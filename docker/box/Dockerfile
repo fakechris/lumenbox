@@ -61,6 +61,13 @@ RUN chmod +x /usr/local/bin/entrypoint.sh /usr/local/bin/box-chrome
 
 EXPOSE 1337 6080
 
+# 7. A terminal on the desktop. Useful to the agent in its own right — some things
+#    are easier to do in a visible shell than through the bash tool — and it gives
+#    the smoke test a text sink, so typing can be verified end to end rather than
+#    only checking that the keymap machinery ran.
+RUN apt-get update && apt-get install -y --no-install-recommends xterm \
+    && rm -rf /var/lib/apt/lists/*
+
 # Run the desktop and the daemon as the unprivileged user. Nothing in the stack
 # needs root — Xvfb, xfwm4, x11vnc, websockify, and node all run fine as `box` —
 # and leaving it as root means every file the agent creates lands root-owned,

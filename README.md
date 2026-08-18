@@ -160,18 +160,79 @@ wrong:
   Volatile content — the time, the inbound message — lives in the message turns,
   because a byte change in the prefix invalidates everything after it.
 
-## Development
+## Testing
+
+Three layers, cheapest first.
+
+### 1. Unit tests — no Docker, no X server, no API key
 
 ```bash
-npm test           # 26 tests, no Docker or X server required
+npm test        # 53 tests, a few seconds
 npm run typecheck
-npm run build
 ```
 
-The tests cover the parts where a mistake is silent in production: coordinate
-scaling, `xrandr` parsing, WebP header patching, keycode-run bounds, and the bus
-semantics (burst collapsing, serialization, priority interrupts, failure isolation,
-and a two-agent exchange terminating).
+Covers the parts where a mistake is silent in production: coordinate scaling,
+`xrandr` parsing, WebP header patching, keycode-run bounds, shell session state,
+the display lease, and the bus semantics (burst collapsing, turn serialization,
+priority interrupts, failure isolation, and a two-agent exchange terminating).
+The turn-loop tests stub the model, so they also check the wiring that would
+otherwise only fail against the live API — that a `tool_use` block reaches
+dispatch, that a screenshot returns as an image block, and that `SendToAgent`
+really wakes the other agent.
+
+### 2. Smoke test — needs the box, still no API key
+
+```bash
+npm run build
+npm run agentbox -- box build     # first time only, ~10 min
+npm run agentbox -- box up
+npm run smoke
+```
+
+16 checks against the running container, covering everything unit tests cannot
+reach: that screenshots decode as valid WebP with the patched size fields, that a
+coordinate sent to the model's space lands where `xdotool getmouselocation` says
+it should, that a failed action still returns a screenshot, that an injected
+xdotool subcommand in a key name is refused, that `cd` and `export` persist per
+agent and do not leak between agents, and that `Aprenderás café 日本語 ÁÉÍ`
+arrives byte-perfect in a real application.
+
+Run this after any change to the box image, the daemon, or the CUA layer — those
+are the paths that fail quietly.
+
+### 3. The agent loop — needs credentials
+
+```bash
+export ANTHROPIC_API_KEY=...      # or run `ant auth login`
+npm run agentbox -- chat
+```
+
+Open the desktop URL that `box up` printed in a browser first, so you can watch
+what the agent does. Things worth trying:
+
+```
+open example.com in the browser and tell me the headline
+create a python script in ~/work that prints the first 20 primes, then run it
+I need someone to own release notes. Set them up and brief them.
+```
+
+The third one exercises the multi-agent path: it should create a teammate and
+message it, and you should see `✉ Ada → <name>` in the transcript followed by
+that agent taking its own turn.
+
+To check the display lease with real agents, ask two of them to use the browser
+at the same time — the second should be told the desktop is busy and given
+something else to do, rather than silently interleaving its clicks with the
+first's.
+
+### Manual poking
+
+```bash
+node dist/cli.js box shot /tmp/screen.webp   # look at the desktop
+node dist/cli.js box exec 'ls -la ~/work'    # run something in the box
+node dist/cli.js box logs --tail 50          # daemon and desktop startup
+node dist/cli.js agents                      # who exists
+```
 
 ## What this does not do
 

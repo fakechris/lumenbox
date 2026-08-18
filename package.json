@@ -13,7 +13,8 @@
     "build:boxd": "esbuild src/boxd/main.ts --bundle --platform=node --target=node22 --format=cjs --outfile=docker/box/boxd.cjs",
     "typecheck": "tsc -p tsconfig.json",
     "test": "node --experimental-transform-types --test --test-timeout=30000 'src/**/*.test.ts'",
-    "agentbox": "node --experimental-transform-types src/cli.ts"
+    "agentbox": "node --experimental-transform-types src/cli.ts",
+    "smoke": "node --experimental-transform-types scripts/smoke.mjs"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.117.1"
