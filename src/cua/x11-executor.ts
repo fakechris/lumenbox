@@ -39,8 +39,18 @@ const SCROLL_BUTTON: Record<ScrollDirection, string> = {
  */
 const KEYMAP_SETTLE_MS = 300;
 
-/** Pause before a screenshot when the preceding action needs the UI to settle. */
-export const DEFAULT_SCREENSHOT_DELAY_MS = 350;
+/**
+ * Pause before a screenshot when the preceding action needs the UI to settle.
+ *
+ * Two seconds looks extravagant and is not: the failure it prevents is silent. Capture too early and the model receives
+ * a half-rendered frame, concludes its click did nothing (or that an element is
+ * still where it used to be), and acts on that — a wrong decision from a stale
+ * image is far more expensive than the wait. The cost is paid once per batch that
+ * contains a screen-changing action, not per action.
+ */
+export const DEFAULT_SCREENSHOT_DELAY_MS = Number(
+  process.env.AGENTBOX_SETTLE_MS ?? 2000
+);
 export const DEFAULT_TYPING_DELAY_MS = 12;
 export const DEFAULT_TYPING_BATCH_SIZE = 50;
 
