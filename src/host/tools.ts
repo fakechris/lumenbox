@@ -381,20 +381,33 @@ export async function dispatchTool(
       }
       const result = await box.computer(actions);
 
-      const notes = [`Ran ${result.action_count} action(s) in ${result.duration_ms}ms.`];
+      const notes: string[] = [];
+      if (result.error) {
+        notes.push(`The action sequence failed: ${result.error}`);
+      } else {
+        notes.push(`Ran ${result.action_count} action(s) in ${result.duration_ms}ms.`);
+      }
       if (result.cursor_position) {
         notes.push(
           `Cursor is at (${result.cursor_position.x}, ${result.cursor_position.y}).`
         );
       }
-      if (result.error) notes.push(`Error: ${result.error}`);
-      notes.push("Screenshot of the resulting screen is attached.");
+      // Attach the screenshot on failure too — seeing the current state is how the
+      // model works out what actually happened and what to try next.
+      if (result.screenshot) {
+        notes.push(
+          result.error
+            ? "A screenshot of the current screen is attached; check what state it is in before retrying."
+            : "Screenshot of the resulting screen is attached."
+        );
+      }
 
       return {
         text: notes.join(" "),
         images: result.screenshot
           ? [{ mediaType: "image/webp", data: result.screenshot }]
           : undefined,
+        isError: Boolean(result.error),
       };
     }
 

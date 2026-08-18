@@ -151,17 +151,44 @@ async function handleComputer(body: ComputerRequest): Promise<ComputerResult> {
     throw new HttpError(400, "actions must be a non-empty array");
   }
   const x11 = await ensureExecutor();
-  const result = await x11.execute(body.actions, {
-    bindUnmappedCharacters: body.bind_unmapped_characters ?? true,
-  });
-  return {
-    success: result.success,
-    screenshot: result.screenshot,
-    cursor_position: result.cursorPosition,
-    action_count: result.actionCount,
-    duration_ms: result.durationMs,
-    error: result.error,
-  };
+  const started = Date.now();
+
+  try {
+    const result = await x11.execute(body.actions, {
+      bindUnmappedCharacters: body.bind_unmapped_characters ?? true,
+    });
+    return {
+      success: result.success,
+      screenshot: result.screenshot,
+      cursor_position: result.cursorPosition,
+      action_count: result.actionCount,
+      duration_ms: result.durationMs,
+      error: result.error,
+    };
+  } catch (error) {
+    // A failed action is exactly when the model most needs to see the screen:
+    // it has to work out what state the desktop is actually in before retrying.
+    // Returning only an error string leaves it guessing, so settle and capture
+    // before reporting. A capture that also fails must not mask the real error.
+    let screenshot = "";
+    try {
+      const recovery = await x11.execute([
+        { action: "wait", duration_ms: 400 },
+        { action: "screenshot" },
+      ]);
+      screenshot = recovery.screenshot;
+    } catch (captureError) {
+      log(`could not capture an error screenshot: ${describe(captureError)}`);
+    }
+
+    return {
+      success: false,
+      screenshot,
+      action_count: body.actions.length,
+      duration_ms: Date.now() - started,
+      error: describe(error),
+    };
+  }
 }
 
 type Handler = (body: any) => Promise<unknown>;
