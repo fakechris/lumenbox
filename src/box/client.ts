@@ -129,12 +129,17 @@ export class BoxClient {
 
   exec(
     command: string,
-    options: { cwd?: string; timeoutMs?: number } = {}
+    options: { cwd?: string; timeoutMs?: number; session?: string } = {}
   ): Promise<ExecResult> {
     const commandTimeout = options.timeoutMs ?? 120_000;
     return this.post<ExecResult>(
       "/exec",
-      { command, cwd: options.cwd, timeout_ms: commandTimeout },
+      {
+        command,
+        cwd: options.cwd,
+        timeout_ms: commandTimeout,
+        session: options.session,
+      },
       // Give the HTTP layer headroom over the command's own timeout, so a
       // command that times out reports its output instead of aborting the request.
       commandTimeout + 15_000

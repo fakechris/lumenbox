@@ -157,7 +157,11 @@ export function buildTools(hasBox: boolean): Anthropic.Tool[] {
           "HTTP endpoint with curl. Prefer it over driving a GUI for the same result. " +
           "Returns stdout, stderr, and the exit code; a non-zero exit code is information, " +
           "not necessarily a failure to report. Commands run through bash, so pipes, " +
-          "redirection, and globs work.",
+          "redirection, and globs work. The session is stateful across calls: your working " +
+          "directory and exported variables persist, so `cd` into a directory once and " +
+          "later commands run there, and an activated virtualenv stays active. Use this to " +
+          "modify files in place too — `sed -i`, a heredoc, or a short python script are " +
+          "often better than rewriting a whole file with write_file.",
         input_schema: {
           type: "object",
           properties: {
@@ -339,9 +343,21 @@ export function buildTools(hasBox: boolean): Anthropic.Tool[] {
   return tools;
 }
 
+/**
+ * Truncates from the middle, keeping both ends.
+ *
+ * Head-only truncation throws away the part that usually matters: a build prints
+ * thousands of lines of progress and then the error that stopped it. Keeping only
+ * the head hands the model the noise and drops the answer.
+ */
 function truncate(text: string, max: number): string {
   if (text.length <= max) return text;
-  return `${text.slice(0, max)}\n\n[truncated: ${text.length - max} more characters]`;
+  const half = Math.floor(max / 2);
+  const dropped = text.length - max;
+  return (
+    `${text.slice(0, half)}\n\n... [${dropped} characters omitted] ...\n\n` +
+    text.slice(text.length - half)
+  );
 }
 
 /** Formats an exec result the way a person reading a terminal would want it. */
@@ -354,8 +370,9 @@ function formatExec(result: {
   const parts: string[] = [];
   if (result.timed_out) parts.push("[command timed out and was killed]");
   parts.push(`exit code: ${result.exit_code}`);
-  if (result.stdout.trim()) parts.push(`stdout:\n${truncate(result.stdout, 60_000)}`);
-  if (result.stderr.trim()) parts.push(`stderr:\n${truncate(result.stderr, 20_000)}`);
+  // Caps chosen so one `npm install` or one `cat` of a log cannot eat the context.
+  if (result.stdout.trim()) parts.push(`stdout:\n${truncate(result.stdout, 20_000)}`);
+  if (result.stderr.trim()) parts.push(`stderr:\n${truncate(result.stderr, 10_000)}`);
   if (!result.stdout.trim() && !result.stderr.trim()) parts.push("(no output)");
   return parts.join("\n\n");
 }
@@ -438,6 +455,9 @@ export async function dispatchTool(
       const result = await box.exec(command, {
         cwd: input.cwd ? String(input.cwd) : undefined,
         timeoutMs: input.timeout_ms ? Number(input.timeout_ms) : undefined,
+        // Per-agent session, so each agent keeps its own working directory and
+        // environment without inheriting a teammate's.
+        session: context.agent.id,
       });
       return { text: formatExec(result) };
     }

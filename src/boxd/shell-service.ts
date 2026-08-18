@@ -23,6 +23,50 @@ function clampOutput(chunks: Buffer[], label: string): string {
   return `${head}\n\n[${label} truncated: ${dropped} more bytes]`;
 }
 
+/** Session keys name files, so keep them to characters that cannot escape a path. */
+function sessionKey(raw: string | undefined): string | undefined {
+  if (!raw) return undefined;
+  const safe = raw.replace(/[^A-Za-z0-9_-]/g, "");
+  return safe.length > 0 ? safe.slice(0, 64) : undefined;
+}
+
+/**
+ * Wraps a command so shell state survives to the next call in the same session.
+ *
+ * A fresh shell per call looks fine until the model runs `cd build`, then `make`,
+ * and the second command silently executes somewhere else — the same trap that
+ * catches `export`, `source venv/bin/activate`, and `nvm use`. The model has no
+ * way to see this happen; it just gets wrong results.
+ *
+ * Rather than hold a long-lived interactive bash and parse sentinels out of its
+ * output — which brings its own hangs and partial-read problems — each call
+ * restores the previous working directory and exported environment, runs, and
+ * saves them again. An EXIT trap does the saving so state persists even if the
+ * command calls `exit`. This covers cwd and exported variables, which is nearly
+ * all of the value; shell functions and aliases do not carry over.
+ */
+function wrapForSession(command: string, key: string, explicitCwd?: string): string {
+  const cwdFile = `/tmp/boxd-session-${key}.cwd`;
+  const envFile = `/tmp/boxd-session-${key}.env`;
+
+  return [
+    `__bs_save() { pwd > '${cwdFile}' 2>/dev/null; export -p > '${envFile}' 2>/dev/null; }`,
+    `trap __bs_save EXIT`,
+    // Restore the environment before the directory, so a saved PWD cannot fight
+    // the cd below.
+    `[ -f '${envFile}' ] && . '${envFile}' 2>/dev/null`,
+    // An explicit cwd on the request wins over the remembered one.
+    explicitCwd
+      ? `cd ${shellQuote(explicitCwd)} 2>/dev/null`
+      : `__bs_dir=$(cat '${cwdFile}' 2>/dev/null); [ -n "$__bs_dir" ] && [ -d "$__bs_dir" ] && cd "$__bs_dir"`,
+    command,
+  ].join("\n");
+}
+
+function shellQuote(value: string): string {
+  return `'${value.replaceAll("'", `'\\''`)}'`;
+}
+
 export function runShell(request: ExecRequest): Promise<ExecResult> {
   const command = request.command?.trim();
   if (!command) {
@@ -34,9 +78,13 @@ export function runShell(request: ExecRequest): Promise<ExecResult> {
     MAX_TIMEOUT_MS
   );
 
+  const key = sessionKey(request.session);
+  const script = key ? wrapForSession(command, key, request.cwd) : command;
+
   return new Promise<ExecResult>(resolve => {
-    const child = spawn("/bin/bash", ["-lc", command], {
-      cwd: request.cwd ?? process.env.HOME ?? "/home/box",
+    const child = spawn("/bin/bash", ["-lc", script], {
+      // With a session the script does its own cd; without one, honour the request.
+      cwd: key ? undefined : (request.cwd ?? process.env.HOME ?? "/home/box"),
       env: { ...process.env, ...request.env },
       stdio: ["ignore", "pipe", "pipe"],
       // New process group, so a timeout kills the whole tree rather than

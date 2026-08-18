@@ -87,6 +87,11 @@ export interface ExecRequest {
   cwd?: string;
   timeout_ms?: number;
   env?: Record<string, string>;
+  /**
+   * Groups calls into one persistent shell session, so `cd`, `export`, and an
+   * activated virtualenv survive between commands. Usually the agent's id.
+   */
+  session?: string;
 }
 
 export interface ExecResult {
