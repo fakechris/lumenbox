@@ -61,12 +61,43 @@ RUN chmod +x /usr/local/bin/entrypoint.sh /usr/local/bin/box-chrome
 
 EXPOSE 1337 6080
 
-# 7. A terminal on the desktop. Useful to the agent in its own right — some things
-#    are easier to do in a visible shell than through the bash tool — and it gives
-#    the smoke test a text sink, so typing can be verified end to end rather than
-#    only checking that the keymap machinery ran.
-RUN apt-get update && apt-get install -y --no-install-recommends xterm \
+# 7. A desktop a person would recognise.
+#
+#    xterm: useful to the agent in its own right — some things are easier in a
+#    visible shell — and it gives the smoke test a text sink, so typing can be
+#    verified end to end rather than only checking the keymap machinery ran.
+#
+#    pcmanfm draws desktop icons and is the file manager they point at. An empty
+#    desktop is not just unfriendly: with nothing on screen there is no way to tell
+#    a working box from a broken one at a glance, and that is the first thing anyone
+#    checks. It also gives a vision model landmarks to orient by.
+#
+#    wmctrl for window and workspace management, which xdotool cannot do.
+#    adwaita-icon-theme so the launchers render as icons rather than blanks.
+RUN apt-get update && apt-get install -y --no-install-recommends \
+      xterm pcmanfm wmctrl adwaita-icon-theme \
     && rm -rf /var/lib/apt/lists/*
+
+# 8. Desktop launchers, and a pcmanfm background matching the plain-X one.
+RUN mkdir -p /home/box/Desktop /home/box/.config/pcmanfm/default \
+    && printf '%s\n' \
+      '[Desktop Entry]' 'Type=Application' 'Name=Terminal' \
+      'Exec=xterm' 'Icon=utilities-terminal' 'Terminal=false' \
+      > /home/box/Desktop/terminal.desktop \
+    && printf '%s\n' \
+      '[Desktop Entry]' 'Type=Application' 'Name=Chromium' \
+      'Exec=box-chrome' 'Icon=web-browser' 'Terminal=false' \
+      > /home/box/Desktop/chromium.desktop \
+    && printf '%s\n' \
+      '[Desktop Entry]' 'Type=Application' 'Name=Files' \
+      'Exec=pcmanfm /home/box/work' 'Icon=system-file-manager' 'Terminal=false' \
+      > /home/box/Desktop/files.desktop \
+    && printf '%s\n' \
+      '[*]' 'wallpaper_mode=color' 'desktop_bg=#1f2430' \
+      'desktop_fg=#e6e9ef' 'desktop_shadow=#000000' 'show_wm_menu=0' \
+      > /home/box/.config/pcmanfm/default/desktop-items-0.conf \
+    && chmod +x /home/box/Desktop/*.desktop \
+    && chown -R box:box /home/box/Desktop /home/box/.config
 
 # Run the desktop and the daemon as the unprivileged user. Nothing in the stack
 # needs root — Xvfb, xfwm4, x11vnc, websockify, and node all run fine as `box` —

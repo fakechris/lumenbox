@@ -84,5 +84,21 @@ sleep 1
 xsetroot -display "${DISPLAY_NUM}" -solid "#1f2430" 2>/dev/null || \
   log "could not set the desktop background"
 
+# Collapse to a single workspace.
+#
+# xfwm4 defaults to four and switches between them on a mouse wheel over the
+# desktop, which means one stray scroll silently swaps the screen for an empty one.
+# A person notices their windows vanish and scrolls back; an agent does not — it
+# takes a screenshot of an empty desktop and reasons from that. With one workspace
+# the gesture has nowhere to go.
+log "collapsing to a single workspace"
+wmctrl -n 1 2>/dev/null || log "could not set the workspace count"
+
+# Desktop icons: a terminal, the browser, and a file manager. An empty desktop
+# gives nobody — human or model — any way to tell a working box from a broken one.
+log "starting the desktop"
+pcmanfm --desktop --profile default > /tmp/pcmanfm.log 2>&1 &
+pids+=($!)
+
 log "starting boxd"
 exec node /opt/boxd/boxd.cjs
