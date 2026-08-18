@@ -17,9 +17,10 @@ import type Anthropic from "@anthropic-ai/sdk";
 import { AgentRegistry } from "../agents/registry.ts";
 import { AgentBus } from "../agents/bus.ts";
 import type { BoxClient } from "../box/client.ts";
+import { DisplayLease } from "../box/display-lease.ts";
 import { runTurn, TurnAborted } from "./turn.ts";
 import { buildSystemPrompt } from "./prompt.ts";
-import { buildTools } from "./tools.ts";
+import { buildTools, dispatchTool } from "./tools.ts";
 
 interface Capture {
   params: Anthropic.MessageCreateParams[];
@@ -199,9 +200,21 @@ test("a turn caches the system prompt and sends the tool set", async () => {
 
     const params = capture.params[0]!;
     assert.equal(params.model, "claude-opus-5");
-    // One breakpoint at the end of the system prompt covers tools + system.
+
+    // Two blocks, split at the stability boundary, each with its own breakpoint:
+    // writing a memory must not re-process the invariant prompt and the tools.
     const system = params.system as Anthropic.TextBlockParam[];
-    assert.equal(system.at(-1)?.cache_control?.type, "ephemeral");
+    assert.equal(system.length, 2, "stable and volatile tiers are separate blocks");
+    assert.equal(system[0]!.cache_control?.type, "ephemeral");
+    assert.equal(system[1]!.cache_control?.type, "ephemeral");
+    assert.match(system[0]!.text, /Your name is Ada/, "identity is in the stable tier");
+    assert.match(system[1]!.text, /memory/i, "memory is in the volatile tier");
+    assert.doesNotMatch(
+      system[0]!.text,
+      /Teammates you can message|memory file is empty/,
+      "nothing the agent rewrites belongs in the cached prefix"
+    );
+
     assert.ok((params.tools?.length ?? 0) > 0, "tools are declared");
     assert.deepEqual(params.thinking, { type: "adaptive", display: "summarized" });
   } finally {
@@ -391,6 +404,87 @@ test("the turn records both sides in the transcript", async () => {
     assert.match(transcript[0]!.text, /Hello/);
     assert.equal(transcript[1]!.role, "assistant");
     assert.equal(transcript[1]!.text, "Hello back.");
+  } finally {
+    cleanup();
+  }
+});
+
+test("a second agent is refused the display while another holds it", async () => {
+  const { registry, cleanup } = fixture();
+  try {
+    const ada = registry.create({ name: "Ada" });
+    const bob = registry.create({ name: "Bob" });
+    const bus = new AgentBus(registry, async () => {});
+    const { box, calls } = stubBox();
+    const display = new DisplayLease();
+
+    // Ada is mid-task with the desktop.
+    assert.equal(display.acquire(ada.id), true);
+
+    const outcome = await dispatchTool(
+      "computer",
+      { actions: [{ action: "screenshot" }] },
+      { agent: bob, registry, bus, box, display }
+    );
+
+    assert.equal(outcome.isError, true);
+    assert.match(outcome.text, /Ada is using the box's desktop/);
+    assert.match(outcome.text, /bash/, "it points at work that does not need the screen");
+    assert.equal(calls.length, 0, "the box must not be touched at all");
+  } finally {
+    cleanup();
+  }
+});
+
+test("a turn releases the display even when it throws", async () => {
+  const { registry, cleanup } = fixture();
+  try {
+    const ada = registry.create({ name: "Ada" });
+    const bus = new AgentBus(registry, async () => {});
+    const { box } = stubBox();
+    const display = new DisplayLease();
+    const capture: Capture = { params: [] };
+
+    // First round takes the display, then the stream fails on the next round.
+    let call = 0;
+    const client = {
+      messages: {
+        stream(params: Anthropic.MessageCreateParams) {
+          capture.params.push({ ...params, messages: [...params.messages] });
+          call++;
+          return {
+            on() {
+              return this;
+            },
+            finalMessage: async () => {
+              if (call === 1) {
+                return message(
+                  [toolUseBlock("computer", { actions: [{ action: "screenshot" }] })],
+                  "tool_use"
+                );
+              }
+              throw new Error("stream exploded");
+            },
+          };
+        },
+      },
+    } as unknown as Anthropic;
+
+    await assert.rejects(
+      runTurn(
+        ada,
+        [{ fromId: "user", fromName: "user", text: "look", priority: false, receivedAt: "" }],
+        new AbortController().signal,
+        { client, registry, bus, box, display, resolution: undefined }
+      ),
+      /stream exploded/
+    );
+
+    assert.equal(
+      display.heldBy(),
+      undefined,
+      "a leaked lease would lock every other agent out of the screen for good"
+    );
   } finally {
     cleanup();
   }

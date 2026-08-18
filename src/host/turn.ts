@@ -10,15 +10,24 @@ import Anthropic from "@anthropic-ai/sdk";
 import type { AgentRecord, AgentRegistry } from "../agents/registry.ts";
 import type { AgentBus, InboundMessage } from "../agents/bus.ts";
 import type { BoxClient } from "../box/client.ts";
+import type { DisplayLease } from "../box/display-lease.ts";
 import type { ResolutionConfig } from "../protocol/index.ts";
-import { buildSystemPrompt, buildTurnPrompt } from "./prompt.ts";
+import { buildSystemPromptParts, buildTurnPrompt } from "./prompt.ts";
 import { buildTools, dispatchTool, type ToolOutcome } from "./tools.ts";
 
 export const DEFAULT_MODEL = "claude-opus-5";
 /** Streaming, so a long turn cannot trip an HTTP timeout. */
 const MAX_TOKENS = 64_000;
-/** A turn that has gone this many rounds is looping, not working. */
-const MAX_ROUNDS = 40;
+/**
+ * Round cap.
+ *
+ * This is a runaway guard, not a task budget. It has to be generous: one round is
+ * one model turn, and a real GUI task spends a round per click, so a browser
+ * workflow can legitimately run well past a hundred. Set it near the plausible ceiling of honest work and treat reaching it as
+ * a fault rather than a finish — a silent stop looks exactly like a completed
+ * turn, which is the worst way to fail.
+ */
+const MAX_ROUNDS = Number(process.env.AGENTBOX_MAX_ROUNDS ?? 400);
 /** Transcript entries replayed into a new turn's context. */
 const HISTORY_LIMIT = 60;
 
@@ -27,6 +36,8 @@ export interface TurnDeps {
   registry: AgentRegistry;
   bus: AgentBus;
   box: BoxClient | undefined;
+  /** Exclusive claim on the box's single display, held for the length of a turn. */
+  display?: DisplayLease;
   resolution: ResolutionConfig | undefined;
   model?: string;
   effort?: "low" | "medium" | "high" | "xhigh" | "max";
@@ -100,6 +111,14 @@ export class TurnAborted extends Error {
   }
 }
 
+/** Thrown when a turn hits the round cap, so a stall is visible rather than silent. */
+export class TurnRoundLimitExceeded extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "TurnRoundLimitExceeded";
+  }
+}
+
 /**
  * Runs one turn for an agent: build context, call the model, execute tools, repeat
  * until the model stops asking for tools.
@@ -115,7 +134,7 @@ export async function runTurn(
   const { registry, bus, box, client } = deps;
   const emit = deps.onEvent ?? (() => {});
 
-  const systemPrompt = buildSystemPrompt({
+  const promptParts = buildSystemPromptParts({
     agent,
     teammates: registry.list(),
     memory: registry.readMemory(agent.id),
@@ -123,6 +142,23 @@ export async function runTurn(
     agentsRoot: registry.root,
     hasBox: box !== undefined,
   });
+
+  // Two breakpoints, one per stability tier. The first covers the tool
+  // definitions and the invariant prompt; the second extends the cache over
+  // memory and the roster while those are unchanged, and is the only part that
+  // has to be re-processed when the agent writes a memory.
+  const system: Anthropic.TextBlockParam[] = [
+    {
+      type: "text",
+      text: promptParts.stable,
+      cache_control: { type: "ephemeral" },
+    },
+    {
+      type: "text",
+      text: promptParts.volatile,
+      cache_control: { type: "ephemeral" },
+    },
+  ];
 
   const history = registry.readTranscript(agent.id) as TranscriptEntry[];
   const turnText = buildTurnPrompt(inbound);
@@ -140,6 +176,16 @@ export async function runTurn(
 
   const tools = buildTools(box !== undefined);
 
+  try {
+    await runRounds();
+  } finally {
+    // Release the desktop however the turn ends — normally, by abort, or by
+    // throwing. A lease leaked here would lock every other agent out of the
+    // screen for the lifetime of the process.
+    deps.display?.release(agent.id);
+  }
+
+  async function runRounds(): Promise<void> {
   for (let round = 0; round < MAX_ROUNDS; round++) {
     if (signal.aborted) {
       emit({ type: "aborted", agentId: agent.id });
@@ -155,11 +201,7 @@ export async function runTurn(
         // instead of a silent pause on a long turn.
         thinking: { type: "adaptive", display: "summarized" },
         output_config: { effort: deps.effort ?? "high" },
-        // The system prompt is stable per agent across a conversation, so one
-        // breakpoint at its end caches both the tool definitions and the prompt.
-        system: [
-          { type: "text", text: systemPrompt, cache_control: { type: "ephemeral" } },
-        ],
+        system,
         tools,
         messages,
       },
@@ -243,7 +285,7 @@ export async function runTurn(
         outcome = await dispatchTool(
           toolUse.name,
           (toolUse.input ?? {}) as Record<string, unknown>,
-          { agent, registry, bus, box }
+          { agent, registry, bus, box, display: deps.display }
         );
       } catch (error) {
         outcome = {
@@ -265,13 +307,17 @@ export async function runTurn(
     messages.push({ role: "user", content: results });
   }
 
+  // Reaching the cap is a fault, not an ending. Recording it as an ordinary
+  // assistant message would leave a stuck agent looking like a finished one, and
+  // the user with no reason to ask why nothing happened.
   const note =
-    `Stopped after ${MAX_ROUNDS} tool rounds without finishing. ` +
-    "The task may need to be broken into smaller steps.";
+    `Stopped after ${MAX_ROUNDS} tool rounds without finishing — the agent is ` +
+    "probably looping rather than making progress.";
   registry.appendTranscript(agent.id, {
     role: "assistant",
     text: note,
     at: new Date().toISOString(),
   } satisfies TranscriptEntry);
-  emit({ type: "text", agentId: agent.id, agentName: agent.profile.name, delta: `\n${note}\n` });
+  throw new TurnRoundLimitExceeded(note);
+  }
 }

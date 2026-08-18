@@ -170,26 +170,52 @@ unavailable. Say so rather than pretending to act; the user can start it with
 
   if (!context.resolution) return COMPUTER_SECTION;
 
+  const { width, height } = context.resolution.api;
+  // State the bounds explicitly. Without them the model has no way to know a
+  // coordinate is off-screen, and an out-of-range click silently does nothing —
+  // it looks to the model like the click landed and the application ignored it.
   return `${COMPUTER_SECTION}
 
-Screenshots come to you at ${context.resolution.api.width}x${context.resolution.api.height}.`;
+Screenshots come to you at ${width}x${height}, and click, move, and scroll
+coordinates are pixels in that same space with the origin at the top left. Never
+emit a coordinate outside 0..${width - 1} horizontally or 0..${height - 1} vertically.`;
 }
 
 /**
- * Assembles the full system prompt.
+ * The system prompt, split at its stability boundary.
  *
- * Order is load-bearing for cache reuse: base and computer sections are identical
- * across all agents, the agent's own identity and memory come next, and the
- * teammate roster — the part most likely to change — comes last.
+ * Caching is a prefix match, so a byte that changes invalidates everything after
+ * it. `stable` holds what does not change for the life of a conversation — the
+ * base rules, the box description, and the agent's own identity — and takes its
+ * own cache breakpoint. `volatile` holds what the agent itself rewrites: its
+ * memory, and the roster, which changes the moment any agent is created or
+ * renamed. Keeping them apart means writing a memory re-processes a few hundred
+ * tokens instead of the whole prompt.
  */
+export interface SystemPromptParts {
+  stable: string;
+  volatile: string;
+}
+
+export function buildSystemPromptParts(
+  context: PromptContext
+): SystemPromptParts {
+  return {
+    stable: [
+      BASE_PROMPT,
+      boxSection(context),
+      profileSection(context.agent),
+    ].join("\n\n---\n\n"),
+    volatile: [memorySection(context.memory), teamSection(context)].join(
+      "\n\n---\n\n"
+    ),
+  };
+}
+
+/** The whole prompt as one string. For tests and for inspecting what was sent. */
 export function buildSystemPrompt(context: PromptContext): string {
-  return [
-    BASE_PROMPT,
-    boxSection(context),
-    profileSection(context.agent),
-    memorySection(context.memory),
-    teamSection(context),
-  ].join("\n\n---\n\n");
+  const { stable, volatile } = buildSystemPromptParts(context);
+  return `${stable}\n\n---\n\n${volatile}`;
 }
 
 /**

@@ -10,6 +10,7 @@ import Anthropic from "@anthropic-ai/sdk";
 import { AgentBus, type BusEvent, type InboundMessage } from "../agents/bus.ts";
 import { AgentRegistry, type AgentRecord } from "../agents/registry.ts";
 import type { BoxClient } from "../box/client.ts";
+import { DisplayLease } from "../box/display-lease.ts";
 import { BoxManager, defaultBoxConfig } from "../box/docker.ts";
 import type { ResolutionConfig } from "../protocol/index.ts";
 import { runTurn, TurnAborted, type TurnEvent } from "./turn.ts";
@@ -31,6 +32,12 @@ export class Orchestrator {
   private readonly client: Anthropic;
   private box: BoxClient | undefined;
   private resolution: ResolutionConfig | undefined;
+  /**
+   * One lease for the whole process, not one per conversation. The display is a
+   * property of the box, so scoping this per agent or per turn would let two
+   * agents each believe they held it.
+   */
+  private readonly display = new DisplayLease();
 
   constructor(private readonly options: OrchestratorOptions = {}) {
     this.registry = options.registry ?? new AgentRegistry();
@@ -82,6 +89,7 @@ export class Orchestrator {
       registry: this.registry,
       bus: this.bus,
       box: this.box,
+      display: this.display,
       resolution: this.resolution,
       model: this.options.model,
       effort: this.options.effort,

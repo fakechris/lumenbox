@@ -8,6 +8,7 @@
 
 import type Anthropic from "@anthropic-ai/sdk";
 import type { BoxClient } from "../box/client.ts";
+import type { DisplayLease } from "../box/display-lease.ts";
 import type { AgentBus } from "../agents/bus.ts";
 import type { AgentRecord, AgentRegistry } from "../agents/registry.ts";
 import type { ComputerAction } from "../protocol/index.ts";
@@ -17,6 +18,8 @@ export interface ToolContext {
   registry: AgentRegistry;
   bus: AgentBus;
   box: BoxClient | undefined;
+  /** Exclusive claim on the box's single display. Absent means no gating. */
+  display?: DisplayLease;
 }
 
 /** A tool result: text for the model, plus optional images. */
@@ -379,6 +382,24 @@ export async function dispatchTool(
       if (!Array.isArray(actions) || actions.length === 0) {
         return { text: "`actions` must be a non-empty array.", isError: true };
       }
+
+      // The desktop is exclusive: see DisplayLease. Refuse rather than queue, so
+      // this agent can do something else instead of blocking invisibly.
+      if (context.display && !context.display.acquire(context.agent.id)) {
+        const holderId = context.display.heldBy()!;
+        const holder = context.registry.tryGet(holderId);
+        const seconds = Math.round(context.display.heldForMs() / 1000);
+        return {
+          text:
+            `${holder?.profile.name ?? holderId} is using the box's desktop ` +
+            `(for ${seconds}s). Only one agent can drive the screen at a time, because ` +
+            "keystrokes and screenshots would otherwise cross between you. Do something " +
+            "that does not need the screen — `bash` and the file tools still work — or " +
+            "wait and try again.",
+          isError: true,
+        };
+      }
+
       const result = await box.computer(actions);
 
       const notes: string[] = [];
