@@ -273,7 +273,13 @@ changing under them.
   and its result inline. A screenshot appears as an image, so you can compare what
   the agent says it saw against what it actually saw.
 - **right** — the live box desktop over noVNC, plus an activity feed covering *all*
-  agents. `✉ Ada → Bob` lines are how you see delegation happen.
+  agents. `✉ Ada → Bob` lines are how you see delegation happen. Click the desktop
+  to give it keyboard focus, or use *open full size* for a whole-window screen.
+
+The desktop is proxied through this server at `/desktop/`, rather than linking to
+the container's own port. Docker assigns that port ephemerally, so it changes on
+every `box up --recreate` and an already-open tab would silently go blank. One
+stable path avoids the whole problem, and keeps the iframe same-origin.
 
 Binds to loopback only and has no authentication: anything that can reach the port
 can already drive the agents, so keeping it off the network is the control.

@@ -11,7 +11,13 @@
  * control.
  */
 
-import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
+import {
+  createServer,
+  request as httpRequest,
+  type IncomingMessage,
+  type ServerResponse,
+} from "node:http";
+import { connect as netConnect, type Socket } from "node:net";
 import { AgentRegistry } from "../agents/registry.ts";
 import type { BusEvent } from "../agents/bus.ts";
 import { BoxManager, defaultBoxConfig } from "../box/docker.ts";
@@ -64,13 +70,58 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
   const box = await orchestrator.connectBox();
   log(box.connected ? `box: ${box.detail}` : `box: unavailable — ${box.detail}`);
 
-  // The noVNC URL is a property of the container, so ask Docker rather than
-  // guessing a port.
-  let novncUrl: string | undefined;
+  /**
+   * Where the box's noVNC actually listens.
+   *
+   * Docker assigns this an ephemeral port, so it changes every time the container
+   * is recreated. Rather than hand that moving target to the browser — an open tab
+   * silently goes blank when the port changes — the desktop is proxied under this
+   * server's own origin at /desktop/. One stable URL, and no cross-origin iframe.
+   */
+  let desktopOrigin: { host: string; port: number } | undefined;
   try {
-    novncUrl = (await new BoxManager(defaultBoxConfig()).status()).novncUrl;
+    const url = (await new BoxManager(defaultBoxConfig()).status()).novncUrl;
+    if (url) {
+      const parsed = new URL(url);
+      desktopOrigin = { host: parsed.hostname, port: Number(parsed.port) };
+      log(`desktop proxied from ${parsed.host}`);
+    }
   } catch {
-    novncUrl = undefined;
+    desktopOrigin = undefined;
+  }
+
+  /** Forwards a /desktop/... request to the box's noVNC server. */
+  function proxyDesktop(req: IncomingMessage, res: ServerResponse, path: string) {
+    if (!desktopOrigin) {
+      res.writeHead(503, { "content-type": "text/plain" });
+      res.end("The box desktop is not available. Start the box with `agentbox box up`.");
+      return;
+    }
+
+    const upstream = httpRequest(
+      {
+        host: desktopOrigin.host,
+        port: desktopOrigin.port,
+        method: req.method,
+        path,
+        headers: { ...req.headers, host: `${desktopOrigin.host}:${desktopOrigin.port}` },
+      },
+      response => {
+        res.writeHead(response.statusCode ?? 502, response.headers);
+        response.pipe(res);
+      }
+    );
+
+    upstream.on("error", error => {
+      if (!res.headersSent) {
+        res.writeHead(502, { "content-type": "text/plain" });
+        res.end(`Cannot reach the box desktop: ${error.message}`);
+      } else {
+        res.end();
+      }
+    });
+
+    req.pipe(upstream);
   }
 
   function send(res: ServerResponse, status: number, body: unknown, type = "application/json") {
@@ -107,10 +158,25 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
           return;
         }
 
+        // noVNC and its assets. `path` tells noVNC to open its socket under the
+        // same prefix, so the whole desktop lives on this origin.
+        if (url.pathname === "/desktop" || url.pathname.startsWith("/desktop/")) {
+          const rest = url.pathname.slice("/desktop".length) || "/vnc.html";
+          proxyDesktop(req, res, `${rest}${url.search}`);
+          return;
+        }
+
         if (route === "GET /api/state") {
           send(res, 200, {
             provider: describeProvider(options.provider),
-            box: { ...box, ok: box.connected, novncUrl },
+            box: {
+              ...box,
+              ok: box.connected,
+              // Always this server's own path, never the container's shifting port.
+              novncUrl: desktopOrigin
+                ? "/desktop/vnc.html?autoconnect=1&resize=scale&path=desktop/websockify"
+                : undefined,
+            },
             agents: registry.list().map(record => ({
               id: record.id,
               name: record.profile.name,
@@ -209,6 +275,41 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
         if (!res.headersSent) send(res, 500, { error: message });
       }
     })();
+  });
+
+  /**
+   * The WebSocket upgrade that actually carries the screen.
+   *
+   * Node does not proxy an upgrade for us: the handshake has to be replayed to the
+   * upstream verbatim and then the two sockets joined byte-for-byte, because
+   * everything after it is framed RFB rather than HTTP.
+   */
+  server.on("upgrade", (req, clientSocket: Socket, head: Buffer) => {
+    const path = (req.url ?? "").replace(/^\/desktop/, "") || "/websockify";
+
+    if (!desktopOrigin || !(req.url ?? "").startsWith("/desktop")) {
+      clientSocket.destroy();
+      return;
+    }
+
+    const upstream = netConnect(desktopOrigin.port, desktopOrigin.host, () => {
+      const headers = Object.entries(req.headers)
+        .map(([key, value]) =>
+          `${key}: ${Array.isArray(value) ? value.join(", ") : value}\r\n`
+        )
+        .join("");
+      upstream.write(`GET ${path} HTTP/1.1\r\n${headers}\r\n`);
+      if (head.length > 0) upstream.write(head);
+      upstream.pipe(clientSocket);
+      clientSocket.pipe(upstream);
+    });
+
+    const drop = () => {
+      upstream.destroy();
+      clientSocket.destroy();
+    };
+    upstream.on("error", drop);
+    clientSocket.on("error", drop);
   });
 
   const host = options.host ?? "127.0.0.1";

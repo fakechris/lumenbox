@@ -79,6 +79,8 @@ export const APP_HTML = String.raw`<!doctype html>
   .ev.warn { color: var(--warn); }
   .bar { padding: 8px 14px; color: var(--dim); font-size: 12px; border-bottom: 1px solid var(--line); }
   .bar b { color: var(--text); }
+  h2 a { color: var(--accent); text-decoration: none; margin-right: 10px; }
+  h2 a:hover { text-decoration: underline; }
 </style>
 </head>
 <body>
@@ -98,9 +100,19 @@ export const APP_HTML = String.raw`<!doctype html>
 </div>
 
 <div class="pane">
-  <h2><span>Box desktop</span><span class="plain" id="boxinfo"></span></h2>
+  <h2>
+    <span>Box desktop</span>
+    <span class="plain">
+      <a id="full" href="#" target="_blank" rel="noopener">open full size</a>
+      <span id="boxinfo"></span>
+    </span>
+  </h2>
   <div class="bar" id="model">&mdash;</div>
   <iframe id="vnc" title="box desktop"></iframe>
+  <div class="bar" style="border-top:1px solid var(--line);border-bottom:0">
+    Click the desktop to give it keyboard focus, or open it full size to drive it
+    like a normal screen.
+  </div>
   <h2 style="border-top:1px solid var(--line)">Activity &mdash; all agents</h2>
   <div class="feed" id="feed"></div>
 </div>
@@ -202,7 +214,18 @@ function refresh() {
     agents = state.agents;
     $("model").innerHTML = "<b>model</b> " + esc(state.provider);
     $("boxinfo").textContent = state.box.ok ? state.box.detail : "unavailable";
-    if (state.box.novncUrl && $("vnc").src !== state.box.novncUrl) $("vnc").src = state.box.novncUrl;
+    if (state.box.novncUrl) {
+      // Compare against the attribute, not .src: the browser resolves .src to an
+      // absolute URL, so a relative path would never match and the iframe would
+      // be reloaded on every poll — dropping the VNC session each time.
+      if ($("vnc").getAttribute("src") !== state.box.novncUrl) {
+        $("vnc").setAttribute("src", state.box.novncUrl);
+      }
+      $("full").href = state.box.novncUrl;
+      $("full").style.display = "";
+    } else {
+      $("full").style.display = "none";
+    }
     if (!current && agents.length) return select(agents[0].id);
     renderAgents();
   });
