@@ -65,6 +65,11 @@ export type ComputerAction =
 export interface ComputerRequest {
   actions: readonly ComputerAction[];
   /**
+   * Which desktop to act on. Each agent gets its own, so their input and their
+   * screenshots cannot cross. Defaults to 1.
+   */
+  display?: number;
+  /**
    * Bind a spare keycode per unmapped character before typing instead of letting
    * `xdotool type` remap one per character and lose it. See the SAND-1271 note in
    * the X11 executor.
@@ -85,6 +90,8 @@ export interface ComputerResult {
 export interface ExecRequest {
   command: string;
   cwd?: string;
+  /** Sets DISPLAY, so a GUI launched from the shell lands on the agent's own desktop. */
+  display?: number;
   timeout_ms?: number;
   env?: Record<string, string>;
   /**
@@ -150,7 +157,23 @@ export interface HealthResult {
   resolution?: ResolutionConfig;
   refresh_rate?: number;
   uptime_seconds: number;
+  /** Desktops currently running. */
+  displays?: DisplayInfo[];
 }
+
+export interface DisplayInfo {
+  index: number;
+  display: string;
+  resolution?: ResolutionConfig;
+  /** Path on the daemon that serves this desktop's noVNC. */
+  vnc_path: string;
+}
+
+export interface EnsureDisplayRequest {
+  index: number;
+}
+
+export type EnsureDisplayResult = DisplayInfo;
 
 export interface ErrorResult {
   error: string;
@@ -159,5 +182,18 @@ export interface ErrorResult {
 /** Port the box daemon listens on inside the container. */
 export const BOXD_PORT = 1337;
 
-/** noVNC's HTTP port inside the container. */
-export const NOVNC_PORT = 6080;
+/**
+ * Base port for each desktop's noVNC inside the container: display N listens on
+ * NOVNC_BASE_PORT + N.
+ *
+ * These are never published. boxd proxies them, so one published port serves any
+ * number of desktops — otherwise the desktop count would be capped by whatever
+ * port mappings were fixed at container-create time.
+ */
+export const NOVNC_BASE_PORT = 6080;
+
+/** Base port for each desktop's VNC server: display N listens on VNC_BASE_PORT + N. */
+export const VNC_BASE_PORT = 5900;
+
+/** The desktop an agent uses when it has no assignment of its own. */
+export const DEFAULT_DISPLAY_INDEX = 1;

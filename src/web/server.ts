@@ -20,7 +20,7 @@ import {
 import { connect as netConnect, type Socket } from "node:net";
 import { AgentRegistry } from "../agents/registry.ts";
 import type { BusEvent } from "../agents/bus.ts";
-import { BoxManager, defaultBoxConfig } from "../box/docker.ts";
+import { BoxManager, defaultBoxConfig, loadBoxToken } from "../box/docker.ts";
 import { Orchestrator } from "../host/orchestrator.ts";
 import { describeProvider, type ProviderProfile } from "../host/provider.ts";
 import type { TurnEvent } from "../host/turn.ts";
@@ -70,41 +70,61 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
   const box = await orchestrator.connectBox();
   log(box.connected ? `box: ${box.detail}` : `box: unavailable — ${box.detail}`);
 
-  /**
-   * Where the box's noVNC actually listens.
-   *
-   * Docker assigns this an ephemeral port, so it changes every time the container
-   * is recreated. Rather than hand that moving target to the browser — an open tab
-   * silently goes blank when the port changes — the desktop is proxied under this
-   * server's own origin at /desktop/. One stable URL, and no cross-origin iframe.
-   */
-  let desktopOrigin: { host: string; port: number } | undefined;
+  const boxToken = loadBoxToken();
+  let boxdUrl: string | undefined;
   try {
-    const url = (await new BoxManager(defaultBoxConfig()).status()).novncUrl;
-    if (url) {
-      const parsed = new URL(url);
-      desktopOrigin = { host: parsed.hostname, port: Number(parsed.port) };
-      log(`desktop proxied from ${parsed.host}`);
-    }
+    boxdUrl = (await new BoxManager(defaultBoxConfig()).status()).boxdUrl;
   } catch {
-    desktopOrigin = undefined;
+    boxdUrl = undefined;
   }
 
-  /** Forwards a /desktop/... request to the box's noVNC server. */
+  /**
+   * Each agent's desktop is proxied under this server's own origin.
+   *
+   * Two reasons it goes through here rather than being linked directly. The
+   * desktops live on in-container ports that are never published — boxd proxies
+   * them — so this is the only route to them. And a published port would be
+   * ephemeral, changing on every recreate and silently blanking any open tab.
+   *
+   * /desktop/<index>/... is the stable path; the browser only ever sees indices.
+   */
+  const boxdOrigin = (() => {
+    if (!box.connected) return undefined;
+    try {
+      const url = new URL(boxdUrl!);
+      return { host: url.hostname, port: Number(url.port) };
+    } catch {
+      return undefined;
+    }
+  })();
+
+  /** Rewrites /desktop/<index>/<rest> to boxd's /vnc/<index>/<rest>. */
+  function desktopUpstreamPath(pathname: string, search: string): string | undefined {
+    const match = /^\/desktop\/(\d+)(\/.*)?$/.exec(pathname);
+    if (!match) return undefined;
+    const rest = match[2] ?? "/";
+    return `/vnc/${match[1]}${rest}${search}`;
+  }
+
   function proxyDesktop(req: IncomingMessage, res: ServerResponse, path: string) {
-    if (!desktopOrigin) {
+    if (!boxdOrigin) {
       res.writeHead(503, { "content-type": "text/plain" });
-      res.end("The box desktop is not available. Start the box with `agentbox box up`.");
+      res.end("The box is not available. Start it with `agentbox box up`.");
       return;
     }
 
     const upstream = httpRequest(
       {
-        host: desktopOrigin.host,
-        port: desktopOrigin.port,
+        host: boxdOrigin.host,
+        port: boxdOrigin.port,
         method: req.method,
         path,
-        headers: { ...req.headers, host: `${desktopOrigin.host}:${desktopOrigin.port}` },
+        headers: {
+          ...req.headers,
+          host: `${boxdOrigin.host}:${boxdOrigin.port}`,
+          // boxd requires the token on everything but /health and the VNC stream.
+          authorization: `Bearer ${boxToken}`,
+        },
       },
       response => {
         res.writeHead(response.statusCode ?? 502, response.headers);
@@ -160,29 +180,35 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
 
         // noVNC and its assets. `path` tells noVNC to open its socket under the
         // same prefix, so the whole desktop lives on this origin.
-        if (url.pathname === "/desktop" || url.pathname.startsWith("/desktop/")) {
-          const rest = url.pathname.slice("/desktop".length) || "/vnc.html";
-          proxyDesktop(req, res, `${rest}${url.search}`);
+        if (url.pathname.startsWith("/desktop/")) {
+          const upstream = desktopUpstreamPath(url.pathname, url.search);
+          if (!upstream) {
+            send(res, 404, { error: `Not a desktop path: ${url.pathname}` });
+            return;
+          }
+          proxyDesktop(req, res, upstream);
           return;
         }
 
         if (route === "GET /api/state") {
           send(res, 200, {
             provider: describeProvider(options.provider),
-            box: {
-              ...box,
-              ok: box.connected,
-              // Always this server's own path, never the container's shifting port.
-              novncUrl: desktopOrigin
-                ? "/desktop/vnc.html?autoconnect=1&resize=scale&path=desktop/websockify"
-                : undefined,
-            },
-            agents: registry.list().map(record => ({
-              id: record.id,
-              name: record.profile.name,
-              title: record.profile.title ?? "",
-              description: record.profile.description,
-            })),
+            box: { ...box, ok: box.connected },
+            agents: registry.list().map(record => {
+              const index = registry.displayIndexFor(record.id);
+              return {
+                id: record.id,
+                name: record.profile.name,
+                title: record.profile.title ?? "",
+                description: record.profile.description,
+                // Every agent has its own desktop, so the UI shows whichever one
+                // belongs to the agent you are looking at.
+                displayIndex: index,
+                desktopUrl:
+                  `/desktop/${index}/vnc.html?autoconnect=1&resize=scale` +
+                  `&path=desktop/${index}/websockify`,
+              };
+            }),
           });
           return;
         }
@@ -285,20 +311,22 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
    * everything after it is framed RFB rather than HTTP.
    */
   server.on("upgrade", (req, clientSocket: Socket, head: Buffer) => {
-    const path = (req.url ?? "").replace(/^\/desktop/, "") || "/websockify";
+    const raw = req.url ?? "";
+    const [pathname, query] = raw.split("?");
+    const upstreamPath = desktopUpstreamPath(pathname ?? "", query ? `?${query}` : "");
 
-    if (!desktopOrigin || !(req.url ?? "").startsWith("/desktop")) {
+    if (!boxdOrigin || !upstreamPath) {
       clientSocket.destroy();
       return;
     }
 
-    const upstream = netConnect(desktopOrigin.port, desktopOrigin.host, () => {
+    const upstream = netConnect(boxdOrigin.port, boxdOrigin.host, () => {
       const headers = Object.entries(req.headers)
         .map(([key, value]) =>
           `${key}: ${Array.isArray(value) ? value.join(", ") : value}\r\n`
         )
         .join("");
-      upstream.write(`GET ${path} HTTP/1.1\r\n${headers}\r\n`);
+      upstream.write(`GET ${upstreamPath} HTTP/1.1\r\n${headers}\r\n`);
       if (head.length > 0) upstream.write(head);
       upstream.pipe(clientSocket);
       clientSocket.pipe(upstream);

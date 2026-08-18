@@ -117,7 +117,7 @@ export const APP_HTML = String.raw`<!doctype html>
 
 <div class="pane">
   <h2>
-    <span>Box desktop</span>
+    <span id="desktoptitle">Desktop</span>
     <span class="plain">
       <a id="full" href="#" target="_blank" rel="noopener">open full size</a>
       <span id="boxinfo"></span>
@@ -126,8 +126,9 @@ export const APP_HTML = String.raw`<!doctype html>
   <div class="bar" id="model">&mdash;</div>
   <iframe id="vnc" title="box desktop"></iframe>
   <div class="bar" style="border-top:1px solid var(--line);border-bottom:0">
-    Click the desktop to give it keyboard focus, or open it full size to drive it
-    like a normal screen.
+    Every agent has its own desktop, so they never fight over focus. This shows the
+    selected agent's. Click it for keyboard focus, or open it full size — you can
+    drive one while the others keep working.
   </div>
   <h2 style="border-top:1px solid var(--line)">Activity &mdash; all agents</h2>
   <div class="feed" id="feed"></div>
@@ -173,7 +174,9 @@ function renderAgents() {
     html += '<div class="agent ' + (a.id === current ? "on" : "") + '" data-id="' + esc(a.id) + '">' +
       '<div class="dot ' + (busy.has(a.id) ? "busy" : "") + '"></div>' +
       '<div style="min-width:0"><div class="nm">' + esc(a.name) + "</div>" +
-      '<div class="ttl">' + esc(String(a.title || a.description || "").slice(0, 46)) + "</div></div></div>";
+      '<div class="ttl">' + esc(String(a.title || a.description || "").slice(0, 40)) +
+      (a.displayIndex ? ' <span style="opacity:.7">:' + esc(a.displayIndex) + "</span>" : "") +
+      "</div></div></div>";
   }
   $("agents").innerHTML = html;
   var nodes = document.querySelectorAll(".agent");
@@ -206,11 +209,31 @@ function toolRow(html, cls) {
   return row;
 }
 
+/** Points the desktop pane at one agent's own display. */
+function showDesktop(id) {
+  var agent = null;
+  for (var i = 0; i < agents.length; i++) if (agents[i].id === id) agent = agents[i];
+  if (!agent || !agent.desktopUrl) {
+    $("desktoptitle").textContent = "Desktop";
+    $("full").style.display = "none";
+    return;
+  }
+  $("desktoptitle").textContent = agent.name + "'s desktop (:" + agent.displayIndex + ")";
+  $("full").href = agent.desktopUrl;
+  $("full").style.display = "";
+  // Only reload when it is a different desktop: re-setting src restarts noVNC and
+  // flashes "Connecting…", so switching back and forth must not thrash it.
+  if ($("vnc").getAttribute("src") !== agent.desktopUrl) {
+    $("vnc").setAttribute("src", agent.desktopUrl);
+  }
+}
+
 function select(id) {
   current = id;
   $("title").textContent = nameOf(id);
   $("round").textContent = "";
   renderAgents();
+  showDesktop(id);
   $("chat").innerHTML = "";
   live.delete(id);
 
@@ -230,21 +253,11 @@ function refresh() {
     agents = state.agents;
     $("model").innerHTML = "<b>model</b> " + esc(state.provider);
     $("boxinfo").textContent = state.box.ok ? state.box.detail : "unavailable";
-    if (state.box.novncUrl) {
-      // Set once, never re-set. The path is fixed, so assigning src again could
-      // only reload noVNC — which is what made the desktop flash "Connecting…"
-      // on a timer. Checking .src would not have caught it either: the browser
-      // resolves that to an absolute URL, so a relative path never compares equal.
-      if (!$("vnc").getAttribute("src")) {
-        $("vnc").setAttribute("src", state.box.novncUrl);
-      }
-      $("full").href = state.box.novncUrl;
-      $("full").style.display = "";
-    } else {
-      $("full").style.display = "none";
-    }
     if (!current && agents.length) return select(agents[0].id);
     renderAgents();
+    // A newly created agent gets its display assigned server-side; keep the pane
+    // in step without reloading an unchanged one.
+    if (current) showDesktop(current);
   });
 }
 

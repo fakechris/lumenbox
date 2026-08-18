@@ -56,10 +56,12 @@ RUN useradd --create-home --shell /bin/bash --uid 1000 box \
 # 6. The daemon bundle, built by `npm run build:boxd`, plus the browser wrapper.
 COPY boxd.cjs /opt/boxd/boxd.cjs
 COPY entrypoint.sh /usr/local/bin/entrypoint.sh
+COPY start-display /usr/local/bin/start-display
 COPY box-chrome /usr/local/bin/box-chrome
-RUN chmod +x /usr/local/bin/entrypoint.sh /usr/local/bin/box-chrome
+RUN chmod +x /usr/local/bin/entrypoint.sh /usr/local/bin/start-display \
+      /usr/local/bin/box-chrome
 
-EXPOSE 1337 6080
+EXPOSE 1337
 
 # 7. A desktop a person would recognise.
 #

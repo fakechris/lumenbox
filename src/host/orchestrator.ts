@@ -45,6 +45,8 @@ export class Orchestrator {
    * agents each believe they held it.
    */
   private readonly display = new DisplayLease();
+  /** Desktops already brought up, so each is started once per process. */
+  private readonly readyDisplays = new Set<number>();
 
   readonly provider: ProviderProfile;
 
@@ -89,12 +91,45 @@ export class Orchestrator {
     }
   }
 
-  private executeTurn(
+  /**
+   * The agent's own desktop, brought up if this is its first turn.
+   *
+   * Created on demand rather than at startup so a box with one active agent does
+   * not pay for a desktop per registered agent. A failure is not fatal — the agent
+   * keeps its shell and file tools — but it is reported, because silently falling
+   * back to a shared display is how agents end up typing into each other's windows.
+   */
+  private async ensureDesktop(agent: AgentRecord): Promise<number | undefined> {
+    if (!this.box) return undefined;
+
+    const index = this.registry.displayIndexFor(agent.id);
+    if (this.readyDisplays.has(index)) return index;
+
+    try {
+      await this.box.ensureDisplay(index);
+      this.readyDisplays.add(index);
+      return index;
+    } catch (error) {
+      this.options.onBusEvent?.({
+        type: "turn_failed",
+        agentId: agent.id,
+        error:
+          `could not start desktop ${index} for ${agent.profile.name}: ` +
+          (error instanceof Error ? error.message : String(error)),
+      });
+      return undefined;
+    }
+  }
+
+  private async executeTurn(
     agent: AgentRecord,
     inbound: readonly InboundMessage[],
     signal: AbortSignal
   ): Promise<void> {
+    const displayIndex = await this.ensureDesktop(agent);
+
     return runTurn(agent, inbound, signal, {
+      displayIndex,
       client: this.client,
       registry: this.registry,
       bus: this.bus,

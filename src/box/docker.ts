@@ -13,7 +13,7 @@ import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { promisify } from "node:util";
-import { BOXD_PORT, NOVNC_PORT } from "../protocol/index.ts";
+import { BOXD_PORT } from "../protocol/index.ts";
 import { BoxClient } from "./client.ts";
 
 const execFileAsync = promisify(execFile);
@@ -26,8 +26,6 @@ export interface BoxConfig {
   image: string;
   /** Host port for the daemon. 0 lets Docker pick an ephemeral one. */
   boxdPort: number;
-  /** Host port for noVNC. 0 lets Docker pick. */
-  novncPort: number;
   token: string;
   /**
    * Where the daemon is reachable from the host. Usually 127.0.0.1, but for a
@@ -74,7 +72,6 @@ export function defaultBoxConfig(overrides: Partial<BoxConfig> = {}): BoxConfig 
     containerName: process.env.AGENTBOX_CONTAINER ?? DEFAULT_CONTAINER,
     image: process.env.AGENTBOX_IMAGE ?? DEFAULT_IMAGE,
     boxdPort: Number(process.env.AGENTBOX_BOXD_PORT ?? 0),
-    novncPort: Number(process.env.AGENTBOX_NOVNC_PORT ?? 0),
     token: loadBoxToken(),
     host: process.env.AGENTBOX_BOX_HOST ?? resolveDockerHostAddress(),
     displayWidth: Number(process.env.AGENTBOX_WIDTH ?? 1280),
@@ -151,7 +148,6 @@ export interface BoxStatus {
   containerName: string;
   /** Host-side URL for the daemon, once the port mapping is known. */
   boxdUrl?: string;
-  novncUrl?: string;
   health?: string;
 }
 
@@ -208,11 +204,7 @@ export class BoxManager {
     if (state !== "running") return status;
 
     const boxdPort = await this.publishedPort(BOXD_PORT);
-    const novncPort = await this.publishedPort(NOVNC_PORT);
     if (boxdPort) status.boxdUrl = `http://${this.config.host}:${boxdPort}`;
-    if (novncPort) {
-      status.novncUrl = `http://${this.config.host}:${novncPort}/vnc.html?autoconnect=1&resize=scale`;
-    }
     return status;
   }
 
@@ -247,10 +239,10 @@ export class BoxManager {
       "--detach",
       "--name",
       config.containerName,
+      // Only the daemon is published. It proxies every desktop's noVNC, so the
+      // number of desktops is not fixed by port mappings chosen at create time.
       "--publish",
       publish(config.boxdPort, BOXD_PORT),
-      "--publish",
-      publish(config.novncPort, NOVNC_PORT),
       "--env",
       `BOXD_TOKEN=${config.token}`,
       "--env",

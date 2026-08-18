@@ -18,7 +18,15 @@ export interface ToolContext {
   registry: AgentRegistry;
   bus: AgentBus;
   box: BoxClient | undefined;
-  /** Exclusive claim on the box's single display. Absent means no gating. */
+  /**
+   * Which desktop this agent drives. Each agent has its own, so their input and
+   * screenshots cannot cross.
+   */
+  displayIndex?: number;
+  /**
+   * Guards one desktop against two agents. Normally moot now that displays are
+   * per-agent, and kept for the case where two are deliberately pointed at one.
+   */
   display?: DisplayLease;
 }
 
@@ -411,8 +419,9 @@ export async function dispatchTool(
         return { text: "`actions` must be a non-empty array.", isError: true };
       }
 
-      // The desktop is exclusive: see DisplayLease. Refuse rather than queue, so
-      // this agent can do something else instead of blocking invisibly.
+      // Two agents on one desktop would type into each other's windows. With a
+      // display each this never fires; it still guards the case where two are
+      // pointed at the same one.
       if (context.display && !context.display.acquire(context.agent.id)) {
         const holderId = context.display.heldBy()!;
         const holder = context.registry.tryGet(holderId);
@@ -428,7 +437,9 @@ export async function dispatchTool(
         };
       }
 
-      const result = await box.computer(actions);
+      const result = await box.computer(actions, {
+        display: context.displayIndex,
+      });
 
       const notes: string[] = [];
       if (result.error) {
@@ -469,6 +480,8 @@ export async function dispatchTool(
         // Per-agent session, so each agent keeps its own working directory and
         // environment without inheriting a teammate's.
         session: context.agent.id,
+        // So a GUI the agent launches from the shell opens on its own desktop.
+        display: context.displayIndex,
       });
       return { text: formatExec(result) };
     }

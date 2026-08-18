@@ -10,7 +10,8 @@ notes, built around the three parts that make it interesting:
 - **A remote Docker box**: the agents' computer is a container, which can live on
   another machine.
 - **Linux computer-use**: a real X11 desktop driven by `xdotool`, captured with
-  `ffmpeg`, and watchable over noVNC.
+  `ffmpeg`, and watchable over noVNC — **one desktop per agent**, so they never
+  fight over focus and you can drive any of them while the others work.
 
 ## How it fits together
 
@@ -33,13 +34,20 @@ notes, built around the three parts that make it interesting:
 ┌─────────────────────────────────────────────────────────┐
 │ box (Docker container — local or remote)                 │
 │                                                         │
-│  boxd :1337   computer / exec / fs                      │
-│    └── X11Executor ──▶ xdotool, ffmpeg, xrandr, xmodmap  │
-│  Xvfb :1 ──▶ xfwm4 ──▶ x11vnc ──▶ noVNC :6080            │
+│  boxd :1337   computer / exec / fs / vnc proxy           │
+│    └── one X11Executor per desktop                       │
+│                                                          │
+│  desktop :1   Xvfb ▸ xfwm4 ▸ pcmanfm ▸ x11vnc ▸ noVNC     │
+│  desktop :2   Xvfb ▸ xfwm4 ▸ pcmanfm ▸ x11vnc ▸ noVNC     │
+│  ...          created on demand, one per agent            │
 └─────────────────────────────────────────────────────────┘
 ```
 
 The host never runs `xdotool` or `ffmpeg` itself. It decides; the box acts.
+
+Only boxd's port is published. It proxies each desktop's noVNC, so the number of
+desktops is not capped by port mappings fixed at container-create time — and the
+web UI reaches any of them through one stable path.
 
 ## Setup
 
@@ -177,6 +185,15 @@ wakes the recipient, and returns an acknowledgement immediately — it never ret
 reply. A reply arrives later as its own message that wakes the sender on a fresh
 turn. Because nothing blocks on a response, two agents cannot deadlock waiting for
 each other, and the prompt tells them not to trade acknowledgements.
+
+Each agent also gets its own desktop in the box — display `:1`, `:2`, and so on,
+assigned at creation and recorded in `profile.json`. This is not tidiness: X
+delivers synthetic input to whichever window holds focus, so agents sharing a
+display type into each other's windows and screenshot each other's work, and a
+human trying to use the screen competes with both. Separate displays make that
+impossible rather than merely discouraged, and they are what lets you drive one
+agent's desktop while the others keep working. Desktops start on an agent's first
+turn, so a box with one active agent does not pay for the rest.
 
 Turns are serialized per agent, so an agent's transcript and profile have exactly one
 writer. A `priority` message aborts a running *background* turn so the agent can deal

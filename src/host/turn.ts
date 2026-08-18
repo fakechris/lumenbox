@@ -34,7 +34,9 @@ export interface TurnDeps {
   registry: AgentRegistry;
   bus: AgentBus;
   box: BoxClient | undefined;
-  /** Exclusive claim on the box's single display, held for the length of a turn. */
+  /** Which desktop this agent drives. Each agent has its own. */
+  displayIndex?: number;
+  /** Guards one desktop against two agents; moot when each has its own. */
   display?: DisplayLease;
   resolution: ResolutionConfig | undefined;
   /** Which endpoint and what it can do. Omitted in tests to mean full Claude. */
@@ -394,7 +396,14 @@ export async function runTurn(
         outcome = await dispatchTool(
           toolUse.name,
           (toolUse.input ?? {}) as Record<string, unknown>,
-          { agent, registry, bus, box, display: deps.display }
+          {
+            agent,
+            registry,
+            bus,
+            box,
+            display: deps.display,
+            displayIndex: deps.displayIndex,
+          }
         );
       } catch (error) {
         outcome = {

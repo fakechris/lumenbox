@@ -39,6 +39,15 @@ export interface AgentProfile {
   avatarColor?: string;
   /** Removes the agent from listings without disabling it. */
   hidden?: boolean;
+  /**
+   * The agent's own desktop in the box.
+   *
+   * One display per agent, never shared: X sends synthetic input to whichever
+   * window has focus, so agents on one display type into each other's windows and
+   * screenshot each other's work. Assigned at creation and stable thereafter, so
+   * an agent returns to the desktop it left.
+   */
+  displayIndex?: number;
   createdAt: string;
   updatedAt: string;
 }
@@ -167,6 +176,19 @@ export class AgentRegistry {
     throw new AgentNotFoundError(idOrName);
   }
 
+  /** The lowest display index no agent holds, so a deleted agent's slot is reused. */
+  private nextDisplayIndex(): number {
+    const taken = new Set(
+      this.list()
+        .map(record => record.profile.displayIndex)
+        .filter((index): index is number => typeof index === "number")
+    );
+    for (let index = 1; index <= 32; index++) {
+      if (!taken.has(index)) return index;
+    }
+    throw new Error("No free desktop: all 32 display slots are assigned.");
+  }
+
   create(input: {
     name: string;
     description?: string;
@@ -185,6 +207,7 @@ export class AgentRegistry {
       title: input.title ? clampLine(input.title, 64) : undefined,
       avatarColor: input.avatarColor,
       hidden: input.hidden ?? false,
+      displayIndex: this.nextDisplayIndex(),
       createdAt: now,
       updatedAt: now,
     };
@@ -230,6 +253,27 @@ export class AgentRegistry {
     profile.updatedAt = new Date().toISOString();
     this.writeProfile(agentId, profile);
     return { id: agentId, profile, dir: this.dirFor(agentId) };
+  }
+
+  /**
+   * The agent's desktop, assigning one if it predates per-agent displays.
+   *
+   * Backfilled rather than defaulted, so an older agent gets a desktop of its own
+   * instead of quietly sharing display 1 with everyone else.
+   */
+  displayIndexFor(agentId: string): number {
+    const record = this.get(agentId);
+    if (typeof record.profile.displayIndex === "number") {
+      return record.profile.displayIndex;
+    }
+
+    const assigned = this.nextDisplayIndex();
+    this.writeProfile(agentId, {
+      ...record.profile,
+      displayIndex: assigned,
+      updatedAt: new Date().toISOString(),
+    });
+    return assigned;
   }
 
   readMemory(agentId: string): string {

@@ -85,7 +85,13 @@ export function runShell(request: ExecRequest): Promise<ExecResult> {
     const child = spawn("/bin/bash", ["-lc", script], {
       // With a session the script does its own cd; without one, honour the request.
       cwd: key ? undefined : (request.cwd ?? process.env.HOME ?? "/home/box"),
-      env: { ...process.env, ...request.env },
+      env: {
+        ...process.env,
+        // A GUI launched from the shell must land on the agent's own desktop, not
+        // on whichever one the daemon happens to default to.
+        ...(request.display ? { DISPLAY: `:${request.display}` } : {}),
+        ...request.env,
+      },
       stdio: ["ignore", "pipe", "pipe"],
       // New process group, so a timeout kills the whole tree rather than
       // leaving orphaned children holding the display or a port.

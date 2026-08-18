@@ -10,7 +10,13 @@
  * the token is the only thing standing between the network and a shell in the box.
  */
 
-import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
+import {
+  createServer,
+  request as httpRequest,
+  type IncomingMessage,
+  type ServerResponse,
+} from "node:http";
+import { connect as netConnect, type Socket } from "node:net";
 import { timingSafeEqual } from "node:crypto";
 import {
   BOXD_PORT,
@@ -18,6 +24,9 @@ import {
   type ComputerResult,
   type ExecRequest,
   type ExecResult,
+  type DisplayInfo,
+  type EnsureDisplayRequest,
+  type EnsureDisplayResult,
   type HealthResult,
   type ListDirRequest,
   type ListDirResult,
@@ -26,13 +35,8 @@ import {
   type WriteFileRequest,
   type WriteFileResult,
 } from "../protocol/index.ts";
-import { X11Executor } from "../cua/x11-executor.ts";
-import {
-  detectDisplay,
-  getDisplay,
-  waitForDisplay,
-  type DisplayDetectionResult,
-} from "../cua/display.ts";
+import { DisplayManager } from "./displays.ts";
+import { getDisplay, parseDisplayNum } from "../cua/display.ts";
 import { runShell } from "./shell-service.ts";
 import { listDir, readFile, writeFile } from "./fs-service.ts";
 
@@ -43,29 +47,16 @@ const startedAt = Date.now();
 const display = getDisplay();
 const token = process.env.BOXD_TOKEN ?? "";
 
-/**
- * Display state is resolved lazily and cached: the daemon must come up even when
- * X is still starting (or absent entirely), because shell and filesystem calls
- * do not need a display.
- */
-let displayState: DisplayDetectionResult | undefined;
-let executor: X11Executor | undefined;
+const displays = new DisplayManager(line => log(line));
 
-async function ensureExecutor(): Promise<X11Executor> {
-  if (executor && displayState) return executor;
-  await waitForDisplay(display, 30_000);
-  displayState = await detectDisplay(display);
-  executor = new X11Executor({
-    display,
-    resolution: displayState.resolution,
-  });
-  log(
-    `display ${display} detected at ${displayState.resolutionString} ` +
-      `(api ${displayState.resolution.api.width}x${displayState.resolution.api.height}, ` +
-      `${displayState.display.refreshRate}Hz)`
-  );
-  return executor;
-}
+/** The desktop `box shot` and the smoke test look at when none is named. */
+const defaultDisplayIndex = (() => {
+  try {
+    return parseDisplayNum(display);
+  } catch {
+    return 1;
+  }
+})();
 
 function log(message: string): void {
   process.stdout.write(`[boxd] ${message}\n`);
@@ -123,26 +114,18 @@ function send(res: ServerResponse, status: number, body: unknown): void {
 }
 
 async function handleHealth(): Promise<HealthResult> {
-  // Report whatever display state we already have without blocking on X coming up.
-  let resolution = displayState?.resolution;
-  let refreshRate = displayState?.display.refreshRate;
-  if (!resolution) {
-    try {
-      const detected = await detectDisplay(display);
-      displayState = detected;
-      resolution = detected.resolution;
-      refreshRate = detected.display.refreshRate;
-    } catch {
-      // No display yet. Shell and fs endpoints still work.
-    }
-  }
+  // Never block on a desktop coming up: shell and fs work without one, and the
+  // container health check must not hang while Xvfb starts.
+  const running = displays.list();
+  const primary = running.find(entry => entry.index === defaultDisplayIndex);
   return {
     ok: true,
     version: VERSION,
     display,
-    resolution,
-    refresh_rate: refreshRate,
+    resolution: primary?.resolution,
+    refresh_rate: undefined,
     uptime_seconds: Math.round((Date.now() - startedAt) / 1000),
+    displays: running,
   };
 }
 
@@ -150,7 +133,8 @@ async function handleComputer(body: ComputerRequest): Promise<ComputerResult> {
   if (!Array.isArray(body.actions) || body.actions.length === 0) {
     throw new HttpError(400, "actions must be a non-empty array");
   }
-  const x11 = await ensureExecutor();
+  const desktop = await displays.ensure(body.display ?? defaultDisplayIndex);
+  const x11 = desktop.executor;
   const started = Date.now();
 
   try {
@@ -191,11 +175,76 @@ async function handleComputer(body: ComputerRequest): Promise<ComputerResult> {
   }
 }
 
+/**
+ * Parses "/vnc/<index>/<rest>" into the desktop and the upstream path.
+ *
+ * Each desktop's noVNC listens on its own in-container port and none of them are
+ * published. Proxying here means one published port serves any number of desktops,
+ * where fixed port mappings would cap the count at container-create time.
+ */
+function parseVncPath(
+  path: string
+): { index: number; upstream: string } | undefined {
+  const match = /^\/vnc\/(\d+)(\/.*)?$/.exec(path);
+  if (!match) return undefined;
+  const index = Number(match[1]);
+  const rest = match[2] ?? "/";
+  return { index, upstream: rest === "/" ? "/vnc.html" : rest };
+}
+
+function proxyVnc(req: IncomingMessage, res: ServerResponse, path: string): void {
+  const parsed = parseVncPath(path.split("?")[0] ?? path);
+  if (!parsed) {
+    send(res, 404, { error: `Not a desktop path: ${path}` });
+    return;
+  }
+  if (!displays.has(parsed.index)) {
+    send(res, 404, {
+      error: `Desktop ${parsed.index} is not running. Ensure it first.`,
+    });
+    return;
+  }
+
+  const query = req.url?.includes("?") ? req.url.slice(req.url.indexOf("?")) : "";
+  const port = DisplayManager.novncPort(parsed.index);
+  const upstream = httpRequest(
+    {
+      host: "127.0.0.1",
+      port,
+      method: req.method,
+      path: `${parsed.upstream}${query}`,
+      headers: { ...req.headers, host: `127.0.0.1:${port}` },
+    },
+    response => {
+      res.writeHead(response.statusCode ?? 502, response.headers);
+      response.pipe(res);
+    }
+  );
+
+  upstream.on("error", error => {
+    if (!res.headersSent) send(res, 502, { error: `Desktop unreachable: ${error.message}` });
+    else res.end();
+  });
+  req.pipe(upstream);
+}
+
 type Handler = (body: any) => Promise<unknown>;
 
 const routes: Record<string, Handler> = {
   "POST /computer": (body: ComputerRequest) => handleComputer(body),
   "POST /exec": (body: ExecRequest): Promise<ExecResult> => runShell(body),
+  "GET /displays": async (): Promise<DisplayInfo[]> => displays.list(),
+  "POST /displays/ensure": async (
+    body: EnsureDisplayRequest
+  ): Promise<EnsureDisplayResult> => {
+    const desktop = await displays.ensure(body.index);
+    return {
+      index: desktop.index,
+      display: desktop.display,
+      resolution: desktop.detection.resolution,
+      vnc_path: DisplayManager.vncPath(desktop.index),
+    };
+  },
   "POST /fs/read": (body: ReadFileRequest): Promise<ReadFileResult> =>
     readFile(body),
   "POST /fs/write": (body: WriteFileRequest): Promise<WriteFileResult> =>
@@ -221,13 +270,20 @@ const server = createServer((req, res) => {
         return;
       }
 
+      // noVNC for a desktop, proxied so only this port has to be published.
+      if (url.startsWith("/vnc/")) {
+        proxyVnc(req, res, url);
+        return;
+      }
+
       const handler = routes[route];
       if (!handler) {
         send(res, 404, { error: `No route for ${route}` });
         return;
       }
 
-      send(res, 200, await handler(await readBody(req)));
+      const body = req.method === "GET" ? {} : await readBody(req);
+      send(res, 200, await handler(body));
     } catch (error) {
       const status = error instanceof HttpError ? error.status : 500;
       if (status >= 500) log(`error on ${route}: ${describe(error)}`);
@@ -244,13 +300,55 @@ if (token.length < 16) {
   process.exit(1);
 }
 
+/**
+ * The WebSocket upgrade carrying a desktop's pixels.
+ *
+ * Replayed to the upstream verbatim and then joined byte-for-byte, because
+ * everything after the handshake is framed RFB rather than HTTP.
+ *
+ * Deliberately unauthenticated, like /health: the browser cannot set headers on a
+ * WebSocket, and the host proxies this from its own loopback-only server. Publishing
+ * boxd to a routable address exposes these desktops — which the README says.
+ */
+server.on("upgrade", (req, clientSocket: Socket, head: Buffer) => {
+  const parsed = parseVncPath((req.url ?? "").split("?")[0] ?? "");
+  if (!parsed || !displays.has(parsed.index)) {
+    clientSocket.destroy();
+    return;
+  }
+
+  const query = (req.url ?? "").includes("?")
+    ? (req.url ?? "").slice((req.url ?? "").indexOf("?"))
+    : "";
+  const port = DisplayManager.novncPort(parsed.index);
+
+  const upstream = netConnect(port, "127.0.0.1", () => {
+    const headers = Object.entries(req.headers)
+      .map(([key, value]) =>
+        `${key}: ${Array.isArray(value) ? value.join(", ") : value}\r\n`
+      )
+      .join("");
+    upstream.write(`GET ${parsed.upstream}${query} HTTP/1.1\r\n${headers}\r\n`);
+    if (head.length > 0) upstream.write(head);
+    upstream.pipe(clientSocket);
+    clientSocket.pipe(upstream);
+  });
+
+  const drop = () => {
+    upstream.destroy();
+    clientSocket.destroy();
+  };
+  upstream.on("error", drop);
+  clientSocket.on("error", drop);
+});
+
 // Bind on all interfaces: Docker's port publishing reaches the container through
 // its bridge address, not loopback. The bearer token is the access control.
 server.listen(BOXD_PORT, "0.0.0.0", () => {
   log(`listening on 0.0.0.0:${BOXD_PORT}, display ${display}`);
   // Warm the display so the first computer call is not paying detection latency.
-  ensureExecutor().catch(error => {
-    log(`display not ready yet: ${describe(error)}`);
+  displays.ensure(defaultDisplayIndex).catch(error => {
+    log(`default desktop not ready yet: ${describe(error)}`);
   });
 });
 

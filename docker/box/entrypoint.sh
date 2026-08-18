@@ -1,14 +1,9 @@
 #!/usr/bin/env bash
-# Brings up the box desktop, then the daemon.
+# Container entrypoint: bring up the first desktop, then the daemon.
 #
-# Order matters: Xvfb must be answering before x11vnc or the daemon's display
-# detection will attach to nothing.
+# Only display 1 is started here. The rest are created on demand by boxd as agents
+# ask for them, so a box with one agent does not pay for four idle desktops.
 set -euo pipefail
-
-WIDTH="${DISPLAY_WIDTH:-1280}"
-HEIGHT="${DISPLAY_HEIGHT:-800}"
-DISPLAY_NUM="${DISPLAY:-:1}"
-SCREEN="${WIDTH}x${HEIGHT}x24"
 
 log() { printf '[box] %s\n' "$*"; }
 
@@ -18,87 +13,13 @@ if [[ -z "${BOXD_TOKEN:-}" ]]; then
   exit 1
 fi
 
-# Track children so a failure takes the whole container down rather than leaving
-# a half-running desktop that looks healthy but cannot be driven.
-pids=()
-cleanup() {
-  log "shutting down"
-  for pid in "${pids[@]:-}"; do
-    [[ -n "$pid" ]] && kill "$pid" 2>/dev/null || true
-  done
-}
-trap cleanup EXIT INT TERM
-
-log "starting Xvfb on ${DISPLAY_NUM} at ${SCREEN}"
-# -noreset keeps the server alive when the last client disconnects, so a crashing
-# browser does not reset the whole display and invalidate our detected geometry.
-Xvfb "${DISPLAY_NUM}" -screen 0 "${SCREEN}" -ac -noreset +extension RANDR \
-  > /tmp/xvfb.log 2>&1 &
-pids+=($!)
-
-# Wait for the server rather than sleeping a fixed amount: on a loaded host Xvfb
-# can take a couple of seconds, and a fixed sleep is either slow or flaky.
-for _ in $(seq 1 60); do
-  if xdpyinfo -display "${DISPLAY_NUM}" > /dev/null 2>&1; then
-    break
-  fi
-  sleep 0.25
-done
-if ! xdpyinfo -display "${DISPLAY_NUM}" > /dev/null 2>&1; then
-  log "FATAL: Xvfb did not come up. Log follows:"
-  cat /tmp/xvfb.log >&2 || true
+# Display 1 is the default: an agent with no assignment lands here, and it is what
+# `box shot` and the smoke test look at.
+log "starting the first desktop"
+if ! /usr/local/bin/start-display 1; then
+  log "FATAL: could not start display 1"
   exit 1
 fi
-log "Xvfb ready"
-
-# A window manager is not optional: without one, dialogs open unmapped and
-# keyboard focus never lands anywhere, so typing silently goes nowhere.
-#
-# No --daemon: we want xfwm4 in the foreground of this job so the pid we record is
-# the window manager itself and not a launcher that has already exited.
-#
-# --compositor=off for two reasons. Its compositor paints over the root window, so
-# the desktop background below is never visible however it is set — which left the
-# screen pure black and made a perfectly healthy box look like it had not started.
-# And compositing buys nothing here: there is no GPU and nothing needs transparency.
-log "starting window manager"
-dbus-launch --exit-with-session xfwm4 --replace --compositor=off \
-  > /tmp/xfwm4.log 2>&1 &
-pids+=($!)
-
-log "starting x11vnc"
-x11vnc -display "${DISPLAY_NUM}" -forever -shared -nopw -quiet -localhost \
-  -rfbport 5900 > /tmp/x11vnc.log 2>&1 &
-pids+=($!)
-
-log "starting noVNC on 6080"
-websockify --web=/usr/share/novnc 6080 localhost:5900 \
-  > /tmp/novnc.log 2>&1 &
-pids+=($!)
-
-# A distinct background is worth more than decoration: against pure black a model
-# cannot tell an empty desktop from a window that failed to paint, and the default
-# X stipple reads as noise. Applied after the window manager has settled, since
-# xfwm4 resets root properties as it starts.
-sleep 1
-xsetroot -display "${DISPLAY_NUM}" -solid "#1f2430" 2>/dev/null || \
-  log "could not set the desktop background"
-
-# Collapse to a single workspace.
-#
-# xfwm4 defaults to four and switches between them on a mouse wheel over the
-# desktop, which means one stray scroll silently swaps the screen for an empty one.
-# A person notices their windows vanish and scrolls back; an agent does not — it
-# takes a screenshot of an empty desktop and reasons from that. With one workspace
-# the gesture has nowhere to go.
-log "collapsing to a single workspace"
-wmctrl -n 1 2>/dev/null || log "could not set the workspace count"
-
-# Desktop icons: a terminal, the browser, and a file manager. An empty desktop
-# gives nobody — human or model — any way to tell a working box from a broken one.
-log "starting the desktop"
-pcmanfm --desktop --profile default > /tmp/pcmanfm.log 2>&1 &
-pids+=($!)
 
 log "starting boxd"
 exec node /opt/boxd/boxd.cjs

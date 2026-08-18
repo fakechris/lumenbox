@@ -79,9 +79,8 @@ async function cmdBoxUp(argv: string[]): Promise<number> {
   out("");
   out(`${bold("Box running")} (${status.containerName})`);
   if (status.boxdUrl) out(`  daemon:  ${status.boxdUrl}`);
-  if (status.novncUrl) out(`  desktop: ${status.novncUrl}`);
   out("");
-  out("Open the desktop URL in a browser to watch the agents work.");
+  out("Each agent gets its own desktop inside the box. Run `agentbox web` to see them.");
   return 0;
 }
 
@@ -105,7 +104,6 @@ async function cmdBoxStatus(): Promise<number> {
   }
 
   out(`daemon:    ${status.boxdUrl ?? "port not published"}`);
-  out(`desktop:   ${status.novncUrl ?? "port not published"}`);
 
   try {
     const client = await manager.connect();
@@ -123,6 +121,10 @@ async function cmdBoxStatus(): Promise<number> {
           "(what the model sees)"
       );
     }
+    const running = health.displays ?? [];
+    out(
+      `desktops:  ${running.length === 0 ? "none yet" : running.map(d => d.index).join(", ")}`
+    );
   } catch (error) {
     out(`health:    ${error instanceof Error ? error.message : String(error)}`);
   }

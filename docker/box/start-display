@@ -1,0 +1,85 @@
+#!/usr/bin/env bash
+# Brings up one independent desktop, numbered.
+#
+# Each agent gets its own X display rather than sharing one. On a shared display X
+# delivers synthetic input to whichever window has focus, so two agents typing at
+# once interleave into the wrong window and each screenshots the other's work —
+# and a human trying to use the desktop competes with both. Separate displays make
+# that impossible instead of merely discouraged, and let the user drive any agent's
+# screen while the others keep working.
+#
+# Everything is per-display and derived from the index: X display :N, VNC on
+# 5900+N, noVNC on 6080+N. Idempotent — re-running for a live display is a no-op.
+set -euo pipefail
+
+N="${1:?usage: start-display <index>}"
+WIDTH="${DISPLAY_WIDTH:-1280}"
+HEIGHT="${DISPLAY_HEIGHT:-800}"
+
+DISP=":${N}"
+RFB_PORT=$((5900 + N))
+WS_PORT=$((6080 + N))
+
+log() { printf '[display %s] %s\n' "$N" "$*"; }
+
+if xdpyinfo -display "${DISP}" > /dev/null 2>&1; then
+  log "already running"
+  exit 0
+fi
+
+log "starting Xvfb on ${DISP} at ${WIDTH}x${HEIGHT}"
+# setsid so these outlive this script and are reparented to the container's init
+# rather than dying with the shell boxd spawned us from.
+setsid Xvfb "${DISP}" -screen 0 "${WIDTH}x${HEIGHT}x24" -ac -noreset \
+  +extension RANDR > "/tmp/xvfb-${N}.log" 2>&1 &
+
+for _ in $(seq 1 80); do
+  xdpyinfo -display "${DISP}" > /dev/null 2>&1 && break
+  sleep 0.25
+done
+if ! xdpyinfo -display "${DISP}" > /dev/null 2>&1; then
+  log "FATAL: Xvfb did not come up"
+  cat "/tmp/xvfb-${N}.log" >&2 || true
+  exit 1
+fi
+
+export DISPLAY="${DISP}"
+
+# A window manager is not optional: without one, dialogs open unmapped and keyboard
+# focus never lands, so typing silently goes nowhere. Compositing off so the
+# desktop background is visible — xfwm4's compositor paints over the root window.
+log "starting window manager"
+setsid dbus-launch --exit-with-session xfwm4 --replace --compositor=off \
+  > "/tmp/xfwm4-${N}.log" 2>&1 &
+sleep 1.5
+
+xsetroot -solid "#1f2430" 2>/dev/null || log "could not set the background"
+
+# One workspace. xfwm4 defaults to four and switches on a mouse wheel over the
+# desktop, so a stray scroll would swap the screen for an empty one — which a
+# person notices and an agent does not.
+wmctrl -n 1 2>/dev/null || log "could not set the workspace count"
+
+log "starting desktop icons"
+setsid pcmanfm --desktop --profile default > "/tmp/pcmanfm-${N}.log" 2>&1 &
+
+log "starting x11vnc on ${RFB_PORT} and noVNC on ${WS_PORT}"
+# -localhost: only boxd reaches these, and it is the only thing published.
+setsid x11vnc -display "${DISP}" -forever -shared -nopw -quiet -localhost \
+  -rfbport "${RFB_PORT}" > "/tmp/x11vnc-${N}.log" 2>&1 &
+setsid websockify --web=/usr/share/novnc "${WS_PORT}" "localhost:${RFB_PORT}" \
+  > "/tmp/novnc-${N}.log" 2>&1 &
+
+# Wait for the VNC path, not just X: boxd reports the display ready and the UI
+# connects immediately, so a half-started stack shows as a failed connection.
+for _ in $(seq 1 60); do
+  if (exec 3<>"/dev/tcp/127.0.0.1/${WS_PORT}") 2>/dev/null; then
+    exec 3<&- 2>/dev/null || true
+    log "ready"
+    exit 0
+  fi
+  sleep 0.25
+done
+
+log "WARNING: noVNC on ${WS_PORT} did not start; the desktop will not be viewable"
+exit 0

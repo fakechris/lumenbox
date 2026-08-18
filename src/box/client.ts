@@ -7,6 +7,7 @@
 import type {
   ComputerAction,
   ComputerResult,
+  EnsureDisplayResult,
   ExecResult,
   HealthResult,
   ListDirResult,
@@ -118,18 +119,33 @@ export class BoxClient {
 
   computer(
     actions: readonly ComputerAction[],
-    bindUnmappedCharacters = true
+    options: { display?: number; bindUnmappedCharacters?: boolean } = {}
   ): Promise<ComputerResult> {
     return this.post<ComputerResult>(
       "/computer",
-      { actions, bind_unmapped_characters: bindUnmappedCharacters },
+      {
+        actions,
+        display: options.display,
+        bind_unmapped_characters: options.bindUnmappedCharacters ?? true,
+      },
       COMPUTER_TIMEOUT_MS
     );
   }
 
+  /** Brings up an agent's desktop, or adopts it if already running. */
+  ensureDisplay(index: number): Promise<EnsureDisplayResult> {
+    // Starting Xvfb, a window manager, VNC and noVNC takes a moment.
+    return this.post<EnsureDisplayResult>("/displays/ensure", { index }, 120_000);
+  }
+
   exec(
     command: string,
-    options: { cwd?: string; timeoutMs?: number; session?: string } = {}
+    options: {
+      cwd?: string;
+      timeoutMs?: number;
+      session?: string;
+      display?: number;
+    } = {}
   ): Promise<ExecResult> {
     const commandTimeout = options.timeoutMs ?? 120_000;
     return this.post<ExecResult>(
@@ -139,6 +155,7 @@ export class BoxClient {
         cwd: options.cwd,
         timeout_ms: commandTimeout,
         session: options.session,
+        display: options.display,
       },
       // Give the HTTP layer headroom over the command's own timeout, so a
       // command that times out reports its output instead of aborting the request.
