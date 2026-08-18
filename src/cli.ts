@@ -4,7 +4,7 @@
  */
 
 import { createInterface } from "node:readline/promises";
-import { writeFileSync, mkdirSync, existsSync, readFileSync } from "node:fs";
+import { existsSync, writeFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { homedir } from "node:os";
@@ -278,23 +278,59 @@ function makeRenderer() {
   return { onTurnEvent, onBusEvent, endStream };
 }
 
-/** Reads `--flag value` out of an argv slice. */
-function flagValue(argv: string[], flag: string): string | undefined {
-  const index = argv.indexOf(flag);
-  if (index === -1) return undefined;
-  const value = argv[index + 1];
-  return value && !value.startsWith("-") ? value : undefined;
+/** Flags that consume the following argument. */
+const VALUE_FLAGS = new Set(["--provider", "--model", "--effort"]);
+
+/**
+ * Splits argv into flags and positionals.
+ *
+ * Filtering on a leading dash is not enough: the *value* of `--provider minimax`
+ * has no dash, so a naive filter leaves it in the positionals and it ends up
+ * concatenated into the user's message. That is how "minimax " came to be
+ * prepended to every prompt.
+ */
+function parseArgs(argv: string[]): {
+  positional: string[];
+  flags: Map<string, string | true>;
+} {
+  const positional: string[] = [];
+  const flags = new Map<string, string | true>();
+
+  for (let i = 0; i < argv.length; i++) {
+    const arg = argv[i]!;
+    if (!arg.startsWith("-")) {
+      positional.push(arg);
+      continue;
+    }
+    if (VALUE_FLAGS.has(arg)) {
+      const value = argv[i + 1];
+      if (value !== undefined && !value.startsWith("-")) {
+        flags.set(arg, value);
+        i++; // consume the value so it never reaches the positionals
+        continue;
+      }
+    }
+    flags.set(arg, true);
+  }
+
+  return { positional, flags };
 }
 
 async function cmdChat(argv: string[]): Promise<number> {
+  const { positional, flags } = parseArgs(argv);
+
   // Flags win over env so a single run can target a different endpoint.
-  const providerName = flagValue(argv, "--provider");
-  const modelOverride = flagValue(argv, "--model");
-  if (modelOverride) process.env.AGENTBOX_MODEL = modelOverride;
+  const providerName = flags.get("--provider");
+  const modelOverride = flags.get("--model");
+  if (typeof modelOverride === "string") {
+    process.env.AGENTBOX_MODEL = modelOverride;
+  }
 
   let provider: ProviderProfile;
   try {
-    provider = resolveProvider(providerName);
+    provider = resolveProvider(
+      typeof providerName === "string" ? providerName : undefined
+    );
   } catch (error) {
     err(error instanceof Error ? error.message : String(error));
     return 1;
@@ -314,8 +350,7 @@ async function cmdChat(argv: string[]): Promise<number> {
     );
   }
 
-  const noBox = argv.includes("--no-box");
-  const positional = argv.filter(arg => !arg.startsWith("-"));
+  const noBox = flags.has("--no-box");
   const agentArg = positional[0];
   const oneShot = positional.slice(1).join(" ").trim();
 
@@ -413,9 +448,9 @@ The box runs wherever your Docker engine points: set DOCKER_HOST or use
 
 Providers:
   anthropic (default)      claude-opus-5; full vision, caching, thinking
-  minimax                  MiniMax-M2 via its Anthropic-compatible endpoint.
-                           Text-only: it accepts screenshots and silently
-                           discards them, so the computer tool is withheld.
+  minimax                  MiniMax-M3 via its Anthropic-compatible endpoint.
+                           M3 can see screenshots; M2 accepts and silently
+                           discards them, so it loses the computer tool.
   custom                   Set AGENTBOX_BASE_URL, AGENTBOX_MODEL, and
                            AGENTBOX_KEY_ENV. Every optional capability
                            defaults off; opt in with AGENTBOX_VISION=1,

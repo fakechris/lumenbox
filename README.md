@@ -75,23 +75,36 @@ is mostly a base URL and a key:
 
 ```bash
 npm run agentbox -- providers                 # what is configured
-npm run agentbox -- chat --provider minimax   # MiniMax-M2
+npm run agentbox -- chat --provider minimax   # MiniMax-M3
 ```
 
-What is *not* interchangeable is capability, and this is the part worth knowing.
-A compatible endpoint will accept a request containing something it does not
-implement and return 200. MiniMax accepts `thinking`, `output_config.effort`,
-`cache_control`, and image content blocks without complaint — and silently
-discards the images. Asked what colour fills a solid red picture, MiniMax-M2
-answers *"I'm unable to view the image"* while its own thinking says *"no image is
-provided"*. Nothing in the HTTP response reveals this.
+What is *not* interchangeable is capability, and it does not fail loudly. A
+compatible endpoint will accept a request containing something it does not
+implement and return 200. MiniMax accepts `thinking`, `output_config.effort`, and
+`cache_control` without complaint and implements none of them, so agentbox omits
+them rather than leaving the behaviour to chance.
 
-So capabilities are declared per provider rather than assumed. A model without
-vision is not given the `computer` tool at all and its prompt says it has no
-screen, instead of being handed screenshots it would narrate from imagination.
-`bash` and the file tools do not need sight and stay available, which is enough
-for real work — verified end to end on MiniMax, including one agent messaging
-another and the teammate doing the job.
+Vision is the sharp edge, and it varies **by model on the same endpoint**:
+
+| Model | Screenshots | Notes |
+|---|---|---|
+| `MiniMax-M3` (default) | Reads them | Read a real 1280×800 WebP screenshot back correctly, so it gets the `computer` tool |
+| `MiniMax-M2` | Accepted and discarded | Answers *"I'm unable to view the image"* while its thinking says *"no image is provided"* — HTTP 200 throughout |
+
+So vision is resolved per model, and a model that cannot see is not given the
+`computer` tool at all — its prompt says it has no screen and tells it not to
+describe one, instead of handing it screenshots it would narrate from imagination.
+`bash` and the file tools do not need sight and stay available, which is enough for
+real work.
+
+Verified end to end on M3: an agent wrote and ran a Python script in the box, read
+a word off the desktop through the `computer` tool, and handed a task to a teammate
+that the teammate completed on its own turn.
+
+An unknown model is assumed blind, since that is the assumption whose failure is
+visible. Override with `AGENTBOX_VISION=1` (or `0`) once you have checked — and do
+check rather than trusting a model card: send a solid colour image and ask what
+colour it is.
 
 For any other endpoint:
 
@@ -107,8 +120,8 @@ Every optional capability defaults **off**, because a wrong "yes" fails silently
 while a wrong "no" only costs a feature and says so. Opt in once you have checked:
 `AGENTBOX_VISION=1`, `AGENTBOX_CACHING=1`, `AGENTBOX_THINKING=1`, `AGENTBOX_EFFORT=1`.
 
-Worth testing vision yourself rather than trusting a model card — send a solid
-colour image and ask what colour it is.
+
+
 
 ## Putting the box on another machine
 

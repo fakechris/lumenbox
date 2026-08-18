@@ -62,15 +62,25 @@ const ANTHROPIC: ProviderProfile = {
   keyEnv: "ANTHROPIC_API_KEY",
 };
 
+/**
+ * Which MiniMax models can actually see an image.
+ *
+ * Vision is a property of the model, not the endpoint, and the two models on this
+ * endpoint differ: M3 read a real 1280x800 WebP screenshot back correctly, while
+ * M2 accepted the same image and answered "I'm unable to view the image". Both
+ * returned 200. Anything not listed here is assumed blind, because that is the
+ * assumption whose failure is visible.
+ */
+const MINIMAX_VISION_MODELS = new Set(["MiniMax-M3"]);
+
 const MINIMAX: ProviderProfile = {
   label: "MiniMax",
   baseUrl: "https://api.minimaxi.com/anthropic",
-  model: "MiniMax-M2",
-  // M2 reasons at length before answering and that thinking counts against the
-  // cap, so a tight budget produces an empty response with stop_reason max_tokens.
+  model: "MiniMax-M3",
+  // Thinking counts against the cap, so a tight budget yields an empty response
+  // with stop_reason max_tokens rather than an answer.
   maxTokens: 32_000,
-  // Verified by experiment, not assumed: images are accepted and discarded.
-  vision: false,
+  vision: true,
   // Accepted but not implemented. Omitted so behaviour is not left to chance.
   adaptiveThinking: false,
   effort: false,
@@ -137,6 +147,18 @@ export function resolveProvider(name?: string): ProviderProfile {
   if (process.env.AGENTBOX_MAX_TOKENS) {
     profile.maxTokens = Number(process.env.AGENTBOX_MAX_TOKENS);
   }
+
+  // Capabilities follow the model, not the endpoint: switching model on the same
+  // provider can gain or lose vision, and getting that wrong is the failure that
+  // does not announce itself.
+  if (chosen === "minimax") {
+    profile.vision = MINIMAX_VISION_MODELS.has(profile.model);
+  }
+
+  // An explicit opt-in always wins, so a newly-capable model needs no code change.
+  if (process.env.AGENTBOX_VISION === "1") profile.vision = true;
+  if (process.env.AGENTBOX_VISION === "0") profile.vision = false;
+
   return profile;
 }
 

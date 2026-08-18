@@ -57,16 +57,38 @@ test("anthropic is the default and has every capability", () => {
   });
 });
 
-test("minimax declares no vision and no caching", () => {
+test("minimax defaults to M3, which can see", () => {
   withEnv(CLEAN, () => {
     const profile = resolveProvider("minimax");
-    assert.equal(profile.model, "MiniMax-M2");
+    assert.equal(profile.model, "MiniMax-M3");
     assert.match(profile.baseUrl ?? "", /minimaxi\.com\/anthropic$/);
     assert.equal(profile.auth, "bearer", "third-party endpoints want Bearer");
-    // Verified against the live endpoint: images are accepted and discarded.
-    assert.equal(profile.vision, false);
+    // Verified live: M3 read a real 1280x800 WebP screenshot back correctly.
+    assert.equal(profile.vision, true);
+    // Accepted by the endpoint but not implemented, so not sent.
     assert.equal(profile.promptCaching, false);
     assert.equal(profile.adaptiveThinking, false);
+  });
+});
+
+test("vision follows the model, not the provider", () => {
+  withEnv({ ...CLEAN, AGENTBOX_MODEL: "MiniMax-M2" }, () => {
+    // M2 accepts images on the same endpoint and silently discards them.
+    assert.equal(resolveProvider("minimax").vision, false);
+  });
+
+  withEnv({ ...CLEAN, AGENTBOX_MODEL: "MiniMax-M9-future" }, () => {
+    // Unknown models are assumed blind: that is the assumption whose failure shows.
+    assert.equal(resolveProvider("minimax").vision, false);
+  });
+
+  withEnv({ ...CLEAN, AGENTBOX_MODEL: "MiniMax-M9-future", AGENTBOX_VISION: "1" }, () => {
+    // An explicit opt-in wins, so a newly-capable model needs no code change.
+    assert.equal(resolveProvider("minimax").vision, true);
+  });
+
+  withEnv({ ...CLEAN, AGENTBOX_VISION: "0" }, () => {
+    assert.equal(resolveProvider("minimax").vision, false, "opt-out also wins");
   });
 });
 
@@ -104,8 +126,8 @@ test("custom capabilities default off and are opt-in", () => {
 });
 
 test("AGENTBOX_MODEL overrides a preset's model", () => {
-  withEnv({ ...CLEAN, AGENTBOX_MODEL: "MiniMax-M1" }, () => {
-    assert.equal(resolveProvider("minimax").model, "MiniMax-M1");
+  withEnv({ ...CLEAN, AGENTBOX_MODEL: "MiniMax-M2" }, () => {
+    assert.equal(resolveProvider("minimax").model, "MiniMax-M2");
   });
 });
 
@@ -170,7 +192,7 @@ test("the prompt tells a blind agent it has no screen", () => {
 
 test("describeProvider surfaces what is missing", () => {
   withEnv(CLEAN, () => {
-    assert.match(describeProvider(resolveProvider("minimax")), /no vision/);
-    assert.doesNotMatch(describeProvider(resolveProvider("anthropic")), /no vision/);
+    assert.match(describeProvider(resolveProvider("minimax")), /no prompt caching/);
+    assert.doesNotMatch(describeProvider(resolveProvider("anthropic")), /no /);
   });
 });

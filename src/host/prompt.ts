@@ -53,7 +53,13 @@ Every \`computer\` call returns a screenshot of the end state, so you do not nee
 for one separately. You can batch several actions into one call — click a field, type
 into it, press Enter — and you will see one settled screenshot of the result. Batch when
 the steps are certain; go one action at a time when you need to see what happened before
-deciding the next move.`;
+deciding the next move.
+
+Never state what is on the screen unless you took a screenshot **in this turn** and are
+reading it. You have no other way to know: the desktop changes between turns, and a
+screenshot you remember from earlier is not evidence about now. If you are asked what is
+displayed, call \`computer\` first. Describing a screen you have not just looked at is
+worse than saying you need to check, because it reads as fact.`;
 
 const TEAM_SECTION_PREAMBLE = `# Your teammates
 
