@@ -11,7 +11,6 @@ import { homedir } from "node:os";
 import {
   BoxManager,
   defaultBoxConfig,
-  generateToken,
   resolveDockerHostAddress,
   type BoxConfig,
 } from "./box/docker.ts";
@@ -19,6 +18,12 @@ import { AgentRegistry, defaultAgentsRoot } from "./agents/registry.ts";
 import { Orchestrator } from "./host/orchestrator.ts";
 import type { TurnEvent } from "./host/turn.ts";
 import type { BusEvent } from "./agents/bus.ts";
+import {
+  describeProvider,
+  providerNames,
+  resolveProvider,
+  type ProviderProfile,
+} from "./host/provider.ts";
 
 const here = dirname(fileURLToPath(import.meta.url));
 
@@ -26,28 +31,9 @@ function agentboxHome(): string {
   return process.env.AGENTBOX_HOME ?? join(homedir(), ".agentbox");
 }
 
-/**
- * The box token is persisted so `box up` and `chat` agree on it across runs.
- * Without this, every command would generate a new token and fail to authenticate
- * against an already-running box.
- */
-function loadOrCreateToken(): string {
-  if (process.env.AGENTBOX_TOKEN) return process.env.AGENTBOX_TOKEN;
-
-  const path = join(agentboxHome(), "token");
-  if (existsSync(path)) {
-    const existing = readFileSync(path, "utf8").trim();
-    if (existing) return existing;
-  }
-
-  const token = generateToken();
-  mkdirSync(dirname(path), { recursive: true });
-  writeFileSync(path, `${token}\n`, { mode: 0o600 });
-  return token;
-}
-
 function boxConfig(overrides: Partial<BoxConfig> = {}): BoxConfig {
-  return defaultBoxConfig({ token: loadOrCreateToken(), ...overrides });
+  // The token comes from defaultBoxConfig, which every caller shares.
+  return defaultBoxConfig(overrides);
 }
 
 const out = (line = "") => process.stdout.write(`${line}\n`);
@@ -292,8 +278,33 @@ function makeRenderer() {
   return { onTurnEvent, onBusEvent, endStream };
 }
 
+/** Reads `--flag value` out of an argv slice. */
+function flagValue(argv: string[], flag: string): string | undefined {
+  const index = argv.indexOf(flag);
+  if (index === -1) return undefined;
+  const value = argv[index + 1];
+  return value && !value.startsWith("-") ? value : undefined;
+}
+
 async function cmdChat(argv: string[]): Promise<number> {
-  if (!process.env.ANTHROPIC_API_KEY && !process.env.ANTHROPIC_AUTH_TOKEN) {
+  // Flags win over env so a single run can target a different endpoint.
+  const providerName = flagValue(argv, "--provider");
+  const modelOverride = flagValue(argv, "--model");
+  if (modelOverride) process.env.AGENTBOX_MODEL = modelOverride;
+
+  let provider: ProviderProfile;
+  try {
+    provider = resolveProvider(providerName);
+  } catch (error) {
+    err(error instanceof Error ? error.message : String(error));
+    return 1;
+  }
+
+  if (
+    provider.keyEnv === "ANTHROPIC_API_KEY" &&
+    !process.env.ANTHROPIC_API_KEY &&
+    !process.env.ANTHROPIC_AUTH_TOKEN
+  ) {
     // The SDK also reads an `ant auth login` profile, so this is a hint, not a gate.
     out(
       dim(
@@ -309,11 +320,20 @@ async function cmdChat(argv: string[]): Promise<number> {
   const oneShot = positional.slice(1).join(" ").trim();
 
   const renderer = makeRenderer();
-  const orchestrator = new Orchestrator({
-    useBox: !noBox,
-    onTurnEvent: renderer.onTurnEvent,
-    onBusEvent: renderer.onBusEvent,
-  });
+  let orchestrator: Orchestrator;
+  try {
+    orchestrator = new Orchestrator({
+      provider,
+      useBox: !noBox,
+      onTurnEvent: renderer.onTurnEvent,
+      onBusEvent: renderer.onBusEvent,
+    });
+  } catch (error) {
+    err(error instanceof Error ? error.message : String(error));
+    return 1;
+  }
+
+  out(dim(`model: ${describeProvider(provider)}`));
 
   const box = await orchestrator.connectBox();
   out(box.connected ? dim(`box: ${box.detail}`) : dim(`box: unavailable — ${box.detail}`));
@@ -384,13 +404,26 @@ Agents:
 Chat:
   chat [agent] [message]    Talk to an agent. Omit the message for a REPL,
                             omit the agent to use the first one.
-                            --no-box runs without the box tools.
+                            --no-box              run without the box tools
+                            --provider <name>     anthropic | minimax | custom
+                            --model <id>          override the model
 
 The box runs wherever your Docker engine points: set DOCKER_HOST or use
 \`docker context use\` to put it on a remote machine.
 
+Providers:
+  anthropic (default)      claude-opus-5; full vision, caching, thinking
+  minimax                  MiniMax-M2 via its Anthropic-compatible endpoint.
+                           Text-only: it accepts screenshots and silently
+                           discards them, so the computer tool is withheld.
+  custom                   Set AGENTBOX_BASE_URL, AGENTBOX_MODEL, and
+                           AGENTBOX_KEY_ENV. Every optional capability
+                           defaults off; opt in with AGENTBOX_VISION=1,
+                           AGENTBOX_CACHING=1, AGENTBOX_THINKING=1.
+
 Environment:
   ANTHROPIC_API_KEY         API credentials (or run \`ant auth login\`)
+  AGENTBOX_PROVIDER         Which provider to use (see above)
   AGENTBOX_HOME             State directory (default ~/.agentbox)
   AGENTBOX_IMAGE            Box image tag (default agentbox/box:latest)
   AGENTBOX_BOX_HOST         Override where published ports are reachable
@@ -444,6 +477,16 @@ async function main(): Promise<number> {
 
     case "chat":
       return cmdChat(rest);
+
+    case "providers": {
+      for (const name of providerNames()) {
+        const profile = resolveProvider(name);
+        const key = process.env[profile.keyEnv] ? "key set" : `needs ${profile.keyEnv}`;
+        out(`${bold(name)}  ${dim(`${key}`)}`);
+        out(dim(`  ${describeProvider(profile)}`));
+      }
+      return 0;
+    }
 
     case "where":
       out(`state:  ${agentboxHome()}`);

@@ -14,10 +14,8 @@ import type { DisplayLease } from "../box/display-lease.ts";
 import type { ResolutionConfig } from "../protocol/index.ts";
 import { buildSystemPromptParts, buildTurnPrompt } from "./prompt.ts";
 import { buildTools, dispatchTool, type ToolOutcome } from "./tools.ts";
+import type { Effort, ProviderProfile } from "./provider.ts";
 
-export const DEFAULT_MODEL = "claude-opus-5";
-/** Streaming, so a long turn cannot trip an HTTP timeout. */
-const MAX_TOKENS = 64_000;
 /**
  * Round cap.
  *
@@ -39,10 +37,23 @@ export interface TurnDeps {
   /** Exclusive claim on the box's single display, held for the length of a turn. */
   display?: DisplayLease;
   resolution: ResolutionConfig | undefined;
-  model?: string;
-  effort?: "low" | "medium" | "high" | "xhigh" | "max";
+  /** Which endpoint and what it can do. Omitted in tests to mean full Claude. */
+  provider?: ProviderProfile;
+  effort?: Effort;
   onEvent?: (event: TurnEvent) => void;
 }
+
+const FULL_CLAUDE: ProviderProfile = {
+  label: "Anthropic",
+  model: "claude-opus-5",
+  maxTokens: 64_000,
+  vision: true,
+  adaptiveThinking: true,
+  effort: true,
+  promptCaching: true,
+  auth: "x-api-key",
+  keyEnv: "ANTHROPIC_API_KEY",
+};
 
 export type TurnEvent =
   | { type: "text"; agentId: string; agentName: string; delta: string }
@@ -133,6 +144,7 @@ export async function runTurn(
 
   const { registry, bus, box, client } = deps;
   const emit = deps.onEvent ?? (() => {});
+  const provider = deps.provider ?? FULL_CLAUDE;
 
   const promptParts = buildSystemPromptParts({
     agent,
@@ -141,23 +153,21 @@ export async function runTurn(
     resolution: deps.resolution,
     agentsRoot: registry.root,
     hasBox: box !== undefined,
+    vision: provider.vision,
   });
 
   // Two breakpoints, one per stability tier. The first covers the tool
   // definitions and the invariant prompt; the second extends the cache over
   // memory and the roster while those are unchanged, and is the only part that
-  // has to be re-processed when the agent writes a memory.
+  // has to be re-processed when the agent writes a memory. Breakpoints are
+  // dropped entirely where the endpoint does not implement caching, rather than
+  // sent and ignored.
+  const cache = provider.promptCaching
+    ? ({ cache_control: { type: "ephemeral" } } as const)
+    : {};
   const system: Anthropic.TextBlockParam[] = [
-    {
-      type: "text",
-      text: promptParts.stable,
-      cache_control: { type: "ephemeral" },
-    },
-    {
-      type: "text",
-      text: promptParts.volatile,
-      cache_control: { type: "ephemeral" },
-    },
+    { type: "text", text: promptParts.stable, ...cache },
+    { type: "text", text: promptParts.volatile, ...cache },
   ];
 
   const history = registry.readTranscript(agent.id) as TranscriptEntry[];
@@ -174,7 +184,7 @@ export async function runTurn(
     at: new Date().toISOString(),
   } satisfies TranscriptEntry);
 
-  const tools = buildTools(box !== undefined);
+  const tools = buildTools(box !== undefined, provider.vision);
 
   try {
     await runRounds();
@@ -195,12 +205,18 @@ export async function runTurn(
 
     const stream = client.messages.stream(
       {
-        model: deps.model ?? DEFAULT_MODEL,
-        max_tokens: MAX_TOKENS,
+        model: provider.model,
+        max_tokens: provider.maxTokens,
         // Adaptive thinking with a summary, so the caller can show progress
-        // instead of a silent pause on a long turn.
-        thinking: { type: "adaptive", display: "summarized" },
-        output_config: { effort: deps.effort ?? "high" },
+        // instead of a silent pause on a long turn. Both this and effort are
+        // Claude-only; a compatible endpoint that accepts them without
+        // implementing them is worse than one that never sees them.
+        ...(provider.adaptiveThinking
+          ? { thinking: { type: "adaptive" as const, display: "summarized" as const } }
+          : {}),
+        ...(provider.effort
+          ? { output_config: { effort: deps.effort ?? "high" } }
+          : {}),
         system,
         tools,
         messages,

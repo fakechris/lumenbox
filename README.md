@@ -68,6 +68,48 @@ you: open example.com in chromium and tell me the headline
 you: I need someone to own our release notes. Set them up and brief them.
 ```
 
+## Other model providers
+
+The Messages API is implemented by several vendors, so pointing agentbox elsewhere
+is mostly a base URL and a key:
+
+```bash
+npm run agentbox -- providers                 # what is configured
+npm run agentbox -- chat --provider minimax   # MiniMax-M2
+```
+
+What is *not* interchangeable is capability, and this is the part worth knowing.
+A compatible endpoint will accept a request containing something it does not
+implement and return 200. MiniMax accepts `thinking`, `output_config.effort`,
+`cache_control`, and image content blocks without complaint — and silently
+discards the images. Asked what colour fills a solid red picture, MiniMax-M2
+answers *"I'm unable to view the image"* while its own thinking says *"no image is
+provided"*. Nothing in the HTTP response reveals this.
+
+So capabilities are declared per provider rather than assumed. A model without
+vision is not given the `computer` tool at all and its prompt says it has no
+screen, instead of being handed screenshots it would narrate from imagination.
+`bash` and the file tools do not need sight and stay available, which is enough
+for real work — verified end to end on MiniMax, including one agent messaging
+another and the teammate doing the job.
+
+For any other endpoint:
+
+```bash
+export AGENTBOX_BASE_URL=https://your-endpoint/anthropic
+export AGENTBOX_MODEL=your-model
+export AGENTBOX_KEY_ENV=YOUR_KEY_VAR      # which env var holds the key
+export AGENTBOX_AUTH=bearer               # or x-api-key
+npm run agentbox -- chat --provider custom
+```
+
+Every optional capability defaults **off**, because a wrong "yes" fails silently
+while a wrong "no" only costs a feature and says so. Opt in once you have checked:
+`AGENTBOX_VISION=1`, `AGENTBOX_CACHING=1`, `AGENTBOX_THINKING=1`, `AGENTBOX_EFFORT=1`.
+
+Worth testing vision yourself rather than trusting a model card — send a solid
+colour image and ask what colour it is.
+
 ## Putting the box on another machine
 
 The box lifecycle goes through the `docker` CLI, so anything Docker can target
@@ -203,7 +245,7 @@ are the paths that fail quietly.
 ### 3. The agent loop — needs credentials
 
 ```bash
-export ANTHROPIC_API_KEY=...      # or run `ant auth login`
+export ANTHROPIC_API_KEY=...      # or run `ant auth login`, or use --provider minimax
 npm run agentbox -- chat
 ```
 

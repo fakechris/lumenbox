@@ -118,13 +118,19 @@ const actionSchema = {
   required: ["action"],
 };
 
-export function buildTools(hasBox: boolean): Anthropic.Tool[] {
+/**
+ * The tool set for one turn.
+ *
+ * `vision` withholds the computer tool when the model cannot see image blocks.
+ * Offering it anyway would be worse than useless: the agent would receive a note
+ * saying a screenshot is attached, see nothing, and narrate a screen it invented.
+ */
+export function buildTools(hasBox: boolean, vision = true): Anthropic.Tool[] {
   const tools: Anthropic.Tool[] = [];
 
-  if (hasBox) {
-    tools.push(
-      {
-        name: "computer",
+  if (hasBox && vision) {
+    tools.push({
+      name: "computer",
         description:
           "Interact with the Linux desktop in your box: move and click the mouse, type, " +
           "press keys, scroll, drag, and capture the screen. Call this whenever the task " +
@@ -147,7 +153,12 @@ export function buildTools(hasBox: boolean): Anthropic.Tool[] {
           },
           required: ["actions"],
         },
-      },
+    });
+  }
+
+  // Shell and files do not need sight, so they stay available on a text-only model.
+  if (hasBox) {
+    tools.push(
       {
         name: "bash",
         description:

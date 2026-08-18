@@ -87,6 +87,8 @@ export interface PromptContext {
   resolution?: ResolutionConfig;
   agentsRoot: string;
   hasBox: boolean;
+  /** Whether the model can see screenshots. False changes what the box section says. */
+  vision?: boolean;
 }
 
 /** One teammate line: name, id, and a clamped description. */
@@ -166,6 +168,22 @@ function boxSection(context: PromptContext): string {
 Your box is not running right now, so \`computer\`, \`bash\`, and the file tools are
 unavailable. Say so rather than pretending to act; the user can start it with
 \`agentbox box up\`.`;
+  }
+
+  // A model that cannot see image blocks must not be told it has a screen. It
+  // would otherwise reach for a tool it has not been given, or worse, describe a
+  // desktop it never saw.
+  if (context.vision === false) {
+    return `# Your computer
+
+You have a Linux container with a shell and a filesystem, and you can install what
+you need. You do **not** have vision: you cannot see screenshots, so there is no
+computer tool and no way for you to look at the desktop. Do the work through
+\`bash\` and the file tools.
+
+If a task genuinely cannot be done without seeing the screen, say so plainly rather
+than guessing at what is on it. Never describe the contents of a screen — you have
+not seen one.`;
   }
 
   if (!context.resolution) return COMPUTER_SECTION;

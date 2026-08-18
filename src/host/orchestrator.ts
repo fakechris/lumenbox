@@ -14,12 +14,19 @@ import { DisplayLease } from "../box/display-lease.ts";
 import { BoxManager, defaultBoxConfig } from "../box/docker.ts";
 import type { ResolutionConfig } from "../protocol/index.ts";
 import { runTurn, TurnAborted, type TurnEvent } from "./turn.ts";
+import {
+  createClient,
+  resolveProvider,
+  type Effort,
+  type ProviderProfile,
+} from "./provider.ts";
 
 export interface OrchestratorOptions {
   registry?: AgentRegistry;
   client?: Anthropic;
-  model?: string;
-  effort?: "low" | "medium" | "high" | "xhigh" | "max";
+  /** Which endpoint to talk to. Defaults to whatever the environment selects. */
+  provider?: ProviderProfile;
+  effort?: Effort;
   /** Connect to a running box. When false, agents run without box tools. */
   useBox?: boolean;
   onTurnEvent?: (event: TurnEvent) => void;
@@ -39,9 +46,12 @@ export class Orchestrator {
    */
   private readonly display = new DisplayLease();
 
+  readonly provider: ProviderProfile;
+
   constructor(private readonly options: OrchestratorOptions = {}) {
     this.registry = options.registry ?? new AgentRegistry();
-    this.client = options.client ?? new Anthropic();
+    this.provider = options.provider ?? resolveProvider();
+    this.client = options.client ?? createClient(this.provider);
 
     this.bus = new AgentBus(
       this.registry,
@@ -91,7 +101,7 @@ export class Orchestrator {
       box: this.box,
       display: this.display,
       resolution: this.resolution,
-      model: this.options.model,
+      provider: this.provider,
       effort: this.options.effort,
       onEvent: this.options.onTurnEvent,
     }).catch(error => {

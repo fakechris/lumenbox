@@ -9,6 +9,9 @@
 
 import { execFile } from "node:child_process";
 import { randomBytes } from "node:crypto";
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { homedir } from "node:os";
+import { join } from "node:path";
 import { promisify } from "node:util";
 import { BOXD_PORT, NOVNC_PORT } from "../protocol/index.ts";
 import { BoxClient } from "./client.ts";
@@ -38,13 +41,41 @@ export interface BoxConfig {
   runArgs: string[];
 }
 
+/**
+ * The box token, resolved the same way from every entry point.
+ *
+ * This lives here rather than in the CLI because it has to: the CLI's `box`
+ * commands and the orchestrator's `connectBox` both need it, and when only one of
+ * them knew where to look the other authenticated with an empty string and every
+ * call came back `Unauthorized` — with nothing to suggest the token was the cause.
+ *
+ * Created on first use and then stable, so a container started earlier keeps
+ * matching.
+ */
+export function loadBoxToken(): string {
+  if (process.env.AGENTBOX_TOKEN) return process.env.AGENTBOX_TOKEN;
+
+  const home = process.env.AGENTBOX_HOME ?? join(homedir(), ".agentbox");
+  const path = join(home, "token");
+
+  if (existsSync(path)) {
+    const existing = readFileSync(path, "utf8").trim();
+    if (existing) return existing;
+  }
+
+  const token = generateToken();
+  mkdirSync(home, { recursive: true });
+  writeFileSync(path, `${token}\n`, { mode: 0o600 });
+  return token;
+}
+
 export function defaultBoxConfig(overrides: Partial<BoxConfig> = {}): BoxConfig {
   return {
     containerName: process.env.AGENTBOX_CONTAINER ?? DEFAULT_CONTAINER,
     image: process.env.AGENTBOX_IMAGE ?? DEFAULT_IMAGE,
     boxdPort: Number(process.env.AGENTBOX_BOXD_PORT ?? 0),
     novncPort: Number(process.env.AGENTBOX_NOVNC_PORT ?? 0),
-    token: process.env.AGENTBOX_TOKEN ?? "",
+    token: loadBoxToken(),
     host: process.env.AGENTBOX_BOX_HOST ?? resolveDockerHostAddress(),
     displayWidth: Number(process.env.AGENTBOX_WIDTH ?? 1280),
     displayHeight: Number(process.env.AGENTBOX_HEIGHT ?? 800),

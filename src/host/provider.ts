@@ -1,0 +1,192 @@
+/**
+ * Model providers.
+ *
+ * The Anthropic Messages API has become a de facto interface that several vendors
+ * implement, so pointing agentbox at one is mostly a base URL and a key. The part
+ * that is not interchangeable is *capability*: a compatible endpoint will happily
+ * accept a request containing things it does not implement and return 200.
+ *
+ * MiniMax is the worked example. It accepts `thinking`, `output_config.effort`,
+ * `cache_control`, and image content blocks without complaint — and then silently
+ * discards the images. Asked what colour fills a solid red picture, MiniMax-M2
+ * replies "I'm unable to view the image" while its thinking says "no image is
+ * provided". Nothing in the HTTP response reveals this.
+ *
+ * That failure mode is why capabilities are declared here rather than probed or
+ * assumed. An agent that cannot see is not given the computer tool at all, and is
+ * told why, instead of being handed screenshots it will hallucinate about.
+ */
+
+import Anthropic from "@anthropic-ai/sdk";
+
+export type Effort = "low" | "medium" | "high" | "xhigh" | "max";
+
+export interface ProviderProfile {
+  /** Shown in the CLI so it is never ambiguous which endpoint is in use. */
+  label: string;
+  /** Omitted for first-party Anthropic, where the SDK default is correct. */
+  baseUrl?: string;
+  model: string;
+  maxTokens: number;
+
+  /**
+   * Whether the model can actually see image content blocks.
+   *
+   * False withholds the computer tool: a blind agent driving a desktop is worse
+   * than one that knows it cannot.
+   */
+  vision: boolean;
+  /** Claude-only request fields. Sent only where they mean something. */
+  adaptiveThinking: boolean;
+  effort: boolean;
+  promptCaching: boolean;
+
+  /**
+   * How the key is presented. Third-party endpoints generally want
+   * `Authorization: Bearer`; Anthropic wants `x-api-key`.
+   */
+  auth: "x-api-key" | "bearer";
+  /** Env var holding the credential. */
+  keyEnv: string;
+}
+
+const ANTHROPIC: ProviderProfile = {
+  label: "Anthropic",
+  model: "claude-opus-5",
+  maxTokens: 64_000,
+  vision: true,
+  adaptiveThinking: true,
+  effort: true,
+  promptCaching: true,
+  auth: "x-api-key",
+  keyEnv: "ANTHROPIC_API_KEY",
+};
+
+const MINIMAX: ProviderProfile = {
+  label: "MiniMax",
+  baseUrl: "https://api.minimaxi.com/anthropic",
+  model: "MiniMax-M2",
+  // M2 reasons at length before answering and that thinking counts against the
+  // cap, so a tight budget produces an empty response with stop_reason max_tokens.
+  maxTokens: 32_000,
+  // Verified by experiment, not assumed: images are accepted and discarded.
+  vision: false,
+  // Accepted but not implemented. Omitted so behaviour is not left to chance.
+  adaptiveThinking: false,
+  effort: false,
+  promptCaching: false,
+  auth: "bearer",
+  keyEnv: "MINIMAX_CODE_CN_API_KEY",
+};
+
+/** A generic Anthropic-compatible endpoint, configured entirely by env. */
+function compatible(): ProviderProfile {
+  const truthy = (value: string | undefined) =>
+    value === "1" || value?.toLowerCase() === "true";
+
+  return {
+    label: process.env.AGENTBOX_PROVIDER_LABEL ?? "custom",
+    baseUrl: process.env.AGENTBOX_BASE_URL,
+    model: process.env.AGENTBOX_MODEL ?? "unknown",
+    maxTokens: Number(process.env.AGENTBOX_MAX_TOKENS ?? 32_000),
+    // Default every optional capability off: a wrong "yes" fails silently,
+    // a wrong "no" merely costs a feature and says so.
+    vision: truthy(process.env.AGENTBOX_VISION),
+    adaptiveThinking: truthy(process.env.AGENTBOX_THINKING),
+    effort: truthy(process.env.AGENTBOX_EFFORT),
+    promptCaching: truthy(process.env.AGENTBOX_CACHING),
+    auth: process.env.AGENTBOX_AUTH === "x-api-key" ? "x-api-key" : "bearer",
+    keyEnv: process.env.AGENTBOX_KEY_ENV ?? "AGENTBOX_API_KEY",
+  };
+}
+
+const PRESETS: Record<string, () => ProviderProfile> = {
+  anthropic: () => ({ ...ANTHROPIC }),
+  minimax: () => ({ ...MINIMAX }),
+  custom: compatible,
+  compatible,
+};
+
+export function providerNames(): string[] {
+  return ["anthropic", "minimax", "custom"];
+}
+
+/**
+ * Resolves the provider from a name or the environment.
+ *
+ * `AGENTBOX_MODEL` overrides the preset's model, so a different model on the same
+ * endpoint does not need a new preset.
+ */
+export function resolveProvider(name?: string): ProviderProfile {
+  const requested = (name ?? process.env.AGENTBOX_PROVIDER ?? "").toLowerCase();
+
+  // A bare base URL with no provider named is unambiguous enough to act on.
+  const chosen =
+    requested || (process.env.AGENTBOX_BASE_URL ? "custom" : "anthropic");
+
+  const build = PRESETS[chosen];
+  if (!build) {
+    throw new Error(
+      `Unknown provider "${chosen}". Known: ${providerNames().join(", ")}.`
+    );
+  }
+
+  const profile = build();
+  if (process.env.AGENTBOX_MODEL) profile.model = process.env.AGENTBOX_MODEL;
+  if (process.env.AGENTBOX_BASE_URL) profile.baseUrl = process.env.AGENTBOX_BASE_URL;
+  if (process.env.AGENTBOX_MAX_TOKENS) {
+    profile.maxTokens = Number(process.env.AGENTBOX_MAX_TOKENS);
+  }
+  return profile;
+}
+
+export class MissingCredentialError extends Error {
+  constructor(profile: ProviderProfile) {
+    super(
+      `No credential for ${profile.label}: set ${profile.keyEnv}.` +
+        (profile.keyEnv === "ANTHROPIC_API_KEY"
+          ? " Or run `ant auth login`."
+          : "")
+    );
+    this.name = "MissingCredentialError";
+  }
+}
+
+/**
+ * Builds a client for the profile.
+ *
+ * The credential is passed in the header the endpoint expects, and the other one
+ * is explicitly nulled: the SDK would otherwise pick `ANTHROPIC_API_KEY` up from
+ * the environment and send both, which the API rejects.
+ */
+export function createClient(profile: ProviderProfile): Anthropic {
+  const key = process.env[profile.keyEnv];
+
+  // First-party Anthropic can also authenticate from an `ant auth login` profile,
+  // so a missing env var is not necessarily an error there.
+  if (!key && profile.keyEnv !== "ANTHROPIC_API_KEY") {
+    throw new MissingCredentialError(profile);
+  }
+
+  if (profile.auth === "bearer") {
+    return new Anthropic({
+      baseURL: profile.baseUrl,
+      authToken: key,
+      apiKey: null,
+    });
+  }
+
+  return new Anthropic({
+    baseURL: profile.baseUrl,
+    ...(key ? { apiKey: key } : {}),
+  });
+}
+
+/** One line describing what is configured, and what it costs. */
+export function describeProvider(profile: ProviderProfile): string {
+  const missing: string[] = [];
+  if (!profile.vision) missing.push("no vision (computer tool withheld)");
+  if (!profile.promptCaching) missing.push("no prompt caching");
+  const suffix = missing.length > 0 ? ` — ${missing.join(", ")}` : "";
+  return `${profile.label} ${profile.model}${profile.baseUrl ? ` at ${profile.baseUrl}` : ""}${suffix}`;
+}
