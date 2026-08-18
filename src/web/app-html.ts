@@ -22,21 +22,35 @@ export const APP_HTML = String.raw`<!doctype html>
     --dim: #8b93a1; --accent: #7aa2f7; --warn: #e0af68; --ok: #9ece6a; --err: #f7768e;
   }
   * { box-sizing: border-box; }
+  /*
+   * Nothing scrolls the document. Each column scrolls inside itself, so reading
+   * back through one agent's conversation never moves the desktop out of view.
+   *
+   * min-height: 0 on the panes and their scrollers is what makes that work: a flex
+   * item defaults to min-height auto, so a long conversation or a busy activity
+   * feed grows its column past the viewport, the body scrolls instead, and all
+   * three columns move together.
+   */
+  html, body { height: 100%; }
   body {
-    margin: 0; height: 100vh; display: grid;
+    margin: 0; overflow: hidden; display: grid;
     grid-template-columns: 232px minmax(340px, 1fr) minmax(420px, 1.05fr);
     font: 14px/1.55 ui-sans-serif, -apple-system, "Segoe UI", system-ui, sans-serif;
     background: var(--bg); color: var(--text);
   }
-  .pane { min-width: 0; display: flex; flex-direction: column; border-right: 1px solid var(--line); }
+  .pane {
+    min-width: 0; min-height: 0; overflow: hidden;
+    display: flex; flex-direction: column; border-right: 1px solid var(--line);
+  }
   .pane:last-child { border-right: 0; }
+  h2, form, .bar, iframe { flex: none; }
   h2 {
     margin: 0; padding: 11px 14px; font-size: 11px; letter-spacing: .09em;
     text-transform: uppercase; color: var(--dim); border-bottom: 1px solid var(--line);
     display: flex; justify-content: space-between; align-items: center; gap: 8px;
   }
   h2 .plain { text-transform: none; letter-spacing: 0; }
-  .scroll { overflow-y: auto; flex: 1; }
+  .scroll { overflow-y: auto; flex: 1; min-height: 0; }
 
   .agent {
     padding: 10px 14px; cursor: pointer; border-bottom: 1px solid var(--line);
@@ -71,7 +85,9 @@ export const APP_HTML = String.raw`<!doctype html>
   button:disabled { opacity: .45; cursor: default; }
 
   iframe { width: 100%; border: 0; background: #000; aspect-ratio: 16/10; flex: none; }
-  .feed { flex: 1; overflow-y: auto; padding: 6px 0; }
+  /* The desktop keeps its size no matter how long the activity feed gets. */
+  #vnc { min-height: 240px; }
+  .feed { flex: 1; min-height: 0; overflow-y: auto; padding: 6px 0; }
   .ev { padding: 3px 14px; font: 12px/1.55 ui-monospace, SFMono-Regular, Menlo, monospace; color: var(--dim); }
   .ev b { color: var(--text); font-weight: 600; }
   .ev.mail { color: var(--ok); }
@@ -215,10 +231,11 @@ function refresh() {
     $("model").innerHTML = "<b>model</b> " + esc(state.provider);
     $("boxinfo").textContent = state.box.ok ? state.box.detail : "unavailable";
     if (state.box.novncUrl) {
-      // Compare against the attribute, not .src: the browser resolves .src to an
-      // absolute URL, so a relative path would never match and the iframe would
-      // be reloaded on every poll — dropping the VNC session each time.
-      if ($("vnc").getAttribute("src") !== state.box.novncUrl) {
+      // Set once, never re-set. The path is fixed, so assigning src again could
+      // only reload noVNC — which is what made the desktop flash "Connecting…"
+      // on a timer. Checking .src would not have caught it either: the browser
+      // resolves that to an absolute URL, so a relative path never compares equal.
+      if (!$("vnc").getAttribute("src")) {
         $("vnc").setAttribute("src", state.box.novncUrl);
       }
       $("full").href = state.box.novncUrl;
