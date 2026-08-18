@@ -1,0 +1,28 @@
+#!/usr/bin/env bash
+# Launches Chromium with the flags a container needs.
+#
+# Plain `chromium` inside Docker fails in ways that are confusing to an agent
+# reading stderr: the setuid sandbox cannot start without extra kernel
+# capabilities, and Chromium's shared-memory use exceeds Docker's default 64MB
+# /dev/shm even when --shm-size is raised. Both are container facts, not something
+# the model should have to rediscover — so the wrapper is the documented entry
+# point and the prompt points at it.
+set -euo pipefail
+
+PROFILE="${CHROME_PROFILE:-$HOME/.config/box-chrome}"
+mkdir -p "$PROFILE"
+
+# A profile left locked by a killed browser makes every later launch fail silently.
+rm -f "$PROFILE"/Singleton{Lock,Cookie,Socket} 2>/dev/null || true
+
+exec chromium \
+  --user-data-dir="$PROFILE" \
+  --no-sandbox \
+  --disable-dev-shm-usage \
+  --disable-gpu \
+  --no-first-run \
+  --no-default-browser-check \
+  --disable-features=TranslateUI \
+  --window-position=0,0 \
+  --start-maximized \
+  "$@"

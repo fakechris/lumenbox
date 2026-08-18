@@ -1,0 +1,29 @@
+{
+  "name": "agentbox",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Multi-agent orchestrator with a remote Docker box and Linux computer-use",
+  "type": "module",
+  "bin": {
+    "agentbox": "./dist/cli.js"
+  },
+  "scripts": {
+    "build": "npm run build:cli && npm run build:boxd",
+    "build:cli": "esbuild src/cli.ts --bundle --platform=node --target=node22 --format=esm --packages=external --outfile=dist/cli.js",
+    "build:boxd": "esbuild src/boxd/main.ts --bundle --platform=node --target=node22 --format=cjs --outfile=docker/box/boxd.cjs",
+    "typecheck": "tsc -p tsconfig.json",
+    "test": "node --experimental-transform-types --test --test-timeout=30000 'src/**/*.test.ts'",
+    "agentbox": "node --experimental-transform-types src/cli.ts"
+  },
+  "dependencies": {
+    "@anthropic-ai/sdk": "^0.117.1"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.0",
+    "esbuild": "^0.25.0",
+    "typescript": "^5.7.0"
+  },
+  "engines": {
+    "node": ">=22.18.0"
+  }
+}

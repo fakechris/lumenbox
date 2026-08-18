@@ -1,0 +1,367 @@
+/**
+ * Box lifecycle over the Docker CLI.
+ *
+ * The CLI rather than the Engine API on purpose: it already resolves
+ * DOCKER_HOST, `docker context`, TLS material, and `ssh://` endpoints, which is
+ * exactly the "remote docker" surface we want and a meaningful amount of code to
+ * reimplement. Every call is execFile with an argument array — no shell.
+ */
+
+import { execFile } from "node:child_process";
+import { randomBytes } from "node:crypto";
+import { promisify } from "node:util";
+import { BOXD_PORT, NOVNC_PORT } from "../protocol/index.ts";
+import { BoxClient } from "./client.ts";
+
+const execFileAsync = promisify(execFile);
+
+export const DEFAULT_IMAGE = "agentbox/box:latest";
+export const DEFAULT_CONTAINER = "agentbox-box";
+
+export interface BoxConfig {
+  containerName: string;
+  image: string;
+  /** Host port for the daemon. 0 lets Docker pick an ephemeral one. */
+  boxdPort: number;
+  /** Host port for noVNC. 0 lets Docker pick. */
+  novncPort: number;
+  token: string;
+  /**
+   * Where the daemon is reachable from the host. Usually 127.0.0.1, but for a
+   * remote engine it is that engine's address — published ports live there,
+   * not on this machine.
+   */
+  host: string;
+  displayWidth: number;
+  displayHeight: number;
+  /** Extra `docker run` arguments, e.g. volume mounts. */
+  runArgs: string[];
+}
+
+export function defaultBoxConfig(overrides: Partial<BoxConfig> = {}): BoxConfig {
+  return {
+    containerName: process.env.AGENTBOX_CONTAINER ?? DEFAULT_CONTAINER,
+    image: process.env.AGENTBOX_IMAGE ?? DEFAULT_IMAGE,
+    boxdPort: Number(process.env.AGENTBOX_BOXD_PORT ?? 0),
+    novncPort: Number(process.env.AGENTBOX_NOVNC_PORT ?? 0),
+    token: process.env.AGENTBOX_TOKEN ?? "",
+    host: process.env.AGENTBOX_BOX_HOST ?? resolveDockerHostAddress(),
+    displayWidth: Number(process.env.AGENTBOX_WIDTH ?? 1280),
+    displayHeight: Number(process.env.AGENTBOX_HEIGHT ?? 800),
+    runArgs: [],
+    ...overrides,
+  };
+}
+
+/**
+ * Where published container ports actually land.
+ *
+ * With a local engine that is loopback. With DOCKER_HOST pointing elsewhere the
+ * ports are published on *that* machine, so we take its hostname.
+ */
+export function resolveDockerHostAddress(
+  dockerHost = process.env.DOCKER_HOST
+): string {
+  if (!dockerHost) return "127.0.0.1";
+  // unix:// and npipe:// are local sockets.
+  if (/^(unix|npipe):/.test(dockerHost)) return "127.0.0.1";
+  try {
+    // tcp://, ssh://, http(s):// all parse as URLs once the scheme is normalized.
+    const url = new URL(dockerHost.replace(/^tcp:/, "http:"));
+    return url.hostname || "127.0.0.1";
+  } catch {
+    return "127.0.0.1";
+  }
+}
+
+export function generateToken(): string {
+  return randomBytes(32).toString("hex");
+}
+
+export class DockerError extends Error {
+  constructor(
+    message: string,
+    readonly stderr = ""
+  ) {
+    super(message);
+    this.name = "DockerError";
+  }
+}
+
+async function docker(
+  args: readonly string[],
+  timeoutMs = 120_000
+): Promise<string> {
+  try {
+    const { stdout } = await execFileAsync("docker", [...args], {
+      timeout: timeoutMs,
+      maxBuffer: 16 * 1024 * 1024,
+    });
+    return stdout.trim();
+  } catch (error) {
+    const stderr = String((error as { stderr?: string }).stderr ?? "").trim();
+    const message = stderr || (error as Error).message;
+    throw new DockerError(`docker ${args[0]} failed: ${message}`, stderr);
+  }
+}
+
+export type ContainerState =
+  | "missing"
+  | "created"
+  | "running"
+  | "paused"
+  | "restarting"
+  | "exited"
+  | "dead"
+  | "removing";
+
+export interface BoxStatus {
+  state: ContainerState;
+  containerName: string;
+  /** Host-side URL for the daemon, once the port mapping is known. */
+  boxdUrl?: string;
+  novncUrl?: string;
+  health?: string;
+}
+
+export class BoxManager {
+  constructor(readonly config: BoxConfig) {}
+
+  async dockerAvailable(): Promise<boolean> {
+    try {
+      await docker(["version", "--format", "{{.Server.Version}}"], 15_000);
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
+  async state(): Promise<ContainerState> {
+    try {
+      const out = await docker(
+        [
+          "inspect",
+          "--format",
+          "{{.State.Status}}",
+          this.config.containerName,
+        ],
+        20_000
+      );
+      return (out || "missing") as ContainerState;
+    } catch (error) {
+      if (error instanceof DockerError && /No such object|no such container/i.test(error.stderr)) {
+        return "missing";
+      }
+      throw error;
+    }
+  }
+
+  /** Resolves the host port Docker assigned to a container port. */
+  private async publishedPort(containerPort: number): Promise<number | undefined> {
+    try {
+      const out = await docker(
+        ["port", this.config.containerName, `${containerPort}/tcp`],
+        20_000
+      );
+      // Output lines look like "0.0.0.0:49173" or "[::]:49173".
+      const match = /:(\d+)\s*$/m.exec(out);
+      return match ? Number(match[1]) : undefined;
+    } catch {
+      return undefined;
+    }
+  }
+
+  async status(): Promise<BoxStatus> {
+    const state = await this.state();
+    const status: BoxStatus = { state, containerName: this.config.containerName };
+    if (state !== "running") return status;
+
+    const boxdPort = await this.publishedPort(BOXD_PORT);
+    const novncPort = await this.publishedPort(NOVNC_PORT);
+    if (boxdPort) status.boxdUrl = `http://${this.config.host}:${boxdPort}`;
+    if (novncPort) {
+      status.novncUrl = `http://${this.config.host}:${novncPort}/vnc.html?autoconnect=1&resize=scale`;
+    }
+    return status;
+  }
+
+  async imageExists(): Promise<boolean> {
+    try {
+      await docker(["image", "inspect", this.config.image], 20_000);
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
+  /** Builds the box image from the given context directory. */
+  async build(contextDir: string, onOutput?: (line: string) => void): Promise<void> {
+    onOutput?.(`building ${this.config.image} from ${contextDir}`);
+    // Build output is large and streaming it needs spawn, but the CLI already
+    // prints progress to stderr; we surface only the outcome.
+    await docker(
+      ["build", "-t", this.config.image, contextDir],
+      20 * 60_000
+    );
+    onOutput?.(`built ${this.config.image}`);
+  }
+
+  private runArguments(): string[] {
+    const { config } = this;
+    const publish = (hostPort: number, containerPort: number) =>
+      hostPort > 0 ? `${hostPort}:${containerPort}` : `${containerPort}`;
+
+    return [
+      "run",
+      "--detach",
+      "--name",
+      config.containerName,
+      "--publish",
+      publish(config.boxdPort, BOXD_PORT),
+      "--publish",
+      publish(config.novncPort, NOVNC_PORT),
+      "--env",
+      `BOXD_TOKEN=${config.token}`,
+      "--env",
+      `DISPLAY_WIDTH=${config.displayWidth}`,
+      "--env",
+      `DISPLAY_HEIGHT=${config.displayHeight}`,
+      // Chrome and friends need more than Docker's default 64MB of /dev/shm.
+      "--shm-size",
+      "1g",
+      // The box runs a desktop and a browser; without this a runaway page can
+      // starve the engine host.
+      "--memory",
+      process.env.AGENTBOX_MEMORY ?? "4g",
+      ...config.runArgs,
+      config.image,
+    ];
+  }
+
+  /**
+   * Brings the box up and waits for the daemon to answer.
+   *
+   * Idempotent: an already-running container is reused, a stopped one is started.
+   */
+  async up(
+    options: { recreate?: boolean; onOutput?: (line: string) => void } = {}
+  ): Promise<{ client: BoxClient; status: BoxStatus }> {
+    const { onOutput } = options;
+
+    if (!this.config.token) {
+      throw new DockerError(
+        "No box token configured. Set AGENTBOX_TOKEN, or let `agentbox box up` generate one."
+      );
+    }
+    if (!(await this.dockerAvailable())) {
+      throw new DockerError(
+        "Cannot reach a Docker engine. Check `docker version`, DOCKER_HOST, and your docker context."
+      );
+    }
+
+    let state = await this.state();
+
+    if (options.recreate && state !== "missing") {
+      onOutput?.(`removing existing container ${this.config.containerName}`);
+      await this.down({ remove: true });
+      state = "missing";
+    }
+
+    if (state === "missing") {
+      if (!(await this.imageExists())) {
+        throw new DockerError(
+          `Image ${this.config.image} not found. Run \`agentbox box build\` first.`
+        );
+      }
+      onOutput?.(`starting container ${this.config.containerName}`);
+      await docker(this.runArguments(), 120_000);
+    } else if (state === "exited" || state === "created") {
+      onOutput?.(`restarting container ${this.config.containerName}`);
+      await docker(["start", this.config.containerName], 60_000);
+    } else if (state === "paused") {
+      await docker(["unpause", this.config.containerName], 30_000);
+    } else if (state !== "running") {
+      throw new DockerError(
+        `Container ${this.config.containerName} is in state "${state}"; ` +
+          "resolve it manually or re-run with --recreate."
+      );
+    }
+
+    const status = await this.status();
+    if (!status.boxdUrl) {
+      throw new DockerError(
+        `Container is running but port ${BOXD_PORT} is not published. ` +
+          "It may have been created outside agentbox; re-run with --recreate."
+      );
+    }
+
+    const client = new BoxClient({ baseUrl: status.boxdUrl, token: this.config.token });
+    await this.waitForHealthy(client, onOutput);
+    return { client, status };
+  }
+
+  /** Polls /health until the daemon reports a usable display. */
+  private async waitForHealthy(
+    client: BoxClient,
+    onOutput?: (line: string) => void,
+    timeoutMs = 90_000
+  ): Promise<void> {
+    const deadline = Date.now() + timeoutMs;
+    let lastError = "";
+    let announcedWait = false;
+
+    while (Date.now() < deadline) {
+      try {
+        const health = await client.health(4000);
+        if (health.resolution) {
+          onOutput?.(
+            `box ready: display ${health.display} at ` +
+              `${health.resolution.display.width}x${health.resolution.display.height}`
+          );
+          return;
+        }
+        // Daemon is up but X is still coming; keep waiting.
+        lastError = "display not ready";
+      } catch (error) {
+        lastError = error instanceof Error ? error.message : String(error);
+      }
+      if (!announcedWait) {
+        onOutput?.("waiting for the box desktop to come up");
+        announcedWait = true;
+      }
+      await new Promise(resolve => setTimeout(resolve, 1000));
+    }
+
+    throw new DockerError(
+      `Box did not become healthy within ${timeoutMs / 1000}s (last: ${lastError}). ` +
+        `Check \`docker logs ${this.config.containerName}\`.`
+    );
+  }
+
+  async down(options: { remove?: boolean } = {}): Promise<void> {
+    const state = await this.state();
+    if (state === "missing") return;
+    if (state === "running" || state === "paused" || state === "restarting") {
+      await docker(["stop", "--timeout", "10", this.config.containerName], 60_000);
+    }
+    if (options.remove) {
+      await docker(["rm", "--force", this.config.containerName], 60_000);
+    }
+  }
+
+  logs(tail = 200): Promise<string> {
+    return docker(["logs", "--tail", String(tail), this.config.containerName], 30_000);
+  }
+
+  /** A client for an already-running box, without touching its lifecycle. */
+  async connect(): Promise<BoxClient> {
+    const status = await this.status();
+    if (status.state !== "running" || !status.boxdUrl) {
+      throw new DockerError(
+        `Box ${this.config.containerName} is not running (state: ${status.state}). ` +
+          "Run `agentbox box up`."
+      );
+    }
+    return new BoxClient({ baseUrl: status.boxdUrl, token: this.config.token });
+  }
+}

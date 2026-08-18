@@ -1,0 +1,465 @@
+#!/usr/bin/env node
+/**
+ * agentbox CLI.
+ */
+
+import { createInterface } from "node:readline/promises";
+import { writeFileSync, mkdirSync, existsSync, readFileSync } from "node:fs";
+import { dirname, join, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
+import { homedir } from "node:os";
+import {
+  BoxManager,
+  defaultBoxConfig,
+  generateToken,
+  resolveDockerHostAddress,
+  type BoxConfig,
+} from "./box/docker.ts";
+import { AgentRegistry, defaultAgentsRoot } from "./agents/registry.ts";
+import { Orchestrator } from "./host/orchestrator.ts";
+import type { TurnEvent } from "./host/turn.ts";
+import type { BusEvent } from "./agents/bus.ts";
+
+const here = dirname(fileURLToPath(import.meta.url));
+
+function agentboxHome(): string {
+  return process.env.AGENTBOX_HOME ?? join(homedir(), ".agentbox");
+}
+
+/**
+ * The box token is persisted so `box up` and `chat` agree on it across runs.
+ * Without this, every command would generate a new token and fail to authenticate
+ * against an already-running box.
+ */
+function loadOrCreateToken(): string {
+  if (process.env.AGENTBOX_TOKEN) return process.env.AGENTBOX_TOKEN;
+
+  const path = join(agentboxHome(), "token");
+  if (existsSync(path)) {
+    const existing = readFileSync(path, "utf8").trim();
+    if (existing) return existing;
+  }
+
+  const token = generateToken();
+  mkdirSync(dirname(path), { recursive: true });
+  writeFileSync(path, `${token}\n`, { mode: 0o600 });
+  return token;
+}
+
+function boxConfig(overrides: Partial<BoxConfig> = {}): BoxConfig {
+  return defaultBoxConfig({ token: loadOrCreateToken(), ...overrides });
+}
+
+const out = (line = "") => process.stdout.write(`${line}\n`);
+const err = (line: string) => process.stderr.write(`${line}\n`);
+
+function dim(text: string): string {
+  return process.stdout.isTTY ? `\x1b[2m${text}\x1b[0m` : text;
+}
+function bold(text: string): string {
+  return process.stdout.isTTY ? `\x1b[1m${text}\x1b[0m` : text;
+}
+
+// --- box commands ---------------------------------------------------------
+
+async function cmdBoxBuild(): Promise<number> {
+  const config = boxConfig();
+  const manager = new BoxManager(config);
+
+  // The bundle is built into the Docker context by `npm run build:boxd`.
+  const context = resolve(here, "..", "docker", "box");
+  const bundle = join(context, "boxd.cjs");
+  if (!existsSync(bundle)) {
+    err(
+      `Daemon bundle missing at ${bundle}.\n` +
+        "Run `npm run build:boxd` first — the image copies the bundle in."
+    );
+    return 1;
+  }
+
+  out(`Building ${config.image}. This takes a few minutes the first time.`);
+  await manager.build(context, line => out(dim(line)));
+  out("Done. Start it with `agentbox box up`.");
+  return 0;
+}
+
+async function cmdBoxUp(argv: string[]): Promise<number> {
+  const manager = new BoxManager(boxConfig());
+  const { status } = await manager.up({
+    recreate: argv.includes("--recreate"),
+    onOutput: line => out(dim(line)),
+  });
+  out("");
+  out(`${bold("Box running")} (${status.containerName})`);
+  if (status.boxdUrl) out(`  daemon:  ${status.boxdUrl}`);
+  if (status.novncUrl) out(`  desktop: ${status.novncUrl}`);
+  out("");
+  out("Open the desktop URL in a browser to watch the agents work.");
+  return 0;
+}
+
+async function cmdBoxStatus(): Promise<number> {
+  const manager = new BoxManager(boxConfig());
+
+  if (!(await manager.dockerAvailable())) {
+    err("Cannot reach a Docker engine. Check `docker version` and DOCKER_HOST.");
+    return 1;
+  }
+
+  const status = await manager.status();
+  out(`container: ${status.containerName}`);
+  out(`state:     ${status.state}`);
+  out(`engine:    ${process.env.DOCKER_HOST ?? "local"} (ports on ${resolveDockerHostAddress()})`);
+
+  if (status.state !== "running") {
+    out("");
+    out("Start it with `agentbox box up`.");
+    return 0;
+  }
+
+  out(`daemon:    ${status.boxdUrl ?? "port not published"}`);
+  out(`desktop:   ${status.novncUrl ?? "port not published"}`);
+
+  try {
+    const client = await manager.connect();
+    const health = await client.health();
+    const size = health.resolution
+      ? `${health.resolution.display.width}x${health.resolution.display.height}`
+      : "no display detected";
+    out(
+      `health:    ok, display ${health.display} at ${size}, ` +
+        `up ${health.uptime_seconds}s`
+    );
+    if (health.resolution) {
+      out(
+        `api space: ${health.resolution.api.width}x${health.resolution.api.height} ` +
+          "(what the model sees)"
+      );
+    }
+  } catch (error) {
+    out(`health:    ${error instanceof Error ? error.message : String(error)}`);
+  }
+  return 0;
+}
+
+async function cmdBoxDown(argv: string[]): Promise<number> {
+  const manager = new BoxManager(boxConfig());
+  await manager.down({ remove: argv.includes("--rm") });
+  out(argv.includes("--rm") ? "Box stopped and removed." : "Box stopped.");
+  return 0;
+}
+
+async function cmdBoxLogs(argv: string[]): Promise<number> {
+  const manager = new BoxManager(boxConfig());
+  const tailIndex = argv.indexOf("--tail");
+  const tail = tailIndex >= 0 ? Number(argv[tailIndex + 1] ?? 200) : 200;
+  out(await manager.logs(tail));
+  return 0;
+}
+
+async function cmdBoxShot(argv: string[]): Promise<number> {
+  const target = argv.find(arg => !arg.startsWith("-")) ?? "box-screenshot.webp";
+  const manager = new BoxManager(boxConfig());
+  const client = await manager.connect();
+
+  const result = await client.computer([{ action: "screenshot" }]);
+  if (!result.screenshot) {
+    err("The box returned an empty screenshot.");
+    return 1;
+  }
+  writeFileSync(target, Buffer.from(result.screenshot, "base64"));
+  out(`Wrote ${target} (${result.duration_ms}ms).`);
+  return 0;
+}
+
+async function cmdBoxExec(argv: string[]): Promise<number> {
+  const command = argv.join(" ").trim();
+  if (!command) {
+    err("Usage: agentbox box exec <command>");
+    return 1;
+  }
+  const manager = new BoxManager(boxConfig());
+  const client = await manager.connect();
+  const result = await client.exec(command);
+  if (result.stdout) process.stdout.write(result.stdout);
+  if (result.stderr) process.stderr.write(result.stderr);
+  return result.exit_code;
+}
+
+// --- agent commands -------------------------------------------------------
+
+function cmdAgents(): number {
+  const registry = new AgentRegistry();
+  const agents = registry.list();
+
+  if (agents.length === 0) {
+    out("No agents yet. `agentbox chat` creates a coordinator to start with,");
+    out("or make one directly: agentbox agent new <name> <description>");
+    return 0;
+  }
+
+  out(`${agents.length} agent(s) in ${registry.root}:`);
+  out("");
+  for (const agent of agents) {
+    const title = agent.profile.title ? ` — ${agent.profile.title}` : "";
+    const hidden = agent.profile.hidden ? dim(" (hidden)") : "";
+    out(`${bold(agent.profile.name)}${title}${hidden}`);
+    out(dim(`  id: ${agent.id}`));
+    if (agent.profile.description) {
+      const summary = agent.profile.description.replace(/\s+/g, " ").slice(0, 140);
+      out(dim(`  ${summary}${agent.profile.description.length > 140 ? "..." : ""}`));
+    }
+    out("");
+  }
+  return 0;
+}
+
+function cmdAgentNew(argv: string[]): number {
+  const [name, ...rest] = argv;
+  if (!name) {
+    err("Usage: agentbox agent new <name> [description]");
+    return 1;
+  }
+  const registry = new AgentRegistry();
+  const created = registry.create({ name, description: rest.join(" ") });
+  out(`Created ${created.profile.name} (id: ${created.id})`);
+  out(dim(`  ${created.dir}`));
+  return 0;
+}
+
+// --- chat -----------------------------------------------------------------
+
+/** Renders turn and bus events as a readable transcript. */
+function makeRenderer() {
+  let streaming = false;
+  let lastAgent = "";
+
+  const endStream = () => {
+    if (streaming) {
+      process.stdout.write("\n");
+      streaming = false;
+    }
+  };
+
+  const onTurnEvent = (event: TurnEvent) => {
+    switch (event.type) {
+      case "text": {
+        if (!streaming || lastAgent !== event.agentName) {
+          endStream();
+          process.stdout.write(`${bold(event.agentName)}: `);
+          lastAgent = event.agentName;
+          streaming = true;
+        }
+        process.stdout.write(event.delta);
+        return;
+      }
+      case "tool_start": {
+        endStream();
+        const detail =
+          event.tool === "bash"
+            ? String((event.input as { command?: string }).command ?? "")
+            : event.tool === "SendToAgent"
+              ? String((event.input as { target_id?: string }).target_id ?? "")
+              : "";
+        out(dim(`  ${event.agentName} → ${event.tool}${detail ? ` ${detail}` : ""}`));
+        return;
+      }
+      case "tool_end": {
+        if (event.summary) out(dim(`    ${event.summary}`));
+        return;
+      }
+      case "aborted": {
+        endStream();
+        out(dim("  (turn superseded by a priority message)"));
+        return;
+      }
+      default:
+        return;
+    }
+  };
+
+  const onBusEvent = (event: BusEvent) => {
+    if (event.type === "message_sent") {
+      endStream();
+      const flag = event.priority ? " (priority)" : "";
+      out(dim(`  ✉ ${event.fromName} → ${event.toName}${flag}`));
+    } else if (event.type === "turn_failed") {
+      endStream();
+      err(`  ! turn failed for ${event.agentId}: ${event.error}`);
+    }
+  };
+
+  return { onTurnEvent, onBusEvent, endStream };
+}
+
+async function cmdChat(argv: string[]): Promise<number> {
+  if (!process.env.ANTHROPIC_API_KEY && !process.env.ANTHROPIC_AUTH_TOKEN) {
+    // The SDK also reads an `ant auth login` profile, so this is a hint, not a gate.
+    out(
+      dim(
+        "No ANTHROPIC_API_KEY set — relying on an `ant auth login` profile. " +
+          "Run `ant auth status` if requests fail."
+      )
+    );
+  }
+
+  const noBox = argv.includes("--no-box");
+  const positional = argv.filter(arg => !arg.startsWith("-"));
+  const agentArg = positional[0];
+  const oneShot = positional.slice(1).join(" ").trim();
+
+  const renderer = makeRenderer();
+  const orchestrator = new Orchestrator({
+    useBox: !noBox,
+    onTurnEvent: renderer.onTurnEvent,
+    onBusEvent: renderer.onBusEvent,
+  });
+
+  const box = await orchestrator.connectBox();
+  out(box.connected ? dim(`box: ${box.detail}`) : dim(`box: unavailable — ${box.detail}`));
+
+  const agent = agentArg
+    ? orchestrator.registry.resolve(agentArg)
+    : orchestrator.ensureDefaultAgent();
+  out(dim(`talking to ${agent.profile.name} (${agent.id})`));
+  out("");
+
+  /** Returns true when the turn (and any it woke) completed without error. */
+  const runOne = async (text: string): Promise<boolean> => {
+    let ok = true;
+    try {
+      await orchestrator.prompt(agent.id, text);
+      // Teammates woken during that turn are still working; let them finish so
+      // their messages land before the next prompt.
+      await orchestrator.settle();
+    } catch (error) {
+      renderer.endStream();
+      err(`error: ${error instanceof Error ? error.message : String(error)}`);
+      ok = false;
+    }
+    renderer.endStream();
+    return ok;
+  };
+
+  // One-shot mode is scriptable, so a failed turn has to be a non-zero exit.
+  if (oneShot) {
+    return (await runOne(oneShot)) ? 0 : 1;
+  }
+
+  const rl = createInterface({ input: process.stdin, output: process.stdout });
+  out(dim("Type a message. Ctrl-C or an empty line with 'exit' to quit."));
+  try {
+    for (;;) {
+      const line = (await rl.question(`\n${bold("you")}: `)).trim();
+      if (!line) continue;
+      if (line === "exit" || line === "quit") break;
+      out("");
+      await runOne(line);
+    }
+  } finally {
+    rl.close();
+  }
+  return 0;
+}
+
+// --- dispatch -------------------------------------------------------------
+
+const USAGE = `agentbox — multi-agent orchestrator with a Docker box and Linux computer-use
+
+Usage: agentbox <command> [args]
+
+Box:
+  box build                 Build the box image (needs \`npm run build:boxd\` first)
+  box up [--recreate]       Start the box and wait for its desktop
+  box status                Show container state, ports, and health
+  box down [--rm]           Stop the box, optionally removing the container
+  box logs [--tail N]       Container logs
+  box shot [file.webp]      Save a screenshot of the box desktop
+  box exec <command>        Run a shell command in the box
+
+Agents:
+  agents                    List agents
+  agent new <name> [desc]   Create an agent
+
+Chat:
+  chat [agent] [message]    Talk to an agent. Omit the message for a REPL,
+                            omit the agent to use the first one.
+                            --no-box runs without the box tools.
+
+The box runs wherever your Docker engine points: set DOCKER_HOST or use
+\`docker context use\` to put it on a remote machine.
+
+Environment:
+  ANTHROPIC_API_KEY         API credentials (or run \`ant auth login\`)
+  AGENTBOX_HOME             State directory (default ~/.agentbox)
+  AGENTBOX_IMAGE            Box image tag (default agentbox/box:latest)
+  AGENTBOX_BOX_HOST         Override where published ports are reachable
+  AGENTBOX_WIDTH/HEIGHT     Box display size (default 1280x800)`;
+
+async function main(): Promise<number> {
+  const argv = process.argv.slice(2);
+  const [command, ...rest] = argv;
+
+  switch (command) {
+    case undefined:
+    case "help":
+    case "--help":
+    case "-h":
+      out(USAGE);
+      return 0;
+
+    case "box": {
+      const [sub, ...boxArgs] = rest;
+      switch (sub) {
+        case "build":
+          return cmdBoxBuild();
+        case "up":
+          return cmdBoxUp(boxArgs);
+        case "status":
+          return cmdBoxStatus();
+        case "down":
+          return cmdBoxDown(boxArgs);
+        case "logs":
+          return cmdBoxLogs(boxArgs);
+        case "shot":
+          return cmdBoxShot(boxArgs);
+        case "exec":
+          return cmdBoxExec(boxArgs);
+        default:
+          err(`Unknown box command: ${sub ?? "(none)"}`);
+          out(USAGE);
+          return 1;
+      }
+    }
+
+    case "agents":
+      return cmdAgents();
+
+    case "agent": {
+      const [sub, ...agentArgs] = rest;
+      if (sub === "new") return cmdAgentNew(agentArgs);
+      err(`Unknown agent command: ${sub ?? "(none)"}`);
+      return 1;
+    }
+
+    case "chat":
+      return cmdChat(rest);
+
+    case "where":
+      out(`state:  ${agentboxHome()}`);
+      out(`agents: ${defaultAgentsRoot()}`);
+      return 0;
+
+    default:
+      err(`Unknown command: ${command}`);
+      out(USAGE);
+      return 1;
+  }
+}
+
+main()
+  .then(code => process.exit(code))
+  .catch(error => {
+    err(`\nerror: ${error instanceof Error ? error.message : String(error)}`);
+    process.exit(1);
+  });

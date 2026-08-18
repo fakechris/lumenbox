@@ -1,0 +1,10 @@
+node_modules/
+dist/
+
+# Built by `npm run build:boxd` into the Docker context. Derived from src/boxd,
+# so it is not source — but the image build needs it present.
+docker/box/boxd.cjs
+
+*.log
+*.webp
+.DS_Store
