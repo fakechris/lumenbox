@@ -120,9 +120,6 @@ Every optional capability defaults **off**, because a wrong "yes" fails silently
 while a wrong "no" only costs a feature and says so. Opt in once you have checked:
 `AGENTBOX_VISION=1`, `AGENTBOX_CACHING=1`, `AGENTBOX_THINKING=1`, `AGENTBOX_EFFORT=1`.
 
-
-
-
 ## Putting the box on another machine
 
 The box lifecycle goes through the `docker` CLI, so anything Docker can target
