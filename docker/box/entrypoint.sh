@@ -53,10 +53,17 @@ log "Xvfb ready"
 
 # A window manager is not optional: without one, dialogs open unmapped and
 # keyboard focus never lands anywhere, so typing silently goes nowhere.
+#
 # No --daemon: we want xfwm4 in the foreground of this job so the pid we record is
 # the window manager itself and not a launcher that has already exited.
+#
+# --compositor=off for two reasons. Its compositor paints over the root window, so
+# the desktop background below is never visible however it is set — which left the
+# screen pure black and made a perfectly healthy box look like it had not started.
+# And compositing buys nothing here: there is no GPU and nothing needs transparency.
 log "starting window manager"
-dbus-launch --exit-with-session xfwm4 --replace > /tmp/xfwm4.log 2>&1 &
+dbus-launch --exit-with-session xfwm4 --replace --compositor=off \
+  > /tmp/xfwm4.log 2>&1 &
 pids+=($!)
 
 log "starting x11vnc"
@@ -69,9 +76,13 @@ websockify --web=/usr/share/novnc 6080 localhost:5900 \
   > /tmp/novnc.log 2>&1 &
 pids+=($!)
 
-# A neutral background makes screenshots easier for the model to read than the
-# default X stipple, which looks like noise.
-xsetroot -display "${DISPLAY_NUM}" -solid "#1f2430" 2>/dev/null || true
+# A distinct background is worth more than decoration: against pure black a model
+# cannot tell an empty desktop from a window that failed to paint, and the default
+# X stipple reads as noise. Applied after the window manager has settled, since
+# xfwm4 resets root properties as it starts.
+sleep 1
+xsetroot -display "${DISPLAY_NUM}" -solid "#1f2430" 2>/dev/null || \
+  log "could not set the desktop background"
 
 log "starting boxd"
 exec node /opt/boxd/boxd.cjs
