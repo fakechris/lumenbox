@@ -157,6 +157,7 @@ agents                    List agents
 agent new <name> [desc]   Create an agent
 
 providers                 Which providers are configured, and what they can do
+web [--port N]            Serve the web UI (default http://127.0.0.1:7777)
 chat [agent] [message]    Talk to an agent; omit the message for a REPL
                           --no-box            run without the box tools
                           --provider <name>   anthropic | minimax | custom
@@ -255,7 +256,60 @@ arrives byte-perfect in a real application.
 Run this after any change to the box image, the daemon, or the CUA layer — those
 are the paths that fail quietly.
 
-### 3. The agent loop — needs credentials
+### 3. The web UI — for hand acceptance testing
+
+```bash
+npm run agentbox -- box up
+npm run agentbox -- web --provider minimax     # or omit --provider for Claude
+```
+
+Then open http://127.0.0.1:7777. Three panes, deliberately: the CLI can show one
+agent's turn, but what needs checking by hand is what a transcript cannot convey —
+several agents working at once, one handing work to another, and the desktop
+changing under them.
+
+- **left** — agents, with a pulsing dot while one is inside a turn. `+` creates one.
+- **middle** — the selected agent's conversation, streaming, with each tool call
+  and its result inline. A screenshot appears as an image, so you can compare what
+  the agent says it saw against what it actually saw.
+- **right** — the live box desktop over noVNC, plus an activity feed covering *all*
+  agents. `✉ Ada → Bob` lines are how you see delegation happen.
+
+Binds to loopback only and has no authentication: anything that can reach the port
+can already drive the agents, so keeping it off the network is the control.
+
+#### An acceptance pass that exercises the real paths
+
+Each of these fails in a different place, so a pass on all five is meaningful.
+Verify the effects in the box (`box exec`), not just the agent's account of them —
+an agent claiming success is exactly the failure mode worth testing for.
+
+1. **Shell and files.** *"Create ~/work/primes.py that prints the first 10 primes,
+   run it, and tell me the output."* Then `box exec 'cat ~/work/primes.py'`.
+2. **Shell state.** *"cd into /tmp, then in a separate step tell me the working
+   directory."* It must say `/tmp`; a stateless shell would say `/home/box`.
+3. **Computer use.** Put something on screen first —
+   `box exec 'DISPLAY=:1 setsid box-chrome --kiosk https://example.com &'` — then
+   ask *"what text is on the screen?"* Watch it call `computer` in the middle pane,
+   and check the screenshot it got matches the noVNC view on the right.
+4. **Delegation.** *"Ask Bob with SendToAgent to write ~/work/note.txt containing
+   OK, then tell me you asked."* You should see `✉ Ada → Bob` in the feed, Bob's
+   dot light up, Bob take its own turn, and the file exist afterwards. Run this
+   **twice** — the second round is where a fabricated "Done" used to appear.
+5. **Display arbitration.** Ask two agents to use the browser at once. The second
+   must be told the desktop is busy and offered other work, not interleave clicks
+   with the first.
+
+#### What "wrong" looks like
+
+- An agent describes the screen with no `computer` call in the transcript — it is
+  guessing. Check the middle pane for the tool row.
+- A file the agent said it wrote is missing. Same class of problem.
+- Two agents' keystrokes land in one window — the display lease is not holding.
+- `box status` shows a display but screenshots are 1998 bytes every time — that is
+  the blank-desktop size, so nothing is actually running on it.
+
+### 4. The agent loop from the CLI — needs credentials
 
 ```bash
 export ANTHROPIC_API_KEY=...      # or run `ant auth login`, or use --provider minimax

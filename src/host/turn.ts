@@ -58,7 +58,19 @@ const FULL_CLAUDE: ProviderProfile = {
 export type TurnEvent =
   | { type: "text"; agentId: string; agentName: string; delta: string }
   | { type: "tool_start"; agentId: string; agentName: string; tool: string; input: unknown }
-  | { type: "tool_end"; agentId: string; agentName: string; tool: string; summary: string }
+  | {
+      type: "tool_end";
+      agentId: string;
+      agentName: string;
+      tool: string;
+      summary: string;
+      /**
+       * base64 WebP, when the tool returned one. Carried so a watching UI can
+       * show what the agent actually saw, which is the difference between
+       * trusting its account of the screen and checking it.
+       */
+      screenshot?: string;
+    }
   | { type: "round"; agentId: string; round: number }
   | { type: "aborted"; agentId: string }
   | {
@@ -70,20 +82,101 @@ export type TurnEvent =
       cacheWriteTokens: number;
     };
 
-/** A transcript record. Only user/assistant text is persisted, not tool traffic. */
-interface TranscriptEntry {
-  role: "user" | "assistant";
-  text: string;
-  at: string;
+/**
+ * A transcript record.
+ *
+ * Tool traffic is persisted as real content blocks rather than as prose, and that
+ * distinction is load-bearing. Persisting only text taught agents to skip the
+ * work: a past turn read as "asked to write a file" followed by "Done — wrote the
+ * file", with the write invisible, and an agent shown that shape twice produced
+ * the second half without the first.
+ *
+ * The first attempt at a fix — appending a "[tools used this turn]" summary as
+ * assistant text — made it worse. The model could see that line in its history,
+ * so it simply wrote one itself, complete with an invented success message, and
+ * called nothing. An audit trail the model can forge is not an audit trail.
+ * `tool_use` and `tool_result` blocks are a separate channel it cannot type into.
+ */
+type TranscriptEntry =
+  | { role: "user" | "assistant"; text: string; at: string }
+  /** An assistant turn that called tools; carries text and tool_use blocks. */
+  | { role: "assistant"; kind: "blocks"; blocks: Anthropic.ContentBlockParam[]; at: string }
+  /** The matching results. Must immediately follow its `blocks` entry. */
+  | {
+      role: "user";
+      kind: "results";
+      blocks: Anthropic.ToolResultBlockParam[];
+      at: string;
+    };
+
+/** Tool-result text kept in replayed history. Enough to be evidence, not bulky. */
+const REPLAYED_RESULT_LIMIT = 2_000;
+
+/**
+ * Strips a tool result down for storage.
+ *
+ * Images are dropped: a turn of computer use would otherwise put a megabyte of
+ * screenshots into every later request, and without compaction that ends the
+ * conversation. The text stays, so the model still sees that it looked and what
+ * it was told.
+ */
+function storableResult(
+  block: Anthropic.ToolResultBlockParam
+): Anthropic.ToolResultBlockParam {
+  const content = Array.isArray(block.content) ? block.content : [];
+  const texts = content
+    .filter((part): part is Anthropic.TextBlockParam => part.type === "text")
+    .map(part => part.text);
+  const imageCount = content.filter(part => part.type === "image").length;
+
+  let text = texts.join("\n").slice(0, REPLAYED_RESULT_LIMIT);
+  if (imageCount > 0) {
+    text += `\n[${imageCount} screenshot(s) were attached and shown at the time]`;
+  }
+
+  return {
+    type: "tool_result",
+    tool_use_id: block.tool_use_id,
+    content: [{ type: "text", text: text || "(no output)" }],
+    is_error: block.is_error,
+  };
 }
 
+/**
+ * Rebuilds message history from the transcript.
+ *
+ * The window is trimmed to whole tool exchanges: a `tool_use` block whose result
+ * was cut off, or a result whose call was, is rejected by the API — so an orphan
+ * at either end is dropped rather than sent.
+ */
 function historyToMessages(
   entries: readonly TranscriptEntry[]
 ): Anthropic.MessageParam[] {
-  return entries
-    .slice(-HISTORY_LIMIT)
-    .filter(entry => entry.text.trim() !== "")
-    .map(entry => ({ role: entry.role, content: entry.text }));
+  const window = entries.slice(-HISTORY_LIMIT);
+
+  // A results entry at the front has lost its call.
+  while (window.length > 0 && "kind" in window[0]! && window[0]!.kind === "results") {
+    window.shift();
+  }
+  // A blocks entry at the end has lost its results.
+  while (
+    window.length > 0 &&
+    "kind" in window.at(-1)! &&
+    (window.at(-1) as { kind?: string }).kind === "blocks"
+  ) {
+    window.pop();
+  }
+
+  const messages: Anthropic.MessageParam[] = [];
+  for (const entry of window) {
+    if ("kind" in entry) {
+      if (entry.blocks.length === 0) continue;
+      messages.push({ role: entry.role, content: entry.blocks });
+    } else if (entry.text.trim() !== "") {
+      messages.push({ role: entry.role, content: entry.text });
+    }
+  }
+  return messages;
 }
 
 /**
@@ -316,9 +409,31 @@ export async function runTurn(
         agentName: agent.profile.name,
         tool: toolUse.name,
         summary: outcome.text.split("\n")[0]?.slice(0, 200) ?? "",
+        screenshot: outcome.images?.[0]?.data,
       });
+
       results.push(toolResultBlock(toolUse.id, outcome));
     }
+
+    // Persist the exchange as blocks, in the order the API requires: the calling
+    // assistant turn, then its results. Thinking blocks are not kept — they are
+    // only valid within the turn that produced them.
+    const at = new Date().toISOString();
+    registry.appendTranscript(agent.id, {
+      role: "assistant",
+      kind: "blocks",
+      blocks: response.content.filter(
+        (block): block is Anthropic.TextBlock | Anthropic.ToolUseBlock =>
+          block.type === "text" || block.type === "tool_use"
+      ),
+      at,
+    } satisfies TranscriptEntry);
+    registry.appendTranscript(agent.id, {
+      role: "user",
+      kind: "results",
+      blocks: results.map(storableResult),
+      at,
+    } satisfies TranscriptEntry);
 
     messages.push({ role: "user", content: results });
   }

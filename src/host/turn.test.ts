@@ -490,6 +490,96 @@ test("a turn releases the display even when it throws", async () => {
   }
 });
 
+test("the transcript records what tools a turn actually ran", async () => {
+  const { registry, cleanup } = fixture();
+  try {
+    const ada = registry.create({ name: "Ada" });
+    const bus = new AgentBus(registry, async () => {});
+    const { box } = stubBox();
+    const capture: Capture = { params: [] };
+
+    const { client } = stubClient(
+      [
+        message(
+          [toolUseBlock("bash", { command: "mkdir -p /home/box/work" })],
+          "tool_use"
+        ),
+        message([textBlock("Done — created the directory.")]),
+      ],
+      capture
+    );
+
+    await runTurn(
+      ada,
+      [{ fromId: "user", fromName: "user", text: "make a dir", priority: false, receivedAt: "" }],
+      new AbortController().signal,
+      { client, registry, bus, box, resolution: undefined }
+    );
+
+    const transcript = registry.readTranscript(ada.id) as any[];
+
+    // The call must be stored as a real tool_use block, not as prose. Prose the
+    // model can read is prose the model can forge: an earlier version recorded a
+    // "[tools used this turn]" line and the model simply wrote one itself, with an
+    // invented success message, and called nothing.
+    const call = transcript.find(e => e.kind === "blocks");
+    assert.ok(call, "the calling turn must be recorded as blocks");
+    const toolUse = call.blocks.find((b: any) => b.type === "tool_use");
+    assert.ok(toolUse, "a tool_use block must be present");
+    assert.equal(toolUse.name, "bash");
+    assert.equal(toolUse.input.command, "mkdir -p /home/box/work");
+
+    // The result must immediately follow it, or the API rejects the pair.
+    const resultIndex = transcript.indexOf(call) + 1;
+    const results = transcript[resultIndex];
+    assert.equal(results.kind, "results");
+    assert.equal(results.role, "user");
+    assert.equal(results.blocks[0].type, "tool_result");
+    assert.equal(results.blocks[0].tool_use_id, toolUse.id);
+    assert.match(results.blocks[0].content[0].text, /exit code: 0/);
+
+    // And the work must precede the claim about it.
+    const claimIndex = transcript.findIndex(e => /Done — created/.test(e.text ?? ""));
+    assert.ok(transcript.indexOf(call) < claimIndex, "work comes before the claim");
+  } finally {
+    cleanup();
+  }
+});
+
+test("a failed tool is recorded as an error, not as work done", async () => {
+  const { registry, cleanup } = fixture();
+  try {
+    const ada = registry.create({ name: "Ada" });
+    const bus = new AgentBus(registry, async () => {});
+    const capture: Capture = { params: [] };
+
+    // No box, so the computer tool is unavailable and dispatch reports an error.
+    const { client } = stubClient(
+      [
+        message([toolUseBlock("computer", { actions: [{ action: "screenshot" }] })], "tool_use"),
+        message([textBlock("I could not look.")]),
+      ],
+      capture
+    );
+
+    await runTurn(
+      ada,
+      [{ fromId: "user", fromName: "user", text: "look", priority: false, receivedAt: "" }],
+      new AbortController().signal,
+      { client, registry, bus, box: undefined, resolution: undefined }
+    );
+
+    const transcript = registry.readTranscript(ada.id) as any[];
+    const results = transcript.find(e => e.kind === "results");
+
+    assert.ok(results, "the failed call must still be recorded");
+    assert.equal(results.blocks[0].is_error, true, "a failure must not read as success");
+    assert.match(results.blocks[0].content[0].text, /box is not running/);
+  } finally {
+    cleanup();
+  }
+});
+
 test("a peer wake is presented differently from a user message", async () => {
   const { registry, cleanup } = fixture();
   try {

@@ -24,6 +24,7 @@ import {
   resolveProvider,
   type ProviderProfile,
 } from "./host/provider.ts";
+import { startWebServer } from "./web/server.ts";
 
 const here = dirname(fileURLToPath(import.meta.url));
 
@@ -279,7 +280,7 @@ function makeRenderer() {
 }
 
 /** Flags that consume the following argument. */
-const VALUE_FLAGS = new Set(["--provider", "--model", "--effort"]);
+const VALUE_FLAGS = new Set(["--provider", "--model", "--effort", "--port"]);
 
 /**
  * Splits argv into flags and positionals.
@@ -417,6 +418,71 @@ async function cmdChat(argv: string[]): Promise<number> {
   return 0;
 }
 
+async function cmdWeb(argv: string[]): Promise<number> {
+  const { flags } = parseArgs(argv);
+  const providerName = flags.get("--provider");
+  const modelOverride = flags.get("--model");
+  if (typeof modelOverride === "string") process.env.AGENTBOX_MODEL = modelOverride;
+
+  const portFlag = flags.get("--port");
+  const port = typeof portFlag === "string" ? Number(portFlag) : 7777;
+
+  let provider: ProviderProfile;
+  try {
+    provider = resolveProvider(
+      typeof providerName === "string" ? providerName : undefined
+    );
+  } catch (error) {
+    err(error instanceof Error ? error.message : String(error));
+    return 1;
+  }
+
+  // Make sure there is somebody to talk to before opening a page with an empty
+  // sidebar and no explanation.
+  const registry = new AgentRegistry();
+  if (registry.list().length === 0) {
+    const created = registry.create({
+      name: "Ada",
+      title: "coordinator",
+      description:
+        "You coordinate this user's team of agents. You are the one they talk to first. " +
+        "When a request falls squarely inside a teammate's remit, hand it to them and say " +
+        "you did; when the team is missing someone the work clearly needs, propose creating " +
+        "them rather than creating them unasked. Do the work yourself when it is faster than " +
+        "delegating.",
+    });
+    out(dim(`created ${created.profile.name} to start with`));
+  }
+
+  out(dim(`model: ${describeProvider(provider)}`));
+
+  try {
+    await startWebServer({
+      port,
+      provider,
+      useBox: !flags.has("--no-box"),
+      onLog: line => out(dim(line)),
+      onReady: url => {
+        out("");
+        out(`${bold("agentbox web")} on ${url}`);
+        out(dim("Open it in a browser. Ctrl-C to stop."));
+      },
+    });
+  } catch (error) {
+    err(error instanceof Error ? error.message : String(error));
+    return 1;
+  }
+
+  // Hold the process open; the server owns the lifetime from here.
+  await new Promise<void>(resolve => {
+    for (const signal of ["SIGINT", "SIGTERM"] as const) {
+      process.on(signal, () => resolve());
+    }
+  });
+  out("\nstopped");
+  return 0;
+}
+
 // --- dispatch -------------------------------------------------------------
 
 const USAGE = `agentbox — multi-agent orchestrator with a Docker box and Linux computer-use
@@ -512,6 +578,9 @@ async function main(): Promise<number> {
 
     case "chat":
       return cmdChat(rest);
+
+    case "web":
+      return cmdWeb(rest);
 
     case "providers": {
       for (const name of providerNames()) {
