@@ -146,8 +146,11 @@ box exec <command>        Run a shell command in the box
 agents                    List agents
 agent new <name> [desc]   Create an agent
 
+providers                 Which providers are configured, and what they can do
 chat [agent] [message]    Talk to an agent; omit the message for a REPL
-                          --no-box runs without the box tools
+                          --no-box            run without the box tools
+                          --provider <name>   anthropic | minimax | custom
+                          --model <id>        override the model
 where                     Print state directories
 ```
 
