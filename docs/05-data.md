@@ -88,7 +88,26 @@ Copy-then-truncate rather than rename, because the writer holds it open.
 
 Not a record of the run. The transcripts are. Deleting this file clears the feed.
 
-### 2.4 `config.json`
+### 2.4 `usage.jsonl`
+
+Append-only, one record per model round:
+
+```jsonc
+{ "seq": 1, "at": "…Z", "agentId": "…", "agentName": "Ada",
+  "provider": "MiniMax", "model": "MiniMax-M3", "round": 0,
+  "inputTokens": 21752, "outputTokens": 27,
+  "cacheReadTokens": 133, "cacheWriteTokens": 0 }
+```
+
+`seq` is monotonic and continues across a restart and across a torn last line, because the reader
+is a collector that remembers an offset: one reading by timestamp either double-counts or skips,
+depending on which way its clock is wrong. Compacted to its tail past 20,000 records, preserving
+sequence numbers.
+
+No prices. A record says tokens; what a token costs belongs to whoever bills and would be wrong in
+a file nobody remembers to update.
+
+### 2.5 `config.json`
 
 ```jsonc
 { "activityLimit": 400 }

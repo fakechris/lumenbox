@@ -234,6 +234,39 @@ await check("the agent's work runs behind the desktop", async () => {
   return `agent nice ${agent.stdout.trim()}, desktop nice ${values.join("/")}`;
 });
 
+await check("what a turn cost is written down", async () => {
+  // Not a box check — the record is the orchestrator's — but it belongs in the suite that runs
+  // against a real system, because the format is what a collector outside the box will meter from.
+  const { UsageLog } = await import("../src/host/usage.ts");
+  const { mkdtempSync } = await import("node:fs");
+  const { tmpdir } = await import("node:os");
+  const { join } = await import("node:path");
+
+  const path = join(mkdtempSync(join(tmpdir(), "agentbox-usage-smoke-")), "usage.jsonl");
+  const log = new UsageLog(path);
+  const first = log.record({
+    agentId: "id", agentName: "Ada", provider: "p", model: "m", round: 0,
+    inputTokens: 10, outputTokens: 2, cacheReadTokens: 0, cacheWriteTokens: 0,
+  });
+  log.record({
+    agentId: "id", agentName: "Ada", provider: "p", model: "m", round: 1,
+    inputTokens: 20, outputTokens: 4, cacheReadTokens: 1, cacheWriteTokens: 0,
+  });
+
+  // The cursor is the property the collector depends on: an offset, not a timestamp.
+  assert(first.seq === 1, `first record is seq ${first.seq}`);
+  assert(log.since(1).length === 1, "since() did not honour the cursor");
+  assert(log.totals().inputTokens === 30, "totals do not add up");
+
+  // And it survives the orchestrator restarting, or a collector would double-count.
+  const reopened = new UsageLog(path);
+  assert(reopened.record({
+    agentId: "id", agentName: "Ada", provider: "p", model: "m", round: 2,
+    inputTokens: 1, outputTokens: 1, cacheReadTokens: 0, cacheWriteTokens: 0,
+  }).seq === 3, "numbering restarted across a reopen");
+  return "sequenced, cursored, survives a restart";
+});
+
 await check("the health check covers what the topology promises", async () => {
   // The defect this closes: the check asked boxd only, so with the orchestrator inside the box —
   // where it is the product, since the only thing outside is a browser — it could be crash-looping

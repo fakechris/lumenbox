@@ -383,6 +383,18 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
           return;
         }
 
+        // What has been spent. Shaped for a collector that remembers an offset — ?since=<seq> —
+        // which is also what the UI uses to show a running total without re-reading everything.
+        if (route === "GET /api/usage") {
+          const since = Number(url.searchParams.get("since") ?? 0);
+          const afterSeq = Number.isFinite(since) && since > 0 ? since : 0;
+          send(res, 200, {
+            records: orchestrator.usage.since(afterSeq, 500),
+            totals: orchestrator.usage.totals(afterSeq),
+          });
+          return;
+        }
+
         if (route === "GET /api/recordings") {
           const client = orchestrator.boxClient();
           if (!client) {

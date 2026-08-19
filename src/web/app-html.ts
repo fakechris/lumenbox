@@ -419,6 +419,9 @@ function select(id) {
   current = id;
   $("title").textContent = nameOf(id);
   $("round").textContent = "";
+  spend = { input: 0, output: 0 };
+  spendLabel = "";
+  roundLabel = "";
   renderAgents();
   showDesktop(id);
   $("chat").innerHTML = "";
@@ -488,6 +491,17 @@ function loadActivity() {
     })
     .catch(function () { /* an empty feed is not worth an error row */ });
 }
+
+/** Tokens as a person reads them: exact until it stops being useful. */
+function fmtTokens(n) {
+  if (n < 10000) return String(n);
+  if (n < 1000000) return (n / 1000).toFixed(n < 100000 ? 1 : 0) + "k";
+  return (n / 1000000).toFixed(1) + "M";
+}
+
+var spend = { input: 0, output: 0 };
+var spendLabel = "";
+var roundLabel = "";
 
 stream.onmessage = function (raw) {
   var e = JSON.parse(raw.data);
@@ -574,7 +588,21 @@ stream.onmessage = function (raw) {
   }
 
   if (e.type === "round") {
-    if (e.agentId === current) $("round").textContent = "round " + (e.round + 1);
+    if (e.agentId === current) {
+      roundLabel = "round " + (e.round + 1);
+      $("round").textContent = spendLabel ? roundLabel + " · " + spendLabel : roundLabel;
+    }
+    return;
+  }
+
+  if (e.type === "usage") {
+    // Shown while it is being spent, not after: a turn that is costing more than it should is
+    // something to notice during, and this is the only number that says so.
+    if (e.agentId !== current) return;
+    spend.input += e.inputTokens;
+    spend.output += e.outputTokens;
+    spendLabel = fmtTokens(spend.input) + " in / " + fmtTokens(spend.output) + " out";
+    $("round").textContent = roundLabel ? roundLabel + " · " + spendLabel : spendLabel;
     return;
   }
 

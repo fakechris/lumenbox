@@ -14,6 +14,7 @@ import { DisplayLease } from "../box/display-lease.ts";
 import { resolveBoxProvisioner, type BoxProvisioner } from "../box/provisioner.ts";
 import type { ResolutionConfig } from "../protocol/index.ts";
 import { runTurn, TurnAborted, type TurnEvent } from "./turn.ts";
+import { UsageLog } from "./usage.ts";
 import {
   createClient,
   resolveProvider,
@@ -53,6 +54,13 @@ export class Orchestrator {
   private readonly display = new DisplayLease();
   /** Desktops already brought up, so each is started once per process. */
   private readonly readyDisplays = new Set<number>();
+  /**
+   * What every turn cost, appended as it happens.
+   *
+   * One per process rather than per turn: the sequence numbers a collector reads by have to be
+   * monotonic across the whole file, and two logs would produce two sequences.
+   */
+  readonly usage = new UsageLog();
 
   readonly provider: ProviderProfile;
 
@@ -163,6 +171,7 @@ export class Orchestrator {
     return runTurn(agent, inbound, signal, {
       displayIndex,
       boxOwner: this.registry.boxOwnerTokenFor(agent.id),
+      usage: this.usage,
       client: this.client,
       registry: this.registry,
       bus: this.bus,

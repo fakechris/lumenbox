@@ -63,7 +63,7 @@ in the test rather than the product: an error message that printed the status tw
 whose pattern matched the shell running it, so the kill loop killed itself — the fourth time that
 trap has bitten in this project.
 
-### R-03 — No cost control of any kind
+### R-03 — No cost control of any kind — **partly fixed: measured, not yet bounded**
 
 A turn may run 400 rounds. An agent may message teammates, each of which takes its own turn, and
 those may create more agents. Nothing bounds spend per turn, per agent, per box, or per hour;
@@ -79,9 +79,17 @@ round emits a `usage` event carrying input, output, cache-read and cache-write t
 `grep 'type === "usage"'` finds no consumer anywhere. Nothing displays it, aggregates it, or
 writes it down. The transcripts contain the word only inside tool output.
 
-Fix, in order of value: consume the event that already exists — show a running total per turn and
-persist it with the turn; then a per-turn and per-box budget; then a wake-depth or wake-rate
-limit on agent-to-agent messaging.
+Done: the event is consumed. Every round appends a record — agent, provider, model, round, and all
+four token counts — to `usage.jsonl` beside the transcripts, and the UI shows a running total while
+a turn is spending rather than after. `GET /api/usage?since=<seq>` is shaped for the collector in
+[08-control-plane.md](08-control-plane.md) §8: monotonic sequence numbers that survive a restart and
+a torn line, so a reader remembers an offset instead of a timestamp and catches up rather than
+double-counting.
+
+Deliberately not done: prices, budgets, and a wake-rate limit. A record says tokens; what a token
+costs belongs to whoever bills. **Nothing yet stops a runaway**, so the finding stays open — but it
+is now open on enforcement rather than on visibility, and the format the control plane will meter
+from is fixed.
 
 ## Non-blocking findings
 

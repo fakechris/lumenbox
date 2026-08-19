@@ -11,6 +11,7 @@ import type { AgentRecord, AgentRegistry } from "../agents/registry.ts";
 import type { AgentBus, InboundMessage } from "../agents/bus.ts";
 import type { BoxClient } from "../box/client.ts";
 import type { DisplayLease } from "../box/display-lease.ts";
+import type { UsageLog } from "./usage.ts";
 import type { ResolutionConfig } from "../protocol/index.ts";
 import { buildSystemPromptParts, buildTurnPrompt } from "./prompt.ts";
 import { buildTools, dispatchTool, type ToolOutcome } from "./tools.ts";
@@ -38,6 +39,8 @@ export interface TurnDeps {
   displayIndex?: number;
   /** Presented on every box call, so the box can refuse another agent's desktop. */
   boxOwner?: string;
+  /** Where what a turn cost is written. Absent in tests that do not care. */
+  usage?: UsageLog;
   /** Guards one desktop against two agents; moot when each has its own. */
   display?: DisplayLease;
   resolution: ResolutionConfig | undefined;
@@ -79,6 +82,8 @@ export type TurnEvent =
   | { type: "aborted"; agentId: string }
   | {
       type: "usage";
+      /** Which round of the turn, so a long turn is visible as one. */
+      round: number;
       agentId: string;
       inputTokens: number;
       outputTokens: number;
@@ -336,13 +341,24 @@ export async function runTurn(
       throw error;
     }
 
-    emit({
-      type: "usage",
-      agentId: agent.id,
+    // Reported and written down. The event drives the UI; the record is what a collector outside
+    // the box pulls, and what a bill is eventually made of — see src/host/usage.ts.
+    const usage = {
       inputTokens: response.usage.input_tokens,
       outputTokens: response.usage.output_tokens,
       cacheReadTokens: response.usage.cache_read_input_tokens ?? 0,
       cacheWriteTokens: response.usage.cache_creation_input_tokens ?? 0,
+    };
+    emit({ type: "usage", agentId: agent.id, round, ...usage });
+    deps.usage?.record({
+      agentId: agent.id,
+      agentName: agent.profile.name,
+      // Recorded from what was actually used, with a fallback rather than an optional field: a
+      // usage record whose model is missing cannot be priced later.
+      provider: deps.provider?.label ?? "unknown",
+      model: deps.provider?.model ?? "unknown",
+      round,
+      ...usage,
     });
 
     // Safety classifiers can decline a request; content is empty or partial.

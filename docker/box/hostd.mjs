@@ -279,10 +279,10 @@ var init_sleep = __esm({
 });
 
 // node_modules/@anthropic-ai/sdk/version.mjs
-var VERSION;
+var VERSION2;
 var init_version = __esm({
   "node_modules/@anthropic-ai/sdk/version.mjs"() {
-    VERSION = "0.117.1";
+    VERSION2 = "0.117.1";
   }
 });
 
@@ -339,7 +339,7 @@ var init_detect_platform = __esm({
       if (detectedPlatform === "deno") {
         return {
           "X-Stainless-Lang": "js",
-          "X-Stainless-Package-Version": VERSION,
+          "X-Stainless-Package-Version": VERSION2,
           "X-Stainless-OS": normalizePlatform(Deno.build.os),
           "X-Stainless-Arch": normalizeArch(Deno.build.arch),
           "X-Stainless-Runtime": "deno",
@@ -349,7 +349,7 @@ var init_detect_platform = __esm({
       if (typeof EdgeRuntime !== "undefined") {
         return {
           "X-Stainless-Lang": "js",
-          "X-Stainless-Package-Version": VERSION,
+          "X-Stainless-Package-Version": VERSION2,
           "X-Stainless-OS": "Unknown",
           "X-Stainless-Arch": `other:${EdgeRuntime}`,
           "X-Stainless-Runtime": "edge",
@@ -359,7 +359,7 @@ var init_detect_platform = __esm({
       if (detectedPlatform === "node") {
         return {
           "X-Stainless-Lang": "js",
-          "X-Stainless-Package-Version": VERSION,
+          "X-Stainless-Package-Version": VERSION2,
           "X-Stainless-OS": normalizePlatform(globalThis.process.platform ?? "unknown"),
           "X-Stainless-Arch": normalizeArch(globalThis.process.arch ?? "unknown"),
           "X-Stainless-Runtime": "node",
@@ -370,7 +370,7 @@ var init_detect_platform = __esm({
       if (browserInfo) {
         return {
           "X-Stainless-Lang": "js",
-          "X-Stainless-Package-Version": VERSION,
+          "X-Stainless-Package-Version": VERSION2,
           "X-Stainless-OS": "Unknown",
           "X-Stainless-Arch": "unknown",
           "X-Stainless-Runtime": `browser:${browserInfo.browser}`,
@@ -379,7 +379,7 @@ var init_detect_platform = __esm({
       }
       return {
         "X-Stainless-Lang": "js",
-        "X-Stainless-Package-Version": VERSION,
+        "X-Stainless-Package-Version": VERSION2,
         "X-Stainless-OS": "Unknown",
         "X-Stainless-Arch": "unknown",
         "X-Stainless-Runtime": "unknown",
@@ -1612,7 +1612,7 @@ function oidcFederationProvider(config) {
         headers: {
           "Content-Type": "application/json",
           "anthropic-beta": `${OAUTH_API_BETA_HEADER},${FEDERATION_BETA_HEADER}`,
-          "User-Agent": config.userAgent || `anthropic-sdk-typescript/${VERSION} oidcFederationProvider`
+          "User-Agent": config.userAgent || `anthropic-sdk-typescript/${VERSION2} oidcFederationProvider`
         },
         body: JSON.stringify(body)
       });
@@ -1692,7 +1692,7 @@ function userOAuthProvider(config) {
         headers: {
           "Content-Type": "application/json",
           "anthropic-beta": OAUTH_API_BETA_HEADER,
-          "User-Agent": config.userAgent || `anthropic-sdk-typescript/${VERSION} userOAuthProvider`
+          "User-Agent": config.userAgent || `anthropic-sdk-typescript/${VERSION2} userOAuthProvider`
         },
         body: JSON.stringify(body)
       });
@@ -5663,10 +5663,10 @@ async function setupSkills(ctx) {
     try {
       const versionId = await resolveSkillVersion(client, skill.skill_id, skill.version);
       const version = await client.beta.skills.versions.retrieve(versionId, { skill_id: skill.skill_id });
-      let dirname7 = path3.basename(version.name.trim());
-      if (dirname7 === "" || dirname7 === "." || dirname7 === "..")
-        dirname7 = skill.skill_id;
-      const dest = path3.resolve(skillsRoot, dirname7);
+      let dirname8 = path3.basename(version.name.trim());
+      if (dirname8 === "" || dirname8 === "." || dirname8 === "..")
+        dirname8 = skill.skill_id;
+      const dest = path3.resolve(skillsRoot, dirname8);
       if (dest !== skillsRoot && !dest.startsWith(skillsRoot + path3.sep)) {
         log.warn("skill name escapes the skills dir; skipping", {
           component: "agent-tool-context",
@@ -12158,7 +12158,7 @@ var init_client = __esm({
         return stringifyQuery(query);
       }
       getUserAgent() {
-        return `Anthropic/JS ${VERSION}`;
+        return `Anthropic/JS ${VERSION2}`;
       }
       defaultIdempotencyKey() {
         return `stainless-node-retry-${uuid4()}`;
@@ -12641,8 +12641,8 @@ var init_sdk = __esm({
 
 // src/cli.ts
 import { createInterface as createInterface2 } from "node:readline/promises";
-import { existsSync as existsSync6, writeFileSync as writeFileSync5 } from "node:fs";
-import { dirname as dirname6, join as join9, resolve as resolve4 } from "node:path";
+import { existsSync as existsSync7, writeFileSync as writeFileSync6 } from "node:fs";
+import { dirname as dirname7, join as join10, resolve as resolve4 } from "node:path";
 import { fileURLToPath } from "node:url";
 import { homedir as homedir4 } from "node:os";
 
@@ -13011,6 +13011,16 @@ var BoxManager = class {
       // the box — the desktop ahead of the agent's work — and a wrong number here just
       // makes the agent slow for no reason. Set it when a box shares a machine.
       ...process.env.AGENTBOX_CPUS ? ["--cpus", process.env.AGENTBOX_CPUS] : [],
+      // Egress, when a relay was named. host.docker.internal resolves on Docker Desktop
+      // already; the mapping is what makes the same name work on a Linux engine, so the
+      // relay address does not have to change per platform.
+      ...process.env.AGENTBOX_EGRESS_RELAY ? [
+        "--add-host",
+        "host.docker.internal:host-gateway",
+        "--env",
+        `AGENTBOX_EGRESS_RELAY=${process.env.AGENTBOX_EGRESS_RELAY}`,
+        ...process.env.AGENTBOX_EGRESS_TOKEN ? ["--env", `AGENTBOX_EGRESS_TOKEN=${process.env.AGENTBOX_EGRESS_TOKEN}`] : []
+      ] : [],
       // Two named volumes, because everything else in the container is disposable and
       // these two things are not: what the agents made, and what they logged into.
       // Without them, `box up --recreate` — which is also what upgrading the image
@@ -13415,6 +13425,159 @@ var AgentRegistry = class {
   }
 };
 
+// src/egress/relay.ts
+import { createServer, connect as netConnect } from "node:net";
+
+// src/egress/protocol.ts
+var PROTOCOL = "AGENTBOX-EGRESS";
+var VERSION = 1;
+var MAX_PREAMBLE_BYTES = 4096;
+var EgressProtocolError = class extends Error {
+};
+var HOST_PATTERN = /^[A-Za-z0-9._:\-[\]]{1,253}$/;
+function decodeRequest(buffer) {
+  const end = buffer.indexOf("\r\n\r\n");
+  if (end === -1) {
+    if (buffer.length > MAX_PREAMBLE_BYTES) {
+      throw new EgressProtocolError("Preamble is too long to be one");
+    }
+    return void 0;
+  }
+  const lines = buffer.subarray(0, end).toString("utf8").split("\r\n");
+  const [greeting = "", ...headers] = lines;
+  const match = new RegExp(`^${PROTOCOL} (\\d+)$`).exec(greeting);
+  if (!match) throw new EgressProtocolError("Not an egress stream");
+  if (Number(match[1]) !== VERSION) {
+    throw new EgressProtocolError(`Unsupported version ${match[1]}`);
+  }
+  let token;
+  let target;
+  for (const line of headers) {
+    const at = line.indexOf(":");
+    if (at <= 0) continue;
+    const name = line.slice(0, at).trim().toLowerCase();
+    const value = line.slice(at + 1).trim();
+    if (name === "authorization") token = value;
+    if (name === "host") target = value;
+  }
+  if (!token) throw new EgressProtocolError("No token");
+  if (!target) throw new EgressProtocolError("No host");
+  const split = target.lastIndexOf(":");
+  if (split <= 0) throw new EgressProtocolError(`No port in ${JSON.stringify(target)}`);
+  const host = target.slice(0, split);
+  const port = Number(target.slice(split + 1));
+  if (!HOST_PATTERN.test(host)) {
+    throw new EgressProtocolError(`Not a host: ${JSON.stringify(host)}`);
+  }
+  if (!Number.isInteger(port) || port < 1 || port > 65535) {
+    throw new EgressProtocolError(`Not a port: ${JSON.stringify(target.slice(split + 1))}`);
+  }
+  return { request: { token, host, port }, rest: buffer.subarray(end + 4) };
+}
+function encodeResponse(ok, detail = "") {
+  return ok ? `${PROTOCOL} 200 OK\r
+\r
+` : `${PROTOCOL} 502 ${detail.replace(/[\r\n]+/g, " ").slice(0, 200)}\r
+\r
+`;
+}
+
+// src/egress/relay.ts
+var DEFAULT_PORT = 8790;
+var PREAMBLE_TIMEOUT_MS = 1e4;
+var RelayError = class extends Error {
+};
+function startEgressRelay(options) {
+  if (!options.token || options.token.length < 16) {
+    throw new RelayError(
+      "The relay needs a token of at least 16 characters. Without one it is an open proxy for anything that can reach it."
+    );
+  }
+  const log = options.log ?? (() => {
+  });
+  const allow = options.allow ?? [];
+  const server = createServer((box) => {
+    box.setNoDelay(true);
+    box.setTimeout(PREAMBLE_TIMEOUT_MS, () => box.destroy());
+    let head = Buffer.alloc(0);
+    const onData = (chunk) => {
+      head = Buffer.concat([head, chunk]);
+      let decoded;
+      try {
+        decoded = decodeRequest(head);
+      } catch (error) {
+        log(`relay: rejected a stream (${describe(error)})`);
+        box.destroy();
+        return;
+      }
+      if (!decoded) return;
+      box.off("data", onData);
+      box.setTimeout(0);
+      const { request, rest } = decoded;
+      if (request.token !== options.token) {
+        log(`relay: wrong token for ${request.host}:${request.port}`);
+        box.end(encodeResponse(false, "unauthorized"));
+        return;
+      }
+      if (!permitted(request, allow)) {
+        log(`relay: ${request.host}:${request.port} is not in the allow list`);
+        box.end(encodeResponse(false, "not allowed"));
+        return;
+      }
+      const upstream = netConnect(request.port, request.host);
+      upstream.setNoDelay(true);
+      upstream.on("connect", () => {
+        log(`relay: ${request.host}:${request.port}`);
+        box.write(encodeResponse(true));
+        if (rest.length > 0) upstream.write(rest);
+        upstream.pipe(box);
+        box.pipe(upstream);
+      });
+      upstream.on("error", (error) => {
+        box.end(encodeResponse(false, describe(error)));
+        upstream.destroy();
+      });
+      box.on("error", () => {
+        upstream.destroy();
+        box.destroy();
+      });
+    };
+    box.on("data", onData);
+    box.on("error", () => box.destroy());
+  });
+  const host = options.host ?? "127.0.0.1";
+  server.listen(options.port ?? DEFAULT_PORT, host, () => {
+    log(
+      `egress relay on ${host}:${options.port ?? DEFAULT_PORT}` + (allow.length > 0 ? `, allowing ${allow.join(", ")}` : ", allowing anywhere")
+    );
+  });
+  return server;
+}
+function permitted(request, allow) {
+  if (allow.length === 0) return true;
+  return allow.some((pattern) => {
+    const [patternHost, patternPort] = splitPattern(pattern);
+    if (patternPort !== void 0 && patternPort !== request.port) return false;
+    if (patternHost === "*") return true;
+    if (patternHost.startsWith("*.")) {
+      const suffix = patternHost.slice(1);
+      return request.host === patternHost.slice(2) || request.host.endsWith(suffix);
+    }
+    return request.host === patternHost;
+  });
+}
+function splitPattern(pattern) {
+  const at = pattern.lastIndexOf(":");
+  if (at <= 0) return [pattern, void 0];
+  const port = Number(pattern.slice(at + 1));
+  if (!Number.isInteger(port)) return [pattern, void 0];
+  return [pattern.slice(0, at), port];
+}
+function describe(error) {
+  if (error instanceof EgressProtocolError) return error.message;
+  return error instanceof Error ? error.message : String(error);
+}
+
 // src/host/orchestrator.ts
 init_sdk();
 
@@ -13709,6 +13872,12 @@ Start the browser with \`box-chrome\` (via \`bash\`, backgrounded: \`box-chrome 
 container needs, and a bare \`chromium\` fails for reasons that have nothing to do with
 your task. Pass a URL as an argument to open it directly. Once it is up, drive it with
 \`computer\`.
+
+Put anything that must outlive this box under \`/home/box/work\`. That directory and the
+browser's profile are the only parts of the filesystem that survive the box being rebuilt \u2014
+which is what upgrading it means \u2014 so a report written to your home directory disappears the
+next time it happens, silently. Scratch files can go anywhere; work someone asked for goes in
+\`/home/box/work\`.
 
 For the clipboard, use \`box-clip copy\` and \`box-clip paste\` rather than \`xclip\`
 directly. An X selection belongs to the process that set it, and the shell tool kills its
@@ -14517,13 +14686,22 @@ async function runTurn(agent, inbound, signal, deps) {
         }
         throw error;
       }
-      emit({
-        type: "usage",
-        agentId: agent.id,
+      const usage = {
         inputTokens: response.usage.input_tokens,
         outputTokens: response.usage.output_tokens,
         cacheReadTokens: response.usage.cache_read_input_tokens ?? 0,
         cacheWriteTokens: response.usage.cache_creation_input_tokens ?? 0
+      };
+      emit({ type: "usage", agentId: agent.id, round, ...usage });
+      deps.usage?.record({
+        agentId: agent.id,
+        agentName: agent.profile.name,
+        // Recorded from what was actually used, with a fallback rather than an optional field: a
+        // usage record whose model is missing cannot be priced later.
+        provider: deps.provider?.label ?? "unknown",
+        model: deps.provider?.model ?? "unknown",
+        round,
+        ...usage
       });
       if (response.stop_reason === "refusal") {
         const category = response.stop_details?.category ?? "unspecified";
@@ -14617,6 +14795,169 @@ async function runTurn(agent, inbound, signal, deps) {
     throw new TurnRoundLimitExceeded(note);
   }
 }
+
+// src/host/usage.ts
+import { appendFileSync as appendFileSync2, existsSync as existsSync4, mkdirSync as mkdirSync4, readFileSync as readFileSync4, renameSync as renameSync2, writeFileSync as writeFileSync4 } from "node:fs";
+import { dirname as dirname5, join as join7 } from "node:path";
+
+// src/config.ts
+import { existsSync as existsSync3, mkdirSync as mkdirSync3, readFileSync as readFileSync3, writeFileSync as writeFileSync3 } from "node:fs";
+import { homedir as homedir3 } from "node:os";
+import { dirname as dirname4, join as join6 } from "node:path";
+var DEFAULT_CONFIG = {
+  activityLimit: 400
+};
+var MAX_ACTIVITY_LIMIT = 2e4;
+function agentboxHome() {
+  return process.env.AGENTBOX_HOME ?? join6(homedir3(), ".agentbox");
+}
+function configPath() {
+  return process.env.AGENTBOX_CONFIG ?? join6(agentboxHome(), "config.json");
+}
+function readInteger(value, fallback, bounds, key, warn) {
+  if (value === void 0) return fallback;
+  const parsed = typeof value === "number" ? value : Number(value);
+  if (!Number.isFinite(parsed) || !Number.isInteger(parsed)) {
+    warn(`config: ${key} must be a whole number, using ${fallback}`);
+    return fallback;
+  }
+  if (parsed < bounds.min || parsed > bounds.max) {
+    const clamped = Math.min(Math.max(parsed, bounds.min), bounds.max);
+    warn(`config: ${key} must be between ${bounds.min} and ${bounds.max}, using ${clamped}`);
+    return clamped;
+  }
+  return parsed;
+}
+function loadConfig(onWarn = () => {
+}) {
+  const path5 = configPath();
+  if (!existsSync3(path5)) return { ...DEFAULT_CONFIG };
+  let parsed;
+  try {
+    parsed = JSON.parse(readFileSync3(path5, "utf8"));
+  } catch (error) {
+    const detail = error instanceof Error ? error.message : String(error);
+    onWarn(`config: ${path5} is not valid JSON (${detail}), using defaults`);
+    return { ...DEFAULT_CONFIG };
+  }
+  if (parsed === null || typeof parsed !== "object" || Array.isArray(parsed)) {
+    onWarn(`config: ${path5} should contain an object, using defaults`);
+    return { ...DEFAULT_CONFIG };
+  }
+  const raw = parsed;
+  return {
+    activityLimit: readInteger(
+      raw.activityLimit,
+      DEFAULT_CONFIG.activityLimit,
+      { min: 1, max: MAX_ACTIVITY_LIMIT },
+      "activityLimit",
+      onWarn
+    )
+  };
+}
+function ensureConfigFile() {
+  const path5 = configPath();
+  if (existsSync3(path5)) return path5;
+  mkdirSync3(dirname4(path5), { recursive: true });
+  writeFileSync3(path5, `${JSON.stringify(DEFAULT_CONFIG, null, 2)}
+`, "utf8");
+  return path5;
+}
+
+// src/host/usage.ts
+function usageLogPath() {
+  return process.env.AGENTBOX_USAGE_LOG ?? join7(agentboxHome(), "usage.jsonl");
+}
+var COMPACT_AT = Number(process.env.AGENTBOX_USAGE_COMPACT_AT ?? 2e4);
+var KEEP_ON_COMPACT = Number(process.env.AGENTBOX_USAGE_KEEP ?? 5e3);
+var UsageLog = class {
+  constructor(path5 = usageLogPath(), onWarn = () => {
+  }) {
+    this.path = path5;
+    this.onWarn = onWarn;
+    this.load();
+  }
+  nextSeq = 1;
+  lines = 0;
+  /** Reads the last sequence number so numbering continues across restarts. */
+  load() {
+    if (!existsSync4(this.path)) return;
+    try {
+      const lines = readFileSync4(this.path, "utf8").split("\n").filter((line) => line.trim() !== "");
+      this.lines = lines.length;
+      for (let at = lines.length - 1; at >= 0; at--) {
+        try {
+          const record = JSON.parse(lines[at]);
+          if (typeof record.seq === "number") {
+            this.nextSeq = record.seq + 1;
+            return;
+          }
+        } catch {
+        }
+      }
+    } catch (error) {
+      const detail = error instanceof Error ? error.message : String(error);
+      this.onWarn(`usage: cannot read ${this.path} (${detail}); numbering restarts`);
+    }
+  }
+  record(entry, now = /* @__PURE__ */ new Date()) {
+    const full = { seq: this.nextSeq++, at: now.toISOString(), ...entry };
+    try {
+      mkdirSync4(dirname5(this.path), { recursive: true });
+      appendFileSync2(this.path, `${JSON.stringify(full)}
+`, "utf8");
+      this.lines++;
+      if (this.lines > COMPACT_AT) this.compact();
+    } catch (error) {
+      const detail = error instanceof Error ? error.message : String(error);
+      this.onWarn(`usage: cannot write ${this.path} (${detail})`);
+    }
+    return full;
+  }
+  /** Records after `afterSeq`, which is how a collector catches up. */
+  since(afterSeq = 0, limit2 = 1e3) {
+    if (!existsSync4(this.path)) return [];
+    try {
+      return readFileSync4(this.path, "utf8").split("\n").filter((line) => line.trim() !== "").flatMap((line) => {
+        try {
+          return [JSON.parse(line)];
+        } catch {
+          return [];
+        }
+      }).filter((record) => typeof record.seq === "number" && record.seq > afterSeq).slice(0, limit2);
+    } catch {
+      return [];
+    }
+  }
+  /** Totals over what is still in the file. Not a billing figure: compaction drops the tail. */
+  totals(afterSeq = 0) {
+    return this.since(afterSeq, Number.MAX_SAFE_INTEGER).reduce(
+      (sum, record) => ({
+        records: sum.records + 1,
+        inputTokens: sum.inputTokens + record.inputTokens,
+        outputTokens: sum.outputTokens + record.outputTokens,
+        cacheReadTokens: sum.cacheReadTokens + record.cacheReadTokens,
+        cacheWriteTokens: sum.cacheWriteTokens + record.cacheWriteTokens
+      }),
+      { records: 0, inputTokens: 0, outputTokens: 0, cacheReadTokens: 0, cacheWriteTokens: 0 }
+    );
+  }
+  /** Rewrites the file with its tail. Temp plus rename, so a reader never sees half a file. */
+  compact() {
+    try {
+      const kept = this.since(0, Number.MAX_SAFE_INTEGER).slice(-KEEP_ON_COMPACT);
+      const temp = `${this.path}.${process.pid}.tmp`;
+      writeFileSync4(temp, kept.map((record) => `${JSON.stringify(record)}
+`).join(""), "utf8");
+      renameSync2(temp, this.path);
+      this.lines = kept.length;
+      this.onWarn(`usage: compacted to the most recent ${kept.length} records`);
+    } catch (error) {
+      const detail = error instanceof Error ? error.message : String(error);
+      this.onWarn(`usage: cannot compact ${this.path} (${detail})`);
+    }
+  }
+};
 
 // src/host/provider.ts
 init_sdk();
@@ -14754,6 +15095,13 @@ var Orchestrator = class {
   display = new DisplayLease();
   /** Desktops already brought up, so each is started once per process. */
   readyDisplays = /* @__PURE__ */ new Set();
+  /**
+   * What every turn cost, appended as it happens.
+   *
+   * One per process rather than per turn: the sequence numbers a collector reads by have to be
+   * monotonic across the whole file, and two logs would produce two sequences.
+   */
+  usage = new UsageLog();
   provider;
   /**
    * Attaches to a running box, if there is one.
@@ -14832,6 +15180,7 @@ var Orchestrator = class {
     return runTurn(agent, inbound, signal, {
       displayIndex,
       boxOwner: this.registry.boxOwnerTokenFor(agent.id),
+      usage: this.usage,
       client: this.client,
       registry: this.registry,
       bus: this.bus,
@@ -14868,84 +15217,20 @@ var Orchestrator = class {
   }
 };
 
-// src/config.ts
-import { existsSync as existsSync3, mkdirSync as mkdirSync3, readFileSync as readFileSync3, writeFileSync as writeFileSync3 } from "node:fs";
-import { homedir as homedir3 } from "node:os";
-import { dirname as dirname4, join as join6 } from "node:path";
-var DEFAULT_CONFIG = {
-  activityLimit: 400
-};
-var MAX_ACTIVITY_LIMIT = 2e4;
-function agentboxHome() {
-  return process.env.AGENTBOX_HOME ?? join6(homedir3(), ".agentbox");
-}
-function configPath() {
-  return process.env.AGENTBOX_CONFIG ?? join6(agentboxHome(), "config.json");
-}
-function readInteger(value, fallback, bounds, key, warn) {
-  if (value === void 0) return fallback;
-  const parsed = typeof value === "number" ? value : Number(value);
-  if (!Number.isFinite(parsed) || !Number.isInteger(parsed)) {
-    warn(`config: ${key} must be a whole number, using ${fallback}`);
-    return fallback;
-  }
-  if (parsed < bounds.min || parsed > bounds.max) {
-    const clamped = Math.min(Math.max(parsed, bounds.min), bounds.max);
-    warn(`config: ${key} must be between ${bounds.min} and ${bounds.max}, using ${clamped}`);
-    return clamped;
-  }
-  return parsed;
-}
-function loadConfig(onWarn = () => {
-}) {
-  const path5 = configPath();
-  if (!existsSync3(path5)) return { ...DEFAULT_CONFIG };
-  let parsed;
-  try {
-    parsed = JSON.parse(readFileSync3(path5, "utf8"));
-  } catch (error) {
-    const detail = error instanceof Error ? error.message : String(error);
-    onWarn(`config: ${path5} is not valid JSON (${detail}), using defaults`);
-    return { ...DEFAULT_CONFIG };
-  }
-  if (parsed === null || typeof parsed !== "object" || Array.isArray(parsed)) {
-    onWarn(`config: ${path5} should contain an object, using defaults`);
-    return { ...DEFAULT_CONFIG };
-  }
-  const raw = parsed;
-  return {
-    activityLimit: readInteger(
-      raw.activityLimit,
-      DEFAULT_CONFIG.activityLimit,
-      { min: 1, max: MAX_ACTIVITY_LIMIT },
-      "activityLimit",
-      onWarn
-    )
-  };
-}
-function ensureConfigFile() {
-  const path5 = configPath();
-  if (existsSync3(path5)) return path5;
-  mkdirSync3(dirname4(path5), { recursive: true });
-  writeFileSync3(path5, `${JSON.stringify(DEFAULT_CONFIG, null, 2)}
-`, "utf8");
-  return path5;
-}
-
 // src/web/server.ts
 import { randomBytes as randomBytes3 } from "node:crypto";
 import {
-  createServer,
+  createServer as createServer2,
   request as httpRequest
 } from "node:http";
-import { readFileSync as readFileSync5 } from "node:fs";
-import { connect as netConnect } from "node:net";
-import { join as join8 } from "node:path";
+import { readFileSync as readFileSync6 } from "node:fs";
+import { connect as netConnect2 } from "node:net";
+import { join as join9 } from "node:path";
 
 // src/web/markdown.ts
-import { existsSync as existsSync4 } from "node:fs";
+import { existsSync as existsSync5 } from "node:fs";
 import { createRequire } from "node:module";
-import { join as join7 } from "node:path";
+import { join as join8 } from "node:path";
 var MARKDOWN_OPTIONS = {
   html: false,
   linkify: true,
@@ -14956,8 +15241,8 @@ var VENDOR_MARKDOWN_IT = "markdown-it/browser";
 function vendorPath(spec = VENDOR_MARKDOWN_IT) {
   const dir = process.env.AGENTBOX_VENDOR_DIR;
   if (dir) {
-    const copied = join7(dir, "markdown-it.js");
-    if (existsSync4(copied)) return copied;
+    const copied = join8(dir, "markdown-it.js");
+    if (existsSync5(copied)) return copied;
   }
   return createRequire(import.meta.url).resolve(spec);
 }
@@ -15368,6 +15653,9 @@ function select(id) {
   current = id;
   $("title").textContent = nameOf(id);
   $("round").textContent = "";
+  spend = { input: 0, output: 0 };
+  spendLabel = "";
+  roundLabel = "";
   renderAgents();
   showDesktop(id);
   $("chat").innerHTML = "";
@@ -15437,6 +15725,17 @@ function loadActivity() {
     })
     .catch(function () { /* an empty feed is not worth an error row */ });
 }
+
+/** Tokens as a person reads them: exact until it stops being useful. */
+function fmtTokens(n) {
+  if (n < 10000) return String(n);
+  if (n < 1000000) return (n / 1000).toFixed(n < 100000 ? 1 : 0) + "k";
+  return (n / 1000000).toFixed(1) + "M";
+}
+
+var spend = { input: 0, output: 0 };
+var spendLabel = "";
+var roundLabel = "";
 
 stream.onmessage = function (raw) {
   var e = JSON.parse(raw.data);
@@ -15523,7 +15822,21 @@ stream.onmessage = function (raw) {
   }
 
   if (e.type === "round") {
-    if (e.agentId === current) $("round").textContent = "round " + (e.round + 1);
+    if (e.agentId === current) {
+      roundLabel = "round " + (e.round + 1);
+      $("round").textContent = spendLabel ? roundLabel + " · " + spendLabel : roundLabel;
+    }
+    return;
+  }
+
+  if (e.type === "usage") {
+    // Shown while it is being spent, not after: a turn that is costing more than it should is
+    // something to notice during, and this is the only number that says so.
+    if (e.agentId !== current) return;
+    spend.input += e.inputTokens;
+    spend.output += e.outputTokens;
+    spendLabel = fmtTokens(spend.input) + " in / " + fmtTokens(spend.output) + " out";
+    $("round").textContent = roundLabel ? roundLabel + " · " + spendLabel : spendLabel;
     return;
   }
 
@@ -15775,8 +16088,8 @@ function authorize(config, request) {
 }
 
 // src/web/activity.ts
-import { appendFileSync as appendFileSync2, existsSync as existsSync5, mkdirSync as mkdirSync4, readFileSync as readFileSync4, renameSync as renameSync2, writeFileSync as writeFileSync4 } from "node:fs";
-import { dirname as dirname5 } from "node:path";
+import { appendFileSync as appendFileSync3, existsSync as existsSync6, mkdirSync as mkdirSync5, readFileSync as readFileSync5, renameSync as renameSync3, writeFileSync as writeFileSync5 } from "node:fs";
+import { dirname as dirname6 } from "node:path";
 var COMPACT_FACTOR = 3;
 var ActivityLog = class {
   path;
@@ -15795,10 +16108,10 @@ var ActivityLog = class {
     this.load();
   }
   load() {
-    if (!existsSync5(this.path)) return;
+    if (!existsSync6(this.path)) return;
     let contents;
     try {
-      contents = readFileSync4(this.path, "utf8");
+      contents = readFileSync5(this.path, "utf8");
     } catch (error) {
       const detail = error instanceof Error ? error.message : String(error);
       this.onWarn(`activity: cannot read ${this.path} (${detail}), starting empty`);
@@ -15831,7 +16144,7 @@ var ActivityLog = class {
       this.events.splice(0, this.events.length - this.limit);
     }
     try {
-      appendFileSync2(this.path, `${JSON.stringify(stored)}
+      appendFileSync3(this.path, `${JSON.stringify(stored)}
 `, "utf8");
       this.lines++;
       if (this.lines > this.limit * COMPACT_FACTOR) this.compact();
@@ -15847,9 +16160,9 @@ var ActivityLog = class {
     const body = this.events.map((event) => `${JSON.stringify(event)}
 `).join("");
     try {
-      mkdirSync4(dirname5(this.path), { recursive: true });
-      writeFileSync4(temp, body, "utf8");
-      renameSync2(temp, this.path);
+      mkdirSync5(dirname6(this.path), { recursive: true });
+      writeFileSync5(temp, body, "utf8");
+      renameSync3(temp, this.path);
       this.lines = this.events.length;
     } catch (error) {
       const detail = error instanceof Error ? error.message : String(error);
@@ -15938,7 +16251,7 @@ async function startWebServer(options) {
   const clients = /* @__PURE__ */ new Set();
   const activityLimit = loadConfig((line) => log(line)).activityLimit;
   const activity = new ActivityLog({
-    path: join8(agentboxHome(), "activity.jsonl"),
+    path: join9(agentboxHome(), "activity.jsonl"),
     limit: activityLimit,
     onWarn: (line) => log(line)
   });
@@ -16076,7 +16389,7 @@ async function startWebServer(options) {
     if (chunks.length === 0) return {};
     return JSON.parse(Buffer.concat(chunks).toString("utf8"));
   }
-  const server = createServer((req, res) => {
+  const server = createServer2((req, res) => {
     void (async () => {
       const url = new URL(req.url ?? "/", "http://localhost");
       const route = `${req.method} ${url.pathname}`;
@@ -16113,7 +16426,7 @@ async function startWebServer(options) {
         }
         if (route === "GET /vendor/markdown-it.js") {
           try {
-            vendorScript ??= readFileSync5(vendorPath());
+            vendorScript ??= readFileSync6(vendorPath());
             res.writeHead(200, {
               "content-type": "application/javascript; charset=utf-8",
               "content-length": vendorScript.length,
@@ -16155,6 +16468,15 @@ async function startWebServer(options) {
           } catch (error) {
             send(res, 400, { error: error instanceof Error ? error.message : String(error) });
           }
+          return;
+        }
+        if (route === "GET /api/usage") {
+          const since = Number(url.searchParams.get("since") ?? 0);
+          const afterSeq = Number.isFinite(since) && since > 0 ? since : 0;
+          send(res, 200, {
+            records: orchestrator.usage.since(afterSeq, 500),
+            totals: orchestrator.usage.totals(afterSeq)
+          });
           return;
         }
         if (route === "GET /api/recordings") {
@@ -16315,7 +16637,7 @@ async function startWebServer(options) {
       clientSocket.destroy();
       return;
     }
-    const upstream = netConnect(origin.port, origin.host, () => {
+    const upstream = netConnect2(origin.port, origin.host, () => {
       const headers = Object.entries(req.headers).map(
         ([key, value]) => `${key}: ${Array.isArray(value) ? value.join(", ") : value}\r
 `
@@ -16356,9 +16678,9 @@ ${headers}\r
 }
 
 // src/cli.ts
-var here = dirname6(fileURLToPath(import.meta.url));
+var here = dirname7(fileURLToPath(import.meta.url));
 function agentboxHome2() {
-  return process.env.AGENTBOX_HOME ?? join9(homedir4(), ".agentbox");
+  return process.env.AGENTBOX_HOME ?? join10(homedir4(), ".agentbox");
 }
 function boxConfig(overrides = {}) {
   return defaultBoxConfig(overrides);
@@ -16377,8 +16699,8 @@ async function cmdBoxBuild() {
   const config = boxConfig();
   const manager = new BoxManager(config);
   const context = resolve4(here, "..", "docker", "box");
-  const bundle = join9(context, "boxd.cjs");
-  if (!existsSync6(bundle)) {
+  const bundle = join10(context, "boxd.cjs");
+  if (!existsSync7(bundle)) {
     err(
       `Daemon bundle missing at ${bundle}.
 Run \`npm run build:boxd\` first \u2014 the image copies the bundle in.`
@@ -16486,7 +16808,7 @@ async function cmdBoxShot(argv) {
     err("The box returned an empty screenshot.");
     return 1;
   }
-  writeFileSync5(target, Buffer.from(result.screenshot, "base64"));
+  writeFileSync6(target, Buffer.from(result.screenshot, "base64"));
   out(`Wrote ${target} (${result.duration_ms}ms).`);
   return 0;
 }
@@ -16597,7 +16919,8 @@ var VALUE_FLAGS = /* @__PURE__ */ new Set([
   "--effort",
   "--port",
   "--host",
-  "--token"
+  "--token",
+  "--allow"
 ]);
 function parseArgs(argv) {
   const positional = [];
@@ -16696,6 +17019,31 @@ ${bold("you")}: `)).trim();
     rl.close();
   }
   return 0;
+}
+async function cmdEgress(argv) {
+  const { flags } = parseArgs(argv);
+  const portFlag = flags.get("--port");
+  const hostFlag = flags.get("--host");
+  const allowFlag = flags.get("--allow");
+  try {
+    const server = startEgressRelay({
+      // The box token by default, so a box started by this CLI can already authenticate.
+      token: loadBoxToken(),
+      port: typeof portFlag === "string" ? Number(portFlag) : void 0,
+      host: typeof hostFlag === "string" ? hostFlag : void 0,
+      allow: typeof allowFlag === "string" ? allowFlag.split(",").map((entry) => entry.trim()).filter(Boolean) : void 0,
+      log: (line) => out(dim(line))
+    });
+    out("");
+    out(`${bold("egress relay")} running. Point a box at it with:`);
+    out(dim("  AGENTBOX_EGRESS_RELAY=host.docker.internal:8790 agentbox box up --recreate"));
+    out(dim("Ctrl-C to stop."));
+    await new Promise((resolve5) => server.on("close", resolve5));
+    return 0;
+  } catch (error) {
+    err(error instanceof Error ? error.message : String(error));
+    return 1;
+  }
 }
 async function cmdWeb(argv) {
   const { flags } = parseArgs(argv);
@@ -16842,6 +17190,8 @@ async function main() {
     }
     case "chat":
       return cmdChat(rest);
+    case "egress":
+      return cmdEgress(rest);
     case "web":
       return cmdWeb(rest);
     case "providers": {
