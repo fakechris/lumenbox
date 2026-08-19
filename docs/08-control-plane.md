@@ -47,8 +47,8 @@ the seams exist before the implementations do.
 | Component | Job | Placeholder version |
 | --- | --- | --- |
 | **Gateway** | Authenticate a person; route them to their box's UI over TLS | Single shared password, direct redirect, no TLS |
-| **Allocator** | Create, find, stop and destroy boxes for a tenant | `compose`: one container per tenant on this host |
-| **Store** | Tenants, boxes, tokens, quotas, usage | SQLite file behind a repository interface |
+| **Allocator** | Create, find, stop and destroy boxes for a tenant | `compose`: one container per tenant on this host — **built** |
+| **Store** | Tenants, boxes, tokens, quotas, usage | SQLite file behind a repository interface — **built** |
 | **Credentials** | Issue box, UI and owner tokens; hold provider keys | Generate and store; keys still passed as env |
 | **Model relay** | Give a box a scoped endpoint instead of the real provider key | Absent: the key goes in the box, as today |
 | **Collector** | Pull health, crashes and usage from every box | Poll loop writing to the store |
@@ -91,11 +91,30 @@ retried request after a timeout safe, and it is the property most likely to be g
 
 ### 4.2 Implementations
 
-**`compose` — first, and enough for a long time.** One container per tenant on one host, named
-`agentbox-<tenant>`, with per-tenant volumes `agentbox-<tenant>-work|config|hostd`. Allocation is
-`docker run` with the tenant's tokens; `find` is `docker inspect`; the UI port is published on
-loopback and the gateway proxies to it. Limits: one host, no scheduling, no rolling upgrade.
-Adequate for tens of boxes and for every part of the design that is not scheduling.
+**`compose` — first, and enough for a long time. Built and verified.** One container per tenant on
+one host, named `agentbox-<tenant>`, with per-tenant volumes `agentbox-<tenant>-work|config|hostd`.
+It is a thin layer over the existing `BoxManager`, which already derives those volume names from the
+container name — so per-tenant names give per-tenant volumes, and there is no second implementation
+of the logic that decides whose work is whose. Ports are ephemeral and read back from Docker rather
+than assumed, because two boxes cannot both publish 7777. Limits: one host, no scheduling, no
+rolling upgrade. Adequate for tens of boxes and for every part of the design that is not scheduling.
+
+Verified by allocating two real boxes, not by faking Docker. Both came up in about three seconds;
+each refused the other tenant's UI token and the other tenant's box token with 401, and refused an
+absent token with 401; three volumes per tenant existed and all six were removed by `destroy`. Two
+bugs surfaced that the unit tests could not, because Docker was substituted there:
+
+- `127.0.0.1:7777` as an ephemeral publish means "host port 127.0.0.1" and is rejected. Binding an
+  address *and* letting Docker choose needs the empty middle field: `127.0.0.1::7777`.
+- A box whose desktop is up is not a box a person can use. The orchestrator starts after X, so for a
+  second or two the published UI port accepts a connection and nothing serves it — the second box's
+  UI refused a request the first box, allocated seconds earlier, had answered. `up` now waits for the
+  UI too, counting a 401 as answering for the same reason `box-healthcheck` does.
+
+A tenant name that Docker cannot hold — `北京公司`, `🚀` — falls back to a short hash of the name
+rather than being refused. Refusing would mean a system that only serves people whose company name is
+spelt in ASCII; the readable name still lives in the store, and this string only has to identify a
+container.
 
 **`kubernetes` — later.** A box becomes a Pod plus a Service; `boxdUrl` is
 `http://box-<tenant>.<ns>.svc:1337`, so the published-port problem disappears. Volumes become
@@ -148,13 +167,22 @@ audit(id, tenant_id, actor, action, target, at, detail_json)
 
 Decisions:
 
-- **SQLite first, behind a repository interface.** One process, one file, no server to operate. The
-  interface exists so Postgres is a second implementation rather than a rewrite — the same move
-  that made the box provisioner replaceable.
+- **SQLite first, behind a repository interface.** One process, one file, no server to operate, and
+  `node:sqlite` means no new dependency. The interface exists so Postgres is a second implementation
+  rather than a rewrite — the same move that made the box provisioner replaceable.
+- **One live box per tenant is a partial unique index**, not a convention. A retried `allocate`
+  after a timeout is the normal case, and two boxes for one tenant is two bills; the allocator checks
+  first and then relies on the index to refuse a racing second insert, destroying the container it
+  just created and returning the winner's box.
+- **`usage` is keyed by `(box_id, seq)` and inserted with `or ignore`.** With the collector's cursor
+  (§8), at-least-once collection becomes exactly-once storage: a collector that dies mid-batch and
+  re-reads cannot double-bill. Verified with an overlapping batch — four rows offered, two stored.
 - **`usage` is append-only and never aggregated in place.** Totals are queries. A metering bug then
   loses a report, not the history.
-- **Tokens are stored encrypted at rest**, with the key from the environment. Not because the store
-  is exposed, but because a database backup should not be a credential dump.
+- **Tokens are stored encrypted at rest** (AES-256-GCM), with the key from `AGENTBOX_CONTROL_KEY` or
+  minted 0600 beside the database. Not because the store is exposed, but because a database backup
+  should not be a credential dump — and note the honest limit: a backup of the whole *directory*
+  still is, unless the key comes from the environment.
 - **`audit` from the start.** Who allocated, stopped or destroyed what. A control plane without one
   cannot answer the first question asked after an incident.
 - **`quota_json` and `components_json` are JSON on purpose.** Their shape will change; a migration
@@ -237,9 +265,10 @@ should change before the control plane does.
 
 ## 12. Order of work
 
-1. R-01, R-02, R-03, R-07 in the box — the last two define what the control plane consumes.
-2. Store and `static` allocator: the control plane running against a laptop box.
-3. `compose` allocator and gateway: the first real multi-user system, on one host.
+1. ~~R-01, R-02, R-03, R-07 in the box~~ — done. The last two define what the control plane consumes.
+2. ~~Store and `static` allocator~~ — done: the control plane running against a laptop box.
+3. `compose` allocator ~~and gateway~~: the allocator is done and verified against two real boxes;
+   the gateway is next.
 4. Collector and metering.
 5. Relay, and metering moves behind it.
 6. Reaper, quotas.

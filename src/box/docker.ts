@@ -13,7 +13,7 @@ import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { promisify } from "node:util";
-import { BOXD_PORT } from "../protocol/index.ts";
+import { BOXD_PORT, UI_PORT } from "../protocol/index.ts";
 import { BoxClient } from "./client.ts";
 
 const execFileAsync = promisify(execFile);
@@ -42,6 +42,19 @@ export interface BoxConfig {
   host: string;
   displayWidth: number;
   displayHeight: number;
+  /**
+   * The UI token to give this box, when the orchestrator runs inside it.
+   *
+   * Omitted means "this machine's own", which is right for the single-box CLI and wrong for a
+   * fleet: one token across every tenant would let anyone who reached one box's UI drive
+   * everyone's. The control plane issues one per box and passes it here.
+   */
+  uiToken?: string;
+  /**
+   * Host port for the UI. Omitted means 7777, which is right for one box on a laptop; 0 lets
+   * Docker pick, which is what a second box on the same host needs.
+   */
+  uiPort?: number;
   /** Extra `docker run` arguments, e.g. volume mounts. */
   runArgs: string[];
 }
@@ -170,6 +183,8 @@ export interface BoxStatus {
   containerName: string;
   /** Host-side URL for the daemon, once the port mapping is known. */
   boxdUrl?: string;
+  /** Host-side URL for the in-box UI, when one is published. */
+  uiUrl?: string;
   health?: string;
 }
 
@@ -274,6 +289,10 @@ export class BoxManager {
 
     const boxdPort = await this.publishedPort(BOXD_PORT);
     if (boxdPort) status.boxdUrl = `http://${this.config.host}:${boxdPort}`;
+    // Only present when the orchestrator runs inside; a box driven from this machine publishes
+    // nothing here, and reporting a URL for it would be a link to nothing.
+    const port = await this.publishedPort(UI_PORT);
+    if (port) status.uiUrl = `http://${this.config.host}:${port}`;
     return status;
   }
 
@@ -302,6 +321,17 @@ export class BoxManager {
     const { config } = this;
     const publish = (hostPort: number, containerPort: number) =>
       hostPort > 0 ? `${hostPort}:${containerPort}` : `${containerPort}`;
+    /**
+     * The same thing, bound to one address.
+     *
+     * The empty middle field is load-bearing: `127.0.0.1::7777` means "this address, a port of
+     * Docker's choosing", while `127.0.0.1:7777` means "host port 127.0.0.1" and is rejected. A
+     * real two-tenant run found this; the unit tests could not, because Docker was faked there.
+     */
+    const publishOn = (address: string, hostPort: number, containerPort: number) =>
+      hostPort > 0
+        ? `${address}:${hostPort}:${containerPort}`
+        : `${address}::${containerPort}`;
 
     return [
       "run",
@@ -373,12 +403,12 @@ export class BoxManager {
             // works. Inside the box the UI binds 0.0.0.0 — Docker's publish address is all
             // that keeps it local — so it must not be open.
             "--env",
-            `AGENTBOX_UI_TOKEN=${uiToken()}`,
+            `AGENTBOX_UI_TOKEN=${config.uiToken ?? uiToken()}`,
             // Published to loopback only. The UI has no authentication — the assumption
             // has always been that anything able to reach it can already drive the
             // agents — so it must not be reachable from the network.
             "--publish",
-            "127.0.0.1:7777:7777",
+            publishOn("127.0.0.1", config.uiPort ?? UI_PORT, UI_PORT),
             ...hostCredentialArgs(),
           ]
         : []),
@@ -446,7 +476,51 @@ export class BoxManager {
 
     const client = new BoxClient({ baseUrl: status.boxdUrl, token: this.config.token });
     await this.waitForHealthy(client, onOutput);
+    if (this.config.withHost === true && status.uiUrl !== undefined) {
+      await this.waitForUi(status.uiUrl, onOutput);
+    }
     return { client, status };
+  }
+
+  /**
+   * Polls the in-box orchestrator's UI until it answers.
+   *
+   * A box whose desktop is up is not a box a person can use: the orchestrator starts after X, and
+   * for a second or two the published port accepts a connection and then nothing serves it. Found
+   * by allocating two boxes for real and watching the second one's UI refuse a request that the
+   * first one — allocated seconds earlier — had answered.
+   *
+   * A 401 counts as answering, for the same reason it does in `box-healthcheck`: a UI that refuses
+   * an unauthenticated request correctly is a UI that is serving.
+   */
+  private async waitForUi(
+    uiUrl: string,
+    onOutput?: (line: string) => void,
+    timeoutMs = 60_000
+  ): Promise<void> {
+    const deadline = Date.now() + timeoutMs;
+    let lastError = "not yet listening";
+    while (Date.now() < deadline) {
+      try {
+        const response = await fetch(uiUrl, {
+          redirect: "manual",
+          signal: AbortSignal.timeout(4000),
+        });
+        if (response.status < 500) {
+          onOutput?.(`orchestrator answering on ${uiUrl}`);
+          return;
+        }
+        lastError = `HTTP ${response.status}`;
+      } catch (error) {
+        lastError = error instanceof Error ? error.message : String(error);
+      }
+      await new Promise(resolve => setTimeout(resolve, 500));
+    }
+    throw new DockerError(
+      `Box desktop is up but its orchestrator never answered on ${uiUrl} ` +
+        `within ${timeoutMs / 1000}s (last: ${lastError}). ` +
+        `Check \`docker logs ${this.config.containerName}\`.`
+    );
   }
 
   /** Polls /health until the daemon reports a usable display. */

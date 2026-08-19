@@ -285,6 +285,14 @@ export interface ErrorResult {
 export const BOXD_PORT = 1337;
 
 /**
+ * Port the in-box orchestrator's web UI listens on inside the container.
+ *
+ * Named here rather than written as 7777 in each of the four places that knew it, because the
+ * control plane publishes it on an ephemeral host port and the two numbers are no longer the same.
+ */
+export const UI_PORT = 7777;
+
+/**
  * Base port for each desktop's noVNC inside the container: display N listens on
  * NOVNC_BASE_PORT + N.
  *

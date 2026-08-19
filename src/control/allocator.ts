@@ -75,7 +75,7 @@ function newToken(): string {
  * bookkeeping is duplicated, which is what keeps `compose` and `kubernetes` from each inventing
  * their own idea of when a box exists.
  */
-abstract class StoreBackedAllocator implements BoxAllocator {
+export abstract class StoreBackedAllocator implements BoxAllocator {
   abstract readonly kind: AllocatorKind;
 
   constructor(protected readonly store: ControlStore) {}
