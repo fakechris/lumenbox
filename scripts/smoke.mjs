@@ -277,6 +277,72 @@ await check("windows can be listed, raised, and read while covered", async () =>
   return `${listed.windows.length} windows, covered capture ${bytes} bytes`;
 });
 
+await check("a point read off a window capture can be clicked", async () => {
+  // The pair that makes "read it, then act on it" work: a window capture is in the
+  // window's own coordinates, so clicking those numbers on the screen would land
+  // somewhere else entirely. This drives a completely covered window by its own
+  // coordinates and checks the keystrokes landed in it.
+  await box.exec(
+    "rm -f /tmp/smoke-window-click.txt; " +
+      'DISPLAY=:1 setsid xterm -geometry 44x10+150+120 -e sh -c "cat > /tmp/smoke-window-click.txt" >/dev/null 2>&1 & ' +
+      "sleep 3; true",
+    { timeoutMs: 30_000 }
+  );
+
+  const listed = await box.computer([{ action: "list_windows" }], {
+    display: 1,
+    owner: owner(),
+  });
+  const sink = listed.windows?.find(w => w.desktop >= 0 && w.width < 600 && w.height < 300);
+  assert(sink, `no sink window in ${JSON.stringify(listed.windows?.map(w => w.title))}`);
+
+  // Bury it.
+  await box.exec(
+    "DISPLAY=:1 setsid box-chrome --app=about:blank --window-size=1280,800 >/dev/null 2>&1 &"
+  );
+  await new Promise(resolve => setTimeout(resolve, 14000));
+
+  // Click the middle of the buried window using the window's own coordinates, then type.
+  const clicked = await box.computer(
+    [
+      {
+        action: "click_in_window",
+        window_id: sink.id,
+        coordinate: [Math.floor(sink.width / 2), Math.floor(sink.height / 2)],
+      },
+      { action: "type", text: "window-click-ok\n" },
+    ],
+    { display: 1, owner: owner() }
+  );
+  assert(clicked.success, clicked.error ?? "click_in_window failed");
+
+  await box.exec("sleep 1; DISPLAY=:1 xdotool key ctrl+d; sleep 1");
+  const written = await box.exec("cat /tmp/smoke-window-click.txt 2>/dev/null || true");
+  assert(
+    written.stdout.includes("window-click-ok"),
+    `the buried window received ${JSON.stringify(written.stdout)}`
+  );
+
+  // Out of bounds is refused rather than clamped to an edge.
+  let refused = false;
+  try {
+    await box.computer(
+      [{ action: "click_in_window", window_id: sink.id, coordinate: [sink.width + 50, 5] }],
+      { display: 1, owner: owner() }
+    );
+  } catch {
+    refused = true;
+  }
+  const outOfBounds = await box.computer(
+    [{ action: "click_in_window", window_id: sink.id, coordinate: [sink.width + 50, 5] }],
+    { display: 1, owner: owner() }
+  ).catch(() => ({ success: false, error: "rejected" }));
+  assert(refused || outOfBounds.success === false, "a point outside the window was clicked");
+
+  await box.exec("DISPLAY=:1 wmctrl -c Chromium; true");
+  return "clicked a buried window by its own coordinates";
+});
+
 await check("a desktop refuses input from another agent", async () => {
   // Demonstrated before it was fixed: an agent can read BOXD_TOKEN's power through the
   // daemon and name any display, so one agent could type into another's screen.

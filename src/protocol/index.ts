@@ -77,7 +77,23 @@ export type ComputerAction =
    * activate_window first, and the coordinates in the result are the window's, not the
    * screen's.
    */
-  | { action: "screenshot_window"; window_id: string };
+  | { action: "screenshot_window"; window_id: string }
+  /**
+   * Clicks a point inside a window, in that window's own coordinates.
+   *
+   * The counterpart to screenshot_window: coordinates read off a window capture are the
+   * window's, not the screen's, so clicking them directly would land somewhere else. This
+   * takes them as they are. It raises the window first, because a click goes to whatever
+   * is on top at that point regardless of which window was meant.
+   */
+  | {
+      action: "click_in_window";
+      window_id: string;
+      coordinate: Coordinate;
+      button?: MouseButton;
+      count?: number;
+      modifiers?: string;
+    };
 
 export interface ComputerRequest {
   actions: readonly ComputerAction[];

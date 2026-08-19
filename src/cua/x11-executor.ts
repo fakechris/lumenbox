@@ -107,6 +107,39 @@ export function assertWindowId(raw: string): string {
   return raw.trim();
 }
 
+export interface WindowGeometry {
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+}
+
+/**
+ * A point inside a window, as a point on the screen.
+ *
+ * The window capture is the window's own pixels, so this is a translation and not a
+ * scaling: xwd hands back exactly width x height physical pixels starting at the window's
+ * origin. Out-of-bounds is refused rather than clamped — a coordinate outside the window
+ * means the model read the wrong image, and silently clicking the nearest edge would turn
+ * that into a mystery click somewhere else.
+ */
+export function windowPointToScreen(
+  geometry: WindowGeometry,
+  coordinate: Coordinate
+): { x: number; y: number } {
+  const [x, y] = coordinate;
+  if (!Number.isFinite(x) || !Number.isFinite(y)) {
+    throw new Error(`Not a coordinate: ${JSON.stringify(coordinate)}`);
+  }
+  if (x < 0 || y < 0 || x >= geometry.width || y >= geometry.height) {
+    throw new Error(
+      `(${x}, ${y}) is outside the window, which is ${geometry.width}x${geometry.height}. ` +
+        "Window coordinates start at (0, 0) in the window's own top-left corner."
+    );
+  }
+  return { x: Math.round(geometry.x + x), y: Math.round(geometry.y + y) };
+}
+
 export function keyForXdotool(key: string): string {
   // Named rather than crashed on: the field is `key`, but a type action takes `text`, so
   // a model that mixes the two up would otherwise get "Cannot read properties of
@@ -177,6 +210,7 @@ export function actionRequiresSettle(action: ComputerAction): boolean {
       // Typing only reflows the page when it commits a line.
       return /[\r\n]/.test(action.text);
     case "activate_window":
+    case "click_in_window":
       // Raising and focusing repaints, and a window manager animates it.
       return true;
     case "wait":
@@ -415,6 +449,33 @@ export class X11Executor {
         await this.typeText(action.text, options);
         return;
 
+      case "click_in_window": {
+        // Geometry is read now rather than remembered from the capture: a window can be
+        // moved or resized between reading it and clicking it.
+        const id = assertWindowId(action.window_id);
+        const geometry = await this.windowGeometry(id);
+        const point = windowPointToScreen(geometry, action.coordinate);
+
+        // Raise first. A click lands on whatever is topmost at that point, so clicking a
+        // covered window without raising it clicks the thing covering it instead.
+        await execFileAsync("wmctrl", ["-i", "-a", id], { env: this.env });
+        await sleep(150);
+
+        const button = BUTTON_MAP[action.button ?? "left"];
+        const count = action.count ?? 1;
+        const clickArgs = count > 1 ? `--repeat ${count} --delay 50 ${button}` : button;
+        const parts: string[] = [];
+        const modifiers = modifiersForXdotool(action.modifiers);
+        for (const mod of modifiers) parts.push(`keydown ${mod}`);
+        // Absolute physical coordinates, so this deliberately skips the API scaler the
+        // other click path uses: the numbers came from the window's own pixels.
+        parts.push(`mousemove --sync ${point.x} ${point.y}`);
+        parts.push(`click ${clickArgs}`);
+        for (const mod of [...modifiers].reverse()) parts.push(`keyup ${mod}`);
+        await this.xdotool(parts.join(" "));
+        return;
+      }
+
       case "activate_window":
         // wmctrl -a rather than a raise: EWMH activation also takes focus and switches
         // workspace, which is what "operate this window" actually needs.
@@ -582,6 +643,21 @@ export class X11Executor {
       input: `${entries.join("\n")}\n`,
       env: this.env,
     });
+  }
+
+  /** Where a window is now, from the same source the capture uses. */
+  async windowGeometry(windowId: string): Promise<WindowGeometry> {
+    const { stdout } = await execFileAsync(
+      "xdotool",
+      ["getwindowgeometry", "--shell", assertWindowId(windowId)],
+      { env: this.env }
+    );
+    const read = (key: string): number => {
+      const match = new RegExp(`^${key}=(-?\\d+)$`, "m").exec(stdout);
+      if (!match) throw new Error(`xdotool did not report ${key} for ${windowId}`);
+      return Number(match[1]);
+    };
+    return { x: read("X"), y: read("Y"), width: read("WIDTH"), height: read("HEIGHT") };
   }
 
   /**

@@ -9,7 +9,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { CoordinateScaler } from "./scaling.ts";
-import { assertWindowId, keyForXdotool } from "./x11-executor.ts";
 import {
   buildResolutionConfig,
   parseDisplayNum,
@@ -17,8 +16,11 @@ import {
 } from "./display.ts";
 import {
   actionRequiresSettle,
+  assertWindowId,
+  keyForXdotool,
   patchWebpHeader,
   runThatFits,
+  windowPointToScreen,
 } from "./x11-executor.ts";
 import { API_WIDTH } from "../protocol/index.ts";
 
@@ -199,5 +201,26 @@ test("activating a window needs a settle; listing does not", () => {
   assert.equal(
     actionRequiresSettle({ action: "screenshot_window", window_id: "0x1" }),
     false
+  );
+});
+
+test("a point in a window becomes a point on the screen", () => {
+  // Translation, not scaling: a window capture is the window's own physical pixels.
+  const geometry = { x: 160, y: 178, width: 244, height: 108 };
+  assert.deepEqual(windowPointToScreen(geometry, [0, 0]), { x: 160, y: 178 });
+  assert.deepEqual(windowPointToScreen(geometry, [12, 30]), { x: 172, y: 208 });
+  assert.deepEqual(windowPointToScreen(geometry, [243, 107]), { x: 403, y: 285 });
+});
+
+test("a point outside the window is refused, not clamped", () => {
+  // Clamping would turn "the model read the wrong image" into a click somewhere else,
+  // which is far harder to notice than an error.
+  const geometry = { x: 160, y: 178, width: 244, height: 108 };
+  assert.throws(() => windowPointToScreen(geometry, [244, 10]), /outside the window/);
+  assert.throws(() => windowPointToScreen(geometry, [10, 108]), /outside the window/);
+  assert.throws(() => windowPointToScreen(geometry, [-1, 10]), /outside the window/);
+  assert.throws(
+    () => windowPointToScreen(geometry, [Number.NaN, 0]),
+    /Not a coordinate/
   );
 });

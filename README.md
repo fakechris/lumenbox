@@ -248,8 +248,13 @@ matters — a dialog behind the browser is invisible in a screenshot, and a wind
 see it cannot decide to raise.
 
 Reading a covered window works only because a compositor is running: every window then
-renders into its own buffer, so an obscured one still has its pixels. Raising is still
-required before typing, because synthetic input follows focus rather than a window id.
+renders into its own buffer, so an obscured one still has its pixels.
+
+`click_in_window` completes the pair: a window capture is in the window's own coordinates,
+so clicking those numbers on the screen would land somewhere else. It takes them as they
+are, raises the window — a click goes to whatever is topmost at that point, whichever
+window was meant — and translates. A point outside the window is refused rather than
+clamped, because clamping turns "the model read the wrong image" into a mystery click.
 
 ### Whose desktop is whose
 

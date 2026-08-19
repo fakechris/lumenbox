@@ -82,6 +82,7 @@ const actionSchema = {
         "list_windows",
         "activate_window",
         "screenshot_window",
+        "click_in_window",
       ],
       description: "Which action to perform.",
     },
@@ -135,7 +136,8 @@ const actionSchema = {
     window_id: {
       type: "string" as const,
       description:
-        'For activate_window and screenshot_window: an id from list_windows, e.g. "0x01e00003".',
+        'For activate_window, screenshot_window and click_in_window: an id from ' +
+        'list_windows, e.g. "0x01e00003".',
     },
   },
   required: ["action"],
@@ -170,8 +172,9 @@ export function buildTools(hasBox: boolean, vision = true): Anthropic.Tool[] {
           "typing into it, because keystrokes go to whatever holds focus; and " +
           "`screenshot_window` reads one window's own contents even while it is covered, " +
           "for when you only need to read it. Coordinates in a window screenshot are the " +
-          "window's, not the screen's — activate it and take a normal screenshot before " +
-          "clicking.",
+          "window's own, measured from its top-left corner, not the screen's — so to act " +
+          "on something you found there, use `click_in_window` with those coordinates " +
+          "as they are. It raises the window and translates them for you.",
         input_schema: {
           type: "object",
           properties: {
