@@ -68,6 +68,24 @@ export function withoutBoxToken(env: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
  * rather than matched by pattern, so a token the user deliberately put in the box for
  * the agent to use — a GitHub token, say — still reaches it.
  */
+/**
+ * How far behind the interactive path the agent's own work runs.
+ *
+ * 19, because it was measured rather than guessed. Twelve cores, the agent saturating all
+ * of them, screenshot latency:
+ *
+ *   idle                185ms
+ *   loaded, no nice     489ms
+ *   loaded, nice 10     327ms
+ *   loaded, nice 19     189ms
+ *
+ * The desktop is only busy in bursts, and nice does nothing on an idle box — Linux hands
+ * spare time to whoever wants it — so the agent loses almost nothing for the desktop
+ * feeling untouched. box-chrome puts itself back at 0: a browser the user is watching is
+ * part of the interactive path even though an agent started it.
+ */
+export const AGENT_NICE = Number(process.env.BOXD_AGENT_NICE ?? 19);
+
 export const SCRUBBED_ENV = [
   "BOXD_TOKEN",
   "ANTHROPIC_API_KEY",
@@ -113,7 +131,17 @@ export function runShell(request: ExecRequest): Promise<ExecResult> {
   const script = key ? wrapForSession(command, key, request.cwd) : command;
 
   return new Promise<ExecResult>(resolve => {
-    const child = spawn("/bin/bash", ["-lc", script], {
+    // Run behind the interactive path. One box shares its CPU between two workloads with
+    // very different needs: the desktop, whose latency the user feels directly as
+    // "computer use is slow", and whatever the agent is running, which is throughput work.
+    // Measured on twelve cores with the agent saturating them: a screenshot went from
+    // 185ms to 489ms. A nice value costs the agent nothing while the box is idle and hands
+    // the desktop the CPU when it is not.
+    //
+    // Inherited by everything the command starts, which is the point — the expensive thing
+    // is usually a build, not the shell. Not a guarantee: the agent has sudo and could
+    // renice itself back. It is the same accident-prevention line as the desktop tokens.
+    const child = spawn("nice", ["-n", String(AGENT_NICE), "/bin/bash", "-lc", script], {
       // With a session the script does its own cd; without one, honour the request.
       cwd: key ? undefined : (request.cwd ?? process.env.HOME ?? "/home/box"),
       env: {

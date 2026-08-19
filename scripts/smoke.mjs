@@ -159,6 +159,26 @@ await check("a human-usable terminal and file manager are installed", async () =
   return "xfce4-terminal, thunar, wallpaper";
 });
 
+await check("the agent's work runs behind the desktop", async () => {
+  // One box, two workloads with different needs: the desktop, whose latency a person feels
+  // directly as "computer use is slow", and whatever the agent runs, which is throughput.
+  // Measured on twelve cores with the agent saturating them, screenshot latency went 185ms
+  // idle, 489ms loaded, 189ms loaded with this in place.
+  const agent = await box.exec("ps -o ni= -p $$ | tr -d ' '");
+  assert(Number(agent.stdout.trim()) > 0, `the agent's shell runs at nice ${agent.stdout}`);
+
+  // And the things the user looks through are not behind it.
+  const interactive = await box.exec(
+    "for p in Xvfb x11vnc websockify; do ps -o ni= -p $(pgrep -x $p | head -1) | tr -d ' '; done"
+  );
+  const values = interactive.stdout.trim().split("\n").map(Number);
+  assert(values.length === 3, interactive.stdout);
+  for (const value of values) {
+    assert(value <= 0, `an interactive process runs at nice ${value}`);
+  }
+  return `agent nice ${agent.stdout.trim()}, desktop nice ${values.join("/")}`;
+});
+
 await check("the box can diagnose itself", async () => {
   // The point is that an agent can run this over its own shell when its computer misbehaves,
   // instead of working around a symptom. Both directions are asserted: a healthy box passes,

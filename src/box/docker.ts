@@ -311,6 +311,10 @@ export class BoxManager {
       // starve the engine host.
       "--memory",
       process.env.AGENTBOX_MEMORY ?? "4g",
+      // A ceiling, if one is wanted. Unset by default: the split that matters is inside
+      // the box — the desktop ahead of the agent's work — and a wrong number here just
+      // makes the agent slow for no reason. Set it when a box shares a machine.
+      ...(process.env.AGENTBOX_CPUS ? ["--cpus", process.env.AGENTBOX_CPUS] : []),
       // Two named volumes, because everything else in the container is disposable and
       // these two things are not: what the agents made, and what they logged into.
       // Without them, `box up --recreate` — which is also what upgrading the image

@@ -258,6 +258,31 @@ The events themselves are in `~/.agentbox/activity.jsonl`, one per line with the
 they happened, so the feed survives a restart of the server and not just a reload of
 the page. Delete the file to clear the feed.
 
+### Who gets the CPU
+
+A box shares one CPU allowance between two workloads that want different things: the
+desktop, whose latency a person feels directly as "computer use is slow", and whatever the
+agent is running, which is throughput work. They used to compete as equals, and the
+difference is measurable — on twelve cores, with the agent saturating all of them, a
+screenshot went from 185ms to 489ms.
+
+So the agent's shell runs at `nice 19`, and everything it starts inherits that. The desktop
+stack, the capture path and anything launched from the dock or a desktop icon stay at 0.
+With the agent saturating the box, a screenshot is back to 189ms — nice costs the agent
+nothing while the box is idle, because Linux hands spare time to whoever wants it, and hands
+the desktop the CPU when it does not.
+
+A browser the agent launches is behind the desktop too, which is the right way round: the
+agent's browsing is throughput, a person's is what they are looking at, and clicking the
+dock icon gets normal priority. Promoting an agent-launched browser would need
+`CAP_SYS_NICE` — lowering a nice value is privileged, and `sudo renice` fails with
+"Operation not permitted" even as root in here — and that capability also allows real-time
+scheduling, which a runaway process could use to starve the host. Not worth it for a browser
+that is slower while the agent compiles.
+
+`AGENTBOX_CPUS` sets a container ceiling if a box shares a machine. Unset by default: the
+split inside the box is what matters, and a wrong ceiling just makes the agent slow.
+
 ### Keeping it running
 
 Both services in the box are supervised in place, with exponential backoff and a cap. The

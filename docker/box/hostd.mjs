@@ -12994,6 +12994,10 @@ var BoxManager = class {
       // starve the engine host.
       "--memory",
       process.env.AGENTBOX_MEMORY ?? "4g",
+      // A ceiling, if one is wanted. Unset by default: the split that matters is inside
+      // the box — the desktop ahead of the agent's work — and a wrong number here just
+      // makes the agent slow for no reason. Set it when a box shares a machine.
+      ...process.env.AGENTBOX_CPUS ? ["--cpus", process.env.AGENTBOX_CPUS] : [],
       // Two named volumes, because everything else in the container is disposable and
       // these two things are not: what the agents made, and what they logged into.
       // Without them, `box up --recreate` — which is also what upgrading the image
@@ -13693,6 +13697,11 @@ directly. An X selection belongs to the process that set it, and the shell tool 
 process group when a command returns \u2014 so a bare \`xclip\` copy is empty a second later.
 The wrapper detaches the owner. The user can read and write the same clipboard from
 outside the box, so this is also how you hand them a value they need.
+
+When something about your computer seems wrong \u2014 a click that does nothing, a screenshot
+that looks empty, a browser that will not start \u2014 run \`box-doctor\` before guessing. It
+checks the handful of things that fail silently in here and prints one line each, so you
+find out which part is broken instead of working around the symptom.
 
 You have \`sudo\` without a password. Installing a package you need is expected, not a
 last resort.
