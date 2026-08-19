@@ -104,11 +104,31 @@ export const APP_HTML = String.raw`<!doctype html>
     border: 1px solid var(--line); padding: 5px 8px; text-align: left; vertical-align: top;
   }
   .msg .body th { background: #1b1f27; font-weight: 600; }
-  /* An agent's message relayed into another agent's turn: not the person typing. */
-  .msg.peer .who { color: var(--warn); }
-  .tool { padding: 5px 16px; color: var(--dim); font: 12px/1.5 ui-monospace, SFMono-Regular, Menlo, monospace; }
+  /* Tool calls collapse to one line. A turn can make dozens, each result can be pages
+     long, and shown in full the conversation becomes a log with the reasoning buried
+     in it. The summary is the call; arguments, output and screenshot are one click in. */
+  .tool { padding: 4px 16px; color: var(--dim); font: 12px/1.5 ui-monospace, SFMono-Regular, Menlo, monospace; }
   .tool .nm { color: var(--accent); }
-  .tool.res { padding-left: 30px; opacity: .85; }
+  details.tool > summary {
+    cursor: pointer; list-style: none;
+    white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  }
+  details.tool > summary::-webkit-details-marker { display: none; }
+  details.tool > summary::before { content: "\25b8  "; }
+  details.tool[open] > summary::before { content: "\25be  "; }
+  details.tool > summary:hover { color: var(--text); }
+  details.tool .det {
+    white-space: pre-wrap; word-break: break-word; color: var(--text);
+    padding: 5px 0 6px 15px; opacity: .9;
+  }
+  details.tool.err > summary, details.tool.err .det { color: var(--err); }
+  /* A teammate message: a one-line hint naming the agent, not the message body.
+     The text is there when you open it. */
+  details.note > summary { color: var(--ok); }
+  .note .chip {
+    background: #232935; border: 1px solid var(--line); border-radius: 9px;
+    padding: 0 7px; color: var(--text);
+  }
   .shot { display: block; max-width: 100%; margin: 8px 0 2px; border: 1px solid var(--line); border-radius: 4px; }
   form { display: flex; gap: 8px; padding: 10px; border-top: 1px solid var(--line); }
   textarea {
@@ -195,6 +215,8 @@ var current = null;
 var busy = new Set();
 /** In-flight assistant text nodes, keyed by agent id, so deltas land in one bubble. */
 var live = new Map();
+/** The tool row awaiting its result, per agent. */
+var openTool = new Map();
 
 function esc(value) {
   return String(value).replace(/[&<>"]/g, function (c) {
@@ -250,15 +272,73 @@ function bubble(role, who, text) {
   return body;
 }
 
-function toolRow(html, cls) {
+/**
+ * A collapsed row: one line of summary, the rest behind a click.
+ *
+ * Used for tool calls and for teammate messages, which are the two things that arrive
+ * in bulk and drown the conversation when shown in full.
+ */
+/** The argument that identifies a call. Mirrors src/web/transcript.ts for replay. */
+function toolDetail(tool, input) {
+  var args = input || {};
+  if (tool === "bash") return args.command || "";
+  if (tool === "SendToAgent") return nameOf(args.target_id || "") + ": " + (args.text || "");
+  if (tool === "computer") {
+    var actions = args.actions || [];
+    var names = [];
+    for (var i = 0; i < actions.length; i++) names.push(actions[i].action);
+    return names.join(" + ");
+  }
+  var values = Object.keys(args).map(function (key) { return String(args[key]); });
+  return values.length ? values[0] : "";
+}
+
+function collapsedRow(cls, summaryHtml, detail) {
   var el = $("chat");
   var stick = nearBottom(el);
-  var row = document.createElement("div");
+  var row = document.createElement("details");
   row.className = "tool " + (cls || "");
-  row.innerHTML = html;
+  row.innerHTML = "<summary>" + summaryHtml + '</summary><div class="det"></div>';
+  // textContent, not innerHTML: this is output from a command or another agent.
+  row.querySelector(".det").textContent = String(detail == null ? "" : detail);
   el.appendChild(row);
   if (stick) el.scrollTop = el.scrollHeight;
   return row;
+}
+
+/** Appends to an open row's body, for a result that arrives after the call. */
+function appendDetail(row, text) {
+  if (!row || !text) return;
+  var body = row.querySelector(".det");
+  body.textContent = body.textContent ? body.textContent + "\n\n" + text : String(text);
+}
+
+function toolCall(name, detail, result, isError) {
+  var oneLine = String(detail == null ? "" : detail).replace(/\s+/g, " ");
+  var row = collapsedRow(
+    isError ? "err" : "",
+    '<span class="nm">' + esc(name) + "</span> " + esc(oneLine.slice(0, 140)),
+    detail
+  );
+  appendDetail(row, result);
+  return row;
+}
+
+/**
+ * A teammate message as a one-line hint.
+ *
+ * The established pattern for this is an inline hint — "Messaged [Bob]" — naming the
+ * agent rather than quoting what was sent. Following that: the row says who and which
+ * direction, and the message itself is one click away.
+ */
+function peerNote(direction, name, text, priority) {
+  var oneLine = String(text == null ? "" : text).replace(/\s+/g, " ");
+  return collapsedRow(
+    "note",
+    "&#9993; " + esc(direction) + ' <span class="chip">' + esc(name) + "</span>" +
+      (priority ? " (priority)" : "") + " " + esc(oneLine.slice(0, 60)),
+    text
+  );
 }
 
 /** Points the desktop pane at one agent's own display. */
@@ -280,15 +360,6 @@ function showDesktop(id) {
   }
 }
 
-/** One teammate message, shown as the sender rather than as the person's own words. */
-function peerBubble(toName, message) {
-  bubble(
-    "peer",
-    message.from + (message.priority ? " (priority)" : "") + " → " + toName,
-    message.text
-  );
-}
-
 /**
  * One mapped transcript entry.
  *
@@ -298,20 +369,15 @@ function peerBubble(toName, message) {
  */
 function replayEntry(id, entry) {
   if (entry.kind === "peer") {
-    for (var p = 0; p < entry.messages.length; p++) peerBubble(nameOf(id), entry.messages[p]);
+    for (var p = 0; p < entry.messages.length; p++) {
+      peerNote("from", entry.messages[p].from, entry.messages[p].text, entry.messages[p].priority);
+    }
     return;
   }
   if (entry.kind === "tools") {
     for (var t = 0; t < entry.tools.length; t++) {
-      toolRow('&rarr; <span class="nm">' + esc(entry.tools[t].name) + "</span> " +
-        esc(String(entry.tools[t].detail).slice(0, 200)));
-    }
-    return;
-  }
-  if (entry.kind === "results") {
-    for (var r = 0; r < entry.results.length; r++) {
-      toolRow(esc(String(entry.results[r].text).slice(0, 400)),
-        entry.results[r].isError ? "res err" : "res");
+      var call = entry.tools[t];
+      toolCall(call.name, call.detail, call.result, call.isError);
     }
     return;
   }
@@ -352,8 +418,50 @@ function refresh() {
 
 var stream = new EventSource("/api/events");
 
+/**
+ * The activity line for an event, or null if it does not belong in the feed.
+ *
+ * Shared by the live stream and by the replay of recent activity on load, so a
+ * reloaded page reads the same as one that was open the whole time.
+ */
+function activityLine(e) {
+  if (e.type === "prompt") return { html: "<b>you</b> &rarr; " + esc(nameOf(e.agentId)), cls: "" };
+  if (e.type === "turn_started") return { html: "<b>" + esc(nameOf(e.agentId)) + "</b> started a turn", cls: "" };
+  if (e.type === "tool_start") return { html: "<b>" + esc(e.agentName) + "</b> &rarr; " + esc(e.tool), cls: "" };
+  if (e.type === "message_sent") {
+    return {
+      html: "&#9993; <b>" + esc(e.fromName) + "</b> &rarr; <b>" + esc(e.toName) + "</b>" +
+        (e.priority ? " (priority)" : "") + ": " + esc(String(e.text).slice(0, 90)),
+      cls: "mail"
+    };
+  }
+  if (e.type === "turn_failed") {
+    return { html: "<b>" + esc(nameOf(e.agentId)) + "</b> failed: " + esc(e.error), cls: "err" };
+  }
+  if (e.type === "turn_interrupted") {
+    return { html: "<b>" + esc(nameOf(e.agentId)) + "</b> interrupted (" + esc(e.reason) + ")", cls: "warn" };
+  }
+  if (e.type === "error") return { html: esc(e.message), cls: "err" };
+  return null;
+}
+
+/** What happened before this page was opened. The feed used to start blank on reload. */
+function loadActivity() {
+  return fetch("/api/activity")
+    .then(function (r) { return r.json(); })
+    .then(function (events) {
+      for (var i = 0; i < events.length; i++) {
+        var line = activityLine(events[i]);
+        if (line) feed(line.html, line.cls);
+      }
+    })
+    .catch(function () { /* an empty feed is not worth an error row */ });
+}
+
 stream.onmessage = function (raw) {
   var e = JSON.parse(raw.data);
+  var line = activityLine(e);
+  if (line) feed(line.html, line.cls);
 
   if (e.type === "prompt") {
     if (e.agentId === current) bubble("user", "you", e.text);
@@ -386,54 +494,39 @@ stream.onmessage = function (raw) {
 
   if (e.type === "tool_start") {
     live.delete(e.agentId);
-    var input = e.input || {};
-    var detail = "";
-    if (e.tool === "bash") detail = input.command || "";
-    else if (e.tool === "SendToAgent") detail = nameOf(input.target_id || "");
-    else if (e.tool === "computer") {
-      var acts = input.actions || [];
-      var parts = [];
-      for (var i = 0; i < acts.length; i++) parts.push(acts[i].action);
-      detail = parts.join(" + ");
-    } else {
-      var values = Object.keys(input).map(function (k) { return String(input[k]); });
-      detail = values.length ? values[0] : "";
-    }
+    // Held so the result can be folded into the same row when it arrives.
     if (e.agentId === current) {
-      toolRow('&rarr; <span class="nm">' + esc(e.tool) + "</span> " + esc(String(detail).slice(0, 200)));
+      openTool.set(e.agentId, toolCall(e.tool, toolDetail(e.tool, e.input)));
     }
-    feed("<b>" + esc(e.agentName) + "</b> &rarr; " + esc(e.tool));
     return;
   }
 
   if (e.type === "tool_end") {
-    if (e.agentId === current && (e.summary || e.screenshot)) {
-      var row = toolRow(esc(e.summary || ""), "res");
-      if (e.screenshot) {
-        var img = document.createElement("img");
-        img.className = "shot";
-        img.src = "data:image/webp;base64," + e.screenshot;
-        row.appendChild(img);
-        $("chat").scrollTop = $("chat").scrollHeight;
-      }
+    var row = openTool.get(e.agentId);
+    openTool.delete(e.agentId);
+    if (e.agentId !== current || !row) return;
+    appendDetail(row, e.summary);
+    if (e.screenshot) {
+      var img = document.createElement("img");
+      img.className = "shot";
+      img.src = "data:image/webp;base64," + e.screenshot;
+      // Inside the row, so it appears when opened rather than filling the column.
+      row.appendChild(img);
     }
     return;
   }
 
   if (e.type === "message_sent") {
-    feed("&#9993; <b>" + esc(e.fromName) + "</b> &rarr; <b>" + esc(e.toName) + "</b>" +
-      (e.priority ? " (priority)" : "") + ": " + esc(String(e.text).slice(0, 90)), "mail");
-    // Show it in the recipient's chat as it arrives. Otherwise the pane jumps from
-    // nothing to a reply, and what prompted the reply only appears on reload.
-    if (e.toId === current) {
-      peerBubble(e.toName, { from: e.fromName, priority: e.priority, text: e.text });
-    }
+    // Both sides, in their own chat: the sender's record of messaging a teammate, and
+    // the recipient's of being messaged. Without the second, the pane jumps from
+    // nothing to a reply and what prompted it only shows up on reload.
+    if (e.toId === current) peerNote("from", e.fromName, e.text, e.priority);
+    else if (e.fromId === current) peerNote("to", e.toName, e.text, e.priority);
     return;
   }
 
   if (e.type === "turn_started") {
     busy.add(e.agentId); renderAgents();
-    feed("<b>" + esc(nameOf(e.agentId)) + "</b> started a turn");
     return;
   }
 
@@ -446,12 +539,6 @@ stream.onmessage = function (raw) {
 
   if (e.type === "turn_failed") {
     busy.delete(e.agentId); renderAgents();
-    feed("<b>" + esc(nameOf(e.agentId)) + "</b> failed: " + esc(e.error), "err");
-    return;
-  }
-
-  if (e.type === "turn_interrupted") {
-    feed("<b>" + esc(nameOf(e.agentId)) + "</b> interrupted (" + esc(e.reason) + ")", "warn");
     return;
   }
 
@@ -460,9 +547,6 @@ stream.onmessage = function (raw) {
     return;
   }
 
-  if (e.type === "error") {
-    feed(esc(e.message), "err");
-  }
 };
 
 stream.onerror = function () {
@@ -534,7 +618,8 @@ $("new").onclick = function () {
   }).then(refresh);
 };
 
-refresh();
+// Activity after the roster, because its lines name agents.
+refresh().then(loadActivity);
 setInterval(refresh, 15000);
 </script>
 </body>

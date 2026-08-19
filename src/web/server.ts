@@ -52,7 +52,30 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
   let vendorScript: Buffer | undefined;
   const clients = new Set<ServerResponse>();
 
+  /**
+   * Recent activity, so the feed is not blank on arrival.
+   *
+   * The feed used to exist only in the page: it showed what happened since the tab
+   * loaded and lost all of it on reload, which is exactly when someone comes back to
+   * see what the agents did. Kept bounded and in memory — this is a view of a run, not
+   * a record of it; the transcripts on disk are the record.
+   *
+   * Text deltas are left out (there are thousands, and the transcript has them) and so
+   * are screenshots, which would make this hold megabytes of base64.
+   */
+  const activity: OutboundEvent[] = [];
+  const ACTIVITY_LIMIT = 400;
+
+  const remember = (event: OutboundEvent) => {
+    if (event.type === "text" || event.type === "round") return;
+    const stored =
+      event.type === "tool_end" ? { ...event, screenshot: undefined } : event;
+    activity.push(stored as OutboundEvent);
+    if (activity.length > ACTIVITY_LIMIT) activity.splice(0, activity.length - ACTIVITY_LIMIT);
+  };
+
   const broadcast = (event: OutboundEvent) => {
+    remember(event);
     const payload = `data: ${JSON.stringify(event)}\n\n`;
     for (const client of clients) {
       // A slow or dead client must not take the server down with it.
@@ -252,6 +275,11 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
           return;
         }
 
+        if (route === "GET /api/activity") {
+          send(res, 200, activity);
+          return;
+        }
+
         if (route === "GET /api/transcript") {
           const id = url.searchParams.get("agent") ?? "";
           if (!registry.has(id)) {
@@ -261,8 +289,11 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
           // Mapped for reading, not replayed raw: the stored form is written for the
           // model, and the roster is what lets a wake prompt be split back into the
           // messages that caused it.
-          const names = registry.list().map(record => record.profile.name);
-          send(res, 200, toDisplayEntries(registry.readTranscript(id), names));
+          const roster = registry.list().map(record => ({
+            id: record.id,
+            name: record.profile.name,
+          }));
+          send(res, 200, toDisplayEntries(registry.readTranscript(id), roster));
           return;
         }
 

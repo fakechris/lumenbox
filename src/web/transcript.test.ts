@@ -83,24 +83,19 @@ test("tool traffic becomes tool rows, not empty bubbles", () => {
     },
   ];
 
-  const display = toDisplayEntries(entries, ["Ada"]);
+  const display = toDisplayEntries(entries, [{ id: "id-Ada", name: "Ada" }]);
 
   assert.deepEqual(display[0], { kind: "text", role: "user", text: "take a screenshot" });
   assert.deepEqual(display[1], { kind: "text", role: "assistant", text: "Looking now." });
+  // The result is folded into the call it answers, so the page has one row to collapse.
   assert.deepEqual(display[2], {
     kind: "tools",
     tools: [
-      { name: "bash", detail: "ls -la /home/box" },
-      { name: "computer", detail: "click + screenshot" },
+      { name: "bash", detail: "ls -la /home/box", result: "work", isError: false },
+      { name: "computer", detail: "click + screenshot", result: "failed", isError: true },
     ],
   });
-  assert.deepEqual(display[3], {
-    kind: "results",
-    results: [
-      { text: "work", isError: false },
-      { text: "failed", isError: true },
-    ],
-  });
+  assert.equal(display[3], undefined);
 });
 
 test("a wake prompt in a transcript becomes a peer entry", () => {
@@ -109,7 +104,7 @@ test("a wake prompt in a transcript becomes a peer entry", () => {
     { role: "assistant", text: "on it", at: "t" },
   ];
 
-  const display = toDisplayEntries(entries, ["Ada", "Bob"]);
+  const display = toDisplayEntries(entries, [{ id: "id-Ada", name: "Ada" }, { id: "id-Bob", name: "Bob" }]);
   assert.deepEqual(display[0], {
     kind: "peer",
     messages: [{ from: "Ada", priority: false, text: "over to you" }],
@@ -123,4 +118,30 @@ test("entries with nothing to show are dropped", () => {
     []
   );
   assert.deepEqual(display, []);
+});
+
+test("a message to a teammate is recorded by name, not by id", () => {
+  // The UI shows this as a one-line hint in the sender's chat ("Messaged [Bob]"),
+  // not as the message text; a uuid there would say nothing about who was messaged.
+  const entries = [
+    {
+      role: "assistant",
+      kind: "blocks",
+      blocks: [
+        {
+          type: "tool_use",
+          id: "1",
+          name: "SendToAgent",
+          input: { target_id: "id-Bob", text: "please verify r1.txt" },
+        },
+      ],
+      at: "t",
+    },
+  ];
+
+  const display = toDisplayEntries(entries, [{ id: "id-Bob", name: "Bob" }]);
+  assert.deepEqual(display[0], {
+    kind: "tools",
+    tools: [{ name: "SendToAgent", detail: "Bob: please verify r1.txt" }],
+  });
 });

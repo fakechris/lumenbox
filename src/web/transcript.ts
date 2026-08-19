@@ -14,19 +14,38 @@
 
 import { parseWakePrompt, type WakeMessage } from "../host/prompt.ts";
 
+export interface DisplayTool {
+  name: string;
+  /** The argument that identifies the call, e.g. the command bash ran. */
+  detail: string;
+  /** Filled in from the matching tool_result, so a call and its outcome stay together. */
+  result?: string;
+  isError?: boolean;
+}
+
 export type DisplayEntry =
   | { kind: "text"; role: "user" | "assistant"; text: string }
   /** A turn a teammate started: the messages, without the scaffolding around them. */
   | { kind: "peer"; messages: WakeMessage[] }
-  | { kind: "tools"; tools: { name: string; detail: string }[] }
-  | { kind: "results"; results: { text: string; isError: boolean }[] };
+  | { kind: "tools"; tools: DisplayTool[] };
+
+export interface RosterEntry {
+  id: string;
+  name: string;
+}
 
 /** What the live view shows for a tool call: the argument that identifies the call. */
-function toolDetail(name: string, input: unknown): string {
+function toolDetail(name: string, input: unknown, roster: readonly RosterEntry[]): string {
   const args = (input ?? {}) as Record<string, unknown>;
 
   if (name === "bash") return String(args.command ?? "");
-  if (name === "SendToAgent") return String(args.text ?? "");
+  if (name === "SendToAgent") {
+    // Named, not an id: this row is the sender's record of messaging a teammate, and
+    // a uuid tells the reader nothing about who that was.
+    const target = roster.find(entry => entry.id === String(args.target_id ?? ""));
+    const to = target ? target.name : String(args.target_id ?? "someone");
+    return `${to}: ${String(args.text ?? "")}`;
+  }
   if (name === "computer") {
     const actions = Array.isArray(args.actions) ? args.actions : [];
     return actions
@@ -51,9 +70,12 @@ function resultText(block: Record<string, unknown>): string {
 
 export function toDisplayEntries(
   entries: readonly unknown[],
-  knownNames: readonly string[]
+  roster: readonly RosterEntry[]
 ): DisplayEntry[] {
   const display: DisplayEntry[] = [];
+  const knownNames = roster.map(entry => entry.name);
+  /** The ids of the calls in the entry just pushed, so results can be matched to it. */
+  let awaiting: { entry: { tools: DisplayTool[] }; ids: string[] } | undefined;
 
   for (const raw of entries) {
     const entry = (raw ?? {}) as Record<string, unknown>;
@@ -70,22 +92,33 @@ export function toDisplayEntries(
         .trim();
       if (text) display.push({ kind: "text", role: "assistant", text });
 
-      const tools = blocks
-        .filter(block => block.type === "tool_use")
-        .map(block => ({
-          name: String(block.name ?? "tool"),
-          detail: toolDetail(String(block.name ?? ""), block.input),
-        }));
-      if (tools.length > 0) display.push({ kind: "tools", tools });
+      const calls = blocks.filter(block => block.type === "tool_use");
+      const tools: DisplayTool[] = calls.map(block => ({
+        name: String(block.name ?? "tool"),
+        detail: toolDetail(String(block.name ?? ""), block.input, roster),
+      }));
+      if (tools.length > 0) {
+        const entryWithTools = { kind: "tools" as const, tools };
+        display.push(entryWithTools);
+        awaiting = {
+          entry: entryWithTools,
+          ids: calls.map(block => String(block.id ?? "")),
+        };
+      }
       continue;
     }
 
     if (entry.kind === "results") {
-      const results = blocks.map(block => ({
-        text: resultText(block),
-        isError: block.is_error === true,
-      }));
-      if (results.length > 0) display.push({ kind: "results", results });
+      // Folded into the call it answers rather than shown as its own row: a call and
+      // its outcome are one thing to a reader, and one collapsed row to the page.
+      for (const block of blocks) {
+        const at = awaiting?.ids.indexOf(String(block.tool_use_id ?? "")) ?? -1;
+        const tool = at >= 0 ? awaiting!.entry.tools[at] : undefined;
+        if (!tool) continue;
+        tool.result = resultText(block);
+        tool.isError = block.is_error === true;
+      }
+      awaiting = undefined;
       continue;
     }
 
