@@ -60,10 +60,35 @@ export type ComputerAction =
   | { action: "key"; key: string; hold_duration_ms?: number }
   | { action: "wait"; duration_ms: number }
   | { action: "screenshot" }
-  | { action: "cursor_position" };
+  | { action: "cursor_position" }
+  /** The windows on this desktop, so a window can be found without hunting visually. */
+  | { action: "list_windows" }
+  /**
+   * Raises a window and gives it focus.
+   *
+   * Needed before typing into it: synthetic input is global — it goes to whatever holds
+   * focus — so a window cannot be operated while it is behind another one.
+   */
+  | { action: "activate_window"; window_id: string }
+  /**
+   * One window's own contents, whether or not it is visible.
+   *
+   * For reading something a window in front is covering. Clicking still needs
+   * activate_window first, and the coordinates in the result are the window's, not the
+   * screen's.
+   */
+  | { action: "screenshot_window"; window_id: string };
 
 export interface ComputerRequest {
   actions: readonly ComputerAction[];
+  /**
+   * Proof that the caller owns this desktop.
+   *
+   * A display is bound to a token when it is created, and input carrying anyone else's
+   * token is refused. Without it, any caller that could name a display could drive it —
+   * which meant one agent could type into another's screen.
+   */
+  owner?: string;
   /**
    * Which desktop to act on. Each agent gets its own, so their input and their
    * screenshots cannot cross. Defaults to 1.
@@ -77,11 +102,29 @@ export interface ComputerRequest {
   bind_unmapped_characters?: boolean;
 }
 
+export interface WindowInfo {
+  /** X window id, e.g. "0x01e00003". What activate_window and screenshot_window take. */
+  id: string;
+  /**
+   * Workspace index, or -1 for the furniture: the layer that draws the desktop and its
+   * icons, and the dock. Those are not windows anyone means.
+   */
+  desktop: number;
+  pid: number;
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+  title: string;
+}
+
 export interface ComputerResult {
   success: boolean;
   /** base64 WebP at API resolution. Empty only if capture failed. */
   screenshot: string;
   cursor_position?: { x: number; y: number };
+  /** Present when the batch included list_windows. */
+  windows?: readonly WindowInfo[];
   action_count: number;
   duration_ms: number;
   error?: string;
@@ -89,6 +132,8 @@ export interface ComputerResult {
 
 export interface ExecRequest {
   command: string;
+  /** Same as on a computer request: proof of ownership when a display is named. */
+  owner?: string;
   cwd?: string;
   /** Sets DISPLAY, so a GUI launched from the shell lands on the agent's own desktop. */
   display?: number;
@@ -171,6 +216,12 @@ export interface DisplayInfo {
 
 export interface EnsureDisplayRequest {
   index: number;
+  /**
+   * Binds this desktop to the caller. Once bound, computer and exec requests naming this
+   * display must present the same token. Re-binding with the same token is idempotent;
+   * a different token is refused while the binding stands.
+   */
+  owner?: string;
 }
 
 export type EnsureDisplayResult = DisplayInfo;

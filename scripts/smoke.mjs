@@ -59,6 +59,19 @@ try {
 
 console.log(`${DIM}smoke test against ${(await manager.status()).boxdUrl}${OFF}\n`);
 
+// Desktops are bound to the agent that owns them, and the box refuses input without the
+// matching token. This script runs on the host, where the tokens live, so it presents the
+// same claim the UI would — otherwise every check that drives display 1 fails the moment
+// an agent has been given it, which is exactly what happened the first time.
+const smokeRegistry = new AgentRegistry();
+const owner = (display = 1) => {
+  try {
+    return smokeRegistry.boxOwnerTokenForDisplay(display);
+  } catch {
+    return undefined;
+  }
+};
+
 // --- box and display -------------------------------------------------------
 
 let resolution;
@@ -227,8 +240,75 @@ await check("the clipboard is one clipboard", async () => {
   return "PRIMARY and CLIPBOARD agree";
 });
 
+await check("windows can be listed, raised, and read while covered", async () => {
+  // What this buys: the model no longer has to find windows by eye. A dialog behind the
+  // browser is invisible in a screenshot, and a window it cannot see it cannot decide to
+  // raise. Reading a covered window works only because a compositor is running.
+  await box.exec("DISPLAY=:1 setsid xfce4-terminal --geometry=50x12+80+80 >/dev/null 2>&1 &");
+  await new Promise(resolve => setTimeout(resolve, 5000));
+
+  const listed = await box.computer([{ action: "list_windows" }], { display: 1, owner: owner() });
+  assert(Array.isArray(listed.windows), "no window list returned");
+  const terminal = listed.windows.find(w => /Terminal/i.test(w.title));
+  assert(terminal, `no terminal in ${JSON.stringify(listed.windows?.map(w => w.title))}`);
+  assert(/^0x[0-9a-f]+$/i.test(terminal.id), `odd window id ${terminal.id}`);
+  assert(terminal.width > 100 && terminal.height > 50, "geometry looks wrong");
+
+  // Cover it completely, then read it anyway.
+  await box.exec("DISPLAY=:1 setsid box-chrome --app=about:blank --window-size=1280,800 >/dev/null 2>&1 &");
+  await new Promise(resolve => setTimeout(resolve, 14000));
+
+  const covered = await box.computer(
+    [{ action: "screenshot_window", window_id: terminal.id }],
+    { display: 1, owner: owner() }
+  );
+  assert(covered.success, covered.error ?? "window capture failed");
+  const bytes = Buffer.from(covered.screenshot, "base64").length;
+  assert(bytes > 500, `window capture is only ${bytes} bytes`);
+
+  // And raising it is what makes it usable, since synthetic input follows focus.
+  const raised = await box.computer(
+    [{ action: "activate_window", window_id: terminal.id }, { action: "list_windows" }],
+    { display: 1, owner: owner() }
+  );
+  assert(raised.success, raised.error ?? "activate failed");
+
+  await box.exec("DISPLAY=:1 wmctrl -c Chromium; DISPLAY=:1 wmctrl -c Terminal; true");
+  return `${listed.windows.length} windows, covered capture ${bytes} bytes`;
+});
+
+await check("a desktop refuses input from another agent", async () => {
+  // Demonstrated before it was fixed: an agent can read BOXD_TOKEN's power through the
+  // daemon and name any display, so one agent could type into another's screen.
+  const claimed = 7;
+  await box.ensureDisplay(claimed, "owner-alpha");
+
+  const mine = await box.computer([{ action: "cursor_position" }], {
+    display: claimed,
+    owner: "owner-alpha",
+  });
+  assert(mine.success, "the owner was refused its own desktop");
+
+  for (const [label, owner] of [["no token", undefined], ["another agent's", "owner-beta"]]) {
+    let refused = false;
+    try {
+      await box.computer([{ action: "type", text: "CROSS-DESKTOP" }], {
+        display: claimed,
+        owner,
+      });
+    } catch (error) {
+      refused = /belongs to another agent/.test(String(error));
+    }
+    assert(refused, `a request with ${label} was allowed onto a claimed desktop`);
+  }
+  return "owner served, others refused";
+});
+
 await check("the desktop can be recorded", async () => {
   // A transcript is the agent's account of what it did; this is the screen's.
+  // A previous run that failed mid-check can leave a recording running, and the daemon
+  // rightly refuses a second one on the same desktop.
+  await box.stopRecording(1).catch(() => {});
   const started = await box.startRecording({ display: 1, name: "smoke" });
   assert(started.file.endsWith(".mp4"), `unexpected file ${started.file}`);
 
@@ -238,7 +318,7 @@ await check("the desktop can be recorded", async () => {
     { action: "wait", duration_ms: 1200 },
     { action: "mouse_move", coordinate: [800, 500] },
     { action: "wait", duration_ms: 1200 },
-  ]);
+  ], { display: 1, owner: owner() });
 
   const finished = await box.stopRecording(1);
   assert((finished.size_bytes ?? 0) > 2000, `file is only ${finished.size_bytes} bytes`);
@@ -301,7 +381,7 @@ await check("desktop launchers launch instead of prompting", async () => {
 // --- screenshots -----------------------------------------------------------
 
 await check("screenshot decodes as a valid WebP", async () => {
-  const result = await box.computer([{ action: "screenshot" }]);
+  const result = await box.computer([{ action: "screenshot" }], { display: 1, owner: owner() });
   assert(result.screenshot, "no screenshot returned");
   const buffer = Buffer.from(result.screenshot, "base64");
 
@@ -334,10 +414,10 @@ await check("header patch leaves a non-VP8 layout alone", async () => {
 
 await check("coordinates round-trip through the real X server", async () => {
   const target = [640, 400];
-  const result = await box.computer([
-    { action: "mouse_move", coordinate: target },
-    { action: "cursor_position" },
-  ]);
+  const result = await box.computer(
+    [{ action: "mouse_move", coordinate: target }, { action: "cursor_position" }],
+    { display: 1, owner: owner() }
+  );
 
   assert(result.cursor_position, "no cursor position returned");
   assert(
@@ -363,7 +443,7 @@ await check("coordinates round-trip through the real X server", async () => {
 // --- failure behaviour -----------------------------------------------------
 
 await check("a failed action still returns a screenshot", async () => {
-  const result = await box.computer([{ action: "drag", path: [[10, 10]] }]);
+  const result = await box.computer([{ action: "drag", path: [[10, 10]] }], { display: 1, owner: owner() });
   assert(result.success === false, "a one-point drag should fail");
   assert(result.error, "no error message");
   assert(result.screenshot, "no screenshot — the model would be blind on failure");
@@ -371,14 +451,14 @@ await check("a failed action still returns a screenshot", async () => {
 });
 
 await check("an unsafe key name is refused", async () => {
-  const result = await box.computer([{ action: "key", key: "a mousemove 5 5" }]);
+  const result = await box.computer([{ action: "key", key: "a mousemove 5 5" }], { display: 1, owner: owner() });
   assert(result.success === false, "an injected xdotool subcommand was accepted");
   assert(/not a keysym/.test(result.error), `unexpected error: ${result.error}`);
   return "keysym validation holds";
 });
 
 await check("a valid chord is accepted", async () => {
-  const result = await box.computer([{ action: "key", key: "ctrl+shift+F5" }]);
+  const result = await box.computer([{ action: "key", key: "ctrl+shift+F5" }], { display: 1, owner: owner() });
   assert(result.success !== false, `rejected a legitimate chord: ${result.error}`);
   return "ctrl+shift+F5";
 });
@@ -451,7 +531,7 @@ await check("a second agent is refused the display", async () => {
     const holder = await dispatchTool(
       "computer",
       { actions: [{ action: "screenshot" }] },
-      { agent: first, registry, bus, box, display }
+      { agent: first, registry, bus, box, display, boxOwner: owner() }
     );
     assert(!holder.isError, `holder was refused: ${holder.text}`);
     assert(holder.images?.length === 1, "holder got no screenshot");
@@ -459,7 +539,7 @@ await check("a second agent is refused the display", async () => {
     const refused = await dispatchTool(
       "computer",
       { actions: [{ action: "screenshot" }] },
-      { agent: second, registry, bus, box, display }
+      { agent: second, registry, bus, box, display, boxOwner: owner() }
     );
     assert(refused.isError === true, "a second agent was allowed onto the display");
     assert(!refused.images, "the refused agent still received an image");
@@ -469,7 +549,7 @@ await check("a second agent is refused the display", async () => {
     const afterRelease = await dispatchTool(
       "computer",
       { actions: [{ action: "screenshot" }] },
-      { agent: second, registry, bus, box, display }
+      { agent: second, registry, bus, box, display, boxOwner: owner() }
     );
     assert(!afterRelease.isError, "display not handed over after release");
     return "holder served, second refused, handover works";
@@ -489,7 +569,7 @@ await check("unicode typing reaches an application", async () => {
     const before = await box.exec(
       'DISPLAY=:1 xmodmap -pke | grep -cE "^keycode +[0-9]+ *= *$"'
     );
-    const typed = await box.computer([{ action: "type", text: "Aprenderás café" }]);
+    const typed = await box.computer([{ action: "type", text: "Aprenderás café" }], { display: 1, owner: owner() });
     assert(typed.success !== false, `typing failed: ${typed.error}`);
     const after = await box.exec(
       'DISPLAY=:1 xmodmap -pke | grep -cE "^keycode +[0-9]+ *= *$"'
@@ -504,11 +584,14 @@ await check("unicode typing reaches an application", async () => {
   const text = "Aprenderás café 日本語 ÁÉÍ";
   await box.exec(
     "rm -f /tmp/smoke-typed.txt; " +
-      'DISPLAY=:1 setsid xterm -e sh -c "cat > /tmp/smoke-typed.txt" >/dev/null 2>&1 & ' +
-      "sleep 3; DISPLAY=:1 xdotool search --class xterm windowactivate --sync windowfocus",
+      // A distinct title, and activation by that title: vnc-probe also opens an xterm, and
+      // searching by class activated whichever one X happened to return — so the text was
+      // typed into the probe's window and this check read an empty file.
+      'DISPLAY=:1 setsid xterm -T smoke-sink -e sh -c "cat > /tmp/smoke-typed.txt" >/dev/null 2>&1 & ' +
+      "sleep 3; DISPLAY=:1 xdotool search --name smoke-sink windowactivate --sync windowfocus",
     { timeoutMs: 30_000 }
   );
-  await box.computer([{ action: "type", text: `${text}\n` }]);
+  await box.computer([{ action: "type", text: `${text}\n` }], { display: 1, owner: owner() });
   await box.exec("sleep 1; DISPLAY=:1 xdotool key ctrl+d; sleep 1");
 
   const got = await box.readFile("/tmp/smoke-typed.txt");

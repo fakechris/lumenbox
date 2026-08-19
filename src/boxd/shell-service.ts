@@ -45,6 +45,21 @@ function sessionKey(raw: string | undefined): string | undefined {
  * command calls `exit`. This covers cwd and exported variables, which is nearly
  * all of the value; shell functions and aliases do not carry over.
  */
+/**
+ * The daemon's own credential, kept out of the agent's reach.
+ *
+ * BOXD_TOKEN is what authorises a box request, and it was in the environment every shell
+ * command inherited — so an agent could read it and drive the daemon directly, including
+ * another agent's desktop. Removing it closes the easy path. It is not airtight: the
+ * daemon's own /proc entry still carries it and the agents run as the same user, so this
+ * is one lock on a door that is not the boundary. The boundary is the container.
+ */
+export function withoutBoxToken(env: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
+  const copy = { ...env };
+  delete copy.BOXD_TOKEN;
+  return copy;
+}
+
 function wrapForSession(command: string, key: string, explicitCwd?: string): string {
   const cwdFile = `/tmp/boxd-session-${key}.cwd`;
   const envFile = `/tmp/boxd-session-${key}.env`;
@@ -86,7 +101,7 @@ export function runShell(request: ExecRequest): Promise<ExecResult> {
       // With a session the script does its own cd; without one, honour the request.
       cwd: key ? undefined : (request.cwd ?? process.env.HOME ?? "/home/box"),
       env: {
-        ...process.env,
+        ...withoutBoxToken(process.env),
         // A GUI launched from the shell must land on the agent's own desktop, not
         // on whichever one the daemon happens to default to.
         ...(request.display ? { DISPLAY: `:${request.display}` } : {}),

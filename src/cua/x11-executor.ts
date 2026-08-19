@@ -5,15 +5,21 @@
  * Runs inside the box. The host never invokes xdotool or ffmpeg directly.
  */
 
+import { execFile } from "node:child_process";
+import { readFileSync, unlinkSync } from "node:fs";
+import { promisify } from "node:util";
 import type {
   ComputerAction,
   Coordinate,
   MouseButton,
   ResolutionConfig,
   ScrollDirection,
+  WindowInfo,
 } from "../protocol/index.ts";
 import { CoordinateScaler } from "./scaling.ts";
 import { exec, execBuffer, execWithInput, sleep } from "./shell.ts";
+
+const execFileAsync = promisify(execFile);
 
 const BUTTON_MAP: Record<MouseButton, string> = {
   left: "1",
@@ -80,6 +86,25 @@ function modifiersForXdotool(raw: string | undefined): string[] {
   return (raw?.split("+").filter(Boolean) ?? []).map(modifier =>
     assertKeysym(modifier === "meta" ? "super" : modifier, raw ?? "")
   );
+}
+
+/**
+ * An X window id as wmctrl and xwd write them.
+ *
+ * Validated for the same reason keysyms are: this value comes from the model, and while
+ * these run through execFile rather than a shell, a malformed id is worth a clear error
+ * rather than an opaque failure from the tool.
+ */
+const WINDOW_ID_PATTERN = /^0x[0-9a-fA-F]{1,16}$/;
+
+export function assertWindowId(raw: string): string {
+  if (typeof raw !== "string" || !WINDOW_ID_PATTERN.test(raw.trim())) {
+    throw new Error(
+      `Not a window id: ${JSON.stringify(raw)}. Use the id from list_windows, ` +
+        'e.g. "0x01e00003".'
+    );
+  }
+  return raw.trim();
 }
 
 export function keyForXdotool(key: string): string {
@@ -151,9 +176,14 @@ export function actionRequiresSettle(action: ComputerAction): boolean {
     case "type":
       // Typing only reflows the page when it commits a line.
       return /[\r\n]/.test(action.text);
+    case "activate_window":
+      // Raising and focusing repaints, and a window manager animates it.
+      return true;
     case "wait":
     case "screenshot":
     case "cursor_position":
+    case "list_windows":
+    case "screenshot_window":
       return false;
   }
 }
@@ -198,6 +228,8 @@ export interface X11ExecutionResult {
   success: boolean;
   screenshot: string;
   cursorPosition?: { x: number; y: number };
+  /** Present when the batch included list_windows. */
+  windows?: readonly WindowInfo[];
   actionCount: number;
   durationMs: number;
   error?: string;
@@ -242,6 +274,7 @@ export class X11Executor {
     const start = Date.now();
     let cursorPosition: { x: number; y: number } | undefined;
     let lastScreenshot: string | undefined;
+    let windows: readonly WindowInfo[] | undefined;
     let screenshotTaken = false;
     let settleNeeded = false;
 
@@ -255,6 +288,18 @@ export class X11Executor {
         screenshotTaken = true;
       } else if (action.action === "cursor_position") {
         cursorPosition = await this.readCursorPosition();
+      } else if (action.action === "list_windows") {
+        windows = await this.listWindows();
+      } else if (action.action === "screenshot_window") {
+        // A window's own contents, so this replaces the screen shot for this batch
+        // rather than adding to it: two images with no way to tell them apart would be
+        // worse than one that is explicitly the window.
+        if (settleNeeded) {
+          await sleep(this.config.screenshotDelayMs);
+          settleNeeded = false;
+        }
+        lastScreenshot = await this.screenshotWindow(action.window_id);
+        screenshotTaken = true;
       } else {
         await this.executeAction(action, options);
         if (actionRequiresSettle(action)) settleNeeded = true;
@@ -271,6 +316,7 @@ export class X11Executor {
       success: true,
       screenshot: lastScreenshot ?? "",
       cursorPosition,
+      windows,
       actionCount: actions.length,
       durationMs: Date.now() - start,
     };
@@ -367,6 +413,14 @@ export class X11Executor {
           );
         }
         await this.typeText(action.text, options);
+        return;
+
+      case "activate_window":
+        // wmctrl -a rather than a raise: EWMH activation also takes focus and switches
+        // workspace, which is what "operate this window" actually needs.
+        await execFileAsync("wmctrl", ["-i", "-a", assertWindowId(action.window_id)], {
+          env: this.env,
+        });
         return;
 
       case "key": {
@@ -528,6 +582,84 @@ export class X11Executor {
       input: `${entries.join("\n")}\n`,
       env: this.env,
     });
+  }
+
+  /**
+   * The windows on this desktop.
+   *
+   * Without this the model has to find windows by looking at a screenshot, which fails
+   * exactly when it matters: a dialog behind the browser is invisible, and a window it
+   * cannot see it cannot decide to raise.
+   */
+  async listWindows(): Promise<WindowInfo[]> {
+    const { stdout } = await execFileAsync("wmctrl", ["-l", "-G", "-p"], { env: this.env });
+
+    return stdout
+      .split("\n")
+      .filter(line => line.trim() !== "")
+      .flatMap(line => {
+        // id desktop pid x y w h host title..., with the title free to contain spaces.
+        const parts = line.split(/\s+/);
+        if (parts.length < 9) return [];
+        const [id, desktop, pid, x, y, width, height] = parts;
+        return [
+          {
+            id: id!,
+            desktop: Number(desktop),
+            pid: Number(pid),
+            x: Number(x),
+            y: Number(y),
+            width: Number(width),
+            height: Number(height),
+            title: parts.slice(8).join(" "),
+          },
+        ];
+      });
+  }
+
+  /**
+   * One window's contents, even when something is in front of it.
+   *
+   * This works because a compositor is running: every window then renders into its own
+   * off-screen buffer, so an obscured window still has its pixels. Without one, the
+   * obscured region would read back as whatever is on top of it.
+   *
+   * Via files rather than pipes, unlike takeScreenshot: ffmpeg can seek in a file and so
+   * writes correct container sizes, which is the header patching that path has to do by
+   * hand. Not scaled, because the result is the window's own coordinate space.
+   */
+  async screenshotWindow(windowId: string): Promise<string> {
+    const id = assertWindowId(windowId);
+    const stem = `/tmp/agentbox-window-${process.pid}-${Date.now()}`;
+    const dump = `${stem}.xwd`;
+    const image = `${stem}.webp`;
+
+    try {
+      await execFileAsync("xwd", ["-id", id, "-out", dump], { env: this.env });
+      await execFileAsync(
+        "ffmpeg",
+        [
+          "-loglevel", "error",
+          "-i", dump,
+          "-frames:v", "1",
+          "-c:v", "libwebp",
+          "-preset", "text",
+          "-lossless", "1",
+          "-y", image,
+        ],
+        { env: this.env }
+      );
+      return readFileSync(image).toString("base64");
+    } finally {
+      for (const path of [dump, image]) {
+        try {
+          unlinkSync(path);
+        } catch {
+          // Never written, because a step above failed. The error from that step is the
+          // one worth reporting.
+        }
+      }
+    }
   }
 
   async takeScreenshot(): Promise<string> {

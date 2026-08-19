@@ -15,6 +15,7 @@ import {
   type BoxConfig,
 } from "./box/docker.ts";
 import { AgentRegistry, defaultAgentsRoot } from "./agents/registry.ts";
+import { DEFAULT_DISPLAY_INDEX } from "./protocol/index.ts";
 import { Orchestrator } from "./host/orchestrator.ts";
 import type { TurnEvent } from "./host/turn.ts";
 import type { BusEvent } from "./agents/bus.ts";
@@ -147,12 +148,39 @@ async function cmdBoxLogs(argv: string[]): Promise<number> {
   return 0;
 }
 
+/**
+ * The claim for a desktop, so a person is never locked out of their own box.
+ *
+ * Desktops are bound to the agent that owns them, and the box refuses input without the
+ * matching token. Every token lives on this side, so the CLI can always produce the right
+ * one — which is the point of keeping them out of the container.
+ */
+function ownerFor(displayIndex: number | undefined): string | undefined {
+  if (displayIndex === undefined) return undefined;
+  try {
+    return new AgentRegistry().boxOwnerTokenForDisplay(displayIndex);
+  } catch {
+    return undefined;
+  }
+}
+
+/** Which desktop a bare `box` command means: the default one, unless --display says. */
+function displayArg(argv: string[]): number {
+  const at = argv.indexOf("--display");
+  const value = at >= 0 ? Number(argv[at + 1]) : NaN;
+  return Number.isInteger(value) && value > 0 ? value : DEFAULT_DISPLAY_INDEX;
+}
+
 async function cmdBoxShot(argv: string[]): Promise<number> {
   const target = argv.find(arg => !arg.startsWith("-")) ?? "box-screenshot.webp";
   const manager = new BoxManager(boxConfig());
   const client = await manager.connect();
 
-  const result = await client.computer([{ action: "screenshot" }]);
+  const display = displayArg(argv);
+  const result = await client.computer([{ action: "screenshot" }], {
+    display,
+    owner: ownerFor(display),
+  });
   if (!result.screenshot) {
     err("The box returned an empty screenshot.");
     return 1;
@@ -170,7 +198,8 @@ async function cmdBoxExec(argv: string[]): Promise<number> {
   }
   const manager = new BoxManager(boxConfig());
   const client = await manager.connect();
-  const result = await client.exec(command);
+  const display = displayArg(argv);
+  const result = await client.exec(command, { display, owner: ownerFor(display) });
   if (result.stdout) process.stdout.write(result.stdout);
   if (result.stderr) process.stderr.write(result.stderr);
   return result.exit_code;

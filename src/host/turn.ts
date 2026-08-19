@@ -36,6 +36,8 @@ export interface TurnDeps {
   box: BoxClient | undefined;
   /** Which desktop this agent drives. Each agent has its own. */
   displayIndex?: number;
+  /** Presented on every box call, so the box can refuse another agent's desktop. */
+  boxOwner?: string;
   /** Guards one desktop against two agents; moot when each has its own. */
   display?: DisplayLease;
   resolution: ResolutionConfig | undefined;
@@ -403,6 +405,7 @@ export async function runTurn(
             box,
             display: deps.display,
             displayIndex: deps.displayIndex,
+            boxOwner: deps.boxOwner,
           }
         );
       } catch (error) {

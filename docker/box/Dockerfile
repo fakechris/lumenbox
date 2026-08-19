@@ -17,6 +17,7 @@ ENV DEBIAN_FRONTEND=noninteractive \
 #    unmapped Unicode characters.
 RUN apt-get update && apt-get install -y --no-install-recommends \
       xvfb x11vnc xdotool xauth x11-xserver-utils x11-utils \
+      x11-apps \
       ffmpeg \
       xfwm4 xfconf dbus-x11 \
       novnc websockify \

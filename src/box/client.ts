@@ -122,13 +122,19 @@ export class BoxClient {
 
   computer(
     actions: readonly ComputerAction[],
-    options: { display?: number; bindUnmappedCharacters?: boolean } = {}
+    options: {
+      display?: number;
+      bindUnmappedCharacters?: boolean;
+      /** Proof that this desktop is the caller's. Refused if it belongs to someone else. */
+      owner?: string;
+    } = {}
   ): Promise<ComputerResult> {
     return this.post<ComputerResult>(
       "/computer",
       {
         actions,
         display: options.display,
+        owner: options.owner,
         bind_unmapped_characters: options.bindUnmappedCharacters ?? true,
       },
       COMPUTER_TIMEOUT_MS
@@ -136,9 +142,9 @@ export class BoxClient {
   }
 
   /** Brings up an agent's desktop, or adopts it if already running. */
-  ensureDisplay(index: number): Promise<EnsureDisplayResult> {
+  ensureDisplay(index: number, owner?: string): Promise<EnsureDisplayResult> {
     // Starting Xvfb, a window manager, VNC and noVNC takes a moment.
-    return this.post<EnsureDisplayResult>("/displays/ensure", { index }, 120_000);
+    return this.post<EnsureDisplayResult>("/displays/ensure", { index, owner }, 120_000);
   }
 
   exec(
@@ -148,6 +154,7 @@ export class BoxClient {
       timeoutMs?: number;
       session?: string;
       display?: number;
+      owner?: string;
     } = {}
   ): Promise<ExecResult> {
     const commandTimeout = options.timeoutMs ?? 120_000;
@@ -159,6 +166,7 @@ export class BoxClient {
         timeout_ms: commandTimeout,
         session: options.session,
         display: options.display,
+        owner: options.owner,
       },
       // Give the HTTP layer headroom over the command's own timeout, so a
       // command that times out reports its output instead of aborting the request.

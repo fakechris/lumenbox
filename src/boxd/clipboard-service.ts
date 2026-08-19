@@ -51,12 +51,19 @@ export async function readClipboard(display: number): Promise<string> {
   }
 }
 
+/** How long to wait for the new owner to actually hold the selection. */
+const OWNERSHIP_TIMEOUT_MS = 2000;
+
 /**
  * Puts text on the CLIPBOARD selection.
  *
  * Detached on purpose. The owner has to outlive this call — a selection with no live
- * owner is an empty selection — so this resolves once the text has been handed over,
- * not when xclip exits.
+ * owner is an empty selection — so the process is left running rather than waited on.
+ *
+ * Then it waits for the selection to actually read back. Handing the text to xclip is not
+ * the same as xclip owning the selection, and resolving on the former made a read that
+ * followed immediately return empty: a race that only showed up once the box was busy
+ * enough for the two to land in the wrong order.
  */
 export function writeClipboard(display: number, text: string): Promise<void> {
   if (Buffer.byteLength(text, "utf8") > MAX_CLIPBOARD_BYTES) {
@@ -89,7 +96,22 @@ export function writeClipboard(display: number, text: string): Promise<void> {
     child.stdin.end(text, () => {
       // Let it go: the process is the clipboard now.
       child.unref();
-      resolve();
+      void confirmOwnership(display, text).then(resolve, reject);
     });
   });
+}
+
+/** Polls until the selection reads back what was written, so callers can read next. */
+async function confirmOwnership(display: number, expected: string): Promise<void> {
+  const deadline = Date.now() + OWNERSHIP_TIMEOUT_MS;
+  for (;;) {
+    if ((await readClipboard(display)) === expected) return;
+    if (Date.now() >= deadline) {
+      throw new ClipboardError(
+        "The clipboard did not take the new value; nothing may be able to own the " +
+          "selection on this display."
+      );
+    }
+    await new Promise(resolve => setTimeout(resolve, 100));
+  }
 }

@@ -9,7 +9,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { CoordinateScaler } from "./scaling.ts";
-import { keyForXdotool } from "./x11-executor.ts";
+import { assertWindowId, keyForXdotool } from "./x11-executor.ts";
 import {
   buildResolutionConfig,
   parseDisplayNum,
@@ -182,4 +182,22 @@ test("a mixed-up field name is named, not crashed on", () => {
   assert.throws(() => keyForXdotool("   "), /needs a non-empty "key" field/);
   assert.equal(keyForXdotool("ctrl+shift+v"), "ctrl+shift+v");
   assert.equal(keyForXdotool("meta+a"), "super+a");
+});
+
+test("window ids are validated, since they come from the model", () => {
+  assert.equal(assertWindowId("0x01e00003"), "0x01e00003");
+  assert.equal(assertWindowId("  0x2A  "), "0x2A");
+  assert.throws(() => assertWindowId("terminal"), /Not a window id/);
+  assert.throws(() => assertWindowId("0x01e00003; rm -rf /"), /Not a window id/);
+  assert.throws(() => assertWindowId(""), /Not a window id/);
+});
+
+test("activating a window needs a settle; listing does not", () => {
+  // Raising repaints the screen, so a screenshot straight after would catch it mid-move.
+  assert.equal(actionRequiresSettle({ action: "activate_window", window_id: "0x1" }), true);
+  assert.equal(actionRequiresSettle({ action: "list_windows" }), false);
+  assert.equal(
+    actionRequiresSettle({ action: "screenshot_window", window_id: "0x1" }),
+    false
+  );
 });

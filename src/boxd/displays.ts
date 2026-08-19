@@ -55,7 +55,11 @@ export interface Desktop {
   display: string;
   executor: X11Executor;
   detection: DisplayDetectionResult;
+  /** Set when the desktop was created on someone's behalf. See assertOwner. */
+  owner?: string;
 }
+
+export class DisplayOwnershipError extends Error {}
 
 export class DisplayManager {
   private readonly desktops = new Map<number, Desktop>();
@@ -171,7 +175,28 @@ export class DisplayManager {
    * Concurrent callers share one start rather than racing two Xvfb processes onto
    * the same display number.
    */
-  async ensure(index = DEFAULT_DISPLAY_INDEX): Promise<Desktop> {
+  /**
+   * Refuses input aimed at someone else's desktop.
+   *
+   * Fails closed on a mismatch, and deliberately does not fail on an unbound desktop:
+   * the CLI and the smoke test drive displays without claiming them, and locking them out
+   * would trade a real capability for a guard that agents can bypass anyway — they share
+   * a filesystem and can kill each other's processes. What this stops is the silent case:
+   * an agent naming a display that is not its own and typing into another agent's work.
+   */
+  assertOwner(index: number, presented: string | undefined): void {
+    const desktop = this.desktops.get(index);
+    const owner = desktop?.owner;
+    if (!owner) return;
+    if (presented === owner) return;
+
+    throw new DisplayOwnershipError(
+      `Desktop ${index} belongs to another agent. ` +
+        "Use your own desktop, which is the one your tools already target."
+    );
+  }
+
+  async ensure(index = DEFAULT_DISPLAY_INDEX, owner?: string): Promise<Desktop> {
     if (!Number.isInteger(index) || index < 1 || index > MAX_DISPLAY_INDEX) {
       throw new Error(
         `Display index must be an integer between 1 and ${MAX_DISPLAY_INDEX}, got ${index}`
@@ -179,17 +204,27 @@ export class DisplayManager {
     }
 
     const existing = this.desktops.get(index);
-    if (existing) return existing;
+    if (existing) {
+      // Claiming an unclaimed desktop is allowed — that is how the first caller takes
+      // ownership — but taking one that is already claimed is not.
+      if (owner && existing.owner && existing.owner !== owner) {
+        throw new DisplayOwnershipError(
+          `Desktop ${index} is already bound to another owner.`
+        );
+      }
+      if (owner && !existing.owner) existing.owner = owner;
+      return existing;
+    }
 
     const pending = this.starting.get(index);
     if (pending) return pending;
 
-    const start = this.start(index).finally(() => this.starting.delete(index));
+    const start = this.start(index, owner).finally(() => this.starting.delete(index));
     this.starting.set(index, start);
     return start;
   }
 
-  private async start(index: number): Promise<Desktop> {
+  private async start(index: number, owner?: string): Promise<Desktop> {
     this.log(`bringing up desktop ${index}`);
 
     // The script is idempotent, so this also adopts a desktop that the entrypoint
@@ -210,7 +245,7 @@ export class DisplayManager {
       resolution: detection.resolution,
     });
 
-    const desktop: Desktop = { index, display, executor, detection };
+    const desktop: Desktop = { index, display, executor, detection, owner };
     this.desktops.set(index, desktop);
     this.log(
       `desktop ${index} ready at ${detection.resolutionString} ` +

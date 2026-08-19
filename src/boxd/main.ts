@@ -44,7 +44,7 @@ import {
   type WriteFileRequest,
   type WriteFileResult,
 } from "../protocol/index.ts";
-import { DisplayManager } from "./displays.ts";
+import { DisplayManager, DisplayOwnershipError } from "./displays.ts";
 import { getDisplay, parseDisplayNum } from "../cua/display.ts";
 import { readClipboard, writeClipboard } from "./clipboard-service.ts";
 import { RecordService, RECORDINGS_DIR } from "./record-service.ts";
@@ -145,7 +145,9 @@ async function handleComputer(body: ComputerRequest): Promise<ComputerResult> {
   if (!Array.isArray(body.actions) || body.actions.length === 0) {
     throw new HttpError(400, "actions must be a non-empty array");
   }
-  const desktop = await displays.ensure(body.display ?? defaultDisplayIndex);
+  const index = body.display ?? defaultDisplayIndex;
+  displays.assertOwner(index, body.owner);
+  const desktop = await displays.ensure(index, body.owner);
   const x11 = desktop.executor;
   const started = Date.now();
 
@@ -156,6 +158,7 @@ async function handleComputer(body: ComputerRequest): Promise<ComputerResult> {
     return {
       success: result.success,
       screenshot: result.screenshot,
+      windows: result.windows,
       cursor_position: result.cursorPosition,
       action_count: result.actionCount,
       duration_ms: result.durationMs,
@@ -244,7 +247,12 @@ type Handler = (body: any) => Promise<unknown>;
 
 const routes: Record<string, Handler> = {
   "POST /computer": (body: ComputerRequest) => handleComputer(body),
-  "POST /exec": (body: ExecRequest): Promise<ExecResult> => runShell(body),
+  "POST /exec": (body: ExecRequest): Promise<ExecResult> => {
+    // A shell on someone else's desktop can do everything computer-use can — start a
+    // window on it, type with xdotool — so it is gated the same way.
+    if (body.display !== undefined) displays.assertOwner(body.display, body.owner);
+    return runShell(body);
+  },
   "GET /displays": async (): Promise<DisplayInfo[]> => displays.list(),
   // Per desktop, like everything else: each agent has its own, so "the clipboard" is
   // whichever screen the caller means.
@@ -281,7 +289,7 @@ const routes: Record<string, Handler> = {
   "POST /displays/ensure": async (
     body: EnsureDisplayRequest
   ): Promise<EnsureDisplayResult> => {
-    const desktop = await displays.ensure(body.index);
+    const desktop = await displays.ensure(body.index, body.owner);
     return {
       index: desktop.index,
       display: desktop.display,
@@ -386,7 +394,12 @@ const server = createServer((req, res) => {
       const body = req.method === "GET" ? {} : await readBody(req);
       send(res, 200, await handler(body));
     } catch (error) {
-      const status = error instanceof HttpError ? error.status : 500;
+      const status =
+        error instanceof HttpError
+          ? error.status
+          : error instanceof DisplayOwnershipError
+            ? 403
+            : 500;
       if (status >= 500) log(`error on ${route}: ${describe(error)}`);
       send(res, status, { error: describe(error) });
     }

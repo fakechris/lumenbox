@@ -24,6 +24,13 @@ export interface ToolContext {
    */
   displayIndex?: number;
   /**
+   * This agent's claim on its own desktop, presented on every box call.
+   *
+   * The box refuses input for a desktop bound to someone else, which is what keeps one
+   * agent out of another's screen — see AgentRegistry.boxOwnerTokenFor.
+   */
+  boxOwner?: string;
+  /**
    * Guards one desktop against two agents. Normally moot now that displays are
    * per-agent, and kept for the case where two are deliberately pointed at one.
    */
@@ -72,6 +79,9 @@ const actionSchema = {
         "wait",
         "screenshot",
         "cursor_position",
+        "list_windows",
+        "activate_window",
+        "screenshot_window",
       ],
       description: "Which action to perform.",
     },
@@ -122,6 +132,11 @@ const actionSchema = {
       type: "integer" as const,
       description: "For wait: how long to pause, in milliseconds.",
     },
+    window_id: {
+      type: "string" as const,
+      description:
+        'For activate_window and screenshot_window: an id from list_windows, e.g. "0x01e00003".',
+    },
   },
   required: ["action"],
 };
@@ -148,7 +163,15 @@ export function buildTools(hasBox: boolean, vision = true): Anthropic.Tool[] {
           "in one call when the sequence is certain (click a field, type, press Enter) and " +
           "you will get one settled screenshot of the result; pass one action when you need " +
           "to see the outcome before choosing the next move. Coordinates are in the same " +
-          "space as the screenshots you receive.",
+          "space as the screenshots you receive.\n\n" +
+          "When a window you need is behind another one, do not hunt for it by eye. " +
+          "`list_windows` gives you every window's id, title and geometry; " +
+          "`activate_window` raises one and gives it focus, which you must do before " +
+          "typing into it, because keystrokes go to whatever holds focus; and " +
+          "`screenshot_window` reads one window's own contents even while it is covered, " +
+          "for when you only need to read it. Coordinates in a window screenshot are the " +
+          "window's, not the screen's — activate it and take a normal screenshot before " +
+          "clicking.",
         input_schema: {
           type: "object",
           properties: {
@@ -439,6 +462,7 @@ export async function dispatchTool(
 
       const result = await box.computer(actions, {
         display: context.displayIndex,
+        owner: context.boxOwner,
       });
 
       const notes: string[] = [];
@@ -450,6 +474,23 @@ export async function dispatchTool(
       if (result.cursor_position) {
         notes.push(
           `Cursor is at (${result.cursor_position.x}, ${result.cursor_position.y}).`
+        );
+      }
+      if (result.windows) {
+        // As text, not as an image: these are ids to be copied into the next call, and a
+        // model reading an id off a screenshot gets it wrong.
+        const rows = result.windows
+          // -1 is the desktop layer and the dock; nobody means those by "window".
+          .filter(window => window.desktop >= 0)
+          .map(
+            window =>
+              `${window.id}  ${window.width}x${window.height}` +
+              ` at (${window.x},${window.y})  ${window.title}`
+          );
+        notes.push(
+          rows.length > 0
+            ? `Windows on your desktop:\n${rows.join("\n")}`
+            : "No application windows are open on your desktop."
         );
       }
       // Attach the screenshot on failure too — seeing the current state is how the
@@ -482,6 +523,7 @@ export async function dispatchTool(
         session: context.agent.id,
         // So a GUI the agent launches from the shell opens on its own desktop.
         display: context.displayIndex,
+        owner: context.boxOwner,
       });
       return { text: formatExec(result) };
     }

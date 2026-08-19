@@ -12,7 +12,7 @@
  * uses for everything else, and so can a human with an editor.
  */
 
-import { randomUUID } from "node:crypto";
+import { randomBytes, randomUUID } from "node:crypto";
 import {
   mkdirSync,
   readFileSync,
@@ -30,6 +30,7 @@ export const AGENT_DESCRIPTION_MAX_LENGTH = 2000;
 export const PROFILE_FILENAME = "profile.json";
 export const TRANSCRIPT_FILENAME = "conversation.jsonl";
 export const MEMORY_FILENAME = "memory.md";
+export const BOX_OWNER_FILENAME = "box-owner";
 
 export interface AgentProfile {
   name: string;
@@ -274,6 +275,48 @@ export class AgentRegistry {
       updatedAt: new Date().toISOString(),
     });
     return assigned;
+  }
+
+  /**
+   * The agent's claim on its own desktop.
+   *
+   * Bound to a display in the box, which then refuses input carrying anyone else's token.
+   * The reason it is needed: BOXD_TOKEN is what authorises a box request, and an agent
+   * with a shell can reach the daemon directly — so nothing stopped one agent from
+   * naming another's display and typing into it. Demonstrated, not theorised.
+   *
+   * Kept on the host, next to the agent's other state, because the box must not be able
+   * to read it. Persisted rather than per-process so a restarted host rebinds the same
+   * token instead of being locked out of a display it already owns.
+   *
+   * This is an accident guard, not a security boundary. Agents share a filesystem by
+   * design and can already read each other's profiles or kill each other's processes;
+   * what this removes is a whole class of silent interference.
+   */
+  boxOwnerTokenFor(agentId: string): string {
+    const path = join(this.dirFor(agentId), BOX_OWNER_FILENAME);
+    if (existsSync(path)) {
+      const existing = readFileSync(path, "utf8").trim();
+      if (existing) return existing;
+    }
+
+    const token = randomBytes(16).toString("hex");
+    mkdirSync(this.dirFor(agentId), { recursive: true });
+    writeFileSync(path, `${token}\n`, { encoding: "utf8", mode: 0o600 });
+    return token;
+  }
+
+  /**
+   * The token for whichever agent owns this desktop, if any.
+   *
+   * Here so host-side callers — the CLI, the web UI, the smoke test — can present the
+   * right claim. The host holds every token; the box holds none. That asymmetry is the
+   * whole design: a person driving their own box is never locked out of it, while an
+   * agent inside the box cannot produce a claim it was not given.
+   */
+  boxOwnerTokenForDisplay(index: number): string | undefined {
+    const owner = this.list().find(record => record.profile.displayIndex === index);
+    return owner ? this.boxOwnerTokenFor(owner.id) : undefined;
   }
 
   readMemory(agentId: string): string {

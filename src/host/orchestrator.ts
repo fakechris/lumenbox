@@ -106,7 +106,9 @@ export class Orchestrator {
     if (this.readyDisplays.has(index)) return index;
 
     try {
-      await this.box.ensureDisplay(index);
+      // Claims the desktop as this agent's while creating it: from here on the box
+      // refuses input for it that does not carry the same token.
+      await this.box.ensureDisplay(index, this.registry.boxOwnerTokenFor(agent.id));
       this.readyDisplays.add(index);
       return index;
     } catch (error) {
@@ -154,6 +156,7 @@ export class Orchestrator {
 
     return runTurn(agent, inbound, signal, {
       displayIndex,
+      boxOwner: this.registry.boxOwnerTokenFor(agent.id),
       client: this.client,
       registry: this.registry,
       bus: this.bus,

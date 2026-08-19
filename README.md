@@ -239,6 +239,36 @@ cannot reach them, and GTK3 ignores `max-height` on a toplevel so there is no ot
 lever. And the cursor is set to 24px, because the X11 default is genuinely hard to find
 over VNC.
 
+### Windows
+
+`list_windows` returns every window's id, title and geometry; `activate_window` raises one
+and gives it focus; `screenshot_window` reads one window's own contents even while another
+covers it. Without these the model had to find windows by eye, which fails exactly when it
+matters — a dialog behind the browser is invisible in a screenshot, and a window it cannot
+see it cannot decide to raise.
+
+Reading a covered window works only because a compositor is running: every window then
+renders into its own buffer, so an obscured one still has its pixels. Raising is still
+required before typing, because synthetic input follows focus rather than a window id.
+
+### Whose desktop is whose
+
+Each desktop is bound to the agent that owns it, and the box refuses computer or exec
+requests for it that do not carry the matching token. This is not theoretical: an agent
+with a shell could read `BOXD_TOKEN` from its own environment, name any display, and type
+into another agent's screen — which it was demonstrated doing before this existed.
+
+The tokens live on the host, in each agent's directory, and never enter the container.
+That asymmetry is the design: host-side callers — the CLI, the web UI, the smoke test —
+can always present the right claim, so a person is never locked out of their own box,
+while an agent inside cannot produce a claim it was not given. `BOXD_TOKEN` is also
+scrubbed from the environment the shell tool hands to commands.
+
+It is an accident guard rather than a security boundary, and worth being clear about why:
+agents share a filesystem by design, and the daemon's own `/proc` entry still carries the
+token to anything running as the same user. What this removes is the silent case — one
+agent quietly disturbing another's work with nothing in either transcript to show it.
+
 ### Recording the desktop
 
 A transcript is the agent's account of what it did and a screenshot is one instant;
