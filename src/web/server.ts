@@ -22,7 +22,7 @@ import { connect as netConnect, type Socket } from "node:net";
 import { join } from "node:path";
 import { AgentRegistry } from "../agents/registry.ts";
 import type { BusEvent } from "../agents/bus.ts";
-import { BoxManager, defaultBoxConfig, loadBoxToken } from "../box/docker.ts";
+import { resolveBoxProvisioner, type BoxProvisioner } from "../box/provisioner.ts";
 import { Orchestrator } from "../host/orchestrator.ts";
 import { describeProvider, type ProviderProfile } from "../host/provider.ts";
 import type { TurnEvent } from "../host/turn.ts";
@@ -34,6 +34,8 @@ import { toDisplayEntries } from "./transcript.ts";
 
 export interface WebOptions {
   port: number;
+  /** Where the box comes from. Defaults to the environment's choice. */
+  boxProvisioner?: BoxProvisioner;
   host?: string;
   provider: ProviderProfile;
   useBox?: boolean;
@@ -106,10 +108,13 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
     }
   };
 
+  const provisioner = options.boxProvisioner ?? resolveBoxProvisioner();
+
   const orchestrator = new Orchestrator({
     registry,
     provider: options.provider,
     useBox: options.useBox,
+    boxProvisioner: provisioner,
     onTurnEvent: broadcast,
     onBusEvent: broadcast,
   });
@@ -131,7 +136,6 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
     }
   }
 
-  const boxToken = loadBoxToken();
 
   /**
    * Each agent's desktop is proxied under this server's own origin.
@@ -154,6 +158,7 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
   interface Origin {
     host: string;
     port: number;
+    token: string;
   }
   let cachedOrigin: { value: Origin | undefined; at: number } | undefined;
   const ORIGIN_TTL_MS = 5000;
@@ -164,8 +169,15 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
     }
     let value: Origin | undefined;
     try {
-      const url = new URL((await new BoxManager(defaultBoxConfig()).status()).boxdUrl!);
-      value = { host: url.hostname, port: Number(url.port) };
+      const endpoint = await provisioner.endpoint();
+      if (endpoint) {
+        const url = new URL(endpoint.baseUrl);
+        value = {
+          host: url.hostname,
+          port: Number(url.port || (url.protocol === "https:" ? 443 : 80)),
+          token: endpoint.token,
+        };
+      }
     } catch {
       value = undefined;
     }
@@ -204,7 +216,7 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
           ...req.headers,
           host: `${origin.host}:${origin.port}`,
           // boxd requires the token on everything but /health and the VNC stream.
-          authorization: `Bearer ${boxToken}`,
+          authorization: `Bearer ${origin.token}`,
         },
       },
       response => {

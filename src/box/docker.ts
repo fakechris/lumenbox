@@ -51,20 +51,34 @@ export interface BoxConfig {
  * matching.
  */
 export function loadBoxToken(): string {
-  if (process.env.AGENTBOX_TOKEN) return process.env.AGENTBOX_TOKEN;
+  const existing = readBoxToken();
+  if (existing) return existing;
 
   const home = process.env.AGENTBOX_HOME ?? join(homedir(), ".agentbox");
   const path = join(home, "token");
-
-  if (existsSync(path)) {
-    const existing = readFileSync(path, "utf8").trim();
-    if (existing) return existing;
-  }
-
   const token = generateToken();
   mkdirSync(home, { recursive: true });
   writeFileSync(path, `${token}\n`, { mode: 0o600 });
   return token;
+}
+
+/**
+ * The token as configured, without inventing one.
+ *
+ * Minting is right when this process is about to start the box — the two agree by
+ * construction. It is wrong when attaching to a box someone else started: a freshly
+ * minted token cannot match theirs, so every call would come back Unauthorized with the
+ * cause looking like a network problem.
+ */
+export function readBoxToken(): string | undefined {
+  if (process.env.AGENTBOX_TOKEN) return process.env.AGENTBOX_TOKEN;
+
+  const home = process.env.AGENTBOX_HOME ?? join(homedir(), ".agentbox");
+  const path = join(home, "token");
+  if (!existsSync(path)) return undefined;
+
+  const existing = readFileSync(path, "utf8").trim();
+  return existing || undefined;
 }
 
 export function defaultBoxConfig(overrides: Partial<BoxConfig> = {}): BoxConfig {

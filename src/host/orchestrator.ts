@@ -11,7 +11,7 @@ import { AgentBus, type BusEvent, type InboundMessage } from "../agents/bus.ts";
 import { AgentRegistry, type AgentRecord } from "../agents/registry.ts";
 import type { BoxClient } from "../box/client.ts";
 import { DisplayLease } from "../box/display-lease.ts";
-import { BoxManager, defaultBoxConfig } from "../box/docker.ts";
+import { resolveBoxProvisioner, type BoxProvisioner } from "../box/provisioner.ts";
 import type { ResolutionConfig } from "../protocol/index.ts";
 import { runTurn, TurnAborted, type TurnEvent } from "./turn.ts";
 import {
@@ -29,6 +29,12 @@ export interface OrchestratorOptions {
   effort?: Effort;
   /** Connect to a running box. When false, agents run without box tools. */
   useBox?: boolean;
+  /**
+   * Where the box comes from. Defaults to the environment's choice — a named URL if one
+   * is set, Docker otherwise. Injectable so a deployment can supply its own, and so this
+   * file no longer knows what Docker is.
+   */
+  boxProvisioner?: BoxProvisioner;
   onTurnEvent?: (event: TurnEvent) => void;
   onBusEvent?: (event: BusEvent) => void;
 }
@@ -74,15 +80,15 @@ export class Orchestrator {
     }
 
     try {
-      const manager = new BoxManager(defaultBoxConfig());
-      const client = await manager.connect();
+      const provisioner = this.options.boxProvisioner ?? resolveBoxProvisioner();
+      const client = await provisioner.connect();
       const health = await client.health();
       this.box = client;
       this.resolution = health.resolution;
       const size = health.resolution
         ? `${health.resolution.display.width}x${health.resolution.display.height}`
         : "no display";
-      return { connected: true, detail: `box ready (${size})` };
+      return { connected: true, detail: `box ready (${size}) via ${provisioner.label}` };
     } catch (error) {
       return {
         connected: false,

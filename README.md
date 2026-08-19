@@ -128,6 +128,35 @@ Every optional capability defaults **off**, because a wrong "yes" fails silently
 while a wrong "no" only costs a feature and says so. Opt in once you have checked:
 `AGENTBOX_VISION=1`, `AGENTBOX_CACHING=1`, `AGENTBOX_THINKING=1`, `AGENTBOX_EFFORT=1`.
 
+## Where the box comes from
+
+The orchestrator needs two things about a box: a URL and a token. It does not need to know
+the box is a Docker container — but that assumption had spread anyway, because the only way
+to learn the URL was to ask the Docker CLI for a published port, so the turn loop and the
+web UI both imported the Docker manager to answer a question that has nothing to do with
+Docker.
+
+A `BoxProvisioner` answers that question, and optionally owns the box's lifecycle:
+
+| Kind | Selected by | Lifecycle |
+| --- | --- | --- |
+| `docker` | the default | creates, starts and stops the container |
+| `attached` | `AGENTBOX_BOXD_URL` | none — the box is someone else's to run |
+| `kubernetes` | not written yet | a pod from a broker, reached through a Service |
+
+`attached` is what makes the core runnable with no Docker at all: point it at a box and the
+turn loop, the tools and the web UI work unchanged. That is verified rather than assumed —
+the whole smoke suite passes in a process with no `docker` on its `PATH`.
+
+The reason to draw this line before there is a cluster to test against: in a centralised
+deployment the boxes are pods created by a control plane, not containers created by a
+laptop, and everything else in here — per-agent desktops, desktop ownership, recording,
+supervision — is already independent of which of those it is. The Kubernetes provisioner is
+a third file in `src/box/`, and nothing outside that directory has to change for it.
+
+`box build`, `box up` and `box down` stay Docker-only, because they are Docker lifecycle.
+With `AGENTBOX_BOXD_URL` set, starting and stopping the box is whoever runs it's job.
+
 ## Putting the box on another machine
 
 The box lifecycle goes through the `docker` CLI, so anything Docker can target

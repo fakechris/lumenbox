@@ -11,7 +11,7 @@
 
 import { readFileSync, rmSync } from "node:fs";
 import { homedir } from "node:os";
-import { BoxManager, defaultBoxConfig } from "../src/box/docker.ts";
+import { resolveBoxProvisioner } from "../src/box/provisioner.ts";
 import { DisplayLease } from "../src/box/display-lease.ts";
 import { AgentRegistry } from "../src/agents/registry.ts";
 import { AgentBus } from "../src/agents/bus.ts";
@@ -46,18 +46,21 @@ function assert(condition, message) {
 
 const token = process.env.AGENTBOX_TOKEN
   ?? readFileSync(`${homedir()}/.agentbox/token`, "utf8").trim();
-const manager = new BoxManager(defaultBoxConfig({ token }));
+// Through the provisioner, so this also covers the path a deployment uses: set
+// AGENTBOX_BOXD_URL and the whole suite runs against a box nothing here started.
+process.env.AGENTBOX_TOKEN ??= token;
+const provisioner = resolveBoxProvisioner();
 
 let box;
 try {
-  box = await manager.connect();
+  box = await provisioner.connect();
 } catch (error) {
   console.error(`${RED}Cannot reach the box:${OFF} ${error.message}`);
   console.error("Start it with:  node dist/cli.js box up");
   process.exit(1);
 }
 
-console.log(`${DIM}smoke test against ${(await manager.status()).boxdUrl}${OFF}\n`);
+console.log(`${DIM}smoke test against ${provisioner.label}${OFF}\n`);
 
 // Desktops are bound to the agent that owns them, and the box refuses input without the
 // matching token. This script runs on the host, where the tokens live, so it presents the
