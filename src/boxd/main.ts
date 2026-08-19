@@ -22,6 +22,9 @@ import { join } from "node:path";
 import { timingSafeEqual } from "node:crypto";
 import {
   BOXD_PORT,
+  type ClipboardReadRequest,
+  type ClipboardResult,
+  type ClipboardWriteRequest,
   type ComputerRequest,
   type ComputerResult,
   type ExecRequest,
@@ -43,6 +46,7 @@ import {
 } from "../protocol/index.ts";
 import { DisplayManager } from "./displays.ts";
 import { getDisplay, parseDisplayNum } from "../cua/display.ts";
+import { readClipboard, writeClipboard } from "./clipboard-service.ts";
 import { RecordService, RECORDINGS_DIR } from "./record-service.ts";
 import { runShell } from "./shell-service.ts";
 import { listDir, readFile, writeFile } from "./fs-service.ts";
@@ -242,6 +246,16 @@ const routes: Record<string, Handler> = {
   "POST /computer": (body: ComputerRequest) => handleComputer(body),
   "POST /exec": (body: ExecRequest): Promise<ExecResult> => runShell(body),
   "GET /displays": async (): Promise<DisplayInfo[]> => displays.list(),
+  // Per desktop, like everything else: each agent has its own, so "the clipboard" is
+  // whichever screen the caller means.
+  "POST /clipboard/read": async (body: ClipboardReadRequest): Promise<ClipboardResult> => ({
+    text: await readClipboard(body.display ?? defaultDisplayIndex),
+  }),
+  "POST /clipboard/write": async (body: ClipboardWriteRequest): Promise<ClipboardResult> => {
+    const text = typeof body.text === "string" ? body.text : "";
+    await writeClipboard(body.display ?? defaultDisplayIndex, text);
+    return { text };
+  },
   // Recording needs the desktop's real resolution, so it goes through ensure() rather
   // than trusting the request: a recording of a display that is not up is an empty file.
   "POST /record/start": async (body: RecordStartRequest): Promise<RecordingInfo> => {

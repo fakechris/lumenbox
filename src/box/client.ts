@@ -5,6 +5,7 @@
  */
 
 import type {
+  ClipboardResult,
   ComputerAction,
   ComputerResult,
   EnsureDisplayResult,
@@ -163,6 +164,16 @@ export class BoxClient {
       // command that times out reports its output instead of aborting the request.
       commandTimeout + 15_000
     );
+  }
+
+  /** What is on a desktop's clipboard. Empty when nothing owns the selection. */
+  readClipboard(display?: number): Promise<ClipboardResult> {
+    return this.post<ClipboardResult>("/clipboard/read", { display });
+  }
+
+  /** Puts text on a desktop's clipboard, ready for the user or agent to paste. */
+  writeClipboard(text: string, display?: number): Promise<ClipboardResult> {
+    return this.post<ClipboardResult>("/clipboard/write", { display, text });
   }
 
   /** Starts recording a desktop. One recording per desktop at a time. */

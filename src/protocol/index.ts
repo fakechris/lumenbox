@@ -224,3 +224,17 @@ export interface RecordingInfo {
 export interface RecordListResult {
   recordings: RecordingInfo[];
 }
+
+/** The box's clipboard. Text only, and bounded: this is not a file transfer. */
+export interface ClipboardReadRequest {
+  display?: number;
+}
+
+export interface ClipboardWriteRequest {
+  display?: number;
+  text: string;
+}
+
+export interface ClipboardResult {
+  text: string;
+}

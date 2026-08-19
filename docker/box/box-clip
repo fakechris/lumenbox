@@ -1,0 +1,33 @@
+#!/usr/bin/env bash
+# The clipboard, for use from the shell.
+#
+# `xclip -selection clipboard` alone does not survive here. An X selection belongs to the
+# process that set it, xclip stays alive to serve it — and the shell tool kills its whole
+# process group when the command returns, so the selection dies with it. The copy appears
+# to work and the clipboard is empty a second later.
+#
+# setsid puts the owner in its own process group, out of reach of that cleanup.
+#
+#   box-clip copy < file      or   echo hi | box-clip copy
+#   box-clip paste
+set -euo pipefail
+
+case "${1:-}" in
+copy)
+  # A new owner replaces the old one, and the old xclip exits by itself when it loses
+  # the selection, so this does not accumulate processes.
+  #
+  # The redirects are not tidiness. The detached owner inherits this command's stdout,
+  # and the shell tool waits for that pipe to close before it returns — so without them
+  # a copy hangs until the tool's timeout rather than returning immediately.
+  setsid xclip -selection clipboard > /dev/null 2>&1
+  ;;
+paste)
+  # An unowned selection is an empty clipboard, not an error.
+  xclip -selection clipboard -o 2>/dev/null || true
+  ;;
+*)
+  echo "usage: box-clip copy|paste   (copy reads stdin, paste writes stdout)" >&2
+  exit 2
+  ;;
+esac

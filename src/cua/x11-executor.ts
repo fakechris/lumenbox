@@ -82,7 +82,17 @@ function modifiersForXdotool(raw: string | undefined): string[] {
   );
 }
 
-function keyForXdotool(key: string): string {
+export function keyForXdotool(key: string): string {
+  // Named rather than crashed on: the field is `key`, but a type action takes `text`, so
+  // a model that mixes the two up would otherwise get "Cannot read properties of
+  // undefined (reading 'split')" and no clue which field was wrong.
+  if (typeof key !== "string" || key.trim() === "") {
+    throw new Error(
+      'A key action needs a non-empty "key" field, e.g. {"action":"key","key":"ctrl+v"}. ' +
+        'Text belongs in "text" on a type action.'
+    );
+  }
+
   return key
     .split("+")
     .filter(Boolean)
@@ -350,6 +360,12 @@ export class X11Executor {
       }
 
       case "type":
+        if (typeof action.text !== "string") {
+          throw new Error(
+            'A type action needs a "text" field, e.g. {"action":"type","text":"hello"}. ' +
+              'Key names belong in "key" on a key action.'
+          );
+        }
         await this.typeText(action.text, options);
         return;
 

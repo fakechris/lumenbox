@@ -58,10 +58,12 @@ COPY boxd.cjs /opt/boxd/boxd.cjs
 COPY entrypoint.sh /usr/local/bin/entrypoint.sh
 COPY start-display /usr/local/bin/start-display
 COPY box-chrome /usr/local/bin/box-chrome
+COPY box-clip /usr/local/bin/box-clip
 COPY wait-compositor /usr/local/bin/wait-compositor
 COPY vnc-probe /usr/local/bin/vnc-probe
 RUN chmod +x /usr/local/bin/entrypoint.sh /usr/local/bin/start-display \
-      /usr/local/bin/box-chrome /usr/local/bin/wait-compositor \
+      /usr/local/bin/box-chrome /usr/local/bin/box-clip \
+      /usr/local/bin/wait-compositor \
       /usr/local/bin/vnc-probe
 
 # Chromium's managed policy. Two things it turns off, both of which are traps for an

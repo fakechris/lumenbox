@@ -309,6 +309,38 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
           return;
         }
 
+        // The clipboard, both directions. A VNC canvas is not a text field: without
+        // this, anything the user wants in the box has to be retyped by hand, and
+        // anything an agent leaves on the clipboard is stuck there.
+        if (route === "POST /api/clipboard") {
+          const body = await readJson(req);
+          const agentId = String(body.agent ?? "");
+          const client = orchestrator.boxClient();
+
+          if (!client) {
+            send(res, 503, { error: "The box is not available." });
+            return;
+          }
+          if (!registry.has(agentId)) {
+            send(res, 404, { error: `No agent ${agentId}` });
+            return;
+          }
+
+          const index = registry.displayIndexFor(agentId);
+          try {
+            // Text present means write, absent means read: one route, because the two
+            // are the same operation from the page's point of view.
+            const result =
+              typeof body.text === "string"
+                ? await client.writeClipboard(body.text, index)
+                : await client.readClipboard(index);
+            send(res, 200, result);
+          } catch (error) {
+            send(res, 400, { error: error instanceof Error ? error.message : String(error) });
+          }
+          return;
+        }
+
         if (route === "GET /api/recordings") {
           const client = orchestrator.boxClient();
           if (!client) {

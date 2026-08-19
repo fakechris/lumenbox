@@ -42,6 +42,12 @@ container needs, and a bare \`chromium\` fails for reasons that have nothing to 
 your task. Pass a URL as an argument to open it directly. Once it is up, drive it with
 \`computer\`.
 
+For the clipboard, use \`box-clip copy\` and \`box-clip paste\` rather than \`xclip\`
+directly. An X selection belongs to the process that set it, and the shell tool kills its
+process group when a command returns — so a bare \`xclip\` copy is empty a second later.
+The wrapper detaches the owner. The user can read and write the same clipboard from
+outside the box, so this is also how you hand them a value they need.
+
 You have \`sudo\` without a password. Installing a package you need is expected, not a
 last resort.
 

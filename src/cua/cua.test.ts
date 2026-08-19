@@ -9,6 +9,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { CoordinateScaler } from "./scaling.ts";
+import { keyForXdotool } from "./x11-executor.ts";
 import {
   buildResolutionConfig,
   parseDisplayNum,
@@ -169,4 +170,16 @@ test("keycode-borrowing runs do not split surrogate pairs", () => {
   const run = runThatFits(emoji, 1);
   assert.equal(run, emoji);
   assert.equal([...run].length, 1);
+});
+
+test("a mixed-up field name is named, not crashed on", () => {
+  // "type" takes text and "key" takes key; swapping them is an easy mistake for a model,
+  // and it used to surface as "Cannot read properties of undefined (reading 'split')".
+  assert.throws(
+    () => keyForXdotool(undefined as unknown as string),
+    /needs a non-empty "key" field/
+  );
+  assert.throws(() => keyForXdotool("   "), /needs a non-empty "key" field/);
+  assert.equal(keyForXdotool("ctrl+shift+v"), "ctrl+shift+v");
+  assert.equal(keyForXdotool("meta+a"), "super+a");
 });

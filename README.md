@@ -216,6 +216,11 @@ all look healthy. Polling the whole framebuffer avoids that; measured with a vie
 attached, it costs the same 2% of a core either way. `vnc-probe` speaks enough RFB to
 prove frames are still arriving, and the smoke test runs it.
 
+The clipboard bar under the desktop reads and writes the box's clipboard from outside it:
+type something and press `→ box` to have it ready for a Ctrl+V in the desktop, or press
+`← box` to pull out whatever is on the box's clipboard (and onto the host's, where the
+browser permits it). Inside the box, agents use `box-clip copy` and `box-clip paste`.
+
 `autocutsel` keeps X's two selections — PRIMARY, which middle-click pastes, and CLIPBOARD,
 which Ctrl-V pastes — in step, so a copy in one application pastes into another and the
 VNC clipboard carries what was actually copied. `xclip` is there for agents that want to

@@ -179,6 +179,38 @@ await check("Chromium's flag warning is policy-suppressed", async () => {
   return "managed policy in place";
 });
 
+await check("the clipboard can be written and read from outside the box", async () => {
+  // The point of the feature: a VNC canvas is not a text field, so without this a URL or
+  // a token has to be retyped by hand and anything an agent copies is stuck in the box.
+  const text = "clipboard-round-trip 剪贴板 ✓";
+  await box.writeClipboard(text, 1);
+
+  const read = await box.readClipboard(1);
+  assert(read.text === text, `read back ${JSON.stringify(read.text)}`);
+
+  // And it really is the X selection, not just something the daemon remembered.
+  const inX = await box.exec("DISPLAY=:1 xclip -o -selection clipboard");
+  assert(inX.stdout === text, `X has ${JSON.stringify(inX.stdout)}`);
+  return "round-trips through the X selection";
+});
+
+await check("box-clip survives the shell tool's process-group cleanup", async () => {
+  // A bare `xclip` copy from the shell tool is empty a second later: the selection
+  // belongs to xclip, and the tool kills its process group when the command returns.
+  // Both halves are asserted, because the difference is the whole reason box-clip exists.
+  await box.exec("DISPLAY=:1 sh -c 'printf raw-xclip | xclip -selection clipboard'");
+  const afterRaw = await box.exec("DISPLAY=:1 xclip -selection clipboard -o 2>/dev/null || true");
+  assert(
+    afterRaw.stdout.trim() !== "raw-xclip",
+    "a bare xclip copy survived, so this test no longer measures anything"
+  );
+
+  await box.exec("DISPLAY=:1 sh -c 'printf wrapped-ok | box-clip copy'");
+  const afterWrapper = await box.exec("DISPLAY=:1 box-clip paste");
+  assert(afterWrapper.stdout.trim() === "wrapped-ok", `got ${afterWrapper.stdout}`);
+  return "bare xclip is lost, box-clip persists";
+});
+
 await check("the clipboard is one clipboard", async () => {
   // X has two selections and applications disagree about which is "the" clipboard;
   // without syncing them, a copy in one app does not paste in another, and the VNC

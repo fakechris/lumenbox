@@ -155,6 +155,14 @@ export const APP_HTML = String.raw`<!doctype html>
   .ev.warn { color: var(--warn); }
   .bar { padding: 8px 14px; color: var(--dim); font-size: 12px; border-bottom: 1px solid var(--line); }
   .bar b { color: var(--text); }
+  /* One line, because it sits between the desktop and the activity feed. */
+  #clipbar { display: flex; gap: 6px; align-items: center; }
+  #clipbar input {
+    flex: 1; min-width: 0; padding: 3px 7px; border-radius: 4px;
+    border: 1px solid var(--line); background: #0f1115; color: var(--text);
+    font: 12px/1.5 ui-monospace, SFMono-Regular, Menlo, monospace;
+  }
+  #clipbar button { padding: 2px 9px; font-size: 12px; }
   h2 a { color: var(--accent); text-decoration: none; margin-right: 10px; }
   h2 a#rec.on { color: var(--err); }
   #recordings a { color: var(--accent); text-decoration: none; margin-right: 10px; }
@@ -189,6 +197,12 @@ export const APP_HTML = String.raw`<!doctype html>
   </h2>
   <div class="bar" id="model">&mdash;</div>
   <div class="bar" id="recordings" style="display:none"></div>
+  <div class="bar" id="clipbar">
+    <b>clipboard</b>
+    <input id="cliptext" placeholder="text to paste into the box" spellcheck="false">
+    <button id="clipin" title="Put this on the box's clipboard, then press Ctrl+V in the desktop">&rarr; box</button>
+    <button id="clipout" title="Read the box's clipboard and copy it here">&larr; box</button>
+  </div>
   <iframe id="vnc" title="box desktop"></iframe>
   <div class="bar" style="border-top:1px solid var(--line);border-bottom:0">
     Every agent has its own desktop, so they never fight over focus. This shows the
@@ -622,6 +636,70 @@ $("input").onkeydown = function (event) {
 
   event.preventDefault();
   $("form").requestSubmit();
+};
+
+/**
+ * The box's clipboard, in both directions.
+ *
+ * The desktop is a VNC canvas, so text cannot be typed into it from here and text copied
+ * inside it cannot be got out. Writing puts it on the box's CLIPBOARD selection, ready
+ * for a Ctrl+V in the desktop; reading pulls it back and, where the browser allows it,
+ * onto the host clipboard too — the click is the user gesture that permission needs.
+ */
+function clipboard(text) {
+  var body = { agent: current };
+  if (text !== undefined) body.text = text;
+  return fetch("/api/clipboard", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify(body)
+  }).then(function (r) {
+    return r.json().then(function (data) {
+      if (!r.ok) throw new Error(data.error || "clipboard failed");
+      return data;
+    });
+  });
+}
+
+function flashButton(button, label) {
+  var original = button.textContent;
+  button.textContent = label;
+  setTimeout(function () { button.textContent = original; }, 1200);
+}
+
+$("clipin").onclick = function () {
+  if (!current) return;
+  var text = $("cliptext").value;
+  if (!text) return;
+  clipboard(text).then(function () {
+    flashButton($("clipin"), "on the box");
+  }).catch(function (error) {
+    feed("clipboard: " + esc(error.message), "err");
+  });
+};
+
+$("clipout").onclick = function () {
+  if (!current) return;
+  clipboard().then(function (data) {
+    $("cliptext").value = data.text;
+    if (!data.text) {
+      flashButton($("clipout"), "empty");
+      return;
+    }
+    // Best effort: this needs a secure context and permission, and the field is
+    // already filled either way, so a refusal is not worth an error row.
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+      navigator.clipboard.writeText(data.text).then(function () {
+        flashButton($("clipout"), "copied here");
+      }, function () {
+        flashButton($("clipout"), "in the field");
+      });
+    } else {
+      flashButton($("clipout"), "in the field");
+    }
+  }).catch(function (error) {
+    feed("clipboard: " + esc(error.message), "err");
+  });
 };
 
 /**
