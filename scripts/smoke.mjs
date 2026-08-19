@@ -143,6 +143,37 @@ await check("a human-usable terminal and file manager are installed", async () =
   return "xfce4-terminal, thunar, wallpaper";
 });
 
+await check("the desktop can be recorded", async () => {
+  // A transcript is the agent's account of what it did; this is the screen's.
+  const started = await box.startRecording({ display: 1, name: "smoke" });
+  assert(started.file.endsWith(".mp4"), `unexpected file ${started.file}`);
+
+  // Something on screen, so the file is not a still frame.
+  await box.computer([
+    { action: "mouse_move", coordinate: [200, 200] },
+    { action: "wait", duration_ms: 1200 },
+    { action: "mouse_move", coordinate: [800, 500] },
+    { action: "wait", duration_ms: 1200 },
+  ]);
+
+  const finished = await box.stopRecording(1);
+  assert((finished.size_bytes ?? 0) > 2000, `file is only ${finished.size_bytes} bytes`);
+
+  // Decoded rather than trusted: a plausible size and a broken container look the same.
+  const probe = await box.exec(
+    "ffprobe -v error -select_streams v:0 -count_frames " +
+      "-show_entries stream=codec_name,width,height,nb_read_frames " +
+      `-of default=noprint_wrappers=1 '${finished.path}'`
+  );
+  assert(probe.stdout.includes("codec_name=h264"), probe.stdout || probe.stderr);
+  assert(probe.stdout.includes("width=1280"), probe.stdout);
+  const frames = Number(/nb_read_frames=(\d+)/.exec(probe.stdout)?.[1] ?? 0);
+  assert(frames > 10, `only ${frames} frames decoded`);
+
+  await box.exec(`rm -f '${finished.path}'`);
+  return `h264 1280x800, ${frames} frames, ${Math.round((finished.size_bytes ?? 0) / 1024)}KB`;
+});
+
 await check("boxd repairs a desktop component that died", async () => {
   // Invisible from the agent's side: x11vnc dying leaves X and the agent working while
   // the user's screen goes dead for good. Killed by port owner rather than by pattern —

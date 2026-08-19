@@ -121,6 +121,11 @@ export class Orchestrator {
     }
   }
 
+  /** The box client, for callers that need the box directly (recording, downloads). */
+  boxClient(): BoxClient | undefined {
+    return this.box;
+  }
+
   /**
    * Brings up every registered agent's desktop at once.
    *

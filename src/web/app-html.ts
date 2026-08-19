@@ -156,6 +156,9 @@ export const APP_HTML = String.raw`<!doctype html>
   .bar { padding: 8px 14px; color: var(--dim); font-size: 12px; border-bottom: 1px solid var(--line); }
   .bar b { color: var(--text); }
   h2 a { color: var(--accent); text-decoration: none; margin-right: 10px; }
+  h2 a#rec.on { color: var(--err); }
+  #recordings a { color: var(--accent); text-decoration: none; margin-right: 10px; }
+  #recordings a:hover { text-decoration: underline; }
   h2 a:hover { text-decoration: underline; }
 </style>
 </head>
@@ -179,11 +182,13 @@ export const APP_HTML = String.raw`<!doctype html>
   <h2>
     <span id="desktoptitle">Desktop</span>
     <span class="plain">
+      <a id="rec" href="#">&#9679; record</a>
       <a id="full" href="#" target="_blank" rel="noopener">open full size</a>
       <span id="boxinfo"></span>
     </span>
   </h2>
   <div class="bar" id="model">&mdash;</div>
+  <div class="bar" id="recordings" style="display:none"></div>
   <iframe id="vnc" title="box desktop"></iframe>
   <div class="bar" style="border-top:1px solid var(--line);border-bottom:0">
     Every agent has its own desktop, so they never fight over focus. This shows the
@@ -619,6 +624,70 @@ $("input").onkeydown = function (event) {
   $("form").requestSubmit();
 };
 
+/**
+ * Recording the desktop.
+ *
+ * A transcript says what an agent claims it did and a screenshot shows one instant;
+ * neither answers "what did it actually do" after the screen has moved on. The file
+ * lands on the box's work volume, so it outlives the container, and opens in a tab
+ * rather than an embedded player — the browser plays fragmented MP4 natively.
+ */
+var recording = null;
+
+function renderRecordings(list) {
+  var box = $("recordings");
+  if (!list || !list.length) {
+    box.style.display = "none";
+    return;
+  }
+  var html = "<b>recordings</b> ";
+  for (var i = 0; i < Math.min(list.length, 6); i++) {
+    var item = list[i];
+    var size = item.size_bytes ? Math.round(item.size_bytes / 1024) + "KB" : "recording…";
+    html += '<a href="/recording?name=' + encodeURIComponent(item.file) + '" target="_blank"' +
+      ' rel="noopener">' + esc(item.file.replace(/\.mp4$/, "")) + " (" + size + ")</a>";
+  }
+  box.innerHTML = html;
+  box.style.display = "";
+}
+
+function loadRecordings() {
+  return fetch("/api/recordings")
+    .then(function (r) { return r.json(); })
+    .then(function (data) { renderRecordings(data.recordings); })
+    .catch(function () { /* the box may be down; the pane just stays hidden */ });
+}
+
+$("rec").onclick = function (event) {
+  event.preventDefault();
+  if (!current) return;
+  var starting = recording === null;
+  var link = $("rec");
+  link.textContent = starting ? "starting…" : "stopping…";
+
+  fetch("/api/record", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ agent: current, action: starting ? "start" : "stop" })
+  }).then(function (r) {
+    return r.json().then(function (data) {
+      if (!r.ok) throw new Error(data.error || "failed");
+      return data;
+    });
+  }).then(function (data) {
+    recording = starting ? data.file : null;
+    link.textContent = starting ? "\u25a0 stop" : "\u25cf record";
+    link.className = starting ? "on" : "";
+    if (!starting) feed("recording saved: " + esc(data.file), "mail");
+    return loadRecordings();
+  }).catch(function (error) {
+    link.textContent = "\u25cf record";
+    link.className = "";
+    recording = null;
+    feed("recording: " + esc(error.message), "err");
+  });
+};
+
 $("new").onclick = function () {
   var name = prompt("Agent name?");
   if (!name) return;
@@ -631,7 +700,7 @@ $("new").onclick = function () {
 };
 
 // Activity after the roster, because its lines name agents.
-refresh().then(loadActivity);
+refresh().then(loadActivity).then(loadRecordings);
 setInterval(refresh, 15000);
 </script>
 </body>

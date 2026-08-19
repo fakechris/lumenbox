@@ -17,6 +17,8 @@ import {
   type ServerResponse,
 } from "node:http";
 import { connect as netConnect, type Socket } from "node:net";
+import { createReadStream, readdirSync, statSync } from "node:fs";
+import { join } from "node:path";
 import { timingSafeEqual } from "node:crypto";
 import {
   BOXD_PORT,
@@ -32,11 +34,16 @@ import {
   type ListDirResult,
   type ReadFileRequest,
   type ReadFileResult,
+  type RecordListResult,
+  type RecordStartRequest,
+  type RecordStopRequest,
+  type RecordingInfo,
   type WriteFileRequest,
   type WriteFileResult,
 } from "../protocol/index.ts";
 import { DisplayManager } from "./displays.ts";
 import { getDisplay, parseDisplayNum } from "../cua/display.ts";
+import { RecordService, RECORDINGS_DIR } from "./record-service.ts";
 import { runShell } from "./shell-service.ts";
 import { listDir, readFile, writeFile } from "./fs-service.ts";
 
@@ -48,6 +55,7 @@ const display = getDisplay();
 const token = process.env.BOXD_TOKEN ?? "";
 
 const displays = new DisplayManager(line => log(line));
+const recorder = new RecordService(line => log(line));
 
 /** The desktop `box shot` and the smoke test look at when none is named. */
 const defaultDisplayIndex = (() => {
@@ -234,6 +242,28 @@ const routes: Record<string, Handler> = {
   "POST /computer": (body: ComputerRequest) => handleComputer(body),
   "POST /exec": (body: ExecRequest): Promise<ExecResult> => runShell(body),
   "GET /displays": async (): Promise<DisplayInfo[]> => displays.list(),
+  // Recording needs the desktop's real resolution, so it goes through ensure() rather
+  // than trusting the request: a recording of a display that is not up is an empty file.
+  "POST /record/start": async (body: RecordStartRequest): Promise<RecordingInfo> => {
+    const desktop = await displays.ensure(body.display ?? defaultDisplayIndex);
+    return recorder.start({
+      display: desktop.index,
+      resolution: desktop.detection.resolution.display,
+      name: body.name,
+      framerate: body.framerate,
+      crf: body.crf,
+      drawMouse: body.draw_mouse,
+    });
+  },
+  "POST /record/stop": (body: RecordStopRequest): Promise<RecordingInfo> =>
+    recorder.stop(body.display ?? defaultDisplayIndex),
+  // Both methods: curl reaches for GET on a listing, the host client posts everything.
+  "GET /recordings": async (): Promise<RecordListResult> => ({
+    recordings: recorder.list(),
+  }),
+  "POST /recordings": async (): Promise<RecordListResult> => ({
+    recordings: recorder.list(),
+  }),
   "POST /displays/ensure": async (
     body: EnsureDisplayRequest
   ): Promise<EnsureDisplayResult> => {
@@ -252,6 +282,56 @@ const routes: Record<string, Handler> = {
   "POST /fs/list": (body: ListDirRequest): Promise<ListDirResult> =>
     listDir(body),
 };
+
+/**
+ * Streams one recording out of the recordings directory.
+ *
+ * The name is matched against the directory listing rather than joined onto a path:
+ * this parameter arrives over HTTP, and a join is how "../../etc/passwd" becomes a
+ * file read. Nothing outside that directory can be named, whatever the caller sends.
+ */
+function serveRecording(req: IncomingMessage, res: ServerResponse): void {
+  const requested = new URL(req.url ?? "", "http://box").searchParams.get("name") ?? "";
+  let entries: string[] = [];
+  try {
+    entries = readdirSync(RECORDINGS_DIR);
+  } catch {
+    entries = [];
+  }
+  if (!entries.includes(requested)) {
+    send(res, 404, { error: `No recording named ${requested}` });
+    return;
+  }
+
+  const path = join(RECORDINGS_DIR, requested);
+  const total = statSync(path).size;
+  const range = /^bytes=(\d*)-(\d*)$/.exec(req.headers.range ?? "");
+
+  if (range) {
+    const start = range[1] ? Number(range[1]) : 0;
+    const end = range[2] ? Math.min(Number(range[2]), total - 1) : total - 1;
+    if (start > end || start >= total) {
+      res.writeHead(416, { "content-range": `bytes */${total}` });
+      res.end();
+      return;
+    }
+    res.writeHead(206, {
+      "content-type": "video/mp4",
+      "content-length": end - start + 1,
+      "content-range": `bytes ${start}-${end}/${total}`,
+      "accept-ranges": "bytes",
+    });
+    createReadStream(path, { start, end }).pipe(res);
+    return;
+  }
+
+  res.writeHead(200, {
+    "content-type": "video/mp4",
+    "content-length": total,
+    "accept-ranges": "bytes",
+  });
+  createReadStream(path).pipe(res);
+}
 
 const server = createServer((req, res) => {
   void (async () => {
@@ -273,6 +353,13 @@ const server = createServer((req, res) => {
       // noVNC for a desktop, proxied so only this port has to be published.
       if (url.startsWith("/vnc/")) {
         proxyVnc(req, res, url);
+        return;
+      }
+
+      // A recording, streamed. Range requests are honoured because that is how a
+      // browser seeks in a video; without it the player can only play from the start.
+      if (route === "GET /recordings/file") {
+        serveRecording(req, res);
         return;
       }
 

@@ -197,3 +197,30 @@ export const VNC_BASE_PORT = 5900;
 
 /** The desktop an agent uses when it has no assignment of its own. */
 export const DEFAULT_DISPLAY_INDEX = 1;
+
+/** Screen recording. One recording per desktop; the file lands on the work volume. */
+export interface RecordStartRequest {
+  display?: number;
+  /** Used in the file name, so a recording can be found by what it was for. */
+  name?: string;
+  framerate?: number;
+  crf?: number;
+  draw_mouse?: boolean;
+}
+
+export interface RecordStopRequest {
+  display?: number;
+}
+
+export interface RecordingInfo {
+  display: number;
+  file: string;
+  path: string;
+  started_at: string;
+  size_bytes?: number;
+  duration_ms?: number;
+}
+
+export interface RecordListResult {
+  recordings: RecordingInfo[];
+}

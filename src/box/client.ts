@@ -12,6 +12,8 @@ import type {
   HealthResult,
   ListDirResult,
   ReadFileResult,
+  RecordListResult,
+  RecordingInfo,
   WriteFileResult,
 } from "../protocol/index.ts";
 
@@ -161,6 +163,27 @@ export class BoxClient {
       // command that times out reports its output instead of aborting the request.
       commandTimeout + 15_000
     );
+  }
+
+  /** Starts recording a desktop. One recording per desktop at a time. */
+  startRecording(
+    options: { display?: number; name?: string; framerate?: number; drawMouse?: boolean } = {}
+  ): Promise<RecordingInfo> {
+    return this.post<RecordingInfo>("/record/start", {
+      display: options.display,
+      name: options.name,
+      framerate: options.framerate,
+      draw_mouse: options.drawMouse,
+    });
+  }
+
+  /** Stops it and returns the finished file. Waits for ffmpeg to write its trailer. */
+  stopRecording(display?: number): Promise<RecordingInfo> {
+    return this.post<RecordingInfo>("/record/stop", { display }, 30_000);
+  }
+
+  listRecordings(): Promise<RecordListResult> {
+    return this.post<RecordListResult>("/recordings", {});
   }
 
   readFile(

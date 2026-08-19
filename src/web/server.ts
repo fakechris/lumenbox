@@ -132,12 +132,6 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
   }
 
   const boxToken = loadBoxToken();
-  let boxdUrl: string | undefined;
-  try {
-    boxdUrl = (await new BoxManager(defaultBoxConfig()).status()).boxdUrl;
-  } catch {
-    boxdUrl = undefined;
-  }
 
   /**
    * Each agent's desktop is proxied under this server's own origin.
@@ -148,16 +142,36 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
    * ephemeral, changing on every recreate and silently blanking any open tab.
    *
    * /desktop/<index>/... is the stable path; the browser only ever sees indices.
+   *
+   * Resolved per request rather than once at startup, and re-resolved when a proxy
+   * attempt fails. Docker assigns boxd a fresh host port on every `box up --recreate`,
+   * so a cached one turns every desktop into a 502 for the rest of the process's life —
+   * which is what happened three times while building this: the box was rebuilt, the UI
+   * kept pointing at a dead port, and the only fix anyone knew was restarting the UI.
+   * The lookup is a `docker port` call, cached for a few seconds so a page load's worth
+   * of asset requests does not shell out for each one.
    */
-  const boxdOrigin = (() => {
-    if (!box.connected) return undefined;
-    try {
-      const url = new URL(boxdUrl!);
-      return { host: url.hostname, port: Number(url.port) };
-    } catch {
-      return undefined;
+  interface Origin {
+    host: string;
+    port: number;
+  }
+  let cachedOrigin: { value: Origin | undefined; at: number } | undefined;
+  const ORIGIN_TTL_MS = 5000;
+
+  async function resolveBoxdOrigin(force = false): Promise<Origin | undefined> {
+    if (!force && cachedOrigin && Date.now() - cachedOrigin.at < ORIGIN_TTL_MS) {
+      return cachedOrigin.value;
     }
-  })();
+    let value: Origin | undefined;
+    try {
+      const url = new URL((await new BoxManager(defaultBoxConfig()).status()).boxdUrl!);
+      value = { host: url.hostname, port: Number(url.port) };
+    } catch {
+      value = undefined;
+    }
+    cachedOrigin = { value, at: Date.now() };
+    return value;
+  }
 
   /** Rewrites /desktop/<index>/<rest> to boxd's /vnc/<index>/<rest>. */
   function desktopUpstreamPath(pathname: string, search: string): string | undefined {
@@ -167,8 +181,14 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
     return `/vnc/${match[1]}${rest}${search}`;
   }
 
-  function proxyDesktop(req: IncomingMessage, res: ServerResponse, path: string) {
-    if (!boxdOrigin) {
+  async function proxyDesktop(
+    req: IncomingMessage,
+    res: ServerResponse,
+    path: string,
+    retried = false
+  ): Promise<void> {
+    const origin = await resolveBoxdOrigin(retried);
+    if (!origin) {
       res.writeHead(503, { "content-type": "text/plain" });
       res.end("The box is not available. Start it with `agentbox box up`.");
       return;
@@ -176,13 +196,13 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
 
     const upstream = httpRequest(
       {
-        host: boxdOrigin.host,
-        port: boxdOrigin.port,
+        host: origin.host,
+        port: origin.port,
         method: req.method,
         path,
         headers: {
           ...req.headers,
-          host: `${boxdOrigin.host}:${boxdOrigin.port}`,
+          host: `${origin.host}:${origin.port}`,
           // boxd requires the token on everything but /health and the VNC stream.
           authorization: `Bearer ${boxToken}`,
         },
@@ -194,6 +214,12 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
     );
 
     upstream.on("error", error => {
+      // A recreated box means a new host port. One retry with a forced lookup turns
+      // that from a permanent 502 into a hiccup.
+      if (!retried && !res.headersSent) {
+        void proxyDesktop(req, res, path, true);
+        return;
+      }
       if (!res.headersSent) {
         res.writeHead(502, { "content-type": "text/plain" });
         res.end(`Cannot reach the box desktop: ${error.message}`);
@@ -247,7 +273,7 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
             send(res, 404, { error: `Not a desktop path: ${url.pathname}` });
             return;
           }
-          proxyDesktop(req, res, upstream);
+          await proxyDesktop(req, res, upstream);
           return;
         }
 
@@ -267,6 +293,65 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
             const detail = error instanceof Error ? error.message : String(error);
             log(`markdown-it is unavailable: ${detail}`);
             send(res, 404, { error: detail });
+          }
+          return;
+        }
+
+        // Recording. The video streams through this server for the same reason the
+        // desktop does: boxd's port is not something the browser should know about.
+        if (route === "GET /recording") {
+          const name = url.searchParams.get("name") ?? "";
+          await proxyDesktop(
+            req,
+            res,
+            `/recordings/file?name=${encodeURIComponent(name)}`
+          );
+          return;
+        }
+
+        if (route === "GET /api/recordings") {
+          const client = orchestrator.boxClient();
+          if (!client) {
+            send(res, 200, { recordings: [] });
+            return;
+          }
+          send(res, 200, await client.listRecordings());
+          return;
+        }
+
+        if (route === "POST /api/record") {
+          const body = await readJson(req);
+          const agentId = String(body.agent ?? "");
+          const action = String(body.action ?? "");
+          const client = orchestrator.boxClient();
+
+          if (!client) {
+            send(res, 503, { error: "The box is not available." });
+            return;
+          }
+          if (!registry.has(agentId)) {
+            send(res, 404, { error: `No agent ${agentId}` });
+            return;
+          }
+
+          // Recorded per desktop, and every agent has its own, so this records exactly
+          // the screen the person is looking at.
+          const index = registry.displayIndexFor(agentId);
+          const name = registry.get(agentId).profile.name;
+          try {
+            const result =
+              action === "start"
+                ? await client.startRecording({ display: index, name })
+                : await client.stopRecording(index);
+            log(
+              action === "start"
+                ? `recording ${name}'s desktop to ${result.file}`
+                : `recording saved: ${result.file} (${result.size_bytes ?? 0} bytes)`
+            );
+            send(res, 200, result);
+          } catch (error) {
+            const message = error instanceof Error ? error.message : String(error);
+            send(res, 400, { error: message });
           }
           return;
         }
@@ -408,12 +493,28 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
     const [pathname, query] = raw.split("?");
     const upstreamPath = desktopUpstreamPath(pathname ?? "", query ? `?${query}` : "");
 
-    if (!boxdOrigin || !upstreamPath) {
+    if (!upstreamPath) {
       clientSocket.destroy();
       return;
     }
 
-    const upstream = netConnect(boxdOrigin.port, boxdOrigin.host, () => {
+    void openUpgrade(req, clientSocket, head, upstreamPath);
+  });
+
+  /** The RFB socket, joined to whichever host port boxd is published on right now. */
+  async function openUpgrade(
+    req: IncomingMessage,
+    clientSocket: Socket,
+    head: Buffer,
+    upstreamPath: string
+  ): Promise<void> {
+    const origin = await resolveBoxdOrigin();
+    if (!origin) {
+      clientSocket.destroy();
+      return;
+    }
+
+    const upstream = netConnect(origin.port, origin.host, () => {
       const headers = Object.entries(req.headers)
         .map(([key, value]) =>
           `${key}: ${Array.isArray(value) ? value.join(", ") : value}\r\n`
@@ -431,7 +532,7 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
     };
     upstream.on("error", drop);
     clientSocket.on("error", drop);
-  });
+  }
 
   const host = options.host ?? "127.0.0.1";
   await new Promise<void>(resolve => server.listen(options.port, host, resolve));

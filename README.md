@@ -213,6 +213,20 @@ cannot reach them, and GTK3 ignores `max-height` on a toplevel so there is no ot
 lever. And the cursor is set to 24px, because the X11 default is genuinely hard to find
 over VNC.
 
+### Recording the desktop
+
+A transcript is the agent's account of what it did and a screenshot is one instant;
+neither answers "what did it actually do" once the screen has moved on. The `record`
+link in the desktop pane starts and stops a recording of the desktop being watched, and
+finished files are listed beneath it — the browser plays them directly.
+
+Files land in `/home/box/work/recordings/` on the work volume, so they outlive the
+container. 12fps and CRF 30 by default, which is a few KB per second: this shares a CPU
+with the agents' browser, and the point is reviewing what happened rather than producing
+video. Fragmented MP4, flushed per packet, with a fragment closed every second — a
+recorder that gets killed then leaves a file that still plays up to near where it
+stopped, instead of an unplayable stub.
+
 ### What survives, and what does not
 
 The container is disposable. `box up --recreate` — which is also what upgrading the
