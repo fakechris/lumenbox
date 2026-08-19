@@ -138,6 +138,7 @@ async function handleHealth(): Promise<HealthResult> {
     refresh_rate: undefined,
     uptime_seconds: Math.round((Date.now() - startedAt) / 1000),
     displays: running,
+    desktop_health: displays.health(),
   };
 }
 

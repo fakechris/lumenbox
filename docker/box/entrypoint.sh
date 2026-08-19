@@ -16,6 +16,10 @@ set -euo pipefail
 
 log() { printf '[box] %s\n' "$*"; }
 
+# docker stop sends SIGTERM here; without this the supervise loops would restart the
+# services being shut down and the stop would wait out its timeout.
+trap 'log "signal received; stopping"; kill 0 2>/dev/null || true; exit 0' TERM INT
+
 if [[ -z "${BOXD_TOKEN:-}" ]]; then
   log "FATAL: BOXD_TOKEN is not set. The daemon exposes shell access and refuses"
   log "       to run without a token. Start the box via 'agentbox box up'."
@@ -60,13 +64,62 @@ if ! as_user box env HOME=/home/box /usr/local/bin/start-display 1; then
   exit 1
 fi
 
+# ── keeping the services alive ────────────────────────────────────────────────────
+# Restarted in place rather than by letting the container die, because the container is
+# not the unit worth recycling: the desktops, the browser sessions and whatever an agent
+# is in the middle of all live in here, and taking the container down to recover one
+# crashed service destroys all of it. Measured before this existed — killing the
+# orchestrator exited the container, and everything went with it.
+#
+# Backoff so a service that cannot start is not hammered, and a cap so one that never
+# stays up escalates to the restart policy instead of looping in here forever. The cap is
+# per service and resets once it has run for a while, which is what tells a crash-loop
+# apart from a service that dies once a day.
+FLAP_SECONDS="${AGENTBOX_FLAP_SECONDS:-60}"
+MAX_RESTARTS="${AGENTBOX_MAX_RESTARTS:-8}"
+MAX_DELAY="${AGENTBOX_MAX_DELAY:-60}"
+
+supervise() {
+  local name="$1"
+  shift
+  local delay=1 restarts=0 started ran code pid
+  while :; do
+    started=$(date +%s)
+    "$@" &
+    pid=$!
+    set +e
+    wait "${pid}"
+    code=$?
+    set -e
+    ran=$(( $(date +%s) - started ))
+
+    # Ran long enough to count as having worked: this is a fresh failure, not a flap.
+    if [ "${ran}" -ge "${FLAP_SECONDS}" ]; then
+      delay=1
+      restarts=0
+    fi
+
+    restarts=$(( restarts + 1 ))
+    if [ "${restarts}" -gt "${MAX_RESTARTS}" ]; then
+      log "${name} failed ${restarts} times without staying up; letting the box restart"
+      return 1
+    fi
+
+    log "${name} exited (${code}) after ${ran}s; restarting in ${delay}s"
+    sleep "${delay}"
+    delay=$(( delay * 2 ))
+    [ "${delay}" -gt "${MAX_DELAY}" ] && delay="${MAX_DELAY}"
+  done
+}
+
 log "starting boxd"
-as_user box env HOME=/home/box BOXD_TOKEN="${BOXD_TOKEN}" \
+supervise boxd as_user box env HOME=/home/box BOXD_TOKEN="${BOXD_TOKEN}" \
   node /opt/boxd/boxd.cjs &
 BOXD_PID=$!
 
 if [[ "${AGENTBOX_HOST_ENABLED:-0}" != "1" ]]; then
-  # Driven from outside: boxd is the whole job, and its exit is the container's exit.
+  # Driven from outside: boxd is the whole job. Its supervisor only returns when boxd
+  # cannot be kept alive, and then the container's restart policy is the bigger hammer.
   wait "${BOXD_PID}"
   exit $?
 fi
@@ -94,7 +147,7 @@ chmod 700 /home/hostd "${AGENTBOX_HOME}" 2>/dev/null || true
 log "starting the orchestrator as hostd (web UI on 7777)"
 # Over loopback: the orchestrator and the daemon are in the same container now, so this
 # is the same HTTP contract with the network hop removed.
-as_user hostd env \
+supervise hostd as_user hostd env \
   HOME=/home/hostd \
   AGENTBOX_HOME="${AGENTBOX_HOME}" \
   AGENTBOX_BOXD_URL="http://127.0.0.1:1337" \
@@ -109,9 +162,10 @@ as_user hostd env \
   node /opt/hostd/hostd.mjs web --host 0.0.0.0 --port 7777 &
 HOSTD_PID=$!
 
-# Either dying takes the container down, so Docker's restart policy applies to both
-# rather than leaving a box with half a stack and no sign of it.
+# Each service is supervised, so reaching here means one of them could not be kept alive
+# at all. That is when the container should go: a restart gets a clean /tmp, a fresh X
+# lock, and a new attempt at everything.
 wait -n "${BOXD_PID}" "${HOSTD_PID}"
 status=$?
-log "a service exited (${status}); shutting the box down"
+log "a service could not be kept alive (${status}); shutting the box down"
 exit "${status}"

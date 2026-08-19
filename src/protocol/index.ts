@@ -219,6 +219,26 @@ export interface HealthResult {
   refresh_rate?: number;
   uptime_seconds: number;
   /** Desktops currently running. */
+  /**
+   * Per-component state for each desktop.
+   *
+   * "ok" is not the whole answer a control plane needs: a desktop whose compositor has
+   * been given up on still serves a screen, and one whose x11vnc is crash-looping does
+   * not, and both used to report the same thing here. Anything deciding whether to
+   * recycle a box reads this.
+   */
+  desktop_health?: readonly {
+    index: number;
+    degraded: boolean;
+    components: readonly {
+      name: string;
+      state: string;
+      restarts: number;
+      crashloops: number;
+      reason?: string;
+      lastRestartAt?: string;
+    }[];
+  }[];
   displays?: DisplayInfo[];
 }
 

@@ -23,6 +23,7 @@ import {
 } from "../protocol/index.ts";
 import { detectDisplay, type DisplayDetectionResult } from "../cua/display.ts";
 import { X11Executor } from "../cua/x11-executor.ts";
+import { ComponentHealth, type ComponentStatus } from "./component-health.ts";
 
 const execFileAsync = promisify(execFile);
 
@@ -55,6 +56,8 @@ export interface Desktop {
   display: string;
   executor: X11Executor;
   detection: DisplayDetectionResult;
+  /** Restart bookkeeping for this desktop's components. */
+  health: ComponentHealth;
   /** Set when the desktop was created on someone's behalf. See assertOwner. */
   owner?: string;
 }
@@ -101,18 +104,33 @@ export class DisplayManager {
       // A desktop being started right now is not a desktop to repair.
       if (this.starting.has(index)) continue;
 
+      const desktop = this.desktops.get(index);
+      if (!desktop) continue;
+
       try {
+        // The skip list is how a decision made over time reaches a script that only sees
+        // one moment: without it a crash-looping component is started again every pass.
+        const blocked = desktop.health.blocked();
         const { stdout, stderr } = await execFileAsync(
           "/usr/local/bin/start-display",
           [String(index)],
-          { timeout: START_TIMEOUT_MS }
-        );
-        // Silent unless something was actually restarted: start-display only reports
-        // components it had to start, so a healthy desktop logs nothing.
-        for (const line of `${stdout}${stderr}`.trim().split("\n")) {
-          if (line.includes("starting") || line.includes("started:") || line.includes("WARNING")) {
-            this.log(`repair: ${line}`);
+          {
+            timeout: START_TIMEOUT_MS,
+            env: { ...process.env, SKIP_COMPONENTS: blocked.join(" ") },
           }
+        );
+
+        const output = `${stdout}${stderr}`;
+        for (const name of startedComponents(output)) {
+          const status = desktop.health.restarted(name);
+          if (status.state === "disabled" || status.state === "crashloop") {
+            this.log(`desktop ${index}: ${status.reason}`);
+          } else {
+            this.log(`desktop ${index}: restarted ${name}`);
+          }
+        }
+        for (const line of output.trim().split("\n")) {
+          if (line.includes("WARNING")) this.log(`repair: ${line}`);
         }
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error);
@@ -143,6 +161,17 @@ export class DisplayManager {
         // No log yet, or a component that never wrote one. Nothing to do.
       }
     }
+  }
+
+  /** Per-component health for every live desktop, for the health endpoint. */
+  health(): { index: number; degraded: boolean; components: ComponentStatus[] }[] {
+    return [...this.desktops.values()]
+      .sort((a, b) => a.index - b.index)
+      .map(desktop => ({
+        index: desktop.index,
+        degraded: desktop.health.degraded(),
+        components: desktop.health.report(),
+      }));
   }
 
   /** The container path serving a desktop's noVNC. */
@@ -245,7 +274,14 @@ export class DisplayManager {
       resolution: detection.resolution,
     });
 
-    const desktop: Desktop = { index, display, executor, detection, owner };
+    const desktop: Desktop = {
+      index,
+      display,
+      executor,
+      detection,
+      owner,
+      health: new ComponentHealth(),
+    };
     this.desktops.set(index, desktop);
     this.log(
       `desktop ${index} ready at ${detection.resolutionString} ` +
@@ -253,4 +289,23 @@ export class DisplayManager {
     );
     return desktop;
   }
+}
+
+/**
+ * The components start-display reports having started.
+ *
+ * It ends a repair with `ready (started: Xvfb xfwm4 …)`, which is the only record of what
+ * was actually missing — parsed rather than re-derived, because the script is the thing
+ * that looked.
+ */
+export function startedComponents(output: string): string[] {
+  // Greedy to the last bracket on the line, not the first: autocutsel reports which
+  // selection it serves — `autocutsel(PRIMARY)` — and stopping at that bracket silently
+  // dropped every component after it from the accounting.
+  const match = /started:\s*(.*)\)\s*$/m.exec(output);
+  if (!match) return [];
+  return match[1]!
+    .split(/\s+/)
+    .map(name => name.replace(/\(.*\)$/, "").trim())
+    .filter(name => name !== "");
 }

@@ -12985,6 +12985,11 @@ var BoxManager = class {
       // Chrome and friends need more than Docker's default 64MB of /dev/shm.
       "--shm-size",
       "1g",
+      // The services inside are supervised and restarted in place; this is for the case
+      // where one of them cannot be kept alive at all, and for the engine restarting.
+      // unless-stopped rather than always, so `box down` stays down.
+      "--restart",
+      "unless-stopped",
       // The box runs a desktop and a browser; without this a runaway page can
       // starve the engine host.
       "--memory",

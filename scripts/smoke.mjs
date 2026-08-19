@@ -159,6 +159,27 @@ await check("a human-usable terminal and file manager are installed", async () =
   return "xfce4-terminal, thunar, wallpaper";
 });
 
+await check("health reports each component, not just ok", async () => {
+  // "ok" was not a useful answer on its own: a desktop whose compositor has been given up
+  // on still serves a screen and one whose x11vnc is crash-looping does not, and both used
+  // to look identical here. Anything deciding whether to recycle a box reads this.
+  const health = await box.health();
+  const desktop = (health.desktop_health ?? []).find(entry => entry.index === 1);
+  assert(desktop, `no component health for desktop 1: ${JSON.stringify(health.desktop_health)}`);
+  assert(
+    typeof desktop.degraded === "boolean",
+    "desktop health does not say whether it is degraded"
+  );
+  const states = new Set(desktop.components.map(component => component.state));
+  for (const state of states) {
+    assert(
+      ["ok", "backoff", "crashloop", "disabled"].includes(state),
+      `unknown component state ${state}`
+    );
+  }
+  return `degraded=${desktop.degraded}, ${desktop.components.length} component(s) tracked`;
+});
+
 await check("a compositor owns the display, so the dock is not a slab", async () => {
   // plank reads this once at startup and paints an opaque rectangle forever if the
   // answer is no. Debian's picom is 9.1 and rejects picom 10's --no-frame-pacing by

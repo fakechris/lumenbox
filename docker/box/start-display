@@ -32,6 +32,17 @@ WS_PORT=$((6080 + N))
 
 log() { printf '[display %s] %s\n' "$N" "$*"; }
 
+# Components boxd has given up on, space-separated. It decides — it is the thing that
+# counts restarts over time — and this script only obeys. Without this, a component that
+# crash-loops would be started again on every single supervision pass.
+SKIP="${SKIP_COMPONENTS:-}"
+skipped() {
+  case " ${SKIP} " in
+  *" $1 "*) return 0 ;;
+  *) return 1 ;;
+  esac
+}
+
 # What this run had to start. Empty output means the desktop was already healthy,
 # which is what lets boxd log repairs without logging every health check.
 repaired=()
@@ -136,7 +147,24 @@ fi
 # flag and prints its usage instead of starting. Copying a flag list written for a newer
 # picom is what produced that — a compositor that was never running, while
 # the dock silently skipped itself for the same reason.
-if ! running_exact "picom"; then
+#
+# Checked by whether a compositor is actually serving, not by whether a process exists.
+# Those differ: a picom that lost the selection lingers without compositing, and the
+# process check then says "running" while the screen is not composited — or starts a second
+# one and leaves two behind, which is a state this box reached and stayed in. Any straggler
+# for this display is reaped first, before a fresh one is started.
+if skipped picom; then
+  log "compositor disabled by the supervisor; running without it"
+elif WAIT_COMPOSITOR_TIMEOUT=0.5 wait-compositor "${DISP}" > /dev/null 2>&1; then
+  : # A compositor owns the display; nothing to do.
+else
+  for pid in $(pgrep -x picom 2>/dev/null || true); do
+    if tr '\0' '\n' < "/proc/${pid}/environ" 2>/dev/null | grep -Fqx "DISPLAY=${DISP}"; then
+      log "reaping a picom that is not compositing ${DISP} (pid ${pid})"
+      kill -9 "${pid}" 2>/dev/null || true
+    fi
+  done
+
   log "starting compositor"
   setsid picom --backend xrender --no-vsync --no-use-damage \
     >> "/tmp/picom-${N}.log" 2>&1 &
@@ -209,7 +237,9 @@ fi
 # Started only once a compositor owns the display. plank reads that once, at startup,
 # and paints an opaque slab forever if the answer was no — so "picom was spawned" is not
 # good enough, and wait-compositor waits for it to actually own _NET_WM_CM_S0.
-if ! running_exact "plank"; then
+if skipped plank; then
+  log "dock disabled by the supervisor"
+elif ! running_exact "plank"; then
   if wait-compositor "${DISP}"; then
     log "starting dock"
     setsid plank >> "/tmp/plank-${N}.log" 2>&1 &
@@ -228,7 +258,9 @@ fi
 # sits on a stale frame while X, the agent and the screenshots all look healthy. Polling
 # the whole framebuffer is reliable and cheap — Xvfb keeps it in RAM. vnc-probe checks
 # that this is actually working rather than merely configured.
-if ! port_listening "${RFB_PORT}"; then
+if skipped x11vnc; then
+  log "x11vnc disabled by the supervisor"
+elif ! port_listening "${RFB_PORT}"; then
   log "starting x11vnc on ${RFB_PORT}"
   setsid x11vnc -display "${DISP}" -forever -shared -nopw -quiet -localhost \
     -capslock -noxdamage -rfbport "${RFB_PORT}" >> "/tmp/x11vnc-${N}.log" 2>&1 &
@@ -237,7 +269,9 @@ fi
 
 # --heartbeat: a WebSocket with no traffic gets closed by intermediaries, and the
 # symptom is a desktop that goes blank and reconnects while nothing is wrong.
-if ! port_listening "${WS_PORT}"; then
+if skipped websockify; then
+  log "websockify disabled by the supervisor"
+elif ! port_listening "${WS_PORT}"; then
   log "starting noVNC on ${WS_PORT}"
   setsid websockify --heartbeat=30 --web=/usr/share/novnc \
     "${WS_PORT}" "localhost:${RFB_PORT}" >> "/tmp/novnc-${N}.log" 2>&1 &

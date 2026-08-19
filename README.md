@@ -258,6 +258,32 @@ The events themselves are in `~/.agentbox/activity.jsonl`, one per line with the
 they happened, so the feed survives a restart of the server and not just a reload of
 the page. Delete the file to clear the feed.
 
+### Keeping it running
+
+Both services in the box are supervised in place, with exponential backoff and a cap. The
+container is not the unit worth recycling: the desktops, the browser sessions and whatever
+an agent is in the middle of all live in it, so taking it down to recover one crashed
+service destroys all of that. Measured before this existed — killing the orchestrator
+exited the container and took every desktop with it. A service that cannot be kept alive at
+all escalates to the container's restart policy, which is the bigger hammer.
+
+A restart also has to work, which is less obvious than it sounds: a dead X server leaves
+its lock behind, and Xvfb refuses to start on a display that looks taken, so a restarted
+container came up with no desktop and gave up. `start-display` clears a stale lock when
+nothing is serving the display.
+
+Desktop components get the same treatment, one level down. boxd counts restarts per
+component in a sliding window, backs off between attempts, and past a cap stops restarting
+that component and says so in `/health` rather than hammering it. Old restarts age out, so
+a box that was briefly broken heals itself.
+
+The compositor is deliberately different: after repeated crashloop episodes it is disabled
+for the life of the process, because a picom that keeps restarting redirects and repaints
+the screen every time — smearing the wallpaper over window content — while a desktop with
+no compositor merely loses the dock's translucency. "No compositor" beats "a compositor
+that flaps". Verified by killing it in a loop: it ends up `disabled`, `/health` reports
+`degraded`, and screenshots, VNC and the agent's tools all keep working without it.
+
 ### The desktop
 
 Each display runs `Xvfb ▸ xfwm4 ▸ pcmanfm ▸ x11vnc ▸ noVNC`, brought up by
