@@ -70,6 +70,20 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
   const box = await orchestrator.connectBox();
   log(box.connected ? `box: ${box.detail}` : `box: unavailable — ${box.detail}`);
 
+  // Every agent's desktop, up front: the point of this UI is that a person can
+  // take over any of them at any moment, which cannot wait on that agent's first
+  // turn. Costs a few seconds at startup and nothing after.
+  if (box.connected) {
+    const desktops = await orchestrator.ensureAllDesktops();
+    for (const desktop of desktops) {
+      log(
+        desktop.index === undefined
+          ? `desktop for ${desktop.name}: failed to start`
+          : `desktop for ${desktop.name}: :${desktop.index}`
+      );
+    }
+  }
+
   const boxToken = loadBoxToken();
   let boxdUrl: string | undefined;
   try {

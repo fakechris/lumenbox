@@ -121,6 +121,25 @@ export class Orchestrator {
     }
   }
 
+  /**
+   * Brings up every registered agent's desktop at once.
+   *
+   * On-demand creation is right for the CLI, but not for a person: they can open
+   * any agent's desktop and work in it before that agent has ever taken a turn,
+   * and a desktop that does not exist yet shows a proxy error instead of a screen.
+   * Failures are collected rather than thrown — one agent's desktop failing must
+   * not stop the others from being usable.
+   */
+  async ensureAllDesktops(): Promise<{ name: string; index: number | undefined }[]> {
+    const agents = this.registry.list();
+    return Promise.all(
+      agents.map(async agent => ({
+        name: agent.profile.name,
+        index: await this.ensureDesktop(agent),
+      }))
+    );
+  }
+
   private async executeTurn(
     agent: AgentRecord,
     inbound: readonly InboundMessage[],

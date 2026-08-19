@@ -85,6 +85,19 @@ await check("the CUA toolchain is present", async () => {
   return "xdotool ffmpeg xrandr xmodmap xdpyinfo box-chrome";
 });
 
+await check("desktop launchers launch instead of prompting", async () => {
+  // Without libfm's quick_exec, activating a launcher opens an "Execute File"
+  // dialog rather than starting anything. It fails quietly: the icons still draw,
+  // so the desktop looks right until someone — or an agent — clicks one.
+  const result = await box.exec(
+    "grep -q '^quick_exec=1' /home/box/.config/libfm/libfm.conf || echo MISSING:quick_exec; " +
+      "for f in /home/box/Desktop/*.desktop; do [ -x \"$f\" ] || echo NOT-EXECUTABLE:$f; done"
+  );
+  assert(result.stdout.trim() === "", result.stdout.trim());
+  const names = await box.exec("ls /home/box/Desktop | tr '\\n' ' '");
+  return `quick_exec, +x: ${names.stdout.trim()}`;
+});
+
 // --- screenshots -----------------------------------------------------------
 
 await check("screenshot decodes as a valid WebP", async () => {

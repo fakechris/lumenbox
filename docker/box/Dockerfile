@@ -81,7 +81,16 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && rm -rf /var/lib/apt/lists/*
 
 # 8. Desktop launchers, and a pcmanfm background matching the plain-X one.
+#
+#    libfm's quick_exec is what makes a launcher launch. Without it, activating a
+#    .desktop file opens an "Execute File" dialog offering Execute / Execute in
+#    Terminal / Open — so the icons read as broken to a person, and to an agent they
+#    are a trap: a modal it has to notice and dismiss before anything happens. The
+#    executable bit below is necessary but does not by itself skip the prompt.
 RUN mkdir -p /home/box/Desktop /home/box/.config/pcmanfm/default \
+      /home/box/.config/libfm \
+    && printf '%s\n' '[config]' 'quick_exec=1' \
+      > /home/box/.config/libfm/libfm.conf \
     && printf '%s\n' \
       '[Desktop Entry]' 'Type=Application' 'Name=Terminal' \
       'Exec=xterm' 'Icon=utilities-terminal' 'Terminal=false' \
