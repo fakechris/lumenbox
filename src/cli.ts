@@ -16,6 +16,7 @@ import {
   uiToken,
   type BoxConfig,
 } from "./box/docker.ts";
+import { describeControlPlane, startControlPlane } from "./control/main.ts";
 import { AgentRegistry, defaultAgentsRoot } from "./agents/registry.ts";
 import { startEgressRelay } from "./egress/relay.ts";
 import { DEFAULT_DISPLAY_INDEX } from "./protocol/index.ts";
@@ -324,6 +325,14 @@ function makeRenderer() {
 }
 
 /** Flags that consume the following argument. */
+/**
+ * Flags that take a value.
+ *
+ * An allow-list rather than a rule, which means a flag missing from here does not fail — its value
+ * silently becomes a positional and the flag reads as `true`. That has now cost time twice: once
+ * when `web --host` was ignored and the published port reached nothing, and once when
+ * `control up --sweep-seconds 5` printed "every 15s". Adding a value flag means adding it here.
+ */
 const VALUE_FLAGS = new Set([
   "--provider",
   "--model",
@@ -332,6 +341,9 @@ const VALUE_FLAGS = new Set([
   "--host",
   "--token",
   "--allow",
+  "--allocator",
+  "--image",
+  "--sweep-seconds",
 ]);
 
 /**
@@ -476,6 +488,67 @@ async function cmdChat(argv: string[]): Promise<number> {
  * Runs in the foreground: it is a network service someone starts deliberately, and one that
  * exits when they stop watching it is better than one that lingers.
  */
+/**
+ * The control plane: many people, one box each.
+ *
+ * A separate command from `web` because it is a different deployment, not a different flag. `web`
+ * drives one box for one person; this authenticates people, gives each their own box, and proxies
+ * them to it.
+ */
+async function cmdControl(argv: string[]): Promise<number> {
+  const [sub = "up", ...rest] = argv;
+
+  if (sub === "status") {
+    for (const line of describeControlPlane()) out(line);
+    return 0;
+  }
+  if (sub !== "up") {
+    err(`Unknown control command: ${sub}. Try \`up\` or \`status\`.`);
+    return 1;
+  }
+
+  const { flags } = parseArgs(rest);
+  const allocatorFlag = flags.get("--allocator");
+  const allocator = allocatorFlag === "static" ? "static" : "compose";
+  if (allocatorFlag !== undefined && allocatorFlag !== "static" && allocatorFlag !== "compose") {
+    err(`Unknown allocator: ${String(allocatorFlag)}. Use compose or static.`);
+    return 1;
+  }
+  const portFlag = flags.get("--port");
+  const hostFlag = flags.get("--host");
+  const imageFlag = flags.get("--image");
+  const sweepFlag = flags.get("--sweep-seconds");
+
+  try {
+    const running = await startControlPlane({
+      port: typeof portFlag === "string" ? Number(portFlag) : 8080,
+      // Loopback by default, like everything else here: this has no TLS, and the session cookie is
+      // the whole session.
+      host: typeof hostFlag === "string" ? hostFlag : "127.0.0.1",
+      allocator,
+      image: typeof imageFlag === "string" ? imageFlag : defaultBoxConfig().image,
+      users: process.env.AGENTBOX_CONTROL_USERS,
+      sweepSeconds: typeof sweepFlag === "string" ? Number(sweepFlag) : undefined,
+      secureCookies: process.env.AGENTBOX_SECURE_COOKIES === "1",
+      out: line => out(line === "" ? "" : dim(line)),
+    });
+    out("");
+    out(`${bold("sign in")} at ${running.url}/gateway/login`);
+    out(dim("Ctrl-C to stop. Boxes keep running: they are not children of this process."));
+    await new Promise<void>(resolve => {
+      const stop = () => {
+        void running.close().then(resolve);
+      };
+      process.once("SIGINT", stop);
+      process.once("SIGTERM", stop);
+    });
+    return 0;
+  } catch (error) {
+    err(error instanceof Error ? error.message : String(error));
+    return 1;
+  }
+}
+
 async function cmdEgress(argv: string[]): Promise<number> {
   const { flags } = parseArgs(argv);
   const portFlag = flags.get("--port");
@@ -624,6 +697,18 @@ Providers:
                            defaults off; opt in with AGENTBOX_VISION=1,
                            AGENTBOX_CACHING=1, AGENTBOX_THINKING=1.
 
+Control plane (many people, one box each):
+  control up                Authenticate people and give each their own box
+                            --allocator compose|static   one container per tenant,
+                                                         or one existing box (dev)
+                            --port <n>       default 8080, loopback only
+                            --image <tag>    box image for new boxes
+                            --sweep-seconds  collector interval; 0 disables it
+  control status            Tenants, their boxes, spend and recent actions
+
+  There is no TLS here. The session cookie is the whole session, so put a TLS
+  terminator in front of it before anyone signs in over a network.
+
 Environment:
   ANTHROPIC_API_KEY         API credentials (or run \`ant auth login\`)
   AGENTBOX_PROVIDER         Which provider to use (see above)
@@ -631,7 +716,14 @@ Environment:
   AGENTBOX_CONFIG           Config file (default <state>/config.json)
   AGENTBOX_IMAGE            Box image tag (default agentbox/box:latest)
   AGENTBOX_BOX_HOST         Override where published ports are reachable
-  AGENTBOX_WIDTH/HEIGHT     Box display size (default 1280x800)`;
+  AGENTBOX_WIDTH/HEIGHT     Box display size (default 1280x800)
+  AGENTBOX_CONTROL_USERS    user:password:tenant,... for \`control up\`
+                            (one is generated and printed when unset)
+  AGENTBOX_CONTROL_KEY      64 hex chars; encrypts stored box tokens. Minted
+                            beside the database when unset — which means a
+                            backup of that directory holds both.
+  AGENTBOX_SESSION_SECRET   Shared by two gateways so sessions survive either
+  AGENTBOX_SECURE_COOKIES   1 when TLS terminates in front of the gateway`;
 
 async function main(): Promise<number> {
   const argv = process.argv.slice(2);
@@ -681,6 +773,9 @@ async function main(): Promise<number> {
 
     case "chat":
       return cmdChat(rest);
+
+    case "control":
+      return cmdControl(rest);
 
     case "egress":
       return cmdEgress(rest);

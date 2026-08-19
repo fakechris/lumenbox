@@ -293,6 +293,31 @@ Two things that run found:
 The pattern is the same one the box already follows: restart the smallest thing, never recycle a
 container to recover a process, and make the loud failure the default.
 
+## 9a. Running it
+
+```
+agentbox control up                  # compose allocator, gateway on 127.0.0.1:8080
+agentbox control up --allocator static --sweep-seconds 0
+agentbox control status              # tenants, boxes, spend, recent actions
+```
+
+Loopback by default and no TLS, and it says so on startup: the session cookie is the whole session, so
+a TLS terminator has to be in front before anyone signs in over a network. With no
+`AGENTBOX_CONTROL_USERS` set it generates one password and prints it once — a control plane that
+starts with no credential is how a demo becomes an incident.
+
+Verified as the command, not only as a library: two people signed in, each got their own container
+within seconds, `control status` showed both tenants with their boxes and the four audit rows
+(`signin`, `allocate`, ×2), the collector's next sweep filled in `last seen`, and stopping the control
+plane left both boxes running — they are not children of that process, which is the whole point of the
+control plane not being in the path of a turn.
+
+That run found one bug: `--sweep-seconds 5` was ignored and the collector printed "every 15s". The
+CLI's value-flag list is an allow-list, so a flag missing from it silently reads as `true` and its
+value becomes a positional. That is the second time it has cost time — the first was `web --host`
+publishing a port that reached nothing — so the list now carries a comment saying what to do when
+adding a flag.
+
 ## 10. Deployment shapes
 
 **Development.** Control plane on a laptop, `static` allocator, one box. No gateway; the UI is
