@@ -1,0 +1,167 @@
+#!/usr/bin/env python3
+"""Checks that x11vnc is still delivering fresh frames.
+
+This exists because of one specific failure. x11vnc learns what changed from the XDamage
+extension, and with a compositor in the way, damage reported against the root window can
+miss a composited repaint. x11vnc then has nothing to send, and the viewer sits on a
+stale frame while everything else — X, the agent, the screenshots — looks perfectly
+healthy. `-noxdamage` makes x11vnc poll the whole framebuffer instead, which is the fix,
+and this probe is what proves the fix is in effect rather than merely configured.
+
+It speaks enough RFB to be conclusive: handshake, declare that it understands only raw
+rectangles, ask for the whole framebuffer, cause a visible change, then keep asking for
+incremental updates until a large enough change comes back. A stale server never sends
+one.
+
+Two things it must not do, both learned by watching it be wrong. It must not accept the
+first non-empty update as proof: the cursor arrives as its own pseudo-encoded rectangle,
+and counting that made the probe pass against a screen that had not changed at all. And it
+must not ask only once: a window takes an unpredictable moment to map, and a single
+request timed out while the screen was about to change.
+
+Usage: vnc-probe <rfb-port> [display]
+Prints one line and exits 0 on a fresh frame, 1 otherwise.
+"""
+
+import os
+import socket
+import struct
+import subprocess
+import sys
+import time
+
+READ_TIMEOUT_S = 6.0
+
+
+def read_exactly(sock: socket.socket, count: int) -> bytes:
+    chunks = []
+    while count > 0:
+        chunk = sock.recv(count)
+        if not chunk:
+            raise ConnectionError("server closed the connection")
+        chunks.append(chunk)
+        count -= len(chunk)
+    return b"".join(chunks)
+
+
+def handshake(sock: socket.socket) -> tuple[int, int]:
+    version = read_exactly(sock, 12)
+    if not version.startswith(b"RFB "):
+        raise ConnectionError(f"not an RFB server: {version!r}")
+    sock.sendall(b"RFB 003.008\n")
+
+    count = read_exactly(sock, 1)[0]
+    if count == 0:
+        raise ConnectionError("server refused the connection")
+    types = read_exactly(sock, count)
+    if 1 not in types:
+        raise ConnectionError(f"no None security type on offer: {list(types)}")
+    sock.sendall(bytes([1]))
+
+    (result,) = struct.unpack(">I", read_exactly(sock, 4))
+    if result != 0:
+        raise ConnectionError("security handshake failed")
+
+    # ClientInit, shared: the user's own viewer must not be kicked off by this probe.
+    sock.sendall(bytes([1]))
+    width, height = struct.unpack(">HH", read_exactly(sock, 4))
+    read_exactly(sock, 16)  # pixel format
+    (name_length,) = struct.unpack(">I", read_exactly(sock, 4))
+    read_exactly(sock, name_length)
+    return width, height
+
+
+def set_encodings(sock: socket.socket) -> None:
+    """Raw only. Left unset, a server may answer with CopyRect, which this cannot skip."""
+    sock.sendall(struct.pack(">BBHi", 2, 0, 1, 0))
+
+
+def request_update(sock: socket.socket, width: int, height: int, incremental: bool) -> None:
+    sock.sendall(struct.pack(">BBHHHH", 3, 1 if incremental else 0, 0, 0, width, height))
+
+
+def read_update(sock: socket.socket) -> int:
+    """Framebuffer pixels in the next update. Cursor rectangles are not framebuffer."""
+    deadline = time.monotonic() + READ_TIMEOUT_S
+    while time.monotonic() < deadline:
+        message = read_exactly(sock, 1)[0]
+        if message != 0:
+            # ServerCutText and friends: length-prefixed, so they can be skipped.
+            if message == 3:
+                read_exactly(sock, 3)
+                (length,) = struct.unpack(">I", read_exactly(sock, 4))
+                read_exactly(sock, length)
+                continue
+            raise ConnectionError(f"unexpected RFB message type {message}")
+
+        read_exactly(sock, 1)
+        (rectangles,) = struct.unpack(">H", read_exactly(sock, 2))
+        area = 0
+        for _ in range(rectangles):
+            _, _, w, h, encoding = struct.unpack(">HHHHi", read_exactly(sock, 12))
+            if encoding == 0:
+                read_exactly(sock, w * h * 4)
+                area += w * h
+            elif encoding == -239:
+                # Cursor shape: carries pixels and a mask, and says nothing about whether
+                # the screen changed. Counting it is what made this probe pass falsely.
+                read_exactly(sock, w * h * 4 + ((w + 7) // 8) * h)
+            else:
+                raise ConnectionError(f"unsupported encoding {encoding} in this probe")
+        return area
+    raise TimeoutError("no framebuffer update arrived")
+
+
+def disturb(display: str) -> subprocess.Popen:
+    """Something that certainly changes pixels: a real window mapping and unmapping."""
+    return subprocess.Popen(
+        ["xterm", "-geometry", "40x6+120+120", "-e", "sleep 3"],
+        env={**os.environ, "DISPLAY": display},
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+    )
+
+
+def main() -> int:
+    port = int(sys.argv[1]) if len(sys.argv) > 1 else 5901
+    display = sys.argv[2] if len(sys.argv) > 2 else os.environ.get("DISPLAY", ":1")
+
+    sock = socket.create_connection(("127.0.0.1", port), timeout=READ_TIMEOUT_S)
+    sock.settimeout(READ_TIMEOUT_S)
+    try:
+        width, height = handshake(sock)
+        set_encodings(sock)
+        request_update(sock, width, height, incremental=False)
+        read_update(sock)
+
+        # More than a cursor, less than a whole screen: a mapped window is tens of
+        # thousands of pixels, and the pointer is a few hundred.
+        threshold = 5000
+        window = disturb(display)
+        area = 0
+        try:
+            deadline = time.monotonic() + 12
+            while area < threshold and time.monotonic() < deadline:
+                request_update(sock, width, height, incremental=True)
+                try:
+                    area += read_update(sock)
+                except TimeoutError:
+                    continue
+        finally:
+            window.terminate()
+
+        if area < threshold:
+            print(f"stale: only {area} pixels changed, expected more than {threshold}")
+            return 1
+        print(f"fresh: {area} pixels changed on {width}x{height}")
+        return 0
+    finally:
+        sock.close()
+
+
+if __name__ == "__main__":
+    try:
+        sys.exit(main())
+    except Exception as error:  # noqa: BLE001 - a probe reports, it does not raise
+        print(f"probe failed: {error}")
+        sys.exit(1)

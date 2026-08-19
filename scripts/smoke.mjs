@@ -143,6 +143,58 @@ await check("a human-usable terminal and file manager are installed", async () =
   return "xfce4-terminal, thunar, wallpaper";
 });
 
+await check("a compositor owns the display, so the dock is not a slab", async () => {
+  // plank reads this once at startup and paints an opaque rectangle forever if the
+  // answer is no. Debian's picom is 9.1 and rejects picom 10's --no-frame-pacing by
+  // printing its usage — which is exactly how this ended up silently not running.
+  const compositor = await box.exec("wait-compositor :1 && echo owned || echo none");
+  assert(compositor.stdout.includes("owned"), "no compositor owns _NET_WM_CM_S0");
+  const dock = await box.exec("pgrep -cx plank");
+  assert(Number(dock.stdout.trim()) > 0, "the dock is not running");
+  return "picom owns the selection, plank is up";
+});
+
+await check("VNC still delivers fresh frames under the compositor", async () => {
+  // The failure this covers is one-sided and silent: XDamage misses a composited
+  // repaint, x11vnc has nothing to send, and the viewer sits on a stale frame while X,
+  // the agent and the screenshots all look healthy. -noxdamage is the fix; this proves
+  // it works rather than that it was configured, by speaking RFB and requiring a
+  // non-empty incremental update after something changes on screen.
+  const flags = await box.exec("pgrep -a x11vnc | head -1");
+  assert(flags.stdout.includes("-noxdamage"), `x11vnc is missing -noxdamage: ${flags.stdout}`);
+
+  const probe = await box.exec("DISPLAY=:1 vnc-probe 5901 :1");
+  assert(probe.stdout.startsWith("fresh:"), probe.stdout || probe.stderr);
+  return probe.stdout.trim();
+});
+
+await check("Chromium's flag warning is policy-suppressed", async () => {
+  // The infobar is a trap rather than an eyesore: it covers page content, reappears on
+  // every launch, and is one more thing a model has to notice and dismiss.
+  const policy = await box.exec("cat /etc/chromium/policies/managed/agentbox.json");
+  assert(
+    /"CommandLineFlagSecurityWarningsEnabled":\s*false/.test(policy.stdout),
+    policy.stdout || "no policy file"
+  );
+  return "managed policy in place";
+});
+
+await check("the clipboard is one clipboard", async () => {
+  // X has two selections and applications disagree about which is "the" clipboard;
+  // without syncing them, a copy in one app does not paste in another, and the VNC
+  // clipboard carries whichever one happened to be set.
+  // One command: xclip owns the selection only while it lives, and a separate exec ends
+  // its process group — which is why splitting this in two reported an empty PRIMARY.
+  const both = await box.exec(
+    "DISPLAY=:1 sh -c 'printf clip-sync-ok | xclip -selection clipboard; sleep 2; " +
+      "xclip -o -selection clipboard; echo; xclip -o -selection primary'"
+  );
+  const [clipboard = "", primary = ""] = both.stdout.trim().split("\n");
+  assert(clipboard.trim() === "clip-sync-ok", `CLIPBOARD holds ${clipboard}`);
+  assert(primary.trim() === "clip-sync-ok", `PRIMARY holds ${primary}`);
+  return "PRIMARY and CLIPBOARD agree";
+});
+
 await check("the desktop can be recorded", async () => {
   // A transcript is the agent's account of what it did; this is the screen's.
   const started = await box.startRecording({ display: 1, name: "smoke" });

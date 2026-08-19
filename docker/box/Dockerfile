@@ -58,8 +58,32 @@ COPY boxd.cjs /opt/boxd/boxd.cjs
 COPY entrypoint.sh /usr/local/bin/entrypoint.sh
 COPY start-display /usr/local/bin/start-display
 COPY box-chrome /usr/local/bin/box-chrome
+COPY wait-compositor /usr/local/bin/wait-compositor
+COPY vnc-probe /usr/local/bin/vnc-probe
 RUN chmod +x /usr/local/bin/entrypoint.sh /usr/local/bin/start-display \
-      /usr/local/bin/box-chrome
+      /usr/local/bin/box-chrome /usr/local/bin/wait-compositor \
+      /usr/local/bin/vnc-probe
+
+# Chromium's managed policy. Two things it turns off, both of which are traps for an
+# agent rather than merely untidy:
+#
+# The "unsupported command-line flag: --no-sandbox" infobar. The flag is deliberate — the
+# container is the security boundary here, and giving Chromium's own sandbox what it needs
+# would mean handing the container SYS_ADMIN or an unconfined seccomp profile, which is a
+# worse trade. The bar itself shifts the page down, sits over content, and reappears on
+# every launch, so it is something the model has to notice and dismiss forever.
+#
+# The default-browser and first-run prompts, for the same reason: a modal on first launch
+# is a step no agent should have to discover.
+#
+# Managed policy rather than flags, because flags do not reach the warning bar.
+RUN mkdir -p /etc/chromium/policies/managed \
+    && printf '%s\n' '{' \
+      '  "CommandLineFlagSecurityWarningsEnabled": false,' \
+      '  "DefaultBrowserSettingEnabled": false,' \
+      '  "PromotionalTabsEnabled": false,' \
+      '  "MetricsReportingEnabled": false' \
+      '}' > /etc/chromium/policies/managed/agentbox.json
 
 EXPOSE 1337
 
@@ -89,8 +113,16 @@ EXPOSE 1337
 #    that draws the desktop and its icons.
 #
 #    dconf-cli to pre-seed GTK settings that have no config-file equivalent.
+#
+#    picom and plank are the dock. plank needs alpha compositing for its theme, and X
+#    without a compositor has no way to blend windows — each window owns its pixels on
+#    the shared framebuffer and there is nothing behind them to blend with. picom gives
+#    every window an off-screen buffer and combines them, which is what makes a
+#    translucent dock (and shadows, and rounded corners) possible at all.
 RUN apt-get update && apt-get install -y --no-install-recommends \
       xterm xfce4-terminal thunar pcmanfm wmctrl dconf-cli \
+      picom plank \
+      autocutsel xclip \
       adwaita-icon-theme fonts-noto-cjk \
     && rm -rf /var/lib/apt/lists/*
 
@@ -130,6 +162,16 @@ RUN mkdir -p /home/box/Desktop /home/box/.config/pcmanfm/default \
       'wallpaper=/usr/share/backgrounds/agentbox.png' 'desktop_bg=#141a26' \
       'desktop_fg=#e6e9ef' 'desktop_shadow=#000000' 'show_wm_menu=0' \
       > /home/box/.config/pcmanfm/default/desktop-items-0.conf \
+    && mkdir -p /home/box/.config/plank/dock1/launchers \
+    && printf '%s\n' '[PlankDockItemPreferences]' \
+      'Launcher=file:///home/box/Desktop/chromium.desktop' \
+      > /home/box/.config/plank/dock1/launchers/chromium.dockitem \
+    && printf '%s\n' '[PlankDockItemPreferences]' \
+      'Launcher=file:///home/box/Desktop/files.desktop' \
+      > /home/box/.config/plank/dock1/launchers/files.dockitem \
+    && printf '%s\n' '[PlankDockItemPreferences]' \
+      'Launcher=file:///home/box/Desktop/terminal.desktop' \
+      > /home/box/.config/plank/dock1/launchers/terminal.dockitem \
     && chmod +x /home/box/Desktop/*.desktop \
     && chown -R box:box /home/box/Desktop /home/box/.config \
     # A copy the image owns. /home/box/.config is a volume at runtime, so it outlives

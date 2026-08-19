@@ -39,7 +39,16 @@ const SUPERVISE_INTERVAL_MS = Number(process.env.BOXD_SUPERVISE_MS ?? 15_000);
 const LOG_LIMIT_BYTES = 2 * 1024 * 1024;
 
 /** Named after the log files start-display writes. */
-const LOG_COMPONENTS = ["xvfb", "xfwm4", "pcmanfm", "x11vnc", "novnc"];
+const LOG_COMPONENTS = [
+  "xvfb",
+  "xfwm4",
+  "picom",
+  "plank",
+  "pcmanfm",
+  "autocutsel",
+  "x11vnc",
+  "novnc",
+];
 
 export interface Desktop {
   index: number;

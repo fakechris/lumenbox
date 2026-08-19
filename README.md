@@ -205,6 +205,27 @@ the agent working normally while the user's screen goes dead and stays dead.
 
 The apps a person actually touches are `xfce4-terminal` and `thunar`; `pcmanfm` only
 draws the desktop and its icons, and `xterm` stays because the smoke test types into it.
+A `plank` dock sits at the bottom with those three launchers, and `picom` composites so
+the dock can be translucent rather than an opaque slab — X on its own has no way to blend
+windows, since each one owns its pixels on the shared framebuffer.
+
+Compositing forces one other setting: `x11vnc -noxdamage`. x11vnc normally learns what
+changed from XDamage, and damage reported against the root window can miss a composited
+repaint, which leaves the viewer on a stale frame while X, the agent and the screenshots
+all look healthy. Polling the whole framebuffer avoids that; measured with a viewer
+attached, it costs the same 2% of a core either way. `vnc-probe` speaks enough RFB to
+prove frames are still arriving, and the smoke test runs it.
+
+`autocutsel` keeps X's two selections — PRIMARY, which middle-click pastes, and CLIPBOARD,
+which Ctrl-V pastes — in step, so a copy in one application pastes into another and the
+VNC clipboard carries what was actually copied. `xclip` is there for agents that want to
+put something on the clipboard from a shell.
+
+Chromium runs under a managed policy that turns off the "unsupported command-line flag"
+infobar. The flag in question is `--no-sandbox`, which is deliberate: the container is the
+security boundary, and giving Chromium's own sandbox what it needs would mean handing the
+container `SYS_ADMIN` or an unconfined seccomp profile. The bar itself covers page content
+and returns on every launch, so it is a thing an agent must notice and dismiss forever.
 
 Two settings exist because of how the box is looked at rather than how it works. The
 GTK3 file chooser is pre-seeded to 1100x680: unset, it opens at roughly 1124x822 on an

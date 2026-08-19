@@ -43,6 +43,20 @@ port_listening() {
 
 # A process matching the pattern whose own DISPLAY is this desktop's. The environ
 # check is what makes it per-display: pgrep alone would find another agent's copy.
+#
+# Two variants because -f matches the whole command line, which also matches anything
+# that merely mentions the name — a log tail, or the very command doing the checking.
+# For a plain binary, matching the process name exactly is both cheaper and correct.
+running_exact() {
+  local name="$1" pid
+  for pid in $(pgrep -x -- "${name}" 2>/dev/null || true); do
+    if tr '\0' '\n' < "/proc/${pid}/environ" 2>/dev/null | grep -Fqx "DISPLAY=${DISP}"; then
+      return 0
+    fi
+  done
+  return 1
+}
+
 running_here() {
   local pattern="$1" pid
   for pid in $(pgrep -f -- "${pattern}" 2>/dev/null || true); do
@@ -98,6 +112,25 @@ if ! wmctrl -m > /dev/null 2>&1; then
   repaired+=("xfwm4")
 fi
 
+# ── compositor ───────────────────────────────────────────────────────────────────
+# Needed for the dock: without alpha compositing every window owns its pixels on the
+# shared framebuffer, so a translucent dock cannot exist. xrender rather than glx —
+# there is no GPU in a container — and vsync, frame pacing and damage tracking are all
+# off: there is no monitor to sync to, and damage tracking is what goes wrong here.
+#
+# Not --no-frame-pacing: that is picom 10, and Debian 12 ships 9.1, which rejects the
+# flag and prints its usage instead of starting. Copying a flag list written for a newer
+# picom is what produced that — a compositor that was never running, while
+# the dock silently skipped itself for the same reason.
+if ! running_exact "picom"; then
+  log "starting compositor"
+  setsid picom --backend xrender --no-vsync --no-use-damage \
+    >> "/tmp/picom-${N}.log" 2>&1 &
+  # Give it a moment to take the selection, or the dock below will decline to start.
+  wait-compositor "${DISP}" > /dev/null 2>&1 || true
+  repaired+=("picom")
+fi
+
 # Painted before anything can look at the screen. A fresh Xvfb root window is black,
 # and a black first frame is indistinguishable from a broken desktop.
 xsetroot -solid "#141a26" 2>/dev/null || log "could not set the background"
@@ -123,6 +156,34 @@ if command -v dconf > /dev/null 2>&1; then
   fi
 fi
 
+# Dock preferences, which plank keeps in dconf rather than in a file.
+if command -v dconf > /dev/null 2>&1; then
+  if [ "$(dconf read /net/launchpad/plank/docks/dock1/theme 2>/dev/null)" != "'Transparent'" ]; then
+    dbus-run-session -- sh -c "
+      p=/net/launchpad/plank/docks/dock1
+      dconf write \$p/dock-items \"['chromium.dockitem', 'files.dockitem', 'terminal.dockitem']\"
+      dconf write \$p/position \"'bottom'\"
+      dconf write \$p/theme \"'Transparent'\"
+      dconf write \$p/icon-size 48
+      dconf write \$p/hide-mode \"'none'\"
+    " 2>/dev/null || log "could not write the dock preferences"
+  fi
+fi
+
+# ── clipboard ────────────────────────────────────────────────────────────────────
+# X has two selections and applications disagree about which one holds "the clipboard":
+# PRIMARY is what a middle-click pastes, CLIPBOARD is what Ctrl-V pastes. autocutsel
+# keeps them in step, in both directions, which is what makes a copy in one application
+# paste into another — and what makes the VNC clipboard carry the thing the user
+# actually copied rather than whichever selection happened to be set.
+for selection in PRIMARY CLIPBOARD; do
+  if ! running_here "autocutsel -selection ${selection}"; then
+    setsid autocutsel -selection "${selection}" -fork \
+      >> "/tmp/autocutsel-${N}.log" 2>&1 &
+    repaired+=("autocutsel(${selection})")
+  fi
+done
+
 # ── desktop icons ────────────────────────────────────────────────────────────────
 if ! running_here "pcmanfm --desktop"; then
   log "starting desktop icons"
@@ -130,14 +191,33 @@ if ! running_here "pcmanfm --desktop"; then
   repaired+=("pcmanfm")
 fi
 
+# ── dock ─────────────────────────────────────────────────────────────────────────
+# Started only once a compositor owns the display. plank reads that once, at startup,
+# and paints an opaque slab forever if the answer was no — so "picom was spawned" is not
+# good enough, and wait-compositor waits for it to actually own _NET_WM_CM_S0.
+if ! running_exact "plank"; then
+  if wait-compositor "${DISP}"; then
+    log "starting dock"
+    setsid plank >> "/tmp/plank-${N}.log" 2>&1 &
+    repaired+=("plank")
+  else
+    log "no compositor on ${DISP}; skipping the dock rather than drawing an opaque one"
+  fi
+fi
+
 # ── VNC ──────────────────────────────────────────────────────────────────────────
 # -localhost: only boxd reaches these, and it is the only thing published.
 # -capslock so a Caps Lock left on by synthetic input does not silently upcase
 # everything typed afterwards.
+# -noxdamage is not an optimisation to skip: x11vnc learns what changed from XDamage,
+# and damage reported against the root window misses a composited repaint, so the viewer
+# sits on a stale frame while X, the agent and the screenshots all look healthy. Polling
+# the whole framebuffer is reliable and cheap — Xvfb keeps it in RAM. vnc-probe checks
+# that this is actually working rather than merely configured.
 if ! port_listening "${RFB_PORT}"; then
   log "starting x11vnc on ${RFB_PORT}"
   setsid x11vnc -display "${DISP}" -forever -shared -nopw -quiet -localhost \
-    -capslock -rfbport "${RFB_PORT}" >> "/tmp/x11vnc-${N}.log" 2>&1 &
+    -capslock -noxdamage -rfbport "${RFB_PORT}" >> "/tmp/x11vnc-${N}.log" 2>&1 &
   repaired+=("x11vnc")
 fi
 

@@ -1,0 +1,58 @@
+#!/usr/bin/env python3
+"""Waits until a compositing manager owns this display, or gives up.
+
+Plank reads whether a compositor is present exactly once, at startup, and paints an
+opaque slab for the rest of its life if the answer was no. So the dock has to be started
+after the compositor is actually serving, not merely after it was spawned.
+
+"Present" means owning the _NET_WM_CM_S0 selection, which is the convention compositors
+follow. That is a selection rather than a property, so xprop cannot read it and there is
+no tool in the image that can — hence ctypes against libX11.
+
+Exits 0 when a compositor owns the selection, 1 on timeout. Never raises: a missing
+libX11 or an unreachable display is a "no", not a traceback in the desktop bringup log.
+"""
+
+import ctypes
+import os
+import sys
+import time
+
+TIMEOUT_S = float(os.environ.get("WAIT_COMPOSITOR_TIMEOUT", "8"))
+
+
+def compositor_present(display_name: str) -> bool:
+    try:
+        xlib = ctypes.CDLL("libX11.so.6")
+    except OSError:
+        return False
+
+    xlib.XOpenDisplay.restype = ctypes.c_void_p
+    xlib.XOpenDisplay.argtypes = [ctypes.c_char_p]
+    xlib.XInternAtom.restype = ctypes.c_ulong
+    xlib.XInternAtom.argtypes = [ctypes.c_void_p, ctypes.c_char_p, ctypes.c_int]
+    xlib.XGetSelectionOwner.restype = ctypes.c_ulong
+    xlib.XGetSelectionOwner.argtypes = [ctypes.c_void_p, ctypes.c_ulong]
+    xlib.XCloseDisplay.argtypes = [ctypes.c_void_p]
+
+    display = xlib.XOpenDisplay(display_name.encode())
+    if not display:
+        return False
+
+    try:
+        # Screen 0: every desktop here is a single-screen Xvfb.
+        selection = xlib.XInternAtom(display, b"_NET_WM_CM_S0", False)
+        deadline = time.monotonic() + TIMEOUT_S
+        while True:
+            if xlib.XGetSelectionOwner(display, selection):
+                return True
+            if time.monotonic() >= deadline:
+                return False
+            time.sleep(0.1)
+    finally:
+        xlib.XCloseDisplay(display)
+
+
+if __name__ == "__main__":
+    name = sys.argv[1] if len(sys.argv) > 1 else os.environ.get("DISPLAY", ":1")
+    sys.exit(0 if compositor_present(name) else 1)
