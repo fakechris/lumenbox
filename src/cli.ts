@@ -73,7 +73,10 @@ async function cmdBoxBuild(): Promise<number> {
 }
 
 async function cmdBoxUp(argv: string[]): Promise<number> {
-  const manager = new BoxManager(boxConfig());
+  // --with-host puts the orchestrator in the container: the production shape, where the
+  // only thing outside the box is a browser. Without it the box is driven from here.
+  const withHost = argv.includes("--with-host");
+  const manager = new BoxManager(boxConfig({ withHost }));
   const { status } = await manager.up({
     recreate: argv.includes("--recreate"),
     onOutput: line => out(dim(line)),
@@ -81,8 +84,14 @@ async function cmdBoxUp(argv: string[]): Promise<number> {
   out("");
   out(`${bold("Box running")} (${status.containerName})`);
   if (status.boxdUrl) out(`  daemon:  ${status.boxdUrl}`);
-  out("");
-  out("Each agent gets its own desktop inside the box. Run `agentbox web` to see them.");
+  if (withHost) {
+    out(`  web UI:  http://127.0.0.1:7777`);
+    out("");
+    out("The orchestrator runs inside the box. Nothing here drives it.");
+  } else {
+    out("");
+    out("Each agent gets its own desktop inside the box. Run `agentbox web` to see them.");
+  }
   return 0;
 }
 
@@ -312,7 +321,13 @@ function makeRenderer() {
 }
 
 /** Flags that consume the following argument. */
-const VALUE_FLAGS = new Set(["--provider", "--model", "--effort", "--port"]);
+const VALUE_FLAGS = new Set([
+  "--provider",
+  "--model",
+  "--effort",
+  "--port",
+  "--host",
+]);
 
 /**
  * Splits argv into flags and positionals.
@@ -459,6 +474,13 @@ async function cmdWeb(argv: string[]): Promise<number> {
   const portFlag = flags.get("--port");
   const port = typeof portFlag === "string" ? Number(portFlag) : 7777;
 
+  // Loopback by default, because the UI has no authentication and the assumption has
+  // always been that anything able to reach it can already drive the agents. Overridable
+  // for the case that changes it: inside the box, where the container's own loopback is
+  // not reachable from anywhere and Docker publishes the port to the host's instead.
+  const hostFlag = flags.get("--host");
+  const host = typeof hostFlag === "string" ? hostFlag : "127.0.0.1";
+
   let provider: ProviderProfile;
   try {
     provider = resolveProvider(
@@ -493,6 +515,7 @@ async function cmdWeb(argv: string[]): Promise<number> {
   try {
     await startWebServer({
       port,
+      host,
       provider,
       useBox: !flags.has("--no-box"),
       onLog: line => out(dim(line)),
@@ -526,6 +549,7 @@ Usage: agentbox <command> [args]
 Box:
   box build                 Build the box image (needs \`npm run build:boxd\` first)
   box up [--recreate]       Start the box and wait for its desktop
+             --with-host    also run the orchestrator inside it (web UI on 7777)
   box status                Show container state, ports, and health
   box down [--rm]           Stop the box, optionally removing the container
   box logs [--tail N]       Container logs

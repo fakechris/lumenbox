@@ -22,6 +22,13 @@ export const DEFAULT_IMAGE = "agentbox/box:latest";
 export const DEFAULT_CONTAINER = "agentbox-box";
 
 export interface BoxConfig {
+  /**
+   * Run the orchestrator inside the box, instead of on this machine.
+   *
+   * The production shape: the only thing outside the container is a browser. Off by
+   * default, because a developer wants the orchestrator where their editor is.
+   */
+  withHost?: boolean;
   containerName: string;
   image: string;
   /** Host port for the daemon. 0 lets Docker pick an ephemeral one. */
@@ -91,6 +98,7 @@ export function defaultBoxConfig(overrides: Partial<BoxConfig> = {}): BoxConfig 
     displayWidth: Number(process.env.AGENTBOX_WIDTH ?? 1280),
     displayHeight: Number(process.env.AGENTBOX_HEIGHT ?? 800),
     runArgs: [],
+    withHost: process.env.AGENTBOX_HOST_ENABLED === "1",
     ...overrides,
   };
 }
@@ -163,6 +171,34 @@ export interface BoxStatus {
   /** Host-side URL for the daemon, once the port mapping is known. */
   boxdUrl?: string;
   health?: string;
+}
+
+/**
+ * The credentials the in-box orchestrator needs, passed through from this environment.
+ *
+ * Only the ones that are actually set, so the container's environment does not fill up
+ * with empty strings that then look like a configured provider with a blank key.
+ *
+ * These land in the container, which is the honest cost of running the orchestrator in
+ * here: `box` has passwordless sudo, so an agent that goes looking can find them. The uid
+ * split keeps them out of the agent's way rather than out of its reach; putting them
+ * behind a relay is what would make that a boundary.
+ */
+function hostCredentialArgs(): string[] {
+  const names = [
+    "ANTHROPIC_API_KEY",
+    "MINIMAX_CODE_CN_API_KEY",
+    "AGENTBOX_API_KEY",
+    "AGENTBOX_BASE_URL",
+    "AGENTBOX_MODEL",
+    "AGENTBOX_PROVIDER",
+    "AGENTBOX_KEY_ENV",
+    "AGENTBOX_AUTH",
+  ];
+  return names.flatMap(name => {
+    const value = process.env[name];
+    return value ? ["--env", `${name}=${value}`] : [];
+  });
 }
 
 export class BoxManager {
@@ -283,6 +319,22 @@ export class BoxManager {
       `${config.containerName}-work:/home/box/work`,
       "--volume",
       `${config.containerName}-config:/home/box/.config`,
+      ...(config.withHost
+        ? [
+            // The orchestrator's own state — transcripts, agent profiles, owner tokens —
+            // on its own volume, so it outlives the container like the agents' work does.
+            "--volume",
+            `${config.containerName}-hostd:/home/hostd/.agentbox`,
+            "--env",
+            "AGENTBOX_HOST_ENABLED=1",
+            // Published to loopback only. The UI has no authentication — the assumption
+            // has always been that anything able to reach it can already drive the
+            // agents — so it must not be reachable from the network.
+            "--publish",
+            "127.0.0.1:7777:7777",
+            ...hostCredentialArgs(),
+          ]
+        : []),
       ...config.runArgs,
       config.image,
     ];

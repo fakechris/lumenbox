@@ -56,9 +56,25 @@ function sessionKey(raw: string | undefined): string | undefined {
  */
 export function withoutBoxToken(env: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
   const copy = { ...env };
-  delete copy.BOXD_TOKEN;
+  for (const name of SCRUBBED_ENV) delete copy[name];
   return copy;
 }
+
+/**
+ * Credentials no agent shell has a reason to see.
+ *
+ * The model API keys matter once the orchestrator runs inside the box: they would
+ * otherwise be in the environment of every command an agent runs. Named explicitly
+ * rather than matched by pattern, so a token the user deliberately put in the box for
+ * the agent to use — a GitHub token, say — still reaches it.
+ */
+export const SCRUBBED_ENV = [
+  "BOXD_TOKEN",
+  "ANTHROPIC_API_KEY",
+  "MINIMAX_CODE_CN_API_KEY",
+  "AGENTBOX_API_KEY",
+  "AGENTBOX_TOKEN",
+];
 
 function wrapForSession(command: string, key: string, explicitCwd?: string): string {
   const cwdFile = `/tmp/boxd-session-${key}.cwd`;

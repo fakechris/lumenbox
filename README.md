@@ -128,6 +128,40 @@ Every optional capability defaults **off**, because a wrong "yes" fails silently
 while a wrong "no" only costs a feature and says so. Opt in once you have checked:
 `AGENTBOX_VISION=1`, `AGENTBOX_CACHING=1`, `AGENTBOX_THINKING=1`, `AGENTBOX_EFFORT=1`.
 
+## Where the orchestrator runs
+
+Two topologies, one image.
+
+**Driven from outside** (`agentbox box up`) is the developer's shape: the box runs the
+desktop and the daemon, and the orchestrator runs wherever your editor is. The turn loop
+reaches the box over its published port.
+
+**Self-contained** (`agentbox box up --with-host`) is the production shape: the
+orchestrator runs inside the box too, reaching the daemon over loopback, and the only thing
+outside the container is a browser. The web UI is published to `127.0.0.1:7777`, the
+orchestrator's own state lives on its own volume, and nothing on the host machine runs any
+of this code. Verified with no orchestrator process on the host at all: the UI answers, the
+desktops proxy, and an agent ran a turn — shell, screenshot and transcript — entirely
+inside the container.
+
+That second shape is why the container has two users. `box` is the agent: its shell, its
+desktop, its browser, and everything it creates has to be box-owned. `hostd` is the
+orchestrator, so its transcripts, the desktop-owner tokens and the model credential are not
+lying in the agent's home directory. The entrypoint runs as root only long enough to drop
+privileges for each service.
+
+Be exact about what the split buys: `box` has passwordless sudo, so an agent that decides
+to read hostd's files can, and this was checked rather than assumed — a direct read gets
+`Permission denied`, and `sudo cat` gets the file. What it removes is the accidental case,
+and it puts the seam where it needs to be for the day the model credential moves behind a
+relay and the boundary becomes real. Until then, running the orchestrator in the box means
+the credential is in the box.
+
+One consequence worth knowing: with the orchestrator inside, the owner tokens are inside
+too, so `box shot` and the smoke test — which run out here — can no longer present a claim
+for an agent's desktop. That is the right way round (the box holds its own secrets), and it
+means the CLI is a tool for the developer topology.
+
 ## Where the box comes from
 
 The orchestrator needs two things about a box: a URL and a token. It does not need to know

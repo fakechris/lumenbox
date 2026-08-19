@@ -43,9 +43,21 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
       chromium chromium-sandbox \
     && rm -rf /var/lib/apt/lists/*
 
-# 5. An unprivileged user. The agent has sudo — it is expected to install things —
-#    but the container boundary, not the user boundary, is what contains it.
-RUN useradd --create-home --shell /bin/bash --uid 1000 box \
+# 5. Two unprivileged users, not one.
+#
+#    `box` is the agent: its shell, its desktop, its browser. It has sudo, because
+#    installing something it needs is expected.
+#
+#    `hostd` is the orchestrator, when it runs in here rather than on someone's laptop. It
+#    is a separate uid so its state — transcripts, the desktop-owner tokens, the model
+#    credential — is not simply lying in the agent's own home directory.
+#
+#    Worth being exact about what that does and does not buy: `box` has passwordless sudo,
+#    so an agent that decides to read hostd's files can. What the split removes is the
+#    accidental case, and it makes the intent explicit for the day the credential moves
+#    behind a relay and the boundary becomes real.
+RUN useradd --create-home --shell /usr/sbin/nologin --uid 1001 hostd \
+    && useradd --create-home --shell /bin/bash --uid 1000 box \
     && echo "box ALL=(ALL) NOPASSWD:ALL" > /etc/sudoers.d/box \
     && chmod 0440 /etc/sudoers.d/box \
     && mkdir -p /home/box/work /opt/boxd \
@@ -56,6 +68,10 @@ RUN useradd --create-home --shell /bin/bash --uid 1000 box \
 
 # 6. The daemon bundle, built by `npm run build:boxd`, plus the browser wrapper.
 COPY boxd.cjs /opt/boxd/boxd.cjs
+# The orchestrator, bundled with its dependencies because there is no node_modules in
+# here, plus the browser build the web UI serves for the same reason.
+COPY hostd.mjs /opt/hostd/hostd.mjs
+COPY markdown-it.js /opt/hostd/vendor/markdown-it.js
 COPY entrypoint.sh /usr/local/bin/entrypoint.sh
 COPY start-display /usr/local/bin/start-display
 COPY box-chrome /usr/local/bin/box-chrome
@@ -88,7 +104,8 @@ RUN mkdir -p /etc/chromium/policies/managed \
       '  "MetricsReportingEnabled": false' \
       '}' > /etc/chromium/policies/managed/agentbox.json
 
-EXPOSE 1337
+# 1337 is the daemon; 7777 is the web UI when the orchestrator runs in here.
+EXPOSE 1337 7777
 
 # 7. A desktop a person would recognise.
 #
@@ -184,12 +201,13 @@ RUN mkdir -p /home/box/Desktop /home/box/.config/pcmanfm/default \
     && mkdir -p /usr/local/share/agentbox/skel \
     && cp -a /home/box/Desktop /home/box/.config /usr/local/share/agentbox/skel/
 
-# Run the desktop and the daemon as the unprivileged user. Nothing in the stack
-# needs root — Xvfb, xfwm4, x11vnc, websockify, and node all run fine as `box` —
-# and leaving it as root means every file the agent creates lands root-owned,
-# which breaks the browser profile in confusing ways. The agent still has
-# passwordless sudo for the cases that genuinely need it.
-USER box
+# The entrypoint runs as root and drops privileges per process: the desktop and the
+# daemon to `box`, the orchestrator to `hostd`. Nothing stays root.
+#
+# This is a change from running the whole container as `box`, and the reason that mattered
+# still holds — every file the agent creates must be box-owned, or its browser profile
+# breaks in confusing ways. setpriv in the entrypoint is what preserves that while making
+# a second uid possible at all.
 WORKDIR /home/box/work
 
 HEALTHCHECK --interval=10s --timeout=5s --start-period=45s --retries=6 \

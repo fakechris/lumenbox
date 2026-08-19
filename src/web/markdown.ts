@@ -18,7 +18,9 @@
  * whatever a CDN answers with.
  */
 
+import { existsSync } from "node:fs";
 import { createRequire } from "node:module";
+import { join } from "node:path";
 
 /**
  * The options the page runs with. Exported because they are the security boundary —
@@ -39,7 +41,18 @@ export const MARKDOWN_OPTIONS = {
  */
 export const VENDOR_MARKDOWN_IT = "markdown-it/browser";
 
-/** Absolute path to a vendored browser build, for the server to read and serve. */
+/**
+ * Absolute path to a vendored browser build, for the server to read and serve.
+ *
+ * AGENTBOX_VENDOR_DIR first, because the box has no node_modules: when the host runs
+ * inside the box image it is a single bundled file, and the browser build is copied in
+ * beside it. On a developer's machine the module resolution is the right answer.
+ */
 export function vendorPath(spec: string = VENDOR_MARKDOWN_IT): string {
+  const dir = process.env.AGENTBOX_VENDOR_DIR;
+  if (dir) {
+    const copied = join(dir, "markdown-it.js");
+    if (existsSync(copied)) return copied;
+  }
   return createRequire(import.meta.url).resolve(spec);
 }
