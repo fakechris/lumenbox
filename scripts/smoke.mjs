@@ -85,6 +85,23 @@ await check("the CUA toolchain is present", async () => {
   return "xdotool ffmpeg xrandr xmodmap xdpyinfo box-chrome";
 });
 
+await check("each desktop gets its own browser profile", async () => {
+  // One shared profile is how an agent's browser window ends up on another agent's
+  // screen: Chromium permits a single instance per profile directory, so the second
+  // agent's launch is answered by the first agent's process. The wrapper keys the
+  // profile to DISPLAY; this checks two desktops really do get two directories.
+  const probe =
+    "rm -rf /home/box/.config/box-chrome-8 /home/box/.config/box-chrome-9; " +
+    "DISPLAY=:8 box-chrome --version >/dev/null 2>&1; " +
+    "DISPLAY=:9 box-chrome --version >/dev/null 2>&1; " +
+    "ls -d /home/box/.config/box-chrome-8 /home/box/.config/box-chrome-9 2>&1; " +
+    "rm -rf /home/box/.config/box-chrome-8 /home/box/.config/box-chrome-9";
+  const result = await box.exec(probe);
+  assert(result.stdout.includes("box-chrome-8"), `no profile for :8 — ${result.stdout}`);
+  assert(result.stdout.includes("box-chrome-9"), `no profile for :9 — ${result.stdout}`);
+  return "one profile per display";
+});
+
 await check("desktop launchers launch instead of prompting", async () => {
   // Without libfm's quick_exec, activating a launcher opens an "Execute File"
   // dialog rather than starting anything. It fails quietly: the icons still draw,

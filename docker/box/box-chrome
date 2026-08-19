@@ -9,11 +9,23 @@
 # point and the prompt points at it.
 set -euo pipefail
 
-PROFILE="${CHROME_PROFILE:-$HOME/.config/box-chrome}"
+# A profile per desktop, because a profile per box is a profile shared between
+# agents. Chromium allows one instance per profile directory and refuses the second
+# by way of the lock below — so with one shared profile, two agents browsing at once
+# either fight over the lock or, once it is cleared, run rival instances writing the
+# same profile. Windows then open wherever the surviving instance is connected, which
+# is another agent's screen. DISPLAY is what tells the agents apart, so it keys this.
+DESKTOP="$(printf '%s' "${DISPLAY:-:0}" | tr -cd '0-9')"
+PROFILE="${CHROME_PROFILE:-$HOME/.config/box-chrome-${DESKTOP:-0}}"
 mkdir -p "$PROFILE"
 
 # A profile left locked by a killed browser makes every later launch fail silently.
-rm -f "$PROFILE"/Singleton{Lock,Cookie,Socket} 2>/dev/null || true
+# Only clear the lock when nothing holds it: a live instance must keep its own, or a
+# second launch on the same desktop starts a rival instance instead of handing the
+# URL to the window already open there.
+if ! pgrep -f -- "--user-data-dir=$PROFILE" >/dev/null 2>&1; then
+  rm -f "$PROFILE"/Singleton{Lock,Cookie,Socket} 2>/dev/null || true
+fi
 
 exec chromium \
   --user-data-dir="$PROFILE" \
