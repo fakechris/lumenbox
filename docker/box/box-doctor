@@ -1,0 +1,209 @@
+#!/usr/bin/env bash
+# Box self-check: the things that break quietly and turn a real failure into a vague one.
+#
+# Every check here exists because that failure actually happened and cost time to find. A
+# missing CJK font is a screen of empty rectangles the model reads as a page. A GTK file
+# chooser taller than the screen puts Open below the bottom edge, and computer-use reports
+# that nothing happened. A dead x11vnc leaves X, the agent and the screenshots all working
+# while the user's screen is frozen. None of those announce themselves.
+#
+# Two audiences. A person runs it through `box exec box-doctor`. The agent runs it through
+# its own shell when something is wrong with its computer — which is why it prints one
+# line per check and a summary, rather than needing anything parsed.
+#
+# Deliberately dependency-light: coreutils and the tools the box already ships. Never
+# aborts early — every check runs, so the summary is complete — and exits non-zero if
+# anything FAILed, so a caller can gate on it.
+set -uo pipefail
+
+N="${1:-${DISPLAY:-:1}}"
+N="${N#:}"
+N="${N%%.*}"
+DISP=":${N}"
+export DISPLAY="${DISP}"
+
+PASSED=0
+FAILED=0
+WARNED=0
+FAILURES=()
+
+pass() {
+  PASSED=$((PASSED + 1))
+  printf '[box-doctor] PASS %s: %s\n' "$1" "$2"
+}
+fail() {
+  FAILED=$((FAILED + 1))
+  FAILURES+=("$1")
+  printf '[box-doctor] FAIL %s: %s\n' "$1" "$2"
+}
+# Something is degraded but the box still works. Reported, not counted as failure: a box
+# running without a compositor is a box that lost translucency, not a broken one.
+warn() {
+  WARNED=$((WARNED + 1))
+  printf '[box-doctor] WARN %s: %s\n' "$1" "$2"
+}
+
+listening() {
+  (exec 3<>"/dev/tcp/127.0.0.1/$1") 2>/dev/null && { exec 3<&- 2>/dev/null; return 0; }
+  return 1
+}
+
+# ── the display ───────────────────────────────────────────────────────────────────
+if geometry=$(xdpyinfo -display "${DISP}" 2>/dev/null | awk '/dimensions:/ {print $2}'); then
+  if [ -n "${geometry}" ]; then
+    want="${DISPLAY_WIDTH:-1280}x${DISPLAY_HEIGHT:-800}"
+    if [ "${geometry}" = "${want}" ]; then
+      pass display "${DISP} at ${geometry}"
+    else
+      # Not a failure: a resized display is legitimate. But coordinate scaling is derived
+      # from it, so a mismatch with the configured size is worth seeing.
+      warn display "${DISP} is ${geometry}, configured for ${want}"
+    fi
+  else
+    fail display "${DISP} answers but reports no dimensions"
+  fi
+else
+  fail display "no X server on ${DISP} — nothing else on this list can work"
+fi
+
+# ── the window manager ────────────────────────────────────────────────────────────
+# Without one, dialogs open unmapped and keyboard focus never lands, so typing silently
+# goes nowhere: the most confusing failure in the box.
+if wm=$(wmctrl -m 2>/dev/null | awk '/^Name:/ {print $2}'); then
+  [ -n "${wm}" ] && pass window-manager "${wm}" || fail window-manager "none is running"
+else
+  fail window-manager "none is running — dialogs will never take focus"
+fi
+
+# ── the compositor ────────────────────────────────────────────────────────────────
+if WAIT_COMPOSITOR_TIMEOUT=1 wait-compositor "${DISP}" > /dev/null 2>&1; then
+  pass compositor "a compositor owns ${DISP}"
+else
+  warn compositor "none on ${DISP} — the dock loses translucency, nothing else changes"
+fi
+
+# ── what the user looks through ───────────────────────────────────────────────────
+if listening "$((5900 + N))"; then
+  pass vnc "x11vnc on $((5900 + N))"
+else
+  fail vnc "nothing on $((5900 + N)) — the desktop cannot be viewed"
+fi
+if listening "$((6080 + N))"; then
+  pass novnc "websockify on $((6080 + N))"
+else
+  fail novnc "nothing on $((6080 + N)) — the browser cannot reach the desktop"
+fi
+
+# ── capture ───────────────────────────────────────────────────────────────────────
+# Decoded rather than trusted: ffmpeg cannot seek in a pipe, so it leaves the container
+# sizes at zero and boxd patches them. A capture that "works" and produces a file every
+# decoder rejects is exactly the shape of that bug.
+shot="$(mktemp -t box-doctor-XXXXXX.webp)"
+if ffmpeg -hide_banner -loglevel error -f x11grab -video_size "${DISPLAY_WIDTH:-1280}x${DISPLAY_HEIGHT:-800}" \
+  -i "${DISP}" -frames:v 1 -y "${shot}" 2>/dev/null && [ -s "${shot}" ]; then
+  if ffprobe -v error -select_streams v:0 -show_entries stream=width -of csv=p=0 "${shot}" \
+    > /dev/null 2>&1; then
+    pass screenshot "$(stat -c %s "${shot}") bytes, decodes"
+  else
+    fail screenshot "captured $(stat -c %s "${shot}") bytes that no decoder accepts"
+  fi
+else
+  fail screenshot "ffmpeg could not capture ${DISP}"
+fi
+rm -f "${shot}"
+
+# ── input ─────────────────────────────────────────────────────────────────────────
+if pointer=$(xdotool getmouselocation 2>/dev/null); then
+  pass input "xdotool reachable (${pointer})"
+else
+  fail input "xdotool cannot talk to ${DISP} — no clicks or keystrokes will land"
+fi
+
+# ── fonts ─────────────────────────────────────────────────────────────────────────
+# The silent one: the page loads, the screenshot succeeds, and the model reads a grid of
+# empty rectangles where the text was.
+if matched=$(fc-match "sans-serif:lang=zh-cn" 2>/dev/null) && \
+  printf '%s' "${matched}" | grep -qiE 'cjk|noto|wenquanyi'; then
+  pass fonts "CJK renders (${matched%%:*})"
+else
+  fail fonts "no CJK font — Chinese, Japanese and Korean will be empty boxes"
+fi
+
+# ── clipboard ─────────────────────────────────────────────────────────────────────
+if command -v xclip > /dev/null 2>&1; then
+  if pgrep -x autocutsel > /dev/null 2>&1; then
+    pass clipboard "xclip present, autocutsel syncing both selections"
+  else
+    warn clipboard "autocutsel is not running — a copy may not paste between applications"
+  fi
+else
+  fail clipboard "xclip is missing"
+fi
+
+# ── the browser ───────────────────────────────────────────────────────────────────
+if command -v box-chrome > /dev/null 2>&1 && chromium --version > /dev/null 2>&1; then
+  pass chrome "$(chromium --version 2>/dev/null)"
+else
+  fail chrome "chromium or the box-chrome wrapper is missing"
+fi
+if grep -q '"CommandLineFlagSecurityWarningsEnabled": false' \
+  /etc/chromium/policies/managed/*.json 2>/dev/null; then
+  pass chrome-policy "the unsupported-flag infobar is suppressed"
+else
+  warn chrome-policy "the flag infobar will appear and cover page content"
+fi
+
+# ── the traps that only show up mid-task ──────────────────────────────────────────
+# GTK3 ignores max-height on a toplevel, so this dconf value is the only thing standing
+# between an upload dialog and its buttons being off-screen.
+chooser="$(dconf read /org/gtk/settings/file-chooser/window-size 2>/dev/null)"
+if [ "${chooser}" = "(1100, 680)" ]; then
+  pass file-chooser "sized to fit the screen"
+else
+  fail file-chooser "size is ${chooser:-unset}; Open and Cancel will fall off the bottom"
+fi
+
+if grep -q '^quick_exec=1' "${HOME:-/home/box}/.config/libfm/libfm.conf" 2>/dev/null; then
+  pass launchers "activate directly instead of asking"
+else
+  warn launchers "double-clicking a desktop icon will open a dialog instead of launching"
+fi
+
+# ── the daemon, and the orchestrator if it lives here ─────────────────────────────
+if curl -fsS --max-time 5 http://127.0.0.1:1337/health > /dev/null 2>&1; then
+  pass boxd "answering on 1337"
+else
+  fail boxd "not answering on 1337 — nothing outside can drive this box"
+fi
+
+if [ "${AGENTBOX_HOST_ENABLED:-0}" = "1" ]; then
+  if listening 7777; then
+    pass orchestrator "web UI on 7777"
+  else
+    fail orchestrator "enabled but nothing is listening on 7777"
+  fi
+fi
+
+# ── room to work ──────────────────────────────────────────────────────────────────
+# A full volume breaks everything downstream in ways that read as unrelated bugs.
+avail_kb=$(df -Pk /home/box/work 2>/dev/null | awk 'NR==2 {print $4}')
+if [ -n "${avail_kb}" ]; then
+  avail_mb=$((avail_kb / 1024))
+  if [ "${avail_mb}" -lt 200 ]; then
+    fail disk "only ${avail_mb}MB free on /home/box/work"
+  elif [ "${avail_mb}" -lt 1024 ]; then
+    warn disk "${avail_mb}MB free on /home/box/work"
+  else
+    pass disk "${avail_mb}MB free on /home/box/work"
+  fi
+else
+  warn disk "could not read free space for /home/box/work"
+fi
+
+printf '[box-doctor] SUMMARY %s passed, %s failed, %s warned' "${PASSED}" "${FAILED}" "${WARNED}"
+if [ "${FAILED}" -gt 0 ]; then
+  printf ' (%s)\n' "${FAILURES[*]}"
+  exit 1
+fi
+printf '\n'
+exit 0

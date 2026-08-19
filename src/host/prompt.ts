@@ -48,6 +48,11 @@ process group when a command returns — so a bare \`xclip\` copy is empty a sec
 The wrapper detaches the owner. The user can read and write the same clipboard from
 outside the box, so this is also how you hand them a value they need.
 
+When something about your computer seems wrong — a click that does nothing, a screenshot
+that looks empty, a browser that will not start — run \`box-doctor\` before guessing. It
+checks the handful of things that fail silently in here and prints one line each, so you
+find out which part is broken instead of working around the symptom.
+
 You have \`sudo\` without a password. Installing a package you need is expected, not a
 last resort.
 

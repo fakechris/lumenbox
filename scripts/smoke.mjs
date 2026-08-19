@@ -159,6 +159,26 @@ await check("a human-usable terminal and file manager are installed", async () =
   return "xfce4-terminal, thunar, wallpaper";
 });
 
+await check("the box can diagnose itself", async () => {
+  // The point is that an agent can run this over its own shell when its computer misbehaves,
+  // instead of working around a symptom. Both directions are asserted: a healthy box passes,
+  // and a broken one fails with a non-zero exit — otherwise this could silently become a
+  // script that always says everything is fine.
+  const healthy = await box.exec("box-doctor");
+  assert(healthy.exit_code === 0, `a healthy box failed its own check:\n${healthy.stdout}`);
+  assert(/SUMMARY \d+ passed, 0 failed/.test(healthy.stdout), healthy.stdout);
+
+  // Broken and checked in one command, because the supervisor repairs things within a tick.
+  const broken = await box.exec(
+    "dbus-run-session -- dconf reset /org/gtk/settings/file-chooser/window-size; box-doctor"
+  );
+  assert(broken.exit_code !== 0, "a broken box reported success");
+  assert(/FAIL file-chooser/.test(broken.stdout), broken.stdout);
+
+  const checks = (healthy.stdout.match(/^\[box-doctor\] (PASS|WARN|FAIL)/gm) ?? []).length;
+  return `${checks} checks, passes clean and fails dirty`;
+});
+
 await check("health reports each component, not just ok", async () => {
   // "ok" was not a useful answer on its own: a desktop whose compositor has been given up
   // on still serves a screen and one whose x11vnc is crash-looping does not, and both used
