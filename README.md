@@ -258,6 +258,27 @@ The events themselves are in `~/.agentbox/activity.jsonl`, one per line with the
 they happened, so the feed survives a restart of the server and not just a reload of
 the page. Delete the file to clear the feed.
 
+### When something dies unwatched
+
+PID 1 is `box-init` rather than tini, for one reason: only PID 1 sees an orphan die, and
+tini reaped every one of them and discarded the status. Everything unsupervised in the box
+dies as an orphan — a browser the agent started and abandoned, a binary it installed and ran,
+a helper that setsid'd away from its parent — so a process crash-looping in here was
+invisible. No log line, no counter, nothing to point at when the box "felt broken".
+
+`box-init` does tini's job and keeps the answer: reap, name the process from a cache sampled
+just before it died, and record one entry per (process, signal) per minute, so a crash loop
+is one line with a count instead of thousands. `/health` carries the recent ones. It starts
+and restarts nothing — supervision belongs to the entrypoint and to boxd, and a watcher that
+also acted would be a second opinion about who owns a process.
+
+Replacing tini is worth being careful with, and it earned that: it surfaced a latent bug in
+the entrypoint's own signal trap. `kill 0` includes the sender, so with the handler still
+installed the shell re-entered itself once per signal until bash blew its stack — an ordinary
+`docker stop` exited 139. It had been masked for weeks by PID 1 sharing the process group.
+The trap now ignores the signal for itself before signalling the group, and a stop takes two
+seconds and exits 0.
+
 ### Who gets the CPU
 
 A box shares one CPU allowance between two workloads that want different things: the

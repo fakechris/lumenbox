@@ -1,0 +1,227 @@
+#!/usr/bin/env python3
+"""PID 1: reaps orphans, and writes down what killed them.
+
+Only PID 1 sees the death of an orphan. Everything unsupervised in this box dies there —
+the browser an agent started and abandoned, a binary it installed and ran, a helper that
+setsid'd away from its parent — and tini reaped all of it and discarded the status. So a
+process crash-looping inside the box was invisible: no log line, no counter, nothing to
+point at when the box "felt broken".
+
+This does tini's job and keeps the answer. Reap, name the process from a cache sampled just
+before it died, and append one record per distinct (name, signal) per window, so a crash
+loop is one line with a count instead of thousands.
+
+Observe-only. It starts nothing and restarts nothing: supervision belongs to the entrypoint
+for the services and to boxd for the desktop, and a watcher that also acted would be a
+second opinion about who owns a process.
+"""
+
+import errno
+import json
+import os
+import signal
+import sys
+import time
+
+CRASH_LOG = os.environ.get("BOX_CRASH_LOG", "/tmp/agentbox-crashes.jsonl")
+SAMPLE_INTERVAL_S = float(os.environ.get("BOX_CRASH_SAMPLE_S", "2"))
+# One record per signature per window, so a crash loop does not fill the disk.
+AGGREGATE_WINDOW_S = float(os.environ.get("BOX_CRASH_WINDOW_S", "60"))
+
+FATAL_SIGNALS = {
+    signal.SIGSEGV: "SIGSEGV",
+    signal.SIGABRT: "SIGABRT",
+    signal.SIGBUS: "SIGBUS",
+    signal.SIGFPE: "SIGFPE",
+    signal.SIGILL: "SIGILL",
+    signal.SIGKILL: "SIGKILL",
+    signal.SIGSYS: "SIGSYS",
+    signal.SIGXCPU: "SIGXCPU",
+    signal.SIGXFSZ: "SIGXFSZ",
+}
+
+# pid -> (name, uid). Sampled, because a dead process has no /proc entry: by the time a
+# status is reaped, the only way to know what it was is to have looked earlier.
+known: dict[int, tuple[str, str]] = {}
+# signature -> [first_seen, count_since_last_write, last_written]
+seen: dict[str, list] = {}
+# signature -> uid, so a flushed count can still say who was running it.
+pending_uid: dict[str, str] = {}
+
+
+def sample_processes() -> None:
+    live = set()
+    try:
+        entries = os.listdir("/proc")
+    except OSError:
+        return
+
+    for entry in entries:
+        if not entry.isdigit():
+            continue
+        pid = int(entry)
+        live.add(pid)
+        if pid in known:
+            continue
+        try:
+            with open(f"/proc/{pid}/comm", encoding="utf-8", errors="replace") as handle:
+                name = handle.read().strip()
+            uid = "?"
+            with open(f"/proc/{pid}/status", encoding="utf-8", errors="replace") as handle:
+                for line in handle:
+                    if line.startswith("Uid:"):
+                        uid = line.split()[1]
+                        break
+        except OSError:
+            continue
+        known[pid] = (name, uid)
+
+    # Forget pids that are gone, or this grows for the life of the box.
+    for pid in [pid for pid in known if pid not in live]:
+        known.pop(pid, None)
+
+
+def describe(status: int) -> tuple[str, str]:
+    """Returns (kind, detail) for a wait status."""
+    if os.WIFSIGNALED(status):
+        number = os.WTERMSIG(status)
+        return "signal", FATAL_SIGNALS.get(number, f"signal {number}")
+    if os.WIFEXITED(status):
+        code = os.WEXITSTATUS(status)
+        return ("exit", f"exit {code}") if code != 0 else ("clean", "exit 0")
+    return "unknown", f"status {status}"
+
+
+def record(pid: int, status: int) -> None:
+    kind, detail = describe(status)
+    # A clean exit is not news. An orphan exiting non-zero might be, and a fatal signal
+    # almost always is.
+    if kind == "clean":
+        return
+
+    name, uid = known.get(pid, ("unknown", "?"))
+    signature = f"{name}:{detail}"
+    pending_uid[signature] = uid
+    now = time.time()
+    entry = seen.get(signature)
+
+    if entry is None:
+        seen[signature] = [now, 1, now]
+        write(name, uid, kind, detail, 1, now)
+        return
+
+    entry[1] += 1
+    # Inside the window: count it and stay quiet. Past it: one line with the total.
+    if now - entry[2] >= AGGREGATE_WINDOW_S:
+        write(name, uid, kind, detail, entry[1], now)
+        entry[2] = now
+        entry[1] = 0
+
+
+def flush_pending() -> None:
+    """Writes out counts whose window has passed.
+
+    Without this a burst that stops inside the window is never written at all: the count sat
+    in memory waiting for a next occurrence that never came, so twenty crashes in ten
+    seconds left an empty log — which is precisely the case this file exists for.
+    """
+    now = time.time()
+    for signature, entry in seen.items():
+        if entry[1] > 0 and now - entry[2] >= AGGREGATE_WINDOW_S:
+            name = signature.rsplit(":", 1)[0]
+            detail = signature.rsplit(":", 1)[1]
+            kind = "signal" if detail.startswith("SIG") else "exit"
+            write(name, pending_uid.get(signature, "?"), kind, detail, entry[1], now)
+            entry[2] = now
+            entry[1] = 0
+
+
+def write(name: str, uid: str, kind: str, detail: str, count: int, at: float) -> None:
+    line = json.dumps(
+        {
+            "at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(at)),
+            "process": name,
+            "uid": uid,
+            "kind": kind,
+            "detail": detail,
+            "count": count,
+        }
+    )
+    try:
+        with open(CRASH_LOG, "a", encoding="utf-8") as handle:
+            handle.write(f"{line}\n")
+    except OSError:
+        pass
+    # Also to the container log, which is where anyone looks first.
+    print(f"[box-init] {name} ({detail})" + (f" x{count}" if count > 1 else ""), flush=True)
+
+
+def main() -> int:
+    if len(sys.argv) < 2:
+        print("usage: box-init <command> [args...]", file=sys.stderr)
+        return 2
+
+    sample_processes()
+    child = os.fork()
+    if child == 0:
+        # Its own session, so signalling the entrypoint's group cannot signal PID 1. It
+        # can: PID 1 forked it, so without this they share a process group, and forwarding
+        # to that group sent SIGTERM back into this handler, which forwarded it again —
+        # recursion until the stack blew and the container exited 139 on a plain
+        # `docker stop`.
+        os.setsid()
+        os.execvp(sys.argv[1], sys.argv[1:])
+        return 127  # unreachable
+
+    # Forwarded to the entrypoint's whole session, which the setsid above made separate
+    # from this one: its children are in it, and a stop that reached only the entrypoint
+    # would leave the desktop running until the engine's timeout.
+    def forward(number, _frame):
+        try:
+            os.killpg(child, number)
+        except OSError:
+            try:
+                os.kill(child, number)
+            except OSError:
+                pass
+
+    for number in (signal.SIGTERM, signal.SIGINT, signal.SIGHUP, signal.SIGQUIT):
+        signal.signal(number, forward)
+
+    last_sample = 0.0
+    while True:
+        now = time.monotonic()
+        if now - last_sample >= SAMPLE_INTERVAL_S:
+            sample_processes()
+            last_sample = now
+
+        try:
+            # Non-blocking so the sampler keeps running; without a fresh cache an orphan
+            # that starts and dies between two waits has no name.
+            pid, status = os.waitpid(-1, os.WNOHANG)
+        except OSError as error:
+            if error.errno == errno.ECHILD:
+                # Nothing left to reap at all, which means the entrypoint is gone.
+                return 0
+            if error.errno == errno.EINTR:
+                continue
+            raise
+
+        if pid == 0:
+            flush_pending()
+            time.sleep(0.2)
+            continue
+
+        if pid == child:
+            kind, detail = describe(status)
+            print(f"[box-init] entrypoint exited ({detail})", flush=True)
+            if os.WIFSIGNALED(status):
+                return 128 + os.WTERMSIG(status)
+            return os.WEXITSTATUS(status)
+
+        record(pid, status)
+        known.pop(pid, None)
+
+
+if __name__ == "__main__":
+    sys.exit(main())

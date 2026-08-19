@@ -77,11 +77,12 @@ COPY start-display /usr/local/bin/start-display
 COPY box-chrome /usr/local/bin/box-chrome
 COPY box-clip /usr/local/bin/box-clip
 COPY box-doctor /usr/local/bin/box-doctor
+COPY box-init /usr/local/bin/box-init
 COPY wait-compositor /usr/local/bin/wait-compositor
 COPY vnc-probe /usr/local/bin/vnc-probe
 RUN chmod +x /usr/local/bin/entrypoint.sh /usr/local/bin/start-display \
       /usr/local/bin/box-chrome /usr/local/bin/box-clip \
-      /usr/local/bin/box-doctor \
+      /usr/local/bin/box-doctor /usr/local/bin/box-init \
       /usr/local/bin/wait-compositor \
       /usr/local/bin/vnc-probe
 
@@ -215,5 +216,9 @@ WORKDIR /home/box/work
 HEALTHCHECK --interval=10s --timeout=5s --start-period=45s --retries=6 \
   CMD curl -fsS http://127.0.0.1:1337/health > /dev/null || exit 1
 
-# tini reaps the desktop processes the entrypoint spawns.
-ENTRYPOINT ["/usr/bin/tini", "--", "/usr/local/bin/entrypoint.sh"]
+# box-init is PID 1 rather than tini, for one reason: only PID 1 sees an orphan die, and
+# tini reaped every one of them and discarded the status. Everything unsupervised in here
+# dies as an orphan — a browser the agent abandoned, a binary it installed and ran — so a
+# process crash-looping in the box was invisible. box-init does tini's job and keeps the
+# answer. It starts and restarts nothing.
+ENTRYPOINT ["/usr/local/bin/box-init", "/usr/local/bin/entrypoint.sh"]

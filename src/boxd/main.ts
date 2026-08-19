@@ -17,7 +17,7 @@ import {
   type ServerResponse,
 } from "node:http";
 import { connect as netConnect, type Socket } from "node:net";
-import { createReadStream, readdirSync, statSync } from "node:fs";
+import { createReadStream, readFileSync, readdirSync, statSync } from "node:fs";
 import { join } from "node:path";
 import { timingSafeEqual } from "node:crypto";
 import {
@@ -125,6 +125,31 @@ function send(res: ServerResponse, status: number, body: unknown): void {
   res.end(payload);
 }
 
+/** The crash log PID 1 keeps, newest last and bounded. */
+const CRASH_LOG = process.env.BOX_CRASH_LOG ?? "/tmp/agentbox-crashes.jsonl";
+const CRASH_LIMIT = 20;
+
+function recentCrashes(): HealthResult["crashes"] {
+  try {
+    return readFileSync(CRASH_LOG, "utf8")
+      .split("\n")
+      .filter(line => line.trim() !== "")
+      .slice(-CRASH_LIMIT)
+      .flatMap(line => {
+        try {
+          return [JSON.parse(line)];
+        } catch {
+          // A line written while the file was being appended to. One record is not worth
+          // failing a health check over.
+          return [];
+        }
+      });
+  } catch {
+    // No crashes recorded, or no log yet.
+    return [];
+  }
+}
+
 async function handleHealth(): Promise<HealthResult> {
   // Never block on a desktop coming up: shell and fs work without one, and the
   // container health check must not hang while Xvfb starts.
@@ -139,6 +164,7 @@ async function handleHealth(): Promise<HealthResult> {
     uptime_seconds: Math.round((Date.now() - startedAt) / 1000),
     displays: running,
     desktop_health: displays.health(),
+    crashes: recentCrashes(),
   };
 }
 

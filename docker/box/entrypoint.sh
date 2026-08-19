@@ -18,7 +18,21 @@ log() { printf '[box] %s\n' "$*"; }
 
 # docker stop sends SIGTERM here; without this the supervise loops would restart the
 # services being shut down and the stop would wait out its timeout.
-trap 'log "signal received; stopping"; kill 0 2>/dev/null || true; exit 0' TERM INT
+#
+# The shell ignores the signal for itself before signalling the group, because `kill 0`
+# includes the sender: with the handler still installed it re-entered itself once per
+# signal until bash blew its stack and the container exited 139 on an ordinary
+# `docker stop`. Only visible once PID 1 stopped sharing this process group, which is
+# how a latent bug in a trap survives for weeks.
+shutdown() {
+  trap '' TERM INT
+  log "signal received; stopping"
+  kill -TERM 0 2>/dev/null || true
+  # A moment for the services to close their sockets and finish their logs.
+  sleep 1
+  exit 0
+}
+trap shutdown TERM INT
 
 if [[ -z "${BOXD_TOKEN:-}" ]]; then
   log "FATAL: BOXD_TOKEN is not set. The daemon exposes shell access and refuses"

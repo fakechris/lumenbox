@@ -218,6 +218,21 @@ export interface HealthResult {
   resolution?: ResolutionConfig;
   refresh_rate?: number;
   uptime_seconds: number;
+  /**
+   * Processes that died in the box with nothing supervising them.
+   *
+   * Recorded by PID 1, which is the only thing that sees an orphan die. A browser the agent
+   * abandoned, or a binary it installed and ran crash-looping, used to leave no trace at
+   * all. Aggregated per (process, signal) so a crash loop is one entry with a count.
+   */
+  crashes?: readonly {
+    at: string;
+    process: string;
+    uid: string;
+    kind: string;
+    detail: string;
+    count: number;
+  }[];
   /** Desktops currently running. */
   /**
    * Per-component state for each desktop.

@@ -199,6 +199,26 @@ await check("the box can diagnose itself", async () => {
   return `${checks} checks, passes clean and fails dirty`;
 });
 
+await check("an unsupervised process that dies is seen", async () => {
+  // Only PID 1 sees an orphan die, and tini reaped every one and discarded the status — so a
+  // browser the agent abandoned, or a binary it installed and ran crash-looping, left no
+  // trace. The orphan has to outlive its parent to be one: killed inside the same command,
+  // the shell reaps it and PID 1 never hears about it, which is how the first version of
+  // this test measured nothing.
+  await box.exec(
+    "setsid sh -c 'sleep 3; kill -ABRT $$' >/dev/null 2>&1 </dev/null &",
+    { timeoutMs: 15_000 }
+  );
+  await new Promise(resolve => setTimeout(resolve, 8000));
+
+  const health = await box.health();
+  const abort = (health.crashes ?? []).find(entry => /SIGABRT/.test(entry.detail));
+  assert(abort, `no crash recorded: ${JSON.stringify(health.crashes)}`);
+  assert(abort.process === "sh", `recorded as ${abort.process}`);
+  assert(abort.uid !== "?", "the crash has no uid, so the process cache missed it");
+  return `${abort.process} ${abort.detail} (uid ${abort.uid})`;
+});
+
 await check("health reports each component, not just ok", async () => {
   // "ok" was not a useful answer on its own: a desktop whose compositor has been given up
   // on still serves a screen and one whose x11vnc is crash-looping does not, and both used
