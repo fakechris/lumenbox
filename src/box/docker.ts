@@ -334,6 +334,20 @@ export class BoxManager {
       // the box — the desktop ahead of the agent's work — and a wrong number here just
       // makes the agent slow for no reason. Set it when a box shares a machine.
       ...(process.env.AGENTBOX_CPUS ? ["--cpus", process.env.AGENTBOX_CPUS] : []),
+      // Egress, when a relay was named. host.docker.internal resolves on Docker Desktop
+      // already; the mapping is what makes the same name work on a Linux engine, so the
+      // relay address does not have to change per platform.
+      ...(process.env.AGENTBOX_EGRESS_RELAY
+        ? [
+            "--add-host",
+            "host.docker.internal:host-gateway",
+            "--env",
+            `AGENTBOX_EGRESS_RELAY=${process.env.AGENTBOX_EGRESS_RELAY}`,
+            ...(process.env.AGENTBOX_EGRESS_TOKEN
+              ? ["--env", `AGENTBOX_EGRESS_TOKEN=${process.env.AGENTBOX_EGRESS_TOKEN}`]
+              : []),
+          ]
+        : []),
       // Two named volumes, because everything else in the container is disposable and
       // these two things are not: what the agents made, and what they logged into.
       // Without them, `box up --recreate` — which is also what upgrading the image

@@ -12,6 +12,7 @@
 import { readFileSync, rmSync } from "node:fs";
 import { homedir } from "node:os";
 import { resolveBoxProvisioner } from "../src/box/provisioner.ts";
+import { startEgressRelay } from "../src/egress/relay.ts";
 import { DisplayLease } from "../src/box/display-lease.ts";
 import { AgentRegistry } from "../src/agents/registry.ts";
 import { AgentBus } from "../src/agents/bus.ts";
@@ -157,6 +158,60 @@ await check("a human-usable terminal and file manager are installed", async () =
   );
   assert(result.stdout.trim() === "", result.stdout.trim());
   return "xfce4-terminal, thunar, wallpaper";
+});
+
+await check("the box's traffic can leave through a relay", async () => {
+  // The point is which network the agent appears on: a box's own address is a datacentre one,
+  // which sites block, geofence or serve differently, and nothing on the user's network is
+  // reachable from it at all. Only meaningful when the box was started with a relay
+  // configured, so this reports rather than fails when it was not.
+  const configured = await box.exec("printenv AGENTBOX_EGRESS_RELAY || true");
+  const relayAddress = configured.stdout.trim();
+  if (!relayAddress) {
+    return "not configured; start the box with AGENTBOX_EGRESS_RELAY to cover this";
+  }
+
+  const port = Number(relayAddress.split(":").pop());
+  const marker = `egress-${Date.now()}`;
+  // A server on this machine's loopback, which the box cannot reach by any other route: if it
+  // arrives, the connection was opened from here.
+  const { createServer } = await import("node:http");
+  const origin = createServer((_req, res) => res.end(marker));
+  await new Promise(resolve => origin.listen(0, "127.0.0.1", resolve));
+  const originPort = origin.address().port;
+
+  const relay = startEgressRelay({
+    token: process.env.AGENTBOX_TOKEN ?? token,
+    port,
+    host: "0.0.0.0",
+    allow: [`127.0.0.1:${originPort}`],
+  });
+  await new Promise(resolve => setTimeout(resolve, 500));
+
+  try {
+    const direct = await box.exec(
+      `curl -s --max-time 4 http://127.0.0.1:${originPort}/ || true`
+    );
+    assert(
+      !direct.stdout.includes(marker),
+      "the box reached this machine's loopback directly, so the test proves nothing"
+    );
+
+    const through = await box.exec(
+      `curl -s --max-time 10 -x http://127.0.0.1:8791 http://127.0.0.1:${originPort}/ || true`
+    );
+    assert(through.stdout.includes(marker), `through the proxy: ${JSON.stringify(through.stdout)}`);
+
+    // And the allow list is not decoration.
+    const refused = await box.exec(
+      "curl -s -o /dev/null -w '%{http_code}' --max-time 10 -x http://127.0.0.1:8791 http://example.com/ || true"
+    );
+    assert(refused.stdout.trim() !== "200", `a target outside the allow list returned ${refused.stdout}`);
+    return "reached this machine's network, and only what was allowed";
+  } finally {
+    relay.close();
+    origin.close();
+  }
 });
 
 await check("the agent's work runs behind the desktop", async () => {

@@ -11,11 +11,13 @@ import { homedir } from "node:os";
 import {
   BoxManager,
   defaultBoxConfig,
+  loadBoxToken,
   resolveDockerHostAddress,
   uiToken,
   type BoxConfig,
 } from "./box/docker.ts";
 import { AgentRegistry, defaultAgentsRoot } from "./agents/registry.ts";
+import { startEgressRelay } from "./egress/relay.ts";
 import { DEFAULT_DISPLAY_INDEX } from "./protocol/index.ts";
 import { Orchestrator } from "./host/orchestrator.ts";
 import type { TurnEvent } from "./host/turn.ts";
@@ -329,6 +331,7 @@ const VALUE_FLAGS = new Set([
   "--port",
   "--host",
   "--token",
+  "--allow",
 ]);
 
 /**
@@ -465,6 +468,42 @@ async function cmdChat(argv: string[]): Promise<number> {
     rl.close();
   }
   return 0;
+}
+
+/**
+ * The relay that carries the box's traffic out through this machine.
+ *
+ * Runs in the foreground: it is a network service someone starts deliberately, and one that
+ * exits when they stop watching it is better than one that lingers.
+ */
+async function cmdEgress(argv: string[]): Promise<number> {
+  const { flags } = parseArgs(argv);
+  const portFlag = flags.get("--port");
+  const hostFlag = flags.get("--host");
+  const allowFlag = flags.get("--allow");
+
+  try {
+    const server = startEgressRelay({
+      // The box token by default, so a box started by this CLI can already authenticate.
+      token: loadBoxToken(),
+      port: typeof portFlag === "string" ? Number(portFlag) : undefined,
+      host: typeof hostFlag === "string" ? hostFlag : undefined,
+      allow:
+        typeof allowFlag === "string"
+          ? allowFlag.split(",").map(entry => entry.trim()).filter(Boolean)
+          : undefined,
+      log: line => out(dim(line)),
+    });
+    out("");
+    out(`${bold("egress relay")} running. Point a box at it with:`);
+    out(dim("  AGENTBOX_EGRESS_RELAY=host.docker.internal:8790 agentbox box up --recreate"));
+    out(dim("Ctrl-C to stop."));
+    await new Promise<void>(resolve => server.on("close", resolve));
+    return 0;
+  } catch (error) {
+    err(error instanceof Error ? error.message : String(error));
+    return 1;
+  }
 }
 
 async function cmdWeb(argv: string[]): Promise<number> {
@@ -642,6 +681,9 @@ async function main(): Promise<number> {
 
     case "chat":
       return cmdChat(rest);
+
+    case "egress":
+      return cmdEgress(rest);
 
     case "web":
       return cmdWeb(rest);

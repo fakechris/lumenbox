@@ -162,6 +162,36 @@ too, so `box shot` and the smoke test — which run out here — can no longer p
 for an agent's desktop. That is the right way round (the box holds its own secrets), and it
 means the CLI is a tool for the developer topology.
 
+## Where the box's traffic comes from
+
+A box browses from its own address, which in a cluster is a datacentre one. Real sites treat
+those differently — blocked, geofenced, or served a different page — and anything on the
+user's own network is unreachable from a box entirely. `agentbox egress` runs a relay on this
+machine, the box's browser goes through it, and the agent then appears on the network the user
+actually has.
+
+```
+agentbox egress --allow example.com,*.internal.example.com
+AGENTBOX_EGRESS_RELAY=host.docker.internal:8790 agentbox box up --recreate
+```
+
+The relay refuses to start without a token, because a relay without one is an open proxy on
+whatever network it can reach. `--allow` is not decoration either: reaching the user's network
+is the feature, and the user's network is exactly what an agent should not be able to sweep,
+so a deployment says what it means. Empty means anywhere.
+
+The obvious design is a WebSocket the client opens into the box, with streams multiplexed
+inside it. This goes the other way — the box dials the relay, one
+connection per stream — so there is no multiplexer, which is where this kind of code goes
+wrong. The cost is a TCP setup per stream, which is what a proxy does anyway.
+
+Two things worth knowing. Box-local addresses bypass the proxy on purpose, so boxd, noVNC and
+anything an agent serves locally are not sent out to the relay and back. And there is no
+fallback: with the proxy configured and the relay down, the browser gets
+`ERR_INTERNET_DISCONNECTED` rather than quietly browsing from the box's own address — checked
+with a fresh profile, because the first attempt at that check was reading Chromium's disk
+cache.
+
 ## Who may drive the agents
 
 The UI used to have no authentication, justified by binding loopback: anything able to reach

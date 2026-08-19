@@ -38,8 +38,21 @@ if ! pgrep -f -- "--user-data-dir=$PROFILE" >/dev/null 2>&1; then
   rm -f "$PROFILE"/Singleton{Lock,Cookie,Socket} 2>/dev/null || true
 fi
 
+# Through the egress proxy when the box has one, so the browser's traffic leaves from the
+# relay's network rather than this container's. The bypass list keeps the box's own services
+# — boxd, noVNC, anything an agent serves locally — off the proxy, which would otherwise send
+# a loopback request out to the relay and back.
+PROXY_ARGS=()
+if [ -n "${AGENTBOX_EGRESS_RELAY:-}" ]; then
+  PROXY_ARGS=(
+    --proxy-server="http://127.0.0.1:${AGENTBOX_EGRESS_PROXY_PORT:-8791}"
+    --proxy-bypass-list="localhost;127.0.0.1;[::1];host.docker.internal"
+  )
+fi
+
 exec chromium \
   --user-data-dir="$PROFILE" \
+  "${PROXY_ARGS[@]+"${PROXY_ARGS[@]}"}" \
   --no-sandbox \
   --disable-dev-shm-usage \
   --disable-gpu \

@@ -47,6 +47,7 @@ import {
 import { DisplayManager, DisplayOwnershipError } from "./displays.ts";
 import { getDisplay, parseDisplayNum } from "../cua/display.ts";
 import { readClipboard, writeClipboard } from "./clipboard-service.ts";
+import { startEgressProxy } from "../egress/proxy.ts";
 import { RecordService, RECORDINGS_DIR } from "./record-service.ts";
 import { runShell } from "./shell-service.ts";
 import { listDir, readFile, writeFile } from "./fs-service.ts";
@@ -485,6 +486,24 @@ server.on("upgrade", (req, clientSocket: Socket, head: Buffer) => {
 
 // Bind on all interfaces: Docker's port publishing reaches the container through
 // its bridge address, not loopback. The bearer token is the access control.
+// Egress, when a relay was named. The browser's traffic then leaves from wherever the relay
+// runs — the user's own network — instead of from wherever this box runs. Off unless
+// configured: without a relay there is nothing to send traffic to.
+const egressRelay = process.env.AGENTBOX_EGRESS_RELAY;
+if (egressRelay) {
+  try {
+    startEgressProxy({
+      relay: egressRelay,
+      token: process.env.AGENTBOX_EGRESS_TOKEN ?? token,
+      log: line => log(line),
+    });
+  } catch (error) {
+    // Not fatal: a box with no egress proxy is a box that browses from its own address, which
+    // is what it did before this existed.
+    log(`egress proxy not started: ${describe(error)}`);
+  }
+}
+
 server.listen(BOXD_PORT, "0.0.0.0", () => {
   log(`listening on 0.0.0.0:${BOXD_PORT}, display ${display}`);
   // Warm the display so the first computer call is not paying detection latency.
