@@ -46,7 +46,7 @@ the seams exist before the implementations do.
 
 | Component | Job | Placeholder version |
 | --- | --- | --- |
-| **Gateway** | Authenticate a person; route them to their box's UI over TLS | Single shared password, direct redirect, no TLS |
+| **Gateway** | Authenticate a person; route them to their box's UI over TLS | Password list, session cookie, no TLS — **built** |
 | **Allocator** | Create, find, stop and destroy boxes for a tenant | `compose`: one container per tenant on this host — **built** |
 | **Store** | Tenants, boxes, tokens, quotas, usage | SQLite file behind a repository interface — **built** |
 | **Credentials** | Issue box, UI and owner tokens; hold provider keys | Generate and store; keys still passed as env |
@@ -148,6 +148,35 @@ person → gateway ──── session cookie ────► gateway looks up 
 Authentication itself is deliberately unspecified — OIDC, a password list, or an existing
 identity provider all fit behind the same seam. What matters is that it produces a tenant id
 before anything else runs.
+
+**Built, and verified against a real box.** The session is a signed cookie carrying a tenant id and
+an expiry, and nothing else: no session table, so the gateway restarts without logging anyone out,
+and no trust in the cookie, because an unsigned cookie holding a tenant id is an invitation to type
+someone else's. The identity provider is a password list, and its limits are written into the code
+rather than glossed: comparison rather than a slow KDF, no lockout, no second factor. Replace it
+before anyone who is not the operator signs in.
+
+Three things the proxy has to get right, each of which fails silently if missed:
+
+- **The client's `Authorization` header is replaced, not merged.** Otherwise presenting another
+  tenant's UI token by hand would be forwarded faithfully.
+- **`agentbox_ui` is stripped from the forwarded cookie header**, for the same reason — it is the
+  box UI's own auth cookie, and a client can set it.
+- **The box's `Set-Cookie` is dropped.** It would land on the gateway's origin, where it would then
+  be sent to every *other* tenant's box on the next request.
+
+Verified end to end, gateway in front of a container: anonymous request → 302 to the form; a wrong
+password → 401 and no cookie; sign-in → a box allocated in 3.4s → the real 29KB application page,
+with the box's UI token absent from it; `GET /api/state` → 200; no session → 401; a session with one
+byte of the signature changed → 401. The desktop matters most and was checked separately: the
+WebSocket upgrade answers `101 Switching Protocols` with a session and `401` without, so the screen
+is not reachable without signing in. The `desktopUrl` handed to the page is gateway-relative, so a
+browser never learns the box's published port.
+
+Allocation is slow — seconds at best, minutes when an image must be pulled — so a request that
+arrives before a box is ready gets a page that retries, not a hung connection. A proxy error marks
+the box `unreachable` in the store, because a person's failed request is usually the first thing that
+notices a box has died.
 
 ## 6. Store
 
@@ -267,8 +296,8 @@ should change before the control plane does.
 
 1. ~~R-01, R-02, R-03, R-07 in the box~~ — done. The last two define what the control plane consumes.
 2. ~~Store and `static` allocator~~ — done: the control plane running against a laptop box.
-3. `compose` allocator ~~and gateway~~: the allocator is done and verified against two real boxes;
-   the gateway is next.
+3. ~~`compose` allocator and gateway~~ — done: the first real multi-user system, on one host, both
+   verified against real containers.
 4. Collector and metering.
 5. Relay, and metering moves behind it.
 6. Reaper, quotas.
