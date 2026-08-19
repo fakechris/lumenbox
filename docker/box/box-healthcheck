@@ -1,0 +1,34 @@
+#!/usr/bin/env bash
+# The container's health check.
+#
+# Checks what the running topology actually promises, which is the fix for a real defect: the
+# check used to ask boxd only, so with the orchestrator inside the box — where it *is* the
+# product, since the only thing outside is a browser — it could be crash-looping while the
+# container reported healthy and the restart policy stayed quiet.
+#
+# Deliberately shallow. A health check is asked every ten seconds and its answer gates restarts,
+# so it tests reachability, not correctness; box-doctor is where depth belongs.
+set -uo pipefail
+
+curl -fsS --max-time 5 http://127.0.0.1:1337/health > /dev/null 2>&1 || {
+  echo "boxd is not answering on 1337"
+  exit 1
+}
+
+if [ "${AGENTBOX_HOST_ENABLED:-0}" = "1" ]; then
+  # Its own port, not boxd's: the orchestrator serves the UI, and a UI that does not answer is
+  # indistinguishable from a broken box to the person looking at it.
+  # One request, and 401 counts as healthy: the UI requires a token and refusing correctly is
+  # the same evidence as serving. curl writes 000 when it never got an answer at all.
+  code=$(curl -s -o /dev/null -w '%{http_code}' --max-time 5 \
+    "http://127.0.0.1:${AGENTBOX_UI_PORT:-7777}/" 2>/dev/null)
+  case "${code}" in
+  2* | 401) ;;
+  *)
+    echo "the orchestrator is enabled but its UI answered ${code:-nothing}"
+    exit 1
+    ;;
+  esac
+fi
+
+exit 0

@@ -42,6 +42,12 @@ container needs, and a bare \`chromium\` fails for reasons that have nothing to 
 your task. Pass a URL as an argument to open it directly. Once it is up, drive it with
 \`computer\`.
 
+Put anything that must outlive this box under \`/home/box/work\`. That directory and the
+browser's profile are the only parts of the filesystem that survive the box being rebuilt —
+which is what upgrading it means — so a report written to your home directory disappears the
+next time it happens, silently. Scratch files can go anywhere; work someone asked for goes in
+\`/home/box/work\`.
+
 For the clipboard, use \`box-clip copy\` and \`box-clip paste\` rather than \`xclip\`
 directly. An X selection belongs to the process that set it, and the shell tool kills its
 process group when a command returns — so a bare \`xclip\` copy is empty a second later.

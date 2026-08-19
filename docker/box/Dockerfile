@@ -78,11 +78,13 @@ COPY box-chrome /usr/local/bin/box-chrome
 COPY box-clip /usr/local/bin/box-clip
 COPY box-doctor /usr/local/bin/box-doctor
 COPY box-init /usr/local/bin/box-init
+COPY box-healthcheck /usr/local/bin/box-healthcheck
 COPY wait-compositor /usr/local/bin/wait-compositor
 COPY vnc-probe /usr/local/bin/vnc-probe
 RUN chmod +x /usr/local/bin/entrypoint.sh /usr/local/bin/start-display \
       /usr/local/bin/box-chrome /usr/local/bin/box-clip \
       /usr/local/bin/box-doctor /usr/local/bin/box-init \
+      /usr/local/bin/box-healthcheck \
       /usr/local/bin/wait-compositor \
       /usr/local/bin/vnc-probe
 
@@ -213,8 +215,9 @@ RUN mkdir -p /home/box/Desktop /home/box/.config/pcmanfm/default \
 # a second uid possible at all.
 WORKDIR /home/box/work
 
-HEALTHCHECK --interval=10s --timeout=5s --start-period=45s --retries=6 \
-  CMD curl -fsS http://127.0.0.1:1337/health > /dev/null || exit 1
+# Covers what the running topology promises, not just boxd — see box-healthcheck.
+HEALTHCHECK --interval=10s --timeout=8s --start-period=60s --retries=6 \
+  CMD /usr/local/bin/box-healthcheck
 
 # box-init is PID 1 rather than tini, for one reason: only PID 1 sees an orphan die, and
 # tini reaped every one of them and discarded the status. Everything unsupervised in here

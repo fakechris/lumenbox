@@ -234,6 +234,39 @@ await check("the agent's work runs behind the desktop", async () => {
   return `agent nice ${agent.stdout.trim()}, desktop nice ${values.join("/")}`;
 });
 
+await check("the health check covers what the topology promises", async () => {
+  // The defect this closes: the check asked boxd only, so with the orchestrator inside the box —
+  // where it is the product, since the only thing outside is a browser — it could be crash-looping
+  // while the container reported healthy and the restart policy stayed quiet. Both directions are
+  // asserted, because a check that cannot fail is the thing being fixed.
+  const healthy = await box.exec("/usr/local/bin/box-healthcheck");
+  assert(healthy.exit_code === 0, `a healthy box failed its check: ${healthy.stdout}${healthy.stderr}`);
+
+  const deadUi = await box.exec(
+    "AGENTBOX_HOST_ENABLED=1 AGENTBOX_UI_PORT=7999 /usr/local/bin/box-healthcheck"
+  );
+  assert(deadUi.exit_code !== 0, "a missing orchestrator UI reported healthy");
+  assert(/UI answered/.test(deadUi.stdout), deadUi.stdout);
+  return "boxd and, when enabled, the orchestrator";
+});
+
+await check("work that must survive has somewhere to go", async () => {
+  // Only /home/box/work and .config are volumes, and a report written to the home directory
+  // disappears on the next rebuild with nothing to say so. The prompt tells the agent; this
+  // checks the box can notice afterwards.
+  await box.exec("rm -f /home/box/smoke-stray.md");
+  const clean = await box.exec("box-doctor 2>&1 | grep work-location || true");
+  assert(/PASS work-location/.test(clean.stdout), clean.stdout);
+
+  await box.exec("echo stray > /home/box/smoke-stray.md");
+  const warned = await box.exec("box-doctor 2>&1 | grep work-location || true");
+  assert(/WARN work-location/.test(warned.stdout), warned.stdout);
+  assert(/smoke-stray/.test(warned.stdout), warned.stdout);
+
+  await box.exec("rm -f /home/box/smoke-stray.md");
+  return "loose files in the home directory are reported";
+});
+
 await check("the box can diagnose itself", async () => {
   // The point is that an agent can run this over its own shell when its computer misbehaves,
   // instead of working around a symptom. Both directions are asserted: a healthy box passes,

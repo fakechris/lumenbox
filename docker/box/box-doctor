@@ -200,6 +200,20 @@ else
   warn disk "could not read free space for /home/box/work"
 fi
 
+# ── work that will not survive a rebuild ──────────────────────────────────────────
+# Only /home/box/work and /home/box/.config are volumes. A file an agent left directly in its
+# home directory looks identical to one in work until the box is rebuilt, and then it is gone
+# with nothing to say so. Reported rather than fixed: moving someone's file is not this
+# script's business.
+stray=$(find "${HOME:-/home/box}" -maxdepth 1 -type f \
+  ! -name '.*' -newermt '-30 days' 2>/dev/null | head -20)
+if [ -n "${stray}" ]; then
+  count=$(printf '%s\n' "${stray}" | wc -l | tr -d ' ')
+  warn work-location "${count} file(s) directly in ${HOME:-/home/box} will not survive a rebuild: $(printf '%s' "${stray}" | head -3 | xargs -n99 basename -a 2>/dev/null | tr '\n' ' ')"
+else
+  pass work-location "nothing loose in ${HOME:-/home/box}"
+fi
+
 printf '[box-doctor] SUMMARY %s passed, %s failed, %s warned' "${PASSED}" "${FAILED}" "${WARNED}"
 if [ "${FAILED}" -gt 0 ]; then
   printf ' (%s)\n' "${FAILURES[*]}"

@@ -5,7 +5,7 @@ Reviewed against [01-requirements.md](01-requirements.md) through
 system or the source, not inferred from the documents.
 
 **Verdict: it does not meet a product-grade standard yet.** Nine findings, three of them
-blocking. What it does meet is a higher standard than that summary suggests in one specific
+blocking. R-01 and R-02 are fixed; the rest stand. What it does meet is a higher standard than that summary suggests in one specific
 respect — the failure behaviour is genuinely engineered and tested — and a lower one in another:
 there is no cost control at all.
 
@@ -23,19 +23,19 @@ there is no cost control at all.
 | F3.6 | Self-diagnosis | met | 15 checks, fails dirty |
 | F4.1–4.3 | Provenance | met | real blocks, screenshots noted |
 | F5.1–5.2 | Create, restart | met | stale-lock sweep |
-| F5.3 | Upgrade preserves work | **partial** | R-01 |
+| F5.3 | Upgrade preserves work | met | R-01 fixed |
 | F5.4 | Provisioner replaceable | met | full suite with no Docker on PATH |
 | N1.1–1.2 | Capture latency | met | 185ms idle, 189ms saturated |
 | N1.3 | Live view within a second | **unverified** | R-06 |
 | N2.1–2.3 | Crash isolation, abandonment, crash records | met | measured by killing things |
-| N2.4 | Work loss needs an explicit act | **partial** | R-01 |
+| N2.4 | Work loss needs an explicit act | met | R-01 fixed |
 | N3.1–3.4 | Isolation | met as scoped | limits stated, not overstated |
 | N4.1–4.3 | Honest failure | met | three no-op tests found and fixed |
-| N5.1–5.4 | Operability | **partial** | R-02, R-05 |
+| N5.1–5.4 | Operability | **partial** | R-05 |
 
 ## Blocking findings
 
-### R-01 — An agent's work outside `/home/box/work` is destroyed by an upgrade
+### R-01 — An agent's work outside `/home/box/work` is destroyed by an upgrade — **fixed**
 
 `grep '/home/box/work' src/host/prompt.ts` → 0. Nothing tells an agent where to put things that
 must survive. `/home/box/work` and `/home/box/.config` are volumes; everything else, including
@@ -46,17 +46,22 @@ An agent asked to "write the report" will reasonably write `~/report.md` and los
 upgrade, with nothing to indicate that happened. This violates N2.4 and F5.3, and it is the
 failure mode this system is otherwise built to avoid: silent.
 
-Fix: say it in the prompt, and have `box-doctor` warn when files sit directly in `/home/box`.
+Fixed: the prompt now says where work that must survive goes and why, and `box-doctor` warns when
+files sit directly in `/home/box`, naming them. Both directions are in the smoke test.
 
-### R-02 — In the self-contained topology, a dead UI reports a healthy container
+### R-02 — In the self-contained topology, a dead UI reports a healthy container — **fixed**
 
 `HEALTHCHECK` runs `curl -fsS http://127.0.0.1:1337/health`, which is boxd only. With
 `--with-host`, the orchestrator is the product — the only thing outside the container is a
 browser — and it can be crash-looping while the container reports healthy and the restart policy
 stays quiet.
 
-Fix: the health check should cover what that topology promises. The supervisor already knows;
-the check does not ask it.
+Fixed: `box-healthcheck` covers boxd and, when the orchestrator is enabled, its UI — treating 401
+as healthy, since a UI refusing correctly is serving. Verified by holding the orchestrator down:
+the check fails during, and passes once it is allowed back. Two of my own bugs on the way, both
+in the test rather than the product: an error message that printed the status twice, and a `pkill`
+whose pattern matched the shell running it, so the kill loop killed itself — the fourth time that
+trap has bitten in this project.
 
 ### R-03 — No cost control of any kind
 
