@@ -17,6 +17,7 @@ import {
   type IncomingMessage,
   type ServerResponse,
 } from "node:http";
+import { readFileSync } from "node:fs";
 import { connect as netConnect, type Socket } from "node:net";
 import { AgentRegistry } from "../agents/registry.ts";
 import type { BusEvent } from "../agents/bus.ts";
@@ -25,6 +26,8 @@ import { Orchestrator } from "../host/orchestrator.ts";
 import { describeProvider, type ProviderProfile } from "../host/provider.ts";
 import type { TurnEvent } from "../host/turn.ts";
 import { APP_HTML } from "./app-html.ts";
+import { vendorPath } from "./markdown.ts";
+import { toDisplayEntries } from "./transcript.ts";
 
 export interface WebOptions {
   port: number;
@@ -45,6 +48,8 @@ type OutboundEvent =
 export async function startWebServer(options: WebOptions): Promise<() => void> {
   const log = options.onLog ?? (() => {});
   const registry = new AgentRegistry();
+  /** Read once on first request; it never changes while the server is up. */
+  let vendorScript: Buffer | undefined;
   const clients = new Set<ServerResponse>();
 
   const broadcast = (event: OutboundEvent) => {
@@ -204,6 +209,26 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
           return;
         }
 
+        // The Markdown renderer, read from node_modules. Served from here rather than
+        // a CDN so the UI works with no network and stays on the locked version.
+        if (route === "GET /vendor/markdown-it.js") {
+          try {
+            vendorScript ??= readFileSync(vendorPath());
+            res.writeHead(200, {
+              "content-type": "application/javascript; charset=utf-8",
+              "content-length": vendorScript.length,
+              "cache-control": "no-store",
+            });
+            res.end(vendorScript);
+          } catch (error) {
+            // The page falls back to plain text, so say what is missing and carry on.
+            const detail = error instanceof Error ? error.message : String(error);
+            log(`markdown-it is unavailable: ${detail}`);
+            send(res, 404, { error: detail });
+          }
+          return;
+        }
+
         if (route === "GET /api/state") {
           send(res, 200, {
             provider: describeProvider(options.provider),
@@ -233,7 +258,11 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
             send(res, 404, { error: `No agent ${id}` });
             return;
           }
-          send(res, 200, registry.readTranscript(id));
+          // Mapped for reading, not replayed raw: the stored form is written for the
+          // model, and the roster is what lets a wake prompt be split back into the
+          // messages that caused it.
+          const names = registry.list().map(record => record.profile.name);
+          send(res, 200, toDisplayEntries(registry.readTranscript(id), names));
           return;
         }
 

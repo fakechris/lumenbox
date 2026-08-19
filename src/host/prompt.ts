@@ -292,6 +292,66 @@ export function buildWakePrompt(inbound: readonly InboundMessage[]): string {
   return lines.join("\n");
 }
 
+export interface WakeMessage {
+  from: string;
+  priority: boolean;
+  text: string;
+}
+
+/**
+ * The teammate messages inside a wake prompt, or null if this is not one.
+ *
+ * The inverse of buildWakePrompt, and it belongs next to it so the two cannot drift.
+ * A wake prompt is scaffolding written for the model — who sent this, that it is a
+ * peer and not the user, what to do about it — and anything showing a transcript to a
+ * person has to get the messages back out of it. Otherwise a person reads
+ * "[agent] A message arrived from your teammate Ada (id: ...)" in a bubble labelled
+ * as their own words, which shows them the machinery instead of the conversation.
+ *
+ * Takes the roster because the format is flat: a line only begins a new message if it
+ * starts with a name that exists. Without that, a message whose own text contains
+ * "Note: ..." would be split into a message from someone called Note.
+ */
+export function parseWakePrompt(
+  text: string,
+  knownNames: readonly string[]
+): WakeMessage[] | null {
+  const value = typeof text === "string" ? text : "";
+  if (!value.startsWith(AGENT_WAKE_CUE)) return null;
+
+  // buildWakePrompt writes three parts: the cue with its explanation, the messages,
+  // and the standing instruction about replying.
+  const parts = value.split("\n\n");
+  if (parts.length < 3) return null;
+  const body = parts.slice(1, -1).join("\n\n");
+
+  const messages: WakeMessage[] = [];
+  for (const line of body.split("\n")) {
+    const opener = knownNames
+      .map(name => ({
+        name,
+        match: new RegExp(
+          `^${name.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}` +
+            "(?: \\(id: [^)]*\\))?( \\(priority\\))?: ([\\s\\S]*)$"
+        ).exec(line),
+      }))
+      .find(candidate => candidate.match !== null);
+
+    if (opener?.match) {
+      messages.push({
+        from: opener.name,
+        priority: opener.match[1] !== undefined,
+        text: opener.match[2]!,
+      });
+    } else if (messages.length > 0) {
+      // A continuation of the message above: peers send multi-line text.
+      messages[messages.length - 1]!.text += `\n${line}`;
+    }
+  }
+
+  return messages.length > 0 ? messages : null;
+}
+
 /** Combines user messages and peer wakes into the text for one turn. */
 export function buildTurnPrompt(inbound: readonly InboundMessage[]): string {
   const fromUser = inbound.filter(message => message.fromId === "user");

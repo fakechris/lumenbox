@@ -8,10 +8,11 @@
  * The embedded script uses string concatenation instead of template literals
  * throughout. It has to: this file is itself a template literal, so an inner
  * "${...}" would be evaluated here rather than shipped to the browser. The one
- * deliberate interpolation is the Markdown renderer, injected as source text.
+ * deliberate interpolation is the Markdown options, which belong next to the tests
+ * that assert what they guarantee.
  */
 
-import { renderMarkdown } from "./markdown.ts";
+import { MARKDOWN_OPTIONS } from "./markdown.ts";
 
 export const APP_HTML = String.raw`<!doctype html>
 <html lang="en">
@@ -96,6 +97,15 @@ export const APP_HTML = String.raw`<!doctype html>
     margin: 6px 0; padding: 2px 0 2px 12px; border-left: 2px solid var(--line); color: var(--dim);
   }
   .msg .body hr { border: 0; border-top: 1px solid var(--line); margin: 12px 0; }
+  /* Full width and wrapping cells, rather than a scrolling block: these tables are
+     mostly long prose in two columns, and wrapping keeps all of it on screen. */
+  .msg .body table { border-collapse: collapse; margin: 8px 0; width: 100%; font-size: 13px; }
+  .msg .body th, .msg .body td {
+    border: 1px solid var(--line); padding: 5px 8px; text-align: left; vertical-align: top;
+  }
+  .msg .body th { background: #1b1f27; font-weight: 600; }
+  /* An agent's message relayed into another agent's turn: not the person typing. */
+  .msg.peer .who { color: var(--warn); }
   .tool { padding: 5px 16px; color: var(--dim); font: 12px/1.5 ui-monospace, SFMono-Regular, Menlo, monospace; }
   .tool .nm { color: var(--accent); }
   .tool.res { padding-left: 30px; opacity: .85; }
@@ -163,13 +173,20 @@ export const APP_HTML = String.raw`<!doctype html>
   <div class="feed" id="feed"></div>
 </div>
 
+<script src="/vendor/markdown-it.js"></script>
 <script>
 "use strict";
-// The Markdown renderer, shipped as its own source. It lives in a module so it can
-// be unit-tested — escaping model output is not something to verify by eye — and is
-// injected rather than inlined because Markdown means matching backticks, which
-// cannot be written inside this template literal.
-var renderMarkdown = ${String(renderMarkdown)};
+// Markdown rendering is markdown-it's job, served from node_modules by this server.
+// html:false is what keeps model output inert — see src/web/markdown.ts.
+var md = window.markdownit ? window.markdownit(${JSON.stringify(MARKDOWN_OPTIONS)}) : null;
+
+function renderMarkdown(text) {
+  var value = String(text == null ? "" : text);
+  // If the library did not load, show escaped text rather than nothing. A feed
+  // showing raw Markdown is poor; a blank one is useless.
+  if (!md) return "<p>" + esc(value).replace(/\n/g, "<br>") + "</p>";
+  return md.render(value);
+}
 
 function $(id) { return document.getElementById(id); }
 
@@ -263,6 +280,44 @@ function showDesktop(id) {
   }
 }
 
+/** One teammate message, shown as the sender rather than as the person's own words. */
+function peerBubble(toName, message) {
+  bubble(
+    "peer",
+    message.from + (message.priority ? " (priority)" : "") + " → " + toName,
+    message.text
+  );
+}
+
+/**
+ * One mapped transcript entry.
+ *
+ * The server hands over what to show — prose, teammate messages, tool calls, results —
+ * because the stored transcript is written for the model and needs a real parse to read
+ * as a conversation. See src/web/transcript.ts.
+ */
+function replayEntry(id, entry) {
+  if (entry.kind === "peer") {
+    for (var p = 0; p < entry.messages.length; p++) peerBubble(nameOf(id), entry.messages[p]);
+    return;
+  }
+  if (entry.kind === "tools") {
+    for (var t = 0; t < entry.tools.length; t++) {
+      toolRow('&rarr; <span class="nm">' + esc(entry.tools[t].name) + "</span> " +
+        esc(String(entry.tools[t].detail).slice(0, 200)));
+    }
+    return;
+  }
+  if (entry.kind === "results") {
+    for (var r = 0; r < entry.results.length; r++) {
+      toolRow(esc(String(entry.results[r].text).slice(0, 400)),
+        entry.results[r].isError ? "res err" : "res");
+    }
+    return;
+  }
+  bubble(entry.role === "user" ? "user" : "", entry.role === "user" ? "you" : nameOf(id), entry.text);
+}
+
 function select(id) {
   current = id;
   $("title").textContent = nameOf(id);
@@ -275,10 +330,7 @@ function select(id) {
   return fetch("/api/transcript?agent=" + encodeURIComponent(id))
     .then(function (r) { return r.json(); })
     .then(function (entries) {
-      for (var i = 0; i < entries.length; i++) {
-        var e = entries[i];
-        bubble(e.role === "user" ? "user" : "", e.role === "user" ? "you" : nameOf(id), e.text);
-      }
+      for (var i = 0; i < entries.length; i++) replayEntry(id, entries[i]);
       $("chat").scrollTop = $("chat").scrollHeight;
     });
 }
@@ -371,6 +423,11 @@ stream.onmessage = function (raw) {
   if (e.type === "message_sent") {
     feed("&#9993; <b>" + esc(e.fromName) + "</b> &rarr; <b>" + esc(e.toName) + "</b>" +
       (e.priority ? " (priority)" : "") + ": " + esc(String(e.text).slice(0, 90)), "mail");
+    // Show it in the recipient's chat as it arrives. Otherwise the pane jumps from
+    // nothing to a reply, and what prompted the reply only appears on reload.
+    if (e.toId === current) {
+      peerBubble(e.toName, { from: e.fromName, priority: e.priority, text: e.text });
+    }
     return;
   }
 
