@@ -65,6 +65,7 @@ Append-only, one JSON object per line, four shapes:
 { "role": "assistant", "text": "…",        "at": "…" }   // prose only
 { "role": "assistant", "kind": "blocks",  "blocks": [ … ], "at": "…" }  // text + tool_use
 { "role": "user",      "kind": "results", "blocks": [ … ], "at": "…" }  // the matching tool_result
+{ "role": "user",      "kind": "summary", "covers": 127, "text": "…", "at": "…" }  // stands in for the first 127
 ```
 
 Invariants:
@@ -76,9 +77,32 @@ Invariants:
 - Images are stripped from stored results and replaced with a note. A transcript would
   otherwise be mostly base64.
 - An unparseable line is skipped, not fatal.
+- A `summary` entry stands in for the first `covers` entries of the window it was written in.
+  Assembly starts from the newest summary and sends the tail verbatim; everything it covers stays
+  on the disk and stays readable by a person. **Compaction changes what is sent, never what is
+  stored** — see §2.2.1.
 
-Observed sizes: a few KB per light conversation, ~180KB after a day of heavy computer use.
-Growth is unbounded — see §7.
+Observed sizes: a few KB per light conversation, ~180KB after a day of heavy computer use. The file
+still grows without bound; what is bounded is the request built from it (§2.2.1).
+
+#### 2.2.1 Compaction
+
+Past `AGENTBOX_COMPACT_AT_TOKENS` (default 60,000, estimated at four characters per token) the
+entries before a cut point are summarised into one `summary` entry, which is appended to the
+transcript and used from then on. `AGENTBOX_COMPACT_KEEP_TOKENS` (default 20,000) is the tail kept
+verbatim, so recent work is never a paraphrase.
+
+Invariants, both load-bearing:
+
+- **The cut lands on a pair boundary.** A `blocks` entry and its `results` are one exchange to the
+  API; a cut between them produces a request the API rejects. The chooser walks back until the
+  entry before the cut ends an exchange, and gives up rather than cutting if it cannot.
+- **A failed summarisation does not fail the turn.** It writes a `summary` entry saying the entries
+  were dropped and why, and telling the model to treat what it cannot see as unknown rather than as
+  not done. Loud, because silent trimming is the failure mode that produces an agent confidently
+  redoing or contradicting its own work.
+
+Measured on a real 166-entry transcript: 26,473 tokens became 1,672.
 
 ### 2.3 `activity.jsonl`
 
@@ -181,8 +205,10 @@ The last row is the one that took work: a killed recorder used to leave an unpla
 
 Honestly, since these are the findings a review should raise:
 
-- **Unbounded growth.** Transcripts have no rotation, compaction or summarisation. A long-lived
-  agent's conversation grows until it exceeds the model's context, and nothing trims it.
+- **Unbounded growth on disk.** Requests are now bounded by compaction (§2.2.1), but the files are
+  not: a transcript grows forever and nothing rotates or archives it. That is deliberate — the
+  record is the product's provenance claim — and it means disk is the eventual limit, which
+  `box-doctor` reports and nothing enforces.
 - **No query.** "Which agent touched this file", "what happened on Tuesday" mean reading every
   file. Fine for one box, not for a fleet.
 - **No transactions.** Atomic profile writes and append-only transcripts cover the realistic

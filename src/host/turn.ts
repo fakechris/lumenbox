@@ -12,6 +12,16 @@ import type { AgentBus, InboundMessage } from "../agents/bus.ts";
 import type { BoxClient } from "../box/client.ts";
 import type { DisplayLease } from "../box/display-lease.ts";
 import type { UsageLog } from "./usage.ts";
+import {
+  activeWindow,
+  buildSummaryPrompt,
+  chooseCutPoint,
+  droppedEntry,
+  estimateTokens,
+  summaryEntry,
+  type HistoryEntry,
+  type SummaryEntry,
+} from "./compaction.ts";
 import type { ResolutionConfig } from "../protocol/index.ts";
 import { buildSystemPromptParts, buildTurnPrompt } from "./prompt.ts";
 import { buildTools, dispatchTool, type ToolOutcome } from "./tools.ts";
@@ -79,6 +89,22 @@ export type TurnEvent =
       screenshot?: string;
     }
   | { type: "round"; agentId: string; round: number }
+  /**
+   * The history outgrew the context window and was summarised.
+   *
+   * Its own event rather than a line of agent prose: the agent did not say this, and a feed that
+   * attributes it to the agent is lying about who is talking. It is feed-worthy because it is the
+   * one moment where what the agent can see stops matching what it did.
+   */
+  | {
+      type: "compacted";
+      agentId: string;
+      /** How many entries the summary stands in for. */
+      covers: number;
+      /** False when summarising failed and the entries were dropped instead. */
+      summarised: boolean;
+      detail: string;
+    }
   | { type: "aborted"; agentId: string }
   | {
       type: "usage";
@@ -115,6 +141,14 @@ type TranscriptEntry =
       role: "user";
       kind: "results";
       blocks: Anthropic.ToolResultBlockParam[];
+      at: string;
+    }
+  /** Stands in for the entries before it when the history outgrew the context window. */
+  | {
+      role: "user";
+      kind: "summary";
+      covers: number;
+      text: string;
       at: string;
     };
 
@@ -158,10 +192,76 @@ function storableResult(
  * was cut off, or a result whose call was, is rejected by the API — so an orphan
  * at either end is dropped rather than sent.
  */
+/**
+ * Summarises the front of a history that has outgrown the context window.
+ *
+ * Returns the history to assemble from — either unchanged, or with a summary entry appended and
+ * persisted. Never throws: a turn that cannot summarise still has to run, so the fallback drops the
+ * oldest entries and says so in the history rather than failing or trimming silently.
+ *
+ * The summarising call is a plain, tool-free request on the same model the agent uses. A dedicated
+ * cheaper or wider model would be better and is a configuration change, not a code one.
+ */
+async function compactHistory(options: {
+  history: TranscriptEntry[];
+  agent: AgentRecord;
+  registry: AgentRegistry;
+  client: Anthropic;
+  provider: ProviderProfile;
+  log: (line: string) => void;
+  onCompacted: (event: { type: "compacted"; covers: number; summarised: boolean; detail: string }) => void;
+}): Promise<TranscriptEntry[]> {
+  const { history, agent, registry, client, provider, log, onCompacted } = options;
+  const active = activeWindow(history as HistoryEntry[]);
+  const cut = chooseCutPoint(active);
+  if (!cut) return history;
+
+  const olderEntries = active.slice(0, cut.index);
+  log(`compacting history: ${cut.reason}`);
+
+  let entry: SummaryEntry;
+  try {
+    const response = await client.messages.create({
+      model: provider.model,
+      // Enough for a dense summary and no more; a summary that runs to pages defeats the purpose.
+      max_tokens: Math.min(4096, provider.maxTokens),
+      messages: [{ role: "user", content: buildSummaryPrompt(olderEntries) }],
+    });
+    const text = response.content
+      .filter((block): block is Anthropic.TextBlock => block.type === "text")
+      .map(block => block.text)
+      .join("\n")
+      .trim();
+    if (!text) throw new Error("the summariser returned no text");
+    entry = summaryEntry(text, cut.index);
+    const detail =
+      `summarised ${cut.index} entries: about ${estimateTokens(olderEntries)} tokens ` +
+      `became ${estimateTokens([entry])}`;
+    log(detail);
+    onCompacted({ type: "compacted", covers: cut.index, summarised: true, detail });
+  } catch (error) {
+    const reason = error instanceof Error ? error.message : String(error);
+    // Loud, and told to the model: the alternative was a request that cannot fit, and the
+    // alternative to that was dropping history with no trace of it having happened.
+    entry = droppedEntry(cut.index, reason);
+    const detail = `could not summarise (${reason}); dropped ${cut.index} entries instead`;
+    log(detail);
+    onCompacted({ type: "compacted", covers: cut.index, summarised: false, detail });
+  }
+
+  registry.appendTranscript(agent.id, entry);
+  return [...history, entry as TranscriptEntry];
+}
+
 function historyToMessages(
   entries: readonly TranscriptEntry[]
 ): Anthropic.MessageParam[] {
-  const window = entries.slice(-HISTORY_LIMIT);
+  // From the newest summary onwards. Everything before it stays in the transcript on disk — the
+  // record is what makes an agent's claims checkable, so compaction changes the request, never the
+  // record.
+  const window = [...activeWindow(entries as HistoryEntry[])].slice(
+    -HISTORY_LIMIT
+  ) as TranscriptEntry[];
 
   // A results entry at the front has lost its call.
   while (window.length > 0 && "kind" in window[0]! && window[0]!.kind === "results") {
@@ -179,6 +279,10 @@ function historyToMessages(
   const messages: Anthropic.MessageParam[] = [];
   for (const entry of window) {
     if ("kind" in entry) {
+      if (entry.kind === "summary") {
+        messages.push({ role: "user", content: entry.text });
+        continue;
+      }
       if (entry.blocks.length === 0) continue;
       messages.push({ role: entry.role, content: entry.blocks });
     } else if (entry.text.trim() !== "") {
@@ -272,8 +376,22 @@ export async function runTurn(
     { type: "text", text: promptParts.volatile, ...cache },
   ];
 
-  const history = registry.readTranscript(agent.id) as TranscriptEntry[];
+  let history = registry.readTranscript(agent.id) as TranscriptEntry[];
   const turnText = buildTurnPrompt(inbound);
+
+  // Before assembling: a conversation that has grown past what fits is summarised, once, and the
+  // summary is persisted so later turns pay nothing. Measured on this system at 158KB and 40k
+  // tokens after a day — the end of that road is a turn failing on a request that cannot be made
+  // smaller, at the worst possible moment.
+  history = await compactHistory({
+    history,
+    agent,
+    registry,
+    client,
+    provider,
+    log: line => console.error(`[compaction] ${agent.profile.name}: ${line}`),
+    onCompacted: event => emit({ ...event, agentId: agent.id }),
+  });
 
   const messages: Anthropic.MessageParam[] = [
     ...historyToMessages(history),

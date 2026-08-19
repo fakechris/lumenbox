@@ -19,6 +19,7 @@ import { AgentBus } from "../agents/bus.ts";
 import type { BoxClient } from "../box/client.ts";
 import { DisplayLease } from "../box/display-lease.ts";
 import { runTurn, TurnAborted } from "./turn.ts";
+import { DEFAULT_POLICY } from "./compaction.ts";
 import { buildSystemPrompt } from "./prompt.ts";
 import { buildTools, dispatchTool } from "./tools.ts";
 
@@ -610,6 +611,197 @@ test("a peer wake is presented differently from a user message", async () => {
     assert.match(turnText, /priority/i);
     assert.match(turnText, /not the user typing/i);
   } finally {
+    cleanup();
+  }
+});
+
+/**
+ * A client that also answers the tool-free `create` call compaction makes.
+ *
+ * `summariser` returns what the summarising round should reply, or throws to exercise the
+ * fallback — which is the path that matters most, because it is the one that runs when the
+ * context is already too big to summarise.
+ */
+function stubClientWithSummariser(
+  replies: Anthropic.Message[],
+  capture: Capture,
+  summariser: (params: Anthropic.MessageCreateParams) => Anthropic.Message
+): Anthropic {
+  const { client } = stubClient(replies, capture);
+  (client.messages as unknown as { create: unknown }).create = async (
+    params: Anthropic.MessageCreateParams
+  ) => summariser(params);
+  return client;
+}
+
+/** A history long enough to trip the trigger, in whole call/result pairs. */
+function bulkyHistory(pairs: number, charsEach: number): unknown[] {
+  const entries: unknown[] = [];
+  for (let at = 0; at < pairs; at++) {
+    entries.push({
+      role: "assistant",
+      kind: "blocks",
+      blocks: [
+        { type: "text", text: `step ${at}` },
+        { type: "tool_use", id: `toolu_${at}`, name: "bash", input: { command: `echo ${at}` } },
+      ],
+      at: new Date(2026, 0, 1, 0, at).toISOString(),
+    });
+    entries.push({
+      role: "user",
+      kind: "results",
+      blocks: [
+        {
+          type: "tool_result",
+          tool_use_id: `toolu_${at}`,
+          content: [{ type: "text", text: "x".repeat(charsEach) }],
+        },
+      ],
+      at: new Date(2026, 0, 1, 0, at, 30).toISOString(),
+    });
+  }
+  return entries;
+}
+
+test("an oversized history is summarised before the request, and the summary persists", async () => {
+  const { registry, cleanup } = fixture();
+  const previousTrigger = process.env.AGENTBOX_COMPACT_AT_TOKENS;
+  const previousKeep = process.env.AGENTBOX_COMPACT_KEEP_TOKENS;
+  try {
+    const ada = registry.create({ name: "Ada" });
+    for (const entry of bulkyHistory(20, 2_000)) {
+      registry.appendTranscript(ada.id, entry as never);
+    }
+
+    // Set on the module's own policy object: the defaults were read at import time, so setting
+    // the environment here would change nothing and the test would pass for the wrong reason.
+    DEFAULT_POLICY.triggerTokens = 5_000;
+    DEFAULT_POLICY.keepTailTokens = 2_000;
+
+    const bus = new AgentBus(registry, async () => {});
+    const capture: Capture = { params: [] };
+    const summaryCalls: Anthropic.MessageCreateParams[] = [];
+    const client = stubClientWithSummariser(
+      [message([textBlock("done")])],
+      capture,
+      params => {
+        summaryCalls.push(params);
+        return message([textBlock("Ran 20 shell steps; wrote /home/box/work/out.txt.")]);
+      }
+    );
+
+    const events: { type: string }[] = [];
+    await runTurn(
+      ada,
+      [{ fromId: "user", fromName: "user", text: "carry on", priority: false, receivedAt: "" }],
+      new AbortController().signal,
+      {
+        client,
+        registry,
+        bus,
+        box: undefined,
+        resolution: undefined,
+        onEvent: event => events.push(event),
+      }
+    );
+
+    assert.equal(summaryCalls.length, 1, "the summariser ran exactly once");
+    assert.ok(
+      summaryCalls[0]!.tools === undefined,
+      "the summarising call declares no tools — it is not a turn"
+    );
+
+    // What was sent: the summary first, and much less than the raw history.
+    const sent = capture.params[0]!.messages;
+    const firstText =
+      typeof sent[0]!.content === "string" ? sent[0]!.content : JSON.stringify(sent[0]!.content);
+    assert.match(firstText, /Summary of the first/, "the request opens with the summary");
+    assert.ok(
+      JSON.stringify(sent).length < 40_000,
+      `the request should be far smaller than the ~80KB history, was ${JSON.stringify(sent).length}`
+    );
+
+    // What was stored: everything, plus the summary. The record is not what got trimmed.
+    const stored = registry.readTranscript(ada.id) as { kind?: string }[];
+    assert.ok(stored.length > 40, "no stored entry was destroyed");
+    assert.equal(
+      stored.filter(entry => entry.kind === "summary").length,
+      1,
+      "the summary is persisted, so the next turn pays nothing"
+    );
+
+    const compacted = events.find(event => event.type === "compacted") as
+      | { covers: number; summarised: boolean }
+      | undefined;
+    assert.ok(compacted, "compaction is reported as its own event, not as agent prose");
+    assert.equal(compacted.summarised, true);
+    assert.ok(compacted.covers > 0);
+
+    // The second turn must not summarise again: that is the whole point of persisting it.
+    await runTurn(
+      ada,
+      [{ fromId: "user", fromName: "user", text: "again", priority: false, receivedAt: "" }],
+      new AbortController().signal,
+      { client, registry, bus, box: undefined, resolution: undefined }
+    );
+    assert.equal(summaryCalls.length, 1, "the persisted summary is reused");
+  } finally {
+    DEFAULT_POLICY.triggerTokens = Number(previousTrigger ?? 60_000);
+    DEFAULT_POLICY.keepTailTokens = Number(previousKeep ?? 20_000);
+    cleanup();
+  }
+});
+
+test("a turn still runs when the summariser fails", async () => {
+  const { registry, cleanup } = fixture();
+  const previousTrigger = DEFAULT_POLICY.triggerTokens;
+  const previousKeep = DEFAULT_POLICY.keepTailTokens;
+  try {
+    const ada = registry.create({ name: "Ada" });
+    for (const entry of bulkyHistory(20, 2_000)) {
+      registry.appendTranscript(ada.id, entry as never);
+    }
+    DEFAULT_POLICY.triggerTokens = 5_000;
+    DEFAULT_POLICY.keepTailTokens = 2_000;
+
+    const bus = new AgentBus(registry, async () => {});
+    const capture: Capture = { params: [] };
+    const client = stubClientWithSummariser([message([textBlock("done")])], capture, () => {
+      throw new Error("overloaded");
+    });
+
+    const events: { type: string }[] = [];
+    await runTurn(
+      ada,
+      [{ fromId: "user", fromName: "user", text: "carry on", priority: false, receivedAt: "" }],
+      new AbortController().signal,
+      {
+        client,
+        registry,
+        bus,
+        box: undefined,
+        resolution: undefined,
+        onEvent: event => events.push(event),
+      }
+    );
+
+    // The turn ran. A failure to summarise must not become a failure to work.
+    assert.equal(capture.params.length, 1, "the turn was still sent");
+
+    const sent = capture.params[0]!.messages;
+    const firstText =
+      typeof sent[0]!.content === "string" ? sent[0]!.content : JSON.stringify(sent[0]!.content);
+    assert.match(firstText, /could not be summarised/, "the model is told what it cannot see");
+
+    const compacted = events.find(event => event.type === "compacted") as
+      | { summarised: boolean; detail: string }
+      | undefined;
+    assert.ok(compacted, "the fallback is reported too — silent trimming is the failure mode");
+    assert.equal(compacted.summarised, false);
+    assert.match(compacted.detail, /overloaded/, "the reason survives into the feed");
+  } finally {
+    DEFAULT_POLICY.triggerTokens = previousTrigger;
+    DEFAULT_POLICY.keepTailTokens = previousKeep;
     cleanup();
   }
 });

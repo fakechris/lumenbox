@@ -5,7 +5,8 @@ Reviewed against [01-requirements.md](01-requirements.md) through
 system or the source, not inferred from the documents.
 
 **Verdict: it does not meet a product-grade standard yet.** Nine findings, three of them
-blocking. R-01 and R-02 are fixed; the rest stand. What it does meet is a higher standard than that summary suggests in one specific
+blocking. R-01, R-02 and R-07 are fixed and R-03 is half fixed — measured but not bounded; the rest
+stand. What it does meet is a higher standard than that summary suggests in one specific
 respect — the failure behaviour is genuinely engineered and tested — and a lower one in another:
 there is no cost control at all.
 
@@ -32,6 +33,9 @@ there is no cost control at all.
 | N3.1–3.4 | Isolation | met as scoped | limits stated, not overstated |
 | N4.1–4.3 | Honest failure | met | three no-op tests found and fixed |
 | N5.1–5.4 | Operability | **partial** | R-05 |
+
+Not in the requirements and it should be: a long-lived agent's history has to stay sendable. Added
+as the fix for R-07 and worth promoting to a requirement of its own.
 
 ## Blocking findings
 
@@ -112,11 +116,32 @@ N1.3 claims the view updates within a second. `vnc-probe` proves frames still ar
 compositor; it does not measure the delay from a screen change to a frame. The number in the
 requirement is currently a hope.
 
-### R-07 — Transcripts grow without bound
+### R-07 — Transcripts grow without bound — **fixed**
 
 180KB after a day of heavy use, no rotation, no compaction, no summarisation. A long-lived agent
-eventually exceeds the model's context and the turn fails on a request that cannot be made
-smaller. The design mentions compaction as a thing that does not exist.
+eventually exceeds the model's context and the turn fails on a request that cannot be made smaller
+— at the worst possible moment, mid-task, with nothing the user can do. The design mentioned
+compaction as a thing that did not exist.
+
+Fixed by summarising what is *sent* and never touching what is *stored*. Past a token trigger the
+history before a cut point is replaced, in the request, by one summary entry; the transcript keeps
+every original entry, because the tool blocks are what make an agent's claims checkable and
+summarising over them would destroy the thing they exist for. The summary is appended to the
+transcript too, so the next turn pays nothing and assembly starts from the newest one.
+
+Two things had to be right. The cut may not land between a `blocks` entry and its `results` — that
+is one exchange to the API and splitting it produces a request it rejects; the cut walks back to a
+pair boundary, with a test that fails if it stops walking. And a failed summarisation may not fail
+the turn: it falls back to dropping the oldest entries and *saying so in the history*, telling the
+model to treat what it cannot see as unknown rather than as not done.
+
+Measured on this box's real transcripts, not synthetic ones. Bob's 166-entry, 37,250-token history
+cut at entry 127 on a genuine pair boundary; the 26,473 tokens before it summarised to 1,672 — 16×
+— in one 30-second call. The summary named the files it wrote with paths, listed the decisions
+locked with its teammate, recorded its next concrete action, and flagged the two facts it had *not*
+independently verified. That last part is the reason for the "do not invent progress" line in the
+prompt: a summary that reads well and quietly upgrades an attempt into an achievement is worse than
+no summary, because the agent will believe it.
 
 ### R-08 — Secrets an agent reads land in the transcript in clear
 
@@ -152,4 +177,4 @@ Worth recording, because a review that only lists faults misrepresents the syste
 2. R-02 (health check covers the topology's promise) — small.
 3. R-03 (usage in the transcript, then budgets) — largest, and the one with money attached.
 4. R-09 (stop a turn) — completes the product's central promise.
-5. R-04, R-06, R-07, R-08, R-05.
+5. R-04, R-06, R-08, R-05. (R-07 done.)
