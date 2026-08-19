@@ -26,6 +26,7 @@ import { Orchestrator } from "../host/orchestrator.ts";
 import { describeProvider, type ProviderProfile } from "../host/provider.ts";
 import type { TurnEvent } from "../host/turn.ts";
 import { APP_HTML } from "./app-html.ts";
+import { loadConfig } from "../config.ts";
 import { vendorPath } from "./markdown.ts";
 import { toDisplayEntries } from "./transcript.ts";
 
@@ -62,16 +63,21 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
    *
    * Text deltas are left out (there are thousands, and the transcript has them) and so
    * are screenshots, which would make this hold megabytes of base64.
+   *
+   * How much to keep is a preference someone sets once, so it lives in the config file
+   * rather than in an environment variable. See src/config.ts.
    */
   const activity: OutboundEvent[] = [];
-  const ACTIVITY_LIMIT = 400;
+  const activityLimit = loadConfig(line => log(line)).activityLimit;
 
   const remember = (event: OutboundEvent) => {
     if (event.type === "text" || event.type === "round") return;
     const stored =
       event.type === "tool_end" ? { ...event, screenshot: undefined } : event;
     activity.push(stored as OutboundEvent);
-    if (activity.length > ACTIVITY_LIMIT) activity.splice(0, activity.length - ACTIVITY_LIMIT);
+    if (activity.length > activityLimit) {
+      activity.splice(0, activity.length - activityLimit);
+    }
   };
 
   const broadcast = (event: OutboundEvent) => {

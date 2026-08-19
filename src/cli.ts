@@ -24,6 +24,7 @@ import {
   resolveProvider,
   type ProviderProfile,
 } from "./host/provider.ts";
+import { ensureConfigFile } from "./config.ts";
 import { startWebServer } from "./web/server.ts";
 
 const here = dirname(fileURLToPath(import.meta.url));
@@ -457,6 +458,8 @@ async function cmdWeb(argv: string[]): Promise<number> {
   }
 
   out(dim(`model: ${describeProvider(provider)}`));
+  // Written on first run so the settings are visible in an editor, not just in docs.
+  out(dim(`config: ${ensureConfigFile()}`));
 
   try {
     await startWebServer({
@@ -528,6 +531,7 @@ Environment:
   ANTHROPIC_API_KEY         API credentials (or run \`ant auth login\`)
   AGENTBOX_PROVIDER         Which provider to use (see above)
   AGENTBOX_HOME             State directory (default ~/.agentbox)
+  AGENTBOX_CONFIG           Config file (default <state>/config.json)
   AGENTBOX_IMAGE            Box image tag (default agentbox/box:latest)
   AGENTBOX_BOX_HOST         Override where published ports are reachable
   AGENTBOX_WIDTH/HEIGHT     Box display size (default 1280x800)`;

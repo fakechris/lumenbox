@@ -173,6 +173,29 @@ chat [agent] [message]    Talk to an agent; omit the message for a REPL
 where                     Print state directories
 ```
 
+### Settings
+
+Anything that changes per run is an environment variable — which provider, which model,
+where the box is. Settings someone decides once live in a file instead, because
+re-exporting a variable in every shell to hold a preference is the wrong shape for it.
+
+`~/.agentbox/config.json`, written with its defaults the first time `web` starts:
+
+```json
+{
+  "activityLimit": 400
+}
+```
+
+| Setting | Default | What it does |
+| --- | --- | --- |
+| `activityLimit` | 400 | How many recent events the web UI keeps, so a page opened later still shows what the agents did. Not a record of the run — the transcripts on disk are that — so it is bounded, and older events are dropped first. |
+
+The file is read once at startup and meant to be edited by hand, so it is read
+defensively: a mistyped value falls back to the default and says so in the log rather
+than stopping the UI, and unknown keys are ignored so a config written by a later
+version still loads. `AGENTBOX_CONFIG` points somewhere else if you need it to.
+
 ## The agent model
 
 Each agent is a directory. `profile.json` holds its name and persona, `memory.md`

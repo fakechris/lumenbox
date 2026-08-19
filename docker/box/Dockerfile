@@ -76,8 +76,14 @@ EXPOSE 1337
 #
 #    wmctrl for window and workspace management, which xdotool cannot do.
 #    adwaita-icon-theme so the launchers render as icons rather than blanks.
+#
+#    fonts-noto-cjk because without it every Chinese, Japanese and Korean character
+#    renders as a tofu box. It fails in the worst way for an agent: the page loads, the
+#    screenshot succeeds, and the model reads a grid of empty rectangles — so it acts on
+#    a page it cannot actually see. Worth ~100MB in the image; a CUA box that cannot
+#    read half the web is not worth the space it saves.
 RUN apt-get update && apt-get install -y --no-install-recommends \
-      xterm pcmanfm wmctrl adwaita-icon-theme \
+      xterm pcmanfm wmctrl adwaita-icon-theme fonts-noto-cjk \
     && rm -rf /var/lib/apt/lists/*
 
 # 8. Desktop launchers, and a pcmanfm background matching the plain-X one.

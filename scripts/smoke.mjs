@@ -85,6 +85,19 @@ await check("the CUA toolchain is present", async () => {
   return "xdotool ffmpeg xrandr xmodmap xdpyinfo box-chrome";
 });
 
+await check("CJK text has a font to render with", async () => {
+  // Without one, Chinese, Japanese and Korean render as tofu boxes — and it fails
+  // silently for an agent: the page loads, the screenshot succeeds, and the model
+  // reads a grid of empty rectangles, then acts on a page it cannot see.
+  const result = await box.exec(
+    'fc-match "sans-serif:lang=zh-cn"; fc-list :lang=ja | wc -l'
+  );
+  const [matched = "", japanese = "0"] = result.stdout.trim().split("\n");
+  assert(/CJK|Noto|WenQuanYi/i.test(matched), `no CJK font, fc-match said: ${matched}`);
+  assert(Number(japanese.trim()) > 0, "no font covers Japanese");
+  return matched.split(":")[0] ?? "a CJK font";
+});
+
 await check("each desktop gets its own browser profile", async () => {
   // One shared profile is how an agent's browser window ends up on another agent's
   // screen: Chromium permits a single instance per profile directory, so the second
