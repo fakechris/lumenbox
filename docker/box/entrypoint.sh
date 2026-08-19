@@ -13,6 +13,19 @@ if [[ -z "${BOXD_TOKEN:-}" ]]; then
   exit 1
 fi
 
+# The config directory is a volume, so it survives the image it came from. Re-seed the
+# files the image owns — desktop launchers, the libfm and pcmanfm settings — or a box
+# created months ago keeps its old copies and a fix shipped in the image never arrives.
+# Everything else in there is left alone: browser profiles and logins are the reason the
+# volume exists.
+#
+# cp -r rather than -a on purpose: this runs as `box`, and preserving ownership would
+# fail and take the entrypoint down with it.
+if [[ -d /usr/local/share/agentbox/skel ]]; then
+  log "re-seeding desktop config from the image"
+  cp -rf /usr/local/share/agentbox/skel/. "${HOME}/"
+fi
+
 # Display 1 is the default: an agent with no assignment lands here, and it is what
 # `box shot` and the smoke test look at.
 log "starting the first desktop"

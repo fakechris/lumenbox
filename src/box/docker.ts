@@ -256,6 +256,19 @@ export class BoxManager {
       // starve the engine host.
       "--memory",
       process.env.AGENTBOX_MEMORY ?? "4g",
+      // Two named volumes, because everything else in the container is disposable and
+      // these two things are not: what the agents made, and what they logged into.
+      // Without them, `box up --recreate` — which is also what upgrading the image
+      // means — silently destroys both.
+      //
+      // The system layer stays ephemeral on purpose, so a rebuilt image really does
+      // deliver a fresh box. The image's own config files are re-seeded into the
+      // config volume on every start (see entrypoint.sh), or an old volume would
+      // shadow them forever.
+      "--volume",
+      `${config.containerName}-work:/home/box/work`,
+      "--volume",
+      `${config.containerName}-config:/home/box/.config`,
       ...config.runArgs,
       config.image,
     ];

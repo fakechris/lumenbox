@@ -195,6 +195,30 @@ The events themselves are in `~/.agentbox/activity.jsonl`, one per line with the
 they happened, so the feed survives a restart of the server and not just a reload of
 the page. Delete the file to clear the feed.
 
+### What survives, and what does not
+
+The container is disposable. `box up --recreate` — which is also what upgrading the
+image means — throws away its filesystem, so two things that must not be thrown away
+live on named volumes instead:
+
+| Volume | Mounted at | Holds |
+| --- | --- | --- |
+| `agentbox-box-work` | `/home/box/work` | What the agents made: files, notes, output |
+| `agentbox-box-config` | `/home/box/.config` | What they logged into: browser profiles, cookies, CLI auth |
+
+Everything else in the container is ephemeral on purpose, so a rebuilt image really
+does deliver a fresh box. The config files the image ships — desktop launchers, the
+libfm and pcmanfm settings — are re-seeded into the config volume on every start, or a
+box created months ago would keep its own copies and never see a fix.
+
+`box down --rm` removes the container but not the volumes. To discard the agents' work
+as well: `docker volume rm agentbox-box-work agentbox-box-config`.
+
+On the host, `~/.agentbox/` holds what the container never sees: each agent's
+`profile.json`, `conversation.jsonl`, and `memory.md`, plus the box token, `config.json`
+and `activity.jsonl`. Those are files on your disk and are unaffected by anything done
+to the container.
+
 The file is read once at startup and meant to be edited by hand, so it is read
 defensively: a mistyped value falls back to the default and says so in the log rather
 than stopping the UI, and unknown keys are ignored so a config written by a later

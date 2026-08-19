@@ -114,7 +114,13 @@ RUN mkdir -p /home/box/Desktop /home/box/.config/pcmanfm/default \
       'desktop_fg=#e6e9ef' 'desktop_shadow=#000000' 'show_wm_menu=0' \
       > /home/box/.config/pcmanfm/default/desktop-items-0.conf \
     && chmod +x /home/box/Desktop/*.desktop \
-    && chown -R box:box /home/box/Desktop /home/box/.config
+    && chown -R box:box /home/box/Desktop /home/box/.config \
+    # A copy the image owns. /home/box/.config is a volume at runtime, so it outlives
+    # the image: without re-seeding from here on every start, an old volume would keep
+    # shadowing whatever config a rebuilt image ships. The originals above stay, so a
+    # fresh volume is still seeded by Docker with the right owner.
+    && mkdir -p /usr/local/share/agentbox/skel \
+    && cp -a /home/box/Desktop /home/box/.config /usr/local/share/agentbox/skel/
 
 # Run the desktop and the daemon as the unprivileged user. Nothing in the stack
 # needs root — Xvfb, xfwm4, x11vnc, websockify, and node all run fine as `box` —
