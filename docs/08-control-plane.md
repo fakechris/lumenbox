@@ -51,8 +51,8 @@ the seams exist before the implementations do.
 | **Store** | Tenants, boxes, tokens, quotas, usage | SQLite file behind a repository interface — **built** |
 | **Credentials** | Issue box, UI and owner tokens; hold provider keys | Generate and store; keys still passed as env |
 | **Model relay** | Give a box a scoped endpoint instead of the real provider key | Absent: the key goes in the box, as today |
-| **Collector** | Pull health, crashes and usage from every box | Poll loop writing to the store |
-| **Metering** | Turn usage into per-tenant totals and enforce budgets | Totals only, no enforcement |
+| **Collector** | Pull health, crashes and usage from every box | Poll loop writing to the store — **built** |
+| **Metering** | Turn usage into per-tenant totals and enforce budgets | Totals only, no enforcement — **built** |
 | **Reaper** | Stop idle boxes, enforce quotas, clean up volumes | Idle timeout only |
 
 The order they become real: Store → Allocator → Gateway → Collector → Metering → Relay → Reaper.
@@ -253,6 +253,32 @@ A poll loop, because the box does not push (§2).
   collector remembers its offset, so a collector that was down for an hour catches up instead of
   losing an hour.
 
+**Built, and verified against a real box doing real work.** The cursor lives in the store rather than
+in the collector's memory, so a restarted collector resumes instead of replaying — and replaying
+would be harmless anyway, which is the point of keying rows by the box's own sequence number.
+
+Boxes are polled concurrently and each failure is recorded rather than thrown: a fleet where one dead
+box stops metering for everyone is worse than no metering, because it looks like it is working. A box
+is marked `unreachable` only after repeated silence — a restart is not a verdict — and a box that
+answers again is un-marked automatically, or a transient fault becomes a box nobody ever un-marks and
+a reaper that keeps restarting something healthy. `stopped` and `gone` boxes are not polled at all;
+polling them would manufacture failures and then act on them.
+
+The end-to-end run: a box allocated by the compose allocator, an agent created and given a prompt
+through the box's own API, one real model round (4,058 input, 1 output, 133 cache-read) appearing in
+`usage.jsonl`, collected into the store by the next sweep, and the meter reporting the tenant over its
+1,000-token quota. The following sweep stored zero rows and left the totals unchanged. `/api/usage`
+answers 401 without a token, so the collector's credential is doing something.
+
+Two things that run found:
+
+- **The image was stale.** `/api/usage` returned 404 because the bundle inside `agentbox/box:latest`
+  predated R-03. Fixed the way this project fixes box problems — rebuild the image from the
+  Dockerfile — not by patching a container.
+- **The collector said so.** A box that is healthy but whose usage cannot be read is a box spending
+  money invisibly, and it logged `usage unavailable (HTTP 404)` rather than reporting a comfortable
+  zero. That is the whole reason R-02 and R-03 were done before this.
+
 ## 9. Failure model
 
 | Failure | Effect | Recovery |
@@ -298,7 +324,7 @@ should change before the control plane does.
 2. ~~Store and `static` allocator~~ — done: the control plane running against a laptop box.
 3. ~~`compose` allocator and gateway~~ — done: the first real multi-user system, on one host, both
    verified against real containers.
-4. Collector and metering.
+4. ~~Collector and metering~~ — done; enforcement is still open (R-03's remaining half).
 5. Relay, and metering moves behind it.
 6. Reaper, quotas.
 7. `kubernetes` allocator, when there is a cluster to verify it against.

@@ -12656,6 +12656,7 @@ import { promisify } from "node:util";
 
 // src/protocol/index.ts
 var BOXD_PORT = 1337;
+var UI_PORT = 7777;
 var DEFAULT_DISPLAY_INDEX = 1;
 
 // src/box/client.ts
@@ -12958,6 +12959,8 @@ var BoxManager = class {
     if (state !== "running") return status;
     const boxdPort = await this.publishedPort(BOXD_PORT);
     if (boxdPort) status.boxdUrl = `http://${this.config.host}:${boxdPort}`;
+    const port = await this.publishedPort(UI_PORT);
+    if (port) status.uiUrl = `http://${this.config.host}:${port}`;
     return status;
   }
   async imageExists() {
@@ -12980,6 +12983,7 @@ var BoxManager = class {
   runArguments() {
     const { config } = this;
     const publish = (hostPort, containerPort) => hostPort > 0 ? `${hostPort}:${containerPort}` : `${containerPort}`;
+    const publishOn = (address, hostPort, containerPort) => hostPort > 0 ? `${address}:${hostPort}:${containerPort}` : `${address}::${containerPort}`;
     return [
       "run",
       "--detach",
@@ -13045,12 +13049,12 @@ var BoxManager = class {
         // works. Inside the box the UI binds 0.0.0.0 — Docker's publish address is all
         // that keeps it local — so it must not be open.
         "--env",
-        `AGENTBOX_UI_TOKEN=${uiToken()}`,
+        `AGENTBOX_UI_TOKEN=${config.uiToken ?? uiToken()}`,
         // Published to loopback only. The UI has no authentication — the assumption
         // has always been that anything able to reach it can already drive the
         // agents — so it must not be reachable from the network.
         "--publish",
-        "127.0.0.1:7777:7777",
+        publishOn("127.0.0.1", config.uiPort ?? UI_PORT, UI_PORT),
         ...hostCredentialArgs()
       ] : [],
       ...config.runArgs,
@@ -13106,7 +13110,44 @@ var BoxManager = class {
     }
     const client = new BoxClient({ baseUrl: status.boxdUrl, token: this.config.token });
     await this.waitForHealthy(client, onOutput);
+    if (this.config.withHost === true && status.uiUrl !== void 0) {
+      await this.waitForUi(status.uiUrl, onOutput);
+    }
     return { client, status };
+  }
+  /**
+   * Polls the in-box orchestrator's UI until it answers.
+   *
+   * A box whose desktop is up is not a box a person can use: the orchestrator starts after X, and
+   * for a second or two the published port accepts a connection and then nothing serves it. Found
+   * by allocating two boxes for real and watching the second one's UI refuse a request that the
+   * first one — allocated seconds earlier — had answered.
+   *
+   * A 401 counts as answering, for the same reason it does in `box-healthcheck`: a UI that refuses
+   * an unauthenticated request correctly is a UI that is serving.
+   */
+  async waitForUi(uiUrl, onOutput, timeoutMs = 6e4) {
+    const deadline = Date.now() + timeoutMs;
+    let lastError = "not yet listening";
+    while (Date.now() < deadline) {
+      try {
+        const response = await fetch(uiUrl, {
+          redirect: "manual",
+          signal: AbortSignal.timeout(4e3)
+        });
+        if (response.status < 500) {
+          onOutput?.(`orchestrator answering on ${uiUrl}`);
+          return;
+        }
+        lastError = `HTTP ${response.status}`;
+      } catch (error) {
+        lastError = error instanceof Error ? error.message : String(error);
+      }
+      await new Promise((resolve5) => setTimeout(resolve5, 500));
+    }
+    throw new DockerError(
+      `Box desktop is up but its orchestrator never answered on ${uiUrl} within ${timeoutMs / 1e3}s (last: ${lastError}). Check \`docker logs ${this.config.containerName}\`.`
+    );
   }
   /** Polls /health until the daemon reports a usable display. */
   async waitForHealthy(client, onOutput, timeoutMs = 9e4) {
@@ -13845,6 +13886,85 @@ function resolveBoxProvisioner() {
 // src/host/turn.ts
 init_sdk();
 
+// src/host/compaction.ts
+var CHARS_PER_TOKEN = 4;
+var DEFAULT_POLICY = {
+  triggerTokens: Number(process.env.AGENTBOX_COMPACT_AT_TOKENS ?? 6e4),
+  keepTailTokens: Number(process.env.AGENTBOX_COMPACT_KEEP_TOKENS ?? 2e4)
+};
+function estimateTokens(entries) {
+  let chars = 0;
+  for (const entry of entries) {
+    chars += "kind" in entry && entry.kind !== "summary" ? JSON.stringify(entry.blocks).length : entry.text.length;
+  }
+  return Math.ceil(chars / CHARS_PER_TOKEN);
+}
+function activeWindow(entries) {
+  for (let at = entries.length - 1; at >= 0; at--) {
+    const entry = entries[at];
+    if ("kind" in entry && entry.kind === "summary") return entries.slice(at);
+  }
+  return entries;
+}
+function chooseCutPoint(entries, policy = DEFAULT_POLICY) {
+  const total = estimateTokens(entries);
+  if (total <= policy.triggerTokens) return void 0;
+  let tail = 0;
+  let index = entries.length;
+  while (index > 0 && tail < policy.keepTailTokens) {
+    index -= 1;
+    tail += estimateTokens([entries[index]]);
+  }
+  while (index > 0) {
+    const previous = entries[index - 1];
+    const isPairEnd = !("kind" in previous) || previous.kind === "results" || previous.kind === "summary";
+    if (isPairEnd) break;
+    index -= 1;
+  }
+  if (index <= 0) return void 0;
+  return {
+    index,
+    reason: `history is about ${total} tokens, over the ${policy.triggerTokens} trigger; summarising the first ${index} entr${index === 1 ? "y" : "ies"} and keeping about ${tail} tokens of tail`
+  };
+}
+function buildSummaryPrompt(entries) {
+  const rendered = entries.map((entry) => {
+    if (!("kind" in entry)) return `${entry.role}: ${entry.text}`;
+    if (entry.kind === "summary") return `summary of earlier work: ${entry.text}`;
+    if (entry.kind === "blocks") {
+      return entry.blocks.map(
+        (block) => block.type === "text" ? `assistant: ${block.text}` : block.type === "tool_use" ? `assistant used ${block.name}: ${JSON.stringify(block.input).slice(0, 400)}` : ""
+      ).filter(Boolean).join("\n");
+    }
+    return entry.blocks.map((block) => {
+      const content = block.content;
+      const text = typeof content === "string" ? content : Array.isArray(content) ? content.filter((part) => part.type === "text").map((part) => part.text ?? "").join(" ") : "";
+      return `result: ${text.slice(0, 400)}`;
+    }).join("\n");
+  }).filter((line) => line.trim() !== "").join("\n");
+  return "Summarise the earlier part of your own working history below, for your future self.\n\nWrite what a later turn needs to continue without re-reading any of it:\n- what was asked, and what has been decided\n- what you actually did, including files you created or changed, with their paths\n- the current state of the work, and anything left open or blocked\n- facts you established that would be expensive to find again\n\nBe specific and dense. Omit narration, apologies and anything you would not need again. Do not invent progress: if something was attempted and failed, say so.\n\n--- history ---\n" + rendered;
+}
+function summaryEntry(text, covers, at = /* @__PURE__ */ new Date()) {
+  return {
+    role: "user",
+    kind: "summary",
+    covers,
+    text: `[Summary of the first ${covers} entries of this conversation]
+
+${text}`,
+    at: at.toISOString()
+  };
+}
+function droppedEntry(covers, reason, at = /* @__PURE__ */ new Date()) {
+  return {
+    role: "user",
+    kind: "summary",
+    covers,
+    text: `[The first ${covers} entries of this conversation were dropped to fit the context window, and could not be summarised: ${reason}. Earlier work is still in the transcript on disk, but not in this request \u2014 treat anything you cannot see as unknown rather than as not done.]`,
+    at: at.toISOString()
+  };
+}
+
 // src/host/prompt.ts
 var AGENT_DIRECTORY_LIMIT = 40;
 var BASE_PROMPT = `You are one of several agents that a single user runs together as a team.
@@ -14565,8 +14685,41 @@ function storableResult(block) {
     is_error: block.is_error
   };
 }
+async function compactHistory(options) {
+  const { history, agent, registry: registry2, client, provider, log, onCompacted } = options;
+  const active = activeWindow(history);
+  const cut = chooseCutPoint(active);
+  if (!cut) return history;
+  const olderEntries = active.slice(0, cut.index);
+  log(`compacting history: ${cut.reason}`);
+  let entry;
+  try {
+    const response = await client.messages.create({
+      model: provider.model,
+      // Enough for a dense summary and no more; a summary that runs to pages defeats the purpose.
+      max_tokens: Math.min(4096, provider.maxTokens),
+      messages: [{ role: "user", content: buildSummaryPrompt(olderEntries) }]
+    });
+    const text = response.content.filter((block) => block.type === "text").map((block) => block.text).join("\n").trim();
+    if (!text) throw new Error("the summariser returned no text");
+    entry = summaryEntry(text, cut.index);
+    const detail = `summarised ${cut.index} entries: about ${estimateTokens(olderEntries)} tokens became ${estimateTokens([entry])}`;
+    log(detail);
+    onCompacted({ type: "compacted", covers: cut.index, summarised: true, detail });
+  } catch (error) {
+    const reason = error instanceof Error ? error.message : String(error);
+    entry = droppedEntry(cut.index, reason);
+    const detail = `could not summarise (${reason}); dropped ${cut.index} entries instead`;
+    log(detail);
+    onCompacted({ type: "compacted", covers: cut.index, summarised: false, detail });
+  }
+  registry2.appendTranscript(agent.id, entry);
+  return [...history, entry];
+}
 function historyToMessages(entries) {
-  const window2 = entries.slice(-HISTORY_LIMIT);
+  const window2 = [...activeWindow(entries)].slice(
+    -HISTORY_LIMIT
+  );
   while (window2.length > 0 && "kind" in window2[0] && window2[0].kind === "results") {
     window2.shift();
   }
@@ -14576,6 +14729,10 @@ function historyToMessages(entries) {
   const messages = [];
   for (const entry of window2) {
     if ("kind" in entry) {
+      if (entry.kind === "summary") {
+        messages.push({ role: "user", content: entry.text });
+        continue;
+      }
       if (entry.blocks.length === 0) continue;
       messages.push({ role: entry.role, content: entry.blocks });
     } else if (entry.text.trim() !== "") {
@@ -14633,8 +14790,17 @@ async function runTurn(agent, inbound, signal, deps) {
     { type: "text", text: promptParts.stable, ...cache },
     { type: "text", text: promptParts.volatile, ...cache }
   ];
-  const history = registry2.readTranscript(agent.id);
+  let history = registry2.readTranscript(agent.id);
   const turnText = buildTurnPrompt(inbound);
+  history = await compactHistory({
+    history,
+    agent,
+    registry: registry2,
+    client,
+    provider,
+    log: (line) => console.error(`[compaction] ${agent.profile.name}: ${line}`),
+    onCompacted: (event) => emit({ ...event, agentId: agent.id })
+  });
   const messages = [
     ...historyToMessages(history),
     { role: "user", content: turnText }
