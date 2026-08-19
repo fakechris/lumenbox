@@ -72,6 +72,20 @@ running_here() {
 # +extension GLX +render: Chromium and GTK check for them, and without them they fall
 # back to slower paths and log errors an agent then has to reason about.
 if ! xdpyinfo -display "${DISP}" > /dev/null 2>&1; then
+  # A dead X server leaves its lock and socket behind, and Xvfb refuses to start on a
+  # display that looks taken: "Server is already active for display N". Nothing clears
+  # them, so a container restart — which is exactly what a restart policy does — comes up
+  # with no desktop, forever. Found by restarting a stopped container and watching it fail.
+  #
+  # Only when nothing is actually serving: xdpyinfo failing plus no Xvfb process for this
+  # display means the files are stale rather than in use.
+  if ! pgrep -f "Xvfb ${DISP}" > /dev/null 2>&1; then
+    if [ -e "/tmp/.X${N}-lock" ] || [ -e "/tmp/.X11-unix/X${N}" ]; then
+      log "clearing a stale X lock for ${DISP}"
+      rm -f "/tmp/.X${N}-lock" "/tmp/.X11-unix/X${N}" 2>/dev/null || true
+    fi
+  fi
+
   log "starting Xvfb at ${WIDTH}x${HEIGHT}"
   # setsid so these outlive this script and are reparented to the container's init
   # rather than dying with the shell boxd spawned us from.
