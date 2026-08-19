@@ -191,6 +191,10 @@ re-exporting a variable in every shell to hold a preference is the wrong shape f
 | --- | --- | --- |
 | `activityLimit` | 400 | How many recent events the web UI keeps, so a page opened later still shows what the agents did. Not a record of the run — the transcripts on disk are that — so it is bounded, and older events are dropped first. |
 
+The events themselves are in `~/.agentbox/activity.jsonl`, one per line with the time
+they happened, so the feed survives a restart of the server and not just a reload of
+the page. Delete the file to clear the feed.
+
 The file is read once at startup and meant to be edited by hand, so it is read
 defensively: a mistyped value falls back to the default and says so in the log rather
 than stopping the UI, and unknown keys are ignored so a config written by a later

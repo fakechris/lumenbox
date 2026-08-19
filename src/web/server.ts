@@ -19,6 +19,7 @@ import {
 } from "node:http";
 import { readFileSync } from "node:fs";
 import { connect as netConnect, type Socket } from "node:net";
+import { join } from "node:path";
 import { AgentRegistry } from "../agents/registry.ts";
 import type { BusEvent } from "../agents/bus.ts";
 import { BoxManager, defaultBoxConfig, loadBoxToken } from "../box/docker.ts";
@@ -26,7 +27,8 @@ import { Orchestrator } from "../host/orchestrator.ts";
 import { describeProvider, type ProviderProfile } from "../host/provider.ts";
 import type { TurnEvent } from "../host/turn.ts";
 import { APP_HTML } from "./app-html.ts";
-import { loadConfig } from "../config.ts";
+import { agentboxHome, loadConfig } from "../config.ts";
+import { ActivityLog } from "./activity.ts";
 import { vendorPath } from "./markdown.ts";
 import { toDisplayEntries } from "./transcript.ts";
 
@@ -62,22 +64,33 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
    * a record of it; the transcripts on disk are the record.
    *
    * Text deltas are left out (there are thousands, and the transcript has them) and so
-   * are screenshots, which would make this hold megabytes of base64.
+   * are screenshots, which would make this hold megabytes of base64. Events that draw
+   * no line are skipped: this exists to fill the feed, not to mirror the stream.
    *
-   * How much to keep is a preference someone sets once, so it lives in the config file
-   * rather than in an environment variable. See src/config.ts.
+   * On disk, because in one process's memory it survived a browser reload but not a
+   * restart — see src/web/activity.ts. How much to keep is a preference someone sets
+   * once, so it lives in the config file rather than in an environment variable.
    */
-  const activity: OutboundEvent[] = [];
   const activityLimit = loadConfig(line => log(line)).activityLimit;
+  const activity = new ActivityLog({
+    path: join(agentboxHome(), "activity.jsonl"),
+    limit: activityLimit,
+    onWarn: line => log(line),
+  });
+
+  const FEED_EVENTS = new Set([
+    "prompt",
+    "turn_started",
+    "turn_failed",
+    "turn_interrupted",
+    "tool_start",
+    "message_sent",
+    "error",
+  ]);
 
   const remember = (event: OutboundEvent) => {
-    if (event.type === "text" || event.type === "round") return;
-    const stored =
-      event.type === "tool_end" ? { ...event, screenshot: undefined } : event;
-    activity.push(stored as OutboundEvent);
-    if (activity.length > activityLimit) {
-      activity.splice(0, activity.length - activityLimit);
-    }
+    if (!FEED_EVENTS.has(event.type)) return;
+    activity.add(event as unknown as Record<string, unknown> & { type: string });
   };
 
   const broadcast = (event: OutboundEvent) => {
@@ -282,7 +295,7 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
         }
 
         if (route === "GET /api/activity") {
-          send(res, 200, activity);
+          send(res, 200, activity.list());
           return;
         }
 

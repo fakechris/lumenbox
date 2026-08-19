@@ -149,6 +149,7 @@ export const APP_HTML = String.raw`<!doctype html>
   .feed { flex: 1; min-height: 0; overflow-y: auto; padding: 6px 0; }
   .ev { padding: 3px 14px; font: 12px/1.55 ui-monospace, SFMono-Regular, Menlo, monospace; color: var(--dim); }
   .ev b { color: var(--text); font-weight: 600; }
+  .ev .t { color: #59616e; }
   .ev.mail { color: var(--ok); }
   .ev.err { color: var(--err); }
   .ev.warn { color: var(--warn); }
@@ -231,12 +232,23 @@ function nameOf(id) {
   return String(id).slice(0, 8);
 }
 
-function feed(html, cls) {
+/**
+ * One activity line. The at argument is when it happened; omit it for something now.
+ *
+ * The clock is there because this history outlives the process: without it, a line from
+ * last night's run reads as if it just happened.
+ */
+function feed(html, cls, at) {
   var el = $("feed");
   var stick = nearBottom(el);
+  var when = at ? new Date(at) : new Date();
+  var stamp = isNaN(when.getTime())
+    ? ""
+    : '<span class="t">' + ("0" + when.getHours()).slice(-2) + ":" +
+        ("0" + when.getMinutes()).slice(-2) + "</span> ";
   var row = document.createElement("div");
   row.className = "ev " + (cls || "");
-  row.innerHTML = html;
+  row.innerHTML = stamp + html;
   el.appendChild(row);
   if (stick) el.scrollTop = el.scrollHeight;
 }
@@ -452,7 +464,7 @@ function loadActivity() {
     .then(function (events) {
       for (var i = 0; i < events.length; i++) {
         var line = activityLine(events[i]);
-        if (line) feed(line.html, line.cls);
+        if (line) feed(line.html, line.cls, events[i].at);
       }
     })
     .catch(function () { /* an empty feed is not worth an error row */ });
