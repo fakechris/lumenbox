@@ -385,11 +385,36 @@ $("form").onsubmit = function (event) {
   });
 };
 
+// Enter is overloaded, and an IME has the stronger claim on it: while composing,
+// Enter accepts the candidate. That keydown reaches the page looking like a
+// deliberate send, and sending on it throws away a half-composed sentence — the
+// characters chosen so far go out as the message and the rest of the thought is
+// lost. Anyone typing Chinese, Japanese or Korean hits this on their first line.
+var composing = false;
+var compositionEndedAt = 0;
+
+$("input").addEventListener("compositionstart", function () {
+  composing = true;
+});
+$("input").addEventListener("compositionend", function () {
+  composing = false;
+  compositionEndedAt = Date.now();
+});
+
 $("input").onkeydown = function (event) {
-  if (event.key === "Enter" && !event.shiftKey) {
-    event.preventDefault();
-    $("form").requestSubmit();
-  }
+  if (event.key !== "Enter" || event.shiftKey) return;
+
+  // isComposing is the standard signal (Chrome, Firefox, Edge); keyCode 229 is the
+  // older one some IMEs still send; the flag covers anything that sets neither.
+  if (event.isComposing || event.keyCode === 229 || composing) return;
+
+  // Safari delivers the accepting Enter *after* compositionend with isComposing
+  // false, so none of the checks above can see it. Nothing legitimate arrives this
+  // fast: a second, deliberate Enter needs the key released and pressed again.
+  if (Date.now() - compositionEndedAt < 50) return;
+
+  event.preventDefault();
+  $("form").requestSubmit();
 };
 
 $("new").onclick = function () {
