@@ -1,0 +1,178 @@
+# Data
+
+There is no database. The data model is the filesystem, and that is a decision with real
+consequences — the ones it buys are in §6, the ones it costs are in §7.
+
+## 1. Where state lives
+
+Three places, and which one a thing is in determines what destroys it.
+
+| Location | Survives | Destroyed by |
+| --- | --- | --- |
+| **Host state dir** (`~/.agentbox`) or the `hostd` volume | container recreate, image upgrade | deleting it |
+| **Box volumes** (`work`, `config`) | container recreate, image upgrade | `docker volume rm` |
+| **Container layer** (everything else) | `docker stop`/`start` | `--recreate`, image upgrade |
+
+The third row is why the first two exist. Recreating a container is what upgrading an image
+means, and it takes the whole writable layer with it.
+
+## 2. Orchestrator state
+
+`~/.agentbox/` on the host, or `/home/hostd/.agentbox` on a volume, mode 700 in the
+self-contained topology.
+
+```
+token                       box API bearer, 0600
+ui-token                    web UI shared secret, 0600
+config.json                 settings decided once
+activity.jsonl              recent activity for the feed
+agents/<agentId>/
+  profile.json              identity and persona
+  conversation.jsonl        the transcript
+  memory.md                 long-term notes the agent maintains
+  box-owner                 this agent's claim on its desktop, 0600
+```
+
+### 2.1 `profile.json`
+
+```jsonc
+{
+  "name": "Ada",                    // unique-ish label, ≤72 chars, whitespace collapsed
+  "description": "…",               // becomes the persona in the system prompt, ≤2000 chars
+  "title": "coordinator",           // optional subtitle
+  "avatarColor": "#7aa2f7",         // optional
+  "hidden": false,                  // removes it from listings, stays functional
+  "displayIndex": 1,                // its desktop; stable for the agent's life
+  "createdAt": "2026-08-19T…Z",
+  "updatedAt": "2026-08-19T…Z"
+}
+```
+
+Written atomically — temp file plus rename — because it is read on every prompt assembly and a
+reader that catches a half-written file sees invalid JSON. A corrupt profile removes that agent
+from listings rather than failing the roster.
+
+`displayIndex` is allocated as the lowest free index, so a deleted agent's desktop is reused,
+capped at 32. An agent created before the field existed is backfilled on first use rather than
+defaulted to 1, which would silently share a desktop.
+
+### 2.2 `conversation.jsonl`
+
+Append-only, one JSON object per line, four shapes:
+
+```jsonc
+{ "role": "user",      "text": "…",        "at": "…" }   // what the person or the wake prompt said
+{ "role": "assistant", "text": "…",        "at": "…" }   // prose only
+{ "role": "assistant", "kind": "blocks",  "blocks": [ … ], "at": "…" }  // text + tool_use
+{ "role": "user",      "kind": "results", "blocks": [ … ], "at": "…" }  // the matching tool_result
+```
+
+Invariants:
+
+- A `results` entry immediately follows its `blocks` entry. Replay trims orphans at the edges,
+  because a result with no call is a protocol error to the model.
+- `blocks` are the model's own content blocks, not a rendering of them. That is the point:
+  see [04-design.md](04-design.md) §6.
+- Images are stripped from stored results and replaced with a note. A transcript would
+  otherwise be mostly base64.
+- An unparseable line is skipped, not fatal.
+
+Observed sizes: a few KB per light conversation, ~180KB after a day of heavy computer use.
+Growth is unbounded — see §7.
+
+### 2.3 `activity.jsonl`
+
+Append-only records of feed-worthy events, each with the time it happened. Bounded by
+`activityLimit` (default 400): the file is compacted in place once it exceeds a few times that.
+Copy-then-truncate rather than rename, because the writer holds it open.
+
+Not a record of the run. The transcripts are. Deleting this file clears the feed.
+
+### 2.4 `config.json`
+
+```jsonc
+{ "activityLimit": 400 }
+```
+
+Read once at startup, written with defaults on first start so the settings are discoverable in
+an editor. Read defensively: a mistyped value falls back and says so, an out-of-range one is
+clamped, unknown keys are ignored so a config from a later version still loads.
+
+## 3. Box state
+
+### 3.1 `work` volume — `/home/box/work`
+
+The agents' output. Whatever they make, plus `recordings/*.mp4`. Owned by `box`. This is the
+volume a person browses in the file manager.
+
+### 3.2 `config` volume — `/home/box/.config`
+
+What the box logged into and how the desktop looks: browser profiles per display
+(`box-chrome-<n>`), dconf, libfm, pcmanfm, plank, Thunar.
+
+**Re-seeded from the image on every start.** A volume outlives the image it came from, so
+without re-seeding a box created months ago keeps its old desktop config and a fix shipped in
+the image never arrives. Only the files the image owns are overwritten; browser profiles are
+left alone, since they are why the volume exists.
+
+### 3.3 Ephemeral, in the container layer
+
+`/tmp/xvfb-N.log`, `xfwm4-N.log`, `picom-N.log`, `plank-N.log`, `pcmanfm-N.log`,
+`x11vnc-N.log`, `novnc-N.log`, `autocutsel-N.log` — rotated by copy-then-truncate past 2MB.
+`/tmp/agentbox-crashes.jsonl` — crash records from PID 1. Session state for shell sessions.
+
+Deliberately ephemeral: a fresh container should have fresh logs, and none of this is evidence
+anyone needs after the box is gone.
+
+## 4. In-memory only
+
+Named because losing them is a design decision, not an oversight.
+
+| State | Lost when | Consequence |
+| --- | --- | --- |
+| Desktop→owner bindings | boxd restarts | Rebound on the next ensure |
+| Component restart history | boxd restarts | An abandoned component is retried |
+| Crash aggregation counters | PID 1 restarts | Pending counts unflushed |
+| In-flight turns | Orchestrator restarts | The turn is lost; its transcript keeps what completed |
+| Recording state | boxd restarts | The file is playable up to near where it stopped |
+
+The last row is the one that took work: a killed recorder used to leave an unplayable stub.
+
+## 5. Identifiers
+
+| Identifier | Form | Scope |
+| --- | --- | --- |
+| Agent id | UUID v4 | Directory name, stable for life |
+| Display index | 1–32 | The box; one agent each |
+| Box token | 32 hex | One box; the API bearer |
+| UI token | 32 hex | One UI; whoever holds it drives everything |
+| Owner token | 32 hex | One agent's desktop claim |
+| Recording file | `<agent>-<ISO timestamp>.mp4` | Sanitised: no path separators survive |
+
+## 6. Why the filesystem
+
+- An agent can read a teammate's profile with the same shell it uses for everything else. No
+  API, no schema migration, no second source of truth.
+- A person can read and repair everything with an editor.
+- Append-only transcripts cannot be corrupted by a concurrent writer, and a truncated last
+  line costs one entry.
+- No process to run, back up, or upgrade separately.
+
+## 7. What it costs
+
+Honestly, since these are the findings a review should raise:
+
+- **Unbounded growth.** Transcripts have no rotation, compaction or summarisation. A long-lived
+  agent's conversation grows until it exceeds the model's context, and nothing trims it.
+- **No query.** "Which agent touched this file", "what happened on Tuesday" mean reading every
+  file. Fine for one box, not for a fleet.
+- **No transactions.** Atomic profile writes and append-only transcripts cover the realistic
+  cases; a crash between appending a `blocks` entry and its `results` entry leaves an orphan,
+  which replay tolerates but which is real.
+- **No schema version.** Nothing in a transcript or profile says which version wrote it. A
+  format change has to be backward-compatible by inspection, which is how a format change goes
+  wrong quietly.
+- **No backup.** Documented as a directory to copy ([06-deployment.md](06-deployment.md) §6);
+  nothing does it.
+- **Concurrent orchestrators are undefined.** Two writing one agent's transcript interleave
+  entries. Nothing prevents it and nothing detects it.
