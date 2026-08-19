@@ -350,6 +350,9 @@ server.listen(BOXD_PORT, "0.0.0.0", () => {
   displays.ensure(defaultDisplayIndex).catch(error => {
     log(`default desktop not ready yet: ${describe(error)}`);
   });
+  // A component that dies takes the user's view of the box with it, silently: the
+  // agent keeps working against X while the screen stays dead. Repair is on a timer.
+  displays.startSupervisor();
 });
 
 for (const signal of ["SIGINT", "SIGTERM"] as const) {

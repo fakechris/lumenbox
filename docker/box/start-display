@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Brings up one independent desktop, numbered.
+# Brings up one independent desktop, numbered, and repairs one that is half up.
 #
 # Each agent gets its own X display rather than sharing one. On a shared display X
 # delivers synthetic input to whichever window has focus, so two agents typing at
@@ -9,7 +9,17 @@
 # screen while the others keep working.
 #
 # Everything is per-display and derived from the index: X display :N, VNC on
-# 5900+N, noVNC on 6080+N. Idempotent — re-running for a live display is a no-op.
+# 5900+N, noVNC on 6080+N.
+#
+# Idempotent per component, not just per display. This used to return early if X was
+# up, which meant a desktop whose x11vnc had died could never be repaired — the user
+# saw a dead screen and the only fix was recreating the container. Each component is
+# now checked and started on its own, so re-running this is also how boxd repairs a
+# desktop (see src/boxd/displays.ts).
+#
+# Logs are opened in append mode because boxd truncates them in place when they grow
+# too large; with truncation and a non-appending writer, the file would come back full
+# of holes at the writer's old offset.
 set -euo pipefail
 
 N="${1:?usage: start-display <index>}"
@@ -22,60 +32,131 @@ WS_PORT=$((6080 + N))
 
 log() { printf '[display %s] %s\n' "$N" "$*"; }
 
-if xdpyinfo -display "${DISP}" > /dev/null 2>&1; then
-  log "already running"
-  exit 0
-fi
+# What this run had to start. Empty output means the desktop was already healthy,
+# which is what lets boxd log repairs without logging every health check.
+repaired=()
 
-log "starting Xvfb on ${DISP} at ${WIDTH}x${HEIGHT}"
-# setsid so these outlive this script and are reparented to the container's init
-# rather than dying with the shell boxd spawned us from.
-setsid Xvfb "${DISP}" -screen 0 "${WIDTH}x${HEIGHT}x24" -ac -noreset \
-  +extension RANDR > "/tmp/xvfb-${N}.log" 2>&1 &
+port_listening() {
+  (exec 3<>"/dev/tcp/127.0.0.1/$1") 2>/dev/null && { exec 3<&- 2>/dev/null; return 0; }
+  return 1
+}
 
-for _ in $(seq 1 80); do
-  xdpyinfo -display "${DISP}" > /dev/null 2>&1 && break
-  sleep 0.25
-done
+# A process matching the pattern whose own DISPLAY is this desktop's. The environ
+# check is what makes it per-display: pgrep alone would find another agent's copy.
+running_here() {
+  local pattern="$1" pid
+  for pid in $(pgrep -f -- "${pattern}" 2>/dev/null || true); do
+    [ "${pid}" = "$$" ] && continue
+    if tr '\0' '\n' < "/proc/${pid}/environ" 2>/dev/null | grep -Fqx "DISPLAY=${DISP}"; then
+      return 0
+    fi
+  done
+  return 1
+}
+
+# ── X ────────────────────────────────────────────────────────────────────────────
+# +extension GLX +render: Chromium and GTK check for them, and without them they fall
+# back to slower paths and log errors an agent then has to reason about.
 if ! xdpyinfo -display "${DISP}" > /dev/null 2>&1; then
-  log "FATAL: Xvfb did not come up"
-  cat "/tmp/xvfb-${N}.log" >&2 || true
-  exit 1
+  log "starting Xvfb at ${WIDTH}x${HEIGHT}"
+  # setsid so these outlive this script and are reparented to the container's init
+  # rather than dying with the shell boxd spawned us from.
+  setsid Xvfb "${DISP}" -screen 0 "${WIDTH}x${HEIGHT}x24" -ac -noreset \
+    +extension RANDR +extension GLX +render >> "/tmp/xvfb-${N}.log" 2>&1 &
+
+  for _ in $(seq 1 80); do
+    xdpyinfo -display "${DISP}" > /dev/null 2>&1 && break
+    sleep 0.25
+  done
+  if ! xdpyinfo -display "${DISP}" > /dev/null 2>&1; then
+    log "FATAL: Xvfb did not come up"
+    tail -20 "/tmp/xvfb-${N}.log" >&2 || true
+    exit 1
+  fi
+  repaired+=("Xvfb")
 fi
 
 export DISPLAY="${DISP}"
 
-# A window manager is not optional: without one, dialogs open unmapped and keyboard
-# focus never lands, so typing silently goes nowhere. Compositing off so the
-# desktop background is visible — xfwm4's compositor paints over the root window.
-log "starting window manager"
-setsid dbus-launch --exit-with-session xfwm4 --replace --compositor=off \
-  > "/tmp/xfwm4-${N}.log" 2>&1 &
-sleep 1.5
+# A visible pointer and readable text. The default cursor is a 16px X11 relic, which
+# over VNC is genuinely hard to find on a 1280x800 screen.
+printf '%s\n' "Xcursor.theme: Adwaita" "Xcursor.size: 24" "Xft.dpi: 96" \
+  "Xft.antialias: 1" "Xft.hinting: 1" "Xft.rgba: rgb" | xrdb -merge 2>/dev/null || true
 
-xsetroot -solid "#1f2430" 2>/dev/null || log "could not set the background"
+# ── window manager ───────────────────────────────────────────────────────────────
+# Not optional: without one, dialogs open unmapped and keyboard focus never lands, so
+# typing silently goes nowhere. Compositing off so the desktop background is visible —
+# xfwm4's own compositor paints over the root window.
+if ! wmctrl -m > /dev/null 2>&1; then
+  log "starting window manager"
+  setsid dbus-launch --exit-with-session xfwm4 --replace --compositor=off \
+    >> "/tmp/xfwm4-${N}.log" 2>&1 &
+  for _ in $(seq 1 40); do
+    wmctrl -m > /dev/null 2>&1 && break
+    sleep 0.25
+  done
+  repaired+=("xfwm4")
+fi
+
+# Painted before anything can look at the screen. A fresh Xvfb root window is black,
+# and a black first frame is indistinguishable from a broken desktop.
+xsetroot -solid "#141a26" 2>/dev/null || log "could not set the background"
 
 # One workspace. xfwm4 defaults to four and switches on a mouse wheel over the
 # desktop, so a stray scroll would swap the screen for an empty one — which a
 # person notices and an agent does not.
 wmctrl -n 1 2>/dev/null || log "could not set the workspace count"
 
-log "starting desktop icons"
-setsid pcmanfm --desktop --profile default > "/tmp/pcmanfm-${N}.log" 2>&1 &
+# ── GTK settings with no config-file equivalent ──────────────────────────────────
+# The GTK3 file chooser opens at the size remembered in dconf, and with nothing
+# remembered it falls back to roughly 1124x822 — taller than this screen. Open and
+# Cancel then sit below the bottom edge, where computer-use cannot click them and a
+# person has to resize the dialog first. GTK3 ignores max-height on a toplevel, so
+# dconf is the only lever. dbus-run-session because dconf writes go through a session
+# bus; the value still lands in ~/.config/dconf/user and outlives the temporary bus.
+if command -v dconf > /dev/null 2>&1; then
+  if [ "$(dconf read /org/gtk/settings/file-chooser/window-size 2>/dev/null)" != "(1100, 680)" ]; then
+    dbus-run-session -- sh -c '
+      dconf write /org/gtk/settings/file-chooser/window-size "(1100, 680)"
+      dconf write /org/gtk/settings/file-chooser/window-position "(90, 60)"
+    ' 2>/dev/null || log "could not pre-seed the GTK file chooser size"
+  fi
+fi
 
-log "starting x11vnc on ${RFB_PORT} and noVNC on ${WS_PORT}"
+# ── desktop icons ────────────────────────────────────────────────────────────────
+if ! running_here "pcmanfm --desktop"; then
+  log "starting desktop icons"
+  setsid pcmanfm --desktop --profile default >> "/tmp/pcmanfm-${N}.log" 2>&1 &
+  repaired+=("pcmanfm")
+fi
+
+# ── VNC ──────────────────────────────────────────────────────────────────────────
 # -localhost: only boxd reaches these, and it is the only thing published.
-setsid x11vnc -display "${DISP}" -forever -shared -nopw -quiet -localhost \
-  -rfbport "${RFB_PORT}" > "/tmp/x11vnc-${N}.log" 2>&1 &
-setsid websockify --web=/usr/share/novnc "${WS_PORT}" "localhost:${RFB_PORT}" \
-  > "/tmp/novnc-${N}.log" 2>&1 &
+# -capslock so a Caps Lock left on by synthetic input does not silently upcase
+# everything typed afterwards.
+if ! port_listening "${RFB_PORT}"; then
+  log "starting x11vnc on ${RFB_PORT}"
+  setsid x11vnc -display "${DISP}" -forever -shared -nopw -quiet -localhost \
+    -capslock -rfbport "${RFB_PORT}" >> "/tmp/x11vnc-${N}.log" 2>&1 &
+  repaired+=("x11vnc")
+fi
+
+# --heartbeat: a WebSocket with no traffic gets closed by intermediaries, and the
+# symptom is a desktop that goes blank and reconnects while nothing is wrong.
+if ! port_listening "${WS_PORT}"; then
+  log "starting noVNC on ${WS_PORT}"
+  setsid websockify --heartbeat=30 --web=/usr/share/novnc \
+    "${WS_PORT}" "localhost:${RFB_PORT}" >> "/tmp/novnc-${N}.log" 2>&1 &
+  repaired+=("websockify")
+fi
 
 # Wait for the VNC path, not just X: boxd reports the display ready and the UI
 # connects immediately, so a half-started stack shows as a failed connection.
 for _ in $(seq 1 60); do
-  if (exec 3<>"/dev/tcp/127.0.0.1/${WS_PORT}") 2>/dev/null; then
-    exec 3<&- 2>/dev/null || true
-    log "ready"
+  if port_listening "${WS_PORT}"; then
+    if [ ${#repaired[@]} -gt 0 ]; then
+      log "ready (started: ${repaired[*]})"
+    fi
     exit 0
   fi
   sleep 0.25

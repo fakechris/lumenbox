@@ -82,9 +82,25 @@ EXPOSE 1337
 #    screenshot succeeds, and the model reads a grid of empty rectangles — so it acts on
 #    a page it cannot actually see. Worth ~100MB in the image; a CUA box that cannot
 #    read half the web is not worth the space it saves.
+#
+#    xfce4-terminal and thunar rather than xterm and pcmanfm's own windows: the box is
+#    something a person looks at and takes over, and xterm's 1980s defaults read as
+#    broken software rather than as a terminal. pcmanfm stays, but only as the layer
+#    that draws the desktop and its icons.
+#
+#    dconf-cli to pre-seed GTK settings that have no config-file equivalent.
 RUN apt-get update && apt-get install -y --no-install-recommends \
-      xterm pcmanfm wmctrl adwaita-icon-theme fonts-noto-cjk \
+      xterm xfce4-terminal thunar pcmanfm wmctrl dconf-cli \
+      adwaita-icon-theme fonts-noto-cjk \
     && rm -rf /var/lib/apt/lists/*
+
+# A wallpaper, generated rather than shipped: ffmpeg is already here, and a real
+# gradient is the difference between a desktop that looks configured and one that looks
+# like it failed to start. A flat colour reads as the latter.
+RUN mkdir -p /usr/share/backgrounds \
+    && ffmpeg -hide_banner -loglevel error -f lavfi \
+      -i "gradients=s=1280x800:c0=0x141a26:c1=0x243050:x0=0:y0=0:x1=1280:y1=800" \
+      -frames:v 1 -y /usr/share/backgrounds/agentbox.png
 
 # 8. Desktop launchers, and a pcmanfm background matching the plain-X one.
 #
@@ -99,7 +115,7 @@ RUN mkdir -p /home/box/Desktop /home/box/.config/pcmanfm/default \
       > /home/box/.config/libfm/libfm.conf \
     && printf '%s\n' \
       '[Desktop Entry]' 'Type=Application' 'Name=Terminal' \
-      'Exec=xterm' 'Icon=utilities-terminal' 'Terminal=false' \
+      'Exec=xfce4-terminal' 'Icon=utilities-terminal' 'Terminal=false' \
       > /home/box/Desktop/terminal.desktop \
     && printf '%s\n' \
       '[Desktop Entry]' 'Type=Application' 'Name=Chromium' \
@@ -107,10 +123,11 @@ RUN mkdir -p /home/box/Desktop /home/box/.config/pcmanfm/default \
       > /home/box/Desktop/chromium.desktop \
     && printf '%s\n' \
       '[Desktop Entry]' 'Type=Application' 'Name=Files' \
-      'Exec=pcmanfm /home/box/work' 'Icon=system-file-manager' 'Terminal=false' \
+      'Exec=thunar /home/box/work' 'Icon=system-file-manager' 'Terminal=false' \
       > /home/box/Desktop/files.desktop \
     && printf '%s\n' \
-      '[*]' 'wallpaper_mode=color' 'desktop_bg=#1f2430' \
+      '[*]' 'wallpaper_mode=stretch' \
+      'wallpaper=/usr/share/backgrounds/agentbox.png' 'desktop_bg=#141a26' \
       'desktop_fg=#e6e9ef' 'desktop_shadow=#000000' 'show_wm_menu=0' \
       > /home/box/.config/pcmanfm/default/desktop-items-0.conf \
     && chmod +x /home/box/Desktop/*.desktop \

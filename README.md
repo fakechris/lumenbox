@@ -195,6 +195,24 @@ The events themselves are in `~/.agentbox/activity.jsonl`, one per line with the
 they happened, so the feed survives a restart of the server and not just a reload of
 the page. Delete the file to clear the feed.
 
+### The desktop
+
+Each display runs `Xvfb ▸ xfwm4 ▸ pcmanfm ▸ x11vnc ▸ noVNC`, brought up by
+`start-display`, which is idempotent per component: re-running it starts only what is
+missing. boxd re-runs it for every live desktop on a timer, so a component that crashes
+comes back. That matters because the failure is one-sided — x11vnc dying leaves X and
+the agent working normally while the user's screen goes dead and stays dead.
+
+The apps a person actually touches are `xfce4-terminal` and `thunar`; `pcmanfm` only
+draws the desktop and its icons, and `xterm` stays because the smoke test types into it.
+
+Two settings exist because of how the box is looked at rather than how it works. The
+GTK3 file chooser is pre-seeded to 1100x680: unset, it opens at roughly 1124x822 on an
+800px-high screen, putting Open and Cancel below the bottom edge where computer-use
+cannot reach them, and GTK3 ignores `max-height` on a toplevel so there is no other
+lever. And the cursor is set to 24px, because the X11 default is genuinely hard to find
+over VNC.
+
 ### What survives, and what does not
 
 The container is disposable. `box up --recreate` — which is also what upgrading the

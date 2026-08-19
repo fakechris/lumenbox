@@ -115,6 +115,61 @@ await check("each desktop gets its own browser profile", async () => {
   return "one profile per display";
 });
 
+await check("the GTK file chooser fits the screen", async () => {
+  // Left unset, GTK3 opens the chooser at about 1124x822 on an 800px-high screen, so
+  // Open and Cancel sit below the bottom edge: computer-use cannot click them and the
+  // agent reports that nothing happened. GTK3 ignores max-height on a toplevel, so
+  // this dconf value is the only lever there is.
+  const result = await box.exec("dconf read /org/gtk/settings/file-chooser/window-size");
+  assert(
+    result.stdout.trim() === "(1100, 680)",
+    `chooser size is ${result.stdout.trim() || "unset"}`
+  );
+  return "1100x680, inside 1280x800";
+});
+
+await check("X advertises the extensions apps look for", async () => {
+  const result = await box.exec("xdpyinfo -display :1 | grep -cE '^    (GLX|RENDER|RANDR)$'");
+  assert(result.stdout.trim() === "3", `found ${result.stdout.trim()} of GLX/RENDER/RANDR`);
+  return "GLX, RENDER, RANDR";
+});
+
+await check("a human-usable terminal and file manager are installed", async () => {
+  const result = await box.exec(
+    "for t in xfce4-terminal thunar; do command -v $t >/dev/null || echo MISSING:$t; done; " +
+      "test -s /usr/share/backgrounds/agentbox.png || echo MISSING:wallpaper"
+  );
+  assert(result.stdout.trim() === "", result.stdout.trim());
+  return "xfce4-terminal, thunar, wallpaper";
+});
+
+await check("boxd repairs a desktop component that died", async () => {
+  // Invisible from the agent's side: x11vnc dying leaves X and the agent working while
+  // the user's screen goes dead for good. Killed by port owner rather than by pattern —
+  // a pkill -f whose pattern appears in the killing command's own cmdline kills its own
+  // shell first, which is how this test silently measured nothing on the first attempt.
+  const before = await box.exec("pgrep -cx x11vnc");
+  assert(Number(before.stdout.trim()) > 0, "x11vnc was not running to begin with");
+
+  await box.exec("fuser -k -n tcp 5901 2>/dev/null; sleep 1; true");
+  const dead = await box.exec("(fuser -n tcp 5901 2>/dev/null && echo up) || echo down");
+  assert(dead.stdout.includes("down"), "x11vnc survived the kill; nothing is being measured");
+
+  // Wait for boxd's own supervision tick, rather than calling the repair path here:
+  // the timer firing is the thing that was added.
+  let restored = false;
+  for (let attempt = 0; attempt < 15; attempt++) {
+    const check = await box.exec("(fuser -n tcp 5901 2>/dev/null && echo up) || echo down");
+    if (check.stdout.includes("up")) {
+      restored = true;
+      break;
+    }
+    await new Promise(resolve => setTimeout(resolve, 3000));
+  }
+  assert(restored, "boxd did not restart x11vnc within 45s");
+  return "x11vnc restarted by the supervisor";
+});
+
 await check("desktop launchers launch instead of prompting", async () => {
   // Without libfm's quick_exec, activating a launcher opens an "Execute File"
   // dialog rather than starting anything. It fails quietly: the icons still draw,
