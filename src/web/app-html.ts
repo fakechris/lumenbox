@@ -7,8 +7,11 @@
  *
  * The embedded script uses string concatenation instead of template literals
  * throughout. It has to: this file is itself a template literal, so an inner
- * "${...}" would be evaluated here rather than shipped to the browser.
+ * "${...}" would be evaluated here rather than shipped to the browser. The one
+ * deliberate interpolation is the Markdown renderer, injected as source text.
  */
+
+import { renderMarkdown } from "./markdown.ts";
 
 export const APP_HTML = String.raw`<!doctype html>
 <html lang="en">
@@ -64,9 +67,35 @@ export const APP_HTML = String.raw`<!doctype html>
   .agent .nm { font-weight: 600; }
   .agent .ttl { color: var(--dim); font-size: 12px; }
 
-  .msg { padding: 11px 16px; border-bottom: 1px solid #21252c; white-space: pre-wrap; word-break: break-word; }
+  /* No pre-wrap: the body is rendered Markdown now, so the blocks carry the layout.
+     Leaving it on would add a blank line for every newline between two tags. */
+  .msg { padding: 11px 16px; border-bottom: 1px solid #21252c; word-break: break-word; }
   .msg .who { font-size: 11px; letter-spacing: .06em; text-transform: uppercase; color: var(--dim); margin-bottom: 4px; }
   .msg.user .who { color: var(--accent); }
+  .msg .body > :first-child { margin-top: 0; }
+  .msg .body > :last-child { margin-bottom: 0; }
+  .msg .body p { margin: 0 0 8px; }
+  .msg .body h1, .msg .body h2, .msg .body h3,
+  .msg .body h4, .msg .body h5, .msg .body h6 { margin: 14px 0 6px; font-size: 15px; line-height: 1.3; }
+  .msg .body h1 { font-size: 18px; }
+  .msg .body h2 { font-size: 16px; }
+  .msg .body ul, .msg .body ol { margin: 4px 0 8px; padding-left: 22px; }
+  .msg .body li { margin: 2px 0; }
+  .msg .body a { color: var(--accent); }
+  .msg .body code {
+    font: 12.5px/1.5 ui-monospace, SFMono-Regular, Menlo, monospace;
+    background: #1b1f27; border: 1px solid var(--line); border-radius: 4px; padding: 1px 4px;
+  }
+  .msg .body pre {
+    margin: 8px 0; padding: 10px 12px; background: #0f1115; border: 1px solid var(--line);
+    /* Scroll long lines rather than wrapping them: wrapped code misreads. */
+    border-radius: 6px; overflow-x: auto; word-break: normal;
+  }
+  .msg .body pre code { background: none; border: 0; padding: 0; }
+  .msg .body blockquote {
+    margin: 6px 0; padding: 2px 0 2px 12px; border-left: 2px solid var(--line); color: var(--dim);
+  }
+  .msg .body hr { border: 0; border-top: 1px solid var(--line); margin: 12px 0; }
   .tool { padding: 5px 16px; color: var(--dim); font: 12px/1.5 ui-monospace, SFMono-Regular, Menlo, monospace; }
   .tool .nm { color: var(--accent); }
   .tool.res { padding-left: 30px; opacity: .85; }
@@ -136,6 +165,12 @@ export const APP_HTML = String.raw`<!doctype html>
 
 <script>
 "use strict";
+// The Markdown renderer, shipped as its own source. It lives in a module so it can
+// be unit-tested — escaping model output is not something to verify by eye — and is
+// injected rather than inlined because Markdown means matching backticks, which
+// cannot be written inside this template literal.
+var renderMarkdown = ${String(renderMarkdown)};
+
 function $(id) { return document.getElementById(id); }
 
 var agents = [];
@@ -190,9 +225,9 @@ function bubble(role, who, text) {
   var stick = nearBottom(el);
   var div = document.createElement("div");
   div.className = "msg " + role;
-  div.innerHTML = '<div class="who">' + esc(who) + '</div><span class="body"></span>';
+  div.innerHTML = '<div class="who">' + esc(who) + '</div><div class="body"></div>';
   var body = div.querySelector(".body");
-  body.textContent = text;
+  body.innerHTML = renderMarkdown(text);
   el.appendChild(div);
   if (stick) el.scrollTop = el.scrollHeight;
   return body;
@@ -275,11 +310,25 @@ stream.onmessage = function (raw) {
 
   if (e.type === "text") {
     if (e.agentId !== current) return;
-    var node = live.get(e.agentId);
-    if (!node) { node = bubble("", e.agentName, ""); live.set(e.agentId, node); }
-    node.textContent += e.delta;
-    var chat = $("chat");
-    if (nearBottom(chat)) chat.scrollTop = chat.scrollHeight;
+    var open = live.get(e.agentId);
+    if (!open) {
+      open = { node: bubble("", e.agentName, ""), text: "", queued: false };
+      live.set(e.agentId, open);
+    }
+    open.text += e.delta;
+    // The whole message has to be re-rendered, not appended to: half a fence is not
+    // yet a code block, and a list grows an item at a time. Deltas arrive far faster
+    // than the screen refreshes, so paint once per frame instead of once per delta.
+    if (!open.queued) {
+      open.queued = true;
+      requestAnimationFrame(function () {
+        open.queued = false;
+        var chat = $("chat");
+        var stick = nearBottom(chat);
+        open.node.innerHTML = renderMarkdown(open.text);
+        if (stick) chat.scrollTop = chat.scrollHeight;
+      });
+    }
     return;
   }
 
