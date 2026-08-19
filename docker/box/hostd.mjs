@@ -3692,7 +3692,7 @@ var require_timing_safe_equal = __commonJS({
         throw new Error(msg);
       }
     }
-    function timingSafeEqual(a, b) {
+    function timingSafeEqual2(a, b) {
       if (a.byteLength !== b.byteLength) {
         return false;
       }
@@ -3712,7 +3712,7 @@ var require_timing_safe_equal = __commonJS({
       }
       return out2 === 0;
     }
-    exports.timingSafeEqual = timingSafeEqual;
+    exports.timingSafeEqual = timingSafeEqual2;
   }
 });
 
@@ -12879,6 +12879,19 @@ async function docker(args, timeoutMs = 12e4) {
     throw new DockerError(`docker ${args[0]} failed: ${message}`, stderr);
   }
 }
+function uiToken() {
+  const home = process.env.AGENTBOX_HOME ?? join(homedir(), ".agentbox");
+  const path5 = join(home, "ui-token");
+  if (existsSync(path5)) {
+    const existing = readFileSync(path5, "utf8").trim();
+    if (existing) return existing;
+  }
+  const token = generateToken();
+  mkdirSync(home, { recursive: true });
+  writeFileSync(path5, `${token}
+`, { mode: 384 });
+  return token;
+}
 function hostCredentialArgs() {
   const names = [
     "ANTHROPIC_API_KEY",
@@ -13018,6 +13031,11 @@ var BoxManager = class {
         `${config.containerName}-hostd:/home/hostd/.agentbox`,
         "--env",
         "AGENTBOX_HOST_ENABLED=1",
+        // Generated here rather than in the container, so the CLI can print a URL that
+        // works. Inside the box the UI binds 0.0.0.0 — Docker's publish address is all
+        // that keeps it local — so it must not be open.
+        "--env",
+        `AGENTBOX_UI_TOKEN=${uiToken()}`,
         // Published to loopback only. The UI has no authentication — the assumption
         // has always been that anything able to reach it can already drive the
         // agents — so it must not be reachable from the network.
@@ -14915,6 +14933,7 @@ function ensureConfigFile() {
 }
 
 // src/web/server.ts
+import { randomBytes as randomBytes3 } from "node:crypto";
 import {
   createServer,
   request as httpRequest
@@ -15714,6 +15733,47 @@ setInterval(refresh, 15000);
 </body>
 </html>`;
 
+// src/web/auth.ts
+import { timingSafeEqual } from "node:crypto";
+var COOKIE_NAME = "agentbox_ui";
+var LOOPBACK = /* @__PURE__ */ new Set(["127.0.0.1", "::1", "localhost"]);
+function isLoopback(host) {
+  return LOOPBACK.has(host);
+}
+function sameToken(a, b) {
+  const left = Buffer.from(a, "utf8");
+  const right = Buffer.from(b, "utf8");
+  if (left.length !== right.length) return false;
+  return timingSafeEqual(left, right);
+}
+function parseCookies(header) {
+  const cookies = /* @__PURE__ */ new Map();
+  for (const part of (header ?? "").split(";")) {
+    const at = part.indexOf("=");
+    if (at <= 0) continue;
+    cookies.set(part.slice(0, at).trim(), decodeURIComponent(part.slice(at + 1).trim()));
+  }
+  return cookies;
+}
+function authorize(config, request) {
+  if (!config.token) {
+    return { allow: true, reason: "loopback" };
+  }
+  const bearer = /^Bearer\s+(.+)$/i.exec(request.authorization ?? "")?.[1]?.trim();
+  if (bearer && sameToken(bearer, config.token)) return { allow: true, reason: "token" };
+  const cookie = parseCookies(request.cookie).get(COOKIE_NAME);
+  if (cookie && sameToken(cookie, config.token)) return { allow: true, reason: "token" };
+  const query = request.query?.trim();
+  if (query && sameToken(query, config.token)) {
+    return {
+      allow: true,
+      reason: "token",
+      setCookie: `${COOKIE_NAME}=${encodeURIComponent(config.token)}; Path=/; HttpOnly; SameSite=Lax`
+    };
+  }
+  return { allow: false, reason: cookie || bearer || query ? "wrong" : "missing" };
+}
+
 // src/web/activity.ts
 import { appendFileSync as appendFileSync2, existsSync as existsSync5, mkdirSync as mkdirSync4, readFileSync as readFileSync4, renameSync as renameSync2, writeFileSync as writeFileSync4 } from "node:fs";
 import { dirname as dirname5 } from "node:path";
@@ -16020,6 +16080,23 @@ async function startWebServer(options) {
     void (async () => {
       const url = new URL(req.url ?? "/", "http://localhost");
       const route = `${req.method} ${url.pathname}`;
+      const decision = authorize(
+        { token, host },
+        {
+          authorization: req.headers.authorization,
+          cookie: req.headers.cookie,
+          query: url.searchParams.get("token")
+        }
+      );
+      if (!decision.allow) {
+        send(res, 401, {
+          error: "This UI needs a token. Open it with ?token=\u2026 or send an Authorization: Bearer header."
+        });
+        return;
+      }
+      if ("setCookie" in decision && decision.setCookie) {
+        res.setHeader("set-cookie", decision.setCookie);
+      }
       try {
         if (route === "GET /") {
           send(res, 200, APP_HTML, "text/html");
@@ -16222,6 +16299,14 @@ async function startWebServer(options) {
       clientSocket.destroy();
       return;
     }
+    const upgradeDecision = authorize(
+      { token, host },
+      { authorization: req.headers.authorization, cookie: req.headers.cookie }
+    );
+    if (!upgradeDecision.allow) {
+      clientSocket.end("HTTP/1.1 401 Unauthorized\r\n\r\n");
+      return;
+    }
     void openUpgrade(req, clientSocket, head, upstreamPath);
   });
   async function openUpgrade(req, clientSocket, head, upstreamPath) {
@@ -16250,6 +16335,16 @@ ${headers}\r
     clientSocket.on("error", drop);
   }
   const host = options.host ?? "127.0.0.1";
+  const configured = options.token ?? process.env.AGENTBOX_UI_TOKEN;
+  let token = configured;
+  if (!token && !isLoopback(host)) {
+    token = randomBytes3(16).toString("hex");
+    log(`bound to ${host} with no token configured; generated one`);
+    log(`open: http://${host}:${options.port}/?token=${token}`);
+  }
+  if (!token) {
+    log("no UI token: anything that can reach this port can drive the agents");
+  }
   await new Promise((resolve5) => server.listen(options.port, host, resolve5));
   const address = server.address();
   const port = typeof address === "object" && address ? address.port : options.port;
@@ -16306,7 +16401,7 @@ async function cmdBoxUp(argv) {
   out(`${bold("Box running")} (${status.containerName})`);
   if (status.boxdUrl) out(`  daemon:  ${status.boxdUrl}`);
   if (withHost) {
-    out(`  web UI:  http://127.0.0.1:7777`);
+    out(`  web UI:  http://127.0.0.1:7777/?token=${uiToken()}`);
     out("");
     out("The orchestrator runs inside the box. Nothing here drives it.");
   } else {
@@ -16501,7 +16596,8 @@ var VALUE_FLAGS = /* @__PURE__ */ new Set([
   "--model",
   "--effort",
   "--port",
-  "--host"
+  "--host",
+  "--token"
 ]);
 function parseArgs(argv) {
   const positional = [];
@@ -16608,6 +16704,7 @@ async function cmdWeb(argv) {
   if (typeof modelOverride === "string") process.env.AGENTBOX_MODEL = modelOverride;
   const portFlag = flags.get("--port");
   const port = typeof portFlag === "string" ? Number(portFlag) : 7777;
+  const tokenFlag = flags.get("--token");
   const hostFlag = flags.get("--host");
   const host = typeof hostFlag === "string" ? hostFlag : "127.0.0.1";
   let provider;
@@ -16634,6 +16731,7 @@ async function cmdWeb(argv) {
     await startWebServer({
       port,
       host,
+      token: typeof tokenFlag === "string" ? tokenFlag : void 0,
       provider,
       useBox: !flags.has("--no-box"),
       onLog: (line) => out(dim(line)),

@@ -12,6 +12,7 @@ import {
   BoxManager,
   defaultBoxConfig,
   resolveDockerHostAddress,
+  uiToken,
   type BoxConfig,
 } from "./box/docker.ts";
 import { AgentRegistry, defaultAgentsRoot } from "./agents/registry.ts";
@@ -85,7 +86,7 @@ async function cmdBoxUp(argv: string[]): Promise<number> {
   out(`${bold("Box running")} (${status.containerName})`);
   if (status.boxdUrl) out(`  daemon:  ${status.boxdUrl}`);
   if (withHost) {
-    out(`  web UI:  http://127.0.0.1:7777`);
+    out(`  web UI:  http://127.0.0.1:7777/?token=${uiToken()}`);
     out("");
     out("The orchestrator runs inside the box. Nothing here drives it.");
   } else {
@@ -327,6 +328,7 @@ const VALUE_FLAGS = new Set([
   "--effort",
   "--port",
   "--host",
+  "--token",
 ]);
 
 /**
@@ -478,6 +480,8 @@ async function cmdWeb(argv: string[]): Promise<number> {
   // always been that anything able to reach it can already drive the agents. Overridable
   // for the case that changes it: inside the box, where the container's own loopback is
   // not reachable from anywhere and Docker publishes the port to the host's instead.
+  // A token makes the UI need one; without it the loopback justification applies.
+  const tokenFlag = flags.get("--token");
   const hostFlag = flags.get("--host");
   const host = typeof hostFlag === "string" ? hostFlag : "127.0.0.1";
 
@@ -516,6 +520,7 @@ async function cmdWeb(argv: string[]): Promise<number> {
     await startWebServer({
       port,
       host,
+      token: typeof tokenFlag === "string" ? tokenFlag : undefined,
       provider,
       useBox: !flags.has("--no-box"),
       onLog: line => out(dim(line)),

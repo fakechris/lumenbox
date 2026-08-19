@@ -11,6 +11,7 @@
  * control.
  */
 
+import { randomBytes } from "node:crypto";
 import {
   createServer,
   request as httpRequest,
@@ -27,6 +28,7 @@ import { Orchestrator } from "../host/orchestrator.ts";
 import { describeProvider, type ProviderProfile } from "../host/provider.ts";
 import type { TurnEvent } from "../host/turn.ts";
 import { APP_HTML } from "./app-html.ts";
+import { COOKIE_NAME, authorize, isLoopback } from "./auth.ts";
 import { agentboxHome, loadConfig } from "../config.ts";
 import { ActivityLog } from "./activity.ts";
 import { vendorPath } from "./markdown.ts";
@@ -34,6 +36,11 @@ import { toDisplayEntries } from "./transcript.ts";
 
 export interface WebOptions {
   port: number;
+  /**
+   * Shared secret for the UI. Anyone holding it can drive the agents, which is the whole
+   * access model: there are no users, only whoever has the token.
+   */
+  token?: string;
   /** Where the box comes from. Defaults to the environment's choice. */
   boxProvisioner?: BoxProvisioner;
   host?: string;
@@ -270,6 +277,29 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
     void (async () => {
       const url = new URL(req.url ?? "/", "http://localhost");
       const route = `${req.method} ${url.pathname}`;
+
+      const decision = authorize(
+        { token, host },
+        {
+          authorization: req.headers.authorization,
+          cookie: req.headers.cookie,
+          query: url.searchParams.get("token"),
+        }
+      );
+      if (!decision.allow) {
+        // No WWW-Authenticate: a browser prompt would be the wrong shape for this, and the
+        // token belongs in the URL once rather than typed into a dialog.
+        send(res, 401, {
+          error:
+            "This UI needs a token. Open it with ?token=… or send an Authorization: Bearer header.",
+        });
+        return;
+      }
+      if ("setCookie" in decision && decision.setCookie) {
+        // Set before anything else writes headers, so the iframe and video requests that
+        // follow this page load are already authenticated.
+        res.setHeader("set-cookie", decision.setCookie);
+      }
 
       try {
         if (route === "GET /") {
@@ -542,6 +572,17 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
       return;
     }
 
+    // The RFB socket carries the screen, so it needs the same check. A browser sends the
+    // cookie on an upgrade but cannot set a header, which is why the cookie exists.
+    const upgradeDecision = authorize(
+      { token, host },
+      { authorization: req.headers.authorization, cookie: req.headers.cookie }
+    );
+    if (!upgradeDecision.allow) {
+      clientSocket.end("HTTP/1.1 401 Unauthorized\r\n\r\n");
+      return;
+    }
+
     void openUpgrade(req, clientSocket, head, upstreamPath);
   });
 
@@ -579,6 +620,22 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
   }
 
   const host = options.host ?? "127.0.0.1";
+
+  // The old justification for having no authentication was that this binds loopback:
+  // anything able to reach it can already drive the agents. That stopped being true when
+  // the orchestrator moved into the box, where it binds 0.0.0.0 and only Docker's publish
+  // address keeps it local. So a non-loopback bind without a configured token gets one
+  // generated and announced, rather than being served openly.
+  const configured = options.token ?? process.env.AGENTBOX_UI_TOKEN;
+  let token = configured;
+  if (!token && !isLoopback(host)) {
+    token = randomBytes(16).toString("hex");
+    log(`bound to ${host} with no token configured; generated one`);
+    log(`open: http://${host}:${options.port}/?token=${token}`);
+  }
+  if (!token) {
+    log("no UI token: anything that can reach this port can drive the agents");
+  }
   await new Promise<void>(resolve => server.listen(options.port, host, resolve));
 
   const address = server.address();

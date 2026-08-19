@@ -162,6 +162,29 @@ too, so `box shot` and the smoke test — which run out here — can no longer p
 for an agent's desktop. That is the right way round (the box holds its own secrets), and it
 means the CLI is a tool for the developer topology.
 
+## Who may drive the agents
+
+The UI used to have no authentication, justified by binding loopback: anything able to reach
+it can already drive the agents. That held while the orchestrator ran on someone's own
+machine. It stopped holding when it moved into the box, where it binds 0.0.0.0 and only
+Docker's publish address keeps it local — one flag, or a Kubernetes Service, and it is open.
+
+So: a configured token is required, no token is allowed only on a loopback bind, and a
+non-loopback bind with no token gets one generated and announced rather than being served
+openly. `box up --with-host` generates one, persists it next to the box token so a recreate
+does not invalidate an open tab, and prints the URL with it.
+
+The mechanism is a cookie rather than a header, because of what the page loads. The desktop is
+an iframe and a recording is a video element, and neither can carry an `Authorization` header —
+a header-only scheme would protect the API and leave the screen open. A token in the query
+string is accepted once to bootstrap the cookie, and the WebSocket upgrade carrying the screen
+is checked the same way. `AGENTBOX_UI_TOKEN` or `web --token` set it for the topologies the CLI
+does not start.
+
+There is one secret and no users: whoever holds the token can drive every agent. That is the
+right shape for one person's box and the wrong shape for a shared deployment, which needs
+identities — the seam is here, not the implementation.
+
 ## Where the box comes from
 
 The orchestrator needs two things about a box: a URL and a token. It does not need to know

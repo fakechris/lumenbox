@@ -184,6 +184,25 @@ export interface BoxStatus {
  * split keeps them out of the agent's way rather than out of its reach; putting them
  * behind a relay is what would make that a boundary.
  */
+/**
+ * The UI token for an in-box orchestrator.
+ *
+ * Persisted next to the box token so a recreate keeps the same URL working, rather than
+ * invalidating whatever tab the user has open.
+ */
+export function uiToken(): string {
+  const home = process.env.AGENTBOX_HOME ?? join(homedir(), ".agentbox");
+  const path = join(home, "ui-token");
+  if (existsSync(path)) {
+    const existing = readFileSync(path, "utf8").trim();
+    if (existing) return existing;
+  }
+  const token = generateToken();
+  mkdirSync(home, { recursive: true });
+  writeFileSync(path, `${token}\n`, { mode: 0o600 });
+  return token;
+}
+
 function hostCredentialArgs(): string[] {
   const names = [
     "ANTHROPIC_API_KEY",
@@ -336,6 +355,11 @@ export class BoxManager {
             `${config.containerName}-hostd:/home/hostd/.agentbox`,
             "--env",
             "AGENTBOX_HOST_ENABLED=1",
+            // Generated here rather than in the container, so the CLI can print a URL that
+            // works. Inside the box the UI binds 0.0.0.0 — Docker's publish address is all
+            // that keeps it local — so it must not be open.
+            "--env",
+            `AGENTBOX_UI_TOKEN=${uiToken()}`,
             // Published to loopback only. The UI has no authentication — the assumption
             // has always been that anything able to reach it can already drive the
             // agents — so it must not be reachable from the network.
