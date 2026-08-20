@@ -17,6 +17,7 @@ import { dedupeKey, validateRecord } from "./memory.ts";
 import {
   describeTodos,
   isTodoStatus,
+  TODO_STATUSES,
   validatePlan,
   validateTodos,
   type TodoItem,
@@ -750,12 +751,38 @@ export async function dispatchTool(
     }
 
     case "SetTodos": {
-      const raw = Array.isArray(input.todos) ? input.todos : [];
+      // Refused, not treated as an empty list. `todos` arriving as an object or a string used to
+      // become `[]`, which then *replaced* the real list — so a malformed call silently erased the
+      // work an agent was tracking, and the echo told it the list was empty as though it had meant
+      // that. Clearing the list is a real thing to want, which is exactly why it has to be said
+      // rather than inferred from a shape that did not parse.
+      if (!Array.isArray(input.todos)) {
+        return {
+          text:
+            `SetTodos needs \`todos\` to be a list. Nothing was changed. To clear the list, pass ` +
+            `an empty one: {"todos": []}.`,
+          isError: true,
+        };
+      }
+      const raw = input.todos;
+      const badStatus = raw
+        .map(entry => String((entry as { status?: unknown })?.status ?? "pending"))
+        .find(status => !isTodoStatus(status));
+      if (badStatus !== undefined) {
+        // Also refused rather than coerced to "pending". Silently downgrading a status means the
+        // list says something the agent did not say, and the agent has no way to notice.
+        return {
+          text:
+            `"${badStatus}" is not a todo status. Use one of: ${TODO_STATUSES.join(", ")}. ` +
+            `Nothing was changed.`,
+          isError: true,
+        };
+      }
       const todos: TodoItem[] = raw.map(entry => {
         const item = entry as { text?: unknown; status?: unknown };
         return {
           text: String(item.text ?? "").trim(),
-          status: isTodoStatus(String(item.status)) ? (String(item.status) as TodoStatus) : "pending",
+          status: String(item.status ?? "pending") as TodoStatus,
         };
       });
       const rejected = validateTodos(todos);

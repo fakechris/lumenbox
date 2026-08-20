@@ -258,10 +258,13 @@ by an agent and read by any agent. The prompt gets **the index only** — name, 
 Bodies are read on demand, because otherwise the fifth skill costs every turn whether or not it
 applies.
 
-- **Degrade, do not refuse.** A file with no frontmatter still works; unknown keys are ignored so a
-  newer format does not break an older reader. But a skill with no description is *reported*, since
-  the description is the only thing read when deciding whether it applies — without one the skill
-  exists and is never chosen.
+- **Degrade where a guess is safe, refuse where it is not.** Unknown frontmatter keys are ignored,
+  so a newer format does not break an older reader, and the parser itself is happy with a file that
+  has no frontmatter at all. But a skill with no `description:` is *refused*, with a message naming
+  the fix: the description is the only thing read when deciding whether a skill applies, so without
+  one the skill would exist and never be chosen — the worst of both, and invisible to its author.
+  Same rule as the schedule parser: something that means slightly the wrong thing is worse than
+  something that did not load.
 - **A `schedule:` key makes it an automation.** Minute resolution, ticking twice a minute so a busy
   loop cannot miss a window. **No catch-up** — two days of missed windows means "the daily report"
   arguably wants two runs and "check every hour" emphatically does not want forty-eight, and a cron

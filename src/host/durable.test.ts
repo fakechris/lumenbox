@@ -10,6 +10,12 @@
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { AgentRegistry } from "../agents/registry.ts";
+import { AgentBus } from "../agents/bus.ts";
+import { dispatchTool, type ToolContext } from "./tools.ts";
 import {
   describeTodos,
   isTodoStatus,
@@ -130,4 +136,62 @@ test("statuses are checked, not trusted", () => {
   assert.equal(isTodoStatus("later"), false);
   assert.equal(isTodoStatus(""), false);
   assert.equal(isTodoStatus("DONE"), false, "case matters: a near miss is a miss");
+});
+
+
+/** A registry and a tool context over it, for the dispatch tests below. */
+function toolFixture() {
+  const root = mkdtempSync(join(tmpdir(), "agentbox-durable-"));
+  const registry = new AgentRegistry(root);
+  const agent = registry.create({ name: "Ada" });
+  const context: ToolContext = {
+    agent,
+    registry,
+    bus: new AgentBus(registry, async () => {}),
+    box: undefined,
+  };
+  return {
+    registry,
+    agent,
+    context,
+    cleanup: () => rmSync(root, { recursive: true, force: true }),
+  };
+}
+
+test("a malformed SetTodos changes nothing, rather than erasing the list", async () => {
+  // `todos` arriving as an object or a string used to become `[]`, which then replaced the real
+  // list — so a malformed call silently erased the work an agent was tracking, and the echo told it
+  // the list was empty as though it had meant that. Clearing is a real thing to want, which is why
+  // it has to be said rather than inferred from a shape that did not parse.
+  const { registry, agent: ada, context, cleanup } = toolFixture();
+  try {
+
+    await dispatchTool("SetTodos", { todos: [{ text: "ship it", status: "doing" }] }, context);
+    assert.equal((registry.readDurableState(ada.id).todos ?? []).length, 1);
+
+    const wrongShape = await dispatchTool("SetTodos", { todos: { text: "ship it" } }, context);
+    assert.equal(wrongShape.isError, true);
+    assert.match(wrongShape.text, /needs `todos` to be a list/);
+    assert.match(wrongShape.text, /Nothing was changed/);
+    assert.match(wrongShape.text, /to clear the list, pass an empty one/i);
+    assert.equal((registry.readDurableState(ada.id).todos ?? []).length, 1, "the real list is still there");
+
+    // An unknown status is refused too, rather than quietly becoming "pending": a list that says
+    // something the agent did not say is worse than a rejected call.
+    const wrongStatus = await dispatchTool(
+      "SetTodos",
+      { todos: [{ text: "ship it", status: "in_progress" }] },
+      context
+    );
+    assert.equal(wrongStatus.isError, true);
+    assert.match(wrongStatus.text, /"in_progress" is not a todo status/);
+    assert.match(wrongStatus.text, /pending, doing, done, blocked/);
+    assert.deepEqual((registry.readDurableState(ada.id).todos ?? [])[0]?.status, "doing", "unchanged");
+
+    // And clearing still works when it is asked for.
+    await dispatchTool("SetTodos", { todos: [] }, context);
+    assert.equal((registry.readDurableState(ada.id).todos ?? []).length, 0);
+  } finally {
+    cleanup();
+  }
 });

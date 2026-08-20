@@ -219,7 +219,16 @@ function sameMinute(a: Date, b: Date): boolean {
   );
 }
 
-/** Plain language, for the prompt and the UI. A cron expression is not something to make a person read. */
+/**
+ * Plain language, for the prompt and the UI. A cron expression is not something to make a person
+ * read — but a description that understates how often something runs is worse than the cron, since
+ * this text is what a person reviews before leaving an automation running unattended.
+ *
+ * The three it used to get wrong: it read only the first minute, so `0,30 * * * *` was "every hour"
+ * when it runs twice an hour; it treated an unrestricted minute field as minute zero, so
+ * `* 9 * * *` — sixty runs — read as "at 09:00"; and it ignored the month entirely, so a schedule
+ * that fires one month a year claimed to fire every month.
+ */
 export function describeSchedule(schedule: Schedule): string {
   if (schedule.everyMs !== undefined) {
     const minutes = Math.round(schedule.everyMs / 60_000);
@@ -227,20 +236,41 @@ export function describeSchedule(schedule: Schedule): string {
     if (minutes % 60 === 0) return `every ${minutes / 60} hour(s)`;
     return `every ${minutes} minute(s)`;
   }
+
+  const pad = (value: number) => String(value).padStart(2, "0");
   const parts: string[] = [];
-  const times =
-    schedule.hours === undefined
-      ? "every hour"
-      : `at ${schedule.hours
-          .map(hour => `${String(hour).padStart(2, "0")}:${String(schedule.minutes?.[0] ?? 0).padStart(2, "0")}`)
-          .join(", ")}`;
-  parts.push(times);
+
+  if (schedule.minutes === undefined) {
+    // Every minute of whichever hours are allowed. Said first and said plainly, because this is the
+    // one that surprises people.
+    parts.push(
+      schedule.hours === undefined
+        ? "every minute"
+        : `every minute of ${schedule.hours.map(hour => `${pad(hour)}:00`).join(", ")}`
+    );
+  } else if (schedule.hours === undefined) {
+    parts.push(
+      schedule.minutes.length === 1
+        ? `every hour at :${pad(schedule.minutes[0]!)}`
+        : `every hour at ${schedule.minutes.map(minute => `:${pad(minute)}`).join(", ")}`
+    );
+  } else {
+    const times = schedule.hours.flatMap(hour =>
+      schedule.minutes!.map(minute => `${pad(hour)}:${pad(minute)}`)
+    );
+    parts.push(`at ${times.join(", ")}`);
+  }
+
   if (schedule.daysOfWeek !== undefined) {
     const names = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
     parts.push(`on ${schedule.daysOfWeek.map(day => names[day]).join(", ")}`);
   }
   if (schedule.daysOfMonth !== undefined) {
     parts.push(`on day ${schedule.daysOfMonth.join(", ")} of the month`);
+  }
+  if (schedule.months !== undefined) {
+    const names = ["", "Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+    parts.push(`in ${schedule.months.map(month => names[month]).join(", ")}`);
   }
   return parts.join(" ");
 }

@@ -107,6 +107,21 @@ test("a schedule reads as words, not as cron", () => {
   assert.match(describeSchedule(scheduleOf("@every 30m")), /every 30 minute/);
 });
 
+test("a description never claims a schedule runs less often than it does", () => {
+  // This text is what a person reviews before leaving an automation running unattended, and what
+  // the model is told a scheduled turn is for. Understating the frequency is worse than showing
+  // them the cron expression.
+  //
+  // All three were wrong: only the first minute was read, an unrestricted minute field was treated
+  // as minute zero, and the month was ignored entirely.
+  assert.match(describeSchedule(scheduleOf("* 9 * * *")), /every minute of 09:00/);
+  assert.match(describeSchedule(scheduleOf("* * * * *")), /every minute/);
+  assert.match(describeSchedule(scheduleOf("0,30 * * * *")), /every hour at :00, :30/);
+  assert.match(describeSchedule(scheduleOf("0,30 9 * * *")), /at 09:00, 09:30/);
+  assert.match(describeSchedule(scheduleOf("0 0 1 3 *")), /in Mar/);
+  assert.match(describeSchedule(scheduleOf("15 * * * *")), /every hour at :15/);
+});
+
 test("a scheduled turn says it was a timer, not a person", () => {
   const prompt = triggerPrompt("Weekly report", "/home/box/work/skills/weekly/SKILL.md", "at 09:00");
   // The distinction it exists for: an agent that believes someone is waiting asks clarifying
