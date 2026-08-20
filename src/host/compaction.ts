@@ -57,11 +57,21 @@ export interface CompactionPolicy {
   triggerTokens: number;
   /** Keep at least this much of the tail verbatim, so recent work is never a summary. */
   keepTailTokens: number;
+  /**
+   * Compact once the window holds this many entries, whatever they weigh.
+   *
+   * Because the request assembler also has a hard entry cap, and a cap that is reached without
+   * compaction having run drops the oldest entries with no summary and no notice — a long
+   * conversation of short messages could silently lose the instruction that started it. Making the
+   * count a compaction trigger means the entry cap is only ever a backstop.
+   */
+  maxEntries: number;
 }
 
 export const DEFAULT_POLICY: CompactionPolicy = {
   triggerTokens: Number(process.env.AGENTBOX_COMPACT_AT_TOKENS ?? 60_000),
   keepTailTokens: Number(process.env.AGENTBOX_COMPACT_KEEP_TOKENS ?? 20_000),
+  maxEntries: Number(process.env.AGENTBOX_COMPACT_MAX_ENTRIES ?? 50),
 };
 
 /**
@@ -109,6 +119,7 @@ export function policyForModel(model: string): CompactionPolicy {
   return {
     triggerTokens: trigger,
     keepTailTokens: Math.max(1_000, Math.floor(trigger * TAIL_FRACTION)),
+    maxEntries: DEFAULT_POLICY.maxEntries,
   };
 }
 
@@ -187,17 +198,39 @@ function countBlock(block: unknown): { chars: number; images: number } {
 }
 
 /**
- * Everything from the newest summary onwards.
+ * The summary, then everything it did not cover.
  *
- * The summary is the first thing sent, standing in for what it covers. Entries before it are still
- * on disk and still readable by a person; they are simply not in the request.
+ * The summary stands in for the entries it covers; the tail that `chooseCutPoint` deliberately kept
+ * is sent verbatim after it. Entries the summary replaced are still on disk and still readable by a
+ * person; they are simply not in the request.
+ *
+ * The subtlety, and the reason this is not a slice: **the transcript is append-only, so a summary is
+ * written at the end, not at the position it summarises.** Reading "from the newest summary onwards"
+ * therefore returned the summary and nothing else — every entry the cut point had deliberately
+ * preserved sat *before* it in the file and was dropped from the request. A conversation compacted
+ * once lost its whole recent tail, which is the opposite of what compaction is for, and the failure
+ * was invisible because the summary itself always arrived.
+ *
+ * `covers` counts entries in the window that was active when the summary was written, so the window
+ * is rebuilt by recursing into that earlier window and dropping the covered prefix. The recursion is
+ * as deep as the number of compactions, which is small.
  */
 export function activeWindow(entries: readonly HistoryEntry[]): readonly HistoryEntry[] {
-  for (let at = entries.length - 1; at >= 0; at--) {
-    const entry = entries[at]!;
-    if ("kind" in entry && entry.kind === "summary") return entries.slice(at);
+  let at = -1;
+  for (let index = entries.length - 1; index >= 0; index--) {
+    const entry = entries[index]!;
+    if ("kind" in entry && entry.kind === "summary") {
+      at = index;
+      break;
+    }
   }
-  return entries;
+  if (at === -1) return entries;
+
+  const summary = entries[at] as HistoryEntry & { covers: number };
+  // The window this summary was computed against, which is what its `covers` counts into.
+  const earlier = activeWindow(entries.slice(0, at));
+  const covers = Number.isFinite(summary.covers) ? Math.max(0, summary.covers) : 0;
+  return [summary, ...earlier.slice(covers), ...entries.slice(at + 1)];
 }
 
 export interface CutPoint {
@@ -219,16 +252,22 @@ export function chooseCutPoint(
   options: { force?: boolean } = {}
 ): CutPoint | undefined {
   const total = estimateTokens(entries);
+  const tooMany = entries.length > policy.maxEntries;
   // `force` asks the different question the background pass needs: not "should we cut" but "where
   // would we cut, if we had to". Without it the speculative path could never fire, because it runs
   // precisely when the total is still *below* the trigger — a bug this function's own gate caused
   // in the first version of the background pass.
-  if (!options.force && total <= policy.triggerTokens) return undefined;
+  if (!options.force && !tooMany && total <= policy.triggerTokens) return undefined;
 
-  // Walk back accumulating the tail.
+  // Walk back accumulating the tail, and stop early once the tail is as many entries as we are
+  // willing to send. Without that second condition a window of many cheap entries never reaches
+  // `keepTailTokens`, so the whole thing counts as tail, no cut is named, and the entry cap
+  // downstream drops the oldest entries in silence — the exact failure the count trigger exists to
+  // prevent.
+  const tailEntryLimit = Math.max(1, Math.floor(policy.maxEntries * 0.6));
   let tail = 0;
   let index = entries.length;
-  while (index > 0 && tail < policy.keepTailTokens) {
+  while (index > 0 && tail < policy.keepTailTokens && entries.length - index < tailEntryLimit) {
     index -= 1;
     tail += estimateTokens([entries[index]!]);
   }
@@ -248,8 +287,10 @@ export function chooseCutPoint(
   return {
     index,
     reason:
-      `history is about ${total} tokens, over the ${policy.triggerTokens} trigger; ` +
-      `summarising the first ${index} entr${index === 1 ? "y" : "ies"} and keeping ` +
+      (tooMany && total <= policy.triggerTokens
+        ? `history is ${entries.length} entries, over the ${policy.maxEntries} entry trigger`
+        : `history is about ${total} tokens, over the ${policy.triggerTokens} trigger`) +
+      `; summarising the first ${index} entr${index === 1 ? "y" : "ies"} and keeping ` +
       `about ${tail} tokens of tail`,
   };
 }
@@ -543,7 +584,12 @@ export function compactionUrgency(
 ): CompactionUrgency {
   const total = estimateTokens(entries);
   if (total > policy.triggerTokens) return "now";
+  // Cheap entries still cost a slot in the request assembler's hard cap, so the count triggers
+  // compaction in its own right. Without this a conversation can be under every token threshold and
+  // still lose its oldest entries to the cap.
+  if (entries.length > policy.maxEntries) return "now";
   if (total > policy.triggerTokens * BACKGROUND_AT) return "background";
+  if (entries.length > policy.maxEntries * BACKGROUND_AT) return "background";
   return "none";
 }
 

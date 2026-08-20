@@ -31,7 +31,7 @@ DEFAULT_POLICY,
   TOKENS_PER_IMAGE,
 } from "./compaction.ts";
 
-const POLICY: CompactionPolicy = { triggerTokens: 100, keepTailTokens: 40 };
+const POLICY: CompactionPolicy = { triggerTokens: 100, keepTailTokens: 40, maxEntries: 50 };
 
 const text = (role: "user" | "assistant", size: number): HistoryEntry => ({
   role,
@@ -304,7 +304,7 @@ test("the trigger follows the model's real window when one is reported", () => {
 // ── background pre-compaction ──────────────────────────────────────────────────────────
 
 test("urgency has three states, and the middle one is the point", () => {
-  const policy = { triggerTokens: 1_000, keepTailTokens: 300 };
+  const policy = { triggerTokens: 1_000, keepTailTokens: 300, maxEntries: 50 };
   const entry = (chars: number): HistoryEntry => ({
     role: "user",
     text: "x".repeat(chars),
@@ -360,4 +360,49 @@ test("an explicit summariser choice wins over the derived one", () => {
     if (previousModel === undefined) delete process.env.AGENTBOX_SUMMARY_MODEL;
     else process.env.AGENTBOX_SUMMARY_MODEL = previousModel;
   }
+});
+
+test("compaction keeps the tail it deliberately preserved", () => {
+  // The bug this exists for: the transcript is append-only, so a summary is written at the END of
+  // the file, not at the position it summarises. Reading "from the newest summary onwards" returned
+  // the summary and nothing else — every entry chooseCutPoint had kept sat before it and vanished
+  // from the request. A conversation compacted once lost its whole recent tail, and the failure was
+  // invisible because the summary itself always arrived.
+  const old = Array.from({ length: 100 }, () => text("user", 5));
+  const recent = Array.from({ length: 20 }, (_, i) => ({
+    role: "user" as const,
+    text: `RECENT ${i}`,
+    at: "2026-08-19T00:00:00Z",
+  }));
+  const summary = { role: "user" as const, kind: "summary" as const, covers: 100, text: "[s]", at: "" };
+
+  const window = activeWindow([...old, ...recent, summary]);
+  assert.equal(window.length, 21, "the summary plus every entry it did not cover");
+  assert.equal(window[0], summary, "and the summary comes first, standing in for the old prefix");
+  assert.equal(
+    window.filter(entry => "text" in entry && entry.text.startsWith("RECENT")).length,
+    20
+  );
+
+  // Compacted twice: the second summary's `covers` counts into the window the first one left.
+  const second = { role: "user" as const, kind: "summary" as const, covers: 11, text: "[s2]", at: "" };
+  const twice = activeWindow([...old, ...recent, summary, ...recent.slice(0, 5), second]);
+  assert.equal(twice[0], second);
+  // 21 - 11 covered = 10 left of the first window, plus the 5 appended after it.
+  assert.equal(twice.length, 1 + 10 + 5);
+});
+
+test("a long conversation of cheap entries is summarised, not silently cut", () => {
+  // Request assembly has a hard entry cap. Reaching it without compaction having run drops the
+  // oldest entries with no summary and no notice, so a hundred short exchanges could lose the
+  // instruction that started the task. The count is a trigger in its own right.
+  const many = Array.from({ length: 80 }, () => text("user", 2));
+  const policy: CompactionPolicy = { triggerTokens: 1_000_000, keepTailTokens: 500_000, maxEntries: 50 };
+  assert.equal(compactionUrgency(many, policy), "now", "far under every token threshold");
+
+  const cut = chooseCutPoint(many, policy);
+  assert.ok(cut, "and a cut is actually named, or the trigger would fire forever with no effect");
+  assert.match(cut.reason, /80 entries, over the 50 entry trigger/);
+  assert.ok(many.length - cut.index <= 50, "the tail it keeps fits under the cap");
+  assert.ok(cut.index > 0);
 });
