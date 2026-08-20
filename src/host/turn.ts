@@ -13,6 +13,16 @@ import type { BoxClient } from "../box/client.ts";
 import type { DisplayLease } from "../box/display-lease.ts";
 import type { PolicyGate } from "./policy.ts";
 import {
+  classifyLimit,
+  continuationPrompt,
+  detectLoop,
+  loopReport,
+  MAX_CONTINUATIONS,
+  signatureOf,
+  stateHashOf,
+  type RoundRecord,
+} from "./progress.ts";
+import {
   decideRetry,
   FirstTokenStallError,
   FIRST_TOKEN_DEADLINE_MS,
@@ -670,8 +680,27 @@ export async function runTurn(
 
   const tools = buildTools(box !== undefined, provider.vision);
 
+  // One entry per completed round, for the loop and progress judgements. Held out here rather than
+  // inside runRounds so a continuation can reset it: a fresh budget deserves a fresh judgement.
+  const rounds: RoundRecord[] = [];
+
   try {
-    await runRounds();
+    // Continuations are a loop here rather than recursion inside runRounds: each pass gets a fresh
+    // round budget and a fresh look at the history, and the plan and todo list carry the intent
+    // across. A turn that was working steadily resumes instead of being abandoned at the limit.
+    let continuation = 0;
+    for (;;) {
+      const outcome = await runRounds(continuation);
+      if (outcome === undefined) break;
+      continuation = outcome.continuation;
+      messages.push({ role: "user", content: outcome.continueWith });
+      registry.appendTranscript(agent.id, {
+        role: "user",
+        text: outcome.continueWith,
+        at: new Date().toISOString(),
+      } satisfies TranscriptEntry);
+      rounds.length = 0; // a fresh budget means a fresh judgement about looping
+    }
   } finally {
     // Release the desktop however the turn ends — normally, by abort, or by
     // throwing. A lease leaked here would lock every other agent out of the
@@ -679,7 +708,9 @@ export async function runTurn(
     deps.display?.release(agent.id);
   }
 
-  async function runRounds(): Promise<void> {
+  async function runRounds(
+    continuation: number
+  ): Promise<{ continueWith: string; continuation: number } | undefined> {
   // How many times this turn has had to shed content after a rejection. Bounded, because a provider
   // that rejects everything must not become an infinite retry loop.
   let shed = 0;
@@ -1014,14 +1045,90 @@ export async function runTurn(
     } satisfies TranscriptEntry);
 
     messages.push({ role: "user", content: results });
+
+    // What this round did, reduced to what decides whether anything is happening. Recorded after the
+    // tools ran, so a todo ticked off during the round counts as the change it is.
+    rounds.push({
+      signatures: toolUses.map(use => signatureOf(use.name, use.input)),
+      stateHash: stateHashOf(registry.readDurableState(agent.id)),
+    });
+
+    // Detected as it starts rather than at the limit. An agent repeating one call has already wasted
+    // every round since the second; there is nothing to learn from letting it do three hundred more.
+    const loop = detectLoop(rounds);
+    if (loop !== undefined) {
+      const report = loopReport(loop, round + 1);
+      registry.appendTranscript(agent.id, {
+        role: "assistant",
+        text: report,
+        at: new Date().toISOString(),
+      } satisfies TranscriptEntry);
+      emit({
+        type: "text",
+        agentId: agent.id,
+        agentName: agent.profile.name,
+        delta: report,
+      });
+      // Ended, not thrown: the agent stopped for a reason it has been told, which is an outcome
+      // rather than a failure of the machinery.
+      return;
+    }
   }
 
-  // Reaching the cap is a fault, not an ending. Recording it as an ordinary
-  // assistant message would leave a stuck agent looking like a finished one, and
-  // the user with no reason to ask why nothing happened.
+  // Out of rounds. Which of the two situations this is decides everything, and until now it was a
+  // guess written as a fact — "probably looping" on a turn that may have been working steadily.
+  const outcome = classifyLimit(rounds);
+
+  if (outcome.kind === "looping") {
+    const report = loopReport(outcome.finding, MAX_ROUNDS);
+    registry.appendTranscript(agent.id, {
+      role: "assistant",
+      text: report,
+      at: new Date().toISOString(),
+    } satisfies TranscriptEntry);
+    throw new TurnRoundLimitExceeded(report);
+  }
+
+  if (outcome.kind === "progressing" && continuation < MAX_CONTINUATIONS) {
+    // A budget, not a wall. The plan and todo list are in the system prompt and unchanged, and the
+    // history will be compacted on the way in — so a fresh turn resumes rather than restarts.
+    const next = continuation + 1;
+    const note =
+      `Used all ${MAX_ROUNDS} rounds and was still making progress; continuing in a fresh turn ` +
+      `(${next} of ${MAX_CONTINUATIONS}).`;
+    registry.appendTranscript(agent.id, {
+      role: "assistant",
+      text: note,
+      at: new Date().toISOString(),
+    } satisfies TranscriptEntry);
+    emit({ type: "text", agentId: agent.id, agentName: agent.profile.name, delta: note });
+    console.error(`[turn] ${agent.profile.name}: ${note}`);
+
+    // Through the same gate as any other wake. An agent continuing itself is precisely the shape the
+    // wake-rate limit exists to catch, so it is checked rather than exempted.
+    const permitted = deps.policy?.check({
+      kind: "wake",
+      agentId: agent.id,
+      agentName: agent.profile.name,
+      targetId: agent.id,
+      targetName: agent.profile.name,
+    });
+    if (permitted !== undefined && !permitted.allow) {
+      throw new TurnRoundLimitExceeded(
+        `${note} The continuation was refused: ${permitted.reason}`
+      );
+    }
+    return { continueWith: continuationPrompt(MAX_ROUNDS, next), continuation: next };
+  }
+
+  // Neither progressing nor obviously looping, or out of continuations. Reported as what it is
+  // rather than as a diagnosis nobody checked.
   const note =
-    `Stopped after ${MAX_ROUNDS} tool rounds without finishing — the agent is ` +
-    "probably looping rather than making progress.";
+    outcome.kind === "progressing"
+      ? `Stopped after ${MAX_CONTINUATIONS} continuations. Work was still moving, so this is a ` +
+        `budget rather than a conclusion — say what is left.`
+      : `Stopped after ${MAX_ROUNDS} rounds. Nothing repeated often enough to call it a loop, and ` +
+        `neither the plan nor the todo list changed, so it is not clear anything was achieved.`;
   registry.appendTranscript(agent.id, {
     role: "assistant",
     text: note,

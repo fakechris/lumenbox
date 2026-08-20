@@ -223,6 +223,40 @@ duplicated and no tool can re-run — but the screen can show the text twice. Th
 `discardPartial` so a UI can drop the first, and until a UI reads it, that duplicate is visible. Worth
 it: a duplicated paragraph is recoverable and a lost turn is not.
 
+### R-11 — The round limit was a guess, and a dead end — **fixed**
+
+A turn ran up to 400 rounds and then recorded "the agent is probably looping rather than making
+progress". Two faults: the diagnosis was a guess written as a fact — a genuinely long task looks
+identical from there — and there was no continuation, so work was abandoned at the limit with
+whatever it had done left half-finished.
+
+Both are answerable now that the agent keeps state saying what it is trying to do (§2.2a of
+[05-data.md](05-data.md)).
+
+**A loop is detected when it starts.** An agent repeating one call has wasted every round since the
+second, so there is nothing to learn from letting it do three hundred more. Four consecutive rounds of
+the same call *and* nothing else called alongside it *and* no change to the plan or todo list. All
+three conditions are required, because each has a false positive on its own — and a detector that
+stops a working agent is worse than none, since that failure is silent and looks like the agent giving
+up. The report quotes the repeated call, which is worth more to a reader than any adjective.
+
+**At the limit the two cases are separated.** A loop stops. Real progress means the turn hit a
+*budget*, and it is continued in a fresh turn: the plan and todo list are in the system prompt and
+unchanged, the history compacts on the way in, so the agent resumes rather than restarts. Bounded at
+three continuations, and the continuation goes through the same policy gate as any other wake, since
+an agent continuing itself is exactly the shape the wake-rate limit exists to catch.
+
+Progress is judged generously — one todo moving in four hundred rounds counts — because the two
+mistakes are not symmetrical: continuing something stuck wastes a budget, while abandoning something
+working throws the work away. The narrow judgement is the loop detector's job.
+
+Where it is genuinely unclear — nothing repeated often enough to call a loop, and nothing changed —
+that is what the transcript says, rather than a diagnosis nobody checked.
+
+The first run of this found an artificial loop in an existing test: six identical screenshot calls,
+written as a fixture for the overflow test. The detector was right and the fixture was not, which is
+the sort of thing a real definition of "looping" turns up.
+
 ## What holds up well
 
 Worth recording, because a review that only lists faults misrepresents the system.

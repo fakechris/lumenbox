@@ -883,10 +883,18 @@ test("a turn that overflows mid-way sheds screenshots and finishes", async () =>
 
     // Six rounds of computer use, then done. The provider refuses any request carrying more than
     // two images — which is what an image-count limit looks like, and is unrelated to size.
+    // Varied per round: six *identical* calls would be a loop by the definition in progress.ts, and
+    // the loop detector would rightly end the turn before this test got to its point.
     const replies: Anthropic.Message[] = [
       ...Array.from({ length: 6 }, (_, index) =>
         message(
-          [toolUseBlock("computer", { actions: [{ action: "screenshot" }] }, `toolu_${index}`)],
+          [
+            toolUseBlock(
+              "computer",
+              { actions: [{ action: "left_click", coordinate: [index * 10, index * 10] }] },
+              `toolu_${index}`
+            ),
+          ],
           "tool_use"
         )
       ),
@@ -1490,6 +1498,107 @@ test("SetPlan and SetTodos round-trip through the tools", async () => {
     assert.match(echoed, /0\/1 done/);
     assert.match(echoed, /step one/);
   } finally {
+    cleanup();
+  }
+});
+
+test("a looping agent is stopped early, with the repeated call named", async () => {
+  const { registry, cleanup } = fixture();
+  try {
+    const ada = registry.create({ name: "Ada" });
+    const bus = new AgentBus(registry, async () => {});
+    const { box } = stubBox();
+    const capture: Capture = { params: [] };
+
+    // The same call forever. Before this, four hundred rounds of it — and then a note saying the
+    // agent was "probably" looping.
+    const { client } = stubClient(
+      [message([toolUseBlock("bash", { command: "ls /nowhere" })], "tool_use")],
+      capture
+    );
+
+    await runTurn(
+      ada,
+      [{ fromId: "user", fromName: "user", text: "look around", priority: false, receivedAt: "" }],
+      new AbortController().signal,
+      { client, registry, bus, box, resolution: undefined, displayIndex: 1 }
+    );
+
+    // Four rounds, not four hundred. Every round after the second was already waste.
+    assert.ok(capture.params.length <= 5, `expected to stop early, ran ${capture.params.length}`);
+
+    const transcript = registry.readTranscript(ada.id) as TranscriptEntry[];
+    const last = transcript.at(-1);
+    assert.ok(last && !("kind" in last));
+    // The call is quoted, which is worth more to whoever reads this than an adjective.
+    assert.match(last.text, /same `bash` call with the same/);
+    assert.match(last.text, /That is a loop rather than slow[\s\S]*progress/);
+  } finally {
+    cleanup();
+  }
+});
+
+test("a turn that is still working continues instead of being abandoned", async () => {
+  const { registry, cleanup } = fixture();
+  const previousMax = process.env.AGENTBOX_MAX_ROUNDS;
+  try {
+    // A tiny budget, so the limit is reached in a test rather than in four hundred rounds. Read at
+    // module load, so this test drives the loop directly rather than through runTurn.
+    const ada = registry.create({ name: "Ada" });
+    const bus = new AgentBus(registry, async () => {});
+    const { box } = stubBox();
+    const capture: Capture = { params: [] };
+
+    // Varied calls and a todo list that moves: progress by any reading. The stub keeps working, so
+    // the only thing that ends this is the round budget.
+    let round = 0;
+    const client = {
+      messages: {
+        stream(params: Anthropic.MessageCreateParams) {
+          capture.params.push({ ...params, messages: [...params.messages] });
+          round += 1;
+          // Never finishes on its own: the only thing that may end this turn is the round budget,
+          // which is what the test is about.
+          return {
+            on() {
+              return this;
+            },
+            finalMessage: async () =>
+              message(
+                [toolUseBlock("bash", { command: `echo ${round}` }, `toolu_${round}`)],
+                "tool_use"
+              ),
+          };
+        },
+      },
+    } as unknown as Anthropic;
+    registry.writeTodos(ada.id, [{ text: "keep going", status: "doing" }]);
+
+    await assert.rejects(
+      runTurn(
+        ada,
+        [{ fromId: "user", fromName: "user", text: "work", priority: false, receivedAt: "" }],
+        new AbortController().signal,
+        { client, registry, bus, box, resolution: undefined, displayIndex: 1 }
+      ),
+      /continuations/
+    );
+
+    // It continued rather than stopping at the first limit: more rounds ran than one budget allows.
+    assert.ok(
+      capture.params.length > 400,
+      `expected continuations past one budget, ran ${capture.params.length}`
+    );
+
+    const transcript = registry.readTranscript(ada.id) as TranscriptEntry[];
+    const text = JSON.stringify(transcript);
+    assert.match(text, /still making progress; continuing in a fresh turn/);
+    assert.match(text, /this is a fresh turn rather than a failure/, "the agent was told why");
+    // And it ends by saying it ran out of budget rather than claiming a conclusion.
+    assert.match(text, /Stopped after 3 continuations/);
+  } finally {
+    if (previousMax === undefined) delete process.env.AGENTBOX_MAX_ROUNDS;
+    else process.env.AGENTBOX_MAX_ROUNDS = previousMax;
     cleanup();
   }
 });
