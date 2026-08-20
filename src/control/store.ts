@@ -44,6 +44,35 @@ export type TenantState = "active" | "suspended";
 export type BoxState = "starting" | "ready" | "stopped" | "unreachable" | "gone";
 export type TokenKind = "box" | "ui";
 
+/**
+ * What a person may do inside one tenant.
+ *
+ * `viewer` exists because the product's promise is "watch and take over", and there is a real need
+ * to let someone watch *without* the ability to take over — a reviewer, an auditor, a customer.
+ */
+export type Role = "owner" | "member" | "viewer";
+
+export const ROLES: readonly Role[] = ["owner", "member", "viewer"];
+
+export function isRole(value: string): value is Role {
+  return (ROLES as readonly string[]).includes(value);
+}
+
+export interface AppUser {
+  id: string;
+  username: string;
+  state: "active" | "suspended";
+  createdAt: string;
+}
+
+export interface Membership {
+  userId: string;
+  username: string;
+  tenantId: string;
+  role: Role;
+  createdAt: string;
+}
+
 export interface Tenant {
   id: string;
   name: string;
@@ -123,6 +152,24 @@ export interface AuditRow extends AuditEntry {
  */
 export interface ControlStore {
   upsertTenant(input: { id?: string; name: string; quota?: Record<string, unknown> }): Tenant;
+
+  upsertUser(input: { id?: string; username: string }): AppUser;
+  getUser(id: string): AppUser | undefined;
+  findUserByName(username: string): AppUser | undefined;
+  setUserState(id: string, state: "active" | "suspended"): void;
+
+  /**
+   * Records that a person belongs to a tenant, in a role. Idempotent, updating the role.
+   *
+   * Returns the membership, which is what a session is built from.
+   */
+  putMembership(userId: string, tenantId: string, role: Role): Membership;
+  membership(userId: string, tenantId: string): Membership | undefined;
+  /** Every tenant this person belongs to — which is what a person picks from when signing in. */
+  membershipsOf(userId: string): Membership[];
+  /** Everyone in this tenant, for the admin surface. */
+  membersOf(tenantId: string): Membership[];
+  removeMembership(userId: string, tenantId: string): boolean;
   getTenant(id: string): Tenant | undefined;
   listTenants(): Tenant[];
   setTenantState(id: string, state: TenantState): void;
@@ -209,6 +256,27 @@ create table if not exists tenant (
   created_at  text not null,
   quota_json  text not null default '{}'
 );
+
+-- A person, distinct from a tenant. One person may work with more than one team, which is the
+-- ordinary case for a contractor rather than an exotic one, so identity and tenancy are separate
+-- tables joined by a membership.
+create table if not exists app_user (
+  id         text primary key,
+  username   text not null unique,
+  created_at text not null,
+  state      text not null default 'active'
+);
+
+create table if not exists membership (
+  user_id    text not null references app_user(id),
+  tenant_id  text not null references tenant(id),
+  -- owner | member | viewer. Three, because two is not enough and four is unexplainable.
+  role       text not null,
+  created_at text not null,
+  primary key (user_id, tenant_id)
+);
+
+create index if not exists membership_by_tenant on membership(tenant_id);
 
 create table if not exists box (
   id             text primary key,
@@ -344,6 +412,87 @@ export class SqliteControlStore implements ControlStore {
       // A hand-edited quota should not take the control plane down with it.
       quota: parseJson(row.quota_json, {}) as Record<string, unknown>,
     };
+  }
+
+  // ── people ────────────────────────────────────────────────────────────────────────
+
+  upsertUser(input: { id?: string; username: string }): AppUser {
+    const existing = this.findUserByName(input.username);
+    const id = input.id ?? existing?.id ?? randomUUID();
+    this.db
+      .prepare(
+        `insert into app_user (id, username, created_at, state) values (?, ?, ?, 'active')
+         on conflict(id) do update set username = excluded.username`
+      )
+      .run(id, input.username, new Date().toISOString());
+    return this.getUser(id)!;
+  }
+
+  getUser(id: string): AppUser | undefined {
+    const row = this.db.prepare("select * from app_user where id = ?").get(id) as
+      | Record<string, string>
+      | undefined;
+    return row === undefined ? undefined : toUser(row);
+  }
+
+  findUserByName(username: string): AppUser | undefined {
+    const row = this.db.prepare("select * from app_user where username = ?").get(username) as
+      | Record<string, string>
+      | undefined;
+    return row === undefined ? undefined : toUser(row);
+  }
+
+  setUserState(id: string, state: "active" | "suspended"): void {
+    this.db.prepare("update app_user set state = ? where id = ?").run(state, id);
+  }
+
+  putMembership(userId: string, tenantId: string, role: Role): Membership {
+    this.db
+      .prepare(
+        `insert into membership (user_id, tenant_id, role, created_at) values (?, ?, ?, ?)
+         on conflict(user_id, tenant_id) do update set role = excluded.role`
+      )
+      .run(userId, tenantId, role, new Date().toISOString());
+    return this.membership(userId, tenantId)!;
+  }
+
+  membership(userId: string, tenantId: string): Membership | undefined {
+    const row = this.db
+      .prepare(
+        `select m.*, u.username from membership m join app_user u on u.id = m.user_id
+         where m.user_id = ? and m.tenant_id = ?`
+      )
+      .get(userId, tenantId) as Record<string, string> | undefined;
+    return row === undefined ? undefined : toMembership(row);
+  }
+
+  membershipsOf(userId: string): Membership[] {
+    return (
+      this.db
+        .prepare(
+          `select m.*, u.username from membership m join app_user u on u.id = m.user_id
+           where m.user_id = ? order by m.created_at`
+        )
+        .all(userId) as Record<string, string>[]
+    ).map(toMembership);
+  }
+
+  membersOf(tenantId: string): Membership[] {
+    return (
+      this.db
+        .prepare(
+          `select m.*, u.username from membership m join app_user u on u.id = m.user_id
+           where m.tenant_id = ? order by u.username`
+        )
+        .all(tenantId) as Record<string, string>[]
+    ).map(toMembership);
+  }
+
+  removeMembership(userId: string, tenantId: string): boolean {
+    const result = this.db
+      .prepare("delete from membership where user_id = ? and tenant_id = ?")
+      .run(userId, tenantId);
+    return Number(result.changes) > 0;
   }
 
   // ── boxes ─────────────────────────────────────────────────────────────────────────
@@ -570,6 +719,27 @@ export class SqliteControlStore implements ControlStore {
   close(): void {
     this.db.close();
   }
+}
+
+function toUser(row: Record<string, string>): AppUser {
+  return {
+    id: row.id!,
+    username: row.username!,
+    state: row.state === "suspended" ? "suspended" : "active",
+    createdAt: row.created_at!,
+  };
+}
+
+function toMembership(row: Record<string, string>): Membership {
+  return {
+    userId: row.user_id!,
+    username: row.username!,
+    tenantId: row.tenant_id!,
+    // A hand-edited role should not become an accidental owner. Anything unrecognised reads as the
+    // least privilege, not the most.
+    role: isRole(row.role!) ? row.role : "viewer",
+    createdAt: row.created_at!,
+  };
 }
 
 function toBox(row: Record<string, string | number | null>): BoxRow {

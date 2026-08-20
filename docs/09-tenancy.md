@@ -197,13 +197,41 @@ the one job a command line does badly.
 
 ## 9. Order of work
 
-1. **Users, memberships and roles in the store**, and a session that carries (user, tenant, role).
-   Nothing observable changes; everything after depends on it.
-2. **Identity injection**, with the stripping rule and the trust rule, and attribution in the box.
-   Valuable on its own: the feed and the transcripts stop saying "the user".
-3. **Enforcement**: agent ownership, visibility, and role checks on driving.
-4. **Admin API**, owner-only, audited.
-5. **Cross-tenant sharing**, if it is ever actually wanted.
+1. ~~**Users, memberships and roles in the store**~~, and a session that carries (user, tenant,
+   role). **Done.**
+2. ~~**Identity injection**~~, with the stripping rule and the trust rule, and attribution in the
+   box. **Done.**
+3. ~~**Enforcement**~~: agent ownership, visibility, and role checks on driving. **Done.**
+4. ~~**Admin API**~~, owner-only, audited. **Done.**
+5. **Cross-tenant sharing**, if it is ever actually wanted. Not built.
 
-Steps 1 and 2 are worth doing even if 3 is never enforced, because attribution is what makes a
-multi-person run reviewable at all.
+## 10. What was built, and what it cost
+
+Verified against a real box with three people in one tenant:
+
+- Three sign-ins, one container. `alice` became owner and the others members, because somebody has
+  to be able to invite the second person and a tenant whose only member cannot manage it is a dead
+  end. Signing in again never changes an existing role — an owner demoting themselves by
+  reconnecting would be a locked-out tenant.
+- A member asking an owner's question got 403 with a message naming what would allow it, and the
+  attempt was audited. "Who tried" is asked after an incident as often as "who did".
+- A viewer read `/api/state` (200) and was refused `POST /api/agents` and `POST /api/prompt` (403).
+- A viewer sending `X-Agentbox-Role: owner` was still refused: the gateway strips those headers off
+  the incoming request before setting its own. This is the rule that fails silently if forgotten.
+- Demoting the only owner was refused with 409 and an explanation, not a generic error.
+
+Two consequences worth stating rather than discovering:
+
+**A role change takes effect at the next sign-in.** The role travels in the signed cookie rather than
+being looked up per request. The trade was deliberate: looking it up costs a store read on every
+request, and the alternative shape — trusting the cookie for *identity* and the store for
+*privilege* — invites the bug where one is checked and the other is not. What must be immediate is
+suspension, and tenant and user state *are* checked on every request. The API says so in its
+response rather than leaving it to be found out.
+
+**An unrecognised role reads as the least privilege, not the most.** Three cases, and conflating the
+last two would be a privilege escalation: no header at all means nobody is asserting anything, which
+is the direct single-user case and has always been able to do everything; a recognised role is what
+the gateway sends; an *unrecognised* one means something upstream is wrong, and the answer there is
+`viewer`. The first draft of that code returned `owner` for the third case while its own comment
+claimed otherwise.

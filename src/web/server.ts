@@ -28,7 +28,7 @@ import { Orchestrator } from "../host/orchestrator.ts";
 import { describeProvider, type ProviderProfile } from "../host/provider.ts";
 import type { TurnEvent } from "../host/turn.ts";
 import { APP_HTML } from "./app-html.ts";
-import { authorize, isLoopback } from "./auth.ts";
+import { authorize, callerOf, isLoopback, refusalToDrive } from "./auth.ts";
 import { agentboxHome, loadConfig } from "../config.ts";
 import { ActivityLog } from "./activity.ts";
 import { vendorPath } from "./markdown.ts";
@@ -301,6 +301,25 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
         res.setHeader("set-cookie", decision.setCookie);
       }
 
+      // Who this is, read once and in one place. `decision.allow` is passed rather than re-derived,
+      // so identity cannot be trusted on a request that authentication did not accept.
+      const caller = callerOf(req.headers, decision.allow);
+
+      /**
+       * Refuses a mutating request the caller may not make, and says which role would allow it.
+       *
+       * Returns true when it has already answered, so a handler reads as one line rather than an
+       * `if` nest. Every route that changes something calls this — a check per handler is how one
+       * handler ends up missing it.
+       */
+      const refused = (agentId?: string): boolean => {
+        const agent = agentId === undefined ? undefined : registry.tryGet(agentId);
+        const reason = refusalToDrive(caller, agent?.profile);
+        if (reason === undefined) return false;
+        send(res, 403, { error: reason });
+        return true;
+      };
+
       try {
         if (route === "GET /") {
           send(res, 200, APP_HTML, "text/html");
@@ -355,6 +374,7 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
         // this, anything the user wants in the box has to be retyped by hand, and
         // anything an agent leaves on the clipboard is stuck there.
         if (route === "POST /api/clipboard") {
+          if (refused()) return;
           const body = await readJson(req);
           const agentId = String(body.agent ?? "");
           const client = orchestrator.boxClient();
@@ -414,6 +434,7 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
         if (route === "POST /api/stop") {
           const body = await readJson(req);
           const agentId = String(body.agent ?? "");
+          if (refused(agentId)) return;
           if (!orchestrator.registry.has(agentId)) {
             send(res, 404, { error: `No agent ${agentId}` });
             return;
@@ -427,6 +448,8 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
         }
 
         if (route === "POST /api/approve" || route === "POST /api/deny") {
+          // Answering an approval is driving: it is the moment a person authorises an action.
+          if (refused()) return;
           const body = await readJson(req);
           const id = String(body.id ?? "");
           const answered =
@@ -454,6 +477,7 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
         }
 
         if (route === "POST /api/record") {
+          if (refused()) return;
           const body = await readJson(req);
           const agentId = String(body.agent ?? "");
           const action = String(body.action ?? "");
@@ -536,12 +560,20 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
         }
 
         if (route === "POST /api/agents") {
+          if (refused()) return;
           const body = await readJson(req);
           const created = registry.create({
             name: String(body.name ?? ""),
             description: String(body.description ?? ""),
+            // Recorded so "whose agent is this" has an answer. Undefined on a box with no gateway in
+            // front, which is the single-user case and stays as it was.
+            ...(caller.userId !== undefined ? { ownerUserId: caller.userId } : {}),
+            visibility: body.visibility === "private" ? "private" : "shared",
           });
-          log(`created agent ${created.profile.name} (${created.id})`);
+          log(
+            `created agent ${created.profile.name} (${created.id})` +
+              (caller.userId === undefined ? "" : ` for ${caller.userId}`)
+          );
           send(res, 200, { id: created.id, name: created.profile.name });
           return;
         }
@@ -549,6 +581,7 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
         if (route === "POST /api/prompt") {
           const body = await readJson(req);
           const agentId = String(body.agent ?? "");
+          if (refused(agentId)) return;
           const text = String(body.text ?? "").trim();
 
           if (!registry.has(agentId)) {
@@ -563,7 +596,14 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
           // Echo the prompt so every connected page shows it, then answer
           // immediately: the turn's output arrives over the event stream, and a
           // long turn must not hold the HTTP request open.
-          broadcast({ type: "prompt", agentId, text });
+          // Attributed, so a transcript stops saying "the user" once there is more than one person
+          // in a tenant. Carried on the event too, since that is what the feed renders.
+          broadcast({
+            type: "prompt",
+            agentId,
+            text,
+            ...(caller.userId !== undefined ? { userId: caller.userId } : {}),
+          });
           send(res, 202, { accepted: true });
 
           void orchestrator

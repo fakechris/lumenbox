@@ -22,6 +22,7 @@ import {
   routeOf,
   SESSION_COOKIE,
   SessionSigner,
+  stripIdentityHeaders,
 } from "./gateway.ts";
 
 /** A stand-in box UI: reports back exactly what it was sent, so leaks are visible. */
@@ -40,7 +41,13 @@ async function fakeBoxUi(expectedToken: string): Promise<{ url: string; close: (
     });
     res.end(
       JSON.stringify({
-        saw: { path: req.url, cookie: req.headers.cookie ?? null, authorization },
+        saw: {
+          path: req.url,
+          cookie: req.headers.cookie ?? null,
+          authorization,
+          user: req.headers["x-agentbox-user"] ?? null,
+          role: req.headers["x-agentbox-role"] ?? null,
+        },
       })
     );
   });
@@ -75,14 +82,29 @@ function fixture() {
 
 test("a session cookie cannot be forged, edited or outlived", () => {
   const signer = new SessionSigner(Buffer.from("a".repeat(32)));
-  const issued = signer.issue("tenant-1");
-  assert.equal(signer.verify(issued), "tenant-1");
+  const session = { userId: "u1", tenantId: "tenant-1", role: "member" as const };
+  const issued = signer.issue(session);
+  assert.deepEqual(signer.verify(issued), session);
 
-  // The whole reason the cookie is signed: otherwise this is how you become another tenant.
-  const [, expires, signature] = issued.split(".");
-  assert.equal(signer.verify(`tenant-2.${expires}.${signature}`), undefined, "swapped tenant");
-  assert.equal(signer.verify(`tenant-1.${expires}.${signature}x`), undefined, "edited signature");
-  assert.equal(signer.verify("tenant-1"), undefined, "no signature at all");
+  // The whole reason the cookie is signed: otherwise each of these is a way to become someone else.
+  const [, , , expires, signature] = issued.split(".");
+  assert.equal(
+    signer.verify(`u1.tenant-2.member.${expires}.${signature}`),
+    undefined,
+    "swapped tenant"
+  );
+  assert.equal(
+    signer.verify(`u2.tenant-1.member.${expires}.${signature}`),
+    undefined,
+    "swapped user"
+  );
+  assert.equal(
+    signer.verify(`u1.tenant-1.owner.${expires}.${signature}`),
+    undefined,
+    "promoted role — the reason the role can travel in the cookie at all"
+  );
+  assert.equal(signer.verify(`${issued}x`), undefined, "edited signature");
+  assert.equal(signer.verify("u1.tenant-1.member"), undefined, "no signature at all");
   assert.equal(signer.verify(undefined), undefined);
   assert.equal(signer.verify(""), undefined);
 
@@ -90,8 +112,15 @@ test("a session cookie cannot be forged, edited or outlived", () => {
   assert.equal(new SessionSigner(randomBytes(32)).verify(issued), undefined);
 
   // Expiry is checked, so a stolen cookie stops working.
-  const old = signer.issue("tenant-1", Date.now() - 13 * 60 * 60 * 1000);
+  const old = signer.issue(session, Date.now() - 13 * 60 * 60 * 1000);
   assert.equal(signer.verify(old), undefined, "a session past its expiry is not a session");
+
+  // A signed cookie carrying a role nobody defined means the signing key is not what we think it
+  // is, so the whole cookie is refused rather than the role being guessed at.
+  const forgedRole = new SessionSigner(Buffer.from("a".repeat(32)));
+  const body = `u1.tenant-1.superuser.${Date.now() + 60_000}`;
+  const validSignature = (forgedRole as unknown as { sign(body: string): string }).sign(body);
+  assert.equal(forgedRole.verify(`${body}.${validSignature}`), undefined);
 });
 
 test("only the box's own paths are forwarded; the gateway keeps three", () => {
@@ -269,8 +298,8 @@ test("one tenant's session cannot open another tenant's box", async () => {
     });
     const server = await serve(gateway);
     try {
-      const asAcme = `${SESSION_COOKIE}=${signer.issue(acme.id)}`;
-      const asBeta = `${SESSION_COOKIE}=${signer.issue(beta.id)}`;
+      const asAcme = `${SESSION_COOKIE}=${signer.issue({ userId: "u-acme", tenantId: acme.id, role: "owner" })}`;
+      const asBeta = `${SESSION_COOKIE}=${signer.issue({ userId: "u-beta", tenantId: beta.id, role: "owner" })}`;
 
       const one = await fetch(`${server.url}/api/agents`, { headers: { cookie: asAcme } });
       const two = await fetch(`${server.url}/api/agents`, { headers: { cookie: asBeta } });
@@ -332,7 +361,7 @@ test("a suspended tenant is refused, and a box that is starting says so", async 
     });
     const server = await serve(gateway);
     try {
-      const session = `${SESSION_COOKIE}=${signer.issue(tenant.id)}`;
+      const session = `${SESSION_COOKIE}=${signer.issue({ userId: "u-tenant", tenantId: tenant.id, role: "owner" })}`;
 
       // Allocation is slow and can fail. The person gets a page that retries, not a hung request.
       const waiting = await fetch(`${server.url}/`, { headers: { cookie: session } });
@@ -346,7 +375,7 @@ test("a suspended tenant is refused, and a box that is starting says so", async 
       assert.match(await suspended.text(), /suspended/);
 
       // A session naming a tenant that no longer exists is not a way in.
-      const ghost = `${SESSION_COOKIE}=${signer.issue("00000000-0000-0000-0000-000000000000")}`;
+      const ghost = `${SESSION_COOKIE}=${signer.issue({ userId: "u1", tenantId: "00000000-0000-0000-0000-000000000000", role: "owner" })}`;
       const gone = await fetch(`${server.url}/`, { headers: { cookie: ghost } });
       assert.equal(gone.status, 403);
     } finally {
@@ -413,7 +442,7 @@ test("a box that stops answering is marked unreachable by the request that notic
     const server = await serve(gateway);
     try {
       const response = await fetch(`${server.url}/`, {
-        headers: { cookie: `${SESSION_COOKIE}=${signer.issue(tenant.id)}` },
+        headers: { cookie: `${SESSION_COOKIE}=${signer.issue({ userId: "u-tenant", tenantId: tenant.id, role: "owner" })}` },
       });
       assert.equal(response.status, 502);
       // A failed proxy is usually the first thing that notices a dead box, so it is what tells the
@@ -423,6 +452,163 @@ test("a box that stops answering is marked unreachable by the request that notic
       server.close();
     }
   } finally {
+    cleanup();
+  }
+});
+
+test("a client cannot assert its own identity", async () => {
+  // The rule that fails silently if forgotten: a client sending `X-Agentbox-Role: owner` must have
+  // it removed, not forwarded to a box that trusts it. Same rule as Authorization and agentbox_ui.
+  const stripped = stripIdentityHeaders({
+    "x-agentbox-user": "somebody-else",
+    "X-Agentbox-Role": "owner",
+    "content-type": "application/json",
+  });
+  assert.deepEqual(stripped, { "content-type": "application/json" });
+  // Case-insensitively, because a comparison that assumes Node's lower-casing breaks the moment
+  // this is reused somewhere that does not.
+  assert.deepEqual(stripIdentityHeaders({ "X-AGENTBOX-USER": "x" }), {});
+});
+
+test("the box is told who is asking, and cannot be lied to about it", async () => {
+  const { store, cleanup } = fixture();
+  const box = await fakeBoxUi("the-ui-token");
+  try {
+    const tenant = store.upsertTenant({ name: "acme" });
+    const user = store.upsertUser({ username: "alice" });
+    store.putMembership(user.id, tenant.id, "viewer");
+    const signer = new SessionSigner(Buffer.from("f".repeat(32)));
+    const gateway = new Gateway({
+      store,
+      allocator: new StaticAllocator(store, {
+        boxdUrl: "http://127.0.0.1:1",
+        uiUrl: box.url,
+        tokens: { box: "b", ui: "the-ui-token" },
+      }),
+      identity: PasswordListIdentity.parse("alice:secret:acme"),
+      sessionSecret: Buffer.from("f".repeat(32)),
+      image: "agentbox/box:test",
+    });
+    const server = await serve(gateway);
+    try {
+      const session = `${SESSION_COOKIE}=${signer.issue({
+        userId: user.id,
+        tenantId: tenant.id,
+        role: "viewer",
+      })}`;
+
+      const response = await fetch(`${server.url}/api/state`, {
+        headers: {
+          cookie: session,
+          // Both attempts at asserting an identity, which must reach the box as neither.
+          "x-agentbox-user": "somebody-else",
+          "x-agentbox-role": "owner",
+        },
+      });
+      const body = (await response.json()) as { saw: { user: string; role: string } };
+      assert.equal(body.saw.user, user.id, "the session decides who, not the request");
+      assert.equal(body.saw.role, "viewer", "and what — the claimed owner did not survive");
+    } finally {
+      server.close();
+    }
+  } finally {
+    box.close();
+    cleanup();
+  }
+});
+
+test("signing in creates the person, and the first one owns the tenant", async () => {
+  const { store, cleanup } = fixture();
+  const box = await fakeBoxUi("t");
+  try {
+    const gateway = new Gateway({
+      store,
+      allocator: new StaticAllocator(store, {
+        boxdUrl: "http://127.0.0.1:1",
+        uiUrl: box.url,
+        tokens: { box: "b", ui: "t" },
+      }),
+      identity: PasswordListIdentity.parse("alice:secret:acme,bob:secret:acme"),
+      sessionSecret: Buffer.from("g".repeat(32)),
+      image: "agentbox/box:test",
+    });
+    const server = await serve(gateway);
+    try {
+      const signIn = async (username: string) =>
+        fetch(`${server.url}/gateway/login`, {
+          method: "POST",
+          body: new URLSearchParams({ username, password: "secret" }),
+          redirect: "manual",
+        });
+
+      await signIn("alice");
+      const tenant = store.listTenants()[0]!;
+      // Somebody has to be able to invite the second person, and a tenant whose only member cannot
+      // manage it is a dead end.
+      assert.deepEqual(
+        store.membersOf(tenant.id).map(entry => [entry.username, entry.role]),
+        [["alice", "owner"]]
+      );
+
+      await signIn("bob");
+      assert.deepEqual(
+        store.membersOf(tenant.id).map(entry => [entry.username, entry.role]).sort(),
+        [["alice", "owner"], ["bob", "member"]]
+      );
+
+      // Signing in again never changes a role: an owner demoting themselves by reconnecting would be
+      // a locked-out tenant.
+      store.putMembership(store.findUserByName("bob")!.id, tenant.id, "owner");
+      await signIn("bob");
+      assert.equal(store.membership(store.findUserByName("bob")!.id, tenant.id)?.role, "owner");
+    } finally {
+      server.close();
+    }
+  } finally {
+    box.close();
+    cleanup();
+  }
+});
+
+test("a suspended person is refused even with a valid cookie", async () => {
+  const { store, cleanup } = fixture();
+  const box = await fakeBoxUi("t");
+  try {
+    const tenant = store.upsertTenant({ name: "acme" });
+    const user = store.upsertUser({ username: "alice" });
+    store.putMembership(user.id, tenant.id, "member");
+    const signer = new SessionSigner(Buffer.from("h".repeat(32)));
+    const gateway = new Gateway({
+      store,
+      allocator: new StaticAllocator(store, {
+        boxdUrl: "http://127.0.0.1:1",
+        uiUrl: box.url,
+        tokens: { box: "b", ui: "t" },
+      }),
+      identity: PasswordListIdentity.parse("alice:secret:acme"),
+      sessionSecret: Buffer.from("h".repeat(32)),
+      image: "agentbox/box:test",
+    });
+    const server = await serve(gateway);
+    try {
+      const session = `${SESSION_COOKIE}=${signer.issue({
+        userId: user.id,
+        tenantId: tenant.id,
+        role: "member",
+      })}`;
+      assert.equal((await fetch(`${server.url}/api/state`, { headers: { cookie: session } })).status, 200);
+
+      // Checked on every request, which is what makes suspending someone take effect now rather
+      // than when their cookie expires — and is why the role can safely travel in the cookie.
+      store.setUserState(user.id, "suspended");
+      const refused = await fetch(`${server.url}/api/state`, { headers: { cookie: session } });
+      assert.equal(refused.status, 403);
+      assert.match(await refused.text(), /suspended/);
+    } finally {
+      server.close();
+    }
+  } finally {
+    box.close();
     cleanup();
   }
 });

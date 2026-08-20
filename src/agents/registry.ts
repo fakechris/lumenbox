@@ -49,6 +49,24 @@ export interface AgentProfile {
    * an agent returns to the desktop it left.
    */
   displayIndex?: number;
+  /**
+   * The person who created it, when the box was told who that was.
+   *
+   * Undefined for an agent made before this existed, or by an automation, or on a box driven
+   * directly with no gateway in front. Absent means shared, which is the right default: the reason a
+   * tenant is a team is that agents work together, and defaulting to private would mean every
+   * collaboration starts with a permissions change.
+   */
+  ownerUserId?: string;
+  /**
+   * Who may drive it.
+   *
+   * **Not a security boundary**, and the code says so where the check is made. Everyone in a tenant
+   * shares a filesystem and passwordless sudo, so a determined member can read another member's
+   * transcript from a shell. This prevents accidents and answers "whose agent is this" — see
+   * docs/09-tenancy.md §3.2.
+   */
+  visibility?: "shared" | "private";
   createdAt: string;
   updatedAt: string;
 }
@@ -196,6 +214,9 @@ export class AgentRegistry {
     title?: string;
     avatarColor?: string;
     hidden?: boolean;
+    /** Who created it, when the box knows. */
+    ownerUserId?: string;
+    visibility?: "shared" | "private";
   }): AgentRecord {
     const name = clampLine(input.name ?? "", AGENT_NAME_MAX_LENGTH);
     if (!name) throw new Error("An agent needs a non-empty name.");
@@ -209,6 +230,8 @@ export class AgentRegistry {
       avatarColor: input.avatarColor,
       hidden: input.hidden ?? false,
       displayIndex: this.nextDisplayIndex(),
+      ...(input.ownerUserId !== undefined ? { ownerUserId: input.ownerUserId } : {}),
+      visibility: input.visibility ?? "shared",
       createdAt: now,
       updatedAt: now,
     };

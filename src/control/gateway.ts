@@ -13,10 +13,13 @@
  *     the existing web server already injects the box token when proxying a desktop. A token in a
  *     browser is a token in history, in a bookmark, and in a screenshot; and here it would be
  *     *another tenant's* box credential, not just the user's own.
- *   - **The session cookie carries a tenant id and a signature, and nothing else.** No server-side
+ *   - **The session cookie carries a person, a tenant, a role and a signature.** No server-side
  *     session table, so the gateway restarts without logging everyone out — and no trust in the
- *     cookie's contents, because it is signed. An unsigned cookie holding a tenant id is an
+ *     cookie's contents, because it is signed. An unsigned cookie holding a tenant id would be an
  *     invitation to type someone else's.
+ *   - **The box is told who is asking, and cannot be lied to about it.** Identity arrives as headers
+ *     the gateway injects after stripping any the client sent. The box trusts them only alongside a
+ *     valid UI token, which is the proof the request came through here — see 09-tenancy.md §4.
  *   - **Identity is a seam, not a decision.** The design deliberately leaves authentication
  *     unspecified: OIDC, a password list, or an existing provider all fit behind
  *     `IdentityProvider`. What matters is that it yields a tenant before anything else runs. The
@@ -33,8 +36,9 @@ import { createHmac, randomBytes, timingSafeEqual } from "node:crypto";
 import { request as httpRequest, type IncomingMessage, type ServerResponse } from "node:http";
 import { connect as netConnect, type Socket } from "node:net";
 import { parseCookies } from "../web/auth.ts";
+import { adminRouteOf, handleAdmin } from "./admin.ts";
 import type { BoxAllocator, BoxHandle } from "./allocator.ts";
-import type { ControlStore } from "./store.ts";
+import { isRole, type ControlStore, type Role } from "./store.ts";
 
 export const SESSION_COOKIE = "agentbox_session";
 
@@ -84,18 +88,39 @@ export class PasswordListIdentity implements IdentityProvider {
   }
 }
 
-/** Signs and checks a session, so no session table is needed and no cookie is believed. */
+/**
+ * Who a request is, once its cookie has been checked.
+ *
+ * A person and a tenant, not one or the other: the same person may belong to more than one team, so
+ * "which tenant" is part of the session rather than derivable from the user.
+ */
+export interface Session {
+  userId: string;
+  tenantId: string;
+  role: Role;
+}
+
+/**
+ * Signs and checks a session, so no session table is needed and no cookie is believed.
+ *
+ * The role travels in the cookie rather than being looked up per request. That is a deliberate
+ * trade: it costs a store read per request to look up, and it means a role change takes effect on
+ * the next sign-in rather than immediately. Chosen because the alternative — trusting a cookie for
+ * *identity* and the store for *privilege* — invites the bug where one is checked and the other is
+ * not. Revocation that has to be immediate is suspending the tenant or the user, which is checked
+ * on every request anyway.
+ */
 export class SessionSigner {
   constructor(private readonly secret: Buffer) {}
 
-  issue(tenantId: string, now = Date.now()): string {
+  issue(session: Session, now = Date.now()): string {
     const expires = now + SESSION_TTL_MS;
-    const body = `${tenantId}.${expires}`;
+    const body = `${session.userId}.${session.tenantId}.${session.role}.${expires}`;
     return `${body}.${this.sign(body)}`;
   }
 
-  /** The tenant id, or undefined if the cookie is forged, corrupt or expired. */
-  verify(value: string | undefined, now = Date.now()): string | undefined {
+  /** The session, or undefined if the cookie is forged, corrupt or expired. */
+  verify(value: string | undefined, now = Date.now()): Session | undefined {
     if (value === undefined) return undefined;
     const at = value.lastIndexOf(".");
     if (at <= 0) return undefined;
@@ -108,10 +133,13 @@ export class SessionSigner {
     ) {
       return undefined;
     }
-    const [tenantId, expires] = body.split(".");
-    if (tenantId === undefined || expires === undefined) return undefined;
-    if (Number(expires) <= now) return undefined;
-    return tenantId;
+    const [userId, tenantId, role, expires] = body.split(".");
+    if (userId === undefined || tenantId === undefined || role === undefined) return undefined;
+    if (expires === undefined || Number(expires) <= now) return undefined;
+    // An unrecognised role is not silently upgraded or downgraded — the whole cookie is refused,
+    // because a signed cookie carrying nonsense means the signing key is not what we think it is.
+    if (!isRole(role)) return undefined;
+    return { userId, tenantId, role };
   }
 
   private sign(body: string): string {
@@ -138,6 +166,7 @@ export type GatewayRoute =
   | { kind: "login-page" }
   | { kind: "login-submit" }
   | { kind: "logout" }
+  | { kind: "admin" }
   | { kind: "proxy"; path: string };
 
 /**
@@ -152,6 +181,9 @@ export function routeOf(pathname: string, method: string): GatewayRoute {
     return method === "POST" ? { kind: "login-submit" } : { kind: "login-page" };
   }
   if (pathname === "/gateway/logout") return { kind: "logout" };
+  // The tenant's own administration, answered here rather than proxied: the box has no concept of a
+  // tenant, and teaching it one would undo the separation this design rests on.
+  if (pathname.startsWith("/api/admin/")) return { kind: "admin" };
   return { kind: "proxy", path: pathname };
 }
 
@@ -163,6 +195,28 @@ export function routeOf(pathname: string, method: string): GatewayRoute {
  * forward it faithfully. The gateway's injected `Authorization` header is the only credential the box
  * should be offered.
  */
+/**
+ * Headers the gateway asserts about a request, and therefore has to remove from it first.
+ *
+ * The rule is the same one that already applies to `Authorization` and the `agentbox_ui` cookie, and
+ * it fails silently if forgotten: a client sending `X-Agentbox-Role: owner` would have it forwarded
+ * faithfully to a box that trusts it, which is a privilege escalation with no trace.
+ */
+export const USER_HEADER = "x-agentbox-user";
+export const ROLE_HEADER = "x-agentbox-role";
+
+export function stripIdentityHeaders<T extends Record<string, unknown>>(headers: T): T {
+  const copy = { ...headers };
+  for (const name of Object.keys(copy)) {
+    // Node lower-cases incoming header names, but a comparison that assumes so would break the
+    // moment this is reused somewhere that does not.
+    if (name.toLowerCase() === USER_HEADER || name.toLowerCase() === ROLE_HEADER) {
+      delete copy[name];
+    }
+  }
+  return copy;
+}
+
 export function forwardableCookies(header: string | undefined): string | undefined {
   if (header === undefined) return undefined;
   const kept = [...parseCookies(header).entries()].filter(
@@ -181,8 +235,8 @@ export class Gateway {
     this.log = options.log ?? (() => {});
   }
 
-  /** The tenant this request belongs to, from its signed cookie. */
-  tenantOf(req: IncomingMessage): string | undefined {
+  /** Who this request is, from its signed cookie. */
+  sessionOf(req: IncomingMessage): Session | undefined {
     const cookies = parseCookies(req.headers.cookie);
     return this.signer.verify(cookies.get(SESSION_COOKIE));
   }
@@ -202,8 +256,8 @@ export class Gateway {
       return;
     }
 
-    const tenantId = this.tenantOf(req);
-    if (tenantId === undefined) {
+    const session = this.sessionOf(req);
+    if (session === undefined) {
       // A page navigation gets the login form; anything else gets a status, because redirecting an
       // API call or an image to HTML produces a confusing parse error instead of a clear 401.
       if ((req.headers.accept ?? "").includes("text/html")) {
@@ -216,7 +270,10 @@ export class Gateway {
       return;
     }
 
-    const tenant = this.options.store.getTenant(tenantId);
+    // Checked on every request, not just at sign-in: this is what makes suspending a tenant or a
+    // person take effect now rather than when their cookie expires, and it is why the role can
+    // safely travel in the cookie.
+    const tenant = this.options.store.getTenant(session.tenantId);
     if (tenant === undefined || tenant.state !== "active") {
       res.writeHead(403, { "content-type": "text/plain" });
       res.end(
@@ -226,8 +283,33 @@ export class Gateway {
       );
       return;
     }
+    const user = this.options.store.getUser(session.userId);
+    if (user !== undefined && user.state !== "active") {
+      res.writeHead(403, { "content-type": "text/plain" });
+      res.end("This user is suspended.\n");
+      return;
+    }
 
-    const box = await this.boxFor(tenantId);
+    if (route.kind === "admin") {
+      const admin = adminRouteOf(req.method ?? "GET", url.pathname);
+      if (admin === undefined) {
+        res.writeHead(404, { "content-type": "application/json" });
+        res.end(JSON.stringify({ error: `No admin route for ${req.method} ${url.pathname}` }));
+        return;
+      }
+      const parsed = await readJsonBody(req);
+      const result = await handleAdmin(admin, parsed, url.searchParams, {
+        store: this.options.store,
+        allocator: this.options.allocator,
+        session,
+        log: this.log,
+      });
+      res.writeHead(result.status, { "content-type": "application/json", "cache-control": "no-store" });
+      res.end(JSON.stringify(result.body));
+      return;
+    }
+
+    const box = await this.boxFor(session.tenantId);
     if (box === undefined) {
       // Starting, not broken. Said plainly and with a retry, because the alternative — a hung
       // request while an image pulls — looks identical to a system that is down.
@@ -243,7 +325,7 @@ export class Gateway {
       return;
     }
 
-    this.proxy(req, res, box, url);
+    this.proxy(req, res, box, url, session);
   }
 
   /**
@@ -308,16 +390,31 @@ export class Gateway {
     }
 
     const tenant = this.options.store.upsertTenant({ name: tenantName });
+    const user = this.options.store.upsertUser({ username });
+    // The first person into a tenant owns it; anyone after is a member. Somebody has to be able to
+    // invite the second person, and a tenant whose only member cannot manage it is a dead end.
+    // An existing membership is never downgraded by signing in again.
+    const existing = this.options.store.membership(user.id, tenant.id);
+    const role: Role =
+      existing?.role ??
+      (this.options.store.membersOf(tenant.id).length === 0 ? "owner" : "member");
+    const membership = this.options.store.putMembership(user.id, tenant.id, role);
+
     this.options.store.audit({
       tenantId: tenant.id,
       actor: username,
       action: "signin",
       target: tenant.name,
+      detail: { userId: user.id, role: membership.role },
     });
     res.writeHead(302, {
       location: "/",
       "set-cookie":
-        `${SESSION_COOKIE}=${this.signer.issue(tenant.id)}; Path=/; HttpOnly; SameSite=Lax` +
+        `${SESSION_COOKIE}=${this.signer.issue({
+          userId: user.id,
+          tenantId: tenant.id,
+          role: membership.role,
+        })}; Path=/; HttpOnly; SameSite=Lax` +
         (this.options.secureCookies === true ? "; Secure" : ""),
     });
     res.end();
@@ -328,14 +425,20 @@ export class Gateway {
     req: IncomingMessage,
     res: ServerResponse,
     box: BoxHandle,
-    url: URL
+    url: URL,
+    session: Session
   ): void {
     const target = new URL(box.uiUrl);
     const headers: Record<string, string | string[]> = {
-      ...req.headers,
+      ...stripIdentityHeaders(req.headers),
       host: target.host,
       // The box's own credential, added here and never sent to the browser.
       authorization: `Bearer ${box.tokens.ui}`,
+      // Who is asking. Set after stripping, so a client that sent `X-Agentbox-Role: owner` had it
+      // removed rather than forwarded. The box trusts these only because they arrive with the UI
+      // token above, which is the proof the request came through here.
+      [USER_HEADER]: session.userId,
+      [ROLE_HEADER]: session.role,
     };
     const cookie = forwardableCookies(req.headers.cookie);
     if (cookie === undefined) delete headers.cookie;
@@ -386,12 +489,12 @@ export class Gateway {
    * without signing in.
    */
   async handleUpgrade(req: IncomingMessage, socket: Socket, head: Buffer): Promise<void> {
-    const tenantId = this.tenantOf(req);
-    if (tenantId === undefined) {
+    const session = this.sessionOf(req);
+    if (session === undefined) {
       socket.end("HTTP/1.1 401 Unauthorized\r\n\r\n");
       return;
     }
-    const box = await this.options.allocator.find(tenantId);
+    const box = await this.options.allocator.find(session.tenantId);
     if (box === undefined || box.state !== "ready") {
       socket.end("HTTP/1.1 503 Service Unavailable\r\n\r\n");
       return;
@@ -400,12 +503,14 @@ export class Gateway {
     const target = new URL(box.uiUrl);
     const upstream = netConnect(Number(target.port), target.hostname, () => {
       const forwarded: Record<string, string> = {};
-      for (const [key, value] of Object.entries(req.headers)) {
+      for (const [key, value] of Object.entries(stripIdentityHeaders(req.headers))) {
         if (key === "cookie" || key === "authorization" || key === "host") continue;
         forwarded[key] = Array.isArray(value) ? value.join(", ") : String(value ?? "");
       }
       forwarded.host = target.host;
       forwarded.authorization = `Bearer ${box.tokens.ui}`;
+      forwarded[USER_HEADER] = session.userId;
+      forwarded[ROLE_HEADER] = session.role;
       const cookie = forwardableCookies(req.headers.cookie);
       if (cookie !== undefined) forwarded.cookie = cookie;
 
@@ -424,6 +529,19 @@ export class Gateway {
     };
     upstream.on("error", drop);
     socket.on("error", drop);
+  }
+}
+
+/** A JSON body, or an empty object. A malformed body is a 400 the handler will produce, not a throw. */
+async function readJsonBody(req: IncomingMessage): Promise<Record<string, unknown>> {
+  if (req.method === "GET" || req.method === "DELETE") return {};
+  const raw = await readBody(req);
+  if (raw.trim() === "") return {};
+  try {
+    const parsed = JSON.parse(raw);
+    return typeof parsed === "object" && parsed !== null ? (parsed as Record<string, unknown>) : {};
+  } catch {
+    return {};
   }
 }
 
