@@ -39,6 +39,7 @@ import {
   estimateMessageTokens,
   noteContextWindow,
   policyForModel,
+  repairPairs,
   pruneOldImages,
   shouldPruneImages,
   chooseCutPoint,
@@ -566,7 +567,10 @@ function historyToMessages(
       messages.push({ role: entry.role, content: entry.text });
     }
   }
-  return messages;
+  // Last, over the assembled request rather than over the entries: an unpaired call does not
+  // degrade a turn, it ends every future turn for this agent, so the guarantee belongs at the point
+  // the request is actually made.
+  return repairPairs(messages);
 }
 
 /**

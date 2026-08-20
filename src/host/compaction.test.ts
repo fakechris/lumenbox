@@ -28,6 +28,7 @@ DEFAULT_POLICY,
   compactionUrgency,
   pendingIsUsable,
   pruneOldImages,
+  repairPairs,
   TOKENS_PER_IMAGE,
 } from "./compaction.ts";
 
@@ -405,4 +406,71 @@ test("a long conversation of cheap entries is summarised, not silently cut", () 
   assert.match(cut.reason, /80 entries, over the 50 entry trigger/);
   assert.ok(many.length - cut.index <= 50, "the tail it keeps fits under the cap");
   assert.ok(cut.index > 0);
+});
+
+
+test("a call whose result history lost still gets one, so the request stays sendable", () => {
+  // A call and its results are two separate appends, so a crash between them leaves an orphan. The
+  // provider rejects a request containing a tool_use with no matching tool_result — which means one
+  // orphan does not degrade a turn, it ends every future turn for that agent, permanently. Trimming
+  // the ends was not enough: the orphan sits at the end only until the next turn appends anything,
+  // and from then on it is interior.
+  const orphaned: Anthropic.MessageParam[] = [
+    { role: "user", content: "deploy it" },
+    { role: "assistant", content: [{ type: "tool_use", id: "t1", name: "bash", input: {} }] },
+    // The crash happened here. Everything below is a later turn.
+    { role: "user", content: "did that work?" },
+    { role: "assistant", content: [{ type: "text", text: "checking" }] },
+  ];
+
+  const repaired = repairPairs(orphaned);
+  const results = repaired
+    .flatMap(message => (Array.isArray(message.content) ? message.content : []))
+    .filter(block => (block as { type?: string }).type === "tool_result");
+  assert.equal(results.length, 1, "the orphan is paired");
+  assert.equal((results[0] as Anthropic.ToolResultBlockParam).tool_use_id, "t1");
+
+  // Unknown, not failed. The call may well have succeeded, and telling a model that a deploy failed
+  // when it may have deployed is how it gets deployed twice.
+  const text = JSON.stringify(results[0]);
+  assert.match(text, /outcome is unknown/);
+  assert.doesNotMatch(text, /"is_error":true/);
+
+  // The later turn is still there and still in order.
+  assert.equal(repaired.at(-1)?.role, "assistant");
+  assert.equal(repaired.filter(message => message.role === "user").length, 3);
+});
+
+test("real results are left alone, and a partly answered call is topped up", () => {
+  const complete: Anthropic.MessageParam[] = [
+    {
+      role: "assistant",
+      content: [
+        { type: "tool_use", id: "t1", name: "bash", input: {} },
+        { type: "tool_use", id: "t2", name: "bash", input: {} },
+      ],
+    },
+    {
+      role: "user",
+      content: [
+        { type: "tool_result", tool_use_id: "t1", content: [{ type: "text", text: "ok" }] },
+      ],
+    },
+  ];
+
+  const repaired = repairPairs(complete);
+  assert.equal(repaired.length, 2, "extended, not followed by a second user message");
+  const blocks = repaired[1]?.content as Anthropic.ToolResultBlockParam[];
+  assert.deepEqual(blocks.map(block => block.tool_use_id), ["t1", "t2"]);
+  assert.match(JSON.stringify(blocks[0]), /ok/, "the real result is untouched");
+
+  // A fully answered pair is returned unchanged, byte for byte.
+  const fine: Anthropic.MessageParam[] = [
+    { role: "assistant", content: [{ type: "tool_use", id: "t1", name: "bash", input: {} }] },
+    {
+      role: "user",
+      content: [{ type: "tool_result", tool_use_id: "t1", content: [{ type: "text", text: "ok" }] }],
+    },
+  ];
+  assert.deepEqual(repairPairs(fine), fine);
 });

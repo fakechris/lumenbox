@@ -605,3 +605,82 @@ export function pendingIsUsable(
   // active window and would make `covers` point at the wrong entries.
   return activeLength >= pending.computedFrom;
 }
+
+/**
+ * Text stood in for a tool result that was never recorded.
+ *
+ * Deliberately says the outcome is unknown rather than claiming failure. The call may well have
+ * succeeded — the process died between writing the call and writing its result — and telling a model
+ * that a deploy failed when it may have deployed is how you get it deployed twice.
+ */
+export const UNRECORDED_RESULT =
+  "The result of this call was never recorded: the orchestrator stopped between making it and " +
+  "writing down what came back. Its outcome is unknown — it may have succeeded. Check the state " +
+  "of whatever it touched before assuming either way.";
+
+/**
+ * Makes every tool call in a request have a result, inventing the ones history lost.
+ *
+ * The provider rejects a request containing a `tool_use` with no matching `tool_result`, so one
+ * unpaired call does not degrade a turn — it ends every future turn for that agent, permanently.
+ *
+ * Which is reachable, because a call and its results are two separate appends: a crash between them
+ * leaves an orphan. Trimming the ends was not enough, because the orphan only stays at the end until
+ * the next turn appends anything after it; from then on it is interior, and interior was never
+ * checked.
+ */
+export function repairPairs(
+  messages: readonly Anthropic.MessageParam[]
+): Anthropic.MessageParam[] {
+  const repaired: Anthropic.MessageParam[] = [];
+
+  for (let index = 0; index < messages.length; index++) {
+    const message = messages[index]!;
+    repaired.push(message);
+    if (message.role !== "assistant" || !Array.isArray(message.content)) continue;
+
+    const calls = message.content.filter(
+      (block): block is Anthropic.ToolUseBlockParam =>
+        (block as { type?: string }).type === "tool_use"
+    );
+    if (calls.length === 0) continue;
+
+    // Whatever the next message already answers, and only the next one: a result that arrives later
+    // is not this call's result, whatever its id says.
+    const next = messages[index + 1];
+    const nextIsResults =
+      next?.role === "user" &&
+      Array.isArray(next.content) &&
+      next.content.some(block => (block as { type?: string }).type === "tool_result");
+
+    const answered = new Set<string>();
+    if (nextIsResults && Array.isArray(next.content)) {
+      for (const block of next.content) {
+        if ((block as { type?: string }).type === "tool_result") {
+          answered.add((block as Anthropic.ToolResultBlockParam).tool_use_id);
+        }
+      }
+    }
+
+    const missing = calls.filter(call => !answered.has(call.id));
+    if (missing.length === 0) continue;
+
+    const invented: Anthropic.ToolResultBlockParam[] = missing.map(call => ({
+      type: "tool_result",
+      tool_use_id: call.id,
+      content: [{ type: "text", text: UNRECORDED_RESULT }],
+      is_error: false,
+    }));
+
+    if (nextIsResults && next !== undefined && Array.isArray(next.content)) {
+      // Extended rather than followed by a second user message: two user turns in a row would
+      // change what the conversation looks like to the model.
+      repaired.push({ ...next, content: [...next.content, ...invented] });
+      index += 1;
+    } else {
+      repaired.push({ role: "user", content: invented });
+    }
+  }
+
+  return repaired;
+}
