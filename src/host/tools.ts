@@ -12,6 +12,7 @@ import type { DisplayLease } from "../box/display-lease.ts";
 import type { AgentBus } from "../agents/bus.ts";
 import type { AgentRecord, AgentRegistry } from "../agents/registry.ts";
 import type { PolicyGate } from "./policy.ts";
+import { dedupeKey, validateRecord } from "./memory.ts";
 import {
   describeTodos,
   isTodoStatus,
@@ -743,14 +744,22 @@ export async function dispatchTool(
 
     case "RememberFact": {
       const fact = String(input.fact ?? "").trim();
-      if (!fact) return { text: "Nothing to remember.", isError: true };
-      const existing = context.registry.readMemory(context.agent.id);
-      const stamp = new Date().toISOString().slice(0, 10);
-      const next = existing.trim()
-        ? `${existing.trimEnd()}\n- (${stamp}) ${fact}\n`
-        : `# Memory\n\n- (${stamp}) ${fact}\n`;
-      context.registry.writeMemory(context.agent.id, next);
-      return { text: "Noted in your memory file." };
+      const rejected = validateRecord(fact);
+      if (rejected !== undefined) return { text: rejected.reason, isError: true };
+
+      // A deliberate act, so it is stored as a `fact` — trusted, and barely decaying. Something the
+      // agent chose to keep should not age out the way an automatic extraction does.
+      const known = context.registry.readMemoryRecords(context.agent.id);
+      const key = dedupeKey(fact);
+      if (known.some(record => dedupeKey(record.text) === key)) {
+        // Told, not silently swallowed: an agent that thinks a write failed will write it again in
+        // different words, which is exactly what the dedupe key exists to prevent.
+        return { text: "You already remember that, so nothing was added." };
+      }
+      context.registry.appendMemoryRecords(context.agent.id, [
+        { at: new Date().toISOString(), kind: "fact", text: fact, source: "RememberFact" },
+      ]);
+      return { text: "Kept. It will be in your instructions on future turns." };
     }
 
     default:

@@ -1,0 +1,287 @@
+/**
+ * Tests for structured memory.
+ *
+ * The claims that matter: that a deliberate fact outlives an automatic note, that the same fact in
+ * five phrasings does not crowd out everything else, that the budget is a budget rather than a count,
+ * and that an extractor is allowed to find nothing. The last one is the easiest to get wrong and the
+ * most expensive: an extractor that must produce output fills memory with restatements of the
+ * obvious, which are then read on every future turn.
+ */
+
+import { test } from "node:test";
+import assert from "node:assert/strict";
+import {
+  buildEpisodePrompt,
+  buildExtractionPrompt,
+  dedupe,
+  dedupeKey,
+  importMarkdown,
+  MAX_RECORD_CHARS,
+  parseEpisode,
+  parseExtraction,
+  recall,
+  renderMemory,
+  scoreOf,
+  selectRelevant,
+  validateRecord,
+  type MemoryRecord,
+} from "./memory.ts";
+
+const DAY = 24 * 60 * 60 * 1000;
+const NOW = Date.parse("2026-08-20T00:00:00.000Z");
+
+function record(
+  kind: MemoryRecord["kind"],
+  text: string,
+  daysAgo = 0
+): MemoryRecord {
+  return { at: new Date(NOW - daysAgo * DAY).toISOString(), kind, text };
+}
+
+test("a deliberate fact outlives an automatic note", () => {
+  // The distinction the three kinds exist for: the agent vouched for one of these and nobody
+  // vouched for the other. A year on, the fact should still be in the prompt and the note gone.
+  const fact = record("fact", "they deploy on Fridays", 200);
+  const note = record("note", "they mentioned a staging server", 200);
+  assert.ok(scoreOf(fact, NOW) > scoreOf(note, NOW) * 5);
+
+  // Fresh, the note is still worth less — it was never reviewed.
+  assert.ok(scoreOf(record("fact", "x"), NOW) > scoreOf(record("note", "x"), NOW));
+
+  // An episode outranks a single fact of the same age: it stands in for several.
+  assert.ok(scoreOf(record("episode", "x"), NOW) > scoreOf(record("fact", "x"), NOW));
+});
+
+test("the same fact in five phrasings does not crowd out everything else", () => {
+  // The failure this prevents. Without it, the one thing an agent keeps re-learning fills the
+  // budget and the nine other things it knows fall out.
+  const records = [
+    record("note", "The user prefers tabs.", 5),
+    record("note", "the user prefers tabs", 4),
+    record("note", "They prefer tabs!", 3),
+    record("note", "user prefers tabs", 2),
+    record("fact", "Deploys are on Fridays", 1),
+  ];
+  const deduped = dedupe(records);
+  assert.equal(deduped.length, 2, `expected two distinct memories, got ${deduped.length}`);
+  assert.ok(deduped.some(entry => /Fridays/.test(entry.text)));
+});
+
+test("a later memory wins, because writing it again is usually a correction", () => {
+  const deduped = dedupe([
+    record("note", "the API key lives in .env", 10),
+    record("note", "the API key lives in 1password", 1),
+  ]);
+  // Different words, so both survive — dedupe is not semantic and does not pretend to be.
+  assert.equal(deduped.length, 2);
+
+  // The same words: the later one is the one kept.
+  const same = dedupe([record("note", "port is 8080", 10), record("note", "port is 8080", 1)]);
+  assert.equal(same.length, 1);
+  assert.equal(same[0]?.at, new Date(NOW - DAY).toISOString());
+});
+
+test("an automatic note never displaces the fact it repeats", () => {
+  // Otherwise extraction would quietly restart the decay clock on something already vouched for,
+  // and demote it from fact to note in the process.
+  const deduped = dedupe([
+    record("fact", "they use pnpm", 100),
+    record("note", "they use pnpm", 1),
+  ]);
+  assert.equal(deduped.length, 1);
+  assert.equal(deduped[0]?.kind, "fact");
+  assert.equal(deduped[0]?.at, new Date(NOW - 100 * DAY).toISOString());
+});
+
+test("the budget is a budget, not a count", () => {
+  // Fifty short facts and five long ones cost the same, and a count would keep the wrong set.
+  const short = Array.from({ length: 50 }, (_, index) =>
+    record("fact", `fact number ${index}`, index)
+  );
+  const kept = recall(short, 300, NOW);
+  assert.ok(kept.records.length > 5, "short memories: many fit");
+  assert.ok(kept.omitted > 0, "and the rest are counted as omitted");
+
+  const long = Array.from({ length: 50 }, (_, index) =>
+    record("fact", "x".repeat(200) + index, index)
+  );
+  assert.ok(recall(long, 300, NOW).records.length < kept.records.length, "long ones: fewer fit");
+});
+
+test("at least one memory survives any budget", () => {
+  // A budget smaller than the newest memory would otherwise render nothing, which reads as "this
+  // agent has never learned anything" — a much worse lie than a slightly over-budget prompt.
+  const kept = recall([record("fact", "x".repeat(400))], 10, NOW);
+  assert.equal(kept.records.length, 1);
+});
+
+test("the prompt is ordered by time even though selection was by score", () => {
+  const kept = recall(
+    [record("fact", "oldest", 10), record("fact", "newest", 1), record("fact", "middle", 5)],
+    10_000,
+    NOW
+  );
+  // Scoring decides *which* memories are shown; a model reading them benefits from knowing which
+  // came after which.
+  assert.deepEqual(
+    kept.records.map(entry => entry.text),
+    ["oldest", "middle", "newest"]
+  );
+});
+
+test("an omitted memory is admitted to, not hidden", () => {
+  const rendered = renderMemory(recall(
+    Array.from({ length: 40 }, (_, index) => record("fact", `something ${index}`, index)),
+    200,
+    NOW
+  ));
+  // Without this an agent reads a truncated list as everything it knows, and concludes something
+  // never happened from its absence.
+  assert.match(rendered, /are not shown/);
+  assert.match(rendered, /do not conclude something never happened/);
+});
+
+test("empty memory says what to do about it", () => {
+  const rendered = renderMemory({ records: [], omitted: 0 });
+  assert.match(rendered, /have not kept anything yet/);
+  assert.match(rendered, /RememberFact/);
+  // And the one instruction that stops memory filling with noise.
+  assert.match(rendered, /what a tool can tell you again on demand/);
+});
+
+test("the kind is shown, because it says how much to trust the line", () => {
+  const rendered = renderMemory(recall([record("note", "they might use Windows")], 10_000, NOW));
+  assert.match(rendered, /\[note\]/);
+  // A deliberate fact carries no marker: it is the default and marking it would be noise.
+  assert.doesNotMatch(
+    renderMemory(recall([record("fact", "they use Linux")], 10_000, NOW)),
+    /\[fact\]/
+  );
+});
+
+test("a memory too long to keep is refused with the alternative named", () => {
+  assert.equal(validateRecord("a normal fact"), undefined);
+  assert.ok(validateRecord("   ")?.reason.includes("nothing to remember"));
+  const long = validateRecord("x".repeat(MAX_RECORD_CHARS + 1));
+  assert.ok(long);
+  assert.match(long.reason, /paid for repeatedly/);
+  assert.match(long.reason, /\/home\/box\/work/, "it says where a document should go instead");
+});
+
+// ── extraction ────────────────────────────────────────────────────────────────────────
+
+test("an extractor is allowed to find nothing", () => {
+  // The most important test here. An extractor that must produce output invents something, and a
+  // memory of the obvious is worse than no memory: it is read on every future turn.
+  assert.deepEqual(parseExtraction("NOTHING", []), []);
+  assert.deepEqual(parseExtraction("  nothing  ", []), []);
+  assert.deepEqual(parseExtraction("NOTHING to keep here", []), []);
+  assert.deepEqual(parseExtraction("", []), []);
+
+  // And the prompt asks for that outcome first, rather than as an afterthought.
+  const prompt = buildExtractionPrompt("some conversation", []);
+  assert.match(prompt, /Reply with NOTHING and nothing else unless/);
+  assert.match(prompt, /Most exchanges teach nothing durable/);
+  assert.match(prompt, /crowds out what matters/);
+});
+
+test("extraction is lenient about shape and strict about content", () => {
+  const known = [record("fact", "they use pnpm")];
+  const parsed = parseExtraction(
+    ["- they deploy on Fridays", "* 2. they use pnpm", "3) staging is at stg.example.com", ""].join("\n"),
+    known
+  );
+  // Bullets and numbering are stripped — models add them whatever the instruction says.
+  assert.deepEqual(
+    parsed.map(entry => entry.text),
+    ["they deploy on Fridays", "staging is at stg.example.com"]
+  );
+  // The one repeating what is already known was dropped rather than stored again.
+  assert.ok(parsed.every(entry => entry.kind === "note"));
+  assert.ok(parsed.every(entry => entry.source === "extracted"));
+});
+
+test("extraction honours its own limit rather than trusting the instruction", () => {
+  const parsed = parseExtraction(
+    ["one thing", "two thing", "three thing", "four thing", "five thing"].join("\n"),
+    []
+  );
+  assert.equal(parsed.length, 3, "the prompt says three; this enforces it");
+});
+
+test("an over-long extracted line is dropped, not truncated", () => {
+  // Truncating would store half a sentence as a fact, which is worse than losing it: a half fact
+  // reads as a whole one.
+  const parsed = parseExtraction(["fine line", "x".repeat(MAX_RECORD_CHARS + 1)].join("\n"), []);
+  assert.deepEqual(parsed.map(entry => entry.text), ["fine line"]);
+});
+
+test("an episode is one paragraph, or nothing", () => {
+  assert.equal(parseEpisode("NOTHING"), undefined);
+  assert.equal(parseEpisode("   "), undefined);
+  const episode = parseEpisode("We built the parser.\n\nIt works now.");
+  assert.equal(episode?.kind, "episode");
+  // Newlines collapsed: an episode is a paragraph, and a multi-line one renders as broken bullets.
+  assert.equal(episode?.text, "We built the parser. It works now.");
+
+  const prompt = buildEpisodePrompt(["a", "b"]);
+  assert.match(prompt, /2 exchanges/);
+  assert.match(prompt, /carry the outcome rather than/, "not the narrative");
+});
+
+// ── retrieval, and the seam it sits behind ────────────────────────────────────────────
+
+test("relevance is word overlap, which is enough for short facts", () => {
+  const records = [
+    record("fact", "the staging database is postgres 16"),
+    record("fact", "they deploy on Fridays"),
+    record("fact", "the production database is postgres 15"),
+  ];
+  const found = selectRelevant("what version is the staging database", records, 2);
+  assert.equal(found.length, 2);
+  assert.ok(found[0]?.text.includes("staging"), "the best overlap comes first");
+  // Nothing in common means nothing returned, rather than the nearest thing by some metric.
+  assert.deepEqual(selectRelevant("unrelated words entirely", records, 2), []);
+  assert.deepEqual(selectRelevant("", records, 2), []);
+  assert.deepEqual(selectRelevant("database", records, 0), []);
+});
+
+test("the dedupe key ignores phrasing but not meaning", () => {
+  assert.equal(dedupeKey("The user prefers tabs!"), dedupeKey("user prefers tabs"));
+  assert.equal(dedupeKey("It is in the .env file"), dedupeKey("in env file"));
+  assert.notEqual(dedupeKey("port is 8080"), dedupeKey("port is 9090"));
+  assert.equal(dedupeKey("!!!"), "", "punctuation alone is not a memory");
+});
+
+// ── migration ─────────────────────────────────────────────────────────────────────────
+
+test("an existing markdown memory is imported, dates and all", () => {
+  // Losing someone's memory to upgrade the format would be the worst possible way to introduce a
+  // feature about not losing things.
+  const imported = importMarkdown(
+    [
+      "# Memory",
+      "",
+      "- (2026-01-15) they deploy on Fridays",
+      "- no date on this one",
+      "- (2026-02-01) they use pnpm",
+      "- (2026-03-01) they use pnpm",
+      "",
+    ].join("\n")
+  );
+  assert.deepEqual(
+    imported.map(entry => entry.text),
+    ["they deploy on Fridays", "no date on this one", "they use pnpm"]
+  );
+  // Imported as facts, because that is what they were: written deliberately with RememberFact.
+  assert.ok(imported.every(entry => entry.kind === "fact"));
+  // The original date is honoured, so decay does not treat a year-old note as written today.
+  assert.equal(imported[0]?.at.slice(0, 10), "2026-01-15");
+  assert.match(imported[0]?.source ?? "", /memory\.md/);
+  // Midday rather than midnight, since the line carried only a date and midnight in one timezone is
+  // the previous day in another.
+  assert.match(imported[0]?.at ?? "", /T12:00/);
+
+  assert.deepEqual(importMarkdown(""), []);
+  assert.deepEqual(importMarkdown("# Memory\n\n"), []);
+});

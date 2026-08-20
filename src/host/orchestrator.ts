@@ -15,9 +15,11 @@ import { resolveBoxProvisioner, type BoxProvisioner } from "../box/provisioner.t
 import type { ResolutionConfig } from "../protocol/index.ts";
 import { runTurn, TurnAborted, type TurnEvent } from "./turn.ts";
 import { PolicyGate } from "./policy.ts";
+import { Rememberer, summariseExchange } from "./remember.ts";
 import { UsageLog } from "./usage.ts";
 import {
   createClient,
+  resolveSummaryProvider,
   resolveProvider,
   type Effort,
   type ProviderProfile,
@@ -78,10 +80,24 @@ export class Orchestrator {
 
   readonly provider: ProviderProfile;
 
+  /**
+   * Notices what a conversation taught, after the fact.
+   *
+   * Given the summariser's profile rather than the agent's: taking notes is the cheapest work in the
+   * system and should be billed accordingly.
+   */
+  private readonly rememberer: Rememberer;
+
   constructor(private readonly options: OrchestratorOptions = {}) {
     this.registry = options.registry ?? new AgentRegistry();
     this.provider = options.provider ?? resolveProvider();
     this.client = options.client ?? createClient(this.provider);
+    this.rememberer = new Rememberer({
+      registry: this.registry,
+      client: this.client,
+      provider: resolveSummaryProvider(this.provider),
+      log: line => console.error(`[memory] ${line}`),
+    });
 
     this.bus = new AgentBus(
       this.registry,
@@ -208,7 +224,29 @@ export class Orchestrator {
   async prompt(agentIdOrName: string, text: string): Promise<void> {
     const agent = this.registry.resolve(agentIdOrName);
     this.bus.sendFromUser(agent.id, text);
+    const before = this.registry.readTranscript(agent.id).length;
     await this.bus.runExclusive(agent.id, { userDriven: true });
+
+    // After the turn, and not awaited: a person waiting on an answer should not also wait on
+    // bookkeeping. What the agent said is read back from the transcript rather than threaded through
+    // the turn loop, which keeps the loop unaware that any of this exists.
+    const said = this.replySince(agent.id, before);
+    if (said !== "") {
+      void this.rememberer
+        .record({ agentId: agent.id, text: summariseExchange(text, said) })
+        .catch(() => {
+          // Already logged inside; a second report here would be noise on a path nobody is watching.
+        });
+    }
+  }
+
+  /** The agent's own prose from this turn, which is what an extractor should reason over. */
+  private replySince(agentId: string, from: number): string {
+    return (this.registry.readTranscript(agentId) as { role?: string; text?: string; kind?: string }[])
+      .slice(from)
+      .filter(entry => entry.role === "assistant" && entry.kind === undefined && entry.text)
+      .map(entry => entry.text as string)
+      .join("\n\n");
   }
 
   /** Waits for every agent woken as a side effect of the last prompt. */

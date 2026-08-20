@@ -26,6 +26,7 @@ import {
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 import { isTodoStatus, type DurableState, type TodoItem } from "../host/durable.ts";
+import { importMarkdown, type MemoryRecord } from "../host/memory.ts";
 
 export const AGENT_NAME_MAX_LENGTH = 72;
 export const AGENT_DESCRIPTION_MAX_LENGTH = 2000;
@@ -40,6 +41,15 @@ export const MEMORY_FILENAME = "memory.md";
  * maintains that has to outlive a conversation. Separate files rather than one, so a malformed todo
  * list cannot take the plan with it.
  */
+/**
+ * Structured memory, one record per line.
+ *
+ * Alongside `memory.md` rather than replacing it: an existing agent's markdown is imported once, and
+ * the original file is left on disk. Deleting someone's memory to upgrade the format would be the
+ * worst possible way to introduce a feature about not losing things.
+ */
+export const MEMORY_RECORDS_FILENAME = "memory.jsonl";
+
 export const PLAN_FILENAME = "plan.md";
 export const TODOS_FILENAME = "todos.json";
 export const BOX_OWNER_FILENAME = "box-owner";
@@ -414,6 +424,52 @@ export class AgentRegistry {
     const temp = `${path}.${process.pid}.${Date.now()}.tmp`;
     writeFileSync(temp, content, "utf8");
     renameSync(temp, path);
+  }
+
+  memoryRecordsPathFor(agentId: string): string {
+    return join(this.dirFor(agentId), MEMORY_RECORDS_FILENAME);
+  }
+
+  /**
+   * Every memory this agent has, oldest first.
+   *
+   * Imports a legacy `memory.md` the first time, so an agent that has been running keeps what it
+   * knew. A torn or unparseable line costs that one record, not the file.
+   */
+  readMemoryRecords(agentId: string): MemoryRecord[] {
+    const path = this.memoryRecordsPathFor(agentId);
+    if (!existsSync(path)) {
+      const legacy = this.readMemory(agentId);
+      if (legacy.trim() === "") return [];
+      const imported = importMarkdown(legacy);
+      if (imported.length > 0) this.appendMemoryRecords(agentId, imported);
+      return imported;
+    }
+    try {
+      return readFileSync(path, "utf8")
+        .split("\n")
+        .filter(line => line.trim() !== "")
+        .flatMap(line => {
+          try {
+            const parsed = JSON.parse(line) as MemoryRecord;
+            return typeof parsed.text === "string" && typeof parsed.at === "string" ? [parsed] : [];
+          } catch {
+            return [];
+          }
+        });
+    } catch {
+      return [];
+    }
+  }
+
+  appendMemoryRecords(agentId: string, records: readonly MemoryRecord[]): void {
+    if (records.length === 0) return;
+    mkdirSync(this.dirFor(agentId), { recursive: true });
+    appendFileSync(
+      this.memoryRecordsPathFor(agentId),
+      records.map(record => `${JSON.stringify(record)}\n`).join(""),
+      "utf8"
+    );
   }
 
   readMemory(agentId: string): string {

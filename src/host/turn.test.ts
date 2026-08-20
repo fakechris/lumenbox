@@ -137,7 +137,7 @@ test("system prompt carries the agent's identity and its teammates", () => {
     const prompt = buildSystemPrompt({
       agent: ada,
       teammates: registry.list(),
-      memory: "",
+      memory: [],
       resolution: { display: { width: 1920, height: 1200 }, api: { width: 1280, height: 800 } },
       agentsRoot: registry.root,
       hasBox: true,
@@ -164,7 +164,7 @@ test("system prompt says the box is unavailable when there is none", () => {
     const prompt = buildSystemPrompt({
       agent: ada,
       teammates: [ada],
-      memory: "",
+      memory: [],
       resolution: undefined,
       agentsRoot: registry.root,
       hasBox: false,

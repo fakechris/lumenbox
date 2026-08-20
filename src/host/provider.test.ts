@@ -169,7 +169,7 @@ test("the prompt tells a blind agent it has no screen", () => {
     const context = {
       agent,
       teammates: [agent],
-      memory: "",
+      memory: [],
       resolution: {
         display: { width: 1280, height: 800 },
         api: { width: 1280, height: 800 },

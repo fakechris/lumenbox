@@ -11,6 +11,7 @@ import type { AgentRecord } from "../agents/registry.ts";
 import type { InboundMessage } from "../agents/bus.ts";
 import { AGENT_WAKE_CUE } from "../agents/bus.ts";
 import { renderDurableBlocks, type DurableState } from "./durable.ts";
+import { recall, renderMemory, type MemoryRecord } from "./memory.ts";
 import type { ResolutionConfig } from "../protocol/index.ts";
 
 /** Teammates listed inline before falling back to "read the agent directory". */
@@ -124,7 +125,13 @@ two of you will ping-pong forever.`;
 export interface PromptContext {
   agent: AgentRecord;
   teammates: readonly AgentRecord[];
-  memory: string;
+  /**
+   * The agent's memories, already selected and budgeted.
+   *
+   * Records rather than a blob: what goes in the prompt is a scored selection under a character
+   * budget, because pasting a file that only grows makes memory a second unbounded context.
+   */
+  memory: readonly MemoryRecord[];
   resolution?: ResolutionConfig;
   agentsRoot: string;
   hasBox: boolean;
@@ -193,21 +200,6 @@ function profileSection(agent: AgentRecord): string {
   return lines.join("\n");
 }
 
-function memorySection(memory: string): string {
-  const trimmed = memory.trim();
-  if (!trimmed) {
-    return `# Your memory
-
-Your memory file is empty. As you learn things worth keeping across conversations —
-a decision the user made, a fact about their setup, a correction they gave you — write
-them there with \`RememberFact\`. Do not record what a tool can tell you again on demand.`;
-  }
-  return `# Your memory
-
-What you have chosen to remember from earlier conversations:
-
-${trimmed}`;
-}
 
 function boxSection(context: PromptContext): string {
   if (!context.hasBox) {
@@ -276,7 +268,7 @@ export function buildSystemPromptParts(
       // Before memory and the roster: this is what the agent is doing *now*, and a model reading
       // top-down should meet its own objective before its background.
       renderDurableBlocks(context.durable ?? {}),
-      memorySection(context.memory),
+      renderMemory(recall(context.memory)),
       teamSection(context),
     ]
       .filter(section => section.trim() !== "")

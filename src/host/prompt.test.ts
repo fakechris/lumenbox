@@ -19,7 +19,7 @@ test("the prompt does not tell the model how to choose between its tools", () =>
   const prompt = buildSystemPrompt({
     agent: { id: "a", profile: { name: "Ada", description: "", createdAt: "", updatedAt: "" } } as never,
     teammates: [],
-    memory: "",
+    memory: [],
     resolution: undefined,
     agentsRoot: "/tmp",
     hasBox: true,
@@ -53,7 +53,7 @@ test("the prompt keeps the facts the model cannot work out for itself", () => {
   const prompt = buildSystemPrompt({
     agent: { id: "a", profile: { name: "Ada", description: "", createdAt: "", updatedAt: "" } } as never,
     teammates: [],
-    memory: "",
+    memory: [],
     resolution: undefined,
     agentsRoot: "/tmp",
     hasBox: true,
@@ -71,7 +71,7 @@ test("the prompt says how to hand a file to a person", () => {
   const prompt = buildSystemPrompt({
     agent: { id: "a", profile: { name: "Ada", description: "", createdAt: "", updatedAt: "" } } as never,
     teammates: [],
-    memory: "",
+    memory: [],
     resolution: undefined,
     agentsRoot: "/tmp",
     hasBox: true,

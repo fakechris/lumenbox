@@ -621,7 +621,7 @@ export async function runTurn(
   const promptParts = buildSystemPromptParts({
     agent,
     teammates: registry.list(),
-    memory: registry.readMemory(agent.id),
+    memory: registry.readMemoryRecords(agent.id),
     // Read fresh every turn, which is what makes the plan and the todo list survive a compaction:
     // they are in the prompt rather than in the history a summary replaces.
     durable: registry.readDurableState(agent.id),

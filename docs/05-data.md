@@ -29,7 +29,8 @@ activity.jsonl              recent activity for the feed
 agents/<agentId>/
   profile.json              identity and persona
   conversation.jsonl        the transcript
-  memory.md                 long-term notes the agent maintains
+  memory.md                 legacy: imported once into memory.jsonl, then left alone
+  memory.jsonl              what the agent remembers, one record per line
   plan.md                   the agent's plan; rendered into every system prompt
   todos.json                the agent's todo list, same
   box-owner                 this agent's claim on its desktop, 0600
@@ -146,6 +147,53 @@ optimistic for JSON, shell output and CJK, and errs in the direction that fails 
 compaction was needed. Images are counted as a flat ~1,600 tokens each rather than by their base64
 length, which is wrong in both directions at once. The trigger follows the model's real context
 window when the provider reports one, so the same code is right for a 200k model and a 1M one.
+
+### 2.2b `memory.jsonl`
+
+Append-only, one record per line: `{ at, kind, text, source? }`.
+
+This replaced a single markdown file that was pasted whole into every system prompt. That works for a
+week and then becomes a second unbounded context — it only grows, nothing ages out, the same fact
+accumulates in five phrasings, and eventually the memory costs more per request than the conversation.
+
+**Deliberately not a retrieval engine**, and that is the load-bearing decision. Facts are short,
+keyword-dense lines: the easy case. So there are records, a score, a budget, and lexical matching
+where matching is needed — no embeddings, no index, no second database. `selectRelevant` is the one
+seam, so semantic retrieval is a substitution rather than a rewrite if evidence ever calls for one.
+The trigger for reconsidering is written down in §7.
+
+Three kinds, each with an unambiguous source, which is what makes them usable:
+
+| kind | written by | half-life | weight |
+| --- | --- | --- | --- |
+| `fact` | `RememberFact` — a deliberate act, so it is trusted | 365d | 1.0 |
+| `note` | automatic extraction — nobody vouched for it | 30d | 0.5 |
+| `episode` | condensed from several exchanges; stands in for facts that have aged out | 90d | 1.5 |
+
+A separate "profile" tier next to a "recent" one was rejected: that classification has to come
+from somewhere, and a tier nobody can populate correctly is worse than one
+list scored honestly.
+
+What reaches the prompt is a **character budget, not a count** — fifty short facts and five long ones
+cost the same, and one of those sets is worth more. Selection is by score; rendering is chronological,
+because a model reading facts benefits from knowing which came after which. Omissions are stated
+(`N older or weaker memories are not shown`) so an agent does not read a truncated list as everything
+it knows.
+
+Deduplication is applied **on read, not on write**: the file stays a faithful log of what was
+believed when, and the view is deduplicated — which is why an over-eager merge is recoverable. A
+later record wins, because writing something again is usually a correction; and an automatic note
+never displaces the deliberate fact it repeats, which would otherwise restart the decay clock on
+something already vouched for.
+
+Extraction runs **after a turn and every third exchange**, on the cheap summariser profile, and is
+allowed to find nothing — the sentinel is explicit and the prompt asks for it first. An extractor that
+must produce output invents something, and a memory of the obvious is worse than none because it is
+read on every future turn. Every fourth extraction condenses into an episode.
+
+An existing `memory.md` is imported once, as `fact` records with their original dates honoured, and
+the markdown file is left on disk. Losing someone's memory to upgrade the format would be the worst
+possible way to introduce a feature about not losing things.
 
 ### 2.2a `plan.md` and `todos.json`
 
@@ -299,6 +347,12 @@ The last row is the one that took work: a killed recorder used to leave an unpla
 
 Honestly, since these are the findings a review should raise:
 
+- **Retrieval is lexical.** Word overlap over short facts, which is what the baseline design also
+  does and defends. It will stop being enough when a memory set is large *and* the vocabulary varies
+  — the falsifiable trigger is: an agent with more than roughly 500 records where word overlap
+  demonstrably misses something it should have recalled, with a specific example rather than an
+  impression. Until then a vector store would be infrastructure bought for a problem nobody has
+  measured.
 - **Unbounded growth on disk.** Requests are now bounded by compaction (§2.2.1), but the files are
   not: a transcript grows forever and nothing rotates or archives it. That is deliberate — the
   record is the product's provenance claim — and it means disk is the eventual limit, which
