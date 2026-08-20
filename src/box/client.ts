@@ -11,6 +11,7 @@ import type {
   EnsureDisplayResult,
   ExecResult,
   HealthResult,
+  DownloadFileResult,
   ListDirResult,
   ReadFileResult,
   RecordListResult,
@@ -218,6 +219,17 @@ export class BoxClient {
 
   writeFile(path: string, content: string): Promise<WriteFileResult> {
     return this.post<WriteFileResult>("/fs/write", { path, content });
+  }
+
+  /**
+   * A file's bytes, for handing to a person.
+   *
+   * Separate from `readFile` because that one is for the model — it returns text with line ranges
+   * and refuses anything it cannot decode. This returns the file exactly, which is what a download
+   * has to be, and is confined to the work directory by the daemon.
+   */
+  downloadFile(path: string): Promise<DownloadFileResult> {
+    return this.post<DownloadFileResult>("/fs/download", { path });
   }
 
   listDir(path: string): Promise<ListDirResult> {

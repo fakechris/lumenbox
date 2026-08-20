@@ -224,6 +224,11 @@ export const APP_HTML = String.raw`<!doctype html>
     selected agent's. Click it for keyboard focus, or open it full size — you can
     drive one while the others keep working.
   </div>
+  <h2 style="border-top:1px solid var(--line)">
+    <span>Files &mdash; /home/box/work</span>
+    <span class="plain"><a id="filesrefresh" href="#">refresh</a></span>
+  </h2>
+  <div class="feed" id="files" style="max-height:150px"></div>
   <h2 style="border-top:1px solid var(--line)">Activity &mdash; all agents</h2>
   <div class="feed" id="feed"></div>
 </div>
@@ -239,8 +244,10 @@ function renderMarkdown(text) {
   var value = String(text == null ? "" : text);
   // If the library did not load, show escaped text rather than nothing. A feed
   // showing raw Markdown is poor; a blank one is useless.
-  if (!md) return "<p>" + esc(value).replace(/\n/g, "<br>") + "</p>";
-  return md.render(value);
+  if (!md) return linkifyWorkPaths("<p>" + esc(value).replace(/\n/g, "<br>") + "</p>");
+  // After rendering, not before: markdown-it escapes and structures first, so this is operating on
+  // known-safe HTML and cannot be used to inject anything. html:false remains the boundary.
+  return linkifyWorkPaths(md.render(value));
 }
 
 function $(id) { return document.getElementById(id); }
@@ -460,13 +467,15 @@ function refresh() {
     // A newly created agent gets its display assigned server-side; keep the pane
     // in step without reloading an unchanged one.
     if (current) showDesktop(current);
-    return Promise.all([refreshPolicy(), refreshProgress()]);
+    return Promise.all([refreshPolicy(), refreshProgress(), refreshFiles()]);
   });
 }
 
 // Every few seconds, because an approval and a ticked-off todo both arrive without an event to ride
 // on. Slow enough to be free, fast enough that a person is not kept waiting by the interface.
 setInterval(function () { refreshPolicy(); refreshProgress(); }, 4000);
+// Less often than the rest: a directory listing changes when work lands, not continuously.
+setInterval(function () { refreshFiles(); }, 15000);
 
 /**
  * Anything waiting on a person, and the selected agent's plan.
@@ -560,6 +569,79 @@ function refreshProgress() {
       }).join("");
     })
     .catch(function () {});
+}
+
+/**
+ * What the agents have produced, as something a person can open.
+ *
+ * The gap this closes: an agent wrote a report and said where it was, and that was the end of it —
+ * a person had to open the desktop, find a file manager and read it there, with no way to get it
+ * onto their own machine. A browser can do both, and it is already authenticated.
+ */
+function refreshFiles(dir) {
+  var target = dir || "/home/box/work";
+  return fetch("/api/files?dir=" + encodeURIComponent(target))
+    .then(function (r) { return r.json(); })
+    .then(function (listing) {
+      var box = $("files");
+      var entries = listing.entries || [];
+      var up = target === "/home/box/work"
+        ? ""
+        : '<div><a href="#" data-dir="' + esc(target.replace(/\/[^/]+$/, "")) + '">&larr; up</a></div>';
+      if (!entries.length) {
+        box.innerHTML = up + '<div class="dim">nothing here yet</div>';
+        return;
+      }
+      box.innerHTML = up + entries.map(function (entry) {
+        var full = target + "/" + entry.name;
+        if (entry.type === "directory") {
+          return '<div><a href="#" data-dir="' + esc(full) + '">' + esc(entry.name) + "/</a></div>";
+        }
+        // Two links on purpose: open reads it in place, which is what someone wants nine times out
+        // of ten; save is the one that gets it onto their own machine.
+        return '<div>' +
+          '<a href="/api/file?path=' + encodeURIComponent(full) + '" target="_blank" rel="noopener">' +
+          esc(entry.name) + "</a> " +
+          '<span class="dim">' + fmtBytes(entry.size) + "</span> " +
+          '<a class="dim" href="/api/file?download=1&path=' + encodeURIComponent(full) + '">save</a>' +
+          "</div>";
+      }).join("");
+    })
+    .catch(function () { $("files").innerHTML = '<div class="dim">could not read the work directory</div>'; });
+}
+
+function fmtBytes(n) {
+  if (typeof n !== "number") return "";
+  if (n < 1024) return n + " B";
+  if (n < 1024 * 1024) return Math.round(n / 1024) + " KB";
+  return (n / 1024 / 1024).toFixed(1) + " MB";
+}
+
+document.getElementById("files").addEventListener("click", function (event) {
+  var dir = event.target.getAttribute && event.target.getAttribute("data-dir");
+  if (!dir) return;
+  event.preventDefault();
+  refreshFiles(dir);
+});
+document.getElementById("filesrefresh").addEventListener("click", function (event) {
+  event.preventDefault();
+  refreshFiles();
+});
+
+/**
+ * Turns a work path an agent mentioned into a link.
+ *
+ * Agents already say "I wrote /home/box/work/report.md", and that was dead text — the single
+ * cheapest thing that was missing. Applied after markdown rendering, and skipped inside an existing
+ * anchor or code fence so a path already formatted as a link or shown as literal text is left alone.
+ */
+function linkifyWorkPaths(html) {
+  return html.replace(/(^|[\s>(\[])(\/home\/box\/work\/[^\s<>)\]"']+)/g, function (all, lead, path) {
+    var clean = path.replace(/[.,;:]+$/, "");
+    var trailing = path.slice(clean.length);
+    return lead + '<a href="/api/file?path=' + encodeURIComponent(clean) +
+      '" target="_blank" rel="noopener">' + clean + "</a>" + trailing;
+  });
 }
 
 // --- live events ----------------------------------------------------------

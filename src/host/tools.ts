@@ -215,8 +215,10 @@ export function buildTools(hasBox: boolean, vision = true): Anthropic.Tool[] {
         description:
           "Run a shell command inside your box. This is the right tool for anything a " +
           "terminal does better than a GUI: installing packages, inspecting and moving " +
-          "files, running scripts or tests, checking whether a service is up, querying an " +
-          "HTTP endpoint with curl. Prefer it over driving a GUI for the same result. " +
+          "files, running scripts or tests, checking whether a service is up, cloning a " +
+          "repository with git, fetching a single file over HTTP. Prefer it over driving a " +
+          "GUI for the same result — but not for reading a site that renders client-side or " +
+          "refuses a plain request, where the browser is the tool that works. " +
           "Returns stdout, stderr, and the exit code; a non-zero exit code is information, " +
           "not necessarily a failure to report. Commands run through bash, so pipes, " +
           "redirection, and globs work. The session is stateful across calls: your working " +

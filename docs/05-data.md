@@ -215,8 +215,29 @@ clamped, unknown keys are ignored so a config from a later version still loads.
 
 ### 3.1 `work` volume — `/home/box/work`
 
-The agents' output. Whatever they make, plus `recordings/*.mp4`. Owned by `box`. This is the
-volume a person browses in the file manager.
+The agents' output. Whatever they make, plus `recordings/*.mp4`. Owned by `box`.
+
+**The only directory a person may browse from outside the box, and the only one that survives a
+rebuild — deliberately the same set.** "You can download it" and "it will still be here tomorrow" are
+then one rule rather than two.
+
+`GET /api/files` lists it and `GET /api/file?path=…` serves a file, both behind the UI's existing
+auth. `?download=1` switches `Content-Disposition` from `inline` to `attachment`, so a browser shows
+what it can and saves what it cannot. Never cached: an agent rewrites its own output, and a stale copy
+would be read as the current one.
+
+Confinement is checked **twice, in two different ways**, because neither check alone is enough:
+
+- The web server normalises the path and requires the `/home/box/work` prefix. This stops `..`, an
+  absolute path elsewhere, and `/home/box/workfoo`. It cannot stop a symlink.
+- The daemon resolves with `realpath` and requires the same prefix. This is what stops a symlink out
+  of the tree — which an agent can create with one command.
+
+Verified against a real box: `/etc/passwd`, the orchestrator's own token file, `..` traversal and a
+sibling-prefix path are all refused by the first check; symlinks to both are refused by the second;
+and an unauthenticated request gets 401. Reads are capped at 10MB because the body is base64 in JSON
+— a third again on the wire — which covers reports, spreadsheets, logs and screenshots. Something
+larger is a dataset, and the honest answer for a dataset is to archive it and say so.
 
 ### 3.2 `config` volume — `/home/box/.config`
 

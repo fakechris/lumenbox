@@ -35,6 +35,8 @@ import {
   type HealthResult,
   type ListDirRequest,
   type ListDirResult,
+  type DownloadFileRequest,
+  type DownloadFileResult,
   type ReadFileRequest,
   type ReadFileResult,
   type RecordListResult,
@@ -50,7 +52,7 @@ import { readClipboard, writeClipboard } from "./clipboard-service.ts";
 import { startEgressProxy } from "../egress/proxy.ts";
 import { RecordService, RECORDINGS_DIR } from "./record-service.ts";
 import { runShell } from "./shell-service.ts";
-import { listDir, readFile, writeFile } from "./fs-service.ts";
+import { downloadFile, listDir, readFile, writeFile } from "./fs-service.ts";
 
 const VERSION = "0.1.0";
 const MAX_BODY_BYTES = 32 * 1024 * 1024;
@@ -333,6 +335,9 @@ const routes: Record<string, Handler> = {
       vnc_path: DisplayManager.vncPath(desktop.index),
     };
   },
+  "POST /fs/download": (body: DownloadFileRequest): Promise<DownloadFileResult> =>
+    downloadFile(body),
+
   "POST /fs/read": (body: ReadFileRequest): Promise<ReadFileResult> =>
     readFile(body),
   "POST /fs/write": (body: WriteFileRequest): Promise<WriteFileResult> =>

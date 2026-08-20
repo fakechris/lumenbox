@@ -5,8 +5,16 @@
  * anyway, so a path jail here would be theatre. The container is the boundary.
  */
 
-import { readdir, lstat, mkdir, readFile as fsReadFile, stat, writeFile as fsWriteFile } from "node:fs/promises";
-import { dirname, resolve } from "node:path";
+import {
+  readdir,
+  lstat,
+  mkdir,
+  readFile as fsReadFile,
+  realpath,
+  stat,
+  writeFile as fsWriteFile,
+} from "node:fs/promises";
+import { dirname, extname, resolve } from "node:path";
 import type {
   DirEntry,
   ListDirRequest,
@@ -15,6 +23,8 @@ import type {
   ReadFileResult,
   WriteFileRequest,
   WriteFileResult,
+  DownloadFileRequest,
+  DownloadFileResult,
 } from "../protocol/index.ts";
 
 /** Files above this are refused rather than silently truncated to nothing useful. */
@@ -22,11 +32,99 @@ const MAX_READ_BYTES = 8 * 1024 * 1024;
 /** Lines returned when no explicit range is asked for. */
 const DEFAULT_LINE_LIMIT = 2000;
 
+/**
+ * The only directory a download may come from.
+ *
+ * Unlike the other endpoints here, `download` exists to serve **a person through the web UI**, not
+ * the agent that owns this box. So it is confined, and confined here rather than only in the caller:
+ * the endpoint's whole purpose is handing over work products, and an unconfined one is an arbitrary
+ * read of the container — including the orchestrator's own token file.
+ *
+ * `/home/box/work` is also the directory that survives a rebuild, so "downloadable" and "durable"
+ * are the same set, which is one fewer thing to explain.
+ */
+const DOWNLOAD_ROOT = process.env.AGENTBOX_WORK_DIR ?? "/home/box/work";
+
+/**
+ * Files above this are refused for download rather than served.
+ *
+ * Lower than the read limit because the body is base64 in JSON — the protocol here is JSON
+ * everywhere and the type is the contract — so the wire cost is a third again. Ten megabytes covers
+ * reports, spreadsheets, logs and screenshots, which is what this is for. Something larger is a
+ * dataset, and the honest answer for a dataset is to archive it and say so rather than to stream it
+ * through an API that was not built for it.
+ */
+const MAX_DOWNLOAD_BYTES = 10 * 1024 * 1024;
+
+/** Media types worth naming, so a browser renders rather than downloads what it can show. */
+const MEDIA_TYPES: Record<string, string> = {
+  ".md": "text/markdown; charset=utf-8",
+  ".txt": "text/plain; charset=utf-8",
+  ".log": "text/plain; charset=utf-8",
+  ".json": "application/json; charset=utf-8",
+  ".csv": "text/csv; charset=utf-8",
+  ".html": "text/html; charset=utf-8",
+  ".png": "image/png",
+  ".jpg": "image/jpeg",
+  ".jpeg": "image/jpeg",
+  ".webp": "image/webp",
+  ".gif": "image/gif",
+  ".svg": "image/svg+xml",
+  ".pdf": "application/pdf",
+  ".mp4": "video/mp4",
+  ".zip": "application/zip",
+};
+
 function requirePath(path: string | undefined, field = "path"): string {
   if (!path || typeof path !== "string" || path.trim() === "") {
     throw new Error(`${field} must be a non-empty string`);
   }
   return resolve(path);
+}
+
+/**
+ * Resolves a path and refuses anything outside the download root.
+ *
+ * `realpath` rather than `resolve`, because a symlink inside the root pointing out of it is the
+ * obvious way past a prefix check — and an agent can create one with a single command.
+ */
+async function requireDownloadable(path: string | undefined): Promise<string> {
+  const requested = requirePath(path);
+  let real: string;
+  try {
+    real = await realpath(requested);
+  } catch {
+    // Report the requested path, not the resolved one: a "no such file" naming a path the caller
+    // never typed is a confusing answer to a typo.
+    throw new Error(`${requested} does not exist`);
+  }
+  const root = await realpath(DOWNLOAD_ROOT).catch(() => DOWNLOAD_ROOT);
+  if (real !== root && !real.startsWith(`${root}/`)) {
+    throw new Error(
+      `${requested} is outside ${DOWNLOAD_ROOT}. Only files under that directory can be handed ` +
+        `over, because it is the one a person is allowed to browse and the one that survives a rebuild.`
+    );
+  }
+  return real;
+}
+
+export async function downloadFile(request: DownloadFileRequest): Promise<DownloadFileResult> {
+  const path = await requireDownloadable(request.path);
+  const info = await stat(path);
+  if (info.isDirectory()) throw new Error(`${path} is a directory`);
+  if (info.size > MAX_DOWNLOAD_BYTES) {
+    throw new Error(
+      `${path} is ${info.size} bytes, over the ${MAX_DOWNLOAD_BYTES}-byte limit for handing a file ` +
+        `over. Archive it or split it, and say which part is which.`
+    );
+  }
+  const bytes = await fsReadFile(path);
+  return {
+    path,
+    size: info.size,
+    media_type: MEDIA_TYPES[extname(path).toLowerCase()] ?? "application/octet-stream",
+    base64: bytes.toString("base64"),
+  };
 }
 
 export async function readFile(

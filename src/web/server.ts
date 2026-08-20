@@ -20,7 +20,7 @@ import {
 } from "node:http";
 import { readFileSync } from "node:fs";
 import { connect as netConnect, type Socket } from "node:net";
-import { join } from "node:path";
+import { join, posix } from "node:path";
 import { AgentRegistry } from "../agents/registry.ts";
 import type { BusEvent } from "../agents/bus.ts";
 import { resolveBoxProvisioner, type BoxProvisioner } from "../box/provisioner.ts";
@@ -29,6 +29,27 @@ import { describeProvider, type ProviderProfile } from "../host/provider.ts";
 import type { TurnEvent } from "../host/turn.ts";
 import { APP_HTML } from "./app-html.ts";
 import { authorize, callerOf, isLoopback, refusalToDrive } from "./auth.ts";
+
+/**
+ * The one directory a person may browse, and the one that survives a rebuild.
+ *
+ * Those being the same set is deliberate: "you can download it" and "it will still be here
+ * tomorrow" are then one rule rather than two.
+ */
+const WORK_DIR = process.env.AGENTBOX_WORK_DIR ?? "/home/box/work";
+
+/**
+ * Whether a path is inside the work directory, textually.
+ *
+ * A prefix check on a normalised path, which stops `..` and a bare `/etc/passwd`. It does *not* stop
+ * a symlink pointing out of the tree — that is checked in the daemon with `realpath`, where the
+ * filesystem actually is. Both, because this one is reachable by anyone with a UI token.
+ */
+function withinWork(path: string): boolean {
+  if (path.includes("\0")) return false;
+  const normalised = posix.normalize(path);
+  return normalised === WORK_DIR || normalised.startsWith(`${WORK_DIR}/`);
+}
 import { agentboxHome, loadConfig } from "../config.ts";
 import { ActivityLog } from "./activity.ts";
 import { vendorPath } from "./markdown.ts";
@@ -433,6 +454,70 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
 
         // What a long task's progress actually looks like: the plan and the list, which survive
         // summarisation and so are the only state that is still true after an hour.
+        // ── handing work over ──────────────────────────────────────────────────────
+        //
+        // The gap this closes: an agent would write a report to /home/box/work and say so, and that
+        // was the end of it. A person had to open the VNC desktop, find a file manager, and read it
+        // there — with no way to get it onto their own machine. The reference product solves this two
+        // ways: pushing the file onto the user's actual disk through an agent running on their
+        // machine, or attaching it to the message. We have no agent on their machine, so the browser
+        // is the delivery mechanism, and these two routes are it.
+        if (route === "GET /api/files") {
+          const client = orchestrator.boxClient();
+          if (!client) {
+            send(res, 503, { error: "The box is not running." });
+            return;
+          }
+          const dir = url.searchParams.get("dir") ?? WORK_DIR;
+          // Confined here as well as in the daemon. Two checks rather than one because this is the
+          // one reachable by anyone holding a UI token, including a viewer.
+          if (!withinWork(dir)) {
+            send(res, 403, { error: `Only ${WORK_DIR} and below can be browsed.` });
+            return;
+          }
+          try {
+            const listing = await client.listDir(dir);
+            send(res, 200, listing);
+          } catch (error) {
+            send(res, 404, { error: error instanceof Error ? error.message : String(error) });
+          }
+          return;
+        }
+
+        if (route === "GET /api/file") {
+          const client = orchestrator.boxClient();
+          if (!client) {
+            send(res, 503, { error: "The box is not running." });
+            return;
+          }
+          const path = url.searchParams.get("path") ?? "";
+          if (!withinWork(path)) {
+            send(res, 403, { error: `Only files under ${WORK_DIR} can be handed over.` });
+            return;
+          }
+          try {
+            const file = await client.downloadFile(path);
+            const bytes = Buffer.from(file.base64, "base64");
+            // `inline` so a browser shows what it can and downloads what it cannot; the filename is
+            // still given, so "save as" produces the right name either way.
+            const name = file.path.split("/").pop() ?? "file";
+            res.writeHead(200, {
+              "content-type": file.media_type,
+              "content-length": bytes.length,
+              "content-disposition": `${
+                url.searchParams.get("download") === "1" ? "attachment" : "inline"
+              }; filename="${name.replace(/["\\]/g, "")}"`,
+              // Never cached: an agent rewrites its own output, and a stale copy would be read as
+              // the current one.
+              "cache-control": "no-store",
+            });
+            res.end(bytes);
+          } catch (error) {
+            send(res, 404, { error: error instanceof Error ? error.message : String(error) });
+          }
+          return;
+        }
+
         if (route === "GET /api/progress") {
           const agentId = url.searchParams.get("agent") ?? "";
           if (!orchestrator.registry.has(agentId)) {

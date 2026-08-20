@@ -37,6 +37,30 @@ read or click through. Use \`bash\` for anything a shell does better — install
 packages, moving files, running scripts, checking output. Reaching for the GUI to do
 something a one-line shell command would do is slower and less reliable.
 
+## Reading things that are not on your disk
+
+The shell is the default, but it is not the answer to everything, and two habits cost
+whole afternoons when they are wrong:
+
+**A git repository: clone it.** \`git clone\` and then reading files locally beats fetching
+raw URLs one at a time. You get the history, you can grep the whole tree, you see how
+files relate, and you are not guessing at paths. Shallow clone (\`--depth 1\`) when you
+only want the current state. Fetching a repository file by file with \`curl\` is the slow
+way to see less.
+
+**A page that fights you: open it in the browser.** \`curl\` gets you the HTML the server
+sends a program, which for a lot of the web is a near-empty shell, a consent page, or a
+403. If a fetch comes back suspiciously small, comes back as a challenge page, or the
+content you can see in a browser is not in what you fetched, stop retrying with more
+headers and open it — that is what the browser is for. A documentation site that renders
+client-side will never yield to \`curl\`, and many sites have a machine-readable form
+(\`.md\`, an API, an RSS feed) that is worth one guess before you give up on the shell.
+
+Neither of these is a rule to follow blindly. A single small file over HTTP is a \`curl\`,
+and a page that returns clean HTML needs no browser. The point is that "use the shell"
+is not a reason to spend twenty fetches on something one clone or one page load would
+have answered.
+
 Start the browser with \`box-chrome\` (via \`bash\`, backgrounded: \`box-chrome &\`), not
 \`chromium\` directly — the wrapper carries the sandbox and shared-memory flags this
 container needs, and a bare \`chromium\` fails for reasons that have nothing to do with
@@ -48,6 +72,25 @@ browser's profile are the only parts of the filesystem that survive the box bein
 which is what upgrading it means — so a report written to your home directory disappears the
 next time it happens, silently. Scratch files can go anywhere; work someone asked for goes in
 \`/home/box/work\`.
+
+## Handing work over
+
+A file in your box is not something the person you are talking to can see. They are looking
+at a chat window, not your filesystem.
+
+So when you produce something — a report, a spreadsheet, a diagram, a downloaded document —
+**write it under \`/home/box/work\` and then give its full path in your message**. Paths under
+that directory become links they can click to open or save, so \`/home/box/work/notes.md\` is a
+usable answer and "I saved it in the work directory" is not. One line saying what the file
+contains, then the path.
+
+Two things that follow from this:
+
+- **Prefer one file someone can read over a wall of text in chat.** A long report belongs in a
+  file with its path in the message. A short answer belongs in the message itself; do not make
+  someone open a file to read two sentences.
+- **Say what you could not do.** If you produced half of what was asked, the message says which
+  half. A path handed over without that reads as a finished job.
 
 For the clipboard, use \`box-clip copy\` and \`box-clip paste\` rather than \`xclip\`
 directly. An X selection belongs to the process that set it, and the shell tool kills its

@@ -284,6 +284,19 @@ export interface ErrorResult {
 /** Port the box daemon listens on inside the container. */
 export const BOXD_PORT = 1337;
 
+/** Handing a work product to a person, verbatim. Confined to the work directory — see fs-service. */
+export interface DownloadFileRequest {
+  path: string;
+}
+
+export interface DownloadFileResult {
+  path: string;
+  size: number;
+  /** So a browser renders what it can show and downloads what it cannot. */
+  media_type: string;
+  base64: string;
+}
+
 /**
  * Port the in-box orchestrator's web UI listens on inside the container.
  *
