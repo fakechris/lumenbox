@@ -8,6 +8,9 @@
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import {
   describeSchedule,
   isDue,
@@ -145,6 +148,9 @@ function runnerFixture(options: { hold?: boolean } = {}) {
     defaultAgent: () => "agent-ada",
     now: () => clock,
     log: line => lines.push(line),
+    // No run history: these tests are about the firing rules, and a default path would have them
+    // writing into the developer's own state directory.
+    path: null,
   });
 
   return {
@@ -218,6 +224,9 @@ test("a failing run is reported and does not stop the schedule", async () => {
     defaultAgent: () => "agent-ada",
     now: () => clock,
     log: line => lines.push(line),
+    // No run history: these tests are about the firing rules, and a default path would have them
+    // writing into the developer's own state directory.
+    path: null,
   });
 
   await scheduler.tick();
@@ -241,6 +250,7 @@ test("a schedule with nobody to run it is reported rather than dropped", async (
     run: async () => {},
     defaultAgent: () => undefined,
     log: line => lines.push(line),
+    path: null,
   });
   await scheduler.tick();
   assert.ok(lines.some(line => /no agent to run it/.test(line)));
@@ -257,6 +267,7 @@ test("a box that cannot be read does not stop the scheduler", async () => {
     run: async () => {},
     defaultAgent: () => "a",
     log: line => lines.push(line),
+    path: null,
   });
 
   await scheduler.tick();
@@ -266,4 +277,168 @@ test("a box that cannot be read does not stop the scheduler", async () => {
   failing = false;
   await scheduler.tick();
   assert.ok(lines.some(line => /firing/.test(line)));
+});
+
+
+// ── the run history ───────────────────────────────────────────────────────────────────
+
+test("a window already fired is not fired again after a restart", async () => {
+  // lastRun used to be process-local, so a restart meant every cron window that had already fired
+  // in the current minute fired again, and every @every schedule became immediately due. A box that
+  // restarts often ran its automations far more often than they said — and an unattended automation
+  // firing twice is a duplicate side effect nobody watched.
+  const dir = mkdtempSync(join(tmpdir(), "agentbox-sched-"));
+  const path = join(dir, "schedules.jsonl");
+  try {
+    const daily: Scheduled = {
+      slug: "report",
+      name: "Daily report",
+      path: "/p",
+      schedule: scheduleOf("0 9 * * *"),
+    };
+    let clock = at("2026-08-20T09:00:05");
+    const runs: string[] = [];
+    const make = () =>
+      new Scheduler({
+        due: async () => [daily],
+        run: async agent => {
+          runs.push(agent);
+        },
+        defaultAgent: () => "agent-ada",
+        now: () => clock,
+        path,
+      });
+
+    await make().tick();
+    assert.equal(runs.length, 1);
+
+    // Restarted twenty seconds later, still inside the 09:00 window.
+    clock = at("2026-08-20T09:00:25");
+    await make().tick();
+    assert.equal(runs.length, 1, "the window it already ran is not repeated");
+
+    // Tomorrow is a different window, and it still fires.
+    clock = at("2026-08-21T09:00:05");
+    await make().tick();
+    assert.equal(runs.length, 2);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("an interval schedule does not become due again just because the box restarted", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "agentbox-sched-"));
+  const path = join(dir, "schedules.jsonl");
+  try {
+    const every30: Scheduled = {
+      slug: "poll",
+      name: "Poll",
+      path: "/p",
+      schedule: scheduleOf("@every 30m"),
+    };
+    let clock = at("2026-08-20T09:00:00");
+    let runs = 0;
+    const make = () =>
+      new Scheduler({
+        due: async () => [every30],
+        run: async () => {
+          runs += 1;
+        },
+        defaultAgent: () => "agent-ada",
+        now: () => clock,
+        path,
+      });
+
+    await make().tick();
+    assert.equal(runs, 1, "the first run is immediate");
+
+    clock = at("2026-08-20T09:05:00");
+    await make().tick();
+    assert.equal(runs, 1, "five minutes into a thirty-minute interval, a restart changes nothing");
+
+    clock = at("2026-08-20T09:31:00");
+    await make().tick();
+    assert.equal(runs, 2);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("a run interrupted by a restart is reported, not resumed and not repeated", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "agentbox-sched-"));
+  const path = join(dir, "schedules.jsonl");
+  try {
+    const skill: Scheduled = {
+      slug: "long",
+      name: "Long job",
+      path: "/p",
+      schedule: scheduleOf("@every 30m"),
+    };
+    let clock = at("2026-08-20T09:00:00");
+    const lines: string[] = [];
+
+    // A run that starts and never settles: the process died holding it.
+    const dying = new Scheduler({
+      due: async () => [skill],
+      run: () => new Promise<void>(() => {}),
+      defaultAgent: () => "agent-ada",
+      now: () => clock,
+      path,
+    });
+    await dying.tick();
+
+    // The replacement sees a start with no end. It must not treat that as running — that would
+    // block this schedule forever — nor as never having happened, which would fire the same window
+    // again.
+    clock = at("2026-08-20T09:05:00");
+    let runs = 0;
+    const successor = new Scheduler({
+      due: async () => [skill],
+      run: async () => {
+        runs += 1;
+      },
+      defaultAgent: () => "agent-ada",
+      now: () => clock,
+      log: line => lines.push(line),
+      path,
+    });
+    assert.ok(
+      lines.some(line => /interrupted by a restart; not resumed, not repeated/.test(line)),
+      `expected the interruption to be reported, got ${JSON.stringify(lines)}`
+    );
+
+    await successor.tick();
+    assert.equal(runs, 0, "not repeated: its window has passed");
+
+    // And the schedule is not wedged — the next window runs normally.
+    clock = at("2026-08-20T09:31:00");
+    await successor.tick();
+    assert.equal(runs, 1);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("a torn history line turns off one record, not every automation", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "agentbox-sched-"));
+  const path = join(dir, "schedules.jsonl");
+  try {
+    writeFileSync(path, '{"slug":"poll","at":"2026-08-20T09:00:00.000Z","event":"start');
+    let runs = 0;
+    const scheduler = new Scheduler({
+      due: async () => [
+        { slug: "poll", name: "Poll", path: "/p", schedule: scheduleOf("@every 30m") },
+      ],
+      run: async () => {
+        runs += 1;
+      },
+      defaultAgent: () => "agent-ada",
+      now: () => at("2026-08-20T09:10:00"),
+      path,
+    });
+    await scheduler.tick();
+    assert.equal(runs, 1, "an unreadable line must not make one bad byte switch automations off");
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
 });

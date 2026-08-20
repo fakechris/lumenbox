@@ -31,6 +31,10 @@
  * same trade as the paragraph above and is why it is acceptable.
  */
 
+import { appendFileSync, existsSync, mkdirSync, readFileSync } from "node:fs";
+import { dirname, join } from "node:path";
+import { agentboxHome } from "../config.ts";
+
 /** A parsed schedule: the fields a cron expression constrains. `undefined` means "any". */
 export interface Schedule {
   /** The text it was parsed from, for messages and for the prompt. */
@@ -270,6 +274,35 @@ export interface Scheduled {
   runAs?: string;
 }
 
+/**
+ * Where a schedule's run history lives.
+ *
+ * Kept next to the transcripts and the usage log: same lifetime, same volume, same backup.
+ */
+export function scheduleLogPath(): string {
+  return process.env.AGENTBOX_SCHEDULE_LOG ?? join(agentboxHome(), "schedules.jsonl");
+}
+
+/** One thing that happened to one schedule. Append-only, like everything else durable here. */
+interface RunRecord {
+  slug: string;
+  at: string;
+  event: "started" | "finished" | "skipped";
+}
+
+/**
+ * What the ledger knows about a schedule, after reading it back.
+ *
+ * `interrupted` is the state that only exists across a restart: a run that started and has no
+ * matching end. It is deliberately not the same as "running" — the process that owned it is gone,
+ * so treating it as running would block that schedule forever, and treating it as never having
+ * happened would fire the same window twice.
+ */
+interface RunState {
+  lastRun: Date | undefined;
+  interrupted: boolean;
+}
+
 export interface SchedulerDeps {
   /** The skills with schedules, re-read each tick so an edit takes effect without a restart. */
   due: () => Promise<readonly Scheduled[]>;
@@ -279,6 +312,11 @@ export interface SchedulerDeps {
   defaultAgent: () => string | undefined;
   now?: () => Date;
   log?: (line: string) => void;
+  /**
+   * Where to keep the run history. `null` means keep none, which is what a test wants; omitted means
+   * the default path, which is what production wants.
+   */
+  path?: string | null;
 }
 
 /**
@@ -291,10 +329,11 @@ export interface SchedulerDeps {
 export class Scheduler {
   private timer: NodeJS.Timeout | undefined;
   private readonly lastRun = new Map<string, Date>();
-  /** Slugs with a run still going. The whole of the overlap answer. */
+  /** Slugs with a run still going *in this process*. The whole of the overlap answer. */
   private readonly running = new Set<string>();
   private readonly now: () => Date;
   private readonly log: (line: string) => void;
+  private readonly path: string | undefined;
 
   constructor(
     private readonly deps: SchedulerDeps,
@@ -302,6 +341,74 @@ export class Scheduler {
   ) {
     this.now = deps.now ?? (() => new Date());
     this.log = deps.log ?? (() => {});
+    this.path = deps.path === null ? undefined : (deps.path ?? scheduleLogPath());
+    this.loadHistory();
+  }
+
+  /**
+   * Reads back when each schedule last ran.
+   *
+   * Without this, `lastRun` was process-local and a restart meant: every cron window that had
+   * already fired in the current minute fired again, and every `@every` schedule became immediately
+   * due — so a box that restarts often runs its automations far more than they say. An unattended
+   * automation firing twice is not a cosmetic problem, it is a duplicate side effect nobody watched.
+   */
+  private loadHistory(): void {
+    if (this.path === undefined || !existsSync(this.path)) return;
+    const states = new Map<string, RunState>();
+    try {
+      for (const line of readFileSync(this.path, "utf8").split("\n")) {
+        if (line.trim() === "") continue;
+        let record: RunRecord;
+        try {
+          record = JSON.parse(line) as RunRecord;
+        } catch {
+          // A torn last line is the normal cost of append-only. Skip it rather than refusing to
+          // start, which would make one bad byte turn every automation off.
+          continue;
+        }
+        const at = new Date(record.at);
+        if (Number.isNaN(at.getTime()) || typeof record.slug !== "string") continue;
+        const state = states.get(record.slug) ?? { lastRun: undefined, interrupted: false };
+        if (record.event === "started") {
+          state.lastRun = at;
+          state.interrupted = true;
+        } else {
+          if (state.lastRun === undefined) state.lastRun = at;
+          state.interrupted = false;
+        }
+        states.set(record.slug, state);
+      }
+    } catch (error) {
+      this.log(`could not read the run history: ${error instanceof Error ? error.message : String(error)}`);
+      return;
+    }
+
+    for (const [slug, state] of states) {
+      if (state.lastRun !== undefined) this.lastRun.set(slug, state.lastRun);
+      if (state.interrupted) {
+        // Said, because it is the one thing a person cannot work out from the outcome: the run did
+        // not fail and did not finish. It is not marked running — the process that owned it is gone
+        // — and it is not replayed, because the window it belonged to has passed.
+        this.log(`${slug}: a previous run was interrupted by a restart; not resumed, not repeated`);
+      }
+    }
+  }
+
+  private record(slug: string, event: RunRecord["event"]): void {
+    if (this.path === undefined) return;
+    try {
+      mkdirSync(dirname(this.path), { recursive: true });
+      appendFileSync(
+        this.path,
+        `${JSON.stringify({ slug, at: this.now().toISOString(), event } satisfies RunRecord)}\n`,
+        "utf8"
+      );
+    } catch (error) {
+      // Never stop firing over bookkeeping. The cost of a lost record is a window that may repeat
+      // after a restart, which is the behaviour this whole file used to have.
+      this.log(`${slug}: could not write the run history (${error instanceof Error ? error.message : String(error)})`);
+    }
   }
 
   /** Runs whatever is due. Exposed so a test drives it directly instead of waiting on a clock. */
@@ -324,6 +431,7 @@ export class Scheduler {
         // about is indistinguishable from a schedule that stopped working.
         this.log(`${skill.name}: skipped, the previous run has not finished`);
         this.lastRun.set(skill.slug, this.now());
+        this.record(skill.slug, "skipped");
         continue;
       }
 
@@ -336,6 +444,7 @@ export class Scheduler {
       // Marked before starting, so a slow first tick cannot be overtaken by the next one.
       this.lastRun.set(skill.slug, this.now());
       this.running.add(skill.slug);
+      this.record(skill.slug, "started");
       this.log(`${skill.name}: firing (${describeSchedule(skill.schedule)})`);
 
       void this.deps
@@ -347,7 +456,10 @@ export class Scheduler {
             `${skill.name}: run failed — ${error instanceof Error ? error.message : String(error)}`
           );
         })
-        .finally(() => this.running.delete(skill.slug));
+        .finally(() => {
+          this.running.delete(skill.slug);
+          this.record(skill.slug, "finished");
+        });
     }
   }
 
