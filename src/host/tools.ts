@@ -12,6 +12,7 @@ import type { DisplayLease } from "../box/display-lease.ts";
 import type { AgentBus } from "../agents/bus.ts";
 import type { AgentRecord, AgentRegistry } from "../agents/registry.ts";
 import type { PolicyGate } from "./policy.ts";
+import { describeHistory, readHistory } from "./history.ts";
 import { dedupeKey, validateRecord } from "./memory.ts";
 import {
   describeTodos,
@@ -440,6 +441,34 @@ export function buildTools(hasBox: boolean, vision = true): Anthropic.Tool[] {
       },
     },
     {
+      name: "ReadHistory",
+      description:
+        "Search or read the recorded history of a conversation — what was actually said, what was " +
+        "called, and what came back. Useful when the start of a conversation has been summarised " +
+        "to fit: the originals were kept, and a summary is a paraphrase. Also how you check what a " +
+        "teammate actually did rather than taking their account of it. Returns a bounded, compact " +
+        "reading with entry numbers, not the raw content, so it will not undo the summarising.",
+      input_schema: {
+        type: "object",
+        properties: {
+          search: {
+            type: "string",
+            description:
+              "Words that must all appear. A plain word match, not a search that guesses at " +
+              "meaning, so use words that would actually have been written.",
+          },
+          from: { type: "number", description: "First entry number to read, when reading a range." },
+          to: { type: "number", description: "One past the last entry number." },
+          agent: {
+            type: "string",
+            description:
+              "Whose history, by id or name. Omit for your own. Reading a teammate's is how you " +
+              "verify their work rather than trusting a summary of it.",
+          },
+        },
+      },
+    },
+    {
       name: "RememberFact",
       description:
         "Keep something across conversations. It goes into your instructions on every future " +
@@ -755,6 +784,33 @@ export async function dispatchTool(
       return {
         text: `Updated agent "${updated.profile.name}" (id: ${updated.id}).`,
       };
+    }
+
+    case "ReadHistory": {
+      const who = String(input.agent ?? "").trim();
+      // A teammate's history is readable on purpose: everyone here shares a box and a filesystem
+      // already, `private` is documented as accident prevention rather than a boundary, and the
+      // reviewer's whole job — promised in its description — is checking what someone actually did
+      // rather than what they said they did.
+      let target = context.agent;
+      if (who !== "" && who !== context.agent.id && who !== context.agent.profile.name) {
+        const found = context.registry.tryGet(who) ?? context.registry.list().find(
+          record => record.profile.name.toLowerCase() === who.toLowerCase()
+        );
+        if (found === undefined) return { text: `No agent "${who}".`, isError: true };
+        target = found;
+      }
+
+      const entries = context.registry.readTranscript(target.id);
+      const query = {
+        ...(typeof input.search === "string" && input.search.trim() !== ""
+          ? { search: input.search.trim() }
+          : {}),
+        ...(typeof input.from === "number" ? { from: input.from } : {}),
+        ...(typeof input.to === "number" ? { to: input.to } : {}),
+      };
+      const whose = target.id === context.agent.id ? "" : `${target.profile.name}: `;
+      return { text: whose + describeHistory(readHistory(entries, query), query) };
     }
 
     case "RememberFact": {

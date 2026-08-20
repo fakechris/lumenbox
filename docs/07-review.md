@@ -257,6 +257,40 @@ The first run of this found an artificial loop in an existing test: six identica
 written as a fixture for the overflow test. The detector was right and the fixture was not, which is
 the sort of thing a real definition of "looping" turns up.
 
+### R-12 — Compaction's central claim was false for the agent — **fixed**
+
+Compaction was shipped with a claim attached: the transcript keeps every entry, including the tool
+blocks, which is what makes an agent's account of itself checkable. That is true for a *person*
+reading the file. It was not true for the agent, and nobody checked — the transcript lives in the
+orchestrator's state directory and the box's uid cannot read it:
+
+```
+$ docker exec --user box … ls /home/hostd/.agentbox/agents/
+ls: Permission denied
+```
+
+So after "the first 127 entries were summarised", an agent needing a detail from entry 40 had no path
+to it at all. The uid split is right and stays; what was missing was a route *through* the
+orchestrator.
+
+`ReadHistory` is that route. Two properties keep it from defeating the thing it completes:
+
+- **Offered only when something was summarised.** A tool advertising access to a history that was
+  never compacted invites a call returning what the agent can already see, which trains it to ignore
+  the tool by the time it matters.
+- **A reading, not a replay.** Re-emitting raw content blocks would pour back the context compaction
+  removed. Entries are rendered compactly with their numbers, capped at 25, each clamped — and a
+  truncated answer says how many it did not show.
+
+It also reads a *teammate's* history, deliberately. Everyone in a tenant already shares a box and a
+filesystem, `private` is documented as accident prevention rather than a boundary, and the reviewer
+agent's whole job — promised in the description it ships with — is checking what someone did rather
+than what they said they did. Until now that promise was unkeepable.
+
+Verified on a real box: Ops wrote a file; Vera was asked to check it, called `ReadHistory` on Ops,
+recovered the exact `write_file` call with its arguments and timestamp, then read the file herself and
+reported both.
+
 ## What holds up well
 
 Worth recording, because a review that only lists faults misrepresents the system.

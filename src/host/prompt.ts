@@ -19,6 +19,7 @@ import {
   type MemoryRecord,
 } from "./memory.ts";
 import { renderSkills, visibleTo, type Skill } from "./skills.ts";
+import { renderHistoryBlock } from "./history.ts";
 import type { ResolutionConfig } from "../protocol/index.ts";
 
 /** Teammates listed inline before falling back to "read the agent directory". */
@@ -153,6 +154,12 @@ export interface PromptContext {
    * the conversation. The agent reads the one it picks.
    */
   skills?: readonly Skill[];
+  /**
+   * The transcript, used only to decide whether to mention that history was summarised.
+   *
+   * Not rendered into the prompt — that would be the thing compaction just removed.
+   */
+  transcript?: readonly unknown[];
   resolution?: ResolutionConfig;
   agentsRoot: string;
   hasBox: boolean;
@@ -291,6 +298,8 @@ export function buildSystemPromptParts(
       renderDurableBlocks(context.durable ?? {}),
       renderMemory(recall(context.memory)),
       renderSkills(visibleTo(context.skills ?? [], context.agent.profile.name)),
+      // Only when something has actually been summarised — see renderHistoryBlock.
+      renderHistoryBlock(context.transcript ?? []),
       renderSharedMemory(
         recall(context.sharedMemory ?? [], SHARED_CHAR_BUDGET),
         id => context.teammates.find(mate => mate.id === id)?.profile.name ?? id
