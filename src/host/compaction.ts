@@ -215,10 +215,15 @@ export interface CutPoint {
  */
 export function chooseCutPoint(
   entries: readonly HistoryEntry[],
-  policy: CompactionPolicy = DEFAULT_POLICY
+  policy: CompactionPolicy = DEFAULT_POLICY,
+  options: { force?: boolean } = {}
 ): CutPoint | undefined {
   const total = estimateTokens(entries);
-  if (total <= policy.triggerTokens) return undefined;
+  // `force` asks the different question the background pass needs: not "should we cut" but "where
+  // would we cut, if we had to". Without it the speculative path could never fire, because it runs
+  // precisely when the total is still *below* the trigger — a bug this function's own gate caused
+  // in the first version of the background pass.
+  if (!options.force && total <= policy.triggerTokens) return undefined;
 
   // Walk back accumulating the tail.
   let tail = 0;
@@ -479,4 +484,77 @@ export function estimateMessageTokens(messages: readonly Anthropic.MessageParam[
     }
   }
   return Math.ceil(chars / CHARS_PER_TOKEN) + images * TOKENS_PER_IMAGE;
+}
+
+// ── background pre-compaction ──────────────────────────────────────────────────────────
+
+/**
+ * Summarising before it is needed, off the critical path.
+ *
+ * Compaction as written is synchronous: a turn that crosses the trigger waits for a summary before
+ * it can start. Measured on a real 26,000-token history, that is a 30-second pause with a user
+ * watching nothing happen — and it lands on the *first* turn after the threshold, which is to say
+ * at random from the user's point of view.
+ *
+ * The fix is to start earlier and speculatively. Two thresholds instead of one:
+ *
+ *   - **start** — the history is large enough that compaction is coming. Begin summarising in the
+ *     background and let the turn proceed uncompacted; there is still room.
+ *   - **adopt** — the history is large enough that compaction is *needed*. Use the summary if it is
+ *     ready, and wait for it if it is not.
+ *
+ * So in the common case the summary is already sitting there when it becomes necessary, and the
+ * pause disappears. In the uncommon case — a conversation that jumps from small to enormous in one
+ * turn — the behaviour degrades to exactly what it was before, which is the right failure.
+ *
+ * A speculative summary can be wasted: the conversation may end, or an entry may be appended after
+ * it was computed. Wasted is acceptable; wrong is not, so a pending summary records the history
+ * length it was computed from and is discarded if the history has moved on.
+ */
+
+export interface PendingSummary {
+  /** How many entries of the active window this summary covers. */
+  covers: number;
+  /** The length of the active window when the work started, so a stale result can be spotted. */
+  computedFrom: number;
+  promise: Promise<SummaryEntry | undefined>;
+}
+
+/**
+ * The fraction of the trigger at which background work starts.
+ *
+ * 0.75 rather than something closer to 1: the point is to have finished before the trigger is
+ * reached, and a summarising call takes tens of seconds. Too close and it never wins the race; too
+ * far and most of the summaries computed are thrown away.
+ */
+const BACKGROUND_AT = Number(process.env.AGENTBOX_COMPACT_BACKGROUND_AT ?? 0.75);
+
+export type CompactionUrgency = "none" | "background" | "now";
+
+/**
+ * How urgently this history needs compacting.
+ *
+ * Separate from the cut decision so the caller can act on "soon" without committing to a cut point,
+ * and so the thresholds are testable without any model.
+ */
+export function compactionUrgency(
+  entries: readonly HistoryEntry[],
+  policy: CompactionPolicy
+): CompactionUrgency {
+  const total = estimateTokens(entries);
+  if (total > policy.triggerTokens) return "now";
+  if (total > policy.triggerTokens * BACKGROUND_AT) return "background";
+  return "none";
+}
+
+/** Whether a summary computed earlier still describes the history it is about to be used for. */
+export function pendingIsUsable(
+  pending: PendingSummary | undefined,
+  activeLength: number
+): boolean {
+  if (pending === undefined) return false;
+  // Appending entries is fine — the summary covers a prefix, and the tail is sent verbatim either
+  // way. What is not fine is the history having been compacted underneath it, which shortens the
+  // active window and would make `covers` point at the wrong entries.
+  return activeLength >= pending.computedFrom;
 }

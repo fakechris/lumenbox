@@ -19,7 +19,12 @@ import { AgentBus } from "../agents/bus.ts";
 import type { BoxClient } from "../box/client.ts";
 import { DisplayLease } from "../box/display-lease.ts";
 import { runTurn, TurnAborted, type TranscriptEntry } from "./turn.ts";
-import { DEFAULT_POLICY } from "./compaction.ts";
+import {
+  compactionUrgency,
+  DEFAULT_POLICY,
+  estimateTokens,
+  type HistoryEntry,
+} from "./compaction.ts";
 import { buildSystemPrompt } from "./prompt.ts";
 import { buildTools, dispatchTool } from "./tools.ts";
 
@@ -962,6 +967,93 @@ test("a request that cannot be made to fit fails with a usable message", async (
     assert.ok(capture.params.length <= 2, "it did not retry blindly");
   } finally {
     DEFAULT_POLICY.triggerTokens = previousTrigger;
+    cleanup();
+  }
+});
+
+test("a summary is prepared in the background and adopted without a wait", async () => {
+  const { registry, cleanup } = fixture();
+  const previousTrigger = DEFAULT_POLICY.triggerTokens;
+  const previousKeep = DEFAULT_POLICY.keepTailTokens;
+  try {
+    const ada = registry.create({ name: "Ada" });
+    const bus = new AgentBus(registry, async () => {});
+
+    const entries = bulkyHistory(12, 400);
+    for (const entry of entries) {
+      registry.appendTranscript(ada.id, entry as never);
+    }
+    // The trigger is derived from what this history actually measures, so the test lands in the
+    // background band (above 75% of the trigger, below the trigger) regardless of how estimation
+    // changes later. Guessing a constant here is how a test starts passing for the wrong reason.
+    const measured = estimateTokens(entries as HistoryEntry[]);
+    DEFAULT_POLICY.triggerTokens = Math.ceil(measured / 0.85);
+    DEFAULT_POLICY.keepTailTokens = Math.ceil(measured / 4);
+    assert.equal(
+      compactionUrgency(entries as HistoryEntry[], DEFAULT_POLICY),
+      "background",
+      "the fixture has to sit in the band this test is about"
+    );
+
+    const capture: Capture = { params: [] };
+    let summaryCalls = 0;
+    let released: (() => void) | undefined;
+    const heldBack = new Promise<void>(resolve => {
+      released = resolve;
+    });
+
+    // The summariser blocks until the test lets it go. If the turn awaited it, the turn would not
+    // finish — which is precisely the 30-second pause this exists to remove.
+    const client = stubClientWithSummariser([message([textBlock("ok")])], capture, () => {
+      summaryCalls += 1;
+      return message([textBlock("Earlier: ran twelve shell steps.")]);
+    });
+    (client.messages as unknown as { create: unknown }).create = async () => {
+      summaryCalls += 1;
+      await heldBack;
+      return message([textBlock("Earlier: ran twelve shell steps.")]);
+    };
+
+    const deps = { client, registry, bus, box: undefined, resolution: undefined };
+    const first = { fromId: "user", fromName: "user", text: "one", priority: false, receivedAt: "" };
+
+    // Turn one: in the background band. It must complete while the summariser is still blocked.
+    await runTurn(ada, [first], new AbortController().signal, deps);
+    assert.equal(capture.params.length, 1, "the turn went out");
+    assert.equal(summaryCalls, 1, "and a summary was started");
+
+    const stored = registry.readTranscript(ada.id) as TranscriptEntry[];
+    assert.equal(
+      stored.filter(entry => "kind" in entry && entry.kind === "summary").length,
+      0,
+      "nothing was adopted yet: there was still room, so the turn was not compacted"
+    );
+
+    // Now let it finish, and push the history over the trigger.
+    released?.();
+    for (const entry of bulkyHistory(12, 400)) {
+      registry.appendTranscript(ada.id, entry as never);
+    }
+
+    await runTurn(
+      ada,
+      [{ ...first, text: "two" }],
+      new AbortController().signal,
+      deps
+    );
+
+    // The second turn adopted the summary that was already sitting there rather than computing a
+    // new one. That reuse is the whole point: the pause lands on nobody.
+    assert.equal(summaryCalls, 1, "the prepared summary was reused, not recomputed");
+    const after = registry.readTranscript(ada.id) as TranscriptEntry[];
+    assert.equal(
+      after.filter(entry => "kind" in entry && entry.kind === "summary").length,
+      1,
+      "and it was persisted"
+    );
+  } finally {
+    DEFAULT_POLICY.triggerTokens = previousTrigger;
+    DEFAULT_POLICY.keepTailTokens = previousKeep;
     cleanup();
   }
 });

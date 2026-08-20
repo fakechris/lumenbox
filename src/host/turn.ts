@@ -15,6 +15,9 @@ import type { UsageLog } from "./usage.ts";
 import {
   activeWindow,
   buildSummaryPrompt,
+  compactionUrgency,
+  pendingIsUsable,
+  type PendingSummary,
   estimateMessageTokens,
   noteContextWindow,
   policyForModel,
@@ -30,6 +33,7 @@ import {
 import type { ResolutionConfig } from "../protocol/index.ts";
 import { buildSystemPromptParts, buildTurnPrompt } from "./prompt.ts";
 import { buildTools, dispatchTool, type ToolOutcome } from "./tools.ts";
+import { resolveSummaryProvider } from "./provider.ts";
 import type { Effort, ProviderProfile } from "./provider.ts";
 
 /**
@@ -341,6 +345,57 @@ function storableResult(
  * The summarising call is a plain, tool-free request on the same model the agent uses. A dedicated
  * cheaper or wider model would be better and is a configuration change, not a code one.
  */
+/**
+ * Summaries computed speculatively, keyed by agent.
+ *
+ * Module-level and in memory on purpose: a speculative summary is worth nothing after a restart —
+ * the work is cheap to redo and the alternative is persisting something the agent has not adopted.
+ * Bounded by the number of agents, which is bounded by desktops (32).
+ */
+const pendingSummaries = new Map<string, PendingSummary>();
+
+/** Produces one summary of the given entries, or undefined when the model would not cooperate. */
+async function summarise(
+  entries: readonly HistoryEntry[],
+  covers: number,
+  client: Anthropic,
+  summaryProvider: ProviderProfile
+): Promise<SummaryEntry | undefined> {
+  const response = await client.messages.create({
+    model: summaryProvider.model,
+    // Enough for a dense summary and no more; a summary that runs to pages defeats the purpose.
+    max_tokens: Math.min(4096, summaryProvider.maxTokens),
+    messages: [{ role: "user", content: buildSummaryPrompt(entries) }],
+  });
+  const text = response.content
+    .filter((block): block is Anthropic.TextBlock => block.type === "text")
+    .map(block => block.text)
+    .join("\n")
+    .trim();
+  if (!text) return undefined;
+  return summaryEntry(text, covers);
+}
+
+/**
+ * Summarises the front of a history that has outgrown the context window.
+ *
+ * Returns the history to assemble from — either unchanged, or with a summary entry appended and
+ * persisted. Never throws: a turn that cannot summarise still has to run, so the fallback drops the
+ * oldest entries and says so in the history rather than failing or trimming silently.
+ *
+ * Three outcomes rather than two, which is the point of the background pass:
+ *
+ *   - **none** — well under the trigger. Nothing happens.
+ *   - **background** — approaching it. A summary is started and *not waited for*; this turn goes
+ *     out uncompacted, because there is still room. If it finishes before it is needed, the pause
+ *     the user would have seen disappears.
+ *   - **now** — over it. Use the speculative summary if one is ready and still describes this
+ *     history, otherwise compute one and wait.
+ *
+ * The summarising call uses a separate, cheaper profile where one is available: it is a plain,
+ * tool-free, text-in-text-out request, and paying the agent's own model for it is the most
+ * expensive way to do the least interesting work.
+ */
 async function compactHistory(options: {
   history: TranscriptEntry[];
   agent: AgentRecord;
@@ -354,32 +409,58 @@ async function compactHistory(options: {
   const active = activeWindow(history as HistoryEntry[]);
   // Derived from the model's real window once one response has reported it, so the same code is
   // right for a 200k model and a 1M one.
-  const cut = chooseCutPoint(active, policyForModel(provider.model));
-  if (!cut) return history;
+  const policy = policyForModel(provider.model);
+  const urgency = compactionUrgency(active, policy);
+  if (urgency === "none") {
+    pendingSummaries.delete(agent.id);
+    return history;
+  }
 
+  // Forced when pre-computing: in the background band the total is still under the trigger, so the
+  // ordinary gate would refuse to name a cut and nothing would ever be prepared.
+  const cut = chooseCutPoint(active, policy, { force: urgency === "background" });
+  if (!cut) return history;
   const olderEntries = active.slice(0, cut.index);
+  const summaryProvider = resolveSummaryProvider(provider);
+
+  if (urgency === "background") {
+    // Start it and walk away. Nothing here is awaited, and a failure is swallowed on purpose: this
+    // is speculative work, and the `now` path will report properly if it ever becomes necessary.
+    if (!pendingSummaries.has(agent.id)) {
+      log(
+        `pre-summarising ${cut.index} entries in the background on ${summaryProvider.model}; ` +
+          `this turn proceeds uncompacted`
+      );
+      pendingSummaries.set(agent.id, {
+        covers: cut.index,
+        computedFrom: active.length,
+        promise: summarise(olderEntries, cut.index, client, summaryProvider).catch(() => undefined),
+      });
+    }
+    return history;
+  }
+
   log(`compacting history: ${cut.reason}`);
 
   let entry: SummaryEntry;
   try {
-    const response = await client.messages.create({
-      model: provider.model,
-      // Enough for a dense summary and no more; a summary that runs to pages defeats the purpose.
-      max_tokens: Math.min(4096, provider.maxTokens),
-      messages: [{ role: "user", content: buildSummaryPrompt(olderEntries) }],
-    });
-    const text = response.content
-      .filter((block): block is Anthropic.TextBlock => block.type === "text")
-      .map(block => block.text)
-      .join("\n")
-      .trim();
-    if (!text) throw new Error("the summariser returned no text");
-    entry = summaryEntry(text, cut.index);
+    const pending = pendingSummaries.get(agent.id);
+    let ready: SummaryEntry | undefined;
+    if (pendingIsUsable(pending, active.length)) {
+      ready = await pending!.promise;
+      if (ready !== undefined) {
+        log(`used the summary prepared in the background (${pending!.covers} entries)`);
+      }
+    }
+    const produced = ready ?? (await summarise(olderEntries, cut.index, client, summaryProvider));
+    if (produced === undefined) throw new Error("the summariser returned no text");
+    entry = produced;
     const detail =
-      `summarised ${cut.index} entries: about ${estimateTokens(olderEntries)} tokens ` +
-      `became ${estimateTokens([entry])}`;
+      `summarised ${entry.covers} entries: about ${estimateTokens(olderEntries)} tokens ` +
+      `became ${estimateTokens([entry])}` +
+      (ready === undefined ? "" : " (prepared in the background)");
     log(detail);
-    onCompacted({ type: "compacted", covers: cut.index, summarised: true, detail });
+    onCompacted({ type: "compacted", covers: entry.covers, summarised: true, detail });
   } catch (error) {
     const reason = error instanceof Error ? error.message : String(error);
     // Loud, and told to the model: the alternative was a request that cannot fit, and the
@@ -388,6 +469,10 @@ async function compactHistory(options: {
     const detail = `could not summarise (${reason}); dropped ${cut.index} entries instead`;
     log(detail);
     onCompacted({ type: "compacted", covers: cut.index, summarised: false, detail });
+  } finally {
+    // Consumed either way: a summary that was adopted must not be adopted twice, and one that
+    // failed must not be retried forever.
+    pendingSummaries.delete(agent.id);
   }
 
   registry.appendTranscript(agent.id, entry);

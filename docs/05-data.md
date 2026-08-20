@@ -124,6 +124,21 @@ of which **94% was images**. So the guard is about images and nothing else:
   oversized tool results. Bounded at `AGENTBOX_MAX_SHED_ATTEMPTS` (3), and when nothing further can
   be shed it fails with what is actually wrong rather than retrying identically.
 
+**Prepared in advance, not on demand.** Compaction used to be synchronous: the first turn to cross
+the trigger waited for a summary, measured at 30 seconds on a real 26,000-token history — a pause
+landing at random from the user's point of view. There are now two thresholds. At 75% of the trigger
+a summary starts *in the background* and the turn goes out uncompacted, because there is still room;
+at the trigger it is adopted if ready and computed-and-waited-for if not. A speculative summary
+records the window length it was computed from and is discarded if the window shortened underneath
+it, since `covers` would then point at the wrong entries. Wasted work is acceptable; wrong work is
+not.
+
+The summarising call uses a cheaper model on the same credential where one is known
+(`AGENTBOX_SUMMARY_PROVIDER` / `AGENTBOX_SUMMARY_MODEL` override it). It is a plain, tool-free,
+text-in-text-out request, and paying the agent's own model for it is the most expensive way to do the
+least interesting work. A provider with no cheaper model named falls back to the agent's own rather
+than refusing: a deployment with one credential must still be able to compact.
+
 Token estimation is 2.5 characters per token — not 4, which is roughly right for prose and badly
 optimistic for JSON, shell output and CJK, and errs in the direction that fails to compact when
 compaction was needed. Images are counted as a flat ~1,600 tokens each rather than by their base64

@@ -223,6 +223,61 @@ export function createClient(profile: ProviderProfile): Anthropic {
 }
 
 /** One line describing what is configured, and what it costs. */
+/**
+ * The model that writes summaries, which should not be the agent's own.
+ *
+ * Summarising is a cheap, mechanical, long-input job, and paying the agent's model to do it is
+ * wrong twice: it costs the most per token of anything in the system, and it blocks the turn.
+ * Measured on this box, one summarisation of a real 26,000-token history took 30 seconds on the
+ * agent's own model — 30 seconds of a user watching nothing happen.
+ *
+ * So a separate profile, chosen in this order:
+ *
+ *   1. `AGENTBOX_SUMMARY_PROVIDER` / `AGENTBOX_SUMMARY_MODEL` — an explicit choice wins.
+ *   2. The agent's own provider with a cheaper model, when one is named for it.
+ *   3. The agent's own profile unchanged, which is what happens today.
+ *
+ * Falling back to the agent's own model rather than refusing matters: a deployment that has one
+ * credential must still be able to compact. Better slow than stuck.
+ *
+ * Deliberately not a hardcoded third-party model. Reaching for a different vendor's cheap model
+ * would mean a second credential nobody configured, and a summariser that fails closed on a system
+ * that was working.
+ */
+const CHEAPER_MODEL_FOR: Record<string, string | undefined> = {
+  // Same endpoint, same key, smaller model. Only listed where the smaller model is known to accept
+  // the same request shape — a summarising call is plain text in, plain text out, so vision and
+  // thinking do not matter here.
+  anthropic: "claude-haiku-4-5",
+};
+
+export function resolveSummaryProvider(agentProfile: ProviderProfile): ProviderProfile {
+  const named = process.env.AGENTBOX_SUMMARY_PROVIDER;
+  if (named !== undefined && named.trim() !== "") {
+    const profile = resolveProvider(named);
+    if (process.env.AGENTBOX_SUMMARY_MODEL) profile.model = process.env.AGENTBOX_SUMMARY_MODEL;
+    return profile;
+  }
+
+  const profile: ProviderProfile = { ...agentProfile };
+  if (process.env.AGENTBOX_SUMMARY_MODEL) {
+    profile.model = process.env.AGENTBOX_SUMMARY_MODEL;
+    return profile;
+  }
+
+  const cheaper = CHEAPER_MODEL_FOR[agentProfile.label.toLowerCase()];
+  if (cheaper !== undefined) {
+    profile.model = cheaper;
+    // The cheaper model is used for one plain-text call. Capabilities it may not share with the
+    // agent's model are switched off rather than assumed, since a summarising request that carries
+    // a field the model rejects fails the compaction it was meant to perform.
+    profile.adaptiveThinking = false;
+    profile.effort = false;
+    profile.vision = false;
+  }
+  return profile;
+}
+
 export function describeProvider(profile: ProviderProfile): string {
   const missing: string[] = [];
   if (!profile.vision) missing.push("no vision (computer tool withheld)");

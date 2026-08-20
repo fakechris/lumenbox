@@ -10,6 +10,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import type Anthropic from "@anthropic-ai/sdk";
+import { resolveProvider, resolveSummaryProvider } from "./provider.ts";
 import {
 DEFAULT_POLICY,
   activeWindow,
@@ -24,6 +25,8 @@ DEFAULT_POLICY,
   knownContextWindow,
   noteContextWindow,
   policyForModel,
+  compactionUrgency,
+  pendingIsUsable,
   pruneOldImages,
   TOKENS_PER_IMAGE,
 } from "./compaction.ts";
@@ -296,4 +299,65 @@ test("the trigger follows the model's real window when one is reported", () => {
   assert.equal(knownContextWindow("small-model"), 200_000);
   noteContextWindow("small-model", undefined);
   assert.equal(knownContextWindow("small-model"), 200_000);
+});
+
+// ── background pre-compaction ──────────────────────────────────────────────────────────
+
+test("urgency has three states, and the middle one is the point", () => {
+  const policy = { triggerTokens: 1_000, keepTailTokens: 300 };
+  const entry = (chars: number): HistoryEntry => ({
+    role: "user",
+    text: "x".repeat(chars),
+    at: "",
+  });
+
+  // 2.5 chars per token, so 1,000 tokens is about 2,500 characters.
+  assert.equal(compactionUrgency([entry(100)], policy), "none");
+  // Above 75% of the trigger: start work, but this turn still has room and must not wait.
+  assert.equal(compactionUrgency([entry(2_000)], policy), "background");
+  assert.equal(compactionUrgency([entry(5_000)], policy), "now");
+});
+
+test("a speculative summary is discarded if the history moved underneath it", async () => {
+  const pending = {
+    covers: 10,
+    computedFrom: 20,
+    promise: Promise.resolve(summaryEntry("done", 10)),
+  };
+  // Longer is fine: the summary covers a prefix and the tail is sent verbatim either way.
+  assert.equal(pendingIsUsable(pending, 25), true);
+  assert.equal(pendingIsUsable(pending, 20), true);
+  // Shorter means the window was compacted underneath it, so `covers` now points at the wrong
+  // entries — using it would silently summarise away work that had not been summarised.
+  assert.equal(pendingIsUsable(pending, 12), false);
+  assert.equal(pendingIsUsable(undefined, 20), false);
+});
+
+test("the summariser is a separate, cheaper profile where one exists", () => {
+  const anthropic = resolveProvider("anthropic");
+  const summary = resolveSummaryProvider(anthropic);
+
+  assert.notEqual(summary.model, anthropic.model, "not the agent's own model");
+  assert.equal(summary.keyEnv, anthropic.keyEnv, "same credential: no new configuration needed");
+  // A summarising call is plain text in, plain text out. Capabilities the cheaper model may not
+  // share are switched off rather than assumed, since a rejected field fails the very compaction it
+  // was meant to perform.
+  assert.equal(summary.adaptiveThinking, false);
+  assert.equal(summary.effort, false);
+
+  // A provider with no cheaper model named falls back to the agent's own, rather than refusing: a
+  // deployment with one credential must still be able to compact. Better slow than stuck.
+  const minimax = resolveProvider("minimax");
+  assert.equal(resolveSummaryProvider(minimax).model, minimax.model);
+});
+
+test("an explicit summariser choice wins over the derived one", () => {
+  const previousModel = process.env.AGENTBOX_SUMMARY_MODEL;
+  try {
+    process.env.AGENTBOX_SUMMARY_MODEL = "some-other-model";
+    assert.equal(resolveSummaryProvider(resolveProvider("anthropic")).model, "some-other-model");
+  } finally {
+    if (previousModel === undefined) delete process.env.AGENTBOX_SUMMARY_MODEL;
+    else process.env.AGENTBOX_SUMMARY_MODEL = previousModel;
+  }
 });
