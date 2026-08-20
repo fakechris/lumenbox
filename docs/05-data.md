@@ -317,6 +317,32 @@ and an unauthenticated request gets 401. Reads are capped at 10MB because the bo
 — a third again on the wire — which covers reports, spreadsheets, logs and screenshots. Something
 larger is a dataset, and the honest answer for a dataset is to archive it and say so.
 
+### 3.1a `skills/` — `/home/box/work/skills/<slug>/SKILL.md`
+
+Work an agent has done once and can do again. **A skill is a saved prompt the agent runs** — a
+markdown file with `---` frontmatter (`name`, `description`, `scope`, `owner`) and optional scripts
+beside it.
+
+In the work volume rather than in orchestrator state, because that is the only location satisfying
+all three things a skill has to be: writable by the agent with the tools it already has, readable and
+editable by a person through the files view, and durable across a rebuild. The third argument settles
+it alone — a skill with a helper script needs the script where `bash` can run it.
+
+**The prompt carries an index, never the bodies**: names, descriptions and paths, and the agent reads
+the one it picks. A dozen recipes in every request would cost more than the conversation, which is the
+same reasoning that governs memory and compaction here.
+
+Frontmatter is parsed with about ten lines rather than a YAML dependency. The failure mode of a real
+parser is worse here: it rejects a file a person hand-edited slightly wrong, where this treats the
+whole thing as a body and the skill still works under a name derived from its directory. A skill with
+*no description* is the one case reported rather than ignored — the description is the only thing read
+when choosing, so without one the skill exists and is never chosen.
+
+Read at most every few seconds, and the load reports whether the directory was actually **read** as
+distinct from being read and empty. Those mean opposite things: without the distinction a box
+restarting replaces a good list with an empty one, and since the list is in the prompt, that reads as
+"you have no skills" rather than "we could not check".
+
 ### 3.2 `config` volume — `/home/box/.config`
 
 What the box logged into and how the desktop looks: browser profiles per display

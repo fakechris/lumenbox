@@ -203,7 +203,9 @@ export const APP_HTML = String.raw`<!doctype html>
     <div id="progresslist" style="font-size:12px;opacity:0.85"></div>
   </div>
   <div class="scroll" id="chat"></div>
-  <form id="form">
+  <!-- Anchored above the composer so it does not cover what is being typed. -->
+  <div id="slashmenu" style="display:none;position:absolute;bottom:64px;left:10px;right:10px;background:var(--panel);border:1px solid var(--line);border-radius:6px;max-height:180px;overflow:auto;z-index:5"></div>
+  <form id="form" style="position:relative">
     <textarea id="input" placeholder="Ask this agent to do something.  Enter sends, Shift+Enter for a newline."></textarea>
     <button id="send">Send</button>
   </form>
@@ -496,13 +498,15 @@ function refresh() {
     // A newly created agent gets its display assigned server-side; keep the pane
     // in step without reloading an unchanged one.
     if (current) showDesktop(current);
-    return Promise.all([refreshPolicy(), refreshProgress()]);
+    return Promise.all([refreshPolicy(), refreshProgress(), refreshSkills()]);
   });
 }
 
 // Every few seconds, because an approval and a ticked-off todo both arrive without an event to ride
 // on. Slow enough to be free, fast enough that a person is not kept waiting by the interface.
 setInterval(function () { refreshPolicy(); refreshProgress(); }, 4000);
+// Skills change when someone writes one, which is rare. Slow enough to be free.
+setInterval(refreshSkills, 30000);
 // Only while the files tab is open: polling a listing nobody is looking at is work for nothing.
 setInterval(function () {
   if ($("filesview").style.display !== "none") refreshFiles();
@@ -827,6 +831,85 @@ function linkifyWorkPaths(html) {
   });
 }
 
+/**
+ * The composer's "/" menu.
+ *
+ * Picking a skill inserts its *name* as an ordinary instruction rather than pasting its body. Two
+ * reasons: the body can be pages long and nobody wants that in their message, and the agent already
+ * has the index in its prompt — so it reads the current version of the file rather than whatever was
+ * pasted at the time. A message that carries a stale copy of a recipe is worse than one that names it.
+ */
+var skills = [];
+var slashIndex = 0;
+
+function refreshSkills() {
+  return fetch("/api/skills")
+    .then(function (r) { return r.json(); })
+    .then(function (payload) {
+      skills = payload.skills || [];
+      // A skill nobody can choose is worth complaining about once, in the feed: the agent silently
+      // never picks it, and only the person who wrote it can fix it.
+      (payload.problems || []).forEach(function (problem) {
+        if (!seenSkillProblems[problem]) {
+          seenSkillProblems[problem] = true;
+          feed("skill not usable &mdash; " + esc(problem), "warn");
+        }
+      });
+    })
+    .catch(function () {});
+}
+var seenSkillProblems = {};
+
+function slashQuery() {
+  var value = $("input").value;
+  // Only when "/" opens the message: mid-sentence a slash is a path or a date, and popping a menu
+  // over someone typing /home/box/work would be worse than having no menu.
+  var match = /^\/([^\s]*)$/.exec(value);
+  return match ? match[1].toLowerCase() : null;
+}
+
+function slashMatches(query) {
+  return skills.filter(function (skill) {
+    return skill.name.toLowerCase().indexOf(query) >= 0 || skill.slug.indexOf(query) >= 0;
+  });
+}
+
+function renderSlash() {
+  var query = slashQuery();
+  var menu = $("slashmenu");
+  if (query === null) { menu.style.display = "none"; return; }
+  var found = slashMatches(query);
+  if (!found.length) {
+    menu.style.display = "";
+    menu.innerHTML = '<div class="dim" style="padding:8px">' +
+      (skills.length ? "No skill matches." : "No skills yet. Ask an agent to write one when it works something out.") +
+      "</div>";
+    return;
+  }
+  if (slashIndex >= found.length) slashIndex = 0;
+  menu.style.display = "";
+  menu.innerHTML = found.map(function (skill, index) {
+    return '<div class="row' + (index === slashIndex ? " on" : "") + '" data-skill="' + esc(skill.name) + '" style="padding:5px 9px;cursor:pointer">' +
+      "<b>" + esc(skill.name) + "</b>" +
+      '<div class="dim" style="font-size:11px">' + esc(skill.description) + "</div></div>";
+  }).join("");
+}
+
+function chooseSkill(name) {
+  $("slashmenu").style.display = "none";
+  // Phrased as an instruction, because that is what it is. The agent resolves the name against the
+  // index it already has.
+  $("input").value = "Use the " + name + " skill.";
+  $("input").focus();
+}
+
+document.getElementById("slashmenu").addEventListener("mousedown", function (event) {
+  var row = event.target.closest && event.target.closest("[data-skill]");
+  if (!row) return;
+  event.preventDefault();
+  chooseSkill(row.getAttribute("data-skill"));
+});
+
 // --- live events ----------------------------------------------------------
 
 var stream = new EventSource("/api/events");
@@ -1055,7 +1138,39 @@ $("input").addEventListener("compositionend", function () {
   compositionEndedAt = Date.now();
 });
 
+$("input").addEventListener("input", function () {
+  slashIndex = 0;
+  renderSlash();
+});
+
 $("input").onkeydown = function (event) {
+  // The slash menu takes the arrow keys and Enter while it is open, and nothing else — Escape
+  // closes it so a person who opened it by accident is not trapped.
+  var menu = $("slashmenu");
+  if (menu.style.display !== "none" && slashQuery() !== null) {
+    var found = slashMatches(slashQuery());
+    if (event.key === "ArrowDown" || event.key === "ArrowUp") {
+      event.preventDefault();
+      slashIndex = (slashIndex + (event.key === "ArrowDown" ? 1 : -1) + found.length) % Math.max(1, found.length);
+      renderSlash();
+      return;
+    }
+    if (event.key === "Escape") {
+      event.preventDefault();
+      menu.style.display = "none";
+      return;
+    }
+    // Enter picks, but never mid-composition: an IME accepting a candidate sends the same key, and
+    // stealing it would make the menu unusable for anyone typing Chinese.
+    if (event.key === "Enter" && !event.shiftKey && found.length > 0) {
+      if (event.isComposing || event.keyCode === 229 || composing) return;
+      if (Date.now() - compositionEndedAt < 50) return;
+      event.preventDefault();
+      chooseSkill(found[slashIndex].name);
+      return;
+    }
+  }
+
   if (event.key !== "Enter" || event.shiftKey) return;
 
   // isComposing is the standard signal (Chrome, Firefox, Edge); keyCode 229 is the

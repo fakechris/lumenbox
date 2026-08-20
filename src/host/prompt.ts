@@ -18,6 +18,7 @@ import {
   SHARED_CHAR_BUDGET,
   type MemoryRecord,
 } from "./memory.ts";
+import { renderSkills, visibleTo, type Skill } from "./skills.ts";
 import type { ResolutionConfig } from "../protocol/index.ts";
 
 /** Teammates listed inline before falling back to "read the agent directory". */
@@ -145,6 +146,13 @@ export interface PromptContext {
    * "I learned this" and "a colleague thought everyone needed this" are different claims.
    */
   sharedMemory?: readonly MemoryRecord[];
+  /**
+   * Skills this agent may reuse — names and descriptions only.
+   *
+   * An index rather than the bodies: a dozen recipes pasted into every request would cost more than
+   * the conversation. The agent reads the one it picks.
+   */
+  skills?: readonly Skill[];
   resolution?: ResolutionConfig;
   agentsRoot: string;
   hasBox: boolean;
@@ -282,6 +290,7 @@ export function buildSystemPromptParts(
       // top-down should meet its own objective before its background.
       renderDurableBlocks(context.durable ?? {}),
       renderMemory(recall(context.memory)),
+      renderSkills(visibleTo(context.skills ?? [], context.agent.profile.name)),
       renderSharedMemory(
         recall(context.sharedMemory ?? [], SHARED_CHAR_BUDGET),
         id => context.teammates.find(mate => mate.id === id)?.profile.name ?? id

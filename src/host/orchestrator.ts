@@ -16,6 +16,7 @@ import type { ResolutionConfig } from "../protocol/index.ts";
 import { runTurn, TurnAborted, type TurnEvent } from "./turn.ts";
 import { PolicyGate } from "./policy.ts";
 import { Rememberer, summariseExchange } from "./remember.ts";
+import { SkillCache } from "./skills.ts";
 import { UsageLog } from "./usage.ts";
 import {
   createClient,
@@ -90,6 +91,14 @@ export class Orchestrator {
 
   /** Who last drove each agent, for attributing what it learns. */
   private readonly callers = new Map<string, { userId?: string }>();
+
+  /**
+   * Skills as they were last read from the box.
+   *
+   * Cached because a prompt is built once per turn and reading them is a listing plus a read per
+   * skill; four agents waking at once should not produce four scans of the same directory.
+   */
+  readonly skills = new SkillCache(() => this.box);
 
   constructor(private readonly options: OrchestratorOptions = {}) {
     this.registry = options.registry ?? new AgentRegistry();
@@ -200,6 +209,9 @@ export class Orchestrator {
     signal: AbortSignal
   ): Promise<void> {
     const displayIndex = await this.ensureDesktop(agent);
+    // Refreshed before the prompt is built, and never allowed to fail the turn — a box with no
+    // skills directory is the normal state of a fresh install.
+    const { skills } = await this.skills.refresh();
 
     return runTurn(agent, inbound, signal, {
       displayIndex,
@@ -207,6 +219,7 @@ export class Orchestrator {
       usage: this.usage,
       policy: this.policy,
       caller: this.callers.get(agent.id),
+      skills,
       client: this.client,
       registry: this.registry,
       bus: this.bus,

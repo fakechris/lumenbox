@@ -12,6 +12,7 @@ import type { AgentBus, InboundMessage } from "../agents/bus.ts";
 import type { BoxClient } from "../box/client.ts";
 import type { DisplayLease } from "../box/display-lease.ts";
 import type { PolicyGate } from "./policy.ts";
+import type { Skill } from "./skills.ts";
 import {
   classifyLimit,
   continuationPrompt,
@@ -220,6 +221,13 @@ export interface TurnDeps {
   policy?: PolicyGate;
   /** Who is driving, threaded through so a memory kept this turn records who it is about. */
   caller?: { userId?: string };
+  /**
+   * Skills, already read from the box.
+   *
+   * Passed in rather than read here, because reading them is a box round trip and the turn loop
+   * should not acquire a reason to fail before it has started.
+   */
+  skills?: readonly Skill[];
   /** Guards one desktop against two agents; moot when each has its own. */
   display?: DisplayLease;
   resolution: ResolutionConfig | undefined;
@@ -625,6 +633,7 @@ export async function runTurn(
     teammates: registry.list(),
     memory: registry.readMemoryRecords(agent.id),
     sharedMemory: registry.readSharedMemory(),
+    skills: deps.skills,
     // Read fresh every turn, which is what makes the plan and the todo list survive a compaction:
     // they are in the prompt rather than in the history a summary replaces.
     durable: registry.readDurableState(agent.id),

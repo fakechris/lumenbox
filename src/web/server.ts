@@ -541,6 +541,25 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
           return;
         }
 
+        // For the composer's "/" menu. Names and descriptions only — the same index the agent gets,
+        // for the same reason.
+        if (route === "GET /api/skills") {
+          const loaded = await orchestrator.skills.refresh();
+          send(res, 200, {
+            skills: loaded.skills.map(skill => ({
+              slug: skill.slug,
+              name: skill.name,
+              description: skill.description,
+              scope: skill.scope,
+              path: skill.path,
+            })),
+            // Surfaced rather than swallowed: a skill with no description is invisible to the agent
+            // while appearing to exist, and the person who wrote it is the only one who can fix it.
+            problems: loaded.problems,
+          });
+          return;
+        }
+
         if (route === "GET /api/progress") {
           const agentId = url.searchParams.get("agent") ?? "";
           if (!orchestrator.registry.has(agentId)) {
