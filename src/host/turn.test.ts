@@ -1080,7 +1080,7 @@ function policyFixture(limits: Partial<PolicyLimits> = {}, spent = 0) {
       approvalRequiredCommands: [],
       ...limits,
     },
-    spentTokens: () => spent,
+    spentSince: () => spent,
   });
   return { gate, cleanup: () => rmSync(dir, { recursive: true, force: true }) };
 }

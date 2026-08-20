@@ -36,7 +36,7 @@ function fixture(limits: Partial<PolicyLimits> = {}, spent = 0) {
         ...limits,
         ...extra,
       },
-      spentTokens: () => spent,
+      spentSince: () => spent,
     });
   return {
     path,
@@ -356,5 +356,44 @@ test("an action too large to show is refused, not shortened", () => {
     assert.equal(gate.check(toolRequest(`${prefix}/one`)).allow, true);
   } finally {
     cleanup();
+  }
+});
+
+
+test("the budget window rolls, rather than being decorative text", () => {
+  // `budgetWindowHours` used to appear in the refusal message and nowhere else: spend was summed
+  // over everything the usage file still held. A box that exhausted a "24-hour" budget on Monday
+  // stayed refused on Tuesday, until enough unrelated records happened to push the old ones out of
+  // the file.
+  const dir = mkdtempSync(join(tmpdir(), "agentbox-policy-"));
+  try {
+    let clock = new Date("2026-08-20T12:00:00Z");
+    // Monday's 5,000 tokens, and nothing since.
+    const spentAt = Date.parse("2026-08-20T09:00:00Z");
+    const gate = new PolicyGate({
+      path: join(dir, "policy.jsonl"),
+      limits: {
+        budgetTokens: 1_000,
+        budgetWindowHours: 24,
+        wakesPerWindow: 30,
+        wakeWindowMinutes: 10,
+        approvalRequiredTools: [],
+        approvalRequiredCommands: [],
+      },
+      now: () => clock,
+      spentSince: sinceMs => (sinceMs <= spentAt ? 5_000 : 0),
+    });
+
+    const call: PolicyRequest = { kind: "model-call", agentId: "a", agentName: "Ada", round: 0 };
+    const refused = gate.check(call);
+    assert.equal(refused.allow, false);
+    assert.ok(!refused.allow && /in the last 24h/.test(refused.reason));
+
+    // A day later that spend is outside the window, so the same box may spend again — without
+    // anything having been reset by hand and without the usage file having been truncated.
+    clock = new Date("2026-08-21T12:00:00Z");
+    assert.equal(gate.check(call).allow, true);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
   }
 });

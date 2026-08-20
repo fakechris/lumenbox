@@ -135,9 +135,30 @@ export class UsageLog {
     }
   }
 
+  /**
+   * Totals over a time window, which is what a rolling budget is actually about.
+   *
+   * `sinceMs` is a timestamp, not a duration, so the caller owns the clock and this stays testable.
+   * A record whose `at` cannot be read counts as inside the window: dropping it would make an
+   * unreadable line reduce measured spend, and a budget that fails open on bad data is worse than
+   * one that occasionally refuses early.
+   */
+  totalsSince(sinceMs: number): UsageTotals {
+    return this.sum(
+      this.since(0, Number.MAX_SAFE_INTEGER).filter(record => {
+        const at = Date.parse(record.at ?? "");
+        return Number.isNaN(at) || at >= sinceMs;
+      })
+    );
+  }
+
   /** Totals over what is still in the file. Not a billing figure: compaction drops the tail. */
   totals(afterSeq = 0): UsageTotals {
-    return this.since(afterSeq, Number.MAX_SAFE_INTEGER).reduce<UsageTotals>(
+    return this.sum(this.since(afterSeq, Number.MAX_SAFE_INTEGER));
+  }
+
+  private sum(records: readonly UsageRecord[]): UsageTotals {
+    return records.reduce<UsageTotals>(
       (sum, record) => ({
         records: sum.records + 1,
         inputTokens: sum.inputTokens + record.inputTokens,

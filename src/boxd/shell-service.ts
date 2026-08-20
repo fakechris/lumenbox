@@ -27,12 +27,40 @@ export const MAX_TIMEOUT_MS = 600_000;
 /** Per-stream cap. Tool results this large are already useless to the model. */
 const MAX_OUTPUT_BYTES = 2 * 1024 * 1024;
 
-function clampOutput(chunks: Buffer[], label: string): string {
-  const joined = Buffer.concat(chunks);
-  if (joined.length <= MAX_OUTPUT_BYTES) return joined.toString("utf8");
-  const head = joined.subarray(0, MAX_OUTPUT_BYTES).toString("utf8");
-  const dropped = joined.length - MAX_OUTPUT_BYTES;
-  return `${head}\n\n[${label} truncated: ${dropped} more bytes]`;
+/**
+ * Collects a stream up to the cap and counts the rest.
+ *
+ * The cap used to be applied at the end, over everything the process had written: every chunk was
+ * retained and then concatenated and truncated. So the advertised 2 MiB limit bounded the *result*
+ * and not the memory — `yes`, a runaway logger or a verbose build could take the container's whole
+ * allowance and kill the daemon before it had anything to return, which reads as the box crashing
+ * rather than as a command producing too much output.
+ *
+ * The head is kept, which is what the cap always did. Whether the *tail* would be more useful for a
+ * failing build is a real question and a separate one; this only stops the daemon dying.
+ */
+class BoundedOutput {
+  private readonly chunks: Buffer[] = [];
+  private kept = 0;
+  private dropped = 0;
+
+  push(chunk: Buffer): void {
+    const room = MAX_OUTPUT_BYTES - this.kept;
+    if (room <= 0) {
+      this.dropped += chunk.length;
+      return;
+    }
+    const take = chunk.length <= room ? chunk : chunk.subarray(0, room);
+    this.chunks.push(take);
+    this.kept += take.length;
+    this.dropped += chunk.length - take.length;
+  }
+
+  toString(label: string): string {
+    const text = Buffer.concat(this.chunks).toString("utf8");
+    if (this.dropped === 0) return text;
+    return `${text}\n\n[${label} truncated: ${this.dropped} more bytes]`;
+  }
 }
 
 /** Session keys name files, so keep them to characters that cannot escape a path. */
@@ -169,8 +197,8 @@ export function runShell(request: ExecRequest): Promise<ExecResult> {
       detached: true,
     });
 
-    const stdout: Buffer[] = [];
-    const stderr: Buffer[] = [];
+    const stdout = new BoundedOutput();
+    const stderr = new BoundedOutput();
     let timedOut = false;
     let settled = false;
 
@@ -191,8 +219,8 @@ export function runShell(request: ExecRequest): Promise<ExecResult> {
       settled = true;
       clearTimeout(timer);
       resolve({
-        stdout: clampOutput(stdout, "stdout"),
-        stderr: clampOutput(stderr, "stderr"),
+        stdout: stdout.toString("stdout"),
+        stderr: stderr.toString("stderr"),
         exit_code: exitCode,
         timed_out: timedOut,
         timeout_ms: timeoutMs,

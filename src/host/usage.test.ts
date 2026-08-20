@@ -125,3 +125,24 @@ test("the file is JSONL a collector can parse line by line", () => {
   assert.equal(lines.length, 1);
   assert.doesNotThrow(() => JSON.parse(lines[0]!));
 });
+
+
+test("a windowed total ignores spend that has aged out, and keeps unreadable dates", () => {
+  const path = logPath();
+  const log = new UsageLog(path);
+  log.record({ ...entry(), inputTokens: 100 }, new Date("2026-08-18T00:00:00Z"));
+  log.record({ ...entry(), inputTokens: 7 }, new Date("2026-08-20T12:00:00Z"));
+
+  const boundary = Date.parse("2026-08-20T00:00:00Z");
+  assert.equal(log.totalsSince(boundary).inputTokens, 7, "Monday's spend is not in Wednesday's window");
+  assert.equal(log.totals().inputTokens, 107, "and the lifetime total is unchanged");
+
+  // A record whose date cannot be read counts as inside the window. Dropping it would let a corrupt
+  // line reduce measured spend, and a budget that fails open on bad data is worse than one that
+  // occasionally refuses early.
+  appendFileSync(
+    path,
+    `${JSON.stringify({ ...entry(), seq: 99, at: "not a date", inputTokens: 500 })}\n`
+  );
+  assert.equal(log.totalsSince(boundary).inputTokens, 507);
+});

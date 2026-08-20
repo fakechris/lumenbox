@@ -159,8 +159,16 @@ interface Outcome {
 export interface PolicyGateOptions {
   path?: string;
   limits?: PolicyLimits;
-  /** Tokens spent in the budget window. Injected because the usage log owns that number. */
-  spentTokens?: () => number;
+  /**
+   * Tokens spent since a moment. Injected because the usage log owns that number, and takes the
+   * moment as an argument so the *window* stays defined here, next to the limit it belongs to.
+   *
+   * It used to be a plain `spentTokens()` over everything the usage file still held, which made
+   * `budgetWindowHours` decorative: it appeared in the refusal text and nowhere else. A box that
+   * exhausted a "24-hour" budget on Monday stayed refused on Tuesday, until enough unrelated
+   * records happened to push the old ones out of the file.
+   */
+  spentSince?: (sinceMs: number) => number;
   now?: () => Date;
   log?: (line: string) => void;
 }
@@ -178,7 +186,7 @@ export class PolicyGate {
   private readonly limits: PolicyLimits;
   private readonly now: () => Date;
   private readonly log: (line: string) => void;
-  private readonly spentTokens: () => number;
+  private readonly spentSince: (sinceMs: number) => number;
 
   /** Agents whose current turn a person has asked to stop. */
   private readonly stopped = new Set<string>();
@@ -194,7 +202,7 @@ export class PolicyGate {
     this.limits = options.limits ?? DEFAULT_LIMITS;
     this.now = options.now ?? (() => new Date());
     this.log = options.log ?? (() => {});
-    this.spentTokens = options.spentTokens ?? (() => 0);
+    this.spentSince = options.spentSince ?? (() => 0);
     this.replay();
   }
 
@@ -248,7 +256,8 @@ export class PolicyGate {
   private decideSpend(): PolicyDecision {
     const budget = this.limits.budgetTokens;
     if (budget === undefined) return { allow: true };
-    const spent = this.spentTokens();
+    const windowMs = Math.max(0, this.limits.budgetWindowHours) * 3_600_000;
+    const spent = this.spentSince(this.now().getTime() - windowMs);
     if (spent < budget) return { allow: true };
     return {
       allow: false,

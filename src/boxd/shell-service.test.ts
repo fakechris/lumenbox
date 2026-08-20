@@ -139,3 +139,29 @@ test("a timeout longer than the box allows is capped, and the result says so", a
   const defaulted = await runShell({ command: "true" });
   assert.equal(defaulted.timeout_ms, 120_000);
 });
+
+
+test("a flood of output is bounded while it streams, not after", async () => {
+  // The cap used to be applied at the end, over everything the process had written, so it bounded
+  // the result and not the memory: a runaway logger could take the container's whole allowance and
+  // kill the daemon before it had anything to return. Measured here by writing far more than the
+  // cap and watching this process's own heap.
+  // `external`, not `heapUsed`: a Buffer's bytes live outside the JS heap, so a heap measurement
+  // here would have been vacuous and would have passed against the broken version too.
+  const usage = () => process.memoryUsage().external + process.memoryUsage().arrayBuffers;
+  const before = usage();
+  const result = await runShell({
+    // ~64 MiB, thirty-two times the 2 MiB cap.
+    command: "head -c 67108864 /dev/zero | tr '\\0' 'x'",
+    timeout_ms: 60_000,
+  });
+  const grew = usage() - before;
+
+  assert.equal(result.exit_code, 0);
+  assert.ok(result.stdout.length < 3 * 1024 * 1024, `result was ${result.stdout.length} bytes`);
+  assert.match(result.stdout, /\[stdout truncated: \d+ more bytes\]/);
+  assert.ok(
+    grew < 32 * 1024 * 1024,
+    `buffers grew by ${Math.round(grew / 1024 / 1024)} MiB for 64 MiB of output`
+  );
+});
