@@ -26,6 +26,13 @@ import type { ComputerAction } from "../protocol/index.ts";
 export interface ToolContext {
   agent: AgentRecord;
   /**
+   * Who is driving, when the box was told.
+   *
+   * Used to record who a memory is about. Absent on a box driven directly, which is the single-user
+   * case and where "about whom" has one answer.
+   */
+  caller?: { userId?: string };
+  /**
    * Asked whether an action may happen, before it happens.
    *
    * Optional so every existing test and the CLI keep working without one, and absent means allow —
@@ -435,11 +442,10 @@ export function buildTools(hasBox: boolean, vision = true): Anthropic.Tool[] {
     {
       name: "RememberFact",
       description:
-        "Append a durable note to your own memory file, which is included in your system " +
-        "prompt on every future turn. Use it for things that will still matter next " +
-        "conversation: a decision the user made and why, a constraint about their setup, a " +
-        "correction they gave you. Do not use it for what a tool can tell you again on " +
-        "demand, or for details that only matter inside this conversation.",
+        "Keep something across conversations. It goes into your instructions on every future " +
+        "turn. Use it for what will still matter next time: a decision the user made and why, a " +
+        "constraint about their setup, a correction they gave you. Not for what a tool can tell " +
+        "you again on demand, and not for details that only matter inside this conversation.",
       input_schema: {
         type: "object",
         properties: {
@@ -448,6 +454,15 @@ export function buildTools(hasBox: boolean, vision = true): Anthropic.Tool[] {
             description:
               "The note to keep, as one or two self-contained sentences that will still " +
               "make sense without this conversation around them.",
+          },
+          scope: {
+            type: "string",
+            enum: ["self", "team"],
+            description:
+              "'team' shares it with every agent here and is right for anything about the person " +
+              "or their setup — they should not have to tell each of us separately. 'self' is for " +
+              "what only your own work needs, and is the default: a wrong 'team' costs everyone " +
+              "prompt space forever, while a wrong 'self' costs one repeated question.",
           },
         },
         required: ["fact"],
@@ -749,16 +764,33 @@ export async function dispatchTool(
 
       // A deliberate act, so it is stored as a `fact` — trusted, and barely decaying. Something the
       // agent chose to keep should not age out the way an automatic extraction does.
-      const known = context.registry.readMemoryRecords(context.agent.id);
+      const shared = String(input.scope ?? "self") === "team";
       const key = dedupeKey(fact);
-      if (known.some(record => dedupeKey(record.text) === key)) {
+      // Checked against both tiers whichever was asked for: an agent should not keep its own copy of
+      // something a colleague already shared, and should not share what it already knows privately
+      // without that being visible.
+      const own = context.registry.readMemoryRecords(context.agent.id);
+      const team = context.registry.readSharedMemory();
+      if ([...own, ...team].some(record => dedupeKey(record.text) === key)) {
         // Told, not silently swallowed: an agent that thinks a write failed will write it again in
         // different words, which is exactly what the dedupe key exists to prevent.
-        return { text: "You already remember that, so nothing was added." };
+        return { text: "That is already remembered, here or by a teammate, so nothing was added." };
       }
-      context.registry.appendMemoryRecords(context.agent.id, [
-        { at: new Date().toISOString(), kind: "fact", text: fact, source: "RememberFact" },
-      ]);
+
+      const record = {
+        at: new Date().toISOString(),
+        kind: "fact" as const,
+        text: fact,
+        source: "RememberFact",
+        // Who it is about, when the box was told. Without it a fact learned from one person reads as
+        // being about whoever asks next, which in a team is worse than not recording it.
+        ...(context.caller?.userId !== undefined ? { about: context.caller.userId } : {}),
+      };
+      if (shared) {
+        context.registry.appendSharedMemory(context.agent.id, [record]);
+        return { text: "Kept and shared. Every agent here will have it on their next turn." };
+      }
+      context.registry.appendMemoryRecords(context.agent.id, [record]);
       return { text: "Kept. It will be in your instructions on future turns." };
     }
 

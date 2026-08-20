@@ -148,6 +148,33 @@ compaction was needed. Images are counted as a flat ~1,600 tokens each rather th
 length, which is wrong in both directions at once. The trigger follows the model's real context
 window when the provider reports one, so the same code is right for a 200k model and a 1M one.
 
+### 2.2c `shared-memory/<agentId>.jsonl`
+
+The team's memory. Same record shape, one file per writing agent, merged on read.
+
+**Sharded because agents run concurrently**, and two appends to one file are not reliably atomic once
+a line exceeds the pipe-buffer size. One writer per file removes the question; merging on read is
+cheap. `via` is stamped from the filename rather than trusted from the record, so a shard cannot
+attribute its contents to a different agent.
+
+Beside the per-agent directories rather than inside one, so removing an agent does not remove what it
+taught the team — that is the whole point of the tier. Under the same root so a custom root keeps an
+installation's state together, which means the agent listing has to exclude it *by name*: it
+previously survived only because reading an absent profile returns undefined, which worked and was an
+accident rather than a rule.
+
+Written by `RememberFact` with `scope: "team"`, and the default is `"self"` because the errors are not
+symmetrical: a wrong `team` costs every agent prompt space forever, while a wrong `self` costs one
+repeated question. Automatic extraction writes only to the agent's own tier, deliberately — an
+unvouched-for note propagating to four agents' prompts multiplies the cost of a bad extraction by
+four.
+
+Rendered as its own section under a tighter budget (1,500 characters against 4,000). Smaller because
+every agent writes to this tier, so it grows N times as fast, and a generous budget here would push
+out an agent's own working knowledge. Each line carries who learned it and, when the box was told who
+was driving, who it is about — without the latter, a fact learned from one person reads as being about
+whoever asks next, which in a team is worse than not recording it.
+
 ### 2.2b `memory.jsonl`
 
 Append-only, one record per line: `{ at, kind, text, source? }`.

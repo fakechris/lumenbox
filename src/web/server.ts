@@ -727,7 +727,7 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
           send(res, 202, { accepted: true });
 
           void orchestrator
-            .prompt(agentId, text)
+            .prompt(agentId, text, caller)
             // Teammates woken by this turn are still working; let them finish so
             // their messages and turns show up before the page looks idle.
             .then(() => orchestrator.settle())

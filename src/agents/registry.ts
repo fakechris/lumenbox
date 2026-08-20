@@ -50,6 +50,20 @@ export const MEMORY_FILENAME = "memory.md";
  */
 export const MEMORY_RECORDS_FILENAME = "memory.jsonl";
 
+/**
+ * The team's memory, sharded by whichever agent wrote it.
+ *
+ * `<root>/shared-memory/<agentId>.jsonl`. Sharded rather than one file for a concrete reason: agents
+ * run concurrently, and two appends to one file are not reliably atomic once a line exceeds the
+ * pipe-buffer size. One writer per file removes the question entirely, and merging on read is cheap.
+ *
+ * Beside the per-agent directories rather than inside one, because removing an agent must not remove
+ * what it taught the team — that is the whole point of a shared tier. Under the same root so a custom
+ * root (a test, a second installation) keeps everything together, which means `list()` has to exclude
+ * it explicitly.
+ */
+export const SHARED_MEMORY_DIRNAME = "shared-memory";
+
 export const PLAN_FILENAME = "plan.md";
 export const TODOS_FILENAME = "todos.json";
 export const BOX_OWNER_FILENAME = "box-owner";
@@ -187,7 +201,12 @@ export class AgentRegistry {
     try {
       ids = readdirSync(this.root, { withFileTypes: true })
         .filter(entry => entry.isDirectory())
-        .map(entry => entry.name);
+        .map(entry => entry.name)
+        // Not everything under the root is an agent. The shared-memory directory lives here so a
+        // custom root keeps all of an installation's state together, and it is excluded by name
+        // rather than left to `tryGet` returning undefined — that worked, but only by accident, and
+        // an accident is not a rule the next directory added here would follow.
+        .filter(name => name !== SHARED_MEMORY_DIRNAME);
     } catch {
       return [];
     }
@@ -467,6 +486,61 @@ export class AgentRegistry {
     mkdirSync(this.dirFor(agentId), { recursive: true });
     appendFileSync(
       this.memoryRecordsPathFor(agentId),
+      records.map(record => `${JSON.stringify(record)}\n`).join(""),
+      "utf8"
+    );
+  }
+
+  private sharedMemoryDir(): string {
+    return join(this.root, SHARED_MEMORY_DIRNAME);
+  }
+
+  sharedMemoryPathFor(agentId: string): string {
+    return join(this.sharedMemoryDir(), `${agentId}.jsonl`);
+  }
+
+  /**
+   * Every shard merged, each record tagged with the agent that wrote it.
+   *
+   * `via` is stamped on read from the filename rather than trusted from the record, so a shard cannot
+   * claim to have been written by a different agent.
+   */
+  readSharedMemory(): MemoryRecord[] {
+    const dir = this.sharedMemoryDir();
+    if (!existsSync(dir)) return [];
+    const out: MemoryRecord[] = [];
+    let names: string[];
+    try {
+      names = readdirSync(dir).filter(name => name.endsWith(".jsonl"));
+    } catch {
+      return [];
+    }
+    for (const name of names) {
+      const agentId = name.slice(0, -".jsonl".length);
+      try {
+        for (const line of readFileSync(join(dir, name), "utf8").split("\n")) {
+          if (line.trim() === "") continue;
+          try {
+            const parsed = JSON.parse(line) as MemoryRecord;
+            if (typeof parsed.text !== "string" || typeof parsed.at !== "string") continue;
+            out.push({ ...parsed, via: agentId });
+          } catch {
+            // One torn line costs one record.
+          }
+        }
+      } catch {
+        // A shard that cannot be read is one agent's contribution, not the whole tier.
+      }
+    }
+    return out;
+  }
+
+  /** Appends to this agent's own shard, which is the only one it may write. */
+  appendSharedMemory(agentId: string, records: readonly MemoryRecord[]): void {
+    if (records.length === 0) return;
+    mkdirSync(this.sharedMemoryDir(), { recursive: true });
+    appendFileSync(
+      this.sharedMemoryPathFor(agentId),
       records.map(record => `${JSON.stringify(record)}\n`).join(""),
       "utf8"
     );

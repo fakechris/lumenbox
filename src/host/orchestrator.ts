@@ -88,6 +88,9 @@ export class Orchestrator {
    */
   private readonly rememberer: Rememberer;
 
+  /** Who last drove each agent, for attributing what it learns. */
+  private readonly callers = new Map<string, { userId?: string }>();
+
   constructor(private readonly options: OrchestratorOptions = {}) {
     this.registry = options.registry ?? new AgentRegistry();
     this.provider = options.provider ?? resolveProvider();
@@ -203,6 +206,7 @@ export class Orchestrator {
       boxOwner: this.registry.boxOwnerTokenFor(agent.id),
       usage: this.usage,
       policy: this.policy,
+      caller: this.callers.get(agent.id),
       client: this.client,
       registry: this.registry,
       bus: this.bus,
@@ -221,8 +225,16 @@ export class Orchestrator {
   }
 
   /** Sends a user message to an agent and runs its turn to completion. */
-  async prompt(agentIdOrName: string, text: string): Promise<void> {
+  async prompt(
+    agentIdOrName: string,
+    text: string,
+    caller?: { userId?: string }
+  ): Promise<void> {
     const agent = this.registry.resolve(agentIdOrName);
+    // Remembered for the turn, so a memory kept during it records who it is about. Per agent because
+    // two people can be driving two agents at once; overwritten on each prompt because the most
+    // recent person to speak to *this* agent is the one its memories are about.
+    if (caller?.userId !== undefined) this.callers.set(agent.id, caller);
     this.bus.sendFromUser(agent.id, text);
     const before = this.registry.readTranscript(agent.id).length;
     await this.bus.runExclusive(agent.id, { userDriven: true });

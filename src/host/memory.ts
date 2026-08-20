@@ -34,6 +34,16 @@ export interface MemoryRecord {
   text: string;
   /** How it got here: the tool that wrote it, or the turn it was extracted from. For a person. */
   source?: string;
+  /**
+   * The agent that learned it, on a shared record.
+   *
+   * Carried because it says how much weight to give the line: a fact from the agent whose job is
+   * checking things is not the same as one from the agent that was installing software at the time.
+   * Absent on an agent's own memories, where it would only repeat what the file already says.
+   */
+  via?: string;
+  /** The person it is about, when the box was told who was driving. Absent means "the team". */
+  about?: string;
 }
 
 export type MemoryKind = "fact" | "note" | "episode";
@@ -213,6 +223,47 @@ export function selectRelevant(
     .sort((a, b) => b.overlap - a.overlap || b.record.at.localeCompare(a.record.at))
     .slice(0, max)
     .map(entry => entry.record);
+}
+
+/**
+ * How much of the prompt the *team's* memory may occupy.
+ *
+ * Smaller than an agent's own, on purpose. A shared fact is worth more per line — it is the kind of
+ * thing everyone needs — but the shared tier is written by every agent, so it grows N times as fast
+ * and a generous budget here would push out an agent's own working knowledge.
+ */
+export const SHARED_CHAR_BUDGET = Number(process.env.AGENTBOX_SHARED_MEMORY_BUDGET ?? 1_500);
+
+/**
+ * The team's memory as it appears in the prompt.
+ *
+ * A separate section rather than one merged list, because the two have different standing. An agent
+ * should be able to tell "I learned this" from "a colleague learned this and thought everyone needed
+ * it" — the second is more likely to be about the person and less likely to be about the work in
+ * front of it.
+ */
+export function renderSharedMemory(
+  recalled: MemoryRecall,
+  nameOf: (agentId: string) => string = id => id
+): string {
+  if (recalled.records.length === 0) return "";
+  const lines = recalled.records.map(record => {
+    const day = record.at.slice(0, 10);
+    const who = record.via === undefined ? "" : ` — ${nameOf(record.via)}`;
+    const about = record.about === undefined ? "" : ` (about ${record.about})`;
+    return `- (${day})${about} ${record.text}${who}`;
+  });
+  const tail =
+    recalled.omitted > 0 ? [``, `${recalled.omitted} more are not shown.`] : [];
+  return [
+    "## What your team has learned",
+    "",
+    "Kept by your teammates because everyone needs it. Treat it as you would your own memory, but",
+    "notice who learned it: a colleague's account of something is not the same as having checked it.",
+    "",
+    ...lines,
+    ...tail,
+  ].join("\n");
 }
 
 /** How memory appears in the system prompt. */

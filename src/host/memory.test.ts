@@ -19,7 +19,10 @@ import {
   MAX_RECORD_CHARS,
   parseEpisode,
   parseExtraction,
+  MEMORY_CHAR_BUDGET,
   recall,
+  renderSharedMemory,
+  SHARED_CHAR_BUDGET,
   renderMemory,
   scoreOf,
   selectRelevant,
@@ -284,4 +287,48 @@ test("an existing markdown memory is imported, dates and all", () => {
 
   assert.deepEqual(importMarkdown(""), []);
   assert.deepEqual(importMarkdown("# Memory\n\n"), []);
+});
+
+// ── the team's tier ───────────────────────────────────────────────────────────────────
+
+test("team memory says who learned it, because that changes its weight", () => {
+  const rendered = renderSharedMemory(
+    recall(
+      [
+        { ...record("fact", "the staging DB is postgres 16"), via: "agent-rex" },
+        { ...record("fact", "the build needs node 22"), via: "agent-ops" },
+      ],
+      10_000,
+      NOW
+    ),
+    id => ({ "agent-rex": "Rex", "agent-ops": "Ops" })[id] ?? id
+  );
+  // A fact from the agent whose job is checking things is not the same as one from the agent that
+  // happened to be installing software at the time.
+  assert.match(rendered, /postgres 16 — Rex/);
+  assert.match(rendered, /node 22 — Ops/);
+  assert.match(rendered, /notice who learned it/);
+  // And it is a separate heading, so "I learned this" and "a colleague did" stay distinguishable.
+  assert.match(rendered, /## What your team has learned/);
+});
+
+test("a team memory records who it is about", () => {
+  const rendered = renderSharedMemory(
+    recall([{ ...record("fact", "prefers tabs"), via: "a", about: "alice" }], 10_000, NOW)
+  );
+  // Without this, a fact learned from one person reads as being about whoever asks next — which in a
+  // team is worse than not recording it at all.
+  assert.match(rendered, /\(about alice\)/);
+});
+
+test("an empty team tier renders nothing, not an empty heading", () => {
+  // A heading with nothing under it tells the model the team knows nothing, which is a claim rather
+  // than an absence.
+  assert.equal(renderSharedMemory({ records: [], omitted: 0 }), "");
+});
+
+test("the team budget is tighter than an agent's own", () => {
+  // The shared tier is written by every agent, so it grows N times as fast; a generous budget here
+  // would push out an agent's own working knowledge.
+  assert.ok(SHARED_CHAR_BUDGET < MEMORY_CHAR_BUDGET);
 });

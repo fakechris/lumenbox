@@ -11,7 +11,13 @@ import type { AgentRecord } from "../agents/registry.ts";
 import type { InboundMessage } from "../agents/bus.ts";
 import { AGENT_WAKE_CUE } from "../agents/bus.ts";
 import { renderDurableBlocks, type DurableState } from "./durable.ts";
-import { recall, renderMemory, type MemoryRecord } from "./memory.ts";
+import {
+  recall,
+  renderMemory,
+  renderSharedMemory,
+  SHARED_CHAR_BUDGET,
+  type MemoryRecord,
+} from "./memory.ts";
 import type { ResolutionConfig } from "../protocol/index.ts";
 
 /** Teammates listed inline before falling back to "read the agent directory". */
@@ -132,6 +138,13 @@ export interface PromptContext {
    * budget, because pasting a file that only grows makes memory a second unbounded context.
    */
   memory: readonly MemoryRecord[];
+  /**
+   * What the team has kept, merged across every agent's shard.
+   *
+   * A separate section rather than merged into the above, because the two have different standing:
+   * "I learned this" and "a colleague thought everyone needed this" are different claims.
+   */
+  sharedMemory?: readonly MemoryRecord[];
   resolution?: ResolutionConfig;
   agentsRoot: string;
   hasBox: boolean;
@@ -269,6 +282,10 @@ export function buildSystemPromptParts(
       // top-down should meet its own objective before its background.
       renderDurableBlocks(context.durable ?? {}),
       renderMemory(recall(context.memory)),
+      renderSharedMemory(
+        recall(context.sharedMemory ?? [], SHARED_CHAR_BUDGET),
+        id => context.teammates.find(mate => mate.id === id)?.profile.name ?? id
+      ),
       teamSection(context),
     ]
       .filter(section => section.trim() !== "")

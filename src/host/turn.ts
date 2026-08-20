@@ -218,6 +218,8 @@ export interface TurnDeps {
    * only place a turn can be left in a state the transcript describes correctly.
    */
   policy?: PolicyGate;
+  /** Who is driving, threaded through so a memory kept this turn records who it is about. */
+  caller?: { userId?: string };
   /** Guards one desktop against two agents; moot when each has its own. */
   display?: DisplayLease;
   resolution: ResolutionConfig | undefined;
@@ -622,6 +624,7 @@ export async function runTurn(
     agent,
     teammates: registry.list(),
     memory: registry.readMemoryRecords(agent.id),
+    sharedMemory: registry.readSharedMemory(),
     // Read fresh every turn, which is what makes the plan and the todo list survive a compaction:
     // they are in the prompt rather than in the history a summary replaces.
     durable: registry.readDurableState(agent.id),
@@ -1000,6 +1003,7 @@ export async function runTurn(
             bus,
             box,
             policy: deps.policy,
+            caller: deps.caller,
             display: deps.display,
             displayIndex: deps.displayIndex,
             boxOwner: deps.boxOwner,

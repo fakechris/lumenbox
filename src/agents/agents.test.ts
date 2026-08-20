@@ -380,3 +380,79 @@ test("the starter team differs in what it touches, not in adjectives", () => {
   // instruction nobody can act on.
   assert.match(byName.get("Vera") ?? "", /looked like it worked and did not/);
 });
+
+test("shared memory is sharded by writer, and a shard cannot claim to be another", () => {
+  const dir = mkdtempSync(join(tmpdir(), "agentbox-shared-"));
+  try {
+    const registry = new AgentRegistry(dir);
+    const ada = registry.create({ name: "Ada" });
+    const rex = registry.create({ name: "Rex" });
+
+    registry.appendSharedMemory(ada.id, [
+      { at: "2026-08-01T00:00:00.000Z", kind: "fact", text: "deploys are on Friday" },
+    ]);
+    // Sharded because agents run concurrently, and two appends to one file are not reliably atomic
+    // once a line exceeds the pipe-buffer size. One writer per file removes the question.
+    registry.appendSharedMemory(rex.id, [
+      { at: "2026-08-02T00:00:00.000Z", kind: "fact", text: "the docs are client-side rendered" },
+    ]);
+
+    const merged = registry.readSharedMemory();
+    assert.equal(merged.length, 2, "every shard is merged on read");
+    assert.deepEqual(
+      merged.map(entry => entry.via).sort(),
+      [ada.id, rex.id].sort(),
+      "provenance is stamped from the filename"
+    );
+
+    // A shard claiming someone else wrote it is overruled: `via` comes from where the file is, not
+    // from what the record says, so a shard cannot attribute its contents to another agent.
+    registry.appendSharedMemory(rex.id, [
+      { at: "2026-08-03T00:00:00.000Z", kind: "fact", text: "something", via: ada.id },
+    ]);
+    const claimed = registry.readSharedMemory().find(entry => entry.text === "something");
+    assert.equal(claimed?.via, rex.id);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("what an agent taught the team survives that agent's directory going away", () => {
+  const dir = mkdtempSync(join(tmpdir(), "agentbox-shared-"));
+  try {
+    const registry = new AgentRegistry(dir);
+    const rex = registry.create({ name: "Rex" });
+    registry.appendSharedMemory(rex.id, [
+      { at: "2026-08-01T00:00:00.000Z", kind: "fact", text: "the API needs a trailing slash" },
+    ]);
+    // Whatever removes an agent — a person clearing it out, a restore from a partial backup — takes
+    // its directory. The shared tier lives outside those directories precisely so that removing an
+    // agent does not remove what it taught everyone else.
+    rmSync(join(dir, rex.id), { recursive: true, force: true });
+
+    const survived = registry.readSharedMemory();
+    assert.equal(survived.length, 1);
+    assert.equal(survived[0]?.via, rex.id, "and it still says who learned it");
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("the shared-memory directory is not mistaken for an agent", () => {
+  const dir = mkdtempSync(join(tmpdir(), "agentbox-shared-"));
+  try {
+    const registry = new AgentRegistry(dir);
+    const ada = registry.create({ name: "Ada" });
+    registry.appendSharedMemory(ada.id, [
+      { at: "2026-08-01T00:00:00.000Z", kind: "fact", text: "something shared" },
+    ]);
+
+    // It lives under the same root so an installation's state stays together, which means the
+    // listing has to exclude it by name. It previously survived only because reading a profile that
+    // is not there returns undefined — which worked, and was an accident rather than a rule.
+    assert.deepEqual(registry.list().map(entry => entry.profile.name), ["Ada"]);
+    assert.equal(registry.tryGet("shared-memory"), undefined);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
