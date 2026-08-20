@@ -11,7 +11,7 @@
  * inside one turn, so its transcript and profile have a single writer.
  */
 
-import { Inbox } from "./inbox.ts";
+import type { Inbox } from "./inbox.ts";
 import {
   AgentNotFoundError,
   clampBlock,
