@@ -216,20 +216,95 @@ export class Orchestrator {
     return this.bus.idle(timeoutMs);
   }
 
-  /** Creates the first agent when the registry is empty, so the CLI is usable. */
+  /**
+   * The starter team, created once when there are no agents at all.
+   *
+   * The alternative — ship a single blank agent and have it interview the user on its first turn —
+   * was considered. That is the better shape when there is a template gallery
+   * to choose from afterwards; without one it leaves a person on a blank page deciding what an agent
+   * even is. So: a small team that shows the shape of the thing by existing.
+   *
+   * Four rules, three of them learned rather than invented:
+   *
+   * **A description is standing identity, never a briefing.** It is re-read into the system prompt on
+   * every single turn, so a one-time instruction parked here — "the disk is full", "start by reading
+   * the spec" — keeps asserting itself long after it stopped being true, and freezes the tool names
+   * that existed the day it was written. What an agent should *do* belongs in a message.
+   *
+   * **The roster is a cost.** Every agent appears in every other agent's prompt, and a team is also a
+   * set of desktops and a set of things a person has to read before doing anything. Four, not ten.
+   *
+   * **The divisions are real or they are decoration.** These four differ in what they touch and how
+   * they fail — a browser and long documents, a shell and installed software, someone else's claims —
+   * not in the adjectives describing them. Five flavours of "helpful assistant" would be worse than
+   * one agent, because it would imply a structure that does not exist.
+   *
+   * **Only when empty.** A person who deletes one does not get it back on the next start, and an
+   * upgrade does not repopulate a team someone has curated.
+   *
+   * Deliberately not done: a hidden first turn per agent so each introduces itself. It reads well and
+   * it spends four model calls before the user has said anything, which is not a cost to impose by
+   * default.
+   */
   ensureDefaultAgent(): AgentRecord {
     const existing = this.registry.list();
     if (existing.length > 0) return existing[0]!;
 
-    return this.registry.create({
-      name: "Ada",
-      title: "coordinator",
-      description:
-        "You coordinate this user's team of agents. You are the one they talk to first. " +
-        "When a request falls squarely inside a teammate's remit, hand it to them and say " +
-        "you did; when the team is missing someone the work clearly needs, propose creating " +
-        "them rather than creating them unasked. Do the work yourself when it is faster than " +
-        "delegating — a single file read or a one-line shell command is not worth a handoff.",
-    });
+    const created = STARTER_TEAM.map(profile => this.registry.create(profile));
+    return created[0]!;
   }
 }
+
+/**
+ * The team a fresh install starts with.
+ *
+ * Order matters: the first is the one a CLI and a fresh UI select, so it is the one that talks to
+ * people. The rest are its colleagues.
+ */
+export const STARTER_TEAM: readonly {
+  name: string;
+  title: string;
+  description: string;
+}[] = [
+  {
+    name: "Ada",
+    title: "coordinator",
+    description:
+      "You coordinate this user's team of agents. You are the one they talk to first. " +
+      "When a request falls squarely inside a teammate's remit, hand it to them and say " +
+      "you did; when the team is missing someone the work clearly needs, propose creating " +
+      "them rather than creating them unasked. Do the work yourself when it is faster than " +
+      "delegating — a single file read or a one-line shell command is not worth a handoff.",
+  },
+  {
+    name: "Rex",
+    title: "researcher",
+    description:
+      "You find things out. Your work is mostly the browser and the files you write from it: you " +
+      "read sources, follow them to their origin rather than trusting a summary of them, and leave " +
+      "what you found in a file under /home/box/work so it outlives the conversation. You are " +
+      "explicit about what you could not confirm — an unmarked guess in a document you wrote is " +
+      "worse than an admitted gap, because the next person cannot tell them apart.",
+  },
+  {
+    name: "Ops",
+    title: "operator",
+    description:
+      "You do the machine work: installing things, running builds and scripts, moving files, and " +
+      "getting a stubborn tool to run at all. You work in the shell by preference because it says " +
+      "what happened, and you read what a command actually printed rather than assuming it worked. " +
+      "When something needs to survive a rebuild it goes under /home/box/work; when a change is " +
+      "hard to undo you say so before making it.",
+  },
+  {
+    name: "Vera",
+    title: "reviewer",
+    description:
+      "You check whether work actually did what it claims. Given a teammate's result, you read " +
+      "their transcript for what they ran and what came back, then reproduce the part that matters " +
+      "yourself rather than taking their account of it — the failure you exist to catch is the one " +
+      "where a step looked like it worked and did not. You report plainly: what you verified, what " +
+      "you could not, and what you found wrong. You do not soften a real problem, and you do not " +
+      "invent one to look useful.",
+  },
+];

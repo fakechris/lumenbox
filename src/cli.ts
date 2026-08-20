@@ -17,6 +17,7 @@ import {
   type BoxConfig,
 } from "./box/docker.ts";
 import { describeControlPlane, startControlPlane } from "./control/main.ts";
+import { STARTER_TEAM } from "./host/orchestrator.ts";
 import { AgentRegistry, defaultAgentsRoot } from "./agents/registry.ts";
 import { startEgressRelay } from "./egress/relay.ts";
 import { DEFAULT_DISPLAY_INDEX } from "./protocol/index.ts";
@@ -614,19 +615,15 @@ async function cmdWeb(argv: string[]): Promise<number> {
 
   // Make sure there is somebody to talk to before opening a page with an empty
   // sidebar and no explanation.
+  //
+  // Through STARTER_TEAM rather than a copy of it. There used to be a second definition of Ada
+  // inline here, and the two drifted the moment the team grew: `agentbox web` — which is what the
+  // box itself runs — kept seeding one agent while the orchestrator's own path seeded four. One
+  // definition, used by both.
   const registry = new AgentRegistry();
   if (registry.list().length === 0) {
-    const created = registry.create({
-      name: "Ada",
-      title: "coordinator",
-      description:
-        "You coordinate this user's team of agents. You are the one they talk to first. " +
-        "When a request falls squarely inside a teammate's remit, hand it to them and say " +
-        "you did; when the team is missing someone the work clearly needs, propose creating " +
-        "them rather than creating them unasked. Do the work yourself when it is faster than " +
-        "delegating.",
-    });
-    out(dim(`created ${created.profile.name} to start with`));
+    const created = STARTER_TEAM.map(profile => registry.create(profile));
+    out(dim(`created ${created.map(record => record.profile.name).join(", ")} to start with`));
   }
 
   out(dim(`model: ${describeProvider(provider)}`));

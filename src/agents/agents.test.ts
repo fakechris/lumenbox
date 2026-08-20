@@ -12,6 +12,7 @@ import { mkdtempSync, rmSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { AgentRegistry } from "./registry.ts";
+import { STARTER_TEAM } from "../host/orchestrator.ts";
 import { AgentBus, type InboundMessage } from "./bus.ts";
 
 function tempRegistry(): { registry: AgentRegistry; cleanup: () => void } {
@@ -330,4 +331,52 @@ test("agents can hand work back and forth without deadlocking", async () => {
   } finally {
     cleanup();
   }
+});
+
+// ── the starter team ───────────────────────────────────────────────────────────────────
+
+test("the starter team is small, distinct, and free of one-time instructions", () => {
+  // Small because the roster is a cost: every agent appears in every other agent's system prompt,
+  // and a team is also a set of desktops and a set of things a person reads before doing anything.
+  assert.ok(STARTER_TEAM.length >= 2 && STARTER_TEAM.length <= 6, "a team, not a directory");
+
+  const names = STARTER_TEAM.map(entry => entry.name);
+  assert.equal(new Set(names).size, names.length, "names are distinct");
+  assert.equal(STARTER_TEAM[0]?.title, "coordinator", "the first one is who a person talks to");
+
+  for (const entry of STARTER_TEAM) {
+    // A description is re-read into the system prompt on every turn, so a one-time instruction
+    // parked here keeps asserting itself long after it stopped being true. This is the lesson that
+    // cost someone else a bug: a "the disk is low" briefing in a profile insists on it forever.
+    // Narrowed after a false positive on correct text: "they talk to you first" is standing
+    // identity, not a moment in time. The guard is for words that can only describe *now* —
+    // a heuristic that fires on good prose is a worse test than no heuristic.
+    assert.doesNotMatch(
+      entry.description,
+      /\b(start by|begin by|right now|currently|today|at the moment|for now)\b/i,
+      `${entry.name}'s description reads like a briefing rather than an identity`
+    );
+    // Tool names in a description freeze on the day it was written.
+    assert.doesNotMatch(
+      entry.description,
+      /SendToAgent|SetTodos|SetPlan|RememberFact|CreateAgent/,
+      `${entry.name}'s description names a tool, which will be wrong after the next rename`
+    );
+    assert.ok(entry.description.length > 120, `${entry.name} needs enough to be a role`);
+    assert.ok(entry.description.length < 900, `${entry.name} is paid for on every turn`);
+  }
+});
+
+test("the starter team differs in what it touches, not in adjectives", () => {
+  // Five flavours of "helpful assistant" would be worse than one agent, because it implies a
+  // structure that does not exist. Each of these should name concrete, different work.
+  const byName = new Map(STARTER_TEAM.map(entry => [entry.name, entry.description]));
+  assert.match(byName.get("Rex") ?? "", /browser/i);
+  assert.match(byName.get("Ops") ?? "", /shell/i);
+  assert.match(byName.get("Vera") ?? "", /transcript/i);
+  assert.match(byName.get("Ada") ?? "", /coordinate/i);
+
+  // And the reviewer's remit names the failure it exists for, since "review the work" is an
+  // instruction nobody can act on.
+  assert.match(byName.get("Vera") ?? "", /looked like it worked and did not/);
 });
