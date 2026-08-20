@@ -167,6 +167,12 @@ export interface ExecResult {
   stderr: string
   exit_code: number;
   timed_out: boolean;
+  /**
+   * The timeout actually applied, which is not always the one requested: the box caps it. Sent
+   * back so a caller that asked for an hour and got ten minutes is told, rather than concluding
+   * its command died for some other reason.
+   */
+  timeout_ms?: number;
 }
 
 export interface ReadFileRequest {

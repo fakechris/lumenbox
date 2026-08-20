@@ -8,8 +8,10 @@ then the decision that is easy to get wrong.
 A turn is: assemble a prompt, call the model, execute the tool calls it returns, append the
 results, repeat until it stops asking for tools.
 
-- **The round limit is 400 and it throws.** A limit that silently returns leaves the caller
-  believing the work finished. 400 is high because a computer-use task legitimately runs long.
+- **The round limit is 400, and reaching it is a question rather than an answer.** A limit that
+  silently returns leaves the caller believing the work finished; a limit that throws treats a
+  task that was going fine identically to one stuck in a loop. So the last rounds are classified
+  first — see §11.
 - **Two cache breakpoints, not one.** The stable prefix (system prompt, roster) and the volatile
   part (conversation) are separated, so the prefix survives a conversation that grows.
 - **Provider capabilities are declared, not assumed.** A compatible endpoint accepts a request
@@ -184,3 +186,97 @@ the agent saturating them: capture went 185ms idle, 489ms loaded, 189ms loaded w
 Not cgroups: sub-cgroups need the cgroup tree delegated into the container, which means
 privileged or a writable `/sys/fs/cgroup`. Promoting an agent-launched browser back to normal
 priority would need `CAP_SYS_NICE`, which also allows real-time scheduling — a bad trade.
+
+## 11. Finishing a long turn
+
+Four mechanisms, all answering the same question — *why did this stop, and could it have kept
+going?* — and each is only correct because of what it refuses to do.
+
+**Compaction changes what is sent, never what is stored.** Over a threshold, the oldest entries
+are replaced in the *request* by a summary; the transcript keeps every original. The cut must land
+on a `blocks`/`results` pair boundary, because a tool call whose result was cut is a request the
+provider rejects outright. Estimation is 2.5 characters per token — not the folklore 4, which
+undercounted by 40% on tool-heavy conversations and made the trigger fire late. Images are counted
+as images (~1600 tokens each). The window is *learned* from the provider's own usage numbers rather
+than hard-coded per model.
+
+Two additions the naive version lacked:
+
+- **Pre-compaction in the background**, at 75% of the trigger, using a cheaper profile. Compacting
+  at the moment of need means a person waits for a summariser in the middle of their turn.
+- **In-turn image pruning**, which is a different problem: one computer-use turn can blow the
+  window without any history at all. Only the newest screenshot is kept. It is safe where
+  compaction is delicate because only tool-result *contents* change — the pairing cannot break.
+  Measured: 94% of an eight-round computer-use request was images, 82% reduction.
+
+**Transient failures are retried; permanent ones are not, and telling them apart is recursive.**
+The signal is often three layers down an `error.cause` chain or inside an `AggregateError`. The
+classifier collects *every* signal and lets permanent win — the earlier version returned the first
+it found, so a permanent error wrapped in "connection closed" was retried four times. A stream that
+produced no first token in 120s is a stall, not a slow answer. Backoff is equal-jitter, and a
+server's `retry-after` is a floor, capped at 30s so a header cannot park a turn for an hour.
+
+**Reaching the round limit is classified before it is reported.** If the last rounds repeat one
+call signature with no state change, that is a loop and it is said so, with what repeated. If work
+was still progressing, the turn continues in a fresh one — up to three times, each carrying a
+prompt that says what has been done.
+
+**A turn that ends with nothing to say says that.** The final message carrying no text used to
+append nothing and emit nothing, which reaches a person as "nothing happened" when the truth is
+"the model had no closing words". Two states, one representation — see [07-review.md](07-review.md).
+
+## 12. Durable state: placement instead of protection
+
+Plan, todos, skills and memory would each be a natural thing to write into the conversation. None
+of them are. They live in the volatile system-prompt tier and are rebuilt from disk every turn,
+which makes them *structurally* immune to compaction rather than protected from it by a rule
+someone has to remember. Nothing needs to know they are special; there is no exemption list to
+forget to add to.
+
+The cost is that they must be small enough to re-send every turn, which is a useful discipline: it
+is what forces memory onto a character budget and skills into an index rather than bodies.
+
+## 13. Memory
+
+Three kinds, because they decay at different rates and conflating them means either losing facts or
+keeping chatter: `fact` (365 days, weight 1.0), `note` (30 days, 0.5) and `episode` (90 days, 1.5).
+Recall scores by weight and recency and fills a **character** budget, not a count — ten short notes
+and ten long ones cost very different amounts of the thing actually being spent.
+
+- **Written both ways.** An agent can record something deliberately, and a cheap extraction pass
+  runs every third exchange. Extraction is explicitly allowed to answer `NOTHING_TO_KEEP`, which
+  is the whole difference between a memory that is useful and one full of "the user said hello".
+- **Deduped on read, not on write.** Two near-identical facts recorded a month apart are both
+  true; only one should occupy the budget.
+- **Sharded by scope.** Personal memory is per-agent; a separate shared store is what lets one
+  agent answer from something another learned.
+
+## 14. Skills and schedules
+
+A skill is a markdown file with frontmatter under `/home/box/work/skills/<slug>/SKILL.md`, written
+by an agent and read by any agent. The prompt gets **the index only** — name, description, path.
+Bodies are read on demand, because otherwise the fifth skill costs every turn whether or not it
+applies.
+
+- **Degrade, do not refuse.** A file with no frontmatter still works; unknown keys are ignored so a
+  newer format does not break an older reader. But a skill with no description is *reported*, since
+  the description is the only thing read when deciding whether it applies — without one the skill
+  exists and is never chosen.
+- **A `schedule:` key makes it an automation.** Minute resolution, ticking twice a minute so a busy
+  loop cannot miss a window. **No catch-up** — two days of missed windows means "the daily report"
+  arguably wants two runs and "check every hour" emphatically does not want forty-eight, and a cron
+  expression cannot say which. **No overlap** — a skipped run is logged, because silence is
+  indistinguishable from a schedule that stopped working.
+- **A scheduled turn is told it was started by a timer.** An agent that believes someone is waiting
+  asks clarifying questions nobody will answer, and hurries.
+
+## 15. The policy gate
+
+One decision point answers stop, budget, wake rate and approval, and it writes its audit row
+*before* the action rather than after. Made one mechanism rather than four `if`s in four files —
+which is also why it yielded a capability nobody planned: requiring a person's consent for a named
+action.
+
+**An approval fingerprint covers the exact text shown.** Fingerprinting a truncated description let
+two commands sharing a 400-character prefix pass under one grant. An action too large to display is
+refused, not truncated: consent to something nobody read is not consent.

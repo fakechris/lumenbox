@@ -34,6 +34,33 @@ another machine, or a pod.
 | **box-init** | PID 1 | Reaping orphans and recording how they died |
 | **Entrypoint** | root, drops privileges | Bringing up desktops and supervising the services |
 
+Inside the orchestrator, five things that are worth naming separately because each answers a
+different question and each has its own failure mode:
+
+| Part | Question it answers | Fails by |
+| --- | --- | --- |
+| **Compaction** | Does this conversation still fit? | Summarising away the objective, or refusing a turn that could have run |
+| **Policy gate** | May this happen at all? | Refusing silently, or allowing because a check was added in one place and not another |
+| **Memory** | What is still true from before? | Growing until it costs more than the conversation |
+| **Skills + scheduler** | Has this been done before, and is it due? | Firing twice, or piling runs on each other |
+| **Rememberer** | What did that exchange teach? | Inventing something on an exchange that taught nothing |
+
+And outside the box, the control plane, whose defining property is what it does *not* do:
+
+| Part | Owns |
+| --- | --- |
+| **Store** | Tenants, people, memberships, boxes, tokens, usage, health, audit |
+| **Allocator** | Creating, finding, restarting and destroying a tenant's box |
+| **Gateway** | Authenticating a person and proxying them to their box, credential withheld |
+| **Collector** | Pulling health and usage out of every box |
+| **Model relay** | Holding the provider key so no box has to, and measuring spend where it passes |
+
+**The control plane is never in the path of a turn.** It allocates, authenticates, meters and
+reaps; a running turn does not touch it, which is what lets it be restarted or briefly broken
+without stopping work already happening. Anything that would put it in that path — proxying tool
+calls, holding conversation state, brokering agent messages — is out of scope by design and not by
+omission.
+
 ## 3. Topologies
 
 The same image, two arrangements.
@@ -111,17 +138,36 @@ desktops, the browser sessions and whatever an agent is in the middle of.
 
 ## 7. Seams left open
 
-Named because a seam that is not named is a decision that gets made by accident.
+Named because a seam that is not named is a decision that gets made by accident. Four of the five
+that were here have since been closed; they are listed as closed rather than deleted, because a
+document that quietly loses its own open questions cannot be checked against.
 
-- **Identity.** Access is one shared token. A shared deployment needs identities; the check
-  is a single function with the request's credentials as its input.
-- **Tenancy.** The registry, the owner tokens and the box are all singular. Multi-tenancy means
-  a tenant dimension on all three.
-- **Box provisioning.** The provisioner interface exists; the Kubernetes implementation does not.
-- **Credential custody.** The model key is held by the orchestrator. In the self-contained
-  topology that puts it in the container. A relay that holds the key and exposes a scoped
-  endpoint is the fix, and is not built.
-- **Fleet telemetry.** Health and crashes are exposed; nothing ships them anywhere.
+**Closed:**
+
+- ~~Identity~~ — people, memberships and three roles, with the session carrying all three
+  ([09-tenancy.md](09-tenancy.md)).
+- ~~Tenancy~~ — a tenant is a team, one box each, and the box is told which person is asking.
+- ~~Credential custody~~ — the model relay holds the key and no box receives one
+  ([08-control-plane.md](08-control-plane.md) §7).
+- ~~Fleet telemetry~~ — the collector pulls health and usage into the store, with a cursor.
+
+**Still open:**
+
+- **Box provisioning beyond one host.** The allocator interface exists and `compose` is proven
+  against real containers; the Kubernetes implementation does not exist and cannot be verified
+  here.
+- **Retrieval.** Memory recall and history search are lexical. The seam is one function
+  (`selectRelevant`), and the falsifiable trigger for replacing it is written down
+  ([05-data.md](05-data.md) §7).
+- **Verification of an action's effect.** Provenance makes a claim checkable and nothing checks it.
+  The reviewer agent can now read a colleague's history and reproduce a step, which is a person-
+  shaped answer rather than a mechanism.
+- **Anything on the person's own machine.** No local shell, filesystem or keychain. Three
+  capabilities genuinely need it; each needs a local agent, which would be the largest attack
+  surface here.
+- **A second execution surface.** Everything visual goes through X11 and pixels. An accessibility-
+  tree executor would be far more deterministic inside a browser at the cost of only working
+  there, and is a second surface rather than a replacement.
 
 ## 8. Why these choices
 

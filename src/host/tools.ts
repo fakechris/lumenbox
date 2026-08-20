@@ -241,7 +241,9 @@ export function buildTools(hasBox: boolean, vision = true): Anthropic.Tool[] {
             },
             timeout_ms: {
               type: "integer",
-              description: "Kill the command after this long. Defaults to 120000.",
+              description:
+                "Kill the command after this long. Defaults to 120000, and the box will not " +
+                "apply more than 600000 whatever is asked for.",
             },
           },
           required: ["command"],
@@ -520,14 +522,30 @@ function truncate(text: string, max: number): string {
 }
 
 /** Formats an exec result the way a person reading a terminal would want it. */
-function formatExec(result: {
-  stdout: string;
-  stderr: string;
-  exit_code: number;
-  timed_out: boolean;
-}): string {
+function formatExec(
+  result: {
+    stdout: string;
+    stderr: string;
+    exit_code: number;
+    timed_out: boolean;
+    timeout_ms?: number;
+  },
+  requestedTimeoutMs?: number
+): string {
   const parts: string[] = [];
-  if (result.timed_out) parts.push("[command timed out and was killed]");
+  if (result.timed_out) {
+    const applied = result.timeout_ms;
+    // Which timeout killed it, and whether it was the one asked for. A command killed at ten
+    // minutes after a request for an hour looks like a crash unless the cap is named.
+    const capped =
+      applied !== undefined && requestedTimeoutMs !== undefined && requestedTimeoutMs > applied
+        ? ` — the box caps a single command at ${applied}ms, so the ${requestedTimeoutMs}ms you ` +
+          `asked for was not applied. For longer work, start it detached and poll it.`
+        : applied !== undefined
+          ? ` after ${applied}ms`
+          : "";
+    parts.push(`[command timed out and was killed${capped}]`);
+  }
   parts.push(`exit code: ${result.exit_code}`);
   // Caps chosen so one `npm install` or one `cat` of a log cannot eat the context.
   if (result.stdout.trim()) parts.push(`stdout:\n${truncate(result.stdout, 20_000)}`);
@@ -656,7 +674,9 @@ export async function dispatchTool(
         display: context.displayIndex,
         owner: context.boxOwner,
       });
-      return { text: formatExec(result) };
+      return {
+        text: formatExec(result, input.timeout_ms ? Number(input.timeout_ms) : undefined),
+      };
     }
 
     case "read_file": {

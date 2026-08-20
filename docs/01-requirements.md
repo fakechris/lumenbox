@@ -27,6 +27,14 @@ screenshot each other's work. Isolation has to be structural, not a convention.
 achieve is worse than one that fails: the failure is silent and compounds. The record of
 what happened must not be the model's own account of it.
 
+**R5 — A long task must be able to finish.** Real work does not fit in one context window or
+one uninterrupted connection. A system that only completes tasks short enough to fit is a
+demo, and every mechanism in §F8 exists because a specific way of not finishing was observed.
+
+**R6 — What was learned once must not have to be learned again.** An agent that has to be
+told the same constraint every conversation, or re-derives the same procedure every week,
+costs its owner the thing it was supposed to save. This is what §F6 and §F7 are for.
+
 ## 2. Users
 
 | User | Wants | Cares about |
@@ -76,6 +84,46 @@ turns, money and trust.
 - F4.2 The persisted record is not writable by the agent it describes.
 - F4.3 Screenshots are excluded from the persisted record; their presence is noted.
 
+### F6 Memory
+
+- F6.1 An agent keeps facts across conversations, and what it keeps is bounded.
+- F6.2 What reaches the prompt is a selection under a budget, and omissions are stated.
+- F6.3 A fact kept deliberately outranks one inferred automatically, and outlives it.
+- F6.4 The same fact in different words does not accumulate.
+- F6.5 What one agent learns about the person can be shared with the others without being told
+  four times.
+- F6.6 Nothing an agent has kept is lost by upgrading how memory is stored.
+
+### F7 Reuse
+
+- F7.1 A procedure worked out once can be saved, and is readable and editable by a person.
+- F7.2 An agent is told which procedures exist without their contents entering every request.
+- F7.3 A saved procedure may run on a schedule, with no person present.
+- F7.4 A scheduled run is recognisable as one by the agent running it.
+- F7.5 A scheduled run cannot overlap itself, and a missed window is not silently replayed.
+
+### F8 Finishing
+
+- F8.1 A conversation that outgrows the context window is compacted, and the compaction is
+  reported rather than silent.
+- F8.2 What an agent is trying to do — its plan and its remaining work — survives compaction.
+- F8.3 The material compaction removed remains readable, by the agent as well as by a person.
+- F8.4 A turn that outgrows the window mid-flight recovers rather than failing.
+- F8.5 A failure a retry could fix is retried; one it could not is not.
+- F8.6 A turn that runs out of rounds is distinguished from one that is repeating itself, and
+  the two are reported differently.
+- F8.7 A turn always ends with something said, including when there is nothing to report.
+
+### F9 Tenancy and control
+
+- F9.1 A box can be allocated per tenant on demand, and finding an existing one is idempotent.
+- F9.2 A tenant is a team: several people share one box, and the box knows which of them is asking.
+- F9.3 A person can be granted read-only access.
+- F9.4 Administration is authorised separately from use, and every mutation is audited before it
+  is attempted.
+- F9.5 The provider credential need not be present inside a box.
+- F9.6 What a box spent is measurable outside it.
+
 ### F5 Lifecycle
 
 - F5.1 A box can be created, stopped, restarted and destroyed.
@@ -122,6 +170,20 @@ is the container, and a requirement that pretended otherwise would be a false on
 
 N4.3 earns its place: this system has had three tests that passed while measuring nothing.
 
+### N6 Cost and consent
+
+- N6.1 A turn can be stopped by a person, and stopping it stops its tools as well as its next
+  model call.
+- N6.2 Spend can be bounded, and the bound refuses before spending rather than reporting after.
+- N6.3 How often agents may wake each other is bounded.
+- N6.4 A named action can require a person's consent, and that consent covers the exact action
+  shown to them and nothing else.
+- N6.5 Every decision to allow or refuse is recorded before the thing it decides about happens.
+
+No default budget is a deliberate answer to N6.2 rather than an omission: a number invented here
+would surprise whoever hit it, and an agent that stops mid-task because of a guess is worse than
+one that spends visibly. The mechanism is the requirement; the number is the operator's.
+
 ### N5 Operability
 
 - N5.1 One command creates a working box.
@@ -131,13 +193,23 @@ N4.3 earns its place: this system has had three tests that passed while measurin
 
 ## 5. Out of scope
 
-Deliberately, with the reason:
+Deliberately, with the reason. Two things that used to be here have since been built, and are
+now F9 — recorded because a requirements document that quietly absorbs its own exclusions is
+not one anybody can check against.
 
-- **Multi-user identity.** One secret, no users. A shared deployment needs identities; the
-  seam is drawn ([03-architecture.md](03-architecture.md) §7) and the implementation is not
-  written.
-- **Scheduling boxes.** A box cannot create itself. Placement, quotas and admission belong to
-  a control plane.
+- **Cluster scheduling.** One host, one container per tenant. Placement across machines,
+  admission and bin-packing belong to an orchestrator, and the allocator seam exists so that is
+  a substitution ([08-control-plane.md](08-control-plane.md) §4.2).
+- **Anything on the person's own machine.** No shell, no filesystem, no keychain outside the
+  box. Three capabilities genuinely need it — proxying a passkey ceremony, holding credentials
+  in an OS keychain, reaching a real project directory — and each needs a local agent, which is
+  the largest attack surface this system could acquire. Researched and deliberately not built.
+- **Verifying that an action achieved what the agent claims.** Provenance (F4) makes a claim
+  checkable; nothing checks it automatically. The criteria have to be designed rather than
+  copied, and a review that cannot say why it passed is worse than none.
+- **Semantic retrieval.** Memory recall and history search are word overlap. The trigger for
+  revisiting is written down ([05-data.md](05-data.md) §7) so the decision is falsifiable rather
+  than a preference.
 - **Model training or evaluation.** This runs agents; it does not measure them.
 - **A general remote desktop.** The desktop exists to be driven by an agent and watched by
   its owner.

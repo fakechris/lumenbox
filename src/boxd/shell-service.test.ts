@@ -12,7 +12,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { realpathSync, rmSync } from "node:fs";
-import { runShell } from "./shell-service.ts";
+import { MAX_TIMEOUT_MS, runShell } from "./shell-service.ts";
 
 function cleanup(key: string): void {
   for (const suffix of ["cwd", "env"]) {
@@ -125,4 +125,17 @@ test("a hanging command is killed and reported as timed out", async () => {
   const result = await runShell({ command: "sleep 30", timeout_ms: 700 });
   assert.equal(result.timed_out, true);
   assert.notEqual(result.exit_code, 0);
+});
+
+test("a timeout longer than the box allows is capped, and the result says so", async () => {
+  // It used to be clamped in silence: a caller asking for an hour was killed at ten minutes with
+  // nothing to distinguish that from the command crashing on its own.
+  const result = await runShell({ command: "true", timeout_ms: 60 * 60_000 });
+  assert.equal(result.timeout_ms, MAX_TIMEOUT_MS);
+
+  const asked = await runShell({ command: "true", timeout_ms: 700 });
+  assert.equal(asked.timeout_ms, 700, "a timeout inside the cap is the one applied");
+
+  const defaulted = await runShell({ command: "true" });
+  assert.equal(defaulted.timeout_ms, 120_000);
 });

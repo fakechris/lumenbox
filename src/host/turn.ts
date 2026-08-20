@@ -986,7 +986,26 @@ export async function runTurn(
           text: finalText,
           at: new Date().toISOString(),
         } satisfies TranscriptEntry);
+        return;
       }
+
+      // A turn that ends with nothing to say used to end silently: nothing appended, nothing
+      // emitted. From the person's side that is "I asked and nothing happened", which is the
+      // worst-feeling failure there is — indistinguishable from a hang, a crash, or being ignored.
+      //
+      // It happens when a final message carries no text: thinking blocks only, an empty content
+      // array, a model that stopped for a reason it did not narrate. Rare, and rare is exactly why
+      // it is worth a line rather than a shrug.
+      const silent =
+        `The turn ended without anything to report. The model returned no text on its last round, ` +
+        `so there is no answer here — not an empty one. Ask again, or ask for what is missing.`;
+      registry.appendTranscript(agent.id, {
+        role: "assistant",
+        text: silent,
+        at: new Date().toISOString(),
+      } satisfies TranscriptEntry);
+      emit({ type: "text", agentId: agent.id, agentName: agent.profile.name, delta: silent });
+      console.error(`[turn] ${agent.profile.name}: ended with no text on round ${round}`);
       return;
     }
 

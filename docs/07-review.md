@@ -4,10 +4,56 @@ Reviewed against [01-requirements.md](01-requirements.md) through
 [06-deployment.md](06-deployment.md). Every finding below was verified against the running
 system or the source, not inferred from the documents.
 
-**Verdict: closer, and the blocking findings are closed.** Nine findings, three of them blocking.
-R-01, R-02, R-03, R-07 and R-09 are fixed. R-04, R-05, R-06 and R-08 stand. What it does meet is a higher standard than that summary suggests in one specific
-respect — the failure behaviour is genuinely engineered and tested — and a lower one in another:
-there is no cost control at all.
+**Verdict, at 20K lines of source and 362 tests: it meets a product-grade standard for a
+single-tenant deployment, and does not yet for a multi-tenant one.** The gap is three items in
+[10-security-backlog.md](10-security-backlog.md), not a shortfall in the functional requirements.
+
+Thirteen findings so far. Ten are fixed, and the three that remain are all in the same family —
+things the system does not *ship anywhere*: secrets it records, latency it asserts, telemetry it
+exposes and nobody collects.
+
+| | Finding | State |
+| --- | --- | --- |
+| R-01 | Work outside `/home/box/work` destroyed by upgrade | fixed |
+| R-02 | Dead UI reported a healthy container | fixed |
+| R-03 | No cost control | fixed |
+| R-04 | UI token stays in the address bar | **open** |
+| R-05 | Nothing shipped anywhere, nothing backed up | **open** |
+| R-06 | Live-view latency asserted, not measured | **open** |
+| R-07 | Transcripts grew without bound | fixed |
+| R-08 | Secrets land in the transcript in clear | **open** (S-1) |
+| R-09 | A running turn could not be stopped | fixed |
+| R-10 | A transient failure ended a long turn | fixed |
+| R-11 | The round limit was a guess and a dead end | fixed |
+| R-12 | Compaction's claim was false for the agent | fixed |
+| R-13 | A turn could end silently | fixed |
+| R-14 | A command timeout was capped in silence | fixed |
+
+### What this review keeps getting wrong
+
+Worth recording, because it is the same mistake four times and naming it is cheaper than finding it
+a fifth:
+
+**Two states that mean opposite things, sharing one representation.** A skill loader returning an
+empty list for both "no skills directory" and "the box did not answer". A cache treating `readAt = 0`
+as "read at time zero" rather than "never read". A cron field parser returning `undefined` for both
+"any value" and "unreadable". And, in a different shape, a turn ending with no text producing neither
+a record nor an event — "nothing to say" and "nothing happened" reaching the person identically.
+
+Each one worked under real conditions and failed the moment a test looked closely. Each is now a
+tagged union or an explicit flag. The pattern to watch for: an `undefined` or an empty collection that
+answers two different questions.
+
+R-14 is the same shape one layer down: a request for a one-hour timeout was clamped to ten minutes
+and the kill reported only "timed out", so the one reading it would reasonably conclude the command
+had crashed. The value applied now comes back with the result and the ceiling is in the tool's
+description — an environment fact the model cannot work out from outside, which is the test for what
+belongs there.
+
+**Claims about the record that were true for a person and false for the agent.** Compaction shipped
+with "the transcript keeps every entry, which is what makes an agent's claims checkable" — true for
+someone reading the file, and the agent could not read it at all. The reviewer agent shipped with a
+description promising it reads a colleague's transcript, months before it could.
 
 ## Requirement coverage
 
@@ -32,9 +78,14 @@ there is no cost control at all.
 | N3.1–3.4 | Isolation | met as scoped | limits stated, not overstated |
 | N4.1–4.3 | Honest failure | met | three no-op tests found and fixed |
 | N5.1–5.4 | Operability | **partial** | R-05 |
+| F6.1–6.6 | Memory: bounded, budgeted, decaying, shared | met | verified across agents on a real box |
+| F7.1–7.5 | Reuse: skills, index-not-bodies, schedules | met | an `@every 1m` skill fired twice unattended |
+| F8.1–8.7 | Finishing: compaction, retry, plan, history, silence | met | each has a test that fails when the mechanism is removed |
+| F9.1–9.6 | Tenancy, roles, admin, relay, metering | met | three people one box; no provider key in the container |
+| N6.1–6.5 | Cost and consent | met | stop, budget, wake limit, fingerprinted approval |
 
-Not in the requirements and it should be: a long-lived agent's history has to stay sendable. Added
-as the fix for R-07 and worth promoting to a requirement of its own.
+R-05 is what keeps N5 partial and it has not moved: health, crashes and usage are all *exposed* and a
+person still has to go and look.
 
 ## Blocking findings
 
@@ -307,16 +358,42 @@ Worth recording, because a review that only lists faults misrepresents the syste
 - **Measurements exist where they matter.** Capture latency under load, the cost of polling
   capture, the effect of the priority split — all numbers, not adjectives.
 
-## Recommended order
+## What is left, in order
 
-1. ~~R-01~~ done — smallest fix, silent data loss.
-2. ~~R-02~~ done — health check covers the topology's promise.
-3. ~~R-03~~ done — usage written down, then budgets and a wake limit.
-4. ~~R-09~~ done — a turn can be stopped, which completes the product's central promise.
-5. R-08 (secrets in the transcript), R-04, R-06, R-05.
+1. **R-08 / S-1 — secrets in the transcript.** The heaviest remaining item, and the relay did *not*
+   fix it: that stopped the provider key entering a box, and does nothing about a credential the
+   agent reads while working. Awkward rather than lazy — the transcript's value is that it stores
+   the model's own blocks unedited, so a redactor is editing the evidence. Detection plus a marker
+   is probably the shape.
+2. **R-06 — measure the live view.** The one requirement in this document whose number is a hope.
+   Small, and it is embarrassing that N4.3 exists while N1.3 is unmeasured.
+3. **R-05 — ship health somewhere.** The collector pulls it into a store and nothing alerts. One box
+   with an owner watching is fine; the moment there are two, a crash-looping component reports itself
+   only to whoever asks.
+4. **R-04 — the token in the URL.** Low severity and still wrong.
 
-R-03 and R-09 were done together rather than separately, and that was the right call: written as two
-patches they would have been two `if`s in two files with two ideas of what a refusal looks like.
-Written as one decision point they are the same mechanism asked different questions — and the same
-mechanism yielded a capability that was not on this list at all: requiring a person's consent before
-a named action. That one exists because the shape allowed it, not because it was planned.
+Two capabilities are absent rather than broken, and both bear on how long a task can run:
+
+- **Work that outlives a turn.** An exec holds a request open, so ten minutes is the ceiling and a
+  longer job has to be started detached and polled. The agent can do that unaided; what does not
+  exist is anything that *re-attaches* to it after the orchestrator restarts, so a four-hour build
+  survives only if nothing bounces. The shape is a watch registry that reads back a known output
+  file, with a give-up rule for the file never appearing.
+- **A snapshot of durable state.** R-05's other half. The shape worth copying: snapshot at turn end
+  while nothing is writing, checkpoint the WAL into the main file first, debounce so a busy agent
+  does not upload continuously, and refuse above a size rather than uploading a huge one slowly.
+  Our own encryption test was vacuous for exactly the WAL reason, which is a hint that anything
+  reading these files without checkpointing them is reading a partial truth.
+
+Then the four large pieces that are each their own project, listed with what makes each hard rather
+than as a backlog: **verifying an action's effect** (the criteria have to be designed, and a check
+that cannot say why it passed is worse than none), **teach-recording** (needs the criteria above to
+be worth anything), **an accessibility-tree executor** (far more deterministic, in a much smaller
+world), and **cross-tenant sharing** (a durable queue the box pulls from, with everything
+at-least-once delivery implies).
+
+The one process observation worth keeping: R-03 and R-09 were done together rather than as two
+patches, and that turned two `if`s into one decision point — which then yielded a capability nobody
+had planned, requiring a person's consent for a named action. Grouping by *mechanism* rather than by
+finding is what made that possible, and the same grouping is why F8 reads as one thing rather than
+six.

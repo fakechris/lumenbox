@@ -1602,3 +1602,43 @@ test("a turn that is still working continues instead of being abandoned", async 
     cleanup();
   }
 });
+
+test("a turn that ends with nothing to say says that, rather than ending silently", async () => {
+  const { registry, cleanup } = fixture();
+  try {
+    const ada = registry.create({ name: "Ada" });
+    const bus = new AgentBus(registry, async () => {});
+    const capture: Capture = { params: [] };
+
+    // A final message with no text: thinking blocks only, an empty content array, a model that
+    // stopped without narrating it. From the person's side an unreported version of this is "I asked
+    // and nothing happened" — indistinguishable from a hang, a crash, or being ignored.
+    const { client } = stubClient([message([])], capture);
+
+    const events: { type: string; delta?: string }[] = [];
+    await runTurn(
+      ada,
+      [{ fromId: "user", fromName: "user", text: "do it", priority: false, receivedAt: "" }],
+      new AbortController().signal,
+      {
+        client,
+        registry,
+        bus,
+        box: undefined,
+        resolution: undefined,
+        onEvent: event => events.push(event as { type: string }),
+      }
+    );
+
+    const transcript = registry.readTranscript(ada.id) as TranscriptEntry[];
+    const last = transcript.at(-1);
+    assert.ok(last && !("kind" in last), "something was recorded");
+    assert.match(last.text, /ended without anything to report/);
+    // And it says the distinction that matters: no answer is not the same as an empty answer.
+    assert.match(last.text, /not an empty one/);
+    // The watcher is told too, not just the file.
+    assert.ok(events.some(event => event.type === "text" && /ended without/.test(event.delta ?? "")));
+  } finally {
+    cleanup();
+  }
+});

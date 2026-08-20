@@ -11,7 +11,19 @@ import { spawn } from "node:child_process";
 import type { ExecRequest, ExecResult } from "../protocol/index.ts";
 
 const DEFAULT_TIMEOUT_MS = 120_000;
-const MAX_TIMEOUT_MS = 600_000;
+/**
+ * The longest any one command may run.
+ *
+ * There is a ceiling because an exec holds an HTTP request and a turn open for its whole duration,
+ * so an unbounded one is a wedged turn nobody can see into. Ten minutes is not the limit of what
+ * the box can do — a longer job is started detached and polled — it is the limit of what can
+ * usefully be done while something waits for the answer.
+ *
+ * The effective value comes back on the result. It used to be clamped silently, so a caller asking
+ * for an hour was killed at ten minutes with nothing saying why, and would reasonably conclude the
+ * command itself had failed.
+ */
+export const MAX_TIMEOUT_MS = 600_000;
 /** Per-stream cap. Tool results this large are already useless to the model. */
 const MAX_OUTPUT_BYTES = 2 * 1024 * 1024;
 
@@ -183,6 +195,7 @@ export function runShell(request: ExecRequest): Promise<ExecResult> {
         stderr: clampOutput(stderr, "stderr"),
         exit_code: exitCode,
         timed_out: timedOut,
+        timeout_ms: timeoutMs,
       });
     };
 
