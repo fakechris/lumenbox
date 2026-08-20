@@ -226,14 +226,18 @@ export class AgentBus {
         try {
           await this.runExclusive(agentId, { userDriven: false });
         } catch (error) {
+          // Stop the loop, keep the queue. Anything still here arrived *after* the failed turn
+          // started — the message that turn was given was taken off the queue before it ran — so
+          // draining discarded work whose sender had already been told "Sent". The loop still has
+          // to stop, because a turn that fails without consuming anything would otherwise be
+          // retried forever; the difference is that stopping and forgetting are not the same thing.
+          const waiting = this.pendingCount(agentId);
           this.onEvent({
             type: "turn_failed",
             agentId,
             error: error instanceof Error ? error.message : String(error),
+            waiting,
           });
-          // Drop what is left rather than retrying a turn that just failed:
-          // re-running it would fail the same way, forever.
-          this.drain(agentId);
           return;
         }
       }
@@ -283,5 +287,16 @@ export type BusEvent =
     }
   | { type: "turn_started"; agentId: string; inboundCount: number }
   | { type: "turn_finished"; agentId: string }
-  | { type: "turn_failed"; agentId: string; error: string }
+  | {
+      type: "turn_failed";
+      agentId: string;
+      error: string;
+      /**
+       * Messages still queued for this agent, which the failure did not consume.
+       *
+       * Reported because they are kept rather than discarded, and a queue nobody mentions is
+       * indistinguishable from work that was silently thrown away.
+       */
+      waiting: number;
+    }
   | { type: "turn_interrupted"; agentId: string; reason: string };

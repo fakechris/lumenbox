@@ -204,6 +204,8 @@ export class Orchestrator {
         error:
           `could not start desktop ${index} for ${agent.profile.name}: ` +
           (error instanceof Error ? error.message : String(error)),
+        // Nothing was dequeued to get here, so nothing is being held back by this failure.
+        waiting: 0,
       });
       return undefined;
     }

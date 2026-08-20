@@ -13,7 +13,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { AgentRegistry } from "./registry.ts";
 import { STARTER_TEAM } from "../host/orchestrator.ts";
-import { AgentBus, type InboundMessage } from "./bus.ts";
+import { AgentBus, type BusEvent, type InboundMessage } from "./bus.ts";
 
 function tempRegistry(): { registry: AgentRegistry; cleanup: () => void } {
   const root = mkdtempSync(join(tmpdir(), "agentbox-test-"));
@@ -302,6 +302,48 @@ test("a failing turn does not poison later turns for the same agent", async () =
     bus.sendFromUser(ada.id, "two");
     await bus.runExclusive(ada.id, { userDriven: true });
     assert.equal(calls, 2, "the second turn still ran");
+  } finally {
+    cleanup();
+  }
+});
+
+test("a message that arrived during a failed turn is kept, not discarded", async () => {
+  // The wake loop's failure handler used to drain the queue, reasoning that re-running a turn that
+  // just failed would fail the same way. True of the message that turn was given — but that one was
+  // taken off the queue before it ran. What the drain actually threw away was everything that
+  // arrived afterwards, whose senders had already been told "Sent".
+  const { registry, cleanup } = tempRegistry();
+  try {
+    const ada = registry.create({ name: "Ada" });
+    const seen: string[] = [];
+    const events: BusEvent[] = [];
+    let failing = true;
+
+    const bus = new AgentBus(
+      registry,
+      async (_agent, inbound) => {
+        if (failing) {
+          // Arrives while this doomed turn is in flight, so it is not the message that failed.
+          bus.sendFromUser(ada.id, "second");
+          throw new Error("the provider was down");
+        }
+        for (const message of inbound) seen.push(message.text);
+      },
+      event => events.push(event)
+    );
+
+    bus.sendFromUser(ada.id, "first");
+    await bus.wake(ada.id);
+
+    assert.equal(bus.pendingCount(ada.id), 1, "the later message survives the earlier failure");
+    const failed = events.find(event => event.type === "turn_failed");
+    assert.ok(failed && "waiting" in failed && failed.waiting === 1, "and the queue is reported");
+
+    // And it is delivered when the agent next runs, rather than sitting there unmentioned forever.
+    failing = false;
+    await bus.wake(ada.id);
+    assert.deepEqual(seen, ["second"]);
+    assert.equal(bus.pendingCount(ada.id), 0);
   } finally {
     cleanup();
   }
