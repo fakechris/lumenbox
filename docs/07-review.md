@@ -4,9 +4,8 @@ Reviewed against [01-requirements.md](01-requirements.md) through
 [06-deployment.md](06-deployment.md). Every finding below was verified against the running
 system or the source, not inferred from the documents.
 
-**Verdict: it does not meet a product-grade standard yet.** Nine findings, three of them
-blocking. R-01, R-02 and R-07 are fixed and R-03 is half fixed — measured but not bounded; the rest
-stand. What it does meet is a higher standard than that summary suggests in one specific
+**Verdict: closer, and the blocking findings are closed.** Nine findings, three of them blocking.
+R-01, R-02, R-03, R-07 and R-09 are fixed. R-04, R-05, R-06 and R-08 stand. What it does meet is a higher standard than that summary suggests in one specific
 respect — the failure behaviour is genuinely engineered and tested — and a lower one in another:
 there is no cost control at all.
 
@@ -90,10 +89,19 @@ a turn is spending rather than after. `GET /api/usage?since=<seq>` is shaped for
 a torn line, so a reader remembers an offset instead of a timestamp and catches up rather than
 double-counting.
 
-Deliberately not done: prices, budgets, and a wake-rate limit. A record says tokens; what a token
-costs belongs to whoever bills. **Nothing yet stops a runaway**, so the finding stays open — but it
-is now open on enforcement rather than on visibility, and the format the control plane will meter
-from is fixed.
+**Now fixed.** Budgets and a wake-rate limit exist, in one place rather than four
+(`src/host/policy.ts`). `AGENTBOX_BUDGET_TOKENS` refuses the model call — before the request, since a
+budget that only reports afterwards is not a budget — and `AGENTBOX_WAKES_PER_WINDOW` refuses an
+agent that has woken teammates too often, which is the specific shape that produces a runaway: two
+agents taking turns to set each other going, spending at the speed of the API with nothing else in
+the system to stop it.
+
+Still deliberately not done: prices. A record says tokens; what a token costs belongs to whoever
+bills, and would be wrong in a file nobody remembers to update.
+
+No default budget, which is a decision and not an omission: a number invented here would surprise
+whoever hit it, and the failure mode of a too-low ceiling is an agent that stops mid-task. The
+mechanism ships; the policy is the operator's.
 
 ## Non-blocking findings
 
@@ -149,11 +157,30 @@ Tool results are persisted verbatim. An agent that runs `printenv`, reads a conf
 receives a credential in a page is writing it to `conversation.jsonl`, which is mode 644 (the
 directory is 700 only in the self-contained topology). Nothing redacts, and nothing warns.
 
-### R-09 — A running turn cannot be stopped from the UI
+### R-09 — A running turn cannot be stopped from the UI — **fixed**
 
-There is a priority-interrupt path for agents, and `TurnAborted` exists, but no control surfaces
-it. A reviewer watching an agent do the wrong thing can only wait or kill the process. For a
-product whose central promise is "watch and take over", that is a missing half.
+There is a priority-interrupt path for agents, and `TurnAborted` exists, but no control surfaced
+it. A reviewer watching an agent do the wrong thing could only wait or kill the process. For a
+product whose central promise is "watch and take over", that was a missing half.
+
+`POST /api/stop` now stops one agent, and the same decision point refuses its tool calls as well as
+its next model call — a person who pressed stop meant all of it, not just whichever came next.
+
+Two decisions inside it are worth stating:
+
+**It stops at a round boundary, not mid-request.** Aborting a request in flight leaves a tool call
+with no result, which is a shape the next turn cannot replay. So the turn ends where the transcript
+is consistent, and the transcript says why it ended rather than simply stopping.
+
+**A stop belongs to the turn that was running.** It is cleared when the next turn starts, because
+leaving it set would silently refuse the person's *next* instruction — which reads as the agent
+having broken rather than having been stopped.
+
+Verified on a real box: a turn told to run forty sequential commands, stopped six seconds in,
+refused its remaining tool calls and then its next model call — so the stop cost no further spend —
+and ended with the reason in its transcript. Honest about the noise: that round had ten parallel
+tool calls and each got its own refusal, so the transcript carries eleven refusals where one would
+read better. Tidying that up would risk leaving a call without a result, so it stands.
 
 ## What holds up well
 
@@ -173,8 +200,14 @@ Worth recording, because a review that only lists faults misrepresents the syste
 
 ## Recommended order
 
-1. R-01 (prompt + doctor check) — smallest fix, silent data loss.
-2. R-02 (health check covers the topology's promise) — small.
-3. R-03 (usage in the transcript, then budgets) — largest, and the one with money attached.
-4. R-09 (stop a turn) — completes the product's central promise.
-5. R-04, R-06, R-08, R-05. (R-07 done.)
+1. ~~R-01~~ done — smallest fix, silent data loss.
+2. ~~R-02~~ done — health check covers the topology's promise.
+3. ~~R-03~~ done — usage written down, then budgets and a wake limit.
+4. ~~R-09~~ done — a turn can be stopped, which completes the product's central promise.
+5. R-08 (secrets in the transcript), R-04, R-06, R-05.
+
+R-03 and R-09 were done together rather than separately, and that was the right call: written as two
+patches they would have been two `if`s in two files with two ideas of what a refusal looks like.
+Written as one decision point they are the same mechanism asked different questions — and the same
+mechanism yielded a capability that was not on this list at all: requiring a person's consent before
+a named action. That one exists because the shape allowed it, not because it was planned.

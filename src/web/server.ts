@@ -395,6 +395,54 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
           return;
         }
 
+        // ── policy: stopping a turn, and answering an approval ─────────────────────
+        //
+        // These are the only two things in this API a person does *to* a running agent rather than
+        // with it, which is why they are POSTs with no body beyond an id: there is nothing to get
+        // wrong, and nothing that reads as a normal instruction.
+        if (route === "GET /api/policy") {
+          send(res, 200, {
+            pending: orchestrator.policy.pending(),
+            stopped: orchestrator.registry
+              .list()
+              .filter(agent => orchestrator.policy.isStopped(agent.id))
+              .map(agent => agent.id),
+          });
+          return;
+        }
+
+        if (route === "POST /api/stop") {
+          const body = await readJson(req);
+          const agentId = String(body.agent ?? "");
+          if (!orchestrator.registry.has(agentId)) {
+            send(res, 404, { error: `No agent ${agentId}` });
+            return;
+          }
+          // Recorded and effective immediately; the turn notices at its next round boundary. Not an
+          // abort: cutting a request in flight would leave a tool call with no result, which the
+          // next turn cannot replay.
+          orchestrator.policy.stop(agentId);
+          send(res, 202, { stopped: agentId });
+          return;
+        }
+
+        if (route === "POST /api/approve" || route === "POST /api/deny") {
+          const body = await readJson(req);
+          const id = String(body.id ?? "");
+          const answered =
+            route === "POST /api/approve"
+              ? orchestrator.policy.grant(id)
+              : orchestrator.policy.deny(id, "user", String(body.reason ?? "") || undefined);
+          // 404 rather than an error for an unknown id: the usual cause is a second click or a page
+          // left open, and neither deserves a failure.
+          if (!answered) {
+            send(res, 404, { error: "That approval is not waiting for an answer." });
+            return;
+          }
+          send(res, 200, { id });
+          return;
+        }
+
         if (route === "GET /api/recordings") {
           const client = orchestrator.boxClient();
           if (!client) {

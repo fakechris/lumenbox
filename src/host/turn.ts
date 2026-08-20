@@ -11,6 +11,7 @@ import type { AgentRecord, AgentRegistry } from "../agents/registry.ts";
 import type { AgentBus, InboundMessage } from "../agents/bus.ts";
 import type { BoxClient } from "../box/client.ts";
 import type { DisplayLease } from "../box/display-lease.ts";
+import type { PolicyGate } from "./policy.ts";
 import type { UsageLog } from "./usage.ts";
 import {
   activeWindow,
@@ -194,6 +195,14 @@ export interface TurnDeps {
   boxOwner?: string;
   /** Where what a turn cost is written. Absent in tests that do not care. */
   usage?: UsageLog;
+  /**
+   * Asked whether this turn may keep going, and whether its tools may run.
+   *
+   * Absent means allow, which is the behaviour before this existed. Present, it is asked once per
+   * round — so a stop takes effect at the next round boundary rather than mid-request, which is the
+   * only place a turn can be left in a state the transcript describes correctly.
+   */
+  policy?: PolicyGate;
   /** Guards one desktop against two agents; moot when each has its own. */
   display?: DisplayLease;
   resolution: ResolutionConfig | undefined;
@@ -630,6 +639,11 @@ export async function runTurn(
     at: new Date().toISOString(),
   } satisfies TranscriptEntry);
 
+  // A stop belongs to the turn that was running. Clearing it as the next turn starts means a
+  // person's next instruction is not silently refused — which would read as the agent having broken
+  // rather than having been stopped.
+  deps.policy?.resume(agent.id);
+
   const tools = buildTools(box !== undefined, provider.vision);
 
   try {
@@ -650,6 +664,30 @@ export async function runTurn(
       emit({ type: "aborted", agentId: agent.id });
       throw new TurnAborted();
     }
+    // Asked before spending anything. A stop or an exhausted budget ends the turn here, at a round
+    // boundary, where the transcript is consistent — aborting mid-request would leave a call with no
+    // result, which is a shape the next turn cannot replay.
+    const permitted = deps.policy?.check({
+      kind: "model-call",
+      agentId: agent.id,
+      agentName: agent.profile.name,
+      round,
+    });
+    if (permitted !== undefined && !permitted.allow) {
+      registry.appendTranscript(agent.id, {
+        role: "assistant",
+        text: permitted.reason,
+        at: new Date().toISOString(),
+      } satisfies TranscriptEntry);
+      emit({
+        type: "text",
+        agentId: agent.id,
+        agentName: agent.profile.name,
+        delta: permitted.reason,
+      });
+      return;
+    }
+
     emit({ type: "round", agentId: agent.id, round });
 
     // Proactive guard, before the request rather than after it fails. Compaction of the *history*
@@ -831,6 +869,7 @@ export async function runTurn(
             registry,
             bus,
             box,
+            policy: deps.policy,
             display: deps.display,
             displayIndex: deps.displayIndex,
             boxOwner: deps.boxOwner,

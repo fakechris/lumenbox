@@ -14,6 +14,7 @@ import { DisplayLease } from "../box/display-lease.ts";
 import { resolveBoxProvisioner, type BoxProvisioner } from "../box/provisioner.ts";
 import type { ResolutionConfig } from "../protocol/index.ts";
 import { runTurn, TurnAborted, type TurnEvent } from "./turn.ts";
+import { PolicyGate } from "./policy.ts";
 import { UsageLog } from "./usage.ts";
 import {
   createClient,
@@ -61,6 +62,19 @@ export class Orchestrator {
    * monotonic across the whole file, and two logs would produce two sequences.
    */
   readonly usage = new UsageLog();
+
+  /**
+   * Decides whether a turn may spend, continue, or run a given action.
+   *
+   * One per process, like the usage log, and for a related reason: its record is append-only and a
+   * second instance would interleave two views of the same state. Given the usage log as its
+   * spend source, so the budget is measured against what was actually billed rather than an
+   * estimate.
+   */
+  readonly policy = new PolicyGate({
+    spentTokens: () => this.usage.totals().inputTokens + this.usage.totals().outputTokens,
+    log: line => console.error(`[policy] ${line}`),
+  });
 
   readonly provider: ProviderProfile;
 
@@ -172,6 +186,7 @@ export class Orchestrator {
       displayIndex,
       boxOwner: this.registry.boxOwnerTokenFor(agent.id),
       usage: this.usage,
+      policy: this.policy,
       client: this.client,
       registry: this.registry,
       bus: this.bus,

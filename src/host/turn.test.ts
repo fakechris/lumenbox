@@ -26,6 +26,7 @@ import {
   type HistoryEntry,
 } from "./compaction.ts";
 import { buildSystemPrompt } from "./prompt.ts";
+import { PolicyGate, type PolicyLimits } from "./policy.ts";
 import { buildTools, dispatchTool } from "./tools.ts";
 
 interface Capture {
@@ -1054,6 +1055,229 @@ test("a summary is prepared in the background and adopted without a wait", async
   } finally {
     DEFAULT_POLICY.triggerTokens = previousTrigger;
     DEFAULT_POLICY.keepTailTokens = previousKeep;
+    cleanup();
+  }
+});
+
+/** A policy gate over a temporary file, for the integration tests below. */
+function policyFixture(limits: Partial<PolicyLimits> = {}, spent = 0) {
+  const dir = mkdtempSync(join(tmpdir(), "agentbox-turn-policy-"));
+  const gate = new PolicyGate({
+    path: join(dir, "policy.jsonl"),
+    limits: {
+      budgetWindowHours: 24,
+      wakesPerWindow: 30,
+      wakeWindowMinutes: 10,
+      approvalRequiredTools: [],
+      approvalRequiredCommands: [],
+      ...limits,
+    },
+    spentTokens: () => spent,
+  });
+  return { gate, cleanup: () => rmSync(dir, { recursive: true, force: true }) };
+}
+
+test("a stop ends a running turn at the next round, and says so in the transcript", async () => {
+  const { registry, cleanup } = fixture();
+  const policy = policyFixture();
+  try {
+    const ada = registry.create({ name: "Ada" });
+    const bus = new AgentBus(registry, async () => {});
+    const { box } = stubBox();
+    const capture: Capture = { params: [] };
+
+    // The model keeps asking for another tool call, so without a stop this runs to MAX_ROUNDS.
+    let rounds = 0;
+    const client = {
+      messages: {
+        stream(params: Anthropic.MessageCreateParams) {
+          capture.params.push({ ...params, messages: [...params.messages] });
+          rounds += 1;
+          // A person presses stop while the second round is in flight.
+          if (rounds === 2) policy.gate.stop(ada.id, "alice");
+          return {
+            on() {
+              return this;
+            },
+            finalMessage: async () =>
+              message(
+                [toolUseBlock("bash", { command: `echo ${rounds}` }, `toolu_${rounds}`)],
+                "tool_use"
+              ),
+          };
+        },
+      },
+    } as unknown as Anthropic;
+
+    await runTurn(
+      ada,
+      [{ fromId: "user", fromName: "user", text: "loop", priority: false, receivedAt: "" }],
+      new AbortController().signal,
+      { client, registry, bus, box, resolution: undefined, displayIndex: 1, policy: policy.gate }
+    );
+
+    // Two requests went out, then the third round was refused. Not aborted mid-request: a call with
+    // no result is a shape the next turn cannot replay.
+    assert.equal(capture.params.length, 2, `expected two rounds, got ${capture.params.length}`);
+
+    const transcript = registry.readTranscript(ada.id) as TranscriptEntry[];
+    const last = transcript.at(-1);
+    assert.ok(last && !("kind" in last), "the turn ends with prose, not a dangling call");
+    assert.match(last.text, /stopped this turn/, "and the transcript says why it ended");
+  } finally {
+    policy.cleanup();
+    cleanup();
+  }
+});
+
+test("the next turn is not refused by the previous turn's stop", async () => {
+  const { registry, cleanup } = fixture();
+  const policy = policyFixture();
+  try {
+    const ada = registry.create({ name: "Ada" });
+    const bus = new AgentBus(registry, async () => {});
+    const capture: Capture = { params: [] };
+    const { client } = stubClient([message([textBlock("done")])], capture);
+    const deps = {
+      client,
+      registry,
+      bus,
+      box: undefined,
+      resolution: undefined,
+      policy: policy.gate,
+    };
+
+    policy.gate.stop(ada.id, "alice");
+    // A stop belongs to the turn that was running. Left set, a person's next instruction would be
+    // refused — which reads as the agent having broken rather than having been stopped.
+    await runTurn(
+      ada,
+      [{ fromId: "user", fromName: "user", text: "again", priority: false, receivedAt: "" }],
+      new AbortController().signal,
+      deps
+    );
+    assert.equal(capture.params.length, 1, "the new turn ran");
+    assert.equal(policy.gate.isStopped(ada.id), false);
+  } finally {
+    policy.cleanup();
+    cleanup();
+  }
+});
+
+test("an exhausted budget refuses the turn before it spends anything", async () => {
+  const { registry, cleanup } = fixture();
+  const policy = policyFixture({ budgetTokens: 100 }, 5_000);
+  try {
+    const ada = registry.create({ name: "Ada" });
+    const bus = new AgentBus(registry, async () => {});
+    const capture: Capture = { params: [] };
+    const { client } = stubClient([message([textBlock("should not be reached")])], capture);
+
+    await runTurn(
+      ada,
+      [{ fromId: "user", fromName: "user", text: "work", priority: false, receivedAt: "" }],
+      new AbortController().signal,
+      { client, registry, bus, box: undefined, resolution: undefined, policy: policy.gate }
+    );
+
+    // Nothing was sent. A budget that only reports after the fact is not a budget.
+    assert.equal(capture.params.length, 0, "no request was made");
+    const transcript = registry.readTranscript(ada.id) as TranscriptEntry[];
+    const last = transcript.at(-1);
+    assert.ok(last && !("kind" in last));
+    assert.match(last.text, /budget/, "the transcript explains why nothing happened");
+  } finally {
+    policy.cleanup();
+    cleanup();
+  }
+});
+
+test("a gated tool call comes back as a tool error, not as a crash", async () => {
+  const { registry, cleanup } = fixture();
+  const policy = policyFixture({ approvalRequiredCommands: ["rm "] });
+  try {
+    const ada = registry.create({ name: "Ada" });
+    const bus = new AgentBus(registry, async () => {});
+    const { box, calls } = stubBox();
+    const capture: Capture = { params: [] };
+    const { client } = stubClient(
+      [
+        message([toolUseBlock("bash", { command: "rm -rf /home/box/work" })], "tool_use"),
+        message([textBlock("I cannot do that without approval.")]),
+      ],
+      capture
+    );
+
+    await runTurn(
+      ada,
+      [{ fromId: "user", fromName: "user", text: "clean up", priority: false, receivedAt: "" }],
+      new AbortController().signal,
+      { client, registry, bus, box, resolution: undefined, displayIndex: 1, policy: policy.gate }
+    );
+
+    // The box never saw it. A refusal that still runs the command is not a refusal.
+    assert.equal(
+      calls.filter(call => call.kind === "exec").length,
+      0,
+      "the command did not reach the box"
+    );
+
+    // And the model was told, in a shape it already knows how to read.
+    const transcript = registry.readTranscript(ada.id) as TranscriptEntry[];
+    const results = transcript.find(entry => "kind" in entry && entry.kind === "results");
+    assert.ok(results && "blocks" in results);
+    const block = results.blocks[0] as Anthropic.ToolResultBlockParam;
+    assert.equal(block.is_error, true);
+    const parts = block.content as Anthropic.TextBlockParam[];
+    assert.match(parts[0]!.text, /needs a person's approval/);
+
+    // A person now has something to decide on, naming the exact command.
+    assert.deepEqual(
+      policy.gate.pending().map(entry => entry.description),
+      ["Ada: bash — rm -rf /home/box/work"]
+    );
+  } finally {
+    policy.cleanup();
+    cleanup();
+  }
+});
+
+test("the wake limit stops two agents from waking each other forever", async () => {
+  const { registry, cleanup } = fixture();
+  const policy = policyFixture({ wakesPerWindow: 1, wakeWindowMinutes: 10 });
+  try {
+    const ada = registry.create({ name: "Ada" });
+    const bob = registry.create({ name: "Bob" });
+    const bus = new AgentBus(registry, async () => {});
+    const capture: Capture = { params: [] };
+    const { client } = stubClient(
+      [
+        message([toolUseBlock("SendToAgent", { target_id: bob.id, message: "one" })], "tool_use"),
+        message([toolUseBlock("SendToAgent", { target_id: bob.id, message: "two" })], "tool_use"),
+        message([textBlock("stopping")]),
+      ],
+      capture
+    );
+
+    await runTurn(
+      ada,
+      [{ fromId: "user", fromName: "user", text: "delegate", priority: false, receivedAt: "" }],
+      new AbortController().signal,
+      { client, registry, bus, box: undefined, resolution: undefined, policy: policy.gate }
+    );
+
+    const transcript = registry.readTranscript(ada.id) as TranscriptEntry[];
+    const results = transcript.filter(
+      entry => "kind" in entry && entry.kind === "results"
+    ) as Extract<TranscriptEntry, { kind: "results" }>[];
+    assert.equal(results.length, 2, "both sends were attempted");
+
+    const second = results[1]!.blocks[0] as Anthropic.ToolResultBlockParam;
+    assert.equal(second.is_error, true, "the second was refused");
+    const parts = second.content as Anthropic.TextBlockParam[];
+    assert.match(parts[0]!.text, /loop that/, "and the reason names the failure it prevents");
+  } finally {
+    policy.cleanup();
     cleanup();
   }
 });

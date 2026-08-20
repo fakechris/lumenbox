@@ -1,0 +1,538 @@
+/**
+ * One place that answers "may this happen?".
+ *
+ * Four gaps used to be four separate patches: no way to stop a running turn, no ceiling on spend, no
+ * limit on how often agents wake each other, and no way to require a human's consent before
+ * something irreversible. Written separately they would be four `if`s in four files, each with its
+ * own idea of what a refusal looks like. Written as one decision point they are the same mechanism
+ * asked four questions, and the fourth — approval — is a capability that would not otherwise exist.
+ *
+ * Three rules shape it, each from a failure someone else already had:
+ *
+ *   1. **The audit row is written before the action, not after.** "Who tried" is asked after
+ *      incidents as often as "who did". A log written on success cannot answer the first.
+ *   2. **State is on disk, never only in memory.** A pending approval that evaporates when the
+ *      process restarts is worse than no approval: a person who clicked "allow" has no way to know
+ *      their decision was lost, and the agent silently stalls forever.
+ *   3. **A refusal explains itself, to the model.** A tool result saying "denied" teaches an agent
+ *      nothing; one saying "denied: this tenant is over its 1,000,000-token budget for the month"
+ *      lets it stop rather than retry.
+ *
+ * Two call sites, one decision maker. The turn loop asks about spending and about being allowed to
+ * continue; tool dispatch asks about actions. Collapsing those into a single proxy in front of
+ * everything was considered and rejected — this system already has the orchestrator and the box in
+ * separate processes, and pretending there is one chokepoint would mean inventing one.
+ *
+ * **Deliberately in the box, not the control plane.** A stop has to be actionable from the UI, which
+ * the box serves; spend is measured in the box; approvals are answered by a person looking at the
+ * box's own screen. Putting this in the control plane would put it in the path of a turn, which the
+ * architecture exists to avoid. Limits arrive as configuration; enforcement is local.
+ */
+
+import { appendFileSync, existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
+import { createHash, randomUUID } from "node:crypto";
+import { dirname, join } from "node:path";
+import { agentboxHome } from "../config.ts";
+
+// ── what can be asked ─────────────────────────────────────────────────────────────────
+
+export type PolicyRequest =
+  /** About to call the model. Asked once per round. */
+  | { kind: "model-call"; agentId: string; agentName: string; round: number }
+  /** About to wake a teammate. Asked before the message is delivered. */
+  | { kind: "wake"; agentId: string; agentName: string; targetId: string; targetName: string }
+  /** About to run a tool. Asked with the tool's real input, before anything happens. */
+  | {
+      kind: "tool";
+      agentId: string;
+      agentName: string;
+      tool: string;
+      input: Record<string, unknown>;
+    };
+
+export type PolicyDecision =
+  | { allow: true }
+  /**
+   * Refused. `reason` is written for the model to read: it is returned as the tool result or as the
+   * turn's ending, so it has to say what would make the difference.
+   */
+  | { allow: false; reason: string; approval?: PendingApproval }
+  ;
+
+/** An action waiting for a person. Survives a restart, because the person's answer is worth keeping. */
+export interface PendingApproval {
+  id: string;
+  /**
+   * A hash of the exact action as it was described to the person.
+   *
+   * The binding is the point. An approval that names only a tool would let an agent ask to run
+   * `rm README.md`, get consent, and then run `rm -rf /home/box/work` under the same grant. So the
+   * grant is valid for one fingerprint, once.
+   */
+  fingerprint: string;
+  agentId: string;
+  agentName: string;
+  /** Rendered for a human. This exact text is what the fingerprint covers. */
+  description: string;
+  requestedAt: string;
+}
+
+// ── limits ────────────────────────────────────────────────────────────────────────────
+
+export interface PolicyLimits {
+  /**
+   * Tokens this box may spend in a rolling window before every model call is refused.
+   *
+   * Undefined means no ceiling, which is today's behaviour and is stated rather than defaulted to
+   * some number that would surprise someone.
+   */
+  budgetTokens?: number;
+  /** The window the budget applies over, in hours. */
+  budgetWindowHours: number;
+  /** How many times one agent may wake teammates in the window below. */
+  wakesPerWindow: number;
+  wakeWindowMinutes: number;
+  /**
+   * Tools whose calls need a person's consent, by name.
+   *
+   * Empty by default. Turning this on for `bash` would ask about every command, which trains a
+   * person to click through — so the useful configuration is narrow, and the mechanism exists
+   * before the policy does.
+   */
+  approvalRequiredTools: readonly string[];
+  /**
+   * Shell commands matching any of these need consent, whatever the tool.
+   *
+   * Substring matches on the command line, because that is the level a person can actually review.
+   * Regular expressions were considered and rejected: an operator writing one under time pressure
+   * gets it subtly wrong, and a policy that fails open is worse than none.
+   */
+  approvalRequiredCommands: readonly string[];
+}
+
+export const DEFAULT_LIMITS: PolicyLimits = {
+  budgetTokens: envNumber("AGENTBOX_BUDGET_TOKENS"),
+  budgetWindowHours: envNumber("AGENTBOX_BUDGET_WINDOW_HOURS") ?? 24,
+  wakesPerWindow: envNumber("AGENTBOX_WAKES_PER_WINDOW") ?? 30,
+  wakeWindowMinutes: envNumber("AGENTBOX_WAKE_WINDOW_MINUTES") ?? 10,
+  approvalRequiredTools: envList("AGENTBOX_APPROVAL_TOOLS"),
+  approvalRequiredCommands: envList("AGENTBOX_APPROVAL_COMMANDS"),
+};
+
+function envNumber(name: string): number | undefined {
+  const raw = process.env[name];
+  if (raw === undefined || raw.trim() === "") return undefined;
+  const value = Number(raw);
+  return Number.isFinite(value) && value > 0 ? value : undefined;
+}
+
+function envList(name: string): readonly string[] {
+  return (process.env[name] ?? "")
+    .split(",")
+    .map(entry => entry.trim())
+    .filter(entry => entry !== "");
+}
+
+// ── the record ────────────────────────────────────────────────────────────────────────
+
+/** One line of the policy log. Append-only, replayed to derive current state. */
+type PolicyEvent =
+  | { at: string; kind: "checked"; request: string; agentId: string; allowed: boolean; reason?: string }
+  | { at: string; kind: "stop"; agentId: string; by: string }
+  | { at: string; kind: "resume"; agentId: string; by: string }
+  | { at: string; kind: "approval-requested"; id: string; fingerprint: string; agentId: string; description: string }
+  | { at: string; kind: "approval-granted"; id: string; by: string }
+  | { at: string; kind: "approval-denied"; id: string; by: string; reason?: string }
+  | { at: string; kind: "approval-used"; id: string };
+
+/**
+ * A decision, plus the one row that records what the decision set in motion.
+ *
+ * Separated so `check` controls the order they are written in: the decision first, then its
+ * consequence.
+ */
+interface Outcome {
+  decision: PolicyDecision;
+  consequence?: PolicyEvent;
+}
+
+export interface PolicyGateOptions {
+  path?: string;
+  limits?: PolicyLimits;
+  /** Tokens spent in the budget window. Injected because the usage log owns that number. */
+  spentTokens?: () => number;
+  now?: () => Date;
+  log?: (line: string) => void;
+}
+
+/**
+ * Reads and writes the policy record, and answers questions against it.
+ *
+ * The file is append-only and replayed on construction, which is the same shape as the transcript
+ * and the activity feed. Replay rather than a mutable snapshot because the interesting states —
+ * "approved but not yet used", "stopped and not resumed" — are transitions, and a snapshot loses the
+ * order they happened in.
+ */
+export class PolicyGate {
+  private readonly path: string;
+  private readonly limits: PolicyLimits;
+  private readonly now: () => Date;
+  private readonly log: (line: string) => void;
+  private readonly spentTokens: () => number;
+
+  /** Agents whose current turn a person has asked to stop. */
+  private readonly stopped = new Set<string>();
+  /** Approvals granted and not yet consumed, by fingerprint. */
+  private readonly granted = new Map<string, PendingApproval>();
+  /** Approvals asked for and not yet answered, by fingerprint. */
+  private readonly awaiting = new Map<string, PendingApproval>();
+  /** Wake timestamps per agent, for the rate limit. Rebuilt from the log on start. */
+  private readonly wakes = new Map<string, number[]>();
+
+  constructor(options: PolicyGateOptions = {}) {
+    this.path = options.path ?? join(agentboxHome(), "policy.jsonl");
+    this.limits = options.limits ?? DEFAULT_LIMITS;
+    this.now = options.now ?? (() => new Date());
+    this.log = options.log ?? (() => {});
+    this.spentTokens = options.spentTokens ?? (() => 0);
+    this.replay();
+  }
+
+  // ── the question ────────────────────────────────────────────────────────────────────
+
+  /**
+   * Decides, and records the decision before the caller acts on it.
+   *
+   * Every path through here writes exactly one `checked` row first. That ordering is the whole
+   * reason this is a method and not four scattered conditions.
+   */
+  check(request: PolicyRequest): PolicyDecision {
+    const { decision, consequence } = this.decide(request);
+    this.append({
+      at: this.now().toISOString(),
+      kind: "checked",
+      request: describeRequest(request),
+      agentId: request.agentId,
+      allowed: decision.allow,
+      ...(decision.allow ? {} : { reason: decision.reason }),
+    });
+    // After the decision row, not before it: the log should read as the story it is — we checked, we
+    // refused, so we asked a person. Both are written before this returns, so nothing acts on a
+    // decision that is not yet on the record.
+    if (consequence !== undefined) this.append(consequence);
+    if (!decision.allow) {
+      this.log(`refused ${describeRequest(request)}: ${decision.reason}`);
+    }
+    return decision;
+  }
+
+  private decide(request: PolicyRequest): Outcome {
+    // Checked first for every kind: a person who pressed stop meant all of it, not just the model
+    // call that happened to come next.
+    if (this.stopped.has(request.agentId)) {
+      return {
+        decision: {
+          allow: false,
+          reason:
+            "A person stopped this turn. Do not continue, retry, or start related work; " +
+            "report where you got to and end the turn.",
+        },
+      };
+    }
+
+    if (request.kind === "model-call") return { decision: this.decideSpend() };
+    if (request.kind === "wake") return { decision: this.decideWake(request.agentId) };
+    return this.decideTool(request);
+  }
+
+  private decideSpend(): PolicyDecision {
+    const budget = this.limits.budgetTokens;
+    if (budget === undefined) return { allow: true };
+    const spent = this.spentTokens();
+    if (spent < budget) return { allow: true };
+    return {
+      allow: false,
+      reason:
+        `This box has spent ${spent} tokens in the last ${this.limits.budgetWindowHours}h, ` +
+        `which is at or over its ${budget} budget. No further model calls will be made until the ` +
+        `window rolls over or the budget is raised. Stop here and say so.`,
+    };
+  }
+
+  private decideWake(agentId: string): PolicyDecision {
+    const windowMs = this.limits.wakeWindowMinutes * 60_000;
+    const cutoff = this.now().getTime() - windowMs;
+    const recent = (this.wakes.get(agentId) ?? []).filter(at => at > cutoff);
+    this.wakes.set(agentId, recent);
+    if (recent.length < this.limits.wakesPerWindow) {
+      recent.push(this.now().getTime());
+      return { allow: true };
+    }
+    // The failure this prevents: two agents that wake each other, each turn generating the next.
+    // Nothing else in the system stops that, and it spends money at the speed of the API.
+    return {
+      allow: false,
+      reason:
+        `You have woken teammates ${recent.length} times in ${this.limits.wakeWindowMinutes} ` +
+        `minutes, which is the limit. Two agents taking turns to wake each other is a loop that ` +
+        `spends money without progressing. Finish what you are doing and reply to the person ` +
+        `instead of delegating again.`,
+    };
+  }
+
+  private decideTool(request: Extract<PolicyRequest, { kind: "tool" }>): Outcome {
+    if (!this.needsApproval(request)) return { decision: { allow: true } };
+
+    const description = describeRequest(request);
+    const fingerprint = fingerprintOf(request.agentId, description);
+
+    // Granted earlier and not yet used. Consumed here, so the same grant cannot cover a second run.
+    const grant = this.granted.get(fingerprint);
+    if (grant !== undefined) {
+      this.granted.delete(fingerprint);
+      return {
+        decision: { allow: true },
+        consequence: { at: this.now().toISOString(), kind: "approval-used", id: grant.id },
+      };
+    }
+
+    const existing = this.awaiting.get(fingerprint);
+    if (existing !== undefined) {
+      return {
+        decision: {
+          allow: false,
+          reason: approvalReason(existing.description),
+          approval: existing,
+        },
+      };
+    }
+
+    const approval: PendingApproval = {
+      id: randomUUID(),
+      fingerprint,
+      agentId: request.agentId,
+      agentName: request.agentName,
+      description,
+      requestedAt: this.now().toISOString(),
+    };
+    this.awaiting.set(fingerprint, approval);
+    this.log(`waiting for a person to approve: ${description}`);
+    return {
+      decision: { allow: false, reason: approvalReason(description), approval },
+      consequence: {
+        at: approval.requestedAt,
+        kind: "approval-requested",
+        id: approval.id,
+        fingerprint,
+        agentId: approval.agentId,
+        description,
+      },
+    };
+  }
+
+  private needsApproval(request: Extract<PolicyRequest, { kind: "tool" }>): boolean {
+    if (this.limits.approvalRequiredTools.includes(request.tool)) return true;
+    const command = typeof request.input.command === "string" ? request.input.command : "";
+    if (command === "") return false;
+    return this.limits.approvalRequiredCommands.some(needle => command.includes(needle));
+  }
+
+  // ── what a person does ──────────────────────────────────────────────────────────────
+
+  /** Stops an agent's current turn. Idempotent, so a second click is not an error. */
+  stop(agentId: string, by = "user"): void {
+    if (this.stopped.has(agentId)) return;
+    this.stopped.add(agentId);
+    this.append({ at: this.now().toISOString(), kind: "stop", agentId, by });
+    this.log(`${by} stopped ${agentId}`);
+  }
+
+  /**
+   * Clears a stop.
+   *
+   * Called when the next turn starts, not by a person: a stop applies to the turn that was running,
+   * and leaving it set would silently refuse the person's *next* instruction — which reads as the
+   * agent having broken rather than having been stopped.
+   */
+  resume(agentId: string, by = "system"): void {
+    if (!this.stopped.has(agentId)) return;
+    this.stopped.delete(agentId);
+    this.append({ at: this.now().toISOString(), kind: "resume", agentId, by });
+  }
+
+  isStopped(agentId: string): boolean {
+    return this.stopped.has(agentId);
+  }
+
+  /** Everything waiting on a person, newest last. */
+  pending(): PendingApproval[] {
+    return [...this.awaiting.values()].sort((a, b) => a.requestedAt.localeCompare(b.requestedAt));
+  }
+
+  /**
+   * Grants one approval by id.
+   *
+   * Returns false for an unknown or already-answered id rather than throwing: the usual cause is a
+   * second click or a stale page, and neither deserves an error.
+   */
+  grant(id: string, by = "user"): boolean {
+    const found = [...this.awaiting.values()].find(approval => approval.id === id);
+    if (found === undefined) return false;
+    this.awaiting.delete(found.fingerprint);
+    this.granted.set(found.fingerprint, found);
+    this.append({ at: this.now().toISOString(), kind: "approval-granted", id, by });
+    this.log(`${by} approved: ${found.description}`);
+    return true;
+  }
+
+  deny(id: string, by = "user", reason?: string): boolean {
+    const found = [...this.awaiting.values()].find(approval => approval.id === id);
+    if (found === undefined) return false;
+    this.awaiting.delete(found.fingerprint);
+    this.append({ at: this.now().toISOString(), kind: "approval-denied", id, by, ...(reason ? { reason } : {}) });
+    return true;
+  }
+
+  // ── the file ────────────────────────────────────────────────────────────────────────
+
+  private append(event: PolicyEvent): void {
+    try {
+      mkdirSync(dirname(this.path), { recursive: true });
+      appendFileSync(this.path, `${JSON.stringify(event)}\n`, "utf8");
+    } catch (error) {
+      // A policy decision must not fail because its log could not be written — the alternative is a
+      // turn that dies over bookkeeping. But it is said loudly, because an unrecorded refusal is
+      // exactly what an audit is for.
+      const detail = error instanceof Error ? error.message : String(error);
+      this.log(`policy: cannot write ${this.path} (${detail}); the decision stands but is unlogged`);
+    }
+  }
+
+  /**
+   * Rebuilds current state from the log.
+   *
+   * The ordering matters and is why this is a replay rather than a snapshot read: an approval that
+   * was requested, granted and used is not pending, and only the sequence says so.
+   */
+  private replay(): void {
+    if (!existsSync(this.path)) return;
+    let lines: string[];
+    try {
+      lines = readFileSync(this.path, "utf8").split("\n").filter(line => line.trim() !== "");
+    } catch (error) {
+      const detail = error instanceof Error ? error.message : String(error);
+      this.log(`policy: cannot read ${this.path} (${detail}); starting with no remembered state`);
+      return;
+    }
+
+    const byId = new Map<string, PendingApproval>();
+    for (const line of lines) {
+      let event: PolicyEvent;
+      try {
+        event = JSON.parse(line) as PolicyEvent;
+      } catch {
+        continue; // A torn last line costs one event, not the file.
+      }
+      switch (event.kind) {
+        case "stop":
+          this.stopped.add(event.agentId);
+          break;
+        case "resume":
+          this.stopped.delete(event.agentId);
+          break;
+        case "approval-requested": {
+          const approval: PendingApproval = {
+            id: event.id,
+            fingerprint: event.fingerprint,
+            agentId: event.agentId,
+            agentName: "",
+            description: event.description,
+            requestedAt: event.at,
+          };
+          byId.set(event.id, approval);
+          this.awaiting.set(event.fingerprint, approval);
+          break;
+        }
+        case "approval-granted": {
+          const approval = byId.get(event.id);
+          if (approval === undefined) break;
+          this.awaiting.delete(approval.fingerprint);
+          this.granted.set(approval.fingerprint, approval);
+          break;
+        }
+        case "approval-denied":
+        case "approval-used": {
+          const approval = byId.get(event.id);
+          if (approval === undefined) break;
+          this.awaiting.delete(approval.fingerprint);
+          this.granted.delete(approval.fingerprint);
+          break;
+        }
+        default:
+          break;
+      }
+    }
+
+    if (this.stopped.size > 0 || this.awaiting.size > 0) {
+      this.log(
+        `policy: resumed with ${this.awaiting.size} approval(s) waiting and ` +
+          `${this.stopped.size} agent(s) stopped`
+      );
+    }
+    if (lines.length > COMPACT_AT) this.compact(lines);
+  }
+
+  /** Rewrites the log with what still matters, so it does not grow without bound. */
+  private compact(lines: readonly string[]): void {
+    try {
+      const kept = lines.slice(-KEEP_ON_COMPACT);
+      const temp = `${this.path}.${process.pid}.tmp`;
+      writeFileSync(temp, `${kept.join("\n")}\n`, "utf8");
+      renameSync(temp, this.path);
+      this.log(`policy: compacted the log to its last ${kept.length} events`);
+    } catch (error) {
+      const detail = error instanceof Error ? error.message : String(error);
+      this.log(`policy: cannot compact ${this.path} (${detail})`);
+    }
+  }
+}
+
+const COMPACT_AT = Number(process.env.AGENTBOX_POLICY_COMPACT_AT ?? 20_000);
+const KEEP_ON_COMPACT = Number(process.env.AGENTBOX_POLICY_KEEP ?? 5_000);
+
+// ── describing and binding ────────────────────────────────────────────────────────────
+
+/**
+ * The one rendering of an action, used for the person, the log, and the fingerprint.
+ *
+ * One function on purpose. If the text shown to a person and the text that was hashed could differ,
+ * the binding would be decorative — someone could be shown one command and consent to another.
+ */
+export function describeRequest(request: PolicyRequest): string {
+  switch (request.kind) {
+    case "model-call":
+      return `${request.agentName}: model call (round ${request.round})`;
+    case "wake":
+      return `${request.agentName}: wake ${request.targetName}`;
+    case "tool": {
+      const command = typeof request.input.command === "string" ? request.input.command : undefined;
+      // The command is the reviewable thing when there is one; otherwise the whole input, bounded so
+      // one enormous argument cannot push the meaningful part off a person's screen.
+      const detail = command ?? JSON.stringify(request.input);
+      return `${request.agentName}: ${request.tool} — ${detail.slice(0, 400)}`;
+    }
+  }
+}
+
+/** Binds a grant to one agent and one exact description. */
+export function fingerprintOf(agentId: string, description: string): string {
+  return createHash("sha256").update(`${agentId} ${description}`).digest("hex").slice(0, 32);
+}
+
+function approvalReason(description: string): string {
+  return (
+    `This needs a person's approval before it can run: ${description}\n` +
+    `It has been put in front of them. Do not try to work around it, and do not repeat the ` +
+    `request — ask the person directly if it is urgent, or continue with something else.`
+  );
+}

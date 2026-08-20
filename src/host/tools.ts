@@ -11,10 +11,19 @@ import type { BoxClient } from "../box/client.ts";
 import type { DisplayLease } from "../box/display-lease.ts";
 import type { AgentBus } from "../agents/bus.ts";
 import type { AgentRecord, AgentRegistry } from "../agents/registry.ts";
+import type { PolicyGate } from "./policy.ts";
 import type { ComputerAction } from "../protocol/index.ts";
 
 export interface ToolContext {
   agent: AgentRecord;
+  /**
+   * Asked whether an action may happen, before it happens.
+   *
+   * Optional so every existing test and the CLI keep working without one, and absent means allow —
+   * which is today's behaviour. Present, it is consulted for every tool call, including the ones
+   * that reach the box and the ones that wake a teammate.
+   */
+  policy?: PolicyGate;
   registry: AgentRegistry;
   bus: AgentBus;
   box: BoxClient | undefined;
@@ -437,6 +446,20 @@ export async function dispatchTool(
   input: Record<string, unknown>,
   context: ToolContext
 ): Promise<ToolOutcome> {
+  // Before the switch, so no tool can be added later that quietly bypasses it. A refusal comes back
+  // as a tool error, which is the shape the model already knows how to read: it sees why, and can
+  // stop or ask, rather than retrying into a wall.
+  const decision = context.policy?.check({
+    kind: "tool",
+    agentId: context.agent.id,
+    agentName: context.agent.profile.name,
+    tool: name,
+    input,
+  });
+  if (decision !== undefined && !decision.allow) {
+    return { text: decision.reason, isError: true };
+  }
+
   switch (name) {
     case "computer": {
       const box = requireBox(context);
@@ -565,9 +588,22 @@ export async function dispatchTool(
     }
 
     case "SendToAgent": {
+      const targetId = String(input.target_id ?? "");
+      // Checked as a wake rather than as a tool call, because the limit that matters here is on how
+      // often agents set each other going — the shape that produces a loop nothing else stops.
+      const target = context.registry.tryGet(targetId);
+      const wake = context.policy?.check({
+        kind: "wake",
+        agentId: context.agent.id,
+        agentName: context.agent.profile.name,
+        targetId,
+        targetName: target?.profile.name ?? targetId,
+      });
+      if (wake !== undefined && !wake.allow) return { text: wake.reason, isError: true };
+
       const ack = context.bus.send({
         fromId: context.agent.id,
-        toId: String(input.target_id ?? ""),
+        toId: targetId,
         text: String(input.message ?? ""),
         priority: input.priority === true,
       });
