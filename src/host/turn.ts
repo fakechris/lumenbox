@@ -716,12 +716,34 @@ export async function runTurn(
       const outcome = await runRounds(continuation);
       if (outcome === undefined) break;
       continuation = outcome.continuation;
-      messages.push({ role: "user", content: outcome.continueWith });
       registry.appendTranscript(agent.id, {
         role: "user",
         text: outcome.continueWith,
         at: new Date().toISOString(),
       } satisfies TranscriptEntry);
+
+      // Reassembled from the transcript, and compacted on the way, which is what the comment above
+      // has always claimed and what the code did not do: a continuation used to push one more
+      // message onto the array the previous four hundred rounds had built. So the turn that most
+      // needs room — one still working after four hundred rounds — was the only one that never got
+      // any, and proactive compaction could not help because it had already run, once, before the
+      // first round.
+      //
+      // Everything a completed round produced is on disk by now, so re-reading loses nothing; and
+      // an orphaned call left by the round limit is paired up during assembly.
+      history = await compactHistory({
+        history: registry.readTranscript(agent.id) as TranscriptEntry[],
+        agent,
+        registry,
+        client,
+        provider,
+        log: line => console.error(`[compaction] ${agent.profile.name}: ${line}`),
+        onCompacted: event => emit({ ...event, agentId: agent.id }),
+      });
+      // In place: `runRounds` closes over this array.
+      messages.length = 0;
+      messages.push(...historyToMessages(history));
+
       rounds.length = 0; // a fresh budget means a fresh judgement about looping
     }
   } finally {

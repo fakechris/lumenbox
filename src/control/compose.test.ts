@@ -430,3 +430,36 @@ test("losing an allocation race does not destroy the winner's container", async 
     cleanup();
   }
 });
+
+
+test("a box made by another allocator is refused, not silently mismanaged", async () => {
+  // allocator_kind was stored and never read. A control plane started with a different allocator
+  // against the same database handed back the other one's row and applied its own semantics: it
+  // would stop a container that is not there, authenticate with credentials that are not its, and
+  // report a running box unreachable.
+  const { store, allocator, cleanup } = fixture();
+  try {
+    const acme = store.upsertTenant({ name: "acme" });
+    store.createBox(
+      {
+        id: "box-static",
+        tenantId: acme.id,
+        allocatorKind: "static",
+        externalId: "a-box-somebody-else-runs",
+        boxdUrl: "http://127.0.0.1:1337",
+        uiUrl: "http://127.0.0.1:7777",
+        state: "ready",
+        image: "agentbox/box:test",
+        createdAt: new Date().toISOString(),
+      },
+      { box: "t", ui: "t" }
+    );
+
+    await assert.rejects(allocator.find(acme.id), /created by the static allocator/);
+    // And the message says what to do about it, because this is a configuration mistake and the
+    // person reading it is the one who can fix it.
+    await assert.rejects(allocator.find(acme.id), /Start the control plane with the static/);
+  } finally {
+    cleanup();
+  }
+});

@@ -1777,3 +1777,63 @@ test("a stop pressed while the history is being compacted is not cleared by the 
     cleanup();
   }
 });
+
+
+test("a continuation reassembles its request instead of growing the old one", async () => {
+  // A continuation used to push one more message onto the array the previous four hundred rounds
+  // had built, so the turn that most needs room — one still working after four hundred rounds — was
+  // the only one that never got any. Proactive compaction had already run, once, before round one.
+  const { registry, cleanup } = fixture();
+  const previousRounds = process.env.AGENTBOX_MAX_ROUNDS;
+  try {
+    // Two rounds per pass, so the limit is reached quickly and a continuation happens.
+    process.env.AGENTBOX_MAX_ROUNDS = "2";
+    const ada = registry.create({ name: "Ada" });
+    const bus = new AgentBus(registry, async () => {});
+    const { box } = stubBox();
+    const capture: Capture = { params: [] };
+
+    // Always asks for another tool call, so every pass exhausts its rounds while making progress.
+    let call = 0;
+    const client = {
+      messages: {
+        create: async () => message([textBlock("a summary")]),
+        stream(params: Anthropic.MessageCreateParams) {
+          capture.params.push({ ...params, messages: [...params.messages] });
+          const id = `t${call++}`;
+          return {
+            on() {
+              return this;
+            },
+            finalMessage: async () =>
+              message([toolUseBlock("bash", { command: `echo ${id}` }, id)], "tool_use"),
+          };
+        },
+      },
+    } as unknown as Anthropic;
+
+    await runTurn(
+      ada,
+      [{ fromId: "user", fromName: "user", text: "keep going", priority: false, receivedAt: "" }],
+      new AbortController().signal,
+      { client, registry, bus, box, resolution: undefined }
+    ).catch(() => {
+      // It ends at the continuation budget; the assertion below is about the requests it made.
+    });
+
+    // The first request of a continuation must not simply be the previous one plus a line. It is
+    // rebuilt from the transcript, so its first message is the start of the window rather than the
+    // original prompt object carried forward.
+    const sizes = capture.params.map(params => params.messages.length);
+    assert.ok(sizes.length > 2, `expected several rounds, got ${sizes.length}`);
+    const shrinks = sizes.some((size, index) => index > 0 && size < sizes[index - 1]!);
+    assert.ok(
+      shrinks,
+      `a continuation should rebuild rather than only ever grow; sizes were ${JSON.stringify(sizes)}`
+    );
+  } finally {
+    if (previousRounds === undefined) delete process.env.AGENTBOX_MAX_ROUNDS;
+    else process.env.AGENTBOX_MAX_ROUNDS = previousRounds;
+    cleanup();
+  }
+});

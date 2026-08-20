@@ -243,7 +243,21 @@ export abstract class StoreBackedAllocator implements BoxAllocator {
 
   async find(tenantId: string): Promise<BoxHandle | undefined> {
     const row = this.store.boxForTenant(tenantId);
-    return row === undefined ? undefined : this.toHandle(row);
+    if (row === undefined) return undefined;
+    // The kind is stored and was never read. A control plane started with a different allocator
+    // against the same database handed back the other one's row and then applied its own semantics
+    // to it: stopping a container that is not there, authenticating with credentials that are not
+    // its, reporting a box unreachable that is running perfectly well. Said plainly instead —
+    // returning undefined would be worse, because the caller would try to allocate a second box and
+    // meet the unique index with no idea why.
+    if (row.allocatorKind !== this.kind) {
+      throw new Error(
+        `This tenant's box was created by the ${row.allocatorKind} allocator and this control ` +
+          `plane is running the ${this.kind} one, so it cannot manage it. Start the control plane ` +
+          `with the ${row.allocatorKind} allocator, or destroy the box first.`
+      );
+    }
+    return this.toHandle(row);
   }
 
   async stop(handle: BoxHandle): Promise<void> {
