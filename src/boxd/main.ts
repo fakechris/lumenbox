@@ -19,6 +19,7 @@ import {
 import { connect as netConnect, type Socket } from "node:net";
 import { createReadStream, readFileSync, readdirSync, statSync } from "node:fs";
 import { join } from "node:path";
+import { resolveRange } from "./range.ts";
 import { timingSafeEqual } from "node:crypto";
 import {
   BOXD_PORT,
@@ -386,16 +387,15 @@ function serveRecording(req: IncomingMessage, res: ServerResponse): void {
 
   const path = join(RECORDINGS_DIR, requested);
   const total = statSync(path).size;
-  const range = /^bytes=(\d*)-(\d*)$/.exec(req.headers.range ?? "");
+  const range = resolveRange(req.headers.range, total);
 
-  if (range) {
-    const start = range[1] ? Number(range[1]) : 0;
-    const end = range[2] ? Math.min(Number(range[2]), total - 1) : total - 1;
-    if (start > end || start >= total) {
+  if (range !== undefined) {
+    if (range === "unsatisfiable") {
       res.writeHead(416, { "content-range": `bytes */${total}` });
       res.end();
       return;
     }
+    const { start, end } = range;
     res.writeHead(206, {
       "content-type": "video/mp4",
       "content-length": end - start + 1,
@@ -537,6 +537,11 @@ if (egressRelay) {
 
 server.listen(BOXD_PORT, "0.0.0.0", () => {
   log(`listening on 0.0.0.0:${BOXD_PORT}, display ${display}`);
+  // Encoders left running by a previous daemon. They are adopted by PID 1 when boxd dies and keep
+  // writing, and this process's map is empty — so without this, starting a recording gives you two
+  // ffmpegs on one screen and a file nobody will ever stop.
+  const reclaimed = recorder.reclaimOrphans();
+  if (reclaimed > 0) log(`stopped ${reclaimed} recording(s) left by a previous daemon`);
   // Warm the display so the first computer call is not paying detection latency.
   displays.ensure(defaultDisplayIndex).catch(error => {
     log(`default desktop not ready yet: ${describe(error)}`);

@@ -169,3 +169,44 @@ test("stopping something that is not recording is an error, not a crash", async 
   const service = serviceWith([]);
   await assert.rejects(() => service.stop(9), RecordingError);
 });
+
+
+test("a spawn failure is reported, not fatal to the daemon", () => {
+  // A child's `error` event with no listener is fatal to the whole process. So an EAGAIN under load
+  // — the moment starting a second encoder is most likely to fail — took boxd down, and its
+  // supervisor restarted it into a box whose first recorder was now an orphan.
+  const lines: string[] = [];
+  const children: FakeChild[] = [];
+  let clock = 1_000_000;
+  const service = new RecordService(
+    line => lines.push(line),
+    () => {
+      const child = new FakeChild();
+      children.push(child);
+      return child as never;
+    },
+    () => (clock += 1000)
+  );
+
+  service.start({ display: 1, resolution });
+  assert.equal(service.isRecording(1), true);
+
+  children[0]?.emit("error", new Error("spawn ffmpeg EAGAIN"));
+
+  assert.equal(service.isRecording(1), false, "the desktop is free to be tried again");
+  assert.ok(
+    lines.some(line => /could not start: spawn ffmpeg EAGAIN/.test(line)),
+    `expected it to say why, got ${JSON.stringify(lines)}`
+  );
+
+  // And the next attempt is not refused by a recording that never existed.
+  service.start({ display: 1, resolution });
+  assert.equal(service.isRecording(1), true);
+});
+
+test("orphaned encoders are looked for, and finding none is not an error", () => {
+  // The reclamation reads /proc, which a developer's machine does not have. It must be silent and
+  // harmless there rather than throwing on startup.
+  const service = new RecordService(() => {});
+  assert.equal(service.reclaimOrphans(), 0);
+});

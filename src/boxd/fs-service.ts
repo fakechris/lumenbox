@@ -148,6 +148,32 @@ export async function uploadFile(request: UploadFileRequest): Promise<UploadFile
   if (realParent !== root && !realParent.startsWith(`${root}/`)) {
     throw new Error(`${requested} is outside ${DOWNLOAD_ROOT}; only that tree accepts uploads`);
   }
+  // And the destination itself, not only its parent. `writeFile` follows a symlink, so a name inside
+  // the work directory that already points outside it was a way through the confinement: leave
+  // `work/report.pdf` pointing at a browser profile file, and the next upload to that name rewrites
+  // the profile. The parent check passes, because the parent really is inside the root.
+  //
+  // A link is resolved rather than refused: one pointing somewhere inside the tree is a normal thing
+  // to have. This is containment against accidents and confused deputies — the agent has a shell as
+  // this uid and does not need to go through here — so the resolve-then-check race is acceptable
+  // where the same race in a security boundary would not be.
+  const existing = await lstat(requested).catch(() => undefined);
+  if (existing?.isSymbolicLink()) {
+    const target = await realpath(requested).catch(() => undefined);
+    if (target === undefined) {
+      throw new Error(
+        `${requested} is a symlink to something that does not exist. Remove it or upload to a ` +
+          `different name; writing through it would create a file outside ${DOWNLOAD_ROOT}.`
+      );
+    }
+    if (target !== root && !target.startsWith(`${root}/`)) {
+      throw new Error(
+        `${requested} is a symlink to ${target}, which is outside ${DOWNLOAD_ROOT}. Writing to it ` +
+          `would change a file outside the work directory, so it is refused.`
+      );
+    }
+  }
+
   const bytes = Buffer.from(request.base64, "base64");
   if (bytes.length > MAX_DOWNLOAD_BYTES) {
     throw new Error(`${bytes.length} bytes is over the ${MAX_DOWNLOAD_BYTES}-byte upload limit`);

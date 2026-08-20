@@ -31,7 +31,7 @@
  */
 
 import { spawn, type ChildProcess } from "node:child_process";
-import { mkdirSync, readdirSync, statSync } from "node:fs";
+import { mkdirSync, readdirSync, readFileSync, statSync } from "node:fs";
 import { join } from "node:path";
 
 /** Under the work volume, so recordings outlive the container that made them. */
@@ -182,6 +182,16 @@ export class RecordService {
       stderr: "",
     };
 
+    // A spawn failure arrives as an `error` event, and an `error` event with no listener is fatal
+    // to the whole daemon. So an EAGAIN under load — the moment when starting a second encoder is
+    // most likely to fail — took boxd down with it, and its supervisor restarted it into a box
+    // whose first recorder was now an orphan.
+    child.on("error", error => {
+      if (this.active.get(display) === entry) this.active.delete(display);
+      entry.stderr = `${entry.stderr}\nfailed to start ffmpeg: ${error.message}`.slice(-4000);
+      this.log(`recording on desktop ${display} could not start: ${error.message}`);
+    });
+
     // Kept because ffmpeg reports why it failed on stderr and then exits; without it a
     // recording that never started looks identical to one that is running.
     child.stderr?.on("data", (chunk: Buffer) => {
@@ -202,6 +212,56 @@ export class RecordService {
     this.active.set(display, entry);
     this.log(`recording desktop ${display} to ${file}`);
     return entry.status;
+  }
+
+  /**
+   * Stops encoders left behind by a previous daemon.
+   *
+   * ffmpeg is a separate process: when boxd dies, its recorders are adopted by PID 1 and keep
+   * writing. The replacement daemon has an empty map, so it believes nothing is recording — and
+   * starting a recorder for that desktop gives you two encoders capturing the same screen into two
+   * files, one of which nobody will ever stop.
+   *
+   * They cannot be adopted: a clean stop is `q` on stdin and that pipe died with the old process.
+   * SIGTERM is what is left, and ffmpeg does write its trailer on SIGTERM, so the orphan's file is
+   * still playable up to that point.
+   *
+   * Reads /proc directly rather than shelling out to `ps`: this runs at startup, on the path a
+   * person is waiting on, and the container has /proc. Anywhere without one — a developer's Mac —
+   * it finds nothing and says nothing, which is correct there.
+   */
+  reclaimOrphans(): number {
+    let stopped = 0;
+    let pids: string[];
+    try {
+      pids = readdirSync("/proc").filter(name => /^\d+$/.test(name));
+    } catch {
+      return 0;
+    }
+
+    for (const pid of pids) {
+      let argv: string[];
+      try {
+        argv = readFileSync(`/proc/${pid}/cmdline`, "utf8").split("\0").filter(Boolean);
+      } catch {
+        continue; // exited while we were looking, or not ours to read
+      }
+      const command = argv[0] ?? "";
+      if (!command.endsWith("ffmpeg")) continue;
+      if (!argv.some(argument => argument.startsWith(RECORDINGS_DIR))) continue;
+
+      try {
+        process.kill(Number(pid), "SIGTERM");
+        stopped += 1;
+        this.log(
+          `stopped a recording left running by a previous daemon (pid ${pid}); its file is ` +
+            `closed where it got to`
+        );
+      } catch (error) {
+        this.log(`could not stop orphaned recorder ${pid}: ${error instanceof Error ? error.message : String(error)}`);
+      }
+    }
+    return stopped;
   }
 
   async stop(display: number): Promise<RecordingStatus> {
