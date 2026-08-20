@@ -4,7 +4,7 @@ Reviewed against [01-requirements.md](01-requirements.md) through
 [06-deployment.md](06-deployment.md). Every finding below was verified against the running
 system or the source, not inferred from the documents.
 
-**Verdict, at 20K lines of source and 362 tests: it meets a product-grade standard for a
+**Verdict, at 20K lines of source and 415 tests: it meets a product-grade standard for a
 single-tenant deployment, and does not yet for a multi-tenant one.** The gap is three items in
 [10-security-backlog.md](10-security-backlog.md), not a shortfall in the functional requirements.
 
@@ -28,6 +28,43 @@ exposes and nobody collects.
 | R-12 | Compaction's claim was false for the agent | fixed |
 | R-13 | A turn could end silently | fixed |
 | R-14 | A command timeout was capped in silence | fixed |
+| R-15 | Compaction dropped the tail it existed to preserve | fixed |
+| R-16 | A viewer could drive the desktop | fixed |
+| R-17 | Three governance controls failed open | fixed |
+| R-18 | Long turns were never compacted after the first round | fixed |
+| R-19 | Execution obligations died with the process | **partly fixed** |
+
+### The adversarial round
+
+An independent reviewer was pointed at four areas — architecture and long-task
+stability, overall design gaps, the model-facing logic, and the box.
+Fifty-two findings came back, all claimed CONFIRMED. Twenty-six survived checking and were
+fixed; the rest were either already-documented trade-offs, or wrong.
+
+Both halves of that matter. **Two of the findings I first judged false positives turned out
+to be real** — image pruning keeping the screenshot from *before* the last action, and the
+continuation loop never recompacting — and both were only settled by running a probe rather
+than by reading the code again. The habit worth keeping is not "trust the reviewer" or
+"trust yourself" but "the argument ends at a probe".
+
+What it found, grouped by what it says about the system rather than by severity:
+
+- **Two states sharing one representation, seven more times.** Compaction's cut point, the
+  entry cap, a stop pressed during compaction, a truncated message, an unparsed setting, a
+  malformed todo list, and — committed *while fixing the others* — `undefined` meaning both
+  "default path" and "no file". This is the defect this codebase produces. It is worth
+  treating any `undefined`, empty array or zero that answers two questions as a bug on sight.
+- **Controls that failed open.** A budget window that never rolled, spend that read as zero
+  when its accounting broke, and consent that was consumed but not recorded. Each was a
+  control that stopped applying at exactly the moment it mattered.
+- **Guarantees the box did not keep.** A view-only role that could type, an output cap that
+  did not bound memory, a timeout that did not end the request, a desktop that changed hands
+  across a restart, a recorder that outlived its daemon, an upload that wrote through a
+  symlink.
+- **Names that could collide.** Container names derived from tenant names, where the volumes
+  carry the tenant's work.
+
+
 
 ### What this review keeps getting wrong
 
@@ -371,6 +408,12 @@ Worth recording, because a review that only lists faults misrepresents the syste
    with an owner watching is fine; the moment there are two, a crash-looping component reports itself
    only to whoever asks.
 4. **R-04 — the token in the URL.** Low severity and still wrong.
+
+**What was left undone, deliberately.** Per-step checkpoint and resume is the one large gap
+still open: a turn interrupted at round 300 leaves its record but does not resume. Everything
+else in the persistence family is closed — admission, schedules, ownership — and this one is
+last because it is the only one that has to answer "what happens to a side effect whose
+result was never written down", and that answer decides whether replay is safe at all.
 
 Two capabilities are absent rather than broken, and both bear on how long a task can run:
 
