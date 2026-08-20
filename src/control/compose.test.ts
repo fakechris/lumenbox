@@ -185,7 +185,8 @@ test("a fresh tenant's box is not recreated", async () => {
     const acme = store.upsertTenant({ name: "acme" });
     await allocator.allocate(acme.id, { image: "agentbox/box:test" });
     const up = engine.calls.find(call => call.action === "up");
-    assert.equal((up?.detail as { recreate?: boolean }).recreate, false);
+    assert.ok(up, "the container was brought up");
+    assert.equal((up.detail as { recreate?: boolean }).recreate, false);
   } finally {
     cleanup();
   }
@@ -290,7 +291,7 @@ test("provider configuration reaches the box as environment", async () => {
 });
 
 test("a restart moves the ports, and reconcile corrects the store", async () => {
-  const { store, allocator, engine, cleanup } = fixture();
+  const { store, allocator, cleanup } = fixture();
   try {
     const acme = store.upsertTenant({ name: "acme" });
     const handle = await allocator.allocate(acme.id, { image: "agentbox/box:test" });

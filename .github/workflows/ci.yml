@@ -1,0 +1,54 @@
+# The checks that have to pass before anything is believed.
+#
+# This repository had none of this until now, and the risk it addresses is not a hypothetical: with
+# one maintainer, a regression can sit undetected indefinitely. The decision record in docs/ says
+# what the system is meant to do; this is what makes those claims enforced rather than aspirational.
+#
+# Four steps, in increasing cost, so the cheapest failure is reported first:
+#   typecheck — the whole repository, strict, with noUncheckedIndexedAccess
+#   lint      — Biome; zero findings is the state, so a new one fails the build
+#   test      — through scripts/test-floor.mjs, which fails if the suite shrank
+#   build     — proves the bundles the Docker image needs still build
+#
+# Not here, deliberately: the smoke suite and anything else needing a real X server and a container.
+# Those run against a live box (`npm run smoke`) and cost minutes; they belong to a release check,
+# not to every push. Said plainly so nobody reads a green tick as "the desktop works".
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      # SHA-pinned rather than tagged: a tag can be moved, and an action runs with access to this
+      # repository's checkout.
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+
+      - uses: actions/setup-node@39370e3970a6d050c480ffad4ff0ed4d3fdee5af # v4.1.0
+        with:
+          node-version: '22'
+          cache: npm
+
+      - run: npm ci
+
+      - name: typecheck
+        run: npm run typecheck
+
+      - name: lint
+        run: npm run lint
+
+      - name: test
+        run: npm run test:ci
+
+      # Last, because a build failure is less informative than a type error and takes longer to read.
+      - name: build
+        run: npm run build:box

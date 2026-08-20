@@ -517,30 +517,34 @@ test("the transcript records what tools a turn actually ran", async () => {
       { client, registry, bus, box, resolution: undefined }
     );
 
-    const transcript = registry.readTranscript(ada.id) as any[];
+    const transcript = registry.readTranscript(ada.id) as TranscriptEntry[];
 
     // The call must be stored as a real tool_use block, not as prose. Prose the
     // model can read is prose the model can forge: an earlier version recorded a
     // "[tools used this turn]" line and the model simply wrote one itself, with an
     // invented success message, and called nothing.
-    const call = transcript.find(e => e.kind === "blocks");
-    assert.ok(call, "the calling turn must be recorded as blocks");
-    const toolUse = call.blocks.find((b: any) => b.type === "tool_use");
+    const call = transcript.find(entry => "kind" in entry && entry.kind === "blocks");
+    assert.ok(call && "blocks" in call, "the calling turn must be recorded as blocks");
+    const toolUse = call.blocks.find(block => block.type === "tool_use");
     assert.ok(toolUse, "a tool_use block must be present");
     assert.equal(toolUse.name, "bash");
-    assert.equal(toolUse.input.command, "mkdir -p /home/box/work");
+    assert.equal((toolUse.input as { command: string }).command, "mkdir -p /home/box/work");
 
     // The result must immediately follow it, or the API rejects the pair.
     const resultIndex = transcript.indexOf(call) + 1;
     const results = transcript[resultIndex];
-    assert.equal(results.kind, "results");
+    assert.ok(results && "blocks" in results, "a results entry must follow the call");
     assert.equal(results.role, "user");
-    assert.equal(results.blocks[0].type, "tool_result");
-    assert.equal(results.blocks[0].tool_use_id, toolUse.id);
-    assert.match(results.blocks[0].content[0].text, /exit code: 0/);
+    const resultBlock = results.blocks[0] as Anthropic.ToolResultBlockParam;
+    assert.equal(resultBlock.type, "tool_result");
+    assert.equal(resultBlock.tool_use_id, toolUse.id);
+    const resultParts = resultBlock.content as Anthropic.TextBlockParam[];
+    assert.match(resultParts[0]!.text, /exit code: 0/);
 
     // And the work must precede the claim about it.
-    const claimIndex = transcript.findIndex(e => /Done — created/.test(e.text ?? ""));
+    const claimIndex = transcript.findIndex(
+      entry => !("kind" in entry) && /Done — created/.test(entry.text)
+    );
     assert.ok(transcript.indexOf(call) < claimIndex, "work comes before the claim");
   } finally {
     cleanup();
@@ -570,12 +574,16 @@ test("a failed tool is recorded as an error, not as work done", async () => {
       { client, registry, bus, box: undefined, resolution: undefined }
     );
 
-    const transcript = registry.readTranscript(ada.id) as any[];
-    const results = transcript.find(e => e.kind === "results");
+    const transcript = registry.readTranscript(ada.id) as TranscriptEntry[];
+    const results = transcript.find(
+      entry => "kind" in entry && entry.kind === "results"
+    );
 
-    assert.ok(results, "the failed call must still be recorded");
-    assert.equal(results.blocks[0].is_error, true, "a failure must not read as success");
-    assert.match(results.blocks[0].content[0].text, /box is not running/);
+    assert.ok(results && "blocks" in results, "the failed call must still be recorded");
+    const block = results.blocks[0] as Anthropic.ToolResultBlockParam;
+    assert.equal(block.is_error, true, "a failure must not read as success");
+    const parts = block.content as Anthropic.TextBlockParam[];
+    assert.match(parts[0]!.text, /box is not running/);
   } finally {
     cleanup();
   }

@@ -16,13 +16,17 @@
     "typecheck": "tsc -p tsconfig.json",
     "test": "node --experimental-transform-types --test --test-timeout=30000 'src/**/*.test.ts'",
     "agentbox": "node --experimental-transform-types src/cli.ts",
-    "smoke": "node --experimental-transform-types scripts/smoke.mjs"
+    "smoke": "node --experimental-transform-types scripts/smoke.mjs",
+    "lint": "biome lint src/ scripts/",
+    "lint:fix": "biome lint --write src/ scripts/",
+    "test:ci": "node scripts/test-floor.mjs"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.117.1",
     "markdown-it": "^15.0.0"
   },
   "devDependencies": {
+    "@biomejs/biome": "^2.5.9",
     "@types/node": "^22.10.0",
     "esbuild": "^0.25.0",
     "typescript": "^5.7.0"

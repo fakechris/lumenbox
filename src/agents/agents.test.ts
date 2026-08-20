@@ -13,7 +13,6 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { AgentRegistry } from "./registry.ts";
 import { AgentBus, type InboundMessage } from "./bus.ts";
-import type { AgentRecord } from "./registry.ts";
 
 function tempRegistry(): { registry: AgentRegistry; cleanup: () => void } {
   const root = mkdtempSync(join(tmpdir(), "agentbox-test-"));

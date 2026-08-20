@@ -1,9 +1,16 @@
 node_modules/
 dist/
 
-# Built by `npm run build:boxd` into the Docker context. Derived from src/boxd,
-# so it is not source — but the image build needs it present.
+# Built into the Docker context by `npm run build:box`. Derived from src/, so neither is source —
+# but the image build needs both present, which is why `scripts/control-up.sh` builds before it
+# builds the image.
+#
+# hostd.mjs used to be committed while boxd.cjs was ignored. That inconsistency was not a decision:
+# a 700KB build artefact in the repository can diverge from src/ silently, and it did — a box came
+# up answering 404 to /api/usage because the committed bundle predated the endpoint, which read as a
+# control-plane bug rather than a stale image.
 docker/box/boxd.cjs
+docker/box/hostd.mjs
 
 *.log
 *.webp

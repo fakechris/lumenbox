@@ -6,7 +6,7 @@
  * orchestration you see at runtime is emergent, not encoded.
  */
 
-import Anthropic from "@anthropic-ai/sdk";
+import type Anthropic from "@anthropic-ai/sdk";
 import { AgentBus, type BusEvent, type InboundMessage } from "../agents/bus.ts";
 import { AgentRegistry, type AgentRecord } from "../agents/registry.ts";
 import type { BoxClient } from "../box/client.ts";

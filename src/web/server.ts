@@ -28,7 +28,7 @@ import { Orchestrator } from "../host/orchestrator.ts";
 import { describeProvider, type ProviderProfile } from "../host/provider.ts";
 import type { TurnEvent } from "../host/turn.ts";
 import { APP_HTML } from "./app-html.ts";
-import { COOKIE_NAME, authorize, isLoopback } from "./auth.ts";
+import { authorize, isLoopback } from "./auth.ts";
 import { agentboxHome, loadConfig } from "../config.ts";
 import { ActivityLog } from "./activity.ts";
 import { vendorPath } from "./markdown.ts";

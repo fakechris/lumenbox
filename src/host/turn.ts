@@ -6,7 +6,7 @@
  * background work, and the abort has to land between tool calls.
  */
 
-import Anthropic from "@anthropic-ai/sdk";
+import type Anthropic from "@anthropic-ai/sdk";
 import type { AgentRecord, AgentRegistry } from "../agents/registry.ts";
 import type { AgentBus, InboundMessage } from "../agents/bus.ts";
 import type { BoxClient } from "../box/client.ts";

@@ -271,6 +271,14 @@ function proxyVnc(req: IncomingMessage, res: ServerResponse, path: string): void
   req.pipe(upstream);
 }
 
+/**
+ * A route handler, which declares its own request type.
+ *
+ * `any` is deliberate and the alternative is worse: with `unknown` every handler below would need a
+ * cast at its own boundary, moving one honest `any` into a dozen dishonest ones. The type each
+ * handler declares is the checked contract; this signature only has to let them differ.
+ */
+// biome-ignore lint/suspicious/noExplicitAny: see above — the handlers' own parameter types are the contract
 type Handler = (body: any) => Promise<unknown>;
 
 const routes: Record<string, Handler> = {

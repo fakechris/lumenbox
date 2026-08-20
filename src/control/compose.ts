@@ -134,7 +134,7 @@ export class ComposeAllocator extends StoreBackedAllocator {
 
   protected async create(
     tenantId: string,
-    boxId: string,
+    _boxId: string,
     spec: BoxSpec,
     tokens: { box: string; ui: string }
   ): Promise<{ externalId: string; boxdUrl: string; uiUrl: string; state: BoxState }> {

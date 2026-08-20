@@ -45,8 +45,9 @@ test("a multi-line message keeps its own lines", () => {
   const parsed = parseWakePrompt(buildWakePrompt([inbound("Ada", body)]), ["Ada"]);
 
   // The roster is what stops "Note:" from being read as a message from Note.
-  assert.equal(parsed?.length, 1);
-  assert.equal(parsed?.[0]!.text, body);
+  assert.ok(parsed, "the body parsed");
+  assert.equal(parsed.length, 1);
+  assert.equal(parsed[0]?.text, body);
 });
 
 test("text the user typed is not a wake prompt", () => {
