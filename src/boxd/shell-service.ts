@@ -26,7 +26,7 @@ const DEFAULT_TIMEOUT_MS = 120_000;
  */
 export const MAX_TIMEOUT_MS = 600_000;
 /** Per-stream cap. Tool results this large are already useless to the model. */
-const MAX_OUTPUT_BYTES = 2 * 1024 * 1024;
+export const MAX_OUTPUT_BYTES = 2 * 1024 * 1024;
 
 /**
  * Collects a stream up to the cap and counts the rest.
@@ -40,7 +40,7 @@ const MAX_OUTPUT_BYTES = 2 * 1024 * 1024;
  * The head is kept, which is what the cap always did. Whether the *tail* would be more useful for a
  * failing build is a real question and a separate one; this only stops the daemon dying.
  */
-class BoundedOutput {
+export class BoundedOutput {
   private readonly chunks: Buffer[] = [];
   private kept = 0;
   private dropped = 0;
@@ -55,6 +55,16 @@ class BoundedOutput {
     this.chunks.push(take);
     this.kept += take.length;
     this.dropped += chunk.length - take.length;
+  }
+
+  /** Bytes actually held. The claim the cap makes, and the one worth asserting on. */
+  retained(): number {
+    return this.kept;
+  }
+
+  /** Bytes seen and thrown away. */
+  discarded(): number {
+    return this.dropped;
   }
 
   toString(label: string): string {
@@ -206,6 +216,20 @@ export function runShell(request: ExecRequest): Promise<ExecResult> {
     child.stdout.on("data", chunk => stdout.push(chunk as Buffer));
     child.stderr.on("data", chunk => stderr.push(chunk as Buffer));
 
+    // How long to wait, after killing, for the pipes to close on their own.
+    //
+    // Because `close` fires when every inherited stdout/stderr descriptor is closed, not when the
+    // command exits — and a descendant can leave the process group (`setsid`, a daemon that
+    // double-forks) and keep those descriptors open. The group kill does not reach it, so the
+    // request stayed pending long past its own ceiling: measured in a real container, a `setsid sh
+    // -c "sleep 30"` held /exec open for the full thirty seconds after the kill at 1.5s.
+    //
+    // Reaping an escapee properly needs a PID namespace or a cgroup, neither of which is available
+    // here without more privilege than this container should have. What is in our control is not
+    // waiting for it.
+    const DRAIN_GRACE_MS = 2_000;
+    let escaped = false;
+
     const timer = setTimeout(() => {
       timedOut = true;
       try {
@@ -213,6 +237,15 @@ export function runShell(request: ExecRequest): Promise<ExecResult> {
       } catch {
         child.kill("SIGKILL");
       }
+      setTimeout(() => {
+        if (settled) return;
+        // Something outlived the kill and is still holding the pipes. Let go of our end and answer
+        // now: a caller waiting forever learns nothing, and the timeout it asked for was a promise.
+        escaped = true;
+        child.stdout.destroy();
+        child.stderr.destroy();
+        finish(124);
+      }, DRAIN_GRACE_MS).unref?.();
     }, timeoutMs);
 
     const finish = (exitCode: number) => {
@@ -221,7 +254,12 @@ export function runShell(request: ExecRequest): Promise<ExecResult> {
       clearTimeout(timer);
       resolve({
         stdout: stdout.toString("stdout"),
-        stderr: stderr.toString("stderr"),
+        stderr:
+          stderr.toString("stderr") +
+          (escaped
+            ? `\n[the command was killed, but something it started left the process group and is ` +
+              `still running — its output is not captured here and it was not stopped]`
+            : ""),
         exit_code: exitCode,
         timed_out: timedOut,
         timeout_ms: timeoutMs,

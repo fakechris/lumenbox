@@ -12,7 +12,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { realpathSync, rmSync } from "node:fs";
-import { MAX_TIMEOUT_MS, runShell } from "./shell-service.ts";
+import { BoundedOutput, MAX_OUTPUT_BYTES, MAX_TIMEOUT_MS, runShell } from "./shell-service.ts";
 
 function cleanup(key: string): void {
   for (const suffix of ["cwd", "env"]) {
@@ -141,27 +141,53 @@ test("a timeout longer than the box allows is capped, and the result says so", a
 });
 
 
-test("a flood of output is bounded while it streams, not after", async () => {
-  // The cap used to be applied at the end, over everything the process had written, so it bounded
-  // the result and not the memory: a runaway logger could take the container's whole allowance and
-  // kill the daemon before it had anything to return. Measured here by writing far more than the
-  // cap and watching this process's own heap.
-  // `external`, not `heapUsed`: a Buffer's bytes live outside the JS heap, so a heap measurement
-  // here would have been vacuous and would have passed against the broken version too.
-  const usage = () => process.memoryUsage().external + process.memoryUsage().arrayBuffers;
-  const before = usage();
-  const result = await runShell({
-    // ~64 MiB, thirty-two times the 2 MiB cap.
-    command: "head -c 67108864 /dev/zero | tr '\\0' 'x'",
-    timeout_ms: 60_000,
-  });
-  const grew = usage() - before;
+test("output is capped as it arrives, not after the whole stream is held", () => {
+  // The cap used to be applied at the end, over everything the process had written: every chunk was
+  // retained, then concatenated and truncated. So it bounded the *result* and not the memory, and a
+  // runaway logger could take the container's whole allowance and kill the daemon before it had
+  // anything to return — which reads as the box crashing rather than as a command being too noisy.
+  //
+  // Asserted on what is retained rather than on process memory: a memory-delta measurement here
+  // depends on when GC runs and was flaky enough to be worse than no test.
+  const output = new BoundedOutput();
+  const chunk = Buffer.alloc(1024 * 1024, 0x78); // 1 MiB at a time
+  for (let index = 0; index < 64; index++) output.push(chunk);
 
-  assert.equal(result.exit_code, 0);
-  assert.ok(result.stdout.length < 3 * 1024 * 1024, `result was ${result.stdout.length} bytes`);
-  assert.match(result.stdout, /\[stdout truncated: \d+ more bytes\]/);
-  assert.ok(
-    grew < 32 * 1024 * 1024,
-    `buffers grew by ${Math.round(grew / 1024 / 1024)} MiB for 64 MiB of output`
-  );
+  assert.ok(output.retained() <= MAX_OUTPUT_BYTES, `retained ${output.retained()} bytes`);
+  assert.equal(output.retained() + output.discarded(), 64 * 1024 * 1024, "every byte is accounted for");
+
+  const text = output.toString("stdout");
+  assert.match(text, /\[stdout truncated: \d+ more bytes\]/);
+  assert.ok(text.length < MAX_OUTPUT_BYTES + 200);
+
+  // Under the cap nothing is dropped and nothing is appended.
+  const small = new BoundedOutput();
+  small.push(Buffer.from("hello"));
+  assert.equal(small.discarded(), 0);
+  assert.equal(small.toString("stdout"), "hello");
+});
+
+test("a descendant that escapes the kill does not wedge the request", async () => {
+  // `close` fires when every inherited stdout/stderr descriptor is closed, not when the command
+  // exits — and a descendant can leave the process group with setsid and keep those descriptors
+  // open. The group kill does not reach it, so the request stayed pending far past its own ceiling:
+  // measured in a real container, `setsid sh -c "sleep 30"` held /exec open for the full thirty
+  // seconds after a kill at 1.5s.
+  const started = Date.now();
+  const result = await runShell({
+    // A detached child inheriting stdout: `detached` is setsid, so it leaves the process group and
+    // keeps the pipe open after the group is killed. Written through node because `setsid` as a
+    // command is not portable, and this test has to run on a developer's machine too.
+    command:
+      `node -e "require('child_process').spawn('sleep',['30'],` +
+      `{detached:true,stdio:['ignore','inherit','inherit']}).unref()"; sleep 30`,
+    timeout_ms: 600,
+  });
+  const took = Date.now() - started;
+
+  assert.equal(result.timed_out, true);
+  assert.ok(took < 10_000, `it answered in ${took}ms rather than waiting on the escapee`);
+  // And says so, because "timed out" alone would suggest everything it started is gone.
+  assert.match(result.stderr, /left the process group and is still running/);
+  assert.match(result.stderr, /it was not stopped/);
 });

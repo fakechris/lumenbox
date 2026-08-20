@@ -16,7 +16,8 @@
 import { envNumber } from "../config.ts";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
-import { copyFileSync, statSync, truncateSync } from "node:fs";
+import { copyFileSync, readFileSync, statSync, truncateSync, writeFileSync } from "node:fs";
+import { createHash } from "node:crypto";
 import {
   DEFAULT_DISPLAY_INDEX,
   NOVNC_BASE_PORT,
@@ -65,6 +66,55 @@ export interface Desktop {
 }
 
 export class DisplayOwnershipError extends Error {}
+
+/**
+ * Where a desktop's owner is remembered, so a boxd restart does not orphan it.
+ *
+ * The X servers, the window manager and everything an agent opened are separate processes: they
+ * survive boxd being restarted in place, and are reattached to rather than recreated. Ownership,
+ * though, lived only in this process's map — so after a restart the first agent to name a desktop
+ * adopted a colleague's live screen, with their browser and their session on it, and locked the
+ * original out of it.
+ *
+ * `/tmp` on purpose: exactly as long-lived as the desktops themselves. A container recreate clears
+ * both, which is correct — there is nothing to own by then.
+ *
+ * A **hash** of the owner's token, never the token. The agent has a shell as this same uid and can
+ * read this file; storing the token would hand it a colleague's desktop credential, which is worse
+ * than the problem being fixed. A hash compares just as well.
+ */
+function ownerFile(index: number): string {
+  return `/tmp/agentbox-display-${index}.owner`;
+}
+
+function ownerHash(token: string): string {
+  return createHash("sha256").update(token).digest("hex").slice(0, 32);
+}
+
+function rememberOwner(index: number, token: string, log: (line: string) => void): void {
+  try {
+    writeFileSync(ownerFile(index), ownerHash(token), { encoding: "utf8", mode: 0o600 });
+  } catch (error) {
+    // Not fatal: the desktop works, it just loses its claim if this daemon restarts.
+    log(`desktop ${index}: could not record its owner (${error instanceof Error ? error.message : String(error)})`);
+  }
+}
+
+function recordedOwner(index: number): string | undefined {
+  try {
+    const text = readFileSync(ownerFile(index), "utf8").trim();
+    return text === "" ? undefined : text;
+  } catch {
+    return undefined;
+  }
+}
+
+/** Whether this token is the one that claimed this desktop, according to what was written down. */
+function matchesRecordedOwner(index: number, token: string | undefined): boolean | undefined {
+  const recorded = recordedOwner(index);
+  if (recorded === undefined) return undefined;
+  return token !== undefined && ownerHash(token) === recorded;
+}
 
 export class DisplayManager {
   private readonly desktops = new Map<number, Desktop>();
@@ -231,7 +281,17 @@ export class DisplayManager {
   assertOwner(index: number, presented: string | undefined): void {
     const desktop = this.desktops.get(index);
     const owner = desktop?.owner;
-    if (!owner) return;
+    if (!owner) {
+      // Nothing in memory is not the same as unowned: this daemon may have restarted under a
+      // desktop that is still running and still someone's.
+      const recorded = matchesRecordedOwner(index, presented);
+      if (recorded === undefined || recorded) return;
+      throw new DisplayOwnershipError(
+        `Desktop ${index} belongs to another agent — it was claimed before this daemon restarted, ` +
+          "and the desktop is still running. Use your own desktop, which is the one your tools " +
+          "already target."
+      );
+    }
     if (presented === owner) return;
 
     throw new DisplayOwnershipError(
@@ -256,7 +316,10 @@ export class DisplayManager {
           `Desktop ${index} is already bound to another owner.`
         );
       }
-      if (owner && !existing.owner) existing.owner = owner;
+      if (owner && !existing.owner) {
+        existing.owner = owner;
+        rememberOwner(index, owner, this.log);
+      }
       return existing;
     }
 
@@ -288,6 +351,17 @@ export class DisplayManager {
       display,
       resolution: detection.resolution,
     });
+
+    // A desktop this daemon did not start may already be claimed. Refused here rather than in
+    // assertOwner alone, so adoption cannot quietly rebind someone else's screen.
+    const recorded = matchesRecordedOwner(index, owner);
+    if (recorded === false) {
+      throw new DisplayOwnershipError(
+        `Desktop ${index} was claimed by another agent before this daemon restarted, and is still ` +
+          "running. Use your own desktop."
+      );
+    }
+    if (owner !== undefined && recorded === undefined) rememberOwner(index, owner, this.log);
 
     const desktop: Desktop = {
       index,
