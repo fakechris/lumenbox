@@ -474,3 +474,42 @@ test("real results are left alone, and a partly answered call is topped up", () 
   ];
   assert.deepEqual(repairPairs(fine), fine);
 });
+
+
+test("the screenshot that survives pruning is the current one", () => {
+  // The messages were reversed and the blocks inside them were not. So one assistant response
+  // making two computer calls produced a single user message holding two screenshots, and the
+  // survivor was the first — the older one. The model was shown the screen as it looked *before*
+  // the last action and told it was current, which for computer use is the most expensive kind of
+  // wrong: it clicks where the button used to be.
+  const shot = (tag: string): Anthropic.ImageBlockParam => ({
+    type: "image",
+    source: { type: "base64", media_type: "image/webp", data: tag },
+  });
+  const messages: Anthropic.MessageParam[] = [
+    {
+      role: "assistant",
+      content: [
+        { type: "tool_use", id: "a", name: "computer", input: {} },
+        { type: "tool_use", id: "b", name: "computer", input: {} },
+      ],
+    },
+    {
+      role: "user",
+      content: [
+        { type: "tool_result", tool_use_id: "a", content: [shot("BEFORE")] },
+        { type: "tool_result", tool_use_id: "b", content: [shot("AFTER")] },
+      ],
+    },
+  ];
+
+  const pruned = pruneOldImages(messages, 1);
+  assert.equal(pruned.dropped, 1);
+  const kept = JSON.stringify(pruned.messages);
+  assert.ok(kept.includes("AFTER"), "the screen as it is now");
+  assert.ok(!kept.includes("BEFORE"), "not the screen as it was before the last action");
+
+  // Order is preserved: the results still line up with the calls that made them.
+  const results = (pruned.messages[1]?.content ?? []) as Anthropic.ToolResultBlockParam[];
+  assert.deepEqual(results.map(result => result.tool_use_id), ["a", "b"]);
+});

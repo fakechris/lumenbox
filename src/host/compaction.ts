@@ -437,16 +437,25 @@ export function pruneOldImages(
     .map((message): Anthropic.MessageParam => {
       if (!Array.isArray(message.content)) return message;
       let changed = false;
-      const blocks = message.content.map(block => {
-        const pruned = pruneBlock(block, () => {
-          seen += 1;
-          if (seen <= keepImages) return false;
-          dropped += 1;
-          return true;
-        });
-        if (pruned !== block) changed = true;
-        return pruned;
-      });
+      // Newest first *within* the message too, and inside each tool_result. The messages were
+      // reversed and the blocks were not, so one assistant response making two computer calls
+      // produced one user message with two screenshots — and the survivor was the first, which is
+      // the older one. The model was shown the screen as it looked before the last action and told
+      // it was current, which is the most expensive kind of wrong for computer use.
+      const blocks = message.content
+        .slice()
+        .reverse()
+        .map(block => {
+          const pruned = pruneBlock(block, () => {
+            seen += 1;
+            if (seen <= keepImages) return false;
+            dropped += 1;
+            return true;
+          });
+          if (pruned !== block) changed = true;
+          return pruned;
+        })
+        .reverse();
       return changed
         ? { ...message, content: blocks as Anthropic.ContentBlockParam[] }
         : message;
@@ -478,11 +487,15 @@ function pruneBlock(block: unknown, shouldDrop: () => boolean): unknown {
   // matters and the easy one to miss.
   if (typed.type === "tool_result" && Array.isArray(typed.content)) {
     let changed = false;
-    const content = typed.content.map(part => {
-      const pruned = pruneBlock(part, shouldDrop);
-      if (pruned !== part) changed = true;
-      return pruned;
-    });
+    const content = typed.content
+      .slice()
+      .reverse()
+      .map(part => {
+        const pruned = pruneBlock(part, shouldDrop);
+        if (pruned !== part) changed = true;
+        return pruned;
+      })
+      .reverse();
     return changed ? { ...typed, content } : block;
   }
 
