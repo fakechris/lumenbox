@@ -11,6 +11,7 @@
  * inside one turn, so its transcript and profile have a single writer.
  */
 
+import { Inbox } from "./inbox.ts";
 import {
   AgentNotFoundError,
   clampBlock,
@@ -29,6 +30,13 @@ export interface InboundMessage {
   text: string;
   priority: boolean;
   receivedAt: string;
+  /**
+   * Its handle in the durable inbox, so the turn that takes it can mark it started.
+   *
+   * Absent when nothing was recorded — no inbox configured, or a write that failed. The message is
+   * still delivered in this process; what it loses is the ability to survive a restart.
+   */
+  admission?: number;
 }
 
 /** Runs one turn for an agent. Returns when the agent's turn is finished. */
@@ -55,8 +63,38 @@ export class AgentBus {
   constructor(
     private readonly registry: AgentRegistry,
     private readonly runTurn: TurnRunner,
-    private readonly onEvent: (event: BusEvent) => void = () => {}
+    private readonly onEvent: (event: BusEvent) => void = () => {},
+    /**
+     * Where accepted-but-unstarted work is recorded.
+     *
+     * Injected rather than defaulted, so nothing acquires a file by accident: production wires one
+     * in the orchestrator and a test gets none unless it asks. Without it, a request answered with
+     * 202 and an inter-agent message answered with "Sent to Bob" existed only in the map above —
+     * accepted, acknowledged, and gone if the process died a millisecond later.
+     */
+    private readonly inbox: Inbox<InboundMessage> | undefined = undefined
   ) {}
+
+  /**
+   * Re-queues work that was accepted but never begun, and says what it found.
+   *
+   * Called once at startup. Only unstarted messages are here — a turn marks its messages started
+   * before anything runs — so nothing replayed has executed anything, and re-queueing it cannot
+   * duplicate a side effect.
+   */
+  recover(): number {
+    const pending = this.inbox?.pending() ?? [];
+    let restored = 0;
+    for (const item of pending) {
+      if (this.registry.tryGet(item.agentId) === undefined) continue;
+      const queue = this.pending.get(item.agentId) ?? [];
+      queue.push({ ...item.message, admission: item.seq });
+      this.pending.set(item.agentId, queue);
+      restored += 1;
+    }
+    for (const agentId of this.pending.keys()) void this.wake(agentId);
+    return restored;
+  }
 
   /**
    * Delivers a message to another agent and wakes it.
@@ -114,8 +152,11 @@ export class AgentBus {
 
   /** Queues an inbound message and interrupts the recipient if it is priority. */
   private enqueue(agentId: string, message: InboundMessage): void {
+    // Recorded before it is queued, and before the sender is told anything. The other order would
+    // acknowledge work that is not yet written down, which is the whole failure being fixed.
+    const admission = this.inbox?.admit(agentId, message);
     const queue = this.pending.get(agentId) ?? [];
-    queue.push(message);
+    queue.push({ ...message, admission });
     this.pending.set(agentId, queue);
 
     if (!message.priority) return;
@@ -180,6 +221,10 @@ export class AgentBus {
         // Drain inside the exclusive section, so messages that arrived while we
         // were queued are picked up by this turn instead of spawning another.
         const inbound = this.drain(agentId);
+        // Marked started before the turn runs, not after it finishes. After would mean replaying
+        // half-finished turns, and a turn that deployed something before dying would deploy it
+        // twice; resuming one properly needs per-step checkpoints, which do not exist yet.
+        this.inbox?.start(inbound.map(message => message.admission));
         this.onEvent({ type: "turn_started", agentId, inboundCount: inbound.length });
         await this.runTurn(agent, inbound, controller.signal);
         this.onEvent({ type: "turn_finished", agentId });

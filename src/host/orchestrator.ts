@@ -8,6 +8,7 @@
 
 import type Anthropic from "@anthropic-ai/sdk";
 import { AgentBus, type BusEvent, type InboundMessage } from "../agents/bus.ts";
+import { Inbox, inboxPath } from "../agents/inbox.ts";
 import { AgentRegistry, type AgentRecord } from "../agents/registry.ts";
 import type { BoxClient } from "../box/client.ts";
 import { DisplayLease } from "../box/display-lease.ts";
@@ -43,6 +44,12 @@ export interface OrchestratorOptions {
   boxProvisioner?: BoxProvisioner;
   onTurnEvent?: (event: TurnEvent) => void;
   onBusEvent?: (event: BusEvent) => void;
+  /**
+   * Where accepted-but-unstarted work is recorded, so a restart does not lose a request that was
+   * already acknowledged. `null` keeps none, which is what a test that should not touch the state
+   * directory wants.
+   */
+  inbox?: Inbox<InboundMessage> | null;
 }
 
 export class Orchestrator {
@@ -144,7 +151,11 @@ export class Orchestrator {
     this.bus = new AgentBus(
       this.registry,
       (agent, inbound, signal) => this.executeTurn(agent, inbound, signal),
-      options.onBusEvent
+      options.onBusEvent,
+      options.inbox === null
+        ? undefined
+        : (options.inbox ??
+          new Inbox<InboundMessage>(inboxPath(), line => console.error(`[inbox] ${line}`)))
     );
   }
 

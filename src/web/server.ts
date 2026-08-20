@@ -147,6 +147,17 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
     onBusEvent: broadcast,
   });
 
+  // Work that was accepted before the last shutdown and never begun. Replayed here rather than
+  // silently forgotten: a request answered with 202, or a message whose sender was told "Sent",
+  // used to exist only in memory. Only unstarted work is here, so nothing is re-executed.
+  const restored = orchestrator.bus.recover();
+  if (restored > 0) {
+    log(
+      `resumed ${restored} message${restored === 1 ? "" : "s"} accepted before the last restart ` +
+        `and never started`
+    );
+  }
+
   const box = await orchestrator.connectBox();
   log(box.connected ? `box: ${box.detail}` : `box: unavailable — ${box.detail}`);
 
