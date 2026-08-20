@@ -203,6 +203,13 @@ export interface DirEntry {
   name: string;
   type: "file" | "directory" | "symlink" | "other";
   size: number;
+  /**
+   * Last modified, ISO 8601.
+   *
+   * Added because "what did the agent just make" is the question a person actually has, and
+   * alphabetical order answers a different one.
+   */
+  modified?: string;
 }
 
 export interface ListDirResult {
@@ -287,6 +294,17 @@ export const BOXD_PORT = 1337;
 /** Handing a work product to a person, verbatim. Confined to the work directory — see fs-service. */
 export interface DownloadFileRequest {
   path: string;
+}
+
+/** Putting a file into the box, verbatim. The inverse of a download, and confined the same way. */
+export interface UploadFileRequest {
+  path: string;
+  base64: string;
+}
+
+export interface UploadFileResult {
+  path: string;
+  size: number;
 }
 
 export interface DownloadFileResult {

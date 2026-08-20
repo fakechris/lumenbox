@@ -221,8 +221,11 @@ The agents' output. Whatever they make, plus `recordings/*.mp4`. Owned by `box`.
 rebuild — deliberately the same set.** "You can download it" and "it will still be here tomorrow" are
 then one rule rather than two.
 
-`GET /api/files` lists it and `GET /api/file?path=…` serves a file, both behind the UI's existing
-auth. `?download=1` switches `Content-Disposition` from `inline` to `attachment`, so a browser shows
+`GET /api/files` lists it (with modification times, because "what did the agent just make" is the
+question people have and alphabetical order answers a different one), `GET /api/file?path=…` serves a
+file, and `POST /api/file` accepts one — the other direction, a person handing the agent a document.
+All behind the UI's existing auth, and the upload requires the driving role: a viewer may read what
+the agents made and may not add to it. `?download=1` switches `Content-Disposition` from `inline` to `attachment`, so a browser shows
 what it can and saves what it cannot. Never cached: an agent rewrites its own output, and a stale copy
 would be read as the current one.
 

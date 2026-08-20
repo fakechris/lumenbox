@@ -25,6 +25,8 @@ import type {
   WriteFileResult,
   DownloadFileRequest,
   DownloadFileResult,
+  UploadFileRequest,
+  UploadFileResult,
 } from "../protocol/index.ts";
 
 /** Files above this are refused rather than silently truncated to nothing useful. */
@@ -127,6 +129,33 @@ export async function downloadFile(request: DownloadFileRequest): Promise<Downlo
   };
 }
 
+/**
+ * Puts a file into the work directory, verbatim.
+ *
+ * The other half of handing work over: a person gives the agent a document to work on. Confined the
+ * same way as download, and for the same reason — this one is reachable by anyone with a UI token,
+ * and an unconfined write is worse than an unconfined read.
+ *
+ * `realpath` on the *parent*, not the file, since the file is usually about to be created.
+ */
+export async function uploadFile(request: UploadFileRequest): Promise<UploadFileResult> {
+  const requested = requirePath(request.path);
+  const parent = dirname(requested);
+  const root = await realpath(DOWNLOAD_ROOT).catch(() => DOWNLOAD_ROOT);
+  const realParent = await realpath(parent).catch(() => {
+    throw new Error(`${parent} does not exist`);
+  });
+  if (realParent !== root && !realParent.startsWith(`${root}/`)) {
+    throw new Error(`${requested} is outside ${DOWNLOAD_ROOT}; only that tree accepts uploads`);
+  }
+  const bytes = Buffer.from(request.base64, "base64");
+  if (bytes.length > MAX_DOWNLOAD_BYTES) {
+    throw new Error(`${bytes.length} bytes is over the ${MAX_DOWNLOAD_BYTES}-byte upload limit`);
+  }
+  await fsWriteFile(requested, bytes);
+  return { path: requested, size: bytes.length };
+}
+
 export async function readFile(
   request: ReadFileRequest
 ): Promise<ReadFileResult> {
@@ -196,6 +225,7 @@ export async function listDir(request: ListDirRequest): Promise<ListDirResult> {
               ? "file"
               : "other",
         size: info.size,
+        modified: info.mtime.toISOString(),
       });
     } catch {
       // A entry that vanished between readdir and lstat is not worth failing over.

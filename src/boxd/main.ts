@@ -37,6 +37,8 @@ import {
   type ListDirResult,
   type DownloadFileRequest,
   type DownloadFileResult,
+  type UploadFileRequest,
+  type UploadFileResult,
   type ReadFileRequest,
   type ReadFileResult,
   type RecordListResult,
@@ -52,7 +54,7 @@ import { readClipboard, writeClipboard } from "./clipboard-service.ts";
 import { startEgressProxy } from "../egress/proxy.ts";
 import { RecordService, RECORDINGS_DIR } from "./record-service.ts";
 import { runShell } from "./shell-service.ts";
-import { downloadFile, listDir, readFile, writeFile } from "./fs-service.ts";
+import { downloadFile, listDir, readFile, uploadFile, writeFile } from "./fs-service.ts";
 
 const VERSION = "0.1.0";
 const MAX_BODY_BYTES = 32 * 1024 * 1024;
@@ -337,6 +339,8 @@ const routes: Record<string, Handler> = {
   },
   "POST /fs/download": (body: DownloadFileRequest): Promise<DownloadFileResult> =>
     downloadFile(body),
+
+  "POST /fs/upload": (body: UploadFileRequest): Promise<UploadFileResult> => uploadFile(body),
 
   "POST /fs/read": (body: ReadFileRequest): Promise<ReadFileResult> =>
     readFile(body),

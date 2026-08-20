@@ -12,6 +12,7 @@ import type {
   ExecResult,
   HealthResult,
   DownloadFileResult,
+  UploadFileResult,
   ListDirResult,
   ReadFileResult,
   RecordListResult,
@@ -230,6 +231,10 @@ export class BoxClient {
    */
   downloadFile(path: string): Promise<DownloadFileResult> {
     return this.post<DownloadFileResult>("/fs/download", { path });
+  }
+
+  uploadFile(path: string, base64: string): Promise<UploadFileResult> {
+    return this.post<UploadFileResult>("/fs/upload", { path, base64 });
   }
 
   listDir(path: string): Promise<ListDirResult> {

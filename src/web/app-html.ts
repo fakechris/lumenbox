@@ -21,6 +21,14 @@ export const APP_HTML = String.raw`<!doctype html>
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>agentbox</title>
 <style>
+  .tab { padding: 2px 9px; border-radius: 4px; text-decoration: none; }
+  .tab.on { background: var(--line); color: var(--text); }
+  #filespreview pre { white-space: pre-wrap; word-break: break-word; margin: 0; padding: 10px; }
+  #filespreview img, #filespreview video { max-width: 100%; display: block; }
+  #fileslist .row { padding: 3px 8px; cursor: pointer; }
+  #fileslist .row:hover { background: var(--line); }
+  #fileslist .row.on { background: var(--line); }
+  #filesview.dropping { outline: 2px dashed var(--accent); outline-offset: -4px; }
   :root {
     --bg: #14161a; --panel: #1b1e24; --line: #2a2f38; --text: #e6e9ef;
     --dim: #8b93a1; --accent: #7aa2f7; --warn: #e0af68; --ok: #9ece6a; --err: #f7768e;
@@ -203,13 +211,20 @@ export const APP_HTML = String.raw`<!doctype html>
 
 <div class="pane">
   <h2>
-    <span id="desktoptitle">Desktop</span>
+    <!-- Tabs rather than a third panel: the files view needs the height, and stacking it under a
+         150px-tall desktop gave neither enough room to be usable. -->
+    <span>
+      <a href="#" id="tabdesktop" class="tab on">Desktop</a>
+      <a href="#" id="tabfiles" class="tab">Files</a>
+      <span id="desktoptitle" class="dim"></span>
+    </span>
     <span class="plain">
       <a id="rec" href="#">&#9679; record</a>
       <a id="full" href="#" target="_blank" rel="noopener">open full size</a>
       <span id="boxinfo"></span>
     </span>
   </h2>
+  <div id="desktopview">
   <div class="bar" id="model">&mdash;</div>
   <div class="bar" id="recordings" style="display:none"></div>
   <div class="bar" id="clipbar">
@@ -224,11 +239,25 @@ export const APP_HTML = String.raw`<!doctype html>
     selected agent's. Click it for keyboard focus, or open it full size — you can
     drive one while the others keep working.
   </div>
-  <h2 style="border-top:1px solid var(--line)">
-    <span>Files &mdash; /home/box/work</span>
-    <span class="plain"><a id="filesrefresh" href="#">refresh</a></span>
-  </h2>
-  <div class="feed" id="files" style="max-height:150px"></div>
+  </div>
+
+  <!-- The files view. Two columns: what is there, and what is in the selected one. Previewing in
+       place is the whole point — a link that opens markdown in a new tab shows raw text, which is
+       what the old version did and why it was useless. -->
+  <div id="filesview" style="display:none;flex:1;min-height:0;display:none">
+    <div class="bar" id="filesbar">
+      <b id="filespath">/home/box/work</b>
+      <span class="plain">
+        <a href="#" id="filesup">up</a>
+        <a href="#" id="filesrefresh">refresh</a>
+        <label class="dim" style="cursor:pointer">add file<input id="filesupload" type="file" multiple style="display:none"></label>
+      </span>
+    </div>
+    <div id="filessplit" style="display:flex;flex:1;min-height:0">
+      <div class="scroll" id="fileslist" style="width:44%;border-right:1px solid var(--line)"></div>
+      <div class="scroll" id="filespreview" style="flex:1"><div class="dim" style="padding:10px">Select a file.</div></div>
+    </div>
+  </div>
   <h2 style="border-top:1px solid var(--line)">Activity &mdash; all agents</h2>
   <div class="feed" id="feed"></div>
 </div>
@@ -467,15 +496,17 @@ function refresh() {
     // A newly created agent gets its display assigned server-side; keep the pane
     // in step without reloading an unchanged one.
     if (current) showDesktop(current);
-    return Promise.all([refreshPolicy(), refreshProgress(), refreshFiles()]);
+    return Promise.all([refreshPolicy(), refreshProgress()]);
   });
 }
 
 // Every few seconds, because an approval and a ticked-off todo both arrive without an event to ride
 // on. Slow enough to be free, fast enough that a person is not kept waiting by the interface.
 setInterval(function () { refreshPolicy(); refreshProgress(); }, 4000);
-// Less often than the rest: a directory listing changes when work lands, not continuously.
-setInterval(function () { refreshFiles(); }, 15000);
+// Only while the files tab is open: polling a listing nobody is looking at is work for nothing.
+setInterval(function () {
+  if ($("filesview").style.display !== "none") refreshFiles();
+}, 15000);
 
 /**
  * Anything waiting on a person, and the selected agent's plan.
@@ -572,42 +603,31 @@ function refreshProgress() {
 }
 
 /**
- * What the agents have produced, as something a person can open.
+ * What the agents have produced, as something a person can actually read.
  *
- * The gap this closes: an agent wrote a report and said where it was, and that was the end of it —
- * a person had to open the desktop, find a file manager and read it there, with no way to get it
- * onto their own machine. A browser can do both, and it is already authenticated.
+ * The first version of this was a flat list of links in a 150px box. Clicking one opened a new tab,
+ * which for markdown — the most common thing an agent writes — shows raw text. So the panel existed
+ * and was still useless, which is worse than absent: it looks like the problem was solved.
+ *
+ * Three things fix it, and none of them needed a desktop app:
+ *
+ *   - **Preview in place.** Markdown rendered, images and video shown, text and CSV readable. The
+ *     point of handing a file over is that someone reads it.
+ *   - **Newest first.** "What did the agent just make" is the question people have; alphabetical
+ *     order answers a different one.
+ *   - **Room.** A tab rather than a strip, so the list and the preview both get height.
  */
-function refreshFiles(dir) {
-  var target = dir || "/home/box/work";
-  return fetch("/api/files?dir=" + encodeURIComponent(target))
-    .then(function (r) { return r.json(); })
-    .then(function (listing) {
-      var box = $("files");
-      var entries = listing.entries || [];
-      var up = target === "/home/box/work"
-        ? ""
-        : '<div><a href="#" data-dir="' + esc(target.replace(/\/[^/]+$/, "")) + '">&larr; up</a></div>';
-      if (!entries.length) {
-        box.innerHTML = up + '<div class="dim">nothing here yet</div>';
-        return;
-      }
-      box.innerHTML = up + entries.map(function (entry) {
-        var full = target + "/" + entry.name;
-        if (entry.type === "directory") {
-          return '<div><a href="#" data-dir="' + esc(full) + '">' + esc(entry.name) + "/</a></div>";
-        }
-        // Two links on purpose: open reads it in place, which is what someone wants nine times out
-        // of ten; save is the one that gets it onto their own machine.
-        return '<div>' +
-          '<a href="/api/file?path=' + encodeURIComponent(full) + '" target="_blank" rel="noopener">' +
-          esc(entry.name) + "</a> " +
-          '<span class="dim">' + fmtBytes(entry.size) + "</span> " +
-          '<a class="dim" href="/api/file?download=1&path=' + encodeURIComponent(full) + '">save</a>' +
-          "</div>";
-      }).join("");
-    })
-    .catch(function () { $("files").innerHTML = '<div class="dim">could not read the work directory</div>'; });
+var filesDir = "/home/box/work";
+var filesSelected = null;
+
+function fileKind(name) {
+  var ext = (name.match(/\.[^.]+$/) || [""])[0].toLowerCase();
+  if (/^\.(png|jpe?g|webp|gif|svg|bmp|ico)$/.test(ext)) return "image";
+  if (/^\.(mp4|webm|mov)$/.test(ext)) return "video";
+  if (ext === ".md" || ext === ".markdown") return "markdown";
+  if (/^\.(txt|log|json|csv|tsv|ya?ml|toml|ini|conf|sh|py|js|ts|tsx|jsx|html?|css|xml|sql|rs|go|java|rb|c|h|cpp|diff|patch)$/.test(ext)) return "text";
+  if (ext === ".pdf") return "pdf";
+  return "binary";
 }
 
 function fmtBytes(n) {
@@ -617,23 +637,186 @@ function fmtBytes(n) {
   return (n / 1024 / 1024).toFixed(1) + " MB";
 }
 
-document.getElementById("files").addEventListener("click", function (event) {
-  var dir = event.target.getAttribute && event.target.getAttribute("data-dir");
-  if (!dir) return;
+function fmtWhen(iso) {
+  if (!iso) return "";
+  var then = new Date(iso).getTime();
+  if (!then) return "";
+  var secs = Math.round((Date.now() - then) / 1000);
+  if (secs < 60) return "just now";
+  if (secs < 3600) return Math.round(secs / 60) + "m ago";
+  if (secs < 86400) return Math.round(secs / 3600) + "h ago";
+  return Math.round(secs / 86400) + "d ago";
+}
+
+function fileUrl(path, download) {
+  return "/api/file?" + (download ? "download=1&" : "") + "path=" + encodeURIComponent(path);
+}
+
+function refreshFiles(dir) {
+  if (dir) { filesDir = dir; filesSelected = null; }
+  $("filespath").textContent = filesDir;
+  $("filesup").style.visibility = filesDir === "/home/box/work" ? "hidden" : "";
+  return fetch("/api/files?dir=" + encodeURIComponent(filesDir))
+    .then(function (r) { return r.json(); })
+    .then(function (listing) {
+      var entries = (listing.entries || []).slice();
+      // Directories first, then newest file first. Two sorts rather than one because a folder's own
+      // mtime says nothing about what is in it.
+      entries.sort(function (a, b) {
+        if ((a.type === "directory") !== (b.type === "directory")) return a.type === "directory" ? -1 : 1;
+        if (a.type === "directory") return a.name.localeCompare(b.name);
+        return String(b.modified || "").localeCompare(String(a.modified || ""));
+      });
+      if (!entries.length) {
+        $("fileslist").innerHTML = '<div class="dim" style="padding:10px">Nothing here yet. Agents write to this directory; you can drop a file in.</div>';
+        return;
+      }
+      $("fileslist").innerHTML = entries.map(function (e) {
+        var full = filesDir.replace(/\/$/, "") + "/" + e.name;
+        var on = full === filesSelected ? " on" : "";
+        var meta = e.type === "directory" ? "" : fmtBytes(e.size) + " · " + fmtWhen(e.modified);
+        return '<div class="row' + on + '" data-path="' + esc(full) + '" data-type="' + esc(e.type) + '">' +
+          esc(e.name) + (e.type === "directory" ? "/" : "") +
+          '<div class="dim" style="font-size:11px">' + esc(meta) + "</div></div>";
+      }).join("");
+    })
+    .catch(function () {
+      $("fileslist").innerHTML = '<div class="dim" style="padding:10px">Could not read the work directory.</div>';
+    });
+}
+
+function previewFile(path) {
+  filesSelected = path;
+  var name = path.split("/").pop();
+  var kind = fileKind(name);
+  var head = '<div class="bar" style="border-top:0"><b>' + esc(name) + "</b>" +
+    '<span class="plain"><a href="' + fileUrl(path, true) + '">save</a>' +
+    '<a href="' + fileUrl(path) + '" target="_blank" rel="noopener">open</a></span></div>';
+
+  if (kind === "image") {
+    $("filespreview").innerHTML = head + '<img src="' + fileUrl(path) + '" alt="' + esc(name) + '">';
+    return Promise.resolve();
+  }
+  if (kind === "video") {
+    $("filespreview").innerHTML = head + '<video src="' + fileUrl(path) + '" controls></video>';
+    return Promise.resolve();
+  }
+  if (kind === "pdf" || kind === "binary") {
+    // Said rather than guessed at: a binary rendered as text is a screen of noise, and pretending to
+    // preview it wastes the one action a person came here to take.
+    $("filespreview").innerHTML = head +
+      '<div class="dim" style="padding:10px">' +
+      (kind === "pdf" ? "PDF — open it in a tab, or save it." : "Not a text file. Save it to look at it.") +
+      "</div>";
+    return Promise.resolve();
+  }
+
+  $("filespreview").innerHTML = head + '<div class="dim" style="padding:10px">Loading…</div>';
+  return fetch(fileUrl(path))
+    .then(function (r) { return r.text(); })
+    .then(function (body) {
+      // Markdown through the same renderer as the chat, so a report reads the way the agent meant
+      // it to. Everything else escaped into a <pre>: it is text, not markup.
+      $("filespreview").innerHTML = head +
+        (kind === "markdown"
+          ? '<div style="padding:10px">' + renderMarkdown(body) + "</div>"
+          : "<pre>" + esc(body) + "</pre>");
+    })
+    .catch(function () {
+      $("filespreview").innerHTML = head + '<div class="dim" style="padding:10px">Could not read it.</div>';
+    });
+}
+
+document.getElementById("fileslist").addEventListener("click", function (event) {
+  var row = event.target.closest && event.target.closest(".row");
+  if (!row) return;
+  var path = row.getAttribute("data-path");
+  if (row.getAttribute("data-type") === "directory") return refreshFiles(path);
+  previewFile(path);
+  refreshFiles();
+});
+
+document.getElementById("filesup").addEventListener("click", function (event) {
   event.preventDefault();
-  refreshFiles(dir);
+  refreshFiles(filesDir.replace(/\/[^/]+$/, "") || "/home/box/work");
 });
 document.getElementById("filesrefresh").addEventListener("click", function (event) {
   event.preventDefault();
   refreshFiles();
 });
 
+/** Sends one file into the work directory. The inverse of a download: giving the agent something. */
+function uploadOne(file) {
+  return new Promise(function (resolve) {
+    var reader = new FileReader();
+    reader.onload = function () {
+      var base64 = String(reader.result).split(",")[1] || "";
+      fetch("/api/file", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ path: filesDir.replace(/\/$/, "") + "/" + file.name, base64: base64 })
+      })
+        .then(function (r) { return r.json(); })
+        .then(function (result) {
+          feed(result.error
+            ? "upload failed: " + esc(result.error)
+            : "added " + esc(file.name) + " to " + esc(filesDir), result.error ? "err" : "");
+          resolve();
+        })
+        .catch(function () { resolve(); });
+    };
+    reader.onerror = function () { resolve(); };
+    reader.readAsDataURL(file);
+  });
+}
+
+function uploadFiles(list) {
+  var files = Array.prototype.slice.call(list || []);
+  if (!files.length) return Promise.resolve();
+  return files.reduce(function (chain, file) {
+    return chain.then(function () { return uploadOne(file); });
+  }, Promise.resolve()).then(function () { return refreshFiles(); });
+}
+
+document.getElementById("filesupload").addEventListener("change", function (event) {
+  uploadFiles(event.target.files);
+  event.target.value = "";
+});
+
+// Drag and drop, because that is how a person expects to hand over a file.
+var filesView = document.getElementById("filesview");
+["dragenter", "dragover"].forEach(function (name) {
+  filesView.addEventListener(name, function (event) {
+    event.preventDefault();
+    filesView.classList.add("dropping");
+  });
+});
+["dragleave", "drop"].forEach(function (name) {
+  filesView.addEventListener(name, function () { filesView.classList.remove("dropping"); });
+});
+filesView.addEventListener("drop", function (event) {
+  event.preventDefault();
+  uploadFiles(event.dataTransfer && event.dataTransfer.files);
+});
+
+/** Which of the two views the right-hand pane is showing. */
+function showTab(which) {
+  var files = which === "files";
+  $("desktopview").style.display = files ? "none" : "";
+  $("filesview").style.display = files ? "flex" : "none";
+  $("tabfiles").className = "tab" + (files ? " on" : "");
+  $("tabdesktop").className = "tab" + (files ? "" : " on");
+  if (files) refreshFiles();
+}
+document.getElementById("tabdesktop").addEventListener("click", function (e) { e.preventDefault(); showTab("desktop"); });
+document.getElementById("tabfiles").addEventListener("click", function (e) { e.preventDefault(); showTab("files"); });
+
 /**
  * Turns a work path an agent mentioned into a link.
  *
  * Agents already say "I wrote /home/box/work/report.md", and that was dead text — the single
  * cheapest thing that was missing. Applied after markdown rendering, and skipped inside an existing
- * anchor or code fence so a path already formatted as a link or shown as literal text is left alone.
+ * anchor so a path already formatted as a link is left alone.
  */
 function linkifyWorkPaths(html) {
   return html.replace(/(^|[\s>(\[])(\/home\/box\/work\/[^\s<>)\]"']+)/g, function (all, lead, path) {

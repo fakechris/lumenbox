@@ -518,6 +518,29 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
           return;
         }
 
+        if (route === "POST /api/file") {
+          // The other direction: a person hands the agent a document. Driving is required — a viewer
+          // may read what the agents made and may not add to it.
+          if (refused()) return;
+          const client = orchestrator.boxClient();
+          if (!client) {
+            send(res, 503, { error: "The box is not running." });
+            return;
+          }
+          const body = await readJson(req);
+          const path = String(body.path ?? "");
+          if (!withinWork(path)) {
+            send(res, 403, { error: `Uploads only land under ${WORK_DIR}.` });
+            return;
+          }
+          try {
+            send(res, 200, await client.uploadFile(path, String(body.base64 ?? "")));
+          } catch (error) {
+            send(res, 400, { error: error instanceof Error ? error.message : String(error) });
+          }
+          return;
+        }
+
         if (route === "GET /api/progress") {
           const agentId = url.searchParams.get("agent") ?? "";
           if (!orchestrator.registry.has(agentId)) {
