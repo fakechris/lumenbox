@@ -95,16 +95,27 @@ export interface ContainerManager {
  * stable, unique, and collision-free where a truncation would not be. The readable name still lives
  * in the store; this string only has to identify a container.
  */
-export function containerNameFor(prefix: string, tenantName: string): string {
+export function containerNameFor(prefix: string, tenantName: string, tenantId: string): string {
+  // The tenant id, always, not only when the name is unusable.
+  //
+  // Because the transform above is lossy in both directions: "Acme Inc" and "Acme-Inc" both flatten
+  // to `acme-inc`, and two names sharing a forty-character prefix truncate to the same string. The
+  // *volumes* are named from this, so a collision does not merely confuse a listing — allocating
+  // the second tenant recreates the first tenant's container against the first tenant's work
+  // volume, handing over their files and their logged-in browser.
+  //
+  // Short enough to keep the name readable, long enough that a collision is not a thing to plan
+  // for. The readable name still lives in the store; this string only has to identify a container.
+  const suffix = createHash("sha256").update(tenantId).digest("hex").slice(0, 8);
   const safe = tenantName
     .toLowerCase()
     .replace(/[^a-z0-9]+/g, "-")
     .replace(/^-+|-+$/g, "")
     .slice(0, 40)
     .replace(/-+$/, "");
-  if (safe !== "") return `${prefix}-${safe}`;
-  const digest = createHash("sha256").update(tenantName).digest("hex").slice(0, 12);
-  return `${prefix}-t${digest}`;
+  // A name with nothing usable in it — `北京公司`, `🚀`, `...` — is not an error; it just carries no
+  // readable part.
+  return safe === "" ? `${prefix}-t${suffix}` : `${prefix}-${safe}-${suffix}`;
 }
 
 export class ComposeAllocator extends StoreBackedAllocator {
@@ -184,7 +195,7 @@ export class ComposeAllocator extends StoreBackedAllocator {
   ): Promise<{ externalId: string; boxdUrl: string; uiUrl: string; state: BoxState }> {
     const tenant = this.store.getTenant(tenantId);
     if (tenant === undefined) throw new Error(`no such tenant: ${tenantId}`);
-    const containerName = containerNameFor(this.prefix, tenant.name);
+    const containerName = containerNameFor(this.prefix, tenant.name, tenant.id);
     const manager = this.managerFor(containerName, spec, tokens);
 
     // A container already carrying this name is the previous incarnation of this tenant's box —

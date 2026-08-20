@@ -112,25 +112,38 @@ function fixture(existing?: Record<string, ContainerState>) {
   };
 }
 
-test("a tenant name becomes a container name that is safe and stable", () => {
-  assert.equal(containerNameFor("agentbox", "Acme"), "agentbox-acme");
-  assert.equal(containerNameFor("agentbox", "Acme Corp"), "agentbox-acme-corp");
+test("a tenant name becomes a container name that is safe, stable and unique", () => {
+  const name = (tenantName: string, tenantId = "tenant-1") =>
+    containerNameFor("agentbox", tenantName, tenantId);
+
+  assert.match(name("Acme"), /^agentbox-acme-[0-9a-f]{8}$/);
+  assert.match(name("Acme Corp"), /^agentbox-acme-corp-[0-9a-f]{8}$/);
   // A name is where a tenant's input reaches a command line. Replaced, not escaped.
-  assert.equal(containerNameFor("agentbox", "a; rm -rf /"), "agentbox-a-rm-rf");
-  assert.equal(containerNameFor("agentbox", "  spaced  "), "agentbox-spaced");
+  assert.match(name("a; rm -rf /"), /^agentbox-a-rm-rf-[0-9a-f]{8}$/);
+  assert.match(name("  spaced  "), /^agentbox-spaced-[0-9a-f]{8}$/);
+
+  // The id, not the name, decides the suffix — because the readable part is lossy in both
+  // directions and the *volumes* are named from this string. "Acme Inc" and "Acme-Inc" flatten to
+  // the same thing, and so do two names sharing a forty-character prefix; without the id,
+  // allocating the second tenant recreated the first tenant's container against the first tenant's
+  // work volume, handing over their files and their logged-in browser.
+  assert.notEqual(name("Acme Inc", "tenant-1"), name("Acme-Inc", "tenant-2"));
+  assert.notEqual(
+    name(`${"a".repeat(40)}-one`, "tenant-1"),
+    name(`${"a".repeat(40)}-two`, "tenant-2")
+  );
+  assert.equal(name("Acme", "tenant-1"), name("Acme", "tenant-1"), "stable across restarts");
 
   // A name Docker cannot hold is not a tenant we refuse. Refusing would mean a system that only
   // serves people whose company name is spelt in ASCII.
-  const beijing = containerNameFor("agentbox", "北京公司");
-  const shanghai = containerNameFor("agentbox", "上海公司");
-  assert.match(beijing, /^agentbox-t[0-9a-f]{12}$/);
-  assert.notEqual(beijing, shanghai, "two such names are not the same container");
-  assert.equal(beijing, containerNameFor("agentbox", "北京公司"), "and it is stable across restarts");
-  assert.match(containerNameFor("agentbox", "🚀"), /^agentbox-t[0-9a-f]{12}$/);
+  assert.match(name("北京公司"), /^agentbox-t[0-9a-f]{8}$/);
+  assert.notEqual(name("北京公司", "tenant-1"), name("上海公司", "tenant-2"));
+  assert.match(name("🚀"), /^agentbox-t[0-9a-f]{8}$/);
 
-  // Long names truncate without leaving a trailing dash, which Docker rejects.
-  const long = containerNameFor("agentbox", `${"a".repeat(38)} corp`);
-  assert.ok(!long.endsWith("-"), `${long} must not end in a dash`);
+  // Truncation must not leave a trailing dash before the suffix, which Docker rejects.
+  const long = name(`${"a".repeat(38)} corp`);
+  assert.ok(!long.includes("--"), `${long} must not contain an empty segment`);
+  assert.ok(!long.endsWith("-"));
 });
 
 test("two tenants get two containers, two volume sets and two ports", async () => {
@@ -142,8 +155,8 @@ test("two tenants get two containers, two volume sets and two ports", async () =
     const one = await allocator.allocate(acme.id, { image: "agentbox/box:test" });
     const two = await allocator.allocate(beta.id, { image: "agentbox/box:test" });
 
-    assert.equal(one.externalId, "agentbox-acme");
-    assert.equal(two.externalId, "agentbox-beta");
+    assert.equal(one.externalId, containerNameFor("agentbox", "acme", acme.id));
+    assert.equal(two.externalId, containerNameFor("agentbox", "beta", beta.id));
     assert.notEqual(one.uiUrl, two.uiUrl, "two boxes cannot share the UI port");
     assert.notEqual(one.boxdUrl, two.boxdUrl);
     assert.notEqual(one.tokens.ui, two.tokens.ui, "one UI token per box, not one per fleet");
@@ -156,17 +169,24 @@ test("two tenants get two containers, two volume sets and two ports", async () =
     // And the store agrees with what was created, which is what survives a restart.
     assert.equal(store.boxForTenant(acme.id)?.uiUrl, one.uiUrl);
     assert.equal(store.boxForTenant(beta.id)?.uiUrl, two.uiUrl);
-    assert.equal(engine.state["agentbox-acme"], "running");
-    assert.equal(engine.state["agentbox-beta"], "running");
+    assert.equal(engine.state[containerNameFor("agentbox", "acme", acme.id)], "running");
+    assert.equal(engine.state[containerNameFor("agentbox", "beta", beta.id)], "running");
   } finally {
     cleanup();
   }
 });
 
 test("a container left over from a previous life is recreated, not adopted", async () => {
-  const { store, allocator, engine, cleanup } = fixture({ "agentbox-acme": "running" });
+  // The tenant is created first, because its id is part of the container's name now.
+  const seed = fixture();
+  const acme = seed.store.upsertTenant({ name: "acme" });
+  seed.cleanup();
+
+  const { store, allocator, engine, cleanup } = fixture({
+    [containerNameFor("agentbox", "acme", acme.id)]: "running",
+  });
   try {
-    const acme = store.upsertTenant({ name: "acme" });
+    store.upsertTenant({ id: acme.id, name: "acme" });
     await allocator.allocate(acme.id, { image: "agentbox/box:test" });
 
     const up = engine.calls.find(call => call.action === "up");
@@ -210,7 +230,9 @@ test("stopping keeps the container and the volumes; destroying takes all three",
     await allocator.destroy(handle);
     assert.deepEqual(
       removed,
-      ["agentbox-acme-work", "agentbox-acme-config", "agentbox-acme-hostd"],
+      ["work", "config", "hostd"].map(
+        suffix => `${containerNameFor("agentbox", "acme", acme.id)}-${suffix}`
+      ),
       "all three volumes go, or the next box with this name inherits them"
     );
     assert.equal(store.getBox(handle.id)?.state, "gone");
@@ -327,7 +349,7 @@ test("reconcile calls a vanished container gone, and a failed lookup nothing", a
     const handle = await allocator.allocate(acme.id, { image: "agentbox/box:test" });
 
     // Someone removed it by hand. The row has to say so, or the tenant can never be given another.
-    delete engine.state["agentbox-acme"];
+    delete engine.state[containerNameFor("agentbox", "acme", acme.id)];
     assert.equal(await allocator.reconcile(handle), undefined);
     assert.equal(store.getBox(handle.id)?.state, "gone");
     assert.equal(store.boxForTenant(acme.id), undefined, "the slot is free again");
@@ -374,5 +396,37 @@ test("a Docker engine that is down does not condemn every box", async () => {
   } finally {
     store.close();
     rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+
+test("losing an allocation race does not destroy the winner's container", async () => {
+  // A container's name is derived from its tenant, so two racers create the *same* one. The loser
+  // then tore down "its" container — which was the winner's — taking all three volumes with it, and
+  // both callers came back holding a handle to something that no longer existed. A tenant's whole
+  // work volume, deleted by a duplicate request.
+  const { store, allocator, engine, removed, cleanup } = fixture();
+  try {
+    const acme = store.upsertTenant({ name: "acme" });
+    const spec = { image: "agentbox/box:test" };
+
+    const [first, second] = await Promise.all([
+      allocator.allocate(acme.id, spec),
+      allocator.allocate(acme.id, spec),
+    ]);
+
+    assert.equal(first.id, second.id, "one box, whichever of them won");
+    assert.deepEqual(removed, [], "no volumes were removed");
+    assert.ok(
+      !engine.calls.some(call => call.action === "down"),
+      `nothing was torn down, got ${JSON.stringify(engine.calls.map(call => call.action))}`
+    );
+    assert.equal(engine.state[first.externalId], "running", "and the container is still up");
+
+    // And there is exactly one box row: the slot is single, which is what makes the race possible
+    // in the first place.
+    assert.equal(store.boxForTenant(acme.id)?.id, first.id);
+  } finally {
+    cleanup();
   }
 });

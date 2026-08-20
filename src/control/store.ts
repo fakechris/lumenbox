@@ -195,8 +195,18 @@ export interface ControlStore {
   listTenants(): Tenant[];
   setTenantState(id: string, state: TenantState): void;
 
-  /** Claims the tenant's single box slot. Throws if one is already claimed. */
-  createBox(row: Omit<BoxRow, "lastSeenAt" | "usageCursor">): BoxRow;
+  /**
+   * Claims the tenant's single box slot, with the box's credentials, in one transaction.
+   *
+   * Together because separately was a way to lose a tenant permanently: the row was committed and
+   * then three tokens were written, so a crash in between left a box the store called ready whose
+   * credentials did not exist. Every request to it failed authentication, and the unique index that
+   * makes the slot single meant it could never be replaced.
+   */
+  createBox(
+    row: Omit<BoxRow, "lastSeenAt" | "usageCursor">,
+    tokens: Readonly<Partial<Record<TokenKind, string>>>
+  ): BoxRow;
   getBox(id: string): BoxRow | undefined;
   boxForTenant(tenantId: string): BoxRow | undefined;
   listBoxes(states?: readonly BoxState[]): BoxRow[];
@@ -547,24 +557,40 @@ export class SqliteControlStore implements ControlStore {
 
   // ── boxes ─────────────────────────────────────────────────────────────────────────
 
-  createBox(row: Omit<BoxRow, "lastSeenAt" | "usageCursor">): BoxRow {
-    this.db
-      .prepare(
-        `insert into box (id, tenant_id, allocator_kind, external_id, boxd_url, ui_url, state,
-                          image, created_at, usage_cursor)
-         values (?, ?, ?, ?, ?, ?, ?, ?, ?, 0)`
-      )
-      .run(
-        row.id,
-        row.tenantId,
-        row.allocatorKind,
-        row.externalId,
-        row.boxdUrl,
-        row.uiUrl,
-        row.state,
-        row.image,
-        row.createdAt
-      );
+  createBox(
+    row: Omit<BoxRow, "lastSeenAt" | "usageCursor">,
+    tokens: Readonly<Partial<Record<TokenKind, string>>> = {}
+  ): BoxRow {
+    // One transaction, because a box the store calls ready and cannot authenticate is worse than no
+    // box: the unique index that makes a tenant's slot single also means the broken row can never
+    // be replaced. Either both land or neither does.
+    this.db.exec("begin");
+    try {
+      this.db
+        .prepare(
+          `insert into box (id, tenant_id, allocator_kind, external_id, boxd_url, ui_url, state,
+                            image, created_at, usage_cursor)
+           values (?, ?, ?, ?, ?, ?, ?, ?, ?, 0)`
+        )
+        .run(
+          row.id,
+          row.tenantId,
+          row.allocatorKind,
+          row.externalId,
+          row.boxdUrl,
+          row.uiUrl,
+          row.state,
+          row.image,
+          row.createdAt
+        );
+      for (const [kind, value] of Object.entries(tokens)) {
+        if (value !== undefined) this.putToken(row.id, kind as TokenKind, value);
+      }
+      this.db.exec("commit");
+    } catch (error) {
+      this.db.exec("rollback");
+      throw error;
+    }
     return this.getBox(row.id)!;
   }
 

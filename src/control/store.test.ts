@@ -382,3 +382,57 @@ test("the static allocator hands out the box's real tokens, not minted ones", as
     cleanup();
   }
 });
+
+
+test("a box and its credentials land together, or neither does", () => {
+  // The row used to be committed and the three tokens written after it, so a crash in between left
+  // a box the store called ready whose credentials did not exist. Every request to it failed
+  // authentication, and the unique index that makes a tenant's slot single meant the broken row
+  // could never be replaced — the tenant was finished.
+  const { store, cleanup } = fixture();
+  try {
+    const acme = store.upsertTenant({ name: "acme" });
+    store.createBox(
+      {
+        id: "box-1",
+        tenantId: acme.id,
+        allocatorKind: "compose",
+        externalId: "agentbox-acme-aaaaaaaa",
+        boxdUrl: "http://127.0.0.1:32800",
+        uiUrl: "http://127.0.0.1:32801",
+        state: "ready",
+        image: "agentbox/box:test",
+        createdAt: new Date().toISOString(),
+      },
+      { box: "box-token", ui: "ui-token", relay: "relay-token" }
+    );
+
+    assert.equal(store.readToken("box-1", "box"), "box-token");
+    assert.equal(store.readToken("box-1", "ui"), "ui-token");
+    assert.equal(store.readToken("box-1", "relay"), "relay-token");
+
+    // A second claim on the same slot is refused and leaves nothing behind — no row, and no tokens
+    // from the attempt.
+    assert.throws(() =>
+      store.createBox(
+        {
+          id: "box-2",
+          tenantId: acme.id,
+          allocatorKind: "compose",
+          externalId: "agentbox-acme-aaaaaaaa",
+          boxdUrl: "http://127.0.0.1:32802",
+          uiUrl: "http://127.0.0.1:32803",
+          state: "ready",
+          image: "agentbox/box:test",
+          createdAt: new Date().toISOString(),
+        },
+        { box: "second-token", ui: "second-ui" }
+      )
+    );
+    assert.equal(store.getBox("box-2"), undefined);
+    assert.equal(store.readToken("box-2", "box"), undefined, "the rollback took the tokens too");
+    assert.equal(store.boxForTenant(acme.id)?.id, "box-1", "the first box is untouched");
+  } finally {
+    cleanup();
+  }
+});

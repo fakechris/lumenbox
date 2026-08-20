@@ -179,47 +179,58 @@ export abstract class StoreBackedAllocator implements BoxAllocator {
 
     let row: BoxRow;
     try {
-      row = this.store.createBox({
-        id: boxId,
-        tenantId,
-        allocatorKind: this.kind,
-        externalId: placed.externalId,
-        boxdUrl: placed.boxdUrl,
-        uiUrl: placed.uiUrl,
-        state: placed.state,
-        image: spec.image,
-        createdAt: new Date().toISOString(),
-      });
+      row = this.store.createBox(
+        {
+          id: boxId,
+          tenantId,
+          allocatorKind: this.kind,
+          externalId: placed.externalId,
+          boxdUrl: placed.boxdUrl,
+          uiUrl: placed.uiUrl,
+          state: placed.state,
+          image: spec.image,
+          createdAt: new Date().toISOString(),
+        },
+        // With the row, not after it: a crash in between left a box the store called ready whose
+        // credentials did not exist, and the unique index meant it could never be replaced.
+        tokens
+      );
     } catch (error) {
       // The unique index refused: someone else allocated for this tenant while we were creating.
       // Their box is the real one; ours has to go, or it runs forever owned by nobody.
       const winner = await this.find(tenantId);
       if (winner !== undefined) {
-        await this.destroyExternal({
-          tenantId,
-          id: boxId,
-          externalId: placed.externalId,
-          boxdUrl: placed.boxdUrl,
-          uiUrl: placed.uiUrl,
-          tokens,
-          createdAt: new Date().toISOString(),
-          state: placed.state,
-        }).catch(() => {});
+        // Only when it is actually a different box. A container's name is derived from its tenant,
+        // so two racers create the *same* one — and the loser tearing down "its" container was
+        // tearing down the winner's, taking all three volumes with it and leaving both callers
+        // holding a handle to something that no longer exists.
+        if (winner.externalId !== placed.externalId) {
+          await this.destroyExternal({
+            tenantId,
+            id: boxId,
+            externalId: placed.externalId,
+            boxdUrl: placed.boxdUrl,
+            uiUrl: placed.uiUrl,
+            tokens,
+            createdAt: new Date().toISOString(),
+            state: placed.state,
+          }).catch(() => {});
+        }
         this.store.audit({
           tenantId,
           actor: `${this.kind}-allocator`,
           action: "allocate.lost-race",
           target: placed.externalId,
-          detail: { keptBox: winner.id },
+          detail: {
+            keptBox: winner.id,
+            sharedContainer: winner.externalId === placed.externalId,
+          },
         });
         return winner;
       }
       throw error;
     }
 
-    this.store.putToken(boxId, "box", tokens.box);
-    this.store.putToken(boxId, "ui", tokens.ui);
-    if (tokens.relay !== undefined) this.store.putToken(boxId, "relay", tokens.relay);
     this.store.audit({
       tenantId,
       actor: `${this.kind}-allocator`,
