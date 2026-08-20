@@ -29,6 +29,8 @@
  * result nobody sees until they call it.
  */
 
+import { describeSchedule, parseSchedule, type Schedule } from "./schedule.ts";
+
 /** Where skills live inside the box. Under the work volume for the reasons in the module comment. */
 export const SKILLS_DIR = "/home/box/work/skills";
 
@@ -54,12 +56,21 @@ export interface Skill {
   path: string;
   /** Scripts and assets beside the markdown, named so the agent knows they are there to be run. */
   helpers: readonly string[];
+  /**
+   * When it runs by itself, if it does.
+   *
+   * A skill with a schedule is an automation. No second object and no second store: the only
+   * difference between a recipe and an automation is a line of frontmatter.
+   */
+  schedule?: Schedule;
+  /** Which agent a scheduled run wakes. Defaults to the coordinator, i.e. whoever is listed first. */
+  runAs?: string;
 }
 
 export type SkillScope = "global" | "agent";
 
 /** Frontmatter keys that mean something. Anything else is ignored rather than rejected. */
-const KNOWN_KEYS = new Set(["name", "description", "scope", "owner"]);
+const KNOWN_KEYS = new Set(["name", "description", "scope", "owner", "schedule", "agent"]);
 
 export interface ParsedSkill {
   meta: Record<string, string>;
@@ -143,6 +154,18 @@ export function skillFrom(
     };
   }
   const scope: SkillScope = parsed.meta.scope?.trim() === "agent" ? "agent" : "global";
+
+  // A schedule that cannot be read is reported rather than ignored. Silently dropping it leaves a
+  // skill that looks scheduled in its own file and never fires, which is the hardest kind of
+  // not-working to notice.
+  let schedule: Schedule | undefined;
+  const scheduleText = parsed.meta.schedule?.trim();
+  if (scheduleText !== undefined && scheduleText !== "") {
+    const result = parseSchedule(scheduleText);
+    if ("problem" in result) return { problem: `${slug}: ${result.problem}` };
+    schedule = result.schedule;
+  }
+
   return {
     skill: {
       slug,
@@ -152,6 +175,8 @@ export function skillFrom(
       ...(scope === "agent" && parsed.meta.owner ? { owner: parsed.meta.owner.trim() } : {}),
       path: `${SKILLS_DIR}/${slug}/${SKILL_FILENAME}`,
       helpers,
+      ...(schedule !== undefined ? { schedule } : {}),
+      ...(parsed.meta.agent ? { runAs: parsed.meta.agent.trim() } : {}),
     },
   };
 }
@@ -179,11 +204,12 @@ export function visibleTo(skills: readonly Skill[], agentName: string): Skill[] 
 export function renderSkills(skills: readonly Skill[]): string {
   if (skills.length === 0) return "";
   const lines = skills.map(skill => {
+    const when = skill.schedule === undefined ? "" : ` — runs ${describeSchedule(skill.schedule)}`;
     const helpers =
       skill.helpers.length === 0
         ? ""
         : ` — with ${skill.helpers.join(", ")} in the same directory`;
-    return `- **${skill.name}** — ${skill.description}\n  \`${skill.path}\`${helpers}`;
+    return `- **${skill.name}** — ${skill.description}${when}\n  \`${skill.path}\`${helpers}`;
   });
   return [
     "## Skills you can reuse",

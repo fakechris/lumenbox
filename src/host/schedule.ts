@@ -1,0 +1,367 @@
+/**
+ * Skills that run without anyone asking.
+ *
+ * A skill with a `schedule:` in its frontmatter is an automation. That is the whole addition — no new
+ * storage, no new object, no second concept. A recipe and a time.
+ *
+ * "Without anyone asking" is where all the weight is, and it forces four answers:
+ *
+ * **It spends money unwatched.** Which is why this waited for the policy gate. A scheduled run goes
+ * through the same check as any other turn, so a box over its budget stops firing rather than
+ * quietly draining it, and the refusal is on the record.
+ *
+ * **Runs must not overlap.** An hourly job that takes seventy minutes meets its own next fire. Piling
+ * a second run on top turns a slow problem into an avalanche, so a fire that finds the previous one
+ * still going is skipped and *said* — a silent skip is indistinguishable from a schedule that stopped
+ * working.
+ *
+ * **A missed window is not caught up.** If the box was down for two days, "generate the daily report"
+ * arguably wants two runs and "check every hour" emphatically does not want forty-eight. There is no
+ * way to tell which from a cron expression, so nothing is replayed: the next fire happens at the next
+ * scheduled time, and the gap is logged. Stated here because the alternative — silently catching up —
+ * is the one that produces a surprise bill.
+ *
+ * **The agent has to know it was not a person.** A wake with no explanation reads as someone talking,
+ * and an agent that thinks a person is waiting behaves differently from one doing background work. So
+ * a scheduled turn carries what fired it.
+ *
+ * Scheduling lives in the orchestrator's own process: that split earns its keep when boxes
+ * hibernate, and ours are running or they are not running at all, so an in-process timer is enough — at
+ * the cost that a window passing while the orchestrator is restarting is simply missed, which is the
+ * same trade as the paragraph above and is why it is acceptable.
+ */
+
+/** A parsed schedule: the fields a cron expression constrains. `undefined` means "any". */
+export interface Schedule {
+  /** The text it was parsed from, for messages and for the prompt. */
+  source: string;
+  minutes?: readonly number[];
+  hours?: readonly number[];
+  daysOfMonth?: readonly number[];
+  months?: readonly number[];
+  daysOfWeek?: readonly number[];
+  /** Set instead of the fields above for `@every <n><unit>`. */
+  everyMs?: number;
+}
+
+const ALIASES: Record<string, string> = {
+  "@hourly": "0 * * * *",
+  "@daily": "0 0 * * *",
+  "@midnight": "0 0 * * *",
+  "@weekly": "0 0 * * 0",
+  "@monthly": "0 0 1 * *",
+};
+
+const RANGES: [number, number][] = [
+  [0, 59], // minute
+  [0, 23], // hour
+  [1, 31], // day of month
+  [1, 12], // month
+  [0, 6], // day of week
+];
+
+/**
+ * Parses a schedule, or says why it could not.
+ *
+ * Deliberately a small subset: `*`, numbers, comma lists, ranges and `*​/n` steps, plus `@every` and a
+ * few aliases. Not a full cron implementation, because the parts left out — names like `MON`, `L`,
+ * `#`, seconds fields — vary between implementations, and a schedule that means something slightly
+ * different from what its author expected is worse than one that was refused.
+ */
+export function parseSchedule(text: string): { schedule: Schedule } | { problem: string } {
+  const raw = text.trim().toLowerCase();
+  if (raw === "") return { problem: "an empty schedule" };
+
+  const every = /^@every\s+(\d+)\s*(m|min|mins|minute|minutes|h|hr|hrs|hour|hours|d|day|days)$/.exec(raw);
+  if (every !== null) {
+    const amount = Number(every[1]);
+    const unit = every[2] ?? "m";
+    const ms = unit.startsWith("d") ? 86_400_000 : unit.startsWith("h") ? 3_600_000 : 60_000;
+    if (amount <= 0) return { problem: `"${text}": an interval has to be more than zero` };
+    const everyMs = amount * ms;
+    // A minute is the floor because the checker ticks at that resolution, and an automation that
+    // claims to run every ten seconds and runs every sixty is lying to whoever wrote it.
+    if (everyMs < 60_000) return { problem: `"${text}": the shortest interval is one minute` };
+    return { schedule: { source: text.trim(), everyMs } };
+  }
+
+  const expanded = ALIASES[raw] ?? raw;
+  if (expanded.startsWith("@")) {
+    return {
+      problem:
+        `"${text}" is not a schedule this understands. Use five cron fields ` +
+        `(\`0 9 * * 1-5\`), \`@every 30m\`, or one of ${Object.keys(ALIASES).join(", ")}.`,
+    };
+  }
+
+  const fields = expanded.split(/\s+/);
+  if (fields.length !== 5) {
+    return {
+      problem:
+        `"${text}" has ${fields.length} field(s); a cron schedule has five ` +
+        `(minute hour day-of-month month day-of-week).`,
+    };
+  }
+
+  const parsed: (readonly number[] | undefined)[] = [];
+  for (let at = 0; at < 5; at++) {
+    const field = parseField(fields[at]!, RANGES[at]![0], RANGES[at]![1]);
+    // "any" and "unreadable" are different answers and must not share a representation. Collapsing
+    // them here made every `*` in fields three to five a parse error — which is to say, almost every
+    // real schedule. The third time in this codebase that conflating "nothing" with "failed" has
+    // produced a bug, so it is a tagged union rather than a convention.
+    if (field.ok === false) {
+      return { problem: `"${text}": cannot read field ${at + 1} ("${fields[at]}")` };
+    }
+    parsed.push(field.any ? undefined : field.values);
+  }
+
+  return {
+    schedule: {
+      source: text.trim(),
+      ...(parsed[0] !== undefined ? { minutes: parsed[0] } : {}),
+      ...(parsed[1] !== undefined ? { hours: parsed[1] } : {}),
+      ...(parsed[2] !== undefined ? { daysOfMonth: parsed[2] } : {}),
+      ...(parsed[3] !== undefined ? { months: parsed[3] } : {}),
+      ...(parsed[4] !== undefined ? { daysOfWeek: parsed[4] } : {}),
+    },
+  };
+}
+
+/**
+ * One cron field, as either "any value", a set of values, or unreadable.
+ *
+ * Three outcomes, named, because two of them mean opposite things and both were `undefined` in the
+ * first version — so `*` in the day-of-month field was read as a parse failure and almost no real
+ * schedule loaded.
+ */
+type Field = { ok: true; any: true } | { ok: true; any: false; values: number[] } | { ok: false };
+
+function parseField(field: string, low: number, high: number): Field {
+  if (field === "*") return { ok: true, any: true };
+  const values = new Set<number>();
+  for (const part of field.split(",")) {
+    const step = /^(.+)\/(\d+)$/.exec(part);
+    const body = step?.[1] ?? part;
+    const stride = step === null ? 1 : Number(step[2]);
+    if (stride <= 0) return { ok: false };
+
+    let from: number;
+    let to: number;
+    if (body === "*") {
+      from = low;
+      to = high;
+    } else {
+      const range = /^(\d+)-(\d+)$/.exec(body);
+      if (range !== null) {
+        from = Number(range[1]);
+        to = Number(range[2]);
+      } else if (/^\d+$/.test(body)) {
+        from = Number(body);
+        to = from;
+      } else {
+        return { ok: false };
+      }
+    }
+    if (from < low || to > high || from > to) return { ok: false };
+    for (let value = from; value <= to; value += stride) values.add(value);
+  }
+  if (values.size === 0) return { ok: false };
+  return { ok: true, any: false, values: [...values].sort((a, b) => a - b) };
+}
+
+/**
+ * Whether a schedule wants to run at this minute, given when it last did.
+ *
+ * Minute resolution, and the last-run time is what stops one tick firing twice. For `@every`, the
+ * question is simply whether the interval has elapsed; for cron it is whether the fields match *and*
+ * we have not already fired inside this same minute.
+ *
+ * **Never catches up.** A schedule whose window passed while nothing was running does not fire late —
+ * see the module comment for why that is the safer default rather than an oversight.
+ */
+export function isDue(schedule: Schedule, now: Date, lastRun: Date | undefined): boolean {
+  if (schedule.everyMs !== undefined) {
+    if (lastRun === undefined) return true;
+    return now.getTime() - lastRun.getTime() >= schedule.everyMs;
+  }
+
+  const matches =
+    within(schedule.minutes, now.getMinutes()) &&
+    within(schedule.hours, now.getHours()) &&
+    within(schedule.daysOfMonth, now.getDate()) &&
+    within(schedule.months, now.getMonth() + 1) &&
+    within(schedule.daysOfWeek, now.getDay());
+  if (!matches) return false;
+
+  // Already fired this minute. Without this a checker ticking every thirty seconds fires twice for
+  // one scheduled minute, which for a daily report means two reports.
+  if (lastRun !== undefined && sameMinute(lastRun, now)) return false;
+  return true;
+}
+
+function within(allowed: readonly number[] | undefined, value: number): boolean {
+  return allowed === undefined || allowed.includes(value);
+}
+
+function sameMinute(a: Date, b: Date): boolean {
+  return (
+    a.getFullYear() === b.getFullYear() &&
+    a.getMonth() === b.getMonth() &&
+    a.getDate() === b.getDate() &&
+    a.getHours() === b.getHours() &&
+    a.getMinutes() === b.getMinutes()
+  );
+}
+
+/** Plain language, for the prompt and the UI. A cron expression is not something to make a person read. */
+export function describeSchedule(schedule: Schedule): string {
+  if (schedule.everyMs !== undefined) {
+    const minutes = Math.round(schedule.everyMs / 60_000);
+    if (minutes % 1440 === 0) return `every ${minutes / 1440} day(s)`;
+    if (minutes % 60 === 0) return `every ${minutes / 60} hour(s)`;
+    return `every ${minutes} minute(s)`;
+  }
+  const parts: string[] = [];
+  const times =
+    schedule.hours === undefined
+      ? "every hour"
+      : `at ${schedule.hours
+          .map(hour => `${String(hour).padStart(2, "0")}:${String(schedule.minutes?.[0] ?? 0).padStart(2, "0")}`)
+          .join(", ")}`;
+  parts.push(times);
+  if (schedule.daysOfWeek !== undefined) {
+    const names = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
+    parts.push(`on ${schedule.daysOfWeek.map(day => names[day]).join(", ")}`);
+  }
+  if (schedule.daysOfMonth !== undefined) {
+    parts.push(`on day ${schedule.daysOfMonth.join(", ")} of the month`);
+  }
+  return parts.join(" ");
+}
+
+/**
+ * What a scheduled turn is told.
+ *
+ * The distinction it exists for: a wake with no explanation reads as a person talking, and an agent
+ * that believes someone is waiting behaves differently from one doing background work — it asks
+ * clarifying questions nobody will answer, and it hurries.
+ */
+export function triggerPrompt(skillName: string, path: string, described: string): string {
+  return [
+    `[scheduled] This turn was started by a timer, not by a person. Nobody is waiting on a reply and`,
+    `no one will answer a question, so do the work and record the result where it can be found later.`,
+    "",
+    `You are running the **${skillName}** skill, scheduled ${described}. Read \`${path}\` and follow it.`,
+    "",
+    "If it produces something, write it under /home/box/work and say the path — that is how anyone",
+    "sees it. If it cannot run, say why in one line rather than retrying: this will come round again.",
+  ].join("\n");
+}
+
+// ── running them ──────────────────────────────────────────────────────────────────────
+
+/** Just enough of a skill for the runner. Keeps this module unaware of how skills are stored. */
+export interface Scheduled {
+  slug: string;
+  name: string;
+  path: string;
+  schedule: Schedule;
+  runAs?: string;
+}
+
+export interface SchedulerDeps {
+  /** The skills with schedules, re-read each tick so an edit takes effect without a restart. */
+  due: () => Promise<readonly Scheduled[]>;
+  /** Starts a turn. Rejecting is fine: the next window is the retry. */
+  run: (agent: string, prompt: string) => Promise<void>;
+  /** Who a schedule wakes when it names nobody. */
+  defaultAgent: () => string | undefined;
+  now?: () => Date;
+  log?: (line: string) => void;
+}
+
+/**
+ * Fires scheduled skills, one at a time per skill.
+ *
+ * Ticks every thirty seconds against minute-resolution schedules, so a window is checked twice and
+ * `isDue` is what stops it firing twice — a checker that ticked exactly on the minute would miss
+ * windows whenever the event loop was busy, which for a daily report means a day with no report.
+ */
+export class Scheduler {
+  private timer: NodeJS.Timeout | undefined;
+  private readonly lastRun = new Map<string, Date>();
+  /** Slugs with a run still going. The whole of the overlap answer. */
+  private readonly running = new Set<string>();
+  private readonly now: () => Date;
+  private readonly log: (line: string) => void;
+
+  constructor(
+    private readonly deps: SchedulerDeps,
+    private readonly tickMs = Number(process.env.AGENTBOX_SCHEDULER_TICK_MS ?? 30_000)
+  ) {
+    this.now = deps.now ?? (() => new Date());
+    this.log = deps.log ?? (() => {});
+  }
+
+  /** Runs whatever is due. Exposed so a test drives it directly instead of waiting on a clock. */
+  async tick(): Promise<void> {
+    let scheduled: readonly Scheduled[];
+    try {
+      scheduled = await this.deps.due();
+    } catch (error) {
+      // A box that is restarting should not stop the scheduler; the next tick is thirty seconds away.
+      this.log(`could not read schedules: ${error instanceof Error ? error.message : String(error)}`);
+      return;
+    }
+
+    for (const skill of scheduled) {
+      if (!isDue(skill.schedule, this.now(), this.lastRun.get(skill.slug))) continue;
+
+      if (this.running.has(skill.slug)) {
+        // Said, not silent. An hourly job taking seventy minutes meets its own next fire, and piling
+        // a second run on top turns a slow problem into an avalanche — but a skip nobody is told
+        // about is indistinguishable from a schedule that stopped working.
+        this.log(`${skill.name}: skipped, the previous run has not finished`);
+        this.lastRun.set(skill.slug, this.now());
+        continue;
+      }
+
+      const agent = skill.runAs ?? this.deps.defaultAgent();
+      if (agent === undefined) {
+        this.log(`${skill.name}: no agent to run it`);
+        continue;
+      }
+
+      // Marked before starting, so a slow first tick cannot be overtaken by the next one.
+      this.lastRun.set(skill.slug, this.now());
+      this.running.add(skill.slug);
+      this.log(`${skill.name}: firing (${describeSchedule(skill.schedule)})`);
+
+      void this.deps
+        .run(agent, triggerPrompt(skill.name, skill.path, describeSchedule(skill.schedule)))
+        .catch(error => {
+          // Reported and dropped. A scheduled run that failed will come round again, and retrying
+          // now would be a second unasked-for turn on top of one that just went wrong.
+          this.log(
+            `${skill.name}: run failed — ${error instanceof Error ? error.message : String(error)}`
+          );
+        })
+        .finally(() => this.running.delete(skill.slug));
+    }
+  }
+
+  start(): void {
+    if (this.timer !== undefined) return;
+    this.timer = setInterval(() => {
+      void this.tick();
+    }, this.tickMs);
+    // Unref'd: a scheduler must not be the reason a process refuses to exit.
+    this.timer.unref?.();
+  }
+
+  stop(): void {
+    if (this.timer !== undefined) clearInterval(this.timer);
+    this.timer = undefined;
+  }
+}

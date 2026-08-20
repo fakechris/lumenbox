@@ -879,6 +879,14 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
 
   const address = server.address();
   const port = typeof address === "object" && address ? address.port : options.port;
+  // Scheduled skills start firing only once something is serving. A CLI invocation that asks one
+  // question should not begin running someone's automations as a side effect, so this lives here
+  // rather than in the orchestrator's constructor.
+  if (process.env.AGENTBOX_SCHEDULER !== "0") {
+    orchestrator.scheduler.start();
+    log("scheduled skills are armed; set AGENTBOX_SCHEDULER=0 to leave them idle");
+  }
+
   options.onReady?.(`http://${host}:${port}`);
 
   return () => {

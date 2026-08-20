@@ -338,6 +338,24 @@ whole thing as a body and the skill still works under a name derived from its di
 *no description* is the one case reported rather than ignored — the description is the only thing read
 when choosing, so without one the skill exists and is never chosen.
 
+A `schedule:` line in the frontmatter makes a skill an **automation** — no second object and no
+second store; the only difference between a recipe and an automation is a line of frontmatter. Five
+cron fields, `@every <n><unit>`, or `@hourly`/`@daily`/`@weekly`/`@monthly`. Deliberately a subset:
+the parts left out (`MON`, `L`, `#`, seconds) vary between implementations, and a schedule meaning
+something slightly different from what its author expected is worse than one that was refused.
+
+Four answers the phrase "without anyone asking" forces, all of them in `schedule.ts`:
+
+- **It spends money unwatched**, so a scheduled run goes through the same policy gate as any other
+  turn. A box over budget stops firing rather than quietly draining, and the refusal is on the record.
+- **Runs do not overlap.** An hourly job taking seventy minutes meets its own next fire; the second
+  is skipped *and logged*, because a silent skip is indistinguishable from a schedule that stopped.
+- **A missed window is not caught up.** Two days down: "the daily report" arguably wants two runs and
+  "check hourly" emphatically does not want forty-eight, and cron cannot say which. Nothing is
+  replayed. Silently catching up is the behaviour that produces a surprise bill.
+- **The turn knows it was a timer.** An agent that believes someone is waiting asks questions nobody
+  will answer and hurries, so the prompt says so and says where to leave its output.
+
 Read at most every few seconds, and the load reports whether the directory was actually **read** as
 distinct from being read and empty. Those mean opposite things: without the distinction a box
 restarting replaces a good list with an empty one, and since the list is in the prompt, that reads as

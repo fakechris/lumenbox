@@ -17,6 +17,7 @@ import { runTurn, TurnAborted, type TurnEvent } from "./turn.ts";
 import { PolicyGate } from "./policy.ts";
 import { Rememberer, summariseExchange } from "./remember.ts";
 import { SkillCache } from "./skills.ts";
+import { Scheduler } from "./schedule.ts";
 import { UsageLog } from "./usage.ts";
 import {
   createClient,
@@ -99,6 +100,32 @@ export class Orchestrator {
    * skill; four agents waking at once should not produce four scans of the same directory.
    */
   readonly skills = new SkillCache(() => this.box);
+
+  /**
+   * Fires skills that carry a schedule.
+   *
+   * Started by whoever runs the orchestrator rather than in the constructor: a CLI invocation that
+   * asks one question should not begin running someone's automations as a side effect.
+   */
+  readonly scheduler = new Scheduler({
+    due: async () => {
+      const { skills } = await this.skills.refresh();
+      return skills
+        .filter(skill => skill.schedule !== undefined)
+        .map(skill => ({
+          slug: skill.slug,
+          name: skill.name,
+          path: skill.path,
+          schedule: skill.schedule!,
+          ...(skill.runAs !== undefined ? { runAs: skill.runAs } : {}),
+        }));
+    },
+    // Through the ordinary prompt path, so a scheduled turn is checked by the policy gate exactly
+    // like any other: a box over its budget stops firing rather than quietly draining it.
+    run: (agent, prompt) => this.prompt(agent, prompt),
+    defaultAgent: () => this.registry.list()[0]?.id,
+    log: line => console.error(`[schedule] ${line}`),
+  });
 
   constructor(private readonly options: OrchestratorOptions = {}) {
     this.registry = options.registry ?? new AgentRegistry();
