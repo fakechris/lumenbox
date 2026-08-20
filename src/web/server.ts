@@ -28,7 +28,7 @@ import { Orchestrator } from "../host/orchestrator.ts";
 import { describeProvider, type ProviderProfile } from "../host/provider.ts";
 import type { TurnEvent } from "../host/turn.ts";
 import { APP_HTML } from "./app-html.ts";
-import { authorize, callerOf, isLoopback, refusalToDrive } from "./auth.ts";
+import { authorize, callerOf, isLoopback, mayDrive, refusalToDrive } from "./auth.ts";
 
 /**
  * The one directory a person may browse, and the one that survives a rebuild.
@@ -214,13 +214,6 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
   }
 
   /** Rewrites /desktop/<index>/<rest> to boxd's /vnc/<index>/<rest>. */
-  function desktopUpstreamPath(pathname: string, search: string): string | undefined {
-    const match = /^\/desktop\/(\d+)(\/.*)?$/.exec(pathname);
-    if (!match) return undefined;
-    const rest = match[2] ?? "/";
-    return `/vnc/${match[1]}${rest}${search}`;
-  }
-
   async function proxyDesktop(
     req: IncomingMessage,
     res: ServerResponse,
@@ -350,7 +343,13 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
         // noVNC and its assets. `path` tells noVNC to open its socket under the
         // same prefix, so the whole desktop lives on this origin.
         if (url.pathname.startsWith("/desktop/")) {
-          const upstream = desktopUpstreamPath(url.pathname, url.search);
+          // Same choice as the upgrade: the page and the socket it opens must come from the same
+          // stack, or a viewer would be served a page pointing at a stream they are refused.
+          const upstream = desktopUpstreamPath(
+            url.pathname,
+            url.search,
+            mayDrive(caller)
+          );
           if (!upstream) {
             send(res, 404, { error: `Not a desktop path: ${url.pathname}` });
             return;
@@ -804,13 +803,6 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
   server.on("upgrade", (req, clientSocket: Socket, head: Buffer) => {
     const raw = req.url ?? "";
     const [pathname, query] = raw.split("?");
-    const upstreamPath = desktopUpstreamPath(pathname ?? "", query ? `?${query}` : "");
-
-    if (!upstreamPath) {
-      clientSocket.destroy();
-      return;
-    }
-
     // The RFB socket carries the screen, so it needs the same check. A browser sends the
     // cookie on an upgrade but cannot set a header, which is why the cookie exists.
     const upgradeDecision = authorize(
@@ -819,6 +811,19 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
     );
     if (!upgradeDecision.allow) {
       clientSocket.end("HTTP/1.1 401 Unauthorized\r\n\r\n");
+      return;
+    }
+
+    // And the role, not only the token: this socket is bidirectional, so authorising it as though
+    // it only carried pixels is what let someone who may only watch drive the desktop instead.
+    const upstreamPath = desktopUpstreamPath(
+      pathname ?? "",
+      query ? `?${query}` : "",
+      mayDrive(callerOf(req.headers, upgradeDecision.allow))
+    );
+
+    if (!upstreamPath) {
+      clientSocket.destroy();
       return;
     }
 
@@ -894,3 +899,27 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
     server.close();
   };
 }
+
+/**
+ * Where in the box a desktop request goes — and, for someone who may only watch, the view-only
+ * copy of the same desktop.
+ *
+ * The browser's URL is identical either way, so nothing about the page depends on the role and a
+ * viewer cannot reach the driving stream by editing an address: the choice is made here, from the
+ * identity the gateway asserted, and boxd itself does not authenticate this path.
+ *
+ * Read-only used to mean only that the HTTP routes refused to mutate. The screen was proxied to
+ * anyone with a session, and x11vnc was not started view-only, so a viewer could type into the
+ * desktop over RFB — every mutation check passed while the person did whatever they liked.
+ */
+export function desktopUpstreamPath(
+  pathname: string,
+  search: string,
+  canDrive: boolean
+): string | undefined {
+  const match = /^\/desktop\/(\d+)(\/.*)?$/.exec(pathname);
+  if (!match) return undefined;
+  const rest = match[2] ?? "/";
+  return `/${canDrive ? "vnc" : "vnc-ro"}/${match[1]}${rest}${search}`;
+}
+

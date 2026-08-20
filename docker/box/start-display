@@ -29,6 +29,16 @@ HEIGHT="${DISPLAY_HEIGHT:-800}"
 DISP=":${N}"
 RFB_PORT=$((5900 + N))
 WS_PORT=$((6080 + N))
+# A second, view-only stack on the same display.
+#
+# Because "watch without being able to take over" is a role the product promises, and the RFB
+# protocol has no way to express it after the fact: a proxy that has already joined the two sockets
+# is forwarding framed RFB, and dropping just the key and pointer messages would mean writing an RFB
+# parser and failing closed on anything it did not recognise. x11vnc already implements view-only
+# correctly, so a viewer gets their own connection to it rather than a filtered version of someone
+# else's. Two extra processes per display is the honest price.
+RFB_RO_PORT=$((5960 + N))
+WS_RO_PORT=$((6180 + N))
 
 log() { printf '[display %s] %s\n' "$N" "$*"; }
 
@@ -267,6 +277,15 @@ elif ! port_listening "${RFB_PORT}"; then
   repaired+=("x11vnc")
 fi
 
+if skipped x11vnc-ro; then
+  log "view-only x11vnc disabled by the supervisor"
+elif ! port_listening "${RFB_RO_PORT}"; then
+  log "starting view-only x11vnc on ${RFB_RO_PORT}"
+  setsid x11vnc -display "${DISP}" -forever -shared -nopw -quiet -localhost -viewonly \
+    -capslock -noxdamage -rfbport "${RFB_RO_PORT}" >> "/tmp/x11vnc-ro-${N}.log" 2>&1 &
+  repaired+=("x11vnc-ro")
+fi
+
 # --heartbeat: a WebSocket with no traffic gets closed by intermediaries, and the
 # symptom is a desktop that goes blank and reconnects while nothing is wrong.
 if skipped websockify; then
@@ -276,6 +295,15 @@ elif ! port_listening "${WS_PORT}"; then
   setsid websockify --heartbeat=30 --web=/usr/share/novnc \
     "${WS_PORT}" "localhost:${RFB_PORT}" >> "/tmp/novnc-${N}.log" 2>&1 &
   repaired+=("websockify")
+fi
+
+if skipped websockify-ro; then
+  log "view-only noVNC disabled by the supervisor"
+elif ! port_listening "${WS_RO_PORT}"; then
+  log "starting view-only noVNC on ${WS_RO_PORT}"
+  setsid websockify --heartbeat=30 --web=/usr/share/novnc \
+    "${WS_RO_PORT}" "localhost:${RFB_RO_PORT}" >> "/tmp/novnc-ro-${N}.log" 2>&1 &
+  repaired+=("websockify-ro")
 fi
 
 # Wait for the VNC path, not just X: boxd reports the display ready and the UI

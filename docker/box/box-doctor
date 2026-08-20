@@ -93,6 +93,14 @@ if listening "$((6080 + N))"; then
 else
   fail novnc "nothing on $((6080 + N)) — the browser cannot reach the desktop"
 fi
+# The view-only stack. A warning rather than a failure: the desktop works without it, but anyone
+# whose role is watch-only gets nothing, and the symptom is a blank screen for one person while
+# everyone else is fine — which reads as their browser being at fault.
+if listening "$((5960 + N))" && listening "$((6180 + N))"; then
+  pass vnc-ro "view-only x11vnc and websockify on $((5960 + N))/$((6180 + N))"
+else
+  warn vnc-ro "no view-only stack on $((5960 + N))/$((6180 + N)) — watch-only viewers see nothing"
+fi
 
 # ── capture ───────────────────────────────────────────────────────────────────────
 # Decoded rather than trusted: ffmpeg cannot seek in a pipe, so it leaves the container

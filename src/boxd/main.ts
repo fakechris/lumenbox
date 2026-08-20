@@ -231,12 +231,26 @@ async function handleComputer(body: ComputerRequest): Promise<ComputerResult> {
  */
 function parseVncPath(
   path: string
-): { index: number; upstream: string } | undefined {
-  const match = /^\/vnc\/(\d+)(\/.*)?$/.exec(path);
+): { index: number; upstream: string; viewOnly: boolean } | undefined {
+  // Two prefixes for the same desktop. `/vnc-ro/` reaches the view-only x11vnc, and which one a
+  // person gets is decided upstream by their role — boxd does not authenticate this path at all, so
+  // it must not be the thing making that decision.
+  const match = /^\/(vnc|vnc-ro)\/(\d+)(\/.*)?$/.exec(path);
   if (!match) return undefined;
-  const index = Number(match[1]);
-  const rest = match[2] ?? "/";
-  return { index, upstream: rest === "/" ? "/vnc.html" : rest };
+  const index = Number(match[2]);
+  const rest = match[3] ?? "/";
+  return {
+    index,
+    upstream: rest === "/" ? "/vnc.html" : rest,
+    viewOnly: match[1] === "vnc-ro",
+  };
+}
+
+/** Which of a desktop's two noVNC stacks a parsed path names. */
+function vncPortOf(parsed: { index: number; viewOnly: boolean }): number {
+  return parsed.viewOnly
+    ? DisplayManager.novncViewOnlyPort(parsed.index)
+    : DisplayManager.novncPort(parsed.index);
 }
 
 function proxyVnc(req: IncomingMessage, res: ServerResponse, path: string): void {
@@ -253,7 +267,7 @@ function proxyVnc(req: IncomingMessage, res: ServerResponse, path: string): void
   }
 
   const query = req.url?.includes("?") ? req.url.slice(req.url.indexOf("?")) : "";
-  const port = DisplayManager.novncPort(parsed.index);
+  const port = vncPortOf(parsed);
   const upstream = httpRequest(
     {
       host: "127.0.0.1",
@@ -479,7 +493,7 @@ server.on("upgrade", (req, clientSocket: Socket, head: Buffer) => {
   const query = (req.url ?? "").includes("?")
     ? (req.url ?? "").slice((req.url ?? "").indexOf("?"))
     : "";
-  const port = DisplayManager.novncPort(parsed.index);
+  const port = vncPortOf(parsed);
 
   const upstream = netConnect(port, "127.0.0.1", () => {
     const headers = Object.entries(req.headers)

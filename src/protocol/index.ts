@@ -339,6 +339,17 @@ export const UI_PORT = 7777;
  */
 export const NOVNC_BASE_PORT = 6080;
 
+/**
+ * Where the same desktop's *view-only* noVNC listens.
+ *
+ * A second x11vnc started with `-viewonly` against the same display. It exists because the product
+ * promises a role that can watch without taking over, and RFB cannot be made read-only downstream:
+ * everything after the handshake is framed, so a proxy would have to parse it and drop key and
+ * pointer messages, failing closed on anything it did not recognise. x11vnc already implements this
+ * correctly. Chosen in `start-display`; this constant has to agree with it.
+ */
+export const NOVNC_VIEW_ONLY_BASE_PORT = 6180;
+
 /** Base port for each desktop's VNC server: display N listens on VNC_BASE_PORT + N. */
 export const VNC_BASE_PORT = 5900;
 

@@ -19,6 +19,7 @@ import { copyFileSync, statSync, truncateSync } from "node:fs";
 import {
   DEFAULT_DISPLAY_INDEX,
   NOVNC_BASE_PORT,
+  NOVNC_VIEW_ONLY_BASE_PORT,
   type DisplayInfo,
 } from "../protocol/index.ts";
 import { detectDisplay, type DisplayDetectionResult } from "../cua/display.ts";
@@ -181,6 +182,19 @@ export class DisplayManager {
 
   static novncPort(index: number): number {
     return NOVNC_BASE_PORT + index;
+  }
+
+  /**
+   * The noVNC port of the same desktop's view-only stack.
+   *
+   * A second x11vnc started with `-viewonly`, because a viewer must be able to watch without being
+   * able to take over and RFB cannot be made read-only by a proxy after the fact — everything after
+   * the handshake is framed, so filtering out key and pointer messages would mean writing an RFB
+   * parser and failing closed on anything it did not recognise. Kept in step with `start-display`,
+   * which is where the ports are actually chosen.
+   */
+  static novncViewOnlyPort(index: number): number {
+    return NOVNC_VIEW_ONLY_BASE_PORT + index;
   }
 
   list(): DisplayInfo[] {
