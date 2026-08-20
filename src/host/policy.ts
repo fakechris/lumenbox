@@ -284,6 +284,10 @@ export class PolicyGate {
     if (!this.needsApproval(request)) return { decision: { allow: true } };
 
     const description = describeRequest(request);
+    // Refused outright, not truncated: see `tooLargeToApprove`.
+    const tooLarge = tooLargeToApprove(description);
+    if (tooLarge !== undefined) return { decision: { allow: false, reason: tooLarge } };
+
     const fingerprint = fingerprintOf(request.agentId, description);
 
     // Granted earlier and not yet used. Consumed here, so the same grant cannot cover a second run.
@@ -516,12 +520,37 @@ export function describeRequest(request: PolicyRequest): string {
       return `${request.agentName}: wake ${request.targetName}`;
     case "tool": {
       const command = typeof request.input.command === "string" ? request.input.command : undefined;
-      // The command is the reviewable thing when there is one; otherwise the whole input, bounded so
-      // one enormous argument cannot push the meaningful part off a person's screen.
       const detail = command ?? JSON.stringify(request.input);
-      return `${request.agentName}: ${request.tool} — ${detail.slice(0, 400)}`;
+      return `${request.agentName}: ${request.tool} — ${detail}`;
     }
   }
+}
+
+/**
+ * The most an action may be and still be approvable.
+ *
+ * Generous — far beyond any real command or path — because the number is not the point. The point is
+ * that consent is given to *what the person read*, so an action too large to show has to be refused
+ * rather than shortened.
+ */
+export const MAX_APPROVABLE_DESCRIPTION = 2_000;
+
+/**
+ * Why an action cannot be put in front of a person at all, if it cannot.
+ *
+ * This closes a hole in the first version of this file. `describeRequest` truncated at 400
+ * characters, and the fingerprint was taken over the truncated text — so two commands sharing their
+ * first 400 characters and differing after would pass under one grant. Truncating what a person is
+ * shown while binding a grant to it makes the binding decorative.
+ */
+export function tooLargeToApprove(description: string): string | undefined {
+  if (description.length <= MAX_APPROVABLE_DESCRIPTION) return undefined;
+  return (
+    `This action is ${description.length} characters long, and cannot be shown to a person in full ` +
+    `(the limit is ${MAX_APPROVABLE_DESCRIPTION}). It is refused rather than shortened, because ` +
+    `approving a summary of an action is not approving the action. Break it into smaller steps, or ` +
+    `put the payload in a file and act on the file.`
+  );
 }
 
 /** Binds a grant to one agent and one exact description. */

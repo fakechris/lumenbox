@@ -15,6 +15,7 @@ import {
   DEFAULT_LIMITS,
   describeRequest,
   fingerprintOf,
+  MAX_APPROVABLE_DESCRIPTION,
   PolicyGate,
   type PolicyLimits,
   type PolicyRequest,
@@ -326,6 +327,33 @@ test("a tool nobody asked to gate is not gated", () => {
     assert.deepEqual(DEFAULT_LIMITS.approvalRequiredTools, []);
     assert.equal(gate.check(toolRequest("rm -rf /")).allow, true);
     assert.equal(gate.pending().length, 0);
+  } finally {
+    cleanup();
+  }
+});
+
+test("an action too large to show is refused, not shortened", () => {
+  const { gate, cleanup } = fixture({ approvalRequiredTools: ["bash"] });
+  try {
+    // The hole this closes: the first version truncated the description at 400 characters and took
+    // the fingerprint over the truncated text, so two commands sharing their first 400 characters
+    // and differing after would pass under one grant. Consent is given to what the person read.
+    const long = `echo ${"x".repeat(MAX_APPROVABLE_DESCRIPTION)}`;
+    const decision = gate.check(toolRequest(long));
+    assert.equal(decision.allow, false);
+    assert.ok(!decision.allow && /refused rather than shortened/.test(decision.reason));
+    // And crucially it does not become a pending approval, because there is nothing showable to
+    // approve.
+    assert.equal(gate.pending().length, 0);
+
+    // Two commands that share a long prefix are still distinguished, now that nothing is cut.
+    const prefix = "rm ".padEnd(500, "a");
+    const first = gate.check(toolRequest(`${prefix}/one`));
+    const id = (!first.allow && first.approval?.id) as string;
+    assert.ok(id, "a showable action is still approvable at 500 characters");
+    assert.equal(gate.grant(id), true);
+    assert.equal(gate.check(toolRequest(`${prefix}/two`)).allow, false, "a different tail is a different action");
+    assert.equal(gate.check(toolRequest(`${prefix}/one`)).allow, true);
   } finally {
     cleanup();
   }

@@ -182,6 +182,47 @@ and ended with the reason in its transcript. Honest about the noise: that round 
 tool calls and each got its own refusal, so the transcript carries eleven refusals where one would
 read better. Tidying that up would risk leaving a call without a result, so it stands.
 
+### R-10 — A transient failure ended a long turn — **fixed**
+
+Found while looking for what actually breaks a long task, rather than in the original review.
+
+A round's stream failure was rethrown for anything that was not an abort or a context overflow. The
+SDK's own retries cover *establishing* a request; a stream that breaks after content has arrived is
+not resumable, and that is precisely the failure a long turn is most exposed to because it holds a
+connection open the longest. So one blip ended the turn and the work with it.
+
+Three things make the retry correct rather than hopeful:
+
+**Only what a retry could fix.** A rejected request, a bad credential, or an overflow that cannot be
+shed further fails identically forever; retrying those spends money and hides the real error behind a
+delay. Four kinds — transient, capacity, permanent, unknown — and only the first two are retried.
+Unknown is deliberately *not* retried: an unrecognised error retried in a loop is how a bug becomes a
+bill.
+
+**Looking through the wrapping.** Node buries the interesting error — a failed `fetch` is a generic
+`TypeError` whose `cause` holds the `ECONNRESET`, and a multi-address failure is an `AggregateError`
+whose `errors` hold several. Every signal in the chain is collected and then decided between, with
+**permanent winning**, because the two mistakes are not symmetrical: calling a transient failure
+permanent loses one turn, while calling a permanent failure transient pays for the same impossible
+request four times. My first version returned the outermost signal, so a permanent error wrapped in
+something saying "connection closed" would have been retried — caught by the test written for exactly
+that case.
+
+**A silent stream is a failure.** A stream can open and deliver nothing, which is not a slow answer
+— a slow answer produces tokens — and waiting on it is indistinguishable from a hang. There is now a
+deadline on the *first* token, separate from any limit on the whole response, and it is reported as
+what it is rather than as an abort.
+
+Backoff uses equal jitter, half fixed and half random, so retries neither pile up at one instant nor
+line up in lockstep across agents. A provider's `retry-after` is a floor rather than a suggestion,
+capped at 30s so a bad header cannot stall a turn for an hour.
+
+One honest limitation: a partial answer already streamed to a watcher will be produced again by the
+retry. Nothing is written to the transcript until a round completes, so stored history cannot be
+duplicated and no tool can re-run — but the screen can show the text twice. The retry event carries
+`discardPartial` so a UI can drop the first, and until a UI reads it, that duplicate is visible. Worth
+it: a duplicated paragraph is recoverable and a lost turn is not.
+
 ## What holds up well
 
 Worth recording, because a review that only lists faults misrepresents the system.

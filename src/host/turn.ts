@@ -12,6 +12,11 @@ import type { AgentBus, InboundMessage } from "../agents/bus.ts";
 import type { BoxClient } from "../box/client.ts";
 import type { DisplayLease } from "../box/display-lease.ts";
 import type { PolicyGate } from "./policy.ts";
+import {
+  decideRetry,
+  FirstTokenStallError,
+  FIRST_TOKEN_DEADLINE_MS,
+} from "./transient.ts";
 import type { UsageLog } from "./usage.ts";
 import {
   activeWindow,
@@ -258,6 +263,22 @@ export type TurnEvent =
       detail: string;
     }
   | { type: "aborted"; agentId: string }
+  /**
+   * A round failed in a way a retry can fix, and is being retried.
+   *
+   * `discardPartial` is the load-bearing field: nothing was written to the transcript, so a partial
+   * answer exists only on the watcher's screen and would otherwise appear twice.
+   */
+  | {
+      type: "retrying";
+      agentId: string;
+      round: number;
+      attempt: number;
+      delayMs: number;
+      kind: string;
+      discardPartial: boolean;
+      detail: string;
+    }
   | {
       type: "usage";
       /** Which round of the turn, so a long turn is visible as one. */
@@ -659,6 +680,9 @@ export async function runTurn(
   // How many times this turn has had to shed content after a rejection. Bounded, because a provider
   // that rejects everything must not become an infinite retry loop.
   let shed = 0;
+  // Transient retries across the whole turn, not per round: a connection that keeps dropping should
+  // not get four fresh attempts at every round of a four-hundred-round turn.
+  let attempts = 0;
   for (let round = 0; round < MAX_ROUNDS; round++) {
     if (signal.aborted) {
       emit({ type: "aborted", agentId: agent.id });
@@ -715,6 +739,17 @@ export async function runTurn(
       }
     }
 
+    // Tracked per attempt: whether anything reached the watcher. A retry cannot duplicate stored
+    // history — nothing is appended until the round completes — but it can show a partial answer
+    // twice, and the watcher is told so it can drop the first.
+    let outputProduced = false;
+    let firstTokenTimer: NodeJS.Timeout | undefined;
+    const attemptControl = new AbortController();
+    // Two signals: the caller's abort, and our own first-token deadline. Linked so either ends the
+    // request and the classifier can still tell which happened.
+    const onOuterAbort = () => attemptControl.abort();
+    signal.addEventListener("abort", onOuterAbort, { once: true });
+
     const stream = client.messages.stream(
       {
         model: provider.model,
@@ -733,17 +768,38 @@ export async function runTurn(
         tools,
         messages,
       },
-      { signal }
+      { signal: attemptControl.signal }
     );
 
+    // A stream can open and then deliver nothing. That is not a slow answer — a slow answer produces
+    // tokens — and waiting on it forever is indistinguishable from a hang.
+    let stalled = false;
+    firstTokenTimer = setTimeout(() => {
+      if (!outputProduced) {
+        stalled = true;
+        attemptControl.abort();
+      }
+    }, FIRST_TOKEN_DEADLINE_MS);
+    firstTokenTimer.unref?.();
+
     stream.on("text", delta => {
+      outputProduced = true;
+      if (firstTokenTimer !== undefined) {
+        clearTimeout(firstTokenTimer);
+        firstTokenTimer = undefined;
+      }
       emit({ type: "text", agentId: agent.id, agentName: agent.profile.name, delta });
     });
 
     let response: Anthropic.Message;
     try {
       response = await stream.finalMessage();
-    } catch (error) {
+    } catch (rawError) {
+      // A first-token stall arrives as an abort, because that is how the request was ended. Named
+      // properly here so the retry decision and the message a person reads both say what happened.
+      const error = stalled ? new FirstTokenStallError(FIRST_TOKEN_DEADLINE_MS) : rawError;
+      // The outer abort is the only one that means "a person stopped this"; our own deadline abort
+      // must not be mistaken for it.
       if (signal.aborted) {
         emit({ type: "aborted", agentId: agent.id });
         throw new TurnAborted();
@@ -779,6 +835,46 @@ export async function runTurn(
         round -= 1; // retry this round rather than consuming one
         continue;
       }
+
+      // Everything else: was this a failure a retry could fix? A long turn is exposed to a dropped
+      // connection precisely because it holds one open the longest, and before this a single blip
+      // ended the turn and the work with it.
+      const retry = decideRetry({
+        error,
+        attempt: attempts + 1,
+        aborted: signal.aborted,
+        outputProduced,
+      });
+      if (retry.retry) {
+        attempts += 1;
+        const detail =
+          `${error instanceof Error ? error.message : String(error)} — ${retry.reason}` +
+          (outputProduced ? "; the partial answer above is being discarded" : "");
+        console.error(`[turn] ${agent.profile.name}: retrying round ${round} in ${retry.delayMs}ms: ${detail}`);
+        emit({
+          type: "retrying",
+          agentId: agent.id,
+          round,
+          attempt: attempts,
+          delayMs: retry.delayMs,
+          kind: retry.kind,
+          // The watcher needs this to drop what it already rendered: nothing was written to the
+          // transcript, so the partial exists only on their screen.
+          discardPartial: outputProduced,
+          detail,
+        });
+        await new Promise(resolve => setTimeout(resolve, retry.delayMs));
+        if (signal.aborted) {
+          emit({ type: "aborted", agentId: agent.id });
+          throw new TurnAborted();
+        }
+        round -= 1;
+        continue;
+      }
+
+      console.error(
+        `[turn] ${agent.profile.name}: giving up on round ${round}: ${retry.reason}`
+      );
       throw error;
     }
 

@@ -1281,3 +1281,112 @@ test("the wake limit stops two agents from waking each other forever", async () 
     cleanup();
   }
 });
+
+test("a dropped connection mid-turn is retried, and the turn finishes", async () => {
+  const { registry, cleanup } = fixture();
+  try {
+    const ada = registry.create({ name: "Ada" });
+    const bus = new AgentBus(registry, async () => {});
+    const capture: Capture = { params: [] };
+
+    // Two rounds fail with a wrapped ECONNRESET — the shape a real dropped connection has — then the
+    // third succeeds. Before this, the first one ended the turn and the work with it.
+    let attempts = 0;
+    const client = {
+      messages: {
+        stream(params: Anthropic.MessageCreateParams) {
+          capture.params.push({ ...params, messages: [...params.messages] });
+          attempts += 1;
+          const failing = attempts <= 2;
+          return {
+            on() {
+              return this;
+            },
+            finalMessage: async () => {
+              if (failing) {
+                throw new Error("fetch failed", {
+                  cause: Object.assign(new Error("read ECONNRESET"), { code: "ECONNRESET" }),
+                });
+              }
+              return message([textBlock("finished anyway")]);
+            },
+          };
+        },
+      },
+    } as unknown as Anthropic;
+
+    const events: { type: string; discardPartial?: boolean; kind?: string }[] = [];
+    await runTurn(
+      ada,
+      [{ fromId: "user", fromName: "user", text: "work", priority: false, receivedAt: "" }],
+      new AbortController().signal,
+      {
+        client,
+        registry,
+        bus,
+        box: undefined,
+        resolution: undefined,
+        onEvent: event => events.push(event as { type: string }),
+      }
+    );
+
+    assert.equal(attempts, 3, "two failures, then a success");
+    const transcript = registry.readTranscript(ada.id) as TranscriptEntry[];
+    const last = transcript.at(-1);
+    assert.ok(last && !("kind" in last));
+    assert.match(last.text, /finished anyway/, "the turn reached its own conclusion");
+
+    // Reported, so a watcher knows why there was a pause rather than assuming a hang.
+    const retries = events.filter(event => event.type === "retrying");
+    assert.equal(retries.length, 2);
+    assert.equal(retries[0]?.kind, "transient");
+    // Nothing had been shown, so there is no partial for the watcher to drop.
+    assert.equal(retries[0]?.discardPartial, false);
+  } finally {
+    cleanup();
+  }
+});
+
+test("a rejected request is not retried, and the error is not hidden behind delays", async () => {
+  const { registry, cleanup } = fixture();
+  try {
+    const ada = registry.create({ name: "Ada" });
+    const bus = new AgentBus(registry, async () => {});
+    const capture: Capture = { params: [] };
+
+    let attempts = 0;
+    const client = {
+      messages: {
+        stream(params: Anthropic.MessageCreateParams) {
+          capture.params.push({ ...params, messages: [...params.messages] });
+          attempts += 1;
+          return {
+            on() {
+              return this;
+            },
+            finalMessage: async () => {
+              throw Object.assign(
+                new Error("invalid_request_error: model: unknown model"),
+                { status: 400 }
+              );
+            },
+          };
+        },
+      },
+    } as unknown as Anthropic;
+
+    await assert.rejects(
+      runTurn(
+        ada,
+        [{ fromId: "user", fromName: "user", text: "work", priority: false, receivedAt: "" }],
+        new AbortController().signal,
+        { client, registry, bus, box: undefined, resolution: undefined }
+      ),
+      /unknown model/
+    );
+    // Once. Retrying a rejected request burns money and hides the real error behind a delay.
+    assert.equal(attempts, 1);
+  } finally {
+    cleanup();
+  }
+});
