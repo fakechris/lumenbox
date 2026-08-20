@@ -3692,7 +3692,7 @@ var require_timing_safe_equal = __commonJS({
         throw new Error(msg);
       }
     }
-    function timingSafeEqual2(a, b) {
+    function timingSafeEqual3(a, b) {
       if (a.byteLength !== b.byteLength) {
         return false;
       }
@@ -3712,7 +3712,7 @@ var require_timing_safe_equal = __commonJS({
       }
       return out2 === 0;
     }
-    exports.timingSafeEqual = timingSafeEqual2;
+    exports.timingSafeEqual = timingSafeEqual3;
   }
 });
 
@@ -5524,7 +5524,7 @@ var init_promise = __esm({
 // node_modules/@anthropic-ai/sdk/tools/agent-toolset/fs-util.mjs
 import * as fs from "node:fs/promises";
 import * as path2 from "node:path";
-import { randomUUID as randomUUID2 } from "node:crypto";
+import { randomUUID as randomUUID4 } from "node:crypto";
 async function realpathOrSelf(p) {
   try {
     return await fs.realpath(p);
@@ -5589,7 +5589,7 @@ async function confineToRoot(root, p, opts) {
 }
 async function atomicWriteFile(targetPath, content) {
   const dir = path2.dirname(targetPath);
-  const tempPath = path2.join(dir, `.tmp-${process.pid}-${randomUUID2()}`);
+  const tempPath = path2.join(dir, `.tmp-${process.pid}-${randomUUID4()}`);
   let handle;
   try {
     handle = await fs.open(tempPath, "wx", FILE_CREATE_MODE);
@@ -5646,8 +5646,8 @@ var init_fs_util = __esm({
 import * as fs2 from "node:fs/promises";
 import * as fssync from "node:fs";
 import * as path3 from "node:path";
-import { execFile as execFile2 } from "node:child_process";
-import { promisify as promisify2 } from "node:util";
+import { execFile as execFile3 } from "node:child_process";
+import { promisify as promisify3 } from "node:util";
 import { Readable } from "node:stream";
 import { pipeline } from "node:stream/promises";
 async function setupSkills(ctx) {
@@ -5663,10 +5663,10 @@ async function setupSkills(ctx) {
     try {
       const versionId = await resolveSkillVersion(client, skill.skill_id, skill.version);
       const version = await client.beta.skills.versions.retrieve(versionId, { skill_id: skill.skill_id });
-      let dirname8 = path3.basename(version.name.trim());
-      if (dirname8 === "" || dirname8 === "." || dirname8 === "..")
-        dirname8 = skill.skill_id;
-      const dest = path3.resolve(skillsRoot, dirname8);
+      let dirname9 = path3.basename(version.name.trim());
+      if (dirname9 === "" || dirname9 === "." || dirname9 === "..")
+        dirname9 = skill.skill_id;
+      const dest = path3.resolve(skillsRoot, dirname9);
       if (dest !== skillsRoot && !dest.startsWith(skillsRoot + path3.sep)) {
         log.warn("skill name escapes the skills dir; skipping", {
           component: "agent-tool-context",
@@ -5850,7 +5850,7 @@ var init_skills = __esm({
     init_error();
     init_log();
     init_fs_util();
-    execFileAsync2 = promisify2(execFile2);
+    execFileAsync2 = promisify3(execFile3);
     INCONSISTENT_LISTING = "skill archive listing is inconsistent; refusing to extract";
     PLAIN_TYPE_CHARS = { unzip: /* @__PURE__ */ new Set(["-", "d", "?"]), tar: /* @__PURE__ */ new Set(["-", "d", "C"]) };
   }
@@ -12641,8 +12641,8 @@ var init_sdk = __esm({
 
 // src/cli.ts
 import { createInterface as createInterface2 } from "node:readline/promises";
-import { existsSync as existsSync7, writeFileSync as writeFileSync6 } from "node:fs";
-import { dirname as dirname7, join as join10, resolve as resolve4 } from "node:path";
+import { existsSync as existsSync9, writeFileSync as writeFileSync8 } from "node:fs";
+import { dirname as dirname8, join as join12, resolve as resolve4 } from "node:path";
 import { fileURLToPath } from "node:url";
 import { homedir as homedir4 } from "node:os";
 
@@ -13202,19 +13202,1370 @@ var BoxManager = class {
   }
 };
 
-// src/agents/registry.ts
+// src/control/main.ts
+import { randomBytes as randomBytes5 } from "node:crypto";
+import { createServer } from "node:http";
+import { existsSync as existsSync4, mkdirSync as mkdirSync4, readFileSync as readFileSync4, writeFileSync as writeFileSync4 } from "node:fs";
+import { join as join4 } from "node:path";
+
+// src/config.ts
+import { existsSync as existsSync2, mkdirSync as mkdirSync2, readFileSync as readFileSync2, writeFileSync as writeFileSync2 } from "node:fs";
+import { homedir as homedir2 } from "node:os";
+import { dirname, join as join2 } from "node:path";
+var DEFAULT_CONFIG = {
+  activityLimit: 400
+};
+var MAX_ACTIVITY_LIMIT = 2e4;
+function agentboxHome() {
+  return process.env.AGENTBOX_HOME ?? join2(homedir2(), ".agentbox");
+}
+function configPath() {
+  return process.env.AGENTBOX_CONFIG ?? join2(agentboxHome(), "config.json");
+}
+function readInteger(value, fallback, bounds, key, warn) {
+  if (value === void 0) return fallback;
+  const parsed = typeof value === "number" ? value : Number(value);
+  if (!Number.isFinite(parsed) || !Number.isInteger(parsed)) {
+    warn(`config: ${key} must be a whole number, using ${fallback}`);
+    return fallback;
+  }
+  if (parsed < bounds.min || parsed > bounds.max) {
+    const clamped = Math.min(Math.max(parsed, bounds.min), bounds.max);
+    warn(`config: ${key} must be between ${bounds.min} and ${bounds.max}, using ${clamped}`);
+    return clamped;
+  }
+  return parsed;
+}
+function loadConfig(onWarn = () => {
+}) {
+  const path5 = configPath();
+  if (!existsSync2(path5)) return { ...DEFAULT_CONFIG };
+  let parsed;
+  try {
+    parsed = JSON.parse(readFileSync2(path5, "utf8"));
+  } catch (error) {
+    const detail = error instanceof Error ? error.message : String(error);
+    onWarn(`config: ${path5} is not valid JSON (${detail}), using defaults`);
+    return { ...DEFAULT_CONFIG };
+  }
+  if (parsed === null || typeof parsed !== "object" || Array.isArray(parsed)) {
+    onWarn(`config: ${path5} should contain an object, using defaults`);
+    return { ...DEFAULT_CONFIG };
+  }
+  const raw = parsed;
+  return {
+    activityLimit: readInteger(
+      raw.activityLimit,
+      DEFAULT_CONFIG.activityLimit,
+      { min: 1, max: MAX_ACTIVITY_LIMIT },
+      "activityLimit",
+      onWarn
+    )
+  };
+}
+function ensureConfigFile() {
+  const path5 = configPath();
+  if (existsSync2(path5)) return path5;
+  mkdirSync2(dirname(path5), { recursive: true });
+  writeFileSync2(path5, `${JSON.stringify(DEFAULT_CONFIG, null, 2)}
+`, "utf8");
+  return path5;
+}
+
+// src/control/allocator.ts
 import { randomBytes as randomBytes2, randomUUID } from "node:crypto";
+function newToken() {
+  return randomBytes2(16).toString("hex");
+}
+var StoreBackedAllocator = class {
+  constructor(store) {
+    this.store = store;
+  }
+  async allocate(tenantId, spec) {
+    const tenant = this.store.getTenant(tenantId);
+    if (tenant === void 0) throw new Error(`no such tenant: ${tenantId}`);
+    if (tenant.state !== "active") {
+      throw new Error(`tenant ${tenant.name} is ${tenant.state}; not allocating a box`);
+    }
+    const existing = await this.find(tenantId);
+    if (existing !== void 0) return existing;
+    const boxId = randomUUID();
+    const tokens = { box: newToken(), ui: newToken() };
+    const placed = await this.create(tenantId, boxId, spec, tokens);
+    let row;
+    try {
+      row = this.store.createBox({
+        id: boxId,
+        tenantId,
+        allocatorKind: this.kind,
+        externalId: placed.externalId,
+        boxdUrl: placed.boxdUrl,
+        uiUrl: placed.uiUrl,
+        state: placed.state,
+        image: spec.image,
+        createdAt: (/* @__PURE__ */ new Date()).toISOString()
+      });
+    } catch (error) {
+      const winner = await this.find(tenantId);
+      if (winner !== void 0) {
+        await this.destroyExternal({
+          tenantId,
+          id: boxId,
+          externalId: placed.externalId,
+          boxdUrl: placed.boxdUrl,
+          uiUrl: placed.uiUrl,
+          tokens,
+          createdAt: (/* @__PURE__ */ new Date()).toISOString(),
+          state: placed.state
+        }).catch(() => {
+        });
+        this.store.audit({
+          tenantId,
+          actor: `${this.kind}-allocator`,
+          action: "allocate.lost-race",
+          target: placed.externalId,
+          detail: { keptBox: winner.id }
+        });
+        return winner;
+      }
+      throw error;
+    }
+    this.store.putToken(boxId, "box", tokens.box);
+    this.store.putToken(boxId, "ui", tokens.ui);
+    this.store.audit({
+      tenantId,
+      actor: `${this.kind}-allocator`,
+      action: "allocate",
+      target: row.externalId,
+      detail: { boxId, image: spec.image }
+    });
+    return this.toHandle(row);
+  }
+  async find(tenantId) {
+    const row = this.store.boxForTenant(tenantId);
+    return row === void 0 ? void 0 : this.toHandle(row);
+  }
+  async stop(handle) {
+    await this.stopExternal(handle);
+    this.store.setBoxState(handle.id, "stopped");
+    this.store.audit({
+      tenantId: handle.tenantId,
+      actor: `${this.kind}-allocator`,
+      action: "stop",
+      target: handle.externalId
+    });
+  }
+  async destroy(handle) {
+    await this.destroyExternal(handle);
+    this.store.setBoxState(handle.id, "gone");
+    this.store.audit({
+      tenantId: handle.tenantId,
+      actor: `${this.kind}-allocator`,
+      action: "destroy",
+      target: handle.externalId,
+      detail: { volumesRemoved: true }
+    });
+  }
+  async list() {
+    return this.store.listBoxes().filter((row) => row.allocatorKind === this.kind && row.state !== "gone").map((row) => this.toHandle(row));
+  }
+  toHandle(row) {
+    return {
+      tenantId: row.tenantId,
+      id: row.id,
+      externalId: row.externalId,
+      boxdUrl: row.boxdUrl,
+      uiUrl: row.uiUrl,
+      tokens: {
+        box: this.store.readToken(row.id, "box") ?? "",
+        ui: this.store.readToken(row.id, "ui") ?? ""
+      },
+      createdAt: row.createdAt,
+      state: row.state
+    };
+  }
+};
+var StaticAllocator = class extends StoreBackedAllocator {
+  constructor(store, options) {
+    super(store);
+    this.options = options;
+  }
+  kind = "static";
+  async create(tenantId, boxId) {
+    const taken = this.store.listBoxes().filter((row) => row.allocatorKind === "static" && row.state !== "gone" && row.tenantId !== tenantId);
+    if (taken.length > 0) {
+      throw new Error(
+        `the static allocator has one box and tenant ${taken[0].tenantId} already has it; use the compose allocator for more than one tenant`
+      );
+    }
+    return {
+      externalId: `static:${boxId}`,
+      boxdUrl: this.options.boxdUrl,
+      uiUrl: this.options.uiUrl,
+      state: "ready"
+    };
+  }
+  /** Nothing to stop: this allocator did not start it, and stopping someone's laptop box is rude. */
+  async stopExternal() {
+  }
+  async destroyExternal() {
+  }
+  /**
+   * The pre-existing box's own tokens, not minted ones.
+   *
+   * A running box will not accept a new token — its is baked into its environment — so returning a
+   * freshly minted one would hand out a credential that authenticates nothing. That was the exact
+   * shape of an earlier bug in the attach path, where a token was minted when it should have been
+   * read.
+   */
+  toHandle(row) {
+    return { ...super.toHandle(row), tokens: this.options.tokens };
+  }
+};
+
+// src/control/compose.ts
+import { createHash } from "node:crypto";
+import { execFile as execFile2 } from "node:child_process";
+import { promisify as promisify2 } from "node:util";
+function containerNameFor(prefix, tenantName) {
+  const safe = tenantName.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 40).replace(/-+$/, "");
+  if (safe !== "") return `${prefix}-${safe}`;
+  const digest = createHash("sha256").update(tenantName).digest("hex").slice(0, 12);
+  return `${prefix}-t${digest}`;
+}
+var ComposeAllocator = class extends StoreBackedAllocator {
+  constructor(store, options = {}) {
+    super(store);
+    this.options = options;
+    this.prefix = options.prefix ?? "agentbox";
+    this.defaultImage = options.image ?? defaultBoxConfig().image;
+  }
+  kind = "compose";
+  prefix;
+  defaultImage;
+  /** A manager for one tenant's container. Cheap: it holds configuration, not a connection. */
+  managerFor(containerName, spec, tokens) {
+    const make = this.options.managerFactory ?? ((config) => new BoxManager(defaultBoxConfig(config)));
+    return make({
+      containerName,
+      image: spec.image || this.defaultImage,
+      token: tokens.box,
+      uiToken: tokens.ui,
+      // Docker picks both, because a second tenant on this host cannot have the first's ports.
+      boxdPort: 0,
+      uiPort: 0,
+      // The whole point of this allocator: the orchestrator lives in the box, so the only thing
+      // outside a container is a browser.
+      withHost: true,
+      runArgs: Object.entries(spec.env ?? {}).flatMap(([key, value]) => [
+        "--env",
+        `${key}=${value}`
+      ])
+    });
+  }
+  async create(tenantId, boxId, spec, tokens) {
+    const tenant = this.store.getTenant(tenantId);
+    if (tenant === void 0) throw new Error(`no such tenant: ${tenantId}`);
+    const containerName = containerNameFor(this.prefix, tenant.name);
+    const manager = this.managerFor(containerName, spec, tokens);
+    const existing = await manager.state();
+    const recreate = existing !== "missing";
+    if (recreate) {
+      this.options.onOutput?.(
+        `${containerName} already exists (${existing}); recreating it with this box's tokens \u2014 volumes are kept`
+      );
+    }
+    const { status } = await manager.up({ recreate, onOutput: this.options.onOutput });
+    if (status.boxdUrl === void 0 || status.uiUrl === void 0) {
+      throw new DockerError(
+        `${containerName} started but did not publish both ports (boxd: ${status.boxdUrl ?? "none"}, ui: ${status.uiUrl ?? "none"})`
+      );
+    }
+    return {
+      externalId: containerName,
+      boxdUrl: status.boxdUrl,
+      uiUrl: status.uiUrl,
+      state: "ready"
+    };
+  }
+  async stopExternal(handle) {
+    await this.managerFor(handle.externalId, { image: this.defaultImage }, handle.tokens).down({
+      remove: false
+    });
+  }
+  async destroyExternal(handle) {
+    await this.managerFor(handle.externalId, { image: this.defaultImage }, handle.tokens).down({
+      remove: true
+    });
+    await this.removeVolumes(handle.externalId);
+  }
+  async removeVolumes(containerName) {
+    const names = ["work", "config", "hostd"].map((suffix) => `${containerName}-${suffix}`);
+    const failures = [];
+    for (const name of names) {
+      try {
+        await (this.options.removeVolume ?? dockerVolumeRemove)(name);
+      } catch (error) {
+        failures.push(`${name}: ${error instanceof Error ? error.message : String(error)}`);
+      }
+    }
+    if (failures.length > 0) {
+      throw new DockerError(
+        `container removed but volumes remain, and a later box with this name would inherit them: ` + failures.join("; ")
+      );
+    }
+  }
+  /**
+   * Restarts a box that is not answering, keeping its volumes.
+   *
+   * The recovery the design calls for: restart the smallest thing. Never recreate a container to
+   * recover a process — the box supervises its own components and gives up loudly when it cannot
+   * (see `component-health.ts`), so a container restart here means the container itself is wrong.
+   */
+  async restart(handle) {
+    const manager = this.managerFor(
+      handle.externalId,
+      { image: this.defaultImage },
+      handle.tokens
+    );
+    await manager.down({ remove: false });
+    this.store.setBoxState(handle.id, "starting");
+    const { status } = await manager.up({ onOutput: this.options.onOutput });
+    this.store.setBoxState(handle.id, status.state === "running" ? "ready" : "unreachable");
+    this.store.audit({
+      tenantId: handle.tenantId,
+      actor: "compose-allocator",
+      action: "restart",
+      target: handle.externalId
+    });
+  }
+};
+async function dockerVolumeRemove(name) {
+  await promisify2(execFile2)("docker", ["volume", "rm", "--force", name], { timeout: 3e4 });
+}
+
+// src/control/collector.ts
+var Collector = class {
+  constructor(options) {
+    this.options = options;
+    this.log = options.log ?? (() => {
+    });
+    this.fetchImpl = options.fetchImpl ?? fetch;
+  }
+  failures = /* @__PURE__ */ new Map();
+  timer;
+  log;
+  fetchImpl;
+  /** Sweeps every box that is supposed to be running. Never throws. */
+  async sweep() {
+    const boxes = this.options.store.listBoxes(["starting", "ready", "unreachable"]);
+    const result = {
+      boxes: boxes.length,
+      healthy: 0,
+      degraded: 0,
+      unreachable: 0,
+      usageRowsStored: 0
+    };
+    await Promise.all(
+      boxes.map(async (box) => {
+        const outcome = await this.collectOne(box);
+        if (outcome.reachable) {
+          this.failures.delete(box.id);
+          if (outcome.degraded) result.degraded++;
+          else result.healthy++;
+          result.usageRowsStored += outcome.usageRowsStored;
+        } else {
+          result.unreachable++;
+        }
+      })
+    );
+    return result;
+  }
+  async collectOne(box) {
+    const health = await this.readHealth(box);
+    if (health === void 0) {
+      this.noteFailure(box);
+      return { reachable: false, degraded: false, usageRowsStored: 0 };
+    }
+    const degraded = (health.desktop_health ?? []).some((desktop) => desktop.degraded);
+    this.options.store.recordHealth({
+      boxId: box.id,
+      at: (/* @__PURE__ */ new Date()).toISOString(),
+      ok: true,
+      degraded,
+      components: health.desktop_health ?? null,
+      crashes: health.crashes ?? null
+    });
+    this.options.store.markBoxSeen(box.id);
+    if (box.state !== "ready") {
+      this.options.store.setBoxState(box.id, "ready");
+      this.log(`${box.externalId} is answering again`);
+    }
+    const usageRowsStored = await this.collectUsage(box);
+    return { reachable: true, degraded, usageRowsStored };
+  }
+  async readHealth(box) {
+    try {
+      const response = await this.fetchImpl(`${box.boxdUrl}/health`, {
+        signal: AbortSignal.timeout(this.options.timeoutMs ?? 5e3)
+      });
+      if (!response.ok) return void 0;
+      return await response.json();
+    } catch {
+      return void 0;
+    }
+  }
+  /**
+   * Pulls usage from where the store left off.
+   *
+   * The cursor is read from the store rather than kept in memory, so a restarted collector resumes
+   * instead of re-reading everything — and re-reading would be safe anyway, which is the point of
+   * keying rows by the box's own sequence number.
+   */
+  async collectUsage(box) {
+    const cursor = this.options.store.getBox(box.id)?.usageCursor ?? 0;
+    let payload;
+    try {
+      const response = await this.fetchImpl(`${box.uiUrl}/api/usage?since=${cursor}`, {
+        headers: { authorization: `Bearer ${this.uiTokenFor(box)}` },
+        signal: AbortSignal.timeout(this.options.timeoutMs ?? 5e3)
+      });
+      if (!response.ok) {
+        this.log(`${box.externalId}: usage unavailable (HTTP ${response.status})`);
+        return 0;
+      }
+      payload = await response.json();
+    } catch (error) {
+      this.log(
+        `${box.externalId}: usage unavailable (${error instanceof Error ? error.message : String(error)})`
+      );
+      return 0;
+    }
+    const records = payload.records ?? [];
+    if (records.length === 0) return 0;
+    const rows = records.map((record) => ({
+      boxId: box.id,
+      tenantId: box.tenantId,
+      seq: record.seq,
+      at: record.at,
+      agentId: record.agentId,
+      model: record.model,
+      inputTokens: record.inputTokens,
+      outputTokens: record.outputTokens,
+      cacheReadTokens: record.cacheReadTokens,
+      cacheWriteTokens: record.cacheWriteTokens
+    }));
+    const stored = this.options.store.appendUsage(rows);
+    if (records.length === 500) {
+      this.log(`${box.externalId}: a full page of usage was returned; more remains for next sweep`);
+    }
+    return stored;
+  }
+  uiTokenFor(box) {
+    return this.options.store.readToken(box.id, "ui") ?? "";
+  }
+  noteFailure(box) {
+    const count = (this.failures.get(box.id) ?? 0) + 1;
+    this.failures.set(box.id, count);
+    const limit2 = this.options.failuresBeforeUnreachable ?? 3;
+    if (count < limit2) {
+      this.log(`${box.externalId} did not answer (${count}/${limit2})`);
+      return;
+    }
+    if (box.state !== "unreachable") {
+      this.options.store.setBoxState(box.id, "unreachable");
+      this.options.store.recordHealth({
+        boxId: box.id,
+        at: (/* @__PURE__ */ new Date()).toISOString(),
+        ok: false,
+        degraded: true,
+        components: null,
+        crashes: null
+      });
+      this.options.store.audit({
+        tenantId: box.tenantId,
+        actor: "collector",
+        action: "mark.unreachable",
+        target: box.externalId,
+        detail: { consecutiveFailures: count }
+      });
+      this.log(`${box.externalId} is unreachable after ${count} attempts`);
+    }
+  }
+  /** Starts sweeping on a timer. Unref'd, so it never holds a process open on its own. */
+  start() {
+    if (this.timer !== void 0) return;
+    const interval = this.options.intervalMs ?? 15e3;
+    const tick = () => {
+      void this.sweep().catch((error) => {
+        this.log(`sweep failed: ${error instanceof Error ? error.message : String(error)}`);
+      });
+    };
+    tick();
+    this.timer = setInterval(tick, interval);
+    this.timer.unref?.();
+  }
+  stop() {
+    if (this.timer !== void 0) clearInterval(this.timer);
+    this.timer = void 0;
+  }
+};
+function meterTenants(store, since) {
+  return store.listTenants().map((tenant) => {
+    const totals = store.tenantTotals(tenant.id, since);
+    const limit2 = tenant.quota.monthlyTokens;
+    const limitTokens = typeof limit2 === "number" && Number.isFinite(limit2) ? limit2 : void 0;
+    const billable = totals.inputTokens + totals.outputTokens + totals.cacheReadTokens + totals.cacheWriteTokens;
+    return {
+      tenantId: tenant.id,
+      tenantName: tenant.name,
+      ...totals,
+      limitTokens,
+      overBudget: limitTokens !== void 0 && billable > limitTokens
+    };
+  });
+}
+
+// src/control/gateway.ts
+import { createHmac, randomBytes as randomBytes3, timingSafeEqual as timingSafeEqual2 } from "node:crypto";
+import { request as httpRequest } from "node:http";
+import { connect as netConnect } from "node:net";
+
+// src/web/auth.ts
+import { timingSafeEqual } from "node:crypto";
+var COOKIE_NAME = "agentbox_ui";
+var LOOPBACK = /* @__PURE__ */ new Set(["127.0.0.1", "::1", "localhost"]);
+function isLoopback(host) {
+  return LOOPBACK.has(host);
+}
+function sameToken(a, b) {
+  const left = Buffer.from(a, "utf8");
+  const right = Buffer.from(b, "utf8");
+  if (left.length !== right.length) return false;
+  return timingSafeEqual(left, right);
+}
+function parseCookies(header) {
+  const cookies = /* @__PURE__ */ new Map();
+  for (const part of (header ?? "").split(";")) {
+    const at = part.indexOf("=");
+    if (at <= 0) continue;
+    cookies.set(part.slice(0, at).trim(), decodeURIComponent(part.slice(at + 1).trim()));
+  }
+  return cookies;
+}
+function authorize(config, request) {
+  if (!config.token) {
+    return { allow: true, reason: "loopback" };
+  }
+  const bearer = /^Bearer\s+(.+)$/i.exec(request.authorization ?? "")?.[1]?.trim();
+  if (bearer && sameToken(bearer, config.token)) return { allow: true, reason: "token" };
+  const cookie = parseCookies(request.cookie).get(COOKIE_NAME);
+  if (cookie && sameToken(cookie, config.token)) return { allow: true, reason: "token" };
+  const query = request.query?.trim();
+  if (query && sameToken(query, config.token)) {
+    return {
+      allow: true,
+      reason: "token",
+      setCookie: `${COOKIE_NAME}=${encodeURIComponent(config.token)}; Path=/; HttpOnly; SameSite=Lax`
+    };
+  }
+  return { allow: false, reason: cookie || bearer || query ? "wrong" : "missing" };
+}
+
+// src/control/gateway.ts
+var SESSION_COOKIE = "agentbox_session";
+var SESSION_TTL_MS = 12 * 60 * 60 * 1e3;
+var PasswordListIdentity = class _PasswordListIdentity {
+  constructor(users) {
+    this.users = users;
+  }
+  /** `alice:secret:acme,bob:hunter2:beta` — for a config file or an environment variable. */
+  static parse(spec) {
+    const users = /* @__PURE__ */ new Map();
+    for (const entry of spec.split(",")) {
+      const [username, password, tenant] = entry.trim().split(":");
+      if (!username || !password || !tenant) continue;
+      users.set(username, { password, tenant });
+    }
+    return new _PasswordListIdentity(users);
+  }
+  async authenticate(username, password) {
+    const found = this.users.get(username);
+    const expected = found?.password ?? randomBytes3(16).toString("hex");
+    const a = Buffer.from(password);
+    const b = Buffer.from(expected);
+    const matches = a.length === b.length && timingSafeEqual2(a, b);
+    return matches && found !== void 0 ? found.tenant : void 0;
+  }
+};
+var SessionSigner = class {
+  constructor(secret) {
+    this.secret = secret;
+  }
+  issue(tenantId, now = Date.now()) {
+    const expires = now + SESSION_TTL_MS;
+    const body = `${tenantId}.${expires}`;
+    return `${body}.${this.sign(body)}`;
+  }
+  /** The tenant id, or undefined if the cookie is forged, corrupt or expired. */
+  verify(value, now = Date.now()) {
+    if (value === void 0) return void 0;
+    const at = value.lastIndexOf(".");
+    if (at <= 0) return void 0;
+    const body = value.slice(0, at);
+    const signature = value.slice(at + 1);
+    const expected = this.sign(body);
+    if (signature.length !== expected.length || !timingSafeEqual2(Buffer.from(signature), Buffer.from(expected))) {
+      return void 0;
+    }
+    const [tenantId, expires] = body.split(".");
+    if (tenantId === void 0 || expires === void 0) return void 0;
+    if (Number(expires) <= now) return void 0;
+    return tenantId;
+  }
+  sign(body) {
+    return createHmac("sha256", this.secret).update(body).digest("base64url");
+  }
+};
+function routeOf(pathname, method) {
+  if (pathname === "/gateway/login") {
+    return method === "POST" ? { kind: "login-submit" } : { kind: "login-page" };
+  }
+  if (pathname === "/gateway/logout") return { kind: "logout" };
+  return { kind: "proxy", path: pathname };
+}
+function forwardableCookies(header) {
+  if (header === void 0) return void 0;
+  const kept = [...parseCookies(header).entries()].filter(
+    ([name]) => name !== SESSION_COOKIE && name !== "agentbox_ui"
+  );
+  if (kept.length === 0) return void 0;
+  return kept.map(([name, value]) => `${name}=${value}`).join("; ");
+}
+var Gateway = class {
+  constructor(options) {
+    this.options = options;
+    this.signer = new SessionSigner(options.sessionSecret ?? randomBytes3(32));
+    this.log = options.log ?? (() => {
+    });
+  }
+  signer;
+  log;
+  /** The tenant this request belongs to, from its signed cookie. */
+  tenantOf(req) {
+    const cookies = parseCookies(req.headers.cookie);
+    return this.signer.verify(cookies.get(SESSION_COOKIE));
+  }
+  async handle(req, res) {
+    const url = new URL(req.url ?? "/", "http://gateway");
+    const route = routeOf(url.pathname, req.method ?? "GET");
+    if (route.kind === "login-page") return this.sendLoginPage(res);
+    if (route.kind === "login-submit") return this.handleLogin(req, res);
+    if (route.kind === "logout") {
+      res.writeHead(302, {
+        location: "/gateway/login",
+        "set-cookie": `${SESSION_COOKIE}=; Path=/; Max-Age=0; HttpOnly; SameSite=Lax`
+      });
+      res.end();
+      return;
+    }
+    const tenantId = this.tenantOf(req);
+    if (tenantId === void 0) {
+      if ((req.headers.accept ?? "").includes("text/html")) {
+        res.writeHead(302, { location: "/gateway/login" });
+        res.end();
+        return;
+      }
+      res.writeHead(401, { "content-type": "text/plain" });
+      res.end("Not signed in.\n");
+      return;
+    }
+    const tenant = this.options.store.getTenant(tenantId);
+    if (tenant === void 0 || tenant.state !== "active") {
+      res.writeHead(403, { "content-type": "text/plain" });
+      res.end(
+        tenant === void 0 ? "This account no longer exists.\n" : `This account is ${tenant.state}.
+`
+      );
+      return;
+    }
+    const box = await this.boxFor(tenantId);
+    if (box === void 0) {
+      res.writeHead(503, { "content-type": "text/html; charset=utf-8", "retry-after": "5" });
+      res.end(
+        `<!doctype html><meta charset="utf-8"><meta http-equiv="refresh" content="5"><title>Starting your box</title><body style="font:14px system-ui;padding:3rem;max-width:34rem"><h1>Starting your box</h1><p>This takes a few seconds the first time, or a few minutes if the image has to be downloaded. This page will retry on its own.</p></body>`
+      );
+      return;
+    }
+    this.proxy(req, res, box, url);
+  }
+  /**
+   * The tenant's box, allocated if they have none.
+   *
+   * Returns undefined while a box exists but is not ready, which the caller turns into a page rather
+   * than a wait. Allocation errors are logged and reported the same way: a person seeing "starting"
+   * and a retry is better served than one watching a spinner.
+   */
+  async boxFor(tenantId) {
+    const existing = await this.options.allocator.find(tenantId);
+    if (existing !== void 0) {
+      return existing.state === "ready" ? existing : void 0;
+    }
+    try {
+      const created = await this.options.allocator.allocate(tenantId, {
+        image: this.options.image,
+        env: this.options.boxEnv
+      });
+      return created.state === "ready" ? created : void 0;
+    } catch (error) {
+      this.log(
+        `could not allocate a box for ${tenantId}: ` + (error instanceof Error ? error.message : String(error))
+      );
+      return void 0;
+    }
+  }
+  sendLoginPage(res, message) {
+    const body = `<!doctype html><meta charset="utf-8"><title>Sign in</title><body style="font:14px system-ui;padding:3rem;max-width:22rem"><h1>Sign in</h1>` + (message === void 0 ? "" : `<p style="color:#b00">${message.replace(/[<&]/g, (character) => character === "<" ? "&lt;" : "&amp;")}</p>`) + `<form method="post" action="/gateway/login"><p><label>User<br><input name="username" autocomplete="username" autofocus></label></p><p><label>Password<br><input name="password" type="password" autocomplete="current-password"></label></p><p><button>Sign in</button></p></form></body>`;
+    res.writeHead(message === void 0 ? 200 : 401, {
+      "content-type": "text/html; charset=utf-8",
+      "cache-control": "no-store"
+    });
+    res.end(body);
+  }
+  async handleLogin(req, res) {
+    const body = await readBody(req);
+    const form = new URLSearchParams(body);
+    const username = form.get("username") ?? "";
+    const password = form.get("password") ?? "";
+    const tenantName = await this.options.identity.authenticate(username, password);
+    if (tenantName === void 0) {
+      this.log(`failed sign-in for ${JSON.stringify(username)}`);
+      this.sendLoginPage(res, "That user and password did not match.");
+      return;
+    }
+    const tenant = this.options.store.upsertTenant({ name: tenantName });
+    this.options.store.audit({
+      tenantId: tenant.id,
+      actor: username,
+      action: "signin",
+      target: tenant.name
+    });
+    res.writeHead(302, {
+      location: "/",
+      "set-cookie": `${SESSION_COOKIE}=${this.signer.issue(tenant.id)}; Path=/; HttpOnly; SameSite=Lax` + (this.options.secureCookies === true ? "; Secure" : "")
+    });
+    res.end();
+  }
+  /** Forwards a request to the tenant's box UI, holding the credential back. */
+  proxy(req, res, box, url) {
+    const target = new URL(box.uiUrl);
+    const headers = {
+      ...req.headers,
+      host: target.host,
+      // The box's own credential, added here and never sent to the browser.
+      authorization: `Bearer ${box.tokens.ui}`
+    };
+    const cookie = forwardableCookies(req.headers.cookie);
+    if (cookie === void 0) delete headers.cookie;
+    else headers.cookie = cookie;
+    const upstream = httpRequest(
+      {
+        host: target.hostname,
+        port: target.port,
+        method: req.method,
+        path: `${url.pathname}${url.search}`,
+        headers
+      },
+      (response) => {
+        const { "set-cookie": _dropped, ...rest } = response.headers;
+        res.writeHead(response.statusCode ?? 502, rest);
+        response.pipe(res);
+      }
+    );
+    upstream.on("error", (error) => {
+      this.log(`proxy to ${box.externalId} failed: ${error.message}`);
+      this.options.store.setBoxState(box.id, "unreachable");
+      if (!res.headersSent) {
+        res.writeHead(502, { "content-type": "text/plain" });
+        res.end("Your box is not answering. It is being restarted.\n");
+      } else {
+        res.end();
+      }
+    });
+    req.pipe(upstream);
+  }
+  /**
+   * The WebSocket upgrade that carries the desktop.
+   *
+   * Node will not proxy an upgrade, so the handshake is replayed verbatim and the sockets joined —
+   * the same shape as the box's own desktop proxy, and for the same reason: everything after the
+   * handshake is framed RFB, not HTTP.
+   *
+   * The session is checked here too. A browser sends cookies on an upgrade but cannot set headers,
+   * which is exactly why the session is a cookie; without this check the screen would be reachable
+   * without signing in.
+   */
+  async handleUpgrade(req, socket, head) {
+    const tenantId = this.tenantOf(req);
+    if (tenantId === void 0) {
+      socket.end("HTTP/1.1 401 Unauthorized\r\n\r\n");
+      return;
+    }
+    const box = await this.options.allocator.find(tenantId);
+    if (box === void 0 || box.state !== "ready") {
+      socket.end("HTTP/1.1 503 Service Unavailable\r\n\r\n");
+      return;
+    }
+    const target = new URL(box.uiUrl);
+    const upstream = netConnect(Number(target.port), target.hostname, () => {
+      const forwarded = {};
+      for (const [key, value] of Object.entries(req.headers)) {
+        if (key === "cookie" || key === "authorization" || key === "host") continue;
+        forwarded[key] = Array.isArray(value) ? value.join(", ") : String(value ?? "");
+      }
+      forwarded.host = target.host;
+      forwarded.authorization = `Bearer ${box.tokens.ui}`;
+      const cookie = forwardableCookies(req.headers.cookie);
+      if (cookie !== void 0) forwarded.cookie = cookie;
+      const lines = Object.entries(forwarded).map(([key, value]) => `${key}: ${value}\r
+`).join("");
+      upstream.write(`GET ${req.url ?? "/"} HTTP/1.1\r
+${lines}\r
+`);
+      if (head.length > 0) upstream.write(head);
+      upstream.pipe(socket);
+      socket.pipe(upstream);
+    });
+    const drop = () => {
+      upstream.destroy();
+      socket.destroy();
+    };
+    upstream.on("error", drop);
+    socket.on("error", drop);
+  }
+};
+async function readBody(req, limit2 = 64 * 1024) {
+  const chunks = [];
+  let size = 0;
+  for await (const chunk of req) {
+    size += chunk.length;
+    if (size > limit2) throw new Error("request body too large");
+    chunks.push(chunk);
+  }
+  return Buffer.concat(chunks).toString("utf8");
+}
+
+// src/control/store.ts
+import { DatabaseSync } from "node:sqlite";
 import {
-  mkdirSync as mkdirSync2,
-  readFileSync as readFileSync2,
+  createCipheriv,
+  createDecipheriv,
+  randomBytes as randomBytes4,
+  randomUUID as randomUUID2
+} from "node:crypto";
+import { chmodSync, existsSync as existsSync3, mkdirSync as mkdirSync3, readFileSync as readFileSync3, writeFileSync as writeFileSync3 } from "node:fs";
+import { dirname as dirname2, join as join3 } from "node:path";
+function loadEncryptionKey(keyPath) {
+  const fromEnv = process.env.AGENTBOX_CONTROL_KEY;
+  if (fromEnv !== void 0 && fromEnv.trim() !== "") {
+    const key2 = Buffer.from(fromEnv.trim(), "hex");
+    if (key2.length !== 32) {
+      throw new Error("AGENTBOX_CONTROL_KEY must be 64 hex characters (32 bytes)");
+    }
+    return key2;
+  }
+  if (existsSync3(keyPath)) {
+    const key2 = Buffer.from(readFileSync3(keyPath, "utf8").trim(), "hex");
+    if (key2.length === 32) return key2;
+    throw new Error(`${keyPath} does not contain a 32-byte hex key; move it aside to mint a new one`);
+  }
+  const key = randomBytes4(32);
+  mkdirSync3(dirname2(keyPath), { recursive: true });
+  writeFileSync3(keyPath, key.toString("hex"), { encoding: "utf8", mode: 384 });
+  chmodSync(keyPath, 384);
+  return key;
+}
+function encrypt(key, plaintext) {
+  const iv = randomBytes4(12);
+  const cipher = createCipheriv("aes-256-gcm", key, iv);
+  const body = Buffer.concat([cipher.update(plaintext, "utf8"), cipher.final()]);
+  return `v1:${iv.toString("base64")}:${cipher.getAuthTag().toString("base64")}:${body.toString("base64")}`;
+}
+function decrypt(key, stored) {
+  const [version, iv, tag, body] = stored.split(":");
+  if (version !== "v1" || iv === void 0 || tag === void 0 || body === void 0) {
+    throw new Error("stored token is not in the expected format");
+  }
+  const decipher = createDecipheriv("aes-256-gcm", key, Buffer.from(iv, "base64"));
+  decipher.setAuthTag(Buffer.from(tag, "base64"));
+  return Buffer.concat([decipher.update(Buffer.from(body, "base64")), decipher.final()]).toString("utf8");
+}
+var SCHEMA = `
+create table if not exists tenant (
+  id          text primary key,
+  name        text not null unique,
+  state       text not null default 'active',
+  created_at  text not null,
+  quota_json  text not null default '{}'
+);
+
+create table if not exists box (
+  id             text primary key,
+  tenant_id      text not null references tenant(id),
+  allocator_kind text not null,
+  external_id    text not null,
+  boxd_url       text not null,
+  ui_url         text not null,
+  state          text not null,
+  image          text not null,
+  created_at     text not null,
+  last_seen_at   text,
+  usage_cursor   integer not null default 0
+);
+
+-- One live box per tenant, enforced here rather than trusted to the allocator: a retried
+-- allocate after a timeout is the normal case, and two boxes for one tenant is two bills.
+create unique index if not exists box_one_live_per_tenant
+  on box(tenant_id) where state <> 'gone';
+
+create table if not exists box_token (
+  box_id     text not null references box(id),
+  kind       text not null,
+  value_enc  text not null,
+  created_at text not null,
+  primary key (box_id, kind)
+);
+
+create table if not exists usage (
+  box_id             text not null references box(id),
+  seq                integer not null,
+  tenant_id          text not null,
+  at                 text not null,
+  agent_id           text not null,
+  model              text not null,
+  input_tokens       integer not null,
+  output_tokens      integer not null,
+  cache_read_tokens  integer not null,
+  cache_write_tokens integer not null,
+  -- The box's own sequence number. Makes re-reading a batch free instead of double-billing.
+  primary key (box_id, seq)
+);
+
+create index if not exists usage_by_tenant on usage(tenant_id, at);
+
+create table if not exists health (
+  box_id          text not null references box(id),
+  at              text not null,
+  ok              integer not null,
+  degraded        integer not null,
+  components_json text not null,
+  crashes_json    text not null,
+  primary key (box_id, at)
+);
+
+create table if not exists audit (
+  id          text primary key,
+  tenant_id   text,
+  actor       text not null,
+  action      text not null,
+  target      text not null,
+  at          text not null,
+  detail_json text
+);
+
+create index if not exists audit_by_time on audit(at);
+`;
+var SqliteControlStore = class {
+  db;
+  key;
+  constructor(options) {
+    if (options.path !== ":memory:") mkdirSync3(dirname2(options.path), { recursive: true });
+    this.db = new DatabaseSync(options.path);
+    if (options.path !== ":memory:") this.db.exec("pragma journal_mode = wal");
+    this.db.exec("pragma foreign_keys = on");
+    this.db.exec(SCHEMA);
+    this.key = loadEncryptionKey(
+      options.keyPath ?? (options.path === ":memory:" ? join3(process.cwd(), ".control-key") : `${options.path}.key`)
+    );
+  }
+  // ── tenants ───────────────────────────────────────────────────────────────────────
+  upsertTenant(input) {
+    const existing = this.db.prepare("select id from tenant where name = ?").get(input.name);
+    const id = input.id ?? existing?.id ?? randomUUID2();
+    const now = (/* @__PURE__ */ new Date()).toISOString();
+    this.db.prepare(
+      `insert into tenant (id, name, state, created_at, quota_json) values (?, ?, 'active', ?, ?)
+         on conflict(id) do update set name = excluded.name, quota_json = excluded.quota_json`
+    ).run(id, input.name, now, JSON.stringify(input.quota ?? {}));
+    return this.getTenant(id);
+  }
+  getTenant(id) {
+    const row = this.db.prepare("select * from tenant where id = ?").get(id);
+    return row === void 0 ? void 0 : this.toTenant(row);
+  }
+  listTenants() {
+    return this.db.prepare("select * from tenant order by created_at").all().map((row) => this.toTenant(row));
+  }
+  setTenantState(id, state) {
+    this.db.prepare("update tenant set state = ? where id = ?").run(state, id);
+  }
+  toTenant(row) {
+    return {
+      id: row.id,
+      name: row.name,
+      state: row.state,
+      createdAt: row.created_at,
+      // A hand-edited quota should not take the control plane down with it.
+      quota: parseJson(row.quota_json, {})
+    };
+  }
+  // ── boxes ─────────────────────────────────────────────────────────────────────────
+  createBox(row) {
+    this.db.prepare(
+      `insert into box (id, tenant_id, allocator_kind, external_id, boxd_url, ui_url, state,
+                          image, created_at, usage_cursor)
+         values (?, ?, ?, ?, ?, ?, ?, ?, ?, 0)`
+    ).run(
+      row.id,
+      row.tenantId,
+      row.allocatorKind,
+      row.externalId,
+      row.boxdUrl,
+      row.uiUrl,
+      row.state,
+      row.image,
+      row.createdAt
+    );
+    return this.getBox(row.id);
+  }
+  getBox(id) {
+    const row = this.db.prepare("select * from box where id = ?").get(id);
+    return row === void 0 ? void 0 : toBox(row);
+  }
+  boxForTenant(tenantId) {
+    const row = this.db.prepare("select * from box where tenant_id = ? and state <> 'gone'").get(tenantId);
+    return row === void 0 ? void 0 : toBox(row);
+  }
+  listBoxes(states) {
+    const rows = states === void 0 || states.length === 0 ? this.db.prepare("select * from box order by created_at").all() : this.db.prepare(
+      `select * from box where state in (${states.map(() => "?").join(",")}) order by created_at`
+    ).all(...states);
+    return rows.map(toBox);
+  }
+  setBoxState(id, state) {
+    this.db.prepare("update box set state = ? where id = ?").run(state, id);
+  }
+  markBoxSeen(id, at = /* @__PURE__ */ new Date()) {
+    this.db.prepare("update box set last_seen_at = ? where id = ?").run(at.toISOString(), id);
+  }
+  // ── tokens ────────────────────────────────────────────────────────────────────────
+  putToken(boxId, kind, value) {
+    this.db.prepare(
+      `insert into box_token (box_id, kind, value_enc, created_at) values (?, ?, ?, ?)
+         on conflict(box_id, kind) do update set value_enc = excluded.value_enc,
+                                                created_at = excluded.created_at`
+    ).run(boxId, kind, encrypt(this.key, value), (/* @__PURE__ */ new Date()).toISOString());
+  }
+  readToken(boxId, kind) {
+    const row = this.db.prepare("select value_enc from box_token where box_id = ? and kind = ?").get(boxId, kind);
+    return row === void 0 ? void 0 : decrypt(this.key, row.value_enc);
+  }
+  // ── usage ─────────────────────────────────────────────────────────────────────────
+  appendUsage(rows) {
+    if (rows.length === 0) return 0;
+    const insert = this.db.prepare(
+      `insert or ignore into usage
+         (box_id, seq, tenant_id, at, agent_id, model,
+          input_tokens, output_tokens, cache_read_tokens, cache_write_tokens)
+       values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+    );
+    this.db.exec("begin");
+    try {
+      let inserted = 0;
+      for (const row of rows) {
+        const result = insert.run(
+          row.boxId,
+          row.seq,
+          row.tenantId,
+          row.at,
+          row.agentId,
+          row.model,
+          row.inputTokens,
+          row.outputTokens,
+          row.cacheReadTokens,
+          row.cacheWriteTokens
+        );
+        inserted += Number(result.changes);
+      }
+      const highest = rows.reduce((max, row) => Math.max(max, row.seq), 0);
+      this.db.prepare("update box set usage_cursor = max(usage_cursor, ?) where id = ?").run(highest, rows[0].boxId);
+      this.db.exec("commit");
+      return inserted;
+    } catch (error) {
+      this.db.exec("rollback");
+      throw error;
+    }
+  }
+  setUsageCursor(boxId, seq) {
+    this.db.prepare("update box set usage_cursor = max(usage_cursor, ?) where id = ?").run(seq, boxId);
+  }
+  tenantTotals(tenantId, since) {
+    const row = this.db.prepare(
+      `select count(*) as records,
+                coalesce(sum(input_tokens), 0) as input_tokens,
+                coalesce(sum(output_tokens), 0) as output_tokens,
+                coalesce(sum(cache_read_tokens), 0) as cache_read_tokens,
+                coalesce(sum(cache_write_tokens), 0) as cache_write_tokens
+         from usage where tenant_id = ? and at >= ?`
+    ).get(tenantId, since ?? "");
+    return {
+      records: Number(row.records),
+      inputTokens: Number(row.input_tokens),
+      outputTokens: Number(row.output_tokens),
+      cacheReadTokens: Number(row.cache_read_tokens),
+      cacheWriteTokens: Number(row.cache_write_tokens)
+    };
+  }
+  // ── health ────────────────────────────────────────────────────────────────────────
+  recordHealth(row) {
+    this.db.prepare(
+      `insert or replace into health (box_id, at, ok, degraded, components_json, crashes_json)
+         values (?, ?, ?, ?, ?, ?)`
+    ).run(
+      row.boxId,
+      row.at,
+      row.ok ? 1 : 0,
+      row.degraded ? 1 : 0,
+      JSON.stringify(row.components ?? null),
+      JSON.stringify(row.crashes ?? null)
+    );
+  }
+  latestHealth(boxId) {
+    const row = this.db.prepare("select * from health where box_id = ? order by at desc limit 1").get(boxId);
+    if (row === void 0) return void 0;
+    return {
+      boxId: String(row.box_id),
+      at: String(row.at),
+      ok: Number(row.ok) === 1,
+      degraded: Number(row.degraded) === 1,
+      components: parseJson(String(row.components_json), null),
+      crashes: parseJson(String(row.crashes_json), null)
+    };
+  }
+  // ── audit ─────────────────────────────────────────────────────────────────────────
+  audit(entry) {
+    this.db.prepare(
+      `insert into audit (id, tenant_id, actor, action, target, at, detail_json)
+         values (?, ?, ?, ?, ?, ?, ?)`
+    ).run(
+      randomUUID2(),
+      entry.tenantId ?? null,
+      entry.actor,
+      entry.action,
+      entry.target,
+      (/* @__PURE__ */ new Date()).toISOString(),
+      entry.detail === void 0 ? null : JSON.stringify(entry.detail)
+    );
+  }
+  recentAudit(limit2 = 100) {
+    return this.db.prepare("select * from audit order by at desc limit ?").all(limit2).map((row) => ({
+      id: row.id,
+      tenantId: row.tenant_id ?? void 0,
+      actor: row.actor,
+      action: row.action,
+      target: row.target,
+      at: row.at,
+      detail: row.detail_json === null ? void 0 : parseJson(row.detail_json, void 0)
+    }));
+  }
+  close() {
+    this.db.close();
+  }
+};
+function toBox(row) {
+  return {
+    id: String(row.id),
+    tenantId: String(row.tenant_id),
+    allocatorKind: String(row.allocator_kind),
+    externalId: String(row.external_id),
+    boxdUrl: String(row.boxd_url),
+    uiUrl: String(row.ui_url),
+    state: String(row.state),
+    image: String(row.image),
+    createdAt: String(row.created_at),
+    lastSeenAt: row.last_seen_at === null ? void 0 : String(row.last_seen_at),
+    usageCursor: Number(row.usage_cursor ?? 0)
+  };
+}
+function parseJson(text, fallback) {
+  if (text === null || text === void 0) return fallback;
+  try {
+    return JSON.parse(text);
+  } catch {
+    return fallback;
+  }
+}
+
+// src/control/main.ts
+function loadSessionSecret(path5) {
+  const fromEnv = process.env.AGENTBOX_SESSION_SECRET;
+  if (fromEnv !== void 0 && fromEnv.trim() !== "") return Buffer.from(fromEnv.trim(), "utf8");
+  if (existsSync4(path5)) {
+    const existing = readFileSync4(path5, "utf8").trim();
+    if (existing !== "") return Buffer.from(existing, "hex");
+  }
+  const secret = randomBytes5(32);
+  writeFileSync4(path5, secret.toString("hex"), { encoding: "utf8", mode: 384 });
+  return secret;
+}
+async function startControlPlane(options) {
+  const out2 = options.out ?? (() => {
+  });
+  const home = options.statePath ?? join4(agentboxHome(), "control");
+  mkdirSync4(home, { recursive: true });
+  const store = new SqliteControlStore({ path: join4(home, "control.db") });
+  let allocator;
+  if (options.allocator === "static") {
+    const token = readBoxToken();
+    if (token === void 0) {
+      throw new Error(
+        "The static allocator needs an existing box: run `agentbox box up --with-host` first, or use --allocator compose."
+      );
+    }
+    const config = defaultBoxConfig();
+    allocator = new StaticAllocator(store, {
+      boxdUrl: `http://${config.host}:${config.boxdPort || 1337}`,
+      uiUrl: process.env.AGENTBOX_UI_URL ?? "http://127.0.0.1:7777",
+      tokens: { box: token, ui: process.env.AGENTBOX_UI_TOKEN ?? "" }
+    });
+  } else {
+    allocator = new ComposeAllocator(store, {
+      image: options.image,
+      onOutput: (line) => out2(`  ${line}`)
+    });
+  }
+  let identity;
+  if (options.users !== void 0 && options.users.trim() !== "") {
+    identity = PasswordListIdentity.parse(options.users);
+  } else {
+    const password = randomBytes5(12).toString("base64url");
+    identity = PasswordListIdentity.parse(`admin:${password}:default`);
+    out2("");
+    out2("  No users configured, so one was generated for this run:");
+    out2(`    user     admin`);
+    out2(`    password ${password}`);
+    out2(`    tenant   default`);
+    out2("  Set AGENTBOX_CONTROL_USERS=user:password:tenant,... to keep them across restarts.");
+    out2("");
+  }
+  const gateway = new Gateway({
+    store,
+    allocator,
+    identity,
+    sessionSecret: loadSessionSecret(join4(home, "session-secret")),
+    image: options.image,
+    // Whatever this process was told about a provider is what a box is told. When the relay exists
+    // this becomes a relay address and a per-box token instead of a key.
+    boxEnv: process.env.AGENTBOX_PROVIDER ? { AGENTBOX_PROVIDER: process.env.AGENTBOX_PROVIDER } : void 0,
+    secureCookies: options.secureCookies,
+    log: (line) => out2(`  ${line}`)
+  });
+  const server = createServer((req, res) => {
+    void gateway.handle(req, res).catch((error) => {
+      out2(`  request failed: ${error instanceof Error ? error.message : String(error)}`);
+      if (!res.headersSent) res.writeHead(500, { "content-type": "text/plain" });
+      res.end("Internal error.\n");
+    });
+  });
+  server.on("upgrade", (req, socket, head) => {
+    void gateway.handleUpgrade(req, socket, head).catch(() => socket.destroy());
+  });
+  await new Promise((resolve5, reject) => {
+    server.once("error", reject);
+    server.listen(options.port, options.host, () => {
+      server.removeListener("error", reject);
+      resolve5();
+    });
+  });
+  const sweepSeconds = options.sweepSeconds ?? 15;
+  let collector;
+  if (sweepSeconds > 0) {
+    collector = new Collector({
+      store,
+      intervalMs: sweepSeconds * 1e3,
+      log: (line) => out2(`  collector: ${line}`)
+    });
+    collector.start();
+  }
+  const address = server.address();
+  const url = `http://${options.host}:${address.port}`;
+  out2(`control plane on ${url}`);
+  out2(`  allocator  ${allocator.kind}${options.allocator === "compose" ? ` (${options.image})` : ""}`);
+  out2(`  store      ${join4(home, "control.db")}`);
+  out2(
+    `  collector  ${collector === void 0 ? "disabled" : `every ${sweepSeconds}s`}  \xB7  tenants ${store.listTenants().length}, boxes ${store.listBoxes(["starting", "ready", "unreachable"]).length}`
+  );
+  if (options.secureCookies !== true) {
+    out2("  no TLS: sessions travel in the clear. Put a TLS terminator in front before real use.");
+  }
+  return {
+    url,
+    store,
+    allocator,
+    collector,
+    async close() {
+      collector?.stop();
+      await new Promise((resolve5) => server.close(() => resolve5()));
+      store.close();
+    }
+  };
+}
+function describeControlPlane(statePath) {
+  const home = statePath ?? join4(agentboxHome(), "control");
+  const path5 = join4(home, "control.db");
+  if (!existsSync4(path5)) {
+    return [`No control plane state at ${path5}. Nothing has run yet.`];
+  }
+  const store = new SqliteControlStore({ path: path5 });
+  try {
+    const lines = [`store ${path5}`];
+    for (const tenant of store.listTenants()) {
+      const box = store.boxForTenant(tenant.id);
+      const health = box === void 0 ? void 0 : store.latestHealth(box.id);
+      const meter = meterTenants(store).find((entry) => entry.tenantId === tenant.id);
+      lines.push(
+        `${tenant.name}  ${tenant.state}  ` + (box === void 0 ? "no box" : `${box.externalId} ${box.state}` + (health?.degraded === true ? " (degraded)" : "") + `  last seen ${box.lastSeenAt ?? "never"}`)
+      );
+      if (meter !== void 0 && meter.records > 0) {
+        lines.push(
+          `    ${meter.records} rounds, ${meter.inputTokens} in, ${meter.outputTokens} out` + (meter.limitTokens === void 0 ? "" : `, limit ${meter.limitTokens}${meter.overBudget ? " \u2014 OVER" : ""}`)
+        );
+      }
+    }
+    const audit = store.recentAudit(5);
+    if (audit.length > 0) {
+      lines.push("recent:");
+      for (const row of audit) lines.push(`    ${row.at}  ${row.actor}  ${row.action}  ${row.target}`);
+    }
+    return lines;
+  } finally {
+    store.close();
+  }
+}
+
+// src/agents/registry.ts
+import { randomBytes as randomBytes6, randomUUID as randomUUID3 } from "node:crypto";
+import {
+  mkdirSync as mkdirSync5,
+  readFileSync as readFileSync5,
   readdirSync,
   renameSync,
-  writeFileSync as writeFileSync2,
-  existsSync as existsSync2,
+  writeFileSync as writeFileSync5,
+  existsSync as existsSync5,
   appendFileSync
 } from "node:fs";
-import { homedir as homedir2 } from "node:os";
-import { join as join2 } from "node:path";
+import { homedir as homedir3 } from "node:os";
+import { join as join5 } from "node:path";
 var AGENT_NAME_MAX_LENGTH = 72;
 var AGENT_DESCRIPTION_MAX_LENGTH = 2e3;
 var PROFILE_FILENAME = "profile.json";
@@ -13228,7 +14579,7 @@ function clampBlock(raw, max) {
   return raw.trim().slice(0, max);
 }
 function defaultAgentsRoot() {
-  return process.env.AGENTBOX_AGENTS_DIR ?? join2(process.env.AGENTBOX_HOME ?? join2(homedir2(), ".agentbox"), "agents");
+  return process.env.AGENTBOX_AGENTS_DIR ?? join5(process.env.AGENTBOX_HOME ?? join5(homedir3(), ".agentbox"), "agents");
 }
 var AgentNotFoundError = class extends Error {
   constructor(agentId) {
@@ -13240,19 +14591,19 @@ var AgentNotFoundError = class extends Error {
 var AgentRegistry = class {
   constructor(root = defaultAgentsRoot()) {
     this.root = root;
-    mkdirSync2(this.root, { recursive: true });
+    mkdirSync5(this.root, { recursive: true });
   }
   dirFor(agentId) {
-    return join2(this.root, agentId);
+    return join5(this.root, agentId);
   }
   profilePathFor(agentId) {
-    return join2(this.dirFor(agentId), PROFILE_FILENAME);
+    return join5(this.dirFor(agentId), PROFILE_FILENAME);
   }
   transcriptPathFor(agentId) {
-    return join2(this.dirFor(agentId), TRANSCRIPT_FILENAME);
+    return join5(this.dirFor(agentId), TRANSCRIPT_FILENAME);
   }
   memoryPathFor(agentId) {
-    return join2(this.dirFor(agentId), MEMORY_FILENAME);
+    return join5(this.dirFor(agentId), MEMORY_FILENAME);
   }
   /**
    * Writes a profile atomically.
@@ -13263,15 +14614,15 @@ var AgentRegistry = class {
    */
   writeProfile(agentId, profile) {
     const dir = this.dirFor(agentId);
-    mkdirSync2(dir, { recursive: true });
-    const path5 = join2(dir, PROFILE_FILENAME);
+    mkdirSync5(dir, { recursive: true });
+    const path5 = join5(dir, PROFILE_FILENAME);
     const temp = `${path5}.${process.pid}.${Date.now()}.tmp`;
-    writeFileSync2(temp, `${JSON.stringify(profile, null, 2)}
+    writeFileSync5(temp, `${JSON.stringify(profile, null, 2)}
 `, "utf8");
     renameSync(temp, path5);
   }
   has(agentId) {
-    return existsSync2(this.profilePathFor(agentId));
+    return existsSync5(this.profilePathFor(agentId));
   }
   get(agentId) {
     const record = this.tryGet(agentId);
@@ -13280,9 +14631,9 @@ var AgentRegistry = class {
   }
   tryGet(agentId) {
     const path5 = this.profilePathFor(agentId);
-    if (!existsSync2(path5)) return void 0;
+    if (!existsSync5(path5)) return void 0;
     try {
-      const profile = JSON.parse(readFileSync2(path5, "utf8"));
+      const profile = JSON.parse(readFileSync5(path5, "utf8"));
       return { id: agentId, profile, dir: this.dirFor(agentId) };
     } catch {
       return void 0;
@@ -13328,7 +14679,7 @@ var AgentRegistry = class {
     const name = clampLine(input.name ?? "", AGENT_NAME_MAX_LENGTH);
     if (!name) throw new Error("An agent needs a non-empty name.");
     const now = (/* @__PURE__ */ new Date()).toISOString();
-    const id = randomUUID();
+    const id = randomUUID3();
     const profile = {
       name,
       description: clampBlock(input.description ?? "", AGENT_DESCRIPTION_MAX_LENGTH),
@@ -13405,14 +14756,14 @@ var AgentRegistry = class {
    * what this removes is a whole class of silent interference.
    */
   boxOwnerTokenFor(agentId) {
-    const path5 = join2(this.dirFor(agentId), BOX_OWNER_FILENAME);
-    if (existsSync2(path5)) {
-      const existing = readFileSync2(path5, "utf8").trim();
+    const path5 = join5(this.dirFor(agentId), BOX_OWNER_FILENAME);
+    if (existsSync5(path5)) {
+      const existing = readFileSync5(path5, "utf8").trim();
       if (existing) return existing;
     }
-    const token = randomBytes2(16).toString("hex");
-    mkdirSync2(this.dirFor(agentId), { recursive: true });
-    writeFileSync2(path5, `${token}
+    const token = randomBytes6(16).toString("hex");
+    mkdirSync5(this.dirFor(agentId), { recursive: true });
+    writeFileSync5(path5, `${token}
 `, { encoding: "utf8", mode: 384 });
     return token;
   }
@@ -13430,22 +14781,22 @@ var AgentRegistry = class {
   }
   readMemory(agentId) {
     const path5 = this.memoryPathFor(agentId);
-    if (!existsSync2(path5)) return "";
+    if (!existsSync5(path5)) return "";
     try {
-      return readFileSync2(path5, "utf8");
+      return readFileSync5(path5, "utf8");
     } catch {
       return "";
     }
   }
   writeMemory(agentId, content) {
-    mkdirSync2(this.dirFor(agentId), { recursive: true });
+    mkdirSync5(this.dirFor(agentId), { recursive: true });
     const path5 = this.memoryPathFor(agentId);
     const temp = `${path5}.${process.pid}.${Date.now()}.tmp`;
-    writeFileSync2(temp, content, "utf8");
+    writeFileSync5(temp, content, "utf8");
     renameSync(temp, path5);
   }
   appendTranscript(agentId, entry) {
-    mkdirSync2(this.dirFor(agentId), { recursive: true });
+    mkdirSync5(this.dirFor(agentId), { recursive: true });
     appendFileSync(
       this.transcriptPathFor(agentId),
       `${JSON.stringify(entry)}
@@ -13455,8 +14806,8 @@ var AgentRegistry = class {
   }
   readTranscript(agentId) {
     const path5 = this.transcriptPathFor(agentId);
-    if (!existsSync2(path5)) return [];
-    return readFileSync2(path5, "utf8").split("\n").filter((line) => line.trim() !== "").flatMap((line) => {
+    if (!existsSync5(path5)) return [];
+    return readFileSync5(path5, "utf8").split("\n").filter((line) => line.trim() !== "").flatMap((line) => {
       try {
         return [JSON.parse(line)];
       } catch {
@@ -13467,7 +14818,7 @@ var AgentRegistry = class {
 };
 
 // src/egress/relay.ts
-import { createServer, connect as netConnect } from "node:net";
+import { createServer as createServer2, connect as netConnect2 } from "node:net";
 
 // src/egress/protocol.ts
 var PROTOCOL = "AGENTBOX-EGRESS";
@@ -13537,7 +14888,7 @@ function startEgressRelay(options) {
   const log = options.log ?? (() => {
   });
   const allow = options.allow ?? [];
-  const server = createServer((box) => {
+  const server = createServer2((box) => {
     box.setNoDelay(true);
     box.setTimeout(PREAMBLE_TIMEOUT_MS, () => box.destroy());
     let head = Buffer.alloc(0);
@@ -13565,7 +14916,7 @@ function startEgressRelay(options) {
         box.end(encodeResponse(false, "not allowed"));
         return;
       }
-      const upstream = netConnect(request.port, request.host);
+      const upstream = netConnect2(request.port, request.host);
       upstream.setNoDelay(true);
       upstream.on("connect", () => {
         log(`relay: ${request.host}:${request.port}`);
@@ -14963,76 +16314,10 @@ async function runTurn(agent, inbound, signal, deps) {
 }
 
 // src/host/usage.ts
-import { appendFileSync as appendFileSync2, existsSync as existsSync4, mkdirSync as mkdirSync4, readFileSync as readFileSync4, renameSync as renameSync2, writeFileSync as writeFileSync4 } from "node:fs";
-import { dirname as dirname5, join as join7 } from "node:path";
-
-// src/config.ts
-import { existsSync as existsSync3, mkdirSync as mkdirSync3, readFileSync as readFileSync3, writeFileSync as writeFileSync3 } from "node:fs";
-import { homedir as homedir3 } from "node:os";
-import { dirname as dirname4, join as join6 } from "node:path";
-var DEFAULT_CONFIG = {
-  activityLimit: 400
-};
-var MAX_ACTIVITY_LIMIT = 2e4;
-function agentboxHome() {
-  return process.env.AGENTBOX_HOME ?? join6(homedir3(), ".agentbox");
-}
-function configPath() {
-  return process.env.AGENTBOX_CONFIG ?? join6(agentboxHome(), "config.json");
-}
-function readInteger(value, fallback, bounds, key, warn) {
-  if (value === void 0) return fallback;
-  const parsed = typeof value === "number" ? value : Number(value);
-  if (!Number.isFinite(parsed) || !Number.isInteger(parsed)) {
-    warn(`config: ${key} must be a whole number, using ${fallback}`);
-    return fallback;
-  }
-  if (parsed < bounds.min || parsed > bounds.max) {
-    const clamped = Math.min(Math.max(parsed, bounds.min), bounds.max);
-    warn(`config: ${key} must be between ${bounds.min} and ${bounds.max}, using ${clamped}`);
-    return clamped;
-  }
-  return parsed;
-}
-function loadConfig(onWarn = () => {
-}) {
-  const path5 = configPath();
-  if (!existsSync3(path5)) return { ...DEFAULT_CONFIG };
-  let parsed;
-  try {
-    parsed = JSON.parse(readFileSync3(path5, "utf8"));
-  } catch (error) {
-    const detail = error instanceof Error ? error.message : String(error);
-    onWarn(`config: ${path5} is not valid JSON (${detail}), using defaults`);
-    return { ...DEFAULT_CONFIG };
-  }
-  if (parsed === null || typeof parsed !== "object" || Array.isArray(parsed)) {
-    onWarn(`config: ${path5} should contain an object, using defaults`);
-    return { ...DEFAULT_CONFIG };
-  }
-  const raw = parsed;
-  return {
-    activityLimit: readInteger(
-      raw.activityLimit,
-      DEFAULT_CONFIG.activityLimit,
-      { min: 1, max: MAX_ACTIVITY_LIMIT },
-      "activityLimit",
-      onWarn
-    )
-  };
-}
-function ensureConfigFile() {
-  const path5 = configPath();
-  if (existsSync3(path5)) return path5;
-  mkdirSync3(dirname4(path5), { recursive: true });
-  writeFileSync3(path5, `${JSON.stringify(DEFAULT_CONFIG, null, 2)}
-`, "utf8");
-  return path5;
-}
-
-// src/host/usage.ts
+import { appendFileSync as appendFileSync2, existsSync as existsSync6, mkdirSync as mkdirSync6, readFileSync as readFileSync6, renameSync as renameSync2, writeFileSync as writeFileSync6 } from "node:fs";
+import { dirname as dirname6, join as join9 } from "node:path";
 function usageLogPath() {
-  return process.env.AGENTBOX_USAGE_LOG ?? join7(agentboxHome(), "usage.jsonl");
+  return process.env.AGENTBOX_USAGE_LOG ?? join9(agentboxHome(), "usage.jsonl");
 }
 var COMPACT_AT = Number(process.env.AGENTBOX_USAGE_COMPACT_AT ?? 2e4);
 var KEEP_ON_COMPACT = Number(process.env.AGENTBOX_USAGE_KEEP ?? 5e3);
@@ -15047,9 +16332,9 @@ var UsageLog = class {
   lines = 0;
   /** Reads the last sequence number so numbering continues across restarts. */
   load() {
-    if (!existsSync4(this.path)) return;
+    if (!existsSync6(this.path)) return;
     try {
-      const lines = readFileSync4(this.path, "utf8").split("\n").filter((line) => line.trim() !== "");
+      const lines = readFileSync6(this.path, "utf8").split("\n").filter((line) => line.trim() !== "");
       this.lines = lines.length;
       for (let at = lines.length - 1; at >= 0; at--) {
         try {
@@ -15069,7 +16354,7 @@ var UsageLog = class {
   record(entry, now = /* @__PURE__ */ new Date()) {
     const full = { seq: this.nextSeq++, at: now.toISOString(), ...entry };
     try {
-      mkdirSync4(dirname5(this.path), { recursive: true });
+      mkdirSync6(dirname6(this.path), { recursive: true });
       appendFileSync2(this.path, `${JSON.stringify(full)}
 `, "utf8");
       this.lines++;
@@ -15082,9 +16367,9 @@ var UsageLog = class {
   }
   /** Records after `afterSeq`, which is how a collector catches up. */
   since(afterSeq = 0, limit2 = 1e3) {
-    if (!existsSync4(this.path)) return [];
+    if (!existsSync6(this.path)) return [];
     try {
-      return readFileSync4(this.path, "utf8").split("\n").filter((line) => line.trim() !== "").flatMap((line) => {
+      return readFileSync6(this.path, "utf8").split("\n").filter((line) => line.trim() !== "").flatMap((line) => {
         try {
           return [JSON.parse(line)];
         } catch {
@@ -15113,7 +16398,7 @@ var UsageLog = class {
     try {
       const kept = this.since(0, Number.MAX_SAFE_INTEGER).slice(-KEEP_ON_COMPACT);
       const temp = `${this.path}.${process.pid}.tmp`;
-      writeFileSync4(temp, kept.map((record) => `${JSON.stringify(record)}
+      writeFileSync6(temp, kept.map((record) => `${JSON.stringify(record)}
 `).join(""), "utf8");
       renameSync2(temp, this.path);
       this.lines = kept.length;
@@ -15384,19 +16669,19 @@ var Orchestrator = class {
 };
 
 // src/web/server.ts
-import { randomBytes as randomBytes3 } from "node:crypto";
+import { randomBytes as randomBytes7 } from "node:crypto";
 import {
-  createServer as createServer2,
-  request as httpRequest
+  createServer as createServer3,
+  request as httpRequest2
 } from "node:http";
-import { readFileSync as readFileSync6 } from "node:fs";
-import { connect as netConnect2 } from "node:net";
-import { join as join9 } from "node:path";
+import { readFileSync as readFileSync8 } from "node:fs";
+import { connect as netConnect3 } from "node:net";
+import { join as join11 } from "node:path";
 
 // src/web/markdown.ts
-import { existsSync as existsSync5 } from "node:fs";
+import { existsSync as existsSync7 } from "node:fs";
 import { createRequire } from "node:module";
-import { join as join8 } from "node:path";
+import { join as join10 } from "node:path";
 var MARKDOWN_OPTIONS = {
   html: false,
   linkify: true,
@@ -15407,8 +16692,8 @@ var VENDOR_MARKDOWN_IT = "markdown-it/browser";
 function vendorPath(spec = VENDOR_MARKDOWN_IT) {
   const dir = process.env.AGENTBOX_VENDOR_DIR;
   if (dir) {
-    const copied = join8(dir, "markdown-it.js");
-    if (existsSync5(copied)) return copied;
+    const copied = join10(dir, "markdown-it.js");
+    if (existsSync7(copied)) return copied;
   }
   return createRequire(import.meta.url).resolve(spec);
 }
@@ -16212,50 +17497,9 @@ setInterval(refresh, 15000);
 </body>
 </html>`;
 
-// src/web/auth.ts
-import { timingSafeEqual } from "node:crypto";
-var COOKIE_NAME = "agentbox_ui";
-var LOOPBACK = /* @__PURE__ */ new Set(["127.0.0.1", "::1", "localhost"]);
-function isLoopback(host) {
-  return LOOPBACK.has(host);
-}
-function sameToken(a, b) {
-  const left = Buffer.from(a, "utf8");
-  const right = Buffer.from(b, "utf8");
-  if (left.length !== right.length) return false;
-  return timingSafeEqual(left, right);
-}
-function parseCookies(header) {
-  const cookies = /* @__PURE__ */ new Map();
-  for (const part of (header ?? "").split(";")) {
-    const at = part.indexOf("=");
-    if (at <= 0) continue;
-    cookies.set(part.slice(0, at).trim(), decodeURIComponent(part.slice(at + 1).trim()));
-  }
-  return cookies;
-}
-function authorize(config, request) {
-  if (!config.token) {
-    return { allow: true, reason: "loopback" };
-  }
-  const bearer = /^Bearer\s+(.+)$/i.exec(request.authorization ?? "")?.[1]?.trim();
-  if (bearer && sameToken(bearer, config.token)) return { allow: true, reason: "token" };
-  const cookie = parseCookies(request.cookie).get(COOKIE_NAME);
-  if (cookie && sameToken(cookie, config.token)) return { allow: true, reason: "token" };
-  const query = request.query?.trim();
-  if (query && sameToken(query, config.token)) {
-    return {
-      allow: true,
-      reason: "token",
-      setCookie: `${COOKIE_NAME}=${encodeURIComponent(config.token)}; Path=/; HttpOnly; SameSite=Lax`
-    };
-  }
-  return { allow: false, reason: cookie || bearer || query ? "wrong" : "missing" };
-}
-
 // src/web/activity.ts
-import { appendFileSync as appendFileSync3, existsSync as existsSync6, mkdirSync as mkdirSync5, readFileSync as readFileSync5, renameSync as renameSync3, writeFileSync as writeFileSync5 } from "node:fs";
-import { dirname as dirname6 } from "node:path";
+import { appendFileSync as appendFileSync3, existsSync as existsSync8, mkdirSync as mkdirSync7, readFileSync as readFileSync7, renameSync as renameSync3, writeFileSync as writeFileSync7 } from "node:fs";
+import { dirname as dirname7 } from "node:path";
 var COMPACT_FACTOR = 3;
 var ActivityLog = class {
   path;
@@ -16274,10 +17518,10 @@ var ActivityLog = class {
     this.load();
   }
   load() {
-    if (!existsSync6(this.path)) return;
+    if (!existsSync8(this.path)) return;
     let contents;
     try {
-      contents = readFileSync5(this.path, "utf8");
+      contents = readFileSync7(this.path, "utf8");
     } catch (error) {
       const detail = error instanceof Error ? error.message : String(error);
       this.onWarn(`activity: cannot read ${this.path} (${detail}), starting empty`);
@@ -16326,8 +17570,8 @@ var ActivityLog = class {
     const body = this.events.map((event) => `${JSON.stringify(event)}
 `).join("");
     try {
-      mkdirSync5(dirname6(this.path), { recursive: true });
-      writeFileSync5(temp, body, "utf8");
+      mkdirSync7(dirname7(this.path), { recursive: true });
+      writeFileSync7(temp, body, "utf8");
       renameSync3(temp, this.path);
       this.lines = this.events.length;
     } catch (error) {
@@ -16417,7 +17661,7 @@ async function startWebServer(options) {
   const clients = /* @__PURE__ */ new Set();
   const activityLimit = loadConfig((line) => log(line)).activityLimit;
   const activity = new ActivityLog({
-    path: join9(agentboxHome(), "activity.jsonl"),
+    path: join11(agentboxHome(), "activity.jsonl"),
     limit: activityLimit,
     onWarn: (line) => log(line)
   });
@@ -16502,7 +17746,7 @@ async function startWebServer(options) {
       res.end("The box is not available. Start it with `agentbox box up`.");
       return;
     }
-    const upstream = httpRequest(
+    const upstream = httpRequest2(
       {
         host: origin.host,
         port: origin.port,
@@ -16555,7 +17799,7 @@ async function startWebServer(options) {
     if (chunks.length === 0) return {};
     return JSON.parse(Buffer.concat(chunks).toString("utf8"));
   }
-  const server = createServer2((req, res) => {
+  const server = createServer3((req, res) => {
     void (async () => {
       const url = new URL(req.url ?? "/", "http://localhost");
       const route = `${req.method} ${url.pathname}`;
@@ -16592,7 +17836,7 @@ async function startWebServer(options) {
         }
         if (route === "GET /vendor/markdown-it.js") {
           try {
-            vendorScript ??= readFileSync6(vendorPath());
+            vendorScript ??= readFileSync8(vendorPath());
             res.writeHead(200, {
               "content-type": "application/javascript; charset=utf-8",
               "content-length": vendorScript.length,
@@ -16803,7 +18047,7 @@ async function startWebServer(options) {
       clientSocket.destroy();
       return;
     }
-    const upstream = netConnect2(origin.port, origin.host, () => {
+    const upstream = netConnect3(origin.port, origin.host, () => {
       const headers = Object.entries(req.headers).map(
         ([key, value]) => `${key}: ${Array.isArray(value) ? value.join(", ") : value}\r
 `
@@ -16826,7 +18070,7 @@ ${headers}\r
   const configured = options.token ?? process.env.AGENTBOX_UI_TOKEN;
   let token = configured;
   if (!token && !isLoopback(host)) {
-    token = randomBytes3(16).toString("hex");
+    token = randomBytes7(16).toString("hex");
     log(`bound to ${host} with no token configured; generated one`);
     log(`open: http://${host}:${options.port}/?token=${token}`);
   }
@@ -16844,9 +18088,9 @@ ${headers}\r
 }
 
 // src/cli.ts
-var here = dirname7(fileURLToPath(import.meta.url));
+var here = dirname8(fileURLToPath(import.meta.url));
 function agentboxHome2() {
-  return process.env.AGENTBOX_HOME ?? join10(homedir4(), ".agentbox");
+  return process.env.AGENTBOX_HOME ?? join12(homedir4(), ".agentbox");
 }
 function boxConfig(overrides = {}) {
   return defaultBoxConfig(overrides);
@@ -16865,8 +18109,8 @@ async function cmdBoxBuild() {
   const config = boxConfig();
   const manager = new BoxManager(config);
   const context = resolve4(here, "..", "docker", "box");
-  const bundle = join10(context, "boxd.cjs");
-  if (!existsSync7(bundle)) {
+  const bundle = join12(context, "boxd.cjs");
+  if (!existsSync9(bundle)) {
     err(
       `Daemon bundle missing at ${bundle}.
 Run \`npm run build:boxd\` first \u2014 the image copies the bundle in.`
@@ -16974,7 +18218,7 @@ async function cmdBoxShot(argv) {
     err("The box returned an empty screenshot.");
     return 1;
   }
-  writeFileSync6(target, Buffer.from(result.screenshot, "base64"));
+  writeFileSync8(target, Buffer.from(result.screenshot, "base64"));
   out(`Wrote ${target} (${result.duration_ms}ms).`);
   return 0;
 }
@@ -17086,7 +18330,10 @@ var VALUE_FLAGS = /* @__PURE__ */ new Set([
   "--port",
   "--host",
   "--token",
-  "--allow"
+  "--allow",
+  "--allocator",
+  "--image",
+  "--sweep-seconds"
 ]);
 function parseArgs(argv) {
   const positional = [];
@@ -17185,6 +18432,56 @@ ${bold("you")}: `)).trim();
     rl.close();
   }
   return 0;
+}
+async function cmdControl(argv) {
+  const [sub = "up", ...rest] = argv;
+  if (sub === "status") {
+    for (const line of describeControlPlane()) out(line);
+    return 0;
+  }
+  if (sub !== "up") {
+    err(`Unknown control command: ${sub}. Try \`up\` or \`status\`.`);
+    return 1;
+  }
+  const { flags } = parseArgs(rest);
+  const allocatorFlag = flags.get("--allocator");
+  const allocator = allocatorFlag === "static" ? "static" : "compose";
+  if (allocatorFlag !== void 0 && allocatorFlag !== "static" && allocatorFlag !== "compose") {
+    err(`Unknown allocator: ${String(allocatorFlag)}. Use compose or static.`);
+    return 1;
+  }
+  const portFlag = flags.get("--port");
+  const hostFlag = flags.get("--host");
+  const imageFlag = flags.get("--image");
+  const sweepFlag = flags.get("--sweep-seconds");
+  try {
+    const running = await startControlPlane({
+      port: typeof portFlag === "string" ? Number(portFlag) : 8080,
+      // Loopback by default, like everything else here: this has no TLS, and the session cookie is
+      // the whole session.
+      host: typeof hostFlag === "string" ? hostFlag : "127.0.0.1",
+      allocator,
+      image: typeof imageFlag === "string" ? imageFlag : defaultBoxConfig().image,
+      users: process.env.AGENTBOX_CONTROL_USERS,
+      sweepSeconds: typeof sweepFlag === "string" ? Number(sweepFlag) : void 0,
+      secureCookies: process.env.AGENTBOX_SECURE_COOKIES === "1",
+      out: (line) => out(line === "" ? "" : dim(line))
+    });
+    out("");
+    out(`${bold("sign in")} at ${running.url}/gateway/login`);
+    out(dim("Ctrl-C to stop. Boxes keep running: they are not children of this process."));
+    await new Promise((resolve5) => {
+      const stop = () => {
+        void running.close().then(resolve5);
+      };
+      process.once("SIGINT", stop);
+      process.once("SIGTERM", stop);
+    });
+    return 0;
+  } catch (error) {
+    err(error instanceof Error ? error.message : String(error));
+    return 1;
+  }
 }
 async function cmdEgress(argv) {
   const { flags } = parseArgs(argv);
@@ -17305,6 +18602,18 @@ Providers:
                            defaults off; opt in with AGENTBOX_VISION=1,
                            AGENTBOX_CACHING=1, AGENTBOX_THINKING=1.
 
+Control plane (many people, one box each):
+  control up                Authenticate people and give each their own box
+                            --allocator compose|static   one container per tenant,
+                                                         or one existing box (dev)
+                            --port <n>       default 8080, loopback only
+                            --image <tag>    box image for new boxes
+                            --sweep-seconds  collector interval; 0 disables it
+  control status            Tenants, their boxes, spend and recent actions
+
+  There is no TLS here. The session cookie is the whole session, so put a TLS
+  terminator in front of it before anyone signs in over a network.
+
 Environment:
   ANTHROPIC_API_KEY         API credentials (or run \`ant auth login\`)
   AGENTBOX_PROVIDER         Which provider to use (see above)
@@ -17312,7 +18621,14 @@ Environment:
   AGENTBOX_CONFIG           Config file (default <state>/config.json)
   AGENTBOX_IMAGE            Box image tag (default agentbox/box:latest)
   AGENTBOX_BOX_HOST         Override where published ports are reachable
-  AGENTBOX_WIDTH/HEIGHT     Box display size (default 1280x800)`;
+  AGENTBOX_WIDTH/HEIGHT     Box display size (default 1280x800)
+  AGENTBOX_CONTROL_USERS    user:password:tenant,... for \`control up\`
+                            (one is generated and printed when unset)
+  AGENTBOX_CONTROL_KEY      64 hex chars; encrypts stored box tokens. Minted
+                            beside the database when unset \u2014 which means a
+                            backup of that directory holds both.
+  AGENTBOX_SESSION_SECRET   Shared by two gateways so sessions survive either
+  AGENTBOX_SECURE_COOKIES   1 when TLS terminates in front of the gateway`;
 async function main() {
   const argv = process.argv.slice(2);
   const [command, ...rest] = argv;
@@ -17356,6 +18672,8 @@ async function main() {
     }
     case "chat":
       return cmdChat(rest);
+    case "control":
+      return cmdControl(rest);
     case "egress":
       return cmdEgress(rest);
     case "web":

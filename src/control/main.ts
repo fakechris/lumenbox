@@ -159,6 +159,8 @@ export async function startControlPlane(
   if (sweepSeconds > 0) {
     collector = new Collector({
       store,
+      // So a restarted box is relocated rather than written off; see Collector's `allocator` note.
+      allocator,
       intervalMs: sweepSeconds * 1000,
       log: line => out(`  collector: ${line}`),
     });

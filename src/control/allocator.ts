@@ -52,6 +52,20 @@ export interface BoxAllocator {
   destroy(handle: BoxHandle): Promise<void>;
   /** Everything this allocator believes it created — for reconciling against the store. */
   list(): Promise<BoxHandle[]>;
+  /**
+   * Re-read where a box actually is, and correct the store.
+   *
+   * Needed because a published port is not stable. A container created with an ephemeral port gets
+   * a *different* one from `docker restart` — and the boxes carry `--restart unless-stopped`, so a
+   * Docker daemon restart or a host reboot re-maps every box at once. Without this the stored URL
+   * goes stale, the collector marks a perfectly healthy box unreachable forever, and the gateway
+   * serves a permanent 502.
+   *
+   * Measured: a restart moved one box from host port 32855 to 32857 while the store kept 32855.
+   *
+   * Returns the corrected handle, or undefined when the box is genuinely gone.
+   */
+  reconcile(handle: BoxHandle): Promise<BoxHandle | undefined>;
 }
 
 export class NotImplementedAllocator extends Error {
@@ -90,6 +104,48 @@ export abstract class StoreBackedAllocator implements BoxAllocator {
 
   protected abstract stopExternal(handle: BoxHandle): Promise<void>;
   protected abstract destroyExternal(handle: BoxHandle): Promise<void>;
+
+  /**
+   * Where the real thing is right now, asked of the platform rather than remembered.
+   *
+   * Undefined means it is not there. An allocator whose addresses cannot move — `static` — can
+   * return the handle unchanged.
+   */
+  protected abstract locate(
+    handle: BoxHandle
+  ): Promise<{ boxdUrl: string; uiUrl: string; running: boolean } | undefined>;
+
+  async reconcile(handle: BoxHandle): Promise<BoxHandle | undefined> {
+    let found: { boxdUrl: string; uiUrl: string; running: boolean } | undefined;
+    try {
+      found = await this.locate(handle);
+    } catch {
+      // Cannot ask — a Docker engine that is itself down. Saying nothing changed is safer than
+      // declaring a box gone on the strength of a failed lookup.
+      return handle;
+    }
+    if (found === undefined) {
+      this.store.setBoxState(handle.id, "gone");
+      this.store.audit({
+        tenantId: handle.tenantId,
+        actor: `${this.kind}-allocator`,
+        action: "reconcile.missing",
+        target: handle.externalId,
+      });
+      return undefined;
+    }
+    if (found.boxdUrl === handle.boxdUrl && found.uiUrl === handle.uiUrl) return handle;
+
+    this.store.updateBoxLocation(handle.id, found.boxdUrl, found.uiUrl);
+    this.store.audit({
+      tenantId: handle.tenantId,
+      actor: `${this.kind}-allocator`,
+      action: "reconcile.moved",
+      target: handle.externalId,
+      detail: { from: handle.boxdUrl, to: found.boxdUrl },
+    });
+    return { ...handle, boxdUrl: found.boxdUrl, uiUrl: found.uiUrl };
+  }
 
   async allocate(tenantId: string, spec: BoxSpec): Promise<BoxHandle> {
     const tenant = this.store.getTenant(tenantId);
@@ -267,6 +323,13 @@ export class StaticAllocator extends StoreBackedAllocator {
   /** Nothing to stop: this allocator did not start it, and stopping someone's laptop box is rude. */
   protected async stopExternal(): Promise<void> {}
   protected async destroyExternal(): Promise<void> {}
+
+  /** Its address came from configuration, so it cannot have moved. */
+  protected async locate(
+    handle: BoxHandle
+  ): Promise<{ boxdUrl: string; uiUrl: string; running: boolean }> {
+    return { boxdUrl: handle.boxdUrl, uiUrl: handle.uiUrl, running: true };
+  }
 
   /**
    * The pre-existing box's own tokens, not minted ones.

@@ -333,3 +333,59 @@ test("the meter totals per tenant and says who is over, without acting on it", a
     cleanup();
   }
 });
+
+test("a box whose port moved is relocated, not written off", async () => {
+  const { store, add, cleanup } = fixture();
+  try {
+    add("acme");
+    // The box is alive at a new address; the store still has the old one. This is what a restart
+    // leaves behind, and it is indistinguishable from death unless someone asks.
+    const fleet = fakeFleet({ moved: { health: {}, usage: [{ seq: 1, tokens: 42 }] } });
+    const lines: string[] = [];
+    const collector = new Collector({
+      store,
+      fetchImpl: fleet.fetchImpl,
+      failuresBeforeUnreachable: 1,
+      log: line => lines.push(line),
+      allocator: {
+        async reconcile(handle) {
+          return {
+            ...handle,
+            boxdUrl: "http://box-moved:1337",
+            uiUrl: "http://box-moved:7777",
+          };
+        },
+      },
+    });
+
+    const result = await collector.sweep();
+    assert.equal(result.healthy, 1, "found at its new address");
+    assert.equal(store.getBox("box-acme")?.state, "ready", "not written off");
+    assert.ok(lines.some(line => line.includes("moved to")), `expected a note, got ${JSON.stringify(lines)}`);
+  } finally {
+    cleanup();
+  }
+});
+
+test("a box that really is dead is still written off after relocating fails", async () => {
+  const { store, add, cleanup } = fixture();
+  try {
+    add("acme");
+    // reconcile finds nothing new — the address is right and the box is simply gone. The relocation
+    // attempt must not become a way to never mark anything unreachable.
+    const collector = new Collector({
+      store,
+      fetchImpl: fakeFleet({}).fetchImpl,
+      failuresBeforeUnreachable: 1,
+      allocator: {
+        async reconcile(handle) {
+          return handle;
+        },
+      },
+    });
+    await collector.sweep();
+    assert.equal(store.getBox("box-acme")?.state, "unreachable");
+  } finally {
+    cleanup();
+  }
+});

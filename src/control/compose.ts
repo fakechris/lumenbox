@@ -60,6 +60,7 @@ export interface ComposeAllocatorOptions {
 /** The part of `BoxManager` this allocator uses. Narrow on purpose: it is also the test's contract. */
 export interface ContainerManager {
   state(): Promise<ContainerState>;
+  status(): Promise<BoxStatus>;
   up(options?: { recreate?: boolean; onOutput?: (line: string) => void }): Promise<{
     status: BoxStatus;
   }>;
@@ -173,6 +174,33 @@ export class ComposeAllocator extends StoreBackedAllocator {
     };
   }
 
+  /**
+   * Asks Docker where this container's ports are now.
+   *
+   * The reason `reconcile` exists at all: `docker restart` on a container published with an
+   * ephemeral port gives it a *different* host port, and these containers carry
+   * `--restart unless-stopped`, so a daemon restart or a host reboot re-maps all of them at once.
+   */
+  protected async locate(
+    handle: BoxHandle
+  ): Promise<{ boxdUrl: string; uiUrl: string; running: boolean } | undefined> {
+    const manager = this.managerFor(
+      handle.externalId,
+      { image: this.defaultImage },
+      handle.tokens
+    );
+    const state = await manager.state();
+    if (state === "missing") return undefined;
+    const status = await manager.status();
+    // A stopped container publishes nothing, so there is no address to correct — but it is not
+    // gone either. Keeping the last known address is right: it will be republished on start, and
+    // reconcile runs again then.
+    if (status.boxdUrl === undefined || status.uiUrl === undefined) {
+      return { boxdUrl: handle.boxdUrl, uiUrl: handle.uiUrl, running: false };
+    }
+    return { boxdUrl: status.boxdUrl, uiUrl: status.uiUrl, running: status.state === "running" };
+  }
+
   protected async stopExternal(handle: BoxHandle): Promise<void> {
     // Stop, do not remove: the container's own layer is disposable but stopping is meant to be
     // reversible, and `docker start` is much faster than a fresh `run`.
@@ -227,6 +255,11 @@ export class ComposeAllocator extends StoreBackedAllocator {
     await manager.down({ remove: false });
     this.store.setBoxState(handle.id, "starting");
     const { status } = await manager.up({ onOutput: this.options.onOutput });
+    // The ports moved: `up` republished them. Correcting the store here rather than waiting for the
+    // collector to notice means the gateway does not serve a 502 in between.
+    if (status.boxdUrl !== undefined && status.uiUrl !== undefined) {
+      this.store.updateBoxLocation(handle.id, status.boxdUrl, status.uiUrl);
+    }
     this.store.setBoxState(handle.id, status.state === "running" ? "ready" : "unreachable");
     this.store.audit({
       tenantId: handle.tenantId,

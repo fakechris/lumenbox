@@ -32,6 +32,7 @@ interface Call {
 function fakeEngine(existing: Record<string, ContainerState> = {}) {
   const calls: Call[] = [];
   const state = { ...existing };
+  const ports = new Map<string, { boxd: number; ui: number }>();
   let nextPort = 32000;
 
   const factory = (config: Partial<BoxConfig> | undefined): ContainerManager => {
@@ -41,6 +42,19 @@ function fakeEngine(existing: Record<string, ContainerState> = {}) {
         calls.push({ containerName, action: "state" });
         return state[containerName] ?? "missing";
       },
+      async status(): Promise<BoxStatus> {
+        // Ports move on restart in reality, so the fake moves them too — otherwise a test would
+        // pass against a fake that is kinder than Docker.
+        const current = state[containerName] ?? "missing";
+        if (current !== "running") return { state: current, containerName };
+        const port = ports.get(containerName);
+        return {
+          state: "running",
+          containerName,
+          boxdUrl: `http://127.0.0.1:${port?.boxd}`,
+          uiUrl: `http://127.0.0.1:${port?.ui}`,
+        };
+      },
       async up(options): Promise<{ status: BoxStatus }> {
         calls.push({
           containerName,
@@ -49,9 +63,12 @@ function fakeEngine(existing: Record<string, ContainerState> = {}) {
           env: config?.runArgs,
         });
         state[containerName] = "running";
-        // Two distinct ephemeral ports, which is the thing a second tenant on one host needs.
+        // Two distinct ephemeral ports, which is the thing a second tenant on one host needs. A
+        // fresh pair on every `up`, because that is what Docker does — and it is exactly what made
+        // the stored URL go stale.
         const boxdPort = nextPort++;
         const uiPort = nextPort++;
+        ports.set(containerName, { boxd: boxdPort, ui: uiPort });
         return {
           status: {
             state: "running",
@@ -68,7 +85,7 @@ function fakeEngine(existing: Record<string, ContainerState> = {}) {
     };
   };
 
-  return { factory, calls, state, tokensSeen: (name: string) => name };
+  return { factory, calls, state, ports };
 }
 
 function fixture(existing?: Record<string, ContainerState>) {
@@ -269,5 +286,92 @@ test("provider configuration reaches the box as environment", async () => {
     ]);
   } finally {
     cleanup();
+  }
+});
+
+test("a restart moves the ports, and reconcile corrects the store", async () => {
+  const { store, allocator, engine, cleanup } = fixture();
+  try {
+    const acme = store.upsertTenant({ name: "acme" });
+    const handle = await allocator.allocate(acme.id, { image: "agentbox/box:test" });
+    const original = handle.boxdUrl;
+
+    // What `docker restart` does to a container published on an ephemeral port. Without reconcile
+    // the stored URL points at a port nothing listens on: the collector marks a healthy box
+    // unreachable forever and the gateway serves a permanent 502. Measured on a real box, which
+    // moved from host port 32855 to 32857 while the store kept 32855.
+    await allocator.restart(handle);
+    const afterRestart = store.getBox(handle.id)!;
+    assert.notEqual(afterRestart.boxdUrl, original, "the fake moves ports, as Docker does");
+    assert.equal(afterRestart.state, "ready");
+
+    // And a stale handle can be corrected by asking, which is what the collector does before it
+    // writes a box off.
+    const stale = { ...handle, boxdUrl: original, uiUrl: handle.uiUrl };
+    const corrected = await allocator.reconcile(stale);
+    assert.equal(corrected?.boxdUrl, afterRestart.boxdUrl);
+    assert.ok(
+      store.recentAudit().some(row => row.action === "reconcile.moved"),
+      "a box that moved is worth an audit row: it explains a gap in metering"
+    );
+  } finally {
+    cleanup();
+  }
+});
+
+test("reconcile calls a vanished container gone, and a failed lookup nothing", async () => {
+  const { store, allocator, engine, cleanup } = fixture();
+  try {
+    const acme = store.upsertTenant({ name: "acme" });
+    const handle = await allocator.allocate(acme.id, { image: "agentbox/box:test" });
+
+    // Someone removed it by hand. The row has to say so, or the tenant can never be given another.
+    delete engine.state["agentbox-acme"];
+    assert.equal(await allocator.reconcile(handle), undefined);
+    assert.equal(store.getBox(handle.id)?.state, "gone");
+    assert.equal(store.boxForTenant(acme.id), undefined, "the slot is free again");
+  } finally {
+    cleanup();
+  }
+});
+
+test("a Docker engine that is down does not condemn every box", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "agentbox-compose-"));
+  const store = new SqliteControlStore({ path: join(dir, "control.db") });
+  try {
+    const engine = fakeEngine();
+    const acme = store.upsertTenant({ name: "acme" });
+    const working = new ComposeAllocator(store, {
+      image: "agentbox/box:test",
+      managerFactory: engine.factory,
+      removeVolume: async () => {},
+    });
+    const handle = await working.allocate(acme.id, { image: "agentbox/box:test" });
+
+    // The engine itself is unreachable, so the lookup throws rather than reporting absence. Marking
+    // every box `gone` on the strength of a failed question would destroy the fleet's record at the
+    // exact moment nothing can be checked.
+    const blind = new ComposeAllocator(store, {
+      image: "agentbox/box:test",
+      managerFactory: () => ({
+        async state() {
+          throw new Error("Cannot connect to the Docker daemon");
+        },
+        async status() {
+          throw new Error("Cannot connect to the Docker daemon");
+        },
+        async up() {
+          throw new Error("Cannot connect to the Docker daemon");
+        },
+        async down() {},
+      }),
+      removeVolume: async () => {},
+    });
+    const result = await blind.reconcile(handle);
+    assert.equal(result?.boxdUrl, handle.boxdUrl, "nothing changed");
+    assert.equal(store.getBox(handle.id)?.state, "ready", "and nothing was condemned");
+  } finally {
+    store.close();
+    rmSync(dir, { recursive: true, force: true });
   }
 });

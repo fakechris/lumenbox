@@ -133,6 +133,8 @@ export interface ControlStore {
   boxForTenant(tenantId: string): BoxRow | undefined;
   listBoxes(states?: readonly BoxState[]): BoxRow[];
   setBoxState(id: string, state: BoxState): void;
+  /** Corrects where a box is reachable, after a restart moved its published ports. */
+  updateBoxLocation(id: string, boxdUrl: string, uiUrl: string): void;
   markBoxSeen(id: string, at?: Date): void;
 
   putToken(boxId: string, kind: TokenKind, value: string): void;
@@ -398,6 +400,12 @@ export class SqliteControlStore implements ControlStore {
 
   setBoxState(id: string, state: BoxState): void {
     this.db.prepare("update box set state = ? where id = ?").run(state, id);
+  }
+
+  updateBoxLocation(id: string, boxdUrl: string, uiUrl: string): void {
+    this.db
+      .prepare("update box set boxd_url = ?, ui_url = ? where id = ?")
+      .run(boxdUrl, uiUrl, id);
   }
 
   markBoxSeen(id: string, at = new Date()): void {

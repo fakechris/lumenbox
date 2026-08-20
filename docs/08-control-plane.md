@@ -123,6 +123,47 @@ PVCs. Node placement, quotas and admission become the cluster's job. **Unverifie
 **`static` — for development.** One box, named by URL, the `attached` provisioner promoted to the
 fleet interface. This is what lets the control plane run against a box on a laptop.
 
+### 4.2a A published port is not stable
+
+The bug that cost the most in this section, found by restarting a real box rather than by reading:
+
+**`docker restart` on a container published with an ephemeral port gives it a different host port.**
+The boxes carry `--restart unless-stopped`, so a Docker daemon restart or a host reboot re-maps
+*every* box at once. Measured: one box moved from host port 32855 to 32857 while the store kept
+32855.
+
+The consequence is not a hiccup. The collector polls the stale address, fails, and marks a perfectly
+healthy box `unreachable` — permanently, because nothing ever re-reads it. The gateway proxies to a
+dead port and serves 502 forever. The tenant's box is bricked with nothing in the logs to say why.
+
+So `BoxAllocator` grows one method:
+
+```ts
+reconcile(handle: BoxHandle): Promise<BoxHandle | undefined>;
+```
+
+Ask the platform where the box actually is, correct the store, and audit the move. Three cases, and
+each of the last two is a way to get this wrong:
+
+- **Moved** → update `boxd_url` and `ui_url`, audit `reconcile.moved`. A gap in that box's metering
+  now has an explanation in the audit log.
+- **Genuinely absent** → `gone`, freeing the tenant's box slot. Without this the tenant can never be
+  given another box.
+- **Cannot ask** — the Docker engine is itself down → change *nothing*. Marking every box `gone` on
+  the strength of a failed question would destroy the fleet's record at the exact moment nothing can
+  be verified.
+
+The collector reconciles *before* writing a box off, because a moved port and a dead box are
+indistinguishable from a failed poll. `restart` corrects the address itself rather than waiting for
+the next sweep, so the gateway does not serve a 502 in between.
+
+Verified on the real box that exhibited the bug: `agentbox-acme moved to http://127.0.0.1:32857;
+corrected`, then `is answering again`, the store updated to 32857, and the gateway back to 200.
+
+There is precedent for this in the codebase, which is the annoying part — the box's own desktop proxy
+already carries the comment *"A recreated box means a new host port. One retry with a forced lookup
+turns that from a permanent 502 into a hiccup."* The same lesson had to be learned twice.
+
 ### 4.3 What a box needs told at creation
 
 The control plane hands a box its identity by environment, because it has no other way to receive
@@ -285,7 +326,8 @@ Two things that run found:
 | --- | --- | --- |
 | Control plane down | No new boxes; metering falls behind; existing work continues | Restart; collector catches up by cursor |
 | Store lost | Boxes orphaned: running, serving whoever holds their tokens, owned by nobody | Backup; reconcile from `allocator.list()` and re-adopt by name |
-| Box unreachable | That tenant cannot work | Reaper restarts it; volumes preserve their data |
+| Box unreachable | That tenant cannot work | Reconciled first — a moved port looks identical to a dead box; then the reaper restarts it, volumes preserving the data |
+| Box's port moved | Stored URL is stale; every poll and proxy fails | `allocator.reconcile()` re-reads it. Without this a restart is permanent death (§4.4) |
 | Box destroyed with volumes | That tenant's work is gone | Explicit action only, audited |
 | Relay down | No agent can call a model; boxes idle | Restart; nothing lost |
 | Gateway down | Nobody can reach their box | Restart; boxes keep running |

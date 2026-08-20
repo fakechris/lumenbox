@@ -29,6 +29,7 @@
  */
 
 import type { HealthResult } from "../protocol/index.ts";
+import type { BoxAllocator, BoxHandle } from "./allocator.ts";
 import type { BoxRow, ControlStore, UsageRow } from "./store.ts";
 
 /** What a box's `GET /api/usage` returns. Mirrors `UsageLog.since`. */
@@ -47,6 +48,15 @@ interface BoxUsagePayload {
 
 export interface CollectorOptions {
   store: ControlStore;
+  /**
+   * Asked where a box really is before it is written off.
+   *
+   * Without this, a restart is a death sentence: a container published on an ephemeral port gets a
+   * different one from `docker restart`, and these boxes carry `--restart unless-stopped`, so a
+   * daemon restart re-maps every box at once. The stored URL goes stale, every poll fails, and the
+   * collector marks a healthy fleet unreachable. Optional so a store-only test needs no allocator.
+   */
+  allocator?: Pick<BoxAllocator, "reconcile">;
   /** How often to sweep the fleet. */
   intervalMs?: number;
   /** Per-request timeout. Short: a box that is thinking hard is still expected to answer a GET. */
@@ -109,9 +119,24 @@ export class Collector {
   }
 
   private async collectOne(
-    box: BoxRow
+    current: BoxRow
   ): Promise<{ reachable: boolean; degraded: boolean; usageRowsStored: number }> {
-    const health = await this.readHealth(box);
+    let box = current;
+    let health = await this.readHealth(box);
+
+    if (health === undefined) {
+      // Before believing it is dead, ask where it actually is. A moved port looks exactly like a
+      // dead box from here, and the difference matters: one needs correcting, the other reporting.
+      const moved = await this.relocate(box);
+      if (moved !== undefined) {
+        box = moved;
+        health = await this.readHealth(box);
+        if (health !== undefined) {
+          this.log(`${box.externalId} moved to ${box.boxdUrl}; corrected`);
+        }
+      }
+    }
+
     if (health === undefined) {
       this.noteFailure(box);
       return { reachable: false, degraded: false, usageRowsStored: 0 };
@@ -138,6 +163,29 @@ export class Collector {
 
     const usageRowsStored = await this.collectUsage(box);
     return { reachable: true, degraded, usageRowsStored };
+  }
+
+  /** Re-reads a box's address through the allocator, returning the row only when it changed. */
+  private async relocate(box: BoxRow): Promise<BoxRow | undefined> {
+    if (this.options.allocator === undefined) return undefined;
+    const handle: BoxHandle = {
+      tenantId: box.tenantId,
+      id: box.id,
+      externalId: box.externalId,
+      boxdUrl: box.boxdUrl,
+      uiUrl: box.uiUrl,
+      tokens: { box: "", ui: "" },
+      createdAt: box.createdAt,
+      state: box.state,
+    };
+    try {
+      const corrected = await this.options.allocator.reconcile(handle);
+      if (corrected === undefined) return undefined;
+      if (corrected.boxdUrl === box.boxdUrl && corrected.uiUrl === box.uiUrl) return undefined;
+      return { ...box, boxdUrl: corrected.boxdUrl, uiUrl: corrected.uiUrl };
+    } catch {
+      return undefined;
+    }
   }
 
   private async readHealth(box: BoxRow): Promise<HealthResult | undefined> {

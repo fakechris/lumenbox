@@ -254,6 +254,9 @@ test("one tenant's session cannot open another tenant's box", async () => {
       async list() {
         return [...boxes.values()];
       },
+      async reconcile(handle) {
+        return handle;
+      },
     };
 
     const signer = new SessionSigner(Buffer.from("c".repeat(32)));
@@ -315,6 +318,9 @@ test("a suspended tenant is refused, and a box that is starting says so", async 
       async destroy() {},
       async list() {
         return [];
+      },
+      async reconcile() {
+        return undefined;
       },
     };
     const gateway = new Gateway({
@@ -395,6 +401,9 @@ test("a box that stops answering is marked unreachable by the request that notic
         async destroy() {},
         async list() {
           return [handle];
+        },
+        async reconcile() {
+          return handle;
         },
       },
       identity: PasswordListIdentity.parse("alice:secret:acme"),
