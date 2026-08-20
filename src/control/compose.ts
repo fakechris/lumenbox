@@ -30,7 +30,7 @@ import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import { BoxManager, DockerError, defaultBoxConfig } from "../box/docker.ts";
 import type { BoxStatus, ContainerState } from "../box/docker.ts";
-import type { BoxSpec, AllocatorKind, BoxHandle } from "./allocator.ts";
+import type { BoxSpec, AllocatorKind, BoxHandle, BoxTokens } from "./allocator.ts";
 import { StoreBackedAllocator } from "./allocator.ts";
 import type { BoxState, ControlStore } from "./store.ts";
 
@@ -43,6 +43,21 @@ export interface ComposeAllocatorOptions {
   prefix?: string;
   /** How long to wait for a box to answer before giving up on it. Pulling an image is slow. */
   startTimeoutMs?: number;
+  /**
+   * The model relay, as the box will reach it — usually `http://host.docker.internal:8788`.
+   *
+   * Set, a box is given this and its own relay token instead of a provider key, and the operator's
+   * credential never enters a container. Unset, boxes keep taking a key from this process's
+   * environment, which is what happened before the relay existed.
+   */
+  relayUrl?: string;
+  /**
+   * Which provider's capabilities a relayed box should assume.
+   *
+   * The relay decides where a token's traffic actually goes; this only tells the box which model and
+   * which optional features to use. The two have to agree, and the control plane is what knows both.
+   */
+  relayProvider?: string;
   onOutput?: (line: string) => void;
   /**
    * How a volume is removed. Injected rather than imported so `destroy` is testable without an
@@ -111,7 +126,7 @@ export class ComposeAllocator extends StoreBackedAllocator {
   private managerFor(
     containerName: string,
     spec: BoxSpec,
-    tokens: { box: string; ui: string }
+    tokens: BoxTokens
   ): ContainerManager {
     const make = this.options.managerFactory ?? (config => new BoxManager(defaultBoxConfig(config)));
     return make({
@@ -125,10 +140,39 @@ export class ComposeAllocator extends StoreBackedAllocator {
         // The whole point of this allocator: the orchestrator lives in the box, so the only thing
         // outside a container is a browser.
         withHost: true,
-        runArgs: Object.entries(spec.env ?? {}).flatMap(([key, value]) => [
-          "--env",
-          `${key}=${value}`,
-        ]),
+        // With a relay, this machine's provider credentials must not be passed in — otherwise the
+        // box has both a relay token and the real key, and the relay protects nothing.
+        relayed: this.options.relayUrl !== undefined && tokens.relay !== undefined,
+        runArgs: [
+          // The relay, when there is one. This is what replaces a provider key in the box: the box
+          // is told an address and a token of its own, and the real credential stays outside.
+          ...(this.options.relayUrl !== undefined && tokens.relay !== undefined
+            ? [
+                "--env",
+                `AGENTBOX_BASE_URL=${this.options.relayUrl}`,
+                "--env",
+                `AGENTBOX_API_KEY=${tokens.relay}`,
+                // Named so `resolveProvider` reads the two above rather than a provider preset — the
+                // capabilities still come from the model, but the endpoint and credential do not.
+                "--env",
+                "AGENTBOX_KEY_ENV=AGENTBOX_API_KEY",
+                // The provider is named as well, because a bare base URL selects the `custom` preset
+                // — which defaults vision, caching and thinking off and would leave an agent unable
+                // to see its own screen. Behind a relay only the endpoint and credential change; the
+                // capabilities still follow the model.
+                "--env",
+                `AGENTBOX_PROVIDER=${this.options.relayProvider ?? "anthropic"}`,
+                // host.docker.internal resolves on Docker Desktop already; the mapping is what makes
+                // the same address work on a Linux engine.
+                "--add-host",
+                "host.docker.internal:host-gateway",
+              ]
+            : []),
+          ...Object.entries(spec.env ?? {}).flatMap(([key, value]) => [
+            "--env",
+            `${key}=${value}`,
+          ]),
+        ],
     });
   }
 
@@ -136,7 +180,7 @@ export class ComposeAllocator extends StoreBackedAllocator {
     tenantId: string,
     _boxId: string,
     spec: BoxSpec,
-    tokens: { box: string; ui: string }
+    tokens: BoxTokens
   ): Promise<{ externalId: string; boxdUrl: string; uiUrl: string; state: BoxState }> {
     const tenant = this.store.getTenant(tenantId);
     if (tenant === undefined) throw new Error(`no such tenant: ${tenantId}`);

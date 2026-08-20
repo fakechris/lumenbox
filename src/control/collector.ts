@@ -326,6 +326,13 @@ export interface TenantMeter {
   cacheReadTokens: number;
   cacheWriteTokens: number;
   records: number;
+  /**
+   * True when these numbers came from the relay rather than from the box.
+   *
+   * Worth surfacing rather than hiding: it is the difference between a figure the tenant could have
+   * understated and one they could not.
+   */
+  measuredByRelay: boolean;
   /** From `quota.monthlyTokens`, when set. */
   limitTokens: number | undefined;
   overBudget: boolean;
@@ -333,7 +340,18 @@ export interface TenantMeter {
 
 export function meterTenants(store: ControlStore, since?: string): TenantMeter[] {
   return store.listTenants().map(tenant => {
-    const totals = store.tenantTotals(tenant.id, since);
+    // Where the relay measured this tenant, that is the number to bill from: it was observed as the
+    // request passed rather than reported by the thing being billed. The two are *not* summed —
+    // they are two measurements of the same traffic, and adding them would double-count.
+    //
+    // "Any relay rows at all" rather than a per-period comparison, because a tenant that moved onto
+    // a relay mid-month would otherwise be billed twice for the days on either side of the switch.
+    // The cost is that the box's own record for the days before is dropped; that is the right way
+    // round, since the unforgeable number is the one to under-bill from rather than over.
+    const measuredByRelay = store.hasRelayUsage(tenant.id);
+    const totals = measuredByRelay
+      ? store.relayTotals(tenant.id, since)
+      : store.tenantTotals(tenant.id, since);
     const limit = tenant.quota.monthlyTokens;
     const limitTokens = typeof limit === "number" && Number.isFinite(limit) ? limit : undefined;
     // Cache reads are counted: they are cheaper, not free, and a tenant whose whole bill is cache
@@ -343,6 +361,7 @@ export function meterTenants(store: ControlStore, since?: string): TenantMeter[]
       tenantId: tenant.id,
       tenantName: tenant.name,
       ...totals,
+      measuredByRelay,
       limitTokens,
       overBudget: limitTokens !== undefined && billable > limitTokens,
     };

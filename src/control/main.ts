@@ -14,7 +14,7 @@
  */
 
 import { randomBytes } from "node:crypto";
-import { createServer } from "node:http";
+import { createServer, type Server } from "node:http";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import type { Socket } from "node:net";
@@ -23,6 +23,8 @@ import { defaultBoxConfig, readBoxToken } from "../box/docker.ts";
 import { StaticAllocator, type BoxAllocator } from "./allocator.ts";
 import { ComposeAllocator } from "./compose.ts";
 import { Collector, meterTenants } from "./collector.ts";
+import { startRelay } from "../relay/server.ts";
+import { availableUpstreams } from "../relay/upstreams.ts";
 import { Gateway, PasswordListIdentity, type IdentityProvider } from "./gateway.ts";
 import { SqliteControlStore, type ControlStore } from "./store.ts";
 
@@ -38,6 +40,16 @@ export interface ControlPlaneOptions {
   statePath?: string;
   /** Seconds between collector sweeps. 0 disables it. */
   sweepSeconds?: number;
+  /**
+   * Run a model relay, so no provider key enters a box.
+   *
+   * Off by default: turning it on changes where credentials live, and a flag that quietly moved them
+   * would be the wrong kind of surprise. On, boxes are created pointing at it.
+   */
+  relay?: boolean;
+  relayPort?: number;
+  /** Which provider's capabilities relayed boxes assume. The relay decides where traffic goes. */
+  relayProvider?: string;
   secureCookies?: boolean;
   out?: (line: string) => void;
 }
@@ -99,6 +111,56 @@ export async function startControlPlane(
     allocator = new ComposeAllocator(store, {
       image: options.image,
       onOutput: line => out(`  ${line}`),
+      ...(options.relay === true
+        ? {
+            // As the *container* reaches it, not as this process does. The two differ, and using
+            // this process's own address is the mistake that produces a box which cannot call a
+            // model at all.
+            relayUrl: `http://host.docker.internal:${options.relayPort ?? 8788}`,
+            relayProvider: options.relayProvider ?? process.env.AGENTBOX_PROVIDER ?? "anthropic",
+          }
+        : {}),
+    });
+  }
+
+  let relay: Server | undefined;
+  if (options.relay === true) {
+    const upstreams = availableUpstreams(line => out(`  relay: ${line}`));
+    if (upstreams.size === 0) {
+      throw new Error(
+        "The relay has no upstream: it needs a provider credential in its own environment " +
+          "(ANTHROPIC_API_KEY, MINIMAX_CODE_CN_API_KEY, …). Without one it could authenticate boxes " +
+          "and then have nothing to forward to."
+      );
+    }
+    const wanted = (options.relayProvider ?? process.env.AGENTBOX_PROVIDER ?? "anthropic").toLowerCase();
+    const upstream = upstreams.get(wanted);
+    if (upstream === undefined) {
+      throw new Error(
+        `The relay has no credential for ${wanted}. It can serve: ${[...upstreams.keys()].join(", ")}.`
+      );
+    }
+    relay = startRelay({
+      port: options.relayPort ?? 8788,
+      // Bound to every interface, because the traffic comes from inside a container and loopback on
+      // this host is not reachable from there. That is why the token check fails closed.
+      host: "0.0.0.0",
+      resolve: token => {
+        // Looked up per request rather than cached, so revoking a token stops it without a restart.
+        for (const row of store.listBoxes(["starting", "ready", "unreachable"])) {
+          if (store.readToken(row.id, "relay") === token) {
+            return { token, tenantId: row.tenantId, boxId: row.id, upstream };
+          }
+        }
+        return undefined;
+      },
+      onUsage: usage => {
+        // Measured where the request passed, which is the point: this number cannot be understated
+        // by the thing being billed. Its own table, because the box's report and the relay's
+        // observation are two measurements and a total that summed both would double-count.
+        store.appendRelayUsage(usage);
+      },
+      log: line => out(`  relay: ${line}`),
     });
   }
 
@@ -177,6 +239,13 @@ export async function startControlPlane(
     `  collector  ${collector === undefined ? "disabled" : `every ${sweepSeconds}s`}` +
       `  ·  tenants ${store.listTenants().length}, boxes ${store.listBoxes(["starting", "ready", "unreachable"]).length}`
   );
+  out(
+    `  relay      ${
+      relay === undefined
+        ? "off — boxes carry a provider key, which an agent with a shell can read"
+        : `on :${options.relayPort ?? 8788} (${options.relayProvider ?? process.env.AGENTBOX_PROVIDER ?? "anthropic"}); no provider key enters a box`
+    }`
+  );
   if (options.secureCookies !== true) {
     // Said plainly, because the cookie is the whole session and this is the one thing about this
     // deployment that is not safe to leave as it is.
@@ -190,6 +259,7 @@ export async function startControlPlane(
     collector,
     async close() {
       collector?.stop();
+      relay?.close();
       await new Promise<void>(resolve => server.close(() => resolve()));
       store.close();
     },

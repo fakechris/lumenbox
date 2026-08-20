@@ -344,6 +344,7 @@ const VALUE_FLAGS = new Set([
   "--allocator",
   "--image",
   "--sweep-seconds",
+  "--relay-port",
 ]);
 
 /**
@@ -518,6 +519,7 @@ async function cmdControl(argv: string[]): Promise<number> {
   const hostFlag = flags.get("--host");
   const imageFlag = flags.get("--image");
   const sweepFlag = flags.get("--sweep-seconds");
+  const relayPortFlag = flags.get("--relay-port");
 
   try {
     const running = await startControlPlane({
@@ -529,6 +531,9 @@ async function cmdControl(argv: string[]): Promise<number> {
       image: typeof imageFlag === "string" ? imageFlag : defaultBoxConfig().image,
       users: process.env.AGENTBOX_CONTROL_USERS,
       sweepSeconds: typeof sweepFlag === "string" ? Number(sweepFlag) : undefined,
+      relay: flags.get("--relay") === true,
+      relayPort: typeof relayPortFlag === "string" ? Number(relayPortFlag) : undefined,
+      relayProvider: typeof flags.get("--provider") === "string" ? String(flags.get("--provider")) : undefined,
       secureCookies: process.env.AGENTBOX_SECURE_COOKIES === "1",
       out: line => out(line === "" ? "" : dim(line)),
     });
@@ -704,10 +709,19 @@ Control plane (many people, one box each):
                             --port <n>       default 8080, loopback only
                             --image <tag>    box image for new boxes
                             --sweep-seconds  collector interval; 0 disables it
+                            --relay          run a model relay, so no provider
+                                             key enters a box (see below)
+                            --relay-port <n> default 8788
+                            --provider <name>  which provider relayed boxes use
   control status            Tenants, their boxes, spend and recent actions
 
   There is no TLS here. The session cookie is the whole session, so put a TLS
   terminator in front of it before anyone signs in over a network.
+
+  Without --relay, every box carries a provider key in its environment, and \`box\`
+  has passwordless sudo — so an agent that goes looking finds it. With --relay the
+  key stays in this process, each box gets a token of its own, and usage is
+  measured where the request passes rather than reported by the box.
 
 Environment:
   ANTHROPIC_API_KEY         API credentials (or run \`ant auth login\`)

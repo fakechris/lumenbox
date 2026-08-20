@@ -50,7 +50,7 @@ the seams exist before the implementations do.
 | **Allocator** | Create, find, stop and destroy boxes for a tenant | `compose`: one container per tenant on this host — **built** |
 | **Store** | Tenants, boxes, tokens, quotas, usage | SQLite file behind a repository interface — **built** |
 | **Credentials** | Issue box, UI and owner tokens; hold provider keys | Generate and store; keys still passed as env |
-| **Model relay** | Give a box a scoped endpoint instead of the real provider key | Absent: the key goes in the box, as today |
+| **Model relay** | Give a box a scoped endpoint instead of the real provider key | **Built**: `control up --relay` |
 | **Collector** | Pull health, crashes and usage from every box | Poll loop writing to the store — **built** |
 | **Metering** | Turn usage into per-tenant totals and enforce budgets | Totals only, no enforcement — **built** |
 | **Reaper** | Stop idle boxes, enforce quotas, clean up volumes | Idle timeout only |
@@ -280,6 +280,36 @@ That last point matters enough to change the plan: **once the relay exists, mete
 from it, not from the box.** Until then, usage is pulled from the box and is only as trustworthy as
 the box.
 
+**Built and verified.** `agentbox control up --relay` starts it; boxes are then created with a relay
+address and a token of their own, and this machine's provider credentials are *not* passed in.
+
+Design decisions, each because the alternative is worse:
+
+- **The token names the upstream.** A box does not say which provider to use; the relay looks it up.
+  So a box cannot reach a provider it was not issued for, or move itself to a costlier model family
+  by editing its own configuration.
+- **Only `/v1/messages` and `/v1/messages/count_tokens`.** A relay that forwarded arbitrary paths
+  would be a general-purpose proxy holding a credential — a far larger blast radius than an agent
+  runtime needs. A forbidden path is refused *before* the token is checked, so a valid token cannot
+  probe the surface.
+- **Streaming passes through byte-for-byte, metered on a copy.** Buffering would break the live text
+  and make long turns look like hangs. A parse failure loses a measurement, never a turn.
+- **Relay usage has its own table.** The box's report and the relay's observation are two
+  measurements of the same traffic; one table with a discriminator invites a total that sums both and
+  double-counts. Kept apart, "prefer the relay where it exists" is a choice the meter makes
+  explicitly, and it does not sum.
+
+Verified against a real box calling a real model: no provider key in the container's environment,
+only its own relay token; the agent answered normally, so the stream survived the hop; the relay
+measured 4,052 input / 3 output / 128 cache-read while the box's own log had nothing to report yet;
+the meter reported `measuredByRelay: true`; a guessed token got 401 and `/v1/models` got 404.
+
+That run found the bug that would have made all of this decoration: `hostCredentialArgs()` passed
+this machine's provider keys into every box unconditionally, so the first relayed box had *both* a
+relay token and the real key. The relay worked, usage was measured, and the credential was still
+sitting in the container. A fix that leaves the credential in place while claiming to have removed it
+is worse than no fix, so the passthrough is now suppressed whenever a relay is configured.
+
 ## 8. Collector
 
 A poll loop, because the box does not push (§2).
@@ -392,6 +422,6 @@ should change before the control plane does.
 3. ~~`compose` allocator and gateway~~ — done: the first real multi-user system, on one host, both
    verified against real containers.
 4. ~~Collector and metering~~ — done; enforcement is still open (R-03's remaining half).
-5. Relay, and metering moves behind it.
+5. ~~Relay, and metering moves behind it~~ — done.
 6. Reaper, quotas.
 7. `kubernetes` allocator, when there is a cluster to verify it against.

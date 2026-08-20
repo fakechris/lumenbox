@@ -162,6 +162,16 @@ export function resolveProvider(name?: string): ProviderProfile {
   const profile = build();
   if (process.env.AGENTBOX_MODEL) profile.model = process.env.AGENTBOX_MODEL;
   if (process.env.AGENTBOX_BASE_URL) profile.baseUrl = process.env.AGENTBOX_BASE_URL;
+  /**
+   * Which variable holds the credential, overridable for any provider and not just `custom`.
+   *
+   * This is what makes the model relay work without a second provider table. Behind a relay the
+   * endpoint and the credential change — to the relay's address and the box's own relay token — while
+   * the *model* and everything derived from it stay whatever the tenant was issued. Before this,
+   * pointing a box at a relay forced the `custom` preset, which silently switched vision, caching and
+   * thinking off and produced an agent that could not see its own screen.
+   */
+  if (process.env.AGENTBOX_KEY_ENV) profile.keyEnv = process.env.AGENTBOX_KEY_ENV;
   if (process.env.AGENTBOX_MAX_TOKENS) {
     profile.maxTokens = Number(process.env.AGENTBOX_MAX_TOKENS);
   }

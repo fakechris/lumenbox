@@ -42,7 +42,15 @@ import { dirname, join } from "node:path";
 
 export type TenantState = "active" | "suspended";
 export type BoxState = "starting" | "ready" | "stopped" | "unreachable" | "gone";
-export type TokenKind = "box" | "ui";
+/**
+ * The three credentials a box has, each with a different holder.
+ *
+ * `box` is presented to boxd by whatever drives the desktop. `ui` is what the gateway injects when
+ * proxying a person to the box's own web UI. `relay` is what the box presents to the model relay in
+ * place of a provider key — a third kind rather than a reuse of one of the others, so that revoking
+ * a box's ability to spend money does not also lock its owner out of watching it.
+ */
+export type TokenKind = "box" | "ui" | "relay";
 
 /**
  * What a person may do inside one tenant.
@@ -105,6 +113,19 @@ export interface UsageRow {
   seq: number;
   at: string;
   agentId: string;
+  model: string;
+  inputTokens: number;
+  outputTokens: number;
+  cacheReadTokens: number;
+  cacheWriteTokens: number;
+}
+
+export interface RelayUsageRow {
+  id: number;
+  boxId: string;
+  tenantId: string;
+  at: string;
+  provider: string;
   model: string;
   inputTokens: number;
   outputTokens: number;
@@ -191,6 +212,12 @@ export interface ControlStore {
   appendUsage(rows: readonly UsageRow[]): number;
   setUsageCursor(boxId: string, seq: number): void;
   tenantTotals(tenantId: string, since?: string): UsageTotals;
+
+  /** One row per request the relay forwarded, measured as it passed. */
+  appendRelayUsage(row: Omit<RelayUsageRow, "id">): void;
+  relayTotals(tenantId: string, since?: string): UsageTotals;
+  /** Whether this tenant has any relay-measured usage, which decides which series to bill from. */
+  hasRelayUsage(tenantId: string): boolean;
 
   recordHealth(row: HealthRow): void
   latestHealth(boxId: string): HealthRow | undefined;
@@ -321,6 +348,29 @@ create table if not exists usage (
 );
 
 create index if not exists usage_by_tenant on usage(tenant_id, at);
+
+-- Usage as the relay measured it, kept apart from what the box reported.
+--
+-- A separate table rather than a column, because these are two measurements with different trust:
+-- the box reports its own spend, the relay observes it. Mixing them in one table would need a
+-- discriminator on the primary key and would invite a total that sums both and double-counts. Kept
+-- apart, "prefer the relay where it exists" is a choice the meter makes explicitly.
+--
+-- No sequence number: nothing pulls this with a cursor, because the relay writes it directly.
+create table if not exists relay_usage (
+  id                 integer primary key autoincrement,
+  box_id             text not null,
+  tenant_id          text not null,
+  at                 text not null,
+  provider           text not null,
+  model              text not null,
+  input_tokens       integer not null,
+  output_tokens      integer not null,
+  cache_read_tokens  integer not null,
+  cache_write_tokens integer not null
+);
+
+create index if not exists relay_usage_by_tenant on relay_usage(tenant_id, at);
 
 create table if not exists health (
   box_id          text not null references box(id),
@@ -645,6 +695,54 @@ export class SqliteControlStore implements ControlStore {
       cacheReadTokens: Number(row.cache_read_tokens),
       cacheWriteTokens: Number(row.cache_write_tokens),
     };
+  }
+
+  appendRelayUsage(row: Omit<RelayUsageRow, "id">): void {
+    this.db
+      .prepare(
+        `insert into relay_usage
+           (box_id, tenant_id, at, provider, model,
+            input_tokens, output_tokens, cache_read_tokens, cache_write_tokens)
+         values (?, ?, ?, ?, ?, ?, ?, ?, ?)`
+      )
+      .run(
+        row.boxId,
+        row.tenantId,
+        row.at,
+        row.provider,
+        row.model,
+        row.inputTokens,
+        row.outputTokens,
+        row.cacheReadTokens,
+        row.cacheWriteTokens
+      );
+  }
+
+  relayTotals(tenantId: string, since?: string): UsageTotals {
+    const row = this.db
+      .prepare(
+        `select count(*) as records,
+                coalesce(sum(input_tokens), 0) as input_tokens,
+                coalesce(sum(output_tokens), 0) as output_tokens,
+                coalesce(sum(cache_read_tokens), 0) as cache_read_tokens,
+                coalesce(sum(cache_write_tokens), 0) as cache_write_tokens
+         from relay_usage where tenant_id = ? and at >= ?`
+      )
+      .get(tenantId, since ?? "") as Record<string, number>;
+    return {
+      records: Number(row.records),
+      inputTokens: Number(row.input_tokens),
+      outputTokens: Number(row.output_tokens),
+      cacheReadTokens: Number(row.cache_read_tokens),
+      cacheWriteTokens: Number(row.cache_write_tokens),
+    };
+  }
+
+  hasRelayUsage(tenantId: string): boolean {
+    const row = this.db
+      .prepare("select 1 as found from relay_usage where tenant_id = ? limit 1")
+      .get(tenantId) as { found?: number } | undefined;
+    return row !== undefined;
   }
 
   // ── health ────────────────────────────────────────────────────────────────────────

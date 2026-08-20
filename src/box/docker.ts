@@ -55,6 +55,14 @@ export interface BoxConfig {
    * Docker pick, which is what a second box on the same host needs.
    */
   uiPort?: number;
+  /**
+   * True when this box reaches its model through a relay.
+   *
+   * Stops this machine's provider credentials being passed in. Without it the relay is decoration:
+   * the box would have both a relay token and the real key, and an agent with a shell would find the
+   * second one.
+   */
+  relayed?: boolean;
   /** Extra `docker run` arguments, e.g. volume mounts. */
   runArgs: string[];
 }
@@ -409,7 +417,11 @@ export class BoxManager {
             // agents — so it must not be reachable from the network.
             "--publish",
             publishOn("127.0.0.1", config.uiPort ?? UI_PORT, UI_PORT),
-            ...hostCredentialArgs(),
+            // Suppressed when a relay is configured, which is the entire point of having one. This
+            // was found by looking: the relay worked, usage was measured, and the provider key was
+            // still sitting in the container because this passthrough was unconditional. A fix that
+            // leaves the credential in place while claiming to have removed it is worse than none.
+            ...(config.relayed === true ? [] : hostCredentialArgs()),
           ]
         : []),
       ...config.runArgs,

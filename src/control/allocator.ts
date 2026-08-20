@@ -36,9 +36,21 @@ export interface BoxHandle {
   externalId: string;
   boxdUrl: string;
   uiUrl: string;
-  tokens: { box: string; ui: string };
+  tokens: BoxTokens;
   createdAt: string;
   state: BoxState;
+}
+
+/**
+ * A box's three credentials.
+ *
+ * `relay` is optional because a deployment without a relay still works — the box keeps a provider key
+ * as before. Present, it replaces that key entirely, which is the point.
+ */
+export interface BoxTokens {
+  box: string;
+  ui: string;
+  relay?: string;
 }
 
 export interface BoxAllocator {
@@ -99,7 +111,7 @@ export abstract class StoreBackedAllocator implements BoxAllocator {
     tenantId: string,
     boxId: string,
     spec: BoxSpec,
-    tokens: { box: string; ui: string }
+    tokens: BoxTokens
   ): Promise<{ externalId: string; boxdUrl: string; uiUrl: string; state: BoxState }>;
 
   protected abstract stopExternal(handle: BoxHandle): Promise<void>;
@@ -160,7 +172,9 @@ export abstract class StoreBackedAllocator implements BoxAllocator {
     if (existing !== undefined) return existing;
 
     const boxId = randomUUID();
-    const tokens = { box: newToken(), ui: newToken() };
+    // A relay token is minted whether or not a relay is configured. Unused it costs a row; issued
+    // later it would mean recreating the container, since a box reads its configuration once.
+    const tokens: BoxTokens = { box: newToken(), ui: newToken(), relay: newToken() };
     const placed = await this.create(tenantId, boxId, spec, tokens);
 
     let row: BoxRow;
@@ -205,6 +219,7 @@ export abstract class StoreBackedAllocator implements BoxAllocator {
 
     this.store.putToken(boxId, "box", tokens.box);
     this.store.putToken(boxId, "ui", tokens.ui);
+    if (tokens.relay !== undefined) this.store.putToken(boxId, "relay", tokens.relay);
     this.store.audit({
       tenantId,
       actor: `${this.kind}-allocator`,
@@ -262,6 +277,9 @@ export abstract class StoreBackedAllocator implements BoxAllocator {
       tokens: {
         box: this.store.readToken(row.id, "box") ?? "",
         ui: this.store.readToken(row.id, "ui") ?? "",
+        ...(this.store.readToken(row.id, "relay") !== undefined
+          ? { relay: this.store.readToken(row.id, "relay")! }
+          : {}),
       },
       createdAt: row.createdAt,
       state: row.state,
