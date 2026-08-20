@@ -1642,3 +1642,61 @@ test("a turn that ends with nothing to say says that, rather than ending silentl
     cleanup();
   }
 });
+
+
+test("a round that streams only tool calls is not mistaken for a stalled one", async () => {
+  // The first-token deadline used to be cleared only by a `text` event. A round that is entirely
+  // tool calls — which is most of a computer-use turn — never produces one, nor does a long stretch
+  // of thinking, so a model working perfectly well was aborted as stalled and retried, on exactly
+  // the turns that take longest.
+  const { registry, cleanup } = fixture();
+  try {
+    const ada = registry.create({ name: "Ada" });
+    const bus = new AgentBus(registry, async () => {});
+    const capture: Capture = { params: [] };
+
+    const toolRound = message([toolUseBlock("RememberFact", { text: "x" }, "t1")], "tool_use");
+    const finalRound = message([textBlock("done")]);
+    let index = 0;
+    let progressFromRawEvents = false;
+
+    const client = {
+      messages: {
+        stream(params: Anthropic.MessageCreateParams) {
+          capture.params.push({ ...params, messages: [...params.messages] });
+          const current = index++ === 0 ? toolRound : finalRound;
+          return {
+            on(event: string, handler: (payload: never) => void) {
+              if (event === "streamEvent" && current === toolRound) {
+                // message_start alone is what an opened-but-silent stream sends, so it must not
+                // count; the block start is real progress.
+                handler({ type: "message_start" } as never);
+                handler({ type: "content_block_start", index: 0 } as never);
+                progressFromRawEvents = true;
+              }
+              if (event === "text" && current === finalRound) {
+                for (const block of current.content) {
+                  if (block.type === "text") handler(block.text as never);
+                }
+              }
+              return this;
+            },
+            finalMessage: async () => current,
+          };
+        },
+      },
+    } as unknown as Anthropic;
+
+    await runTurn(
+      ada,
+      [{ fromId: "user", fromName: "user", text: "remember this", priority: false, receivedAt: "" }],
+      new AbortController().signal,
+      { client, registry, bus, box: undefined, resolution: undefined }
+    );
+
+    assert.ok(progressFromRawEvents, "the tool-only round reported progress through raw events");
+    assert.equal(capture.params.length, 2, "two rounds, neither abandoned as a stall");
+  } finally {
+    cleanup();
+  }
+});

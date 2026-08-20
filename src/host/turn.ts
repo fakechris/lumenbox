@@ -830,19 +830,50 @@ export async function runTurn(
     }, FIRST_TOKEN_DEADLINE_MS);
     firstTokenTimer.unref?.();
 
-    stream.on("text", delta => {
+    const sawProgress = () => {
       outputProduced = true;
       if (firstTokenTimer !== undefined) {
         clearTimeout(firstTokenTimer);
         firstTokenTimer = undefined;
       }
+    };
+
+    // Any content, not just prose. The deadline used to be cleared only by a `text` event, and a
+    // round that is entirely tool calls — which is most of a computer-use turn — never produces one,
+    // nor does a long stretch of thinking. So a model working perfectly well for two minutes was
+    // aborted as stalled and retried, repeatedly, on exactly the turns that take longest.
+    //
+    // `message_start` is excluded on purpose: it is what a stream that has opened and delivered
+    // nothing still sends, so treating it as progress would disable the deadline rather than widen
+    // it. (The SDK does not surface `ping` here at all, which is why it is not in this check —
+    // adding it would not compile.)
+    stream.on("streamEvent", event => {
+      if (event.type === "message_start") return;
+      sawProgress();
+    });
+
+    stream.on("text", delta => {
+      sawProgress();
       emit({ type: "text", agentId: agent.id, agentName: agent.profile.name, delta });
     });
+
+    // Both are per attempt and both used to outlive it: the listener was never removed and the timer
+    // was never cleared unless a `text` event arrived. Four hundred rounds of that is four hundred
+    // listeners on one signal — past Node's warning threshold — and as many pending timers.
+    const releaseAttempt = () => {
+      signal.removeEventListener("abort", onOuterAbort);
+      if (firstTokenTimer !== undefined) {
+        clearTimeout(firstTokenTimer);
+        firstTokenTimer = undefined;
+      }
+    };
 
     let response: Anthropic.Message;
     try {
       response = await stream.finalMessage();
+      releaseAttempt();
     } catch (rawError) {
+      releaseAttempt();
       // A first-token stall arrives as an abort, because that is how the request was ended. Named
       // properly here so the retry decision and the message a person reads both say what happened.
       const error = stalled ? new FirstTokenStallError(FIRST_TOKEN_DEADLINE_MS) : rawError;
