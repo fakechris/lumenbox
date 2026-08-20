@@ -663,6 +663,16 @@ export async function runTurn(
     { type: "text", text: promptParts.volatile, ...cache },
   ];
 
+  // A stop belongs to the turn that was running. Clearing it as the next turn starts means a
+  // person's next instruction is not silently refused — which would read as the agent having broken
+  // rather than having been stopped.
+  //
+  // Here, at the top, rather than after the history is assembled. Compaction can wait on a
+  // summariser for several seconds, and a stop pressed during that wait was cleared by this line
+  // moments later: one flag meant both "stop the turn that was running" and "stop the turn that is
+  // starting", and clearing the first threw away the second. The Stop button did nothing, silently.
+  deps.policy?.resume(agent.id);
+
   let history = registry.readTranscript(agent.id) as TranscriptEntry[];
   const turnText = buildTurnPrompt(inbound);
 
@@ -690,11 +700,6 @@ export async function runTurn(
     text: turnText,
     at: new Date().toISOString(),
   } satisfies TranscriptEntry);
-
-  // A stop belongs to the turn that was running. Clearing it as the next turn starts means a
-  // person's next instruction is not silently refused — which would read as the agent having broken
-  // rather than having been stopped.
-  deps.policy?.resume(agent.id);
 
   const tools = buildTools(box !== undefined, provider.vision);
 

@@ -14,7 +14,7 @@
 import type { Inbox } from "./inbox.ts";
 import {
   AgentNotFoundError,
-  clampBlock,
+  clampMessage,
   type AgentRecord,
   type AgentRegistry,
 } from "./registry.ts";
@@ -107,7 +107,7 @@ export class AgentBus {
     text: string;
     priority?: boolean;
   }): string {
-    const text = clampBlock(input.text ?? "", AGENT_MESSAGE_MAX_LENGTH);
+    const text = clampMessage(input.text ?? "", AGENT_MESSAGE_MAX_LENGTH);
     if (text.length === 0) return "Message was empty; nothing was sent.";
     if (input.toId === input.fromId) {
       return "An agent can't message itself. Reply to the user instead, or pick a different target id.";
@@ -176,7 +176,7 @@ export class AgentBus {
     this.enqueue(agentId, {
       fromId: "user",
       fromName: "user",
-      text: clampBlock(text, AGENT_MESSAGE_MAX_LENGTH),
+      text: clampMessage(text, AGENT_MESSAGE_MAX_LENGTH),
       priority: false,
       receivedAt: new Date().toISOString(),
     });

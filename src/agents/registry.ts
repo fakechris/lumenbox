@@ -122,6 +122,26 @@ export function clampBlock(raw: string, max: number): string {
   return raw.trim().slice(0, max);
 }
 
+/**
+ * Clamps, and says so when it had to.
+ *
+ * For anything a person or an agent *wrote*, as opposed to a field with a length rule. A message
+ * used to be cut at 8,000 characters in silence: a pasted specification whose acceptance criteria
+ * were at the end arrived without them, the sender was told "Sent", and the model had no way to
+ * know it was reading part of a request. Losing the text is survivable; not knowing it was lost is
+ * not, because the model then answers the truncated question confidently.
+ */
+export function clampMessage(raw: string, max: number): string {
+  const text = raw.trim();
+  if (text.length <= max) return text;
+  const dropped = text.length - max;
+  return (
+    `${text.slice(0, max)}\n\n[This message was cut here: ${dropped} more characters were not ` +
+    `delivered. You are reading part of it. Say so, and ask for the rest — in a file if it is long, ` +
+    `since a file has no length limit.]`
+  );
+}
+
 export function defaultAgentsRoot(): string {
   return (
     process.env.AGENTBOX_AGENTS_DIR ??

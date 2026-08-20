@@ -13,7 +13,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { AgentRegistry } from "./registry.ts";
 import { STARTER_TEAM } from "../host/orchestrator.ts";
-import { AgentBus, type BusEvent, type InboundMessage } from "./bus.ts";
+import { AGENT_MESSAGE_MAX_LENGTH, AgentBus, type BusEvent, type InboundMessage } from "./bus.ts";
 
 function tempRegistry(): { registry: AgentRegistry; cleanup: () => void } {
   const root = mkdtempSync(join(tmpdir(), "agentbox-test-"));
@@ -496,5 +496,38 @@ test("the shared-memory directory is not mistaken for an agent", () => {
     assert.equal(registry.tryGet("shared-memory"), undefined);
   } finally {
     rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+
+test("a message too long to deliver says it was cut", async () => {
+  // It used to be sliced at 8,000 characters in silence: a pasted specification whose acceptance
+  // criteria were at the end arrived without them, the sender was told "Sent", and the model had no
+  // way to know it was reading part of a request — so it answered the truncated question
+  // confidently. Losing the text is survivable; not knowing it was lost is not.
+  const { registry, cleanup } = tempRegistry();
+  try {
+    const ada = registry.create({ name: "Ada" });
+    const seen: string[] = [];
+    const bus = new AgentBus(registry, async (_agent, inbound) => {
+      for (const item of inbound) seen.push(item.text);
+    });
+
+    const spec = `${"x".repeat(AGENT_MESSAGE_MAX_LENGTH)}ACCEPTANCE CRITERIA AT THE END`;
+    bus.sendFromUser(ada.id, spec);
+    await bus.wake(ada.id);
+
+    const delivered = seen[0] ?? "";
+    assert.ok(!delivered.includes("ACCEPTANCE"), "it is still cut — the cap is the cap");
+    assert.match(delivered, /30 more characters were not delivered/);
+    assert.match(delivered, /You are reading part of it/);
+    assert.match(delivered, /ask for the rest/, "and it says how to get the rest");
+
+    // A message inside the limit is delivered exactly, with nothing appended.
+    bus.sendFromUser(ada.id, "short one");
+    await bus.wake(ada.id);
+    assert.equal(seen[1], "short one");
+  } finally {
+    cleanup();
   }
 });

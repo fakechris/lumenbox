@@ -1700,3 +1700,80 @@ test("a round that streams only tool calls is not mistaken for a stalled one", a
     cleanup();
   }
 });
+
+
+test("a stop pressed while the history is being compacted is not cleared by the turn starting", async () => {
+  // One flag meant both "stop the turn that was running" and "stop the turn that is starting", and
+  // the clearing happened *after* compaction. Compaction waits on a summariser for seconds, so a
+  // stop pressed during that wait was thrown away moments later and the turn ran on: the Stop
+  // button did nothing, silently.
+  const { registry, cleanup } = fixture();
+  const policy = policyFixture();
+  const previousTrigger = DEFAULT_POLICY.triggerTokens;
+  const previousKeep = DEFAULT_POLICY.keepTailTokens;
+  try {
+    // Both, because policyForModel ignores DEFAULT_POLICY once a context window has been learned
+    // for this model — which an earlier test in this file may have done.
+    process.env.AGENTBOX_COMPACT_AT_TOKENS = "50";
+    DEFAULT_POLICY.triggerTokens = 50;
+    // The tail has to be small too, or the whole window counts as tail and no cut is named.
+    DEFAULT_POLICY.keepTailTokens = 20;
+    const ada = registry.create({ name: "Ada" });
+    const bus = new AgentBus(registry, async () => {});
+    for (const entry of bulkyHistory(12, 400)) registry.appendTranscript(ada.id, entry as never);
+
+    const capture: Capture = { params: [] };
+    let calls = 0;
+    const client = {
+      messages: {
+        // The summariser goes through `create`, not `stream`. The person presses Stop while it is
+        // in flight — which is the window the bug lived in.
+        create: async () => {
+          calls++;
+          policy.gate.stop(ada.id, "alice");
+          return message([textBlock("a summary of earlier work")]);
+        },
+        stream(params: Anthropic.MessageCreateParams) {
+          capture.params.push({ ...params, messages: [...params.messages] });
+          calls++;
+          return {
+            on() {
+              return this;
+            },
+            finalMessage: async () => message([textBlock("the turn ran anyway")]),
+          };
+        },
+      },
+    } as unknown as Anthropic;
+
+    await runTurn(
+      ada,
+      [{ fromId: "user", fromName: "user", text: "go", priority: false, receivedAt: "" }],
+      new AbortController().signal,
+      {
+        client,
+        registry,
+        bus,
+        box: undefined,
+        resolution: undefined,
+        policy: policy.gate,
+      }
+    );
+
+    assert.equal(policy.gate.isStopped(ada.id), true, "the stop survived the turn starting");
+    assert.equal(calls, 1, "and no round ran after it: only the summariser was called");
+    assert.equal(capture.params.length, 0, "the model was never asked to take a turn");
+    const transcript = registry.readTranscript(ada.id) as TranscriptEntry[];
+    assert.match(
+      JSON.stringify(transcript.slice(-3)),
+      /stopped/i,
+      "and the transcript says it was stopped rather than ending blank"
+    );
+  } finally {
+    delete process.env.AGENTBOX_COMPACT_AT_TOKENS;
+    DEFAULT_POLICY.triggerTokens = previousTrigger;
+    DEFAULT_POLICY.keepTailTokens = previousKeep;
+    policy.cleanup();
+    cleanup();
+  }
+});
