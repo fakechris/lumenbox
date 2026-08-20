@@ -431,6 +431,18 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
           return;
         }
 
+        // What a long task's progress actually looks like: the plan and the list, which survive
+        // summarisation and so are the only state that is still true after an hour.
+        if (route === "GET /api/progress") {
+          const agentId = url.searchParams.get("agent") ?? "";
+          if (!orchestrator.registry.has(agentId)) {
+            send(res, 404, { error: `No agent ${agentId}` });
+            return;
+          }
+          send(res, 200, orchestrator.registry.readDurableState(agentId));
+          return;
+        }
+
         if (route === "POST /api/stop") {
           const body = await readJson(req);
           const agentId = String(body.agent ?? "");

@@ -178,7 +178,22 @@ export const APP_HTML = String.raw`<!doctype html>
 </div>
 
 <div class="pane">
-  <h2><span id="title">&mdash;</span><span class="plain" id="round"></span></h2>
+  <h2>
+    <span id="title">&mdash;</span>
+    <span class="plain">
+      <span id="round"></span>
+      <!-- Only shown while a turn is running: a stop button with nothing to stop invites a click
+           that does nothing, and then the real one is not trusted. -->
+      <button id="stop" style="display:none;padding:2px 9px;font-size:12px">stop</button>
+    </span>
+  </h2>
+  <!-- Ahead of the conversation on purpose. An agent waiting on consent has stopped working, and a
+       person who has to scroll to find that out has been kept waiting by the interface. -->
+  <div class="bar" id="approvals" style="display:none;flex-direction:column;align-items:stretch;gap:6px"></div>
+  <div class="bar" id="progress" style="display:none;flex-direction:column;align-items:stretch">
+    <div id="progresshead"></div>
+    <div id="progresslist" style="font-size:12px;opacity:0.85"></div>
+  </div>
   <div class="scroll" id="chat"></div>
   <form id="form">
     <textarea id="input" placeholder="Ask this agent to do something.  Enter sends, Shift+Enter for a newline."></textarea>
@@ -445,7 +460,106 @@ function refresh() {
     // A newly created agent gets its display assigned server-side; keep the pane
     // in step without reloading an unchanged one.
     if (current) showDesktop(current);
+    return Promise.all([refreshPolicy(), refreshProgress()]);
   });
+}
+
+// Every few seconds, because an approval and a ticked-off todo both arrive without an event to ride
+// on. Slow enough to be free, fast enough that a person is not kept waiting by the interface.
+setInterval(function () { refreshPolicy(); refreshProgress(); }, 4000);
+
+/**
+ * Anything waiting on a person, and the selected agent's plan.
+ *
+ * Polled rather than pushed. An approval is created by a turn that then *stops*, so there is no
+ * stream of events to ride on — and the alternative to polling is a person watching an agent do
+ * nothing while its request sits unseen on the server. Cheap: two small reads every few seconds.
+ */
+function refreshPolicy() {
+  return fetch("/api/policy")
+    .then(function (r) { return r.json(); })
+    .then(function (state) { renderApprovals(state.pending || []); })
+    .catch(function () { /* a dropped poll is not worth a message; the next one covers it */ });
+}
+
+function renderApprovals(pending) {
+  var box = $("approvals");
+  if (!pending.length) {
+    box.style.display = "none";
+    box.innerHTML = "";
+    return;
+  }
+  box.style.display = "";
+  box.innerHTML = pending.map(function (item) {
+    // The exact text the fingerprint was taken over. Not a summary of it: consent is given to what
+    // is read here, so anything shortened would be consent to something else.
+    return '<div style="display:flex;gap:8px;align-items:flex-start">' +
+      '<b style="color:var(--warn)">approve?</b>' +
+      '<code style="flex:1;white-space:pre-wrap;word-break:break-all">' + esc(item.description) + '</code>' +
+      '<button data-approve="' + esc(item.id) + '">allow</button>' +
+      '<button data-deny="' + esc(item.id) + '">deny</button>' +
+      '</div>';
+  }).join("");
+}
+
+document.getElementById("approvals").addEventListener("click", function (event) {
+  var allow = event.target.getAttribute && event.target.getAttribute("data-approve");
+  var deny = event.target.getAttribute && event.target.getAttribute("data-deny");
+  if (!allow && !deny) return;
+  event.target.disabled = true;
+  fetch(allow ? "/api/approve" : "/api/deny", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ id: allow || deny })
+  }).then(function () {
+    feed(allow ? "you allowed an action" : "you denied an action", "warn");
+    // The agent does not resume by itself: it was told to stop and ask. Say so, rather than
+    // leaving a person waiting for something that is not coming.
+    if (allow) feed("send the agent a message to have it retry the approved action", "");
+    return refreshPolicy();
+  });
+});
+
+document.getElementById("stop").addEventListener("click", function () {
+  if (!current) return;
+  $("stop").disabled = true;
+  fetch("/api/stop", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ agent: current })
+  }).then(function () {
+    // It takes effect at the next round boundary, not instantly — aborting mid-request would leave
+    // a tool call with no result. Said here so the delay does not read as the button not working.
+    feed("stopping " + esc(nameOf(current)) + " at the end of this round", "warn");
+  }).finally(function () { $("stop").disabled = false; });
+});
+
+/** The selected agent's plan and todo list, which is what a long task's progress looks like. */
+function refreshProgress() {
+  if (!current) return Promise.resolve();
+  return fetch("/api/progress?agent=" + encodeURIComponent(current))
+    .then(function (r) { return r.json(); })
+    .then(function (state) {
+      var head = $("progresshead");
+      var list = $("progresslist");
+      var todos = state.todos || [];
+      var hasPlan = !!(state.plan && state.plan.trim());
+      if (!hasPlan && !todos.length) {
+        $("progress").style.display = "none";
+        return;
+      }
+      $("progress").style.display = "";
+      var done = todos.filter(function (t) { return t.status === "done"; }).length;
+      head.innerHTML = "<b>plan</b> " + (hasPlan ? esc(state.plan.split("\n")[0]) : "&mdash;") +
+        (todos.length ? ' <span class="plain">' + done + "/" + todos.length + " done</span>" : "");
+      list.innerHTML = todos.map(function (t) {
+        var mark = t.status === "done" ? "&#10003;" : t.status === "doing" ? "&rarr;" :
+          t.status === "blocked" ? "&#9888;" : "&middot;";
+        var dim = t.status === "done" ? "opacity:0.5;text-decoration:line-through" : "";
+        return '<div style="' + dim + '">' + mark + " " + esc(t.text) + "</div>";
+      }).join("");
+    })
+    .catch(function () {});
 }
 
 // --- live events ----------------------------------------------------------
@@ -518,6 +632,9 @@ stream.onmessage = function (raw) {
     var open = live.get(e.agentId);
     if (!open) {
       open = { node: bubble("", e.agentName, ""), text: "", queued: false };
+      // Marked while it is still streaming, so a retry can drop it. Cleared when the turn's own
+      // message is stored, at which point it is no longer a partial anyone should discard.
+      open.node.setAttribute("data-partial", "1");
       live.set(e.agentId, open);
     }
     open.text += e.delta;
@@ -576,6 +693,10 @@ stream.onmessage = function (raw) {
   }
 
   if (e.type === "turn_finished") {
+    // No longer running, so the stop button goes away rather than staying to be clicked at nothing.
+    if (e.agentId === current) $("stop").style.display = "none";
+    var settled = live.get(e.agentId);
+    if (settled) settled.node.removeAttribute("data-partial");
     busy.delete(e.agentId); live.delete(e.agentId); renderAgents();
     // A teammate that just worked may be new to this page, or have new history.
     refresh();
@@ -589,8 +710,27 @@ stream.onmessage = function (raw) {
 
   if (e.type === "round") {
     if (e.agentId === current) {
+      // A round starting is the clearest signal a turn is live, and the only one that is not a guess.
+      $("stop").style.display = "";
       roundLabel = "round " + (e.round + 1);
       $("round").textContent = spendLabel ? roundLabel + " · " + spendLabel : roundLabel;
+    }
+    return;
+  }
+
+  if (e.type === "retrying") {
+    // Explained rather than left as a pause. A silent gap while a connection is retried is
+    // indistinguishable from a hang, and a person watching one reaches for the reload button.
+    feed(
+      "<b>" + esc(nameOf(e.agentId)) + "</b> retrying round " + (e.round + 1) +
+        " in " + Math.round(e.delayMs / 100) / 10 + "s &mdash; " + esc(e.detail),
+      "warn"
+    );
+    if (e.agentId === current && e.discardPartial) {
+      // The partial answer exists only here: nothing was written to the transcript, so dropping it
+      // is what stops the retry showing the same text twice.
+      var last = $("chat").lastElementChild;
+      if (last && last.getAttribute("data-partial") === "1") last.remove();
     }
     return;
   }

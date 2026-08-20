@@ -1390,3 +1390,106 @@ test("a rejected request is not retried, and the error is not hidden behind dela
     cleanup();
   }
 });
+
+test("a plan and todo list survive a compaction that replaces the conversation", async () => {
+  const { registry, cleanup } = fixture();
+  const previousTrigger = DEFAULT_POLICY.triggerTokens;
+  const previousKeep = DEFAULT_POLICY.keepTailTokens;
+  try {
+    const ada = registry.create({ name: "Ada" });
+    const bus = new AgentBus(registry, async () => {});
+
+    // The agent has written a plan and a list, and then done enough work to force a summary.
+    registry.writePlan(ada.id, "Ship the parser. Ruled out regexes: nested quotes.");
+    registry.writeTodos(ada.id, [
+      { text: "read the spec", status: "done" },
+      { text: "write the tokeniser", status: "doing" },
+    ]);
+    for (const entry of bulkyHistory(20, 2_000)) {
+      registry.appendTranscript(ada.id, entry as never);
+    }
+    DEFAULT_POLICY.triggerTokens = 5_000;
+    DEFAULT_POLICY.keepTailTokens = 2_000;
+
+    const capture: Capture = { params: [] };
+    const client = stubClientWithSummariser([message([textBlock("done")])], capture, () =>
+      // A summary that says nothing about the plan, deliberately: the point is that the plan does not
+      // depend on the summariser having mentioned it.
+      message([textBlock("Earlier: some shell commands were run.")])
+    );
+
+    await runTurn(
+      ada,
+      [{ fromId: "user", fromName: "user", text: "carry on", priority: false, receivedAt: "" }],
+      new AbortController().signal,
+      { client, registry, bus, box: undefined, resolution: undefined }
+    );
+
+    const params = capture.params[0]!;
+    const system = (params.system as Anthropic.TextBlockParam[]).map(block => block.text).join("\n");
+
+    // Compaction happened — the history was replaced by a summary that mentions neither.
+    const sent = JSON.stringify(params.messages);
+    assert.match(sent, /Summary of the first/, "the conversation was compacted");
+    assert.ok(!sent.includes("Ruled out regexes"), "and the summary did not carry the plan");
+
+    // And the plan and list are still there, because they were never in the history to lose. This is
+    // the whole claim: the survival comes from placement, not from a mechanism that could fail.
+    assert.match(system, /Ruled out regexes: nested quotes/, "the plan is in the system prompt");
+    assert.match(system, /- \[x\] read the spec/);
+    assert.match(system, /- \[>\] write the tokeniser/);
+  } finally {
+    DEFAULT_POLICY.triggerTokens = previousTrigger;
+    DEFAULT_POLICY.keepTailTokens = previousKeep;
+    cleanup();
+  }
+});
+
+test("SetPlan and SetTodos round-trip through the tools", async () => {
+  const { registry, cleanup } = fixture();
+  try {
+    const ada = registry.create({ name: "Ada" });
+    const bus = new AgentBus(registry, async () => {});
+    const capture: Capture = { params: [] };
+    const { client } = stubClient(
+      [
+        message([toolUseBlock("SetPlan", { plan: "Do the thing" }, "toolu_1")], "tool_use"),
+        message(
+          [
+            toolUseBlock(
+              "SetTodos",
+              { todos: [{ text: "step one", status: "doing" }] },
+              "toolu_2"
+            ),
+          ],
+          "tool_use"
+        ),
+        message([textBlock("planned")]),
+      ],
+      capture
+    );
+
+    await runTurn(
+      ada,
+      [{ fromId: "user", fromName: "user", text: "plan it", priority: false, receivedAt: "" }],
+      new AbortController().signal,
+      { client, registry, bus, box: undefined, resolution: undefined }
+    );
+
+    const state = registry.readDurableState(ada.id);
+    assert.equal(state.plan, "Do the thing");
+    assert.deepEqual(state.todos, [{ text: "step one", status: "doing" }]);
+
+    // The tool result echoes the whole list, which is what makes a round-5 change visible at round
+    // 300 given the system prompt is built once per turn.
+    const transcript = registry.readTranscript(ada.id) as TranscriptEntry[];
+    const results = transcript.filter(
+      entry => "kind" in entry && entry.kind === "results"
+    ) as Extract<TranscriptEntry, { kind: "results" }>[];
+    const echoed = JSON.stringify(results.at(-1));
+    assert.match(echoed, /0\/1 done/);
+    assert.match(echoed, /step one/);
+  } finally {
+    cleanup();
+  }
+});

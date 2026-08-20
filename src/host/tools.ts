@@ -12,6 +12,14 @@ import type { DisplayLease } from "../box/display-lease.ts";
 import type { AgentBus } from "../agents/bus.ts";
 import type { AgentRecord, AgentRegistry } from "../agents/registry.ts";
 import type { PolicyGate } from "./policy.ts";
+import {
+  describeTodos,
+  isTodoStatus,
+  validatePlan,
+  validateTodos,
+  type TodoItem,
+  type TodoStatus,
+} from "./durable.ts";
 import type { ComputerAction } from "../protocol/index.ts";
 
 export interface ToolContext {
@@ -372,6 +380,60 @@ export function buildTools(hasBox: boolean, vision = true): Anthropic.Tool[] {
       },
     },
     {
+      name: "SetPlan",
+      description:
+        "Write or replace your plan for the work you are doing. It goes in your system prompt on " +
+        "every turn from now on, so it survives the conversation being summarised — which makes it " +
+        "the one record of your intent that cannot be paraphrased away. Write one when the work " +
+        "will take more than a few steps, and update it when the approach changes rather than " +
+        "leaving a plan that contradicts what you are doing. Keep it to intent and shape; put " +
+        "detail in a file under /home/box/work and point at it.",
+      input_schema: {
+        type: "object",
+        properties: {
+          plan: {
+            type: "string",
+            description:
+              "Markdown. What you are trying to achieve, the approach, and anything you have " +
+              "ruled out and why — that last part is what stops you re-trying it later.",
+          },
+        },
+        required: ["plan"],
+      },
+    },
+    {
+      name: "SetTodos",
+      description:
+        "Replace your todo list. Like the plan, it survives summarisation, so it is how you know " +
+        "what is left after a long piece of work. Send the whole list every time, not a change to " +
+        "it. Keep it accurate in both directions: an item left pending after you finished it will " +
+        "make you redo the work, and one marked done that is not will make you skip it.",
+      input_schema: {
+        type: "object",
+        properties: {
+          todos: {
+            type: "array",
+            description: "The complete list, in the order you intend to work through it.",
+            items: {
+              type: "object",
+              properties: {
+                text: { type: "string", description: "One line saying what this is." },
+                status: {
+                  type: "string",
+                  enum: ["pending", "doing", "done", "blocked"],
+                  description:
+                    "blocked means something outside your control is in the way — say what in " +
+                    "the text, because a blocked item with no reason cannot be helped.",
+                },
+              },
+              required: ["text", "status"],
+            },
+          },
+        },
+        required: ["todos"],
+      },
+    },
+    {
       name: "RememberFact",
       description:
         "Append a durable note to your own memory file, which is included in your system " +
@@ -608,6 +670,37 @@ export async function dispatchTool(
         priority: input.priority === true,
       });
       return { text: ack };
+    }
+
+    case "SetPlan": {
+      const plan = String(input.plan ?? "");
+      const rejected = validatePlan(plan);
+      // Returned as an error so the model reads it and can act: a refusal that does not say what
+      // would be accepted produces a retry of the same thing.
+      if (rejected !== undefined) return { text: rejected.reason, isError: true };
+      context.registry.writePlan(context.agent.id, plan);
+      return {
+        text:
+          "Plan saved. It is in your system prompt from the next turn, and in this turn it is the " +
+          "text above — so you can act on it now.",
+      };
+    }
+
+    case "SetTodos": {
+      const raw = Array.isArray(input.todos) ? input.todos : [];
+      const todos: TodoItem[] = raw.map(entry => {
+        const item = entry as { text?: unknown; status?: unknown };
+        return {
+          text: String(item.text ?? "").trim(),
+          status: isTodoStatus(String(item.status)) ? (String(item.status) as TodoStatus) : "pending",
+        };
+      });
+      const rejected = validateTodos(todos);
+      if (rejected !== undefined) return { text: rejected.reason, isError: true };
+      context.registry.writeTodos(context.agent.id, todos);
+      // The whole new list, echoed back. The system prompt is built once per turn, so this is what
+      // makes an update at round 5 visible at round 300.
+      return { text: describeTodos(todos) };
     }
 
     case "CreateAgent": {

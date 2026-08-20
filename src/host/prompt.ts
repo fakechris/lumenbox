@@ -10,6 +10,7 @@
 import type { AgentRecord } from "../agents/registry.ts";
 import type { InboundMessage } from "../agents/bus.ts";
 import { AGENT_WAKE_CUE } from "../agents/bus.ts";
+import { renderDurableBlocks, type DurableState } from "./durable.ts";
 import type { ResolutionConfig } from "../protocol/index.ts";
 
 /** Teammates listed inline before falling back to "read the agent directory". */
@@ -112,6 +113,13 @@ export interface PromptContext {
   hasBox: boolean;
   /** Whether the model can see screenshots. False changes what the box section says. */
   vision?: boolean;
+  /**
+   * The plan and todo list, rendered into the volatile tier.
+   *
+   * Here rather than in the conversation, which is what makes them survive compaction: the prompt is
+   * rebuilt every turn, so there is no path by which a summary could lose them. See durable.ts.
+   */
+  durable?: DurableState;
 }
 
 /** One teammate line: name, id, and a clamped description. */
@@ -247,7 +255,15 @@ export function buildSystemPromptParts(
       boxSection(context),
       profileSection(context.agent),
     ].join("\n\n---\n\n"),
-    volatile: [memorySection(context.memory), teamSection(context)].join(
+    volatile: [
+      // Before memory and the roster: this is what the agent is doing *now*, and a model reading
+      // top-down should meet its own objective before its background.
+      renderDurableBlocks(context.durable ?? {}),
+      memorySection(context.memory),
+      teamSection(context),
+    ]
+      .filter(section => section.trim() !== "")
+      .join(
       "\n\n---\n\n"
     ),
   };

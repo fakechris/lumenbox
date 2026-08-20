@@ -21,15 +21,27 @@ import {
   writeFileSync,
   existsSync,
   appendFileSync,
+  statSync,
 } from "node:fs";
 import { homedir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
+import { isTodoStatus, type DurableState, type TodoItem } from "../host/durable.ts";
 
 export const AGENT_NAME_MAX_LENGTH = 72;
 export const AGENT_DESCRIPTION_MAX_LENGTH = 2000;
 export const PROFILE_FILENAME = "profile.json";
 export const TRANSCRIPT_FILENAME = "conversation.jsonl";
 export const MEMORY_FILENAME = "memory.md";
+
+/**
+ * Where the agent's plan and todo list live.
+ *
+ * Beside the memory and the transcript, because they are the same kind of thing: state the agent
+ * maintains that has to outlive a conversation. Separate files rather than one, so a malformed todo
+ * list cannot take the plan with it.
+ */
+export const PLAN_FILENAME = "plan.md";
+export const TODOS_FILENAME = "todos.json";
 export const BOX_OWNER_FILENAME = "box-owner";
 
 export interface AgentProfile {
@@ -340,6 +352,68 @@ export class AgentRegistry {
   boxOwnerTokenForDisplay(index: number): string | undefined {
     const owner = this.list().find(record => record.profile.displayIndex === index);
     return owner ? this.boxOwnerTokenFor(owner.id) : undefined;
+  }
+
+  planPathFor(agentId: string): string {
+    return join(this.dirFor(agentId), PLAN_FILENAME);
+  }
+
+  todosPathFor(agentId: string): string {
+    return join(this.dirFor(agentId), TODOS_FILENAME);
+  }
+
+  /**
+   * The plan and todo list, as the prompt needs them.
+   *
+   * Reads defensively and independently: a todo file someone edited into invalid JSON must not stop
+   * the plan being shown, and neither must stop a turn. A lost list is recoverable — the agent will
+   * write a new one — while a turn that will not start is not.
+   */
+  readDurableState(agentId: string): DurableState {
+    const state: DurableState = {};
+    const planPath = this.planPathFor(agentId);
+    if (existsSync(planPath)) {
+      try {
+        state.plan = readFileSync(planPath, "utf8");
+        state.planUpdatedAt = statSync(planPath).mtime.toISOString();
+      } catch {
+        // Left absent, which renders as nothing rather than as an empty plan.
+      }
+    }
+    const todosPath = this.todosPathFor(agentId);
+    if (existsSync(todosPath)) {
+      try {
+        const parsed = JSON.parse(readFileSync(todosPath, "utf8")) as unknown;
+        if (Array.isArray(parsed)) {
+          state.todos = parsed.filter(
+            (item): item is TodoItem =>
+              typeof item === "object" &&
+              item !== null &&
+              typeof (item as TodoItem).text === "string" &&
+              isTodoStatus(String((item as TodoItem).status))
+          );
+        }
+      } catch {
+        // Same: an unreadable list is no list.
+      }
+    }
+    return state;
+  }
+
+  writePlan(agentId: string, plan: string): void {
+    this.writeAtomic(this.planPathFor(agentId), plan);
+  }
+
+  writeTodos(agentId: string, todos: readonly TodoItem[]): void {
+    this.writeAtomic(this.todosPathFor(agentId), `${JSON.stringify(todos, null, 2)}\n`);
+  }
+
+  /** Temp plus rename, so a reader never sees half a file. */
+  private writeAtomic(path: string, content: string): void {
+    mkdirSync(dirname(path), { recursive: true });
+    const temp = `${path}.${process.pid}.${Date.now()}.tmp`;
+    writeFileSync(temp, content, "utf8");
+    renameSync(temp, path);
   }
 
   readMemory(agentId: string): string {

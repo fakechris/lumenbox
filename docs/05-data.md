@@ -30,6 +30,8 @@ agents/<agentId>/
   profile.json              identity and persona
   conversation.jsonl        the transcript
   memory.md                 long-term notes the agent maintains
+  plan.md                   the agent's plan; rendered into every system prompt
+  todos.json                the agent's todo list, same
   box-owner                 this agent's claim on its desktop, 0600
 ```
 
@@ -144,6 +146,33 @@ optimistic for JSON, shell output and CJK, and errs in the direction that fails 
 compaction was needed. Images are counted as a flat ~1,600 tokens each rather than by their base64
 length, which is wrong in both directions at once. The trigger follows the model's real context
 window when the provider reports one, so the same code is right for a 200k model and a 1M one.
+
+### 2.2a `plan.md` and `todos.json`
+
+State the agent maintains with `SetPlan` and `SetTodos`, and **the only state a long task has that
+compaction cannot touch.**
+
+That immunity comes from placement, not from a mechanism. Both are rendered into the *volatile system
+prompt tier* on every turn ([04-design.md](04-design.md)), so there is no path by which a summary
+could lose them — they were never in the history a summary replaces. The alternative, re-rendering
+them into each summary, would be a mechanism to maintain and to get wrong.
+
+Written atomically, read defensively and independently: a `todos.json` someone edited into invalid
+JSON must not stop the plan being shown, and neither must stop a turn. A lost list is recoverable —
+the agent writes a new one — while a turn that will not start is not.
+
+Absent renders as *nothing*, never as an empty container. A heading saying "here is the plan:" with
+nothing under it tells a model that a plan exists and is empty, which reads as "there is no work to
+do".
+
+Bounded: 8,000 characters of plan, 40 todos of 200 characters. The plan is in every request from then
+on, so length is paid for repeatedly; a refusal says to put detail in a file under `/home/box/work`
+and point at it, because a refusal that does not name the alternative produces a retry of the same
+thing.
+
+One gap covered from the other side: the system prompt is built once per turn, so an update at round
+5 is not in the prompt at round 300. The tools echo the whole new state in their result, which puts
+it in the message array where in-turn pruning does not reach.
 
 ### 2.3 `activity.jsonl`
 
