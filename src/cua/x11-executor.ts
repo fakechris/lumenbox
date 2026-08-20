@@ -5,6 +5,7 @@
  * Runs inside the box. The host never invokes xdotool or ffmpeg directly.
  */
 
+import { envNumber } from "../config.ts";
 import { execFile } from "node:child_process";
 import { readFileSync, unlinkSync } from "node:fs";
 import { promisify } from "node:util";
@@ -54,9 +55,7 @@ const KEYMAP_SETTLE_MS = 300;
  * image is far more expensive than the wait. The cost is paid once per batch that
  * contains a screen-changing action, not per action.
  */
-export const DEFAULT_SCREENSHOT_DELAY_MS = Number(
-  process.env.AGENTBOX_SETTLE_MS ?? 2000
-);
+export const DEFAULT_SCREENSHOT_DELAY_MS = envNumber("AGENTBOX_SETTLE_MS", 2000);
 export const DEFAULT_TYPING_DELAY_MS = 12;
 export const DEFAULT_TYPING_BATCH_SIZE = 50;
 

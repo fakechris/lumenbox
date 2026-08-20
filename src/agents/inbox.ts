@@ -19,6 +19,7 @@
  * invisible, but it is not silently re-run either.
  */
 
+import { envNumber } from "../config.ts";
 import { appendFileSync, existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { agentboxHome } from "../config.ts";
@@ -35,7 +36,7 @@ export function inboxPath(): string {
  * are still needed, and the point of the file is that it is only ever appended to while anything
  * depends on it.
  */
-const COMPACT_AT = Number(process.env.AGENTBOX_INBOX_COMPACT_AT ?? 5_000);
+const COMPACT_AT = envNumber("AGENTBOX_INBOX_COMPACT_AT", 5_000);
 
 interface AdmitRecord<T> {
   seq: number;

@@ -110,3 +110,30 @@ export function ensureConfigFile(): string {
   writeFileSync(path, `${JSON.stringify(DEFAULT_CONFIG, null, 2)}\n`, "utf8");
   return path;
 }
+
+/**
+ * A number from the environment, or the default if it is not one.
+ *
+ * Every tunable in this system used to be read as `Number(process.env.X ?? default)`, in
+ * forty-two places. `Number("4000x")` is `NaN`, and every comparison against `NaN` is false — so a
+ * single typo in a variable name's *value* did not fall back to the default, it removed the limit.
+ * `AGENTBOX_MEMORY_BUDGET=4000x` put the entire memory file into every system prompt; a mistyped
+ * budget or round cap would have been worse.
+ *
+ * Loud, because a silently ignored setting is indistinguishable from one that had no effect: the
+ * person who set it watches the thing they configured not happen, and looks for the bug in the
+ * product.
+ *
+ * Finiteness only. Callers who need a range say so themselves, because "positive" is right for a
+ * budget, wrong for a nice value, and meaningless for a port of zero.
+ */
+export function envNumber(name: string, fallback: number): number {
+  const raw = process.env[name];
+  if (raw === undefined || raw.trim() === "") return fallback;
+  const value = Number(raw);
+  if (!Number.isFinite(value)) {
+    console.error(`[config] ${name}="${raw}" is not a number; using ${fallback}`);
+    return fallback;
+  }
+  return value;
+}

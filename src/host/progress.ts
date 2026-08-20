@@ -22,6 +22,7 @@
  * continues forever is worse than one that stops, because it stops *visibly*.
  */
 
+import { envNumber } from "../config.ts";
 import { createHash } from "node:crypto";
 import type { DurableState } from "./durable.ts";
 
@@ -69,7 +70,7 @@ export function stateHashOf(state: DurableState): string {
  * page finished loading, polling a build. Three of those in a row is patience; four with nothing else
  * happening and no change to what the agent says it is doing is a loop.
  */
-const LOOP_THRESHOLD = Number(process.env.AGENTBOX_LOOP_ROUNDS ?? 4);
+const LOOP_THRESHOLD = envNumber("AGENTBOX_LOOP_ROUNDS", 4);
 
 export interface LoopFinding {
   /** The call being repeated, for the message. An adjective is worth less than the actual call. */
@@ -140,7 +141,7 @@ export function classifyLimit(rounds: readonly RoundRecord[]): LimitOutcome {
  * heuristic that gates an unbounded loop is an unbounded loop. Three continuations is 1,600 rounds,
  * which is far past any task that was going to finish.
  */
-export const MAX_CONTINUATIONS = Number(process.env.AGENTBOX_MAX_CONTINUATIONS ?? 3);
+export const MAX_CONTINUATIONS = envNumber("AGENTBOX_MAX_CONTINUATIONS", 3);
 
 /** What the agent is told when its turn is continued rather than ended. */
 export function continuationPrompt(round: number, continuation: number): string {

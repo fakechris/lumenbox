@@ -17,6 +17,7 @@
  * told why, instead of being handed screenshots it will hallucinate about.
  */
 
+import { envNumber } from "../config.ts";
 import Anthropic from "@anthropic-ai/sdk";
 
 export type Effort = "low" | "medium" | "high" | "xhigh" | "max";
@@ -113,9 +114,11 @@ function compatible(): ProviderProfile {
     label: process.env.AGENTBOX_PROVIDER_LABEL ?? "custom",
     baseUrl: process.env.AGENTBOX_BASE_URL,
     model: process.env.AGENTBOX_MODEL ?? "unknown",
-    maxTokens: Number(process.env.AGENTBOX_MAX_TOKENS ?? 32_000),
-    ...(process.env.AGENTBOX_CONTEXT_WINDOW
-      ? { contextWindow: Number(process.env.AGENTBOX_CONTEXT_WINDOW) }
+    maxTokens: envNumber("AGENTBOX_MAX_TOKENS", 32_000),
+    // Zero as the fallback means "not stated", which is what an absent variable means here — and
+    // now also what an unreadable one means, instead of NaN.
+    ...(envNumber("AGENTBOX_CONTEXT_WINDOW", 0) > 0
+      ? { contextWindow: envNumber("AGENTBOX_CONTEXT_WINDOW", 0) }
       : {}),
     // Default every optional capability off: a wrong "yes" fails silently,
     // a wrong "no" merely costs a feature and says so.
@@ -172,9 +175,9 @@ export function resolveProvider(name?: string): ProviderProfile {
    * thinking off and produced an agent that could not see its own screen.
    */
   if (process.env.AGENTBOX_KEY_ENV) profile.keyEnv = process.env.AGENTBOX_KEY_ENV;
-  if (process.env.AGENTBOX_MAX_TOKENS) {
-    profile.maxTokens = Number(process.env.AGENTBOX_MAX_TOKENS);
-  }
+  // Keeps the profile's own value when the variable is absent or unreadable, rather than
+  // overwriting a working setting with NaN.
+  profile.maxTokens = envNumber("AGENTBOX_MAX_TOKENS", profile.maxTokens);
 
   // Capabilities follow the model, not the endpoint: switching model on the same
   // provider can gain or lose vision, and getting that wrong is the failure that

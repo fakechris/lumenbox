@@ -30,6 +30,8 @@
  * rate limit.
  */
 
+import { envNumber } from "../config.ts";
+
 /** Codes that mean the connection broke, not that the request was wrong. */
 const TRANSIENT_ERRNO_CODES: ReadonlySet<string> = new Set([
   "ECONNRESET",
@@ -229,15 +231,15 @@ export interface RetryPolicy {
  * other end is probably fine.
  */
 export const CAPACITY_POLICY: RetryPolicy = {
-  maxAttempts: Number(process.env.AGENTBOX_CAPACITY_ATTEMPTS ?? 3),
-  baseDelayMs: Number(process.env.AGENTBOX_CAPACITY_BASE_MS ?? 750),
-  maxDelayMs: Number(process.env.AGENTBOX_CAPACITY_MAX_MS ?? 6_000),
+  maxAttempts: envNumber("AGENTBOX_CAPACITY_ATTEMPTS", 3),
+  baseDelayMs: envNumber("AGENTBOX_CAPACITY_BASE_MS", 750),
+  maxDelayMs: envNumber("AGENTBOX_CAPACITY_MAX_MS", 6_000),
 };
 
 export const TRANSIENT_POLICY: RetryPolicy = {
-  maxAttempts: Number(process.env.AGENTBOX_TRANSIENT_ATTEMPTS ?? 4),
-  baseDelayMs: Number(process.env.AGENTBOX_TRANSIENT_BASE_MS ?? 1_000),
-  maxDelayMs: Number(process.env.AGENTBOX_TRANSIENT_MAX_MS ?? 15_000),
+  maxAttempts: envNumber("AGENTBOX_TRANSIENT_ATTEMPTS", 4),
+  baseDelayMs: envNumber("AGENTBOX_TRANSIENT_BASE_MS", 1_000),
+  maxDelayMs: envNumber("AGENTBOX_TRANSIENT_MAX_MS", 15_000),
 };
 
 export function policyFor(kind: FailureKind): RetryPolicy | undefined {
@@ -247,9 +249,7 @@ export function policyFor(kind: FailureKind): RetryPolicy | undefined {
 }
 
 /** How long to wait before a stream that has produced nothing is given up on. */
-export const FIRST_TOKEN_DEADLINE_MS = Number(
-  process.env.AGENTBOX_FIRST_TOKEN_DEADLINE_MS ?? 120_000
-);
+export const FIRST_TOKEN_DEADLINE_MS = envNumber("AGENTBOX_FIRST_TOKEN_DEADLINE_MS", 120_000);
 
 /** The most of a server's `retry-after` to honour, so a bad header cannot stall a turn for an hour. */
 export const MAX_RETRY_AFTER_MS = 30_000;

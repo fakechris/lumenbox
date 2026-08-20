@@ -29,6 +29,7 @@
  * result nobody sees until they call it.
  */
 
+import { envNumber } from "../config.ts";
 import { describeSchedule, parseSchedule, type Schedule } from "./schedule.ts";
 
 /** Where skills live inside the box. Under the work volume for the reasons in the module comment. */
@@ -333,7 +334,7 @@ export class SkillCache {
 
   constructor(
     private readonly source: () => SkillSource | undefined,
-    private readonly ttlMs = Number(process.env.AGENTBOX_SKILL_TTL_MS ?? 5_000),
+    private readonly ttlMs = envNumber("AGENTBOX_SKILL_TTL_MS", 5_000),
     private readonly now: () => number = Date.now
   ) {}
 

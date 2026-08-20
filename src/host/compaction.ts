@@ -23,6 +23,7 @@
  * cannot answer.
  */
 
+import { envNumber } from "../config.ts";
 import type Anthropic from "@anthropic-ai/sdk";
 
 /**
@@ -50,7 +51,7 @@ export const TOOL_CALL_OVERHEAD_CHARS = 50;
  * looks free and a large one looks ruinous. A flat, slightly pessimistic constant is closer to the
  * truth than either.
  */
-export const TOKENS_PER_IMAGE = Number(process.env.AGENTBOX_TOKENS_PER_IMAGE ?? 1_600);
+export const TOKENS_PER_IMAGE = envNumber("AGENTBOX_TOKENS_PER_IMAGE", 1_600);
 
 export interface CompactionPolicy {
   /** Compact once the assembled history is estimated above this many tokens. */
@@ -69,9 +70,9 @@ export interface CompactionPolicy {
 }
 
 export const DEFAULT_POLICY: CompactionPolicy = {
-  triggerTokens: Number(process.env.AGENTBOX_COMPACT_AT_TOKENS ?? 60_000),
-  keepTailTokens: Number(process.env.AGENTBOX_COMPACT_KEEP_TOKENS ?? 20_000),
-  maxEntries: Number(process.env.AGENTBOX_COMPACT_MAX_ENTRIES ?? 50),
+  triggerTokens: envNumber("AGENTBOX_COMPACT_AT_TOKENS", 60_000),
+  keepTailTokens: envNumber("AGENTBOX_COMPACT_KEEP_TOKENS", 20_000),
+  maxEntries: envNumber("AGENTBOX_COMPACT_MAX_ENTRIES", 50),
 };
 
 /**
@@ -103,8 +104,8 @@ export function knownContextWindow(model: string): number | undefined {
  * has to be reasoned about: what matters is whether the *next* round still fits, and a round can add
  * a screenshot and a page of shell output.
  */
-const FREE_FRACTION = Number(process.env.AGENTBOX_COMPACT_FREE_FRACTION ?? 0.35);
-const TAIL_FRACTION = Number(process.env.AGENTBOX_COMPACT_TAIL_FRACTION ?? 0.3);
+const FREE_FRACTION = envNumber("AGENTBOX_COMPACT_FREE_FRACTION", 0.35);
+const TAIL_FRACTION = envNumber("AGENTBOX_COMPACT_TAIL_FRACTION", 0.3);
 
 /**
  * The policy to use for a model, derived from its real window when that is known.
@@ -568,7 +569,7 @@ export interface PendingSummary {
  * reached, and a summarising call takes tens of seconds. Too close and it never wins the race; too
  * far and most of the summaries computed are thrown away.
  */
-const BACKGROUND_AT = Number(process.env.AGENTBOX_COMPACT_BACKGROUND_AT ?? 0.75);
+const BACKGROUND_AT = envNumber("AGENTBOX_COMPACT_BACKGROUND_AT", 0.75);
 
 export type CompactionUrgency = "none" | "background" | "now";
 

@@ -31,6 +31,7 @@
  * same trade as the paragraph above and is why it is acceptable.
  */
 
+import { envNumber } from "../config.ts";
 import { appendFileSync, existsSync, mkdirSync, readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { agentboxHome } from "../config.ts";
@@ -337,7 +338,7 @@ export class Scheduler {
 
   constructor(
     private readonly deps: SchedulerDeps,
-    private readonly tickMs = Number(process.env.AGENTBOX_SCHEDULER_TICK_MS ?? 30_000)
+    private readonly tickMs = envNumber("AGENTBOX_SCHEDULER_TICK_MS", 30_000)
   ) {
     this.now = deps.now ?? (() => new Date());
     this.log = deps.log ?? (() => {});

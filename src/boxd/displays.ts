@@ -13,6 +13,7 @@
  * Desktops are created on demand: a box with one agent does not pay for idle ones.
  */
 
+import { envNumber } from "../config.ts";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import { copyFileSync, statSync, truncateSync } from "node:fs";
@@ -35,7 +36,7 @@ const START_TIMEOUT_MS = 90_000;
 const MAX_DISPLAY_INDEX = 32;
 
 /** How often each live desktop is checked and repaired. */
-const SUPERVISE_INTERVAL_MS = Number(process.env.BOXD_SUPERVISE_MS ?? 15_000);
+const SUPERVISE_INTERVAL_MS = envNumber("BOXD_SUPERVISE_MS", 15_000);
 
 /** A desktop component's log is rotated past this. */
 const LOG_LIMIT_BYTES = 2 * 1024 * 1024;

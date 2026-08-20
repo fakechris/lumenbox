@@ -7,6 +7,7 @@
  * why the box should never be given credentials you would not hand to the model.
  */
 
+import { envNumber } from "../config.ts";
 import { spawn } from "node:child_process";
 import type { ExecRequest, ExecResult } from "../protocol/index.ts";
 
@@ -124,7 +125,7 @@ export function withoutBoxToken(env: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
  * feeling untouched. box-chrome puts itself back at 0: a browser the user is watching is
  * part of the interactive path even though an agent started it.
  */
-export const AGENT_NICE = Number(process.env.BOXD_AGENT_NICE ?? 19);
+export const AGENT_NICE = envNumber("BOXD_AGENT_NICE", 19);
 
 export const SCRUBBED_ENV = [
   "BOXD_TOKEN",

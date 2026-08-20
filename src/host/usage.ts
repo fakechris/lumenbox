@@ -20,6 +20,7 @@
  * changes without warning, and would be wrong in a file nobody remembers to update.
  */
 
+import { envNumber } from "../config.ts";
 import { appendFileSync, existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { agentboxHome } from "../config.ts";
@@ -60,8 +61,8 @@ export function usageLogPath(): string {
  * file does not become the largest thing in the state directory. Compaction preserves sequence
  * numbers, so a reader's offset stays meaningful across it.
  */
-const COMPACT_AT = Number(process.env.AGENTBOX_USAGE_COMPACT_AT ?? 20_000);
-const KEEP_ON_COMPACT = Number(process.env.AGENTBOX_USAGE_KEEP ?? 5_000);
+const COMPACT_AT = envNumber("AGENTBOX_USAGE_COMPACT_AT", 20_000);
+const KEEP_ON_COMPACT = envNumber("AGENTBOX_USAGE_KEEP", 5_000);
 
 export class UsageLog {
   private nextSeq = 1;

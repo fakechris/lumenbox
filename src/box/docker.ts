@@ -7,6 +7,7 @@
  * reimplement. Every call is execFile with an argument array — no shell.
  */
 
+import { envNumber } from "../config.ts";
 import { execFile } from "node:child_process";
 import { randomBytes } from "node:crypto";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
@@ -113,11 +114,11 @@ export function defaultBoxConfig(overrides: Partial<BoxConfig> = {}): BoxConfig 
   return {
     containerName: process.env.AGENTBOX_CONTAINER ?? DEFAULT_CONTAINER,
     image: process.env.AGENTBOX_IMAGE ?? DEFAULT_IMAGE,
-    boxdPort: Number(process.env.AGENTBOX_BOXD_PORT ?? 0),
+    boxdPort: envNumber("AGENTBOX_BOXD_PORT", 0),
     token: loadBoxToken(),
     host: process.env.AGENTBOX_BOX_HOST ?? resolveDockerHostAddress(),
-    displayWidth: Number(process.env.AGENTBOX_WIDTH ?? 1280),
-    displayHeight: Number(process.env.AGENTBOX_HEIGHT ?? 800),
+    displayWidth: envNumber("AGENTBOX_WIDTH", 1280),
+    displayHeight: envNumber("AGENTBOX_HEIGHT", 800),
     runArgs: [],
     withHost: process.env.AGENTBOX_HOST_ENABLED === "1",
     ...overrides,

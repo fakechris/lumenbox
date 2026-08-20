@@ -20,6 +20,7 @@
  * future turn and crowds out what matters. The sentinel is explicit and the parser honours it.
  */
 
+import { envNumber } from "../config.ts";
 import type Anthropic from "@anthropic-ai/sdk";
 import type { AgentRegistry } from "../agents/registry.ts";
 import type { ProviderProfile } from "./provider.ts";
@@ -39,7 +40,7 @@ import {
  * learned early in a session is not lost if the process stops. Zero disables extraction entirely,
  * which is the honest way to turn off a feature that spends money.
  */
-export const EXTRACT_EVERY = Number(process.env.AGENTBOX_EXTRACT_EVERY ?? 3);
+export const EXTRACT_EVERY = envNumber("AGENTBOX_EXTRACT_EVERY", 3);
 
 /**
  * How many extractions before those exchanges are condensed into one episode.
@@ -47,7 +48,7 @@ export const EXTRACT_EVERY = Number(process.env.AGENTBOX_EXTRACT_EVERY ?? 3);
  * An episode exists so that when the individual notes decay, what they were about survives. Four
  * extractions is roughly a session's worth.
  */
-export const EPISODE_EVERY = Number(process.env.AGENTBOX_EPISODE_EVERY ?? 4);
+export const EPISODE_EVERY = envNumber("AGENTBOX_EPISODE_EVERY", 4);
 
 /** How many existing memories the extractor is shown, so it can avoid repeating them. */
 const RELEVANT_LIMIT = 12;

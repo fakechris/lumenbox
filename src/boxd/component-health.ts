@@ -25,6 +25,8 @@
  * being retried on every single one.
  */
 
+import { envNumber } from "../config.ts";
+
 const MINUTE_MS = 60_000;
 
 export interface ComponentPolicy {
@@ -43,10 +45,10 @@ export interface ComponentPolicy {
 
 export const DEFAULT_POLICY: ComponentPolicy = {
   windowMs: Number(process.env.BOXD_RESTART_WINDOW_MS ?? 10 * MINUTE_MS),
-  maxInWindow: Number(process.env.BOXD_MAX_RESTARTS ?? 8),
-  backoffBaseMs: Number(process.env.BOXD_BACKOFF_BASE_MS ?? 15_000),
+  maxInWindow: envNumber("BOXD_MAX_RESTARTS", 8),
+  backoffBaseMs: envNumber("BOXD_BACKOFF_BASE_MS", 15_000),
   backoffMaxMs: Number(process.env.BOXD_BACKOFF_MAX_MS ?? 5 * MINUTE_MS),
-  giveUpAfterEpisodes: Number(process.env.BOXD_GIVE_UP_EPISODES ?? 2),
+  giveUpAfterEpisodes: envNumber("BOXD_GIVE_UP_EPISODES", 2),
   // The dock goes with it: without a compositor it paints an opaque slab, which is worse
   // than not having it.
   optional: ["picom", "plank"],

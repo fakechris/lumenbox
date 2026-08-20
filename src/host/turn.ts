@@ -6,6 +6,7 @@
  * background work, and the abort has to land between tool calls.
  */
 
+import { envNumber } from "../config.ts";
 import type Anthropic from "@anthropic-ai/sdk";
 import type { AgentRecord, AgentRegistry } from "../agents/registry.ts";
 import type { AgentBus, InboundMessage } from "../agents/bus.ts";
@@ -62,7 +63,7 @@ import type { Effort, ProviderProfile } from "./provider.ts";
  * a fault rather than a finish — a silent stop looks exactly like a completed
  * turn, which is the worst way to fail.
  */
-const MAX_ROUNDS = Number(process.env.AGENTBOX_MAX_ROUNDS ?? 400);
+const MAX_ROUNDS = envNumber("AGENTBOX_MAX_ROUNDS", 400);
 
 /**
  * How many of the most recent screenshots survive an in-turn prune.
@@ -70,7 +71,7 @@ const MAX_ROUNDS = Number(process.env.AGENTBOX_MAX_ROUNDS ?? 400);
  * One, because one is what the decision needs: an agent choosing where to click needs the screen as
  * it is now. Two is defensible for before/after comparisons and costs another ~1,600 tokens a round.
  */
-const KEEP_IMAGES = Number(process.env.AGENTBOX_KEEP_IMAGES ?? 1);
+const KEEP_IMAGES = envNumber("AGENTBOX_KEEP_IMAGES", 1);
 
 /**
  * How many times one turn may shed content and retry after the provider rejects the request.
@@ -78,7 +79,7 @@ const KEEP_IMAGES = Number(process.env.AGENTBOX_KEEP_IMAGES ?? 1);
  * Bounded so a provider that rejects everything cannot become an infinite loop. Each attempt sheds
  * strictly more than the last, so three is enough to go from "all screenshots" to "one" to "none".
  */
-const MAX_SHED_ATTEMPTS = Number(process.env.AGENTBOX_MAX_SHED_ATTEMPTS ?? 3);
+const MAX_SHED_ATTEMPTS = envNumber("AGENTBOX_MAX_SHED_ATTEMPTS", 3);
 
 /** What kind of "too big" a provider is complaining about, or undefined if it is not that. */
 type Overflow = "context-window" | "too-many-images";

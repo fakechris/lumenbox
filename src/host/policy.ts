@@ -29,6 +29,7 @@
  * architecture exists to avoid. Limits arrive as configuration; enforcement is local.
  */
 
+import { envNumber } from "../config.ts";
 import { appendFileSync, existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import { createHash, randomUUID } from "node:crypto";
 import { dirname, join } from "node:path";
@@ -111,15 +112,22 @@ export interface PolicyLimits {
 }
 
 export const DEFAULT_LIMITS: PolicyLimits = {
-  budgetTokens: envNumber("AGENTBOX_BUDGET_TOKENS"),
-  budgetWindowHours: envNumber("AGENTBOX_BUDGET_WINDOW_HOURS") ?? 24,
-  wakesPerWindow: envNumber("AGENTBOX_WAKES_PER_WINDOW") ?? 30,
-  wakeWindowMinutes: envNumber("AGENTBOX_WAKE_WINDOW_MINUTES") ?? 10,
+  budgetTokens: envLimit("AGENTBOX_BUDGET_TOKENS"),
+  budgetWindowHours: envLimit("AGENTBOX_BUDGET_WINDOW_HOURS") ?? 24,
+  wakesPerWindow: envLimit("AGENTBOX_WAKES_PER_WINDOW") ?? 30,
+  wakeWindowMinutes: envLimit("AGENTBOX_WAKE_WINDOW_MINUTES") ?? 10,
   approvalRequiredTools: envList("AGENTBOX_APPROVAL_TOOLS"),
   approvalRequiredCommands: envList("AGENTBOX_APPROVAL_COMMANDS"),
 };
 
-function envNumber(name: string): number | undefined {
+/**
+ * A limit, or `undefined` when nobody set one.
+ *
+ * Different from `envNumber` in config.ts, which answers "this tunable, or its default". Here the
+ * absence is meaningful — no budget at all is a valid configuration — so the two must not share a
+ * name or a shape.
+ */
+function envLimit(name: string): number | undefined {
   const raw = process.env[name];
   if (raw === undefined || raw.trim() === "") return undefined;
   const value = Number(raw);
@@ -510,8 +518,8 @@ export class PolicyGate {
   }
 }
 
-const COMPACT_AT = Number(process.env.AGENTBOX_POLICY_COMPACT_AT ?? 20_000);
-const KEEP_ON_COMPACT = Number(process.env.AGENTBOX_POLICY_KEEP ?? 5_000);
+const COMPACT_AT = envNumber("AGENTBOX_POLICY_COMPACT_AT", 20_000);
+const KEEP_ON_COMPACT = envNumber("AGENTBOX_POLICY_KEEP", 5_000);
 
 // ── describing and binding ────────────────────────────────────────────────────────────
 

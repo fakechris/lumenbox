@@ -15,6 +15,7 @@ import {
   DEFAULT_CONFIG,
   configPath,
   ensureConfigFile,
+  envNumber,
   loadConfig,
 } from "./config.ts";
 
@@ -95,4 +96,45 @@ test("the file is written on first use, so the settings are findable", () => {
   writeFileSync(path, '{"activityLimit": 7}\n', "utf8");
   ensureConfigFile();
   assert.equal(loadConfig().activityLimit, 7);
+});
+
+
+test("a setting that is not a number falls back to the default, loudly", () => {
+  // Every tunable here used to be `Number(process.env.X ?? default)`, in forty-two places.
+  // `Number("4000x")` is NaN and every comparison against NaN is false, so a typo in a value did
+  // not fall back to the default — it removed the limit. AGENTBOX_MEMORY_BUDGET=4000x put the whole
+  // memory file into every system prompt.
+  const said: string[] = [];
+  const error = console.error;
+  console.error = (line: string) => said.push(line);
+  try {
+    process.env.AGENTBOX_TEST_NUMBER = "4000x";
+    assert.equal(envNumber("AGENTBOX_TEST_NUMBER", 4_000), 4_000);
+    assert.ok(
+      said.some(line => /AGENTBOX_TEST_NUMBER="4000x" is not a number; using 4000/.test(line)),
+      // Silence would be indistinguishable from a setting that had no effect, and the person who
+      // set it would go looking for the bug in the product.
+      `expected it to say so, got ${JSON.stringify(said)}`
+    );
+
+    process.env.AGENTBOX_TEST_NUMBER = "12";
+    assert.equal(envNumber("AGENTBOX_TEST_NUMBER", 4_000), 12);
+
+    // Absent and empty both mean "not set", and neither is worth a warning.
+    process.env.AGENTBOX_TEST_NUMBER = "  ";
+    assert.equal(envNumber("AGENTBOX_TEST_NUMBER", 7), 7);
+    delete process.env.AGENTBOX_TEST_NUMBER;
+    assert.equal(envNumber("AGENTBOX_TEST_NUMBER", 7), 7);
+    assert.equal(said.length, 1, "one complaint, for the one unreadable value");
+
+    // Fractions and zero are settings, not errors: 0.35 is a real default here and a port of 0
+    // means "pick one".
+    process.env.AGENTBOX_TEST_NUMBER = "0.35";
+    assert.equal(envNumber("AGENTBOX_TEST_NUMBER", 1), 0.35);
+    process.env.AGENTBOX_TEST_NUMBER = "0";
+    assert.equal(envNumber("AGENTBOX_TEST_NUMBER", 5), 0);
+  } finally {
+    console.error = error;
+    delete process.env.AGENTBOX_TEST_NUMBER;
+  }
 });

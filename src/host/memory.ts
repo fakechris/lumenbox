@@ -27,6 +27,8 @@
  * is what makes them usable.
  */
 
+import { envNumber } from "../config.ts";
+
 /** A single thing remembered. One JSON object per line, appended, never edited in place. */
 export interface MemoryRecord {
   at: string;
@@ -62,7 +64,7 @@ export const MAX_RECORD_CHARS = 500;
  * A budget rather than a count, because a count of fifty three-word facts and a count of fifty
  * three-line ones cost very differently — and this is paid on every request.
  */
-export const MEMORY_CHAR_BUDGET = Number(process.env.AGENTBOX_MEMORY_BUDGET ?? 4_000);
+export const MEMORY_CHAR_BUDGET = envNumber("AGENTBOX_MEMORY_BUDGET", 4_000);
 
 /**
  * How fast an unvouched-for memory loses its claim on the prompt, in days.
@@ -232,7 +234,7 @@ export function selectRelevant(
  * thing everyone needs — but the shared tier is written by every agent, so it grows N times as fast
  * and a generous budget here would push out an agent's own working knowledge.
  */
-export const SHARED_CHAR_BUDGET = Number(process.env.AGENTBOX_SHARED_MEMORY_BUDGET ?? 1_500);
+export const SHARED_CHAR_BUDGET = envNumber("AGENTBOX_SHARED_MEMORY_BUDGET", 1_500);
 
 /**
  * The team's memory as it appears in the prompt.
