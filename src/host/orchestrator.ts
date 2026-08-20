@@ -83,6 +83,7 @@ export class Orchestrator {
    * estimate.
    */
   readonly policy = new PolicyGate({
+    spendUnavailable: () => this.usage.unavailable(),
     spentSince: sinceMs => {
       const totals = this.usage.totalsSince(sinceMs);
       return totals.inputTokens + totals.outputTokens;

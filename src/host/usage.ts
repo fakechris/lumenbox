@@ -67,6 +67,16 @@ const KEEP_ON_COMPACT = envNumber("AGENTBOX_USAGE_KEEP", 5_000);
 export class UsageLog {
   private nextSeq = 1;
   private lines = 0;
+  /**
+   * Why the numbers here cannot be trusted, once something has gone wrong with the file.
+   *
+   * A swallowed write means spend happened and was not counted; a failed read means the total is
+   * unknown. Both used to come back as zero, which a budget cannot tell from "nothing spent" — so
+   * the one condition under which a ceiling matters most was the one that removed it. Sticky for
+   * the life of the process: a write that failed is not un-failed by a later one succeeding, and
+   * the records it lost are gone.
+   */
+  private unavailableReason: string | undefined;
 
   constructor(
     private readonly path: string = usageLogPath(),
@@ -110,6 +120,7 @@ export class UsageLog {
       // Never fail a turn over accounting. A lost record is a billing question; a failed turn is
       // the user's work.
       const detail = error instanceof Error ? error.message : String(error);
+      this.unavailableReason ??= `a usage record could not be written (${detail})`;
       this.onWarn(`usage: cannot write ${this.path} (${detail})`);
     }
     return full;
@@ -131,9 +142,24 @@ export class UsageLog {
         })
         .filter(record => typeof record.seq === "number" && record.seq > afterSeq)
         .slice(0, limit);
-    } catch {
+    } catch (error) {
+      // A whole-file read failure, not a torn line — those are skipped per line above and are the
+      // normal cost of append-only.
+      const detail = error instanceof Error ? error.message : String(error);
+      this.unavailableReason ??= `the usage log could not be read (${detail})`;
+      this.onWarn(`usage: cannot read ${this.path} (${detail})`);
       return [];
     }
+  }
+
+  /**
+   * Why spend cannot be measured, or `undefined` when it can.
+   *
+   * Exists so a budget can refuse rather than fail open. Returning a number would have meant
+   * inventing one, and every number here is either a lie or a licence to spend.
+   */
+  unavailable(): string | undefined {
+    return this.unavailableReason;
   }
 
   /**

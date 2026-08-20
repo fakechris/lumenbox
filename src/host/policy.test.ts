@@ -8,7 +8,7 @@
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
@@ -393,6 +393,80 @@ test("the budget window rolls, rather than being decorative text", () => {
     // anything having been reset by hand and without the usage file having been truncated.
     clock = new Date("2026-08-21T12:00:00Z");
     assert.equal(gate.check(call).allow, true);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+
+test("an approval that cannot be recorded is not used", () => {
+  // The grant is consumed in memory before its row is written. If that row never reaches the log, a
+  // replay after a restart finds it granted-and-unused and permits the identical destructive action
+  // a second time without asking anyone. Everything else here stands unlogged — a turn dying over
+  // bookkeeping is worse — but consent that cannot be recorded is the exception.
+  const dir = mkdtempSync(join(tmpdir(), "agentbox-policy-"));
+  try {
+    const path = join(dir, "policy.jsonl");
+    const limits: PolicyLimits = {
+      budgetWindowHours: 24,
+      wakesPerWindow: 30,
+      wakeWindowMinutes: 10,
+      approvalRequiredCommands: ["rm -rf"],
+      approvalRequiredTools: [],
+    };
+    const gate = new PolicyGate({ path, limits });
+    const request = toolRequest("rm -rf /srv/data");
+
+    const asked = gate.check(request);
+    assert.equal(asked.allow, false);
+    assert.ok(!asked.allow && asked.approval, "it asks a person");
+    assert.equal(gate.grant(asked.approval.id, "alice"), true);
+
+    // The log becomes unwritable between the grant and its use.
+    rmSync(path);
+    mkdirSync(path, { recursive: true });
+
+    const used = gate.check(request);
+    assert.equal(used.allow, false, "consent that cannot be written down is not exercised");
+    assert.ok(!used.allow && /could not be recorded/.test(used.reason));
+    assert.ok(!used.allow && /approved once and run twice/.test(used.reason));
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+
+test("a budget refuses when spend cannot be measured, rather than assuming zero", () => {
+  // An unreadable or unwritable usage log reported zero spent, and a budget cannot tell that from
+  // "nothing has been spent" — so the ceiling stopped applying at exactly the moment its accounting
+  // broke, which is when it matters most.
+  const dir = mkdtempSync(join(tmpdir(), "agentbox-policy-"));
+  try {
+    const limits: PolicyLimits = {
+      ...DEFAULT_LIMITS,
+      budgetTokens: 1_000,
+      budgetWindowHours: 24,
+    };
+    const call: PolicyRequest = { kind: "model-call", agentId: "a", agentName: "Ada", round: 0 };
+
+    const broken = new PolicyGate({
+      path: join(dir, "policy.jsonl"),
+      limits,
+      spentSince: () => 0,
+      spendUnavailable: () => "the usage log could not be read (EACCES)",
+    });
+    const refused = broken.check(call);
+    assert.equal(refused.allow, false);
+    assert.ok(!refused.allow && /cannot be measured/.test(refused.reason));
+    assert.ok(!refused.allow && /EACCES/.test(refused.reason), "and says which failure it was");
+
+    // With no ceiling configured nothing depends on the number, so refusing would be gratuitous.
+    const unbudgeted = new PolicyGate({
+      path: join(dir, "policy2.jsonl"),
+      limits: { ...limits, budgetTokens: undefined },
+      spendUnavailable: () => "the usage log could not be read (EACCES)",
+    });
+    assert.equal(unbudgeted.check(call).allow, true);
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }

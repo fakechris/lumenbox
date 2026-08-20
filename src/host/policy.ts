@@ -177,6 +177,14 @@ export interface PolicyGateOptions {
    * records happened to push the old ones out of the file.
    */
   spentSince?: (sinceMs: number) => number;
+  /**
+   * Why spend cannot be measured right now, when it cannot.
+   *
+   * Separate from `spentSince` because "unknown" is not a number, and the two used to share one:
+   * an unreadable or unwritable usage log reported zero spent, so a configured ceiling stopped
+   * applying at exactly the moment its accounting broke.
+   */
+  spendUnavailable?: () => string | undefined;
   now?: () => Date;
   log?: (line: string) => void;
 }
@@ -195,6 +203,7 @@ export class PolicyGate {
   private readonly now: () => Date;
   private readonly log: (line: string) => void;
   private readonly spentSince: (sinceMs: number) => number;
+  private readonly spendUnavailable: () => string | undefined;
 
   /** Agents whose current turn a person has asked to stop. */
   private readonly stopped = new Set<string>();
@@ -211,6 +220,7 @@ export class PolicyGate {
     this.now = options.now ?? (() => new Date());
     this.log = options.log ?? (() => {});
     this.spentSince = options.spentSince ?? (() => 0);
+    this.spendUnavailable = options.spendUnavailable ?? (() => undefined);
     this.replay();
   }
 
@@ -235,7 +245,22 @@ export class PolicyGate {
     // After the decision row, not before it: the log should read as the story it is — we checked, we
     // refused, so we asked a person. Both are written before this returns, so nothing acts on a
     // decision that is not yet on the record.
-    if (consequence !== undefined) this.append(consequence);
+    if (consequence !== undefined) {
+      const written = this.append(consequence);
+      // One consequence cannot be allowed to go unrecorded: consuming a person's approval. The
+      // grant has already been removed from memory, so if the row saying so does not reach the log,
+      // a replay after a restart finds it granted-and-unused and permits the identical destructive
+      // action a second time without asking anyone. Everything else here stands unlogged, because a
+      // turn dying over bookkeeping is worse; consent that cannot be recorded is the exception.
+      if (!written && consequence.kind === "approval-used") {
+        const reason =
+          `This was approved, but the approval could not be recorded, so it has not been used. ` +
+          `Acting on consent that is not on the record would let the same action be approved once ` +
+          `and run twice. Ask again once the policy log is writable.`;
+        this.log(`refused ${describeRequest(request)}: the approval could not be recorded`);
+        return { allow: false, reason };
+      }
+    }
     if (!decision.allow) {
       this.log(`refused ${describeRequest(request)}: ${decision.reason}`);
     }
@@ -263,7 +288,21 @@ export class PolicyGate {
 
   private decideSpend(): PolicyDecision {
     const budget = this.limits.budgetTokens;
+    // No ceiling means nothing depends on the number, so a broken accounting file is not this
+    // function's problem and refusing over it would be gratuitous.
     if (budget === undefined) return { allow: true };
+
+    const unavailable = this.spendUnavailable();
+    if (unavailable !== undefined) {
+      return {
+        allow: false,
+        reason:
+          `This box has a ${budget}-token budget and its spending cannot be measured: ` +
+          `${unavailable}. Refusing rather than assuming nothing has been spent — that assumption ` +
+          `is exactly how a ceiling stops applying at the moment its accounting breaks. Stop here ` +
+          `and say so.`,
+      };
+    }
     const windowMs = Math.max(0, this.limits.budgetWindowHours) * 3_600_000;
     const spent = this.spentSince(this.now().getTime() - windowMs);
     if (spent < budget) return { allow: true };
@@ -416,16 +455,18 @@ export class PolicyGate {
 
   // ── the file ────────────────────────────────────────────────────────────────────────
 
-  private append(event: PolicyEvent): void {
+  private append(event: PolicyEvent): boolean {
     try {
       mkdirSync(dirname(this.path), { recursive: true });
       appendFileSync(this.path, `${JSON.stringify(event)}\n`, "utf8");
+      return true;
     } catch (error) {
       // A policy decision must not fail because its log could not be written — the alternative is a
       // turn that dies over bookkeeping. But it is said loudly, because an unrecorded refusal is
       // exactly what an audit is for.
       const detail = error instanceof Error ? error.message : String(error);
       this.log(`policy: cannot write ${this.path} (${detail}); the decision stands but is unlogged`);
+      return false;
     }
   }
 
