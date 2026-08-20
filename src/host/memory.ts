@@ -48,7 +48,15 @@ export interface MemoryRecord {
   about?: string;
 }
 
-export type MemoryKind = "fact" | "note" | "episode";
+/**
+ * `retraction` is not a memory; it is a record that an earlier one is no longer true.
+ *
+ * It exists because memory could only accrete. An agent that recorded "the deployment region is
+ * us-east-1" and later learned otherwise could write the new fact, but not withdraw the old one —
+ * so both sat in the prompt, both dated, both presented as things it knows. Nothing here tries to
+ * *detect* the contradiction, which would mean guessing at meaning; the agent that knows says so.
+ */
+export type MemoryKind = "fact" | "note" | "episode" | "retraction";
 
 /**
  * One item's ceiling.
@@ -78,6 +86,7 @@ const HALF_LIFE_DAYS: Record<MemoryKind, number> = {
   fact: 365,
   note: 30,
   episode: 90,
+  retraction: 365,
 };
 
 /** Relative claim on the prompt at equal age. An episode summarises many facts, so it outranks one. */
@@ -85,6 +94,8 @@ const WEIGHT: Record<MemoryKind, number> = {
   fact: 1,
   note: 0.5,
   episode: 1.5,
+  // Never scored: a retraction is removed during dedupe and never reaches recall.
+  retraction: 0,
 };
 
 const DAY_MS = 24 * 60 * 60 * 1000;
@@ -152,6 +163,12 @@ export function dedupe(records: readonly MemoryRecord[]): MemoryRecord[] {
   for (const record of records) {
     const key = dedupeKey(record.text);
     if (key === "") continue;
+    if (record.kind === "retraction") {
+      // Withdraws whatever it names, and is not itself remembered. Order matters and is the file's:
+      // something recorded again *after* a retraction is a fresh statement, not a withdrawn one.
+      byKey.delete(key);
+      continue;
+    }
     const existing = byKey.get(key);
     // A deliberate fact is never replaced by an automatic note repeating it: the note adds nothing
     // and would restart the decay clock on something already vouched for.

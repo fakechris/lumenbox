@@ -16,6 +16,7 @@ import { join } from "node:path";
 import { AgentRegistry } from "../agents/registry.ts";
 import { AgentBus } from "../agents/bus.ts";
 import { dispatchTool, type ToolContext } from "./tools.ts";
+import { recall, renderMemory } from "./memory.ts";
 import {
   describeTodos,
   isTodoStatus,
@@ -191,6 +192,46 @@ test("a malformed SetTodos changes nothing, rather than erasing the list", async
     // And clearing still works when it is asked for.
     await dispatchTool("SetTodos", { todos: [] }, context);
     assert.equal((registry.readDurableState(ada.id).todos ?? []).length, 0);
+  } finally {
+    cleanup();
+  }
+});
+
+
+test("RememberFact can withdraw what it replaces, and refuses when nothing matches", async () => {
+  const { registry, agent: ada, context, cleanup } = toolFixture();
+  try {
+    await dispatchTool("RememberFact", { fact: "deployment region is us-east-1" }, context);
+
+    // A correction that names nothing is refused rather than silently added alongside: an agent
+    // that believes it corrected something and did not will act on the correction while the prompt
+    // keeps showing the old line.
+    const missed = await dispatchTool(
+      "RememberFact",
+      { fact: "deployment region is eu-west-1", replaces: "the billing address" },
+      context
+    );
+    assert.equal(missed.isError, true);
+    assert.match(missed.text, /Nothing remembered matches/);
+    assert.equal(registry.readMemoryRecords(ada.id).length, 1, "and nothing was added");
+
+    const corrected = await dispatchTool(
+      "RememberFact",
+      {
+        fact: "deployment region is eu-west-1",
+        replaces: "deployment region is us-east-1",
+      },
+      context
+    );
+    assert.equal(corrected.isError, undefined);
+    assert.match(corrected.text, /has been withdrawn/);
+
+    // The log keeps all three lines — it is a record of what was believed when, which is what makes
+    // a wrong correction recoverable — and the view the prompt is built from has one.
+    assert.equal(registry.readMemoryRecords(ada.id).length, 3);
+    const view = renderMemory(recall(registry.readMemoryRecords(ada.id)));
+    assert.ok(!view.includes("us-east-1"), `still showing the old region: ${view}`);
+    assert.ok(view.includes("eu-west-1"));
   } finally {
     cleanup();
   }

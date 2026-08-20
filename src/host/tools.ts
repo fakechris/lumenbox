@@ -496,6 +496,13 @@ export function buildTools(hasBox: boolean, vision = true): Anthropic.Tool[] {
               "what only your own work needs, and is the default: a wrong 'team' costs everyone " +
               "prompt space forever, while a wrong 'self' costs one repeated question.",
           },
+          replaces: {
+            type: "string",
+            description:
+              "An earlier memory this one supersedes, quoted closely enough to recognise. Without " +
+              "it the old one stays alongside the new one and both are presented to you later as " +
+              "things you know.",
+          },
         },
         required: ["fact"],
       },
@@ -874,6 +881,43 @@ export async function dispatchTool(
       // without that being visible.
       const own = context.registry.readMemoryRecords(context.agent.id);
       const team = context.registry.readSharedMemory();
+
+      // What this fact withdraws, if anything. Written as its own record rather than by editing the
+      // file: memory is an append-only log of what was believed when, and that is what makes a
+      // wrong correction recoverable. Without this, memory could only accrete — an agent could
+      // record that it had learned better but not withdraw what it had learned wrongly, so both
+      // sat in the prompt, dated and presented as things it knows.
+      const replaces = String(input.replaces ?? "").trim();
+      let retracted = false;
+      if (replaces !== "") {
+        const target = dedupeKey(replaces);
+        const retraction = {
+          at: new Date().toISOString(),
+          kind: "retraction" as const,
+          text: replaces,
+          source: "RememberFact.replaces",
+        };
+        if (target !== "" && own.some(record => dedupeKey(record.text) === target)) {
+          context.registry.appendMemoryRecords(context.agent.id, [retraction]);
+          retracted = true;
+        }
+        if (target !== "" && team.some(record => dedupeKey(record.text) === target)) {
+          context.registry.appendSharedMemory(context.agent.id, [retraction]);
+          retracted = true;
+        }
+        if (!retracted) {
+          // Said, because an agent that believes it corrected something and did not will act on
+          // the correction while the prompt keeps showing the old line.
+          return {
+            text:
+              `Nothing remembered matches "${replaces}", so nothing was withdrawn and nothing was ` +
+              `added. Quote the memory you mean more closely, or leave \`replaces\` out to keep ` +
+              `this as a new one alongside it.`,
+            isError: true,
+          };
+        }
+      }
+
       if ([...own, ...team].some(record => dedupeKey(record.text) === key)) {
         // Told, not silently swallowed: an agent that thinks a write failed will write it again in
         // different words, which is exactly what the dedupe key exists to prevent.
@@ -889,12 +933,15 @@ export async function dispatchTool(
         // being about whoever asks next, which in a team is worse than not recording it.
         ...(context.caller?.userId !== undefined ? { about: context.caller.userId } : {}),
       };
+      const withdrawn = retracted ? " The one it replaces has been withdrawn." : "";
       if (shared) {
         context.registry.appendSharedMemory(context.agent.id, [record]);
-        return { text: "Kept and shared. Every agent here will have it on their next turn." };
+        return {
+          text: `Kept and shared. Every agent here will have it on their next turn.${withdrawn}`,
+        };
       }
       context.registry.appendMemoryRecords(context.agent.id, [record]);
-      return { text: "Kept. It will be in your instructions on future turns." };
+      return { text: `Kept. It will be in your instructions on future turns.${withdrawn}` };
     }
 
     default:

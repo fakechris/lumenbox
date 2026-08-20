@@ -332,3 +332,46 @@ test("the team budget is tighter than an agent's own", () => {
   // would push out an agent's own working knowledge.
   assert.ok(SHARED_CHAR_BUDGET < MEMORY_CHAR_BUDGET);
 });
+
+
+test("a memory can be withdrawn, so a correction does not sit beside the thing it corrects", () => {
+  // Memory could only accrete. An agent that recorded "the deployment region is us-east-1" and
+  // later learned otherwise could write the new fact but not withdraw the old one, so both sat in
+  // the prompt, both dated, both presented as things it knows. Nothing here *detects* the
+  // contradiction — that would mean guessing at meaning — the agent that knows says so.
+  const records: MemoryRecord[] = [
+    { at: "2026-06-01T00:00:00Z", kind: "fact", text: "deployment region is us-east-1" },
+    { at: "2026-08-01T00:00:00Z", kind: "retraction", text: "deployment region is us-east-1" },
+    { at: "2026-08-01T00:00:01Z", kind: "fact", text: "deployment region is eu-west-1" },
+  ];
+
+  const kept = dedupe(records).map(record => record.text);
+  assert.deepEqual(kept, ["deployment region is eu-west-1"]);
+
+  // A retraction is not itself a memory: it must not appear in the prompt as a line saying what is
+  // no longer true.
+  const rendered = renderMemory(recall(records, new Date("2026-08-20T00:00:00Z")));
+  assert.ok(!rendered.includes("us-east-1"));
+  assert.match(rendered, /eu-west-1/);
+});
+
+test("a retraction withdraws what came before it, not what comes after", () => {
+  // Order is the file's. Something recorded again after a retraction is a fresh statement, not a
+  // withdrawn one — otherwise an agent could never re-learn something it had once retracted.
+  const records: MemoryRecord[] = [
+    { at: "2026-06-01T00:00:00Z", kind: "fact", text: "the staging box is at 10.0.0.4" },
+    { at: "2026-07-01T00:00:00Z", kind: "retraction", text: "the staging box is at 10.0.0.4" },
+    { at: "2026-08-01T00:00:00Z", kind: "fact", text: "the staging box is at 10.0.0.4" },
+  ];
+  assert.deepEqual(
+    dedupe(records).map(record => record.text),
+    ["the staging box is at 10.0.0.4"]
+  );
+
+  // And a retraction naming something nobody remembers changes nothing.
+  const unrelated: MemoryRecord[] = [
+    { at: "2026-06-01T00:00:00Z", kind: "fact", text: "they prefer short answers" },
+    { at: "2026-07-01T00:00:00Z", kind: "retraction", text: "something never recorded" },
+  ];
+  assert.deepEqual(dedupe(unrelated).map(record => record.text), ["they prefer short answers"]);
+});
