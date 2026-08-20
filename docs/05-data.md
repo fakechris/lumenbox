@@ -104,6 +104,32 @@ Invariants, both load-bearing:
 
 Measured on a real 166-entry transcript: 26,473 tokens became 1,672.
 
+#### 2.2.2 Within one turn
+
+Compaction above runs once, before a turn. It cannot help a turn that outgrows the window on its own,
+and a computer-use turn does exactly that: one screenshot per round, up to `AGENTBOX_MAX_ROUNDS`
+(400) of them, all still being sent on the last one.
+
+Measured on eight real rounds against this box: the request was 71KB and an estimated 13,553 tokens,
+of which **94% was images**. So the guard is about images and nothing else:
+
+- **Before each request**, if the estimate exceeds the trigger, every screenshot except the newest is
+  replaced by `[screenshot removed to fit the context window]`. An agent deciding where to click
+  needs the screen as it is now; the screen thirty actions ago is a claim about the past that the
+  text already records. On those eight rounds this was an 82% reduction.
+- **Only the contents of tool results change**, so the `tool_use`/`tool_result` pairing the API
+  requires cannot be broken by it. Verified: all eight results and their ids survived.
+- **After a rejection**, the same shedding runs and the round is retried — images first, then all
+  images when the provider's complaint is about image *count* rather than size, then the oldest
+  oversized tool results. Bounded at `AGENTBOX_MAX_SHED_ATTEMPTS` (3), and when nothing further can
+  be shed it fails with what is actually wrong rather than retrying identically.
+
+Token estimation is 2.5 characters per token — not 4, which is roughly right for prose and badly
+optimistic for JSON, shell output and CJK, and errs in the direction that fails to compact when
+compaction was needed. Images are counted as a flat ~1,600 tokens each rather than by their base64
+length, which is wrong in both directions at once. The trigger follows the model's real context
+window when the provider reports one, so the same code is right for a 200k model and a 1M one.
+
 ### 2.3 `activity.jsonl`
 
 Append-only records of feed-worthy events, each with the time it happened. Bounded by

@@ -27,7 +27,19 @@ export interface ProviderProfile {
   /** Omitted for first-party Anthropic, where the SDK default is correct. */
   baseUrl?: string;
   model: string;
+  /** The cap on *output* tokens for one response. Not the context window; see `contextWindow`. */
   maxTokens: number;
+  /**
+   * How much the model can be sent, total. Drives compaction.
+   *
+   * Only set where it is actually known. Left undefined otherwise on purpose: a wrong number here
+   * either wastes most of the context or overruns it, and both fail late and confusingly.
+   * Compaction falls back to a conservative constant when this is absent, and prefers whatever the
+   * endpoint reports at runtime over either — see `src/host/compaction.ts`.
+   *
+   * `AGENTBOX_CONTEXT_WINDOW` overrides it for a custom endpoint.
+   */
+  contextWindow?: number;
 
   /**
    * Whether the model can actually see image content blocks.
@@ -54,6 +66,7 @@ const ANTHROPIC: ProviderProfile = {
   label: "Anthropic",
   model: "claude-opus-5",
   maxTokens: 64_000,
+  contextWindow: 1_000_000,
   vision: true,
   adaptiveThinking: true,
   effort: true,
@@ -80,6 +93,8 @@ const MINIMAX: ProviderProfile = {
   // Thinking counts against the cap, so a tight budget yields an empty response
   // with stop_reason max_tokens rather than an answer.
   maxTokens: 32_000,
+  // Deliberately unset: this endpoint's window is not documented anywhere I could verify, and
+  // guessing it is worse than falling back to the conservative default.
   vision: true,
   // Accepted but not implemented. Omitted so behaviour is not left to chance.
   adaptiveThinking: false,
@@ -99,6 +114,9 @@ function compatible(): ProviderProfile {
     baseUrl: process.env.AGENTBOX_BASE_URL,
     model: process.env.AGENTBOX_MODEL ?? "unknown",
     maxTokens: Number(process.env.AGENTBOX_MAX_TOKENS ?? 32_000),
+    ...(process.env.AGENTBOX_CONTEXT_WINDOW
+      ? { contextWindow: Number(process.env.AGENTBOX_CONTEXT_WINDOW) }
+      : {}),
     // Default every optional capability off: a wrong "yes" fails silently,
     // a wrong "no" merely costs a feature and says so.
     vision: truthy(process.env.AGENTBOX_VISION),

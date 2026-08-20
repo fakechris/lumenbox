@@ -18,7 +18,7 @@ import { AgentRegistry } from "../agents/registry.ts";
 import { AgentBus } from "../agents/bus.ts";
 import type { BoxClient } from "../box/client.ts";
 import { DisplayLease } from "../box/display-lease.ts";
-import { runTurn, TurnAborted } from "./turn.ts";
+import { runTurn, TurnAborted, type TranscriptEntry } from "./turn.ts";
 import { DEFAULT_POLICY } from "./compaction.ts";
 import { buildSystemPrompt } from "./prompt.ts";
 import { buildTools, dispatchTool } from "./tools.ts";
@@ -802,6 +802,158 @@ test("a turn still runs when the summariser fails", async () => {
   } finally {
     DEFAULT_POLICY.triggerTokens = previousTrigger;
     DEFAULT_POLICY.keepTailTokens = previousKeep;
+    cleanup();
+  }
+});
+
+/**
+ * A client whose stream rejects until the request gets small enough.
+ *
+ * `rejectWhile` decides, per request, whether the provider refuses it. That is the only honest way
+ * to test the recovery path: the point is not that we call a prune function, it is that a turn which
+ * would have died now finishes.
+ */
+function stubClientRejectingLargeRequests(
+  replies: Anthropic.Message[],
+  capture: Capture,
+  rejectWhile: (params: Anthropic.MessageCreateParams) => string | undefined
+): Anthropic {
+  let index = 0;
+  return {
+    messages: {
+      stream(params: Anthropic.MessageCreateParams) {
+        capture.params.push({ ...params, messages: [...params.messages] });
+        const refusal = rejectWhile(params);
+        const reply = replies[Math.min(index, replies.length - 1)]!;
+        return {
+          on() {
+            return this;
+          },
+          finalMessage: async () => {
+            if (refusal !== undefined) throw new Error(refusal);
+            index++;
+            return reply;
+          },
+        };
+      },
+    },
+  } as unknown as Anthropic;
+}
+
+/** Counts image blocks anywhere in a request, including nested in tool results. */
+function imagesIn(params: Anthropic.MessageCreateParams): number {
+  let count = 0;
+  const walk = (block: unknown): void => {
+    if (block === null || typeof block !== "object") return;
+    const typed = block as { type?: string; content?: unknown };
+    if (typed.type === "image") count++;
+    if (Array.isArray(typed.content)) typed.content.forEach(walk);
+  };
+  for (const message of params.messages) {
+    if (Array.isArray(message.content)) message.content.forEach(walk);
+  }
+  return count;
+}
+
+test("a turn that overflows mid-way sheds screenshots and finishes", async () => {
+  const { registry, cleanup } = fixture();
+  const previousTrigger = DEFAULT_POLICY.triggerTokens;
+  try {
+    const ada = registry.create({ name: "Ada" });
+    const bus = new AgentBus(registry, async () => {});
+    const { box } = stubBox();
+    const capture: Capture = { params: [] };
+
+    // High, so the proactive guard does not fire and the *reactive* path is what is under test.
+    DEFAULT_POLICY.triggerTokens = 10_000_000;
+
+    // Six rounds of computer use, then done. The provider refuses any request carrying more than
+    // two images — which is what an image-count limit looks like, and is unrelated to size.
+    const replies: Anthropic.Message[] = [
+      ...Array.from({ length: 6 }, (_, index) =>
+        message(
+          [toolUseBlock("computer", { actions: [{ action: "screenshot" }] }, `toolu_${index}`)],
+          "tool_use"
+        )
+      ),
+      message([textBlock("done")]),
+    ];
+    const client = stubClientRejectingLargeRequests(replies, capture, params =>
+      imagesIn(params) > 2 ? "400 request contained too many images or documents" : undefined
+    );
+
+    const events: { type: string; detail?: string }[] = [];
+    await runTurn(
+      ada,
+      [{ fromId: "user", fromName: "user", text: "drive the desktop", priority: false, receivedAt: "" }],
+      new AbortController().signal,
+      {
+        client,
+        registry,
+        bus,
+        box,
+        resolution: undefined,
+        displayIndex: 1,
+        onEvent: event => events.push(event as { type: string }),
+      }
+    );
+
+    // The turn completed. Before this existed it would have thrown on the round that crossed the
+    // provider's limit, mid-task, with nothing the user could do.
+    const texts = (registry.readTranscript(ada.id) as TranscriptEntry[]).filter(
+      entry => !("kind" in entry)
+    );
+    assert.ok(
+      JSON.stringify(texts).includes("done"),
+      "the turn reached its own conclusion rather than dying"
+    );
+
+    // It recovered by shedding, and said so as its own event rather than as agent prose.
+    const shed = events.filter(event => event.type === "compacted");
+    assert.ok(shed.length > 0, "the recovery is reported");
+    assert.ok(
+      shed.some(event => (event.detail ?? "").includes("too-many-images")),
+      `the reason survives: ${JSON.stringify(shed.map(event => event.detail))}`
+    );
+
+    // And every request that was actually accepted was within the provider's limit.
+    const accepted = capture.params.filter(params => imagesIn(params) <= 2);
+    assert.ok(accepted.length > 0);
+  } finally {
+    DEFAULT_POLICY.triggerTokens = previousTrigger;
+    cleanup();
+  }
+});
+
+test("a request that cannot be made to fit fails with a usable message", async () => {
+  const { registry, cleanup } = fixture();
+  const previousTrigger = DEFAULT_POLICY.triggerTokens;
+  try {
+    const ada = registry.create({ name: "Ada" });
+    const bus = new AgentBus(registry, async () => {});
+    const capture: Capture = { params: [] };
+    DEFAULT_POLICY.triggerTokens = 10_000_000;
+
+    // Refuses everything, and there are no images or long results to shed — so shedding cannot
+    // help. Looping until the retry budget runs out would hide the real problem.
+    const client = stubClientRejectingLargeRequests(
+      [message([textBlock("never sent")])],
+      capture,
+      () => "400 prompt is too long"
+    );
+
+    await assert.rejects(
+      runTurn(
+        ada,
+        [{ fromId: "user", fromName: "user", text: "hi", priority: false, receivedAt: "" }],
+        new AbortController().signal,
+        { client, registry, bus, box: undefined, resolution: undefined }
+      ),
+      /too large|nothing further can be dropped/
+    );
+    assert.ok(capture.params.length <= 2, "it did not retry blindly");
+  } finally {
+    DEFAULT_POLICY.triggerTokens = previousTrigger;
     cleanup();
   }
 });

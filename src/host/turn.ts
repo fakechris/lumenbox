@@ -15,6 +15,11 @@ import type { UsageLog } from "./usage.ts";
 import {
   activeWindow,
   buildSummaryPrompt,
+  estimateMessageTokens,
+  noteContextWindow,
+  policyForModel,
+  pruneOldImages,
+  shouldPruneImages,
   chooseCutPoint,
   droppedEntry,
   estimateTokens,
@@ -37,6 +42,140 @@ import type { Effort, ProviderProfile } from "./provider.ts";
  * turn, which is the worst way to fail.
  */
 const MAX_ROUNDS = Number(process.env.AGENTBOX_MAX_ROUNDS ?? 400);
+
+/**
+ * How many of the most recent screenshots survive an in-turn prune.
+ *
+ * One, because one is what the decision needs: an agent choosing where to click needs the screen as
+ * it is now. Two is defensible for before/after comparisons and costs another ~1,600 tokens a round.
+ */
+const KEEP_IMAGES = Number(process.env.AGENTBOX_KEEP_IMAGES ?? 1);
+
+/**
+ * How many times one turn may shed content and retry after the provider rejects the request.
+ *
+ * Bounded so a provider that rejects everything cannot become an infinite loop. Each attempt sheds
+ * strictly more than the last, so three is enough to go from "all screenshots" to "one" to "none".
+ */
+const MAX_SHED_ATTEMPTS = Number(process.env.AGENTBOX_MAX_SHED_ATTEMPTS ?? 3);
+
+/** What kind of "too big" a provider is complaining about, or undefined if it is not that. */
+type Overflow = "context-window" | "too-many-images";
+
+/**
+ * Reads a provider error for the two distinct ways a request can be too large.
+ *
+ * They are separate because the fixes are separate: a context-window overflow is about total tokens
+ * and is helped by dropping anything, while an image-count limit is about the *number* of images
+ * regardless of size and is only helped by dropping images. Treating them as one thing means
+ * shedding text to fix an image-count error and failing again with the same message.
+ *
+ * Matched on message text because that is what providers actually give us — status codes are shared
+ * with unrelated failures, and an over-broad match here would turn a genuine bug into a silent
+ * retry. Hence the specific phrases rather than a search for "token" or "large".
+ */
+function classifyOverflow(error: unknown): Overflow | undefined {
+  const message = (error instanceof Error ? error.message : String(error)).toLowerCase();
+  const imagePhrases = [
+    "too many images",
+    "too many images or documents",
+    "too much media",
+    "image count",
+  ];
+  if (imagePhrases.some(phrase => message.includes(phrase))) return "too-many-images";
+
+  const contextPhrases = [
+    "prompt is too long",
+    "context length",
+    "context_length_exceeded",
+    "maximum context",
+    "input length and `max_tokens` exceed",
+    "input token limit",
+    "too many total text bytes",
+    "request too large",
+  ];
+  if (contextPhrases.some(phrase => message.includes(phrase))) return "context-window";
+  return undefined;
+}
+
+/**
+ * Sheds content in place so the same round can be retried, and says what it did.
+ *
+ * Ordered by what costs least to lose. Images first, because they are the bulk and only the newest
+ * matters. Then all images, because an image-count limit is not about size. Only then text, and even
+ * then the oldest tool results rather than anything the model said — a tool result is evidence the
+ * transcript still holds, while dropping the model's own words rewrites the conversation it is
+ * mid-way through.
+ *
+ * `dropped` of zero means nothing further can be shed, which the caller turns into a clear error
+ * rather than another attempt.
+ */
+function shedForRetry(
+  messages: Anthropic.MessageParam[],
+  overflow: Overflow
+): { dropped: number; detail: string } {
+  // An image-count rejection is not about tokens, so keeping even one may be too many.
+  const keep = overflow === "too-many-images" ? 0 : KEEP_IMAGES;
+  const pruned = pruneOldImages(messages, keep);
+  if (pruned.dropped > 0) {
+    messages.length = 0;
+    messages.push(...pruned.messages);
+    return {
+      dropped: pruned.dropped,
+      detail:
+        `dropped ${pruned.dropped} screenshot(s)` +
+        (keep === 0 ? " (all of them: the limit is on image count, not size)" : "") +
+        `, about ${pruned.reclaimedTokens} tokens`,
+    };
+  }
+
+  const trimmed = truncateOldestResults(messages);
+  if (trimmed.dropped > 0) {
+    return {
+      dropped: trimmed.dropped,
+      detail: `truncated ${trimmed.dropped} older tool result(s), about ${trimmed.chars} characters`,
+    };
+  }
+  return { dropped: 0, detail: "nothing further can be dropped" };
+}
+
+/** Tool-result text kept when a retry has to reach for text. Enough to stay evidence. */
+const SHED_RESULT_LIMIT = 500;
+
+/**
+ * Shortens the oldest oversized tool results, leaving a note where the rest was.
+ *
+ * Oldest first and results only: the newest results are what the current decision rests on, and the
+ * model's own messages are not ours to rewrite. A truncated result says so, because an agent that
+ * silently sees less than it did would draw conclusions from an absence.
+ */
+function truncateOldestResults(
+  messages: Anthropic.MessageParam[]
+): { dropped: number; chars: number } {
+  let dropped = 0;
+  let chars = 0;
+  for (const message of messages) {
+    if (!Array.isArray(message.content)) continue;
+    for (const block of message.content) {
+      if ((block as { type?: string }).type !== "tool_result") continue;
+      const result = block as Anthropic.ToolResultBlockParam;
+      if (!Array.isArray(result.content)) continue;
+      for (const part of result.content) {
+        const typed = part as { type?: string; text?: string };
+        if (typed.type !== "text" || typeof typed.text !== "string") continue;
+        if (typed.text.length <= SHED_RESULT_LIMIT) continue;
+        chars += typed.text.length - SHED_RESULT_LIMIT;
+        typed.text =
+          `${typed.text.slice(0, SHED_RESULT_LIMIT)}\n[truncated to fit the context window]`;
+        dropped += 1;
+        // One pass, and only until something was actually freed: shedding the minimum keeps the
+        // most evidence, and the retry will come back if it was not enough.
+        if (chars > 20_000) return { dropped, chars };
+      }
+    }
+  }
+  return { dropped, chars };
+}
 /** Transcript entries replayed into a new turn's context. */
 const HISTORY_LIMIT = 60;
 
@@ -132,7 +271,7 @@ export type TurnEvent =
  * called nothing. An audit trail the model can forge is not an audit trail.
  * `tool_use` and `tool_result` blocks are a separate channel it cannot type into.
  */
-type TranscriptEntry =
+export type TranscriptEntry =
   | { role: "user" | "assistant"; text: string; at: string }
   /** An assistant turn that called tools; carries text and tool_use blocks. */
   | { role: "assistant"; kind: "blocks"; blocks: Anthropic.ContentBlockParam[]; at: string }
@@ -213,7 +352,9 @@ async function compactHistory(options: {
 }): Promise<TranscriptEntry[]> {
   const { history, agent, registry, client, provider, log, onCompacted } = options;
   const active = activeWindow(history as HistoryEntry[]);
-  const cut = chooseCutPoint(active);
+  // Derived from the model's real window once one response has reported it, so the same code is
+  // right for a 200k model and a 1M one.
+  const cut = chooseCutPoint(active, policyForModel(provider.model));
   if (!cut) return history;
 
   const olderEntries = active.slice(0, cut.index);
@@ -416,12 +557,40 @@ export async function runTurn(
   }
 
   async function runRounds(): Promise<void> {
+  // How many times this turn has had to shed content after a rejection. Bounded, because a provider
+  // that rejects everything must not become an infinite retry loop.
+  let shed = 0;
   for (let round = 0; round < MAX_ROUNDS; round++) {
     if (signal.aborted) {
       emit({ type: "aborted", agentId: agent.id });
       throw new TurnAborted();
     }
     emit({ type: "round", agentId: agent.id, round });
+
+    // Proactive guard, before the request rather than after it fails. Compaction of the *history*
+    // happened once, before this turn; it cannot help a turn that outgrows the window on its own,
+    // and a computer-use turn does exactly that — one screenshot per round, up to MAX_ROUNDS of
+    // them, all still being sent on the last one. Only the newest screen matters for deciding what
+    // to click; the rest is a claim about the past that the text already records.
+    const estimated = estimateMessageTokens(messages);
+    if (shouldPruneImages(estimated, provider.model)) {
+      const pruned = pruneOldImages(messages, KEEP_IMAGES);
+      if (pruned.dropped > 0) {
+        messages.length = 0;
+        messages.push(...pruned.messages);
+        const note =
+          `dropped ${pruned.dropped} older screenshot(s) to fit the context window ` +
+          `(about ${pruned.reclaimedTokens} tokens, from an estimated ${estimated})`;
+        console.error(`[compaction] ${agent.profile.name}: ${note}`);
+        emit({
+          type: "compacted",
+          agentId: agent.id,
+          covers: pruned.dropped,
+          summarised: true,
+          detail: note,
+        });
+      }
+    }
 
     const stream = client.messages.stream(
       {
@@ -456,6 +625,37 @@ export async function runTurn(
         emit({ type: "aborted", agentId: agent.id });
         throw new TurnAborted();
       }
+      // The request did not fit. This is recoverable and must be recovered from: the alternative is
+      // a turn that dies mid-task, which is the worst moment to find out. Shed what can be shed and
+      // retry the same round — the estimate is only an estimate, so the proactive guard above will
+      // sometimes be wrong and this is what catches it.
+      const overflow = classifyOverflow(error);
+      if (overflow !== undefined && shed < MAX_SHED_ATTEMPTS) {
+        shed += 1;
+        const relief = shedForRetry(messages, overflow);
+        console.error(
+          `[compaction] ${agent.profile.name}: request rejected (${overflow}); ` +
+            `${relief.detail}; retrying round ${round}`
+        );
+        emit({
+          type: "compacted",
+          agentId: agent.id,
+          covers: relief.dropped,
+          summarised: relief.dropped > 0,
+          detail: `request rejected (${overflow}); ${relief.detail}`,
+        });
+        if (relief.dropped === 0) {
+          // Nothing left to shed. Retrying would fail identically, so say what is actually wrong
+          // rather than looping until MAX_SHED_ATTEMPTS runs out.
+          throw new Error(
+            `The request is too large for ${provider.model} and nothing further can be dropped ` +
+              `(${overflow}). The turn has ${messages.length} messages. Consider a model with a ` +
+              `larger context window, or a smaller task.`
+          );
+        }
+        round -= 1; // retry this round rather than consuming one
+        continue;
+      }
       throw error;
     }
 
@@ -468,6 +668,15 @@ export async function runTurn(
       cacheWriteTokens: response.usage.cache_creation_input_tokens ?? 0,
     };
     emit({ type: "usage", agentId: agent.id, round, ...usage });
+    // Learn the real context window while we are here. Providers report it under different names —
+    // Anthropic does not report it at all today, several OpenAI-compatible endpoints do — so this
+    // reads whatever is present and falls back to the configured constants when nothing is.
+    noteContextWindow(
+      provider.model,
+      (response.usage as { max_tokens?: number; context_window?: number }).max_tokens ??
+        (response.usage as { context_window?: number }).context_window ??
+        provider.contextWindow
+    );
     deps.usage?.record({
       agentId: agent.id,
       agentName: agent.profile.name,
