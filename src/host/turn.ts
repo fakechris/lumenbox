@@ -65,9 +65,10 @@ import type { Effort, ProviderProfile } from "./provider.ts";
  *
  * This is a runaway guard, not a task budget. It has to be generous: one round is
  * one model turn, and a real GUI task spends a round per click, so a browser
- * workflow can legitimately run well past a hundred. Set it near the plausible ceiling of honest work and treat reaching it as
- * a fault rather than a finish — a silent stop looks exactly like a completed
- * turn, which is the worst way to fail.
+ * workflow can legitimately run well past a hundred. Set it near the plausible
+ * ceiling of honest work and treat reaching it as a fault rather than a finish —
+ * a silent stop looks exactly like a completed turn, which is the worst way to
+ * fail.
  */
 const MAX_ROUNDS = envNumber("AGENTBOX_MAX_ROUNDS", 400);
 

@@ -477,9 +477,9 @@ export class Orchestrator {
    * The starter team, created once when there are no agents at all.
    *
    * The alternative — ship a single blank agent and have it interview the user on its first turn —
-   * was considered. That is the better shape when there is a template gallery
-   * to choose from afterwards; without one it leaves a person on a blank page deciding what an agent
-   * even is. So: a small team that shows the shape of the thing by existing.
+   * is the better shape when there is a template gallery to choose from afterwards; without one it
+   * leaves a person on a blank page deciding what an agent even is. So: a small team that shows the
+   * shape of the thing by existing.
    *
    * Four rules, three of them learned rather than invented:
    *

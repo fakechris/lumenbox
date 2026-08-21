@@ -22,9 +22,9 @@
  *     so it outlives them.
  *
  * A separate "profile" tier next to a "recent" one was considered and rejected: that
- * classification has to come from somewhere, and a tier nobody can populate correctly is
- * worse than one list scored honestly. The three kinds above each have an unambiguous source, which
- * is what makes them usable.
+ * classification has to come from somewhere, and a tier nobody can populate correctly is worse
+ * than one list scored honestly. The three kinds above each have an unambiguous source, which is
+ * what makes them usable.
  */
 
 import { envNumber } from "../config.ts";

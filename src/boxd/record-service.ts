@@ -26,8 +26,7 @@
  *
  * The frame rate and quality are deliberately modest — 12fps, CRF 30 — because this
  * shares a CPU with the agents' browser. Recording at 60fps all-intra is what video
- * editing wants; that is a different purpose and roughly twenty times the
- * bitrate.
+ * editing wants; that is a different purpose and roughly twenty times the bitrate.
  */
 
 import { spawn, type ChildProcess } from "node:child_process";

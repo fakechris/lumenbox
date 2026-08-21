@@ -25,10 +25,11 @@
  * and an agent that thinks a person is waiting behaves differently from one doing background work. So
  * a scheduled turn carries what fired it.
  *
- * Scheduling lives in the orchestrator's own process: that split earns its keep when boxes
- * hibernate, and ours are running or they are not running at all, so an in-process timer is enough — at
- * the cost that a window passing while the orchestrator is restarting is simply missed, which is the
- * same trade as the paragraph above and is why it is acceptable.
+ * Scheduling lives in the orchestrator's own process rather than in a backend that delivers into
+ * the box — that split earns its keep when boxes hibernate, and ours are running or they are not
+ * running at all. An in-process timer is enough, at the cost that a window passing while the
+ * orchestrator is restarting is simply missed, which is the same trade as the paragraph above and
+ * is why it is acceptable.
  */
 
 import { envNumber } from "../config.ts";

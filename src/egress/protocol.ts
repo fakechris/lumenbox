@@ -8,10 +8,10 @@
  * has.
  *
  * The obvious design is a WebSocket the client opens into the box, with streams multiplexed
- * inside it. That needs a multiplexer, which is where this kind of code
- * goes wrong. Here the direction is reversed — the box dials the relay, one connection per
- * stream — so the framing is a text preamble and then raw bytes, with nothing to interleave
- * and nothing to get out of order. The cost is a TCP setup per stream, which is what a proxy
+ * inside it. That needs a multiplexer, which is where this kind of code goes wrong. Here the
+ * direction is reversed — the box dials the relay, one connection per stream — so the framing
+ * is a text preamble and then raw bytes, with nothing to interleave and nothing to get out of
+ * order. The cost is a TCP setup per stream, which is what a proxy
  * does anyway.
  *
  * The token is in the preamble rather than a TLS client certificate or anything cleverer

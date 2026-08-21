@@ -7,9 +7,8 @@
  * window, and each agent's screenshot shows the other's work, so both reason from
  * a screen that is not theirs. Nothing about coordinate handling can fix that.
  *
- * The fix is a lease: hold the
- * display for the duration of a turn, and REFUSE a second claimant rather than
- * queueing it. Queueing would block one agent behind another's long GUI task while
+ * The fix is a lease: hold the display for the duration of a turn, and REFUSE a
+ * second claimant rather than queueing it. Queueing would block one agent behind another's long GUI task while
  * telling it nothing; a refusal lets the model do something else, or say so, and
  * come back.
  *

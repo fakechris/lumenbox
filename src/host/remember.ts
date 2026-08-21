@@ -11,8 +11,9 @@
  * should not also wait on bookkeeping. It runs when the work is done, and if it fails the turn has
  * already succeeded.
  *
- * **Every few turns, not every turn.** Extracting on every exchange is the right call when a cheap dedicated model is a given; here it would add a call to every single turn
- * for a system whose whole cost story is per-token. Batching several exchanges also gives the
+ * **Every few turns, not every turn.** Extracting on every exchange is the right call when a cheap
+ * dedicated model is a given; here it would add a call to every single turn for a system whose
+ * whole cost story is per-token. Batching several exchanges also gives the
  * extractor more to work with, which produces fewer restatements of the obvious.
  *
  * **It is allowed to find nothing.** An extractor that must produce output invents something, and a

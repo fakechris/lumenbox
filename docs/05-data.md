@@ -198,8 +198,7 @@ Three kinds, each with an unambiguous source, which is what makes them usable:
 | `episode` | condensed from several exchanges; stands in for facts that have aged out | 90d | 1.5 |
 
 A separate "profile" tier next to a "recent" one was rejected: that classification has to come
-from somewhere, and a tier nobody can populate correctly is worse than one
-list scored honestly.
+from somewhere, and a tier nobody can populate correctly is worse than one list scored honestly.
 
 What reaches the prompt is a **character budget, not a count** — fifty short facts and five long ones
 cost the same, and one of those sets is worth more. Selection is by score; rendering is chronological,

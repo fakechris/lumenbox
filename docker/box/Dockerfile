@@ -1,7 +1,7 @@
 # The box: a Linux desktop the agents share, plus the daemon that drives it.
 #
-# Deliberately not systemd-based: a plain entrypoint script that supervises a handful of processes is
-# easier to debug and does not need a privileged container.
+# Deliberately not systemd-based: a plain entrypoint script that supervises a
+# handful of processes is easier to debug and does not need a privileged container.
 FROM debian:12-slim
 
 ENV DEBIAN_FRONTEND=noninteractive \

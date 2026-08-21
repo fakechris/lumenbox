@@ -700,7 +700,7 @@ node dist/cli.js agents                      # who exists
 
 ## What this does not do
 
-Documented rather than discovered later: no WebAuthn bridging into the box, no local
-context compaction (the API's server-side compaction covers it), one shared display
-rather than per-agent window forking, and no cron/routine wakes — though the bus
-already has the wake primitive those would build on. See `IMPLEMENTATION_PLAN.md`.
+Documented rather than discovered later: no WebAuthn bridging into the box, no
+per-step checkpointing of a turn's side effects (an interrupted turn is resumed with
+its last action marked *outcome unknown*, never replayed), and no cluster scheduling —
+one box per tenant, one machine. The full boundary lives in `docs/01-requirements.md` §5.

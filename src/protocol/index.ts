@@ -3,8 +3,8 @@
  *
  * Plain JSON over HTTP, not an RPC framework with generated schemas: that buys
  * wire compatibility across independently-versioned services, and here host and
- * box ship together from this repo, so the schema lives in one file and
- * both sides import it.
+ * box ship together from this repo — so the schema lives in one file and both
+ * sides import it.
  */
 
 export const API_WIDTH = 1280;

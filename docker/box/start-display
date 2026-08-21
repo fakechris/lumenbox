@@ -155,8 +155,8 @@ fi
 #
 # Not --no-frame-pacing: that is picom 10, and Debian 12 ships 9.1, which rejects the
 # flag and prints its usage instead of starting. Copying a flag list written for a newer
-# picom is what produced that — a compositor that was never running, while
-# the dock silently skipped itself for the same reason.
+# picom is what produced that — a compositor that was never running, while the dock
+# silently skipped itself for the same reason.
 #
 # Checked by whether a compositor is actually serving, not by whether a process exists.
 # Those differ: a picom that lost the selection lingers without compositing, and the
