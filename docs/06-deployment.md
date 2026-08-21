@@ -137,16 +137,30 @@ The image's own desktop config is re-seeded on every start, so a fix reaches an 
 
 ## 7. Backup
 
-Copy while stopped, or accept a torn transcript line:
-
 ```bash
-node dist/cli.js box down
-cp -a ~/.agentbox ~/agentbox-backup-$(date +%F)
-docker run --rm -v agentbox-box-work:/w -v "$PWD:/out" debian:12-slim \
-  tar czf /out/work-$(date +%F).tgz -C /w .
+node dist/cli.js backup            # ~/.agentbox-backups/<timestamp>
+node dist/cli.js backup /mnt/nas   # or somewhere that is not this disk
 ```
 
-Nothing automates this. It is a documented gap, not a feature.
+Nothing is stopped. Every file under `~/.agentbox` is either append-only JSONL or a document
+replaced atomically by rename, and every reader here already skips a torn last line — because that
+is also what a crash leaves behind. The old instruction to `box down` first was solving a problem
+the formats had already solved, and its real cost was that a backup requiring downtime does not get
+taken.
+
+`AGENTBOX_BACKUP_HOURS=6` makes `agentbox web` do it on a timer, with one at startup so a fresh
+deployment has a copy before it has run anything. `AGENTBOX_BACKUP_KEEP` (default 7) bounds how many
+are kept — by count rather than by age, because "keep the last seven" survives a machine that was
+off for a month and "delete older than a week" throws them all away on the first run after.
+
+The directory is `0700`. A backup is a second copy of everything, including the box token, the UI
+token and the control-plane database; the files keep their own modes so credentials stay `0600`, but
+transcripts do not, and a transcript is where a secret an agent read ends up.
+
+**What this does not cover:** `/home/box/work` is a Docker volume and is not in here. It is the
+agents' output rather than their memory, and it has its own lifetime — but if it matters, it needs
+its own copy.
+
 
 ## 8. Destroying it
 

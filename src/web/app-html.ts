@@ -271,6 +271,27 @@ export const APP_HTML = String.raw`<!doctype html>
 // html:false is what keeps model output inert — see src/web/markdown.ts.
 var md = window.markdownit ? window.markdownit(${JSON.stringify(MARKDOWN_OPTIONS)}) : null;
 
+// The token, out of the address bar.
+//
+// It is accepted once as a query parameter to bootstrap the cookie, and the cookie is what every
+// later request uses — so by the time this runs it has done its job. Leaving it there put a working
+// credential in browser history, in autocomplete, in the title bar of any screenshot, and in the
+// referrer of any outbound link. The one that actually happens: you copy the address bar to show a
+// colleague an agent's desktop, and hand over control of the box with it.
+//
+// Only if the page loaded, which means the cookie was set — this runs after the server accepted the
+// request. Replacing it before that would lock someone out on the next refresh.
+(function stripToken() {
+  try {
+    var url = new URL(window.location.href);
+    if (!url.searchParams.has("token")) return;
+    url.searchParams.delete("token");
+    window.history.replaceState(null, "", url.pathname + url.search + url.hash);
+  } catch (error) {
+    // A browser without history.replaceState still works; it just keeps the token visible.
+  }
+})();
+
 function renderMarkdown(text) {
   var value = String(text == null ? "" : text);
   // If the library did not load, show escaped text rather than nothing. A feed

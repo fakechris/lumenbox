@@ -17,9 +17,9 @@ exposes and nobody collects.
 | R-01 | Work outside `/home/box/work` destroyed by upgrade | fixed |
 | R-02 | Dead UI reported a healthy container | fixed |
 | R-03 | No cost control | fixed |
-| R-04 | UI token stays in the address bar | **open** |
-| R-05 | Nothing shipped anywhere, nothing backed up | **open** |
-| R-06 | Live-view latency asserted, not measured | **open** |
+| R-04 | UI token stays in the address bar | fixed |
+| R-05 | Nothing shipped anywhere, nothing backed up | fixed |
+| R-06 | Live-view latency asserted, not measured | fixed — 123ms against a 1000ms budget |
 | R-07 | Transcripts grew without bound | fixed |
 | R-08 | Secrets land in the transcript in clear | **open** (S-1) |
 | R-09 | A running turn could not be stopped | fixed |
@@ -142,8 +142,10 @@ Nothing forces an agent to claim work before doing it, and an agent with a shell
 without the version check ever seeing it. Both make the anomaly visible and refusable rather than
 impossible, which is the honest description.
 
-R-05 is what keeps N5 partial and it has not moved: health, crashes and usage are all *exposed* and a
-person still has to go and look.
+N5 is met now. Health, crashes and usage were all *exposed* and a person had to go and look; a
+state change is now delivered — to the console always, and to a webhook when one is configured —
+and only on a transition, because a notice every sweep is a notice that gets muted, after which
+there is a channel everyone believes is working.
 
 ## Blocking findings
 
@@ -422,19 +424,8 @@ Worth recording, because a review that only lists faults misrepresents the syste
    fix it: that stopped the provider key entering a box, and does nothing about a credential the
    agent reads while working. Awkward rather than lazy — the transcript's value is that it stores
    the model's own blocks unedited, so a redactor is editing the evidence. Detection plus a marker
-   is probably the shape.
-2. **R-06 — measure the live view.** The one requirement in this document whose number is a hope.
-   Small, and it is embarrassing that N4.3 exists while N1.3 is unmeasured.
-3. **R-05 — ship health somewhere.** The collector pulls it into a store and nothing alerts. One box
-   with an owner watching is fine; the moment there are two, a crash-looping component reports itself
-   only to whoever asks.
-4. **R-04 — the token in the URL.** Low severity and still wrong.
-
-**What was left undone, deliberately.** Per-step checkpoint and resume is the one large gap
-still open: a turn interrupted at round 300 leaves its record but does not resume. Everything
-else in the persistence family is closed — admission, schedules, ownership — and this one is
-last because it is the only one that has to answer "what happens to a side effect whose
-result was never written down", and that answer decides whether replay is safe at all.
+   is probably the shape. It got heavier with backups: there is now a second copy of every
+   transcript, which is why the backup directory is 0700.
 
 Two capabilities are absent rather than broken, and both bear on how long a task can run:
 

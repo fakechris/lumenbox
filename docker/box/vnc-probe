@@ -32,6 +32,13 @@ import time
 
 READ_TIMEOUT_S = 6.0
 
+# What N1.3 promises: the live view updates within a second of the screen changing.
+#
+# Exceeded is reported as its own exit code rather than as a hard failure, because "the view is
+# slow" and "the view is stale" are different problems with different causes, and a caller that
+# cannot tell them apart will treat both as flaky.
+BUDGET_MS = int(os.environ.get("BOXD_VIEW_BUDGET_MS", "1000"))
+
 
 def read_exactly(sock: socket.socket, count: int) -> bytes:
     chunks = []
@@ -137,10 +144,19 @@ def main() -> int:
         # More than a cursor, less than a whole screen: a mapped window is tens of
         # thousands of pixels, and the pointer is a few hundred.
         threshold = 5000
+        # From the moment the screen changes to the moment a frame carrying that change arrives.
+        #
+        # This is the number N1.3 is about, and it was never measured — the requirement said "the
+        # live view updates within a second" and nothing checked it. The clock was already here,
+        # used only to give up; reporting it is the difference between a claim and a measurement.
+        #
+        # Started before the window is mapped, not after: the delay a person feels includes X
+        # putting it on screen, and timing from "already drawn" would flatter the answer.
+        started = time.monotonic()
         window = disturb(display)
         area = 0
         try:
-            deadline = time.monotonic() + 12
+            deadline = started + 12
             while area < threshold and time.monotonic() < deadline:
                 request_update(sock, width, height, incremental=True)
                 try:
@@ -148,12 +164,18 @@ def main() -> int:
                 except TimeoutError:
                     continue
         finally:
+            elapsed_ms = int((time.monotonic() - started) * 1000)
             window.terminate()
 
         if area < threshold:
-            print(f"stale: only {area} pixels changed, expected more than {threshold}")
+            print(f"stale: only {area} pixels changed in {elapsed_ms}ms, expected more than {threshold}")
             return 1
-        print(f"fresh: {area} pixels changed on {width}x{height}")
+        print(f"fresh: {area} pixels changed on {width}x{height} in {elapsed_ms}ms")
+        if elapsed_ms > BUDGET_MS:
+            # Not a failure of the probe's own question — frames are arriving — but a failure of the
+            # requirement, and the only place it is ever checked.
+            print(f"slow: {elapsed_ms}ms is over the {BUDGET_MS}ms budget for the live view (N1.3)")
+            return 2
         return 0
     finally:
         sock.close()

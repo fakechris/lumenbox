@@ -23,6 +23,7 @@ import { defaultBoxConfig, readBoxToken } from "../box/docker.ts";
 import { StaticAllocator, type BoxAllocator } from "./allocator.ts";
 import { ComposeAllocator } from "./compose.ts";
 import { Collector, meterTenants } from "./collector.ts";
+import { HealthNotifier, webhookDelivery } from "./notify.ts";
 import { startRelay } from "../relay/server.ts";
 import { availableUpstreams } from "../relay/upstreams.ts";
 import { Gateway, PasswordListIdentity, type IdentityProvider } from "./gateway.ts";
@@ -217,6 +218,19 @@ export async function startControlPlane(
   });
 
   const sweepSeconds = options.sweepSeconds ?? 15;
+  // Where a state change is sent, if anywhere. Without it everything is still recorded and still
+  // queryable — which was the whole problem: it was reported only to whoever asked, and nobody asks
+  // at three in the morning.
+  const webhook = process.env.AGENTBOX_HEALTH_WEBHOOK;
+  const notifier = new HealthNotifier(notice => {
+    // Always to the log, whether or not a webhook is configured: an operator watching the console
+    // should not have to set up a webhook to see that a box just died.
+    out(`  health: ${notice.text}`);
+    if (webhook !== undefined && webhook.trim() !== "") {
+      webhookDelivery(webhook, line => out(`  health: ${line}`))(notice);
+    }
+  });
+
   let collector: Collector | undefined;
   if (sweepSeconds > 0) {
     collector = new Collector({
@@ -224,6 +238,7 @@ export async function startControlPlane(
       // So a restarted box is relocated rather than written off; see Collector's `allocator` note.
       allocator,
       intervalMs: sweepSeconds * 1000,
+      notifier,
       log: line => out(`  collector: ${line}`),
     });
     collector.start();
@@ -235,6 +250,9 @@ export async function startControlPlane(
   out(`control plane on ${url}`);
   out(`  allocator  ${allocator.kind}${options.allocator === "compose" ? ` (${options.image})` : ""}`);
   out(`  store      ${join(home, "control.db")}`);
+  out(
+    `  health     ${webhook === undefined || webhook.trim() === "" ? "console only (set AGENTBOX_HEALTH_WEBHOOK to send changes somewhere)" : `console and ${webhook}`}`
+  );
   out(
     `  collector  ${collector === undefined ? "disabled" : `every ${sweepSeconds}s`}` +
       `  ·  tenants ${store.listTenants().length}, boxes ${store.listBoxes(["starting", "ready", "unreachable"]).length}`

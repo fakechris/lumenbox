@@ -18,6 +18,7 @@ import {
 } from "./box/docker.ts";
 import { describeControlPlane, startControlPlane } from "./control/main.ts";
 import { STARTER_TEAM } from "./host/orchestrator.ts";
+import { backupNow } from "./host/backup.ts";
 import { AgentRegistry, defaultAgentsRoot } from "./agents/registry.ts";
 import { startEgressRelay } from "./egress/relay.ts";
 import { DEFAULT_DISPLAY_INDEX } from "./protocol/index.ts";
@@ -220,6 +221,26 @@ async function cmdBoxExec(argv: string[]): Promise<number> {
 }
 
 // --- agent commands -------------------------------------------------------
+
+function cmdBackup(args: string[]): number {
+  const to = args[0];
+  try {
+    const stamp = new Date().toISOString().replace(/[:.]/g, "-").slice(0, 19);
+    const result = backupNow({ stamp, ...(to !== undefined ? { to } : {}) });
+    out(`${result.files} files (${Math.round(result.bytes / 1024)}KB) -> ${result.path}`);
+    // Said, because a backup that silently deleted the copy someone was relying on is worse than
+    // no backup at all.
+    if (result.pruned.length > 0) {
+      out(dim(`pruned ${result.pruned.length} older: ${result.pruned.join(", ")}`));
+    }
+    out(dim("Taken without stopping anything: these files tolerate a torn last line, and so do"));
+    out(dim("their readers — which is what a crash leaves behind too."));
+    return 0;
+  } catch (error) {
+    err(error instanceof Error ? error.message : String(error));
+    return 1;
+  }
+}
 
 function cmdAgents(): number {
   const registry = new AgentRegistry();
@@ -679,6 +700,11 @@ Agents:
   agents                    List agents
   agent new <name> [desc]   Create an agent
 
+State:
+  backup [dir]              Snapshot ~/.agentbox without stopping anything.
+                            Transcripts, memory, plans and skills are the only
+                            things here that cannot be rebuilt.
+
 Chat:
   chat [agent] [message]    Talk to an agent. Omit the message for a REPL,
                             omit the agent to use the first one.
@@ -771,6 +797,9 @@ async function main(): Promise<number> {
           return 1;
       }
     }
+
+    case "backup":
+      return cmdBackup(rest);
 
     case "agents":
       return cmdAgents();

@@ -24,6 +24,8 @@ import { join, posix } from "node:path";
 import { AgentRegistry } from "../agents/registry.ts";
 import type { BusEvent } from "../agents/bus.ts";
 import { resolveBoxProvisioner, type BoxProvisioner } from "../box/provisioner.ts";
+import { envNumber } from "../config.ts";
+import { BackupSchedule, backupRoot } from "../host/backup.ts";
 import { Orchestrator } from "../host/orchestrator.ts";
 import { describeProvider, type ProviderProfile } from "../host/provider.ts";
 import type { TurnEvent } from "../host/turn.ts";
@@ -170,6 +172,22 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
       `${picked.abandoned} interrupted turn${picked.abandoned === 1 ? "" : "s"} not picked up again ` +
         `after repeated failures; said so in the transcript`
     );
+  }
+
+  // Backups on a timer, off unless asked for. The state this protects is the only part of the
+  // system that cannot be rebuilt, and the previous instruction — stop the box, then `cp -a` —
+  // required both stopping and remembering, so it did not happen.
+  const backupHours = envNumber("AGENTBOX_BACKUP_HOURS", 0);
+  if (backupHours > 0) {
+    const backups = new BackupSchedule({
+      intervalMs: backupHours * 3_600_000,
+      log: line => log(line),
+    });
+    // One at startup, so a fresh deployment has a copy before it has run anything, rather than
+    // after the first interval it may not survive.
+    backups.once();
+    backups.start();
+    log(`backing up every ${backupHours}h to ${backupRoot()}`);
   }
 
   const box = await orchestrator.connectBox();

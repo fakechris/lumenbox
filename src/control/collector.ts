@@ -29,6 +29,7 @@
  */
 
 import type { HealthResult } from "../protocol/index.ts";
+import type { HealthNotifier } from "./notify.ts";
 import type { BoxAllocator, BoxHandle } from "./allocator.ts";
 import type { BoxRow, ControlStore, UsageRow } from "./store.ts";
 
@@ -63,6 +64,13 @@ export interface CollectorOptions {
   timeoutMs?: number;
   /** Consecutive failures before a box is called unreachable. */
   failuresBeforeUnreachable?: number;
+  /**
+   * Told when a box changes state, so a fleet does not depend on someone asking.
+   *
+   * Optional: without it everything is recorded exactly as before and nobody is told, which is the
+   * behaviour this had until it had this.
+   */
+  notifier?: HealthNotifier;
   /** Injected so the tests do not need a box, and so a fake can fail on demand. */
   fetchImpl?: typeof fetch;
   log?: (line: string) => void;
@@ -105,6 +113,12 @@ export class Collector {
     await Promise.all(
       boxes.map(async box => {
         const outcome = await this.collectOne(box);
+        // After the outcome and before the counters, so a notice reflects what was just recorded.
+        // The notifier decides what is a change; this only says what was seen.
+        this.options.notifier?.observe(box, {
+          reachable: outcome.reachable,
+          degraded: outcome.degraded,
+        });
         if (outcome.reachable) {
           this.failures.delete(box.id);
           if (outcome.degraded) result.degraded++;
