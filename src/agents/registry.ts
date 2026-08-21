@@ -18,6 +18,7 @@ import {
   readFileSync,
   readdirSync,
   renameSync,
+  rmSync,
   writeFileSync,
   existsSync,
   statSync,
@@ -371,6 +372,38 @@ export class AgentRegistry {
     profile.updatedAt = new Date().toISOString();
     this.writeProfile(agentId, profile);
     return { id: agentId, profile, dir: this.dirFor(agentId) };
+  }
+
+  /**
+   * Removes an agent. A human action, reached only from the UI — no tool leads here.
+   *
+   * Two modes, because "delete the agent" and "delete everything it ever did" are
+   * different decisions. Archiving moves the whole directory — transcript, memory,
+   * plan — to `archive/agents/` beside the roster, where it is ordinary files a
+   * person can read or restore by moving back. Deleting removes it outright.
+   *
+   * The agent's shard of *shared* memory stays either way: facts it shared belong to
+   * the team, and withdrawing them because their author left would silently change
+   * what everyone else remembers.
+   */
+  remove(agentId: string, options: { archive: boolean }): { archivedTo?: string } {
+    const record = this.get(agentId);
+    const dir = this.dirFor(agentId);
+
+    if (!options.archive) {
+      rmSync(dir, { recursive: true, force: true });
+      return {};
+    }
+
+    const archiveRoot = join(dirname(this.root), "archive", "agents");
+    mkdirSync(archiveRoot, { recursive: true });
+    const stamp = new Date().toISOString().slice(0, 10);
+    const dest = join(
+      archiveRoot,
+      `${record.profile.name.replace(/[^\p{L}\p{N}._-]+/gu, "_")}-${stamp}-${agentId.slice(0, 8)}`
+    );
+    renameSync(dir, dest);
+    return { archivedTo: dest };
   }
 
   /**

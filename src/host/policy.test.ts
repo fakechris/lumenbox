@@ -515,3 +515,61 @@ test("a zero budget refuses every model call", () => {
     rmSync(dir, { recursive: true, force: true });
   }
 });
+
+// ── approval scopes ──────────────────────────────────────────────────────────────────
+
+test("a session grant covers repeats but dies with the process; always survives it", () => {
+  const { gate, restart, cleanup } = fixture({ approvalRequiredCommands: ["deploy"] });
+  try {
+    // Session: ask, grant for the session, and the identical action stops asking.
+    let decision = gate.check(toolRequest("deploy staging"));
+    assert.ok(!decision.allow && decision.approval !== undefined);
+    assert.ok(gate.grant(decision.approval.id, "user", "session"));
+    assert.ok(gate.check(toolRequest("deploy staging")).allow);
+    assert.ok(gate.check(toolRequest("deploy staging")).allow, "not consumed by use");
+
+    // A different action is a different fingerprint and still asks.
+    assert.ok(!gate.check(toolRequest("deploy production")).allow);
+
+    // The restart is the end of the session: the same action asks again.
+    const later = restart();
+    const again = later.check(toolRequest("deploy staging"));
+    assert.ok(!again.allow && again.approval !== undefined, "session grant did not survive");
+
+    // Always: grant standing, and it holds across a further restart.
+    assert.ok(later.grant(again.approval.id, "user", "always"));
+    assert.ok(later.check(toolRequest("deploy staging")).allow);
+    const rebooted = restart();
+    assert.ok(rebooted.check(toolRequest("deploy staging")).allow, "standing grant survives");
+
+    // Revoking makes the next identical action ask again — durably.
+    const grants = rebooted.standingGrants();
+    assert.equal(grants.length, 1);
+    assert.ok(rebooted.revokeStanding(grants[0]!.fingerprint));
+    assert.ok(!rebooted.check(toolRequest("deploy staging")).allow);
+    assert.ok(!restart().check(toolRequest("deploy staging")).allow, "revocation survives too");
+  } finally {
+    cleanup();
+  }
+});
+
+test("compaction does not turn 'always' back into 'ask me every time'", () => {
+  const { path, gate, restart, cleanup } = fixture({ approvalRequiredCommands: ["deploy"] });
+  try {
+    const decision = gate.check(toolRequest("deploy staging"));
+    assert.ok(!decision.allow && decision.approval !== undefined);
+    gate.grant(decision.approval.id, "user", "always");
+
+    // Push far past the compaction threshold with unrelated events, then restart so
+    // replay compacts. The standing grant's own rows are deep in the discarded tail.
+    for (let i = 0; i < 20_100; i++) gate.check(toolRequest(`ls ${i}`));
+    const compacted = restart();
+    assert.ok(
+      readFileSync(path, "utf8").split("\n").filter(l => l.trim()).length < 20_100,
+      "the log did compact"
+    );
+    assert.ok(compacted.check(toolRequest("deploy staging")).allow, "the grant survived compaction");
+  } finally {
+    cleanup();
+  }
+});

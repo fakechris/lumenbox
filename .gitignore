@@ -18,3 +18,4 @@ docker/box/hostd.mjs
 # Local research notes. Never committed.
 research/
 /dist-app/
+/design/

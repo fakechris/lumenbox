@@ -19,6 +19,7 @@
 
 import { envNumber } from "../config.ts";
 import Anthropic from "@anthropic-ai/sdk";
+import { OpenAIWireClient } from "./openai-wire.ts";
 
 export type Effort = "low" | "medium" | "high" | "xhigh" | "max";
 
@@ -61,6 +62,12 @@ export interface ProviderProfile {
   auth: "x-api-key" | "bearer";
   /** Env var holding the credential. */
   keyEnv: string;
+  /**
+   * Which protocol the endpoint speaks. Absent means the Anthropic Messages API.
+   * "openai" routes through the translation in openai-wire.ts, which is what lets
+   * OpenAI, OpenRouter and SiliconFlow sit in the same catalog as everyone else.
+   */
+  wire?: "anthropic" | "openai";
 }
 
 const ANTHROPIC: ProviderProfile = {
@@ -154,6 +161,85 @@ const GLM: ProviderProfile = {
 };
 
 /**
+ * The vendors whose Chinese and global sites are different endpoints with separate
+ * accounts and keys: same models, same wire, different base URL. Split into two
+ * presets rather than a toggle because a key from one site is invalid on the other,
+ * and a toggle that silently invalidates the saved key is a support ticket.
+ */
+const MINIMAX_GLOBAL: ProviderProfile = {
+  ...MINIMAX,
+  label: "MiniMax (global)",
+  baseUrl: "https://api.minimax.io/anthropic",
+};
+
+const GLM_GLOBAL: ProviderProfile = {
+  ...GLM,
+  label: "GLM (global · Z.ai)",
+  baseUrl: "https://api.z.ai/api/anthropic",
+};
+
+const KIMI_GLOBAL: ProviderProfile = {
+  ...KIMI,
+  label: "Kimi (global)",
+  baseUrl: "https://api.moonshot.ai/anthropic",
+};
+
+/**
+ * OpenAI-wire vendors, through the translation in openai-wire.ts.
+ *
+ * OpenAI's own models can see images, so vision is on there — the wire carries them
+ * as data URLs. The aggregators default it off because what the key reaches depends
+ * on which model is typed into the box; `AGENTBOX_VISION=1` opts in.
+ */
+const OPENAI: ProviderProfile = {
+  label: "OpenAI",
+  baseUrl: "https://api.openai.com/v1",
+  model: "gpt-5.1",
+  maxTokens: 16_000,
+  vision: true,
+  adaptiveThinking: false,
+  effort: false,
+  promptCaching: false,
+  auth: "bearer",
+  keyEnv: "OPENAI_API_KEY",
+  wire: "openai",
+};
+
+const OPENROUTER: ProviderProfile = {
+  label: "OpenRouter",
+  baseUrl: "https://openrouter.ai/api/v1",
+  model: "openai/gpt-5.1",
+  maxTokens: 16_000,
+  vision: false,
+  adaptiveThinking: false,
+  effort: false,
+  promptCaching: false,
+  auth: "bearer",
+  keyEnv: "OPENROUTER_API_KEY",
+  wire: "openai",
+};
+
+const SILICONFLOW: ProviderProfile = {
+  label: "SiliconFlow (China)",
+  baseUrl: "https://api.siliconflow.cn/v1",
+  model: "deepseek-ai/DeepSeek-V3.2-Exp",
+  maxTokens: 16_000,
+  vision: false,
+  adaptiveThinking: false,
+  effort: false,
+  promptCaching: false,
+  auth: "bearer",
+  keyEnv: "SILICONFLOW_API_KEY",
+  wire: "openai",
+};
+
+const SILICONFLOW_GLOBAL: ProviderProfile = {
+  ...SILICONFLOW,
+  label: "SiliconFlow (global)",
+  baseUrl: "https://api.siliconflow.com/v1",
+};
+
+/**
  * Model suggestions per preset, for the settings dialog's picker.
  *
  * Suggestions, not a gate: the field stays free text because vendors ship models
@@ -163,9 +249,32 @@ const GLM: ProviderProfile = {
 export const PRESET_MODELS: Record<string, readonly string[]> = {
   anthropic: ["claude-opus-5", "claude-sonnet-5", "claude-opus-4-6", "claude-haiku-4-5"],
   minimax: ["MiniMax-M3", "MiniMax-M2"],
+  "minimax-global": ["MiniMax-M3", "MiniMax-M2"],
   deepseek: ["deepseek-chat", "deepseek-reasoner"],
   kimi: ["kimi-k2-turbo-preview", "kimi-k2-0905-preview"],
+  "kimi-global": ["kimi-k2-turbo-preview", "kimi-k2-0905-preview"],
   glm: ["glm-4.6", "glm-4.5-air"],
+  "glm-global": ["glm-4.6", "glm-4.5-air"],
+  openai: ["gpt-5.1", "gpt-5.1-mini", "gpt-4.1", "gpt-4o"],
+  openrouter: [
+    "openai/gpt-5.1",
+    "anthropic/claude-sonnet-4.5",
+    "deepseek/deepseek-chat",
+    "qwen/qwen3-coder",
+    "xiaomi/mimo-7b",
+  ],
+  siliconflow: [
+    "deepseek-ai/DeepSeek-V3.2-Exp",
+    "Qwen/Qwen3-Coder-480B-A35B-Instruct",
+    "zai-org/GLM-4.6",
+    "moonshotai/Kimi-K2-Instruct",
+    "XiaomiMiMo/MiMo-7B-RL",
+  ],
+  "siliconflow-global": [
+    "deepseek-ai/DeepSeek-V3.2-Exp",
+    "Qwen/Qwen3-Coder-480B-A35B-Instruct",
+    "zai-org/GLM-4.6",
+  ],
   custom: [],
 };
 
@@ -192,21 +301,43 @@ function compatible(): ProviderProfile {
     promptCaching: truthy(process.env.AGENTBOX_CACHING),
     auth: process.env.AGENTBOX_AUTH === "x-api-key" ? "x-api-key" : "bearer",
     keyEnv: process.env.AGENTBOX_KEY_ENV ?? "AGENTBOX_API_KEY",
+    ...(process.env.AGENTBOX_WIRE === "openai" ? { wire: "openai" as const } : {}),
   };
 }
 
 const PRESETS: Record<string, () => ProviderProfile> = {
   anthropic: () => ({ ...ANTHROPIC }),
-  minimax: () => ({ ...MINIMAX }),
+  minimax: () => ({ ...MINIMAX, label: "MiniMax (China)" }),
+  "minimax-global": () => ({ ...MINIMAX_GLOBAL }),
   deepseek: () => ({ ...DEEPSEEK }),
-  kimi: () => ({ ...KIMI }),
-  glm: () => ({ ...GLM }),
+  kimi: () => ({ ...KIMI, label: "Kimi (China)" }),
+  "kimi-global": () => ({ ...KIMI_GLOBAL }),
+  glm: () => ({ ...GLM, label: "GLM (China)" }),
+  "glm-global": () => ({ ...GLM_GLOBAL }),
+  openai: () => ({ ...OPENAI }),
+  openrouter: () => ({ ...OPENROUTER }),
+  siliconflow: () => ({ ...SILICONFLOW }),
+  "siliconflow-global": () => ({ ...SILICONFLOW_GLOBAL }),
   custom: compatible,
   compatible,
 };
 
 export function providerNames(): string[] {
-  return ["anthropic", "minimax", "deepseek", "kimi", "glm", "custom"];
+  return [
+    "anthropic",
+    "minimax",
+    "minimax-global",
+    "deepseek",
+    "kimi",
+    "kimi-global",
+    "glm",
+    "glm-global",
+    "openai",
+    "openrouter",
+    "siliconflow",
+    "siliconflow-global",
+    "custom",
+  ];
 }
 
 /**
@@ -277,14 +408,28 @@ export class MissingCredentialError extends Error {
 }
 
 /**
- * Builds a client for the profile.
+ * Builds a client for the profile, with an explicit key when the caller has one.
  *
  * The credential is passed in the header the endpoint expects, and the other one
  * is explicitly nulled: the SDK would otherwise pick `ANTHROPIC_API_KEY` up from
  * the environment and send both, which the API rejects.
+ *
+ * An OpenAI-wire profile gets the translation client instead. The cast is
+ * load-bearing: OpenAIWireClient implements exactly the surface this codebase uses
+ * (messages.create, messages.stream with streamEvent/text/finalMessage), which its
+ * tests hold true, and threading a structural type through every signature would
+ * cost every reader more than this one comment.
  */
-export function createClient(profile: ProviderProfile): Anthropic {
-  const key = process.env[profile.keyEnv];
+function clientFor(
+  profile: ProviderProfile,
+  key: string | undefined,
+  options?: { maxRetries?: number; timeout?: number }
+): Anthropic {
+  if (profile.wire === "openai") {
+    if (!key) throw new MissingCredentialError(profile);
+    if (!profile.baseUrl) throw new Error(`${profile.label}: no base URL configured.`);
+    return new OpenAIWireClient({ baseURL: profile.baseUrl, key }) as unknown as Anthropic;
+  }
 
   // First-party Anthropic can also authenticate from an `ant auth login` profile,
   // so a missing env var is not necessarily an error there.
@@ -297,13 +442,19 @@ export function createClient(profile: ProviderProfile): Anthropic {
       baseURL: profile.baseUrl,
       authToken: key,
       apiKey: null,
+      ...options,
     });
   }
 
   return new Anthropic({
     baseURL: profile.baseUrl,
     ...(key ? { apiKey: key } : {}),
+    ...options,
   });
+}
+
+export function createClient(profile: ProviderProfile): Anthropic {
+  return clientFor(profile, process.env[profile.keyEnv]);
 }
 
 /**
@@ -320,25 +471,7 @@ export async function testProvider(
   keyOverride?: string
 ): Promise<{ ok: true; latencyMs: number; model: string }> {
   const key = keyOverride ?? process.env[profile.keyEnv];
-  if (!key && profile.keyEnv !== "ANTHROPIC_API_KEY") {
-    throw new MissingCredentialError(profile);
-  }
-
-  const client =
-    profile.auth === "bearer"
-      ? new Anthropic({
-          baseURL: profile.baseUrl,
-          authToken: key,
-          apiKey: null,
-          maxRetries: 0,
-          timeout: 20_000,
-        })
-      : new Anthropic({
-          baseURL: profile.baseUrl,
-          ...(key ? { apiKey: key } : {}),
-          maxRetries: 0,
-          timeout: 20_000,
-        });
+  const client = clientFor(profile, key, { maxRetries: 0, timeout: 20_000 });
 
   const started = Date.now();
   const response = await client.messages.create({

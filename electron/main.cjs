@@ -16,7 +16,16 @@
  * separate daemon and always was. The tray's quit item says so.
  */
 
-const { app, BrowserWindow, Menu, Tray, dialog, nativeImage, nativeTheme } = require("electron");
+const {
+  app,
+  BrowserWindow,
+  Menu,
+  Notification,
+  Tray,
+  dialog,
+  nativeImage,
+  nativeTheme,
+} = require("electron");
 const { spawn } = require("node:child_process");
 const http = require("node:http");
 const path = require("node:path");
@@ -95,6 +104,69 @@ function startServer() {
       `It exited ${crashRestarts} times in a row. Last output:\n\n${recentLog.join("\n")}`
     );
   });
+}
+
+/**
+ * System notifications, from the server's own event stream.
+ *
+ * Exactly three kinds of event leave the page and reach the OS: an agent waiting on
+ * consent (the turn is paused until a person answers), a turn finishing while nobody
+ * is looking at the window (the unattended-run case), and the box or server going
+ * away. Everything else stays in the activity feed, because a notification channel
+ * that carries everything carries nothing.
+ */
+let eventsRequest = null;
+
+function windowIsVisible() {
+  return mainWindow !== null && mainWindow.isVisible() && mainWindow.isFocused();
+}
+
+function notify(title, body) {
+  if (!Notification.isSupported()) return;
+  const notification = new Notification({ title, body: body.slice(0, 240) });
+  notification.on("click", () => createWindow());
+  notification.show();
+}
+
+function watchEvents() {
+  eventsRequest?.destroy();
+  const request = http.get(`${PAGE}api/events`, response => {
+    let buffer = "";
+    response.on("data", chunk => {
+      buffer += String(chunk);
+      let boundary = buffer.indexOf("\n\n");
+      while (boundary >= 0) {
+        const frame = buffer.slice(0, boundary);
+        buffer = buffer.slice(boundary + 2);
+        boundary = buffer.indexOf("\n\n");
+        for (const line of frame.split("\n")) {
+          if (!line.startsWith("data:")) continue;
+          try {
+            handleServerEvent(JSON.parse(line.slice(5)));
+          } catch {
+            // A torn frame; the next one is whole.
+          }
+        }
+      }
+    });
+    response.on("end", () => setTimeout(watchEvents, 3000));
+  });
+  request.on("error", () => setTimeout(watchEvents, 3000));
+  eventsRequest = request;
+}
+
+function handleServerEvent(event) {
+  if (event.type === "approval_pending") {
+    notify(`${event.agentName || "An agent"} needs your consent`, `${event.description} — the turn is paused until you answer`);
+    return;
+  }
+  if (event.type === "turn_finished" && !windowIsVisible()) {
+    notify("A turn finished", "Open LumenBox to read what the agent said.");
+    return;
+  }
+  if (event.type === "error" && /box stopped answering/i.test(String(event.message ?? ""))) {
+    notify("The box stopped answering", String(event.message));
+  }
 }
 
 /** Polls the page until the server answers, then calls back. */
@@ -194,6 +266,7 @@ if (!app.requestSingleInstanceLock()) {
     startServer();
     createTray();
     createWindow();
+    whenServerReady(() => watchEvents());
   });
 
   // The window closing is not the app ending: the tray keeps the agents reachable,

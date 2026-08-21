@@ -164,12 +164,12 @@ test("provider precedence: flag beats env beats config beats default", () => {
   delete process.env.AGENTBOX_BASE_URL;
   try {
     delete process.env.AGENTBOX_PROVIDER;
-    assert.equal(resolveProvider(undefined, "minimax").label, "MiniMax", "config default holds");
+    assert.equal(resolveProvider(undefined, "minimax").label, "MiniMax (China)", "config default holds");
     assert.equal(resolveProvider(undefined, undefined).label, "Anthropic", "no config, old default");
 
     process.env.AGENTBOX_PROVIDER = "anthropic";
     assert.equal(resolveProvider(undefined, "minimax").label, "Anthropic", "env beats config");
-    assert.equal(resolveProvider("minimax", "anthropic").label, "MiniMax", "flag beats both");
+    assert.equal(resolveProvider("minimax", "anthropic").label, "MiniMax (China)", "flag beats both");
   } finally {
     if (provider === undefined) delete process.env.AGENTBOX_PROVIDER;
     else process.env.AGENTBOX_PROVIDER = provider;

@@ -164,7 +164,9 @@ export const APP_HTML = String.raw`<!doctype html>
   }
   .modal h3 { margin: 0; font-size: 1.15rem; font-weight: 600; }
   .field { display: flex; flex-direction: column; gap: 6px; }
-  .field label { font-size: 11px; letter-spacing: 0.08em; text-transform: uppercase; color: var(--muted); }
+  .field > label { font-size: 11px; letter-spacing: 0.08em; text-transform: uppercase; color: var(--muted); }
+  .radio { display: flex; gap: 8px; align-items: baseline; font-size: 13px; color: var(--text-soft); cursor: pointer; }
+  .btn.danger { background: var(--danger); border-color: var(--danger); color: #fff; }
   .field input, .field select {
     height: 38px; padding: 0 12px; border-radius: var(--radius-input);
     border: 1px solid var(--border-strong); background: var(--bg); color: var(--text); font: inherit;
@@ -487,6 +489,7 @@ export const APP_HTML = String.raw`<!doctype html>
     LumenBox
   </span>
   <span class="mid"><span id="model">&mdash;</span></span>
+  <span id="spendtoday" class="mono" style="font-size:12px;color:var(--muted);white-space:nowrap" title="Tokens spent today, all agents"></span>
   <button id="settingsbtn" title="Settings" aria-label="Settings">
     <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3.2"/><path d="M19.4 15a1.7 1.7 0 0 0 .34 1.87l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.7 1.7 0 0 0-1.87-.34 1.7 1.7 0 0 0-1.03 1.56V21a2 2 0 1 1-4 0v-.09a1.7 1.7 0 0 0-1.11-1.56 1.7 1.7 0 0 0-1.87.34l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.7 1.7 0 0 0 .34-1.87 1.7 1.7 0 0 0-1.56-1.03H3a2 2 0 1 1 0-4h.09a1.7 1.7 0 0 0 1.56-1.11 1.7 1.7 0 0 0-.34-1.87l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.7 1.7 0 0 0 1.87.34h.09a1.7 1.7 0 0 0 1.03-1.56V3a2 2 0 1 1 4 0v.09a1.7 1.7 0 0 0 1.03 1.56 1.7 1.7 0 0 0 1.87-.34l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.7 1.7 0 0 0-.34 1.87v.09a1.7 1.7 0 0 0 1.56 1.03H21a2 2 0 1 1 0 4h-.09a1.7 1.7 0 0 0-1.56 1.03Z"/></svg>
   </button>
@@ -598,6 +601,11 @@ export const APP_HTML = String.raw`<!doctype html>
 <div id="settingswrap" style="display:none">
   <div class="modal">
     <h3>Settings &mdash; model &amp; key</h3>
+    <div class="fieldnote" id="setwelcome" style="display:none;border:1px solid var(--border);border-radius:var(--radius-md);padding:10px 12px;color:var(--text-soft)">
+      Welcome. LumenBox needs two things before agents can work: a model provider with a
+      key, and the box &mdash; one Linux container with a desktop, a browser and a shell,
+      running on this machine. Both are set up here.
+    </div>
     <div class="field">
       <label>Provider</label>
       <select id="setprovider"></select>
@@ -619,6 +627,20 @@ export const APP_HTML = String.raw`<!doctype html>
     <div class="fieldnote">Saved to ~/.agentbox/config.json on this machine, mode 0600. A key stored
       here is used only when the environment does not already provide one, and is never placed
       inside the box. Changes take effect when the server restarts.</div>
+    <div class="field" id="setboxwrap">
+      <label>Box</label>
+      <div class="fieldnote" id="setboxstate" style="margin:0"></div>
+      <div id="setboxactions" style="display:none">
+        <button class="btn sm" id="setboxup">Start the box</button>
+      </div>
+      <pre id="setboxlog" style="display:none;max-height:140px;overflow:auto;background:var(--code-bg);color:var(--code-text);border:1px solid var(--border);border-radius:var(--radius-md);padding:10px 12px;font-family:var(--font-mono);font-size:11px;line-height:1.6;margin:0;white-space:pre-wrap"></pre>
+    </div>
+    <div class="field" id="setgrantswrap" style="display:none">
+      <label>Standing approvals</label>
+      <div id="setgrants" style="display:flex;flex-direction:column;gap:6px"></div>
+      <div class="fieldnote">Each covers one exact action until revoked. Revoking makes the next
+        identical action ask again.</div>
+    </div>
     <div class="fieldnote" id="setstatus"></div>
     <div class="actions">
       <button class="btn" id="settest">Test connection</button>
@@ -652,6 +674,20 @@ export const APP_HTML = String.raw`<!doctype html>
       <div id="agtools" class="toolchips"></div>
       <div class="fieldnote">An unchecked tool is withheld — it does not appear in the agent's
         prompt at all. Leaving everything checked means everything, including tools added later.</div>
+    </div>
+    <div class="field" id="agdanger" style="display:none">
+      <label>Delete</label>
+      <div id="agdel1"><a href="#" id="agdelete" style="color:var(--danger);font-size:13px">Delete this agent&hellip;</a></div>
+      <div id="agdel2" style="display:none;flex-direction:column;gap:8px">
+        <label class="radio"><input type="radio" name="agrecords" value="archive" checked>
+          Keep its records &mdash; the transcript, memory and plan are archived, restorable by moving them back</label>
+        <label class="radio"><input type="radio" name="agrecords" value="delete">
+          Delete everything it ever did</label>
+        <div style="display:flex;gap:10px;padding-top:2px">
+          <button class="btn sm danger" id="agdelconfirm">Delete agent</button>
+          <button class="btn sm ghost" id="agdelback">Back</button>
+        </div>
+      </div>
     </div>
     <div class="fieldnote" id="agstatus"></div>
     <div class="actions">
@@ -744,10 +780,86 @@ function openSettings() {
       $("setkey").value = "";
       $("setstatus").textContent = "Now running: " + (data.current || "");
       settingsProviderChanged();
+      renderStandingGrants();
+      renderBoxSection();
       $("settingswrap").style.display = "flex";
     })
     .catch(function () { feed("could not load settings", "err"); });
 }
+
+function renderBoxSection() {
+  $("setboxstate").textContent = boxState.ok
+    ? "Running — " + boxState.detail
+    : "Not running. Agents have no desktop, shell or files until it is.";
+  $("setboxactions").style.display = boxState.ok ? "none" : "";
+}
+
+/**
+ * First run: nothing configured, or no box. Opens settings with the welcome note so
+ * the two things the product needs are the first two things a person sees. Once
+ * dismissed or saved, never again — the flag is the browser's, not the server's.
+ */
+function maybeOnboard() {
+  try { if (localStorage.getItem("lumen-onboarded")) return; } catch (error) {}
+  fetch("/api/config")
+    .then(function (r) { return r.json(); })
+    .then(function (data) {
+      var configured = !!(data.config && data.config.provider);
+      var anyKey = (data.presets || []).some(function (p) { return p.keyPresent; });
+      if ((!configured && !anyKey) || !boxState.ok) {
+        openSettings();
+        $("setwelcome").style.display = "";
+      }
+    })
+    .catch(function () {});
+}
+
+function markOnboarded() {
+  try { localStorage.setItem("lumen-onboarded", "1"); } catch (error) {}
+  $("setwelcome").style.display = "none";
+}
+
+$("setboxup").onclick = function () {
+  $("setboxup").disabled = true;
+  $("setboxlog").style.display = "";
+  $("setboxlog").textContent = "starting…\n";
+  fetch("/api/box/up", { method: "POST" })
+    .then(function (r) { return r.json(); })
+    .then(function (d) {
+      if (d.error) $("setboxlog").textContent += d.error + "\n";
+    })
+    .catch(function (error) { $("setboxlog").textContent += error.message + "\n"; })
+    .then(function () { $("setboxup").disabled = false; });
+};
+
+/** The approvals that hold until revoked, with the one action that ends each. */
+function renderStandingGrants() {
+  fetch("/api/policy")
+    .then(function (r) { return r.json(); })
+    .then(function (data) {
+      var grants = data.standing || [];
+      $("setgrantswrap").style.display = grants.length ? "" : "none";
+      $("setgrants").innerHTML = grants.map(function (grant) {
+        return '<div style="display:flex;gap:10px;align-items:baseline">' +
+          '<code style="flex:1;font-family:var(--font-mono);font-size:12px;word-break:break-all">' +
+          esc(grant.description) + "</code>" +
+          '<a href="#" data-revoke="' + esc(grant.fingerprint) + '" style="font-size:12px;color:var(--danger)">Revoke</a>' +
+          "</div>";
+      }).join("");
+    })
+    .catch(function () {});
+}
+
+document.getElementById("setgrants").addEventListener("click", function (event) {
+  var fingerprint = event.target.getAttribute && event.target.getAttribute("data-revoke");
+  if (!fingerprint) return;
+  event.preventDefault();
+  fetch("/api/policy/revoke", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ fingerprint: fingerprint })
+  }).then(renderStandingGrants);
+});
 
 function settingsProviderChanged() {
   var name = $("setprovider").value;
@@ -791,6 +903,7 @@ function saveSettings(thenRestart) {
       });
     })
     .then(function () {
+      markOnboarded();
       if (!thenRestart) {
         $("setstatus").textContent = "Saved. Takes effect when the server restarts.";
         return;
@@ -856,14 +969,23 @@ $("settingsbtn").onclick = openSettings;
 $("setprovider").onchange = settingsProviderChanged;
 $("setsave").onclick = function () { saveSettings(false); };
 $("setsaverestart").onclick = function () { saveSettings(true); };
-$("setcancel").onclick = function () { $("settingswrap").style.display = "none"; };
+$("setcancel").onclick = function () {
+  markOnboarded();
+  $("settingswrap").style.display = "none";
+};
 $("settingswrap").addEventListener("click", function (event) {
-  if (event.target === $("settingswrap")) $("settingswrap").style.display = "none";
+  if (event.target === $("settingswrap")) {
+    markOnboarded();
+    $("settingswrap").style.display = "none";
+  }
 });
 
 var agents = [];
 var allTools = [];
 var current = null;
+/** The last /api/state box report, for the settings dialog's box section. */
+var boxState = { ok: false, detail: "" };
+var onboardChecked = false;
 var busy = new Set();
 /** In-flight assistant text nodes, keyed by agent id, so deltas land in one bubble. */
 var live = new Map();
@@ -1101,10 +1223,21 @@ function refresh() {
     agents = state.agents;
     allTools = state.allTools || allTools;
     $("model").innerHTML = "<b>" + esc(state.provider) + "</b>";
+    boxState = { ok: !!state.box.ok, detail: String(state.box.detail || "") };
     $("boxinfo").textContent = state.box.ok ? state.box.detail : "box unavailable";
     $("boxdot").className = "dot " + (state.box.ok ? "ok" : "bad");
+    if (!onboardChecked) {
+      onboardChecked = true;
+      maybeOnboard();
+    }
     if (state.build) {
       $("buildinfo").textContent = "v" + state.build.version + " · " + state.build.commit;
+    }
+    if (state.usageToday) {
+      var today = state.usageToday;
+      $("spendtoday").textContent = today.records === 0
+        ? ""
+        : "today " + fmtTokens(today.inputTokens) + " in / " + fmtTokens(today.outputTokens) + " out";
     }
     if (!current && agents.length) return select(agents[0].id);
     renderAgents();
@@ -1153,9 +1286,11 @@ function renderApprovals(pending) {
     return '<div class="consent">' +
       '<div class="chead"><span class="dot"></span>Consent needed &mdash; the turn is paused until you answer</div>' +
       "<code>" + esc(item.description) + "</code>" +
-      '<div class="note">Approving covers this request only.</div>' +
+      '<div class="note">Each button says what it covers: this exact action, once, for this session, or until you revoke it in Settings.</div>' +
       '<div class="cactions">' +
-      '<button class="btn sm accent" data-approve="' + esc(item.id) + '">Allow once</button>' +
+      '<button class="btn sm accent" data-approve="' + esc(item.id) + '" data-scope="once">Allow once</button>' +
+      '<button class="btn sm" data-approve="' + esc(item.id) + '" data-scope="session">This session</button>' +
+      '<button class="btn sm" data-approve="' + esc(item.id) + '" data-scope="always">Always</button>' +
       '<button class="btn sm ghost" data-deny="' + esc(item.id) + '">Refuse</button>' +
       "</div></div>";
   }).join("");
@@ -1165,13 +1300,20 @@ document.getElementById("approvals").addEventListener("click", function (event) 
   var allow = event.target.getAttribute && event.target.getAttribute("data-approve");
   var deny = event.target.getAttribute && event.target.getAttribute("data-deny");
   if (!allow && !deny) return;
+  var scope = (event.target.getAttribute && event.target.getAttribute("data-scope")) || "once";
   event.target.disabled = true;
   fetch(allow ? "/api/approve" : "/api/deny", {
     method: "POST",
     headers: { "content-type": "application/json" },
-    body: JSON.stringify({ id: allow || deny })
+    body: JSON.stringify({ id: allow || deny, scope: scope })
   }).then(function () {
-    feed(allow ? "you allowed an action" : "you refused an action", "warn");
+    feed(
+      allow
+        ? "you allowed an action" +
+          (scope === "session" ? " for this session" : scope === "always" ? ", standing until revoked" : "")
+        : "you refused an action",
+      "warn"
+    );
     // The agent does not resume by itself: it was told to stop and ask. Say so, rather than
     // leaving a person waiting for something that is not coming.
     if (allow) feed("send the agent a message to have it retry the approved action", "");
@@ -1686,6 +1828,20 @@ stream.onmessage = function (raw) {
     return;
   }
 
+  if (e.type === "box_setup") {
+    // Docker output while the box comes up, into the settings dialog's log — not the
+    // activity feed, which an image pull would flood with a hundred lines.
+    var boxLog = $("setboxlog");
+    boxLog.style.display = "";
+    boxLog.textContent += e.line + "\n";
+    boxLog.scrollTop = boxLog.scrollHeight;
+    if (e.done) {
+      refresh().then(renderBoxSection);
+      feed(e.ok ? "the box is up" : "starting the box failed — " + esc(e.line), e.ok ? "mail" : "err");
+    }
+    return;
+  }
+
   if (e.type === "retrying") {
     // Explained rather than left as a pause. A silent gap while a connection is retried is
     // indistinguishable from a hang, and a person watching one reaches for the reload button.
@@ -1957,9 +2113,45 @@ function openAgentModal(mode, agent) {
       esc(tool) + "</span>";
   }).join("");
   $("agstatus").textContent = "";
+  $("agdanger").style.display = mode === "edit" ? "" : "none";
+  $("agdel1").style.display = "";
+  $("agdel2").style.display = "none";
   $("agentwrap").style.display = "flex";
   $("agname").focus();
 }
+
+$("agdelete").onclick = function (event) {
+  event.preventDefault();
+  $("agdel1").style.display = "none";
+  $("agdel2").style.display = "flex";
+};
+$("agdelback").onclick = function () {
+  $("agdel1").style.display = "";
+  $("agdel2").style.display = "none";
+};
+$("agdelconfirm").onclick = function () {
+  var records = document.querySelector('input[name="agrecords"]:checked');
+  $("agdelconfirm").disabled = true;
+  fetch("/api/agents/delete", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ id: agentModal.id, records: records ? records.value : "archive" })
+  })
+    .then(function (r) {
+      return r.json().then(function (d) {
+        if (!r.ok) throw new Error(d.error || "delete failed");
+        return d;
+      });
+    })
+    .then(function (d) {
+      $("agentwrap").style.display = "none";
+      feed("agent deleted" + (d.archivedTo ? " — records archived" : ""), "warn");
+      current = null;
+      return refresh();
+    })
+    .catch(function (error) { $("agstatus").textContent = error.message; })
+    .then(function () { $("agdelconfirm").disabled = false; });
+};
 
 $("agtools").addEventListener("click", function (event) {
   var chip = event.target.closest && event.target.closest("[data-tool]");
