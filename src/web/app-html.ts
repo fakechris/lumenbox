@@ -4,6 +4,14 @@
  * Inlined rather than served from disk so the CLI stays one esbuild bundle with no
  * asset paths to resolve, and vanilla JS on purpose: this is an acceptance-testing
  * surface, and a build step for it would be a liability rather than a feature.
+ * The two exceptions that do live on disk — the markdown renderer and the woff2
+ * fonts — degrade gracefully when absent: plain text, system fonts.
+ *
+ * The look is the Lumen design system: two equal themes ("Atelier" warm light,
+ * "Vault" dark) switched by data-theme on <html>, IBM Plex for UI and mono, a
+ * reading serif for the agents' prose, 1px hairlines instead of elevation, and
+ * status as a colored dot plus a word. The tokens below are copied from the design
+ * sheet rather than referenced, for the same reason everything else is inline.
  *
  * The embedded script uses string concatenation instead of template literals
  * throughout. It has to: this file is itself a template literal, so an inner
@@ -19,21 +27,83 @@ export const APP_HTML = String.raw`<!doctype html>
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>agentbox</title>
-<style>
-  .tab { padding: 2px 9px; border-radius: 4px; text-decoration: none; }
-  .tab.on { background: var(--line); color: var(--text); }
-  #filespreview pre { white-space: pre-wrap; word-break: break-word; margin: 0; padding: 10px; }
-  #filespreview img, #filespreview video { max-width: 100%; display: block; }
-  #fileslist .row { padding: 3px 8px; cursor: pointer; }
-  #fileslist .row:hover { background: var(--line); }
-  #fileslist .row.on { background: var(--line); }
-  #filesview.dropping { outline: 2px dashed var(--accent); outline-offset: -4px; }
-  :root {
-    --bg: #14161a; --panel: #1b1e24; --line: #2a2f38; --text: #e6e9ef;
-    --dim: #8b93a1; --accent: #7aa2f7; --warn: #e0af68; --ok: #9ece6a; --err: #f7768e;
+<title>LumenBox</title>
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 128 128'%3E%3Crect x='4' y='4' width='120' height='120' rx='30' fill='%23231a13'/%3E%3Cpath d='M64 32 96 49 64 66 32 49Z' fill='%23d9634a'/%3E%3Cpath d='M32 49 64 66v32L32 81Z' fill='%23d9634a' fill-opacity='.62'/%3E%3Cpath d='M96 49 64 66v32l32-17Z' fill='%23d9634a' fill-opacity='.34'/%3E%3C/svg%3E">
+<script>
+// The theme, before first paint: reading it after the stylesheet applies flashes the
+// wrong colors on every load for everyone on the non-default theme.
+(function () {
+  var theme;
+  try { theme = localStorage.getItem("lumen-theme"); } catch (error) {}
+  if (theme !== "light" && theme !== "dark") {
+    theme = window.matchMedia && window.matchMedia("(prefers-color-scheme: dark)").matches
+      ? "dark" : "light";
   }
+  document.documentElement.setAttribute("data-theme", theme);
+})();
+</script>
+<style>
+  /* ── Lumen tokens ─────────────────────────────────────────────────────────── */
+  @font-face { font-family: "IBM Plex Sans"; font-style: normal; font-weight: 400; font-display: swap;
+    src: url("/assets/fonts/IBMPlexSans-Regular.woff2") format("woff2"); }
+  @font-face { font-family: "IBM Plex Sans"; font-style: normal; font-weight: 500; font-display: swap;
+    src: url("/assets/fonts/IBMPlexSans-Medium.woff2") format("woff2"); }
+  @font-face { font-family: "IBM Plex Sans"; font-style: normal; font-weight: 600; font-display: swap;
+    src: url("/assets/fonts/IBMPlexSans-SemiBold.woff2") format("woff2"); }
+  @font-face { font-family: "IBM Plex Sans"; font-style: normal; font-weight: 700; font-display: swap;
+    src: url("/assets/fonts/IBMPlexSans-Bold.woff2") format("woff2"); }
+  @font-face { font-family: "IBM Plex Mono"; font-style: normal; font-weight: 400; font-display: swap;
+    src: url("/assets/fonts/IBMPlexMono-Regular.woff2") format("woff2"); }
+  @font-face { font-family: "IBM Plex Mono"; font-style: normal; font-weight: 500; font-display: swap;
+    src: url("/assets/fonts/IBMPlexMono-Medium.woff2") format("woff2"); }
+  @font-face { font-family: "IBM Plex Mono"; font-style: normal; font-weight: 600; font-display: swap;
+    src: url("/assets/fonts/IBMPlexMono-SemiBold.woff2") format("woff2"); }
+
+  :root, [data-theme="light"] {
+    color-scheme: light;
+    --bg: #f7f6f2; --bg-deep: #efece5; --surface: #fffdfa; --surface-2: #fbf7f0;
+    --border: #e7e1d8; --border-strong: #cdc4b6;
+    --text: #1f1a17; --text-soft: #443a32; --muted: #71675d;
+    --accent: #9f4f24; --accent-soft: #f4dfd2; --accent-strong: #843c15;
+    --accent-2: #2563bb; --accent-2-soft: #dbe7f7; --on-accent: #fffdfa;
+    --success: #2f7d52; --success-soft: #e4f0e8;
+    --warn: #a85e10; --warn-soft: #fff8ec; --warn-border: #d48a2f;
+    --danger: #b04545; --danger-soft: #fbe9e7;
+    --code-bg: #f4f1ea; --code-text: #1f1a17;
+    --c-1: #9f4f24; --c-2: #2563bb; --c-3: #2f7d52; --c-4: #b8862e;
+    --c-5: #6c4dab; --c-6: #b04545; --c-7: #2d6e87; --c-8: #645a52;
+    --sidebar: #efece5; --surface-hover: #f2ede4;
+    --shadow-shell: 0 12px 36px rgba(31,26,23,0.06);
+    --shadow-pop: 0 16px 48px rgba(31,26,23,0.12);
+  }
+  [data-theme="dark"] {
+    color-scheme: dark;
+    --bg: #0a0e16; --bg-deep: #05080d; --surface: #11161f; --surface-2: #161c27;
+    --border: #1f2937; --border-strong: #2c3a4f;
+    --text: #e6edf5; --text-soft: #c2cfde; --muted: #7d8aa0;
+    --accent: #3b82f6; --accent-soft: rgba(59,130,246,0.16); --accent-strong: #5b98f8;
+    --accent-2: #06b6d4; --accent-2-soft: rgba(6,182,212,0.16); --on-accent: #081120;
+    --success: #22c55e; --success-soft: rgba(34,197,94,0.15);
+    --warn: #fbbf24; --warn-soft: rgba(245,158,11,0.12); --warn-border: #f59e0b;
+    --danger: #f472b6; --danger-soft: rgba(244,114,182,0.14);
+    --code-bg: #0e1420; --code-text: #e6edf5;
+    --c-1: #3b82f6; --c-2: #06b6d4; --c-3: #22c55e; --c-4: #eab308;
+    --c-5: #a78bfa; --c-6: #f472b6; --c-7: #14b8a6; --c-8: #94a3b8;
+    --sidebar: #0c1119; --surface-hover: #1c2432;
+    --shadow-shell: 0 12px 36px rgba(0,0,0,0.55);
+    --shadow-pop: 0 18px 52px rgba(0,0,0,0.7);
+  }
+  :root {
+    --font-sans: "IBM Plex Sans", "IBM Plex Sans SC", ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+    --font-mono: "IBM Plex Mono", ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    --font-serif: "Iowan Old Style", "Songti SC", "Source Han Serif SC", Georgia, "Times New Roman", serif;
+    --radius-input: 10px; --radius-md: 12px; --radius-card: 16px; --radius-pill: 999px;
+    --dur: 150ms; --ease: cubic-bezier(0.4, 0, 0.2, 1);
+  }
+
+  /* ── shell ────────────────────────────────────────────────────────────────── */
   * { box-sizing: border-box; }
+  html { font-size: 15px; }
   /*
    * Nothing scrolls the document. Each column scrolls inside itself, so reading
    * back through one agent's conversation never moves the desktop out of view.
@@ -45,202 +115,397 @@ export const APP_HTML = String.raw`<!doctype html>
    */
   html, body { height: 100%; }
   body {
-    margin: 0; overflow: hidden; display: grid;
-    grid-template-columns: 232px minmax(340px, 1fr) minmax(420px, 1.05fr);
-    font: 14px/1.55 ui-sans-serif, -apple-system, "Segoe UI", system-ui, sans-serif;
+    margin: 0; overflow: hidden; display: flex; flex-direction: column;
+    font-family: var(--font-sans); font-size: 0.92rem; line-height: 1.55;
     background: var(--bg); color: var(--text);
+    font-synthesis: none; -webkit-font-smoothing: antialiased;
   }
-  .pane {
-    min-width: 0; min-height: 0; overflow: hidden;
-    display: flex; flex-direction: column; border-right: 1px solid var(--line);
+  ::selection { background: var(--accent-soft); color: var(--text); }
+  :focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+  a { color: var(--accent-2); text-decoration: none; }
+  a:hover { text-decoration: underline; }
+  .dim { color: var(--muted); }
+  .mono { font-family: var(--font-mono); }
+
+  #topbar {
+    flex: none; height: 40px; display: flex; align-items: center; gap: 12px;
+    padding: 0 14px; background: var(--surface-2); border-bottom: 1px solid var(--border);
   }
-  .pane:last-child { border-right: 0; }
-  h2, form, .bar, iframe { flex: none; }
-  h2 {
-    margin: 0; padding: 11px 14px; font-size: 11px; letter-spacing: .09em;
-    text-transform: uppercase; color: var(--dim); border-bottom: 1px solid var(--line);
-    display: flex; justify-content: space-between; align-items: center; gap: 8px;
+  #topbar .brand { display: flex; align-items: center; gap: 9px; font-weight: 600; font-size: 0.92rem; }
+  #topbar .brand svg { border-radius: 5px; display: block; }
+  #topbar .mid {
+    flex: 1; display: flex; justify-content: center; align-items: center; gap: 10px;
+    font-family: var(--font-mono); font-size: 12px; color: var(--muted);
+    overflow: hidden; white-space: nowrap;
   }
-  h2 .plain { text-transform: none; letter-spacing: 0; }
+  #topbar .mid b { color: var(--text-soft); font-weight: 500; }
+  #theme {
+    border: 0; background: none; color: var(--muted); cursor: pointer; padding: 4px;
+    border-radius: var(--radius-input); display: flex; transition: color var(--dur) var(--ease);
+  }
+  #theme:hover { color: var(--text); }
+
+  #shell { flex: 1; min-height: 0; display: flex; }
+  .pane { min-width: 0; min-height: 0; overflow: hidden; display: flex; flex-direction: column; }
   .scroll { overflow-y: auto; flex: 1; min-height: 0; }
 
-  .agent {
-    padding: 10px 14px; cursor: pointer; border-bottom: 1px solid var(--line);
-    display: flex; gap: 9px; align-items: flex-start;
-  }
-  .agent:hover { background: #20242b; }
-  .agent.on { background: #232935; box-shadow: inset 2px 0 0 var(--accent); }
-  .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--line); margin-top: 6px; flex: none; }
-  .dot.busy { background: var(--warn); animation: pulse 1s infinite; }
-  @keyframes pulse { 50% { opacity: .25; } }
-  .agent .nm { font-weight: 600; }
-  .agent .ttl { color: var(--dim); font-size: 12px; }
+  /* Left 224px fixed, right 480px fixed, middle flexes — the desktop never scrolls
+     out of view and each pane answers one question. */
+  #sidebar { width: 224px; flex: 0 0 224px; background: var(--sidebar); border-right: 1px solid var(--border); }
+  #rightpane { width: 480px; flex: 0 0 480px; border-left: 1px solid var(--border); }
+  @media (max-width: 1240px) { #rightpane { width: 380px; flex: 0 0 380px; } }
 
-  /* No pre-wrap: the body is rendered Markdown now, so the blocks carry the layout.
-     Leaving it on would add a blank line for every newline between two tags. */
-  .msg { padding: 11px 16px; border-bottom: 1px solid #21252c; word-break: break-word; }
-  .msg .who { font-size: 11px; letter-spacing: .06em; text-transform: uppercase; color: var(--dim); margin-bottom: 4px; }
-  .msg.user .who { color: var(--accent); }
+  .eyebrow {
+    font-size: 11px; letter-spacing: 0.13em; text-transform: uppercase; color: var(--muted);
+  }
+  .eyebrow-row {
+    flex: none; display: flex; align-items: center; justify-content: space-between;
+    padding: 14px 16px 8px;
+  }
+
+  /* ── buttons ──────────────────────────────────────────────────────────────── */
+  .btn {
+    font: inherit; font-size: 0.92rem; cursor: pointer; border-radius: var(--radius-input);
+    border: 1px solid var(--border-strong); background: var(--surface); color: var(--text);
+    padding: 7px 16px; transition: background var(--dur) var(--ease), border-color var(--dur) var(--ease);
+  }
+  .btn:hover:not(:disabled) { background: var(--surface-hover); }
+  .btn:disabled { opacity: 0.45; cursor: default; }
+  .btn.accent { background: var(--accent); border-color: var(--accent); color: var(--on-accent); }
+  .btn.accent:hover:not(:disabled) { background: var(--accent-strong); border-color: var(--accent-strong); }
+  .btn.ghost { border-color: transparent; background: none; color: var(--text-soft); }
+  .btn.ghost:hover:not(:disabled) { background: var(--surface-hover); }
+  .btn.sm { padding: 4px 12px; font-size: 12px; }
+
+  /* ── sidebar: who is working ──────────────────────────────────────────────── */
+  .agent {
+    margin: 0 8px 2px; padding: 9px 10px; cursor: pointer; border-radius: var(--radius-input);
+    display: flex; gap: 10px; align-items: center;
+    transition: background var(--dur) var(--ease);
+  }
+  .agent:hover { background: var(--surface-hover); }
+  .agent.on { background: var(--accent-soft); }
+  .agent.on .nm, .agent.on .ttl, .agent.on .dnum { color: var(--accent); }
+  .dot { width: 7px; height: 7px; border-radius: var(--radius-pill); background: var(--muted); flex: none; }
+  .dot.busy { background: var(--accent); animation: pulse 1.2s infinite; }
+  .dot.ok { background: var(--success); }
+  .dot.bad { background: var(--danger); }
+  @keyframes pulse { 50% { opacity: 0.3; } }
+  .agent .cols { flex: 1; min-width: 0; }
+  .agent .nm { font-weight: 600; font-size: 0.92rem; }
+  .agent .ttl {
+    color: var(--muted); font-size: 11px;
+    white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  }
+  .agent .dnum { font-family: var(--font-mono); font-size: 11px; color: var(--muted); }
+  #sidefoot {
+    flex: none; margin-top: auto; padding: 12px 16px; border-top: 1px solid var(--border);
+    display: flex; align-items: center; gap: 9px; font-size: 12px; color: var(--muted);
+  }
+  #sidefoot span:last-child { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+  /* ── pane headers ─────────────────────────────────────────────────────────── */
+  .paneheader {
+    flex: none; height: 52px; border-bottom: 1px solid var(--border);
+    display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 0 18px;
+  }
+  .paneheader .lead { display: flex; align-items: center; gap: 10px; min-width: 0; }
+  #title { font-weight: 600; font-size: 1rem; }
+  .roundpill {
+    display: flex; align-items: center; gap: 7px; font-family: var(--font-mono); font-size: 12px;
+    color: var(--accent); background: var(--accent-soft); padding: 4px 10px; border-radius: var(--radius-pill);
+    white-space: nowrap;
+  }
+  .roundpill:empty { display: none; }
+  .headactions { display: flex; align-items: center; gap: 10px; flex: none; }
+
+  /* ── consent, before the conversation: an agent waiting on a person has stopped
+        working, and scrolling to find that out is the interface keeping them waiting. */
+  #approvals { flex: none; display: flex; flex-direction: column; gap: 8px; padding: 12px 18px 0; }
+  .consent {
+    border: 1px solid var(--warn-border); background: var(--warn-soft);
+    border-radius: var(--radius-card); padding: 14px 16px;
+    display: flex; flex-direction: column; gap: 10px;
+  }
+  .consent .chead { display: flex; align-items: center; gap: 9px; font-weight: 600; font-size: 0.92rem; }
+  .consent .chead .dot { background: var(--warn); }
+  .consent code {
+    font-family: var(--font-mono); font-size: 12px; line-height: 1.6; color: var(--text-soft);
+    white-space: pre-wrap; word-break: break-word;
+  }
+  .consent .note { font-size: 12px; color: var(--text-soft); }
+  .consent .cactions { display: flex; gap: 8px; }
+
+  #progress { flex: none; margin: 12px 18px 0; border: 1px solid var(--border); border-radius: var(--radius-md); background: var(--surface); padding: 10px 14px; font-size: 12px; }
+  #progresshead { color: var(--text-soft); }
+  #progresshead b { font-weight: 600; color: var(--text); }
+  #progresslist { color: var(--muted); margin-top: 2px; }
+
+  /* ── the conversation ─────────────────────────────────────────────────────── */
+  #chat { padding: 18px 18px 8px; display: flex; flex-direction: column; gap: 4px; }
+  /* A flex column whose content overflows shrinks its items to fit — and an item with
+     overflow: hidden (the tool rows) may shrink to nothing, which is exactly what
+     happened: every tool call rendered as a 2px hairline. The scroller scrolls;
+     nothing inside it gets compressed. */
+  #chat > * { flex-shrink: 0; }
+  .msg { padding: 6px 0; word-break: break-word; }
+  .msg .who {
+    font-size: 11px; letter-spacing: 0.1em; text-transform: uppercase; color: var(--muted);
+    margin-bottom: 5px;
+  }
+  /* The agent's prose reads in the serif; everything operational stays in sans/mono. */
+  .msg .body { max-width: 680px; font-family: var(--font-serif); font-size: 1rem; line-height: 1.68; color: var(--text); }
+  .msg.user { align-self: flex-end; max-width: 560px; }
+  .msg.user .who { text-align: right; }
+  .msg.user .body {
+    font-family: var(--font-sans); font-size: 0.92rem; line-height: 1.6;
+    background: var(--surface-2); border: 1px solid var(--border);
+    border-radius: var(--radius-card); padding: 12px 15px;
+  }
   .msg .body > :first-child { margin-top: 0; }
   .msg .body > :last-child { margin-bottom: 0; }
   .msg .body p { margin: 0 0 8px; }
   .msg .body h1, .msg .body h2, .msg .body h3,
-  .msg .body h4, .msg .body h5, .msg .body h6 { margin: 14px 0 6px; font-size: 15px; line-height: 1.3; }
-  .msg .body h1 { font-size: 18px; }
-  .msg .body h2 { font-size: 16px; }
+  .msg .body h4, .msg .body h5, .msg .body h6 {
+    margin: 14px 0 6px; font-size: 1rem; line-height: 1.3; font-family: var(--font-sans); font-weight: 600;
+  }
+  .msg .body h1 { font-size: 1.15rem; }
+  .msg .body h2 { font-size: 1.05rem; }
   .msg .body ul, .msg .body ol { margin: 4px 0 8px; padding-left: 22px; }
   .msg .body li { margin: 2px 0; }
-  .msg .body a { color: var(--accent); }
+  .msg .body a { color: var(--accent-2); }
   .msg .body code {
-    font: 12.5px/1.5 ui-monospace, SFMono-Regular, Menlo, monospace;
-    background: #1b1f27; border: 1px solid var(--line); border-radius: 4px; padding: 1px 4px;
+    font-family: var(--font-mono); font-size: 12.5px; line-height: 1.5;
+    background: var(--code-bg); color: var(--code-text);
+    border: 1px solid var(--border); border-radius: 5px; padding: 1px 5px;
   }
   .msg .body pre {
-    margin: 8px 0; padding: 10px 12px; background: #0f1115; border: 1px solid var(--line);
+    margin: 8px 0; padding: 11px 13px; background: var(--code-bg); border: 1px solid var(--border);
     /* Scroll long lines rather than wrapping them: wrapped code misreads. */
-    border-radius: 6px; overflow-x: auto; word-break: normal;
+    border-radius: var(--radius-md); overflow-x: auto; word-break: normal;
+    font-family: var(--font-mono);
   }
   .msg .body pre code { background: none; border: 0; padding: 0; }
   .msg .body blockquote {
-    margin: 6px 0; padding: 2px 0 2px 12px; border-left: 2px solid var(--line); color: var(--dim);
+    margin: 6px 0; padding: 2px 0 2px 12px; border-left: 2px solid var(--border-strong); color: var(--muted);
   }
-  .msg .body hr { border: 0; border-top: 1px solid var(--line); margin: 12px 0; }
+  .msg .body hr { border: 0; border-top: 1px solid var(--border); margin: 12px 0; }
   /* Full width and wrapping cells, rather than a scrolling block: these tables are
      mostly long prose in two columns, and wrapping keeps all of it on screen. */
-  .msg .body table { border-collapse: collapse; margin: 8px 0; width: 100%; font-size: 13px; }
-  .msg .body th, .msg .body td {
-    border: 1px solid var(--line); padding: 5px 8px; text-align: left; vertical-align: top;
+  .msg .body table {
+    border-collapse: collapse; margin: 8px 0; width: 100%;
+    font-family: var(--font-sans); font-size: 13px;
   }
-  .msg .body th { background: #1b1f27; font-weight: 600; }
-  /* Tool calls collapse to one line. A turn can make dozens, each result can be pages
-     long, and shown in full the conversation becomes a log with the reasoning buried
-     in it. The summary is the call; arguments, output and screenshot are one click in. */
-  .tool { padding: 4px 16px; color: var(--dim); font: 12px/1.5 ui-monospace, SFMono-Regular, Menlo, monospace; }
-  .tool .nm { color: var(--accent); }
+  .msg .body th, .msg .body td {
+    border: 1px solid var(--border); padding: 5px 8px; text-align: left; vertical-align: top;
+  }
+  .msg .body th { background: var(--surface-2); font-weight: 600; }
+
+  /* Tool calls collapse to one line: tool name · argument summary. A turn can make
+     dozens, each result can be pages long, and shown in full the conversation becomes
+     a log with the reasoning buried in it. The rest is one click in. */
+  details.tool {
+    max-width: 680px; margin: 2px 0; border: 1px solid var(--border); border-radius: var(--radius-input);
+    background: var(--surface); overflow: hidden;
+    font-family: var(--font-mono); font-size: 12px; color: var(--text-soft);
+  }
   details.tool > summary {
-    cursor: pointer; list-style: none;
+    cursor: pointer; list-style: none; padding: 8px 12px;
     white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+    transition: background var(--dur) var(--ease);
   }
   details.tool > summary::-webkit-details-marker { display: none; }
-  details.tool > summary::before { content: "\25b8  "; }
-  details.tool[open] > summary::before { content: "\25be  "; }
-  details.tool > summary:hover { color: var(--text); }
+  details.tool > summary::before { content: "\25b8"; color: var(--muted); margin-right: 8px; }
+  details.tool[open] > summary::before { content: "\25be"; }
+  details.tool > summary:hover { background: var(--surface-hover); }
+  details.tool .nm { color: var(--accent-2); }
   details.tool .det {
-    white-space: pre-wrap; word-break: break-word; color: var(--text);
-    padding: 5px 0 6px 15px; opacity: .9;
+    white-space: pre-wrap; word-break: break-word; color: var(--code-text);
+    background: var(--code-bg); border-top: 1px solid var(--border);
+    padding: 10px 13px; line-height: 1.6;
   }
-  details.tool.err > summary, details.tool.err .det { color: var(--err); }
-  /* A teammate message: a one-line hint naming the agent, not the message body.
-     The text is there when you open it. */
-  details.note > summary { color: var(--ok); }
-  .note .chip {
-    background: #232935; border: 1px solid var(--line); border-radius: 9px;
-    padding: 0 7px; color: var(--text);
+  details.tool.err { border-color: var(--danger); }
+  details.tool.err > summary, details.tool.err .det { color: var(--danger); }
+  details.tool .shot {
+    display: block; max-width: 100%; margin: 0;
+    border-top: 1px solid var(--border);
   }
-  .shot { display: block; max-width: 100%; margin: 8px 0 2px; border: 1px solid var(--line); border-radius: 4px; }
-  form { display: flex; gap: 8px; padding: 10px; border-top: 1px solid var(--line); }
-  textarea {
-    flex: 1; resize: none; height: 62px; padding: 9px 11px; border-radius: 6px;
-    border: 1px solid var(--line); background: #0f1115; color: var(--text); font: inherit;
+  /* A teammate message is a notification with a hairline, not a bubble: who and which
+     direction on the line, the text itself one click in. */
+  details.note {
+    max-width: 680px; margin: 6px 0; border-top: 1px solid var(--border); border-bottom: 1px solid var(--border);
+    font-size: 0.92rem; color: var(--text-soft);
   }
-  textarea:focus { outline: 0; border-color: var(--accent); }
-  button {
-    padding: 0 16px; border-radius: 6px; border: 1px solid var(--line);
-    background: #262c36; color: var(--text); font: inherit; cursor: pointer;
+  details.note > summary { cursor: pointer; list-style: none; padding: 8px 2px; }
+  details.note > summary::-webkit-details-marker { display: none; }
+  details.note .peerdot {
+    display: inline-block; width: 6px; height: 6px; border-radius: var(--radius-pill);
+    margin-right: 9px; vertical-align: middle; background: var(--muted);
   }
-  button:hover:not(:disabled) { border-color: var(--accent); }
-  button:disabled { opacity: .45; cursor: default; }
+  details.note .chip { font-weight: 600; color: var(--text); }
+  details.note .det {
+    white-space: pre-wrap; word-break: break-word; color: var(--text-soft);
+    font-size: 13px; padding: 0 2px 10px 15px;
+  }
 
-  iframe { width: 100%; border: 0; background: #000; aspect-ratio: 16/10; flex: none; }
+  /* ── composer ─────────────────────────────────────────────────────────────── */
+  #form { flex: none; display: flex; flex-direction: column; gap: 8px; padding: 12px 18px 14px; border-top: 1px solid var(--border); position: relative; }
+  #form .inputrow { display: flex; gap: 10px; align-items: flex-end; }
+  textarea {
+    flex: 1; resize: none; height: 58px; padding: 11px 13px; border-radius: var(--radius-input);
+    border: 1px solid var(--border-strong); background: var(--surface); color: var(--text); font: inherit;
+    transition: border-color var(--dur) var(--ease);
+  }
+  textarea::placeholder { color: var(--muted); }
+  textarea:focus { outline: 0; border-color: var(--accent); }
+  .hintrow { display: flex; justify-content: space-between; font-size: 12px; color: var(--muted); }
+  .hintrow .mono { font-size: 11px; }
+  #slashmenu {
+    position: absolute; bottom: 100%; left: 18px; right: 18px; margin-bottom: 4px;
+    background: var(--surface); border: 1px solid var(--border-strong);
+    border-radius: var(--radius-md); box-shadow: var(--shadow-pop);
+    max-height: 200px; overflow: auto; z-index: 5;
+  }
+  #slashmenu .row { padding: 7px 11px; cursor: pointer; }
+  #slashmenu .row:hover, #slashmenu .row.on { background: var(--accent-soft); }
+  #slashmenu b { font-size: 0.92rem; }
+
+  /* ── right pane: what is happening now ────────────────────────────────────── */
+  .tab {
+    padding: 4px 12px; border-radius: var(--radius-pill); text-decoration: none;
+    font-size: 12px; color: var(--muted); transition: background var(--dur) var(--ease);
+  }
+  .tab:hover { text-decoration: none; background: var(--surface-hover); }
+  .tab.on { background: var(--accent-soft); color: var(--accent); }
+  #desktoptitle { font-size: 12px; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .paneheader a { font-size: 12px; }
+  a#rec.on { color: var(--danger); }
+
+  .desktopwrap { flex: none; padding: 14px 16px 10px; }
+  iframe {
+    width: 100%; border: 1px solid var(--border-strong); border-radius: var(--radius-md);
+    background: #000; aspect-ratio: 16/10; display: block;
+  }
   /* The desktop keeps its size no matter how long the activity feed gets. */
   #vnc { min-height: 240px; }
-  .feed { flex: 1; min-height: 0; overflow-y: auto; padding: 6px 0; }
-  .ev { padding: 3px 14px; font: 12px/1.55 ui-monospace, SFMono-Regular, Menlo, monospace; color: var(--dim); }
-  .ev b { color: var(--text); font-weight: 600; }
-  .ev .t { color: #59616e; }
-  .ev.mail { color: var(--ok); }
-  .ev.err { color: var(--err); }
-  .ev.warn { color: var(--warn); }
-  .bar { padding: 8px 14px; color: var(--dim); font-size: 12px; border-bottom: 1px solid var(--line); }
-  .bar b { color: var(--text); }
+  .bar { flex: none; padding: 7px 16px; color: var(--muted); font-size: 12px; }
+  .bar b { color: var(--text-soft); font-weight: 500; }
+  #recordings a { margin-right: 10px; }
   /* One line, because it sits between the desktop and the activity feed. */
   #clipbar { display: flex; gap: 6px; align-items: center; }
+  #clipbar b { font-family: var(--font-mono); font-size: 11px; }
   #clipbar input {
-    flex: 1; min-width: 0; padding: 3px 7px; border-radius: 4px;
-    border: 1px solid var(--line); background: #0f1115; color: var(--text);
-    font: 12px/1.5 ui-monospace, SFMono-Regular, Menlo, monospace;
+    flex: 1; min-width: 0; padding: 4px 9px; border-radius: var(--radius-input);
+    border: 1px solid var(--border-strong); background: var(--surface); color: var(--text);
+    font-family: var(--font-mono); font-size: 12px;
   }
-  #clipbar button { padding: 2px 9px; font-size: 12px; }
-  h2 a { color: var(--accent); text-decoration: none; margin-right: 10px; }
-  h2 a#rec.on { color: var(--err); }
-  #recordings a { color: var(--accent); text-decoration: none; margin-right: 10px; }
-  #recordings a:hover { text-decoration: underline; }
-  h2 a:hover { text-decoration: underline; }
+  #clipbar input:focus { outline: 0; border-color: var(--accent); }
+  .bar.note { line-height: 1.6; padding-bottom: 10px; }
+
+  .activityhead { border-top: 1px solid var(--border); padding-top: 12px; }
+  .feed { flex: 1; min-height: 0; overflow-y: auto; padding: 2px 0 8px; }
+  .ev {
+    padding: 4px 16px; font-size: 12px; line-height: 1.55; color: var(--muted);
+    border-top: 1px solid var(--border);
+  }
+  .ev:first-child { border-top: 0; }
+  .ev b { color: var(--text-soft); font-weight: 600; }
+  .ev .t { font-family: var(--font-mono); color: var(--muted); margin-right: 4px; }
+  .ev.mail { color: var(--success); }
+  .ev.err { color: var(--danger); }
+  .ev.warn { color: var(--warn); }
+
+  /* ── files ────────────────────────────────────────────────────────────────── */
+  #filespreview pre { white-space: pre-wrap; word-break: break-word; margin: 0; padding: 10px 14px; font-family: var(--font-mono); font-size: 12px; }
+  #filespreview img, #filespreview video { max-width: 100%; display: block; }
+  #fileslist .row { padding: 6px 12px; cursor: pointer; font-size: 13px; }
+  #fileslist .row:hover { background: var(--surface-hover); }
+  #fileslist .row.on { background: var(--accent-soft); }
+  #filesview.dropping { outline: 2px dashed var(--accent); outline-offset: -4px; }
+  #filesbar { display: flex; justify-content: space-between; gap: 8px; border-bottom: 1px solid var(--border); }
+  #filesbar b { font-family: var(--font-mono); font-size: 11px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  #filesbar .plain a, #filesbar .plain label { margin-left: 10px; color: var(--accent-2); cursor: pointer; }
 </style>
 </head>
 <body>
 
-<div class="pane">
-  <h2><span>Agents</span><button id="new" style="padding:2px 9px;font-size:12px">+</button></h2>
+<header id="topbar">
+  <span class="brand">
+    <svg width="20" height="20" viewBox="0 0 128 128" aria-hidden="true"><rect x="4" y="4" width="120" height="120" rx="30" fill="#231a13"/><path d="M64 32 96 49 64 66 32 49Z" fill="#d9634a"/><path d="M32 49 64 66v32L32 81Z" fill="#d9634a" fill-opacity=".62"/><path d="M96 49 64 66v32l32-17Z" fill="#d9634a" fill-opacity=".34"/></svg>
+    LumenBox
+  </span>
+  <span class="mid"><span id="model">&mdash;</span></span>
+  <button id="theme" title="Switch theme" aria-label="Switch theme">
+    <svg id="themesun" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M2 12h2M20 12h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4"/></svg>
+    <svg id="thememoon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12.8A9 9 0 1 1 11.2 3a7 7 0 0 0 9.8 9.8Z"/></svg>
+  </button>
+</header>
+
+<div id="shell">
+
+<div class="pane" id="sidebar">
+  <div class="eyebrow-row"><span class="eyebrow">Agents</span><button id="new" class="btn ghost sm" title="New agent">+</button></div>
   <div class="scroll" id="agents"></div>
+  <div id="sidefoot"><span class="dot" id="boxdot"></span><span id="boxinfo">box</span></div>
 </div>
 
-<div class="pane">
-  <h2>
-    <span id="title">&mdash;</span>
-    <span class="plain">
-      <span id="round"></span>
+<div class="pane" id="middle">
+  <div class="paneheader">
+    <span class="lead"><span id="title">&mdash;</span></span>
+    <span class="headactions">
+      <span id="round" class="roundpill"></span>
       <!-- Only shown while a turn is running: a stop button with nothing to stop invites a click
            that does nothing, and then the real one is not trusted. -->
-      <button id="stop" style="display:none;padding:2px 9px;font-size:12px">stop</button>
+      <button id="stop" class="btn sm" style="display:none">Stop</button>
     </span>
-  </h2>
+  </div>
   <!-- Ahead of the conversation on purpose. An agent waiting on consent has stopped working, and a
        person who has to scroll to find that out has been kept waiting by the interface. -->
-  <div class="bar" id="approvals" style="display:none;flex-direction:column;align-items:stretch;gap:6px"></div>
-  <div class="bar" id="progress" style="display:none;flex-direction:column;align-items:stretch">
+  <div id="approvals" style="display:none"></div>
+  <div id="progress" style="display:none">
     <div id="progresshead"></div>
-    <div id="progresslist" style="font-size:12px;opacity:0.85"></div>
+    <div id="progresslist"></div>
   </div>
   <div class="scroll" id="chat"></div>
-  <!-- Anchored above the composer so it does not cover what is being typed. -->
-  <div id="slashmenu" style="display:none;position:absolute;bottom:64px;left:10px;right:10px;background:var(--panel);border:1px solid var(--line);border-radius:6px;max-height:180px;overflow:auto;z-index:5"></div>
-  <form id="form" style="position:relative">
-    <textarea id="input" placeholder="Ask this agent to do something.  Enter sends, Shift+Enter for a newline."></textarea>
-    <button id="send">Send</button>
+  <form id="form">
+    <!-- Anchored above the composer so it does not cover what is being typed. -->
+    <div id="slashmenu" style="display:none"></div>
+    <div class="inputrow">
+      <textarea id="input" placeholder="Message this agent&hellip;"></textarea>
+      <button id="send" class="btn accent">Send</button>
+    </div>
+    <div class="hintrow"><span>&#9166; send &middot; &#8679;&#9166; newline &middot; / skills</span></div>
   </form>
 </div>
 
-<div class="pane">
-  <h2>
+<div class="pane" id="rightpane">
+  <div class="paneheader">
     <!-- Tabs rather than a third panel: the files view needs the height, and stacking it under a
          150px-tall desktop gave neither enough room to be usable. -->
-    <span>
+    <span class="lead">
       <a href="#" id="tabdesktop" class="tab on">Desktop</a>
       <a href="#" id="tabfiles" class="tab">Files</a>
-      <span id="desktoptitle" class="dim"></span>
+      <span id="desktoptitle"></span>
     </span>
-    <span class="plain">
+    <span class="headactions">
       <a id="rec" href="#">&#9679; record</a>
-      <a id="full" href="#" target="_blank" rel="noopener">open full size</a>
-      <span id="boxinfo"></span>
+      <a id="full" href="#" target="_blank" rel="noopener" class="btn sm" style="text-decoration:none">Take over</a>
     </span>
-  </h2>
+  </div>
   <div id="desktopview">
-  <div class="bar" id="model">&mdash;</div>
-  <div class="bar" id="recordings" style="display:none"></div>
-  <div class="bar" id="clipbar">
-    <b>clipboard</b>
-    <input id="cliptext" placeholder="text to paste into the box" spellcheck="false">
-    <button id="clipin" title="Put this on the box's clipboard, then press Ctrl+V in the desktop">&rarr; box</button>
-    <button id="clipout" title="Read the box's clipboard and copy it here">&larr; box</button>
-  </div>
-  <iframe id="vnc" title="box desktop"></iframe>
-  <div class="bar" style="border-top:1px solid var(--line);border-bottom:0">
-    Every agent has its own desktop, so they never fight over focus. This shows the
-    selected agent's. Click it for keyboard focus, or open it full size — you can
-    drive one while the others keep working.
-  </div>
+    <div class="desktopwrap"><iframe id="vnc" title="box desktop"></iframe></div>
+    <div class="bar" id="recordings" style="display:none"></div>
+    <div class="bar" id="clipbar">
+      <b>clipboard</b>
+      <input id="cliptext" placeholder="text to paste into the box" spellcheck="false">
+      <button id="clipin" class="btn sm" title="Put this on the box's clipboard, then press Ctrl+V in the desktop">&rarr; box</button>
+      <button id="clipout" class="btn sm" title="Read the box's clipboard and copy it here">&larr; box</button>
+    </div>
+    <div class="bar note">
+      Every agent has its own desktop, so they never fight over focus. This shows the
+      selected agent's. Click it for keyboard focus, or take it over full size &mdash; you
+      can drive one while the others keep working.
+    </div>
   </div>
 
   <!-- The files view. Two columns: what is there, and what is in the selected one. Previewing in
@@ -252,16 +517,18 @@ export const APP_HTML = String.raw`<!doctype html>
       <span class="plain">
         <a href="#" id="filesup">up</a>
         <a href="#" id="filesrefresh">refresh</a>
-        <label class="dim" style="cursor:pointer">add file<input id="filesupload" type="file" multiple style="display:none"></label>
+        <label class="dim">add file<input id="filesupload" type="file" multiple style="display:none"></label>
       </span>
     </div>
     <div id="filessplit" style="display:flex;flex:1;min-height:0">
-      <div class="scroll" id="fileslist" style="width:44%;border-right:1px solid var(--line)"></div>
-      <div class="scroll" id="filespreview" style="flex:1"><div class="dim" style="padding:10px">Select a file.</div></div>
+      <div class="scroll" id="fileslist" style="width:44%;border-right:1px solid var(--border)"></div>
+      <div class="scroll" id="filespreview" style="flex:1"><div class="dim" style="padding:10px 14px">Select a file.</div></div>
     </div>
   </div>
-  <h2 style="border-top:1px solid var(--line)">Activity &mdash; all agents</h2>
+  <div class="eyebrow-row activityhead"><span class="eyebrow">Activity &mdash; all agents</span></div>
   <div class="feed" id="feed"></div>
+</div>
+
 </div>
 
 <script src="/vendor/markdown-it.js"></script>
@@ -304,6 +571,21 @@ function renderMarkdown(text) {
 
 function $(id) { return document.getElementById(id); }
 
+// ── theme ──────────────────────────────────────────────────────────────────
+// The boot script in <head> chose before first paint; this button only mutates.
+function showThemeIcon() {
+  var dark = document.documentElement.getAttribute("data-theme") === "dark";
+  $("themesun").style.display = dark ? "" : "none";
+  $("thememoon").style.display = dark ? "none" : "";
+}
+$("theme").onclick = function () {
+  var next = document.documentElement.getAttribute("data-theme") === "dark" ? "light" : "dark";
+  document.documentElement.setAttribute("data-theme", next);
+  try { localStorage.setItem("lumen-theme", next); } catch (error) {}
+  showThemeIcon();
+};
+showThemeIcon();
+
 var agents = [];
 var current = null;
 var busy = new Set();
@@ -323,6 +605,17 @@ function nearBottom(el) {
 function nameOf(id) {
   for (var i = 0; i < agents.length; i++) if (agents[i].id === id) return agents[i].name;
   return String(id).slice(0, 8);
+}
+
+/**
+ * The agent's identity color: assigned by roster position, stable while it exists.
+ * Status is always a dot plus a word; this color marks identity, never state.
+ */
+function colorOfName(name) {
+  for (var i = 0; i < agents.length; i++) {
+    if (agents[i].name === name) return "var(--c-" + ((i % 8) + 1) + ")";
+  }
+  return "var(--muted)";
 }
 
 /**
@@ -352,10 +645,11 @@ function renderAgents() {
     var a = agents[i];
     html += '<div class="agent ' + (a.id === current ? "on" : "") + '" data-id="' + esc(a.id) + '">' +
       '<div class="dot ' + (busy.has(a.id) ? "busy" : "") + '"></div>' +
-      '<div style="min-width:0"><div class="nm">' + esc(a.name) + "</div>" +
-      '<div class="ttl">' + esc(String(a.title || a.description || "").slice(0, 40)) +
-      (a.displayIndex ? ' <span style="opacity:.7">:' + esc(a.displayIndex) + "</span>" : "") +
-      "</div></div></div>";
+      '<div class="cols"><div class="nm">' + esc(a.name) + "</div>" +
+      '<div class="ttl">' + esc(busy.has(a.id) ? "Running" : String(a.title || a.description || "idle").slice(0, 40)) +
+      "</div></div>" +
+      (a.displayIndex ? '<span class="dnum">d' + esc(a.displayIndex) + "</span>" : "") +
+      "</div>";
   }
   $("agents").innerHTML = html;
   var nodes = document.querySelectorAll(".agent");
@@ -434,16 +728,25 @@ function toolCall(name, detail, result, isError) {
  *
  * The established pattern for this is an inline hint — "Messaged [Bob]" — naming the
  * agent rather than quoting what was sent. Following that: the row says who and which
- * direction, and the message itself is one click away.
+ * direction, and the message itself is one click away. The dot carries the teammate's
+ * identity color, the same one the roster gave them.
  */
 function peerNote(direction, name, text, priority) {
   var oneLine = String(text == null ? "" : text).replace(/\s+/g, " ");
-  return collapsedRow(
-    "note",
-    "&#9993; " + esc(direction) + ' <span class="chip">' + esc(name) + "</span>" +
-      (priority ? " (priority)" : "") + " " + esc(oneLine.slice(0, 60)),
-    text
-  );
+  var row = document.createElement("details");
+  row.className = "note";
+  row.innerHTML = "<summary>" +
+    '<span class="peerdot" style="background:' + colorOfName(name) + '"></span>' +
+    esc(direction) + ' <span class="chip">' + esc(name) + "</span>" +
+    (priority ? " (priority)" : "") +
+    ' <span class="dim">' + esc(oneLine.slice(0, 60)) + "</span>" +
+    '</summary><div class="det"></div>';
+  row.querySelector(".det").textContent = String(text == null ? "" : text);
+  var el = $("chat");
+  var stick = nearBottom(el);
+  el.appendChild(row);
+  if (stick) el.scrollTop = el.scrollHeight;
+  return row;
 }
 
 /** Points the desktop pane at one agent's own display. */
@@ -451,11 +754,11 @@ function showDesktop(id) {
   var agent = null;
   for (var i = 0; i < agents.length; i++) if (agents[i].id === id) agent = agents[i];
   if (!agent || !agent.desktopUrl) {
-    $("desktoptitle").textContent = "Desktop";
+    $("desktoptitle").textContent = "";
     $("full").style.display = "none";
     return;
   }
-  $("desktoptitle").textContent = agent.name + "'s desktop (:" + agent.displayIndex + ")";
+  $("desktoptitle").textContent = agent.name + " · d" + agent.displayIndex;
   $("full").href = agent.desktopUrl;
   $("full").style.display = "";
   // Only reload when it is a different desktop: re-setting src restarts noVNC and
@@ -512,8 +815,9 @@ function select(id) {
 function refresh() {
   return fetch("/api/state").then(function (r) { return r.json(); }).then(function (state) {
     agents = state.agents;
-    $("model").innerHTML = "<b>model</b> " + esc(state.provider);
-    $("boxinfo").textContent = state.box.ok ? state.box.detail : "unavailable";
+    $("model").innerHTML = "<b>" + esc(state.provider) + "</b>";
+    $("boxinfo").textContent = state.box.ok ? state.box.detail : "box unavailable";
+    $("boxdot").className = "dot " + (state.box.ok ? "ok" : "bad");
     if (!current && agents.length) return select(agents[0].id);
     renderAgents();
     // A newly created agent gets its display assigned server-side; keep the pane
@@ -558,12 +862,14 @@ function renderApprovals(pending) {
   box.innerHTML = pending.map(function (item) {
     // The exact text the fingerprint was taken over. Not a summary of it: consent is given to what
     // is read here, so anything shortened would be consent to something else.
-    return '<div style="display:flex;gap:8px;align-items:flex-start">' +
-      '<b style="color:var(--warn)">approve?</b>' +
-      '<code style="flex:1;white-space:pre-wrap;word-break:break-all">' + esc(item.description) + '</code>' +
-      '<button data-approve="' + esc(item.id) + '">allow</button>' +
-      '<button data-deny="' + esc(item.id) + '">deny</button>' +
-      '</div>';
+    return '<div class="consent">' +
+      '<div class="chead"><span class="dot"></span>Consent needed &mdash; the turn is paused until you answer</div>' +
+      "<code>" + esc(item.description) + "</code>" +
+      '<div class="note">Approving covers this request only.</div>' +
+      '<div class="cactions">' +
+      '<button class="btn sm accent" data-approve="' + esc(item.id) + '">Allow once</button>' +
+      '<button class="btn sm ghost" data-deny="' + esc(item.id) + '">Refuse</button>' +
+      "</div></div>";
   }).join("");
 }
 
@@ -577,7 +883,7 @@ document.getElementById("approvals").addEventListener("click", function (event) 
     headers: { "content-type": "application/json" },
     body: JSON.stringify({ id: allow || deny })
   }).then(function () {
-    feed(allow ? "you allowed an action" : "you denied an action", "warn");
+    feed(allow ? "you allowed an action" : "you refused an action", "warn");
     // The agent does not resume by itself: it was told to stop and ask. Say so, rather than
     // leaving a person waiting for something that is not coming.
     if (allow) feed("send the agent a message to have it retry the approved action", "");
@@ -616,7 +922,7 @@ function refreshProgress() {
       $("progress").style.display = "";
       var done = todos.filter(function (t) { return t.status === "done"; }).length;
       head.innerHTML = "<b>plan</b> " + (hasPlan ? esc(state.plan.split("\n")[0]) : "&mdash;") +
-        (todos.length ? ' <span class="plain">' + done + "/" + todos.length + " done</span>" : "");
+        (todos.length ? ' <span class="dim mono">' + done + "/" + todos.length + " done</span>" : "");
       list.innerHTML = todos.map(function (t) {
         var mark = t.status === "done" ? "&#10003;" : t.status === "doing" ? "&rarr;" :
           t.status === "blocked" ? "&#9888;" : "&middot;";
@@ -693,7 +999,7 @@ function refreshFiles(dir) {
         return String(b.modified || "").localeCompare(String(a.modified || ""));
       });
       if (!entries.length) {
-        $("fileslist").innerHTML = '<div class="dim" style="padding:10px">Nothing here yet. Agents write to this directory; you can drop a file in.</div>';
+        $("fileslist").innerHTML = '<div class="dim" style="padding:10px 12px">Nothing here yet. Agents write to this directory; you can drop a file in.</div>';
         return;
       }
       $("fileslist").innerHTML = entries.map(function (e) {
@@ -702,11 +1008,11 @@ function refreshFiles(dir) {
         var meta = e.type === "directory" ? "" : fmtBytes(e.size) + " · " + fmtWhen(e.modified);
         return '<div class="row' + on + '" data-path="' + esc(full) + '" data-type="' + esc(e.type) + '">' +
           esc(e.name) + (e.type === "directory" ? "/" : "") +
-          '<div class="dim" style="font-size:11px">' + esc(meta) + "</div></div>";
+          '<div class="dim mono" style="font-size:11px">' + esc(meta) + "</div></div>";
       }).join("");
     })
     .catch(function () {
-      $("fileslist").innerHTML = '<div class="dim" style="padding:10px">Could not read the work directory.</div>';
+      $("fileslist").innerHTML = '<div class="dim" style="padding:10px 12px">Could not read the work directory.</div>';
     });
 }
 
@@ -714,8 +1020,8 @@ function previewFile(path) {
   filesSelected = path;
   var name = path.split("/").pop();
   var kind = fileKind(name);
-  var head = '<div class="bar" style="border-top:0"><b>' + esc(name) + "</b>" +
-    '<span class="plain"><a href="' + fileUrl(path, true) + '">save</a>' +
+  var head = '<div class="bar" style="border-bottom:1px solid var(--border)"><b>' + esc(name) + "</b>" +
+    ' <span><a href="' + fileUrl(path, true) + '">save</a> ' +
     '<a href="' + fileUrl(path) + '" target="_blank" rel="noopener">open</a></span></div>';
 
   if (kind === "image") {
@@ -730,13 +1036,13 @@ function previewFile(path) {
     // Said rather than guessed at: a binary rendered as text is a screen of noise, and pretending to
     // preview it wastes the one action a person came here to take.
     $("filespreview").innerHTML = head +
-      '<div class="dim" style="padding:10px">' +
+      '<div class="dim" style="padding:10px 14px">' +
       (kind === "pdf" ? "PDF — open it in a tab, or save it." : "Not a text file. Save it to look at it.") +
       "</div>";
     return Promise.resolve();
   }
 
-  $("filespreview").innerHTML = head + '<div class="dim" style="padding:10px">Loading…</div>';
+  $("filespreview").innerHTML = head + '<div class="dim" style="padding:10px 14px">Loading…</div>';
   return fetch(fileUrl(path))
     .then(function (r) { return r.text(); })
     .then(function (body) {
@@ -744,11 +1050,11 @@ function previewFile(path) {
       // it to. Everything else escaped into a <pre>: it is text, not markup.
       $("filespreview").innerHTML = head +
         (kind === "markdown"
-          ? '<div style="padding:10px">' + renderMarkdown(body) + "</div>"
+          ? '<div class="msg" style="padding:10px 14px"><div class="body" style="font-family:var(--font-sans);font-size:0.92rem">' + renderMarkdown(body) + "</div></div>"
           : "<pre>" + esc(body) + "</pre>");
     })
     .catch(function () {
-      $("filespreview").innerHTML = head + '<div class="dim" style="padding:10px">Could not read it.</div>';
+      $("filespreview").innerHTML = head + '<div class="dim" style="padding:10px 14px">Could not read it.</div>';
     });
 }
 
@@ -902,7 +1208,7 @@ function renderSlash() {
   var found = slashMatches(query);
   if (!found.length) {
     menu.style.display = "";
-    menu.innerHTML = '<div class="dim" style="padding:8px">' +
+    menu.innerHTML = '<div class="dim" style="padding:8px 11px">' +
       (skills.length ? "No skill matches." : "No skills yet. Ask an agent to write one when it works something out.") +
       "</div>";
     return;
@@ -910,7 +1216,7 @@ function renderSlash() {
   if (slashIndex >= found.length) slashIndex = 0;
   menu.style.display = "";
   menu.innerHTML = found.map(function (skill, index) {
-    return '<div class="row' + (index === slashIndex ? " on" : "") + '" data-skill="' + esc(skill.name) + '" style="padding:5px 9px;cursor:pointer">' +
+    return '<div class="row' + (index === slashIndex ? " on" : "") + '" data-skill="' + esc(skill.name) + '">' +
       "<b>" + esc(skill.name) + "</b>" +
       '<div class="dim" style="font-size:11px">' + esc(skill.description) + "</div></div>";
   }).join("");
@@ -947,7 +1253,7 @@ function activityLine(e) {
   if (e.type === "tool_start") return { html: "<b>" + esc(e.agentName) + "</b> &rarr; " + esc(e.tool), cls: "" };
   if (e.type === "message_sent") {
     return {
-      html: "&#9993; <b>" + esc(e.fromName) + "</b> &rarr; <b>" + esc(e.toName) + "</b>" +
+      html: "<b>" + esc(e.fromName) + "</b> &rarr; <b>" + esc(e.toName) + "</b>" +
         (e.priority ? " (priority)" : "") + ": " + esc(String(e.text).slice(0, 90)),
       cls: "mail"
     };
@@ -1323,12 +1629,12 @@ $("rec").onclick = function (event) {
     });
   }).then(function (data) {
     recording = starting ? data.file : null;
-    link.textContent = starting ? "\u25a0 stop" : "\u25cf record";
+    link.textContent = starting ? "■ stop" : "● record";
     link.className = starting ? "on" : "";
     if (!starting) feed("recording saved: " + esc(data.file), "mail");
     return loadRecordings();
   }).catch(function (error) {
-    link.textContent = "\u25cf record";
+    link.textContent = "● record";
     link.className = "";
     recording = null;
     feed("recording: " + esc(error.message), "err");
