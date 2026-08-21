@@ -1,6 +1,7 @@
-# agentbox
+# lumenbox
 
 A multi-agent orchestrator with a remote Docker "box" and Linux computer-use.
+(The CLI and internal names still use the working name `agentbox`.)
 
 This is an independent implementation of an architecture described in local research
 notes, built around the three parts that make it interesting:
@@ -704,3 +705,7 @@ Documented rather than discovered later: no WebAuthn bridging into the box, no
 per-step checkpointing of a turn's side effects (an interrupted turn is resumed with
 its last action marked *outcome unknown*, never replayed), and no cluster scheduling —
 one box per tenant, one machine. The full boundary lives in `docs/01-requirements.md` §5.
+
+## License
+
+GPL-3.0-only. See [LICENSE](LICENSE).
