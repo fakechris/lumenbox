@@ -114,6 +114,7 @@ export async function downloadFile(request: DownloadFileRequest): Promise<Downlo
   const path = await requireDownloadable(request.path);
   const info = await stat(path);
   if (info.isDirectory()) throw new Error(`${path} is a directory`);
+  if (!info.isFile()) throw new Error(`${path} is not a regular file`);
   if (info.size > MAX_DOWNLOAD_BYTES) {
     throw new Error(
       `${path} is ${info.size} bytes, over the ${MAX_DOWNLOAD_BYTES}-byte limit for handing a file ` +
@@ -190,6 +191,13 @@ export async function readFile(
   const info = await stat(path);
   if (info.isDirectory()) {
     throw new Error(`${path} is a directory; use fs/list`);
+  }
+  // Only regular files. A character device like /dev/zero reports size 0 — the same as an empty
+  // file — and reading it never ends, so it walks straight past the size guard below and reads
+  // until the daemon is out of memory. "Size 0" meaning both "empty" and "unbounded" is the same
+  // two-states bug this review keeps finding.
+  if (!info.isFile()) {
+    throw new Error(`${path} is not a regular file, so it cannot be read as text.`);
   }
   if (info.size > MAX_READ_BYTES) {
     throw new Error(

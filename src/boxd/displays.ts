@@ -16,7 +16,7 @@
 import { envNumber } from "../config.ts";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
-import { copyFileSync, readFileSync, statSync, truncateSync, writeFileSync } from "node:fs";
+import { copyFileSync, readFileSync, renameSync, rmSync, statSync, truncateSync, writeFileSync } from "node:fs";
 import { createHash } from "node:crypto";
 import {
   DEFAULT_DISPLAY_INDEX,
@@ -52,6 +52,8 @@ const LOG_COMPONENTS = [
   "autocutsel",
   "x11vnc",
   "novnc",
+  "x11vnc-ro",
+  "novnc-ro",
 ];
 
 export interface Desktop {
@@ -110,42 +112,86 @@ function ownerHash(token: string): string {
  * figure work claims use, and for the same reason: longer than any single stretch of real work,
  * shorter than a working day.
  */
-const OWNER_TTL_MS = envNumber("BOXD_DISPLAY_OWNER_TTL_MS", 30 * 60_000);
+// Floored at a minute: a zero or negative TTL configured by mistake would expire every lease
+// instantly, turning the lease into no protection at all.
+const OWNER_TTL_MS = Math.max(60_000, envNumber("BOXD_DISPLAY_OWNER_TTL_MS", 30 * 60_000));
 
 function rememberOwner(index: number, token: string, log: (line: string) => void): void {
+  const path = ownerFile(index);
+  const temp = `${path}.${process.pid}.tmp`;
   try {
-    writeFileSync(
-      ownerFile(index),
-      JSON.stringify({ hash: ownerHash(token), at: Date.now() }),
-      { encoding: "utf8", mode: 0o600 }
-    );
+    // Temp-plus-rename, so a reader never sees a half-written claim. In-place writing let a torn or
+    // interrupted write leave an empty or partial file, which the reader below then took for "no
+    // owner" — and handed a live desktop, with its browser session, to the next agent. A rename is
+    // atomic on one filesystem, so the file is only ever absent, the old claim, or the new one.
+    writeFileSync(temp, JSON.stringify({ hash: ownerHash(token), at: Date.now() }), {
+      encoding: "utf8",
+      mode: 0o600,
+    });
+    renameSync(temp, path);
   } catch (error) {
+    try {
+      rmSync(temp, { force: true });
+    } catch {
+      // best effort
+    }
     // Not fatal: the desktop works, it just loses its claim if this daemon restarts.
     log(`desktop ${index}: could not record its owner (${error instanceof Error ? error.message : String(error)})`);
   }
 }
 
-function recordedOwner(index: number, now = Date.now()): string | undefined {
+/** What a lease file says, kept three-way so "unreadable" is not confused with "free". */
+type OwnerState =
+  | { status: "owned"; hash: string }
+  | { status: "free" }
+  | { status: "unknown" };
+
+function recordedOwner(index: number, now = Date.now()): OwnerState {
+  let text: string;
   try {
-    const text = readFileSync(ownerFile(index), "utf8").trim();
-    if (text === "") return undefined;
-    // The older format was the bare hash with no timestamp. Treated as expired rather than as
-    // eternal: an unreadable age must not be the one thing that makes a claim permanent.
-    if (!text.startsWith("{")) return undefined;
-    const record = JSON.parse(text) as { hash?: string; at?: number };
-    if (typeof record.hash !== "string" || typeof record.at !== "number") return undefined;
-    if (now - record.at > OWNER_TTL_MS) return undefined;
-    return record.hash;
-  } catch {
-    return undefined;
+    text = readFileSync(ownerFile(index), "utf8").trim();
+  } catch (error) {
+    // Absent is free — no claim was ever made. Any other read error (EACCES, EIO) is *unknown*: we
+    // cannot say the desktop is free, so we must not hand it to someone else. These differ because
+    // "nobody owns it" and "we cannot tell who owns it" are opposite answers, and collapsing them
+    // is what let a corrupt file read as an unclaimed desktop.
+    if ((error as NodeJS.ErrnoException)?.code === "ENOENT") return { status: "free" };
+    return { status: "unknown" };
   }
+  if (text === "") return { status: "unknown" }; // a torn write, not an absence
+  let record: { hash?: string; at?: number };
+  try {
+    record = JSON.parse(text) as { hash?: string; at?: number };
+  } catch {
+    return { status: "unknown" };
+  }
+  if (typeof record.hash !== "string" || typeof record.at !== "number" || !Number.isFinite(record.at)) {
+    return { status: "unknown" };
+  }
+  // A timestamp from the future is a clock that moved, not a valid age: treat it as fresh rather
+  // than as expired, so a backward correction does not evict a live owner. A forward correction
+  // past the TTL still expires it, which is the safe direction — the owner simply reclaims on its
+  // next call.
+  const age = record.at > now ? 0 : now - record.at;
+  if (age > OWNER_TTL_MS) return { status: "free" };
+  return { status: "owned", hash: record.hash };
 }
 
-/** Whether this token is the one that claimed this desktop, according to what was written down. */
-function matchesRecordedOwner(index: number, token: string | undefined): boolean | undefined {
-  const recorded = recordedOwner(index);
-  if (recorded === undefined) return undefined;
-  return token !== undefined && ownerHash(token) === recorded;
+/**
+ * How a presented token relates to the recorded owner.
+ *
+ * `undefined` means "no live claim stands in the way" — free, or held by this same token. A string
+ * is the refusal reason. Crucially, an *unknown* lease is a refusal, not a free pass: a file we
+ * cannot read may be a live owner whose write was torn.
+ */
+function ownerConflict(index: number, token: string | undefined): string | undefined {
+  const state = recordedOwner(index);
+  if (state.status === "free") return undefined;
+  if (state.status === "unknown") {
+    return `Desktop ${index}'s ownership record could not be read, so it is not being handed over.`;
+  }
+  if (token !== undefined && ownerHash(token) === state.hash) return undefined;
+  return `Desktop ${index} belongs to another agent — it was claimed before this daemon restarted.`;
 }
 
 export class DisplayManager {
@@ -317,35 +363,37 @@ export class DisplayManager {
   }
 
   assertOwner(index: number, presented: string | undefined): void {
+    // No token is the ungated, single-user path — one owner, everything allowed. Ownership only
+    // means something once a gateway is putting an identity on the request.
+    if (presented === undefined) return;
+
     const desktop = this.desktops.get(index);
-    const owner = this.lapsed(desktop) ? undefined : desktop?.owner;
-    if (!owner) {
-      // Nothing in memory is not the same as unowned: this daemon may have restarted under a
-      // desktop that is still running and still someone's.
-      const recorded = matchesRecordedOwner(index, presented);
-      if (recorded === undefined || recorded) {
-        // Touched on every access by its owner, which is what makes the claim a lease: an agent
-        // working renews constantly, and one that has stopped lets go on its own.
-        if (recorded && presented !== undefined) rememberOwner(index, presented, this.log);
-        return;
-      }
+
+    // A fresh in-memory owner that is someone else settles it without touching disk: this is the
+    // concurrent case, where two agents reach an already-owned desktop in one process.
+    if (desktop?.owner !== undefined && !this.lapsed(desktop) && desktop.owner !== presented) {
       throw new DisplayOwnershipError(
-        `Desktop ${index} belongs to another agent — it was claimed before this daemon restarted, ` +
-          "and the desktop is still running. Use your own desktop, which is the one your tools " +
-          "already target."
+        `Desktop ${index} belongs to another agent. Use your own desktop, which is the one your ` +
+          "tools already target."
       );
     }
-    if (presented === owner) {
-      // Renewed by use, which is what makes this a lease rather than a lock.
-      if (desktop !== undefined) desktop.ownerAt = Date.now();
-      if (presented !== undefined) rememberOwner(index, presented, this.log);
-      return;
+
+    // Then the persisted lease, which is the source of truth across a restart — and where an
+    // unreadable record is a refusal rather than a free desktop.
+    const conflict = ownerConflict(index, presented);
+    if (conflict !== undefined) {
+      throw new DisplayOwnershipError(
+        `${conflict} Use your own desktop, which is the one your tools already target.`
+      );
     }
 
-    throw new DisplayOwnershipError(
-      `Desktop ${index} belongs to another agent. ` +
-        "Use your own desktop, which is the one your tools already target."
-    );
+    // Free, or mine: take or renew. Every access moves the clock, which is what makes this a lease
+    // rather than a lock — working renews it, stopping lets it lapse.
+    rememberOwner(index, presented, this.log);
+    if (desktop !== undefined) {
+      desktop.owner = presented;
+      desktop.ownerAt = Date.now();
+    }
   }
 
   async ensure(index = DEFAULT_DISPLAY_INDEX, owner?: string): Promise<Desktop> {
@@ -411,13 +459,11 @@ export class DisplayManager {
     });
 
     // A desktop this daemon did not start may already be claimed. Refused here rather than in
-    // assertOwner alone, so adoption cannot quietly rebind someone else's screen.
-    const recorded = matchesRecordedOwner(index, owner);
-    if (recorded === false) {
-      throw new DisplayOwnershipError(
-        `Desktop ${index} was claimed by another agent before this daemon restarted, and is still ` +
-          "running. Use your own desktop."
-      );
+    // assertOwner alone, so adoption cannot quietly rebind someone else's screen. An unreadable
+    // lease refuses too — it may be a live owner whose write was torn.
+    const conflict = ownerConflict(index, owner);
+    if (conflict !== undefined) {
+      throw new DisplayOwnershipError(`${conflict} Use your own desktop.`);
     }
     if (owner !== undefined) rememberOwner(index, owner, this.log);
 

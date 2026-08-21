@@ -12,7 +12,7 @@
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { existsSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { DisplayManager, DisplayOwnershipError } from "./displays.ts";
 
 /** High enough that it cannot collide with a desktop a developer is actually running. */
@@ -114,13 +114,43 @@ test("an owner that is still working keeps its desktop", async () => {
   }
 });
 
-test("a claim in the older format without a timestamp is not eternal", () => {
-  // The first version of this wrote a bare hash. An unreadable age must not be the one thing that
-  // makes a claim permanent.
+test("an unreadable or legacy lease is refused, not treated as a free desktop", () => {
+  // The safer half of the two-states fix. A file we cannot parse — a torn write, or the old
+  // bare-hash format — might be a live owner whose write was interrupted, so it must not read as an
+  // unclaimed desktop and be handed to the next agent. This is fail-closed on purpose; atomic
+  // writes mean a torn file does not happen in practice.
   rmSync(OWNER_FILE, { force: true });
   try {
     writeFileSync(OWNER_FILE, "0123456789abcdef0123456789abcdef");
-    new DisplayManager(() => {}).assertOwner(INDEX, "somebody-else");
+    assert.throws(
+      () => new DisplayManager(() => {}).assertOwner(INDEX, "somebody-else"),
+      DisplayOwnershipError
+    );
+    // An empty file — a torn rename target — is likewise not "free".
+    writeFileSync(OWNER_FILE, "");
+    assert.throws(
+      () => new DisplayManager(() => {}).assertOwner(INDEX, "somebody-else"),
+      DisplayOwnershipError
+    );
+  } finally {
+    rmSync(OWNER_FILE, { force: true });
+  }
+});
+
+test("the lease is written atomically, leaving no partial file", async () => {
+  // Temp-plus-rename, so a reader never sees a half-written claim — the hole that let a torn write
+  // read as an unclaimed desktop.
+  rmSync(OWNER_FILE, { force: true });
+  try {
+    await withDesktop().ensure(INDEX, "token-for-ada");
+    const record = JSON.parse(readFileSync(OWNER_FILE, "utf8")) as { hash: string; at: number };
+    assert.match(record.hash, /^[0-9a-f]{32}$/);
+    // No leftover temp file beside it.
+    const dir = OWNER_FILE.slice(0, OWNER_FILE.lastIndexOf("/"));
+    const leftovers = readdirSync(dir).filter(
+      name => name.startsWith("agentbox-display-") && name.includes(".tmp")
+    );
+    assert.deepEqual(leftovers, []);
   } finally {
     rmSync(OWNER_FILE, { force: true });
   }

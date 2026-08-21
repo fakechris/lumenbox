@@ -308,8 +308,11 @@ fi
 
 # Wait for the VNC path, not just X: boxd reports the display ready and the UI
 # connects immediately, so a half-started stack shows as a failed connection.
+# Both stacks: the driving one, and the view-only one a viewer's page is served from. Waiting only
+# on the driving port let a repair report "ready" while the view-only websockify was still binding
+# or had failed, so a viewer got nothing while the driver looked healthy.
 for _ in $(seq 1 60); do
-  if port_listening "${WS_PORT}"; then
+  if port_listening "${WS_PORT}" && port_listening "${WS_RO_PORT}"; then
     if [ ${#repaired[@]} -gt 0 ]; then
       log "ready (started: ${repaired[*]})"
     fi
@@ -318,5 +321,9 @@ for _ in $(seq 1 60); do
   sleep 0.25
 done
 
-log "WARNING: noVNC on ${WS_PORT} did not start; the desktop will not be viewable"
+if ! port_listening "${WS_PORT}"; then
+  log "WARNING: noVNC on ${WS_PORT} did not start; the desktop will not be viewable"
+elif ! port_listening "${WS_RO_PORT}"; then
+  log "WARNING: view-only noVNC on ${WS_RO_PORT} did not start; watch-only viewers cannot connect"
+fi
 exit 0

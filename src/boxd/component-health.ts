@@ -44,10 +44,10 @@ export interface ComponentPolicy {
 }
 
 export const DEFAULT_POLICY: ComponentPolicy = {
-  windowMs: Number(process.env.BOXD_RESTART_WINDOW_MS ?? 10 * MINUTE_MS),
+  windowMs: envNumber("BOXD_RESTART_WINDOW_MS", 10 * MINUTE_MS),
   maxInWindow: envNumber("BOXD_MAX_RESTARTS", 8),
   backoffBaseMs: envNumber("BOXD_BACKOFF_BASE_MS", 15_000),
-  backoffMaxMs: Number(process.env.BOXD_BACKOFF_MAX_MS ?? 5 * MINUTE_MS),
+  backoffMaxMs: envNumber("BOXD_BACKOFF_MAX_MS", 5 * MINUTE_MS),
   giveUpAfterEpisodes: envNumber("BOXD_GIVE_UP_EPISODES", 2),
   // The dock goes with it: without a compositor it paints an opaque slab, which is worse
   // than not having it.

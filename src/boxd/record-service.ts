@@ -248,7 +248,20 @@ export class RecordService {
       }
       const command = argv[0] ?? "";
       if (!command.endsWith("ffmpeg")) continue;
-      if (!argv.some(argument => argument.startsWith(RECORDINGS_DIR))) continue;
+      // Ours only: an argument that is an output file *inside* the recordings directory. Two guards
+      // that were missing. A bare `startsWith(RECORDINGS_DIR)` matched `recordings-backup/x` as
+      // well as `recordings/x` because it has no boundary — the trailing slash gives it one. And it
+      // matched an ffmpeg *reading* a file from the directory, not only one writing to it; requiring
+      // the `.mp4` we name our output stops us killing a legitimate reader. An empty RECORDINGS_DIR
+      // would have made `startsWith("")` match every ffmpeg on the machine, so that is refused
+      // outright.
+      const dir = RECORDINGS_DIR.replace(/\/$/, "");
+      if (dir === "") continue;
+      const prefix = `${dir}/`;
+      const isOurs = argv.some(
+        argument => argument.startsWith(prefix) && argument.endsWith(".mp4")
+      );
+      if (!isOurs) continue;
 
       try {
         process.kill(Number(pid), "SIGTERM");

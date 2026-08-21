@@ -431,8 +431,12 @@ const server = createServer((req, res) => {
         return;
       }
 
-      // noVNC for a desktop, proxied so only this port has to be published.
-      if (url.startsWith("/vnc/")) {
+      // noVNC for a desktop, proxied so only this port has to be published. Both prefixes: the
+      // driving stack at /vnc/ and the view-only stack at /vnc-ro/, which a viewer's page is served
+      // from. Routing only /vnc/ meant a viewer's noVNC HTML request fell through to a 404, so the
+      // correctly-view-only WebSocket was never opened and the whole feature was dead at the HTTP
+      // layer — the injection-refusal was verified against the raw port and this path was not.
+      if (url.startsWith("/vnc/") || url.startsWith("/vnc-ro/")) {
         proxyVnc(req, res, url);
         return;
       }
