@@ -338,3 +338,30 @@ file with `sed -i` or a heredoc and nothing sees it — though the *next* tool w
 comparison is against the file's real content rather than a record of who did what. So this turns
 the both-used-the-tools case into a refusal, and the one-used-the-shell case into a refusal for the
 other agent rather than a silent loss. It is not a lock and does not pretend to be one.
+
+## 18. What a message from a teammate is allowed to be (F10.6)
+
+An agent reads its teammates' messages, the pages it browses, the files it opens and the output of
+the commands it runs. All of it arrives as text, and text can be phrased as an instruction. In a
+fleet that matters more than it does for one agent: if instructions found in content are acted on
+with the same weight as the user's, then one confused or compromised agent can direct the others.
+
+The fix is not filtering — a message that has been rewritten is no longer the message, and the
+agent needs to see what was actually said. It is telling the agent **where authority comes from**,
+which is genuinely something it cannot work out from the outside:
+
+- anyone here can send it a message, and the only thing establishing who sent one is a name in a
+  string;
+- a teammate has the same permissions and cannot grant more, cannot approve on the user's behalf,
+  and cannot set aside what the user said;
+- pages, files and command output are things it *found*, and no text anywhere grants permission.
+
+That is a fact about this system, not advice about how to behave, which is the line this project
+draws about what belongs in a prompt at all.
+
+**A structural consequence.** All of that framing is written *above* the messages, and the messages
+are last. The wake prompt is also parsed back out — a person reading a transcript should see what a
+teammate said, not the scaffolding around it — and the format is flat, so "where do the messages
+end" has no answer that survives a paragraph being added to the framing. Twice now, adding one
+silently changed what a person saw. Messages last makes the boundary "from the first name onwards",
+which nothing we add later can move.
