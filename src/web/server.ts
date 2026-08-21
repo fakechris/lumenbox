@@ -11,6 +11,7 @@
  * control.
  */
 
+import { execFileSync } from "node:child_process";
 import { randomBytes } from "node:crypto";
 import {
   createServer,
@@ -40,6 +41,40 @@ import { authorize, callerOf, isLoopback, mayDrive, refusalToDrive } from "./aut
  * tomorrow" are then one rule rather than two.
  */
 const WORK_DIR = process.env.AGENTBOX_WORK_DIR ?? "/home/box/work";
+
+/**
+ * Which code is running, for reading a bug report against the right build.
+ *
+ * Version from package.json; commit from git, asked once at startup — a deployment
+ * without a git checkout says so via AGENTBOX_BUILD or shows "unknown", which is
+ * still more honest than showing nothing and guessing later.
+ */
+function buildInfo(): { version: string; commit: string } {
+  const root = fileURLToPath(new URL("../..", import.meta.url));
+  let version = "0.0.0";
+  try {
+    const pkg = JSON.parse(readFileSync(join(root, "package.json"), "utf8")) as {
+      version?: unknown;
+    };
+    if (typeof pkg.version === "string") version = pkg.version;
+  } catch {
+    // The page shows 0.0.0, which reads as "could not tell" and is exactly true.
+  }
+  let commit = process.env.AGENTBOX_BUILD ?? "";
+  if (commit === "") {
+    try {
+      commit = execFileSync("git", ["rev-parse", "--short", "HEAD"], {
+        cwd: root,
+        stdio: ["ignore", "pipe", "ignore"],
+      })
+        .toString()
+        .trim();
+    } catch {
+      commit = "unknown";
+    }
+  }
+  return { version, commit };
+}
 
 /**
  * The exit code that means "start me again with the new config".
@@ -98,6 +133,8 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
   let vendorScript: Buffer | undefined;
   /** The woff2 faces, read once each. Seven files, ~400 KB total. */
   const fontCache = new Map<string, Buffer>();
+  /** Asked once: the answer cannot change while this process runs. */
+  const build = buildInfo();
   const clients = new Set<ServerResponse>();
 
   /**
@@ -825,6 +862,7 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
         if (route === "GET /api/state") {
           send(res, 200, {
             provider: describeProvider(options.provider),
+            build,
             box: { ...box, ok: box.connected },
             agents: registry.list().map(record => {
               const index = registry.displayIndexFor(record.id);

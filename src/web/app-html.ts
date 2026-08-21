@@ -216,8 +216,10 @@ export const APP_HTML = String.raw`<!doctype html>
   .agent:hover { background: var(--surface-hover); }
   .agent.on { background: var(--accent-soft); }
   .agent.on .nm, .agent.on .ttl, .agent.on .dnum { color: var(--accent); }
+  /* The dot beside an agent carries its identity color (--c-1…8, stable by roster
+     position); state is the word next to it, and the pulse while a turn runs. */
   .dot { width: 7px; height: 7px; border-radius: var(--radius-pill); background: var(--muted); flex: none; }
-  .dot.busy { background: var(--accent); animation: pulse 1.2s infinite; }
+  .dot.busy { animation: pulse 1.2s infinite; }
   .dot.ok { background: var(--success); }
   .dot.bad { background: var(--danger); }
   @keyframes pulse { 50% { opacity: 0.3; } }
@@ -229,10 +231,13 @@ export const APP_HTML = String.raw`<!doctype html>
   }
   .agent .dnum { font-family: var(--font-mono); font-size: 11px; color: var(--muted); }
   #sidefoot {
-    flex: none; margin-top: auto; padding: 12px 16px; border-top: 1px solid var(--border);
-    display: flex; align-items: center; gap: 9px; font-size: 12px; color: var(--muted);
+    flex: none; margin-top: auto; padding: 10px 16px 12px; border-top: 1px solid var(--border);
+    display: flex; flex-direction: column; gap: 4px; font-size: 12px; color: var(--muted);
   }
-  #sidefoot span:last-child { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  #sidefoot .footrow { display: flex; align-items: center; gap: 9px; }
+  #sidefoot .footrow span:last-child { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  /* Which build is running, for reading a bug report against the right code. */
+  #buildinfo { font-family: var(--font-mono); font-size: 11px; }
 
   /* ── pane headers ─────────────────────────────────────────────────────────── */
   .paneheader {
@@ -446,6 +451,9 @@ export const APP_HTML = String.raw`<!doctype html>
   .ev.warn { color: var(--warn); }
 
   /* ── files ────────────────────────────────────────────────────────────────── */
+  /* A column, said in CSS because showTab() only sets display:flex — without this the
+     toolbar and the split laid out side by side and the file list was a squeezed strip. */
+  #filesview { flex-direction: column; }
   #filespreview pre { white-space: pre-wrap; word-break: break-word; margin: 0; padding: 10px 14px; font-family: var(--font-mono); font-size: 12px; }
   #filespreview img, #filespreview video { max-width: 100%; display: block; }
   #fileslist .row { padding: 6px 12px; cursor: pointer; font-size: 13px; }
@@ -479,7 +487,10 @@ export const APP_HTML = String.raw`<!doctype html>
 <div class="pane" id="sidebar">
   <div class="eyebrow-row"><span class="eyebrow">Agents</span><button id="new" class="btn ghost sm" title="New agent">+</button></div>
   <div class="scroll" id="agents"></div>
-  <div id="sidefoot"><span class="dot" id="boxdot"></span><span id="boxinfo">box</span></div>
+  <div id="sidefoot">
+    <div class="footrow"><span class="dot" id="boxdot"></span><span id="boxinfo">box</span></div>
+    <div id="buildinfo"></div>
+  </div>
 </div>
 
 <div class="pane" id="middle">
@@ -824,7 +835,8 @@ function renderAgents() {
   for (var i = 0; i < agents.length; i++) {
     var a = agents[i];
     html += '<div class="agent ' + (a.id === current ? "on" : "") + '" data-id="' + esc(a.id) + '">' +
-      '<div class="dot ' + (busy.has(a.id) ? "busy" : "") + '"></div>' +
+      '<div class="dot ' + (busy.has(a.id) ? "busy" : "") +
+      '" style="background:var(--c-' + ((i % 8) + 1) + ')"></div>' +
       '<div class="cols"><div class="nm">' + esc(a.name) + "</div>" +
       '<div class="ttl">' + esc(busy.has(a.id) ? "Running" : String(a.title || a.description || "idle").slice(0, 40)) +
       "</div></div>" +
@@ -998,6 +1010,9 @@ function refresh() {
     $("model").innerHTML = "<b>" + esc(state.provider) + "</b>";
     $("boxinfo").textContent = state.box.ok ? state.box.detail : "box unavailable";
     $("boxdot").className = "dot " + (state.box.ok ? "ok" : "bad");
+    if (state.build) {
+      $("buildinfo").textContent = "v" + state.build.version + " · " + state.build.commit;
+    }
     if (!current && agents.length) return select(agents[0].id);
     renderAgents();
     // A newly created agent gets its display assigned server-side; keep the pane
@@ -1427,22 +1442,27 @@ var stream = new EventSource("/api/events");
  * Shared by the live stream and by the replay of recent activity on load, so a
  * reloaded page reads the same as one that was open the whole time.
  */
+/** An agent's name in its identity color, for the feed. */
+function who(name) {
+  return '<b style="color:' + colorOfName(name) + '">' + esc(name) + "</b>";
+}
+
 function activityLine(e) {
-  if (e.type === "prompt") return { html: "<b>you</b> &rarr; " + esc(nameOf(e.agentId)), cls: "" };
-  if (e.type === "turn_started") return { html: "<b>" + esc(nameOf(e.agentId)) + "</b> started a turn", cls: "" };
-  if (e.type === "tool_start") return { html: "<b>" + esc(e.agentName) + "</b> &rarr; " + esc(e.tool), cls: "" };
+  if (e.type === "prompt") return { html: "<b>you</b> &rarr; " + who(nameOf(e.agentId)), cls: "" };
+  if (e.type === "turn_started") return { html: who(nameOf(e.agentId)) + " started a turn", cls: "" };
+  if (e.type === "tool_start") return { html: who(e.agentName) + " &rarr; " + esc(e.tool), cls: "" };
   if (e.type === "message_sent") {
     return {
-      html: "<b>" + esc(e.fromName) + "</b> &rarr; <b>" + esc(e.toName) + "</b>" +
+      html: who(e.fromName) + " &rarr; " + who(e.toName) +
         (e.priority ? " (priority)" : "") + ": " + esc(String(e.text).slice(0, 90)),
       cls: "mail"
     };
   }
   if (e.type === "turn_failed") {
-    return { html: "<b>" + esc(nameOf(e.agentId)) + "</b> failed: " + esc(e.error), cls: "err" };
+    return { html: who(nameOf(e.agentId)) + " failed: " + esc(e.error), cls: "err" };
   }
   if (e.type === "turn_interrupted") {
-    return { html: "<b>" + esc(nameOf(e.agentId)) + "</b> interrupted (" + esc(e.reason) + ")", cls: "warn" };
+    return { html: who(nameOf(e.agentId)) + " interrupted (" + esc(e.reason) + ")", cls: "warn" };
   }
   if (e.type === "error") return { html: esc(e.message), cls: "err" };
   return null;
