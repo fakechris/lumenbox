@@ -42,6 +42,15 @@ import { authorize, callerOf, isLoopback, mayDrive, refusalToDrive } from "./aut
 const WORK_DIR = process.env.AGENTBOX_WORK_DIR ?? "/home/box/work";
 
 /**
+ * The exit code that means "start me again with the new config".
+ *
+ * 75 is EX_TEMPFAIL — a temporary condition, try again — which is exactly what a
+ * settings-driven restart is. The desktop shell relaunches on it; any other exit is a
+ * stop or a crash and is treated as one.
+ */
+export const RESTART_EXIT_CODE = 75;
+
+/**
  * Whether a path is inside the work directory, textually.
  *
  * A prefix check on a normalised path, which stops `..` and a bare `/etc/passwd`. It does *not* stop
@@ -53,7 +62,8 @@ function withinWork(path: string): boolean {
   const normalised = posix.normalize(path);
   return normalised === WORK_DIR || normalised.startsWith(`${WORK_DIR}/`);
 }
-import { agentboxHome, loadConfig } from "../config.ts";
+import { agentboxHome, loadConfig, saveConfig } from "../config.ts";
+import { providerNames, resolveProvider } from "../host/provider.ts";
 import { ActivityLog } from "./activity.ts";
 import { vendorPath } from "./markdown.ts";
 import { toDisplayEntries } from "./transcript.ts";
@@ -678,6 +688,89 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
             return;
           }
           send(res, 200, { id });
+          return;
+        }
+
+        // ── settings: which provider, persisted ────────────────────────────────────
+        //
+        // The choice used to live only in the launch command, and a restart that forgot
+        // the flag silently became a different company's model with a credential that
+        // could not work. The file is the fix; this pair of routes is the interface to
+        // it. A change takes effect at the next start — the orchestrator is built around
+        // one provider, and swapping it under running turns would be a livelier bug than
+        // a restart.
+        if (route === "GET /api/config") {
+          const config = loadConfig();
+          send(res, 200, {
+            current: describeProvider(options.provider),
+            config: {
+              provider: config.provider ?? null,
+              model: config.model ?? null,
+              baseUrl: config.baseUrl ?? null,
+            },
+            // Whether a credential is present is worth showing; the credential is not.
+            presets: providerNames().map(name => {
+              const profile = resolveProvider(name);
+              return {
+                name,
+                label: profile.label,
+                model: profile.model,
+                keyEnv: profile.keyEnv,
+                keyPresent:
+                  process.env[profile.keyEnv] !== undefined ||
+                  (profile.keyEnv === "ANTHROPIC_API_KEY" &&
+                    process.env.ANTHROPIC_AUTH_TOKEN !== undefined),
+              };
+            }),
+          });
+          return;
+        }
+
+        if (route === "POST /api/config") {
+          if (refused()) return;
+          const body = await readJson(req);
+
+          const providerValue = body.provider;
+          if (
+            typeof providerValue === "string" &&
+            !providerNames().includes(providerValue.toLowerCase())
+          ) {
+            send(res, 400, {
+              error: `Unknown provider "${providerValue}". Known: ${providerNames().join(", ")}.`,
+            });
+            return;
+          }
+
+          const field = (value: unknown): string | null | undefined =>
+            value === null ? null : typeof value === "string" && value.trim() !== "" ? value.trim() : undefined;
+
+          // The key is stored under the variable the chosen provider reads, and only
+          // there: the UI cannot write arbitrary environment variables.
+          const chosenName =
+            (typeof providerValue === "string" ? providerValue.toLowerCase() : undefined) ??
+            loadConfig().provider ??
+            "anthropic";
+          const key = field(body.key);
+          const path = saveConfig({
+            provider: providerValue === null ? null : field(providerValue)?.toLowerCase(),
+            model: body.model === null ? null : field(body.model),
+            baseUrl: body.baseUrl === null ? null : field(body.baseUrl),
+            ...(key !== undefined && key !== null
+              ? { env: { [resolveProvider(chosenName).keyEnv]: key } }
+              : {}),
+          });
+          log(`config saved to ${path}`);
+          send(res, 200, { saved: true, note: "Takes effect when the server restarts." });
+          return;
+        }
+
+        // Exits with the code the desktop shell treats as "start me again". Under a bare
+        // CLI the process simply ends, which the page says out loud before asking.
+        if (route === "POST /api/restart") {
+          if (refused()) return;
+          log("restart requested from the UI");
+          send(res, 202, { restarting: true });
+          setTimeout(() => process.exit(RESTART_EXIT_CODE), 300);
           return;
         }
 

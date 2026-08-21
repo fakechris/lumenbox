@@ -139,11 +139,41 @@ export const APP_HTML = String.raw`<!doctype html>
     overflow: hidden; white-space: nowrap;
   }
   #topbar .mid b { color: var(--text-soft); font-weight: 500; }
-  #theme {
+  #theme, #settingsbtn {
     border: 0; background: none; color: var(--muted); cursor: pointer; padding: 4px;
     border-radius: var(--radius-input); display: flex; transition: color var(--dur) var(--ease);
   }
-  #theme:hover { color: var(--text); }
+  #theme:hover, #settingsbtn:hover { color: var(--text); }
+
+  /* Inside the desktop shell the top bar doubles as the window title bar: the whole
+     strip drags, the controls opt out, and on macOS the traffic lights need room. */
+  body.electron #topbar { -webkit-app-region: drag; }
+  body.electron #topbar button, body.electron #topbar a { -webkit-app-region: no-drag; }
+  body.electron-mac #topbar { padding-left: 84px; }
+
+  /* ── settings ─────────────────────────────────────────────────────────────── */
+  #settingswrap {
+    position: fixed; inset: 0; z-index: 20; display: flex;
+    align-items: center; justify-content: center; background: rgba(0,0,0,0.3);
+  }
+  .modal {
+    width: 480px; max-width: calc(100vw - 40px);
+    background: var(--surface); border: 1px solid var(--border-strong);
+    border-radius: var(--radius-card); box-shadow: var(--shadow-pop);
+    padding: 22px; display: flex; flex-direction: column; gap: 14px;
+  }
+  .modal h3 { margin: 0; font-size: 1.15rem; font-weight: 600; }
+  .field { display: flex; flex-direction: column; gap: 6px; }
+  .field label { font-size: 11px; letter-spacing: 0.08em; text-transform: uppercase; color: var(--muted); }
+  .field input, .field select {
+    height: 38px; padding: 0 12px; border-radius: var(--radius-input);
+    border: 1px solid var(--border-strong); background: var(--bg); color: var(--text); font: inherit;
+  }
+  .field input { font-family: var(--font-mono); font-size: 13px; }
+  .field input:focus, .field select:focus { outline: 0; border-color: var(--accent); }
+  .fieldnote { font-size: 12px; color: var(--muted); line-height: 1.6; }
+  .fieldnote:empty { display: none; }
+  .modal .actions { display: flex; gap: 10px; padding-top: 2px; }
 
   #shell { flex: 1; min-height: 0; display: flex; }
   .pane { min-width: 0; min-height: 0; overflow: hidden; display: flex; flex-direction: column; }
@@ -435,6 +465,9 @@ export const APP_HTML = String.raw`<!doctype html>
     LumenBox
   </span>
   <span class="mid"><span id="model">&mdash;</span></span>
+  <button id="settingsbtn" title="Settings" aria-label="Settings">
+    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3.2"/><path d="M19.4 15a1.7 1.7 0 0 0 .34 1.87l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.7 1.7 0 0 0-1.87-.34 1.7 1.7 0 0 0-1.03 1.56V21a2 2 0 1 1-4 0v-.09a1.7 1.7 0 0 0-1.11-1.56 1.7 1.7 0 0 0-1.87.34l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.7 1.7 0 0 0 .34-1.87 1.7 1.7 0 0 0-1.56-1.03H3a2 2 0 1 1 0-4h.09a1.7 1.7 0 0 0 1.56-1.11 1.7 1.7 0 0 0-.34-1.87l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.7 1.7 0 0 0 1.87.34h.09a1.7 1.7 0 0 0 1.03-1.56V3a2 2 0 1 1 4 0v.09a1.7 1.7 0 0 0 1.03 1.56 1.7 1.7 0 0 0 1.87-.34l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.7 1.7 0 0 0-.34 1.87v.09a1.7 1.7 0 0 0 1.56 1.03H21a2 2 0 1 1 0 4h-.09a1.7 1.7 0 0 0-1.56 1.03Z"/></svg>
+  </button>
   <button id="theme" title="Switch theme" aria-label="Switch theme">
     <svg id="themesun" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M2 12h2M20 12h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4"/></svg>
     <svg id="thememoon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12.8A9 9 0 1 1 11.2 3a7 7 0 0 0 9.8 9.8Z"/></svg>
@@ -531,6 +564,40 @@ export const APP_HTML = String.raw`<!doctype html>
 
 </div>
 
+<!-- Settings. What is here is exactly what the config file holds: the provider choice
+     the launch command used to carry, its model override, and the key. -->
+<div id="settingswrap" style="display:none">
+  <div class="modal">
+    <h3>Settings &mdash; model &amp; key</h3>
+    <div class="field">
+      <label>Provider</label>
+      <select id="setprovider"></select>
+    </div>
+    <div class="field">
+      <label>Model</label>
+      <input id="setmodel" placeholder="preset default" spellcheck="false">
+    </div>
+    <div class="field" id="setbasewrap" style="display:none">
+      <label>Base URL</label>
+      <input id="setbase" placeholder="https://&hellip;" spellcheck="false">
+    </div>
+    <div class="field">
+      <label>API key</label>
+      <input id="setkey" type="password" spellcheck="false" autocomplete="off">
+      <div class="fieldnote" id="setkeynote"></div>
+    </div>
+    <div class="fieldnote">Saved to ~/.agentbox/config.json on this machine, mode 0600. A key stored
+      here is used only when the environment does not already provide one, and is never placed
+      inside the box. Changes take effect when the server restarts.</div>
+    <div class="fieldnote" id="setstatus"></div>
+    <div class="actions">
+      <button class="btn accent" id="setsaverestart">Save &amp; restart</button>
+      <button class="btn" id="setsave">Save</button>
+      <button class="btn ghost" id="setcancel">Cancel</button>
+    </div>
+  </div>
+</div>
+
 <script src="/vendor/markdown-it.js"></script>
 <script>
 "use strict";
@@ -585,6 +652,119 @@ $("theme").onclick = function () {
   showThemeIcon();
 };
 showThemeIcon();
+
+// Under the desktop shell the top bar is also the window title bar.
+if (navigator.userAgent.indexOf("Electron") >= 0) {
+  document.body.classList.add("electron");
+  if (/Macintosh/.test(navigator.userAgent)) document.body.classList.add("electron-mac");
+}
+
+// ── settings ───────────────────────────────────────────────────────────────
+// The dialog edits the config file the server reads at startup, so a saved change
+// needs a restart to act. Under the desktop shell "Save & restart" is seamless — the
+// shell relaunches the server; under a bare CLI the page says the process has ended.
+var settingsPresets = [];
+
+function openSettings() {
+  fetch("/api/config")
+    .then(function (r) { return r.json(); })
+    .then(function (data) {
+      settingsPresets = data.presets || [];
+      var sel = $("setprovider");
+      sel.innerHTML = settingsPresets.map(function (p) {
+        return '<option value="' + esc(p.name) + '">' + esc(p.label) + " &middot; " + esc(p.model) + "</option>";
+      }).join("");
+      var chosen = (data.config && data.config.provider) || "";
+      if (chosen) sel.value = chosen;
+      $("setmodel").value = (data.config && data.config.model) || "";
+      $("setbase").value = (data.config && data.config.baseUrl) || "";
+      $("setkey").value = "";
+      $("setstatus").textContent = "Now running: " + (data.current || "");
+      settingsProviderChanged();
+      $("settingswrap").style.display = "flex";
+    })
+    .catch(function () { feed("could not load settings", "err"); });
+}
+
+function settingsProviderChanged() {
+  var name = $("setprovider").value;
+  $("setbasewrap").style.display = name === "custom" ? "" : "none";
+  var preset = null;
+  for (var i = 0; i < settingsPresets.length; i++) {
+    if (settingsPresets[i].name === name) preset = settingsPresets[i];
+  }
+  if (!preset) return;
+  // Whether a credential is present is worth showing; the credential itself never
+  // leaves the server.
+  $("setkeynote").textContent = preset.keyPresent
+    ? "A key for " + preset.keyEnv + " is already provided. Leave blank to keep using it."
+    : "No " + preset.keyEnv + " found — paste a key here, or export the variable before starting.";
+  $("setkey").placeholder = preset.keyPresent ? "provided by environment" : "paste API key";
+}
+
+function saveSettings(thenRestart) {
+  var body = { provider: $("setprovider").value };
+  var model = $("setmodel").value.trim();
+  body.model = model === "" ? null : model;
+  var base = $("setbase").value.trim();
+  body.baseUrl = base === "" ? null : base;
+  var key = $("setkey").value.trim();
+  if (key !== "") body.key = key;
+  $("setstatus").textContent = "Saving…";
+  fetch("/api/config", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify(body)
+  })
+    .then(function (r) {
+      return r.json().then(function (d) {
+        if (!r.ok) throw new Error(d.error || "save failed");
+        return d;
+      });
+    })
+    .then(function () {
+      if (!thenRestart) {
+        $("setstatus").textContent = "Saved. Takes effect when the server restarts.";
+        return;
+      }
+      $("setstatus").textContent = "Restarting…";
+      return fetch("/api/restart", { method: "POST" }).then(waitForRestart);
+    })
+    .catch(function (error) {
+      $("setstatus").textContent = "Save failed: " + error.message;
+    });
+}
+
+function waitForRestart() {
+  // The old process exits ~300ms after answering, so polling starts after that window —
+  // a 200 from the dying server would reload the page into nothing.
+  var tries = 0;
+  setTimeout(function poll() {
+    tries += 1;
+    fetch("/api/state")
+      .then(function (r) {
+        if (r.ok) { window.location.reload(); return; }
+        throw new Error("not yet");
+      })
+      .catch(function () {
+        if (tries > 60) {
+          $("setstatus").textContent =
+            "The server did not come back — start it again yourself: agentbox web";
+          return;
+        }
+        setTimeout(poll, 1000);
+      });
+  }, 1500);
+}
+
+$("settingsbtn").onclick = openSettings;
+$("setprovider").onchange = settingsProviderChanged;
+$("setsave").onclick = function () { saveSettings(false); };
+$("setsaverestart").onclick = function () { saveSettings(true); };
+$("setcancel").onclick = function () { $("settingswrap").style.display = "none"; };
+$("settingswrap").addEventListener("click", function (event) {
+  if (event.target === $("settingswrap")) $("settingswrap").style.display = "none";
+});
 
 var agents = [];
 var current = null;

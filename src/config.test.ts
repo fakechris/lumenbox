@@ -11,13 +11,17 @@ import assert from "node:assert/strict";
 import { mkdtempSync, writeFileSync, existsSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { statSync } from "node:fs";
 import {
   DEFAULT_CONFIG,
+  applyConfigEnv,
   configPath,
   ensureConfigFile,
   envNumber,
   loadConfig,
+  saveConfig,
 } from "./config.ts";
+import { resolveProvider } from "./host/provider.ts";
 
 /** Each test gets its own home, so none of them sees another's config. */
 function withHome(contents?: string): { warnings: string[] } {
@@ -98,6 +102,80 @@ test("the file is written on first use, so the settings are findable", () => {
   assert.equal(loadConfig().activityLimit, 7);
 });
 
+
+// ── the persisted provider choice ────────────────────────────────────────────────────
+
+test("provider, model, baseUrl and env load, and wrong types are ignored loudly", () => {
+  const { warnings } = withHome(
+    '{"activityLimit": 10, "provider": "minimax", "model": " M3 ", "baseUrl": 7, ' +
+      '"env": {"GOOD_KEY": "value", "BAD_KEY": 42}}'
+  );
+  const config = loadConfig(line => warnings.push(line));
+  assert.equal(config.provider, "minimax");
+  assert.equal(config.model, "M3", "strings are trimmed");
+  assert.equal(config.baseUrl, undefined, "a number is not a URL");
+  assert.deepEqual(config.env, { GOOD_KEY: "value" });
+  assert.ok(warnings.some(line => /baseUrl/.test(line)));
+  assert.ok(warnings.some(line => /env\.BAD_KEY/.test(line)));
+});
+
+test("saveConfig merges into the file and keeps keys it does not know", () => {
+  withHome('{"activityLimit": 55, "somethingLater": true, "env": {"KEEP": "me"}}');
+  saveConfig({ provider: "minimax", env: { NEW_KEY: "abc" } });
+
+  const raw = JSON.parse(readFileSync(configPath(), "utf8"));
+  assert.equal(raw.activityLimit, 55, "untouched fields survive");
+  assert.equal(raw.somethingLater, true, "unknown keys survive a save from this version");
+  assert.equal(raw.provider, "minimax");
+  assert.deepEqual(raw.env, { KEEP: "me", NEW_KEY: "abc" }, "env merges, not replaces");
+
+  // The file may hold a key now, so it is private even if it was not before.
+  assert.equal(statSync(configPath()).mode & 0o777, 0o600);
+
+  // null clears; absent leaves alone.
+  saveConfig({ model: null, provider: null, env: { KEEP: null } });
+  const cleared = JSON.parse(readFileSync(configPath(), "utf8"));
+  assert.equal(cleared.provider, undefined);
+  assert.deepEqual(cleared.env, { NEW_KEY: "abc" });
+});
+
+test("the config's env sits under the real environment, never over it", () => {
+  withHome();
+  delete process.env.AGENTBOX_TEST_FROM_CONFIG;
+  process.env.AGENTBOX_TEST_FROM_SHELL = "shell";
+  try {
+    applyConfigEnv({
+      activityLimit: 400,
+      env: { AGENTBOX_TEST_FROM_CONFIG: "config", AGENTBOX_TEST_FROM_SHELL: "config" },
+    });
+    assert.equal(process.env.AGENTBOX_TEST_FROM_CONFIG, "config");
+    assert.equal(process.env.AGENTBOX_TEST_FROM_SHELL, "shell", "an exported variable wins");
+  } finally {
+    delete process.env.AGENTBOX_TEST_FROM_CONFIG;
+    delete process.env.AGENTBOX_TEST_FROM_SHELL;
+  }
+});
+
+test("provider precedence: flag beats env beats config beats default", () => {
+  // The failure this ordering prevents: a restart that forgot the flag silently
+  // switching to a different company's model with a credential that cannot work.
+  const provider = process.env.AGENTBOX_PROVIDER;
+  const baseUrl = process.env.AGENTBOX_BASE_URL;
+  delete process.env.AGENTBOX_BASE_URL;
+  try {
+    delete process.env.AGENTBOX_PROVIDER;
+    assert.equal(resolveProvider(undefined, "minimax").label, "MiniMax", "config default holds");
+    assert.equal(resolveProvider(undefined, undefined).label, "Anthropic", "no config, old default");
+
+    process.env.AGENTBOX_PROVIDER = "anthropic";
+    assert.equal(resolveProvider(undefined, "minimax").label, "Anthropic", "env beats config");
+    assert.equal(resolveProvider("minimax", "anthropic").label, "MiniMax", "flag beats both");
+  } finally {
+    if (provider === undefined) delete process.env.AGENTBOX_PROVIDER;
+    else process.env.AGENTBOX_PROVIDER = provider;
+    if (baseUrl !== undefined) process.env.AGENTBOX_BASE_URL = baseUrl;
+  }
+});
 
 test("a setting that is not a number falls back to the default, loudly", () => {
   // Every tunable here used to be `Number(process.env.X ?? default)`, in forty-two places.
