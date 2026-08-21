@@ -22,8 +22,9 @@
  * month and "delete older than a week" does not.
  */
 
-import { chmodSync, cpSync, existsSync, mkdirSync, readdirSync, rmSync, statSync } from "node:fs";
+import { chmodSync, cpSync, existsSync, mkdirSync, readdirSync, renameSync, rmSync, statSync } from "node:fs";
 import { join } from "node:path";
+import { DatabaseSync } from "node:sqlite";
 import { agentboxHome, envNumber } from "../config.ts";
 
 /** Where snapshots go, unless told otherwise. Beside the state, not inside it. */
@@ -31,8 +32,24 @@ export function backupRoot(): string {
   return process.env.AGENTBOX_BACKUP_DIR ?? `${agentboxHome()}-backups`;
 }
 
-/** How many to keep. Count, not age: a machine that was off for a month still has its backups. */
-export const KEEP_BACKUPS = envNumber("AGENTBOX_BACKUP_KEEP", 7);
+/**
+ * How many to keep. Count, not age: a machine that was off for a month still has its backups.
+ *
+ * Floored at 1 and forced to a whole number. `AGENTBOX_BACKUP_KEEP=-1` or `0` — or a fraction —
+ * would otherwise select every snapshot for deletion, including the one just taken, and then report
+ * a successful path that no longer exists.
+ */
+export const KEEP_BACKUPS = Math.max(1, Math.floor(envNumber("AGENTBOX_BACKUP_KEEP", 7)));
+
+/**
+ * The shape of a snapshot's name: an ISO timestamp with the punctuation replaced.
+ *
+ * Pruning only ever touches directories that match this. The destination may be a directory that
+ * holds other things — `backup /mnt/nas` is documented — and a prune that deleted whatever sorted
+ * first would destroy unrelated data. A snapshot is only a thing this tool made if it is named like
+ * one.
+ */
+const SNAPSHOT_NAME = /^\d{4}-\d{2}-\d{2}T\d{2}-\d{2}-\d{2}$/;
 
 export interface BackupResult {
   path: string;
@@ -86,22 +103,62 @@ export function backupNow(options: { stamp: string; from?: string; to?: string }
   cpSync(from, partial, { recursive: true, dereference: false });
   chmodSync(partial, 0o700);
   rmSync(path, { recursive: true, force: true });
-  // `cpSync` then remove, rather than rename, because the two may be on different filesystems —
-  // which is the normal case for a backup that is worth having.
-  cpSync(partial, path, { recursive: true, dereference: false });
+  // Rename, not a second copy: `partial` and the final name are both under `root`, so they are on
+  // one filesystem and the rename is atomic. The final directory therefore never exists half-built
+  // — the failure a prune would later count as a real snapshot and evict a good one for.
+  renameSync(partial, path);
   chmodSync(path, 0o700);
-  rmSync(partial, { recursive: true, force: true });
+
+  // The one file here that is not append-only JSONL: the control-plane SQLite database, in WAL
+  // mode. A recursive copy of `control.db` + `-wal` + `-shm` is not a consistent snapshot — a
+  // checkpoint between copying the two can splice generations. `VACUUM INTO` asks SQLite for a
+  // clean single-file snapshot of the *live* database, which is the blessed way to copy an open
+  // WAL db. Best-effort: if it fails, the file copy already in place stands, and a backup never
+  // fails over this.
+  snapshotControlDb(from, path);
 
   const { bytes, files } = measure(path);
 
+  // Only directories this tool made, by name. Anything else under `root` is not ours to delete —
+  // the destination is allowed to hold other things.
   const existing = readdirSync(root, { withFileTypes: true })
-    .filter(entry => entry.isDirectory() && !entry.name.endsWith(".partial"))
+    .filter(entry => entry.isDirectory() && SNAPSHOT_NAME.test(entry.name))
     .map(entry => entry.name)
     .sort();
   const pruned = existing.slice(0, Math.max(0, existing.length - KEEP_BACKUPS));
   for (const name of pruned) rmSync(join(root, name), { recursive: true, force: true });
 
   return { path, bytes, files, pruned };
+}
+
+/**
+ * Replaces the copied control.db with a consistent SQLite snapshot, if there is one.
+ *
+ * Separate connection, read from the live database, written into the backup. The stale `-wal` and
+ * `-shm` copies are removed because the snapshot already folds their committed frames in; leaving
+ * them would have a restore replay frames that are no longer relevant.
+ */
+function snapshotControlDb(from: string, snapshot: string): void {
+  const live = join(from, "control", "control.db");
+  const copied = join(snapshot, "control", "control.db");
+  if (!existsSync(live) || !existsSync(copied)) return;
+  try {
+    const db = new DatabaseSync(live, { readOnly: true });
+    try {
+      rmSync(copied, { force: true });
+      // Quote for the SQL string; a path with a single quote would otherwise break it.
+      db.exec(`vacuum into '${copied.replace(/'/g, "''")}'`);
+      chmodSync(copied, 0o600);
+    } finally {
+      db.close();
+    }
+    for (const suffix of ["-wal", "-shm"]) {
+      rmSync(`${copied}${suffix}`, { force: true });
+    }
+  } catch {
+    // The recursive file copy remains in place; it is inconsistent under concurrent writes but
+    // better than no control.db, and a backup must not fail over this.
+  }
 }
 
 /**

@@ -130,3 +130,43 @@ test("a backup is not readable by anyone who happens to be on the machine", () =
     cleanup();
   }
 });
+
+
+test("a destination that holds other things loses none of them", () => {
+  // `backup /mnt/nas` is documented, so the destination may contain unrelated directories. Pruning
+  // deleted whatever sorted first beyond the keep count — real data loss. It now only ever removes
+  // directories named like a snapshot.
+  const to = mkdtempSync(join(tmpdir(), "agentbox-dest-"));
+  const { dir, cleanup } = state();
+  try {
+    mkdirSync(join(to, "2020-accounts"));
+    mkdirSync(join(to, "important-stuff"));
+    writeFileSync(join(to, "2020-accounts", "ledger.csv"), "money");
+
+    for (let index = 0; index < KEEP_BACKUPS + 3; index++) {
+      backupNow({ stamp: `2026-08-20T10-00-${String(index).padStart(2, "0")}`, from: dir, to });
+    }
+
+    assert.ok(existsSync(join(to, "2020-accounts", "ledger.csv")), "unrelated data survives");
+    assert.ok(existsSync(join(to, "important-stuff")));
+    // Only snapshots were pruned, and exactly KEEP of them remain.
+    const snapshots = readdirSync(to).filter(name => /^\d{4}-\d{2}-\d{2}T/.test(name));
+    assert.equal(snapshots.length, KEEP_BACKUPS);
+  } finally {
+    rmSync(to, { recursive: true, force: true });
+    cleanup();
+  }
+});
+
+test("a nonsense keep count does not delete every snapshot", () => {
+  // AGENTBOX_BACKUP_KEEP=-1 or 0 would select every snapshot for deletion, including the one just
+  // taken, then report a path that no longer exists. KEEP_BACKUPS is floored at 1.
+  assert.ok(KEEP_BACKUPS >= 1);
+  const { dir, to, cleanup } = state();
+  try {
+    const result = backupNow({ stamp: "2026-08-20T10-00-00", from: dir, to });
+    assert.ok(existsSync(result.path), "the snapshot just taken still exists");
+  } finally {
+    cleanup();
+  }
+});

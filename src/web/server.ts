@@ -178,11 +178,11 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
   // system that cannot be rebuilt, and the previous instruction — stop the box, then `cp -a` —
   // required both stopping and remembering, so it did not happen.
   const backupHours = envNumber("AGENTBOX_BACKUP_HOURS", 0);
-  if (backupHours > 0) {
-    const backups = new BackupSchedule({
-      intervalMs: backupHours * 3_600_000,
-      log: line => log(line),
-    });
+  const backups =
+    backupHours > 0
+      ? new BackupSchedule({ intervalMs: backupHours * 3_600_000, log: line => log(line) })
+      : undefined;
+  if (backups !== undefined) {
     // One at startup, so a fresh deployment has a copy before it has run anything, rather than
     // after the first interval it may not survive.
     backups.once();
@@ -939,6 +939,10 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
 
   return () => {
     for (const client of clients) client.end();
+    // The backup timer, or an embedding that restarts the server in one process leaves the old one
+    // firing alongside the new — two backups a tick, sharing a timestamp and a partial directory.
+    backups?.stop();
+    orchestrator.scheduler.stop();
     server.close();
   };
 }
