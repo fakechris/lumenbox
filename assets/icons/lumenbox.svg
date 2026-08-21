@@ -1,0 +1,7 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 128 128" width="128" height="128" role="img" aria-label="LumenBox">
+<rect x="4" y="4" width="120" height="120" rx="30" fill="#231a13"></rect>
+<rect x="4.75" y="4.75" width="118.5" height="118.5" rx="29.25" fill="none" stroke="#ffffff" stroke-opacity="0.08" stroke-width="1.5"></rect>
+<path d="M64 32 96 49 64 66 32 49Z" fill="#d9634a"></path>
+<path d="M32 49 64 66v32L32 81Z" fill="#d9634a" fill-opacity="0.62"></path>
+<path d="M96 49 64 66v32l32-17Z" fill="#d9634a" fill-opacity="0.34"></path>
+</svg>

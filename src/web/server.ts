@@ -21,6 +21,7 @@ import {
 import { readFileSync } from "node:fs";
 import { connect as netConnect, type Socket } from "node:net";
 import { join, posix } from "node:path";
+import { fileURLToPath } from "node:url";
 import { AgentRegistry } from "../agents/registry.ts";
 import type { BusEvent } from "../agents/bus.ts";
 import { resolveBoxProvisioner, type BoxProvisioner } from "../box/provisioner.ts";
@@ -85,6 +86,8 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
   const registry = new AgentRegistry();
   /** Read once on first request; it never changes while the server is up. */
   let vendorScript: Buffer | undefined;
+  /** The woff2 faces, read once each. Seven files, ~400 KB total. */
+  const fontCache = new Map<string, Buffer>();
   const clients = new Set<ServerResponse>();
 
   /**
@@ -415,6 +418,39 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
             const detail = error instanceof Error ? error.message : String(error);
             log(`markdown-it is unavailable: ${detail}`);
             send(res, 404, { error: detail });
+          }
+          return;
+        }
+
+        // The IBM Plex faces the page's @font-face rules point at, from the repo's
+        // assets directory. Absent is fine — font-display: swap and the stacks fall
+        // back to system fonts — so a deployment without the directory degrades
+        // quietly instead of breaking the page. The name is allowlisted by shape,
+        // which is what keeps this from being a file server.
+        if (url.pathname.startsWith("/assets/fonts/")) {
+          const name = url.pathname.slice("/assets/fonts/".length);
+          if (!/^[A-Za-z0-9-]+\.woff2$/.test(name)) {
+            send(res, 404, { error: "not a font" });
+            return;
+          }
+          try {
+            let font = fontCache.get(name);
+            if (font === undefined) {
+              const dir =
+                process.env.AGENTBOX_ASSETS_DIR ??
+                fileURLToPath(new URL("../../assets/fonts", import.meta.url));
+              font = readFileSync(join(dir, name));
+              fontCache.set(name, font);
+            }
+            res.writeHead(200, {
+              "content-type": "font/woff2",
+              "content-length": font.length,
+              // Unlike the page, a font file never changes under the same name.
+              "cache-control": "public, max-age=86400",
+            });
+            res.end(font);
+          } catch {
+            send(res, 404, { error: `${name} is not present on this deployment` });
           }
           return;
         }
