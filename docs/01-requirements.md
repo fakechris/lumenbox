@@ -124,6 +124,32 @@ turns, money and trust.
 - F9.5 The provider credential need not be present inside a box.
 - F9.6 What a box spent is measurable outside it.
 
+### F10 Coordination
+
+Agents here overlap in time and share one box, one work directory and one set of desktops. That
+makes this a concurrent system, and the failures it produces are the ordinary ones — stale reads,
+lost updates, write-write races, non-idempotent replay — wearing the costume of "the agents
+miscommunicated". They are not fixed by asking the model in a prompt to avoid stepping on anyone;
+a rule that is not enforced somewhere is a suggestion.
+
+A second thing this section takes as given: **the other writer is not always another agent.** A
+person pressing stop while a summariser runs, and a person uploading a file an agent is reading,
+produce the same anomalies with a single agent in the system.
+
+- F10.1 A message's acknowledgement says what it actually promises. "Sent" that means "queued and
+  recorded" must not be indistinguishable from "read" or "acted on".
+- F10.2 Work claimed by one agent cannot be claimed by another while the claim holds, and a claim
+  survives the process that made it.
+- F10.3 Two writers to the same file are detected rather than silently resolved by whoever writes
+  last.
+- F10.4 An action whose result was never recorded is reported as *unknown*, never as failed and
+  never as done.
+- F10.5 What happened across agents can be put in order after the fact, well enough to say which
+  action preceded which — otherwise a failure in a team of agents has no author.
+- F10.6 Nothing an agent reads — a teammate's message, a file, a fetched page — is executed as an
+  instruction merely because it is phrased as one.
+- F10.7 A turn interrupted by the process ending is resumed or reported, not silently lost.
+
 ### F5 Lifecycle
 
 - F5.1 A box can be created, stopped, restarted and destroyed.
