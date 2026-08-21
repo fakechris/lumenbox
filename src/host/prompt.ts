@@ -492,19 +492,44 @@ export function parseWakePrompt(
   // boundary exists: it used to be a positional slice — "the middle of three blocks" — which made
   // the writer's paragraph count part of the format, and a paragraph added to the prompt silently
   // changed what a person saw in the UI.
-  const messages: WakeMessage[] = [];
-  for (const line of value.split("\n")) {
-    const opener = knownNames
+  // What starts a new message depends on which shape buildWakePrompt used, and the shapes rule out
+  // the false split. The multi-peer shape writes every opener with an id: "Name (id: x): text". The
+  // single-peer shape writes exactly one opener with no id: "Name: text". So: the *first* opener may
+  // have an id or not; a *later* opener is only real if it carries an id — a message body containing
+  // "Bob: go ahead" has no "(id: ...)", so it is a continuation, not a fabricated message from Bob.
+  // And if the first opener had no id, there is only one message, so nothing after it splits.
+  const withId = (line: string) =>
+    knownNames
       .map(name => ({
         name,
         match: new RegExp(
           `^${name.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}` +
-            "(?: \\(id: [^)]*\\))?( \\(priority\\))?: ([\\s\\S]*)$"
+            " \\(id: [^)]*\\)( \\(priority\\))?: ([\\s\\S]*)$"
+        ).exec(line),
+      }))
+      .find(candidate => candidate.match !== null);
+  const bare = (line: string) =>
+    knownNames
+      .map(name => ({
+        name,
+        match: new RegExp(
+          `^${name.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}( \\(priority\\))?: ([\\s\\S]*)$`
         ).exec(line),
       }))
       .find(candidate => candidate.match !== null);
 
+  const messages: WakeMessage[] = [];
+  let multiPeer = false;
+  for (const line of value.split("\n")) {
+    const opener =
+      messages.length === 0
+        ? (withId(line) ?? bare(line)) // the first opener: either shape
+        : multiPeer
+          ? withId(line) // later openers only count with an id
+          : undefined; // single-peer: nothing after the one message splits
+
     if (opener?.match) {
+      if (messages.length === 0 && opener.match[0].includes("(id:")) multiPeer = true;
       messages.push({
         from: opener.name,
         priority: opener.match[1] !== undefined,

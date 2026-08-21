@@ -226,8 +226,15 @@ export interface ControlStore {
   /** One row per request the relay forwarded, measured as it passed. */
   appendRelayUsage(row: Omit<RelayUsageRow, "id">): void;
   relayTotals(tenantId: string, since?: string): UsageTotals;
-  /** Whether this tenant has any relay-measured usage, which decides which series to bill from. */
-  hasRelayUsage(tenantId: string): boolean;
+  /**
+   * Whether this tenant has relay-measured usage in a period, which decides which series to bill.
+   *
+   * Windowed: `since` bounds it to the billing period. Without a window, a single relay request
+   * ever made a tenant relay-metered forever — so a tenant that used the relay once and then ran
+   * without it read as having spent nothing, because the meter looked only at the (empty) relay
+   * series for the current period.
+   */
+  hasRelayUsage(tenantId: string, since?: string): boolean;
 
   recordHealth(row: HealthRow): void
   latestHealth(boxId: string): HealthRow | undefined;
@@ -764,10 +771,15 @@ export class SqliteControlStore implements ControlStore {
     };
   }
 
-  hasRelayUsage(tenantId: string): boolean {
-    const row = this.db
-      .prepare("select 1 as found from relay_usage where tenant_id = ? limit 1")
-      .get(tenantId) as { found?: number } | undefined;
+  hasRelayUsage(tenantId: string, since?: string): boolean {
+    const row =
+      since === undefined
+        ? (this.db
+            .prepare("select 1 as found from relay_usage where tenant_id = ? limit 1")
+            .get(tenantId) as { found?: number } | undefined)
+        : (this.db
+            .prepare("select 1 as found from relay_usage where tenant_id = ? and at >= ? limit 1")
+            .get(tenantId, since) as { found?: number } | undefined);
     return row !== undefined;
   }
 

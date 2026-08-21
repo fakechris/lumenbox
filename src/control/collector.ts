@@ -57,7 +57,7 @@ export interface CollectorOptions {
    * daemon restart re-maps every box at once. The stored URL goes stale, every poll fails, and the
    * collector marks a healthy fleet unreachable. Optional so a store-only test needs no allocator.
    */
-  allocator?: Pick<BoxAllocator, "reconcile">;
+  allocator?: Pick<BoxAllocator, "reconcile" | "kind">;
   /** How often to sweep the fleet. */
   intervalMs?: number;
   /** Per-request timeout. Short: a box that is thinking hard is still expected to answer a GET. */
@@ -188,6 +188,11 @@ export class Collector {
   /** Re-reads a box's address through the allocator, returning the row only when it changed. */
   private async relocate(box: BoxRow): Promise<BoxRow | undefined> {
     if (this.options.allocator === undefined) return undefined;
+    // Only a box this allocator actually owns. find() refuses a row created by another allocator,
+    // but relocate reached reconcile() directly on the raw row — so a Compose control plane run
+    // against a database holding a Static box would fail to find a Docker object for it and mark the
+    // still-running box `gone`, freeing the tenant's slot for a second box.
+    if (box.allocatorKind !== this.options.allocator.kind) return undefined;
     const handle: BoxHandle = {
       tenantId: box.tenantId,
       id: box.id,
@@ -374,11 +379,11 @@ export function meterTenants(store: ControlStore, since?: string): TenantMeter[]
     // request passed rather than reported by the thing being billed. The two are *not* summed —
     // they are two measurements of the same traffic, and adding them would double-count.
     //
-    // "Any relay rows at all" rather than a per-period comparison, because a tenant that moved onto
-    // a relay mid-month would otherwise be billed twice for the days on either side of the switch.
-    // The cost is that the box's own record for the days before is dropped; that is the right way
-    // round, since the unforgeable number is the one to under-bill from rather than over.
-    const measuredByRelay = store.hasRelayUsage(tenant.id);
+    // Within the billing period, not "ever": a single relay request used to switch a tenant to
+    // relay metering permanently, so a tenant that used the relay once and then ran without it
+    // billed from an empty relay series and read as spending nothing. Windowed, a period with no
+    // relay rows falls back to the box's own record.
+    const measuredByRelay = store.hasRelayUsage(tenant.id, since);
     const totals = measuredByRelay
       ? store.relayTotals(tenant.id, since)
       : store.tenantTotals(tenant.id, since);

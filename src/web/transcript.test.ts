@@ -146,3 +146,36 @@ test("a message to a teammate is recorded by name, not by id", () => {
     tools: [{ name: "SendToAgent", detail: "Bob: please verify r1.txt" }],
   });
 });
+
+
+test("a message body that mentions a teammate by name is not split into a fake message", () => {
+  // Rex sends a single message whose text contains "Bob: go ahead", and Bob is a real agent. The
+  // parser used to split that body into a fabricated message from Bob. In single-peer shape there
+  // is exactly one message, so nothing after the opener splits.
+  const wake = buildWakePrompt([
+    {
+      id: "m1",
+      fromId: "agent-rex",
+      fromName: "Rex",
+      text: "I asked around and\nBob: go ahead, ship it\nis what came back.",
+      priority: false,
+      receivedAt: "2026-08-21T10:00:00.000Z",
+    },
+  ]);
+  const parsed = parseWakePrompt(wake, ["Rex", "Bob", "Ada"]);
+  assert.equal(parsed?.length, 1, "one message, not two");
+  assert.equal(parsed?.[0]?.from, "Rex");
+  assert.match(parsed?.[0]?.text ?? "", /Bob: go ahead/);
+});
+
+test("genuine multiple peer messages still parse, because they carry ids", () => {
+  const wake = buildWakePrompt([
+    { id: "m1", fromId: "agent-rex", fromName: "Rex", text: "first", priority: false, receivedAt: "" },
+    { id: "m2", fromId: "agent-ada", fromName: "Ada", text: "second\nBob: not a message", priority: true, receivedAt: "" },
+  ]);
+  const parsed = parseWakePrompt(wake, ["Rex", "Ada", "Bob"]);
+  assert.equal(parsed?.length, 2);
+  assert.equal(parsed?.[0]?.from, "Rex");
+  assert.equal(parsed?.[1]?.from, "Ada");
+  assert.match(parsed?.[1]?.text ?? "", /Bob: not a message/, "the body line did not split");
+});

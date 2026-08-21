@@ -348,6 +348,7 @@ test("a box whose port moved is relocated, not written off", async () => {
       failuresBeforeUnreachable: 1,
       log: line => lines.push(line),
       allocator: {
+        kind: "compose" as const,
         async reconcile(handle) {
           return {
             ...handle,
@@ -378,6 +379,7 @@ test("a box that really is dead is still written off after relocating fails", as
       fetchImpl: fakeFleet({}).fetchImpl,
       failuresBeforeUnreachable: 1,
       allocator: {
+        kind: "compose" as const,
         async reconcile(handle) {
           return handle;
         },

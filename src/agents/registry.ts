@@ -567,6 +567,12 @@ export class AgentRegistry {
         // A shard that cannot be read is one agent's contribution, not the whole tier.
       }
     }
+    // Merged in timestamp order, not shard-enumeration order. Retraction correctness in dedupe
+    // depends on a record being seen after the one it withdraws — and a retraction written to one
+    // agent's shard withdraws a fact in another's, so reading shard-by-shard could process the
+    // later retraction before the earlier fact and leave both. A stable sort by `at` restores the
+    // global order the append-only design assumes.
+    out.sort((a, b) => a.at.localeCompare(b.at));
     return out;
   }
 
