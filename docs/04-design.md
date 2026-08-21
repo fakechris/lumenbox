@@ -250,6 +250,11 @@ and ten long ones cost very different amounts of the thing actually being spent.
   true; only one should occupy the budget.
 - **Sharded by scope.** Personal memory is per-agent; a separate shared store is what lets one
   agent answer from something another learned.
+- **The file is bounded, like every other durable log.** Past a threshold it is rewritten down to
+  the live view — superseded records, retracted facts with their retractions, and lines no reader
+  ever parsed all go; what stays keeps its bytes and timestamps, so the view and the decay do not
+  move. Shared shards compact together: a retraction is only dropped once nothing it could kill
+  remains on disk, so no crash between shard writes can resurrect a withdrawn fact.
 
 ## 14. Skills and schedules
 

@@ -429,10 +429,17 @@ Honestly, since these are the findings a review should raise:
   nothing is dropped, nothing is chosen, and no call is made — which is almost always. The selector
   is an improvement to which memories are discarded and never a reason a turn does not happen: any
   failure, or an answer that cannot be read, falls back to the score.
-- **Unbounded growth on disk.** Requests are now bounded by compaction (§2.2.1), but the files are
-  not: a transcript grows forever and nothing rotates or archives it. That is deliberate — the
-  record is the product's provenance claim — and it means disk is the eventual limit, which
-  `box-doctor` reports and nothing enforces.
+- **Unbounded growth on disk, for the transcript only.** Requests are bounded by compaction
+  (§2.2.1) and the transcript file still grows forever — deliberately, because the record is the
+  product's provenance claim. Memory no longer shares that property: `memory.jsonl` was the one
+  durable log that never compacted its own file (usage, policy, claims, the inbox and the turn
+  ledger all rewrite their tail), which was an inconsistency rather than a decision — the *view*
+  was always bounded, so nothing above the file noticed. Past a line threshold it is rewritten down
+  to the live view dedupe already computes, original bytes and timestamps kept, so the view and the
+  decay are untouched. The cost accepted matches every other log: "what was believed when" is only
+  recoverable back to the last compaction. Shared shards compact together, never one at a time — a
+  retraction in one agent's shard withdraws a fact in another's, and the rule that keeps every
+  crash point safe is that a retraction is only dropped once nothing it could kill remains on disk.
 - **No query.** "Which agent touched this file", "what happened on Tuesday" mean reading every
   file. Fine for one box, not for a fleet.
 - **No transactions.** Atomic profile writes and append-only transcripts cover the realistic

@@ -26,7 +26,13 @@ import { appendLine } from "../host/jsonl.ts";
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 import { isTodoStatus, type DurableState, type TodoItem } from "../host/durable.ts";
-import { importMarkdown, type MemoryRecord } from "../host/memory.ts";
+import {
+  compactMemoryLines,
+  compactSharedShardLines,
+  importMarkdown,
+  MEMORY_COMPACT_AT,
+  type MemoryRecord,
+} from "../host/memory.ts";
 
 export const AGENT_NAME_MAX_LENGTH = 72;
 export const AGENT_DESCRIPTION_MAX_LENGTH = 2000;
@@ -524,6 +530,55 @@ export class AgentRegistry {
     for (const record of records) {
       appendLine(this.memoryRecordsPathFor(agentId), JSON.stringify(record));
     }
+    this.maybeCompactOwnMemory(agentId);
+  }
+
+  /**
+   * Line counts at which the last compaction attempt found nothing to drop, per path.
+   *
+   * Without this, a file whose records are all genuinely live — over the threshold with nothing to
+   * shrink — would be re-read and re-judged on every append, forever. A file that could not shrink
+   * at N lines is not retried until it has grown past N.
+   */
+  private readonly memoryCompactFloor = new Map<string, number>();
+
+  /**
+   * Rewrites an agent's memory file down to its live view, past a threshold.
+   *
+   * Memory was the one durable log that never bounded its own file: the *view* was bounded (dedupe,
+   * decay, a character budget) so nothing ever noticed the file underneath only grew. The rewrite
+   * keeps exactly the records every reader already sees, byte-for-byte and in order, so the view
+   * before and after is identical — including decay, because the timestamps are untouched. The cost
+   * accepted is the same one usage and policy already accept: "what was believed when" is only
+   * recoverable back to the last compaction.
+   */
+  private maybeCompactOwnMemory(agentId: string): void {
+    const path = this.memoryRecordsPathFor(agentId);
+    try {
+      const lines = readFileSync(path, "utf8")
+        .split("\n")
+        .filter(line => line.trim() !== "");
+      if (lines.length <= MEMORY_COMPACT_AT) return;
+      // The floor carries slack: a file that could not shrink at N lines grows by one on every
+      // append, so "retry when bigger than N" would re-read and re-judge the whole file every
+      // single time. An eighth's growth between attempts keeps the judging cost amortised.
+      const floor = this.memoryCompactFloor.get(path);
+      if (floor !== undefined && lines.length <= floor + Math.max(32, floor >> 3)) return;
+
+      const kept = compactMemoryLines(lines);
+      if (kept === undefined) {
+        this.memoryCompactFloor.set(path, lines.length);
+        return;
+      }
+      // Temp plus rename, so a reader never sees half a file — the same shape as every other log.
+      const temp = `${path}.${process.pid}.tmp`;
+      writeFileSync(temp, kept.length === 0 ? "" : `${kept.join("\n")}\n`, "utf8");
+      renameSync(temp, path);
+      this.memoryCompactFloor.delete(path);
+    } catch {
+      // Never fail an append over housekeeping: the worst case is the file stays big, which is the
+      // behaviour it always had.
+    }
   }
 
   private sharedMemoryDir(): string {
@@ -582,6 +637,51 @@ export class AgentRegistry {
     mkdirSync(this.sharedMemoryDir(), { recursive: true });
     for (const record of records) {
       appendLine(this.sharedMemoryPathFor(agentId), JSON.stringify(record));
+    }
+    this.maybeCompactSharedMemory();
+  }
+
+  /**
+   * Compacts every shard together, past a threshold on their combined size.
+   *
+   * Together, never one at a time: a retraction in one agent's shard withdraws a fact in another's,
+   * and compacting a single shard by its own live view would drop the retraction while the fact it
+   * killed still sits elsewhere — resurrecting it. The helper's rule (a retraction is only dropped
+   * once nothing it could kill remains on disk) makes any interleaving of the shard writes safe,
+   * so a crash between two rewrites cannot bring anything back either.
+   */
+  private maybeCompactSharedMemory(): void {
+    const dir = this.sharedMemoryDir();
+    try {
+      const names = readdirSync(dir).filter(name => name.endsWith(".jsonl"));
+      const shards = new Map<string, readonly string[]>();
+      let total = 0;
+      for (const name of names) {
+        const lines = readFileSync(join(dir, name), "utf8")
+          .split("\n")
+          .filter(line => line.trim() !== "");
+        shards.set(name, lines);
+        total += lines.length;
+      }
+      if (total <= MEMORY_COMPACT_AT) return;
+      const floor = this.memoryCompactFloor.get(dir);
+      if (floor !== undefined && total <= floor + Math.max(32, floor >> 3)) return;
+
+      const kept = compactSharedShardLines(shards);
+      if (kept === undefined) {
+        this.memoryCompactFloor.set(dir, total);
+        return;
+      }
+      for (const [name, lines] of kept) {
+        if (lines.length === (shards.get(name) ?? []).length) continue; // unchanged shard
+        const path = join(dir, name);
+        const temp = `${path}.${process.pid}.tmp`;
+        writeFileSync(temp, lines.length === 0 ? "" : `${lines.join("\n")}\n`, "utf8");
+        renameSync(temp, path);
+      }
+      this.memoryCompactFloor.delete(dir);
+    } catch {
+      // Housekeeping only; the file staying big is the old behaviour, not a failure.
     }
   }
 

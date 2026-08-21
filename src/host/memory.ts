@@ -623,3 +623,120 @@ export async function chooseRelevant(options: {
     return first;
   }
 }
+
+// ── bounding the file itself ─────────────────────────────────────────────────────────
+
+/**
+ * How many lines a memory file may reach before compaction tries to shrink it.
+ *
+ * Memory was the one durable log that never compacted its file: usage, policy, claims, the inbox
+ * and the turn ledger all rewrite their tail past a threshold, and `memory.jsonl` only ever grew —
+ * superseded records, retracted facts with their retractions, every re-recording, kept forever.
+ * That was an inconsistency, not a decision: the *view* was always bounded (dedupe plus a character
+ * budget), so nothing above the file ever noticed the file itself had no bound.
+ */
+export const MEMORY_COMPACT_AT = envNumber("AGENTBOX_MEMORY_COMPACT_AT", 1_000);
+
+/** A line paired with what it parsed to, so kept lines are written back byte-for-byte. */
+function parseMemoryLines(
+  lines: readonly string[]
+): { line: string; record: MemoryRecord | undefined }[] {
+  return lines.map(line => {
+    try {
+      const parsed = JSON.parse(line) as MemoryRecord;
+      return typeof parsed.text === "string" && typeof parsed.at === "string"
+        ? { line, record: parsed }
+        : { line, record: undefined };
+    } catch {
+      return { line, record: undefined };
+    }
+  });
+}
+
+/**
+ * The lines worth keeping from one agent's own memory file, or `undefined` when nothing shrinks.
+ *
+ * Keeps exactly the live view `dedupe` already computes — the same records every reader sees — in
+ * their original file order and as their original bytes, so a field this version does not know
+ * about survives a rewrite by a version that wrote it. What goes: superseded records, retracted
+ * facts together with their retractions (a single file is rewritten atomically, so the pair cannot
+ * be separated by a crash), and lines that never parsed — which no reader has ever seen.
+ *
+ * `undefined` rather than the same lines back, so the caller can tell "nothing to gain" from "done"
+ * and stop re-attempting a rewrite that will never shrink: a file of genuinely distinct live facts
+ * is legitimately large, and that is recall's budget problem, not the file's.
+ */
+export function compactMemoryLines(lines: readonly string[]): string[] | undefined {
+  const parsed = parseMemoryLines(lines);
+  const records = parsed.flatMap(entry => (entry.record === undefined ? [] : [entry.record]));
+  const live = new Set(dedupe(records));
+  const kept = parsed
+    .filter(entry => entry.record !== undefined && live.has(entry.record))
+    .map(entry => entry.line);
+  return kept.length < lines.length ? kept : undefined;
+}
+
+/**
+ * The lines worth keeping from every shared-memory shard, or `undefined` when nothing shrinks.
+ *
+ * Shared memory cannot be compacted one shard at a time, because a retraction in one agent's shard
+ * withdraws a fact in another's. Naively keeping each shard's own live view would drop a retraction
+ * from Ada's shard while the fact it killed still sits in Rex's — and the fact comes back to life.
+ *
+ * The rule that makes this safe at every crash point: **dropping a dead fact is always safe, and a
+ * retraction is only dropped when nothing it could kill remains on disk.** So one pass keeps the
+ * merged live view plus every retraction that still has an on-disk record older than itself,
+ * whichever shard that record is in. A retraction whose targets are being dropped *in this pass* is
+ * kept — its targets were on disk when the pass was decided — and becomes droppable on the next
+ * pass, once they are genuinely gone. Two passes to fully converge, and no interleaving of shard
+ * writes, however it crashes, can resurrect anything.
+ */
+export function compactSharedShardLines(
+  shards: ReadonlyMap<string, readonly string[]>
+): Map<string, string[]> | undefined {
+  const byShard = new Map<string, { line: string; record: MemoryRecord | undefined }[]>();
+  const merged: { record: MemoryRecord; shard: string }[] = [];
+  for (const [shard, lines] of shards) {
+    const parsed = parseMemoryLines(lines);
+    byShard.set(shard, parsed);
+    for (const entry of parsed) {
+      if (entry.record !== undefined) merged.push({ record: entry.record, shard });
+    }
+  }
+
+  // The same order the reader uses: global timestamp order, so retraction semantics match.
+  merged.sort((a, b) => a.record.at.localeCompare(b.record.at));
+  const live = new Set(dedupe(merged.map(entry => entry.record)));
+
+  // Everything a retraction could still kill: non-retraction records on disk, by key, with their
+  // times. Computed against the pre-pass state on purpose — see above.
+  const killable = new Map<string, string[]>();
+  for (const { record } of merged) {
+    if (record.kind === "retraction") continue;
+    const key = dedupeKey(record.text);
+    if (key === "") continue;
+    const times = killable.get(key) ?? [];
+    times.push(record.at);
+    killable.set(key, times);
+  }
+
+  const keep = (record: MemoryRecord): boolean => {
+    if (live.has(record)) return true;
+    if (record.kind !== "retraction") return false;
+    const times = killable.get(dedupeKey(record.text));
+    return times !== undefined && times.some(at => at < record.at);
+  };
+
+  const out = new Map<string, string[]>();
+  let keptTotal = 0;
+  let lineTotal = 0;
+  for (const [shard, parsed] of byShard) {
+    const kept = parsed
+      .filter(entry => entry.record !== undefined && keep(entry.record))
+      .map(entry => entry.line);
+    out.set(shard, kept);
+    keptTotal += kept.length;
+    lineTotal += parsed.length;
+  }
+  return keptTotal < lineTotal ? out : undefined;
+}
