@@ -113,15 +113,26 @@ export class HealthNotifier {
  */
 export function webhookDelivery(url: string, log: (line: string) => void): Deliver {
   return notice => {
+    // A five-second deadline so a hung endpoint cannot pile up requests, and a status check so a
+    // 401/429/500 is reported rather than counted as delivered — a resolved fetch is not a
+    // successful notification.
+    const cancel = AbortSignal.timeout(5_000);
     void fetch(url, {
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify(notice),
-    }).catch(error => {
-      log(
-        `could not deliver a ${notice.kind} notice for ${notice.externalId}: ` +
-          `${error instanceof Error ? error.message : String(error)}`
-      );
-    });
+      signal: cancel,
+    })
+      .then(response => {
+        if (!response.ok) {
+          log(`webhook returned ${response.status} for a ${notice.kind} notice on ${notice.externalId}`);
+        }
+      })
+      .catch(error => {
+        log(
+          `could not deliver a ${notice.kind} notice for ${notice.externalId}: ` +
+            `${error instanceof Error ? error.message : String(error)}`
+        );
+      });
   };
 }

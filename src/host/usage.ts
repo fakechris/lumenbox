@@ -63,6 +63,13 @@ export function usageLogPath(): string {
  */
 const COMPACT_AT = envNumber("AGENTBOX_USAGE_COMPACT_AT", 20_000);
 const KEEP_ON_COMPACT = envNumber("AGENTBOX_USAGE_KEEP", 5_000);
+/**
+ * How far back compaction always keeps records, whatever the count.
+ *
+ * Because the rolling budget is summed from this file. Two days covers the 24-hour default budget
+ * window with room to spare, so a record still inside the window is never dropped.
+ */
+const RETAIN_MS = envNumber("AGENTBOX_USAGE_RETAIN_HOURS", 48) * 3_600_000;
 
 export class UsageLog {
   private nextSeq = 1;
@@ -105,6 +112,9 @@ export class UsageLog {
       }
     } catch (error) {
       const detail = error instanceof Error ? error.message : String(error);
+      // Sticky, like a write failure: if the file existed but could not be read at startup, spend
+      // cannot be measured, and the very first budget check must not read that as "nothing spent".
+      this.unavailableReason ??= `the usage log could not be read at startup (${detail})`;
       this.onWarn(`usage: cannot read ${this.path} (${detail}); numbering restarts`);
     }
   }
@@ -197,10 +207,27 @@ export class UsageLog {
     );
   }
 
-  /** Rewrites the file with its tail. Temp plus rename, so a reader never sees half a file. */
-  private compact(): void {
+  /**
+   * Rewrites the file with its tail. Temp plus rename, so a reader never sees half a file.
+   *
+   * Keeps the last `KEEP_ON_COMPACT` records *and* everything newer than a retention horizon,
+   * whichever is larger. The horizon matters: the rolling budget is measured from this file, and
+   * dropping records that are still inside the budget window would make a box that spent its whole
+   * budget in a burst read as having spent almost nothing right afterwards — the ceiling stops
+   * applying exactly when it should bite. Two days comfortably covers the 24-hour default window.
+   */
+  private compact(now = Date.now()): void {
     try {
-      const kept = this.since(0, Number.MAX_SAFE_INTEGER).slice(-KEEP_ON_COMPACT);
+      const all = this.since(0, Number.MAX_SAFE_INTEGER);
+      const horizon = now - RETAIN_MS;
+      const byCount = all.slice(-KEEP_ON_COMPACT);
+      const oldestKept = byCount.length > 0 ? Date.parse(byCount[0]!.at) : now;
+      // If the count-tail already reaches past the horizon, it is enough; otherwise widen to the
+      // horizon so no in-window record is lost.
+      const kept =
+        Number.isFinite(oldestKept) && oldestKept <= horizon
+          ? byCount
+          : all.filter((record, index) => index >= all.length - KEEP_ON_COMPACT || Date.parse(record.at) >= horizon);
       const temp = `${this.path}.${process.pid}.tmp`;
       writeFileSync(temp, kept.map(record => `${JSON.stringify(record)}\n`).join(""), "utf8");
       renameSync(temp, this.path);

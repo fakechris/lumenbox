@@ -13,6 +13,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
   DEFAULT_LIMITS,
+  envLimit,
   describeRequest,
   fingerprintOf,
   MAX_APPROVABLE_DESCRIPTION,
@@ -467,6 +468,49 @@ test("a budget refuses when spend cannot be measured, rather than assuming zero"
       spendUnavailable: () => "the usage log could not be read (EACCES)",
     });
     assert.equal(unbudgeted.check(call).allow, true);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+
+test("a zero limit is a real ceiling, and garbage does not become unlimited", () => {
+  // AGENTBOX_BUDGET_TOKENS=0 is an operator saying stop; it used to fall through to "no limit", the
+  // exact opposite. And a typo'd value must not silently disable the budget either.
+  const saved = process.env.AGENTBOX_TEST_LIMIT;
+  const errors: string[] = [];
+  const realError = console.error;
+  console.error = (line: string) => errors.push(line);
+  try {
+    process.env.AGENTBOX_TEST_LIMIT = "0";
+    assert.equal(envLimit("AGENTBOX_TEST_LIMIT"), 0, "zero is a real ceiling, not 'no limit'");
+
+    process.env.AGENTBOX_TEST_LIMIT = "10000x";
+    assert.equal(envLimit("AGENTBOX_TEST_LIMIT"), undefined);
+    assert.ok(errors.some(line => /is not a valid limit/.test(line)), "and loudly");
+
+    process.env.AGENTBOX_TEST_LIMIT = "-5";
+    assert.equal(envLimit("AGENTBOX_TEST_LIMIT"), undefined, "negative is not a ceiling either");
+
+    delete process.env.AGENTBOX_TEST_LIMIT;
+    assert.equal(envLimit("AGENTBOX_TEST_LIMIT"), undefined, "unset is the only silent no-limit");
+  } finally {
+    console.error = realError;
+    if (saved === undefined) delete process.env.AGENTBOX_TEST_LIMIT;
+    else process.env.AGENTBOX_TEST_LIMIT = saved;
+  }
+});
+
+test("a zero budget refuses every model call", () => {
+  const dir = mkdtempSync(join(tmpdir(), "agentbox-policy-"));
+  try {
+    const gate = new PolicyGate({
+      path: join(dir, "policy.jsonl"),
+      limits: { ...DEFAULT_LIMITS, budgetTokens: 0, budgetWindowHours: 24 },
+      spentSince: () => 0,
+    });
+    const decision = gate.check({ kind: "model-call", agentId: "a", agentName: "Ada", round: 0 });
+    assert.equal(decision.allow, false, "0 spent is not < 0 budget, so it halts");
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }

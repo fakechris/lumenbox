@@ -102,7 +102,15 @@ export class Orchestrator {
     spendUnavailable: () => this.usage.unavailable(),
     spentSince: sinceMs => {
       const totals = this.usage.totalsSince(sinceMs);
-      return totals.inputTokens + totals.outputTokens;
+      // Every billed class, not just input and output. The control-plane meter counts cache reads
+      // and writes; a local budget that ignored them let a cache-heavy run report near-zero spend
+      // while genuinely costing money.
+      return (
+        totals.inputTokens +
+        totals.outputTokens +
+        totals.cacheReadTokens +
+        totals.cacheWriteTokens
+      );
     },
     log: line => console.error(`[policy] ${line}`),
   });

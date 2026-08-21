@@ -113,12 +113,18 @@ export class Collector {
     await Promise.all(
       boxes.map(async box => {
         const outcome = await this.collectOne(box);
-        // After the outcome and before the counters, so a notice reflects what was just recorded.
-        // The notifier decides what is a change; this only says what was seen.
-        this.options.notifier?.observe(box, {
-          reachable: outcome.reachable,
-          degraded: outcome.degraded,
-        });
+        // Told the *stored* state, not the raw probe. A single transient timeout does not move the
+        // store to `unreachable` — that waits for the consecutive-failure threshold — so feeding the
+        // notifier the raw outcome paged "stopped answering" on one blip and "recovered" on the
+        // next sweep. Re-reading the row means a notice reflects a real state transition, which is
+        // what the review document says is delivered.
+        const stored = this.options.store.getBox(box.id);
+        if (stored !== undefined) {
+          this.options.notifier?.observe(stored, {
+            reachable: stored.state !== "unreachable" && stored.state !== "gone",
+            degraded: outcome.reachable && outcome.degraded,
+          });
+        }
         if (outcome.reachable) {
           this.failures.delete(box.id);
           if (outcome.degraded) result.degraded++;
@@ -306,10 +312,20 @@ export class Collector {
   start(): void {
     if (this.timer !== undefined) return;
     const interval = this.options.intervalMs ?? 15_000;
+    // Skip a tick if the last sweep is still going. A sweep that relocates a box and makes two
+    // health requests plus a usage pull can exceed the interval, and overlapping sweeps let a slow
+    // failed probe land after a newer healthy one — a stale alert followed by a recovery.
+    let sweeping = false;
     const tick = () => {
-      void this.sweep().catch(error => {
-        this.log(`sweep failed: ${error instanceof Error ? error.message : String(error)}`);
-      });
+      if (sweeping) return;
+      sweeping = true;
+      void this.sweep()
+        .catch(error => {
+          this.log(`sweep failed: ${error instanceof Error ? error.message : String(error)}`);
+        })
+        .finally(() => {
+          sweeping = false;
+        });
     };
     tick();
     this.timer = setInterval(tick, interval);

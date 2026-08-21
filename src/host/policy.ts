@@ -127,11 +127,19 @@ export const DEFAULT_LIMITS: PolicyLimits = {
  * absence is meaningful — no budget at all is a valid configuration — so the two must not share a
  * name or a shape.
  */
-function envLimit(name: string): number | undefined {
+export function envLimit(name: string): number | undefined {
   const raw = process.env[name];
+  // Unset is the only thing that means "no limit". Present-but-unreadable does not silently become
+  // unlimited — an operator who set a budget and typo'd it should not end up with no budget at all.
   if (raw === undefined || raw.trim() === "") return undefined;
   const value = Number(raw);
-  return Number.isFinite(value) && value > 0 ? value : undefined;
+  if (!Number.isFinite(value) || value < 0) {
+    console.error(`[policy] ${name}="${raw}" is not a valid limit (a number >= 0); no limit applied`);
+    return undefined;
+  }
+  // Zero is a real limit: it halts spending. It used to fall through to "no limit", so an operator
+  // trying to stop the box with `=0` got the opposite.
+  return value;
 }
 
 function envList(name: string): readonly string[] {
