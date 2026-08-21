@@ -339,6 +339,12 @@ export class AgentRegistry {
       title?: string;
       avatarColor?: string;
       hidden?: boolean;
+      /**
+       * The tool set, `null` to lift the restriction entirely. Reached only from the
+       * web UI's agent dialog — the model-facing UpdateAgent tool never passes this,
+       * which is what keeps "nothing grants what the granter does not hold" true.
+       */
+      tools?: readonly string[] | null;
     }
   ): AgentRecord {
     const existing = this.get(agentId);
@@ -357,6 +363,10 @@ export class AgentRegistry {
     if (changes.title !== undefined) profile.title = clampLine(changes.title, 64);
     if (changes.avatarColor !== undefined) profile.avatarColor = changes.avatarColor;
     if (changes.hidden !== undefined) profile.hidden = changes.hidden;
+    if (changes.tools !== undefined) {
+      if (changes.tools === null) delete profile.tools;
+      else profile.tools = [...changes.tools];
+    }
 
     profile.updatedAt = new Date().toISOString();
     this.writeProfile(agentId, profile);

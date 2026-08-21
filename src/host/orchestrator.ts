@@ -525,7 +525,7 @@ export class Orchestrator {
  * subtraction from a stated whole, and so the test that every tool is accounted for has something
  * to compare against.
  */
-const ALL_TOOLS: readonly string[] = [
+export const ALL_TOOLS: readonly string[] = [
   "computer",
   "bash",
   "read_file",

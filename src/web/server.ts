@@ -43,6 +43,23 @@ import { authorize, callerOf, isLoopback, mayDrive, refusalToDrive } from "./aut
 const WORK_DIR = process.env.AGENTBOX_WORK_DIR ?? "/home/box/work";
 
 /**
+ * The tool list from a request body: an array of known names, `null` for "all",
+ * `undefined` for "not provided", or an Error naming what was wrong.
+ */
+function readToolList(value: unknown): readonly string[] | null | undefined | Error {
+  if (value === undefined) return undefined;
+  if (value === null) return null;
+  if (!Array.isArray(value) || value.some(item => typeof item !== "string")) {
+    return new Error("tools must be an array of tool names");
+  }
+  const unknown = (value as string[]).filter(name => !ALL_TOOLS.includes(name));
+  if (unknown.length > 0) {
+    return new Error(`Unknown tools: ${unknown.join(", ")}. Known: ${ALL_TOOLS.join(", ")}.`);
+  }
+  return value as string[];
+}
+
+/**
  * Which code is running, for reading a bug report against the right build.
  *
  * Version from package.json; commit from git, asked once at startup — a deployment
@@ -98,7 +115,8 @@ function withinWork(path: string): boolean {
   return normalised === WORK_DIR || normalised.startsWith(`${WORK_DIR}/`);
 }
 import { agentboxHome, loadConfig, saveConfig } from "../config.ts";
-import { providerNames, resolveProvider } from "../host/provider.ts";
+import { ALL_TOOLS } from "../host/orchestrator.ts";
+import { PRESET_MODELS, providerNames, resolveProvider, testProvider } from "../host/provider.ts";
 import { ActivityLog } from "./activity.ts";
 import { vendorPath } from "./markdown.ts";
 import { toDisplayEntries } from "./transcript.ts";
@@ -752,6 +770,7 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
                 name,
                 label: profile.label,
                 model: profile.model,
+                models: PRESET_MODELS[name] ?? [],
                 keyEnv: profile.keyEnv,
                 keyPresent:
                   process.env[profile.keyEnv] !== undefined ||
@@ -798,6 +817,39 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
           });
           log(`config saved to ${path}`);
           send(res, 200, { saved: true, note: "Takes effect when the server restarts." });
+          return;
+        }
+
+        // One real round trip against the endpoint before anything is saved: "invalid
+        // api key" from the vendor beats a saved config that fails at the next restart.
+        if (route === "POST /api/config/test") {
+          if (refused()) return;
+          const body = await readJson(req);
+          const name = typeof body.provider === "string" ? body.provider.toLowerCase() : "";
+          if (!providerNames().includes(name)) {
+            send(res, 400, { error: `Unknown provider "${name}".` });
+            return;
+          }
+          try {
+            const profile = resolveProvider(name);
+            if (typeof body.model === "string" && body.model.trim() !== "") {
+              profile.model = body.model.trim();
+            }
+            if (typeof body.baseUrl === "string" && body.baseUrl.trim() !== "") {
+              profile.baseUrl = body.baseUrl.trim();
+            }
+            const key =
+              typeof body.key === "string" && body.key.trim() !== ""
+                ? body.key.trim()
+                : undefined;
+            const result = await testProvider(profile, key);
+            send(res, 200, result);
+          } catch (error) {
+            send(res, 200, {
+              ok: false,
+              error: error instanceof Error ? error.message : String(error),
+            });
+          }
           return;
         }
 
@@ -864,6 +916,7 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
             provider: describeProvider(options.provider),
             build,
             box: { ...box, ok: box.connected },
+            allTools: ALL_TOOLS,
             agents: registry.list().map(record => {
               const index = registry.displayIndexFor(record.id);
               return {
@@ -871,6 +924,8 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
                 name: record.profile.name,
                 title: record.profile.title ?? "",
                 description: record.profile.description,
+                // null means unrestricted — every tool, including ones added later.
+                tools: record.profile.tools ?? null,
                 // Every agent has its own desktop, so the UI shows whichever one
                 // belongs to the agent you are looking at.
                 displayIndex: index,
@@ -908,9 +963,27 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
         if (route === "POST /api/agents") {
           if (refused()) return;
           const body = await readJson(req);
+          const name = String(body.name ?? "").trim();
+          if (name === "") {
+            send(res, 400, { error: "The agent needs a name." });
+            return;
+          }
+          const tools = readToolList(body.tools);
+          if (tools instanceof Error) {
+            send(res, 400, { error: tools.message });
+            return;
+          }
           const created = registry.create({
-            name: String(body.name ?? ""),
+            name,
             description: String(body.description ?? ""),
+            ...(typeof body.title === "string" && body.title.trim() !== ""
+              ? { title: body.title.trim() }
+              : {}),
+            // A full set is stored as no restriction, so a later new tool reaches an
+            // agent that was created with "everything" rather than being withheld.
+            ...(tools !== undefined && tools !== null && tools.length < ALL_TOOLS.length
+              ? { tools }
+              : {}),
             // Recorded so "whose agent is this" has an answer. Undefined on a box with no gateway in
             // front, which is the single-user case and stays as it was.
             ...(caller.userId !== undefined ? { ownerUserId: caller.userId } : {}),
@@ -921,6 +994,37 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
               (caller.userId === undefined ? "" : ` for ${caller.userId}`)
           );
           send(res, 200, { id: created.id, name: created.profile.name });
+          return;
+        }
+
+        // The human path for editing an agent: persona, role label, name, tool set.
+        // Distinct from the model-facing UpdateAgent tool, which cannot touch tools —
+        // an agent must not be able to widen anyone's tool set, including its own.
+        if (route === "POST /api/agents/update") {
+          const body = await readJson(req);
+          const agentId = String(body.id ?? "");
+          if (refused(agentId)) return;
+          if (!registry.has(agentId)) {
+            send(res, 404, { error: `No agent ${agentId}` });
+            return;
+          }
+          const tools = readToolList(body.tools);
+          if (tools instanceof Error) {
+            send(res, 400, { error: tools.message });
+            return;
+          }
+          const updated = registry.update(agentId, {
+            ...(typeof body.name === "string" && body.name.trim() !== ""
+              ? { name: body.name.trim() }
+              : {}),
+            ...(typeof body.title === "string" ? { title: body.title.trim() } : {}),
+            ...(typeof body.description === "string" ? { description: body.description } : {}),
+            ...(tools !== undefined
+              ? { tools: tools === null || tools.length >= ALL_TOOLS.length ? null : tools }
+              : {}),
+          });
+          log(`updated agent ${updated.profile.name} (${agentId}) from the UI`);
+          send(res, 200, { id: agentId, name: updated.profile.name });
           return;
         }
 

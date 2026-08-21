@@ -17,3 +17,4 @@ docker/box/hostd.mjs
 .DS_Store
 # Local research notes. Never committed.
 research/
+/dist-app/
