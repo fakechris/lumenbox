@@ -19,7 +19,8 @@
     "smoke": "node --experimental-transform-types scripts/smoke.mjs",
     "lint": "biome lint src/ scripts/",
     "lint:fix": "biome lint --write src/ scripts/",
-    "test:ci": "node scripts/test-floor.mjs"
+    "test:ci": "node scripts/test-floor.mjs",
+    "check": "npm run typecheck && npm run lint && npm run test:ci"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.117.1",

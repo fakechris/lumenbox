@@ -7,12 +7,14 @@
  */
 
 import { envNumber } from "../config.ts";
+import { randomUUID } from "node:crypto";
 import type Anthropic from "@anthropic-ai/sdk";
 import type { AgentRecord, AgentRegistry } from "../agents/registry.ts";
 import type { AgentBus, InboundMessage } from "../agents/bus.ts";
 import type { BoxClient } from "../box/client.ts";
 import type { DisplayLease } from "../box/display-lease.ts";
 import type { PolicyGate } from "./policy.ts";
+import type { TurnLedger } from "./resume.ts";
 import type { Skill } from "./skills.ts";
 import {
   classifyLimit,
@@ -236,6 +238,21 @@ export interface TurnDeps {
   /** Which endpoint and what it can do. Omitted in tests to mean full Claude. */
   provider?: ProviderProfile;
   effort?: Effort;
+  /**
+   * Records that this turn began, so a process that dies underneath it leaves a fact rather than a
+   * silence.
+   *
+   * Optional, and absent means no record — which is what every turn had before, and what a test
+   * that should not touch the state directory wants.
+   */
+  turns?: TurnLedger;
+  /**
+   * The ledger handle for this turn, when it is a resumption of an earlier one.
+   *
+   * Threaded in rather than derived, because only the caller doing the resuming knows which turn
+   * this continues and how many attempts have gone before.
+   */
+  resumeOf?: { id: string; attempt: number };
   onEvent?: (event: TurnEvent) => void;
 }
 
@@ -545,14 +562,11 @@ function historyToMessages(
   while (window.length > 0 && "kind" in window[0]! && window[0]!.kind === "results") {
     window.shift();
   }
-  // A blocks entry at the end has lost its results.
-  while (
-    window.length > 0 &&
-    "kind" in window.at(-1)! &&
-    (window.at(-1) as { kind?: string }).kind === "blocks"
-  ) {
-    window.pop();
-  }
+  // A trailing call with no results is *kept*, not dropped. It used to be popped, because a request
+  // ending in an unpaired `tool_use` is rejected — but pairing is now repaired below, and popping it
+  // deleted the one piece of evidence a resumed turn most needs: the action that was in flight when
+  // the process died. The agent was told to check what it might have been part-way through, and the
+  // record of what that was had been removed from its own history.
 
   const messages: Anthropic.MessageParam[] = [];
   for (const entry of window) {
@@ -632,6 +646,24 @@ export async function runTurn(
   const { registry, bus, box, client } = deps;
   const emit = deps.onEvent ?? (() => {});
   const provider = deps.provider ?? FULL_CLAUDE;
+
+  // Recorded before anything else, so a process that dies at any point after this leaves a begin
+  // with no end — a fact, rather than a turn that simply stopped existing.
+  const turnId = randomUUID();
+  deps.turns?.begin({
+    id: turnId,
+    agentId: agent.id,
+    about: inbound.map(message => message.text).join(" / "),
+    ...(deps.resumeOf !== undefined
+      ? { resumeOf: deps.resumeOf.id, attempt: deps.resumeOf.attempt }
+      : {}),
+  });
+  let ended = false;
+  const finish = (how: string) => {
+    if (ended) return;
+    ended = true;
+    deps.turns?.end(turnId, how);
+  };
 
   const promptParts = buildSystemPromptParts({
     agent,
@@ -746,6 +778,12 @@ export async function runTurn(
 
       rounds.length = 0; // a fresh budget means a fresh judgement about looping
     }
+    finish("done");
+  } catch (error) {
+    // An end either way. A turn that failed or was aborted is over, and leaving it open would have
+    // the next startup try to resume something that already reported itself.
+    finish(error instanceof TurnAborted ? "aborted" : "failed");
+    throw error;
   } finally {
     // Release the desktop however the turn ends — normally, by abort, or by
     // throwing. A lease leaked here would lock every other agent out of the

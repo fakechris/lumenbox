@@ -14,6 +14,7 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type Anthropic from "@anthropic-ai/sdk";
+import { TurnLedger } from "./resume.ts";
 import { AgentRegistry } from "../agents/registry.ts";
 import { AgentBus } from "../agents/bus.ts";
 import type { BoxClient } from "../box/client.ts";
@@ -1834,6 +1835,160 @@ test("a continuation reassembles its request instead of growing the old one", as
   } finally {
     if (previousRounds === undefined) delete process.env.AGENTBOX_MAX_ROUNDS;
     else process.env.AGENTBOX_MAX_ROUNDS = previousRounds;
+    cleanup();
+  }
+});
+
+
+test("a turn killed mid-flight leaves a record that it was interrupted", async () => {
+  // The claim the whole feature rests on: after the process dies, a *fact* is on disk saying a turn
+  // was in progress. Before this, an agent four hundred rounds into a task simply stopped — no
+  // error, no report, and nothing that would ever run again.
+  const { registry, cleanup } = fixture();
+  const dir = mkdtempSync(join(tmpdir(), "agentbox-turns-"));
+  try {
+    const ada = registry.create({ name: "Ada" });
+    const bus = new AgentBus(registry, async () => {});
+    const ledger = new TurnLedger(join(dir, "turns.jsonl"));
+    const capture: Capture = { params: [] };
+
+    // A turn that never returns, standing in for a process that dies inside one.
+    const wedged = {
+      messages: {
+        stream(params: Anthropic.MessageCreateParams) {
+          capture.params.push({ ...params, messages: [...params.messages] });
+          return {
+            on() {
+              return this;
+            },
+            finalMessage: () => new Promise<never>(() => {}),
+          };
+        },
+      },
+    } as unknown as Anthropic;
+
+    void runTurn(
+      ada,
+      [{ fromId: "user", fromName: "user", text: "deploy the release", priority: false, receivedAt: "" }],
+      new AbortController().signal,
+      { client: wedged, registry, bus, box: undefined, resolution: undefined, turns: ledger }
+    );
+    // Let it reach the model call, which is where it will sit forever.
+    await new Promise(resolve => setImmediate(resolve));
+
+    // What a fresh process sees.
+    const outstanding = new TurnLedger(join(dir, "turns.jsonl")).interrupted();
+    assert.equal(outstanding.length, 1, "the interrupted turn is on disk");
+    assert.equal(outstanding[0]?.agentId, ada.id);
+    assert.match(outstanding[0]?.about ?? "", /deploy the release/);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+    cleanup();
+  }
+});
+
+test("a turn that finishes leaves nothing to resume", async () => {
+  const { registry, cleanup } = fixture();
+  const dir = mkdtempSync(join(tmpdir(), "agentbox-turns-"));
+  try {
+    const ada = registry.create({ name: "Ada" });
+    const bus = new AgentBus(registry, async () => {});
+    const ledger = new TurnLedger(join(dir, "turns.jsonl"));
+    const capture: Capture = { params: [] };
+    const { client } = stubClient([message([textBlock("done")])], capture);
+
+    await runTurn(
+      ada,
+      [{ fromId: "user", fromName: "user", text: "hi", priority: false, receivedAt: "" }],
+      new AbortController().signal,
+      { client, registry, bus, box: undefined, resolution: undefined, turns: ledger }
+    );
+
+    assert.deepEqual(new TurnLedger(join(dir, "turns.jsonl")).interrupted(), []);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+    cleanup();
+  }
+});
+
+test("a turn that throws is closed too, not left looking interrupted", async () => {
+  // A failure and an abort are ends. Leaving them open would have the next startup resume something
+  // that already reported itself, which reads as the agent repeating itself for no reason.
+  const { registry, cleanup } = fixture();
+  const dir = mkdtempSync(join(tmpdir(), "agentbox-turns-"));
+  try {
+    const ada = registry.create({ name: "Ada" });
+    const bus = new AgentBus(registry, async () => {});
+    const ledger = new TurnLedger(join(dir, "turns.jsonl"));
+    const exploding = {
+      messages: {
+        stream() {
+          return {
+            on() {
+              return this;
+            },
+            finalMessage: async () => {
+              throw new Error("400 model does not exist");
+            },
+          };
+        },
+      },
+    } as unknown as Anthropic;
+
+    await assert.rejects(
+      runTurn(
+        ada,
+        [{ fromId: "user", fromName: "user", text: "hi", priority: false, receivedAt: "" }],
+        new AbortController().signal,
+        { client: exploding, registry, bus, box: undefined, resolution: undefined, turns: ledger }
+      )
+    );
+    assert.deepEqual(new TurnLedger(join(dir, "turns.jsonl")).interrupted(), []);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+    cleanup();
+  }
+});
+
+
+test("the call that was in flight survives into the resumed turn, marked unknown", async () => {
+  // The evidence a resumed turn most needs is the action that was running when the process died.
+  // Request assembly used to pop a trailing call with no results — correct once, because a request
+  // ending in an unpaired tool_use is rejected, and wrong since pairing started being repaired: the
+  // agent was told to check what it might have been part-way through, while the record of what that
+  // was had been deleted from its own history.
+  const { registry, cleanup } = fixture();
+  try {
+    const ada = registry.create({ name: "Ada" });
+    const bus = new AgentBus(registry, async () => {});
+    const capture: Capture = { params: [] };
+    const { client } = stubClient([message([textBlock("checked, it had gone through")])], capture);
+
+    registry.appendTranscript(ada.id, {
+      role: "user",
+      text: "deploy the release",
+      at: new Date().toISOString(),
+    });
+    registry.appendTranscript(ada.id, {
+      role: "assistant",
+      kind: "blocks",
+      at: new Date().toISOString(),
+      blocks: [{ type: "tool_use", id: "call-1", name: "bash", input: { command: "./deploy.sh" } }],
+    } as never);
+    // No results entry: the crash landed between the call and its result.
+
+    await runTurn(
+      ada,
+      [{ fromId: "user", fromName: "user", text: "[resumed] carry on", priority: false, receivedAt: "" }],
+      new AbortController().signal,
+      { client, registry, bus, box: undefined, resolution: undefined }
+    );
+
+    const sent = JSON.stringify(capture.params[0]?.messages);
+    assert.match(sent, /deploy\.sh/, "the agent can see what it was doing");
+    assert.match(sent, /outcome is unknown/, "and that it does not know whether it worked");
+    assert.doesNotMatch(sent, /"is_error":true/, "not reported as a failure it can undo");
+  } finally {
     cleanup();
   }
 });

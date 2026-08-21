@@ -148,7 +148,8 @@ produce the same anomalies with a single agent in the system.
   action preceded which — otherwise a failure in a team of agents has no author.
 - F10.6 Nothing an agent reads — a teammate's message, a file, a fetched page — is executed as an
   instruction merely because it is phrased as one.
-- F10.7 A turn interrupted by the process ending is resumed or reported, not silently lost.
+- F10.7 A turn interrupted by the process ending is resumed or reported, not silently lost, and a
+  turn that keeps ending the process is reported rather than retried.
 
 ### F5 Lifecycle
 

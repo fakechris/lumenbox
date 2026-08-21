@@ -283,3 +283,30 @@ action.
 **An approval fingerprint covers the exact text shown.** Fingerprinting a truncated description let
 two commands sharing a 400-character prefix pass under one grant. An action too large to display is
 refused, not truncated: consent to something nobody read is not consent.
+
+## 16. Resuming an interrupted turn
+
+An agent four hundred rounds into a task, killed by a restart or an OOM, used to leave its prompt
+and its completed rounds in the transcript and simply stop. No error, no report, nothing that would
+ever run again — the failure mode this whole system is meant not to have.
+
+**The transcript is already the checkpoint.** Every completed round is appended as it happens, so
+what a resumed turn needs is not "what did I do" — that is on disk — but "there was a turn here and
+it did not end". A begin and an end record, so a begin with no end is a fact rather than a guess.
+That is the entire mechanism; there is no separate snapshot to keep in step with anything.
+
+**Nothing is re-executed.** A resumed turn is an ordinary turn whose opening message says what
+happened, and the model reads its own history and decides. That is the only defensible choice while
+a call and its result are separate appends: a crash between them leaves an action whose outcome is
+genuinely unknown. Re-running it automatically would deploy twice; reporting it as failed would undo
+work that succeeded. So it is described as *unknown*, in those words, with the instruction to look
+before redoing — and the call that was in flight is deliberately kept in the request rather than
+trimmed, because it is the one thing the agent needs in order to look.
+
+**Resuming is bounded at two attempts.** A turn that ends the process will end it again; a crash
+loop that restarts itself is worse than a task that stopped. After that the interruption is written
+into the conversation, saying that the cause is probably in the work rather than in the machine and
+that a person needs to look.
+
+Ordering at startup: accepted-but-unstarted work first, then interrupted turns — a turn already
+running is further along than a message only accepted, and they run in the order they are queued.

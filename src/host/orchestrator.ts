@@ -9,6 +9,13 @@
 import type Anthropic from "@anthropic-ai/sdk";
 import { AgentBus, type BusEvent, type InboundMessage } from "../agents/bus.ts";
 import { Inbox, inboxPath } from "../agents/inbox.ts";
+import {
+  giveUpNote,
+  MAX_RESUMES,
+  resumePrompt,
+  TurnLedger,
+  turnLedgerPath,
+} from "./resume.ts";
 import { AgentRegistry, type AgentRecord } from "../agents/registry.ts";
 import type { BoxClient } from "../box/client.ts";
 import { DisplayLease } from "../box/display-lease.ts";
@@ -50,6 +57,11 @@ export interface OrchestratorOptions {
    * directory wants.
    */
   inbox?: Inbox<InboundMessage> | null;
+  /**
+   * Where turns record that they began, so one interrupted by the process ending can be picked up.
+   * `null` keeps none.
+   */
+  turns?: TurnLedger | null;
 }
 
 export class Orchestrator {
@@ -92,6 +104,18 @@ export class Orchestrator {
   });
 
   readonly provider: ProviderProfile;
+
+  /** Begin/end per turn. A begin with no end is a turn the process died underneath. */
+  private readonly turns: TurnLedger | undefined;
+
+  /**
+   * Which turn each agent is currently resuming, so the ledger entry it writes is linked to the one
+   * it is picking up rather than looking like fresh work.
+   *
+   * Without the link, every resumption would start its own chain and a turn that kills the process
+   * would be retried forever — the count is the whole of the crash-loop guard.
+   */
+  private readonly resuming = new Map<string, { id: string; attempt: number }>();
 
   /**
    * Notices what a conversation taught, after the fact.
@@ -139,6 +163,11 @@ export class Orchestrator {
   });
 
   constructor(private readonly options: OrchestratorOptions = {}) {
+    this.turns =
+      options.turns === null
+        ? undefined
+        : (options.turns ??
+          new TurnLedger(turnLedgerPath(), line => console.error(`[turns] ${line}`)));
     this.registry = options.registry ?? new AgentRegistry();
     this.provider = options.provider ?? resolveProvider();
     this.client = options.client ?? createClient(this.provider);
@@ -252,6 +281,12 @@ export class Orchestrator {
     inbound: readonly InboundMessage[],
     signal: AbortSignal
   ): Promise<void> {
+    // Taken, not read: a resumption marker belongs to exactly one turn. Leaving it in place would
+    // make every later turn for this agent look like another attempt at the interrupted one, and
+    // the attempt count is the whole of the crash-loop guard.
+    const resumeOf = this.resuming.get(agent.id);
+    this.resuming.delete(agent.id);
+
     const displayIndex = await this.ensureDesktop(agent);
     // Refreshed before the prompt is built, and never allowed to fail the turn — a box with no
     // skills directory is the normal state of a fresh install.
@@ -272,6 +307,8 @@ export class Orchestrator {
       resolution: this.resolution,
       provider: this.provider,
       effort: this.options.effort,
+      turns: this.turns,
+      resumeOf,
       onEvent: this.options.onTurnEvent,
     }).catch(error => {
       // An aborted turn is a normal outcome — a priority message superseded it,
@@ -279,6 +316,53 @@ export class Orchestrator {
       if (error instanceof TurnAborted) return;
       throw error;
     });
+  }
+
+  /**
+   * Picks up turns the last process died underneath, and says what it did.
+   *
+   * Called once at startup. Nothing is re-executed: a resumed turn is an ordinary turn whose
+   * opening message says what happened, and the model reads its own history — which already holds
+   * every completed round — and decides. A call whose result was never written appears there as
+   * having an unknown outcome, which is the truth and the only safe thing to say about it.
+   */
+  resumeInterrupted(): { resumed: number; abandoned: number } {
+    const outstanding = this.turns?.interrupted() ?? [];
+    let resumed = 0;
+    let abandoned = 0;
+
+    for (const turn of outstanding) {
+      const agent = this.registry.tryGet(turn.agentId);
+      if (agent === undefined) {
+        // The agent was deleted while it was working. Nothing to resume onto, and nothing lost that
+        // deleting the agent had not already discarded.
+        this.turns?.end(turn.id, "agent-gone");
+        continue;
+      }
+
+      if (turn.attempt >= MAX_RESUMES) {
+        // A turn that ends the process will end it again. Reported into the conversation rather
+        // than retried: a crash loop that restarts itself is worse than a task that stopped, and
+        // the person reading this is the one who can do something about it.
+        this.turns?.end(turn.id, "given-up");
+        this.registry.appendTranscript(agent.id, {
+          role: "assistant",
+          text: giveUpNote(turn.about, turn.attempt),
+          at: new Date().toISOString(),
+        });
+        abandoned += 1;
+        continue;
+      }
+
+      // Closed before the new one opens, so a crash during the resumption leaves exactly one
+      // unfinished turn rather than two.
+      this.turns?.end(turn.id, "resumed");
+      this.resuming.set(agent.id, { id: turn.id, attempt: turn.attempt + 1 });
+      this.bus.sendFromUser(agent.id, resumePrompt(turn.about, turn.at));
+      resumed += 1;
+    }
+
+    return { resumed, abandoned };
   }
 
   /** Sends a user message to an agent and runs its turn to completion. */

@@ -158,6 +158,20 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
     );
   }
 
+  // Turns the last process died underneath. Resumed after the inbox, because a turn that was
+  // already running is further along than a message that was only accepted, and the order they are
+  // queued in is the order they will run.
+  const picked = orchestrator.resumeInterrupted();
+  if (picked.resumed > 0) {
+    log(`picking up ${picked.resumed} turn${picked.resumed === 1 ? "" : "s"} interrupted by a restart`);
+  }
+  if (picked.abandoned > 0) {
+    log(
+      `${picked.abandoned} interrupted turn${picked.abandoned === 1 ? "" : "s"} not picked up again ` +
+        `after repeated failures; said so in the transcript`
+    );
+  }
+
   const box = await orchestrator.connectBox();
   log(box.connected ? `box: ${box.detail}` : `box: unavailable — ${box.detail}`);
 

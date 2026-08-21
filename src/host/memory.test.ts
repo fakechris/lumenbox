@@ -350,7 +350,7 @@ test("a memory can be withdrawn, so a correction does not sit beside the thing i
 
   // A retraction is not itself a memory: it must not appear in the prompt as a line saying what is
   // no longer true.
-  const rendered = renderMemory(recall(records, new Date("2026-08-20T00:00:00Z")));
+  const rendered = renderMemory(recall(records, Date.parse("2026-08-20T00:00:00Z")));
   assert.ok(!rendered.includes("us-east-1"));
   assert.match(rendered, /eu-west-1/);
 });
