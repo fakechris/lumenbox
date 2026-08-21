@@ -21,7 +21,8 @@
     "lint:fix": "biome lint --write src/ scripts/",
     "test:ci": "node scripts/test-floor.mjs",
     "check": "npm run typecheck && npm run lint && npm run test:ci",
-    "app": "electron ."
+    "app": "electron .",
+    "dist:app": "electron-builder --mac --dir"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.117.1",
@@ -31,6 +32,7 @@
     "@biomejs/biome": "^2.5.9",
     "@types/node": "^22.10.0",
     "electron": "^43.4.1",
+    "electron-builder": "^26.15.3",
     "esbuild": "^0.25.0",
     "typescript": "^5.7.0"
   },
@@ -42,5 +44,30 @@
     "type": "git",
     "url": "https://github.com/fakechris/lumenbox.git"
   },
-  "main": "electron/main.cjs"
+  "main": "electron/main.cjs",
+  "build": {
+    "appId": "io.lumenbox.app",
+    "productName": "LumenBox",
+    "asar": false,
+    "directories": {
+      "output": "dist-app"
+    },
+    "files": [
+      "electron/**",
+      "src/**",
+      "assets/**",
+      "package.json",
+      "!src/**/*.test.ts"
+    ],
+    "mac": {
+      "icon": "assets/app-icon/lumenbox.icns",
+      "category": "public.app-category.developer-tools"
+    },
+    "win": {
+      "icon": "assets/app-icon/lumenbox.ico"
+    },
+    "linux": {
+      "icon": "assets/app-icon/png"
+    }
+  }
 }

@@ -105,6 +105,70 @@ const MINIMAX: ProviderProfile = {
   keyEnv: "MINIMAX_CODE_CN_API_KEY",
 };
 
+/**
+ * Other vendors' Anthropic-compatible endpoints.
+ *
+ * Each is the vendor's own documented compatibility endpoint, not a proxy. All the
+ * capability flags start false for the same reason MiniMax's do: a compatible endpoint
+ * accepts what it does not implement and returns 200, so a wrong "yes" fails silently
+ * while a wrong "no" merely costs a feature and says so. `AGENTBOX_VISION=1` opts a
+ * capable model in without a code change.
+ */
+const DEEPSEEK: ProviderProfile = {
+  label: "DeepSeek",
+  baseUrl: "https://api.deepseek.com/anthropic",
+  model: "deepseek-chat",
+  maxTokens: 8_000,
+  vision: false,
+  adaptiveThinking: false,
+  effort: false,
+  promptCaching: false,
+  auth: "bearer",
+  keyEnv: "DEEPSEEK_API_KEY",
+};
+
+const KIMI: ProviderProfile = {
+  label: "Kimi",
+  baseUrl: "https://api.moonshot.cn/anthropic",
+  model: "kimi-k2-turbo-preview",
+  maxTokens: 32_000,
+  vision: false,
+  adaptiveThinking: false,
+  effort: false,
+  promptCaching: false,
+  auth: "bearer",
+  keyEnv: "MOONSHOT_API_KEY",
+};
+
+const GLM: ProviderProfile = {
+  label: "GLM",
+  baseUrl: "https://open.bigmodel.cn/api/anthropic",
+  model: "glm-4.6",
+  maxTokens: 32_000,
+  vision: false,
+  adaptiveThinking: false,
+  effort: false,
+  promptCaching: false,
+  auth: "bearer",
+  keyEnv: "ZHIPU_API_KEY",
+};
+
+/**
+ * Model suggestions per preset, for the settings dialog's picker.
+ *
+ * Suggestions, not a gate: the field stays free text because vendors ship models
+ * faster than this list updates, and refusing a model name this file has not heard of
+ * would make the product wrong the day a vendor ships.
+ */
+export const PRESET_MODELS: Record<string, readonly string[]> = {
+  anthropic: ["claude-opus-5", "claude-sonnet-5", "claude-opus-4-6", "claude-haiku-4-5"],
+  minimax: ["MiniMax-M3", "MiniMax-M2"],
+  deepseek: ["deepseek-chat", "deepseek-reasoner"],
+  kimi: ["kimi-k2-turbo-preview", "kimi-k2-0905-preview"],
+  glm: ["glm-4.6", "glm-4.5-air"],
+  custom: [],
+};
+
 /** A generic Anthropic-compatible endpoint, configured entirely by env. */
 function compatible(): ProviderProfile {
   const truthy = (value: string | undefined) =>
@@ -134,12 +198,15 @@ function compatible(): ProviderProfile {
 const PRESETS: Record<string, () => ProviderProfile> = {
   anthropic: () => ({ ...ANTHROPIC }),
   minimax: () => ({ ...MINIMAX }),
+  deepseek: () => ({ ...DEEPSEEK }),
+  kimi: () => ({ ...KIMI }),
+  glm: () => ({ ...GLM }),
   custom: compatible,
   compatible,
 };
 
 export function providerNames(): string[] {
-  return ["anthropic", "minimax", "custom"];
+  return ["anthropic", "minimax", "deepseek", "kimi", "glm", "custom"];
 }
 
 /**
@@ -237,6 +304,49 @@ export function createClient(profile: ProviderProfile): Anthropic {
     baseURL: profile.baseUrl,
     ...(key ? { apiKey: key } : {}),
   });
+}
+
+/**
+ * One real round trip, so a key is known good before it is saved.
+ *
+ * A cheap actual request rather than a HEAD or a models listing, because compatible
+ * endpoints differ in everything except the messages route itself — the only thing a
+ * probe of anything else proves is that the vendor has a load balancer. The failure
+ * message is passed through as the vendor wrote it: "invalid api key" from the horse's
+ * mouth beats any paraphrase.
+ */
+export async function testProvider(
+  profile: ProviderProfile,
+  keyOverride?: string
+): Promise<{ ok: true; latencyMs: number; model: string }> {
+  const key = keyOverride ?? process.env[profile.keyEnv];
+  if (!key && profile.keyEnv !== "ANTHROPIC_API_KEY") {
+    throw new MissingCredentialError(profile);
+  }
+
+  const client =
+    profile.auth === "bearer"
+      ? new Anthropic({
+          baseURL: profile.baseUrl,
+          authToken: key,
+          apiKey: null,
+          maxRetries: 0,
+          timeout: 20_000,
+        })
+      : new Anthropic({
+          baseURL: profile.baseUrl,
+          ...(key ? { apiKey: key } : {}),
+          maxRetries: 0,
+          timeout: 20_000,
+        });
+
+  const started = Date.now();
+  const response = await client.messages.create({
+    model: profile.model,
+    max_tokens: 16,
+    messages: [{ role: "user", content: "Reply with the single word: ok" }],
+  });
+  return { ok: true, latencyMs: Date.now() - started, model: response.model };
 }
 
 /** One line describing what is configured, and what it costs. */

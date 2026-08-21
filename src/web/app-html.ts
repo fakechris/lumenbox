@@ -152,12 +152,12 @@ export const APP_HTML = String.raw`<!doctype html>
   body.electron-mac #topbar { padding-left: 84px; }
 
   /* ── settings ─────────────────────────────────────────────────────────────── */
-  #settingswrap {
+  #settingswrap, #agentwrap {
     position: fixed; inset: 0; z-index: 20; display: flex;
     align-items: center; justify-content: center; background: rgba(0,0,0,0.3);
   }
   .modal {
-    width: 480px; max-width: calc(100vw - 40px);
+    width: 520px; max-width: calc(100vw - 40px); max-height: calc(100vh - 80px); overflow-y: auto;
     background: var(--surface); border: 1px solid var(--border-strong);
     border-radius: var(--radius-card); box-shadow: var(--shadow-pop);
     padding: 22px; display: flex; flex-direction: column; gap: 14px;
@@ -170,7 +170,21 @@ export const APP_HTML = String.raw`<!doctype html>
     border: 1px solid var(--border-strong); background: var(--bg); color: var(--text); font: inherit;
   }
   .field input { font-family: var(--font-mono); font-size: 13px; }
-  .field input:focus, .field select:focus { outline: 0; border-color: var(--accent); }
+  .field textarea {
+    min-height: 84px; padding: 10px 12px; border-radius: var(--radius-input); resize: vertical;
+    border: 1px solid var(--border-strong); background: var(--bg); color: var(--text);
+    font: inherit; line-height: 1.55;
+  }
+  .field input:focus, .field select:focus, .field textarea:focus { outline: 0; border-color: var(--accent); }
+  /* Tool grants as toggle pills: filled means offered, outline means withheld —
+     withheld tools are not in the agent's prompt at all. */
+  .toolchips { display: flex; flex-wrap: wrap; gap: 8px; }
+  .toolchip {
+    font-family: var(--font-mono); font-size: 12px; padding: 5px 10px; cursor: pointer;
+    border-radius: var(--radius-pill); border: 1px solid var(--border); color: var(--muted);
+    transition: background var(--dur) var(--ease), color var(--dur) var(--ease);
+  }
+  .toolchip.on { background: var(--accent-soft); color: var(--accent); border-color: transparent; }
   .fieldnote { font-size: 12px; color: var(--muted); line-height: 1.6; }
   .fieldnote:empty { display: none; }
   .modal .actions { display: flex; gap: 10px; padding-top: 2px; }
@@ -495,7 +509,11 @@ export const APP_HTML = String.raw`<!doctype html>
 
 <div class="pane" id="middle">
   <div class="paneheader">
-    <span class="lead"><span id="title">&mdash;</span></span>
+    <span class="lead">
+      <span id="title">&mdash;</span>
+      <span id="titlerole" class="dim" style="font-size:12px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis"></span>
+      <a href="#" id="agentcfg" style="font-size:12px;flex:none">Configure</a>
+    </span>
     <span class="headactions">
       <span id="round" class="roundpill"></span>
       <!-- Only shown while a turn is running: a stop button with nothing to stop invites a click
@@ -586,7 +604,8 @@ export const APP_HTML = String.raw`<!doctype html>
     </div>
     <div class="field">
       <label>Model</label>
-      <input id="setmodel" placeholder="preset default" spellcheck="false">
+      <input id="setmodel" list="modellist" placeholder="preset default" spellcheck="false">
+      <datalist id="modellist"></datalist>
     </div>
     <div class="field" id="setbasewrap" style="display:none">
       <label>Base URL</label>
@@ -602,9 +621,42 @@ export const APP_HTML = String.raw`<!doctype html>
       inside the box. Changes take effect when the server restarts.</div>
     <div class="fieldnote" id="setstatus"></div>
     <div class="actions">
+      <button class="btn" id="settest">Test connection</button>
       <button class="btn accent" id="setsaverestart">Save &amp; restart</button>
       <button class="btn" id="setsave">Save</button>
       <button class="btn ghost" id="setcancel">Cancel</button>
+    </div>
+  </div>
+</div>
+
+<!-- One dialog for creating and configuring an agent: identity, persona, tool set.
+     The old path was window.prompt, which a desktop shell does not implement at all —
+     the + button did nothing and said nothing. -->
+<div id="agentwrap" style="display:none">
+  <div class="modal">
+    <h3 id="agenttitle">New agent</h3>
+    <div class="field">
+      <label>Name</label>
+      <input id="agname" spellcheck="false" style="font-family:var(--font-sans)">
+    </div>
+    <div class="field">
+      <label>Role label</label>
+      <input id="agrole" placeholder="e.g. release manager" spellcheck="false" style="font-family:var(--font-sans)">
+    </div>
+    <div class="field">
+      <label>Persona</label>
+      <textarea id="agpersona" placeholder="What is this agent for? This becomes its system prompt."></textarea>
+    </div>
+    <div class="field">
+      <label>Tools</label>
+      <div id="agtools" class="toolchips"></div>
+      <div class="fieldnote">An unchecked tool is withheld — it does not appear in the agent's
+        prompt at all. Leaving everything checked means everything, including tools added later.</div>
+    </div>
+    <div class="fieldnote" id="agstatus"></div>
+    <div class="actions">
+      <button class="btn accent" id="agsave">Create</button>
+      <button class="btn ghost" id="agcancel">Cancel</button>
     </div>
   </div>
 </div>
@@ -705,6 +757,11 @@ function settingsProviderChanged() {
     if (settingsPresets[i].name === name) preset = settingsPresets[i];
   }
   if (!preset) return;
+  // Suggestions, not a gate: vendors ship models faster than any list updates.
+  $("modellist").innerHTML = (preset.models || []).map(function (m) {
+    return '<option value="' + esc(m) + '">';
+  }).join("");
+  $("setmodel").placeholder = "preset default: " + preset.model;
   // Whether a credential is present is worth showing; the credential itself never
   // leaves the server.
   $("setkeynote").textContent = preset.keyPresent
@@ -768,6 +825,33 @@ function waitForRestart() {
   }, 1500);
 }
 
+// One real request against the endpoint, so "invalid api key" is learned here and not
+// at the restart after saving.
+$("settest").onclick = function () {
+  var body = { provider: $("setprovider").value };
+  var model = $("setmodel").value.trim();
+  if (model) body.model = model;
+  var base = $("setbase").value.trim();
+  if (base) body.baseUrl = base;
+  var key = $("setkey").value.trim();
+  if (key) body.key = key;
+  $("settest").disabled = true;
+  $("setstatus").textContent = "Testing — one real request…";
+  fetch("/api/config/test", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify(body)
+  })
+    .then(function (r) { return r.json(); })
+    .then(function (d) {
+      $("setstatus").textContent = d.ok
+        ? "Connected — " + d.model + " answered in " + d.latencyMs + "ms."
+        : "Failed: " + d.error;
+    })
+    .catch(function (error) { $("setstatus").textContent = "Test failed: " + error.message; })
+    .then(function () { $("settest").disabled = false; });
+};
+
 $("settingsbtn").onclick = openSettings;
 $("setprovider").onchange = settingsProviderChanged;
 $("setsave").onclick = function () { saveSettings(false); };
@@ -778,6 +862,7 @@ $("settingswrap").addEventListener("click", function (event) {
 });
 
 var agents = [];
+var allTools = [];
 var current = null;
 var busy = new Set();
 /** In-flight assistant text nodes, keyed by agent id, so deltas land in one bubble. */
@@ -984,9 +1069,16 @@ function replayEntry(id, entry) {
   bubble(entry.role === "user" ? "user" : "", entry.role === "user" ? "you" : nameOf(id), entry.text);
 }
 
+function agentById(id) {
+  for (var i = 0; i < agents.length; i++) if (agents[i].id === id) return agents[i];
+  return null;
+}
+
 function select(id) {
   current = id;
   $("title").textContent = nameOf(id);
+  var selected = agentById(id);
+  $("titlerole").textContent = selected ? String(selected.title || "") : "";
   $("round").textContent = "";
   spend = { input: 0, output: 0 };
   spendLabel = "";
@@ -1007,6 +1099,7 @@ function select(id) {
 function refresh() {
   return fetch("/api/state").then(function (r) { return r.json(); }).then(function (state) {
     agents = state.agents;
+    allTools = state.allTools || allTools;
     $("model").innerHTML = "<b>" + esc(state.provider) + "</b>";
     $("boxinfo").textContent = state.box.ok ? state.box.detail : "box unavailable";
     $("boxdot").className = "dot " + (state.box.ok ? "ok" : "bad");
@@ -1841,16 +1934,96 @@ $("rec").onclick = function (event) {
   });
 };
 
-$("new").onclick = function () {
-  var name = prompt("Agent name?");
-  if (!name) return;
-  var description = prompt("What is this agent for? (becomes its system prompt)") || "";
-  fetch("/api/agents", {
+// ── creating and configuring agents ────────────────────────────────────────
+// One dialog, two modes. The previous version used window.prompt, which the desktop
+// shell does not implement: the + button did nothing, silently.
+var agentModal = { mode: "new", id: null, tools: {} };
+
+function openAgentModal(mode, agent) {
+  agentModal.mode = mode;
+  agentModal.id = agent ? agent.id : null;
+  $("agenttitle").textContent = mode === "new" ? "New agent" : "Configure " + agent.name;
+  $("agsave").textContent = mode === "new" ? "Create" : "Save";
+  $("agname").value = agent ? agent.name : "";
+  $("agrole").value = agent ? String(agent.title || "") : "";
+  $("agpersona").value = agent ? String(agent.description || "") : "";
+  // null means unrestricted — every tool, including ones that do not exist yet.
+  var granted = agent && agent.tools ? agent.tools : null;
+  agentModal.tools = {};
+  $("agtools").innerHTML = allTools.map(function (tool) {
+    var on = granted === null || granted.indexOf(tool) >= 0;
+    agentModal.tools[tool] = on;
+    return '<span class="toolchip' + (on ? " on" : "") + '" data-tool="' + esc(tool) + '">' +
+      esc(tool) + "</span>";
+  }).join("");
+  $("agstatus").textContent = "";
+  $("agentwrap").style.display = "flex";
+  $("agname").focus();
+}
+
+$("agtools").addEventListener("click", function (event) {
+  var chip = event.target.closest && event.target.closest("[data-tool]");
+  if (!chip) return;
+  var tool = chip.getAttribute("data-tool");
+  agentModal.tools[tool] = !agentModal.tools[tool];
+  chip.className = "toolchip" + (agentModal.tools[tool] ? " on" : "");
+});
+
+function saveAgentModal() {
+  var name = $("agname").value.trim();
+  if (!name) {
+    $("agstatus").textContent = "The agent needs a name.";
+    return;
+  }
+  var granted = allTools.filter(function (tool) { return agentModal.tools[tool]; });
+  var isNew = agentModal.mode === "new";
+  var body = {
+    name: name,
+    title: $("agrole").value.trim(),
+    description: $("agpersona").value,
+    // A full set is sent as null — "everything", which stays true for future tools.
+    tools: granted.length === allTools.length ? null : granted
+  };
+  if (!isNew) body.id = agentModal.id;
+  $("agstatus").textContent = "Saving…";
+  $("agsave").disabled = true;
+  fetch(isNew ? "/api/agents" : "/api/agents/update", {
     method: "POST",
     headers: { "content-type": "application/json" },
-    body: JSON.stringify({ name: name, description: description })
-  }).then(refresh);
+    body: JSON.stringify(body)
+  })
+    .then(function (r) {
+      return r.json().then(function (d) {
+        if (!r.ok) throw new Error(d.error || "save failed");
+        return d;
+      });
+    })
+    .then(function (d) {
+      $("agentwrap").style.display = "none";
+      return refresh().then(function () {
+        if (isNew && d.id) return select(d.id);
+        if (!isNew && current) {
+          $("title").textContent = nameOf(current);
+          var edited = agentById(current);
+          $("titlerole").textContent = edited ? String(edited.title || "") : "";
+        }
+      });
+    })
+    .catch(function (error) { $("agstatus").textContent = "Save failed: " + error.message; })
+    .then(function () { $("agsave").disabled = false; });
+}
+
+$("new").onclick = function () { openAgentModal("new", null); };
+$("agentcfg").onclick = function (event) {
+  event.preventDefault();
+  var agent = agentById(current);
+  if (agent) openAgentModal("edit", agent);
 };
+$("agsave").onclick = saveAgentModal;
+$("agcancel").onclick = function () { $("agentwrap").style.display = "none"; };
+$("agentwrap").addEventListener("click", function (event) {
+  if (event.target === $("agentwrap")) $("agentwrap").style.display = "none";
+});
 
 // Activity after the roster, because its lines name agents.
 refresh().then(loadActivity).then(loadRecordings);
