@@ -217,21 +217,40 @@ function countBlock(block: unknown): { chars: number; images: number } {
  * as deep as the number of compactions, which is small.
  */
 export function activeWindow(entries: readonly HistoryEntry[]): readonly HistoryEntry[] {
-  let at = -1;
-  for (let index = entries.length - 1; index >= 0; index--) {
-    const entry = entries[index]!;
-    if ("kind" in entry && entry.kind === "summary") {
-      at = index;
-      break;
+  // Iterative, not recursive. The relationship is linear — each summary's window is a function of
+  // the window before it — so it unrolls into a loop, and a loop does not exhaust the call stack.
+  // The recursion did: a transcript with enough summaries (thousands) threw a stack overflow and
+  // then no turn could be assembled at all. Unreachable in normal use, but a clean fix.
+  //
+  // Walk back collecting the summary chain, then rebuild from the innermost summary outward. Each
+  // step is result = [summary, ...previous.slice(covers), ...suffixAfterSummary].
+  const chain: { summary: HistoryEntry; covers: number; suffix: readonly HistoryEntry[] }[] = [];
+  let cur: readonly HistoryEntry[] = entries;
+  for (;;) {
+    let at = -1;
+    for (let index = cur.length - 1; index >= 0; index--) {
+      const entry = cur[index]!;
+      if ("kind" in entry && entry.kind === "summary") {
+        at = index;
+        break;
+      }
     }
+    if (at === -1) break;
+    const summary = cur[at] as HistoryEntry & { covers: number };
+    chain.push({
+      summary,
+      covers: Number.isFinite(summary.covers) ? Math.max(0, summary.covers) : 0,
+      suffix: cur.slice(at + 1),
+    });
+    cur = cur.slice(0, at);
   }
-  if (at === -1) return entries;
 
-  const summary = entries[at] as HistoryEntry & { covers: number };
-  // The window this summary was computed against, which is what its `covers` counts into.
-  const earlier = activeWindow(entries.slice(0, at));
-  const covers = Number.isFinite(summary.covers) ? Math.max(0, summary.covers) : 0;
-  return [summary, ...earlier.slice(covers), ...entries.slice(at + 1)];
+  let result: readonly HistoryEntry[] = cur;
+  for (let index = chain.length - 1; index >= 0; index--) {
+    const step = chain[index]!;
+    result = [step.summary, ...result.slice(step.covers), ...step.suffix];
+  }
+  return result;
 }
 
 export interface CutPoint {
@@ -627,13 +646,20 @@ export function compactionUrgency(
 /** Whether a summary computed earlier still describes the history it is about to be used for. */
 export function pendingIsUsable(
   pending: PendingSummary | undefined,
-  activeLength: number
+  activeLength: number,
+  maxEntries = DEFAULT_POLICY.maxEntries
 ): boolean {
   if (pending === undefined) return false;
-  // Appending entries is fine — the summary covers a prefix, and the tail is sent verbatim either
-  // way. What is not fine is the history having been compacted underneath it, which shortens the
-  // active window and would make `covers` point at the wrong entries.
-  return activeLength >= pending.computedFrom;
+  // The history having been compacted underneath it shortens the active window and makes `covers`
+  // point at the wrong entries — reject.
+  if (activeLength < pending.computedFrom) return false;
+  // Stale in the way that matters: the summary covers a prefix, and if the tail it would leave
+  // behind (everything it does not cover) is itself larger than the entry cap, adopting it does not
+  // bound the window — the cap downstream then drops that unsummarised tail with no marker. Measured
+  // on covers, not on how much the window grew: a summary that still covers most of the history is
+  // fine however long ago it was computed.
+  if (activeLength - pending.covers > maxEntries) return false;
+  return true;
 }
 
 /**

@@ -524,8 +524,9 @@ export function buildSelectionPrompt(
     `Reply with the numbers of at most ${MAX_SELECTED}, most useful first, as JSON:`,
     '{"selected": [3, 1, 7]}',
     "",
-    "Choose nothing rather than padding: an irrelevant memory in front of the agent is worse",
-    'than a missing one, because it will be treated as relevant. `{"selected": []}` is a real answer.',
+    "Pick only what bears on the message — do not pad the list to look useful. If none of these",
+    'stand out, reply `{"selected": []}` and the strongest by default ranking are kept; you are not',
+    "forced to promote anything.",
   ].join("\n");
 }
 
@@ -601,6 +602,12 @@ export async function chooseRelevant(options: {
       options.log?.("the memory selector's answer could not be read; keeping the scored order");
       return first;
     }
+    // An empty selection is a real answer — the model reviewed the candidates and none stood out —
+    // and it means "no preference", so the score-based default (`first`) stands. It is not
+    // "show nothing": memory recall always surfaces the strongest by default, and an empty section
+    // when memories exist would read as having none. So `[]` and an unreadable answer reach the
+    // same output by different routes, which is why parseSelection keeps them distinct (one is a
+    // decision, one is a failure) even though the result here is the same.
     if (chosen.length === 0) return first;
     return recall(
       options.records,

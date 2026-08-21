@@ -583,9 +583,20 @@ function historyToMessages(
   // From the newest summary onwards. Everything before it stays in the transcript on disk — the
   // record is what makes an agent's claims checkable, so compaction changes the request, never the
   // record.
-  const window = [...activeWindow(entries as HistoryEntry[])].slice(
-    -HISTORY_LIMIT
-  ) as TranscriptEntry[];
+  //
+  // The slice is a backstop: compaction bounds the window by tokens and by entry count, so this
+  // rarely fires. When it does, the leading summary is kept even though it is the oldest entry,
+  // because it is the one marker that history was compacted at all — dropping it as well would
+  // discard uncovered history with no trace that anything was cut.
+  const full = activeWindow(entries as HistoryEntry[]) as TranscriptEntry[];
+  const leadingSummary =
+    full.length > 0 && "kind" in full[0]! && (full[0] as { kind?: string }).kind === "summary"
+      ? full[0]
+      : undefined;
+  let window = full.slice(-HISTORY_LIMIT);
+  if (leadingSummary !== undefined && window[0] !== leadingSummary) {
+    window = [leadingSummary, ...window.slice(-(HISTORY_LIMIT - 1))];
+  }
 
   // A results entry at the front has lost its call.
   while (window.length > 0 && "kind" in window[0]! && window[0]!.kind === "results") {

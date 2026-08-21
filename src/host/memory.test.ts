@@ -471,7 +471,7 @@ test("the selection prompt says that choosing nothing is allowed", () => {
   assert.match(prompt, /what would change the/);
   // Without this a model pads to look useful, and an irrelevant memory in front of an agent is
   // worse than a missing one because it will be treated as relevant.
-  assert.match(prompt, /Choose nothing rather than padding/);
-  assert.match(prompt, /is a real answer/);
+  assert.match(prompt, /do not pad the list to look useful/);
+  assert.match(prompt, /kept; you are not/);
   assert.match(prompt, /a fact/);
 });
