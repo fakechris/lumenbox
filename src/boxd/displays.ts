@@ -63,6 +63,13 @@ export interface Desktop {
   health: ComponentHealth;
   /** Set when the desktop was created on someone's behalf. See assertOwner. */
   owner?: string;
+  /**
+   * When its owner last touched it.
+   *
+   * The in-memory half of the same lease. Without it a claim held by an agent that stopped lasts as
+   * long as the daemon does, which for a box running for days is indistinguishable from forever.
+   */
+  ownerAt?: number;
 }
 
 export class DisplayOwnershipError extends Error {}
@@ -91,19 +98,44 @@ function ownerHash(token: string): string {
   return createHash("sha256").update(token).digest("hex").slice(0, 32);
 }
 
+/**
+ * How long a desktop stays claimed without its owner touching it.
+ *
+ * A claim with no expiry is a lock, and a lock held by an agent that no longer exists is a desktop
+ * nobody can ever use again — one failure turned into a permanent one, fixable only by recreating
+ * the container. That was the behaviour, and persisting the claim made it outlive the daemon too.
+ *
+ * An owner touches its desktop on every screenshot and every click, so an agent that is working
+ * renews constantly and an agent that has stopped lets go on its own. Thirty minutes is the same
+ * figure work claims use, and for the same reason: longer than any single stretch of real work,
+ * shorter than a working day.
+ */
+const OWNER_TTL_MS = envNumber("BOXD_DISPLAY_OWNER_TTL_MS", 30 * 60_000);
+
 function rememberOwner(index: number, token: string, log: (line: string) => void): void {
   try {
-    writeFileSync(ownerFile(index), ownerHash(token), { encoding: "utf8", mode: 0o600 });
+    writeFileSync(
+      ownerFile(index),
+      JSON.stringify({ hash: ownerHash(token), at: Date.now() }),
+      { encoding: "utf8", mode: 0o600 }
+    );
   } catch (error) {
     // Not fatal: the desktop works, it just loses its claim if this daemon restarts.
     log(`desktop ${index}: could not record its owner (${error instanceof Error ? error.message : String(error)})`);
   }
 }
 
-function recordedOwner(index: number): string | undefined {
+function recordedOwner(index: number, now = Date.now()): string | undefined {
   try {
     const text = readFileSync(ownerFile(index), "utf8").trim();
-    return text === "" ? undefined : text;
+    if (text === "") return undefined;
+    // The older format was the bare hash with no timestamp. Treated as expired rather than as
+    // eternal: an unreadable age must not be the one thing that makes a claim permanent.
+    if (!text.startsWith("{")) return undefined;
+    const record = JSON.parse(text) as { hash?: string; at?: number };
+    if (typeof record.hash !== "string" || typeof record.at !== "number") return undefined;
+    if (now - record.at > OWNER_TTL_MS) return undefined;
+    return record.hash;
   } catch {
     return undefined;
   }
@@ -278,21 +310,37 @@ export class DisplayManager {
    * a filesystem and can kill each other's processes. What this stops is the silent case:
    * an agent naming a display that is not its own and typing into another agent's work.
    */
+  /** Whether a claim held in memory has gone quiet long enough to be taken over. */
+  private lapsed(desktop: Desktop | undefined, now = Date.now()): boolean {
+    if (desktop?.owner === undefined) return true;
+    return now - (desktop.ownerAt ?? 0) > OWNER_TTL_MS;
+  }
+
   assertOwner(index: number, presented: string | undefined): void {
     const desktop = this.desktops.get(index);
-    const owner = desktop?.owner;
+    const owner = this.lapsed(desktop) ? undefined : desktop?.owner;
     if (!owner) {
       // Nothing in memory is not the same as unowned: this daemon may have restarted under a
       // desktop that is still running and still someone's.
       const recorded = matchesRecordedOwner(index, presented);
-      if (recorded === undefined || recorded) return;
+      if (recorded === undefined || recorded) {
+        // Touched on every access by its owner, which is what makes the claim a lease: an agent
+        // working renews constantly, and one that has stopped lets go on its own.
+        if (recorded && presented !== undefined) rememberOwner(index, presented, this.log);
+        return;
+      }
       throw new DisplayOwnershipError(
         `Desktop ${index} belongs to another agent — it was claimed before this daemon restarted, ` +
           "and the desktop is still running. Use your own desktop, which is the one your tools " +
           "already target."
       );
     }
-    if (presented === owner) return;
+    if (presented === owner) {
+      // Renewed by use, which is what makes this a lease rather than a lock.
+      if (desktop !== undefined) desktop.ownerAt = Date.now();
+      if (presented !== undefined) rememberOwner(index, presented, this.log);
+      return;
+    }
 
     throw new DisplayOwnershipError(
       `Desktop ${index} belongs to another agent. ` +
@@ -311,13 +359,23 @@ export class DisplayManager {
     if (existing) {
       // Claiming an unclaimed desktop is allowed — that is how the first caller takes
       // ownership — but taking one that is already claimed is not.
-      if (owner && existing.owner && existing.owner !== owner) {
+      if (owner && existing.owner && existing.owner !== owner && !this.lapsed(existing)) {
         throw new DisplayOwnershipError(
           `Desktop ${index} is already bound to another owner.`
         );
       }
-      if (owner && !existing.owner) {
+      if (owner && (existing.owner === undefined || this.lapsed(existing))) {
+        if (existing.owner !== undefined && existing.owner !== owner) {
+          this.log(
+            `desktop ${index}: its owner has not touched it for ` +
+              `${Math.round(OWNER_TTL_MS / 60_000)} minutes; handing it over`
+          );
+        }
         existing.owner = owner;
+      }
+      // Renewed on every ensure by the owner, for the same reason.
+      if (owner && existing.owner === owner) {
+        existing.ownerAt = Date.now();
         rememberOwner(index, owner, this.log);
       }
       return existing;
@@ -361,7 +419,7 @@ export class DisplayManager {
           "running. Use your own desktop."
       );
     }
-    if (owner !== undefined && recorded === undefined) rememberOwner(index, owner, this.log);
+    if (owner !== undefined) rememberOwner(index, owner, this.log);
 
     const desktop: Desktop = {
       index,
@@ -369,6 +427,7 @@ export class DisplayManager {
       executor,
       detection,
       owner,
+      ...(owner !== undefined ? { ownerAt: Date.now() } : {}),
       health: new ComponentHealth(),
     };
     this.desktops.set(index, desktop);

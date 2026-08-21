@@ -12,7 +12,7 @@
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { existsSync, readFileSync, rmSync } from "node:fs";
+import { existsSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { DisplayManager, DisplayOwnershipError } from "./displays.ts";
 
 /** High enough that it cannot collide with a desktop a developer is actually running. */
@@ -63,7 +63,64 @@ test("what is written down is a hash, never the owner's token", async () => {
     // The agent has a shell as this same uid and can read this file. Storing the token would hand
     // it a colleague's desktop credential, which is a worse problem than the one being fixed.
     assert.ok(!written.includes("token-for-ada"));
-    assert.match(written, /^[0-9a-f]{32}$/);
+    const record = JSON.parse(written) as { hash: string; at: number };
+    assert.match(record.hash, /^[0-9a-f]{32}$/);
+    assert.ok(record.at > 0, "and when it was last touched, which is what makes it a lease");
+  } finally {
+    rmSync(OWNER_FILE, { force: true });
+  }
+});
+
+
+test("a claim nobody has touched lapses, so a dead agent does not park a desktop forever", async () => {
+  // A claim with no expiry is a lock, and a lock held by an agent that no longer exists is a
+  // desktop nobody can ever use again — one failure turned into a permanent one, fixable only by
+  // recreating the container. Found by running two agents against a box that had been up for a
+  // day: both were refused their own desktops by owners that no longer existed.
+  rmSync(OWNER_FILE, { force: true });
+  try {
+    await withDesktop().ensure(INDEX, "token-for-ada");
+
+    // Rewrite the claim as though it were made long ago; the owner has not touched it since.
+    const stale = JSON.parse(readFileSync(OWNER_FILE, "utf8")) as { hash: string; at: number };
+    writeFileSync(OWNER_FILE, JSON.stringify({ ...stale, at: Date.now() - 31 * 60_000 }));
+
+    const successor = new DisplayManager(() => {});
+    successor.assertOwner(INDEX, "token-for-rex");
+  } finally {
+    rmSync(OWNER_FILE, { force: true });
+  }
+});
+
+test("an owner that is still working keeps its desktop", async () => {
+  rmSync(OWNER_FILE, { force: true });
+  try {
+    const manager = withDesktop();
+    await manager.ensure(INDEX, "token-for-ada");
+    const first = JSON.parse(readFileSync(OWNER_FILE, "utf8")) as { at: number };
+
+    // Every screenshot and every click goes through assertOwner, so working renews the lease.
+    await new Promise(resolve => setTimeout(resolve, 5));
+    manager.assertOwner(INDEX, "token-for-ada");
+    const renewed = JSON.parse(readFileSync(OWNER_FILE, "utf8")) as { at: number };
+    assert.ok(renewed.at >= first.at, "using it moves the clock");
+
+    assert.throws(
+      () => new DisplayManager(() => {}).assertOwner(INDEX, "token-for-rex"),
+      DisplayOwnershipError
+    );
+  } finally {
+    rmSync(OWNER_FILE, { force: true });
+  }
+});
+
+test("a claim in the older format without a timestamp is not eternal", () => {
+  // The first version of this wrote a bare hash. An unreadable age must not be the one thing that
+  // makes a claim permanent.
+  rmSync(OWNER_FILE, { force: true });
+  try {
+    writeFileSync(OWNER_FILE, "0123456789abcdef0123456789abcdef");
+    new DisplayManager(() => {}).assertOwner(INDEX, "somebody-else");
   } finally {
     rmSync(OWNER_FILE, { force: true });
   }

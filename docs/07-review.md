@@ -34,6 +34,30 @@ exposes and nobody collects.
 | R-18 | Long turns were never compacted after the first round | fixed |
 | R-19 | Execution obligations died with the process | **partly fixed** |
 
+### Verified end to end
+
+The coordination work was checked against a real box and a real model rather than only against
+stubs, and the run is worth recording because three mechanisms fired in one pass without being
+staged:
+
+Two agents were given the same instruction at the same moment. Rex claimed the work; Ada was
+refused, told who held it and when, and **stopped** — no duplicate, and no negotiation about who
+should stop. Rex then went to write the file and was refused for a second reason: it already
+existed and he had not read it. He read it, found substantive content from an earlier run, and
+declined to overwrite. A lost update that would have been silent, prevented, without either agent
+being asked to be careful.
+
+An earlier pass exercised the messaging path: Ada wrote a file and told Rex; Rex read it, reviewed
+it and replied; Ada thanked him; and Rex ended his turn **without replying**, which is the discipline
+the wake prompt asks for and the thing that stops "you sure? / sure / ok starting" from consuming
+turns.
+
+It also found a real defect, which is what an end-to-end run is for. Both agents were refused their
+own desktops by owners that no longer existed: desktop ownership was a lock with no expiry and no
+release, so an agent that stopped parked a desktop until the container was recreated — and
+persisting the claim earlier the same day had extended that from the daemon's lifetime to the
+container's. It is a lease now, renewed by use, which is the shape work claims already had.
+
 ### The adversarial round
 
 An independent reviewer was pointed at four areas — architecture and long-task
