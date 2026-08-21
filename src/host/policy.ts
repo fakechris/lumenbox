@@ -158,8 +158,30 @@ type PolicyEvent =
   | { at: string; kind: "resume"; agentId: string; by: string }
   | { at: string; kind: "approval-requested"; id: string; fingerprint: string; agentId: string; description: string }
   | { at: string; kind: "approval-granted"; id: string; by: string }
+  | { at: string; kind: "approval-granted-session"; id: string; by: string }
+  | {
+      at: string;
+      kind: "approval-granted-always";
+      id: string;
+      by: string;
+      // Carried in full, not looked up by id: a standing grant must survive the
+      // request event it answered falling off the compacted log.
+      fingerprint: string;
+      description: string;
+      agentId: string;
+    }
+  | { at: string; kind: "approval-revoked"; fingerprint: string; by: string }
   | { at: string; kind: "approval-denied"; id: string; by: string; reason?: string }
   | { at: string; kind: "approval-used"; id: string };
+
+/** A grant that outlives the moment: same agent, same exact action, until revoked. */
+export interface StandingGrant {
+  fingerprint: string;
+  description: string;
+  agentId: string;
+  grantedAt: string;
+  id: string;
+}
 
 /**
  * A decision, plus the one row that records what the decision set in motion.
@@ -213,12 +235,30 @@ export class PolicyGate {
   private readonly spentSince: (sinceMs: number) => number;
   private readonly spendUnavailable: () => string | undefined;
 
+  /**
+   * Called the moment a new approval is created, with what a notifier needs.
+   *
+   * A public assignable field rather than a constructor option because the one caller
+   * that wants it (the web server) meets the gate long after construction. Polling
+   * still works without it; this is what lets a desktop shell say "an agent is
+   * waiting on you" while the window is closed.
+   */
+  onApprovalRequested: ((approval: PendingApproval) => void) | undefined;
+
   /** Agents whose current turn a person has asked to stop. */
   private readonly stopped = new Set<string>();
   /** Approvals granted and not yet consumed, by fingerprint. */
   private readonly granted = new Map<string, PendingApproval>();
   /** Approvals asked for and not yet answered, by fingerprint. */
   private readonly awaiting = new Map<string, PendingApproval>();
+  /**
+   * Grants that hold until this process ends, by fingerprint. In memory on purpose
+   * and deliberately not rebuilt by replay: "for this session" means exactly the
+   * lifetime of the process the person said it to.
+   */
+  private readonly session = new Map<string, PendingApproval>();
+  /** Grants that hold until revoked, by fingerprint. Replayed from the log. */
+  private readonly always = new Map<string, StandingGrant>();
   /** Wake timestamps per agent, for the rate limit. Rebuilt from the log on start. */
   private readonly wakes = new Map<string, number[]>();
 
@@ -354,6 +394,24 @@ export class PolicyGate {
 
     const fingerprint = fingerprintOf(request.agentId, description);
 
+    // A standing or session grant covers this exact action without being consumed.
+    // Each use still writes an approval-used row, so the audit trail says every time
+    // the grant did work, not only the day it was given.
+    const standing = this.always.get(fingerprint);
+    if (standing !== undefined) {
+      return {
+        decision: { allow: true },
+        consequence: { at: this.now().toISOString(), kind: "approval-used", id: standing.id },
+      };
+    }
+    const sessionGrant = this.session.get(fingerprint);
+    if (sessionGrant !== undefined) {
+      return {
+        decision: { allow: true },
+        consequence: { at: this.now().toISOString(), kind: "approval-used", id: sessionGrant.id },
+      };
+    }
+
     // Granted earlier and not yet used. Consumed here, so the same grant cannot cover a second run.
     const grant = this.granted.get(fingerprint);
     if (grant !== undefined) {
@@ -385,6 +443,11 @@ export class PolicyGate {
     };
     this.awaiting.set(fingerprint, approval);
     this.log(`waiting for a person to approve: ${description}`);
+    try {
+      this.onApprovalRequested?.(approval);
+    } catch {
+      // A notifier's failure must not change a policy decision.
+    }
     return {
       decision: { allow: false, reason: approvalReason(description), approval },
       consequence: {
@@ -438,18 +501,67 @@ export class PolicyGate {
   }
 
   /**
-   * Grants one approval by id.
+   * Grants one approval by id, at one of three scopes.
+   *
+   * "once" is consumed by its first use — the default, and the safest. "session"
+   * holds for this process's lifetime and dies with it. "always" holds until revoked
+   * and survives restarts. All three cover the *exact* action text the person read;
+   * none of them widens to a class of actions, because the fingerprint is the grant.
    *
    * Returns false for an unknown or already-answered id rather than throwing: the usual cause is a
    * second click or a stale page, and neither deserves an error.
    */
-  grant(id: string, by = "user"): boolean {
+  grant(id: string, by = "user", scope: "once" | "session" | "always" = "once"): boolean {
     const found = [...this.awaiting.values()].find(approval => approval.id === id);
     if (found === undefined) return false;
     this.awaiting.delete(found.fingerprint);
+    const at = this.now().toISOString();
+
+    if (scope === "always") {
+      this.always.set(found.fingerprint, {
+        fingerprint: found.fingerprint,
+        description: found.description,
+        agentId: found.agentId,
+        grantedAt: at,
+        id,
+      });
+      this.append({
+        at,
+        kind: "approval-granted-always",
+        id,
+        by,
+        fingerprint: found.fingerprint,
+        description: found.description,
+        agentId: found.agentId,
+      });
+      this.log(`${by} approved, standing until revoked: ${found.description}`);
+      return true;
+    }
+
+    if (scope === "session") {
+      this.session.set(found.fingerprint, found);
+      this.append({ at, kind: "approval-granted-session", id, by });
+      this.log(`${by} approved for this session: ${found.description}`);
+      return true;
+    }
+
     this.granted.set(found.fingerprint, found);
-    this.append({ at: this.now().toISOString(), kind: "approval-granted", id, by });
+    this.append({ at, kind: "approval-granted", id, by });
     this.log(`${by} approved: ${found.description}`);
+    return true;
+  }
+
+  /** The standing grants, for showing a person what holds and letting them end it. */
+  standingGrants(): StandingGrant[] {
+    return [...this.always.values()].sort((a, b) => a.grantedAt.localeCompare(b.grantedAt));
+  }
+
+  /** Ends a standing grant. The next identical action asks again. */
+  revokeStanding(fingerprint: string, by = "user"): boolean {
+    if (!this.always.has(fingerprint)) return false;
+    this.always.delete(fingerprint);
+    this.append({ at: this.now().toISOString(), kind: "approval-revoked", fingerprint, by });
+    this.log(`${by} revoked a standing approval`);
     return true;
   }
 
@@ -530,6 +642,26 @@ export class PolicyGate {
           this.granted.set(approval.fingerprint, approval);
           break;
         }
+        case "approval-granted-session": {
+          // The question was answered, so it is no longer pending — but the grant
+          // itself belonged to a process that has ended, so it is not rebuilt.
+          const approval = byId.get(event.id);
+          if (approval !== undefined) this.awaiting.delete(approval.fingerprint);
+          break;
+        }
+        case "approval-granted-always":
+          this.awaiting.delete(event.fingerprint);
+          this.always.set(event.fingerprint, {
+            fingerprint: event.fingerprint,
+            description: event.description,
+            agentId: event.agentId,
+            grantedAt: event.at,
+            id: event.id,
+          });
+          break;
+        case "approval-revoked":
+          this.always.delete(event.fingerprint);
+          break;
         case "approval-denied":
         case "approval-used": {
           const approval = byId.get(event.id);
@@ -555,7 +687,21 @@ export class PolicyGate {
   /** Rewrites the log with what still matters, so it does not grow without bound. */
   private compact(lines: readonly string[]): void {
     try {
-      const kept = lines.slice(-KEEP_ON_COMPACT);
+      // Standing grants are re-stated ahead of the tail: a grant given months ago is
+      // still in force, and a compaction that keeps only recent events must not
+      // silently turn "always" back into "ask me every time".
+      const standing = this.standingGrants().map(grant =>
+        JSON.stringify({
+          at: grant.grantedAt,
+          kind: "approval-granted-always",
+          id: grant.id,
+          by: "compaction",
+          fingerprint: grant.fingerprint,
+          description: grant.description,
+          agentId: grant.agentId,
+        } satisfies PolicyEvent)
+      );
+      const kept = [...standing, ...lines.slice(-KEEP_ON_COMPACT)];
       const temp = `${this.path}.${process.pid}.tmp`;
       writeFileSync(temp, `${kept.join("\n")}\n`, "utf8");
       renameSync(temp, this.path);

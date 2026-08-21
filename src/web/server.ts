@@ -25,6 +25,7 @@ import { join, posix } from "node:path";
 import { fileURLToPath } from "node:url";
 import { AgentRegistry } from "../agents/registry.ts";
 import type { BusEvent } from "../agents/bus.ts";
+import { BoxManager, defaultBoxConfig } from "../box/docker.ts";
 import { resolveBoxProvisioner, type BoxProvisioner } from "../box/provisioner.ts";
 import { envNumber } from "../config.ts";
 import { BackupSchedule, backupRoot } from "../host/backup.ts";
@@ -142,7 +143,11 @@ type OutboundEvent =
   | TurnEvent
   | BusEvent
   | { type: "prompt"; agentId: string; text: string }
-  | { type: "error"; message: string };
+  | { type: "error"; message: string }
+  /** One line of docker output while the box is brought up from the page. */
+  | { type: "box_setup"; line: string; done?: boolean; ok?: boolean }
+  /** An approval was just created; the desktop shell turns this into a notification. */
+  | { type: "approval_pending"; agentId: string; agentName: string; description: string };
 
 export async function startWebServer(options: WebOptions): Promise<() => void> {
   const log = options.onLog ?? (() => {});
@@ -153,6 +158,8 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
   const fontCache = new Map<string, Buffer>();
   /** Asked once: the answer cannot change while this process runs. */
   const build = buildInfo();
+  /** One docker bring-up at a time; a second click joins the first via the events. */
+  let boxUpInFlight = false;
   const clients = new Set<ServerResponse>();
 
   /**
@@ -208,6 +215,22 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
 
   const provisioner = options.boxProvisioner ?? resolveBoxProvisioner();
 
+  // The moment an agent starts waiting on a person is worth pushing, not only
+  // polling: the desktop shell turns this into a system notification, which is the
+  // only way to learn about it while the window is closed.
+  const announceApproval = (approval: {
+    agentId: string;
+    agentName: string;
+    description: string;
+  }) => {
+    broadcast({
+      type: "approval_pending",
+      agentId: approval.agentId,
+      agentName: approval.agentName,
+      description: approval.description,
+    });
+  };
+
   const orchestrator = new Orchestrator({
     registry,
     provider: options.provider,
@@ -216,6 +239,31 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
     onTurnEvent: broadcast,
     onBusEvent: broadcast,
   });
+
+  orchestrator.policy.onApprovalRequested = announceApproval;
+
+  // The box dying is exactly the event nobody is looking at the page for. A light
+  // health probe, and only the ok→gone *transition* is announced — a box that stays
+  // down does not deserve a notification a minute.
+  let boxWasHealthy = false;
+  const boxWatch = setInterval(() => {
+    void (async () => {
+      const client = orchestrator.boxClient();
+      if (!client) return;
+      try {
+        await client.health();
+        boxWasHealthy = true;
+      } catch (error) {
+        if (boxWasHealthy) {
+          boxWasHealthy = false;
+          const detail = error instanceof Error ? error.message : String(error);
+          log(`box stopped answering: ${detail}`);
+          broadcast({ type: "error", message: `The box stopped answering: ${detail}` });
+        }
+      }
+    })();
+  }, 30_000);
+  boxWatch.unref?.();
 
   // Backups on a timer, off unless asked for. The state this protects is the only part of the
   // system that cannot be rebuilt, and the previous instruction — stop the box, then `cp -a` —
@@ -233,7 +281,8 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
     log(`backing up every ${backupHours}h to ${backupRoot()}`);
   }
 
-  const box = await orchestrator.connectBox();
+  // Mutable: the UI can bring the box up after this server started without one.
+  let box = await orchestrator.connectBox();
   log(box.connected ? `box: ${box.detail}` : `box: unavailable — ${box.detail}`);
 
   // Recovery happens only now, after the box is connected — a recovered turn captures whatever box
@@ -585,11 +634,25 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
         if (route === "GET /api/policy") {
           send(res, 200, {
             pending: orchestrator.policy.pending(),
+            standing: orchestrator.policy.standingGrants(),
             stopped: orchestrator.registry
               .list()
               .filter(agent => orchestrator.policy.isStopped(agent.id))
               .map(agent => agent.id),
           });
+          return;
+        }
+
+        // Ending a standing grant. The next identical action asks again.
+        if (route === "POST /api/policy/revoke") {
+          if (refused()) return;
+          const body = await readJson(req);
+          const revoked = orchestrator.policy.revokeStanding(String(body.fingerprint ?? ""));
+          if (!revoked) {
+            send(res, 404, { error: "No standing approval with that fingerprint." });
+            return;
+          }
+          send(res, 200, { revoked: true });
           return;
         }
 
@@ -732,9 +795,11 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
           if (refused()) return;
           const body = await readJson(req);
           const id = String(body.id ?? "");
+          const scope =
+            body.scope === "session" || body.scope === "always" ? body.scope : "once";
           const answered =
             route === "POST /api/approve"
-              ? orchestrator.policy.grant(id)
+              ? orchestrator.policy.grant(id, "user", scope)
               : orchestrator.policy.deny(id, "user", String(body.reason ?? "") || undefined);
           // 404 rather than an error for an unknown id: the usual cause is a second click or a page
           // left open, and neither deserves a failure.
@@ -817,6 +882,51 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
           });
           log(`config saved to ${path}`);
           send(res, 200, { saved: true, note: "Takes effect when the server restarts." });
+          return;
+        }
+
+        // Brings the box up from the page — the first-run path, where telling someone
+        // to go find a terminal is the product giving up. The docker output streams to
+        // every connected page as events, because an image pull is minutes long and a
+        // silent minutes-long button is indistinguishable from a broken one.
+        if (route === "POST /api/box/up") {
+          if (refused()) return;
+          if (boxUpInFlight) {
+            send(res, 409, { error: "The box is already being started." });
+            return;
+          }
+          if (box.connected) {
+            send(res, 200, { ok: true, detail: box.detail });
+            return;
+          }
+          boxUpInFlight = true;
+          send(res, 202, { starting: true });
+          void (async () => {
+            try {
+              const manager = new BoxManager(defaultBoxConfig());
+              await manager.up({
+                onOutput: line => broadcast({ type: "box_setup", line }),
+              });
+              box = await orchestrator.connectBox();
+              if (box.connected) {
+                const desktops = await orchestrator.ensureAllDesktops();
+                for (const desktop of desktops) {
+                  log(`desktop for ${desktop.name}: ${desktop.index === undefined ? "failed" : `:${desktop.index}`}`);
+                }
+              }
+              broadcast({
+                type: "box_setup",
+                line: box.connected ? `ready — ${box.detail}` : `failed — ${box.detail}`,
+                done: true,
+                ok: box.connected,
+              });
+            } catch (error) {
+              const detail = error instanceof Error ? error.message : String(error);
+              broadcast({ type: "box_setup", line: `failed — ${detail}`, done: true, ok: false });
+            } finally {
+              boxUpInFlight = false;
+            }
+          })();
           return;
         }
 
@@ -912,9 +1022,14 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
         }
 
         if (route === "GET /api/state") {
+          // Since local midnight, because "what did today cost" is the question a
+          // person glancing at the top bar is asking.
+          const midnight = new Date();
+          midnight.setHours(0, 0, 0, 0);
           send(res, 200, {
             provider: describeProvider(options.provider),
             build,
+            usageToday: orchestrator.usage.totalsSince(midnight.getTime()),
             box: { ...box, ok: box.connected },
             allTools: ALL_TOOLS,
             agents: registry.list().map(record => {
@@ -994,6 +1109,42 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
               (caller.userId === undefined ? "" : ` for ${caller.userId}`)
           );
           send(res, 200, { id: created.id, name: created.profile.name });
+          return;
+        }
+
+        // Deleting an agent, with the records decision made explicit: archive the
+        // directory (transcript, memory, plan — readable, restorable by moving it
+        // back) or delete it outright. Refused mid-turn, because tearing the state
+        // out from under a running turn manufactures exactly the interrupted-turn
+        // recovery case for no reason; and refused for the last agent, because an
+        // empty roster is a page with nothing to click.
+        if (route === "POST /api/agents/delete") {
+          const body = await readJson(req);
+          const agentId = String(body.id ?? "");
+          if (refused(agentId)) return;
+          if (!registry.has(agentId)) {
+            send(res, 404, { error: `No agent ${agentId}` });
+            return;
+          }
+          if (orchestrator.bus.activeAgentIds().includes(agentId)) {
+            send(res, 409, {
+              error: "This agent is in the middle of a turn. Stop it first, then delete.",
+            });
+            return;
+          }
+          if (registry.list().length <= 1) {
+            send(res, 400, { error: "This is the last agent; create another before deleting it." });
+            return;
+          }
+          const archive = body.records !== "delete";
+          const name = registry.get(agentId).profile.name;
+          const result = registry.remove(agentId, { archive });
+          log(
+            archive
+              ? `deleted agent ${name}; records archived to ${result.archivedTo}`
+              : `deleted agent ${name} and its records`
+          );
+          send(res, 200, { deleted: agentId, ...(result.archivedTo ? { archivedTo: result.archivedTo } : {}) });
           return;
         }
 
@@ -1211,6 +1362,7 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
     // The backup timer, or an embedding that restarts the server in one process leaves the old one
     // firing alongside the new — two backups a tick, sharing a timestamp and a partial directory.
     backups?.stop();
+    clearInterval(boxWatch);
     orchestrator.scheduler.stop();
     server.close();
   };
