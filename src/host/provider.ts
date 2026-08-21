@@ -143,13 +143,17 @@ export function providerNames(): string[] {
 }
 
 /**
- * Resolves the provider from a name or the environment.
+ * Resolves the provider from a name, the environment, or a configured default.
+ *
+ * Precedence: the explicit name (a flag), then `AGENTBOX_PROVIDER`, then the config
+ * file's default. The config sits under the environment for the same reason the
+ * environment sits under the flag — the more deliberate, more recent choice wins.
  *
  * `AGENTBOX_MODEL` overrides the preset's model, so a different model on the same
  * endpoint does not need a new preset.
  */
-export function resolveProvider(name?: string): ProviderProfile {
-  const requested = (name ?? process.env.AGENTBOX_PROVIDER ?? "").toLowerCase();
+export function resolveProvider(name?: string, configuredDefault?: string): ProviderProfile {
+  const requested = (name ?? process.env.AGENTBOX_PROVIDER ?? configuredDefault ?? "").toLowerCase();
 
   // A bare base URL with no provider named is unambiguous enough to act on.
   const chosen =

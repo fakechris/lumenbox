@@ -31,7 +31,7 @@ import {
   resolveProvider,
   type ProviderProfile,
 } from "./host/provider.ts";
-import { ensureConfigFile } from "./config.ts";
+import { applyConfigEnv, ensureConfigFile, loadConfig } from "./config.ts";
 import { startWebServer } from "./web/server.ts";
 
 const here = dirname(fileURLToPath(import.meta.url));
@@ -407,17 +407,21 @@ function parseArgs(argv: string[]): {
 async function cmdChat(argv: string[]): Promise<number> {
   const { positional, flags } = parseArgs(argv);
 
-  // Flags win over env so a single run can target a different endpoint.
+  // Flags win over env, and env wins over the config file, so a single run can
+  // target a different endpoint while the configured default holds otherwise.
   const providerName = flags.get("--provider");
   const modelOverride = flags.get("--model");
   if (typeof modelOverride === "string") {
     process.env.AGENTBOX_MODEL = modelOverride;
   }
+  const config = loadConfig(line => err(dim(line)));
+  applyConfigEnv(config);
 
   let provider: ProviderProfile;
   try {
     provider = resolveProvider(
-      typeof providerName === "string" ? providerName : undefined
+      typeof providerName === "string" ? providerName : undefined,
+      config.provider
     );
   } catch (error) {
     err(error instanceof Error ? error.message : String(error));
@@ -611,6 +615,10 @@ async function cmdWeb(argv: string[]): Promise<number> {
   const providerName = flags.get("--provider");
   const modelOverride = flags.get("--model");
   if (typeof modelOverride === "string") process.env.AGENTBOX_MODEL = modelOverride;
+  // The configured default provider and its key, so a restart that forgot the flag
+  // does not silently become a different company's model with no credential.
+  const webConfig = loadConfig(line => err(dim(line)));
+  applyConfigEnv(webConfig);
 
   const portFlag = flags.get("--port");
   const port = typeof portFlag === "string" ? Number(portFlag) : 7777;
@@ -627,7 +635,8 @@ async function cmdWeb(argv: string[]): Promise<number> {
   let provider: ProviderProfile;
   try {
     provider = resolveProvider(
-      typeof providerName === "string" ? providerName : undefined
+      typeof providerName === "string" ? providerName : undefined,
+      webConfig.provider
     );
   } catch (error) {
     err(error instanceof Error ? error.message : String(error));
