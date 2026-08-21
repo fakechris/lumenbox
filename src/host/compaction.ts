@@ -297,11 +297,25 @@ export function chooseCutPoint(
 }
 
 /**
+ * How long a summary may be.
+ *
+ * A cap because the failure of an unbounded one is not that it costs tokens — it is that it becomes
+ * a narrative. Given room, a model retells; given a limit, it chooses.
+ */
+export const SUMMARY_WORD_CAP = envNumber("AGENTBOX_SUMMARY_WORDS", 400);
+
+/**
  * The prompt that produces a summary.
  *
  * Asks for what a later turn actually needs — decisions, state, open threads, paths — rather than a
  * narrative. A summary that reads well and omits the file it wrote is worse than no summary,
  * because the agent will believe it.
+ *
+ * **Four named sections rather than four bullet points.** The difference is not style. A list of
+ * things to mention gets partially satisfied and nobody notices which part was dropped; a heading
+ * that must be present makes an omission visible, and `Artifacts: none` is a claim that can be
+ * wrong, where a missing paragraph about files is just absence. Paths are the thing most often lost
+ * and most expensive to find again, which is why they get a section of their own.
  */
 export function buildSummaryPrompt(entries: readonly HistoryEntry[]): string {
   const rendered = entries
@@ -341,13 +355,16 @@ export function buildSummaryPrompt(entries: readonly HistoryEntry[]): string {
 
   return (
     "Summarise the earlier part of your own working history below, for your future self.\n\n" +
-    "Write what a later turn needs to continue without re-reading any of it:\n" +
-    "- what was asked, and what has been decided\n" +
-    "- what you actually did, including files you created or changed, with their paths\n" +
-    "- the current state of the work, and anything left open or blocked\n" +
-    "- facts you established that would be expensive to find again\n\n" +
-    "Be specific and dense. Omit narration, apologies and anything you would not need again. " +
-    "Do not invent progress: if something was attempted and failed, say so.\n\n" +
+    "Use exactly these four headings, in this order, and put nothing outside them:\n\n" +
+    "**Objective** — what was asked, and what has since been decided about it.\n" +
+    "**Done** — what you actually did, and what came of it. Attempts that failed belong here too; " +
+    "a summary that lists only successes reads as a plan rather than a history.\n" +
+    "**State** — where the work stands right now, and anything open, blocked or waiting.\n" +
+    "**Artifacts** — every file you created or changed, by full path, one per line, with a few " +
+    "words on what each holds. If there are none, write \"none\" — an empty section is a fact, and " +
+    "leaving it out looks like forgetting.\n\n" +
+    `Under ${SUMMARY_WORD_CAP} words. Be specific and dense: omit narration, apologies and ` +
+    "anything you would not need again. Do not invent progress.\n\n" +
     "--- history ---\n" +
     rendered
   );

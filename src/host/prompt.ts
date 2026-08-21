@@ -298,33 +298,88 @@ export interface SystemPromptParts {
   volatile: string;
 }
 
+/** One named piece of the prompt. Empty output means the piece does not apply and is left out. */
+export interface PromptSection {
+  name: string;
+  render: (context: PromptContext) => string;
+}
+
+/**
+ * The stable tier: everything that does not change between turns for one agent.
+ *
+ * Separated from the volatile tier because of prompt caching — a cache breakpoint sits between
+ * them, so anything that changes per turn must not be up here or the prefix is invalidated every
+ * time.
+ */
+export const STABLE_SECTIONS: readonly PromptSection[] = [
+  { name: "base", render: () => BASE_PROMPT },
+  { name: "box", render: context => boxSection(context) },
+  { name: "profile", render: context => profileSection(context.agent) },
+];
+
+/**
+ * The volatile tier, in the order a model reads it.
+ *
+ * The order is the contract, and it was previously a comment on one entry. Stated here because it
+ * is a decision that is easy to change by accident: sections are appended by whoever adds one, and
+ * "wherever it landed" is not a reason.
+ *
+ * 1. **plan** — what this agent is doing *now*. First, because a model reading top-down should meet
+ *    its own objective before its background; put memory first and the objective arrives as a
+ *    footnote to a pile of facts.
+ * 2. **memory** — what it knows, chosen and budgeted.
+ * 3. **skills** — what it can reuse. After memory because a skill is only worth reaching for once
+ *    the situation is understood.
+ * 4. **history** — that earlier turns are still readable, and only when something was summarised.
+ * 5. **shared-memory** — what colleagues have kept. After its own, because "I learned this" and "a
+ *    colleague thought everyone needed this" are different claims and the weaker one goes second.
+ * 6. **team** — who else exists. Last, because delegation is a decision made after the work is
+ *    understood, not a lens for reading it.
+ */
+export const VOLATILE_SECTIONS: readonly PromptSection[] = [
+  { name: "plan", render: context => renderDurableBlocks(context.durable ?? {}) },
+  {
+    name: "memory",
+    render: context => renderMemory(context.memoryRecall ?? recall(context.memory)),
+  },
+  {
+    name: "skills",
+    render: context => renderSkills(visibleTo(context.skills ?? [], context.agent.profile.name)),
+  },
+  { name: "history", render: context => renderHistoryBlock(context.transcript ?? []) },
+  {
+    name: "shared-memory",
+    render: context =>
+      renderSharedMemory(recall(context.sharedMemory ?? [], SHARED_CHAR_BUDGET), id =>
+        context.teammates.find(mate => mate.id === id)?.profile.name ?? id
+      ),
+  },
+  { name: "team", render: context => teamSection(context) },
+];
+
+/** Which sections actually produced anything, in order. For tests and for inspecting a prompt. */
+export function sectionsPresent(context: PromptContext): string[] {
+  return VOLATILE_SECTIONS.filter(section => section.render(context).trim() !== "").map(
+    section => section.name
+  );
+}
+
+function assemble(
+  sections: readonly PromptSection[],
+  context: PromptContext
+): string {
+  return sections
+    .map(section => section.render(context))
+    .filter(text => text.trim() !== "")
+    .join("\n\n---\n\n");
+}
+
 export function buildSystemPromptParts(
   context: PromptContext
 ): SystemPromptParts {
   return {
-    stable: [
-      BASE_PROMPT,
-      boxSection(context),
-      profileSection(context.agent),
-    ].join("\n\n---\n\n"),
-    volatile: [
-      // Before memory and the roster: this is what the agent is doing *now*, and a model reading
-      // top-down should meet its own objective before its background.
-      renderDurableBlocks(context.durable ?? {}),
-      renderMemory(context.memoryRecall ?? recall(context.memory)),
-      renderSkills(visibleTo(context.skills ?? [], context.agent.profile.name)),
-      // Only when something has actually been summarised — see renderHistoryBlock.
-      renderHistoryBlock(context.transcript ?? []),
-      renderSharedMemory(
-        recall(context.sharedMemory ?? [], SHARED_CHAR_BUDGET),
-        id => context.teammates.find(mate => mate.id === id)?.profile.name ?? id
-      ),
-      teamSection(context),
-    ]
-      .filter(section => section.trim() !== "")
-      .join(
-      "\n\n---\n\n"
-    ),
+    stable: assemble(STABLE_SECTIONS, context),
+    volatile: assemble(VOLATILE_SECTIONS, context),
   };
 }
 

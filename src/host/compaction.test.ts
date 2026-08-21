@@ -27,6 +27,7 @@ DEFAULT_POLICY,
   policyForModel,
   compactionUrgency,
   pendingIsUsable,
+  SUMMARY_WORD_CAP,
   pruneOldImages,
   repairPairs,
   TOKENS_PER_IMAGE,
@@ -117,8 +118,8 @@ test("the summary prompt asks for state, not narrative", () => {
     result(3),
   ]);
 
-  assert.match(prompt, /files you created or changed, with their paths/);
-  assert.match(prompt, /left open or blocked/);
+  assert.match(prompt, /every file you created or changed, by full path/);
+  assert.match(prompt, /open, blocked or waiting/);
   assert.match(prompt, /Do not invent progress/);
   // Tool traffic is rendered, or a summary would describe a conversation with no work in it.
   assert.match(prompt, /assistant used bash/);
@@ -512,4 +513,30 @@ test("the screenshot that survives pruning is the current one", () => {
   // Order is preserved: the results still line up with the calls that made them.
   const results = (pruned.messages[1]?.content ?? []) as Anthropic.ToolResultBlockParam[];
   assert.deepEqual(results.map(result => result.tool_use_id), ["a", "b"]);
+});
+
+
+test("a summary has a shape, so what it left out is visible", () => {
+  // Four named sections rather than four things to mention. A list gets partially satisfied and
+  // nobody notices which part was dropped; a heading that must be present makes the omission
+  // visible — "Artifacts: none" is a claim that can be wrong, where a missing paragraph about files
+  // is just absence.
+  const prompt = buildSummaryPrompt([
+    { role: "user", text: "write the release notes", at: "2026-08-20T10:00:00Z" },
+  ]);
+
+  for (const heading of ["**Objective**", "**Done**", "**State**", "**Artifacts**"]) {
+    assert.ok(prompt.includes(heading), `missing ${heading}`);
+  }
+  assert.match(prompt, /exactly these four headings/);
+
+  // Paths are the thing most often lost and most expensive to find again.
+  assert.match(prompt, /every file you created or changed, by full path/);
+  assert.match(prompt, /an empty section is a fact/);
+
+  // Failures belong in the history, or the summary reads as a plan rather than a record.
+  assert.match(prompt, /Attempts that failed belong here too/);
+
+  // A cap, because the failure of an unbounded summary is that it becomes a narrative.
+  assert.match(prompt, new RegExp(`Under ${SUMMARY_WORD_CAP} words`));
 });

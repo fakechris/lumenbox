@@ -436,3 +436,31 @@ Three properties it has to have, each of which is a way it could go wrong:
   unparseable answer is not read as "none".
 - **The prompt says padding is worse than omitting.** An irrelevant memory in front of an agent is
   worse than a missing one, because it will be treated as relevant.
+
+## 22. The prompt's sections, named and ordered
+
+The system prompt is assembled from named sections in a declared order, split across two tiers with
+a cache breakpoint between them. Anything that changes per turn belongs in the volatile tier; put it
+in the stable one and the cached prefix is invalidated every turn, at a cost that is invisible and
+continuous.
+
+The order is the part worth writing down, because it is the part that gets changed by accident —
+sections are appended by whoever adds one, and "wherever it landed" is not a reason:
+
+`plan → memory → skills → history → shared-memory → team`
+
+An agent meets its own objective before its background; put memory first and the objective arrives
+as a footnote to a pile of facts. Skills come after memory because a recipe is only worth reaching
+for once the situation is understood. Shared memory comes after its own, because "I learned this"
+and "a colleague thought everyone needed this" are different claims and the weaker one goes second.
+The roster is last: delegation is a decision made after the work is understood, not a lens for
+reading it.
+
+**A section with nothing to say is left out — unless its emptiness is worth saying.** Most are
+omitted when empty: an empty heading costs the same as a full one and tells the model there is a
+category it ought to have something in. Memory is the exception, because an agent that has kept
+nothing has to be told the capability exists or it never starts.
+
+The rendering functions themselves live with the things they render — `durable.ts`, `memory.ts`,
+`skills.ts`, `history.ts` — which is where the separation already was. What this adds is the names,
+the order, and one place that states why.
