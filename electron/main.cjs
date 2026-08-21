@@ -176,7 +176,21 @@ if (!app.requestSingleInstanceLock()) {
     mainWindow?.focus();
   });
 
+  app.setName("LumenBox");
+
   app.whenReady().then(() => {
+    // The BrowserWindow icon option is Windows/Linux only; on macOS the Dock icon
+    // comes from the app bundle — which, unpackaged, is Electron's own. Set it at
+    // runtime so the mark from the brand sheet shows in every mode. (The name beside
+    // the menus still says Electron until the app is packaged; that is a bundle
+    // property no runtime call can change.)
+    if (process.platform === "darwin" && app.dock) {
+      app.dock.setIcon(
+        nativeImage.createFromPath(
+          path.join(REPO, "assets", "app-icon", "png", "lumenbox-512.png")
+        )
+      );
+    }
     startServer();
     createTray();
     createWindow();
