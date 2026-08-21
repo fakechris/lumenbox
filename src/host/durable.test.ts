@@ -18,6 +18,7 @@ import { AgentBus } from "../agents/bus.ts";
 import { dispatchTool, type ToolContext } from "./tools.ts";
 import { recall, renderMemory } from "./memory.ts";
 import { FileVersions } from "./files.ts";
+import { Claims } from "./claims.ts";
 import {
   describeTodos,
   isTodoStatus,
@@ -331,6 +332,51 @@ test("a file that cannot be checked is refused, not waved through", async () => 
       ada
     );
     assert.equal(forced.isError, undefined);
+  } finally {
+    cleanup();
+  }
+});
+
+
+test("two agents claiming one task: the second is refused, through the tool", async () => {
+  const { registry, context, cleanup } = toolFixture();
+  try {
+    const rex = registry.create({ name: "Rex" });
+    const claims = new Claims(null);
+    // A real file would be better but the class is covered directly; here the wiring is on test.
+    const shared = new Claims(join(mkdtempSync(join(tmpdir(), "agentbox-claims-tool-")), "c.jsonl"));
+    void claims;
+
+    const ada = { ...context, claims: shared };
+    const rexContext = { ...context, agent: rex, claims: shared };
+
+    const first = await dispatchTool("ClaimWork", { work: "Rewrite the deploy script" }, ada);
+    assert.equal(first.isError, undefined);
+    assert.match(first.text, /Claimed/);
+
+    const second = await dispatchTool("ClaimWork", { work: "rewrite the deploy script" }, rexContext);
+    assert.equal(second.isError, true);
+    assert.match(second.text, /Ada claimed this/);
+
+    // Renewing is not a conflict with yourself.
+    const renewed = await dispatchTool("ClaimWork", { work: "Rewrite the deploy script" }, ada);
+    assert.match(renewed.text, /Still yours/);
+
+    // And releasing hands it over.
+    await dispatchTool("ClaimWork", { work: "Rewrite the deploy script", release: true }, ada);
+    const afterRelease = await dispatchTool("ClaimWork", { work: "rewrite deploy script" }, rexContext);
+    assert.equal(afterRelease.isError, undefined);
+  } finally {
+    cleanup();
+  }
+});
+
+test("an empty claim is refused rather than colliding with everything", async () => {
+  const { context, cleanup } = toolFixture();
+  try {
+    const result = await dispatchTool("ClaimWork", { work: "  " }, { ...context, claims: new Claims(null) });
+    assert.equal(result.isError, true);
+    assert.match(result.text, /Say what the work is/);
   } finally {
     cleanup();
   }

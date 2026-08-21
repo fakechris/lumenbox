@@ -14,6 +14,7 @@ import type { AgentRecord, AgentRegistry } from "../agents/registry.ts";
 import type { PolicyGate } from "./policy.ts";
 import { describeHistory, readHistory } from "./history.ts";
 import { dedupeKey, validateRecord } from "./memory.ts";
+import { Claims, heldElsewhere } from "./claims.ts";
 import { ABSENT, versionOf, type FileVersions } from "./files.ts";
 import {
   describeTodos,
@@ -50,6 +51,11 @@ export interface ToolContext {
    * is not about this wants.
    */
   files?: FileVersions;
+  /**
+   * Who has taken which piece of work. Absent means no claiming, which is what every turn did
+   * before and what a test not about this wants.
+   */
+  claims?: Claims;
   registry: AgentRegistry;
   bus: AgentBus;
   box: BoxClient | undefined;
@@ -486,6 +492,30 @@ export function buildTools(hasBox: boolean, vision = true): Anthropic.Tool[] {
       },
     },
     {
+      name: "ClaimWork",
+      description:
+        "Take a piece of work so a teammate does not take the same one, or hand it back when you " +
+        "are done with it. Claiming something you already hold renews it. A claim lapses on its " +
+        "own if it is not renewed, so nothing stays stuck when an agent stops.",
+      input_schema: {
+        type: "object",
+        properties: {
+          work: {
+            type: "string",
+            description:
+              "What you are taking on, in one line, as you would describe it to a colleague. " +
+              "Matching is on the words, so describing the same task differently from a teammate " +
+              "will not collide — say what the task is rather than how you plan to do it.",
+          },
+          release: {
+            type: "boolean",
+            description: "Hand it back instead of taking it. Finished, or no longer doing it.",
+          },
+        },
+        required: ["work"],
+      },
+    },
+    {
       name: "RememberFact",
       description:
         "Keep something across conversations. It goes into your instructions on every future " +
@@ -918,6 +948,37 @@ export async function dispatchTool(
       };
       const whose = target.id === context.agent.id ? "" : `${target.profile.name}: `;
       return { text: whose + describeHistory(readHistory(entries, query), query) };
+    }
+
+    case "ClaimWork": {
+      const work = String(input.work ?? "").trim();
+      if (work === "") {
+        return {
+          text: "Say what the work is, in one line. An empty claim collides with everything or nothing.",
+          isError: true,
+        };
+      }
+      if (context.claims === undefined) {
+        return { text: "Work claims are not available here, so nothing was recorded.", isError: true };
+      }
+
+      if (input.release === true) {
+        context.claims.release(context.agent.id, work);
+        return { text: `Released. Anyone can pick up "${work}" now.` };
+      }
+
+      const taken = context.claims.claim({ agentId: context.agent.id, about: work });
+      if (!taken.ok) {
+        return {
+          text: heldElsewhere(taken.held, id => context.registry.tryGet(id)?.profile.name ?? id),
+          isError: true,
+        };
+      }
+      return {
+        text: taken.renewed
+          ? `Still yours. The claim on "${work}" is renewed.`
+          : `Claimed. "${work}" is yours until you release it or it lapses.`,
+      };
     }
 
     case "RememberFact": {

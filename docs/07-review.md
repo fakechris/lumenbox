@@ -120,27 +120,27 @@ description promising it reads a colleague's transcript, months before it could.
 | F8.1–8.7 | Finishing: compaction, retry, plan, history, silence | met | each has a test that fails when the mechanism is removed |
 | F9.1–9.6 | Tenancy, roles, admin, relay, metering | met | three people one box; no provider key in the container |
 | N6.1–6.5 | Cost and consent | met | stop, budget, wake limit, fingerprinted approval |
-| F10.1–10.7 | Coordination | **partial** | see below |
+| F10.1–10.7 | Coordination | met | claims, file versions, causal links, honest acks, resume |
 
-F10 is new and mostly open. It was written after noticing that every serious defect the adversarial
-round found in the multi-agent parts was a textbook concurrency anomaly rather than anything to do
-with agents: the allocation race is a write-write race, the desktop adopted after a restart is a
-lease with no durability, the scheduler re-firing a window is non-idempotent replay, and a stop
-cleared by the turn that followed it is a stale commit. Those four are fixed. What is not:
+F10 was written after noticing that every serious defect the adversarial round found in the
+multi-agent parts was a textbook concurrency anomaly rather than anything to do with agents: the
+allocation race is a write-write race, the desktop adopted after a restart is a lease with no
+durability, the scheduler re-firing a window is non-idempotent replay, and a stop cleared by the
+turn that followed it is a stale commit. All seven are now closed, and two of them turned out to
+need less machinery than the requirement implied:
 
-- **F10.1** — `SendToAgent` answers "Sent", which now honestly means "recorded and queued", but a
-  sender still never learns what became of it. An acknowledgement that cannot distinguish queued
-  from acted-on is where a team of agents starts holding conversations to simulate one.
-- **F10.2** — there is no claim on a piece of work at all. Two agents told to do the same thing both
-  do it.
-- **F10.3** — every agent writes to one `/home/box/work` as one uid. Two agents editing one file is
-  a lost update with nothing to detect it.
-- **F10.5** — messages carry no sender-side ordering, so after a failure in a team there is no
-  happens-before to reconstruct and no way to say which action came first.
-- **F10.6** — a teammate's message arrives inside the wake prompt as text to act on. Nothing marks
-  it as data rather than instruction, which in a fleet means one compromised agent can direct the
-  others.
-- **F10.7** — the subject of the next piece of work.
+- **F10.5** asked for ordering, and ordering was not the problem — every agent runs in one process
+  against one clock, so timestamps already order events. What was missing was the *link*, so
+  messages are identified and a turn records which ones caused it. A logical clock becomes necessary
+  the moment there are two orchestrators, and not before.
+- **F10.6** is a prompt change rather than a filter. A message that has been rewritten is no longer
+  the message; what the agent lacked was not protection but the *fact* that a teammate carries no
+  authority, which it cannot work out from the outside.
+
+What remains, and is worth stating because it bounds the claim: **F10.2 and F10.3 are advisory.**
+Nothing forces an agent to claim work before doing it, and an agent with a shell can write a file
+without the version check ever seeing it. Both make the anomaly visible and refusable rather than
+impossible, which is the honest description.
 
 R-05 is what keeps N5 partial and it has not moved: health, crashes and usage are all *exposed* and a
 person still has to go and look.

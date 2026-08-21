@@ -14,6 +14,7 @@ import type { AgentBus, InboundMessage } from "../agents/bus.ts";
 import type { BoxClient } from "../box/client.ts";
 import type { DisplayLease } from "../box/display-lease.ts";
 import type { PolicyGate } from "./policy.ts";
+import type { Claims } from "./claims.ts";
 import type { FileVersions } from "./files.ts";
 import type { TurnLedger } from "./resume.ts";
 import type { Skill } from "./skills.ts";
@@ -240,6 +241,8 @@ export interface TurnDeps {
    * rather than silently resolved by whoever wrote last.
    */
   files?: FileVersions;
+  /** Who has taken which piece of work, so two agents do not take the same one. */
+  claims?: Claims;
   resolution: ResolutionConfig | undefined;
   /** Which endpoint and what it can do. Omitted in tests to mean full Claude. */
   provider?: ProviderProfile;
@@ -1156,6 +1159,7 @@ export async function runTurn(
             bus,
             box,
             files: deps.files,
+            claims: deps.claims,
             policy: deps.policy,
             caller: deps.caller,
             display: deps.display,

@@ -365,3 +365,22 @@ teammate said, not the scaffolding around it — and the format is flat, so "whe
 end" has no answer that survives a paragraph being added to the framing. Twice now, adding one
 silently changed what a person saw. Messages last makes the boundary "from the first name onwards",
 which nothing we add later can move.
+
+## 19. Taking a piece of work (F10.2)
+
+Two agents told to do the same thing both do it. Not a communication failure, and not fixable by
+asking them to coordinate: it is the absence of a claim. Everything else here has one — a box has a
+tenant, a desktop has an owner, a file has a version — and the work itself did not.
+
+**A lease, not a lock.** A claim expires. An agent that dies holding one would otherwise park that
+work permanently, turning a single failure into a lasting one, and there is no way to tell "still
+working" from "gone" except by asking — which is what expiry does implicitly. Still working means
+claiming again, which costs nothing and moves the clock.
+
+**Expiry is computed on read.** Nothing has to be running for a claim to lapse, which is the
+property that matters when the thing that stopped running is the process that held it.
+
+**Advisory, and said so.** Nothing forces an agent to claim before working. This makes duplicate
+work visible and refusable, not impossible — and the matching is on words, so two agents describing
+one task differently will not collide. Nothing textual can fix that, and pretending otherwise would
+be the failure the mechanism exists to avoid.

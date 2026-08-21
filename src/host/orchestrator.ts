@@ -9,6 +9,7 @@
 import type Anthropic from "@anthropic-ai/sdk";
 import { AgentBus, type BusEvent, type InboundMessage } from "../agents/bus.ts";
 import { Inbox, inboxPath } from "../agents/inbox.ts";
+import { Claims, claimsPath } from "./claims.ts";
 import { FileVersions } from "./files.ts";
 import {
   giveUpNote,
@@ -63,6 +64,8 @@ export interface OrchestratorOptions {
    * `null` keeps none.
    */
   turns?: TurnLedger | null;
+  /** Who has taken which piece of work. `null` keeps none. */
+  claims?: Claims | null;
 }
 
 export class Orchestrator {
@@ -128,6 +131,15 @@ export class Orchestrator {
   private readonly files = new FileVersions();
 
   /**
+   * Who has taken which piece of work.
+   *
+   * Durable, because the point is surviving the process: in memory it would answer the easy half of
+   * the question and fail at a restart, which is exactly when two agents are most likely to pick up
+   * the same thing.
+   */
+  private readonly claims: Claims;
+
+  /**
    * Notices what a conversation taught, after the fact.
    *
    * Given the summariser's profile rather than the agent's: taking notes is the cheapest work in the
@@ -173,6 +185,10 @@ export class Orchestrator {
   });
 
   constructor(private readonly options: OrchestratorOptions = {}) {
+    this.claims =
+      options.claims === null
+        ? new Claims(null)
+        : (options.claims ?? new Claims(claimsPath(), line => console.error(`[claims] ${line}`)));
     this.turns =
       options.turns === null
         ? undefined
@@ -312,6 +328,7 @@ export class Orchestrator {
       client: this.client,
       registry: this.registry,
       files: this.files,
+      claims: this.claims,
       bus: this.bus,
       box: this.box,
       display: this.display,
