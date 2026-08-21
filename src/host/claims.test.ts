@@ -138,3 +138,30 @@ test("no claims file means nothing is refused", () => {
   assert.equal(claims.claim({ agentId: "ada", about: "x", now: AT }).ok, true);
   assert.equal(claims.claim({ agentId: "rex", about: "x", now: AT }).ok, true);
 });
+
+
+test("a late release from a lapsed owner does not delete the new holder's claim", () => {
+  // Ada's claim expires and Rex takes the work. Ada, finishing late, releases her old claim. If
+  // release deleted by key alone, it would delete Rex's live claim and let a third agent take the
+  // work while Rex is still on it.
+  const { file, cleanup } = path();
+  try {
+    const claims = new Claims(file);
+    claims.claim({ agentId: "ada", about: "Rewrite the deploy script", now: AT });
+
+    // Long enough later that Ada's claim has lapsed and Rex takes it.
+    const afterLapse = new Date(AT.getTime() + CLAIM_TTL_MS + 60_000);
+    assert.equal(
+      claims.claim({ agentId: "rex", about: "rewrite the deploy script", now: afterLapse }).ok,
+      true
+    );
+
+    // Ada releases her old one. It must not touch Rex's.
+    claims.release("ada", "Rewrite the deploy script", new Date(afterLapse.getTime() + 60_000));
+
+    const holder = claims.holderOf(claimKey("rewrite the deploy script"), new Date(afterLapse.getTime() + 120_000));
+    assert.equal(holder?.agentId, "rex", "Rex still holds it");
+  } finally {
+    cleanup();
+  }
+});

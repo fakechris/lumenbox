@@ -783,10 +783,30 @@ export async function dispatchTool(
       // What the file is right now, read immediately before writing. Compared against what this
       // agent last saw, which is what turns "the second write wins silently" into a refusal.
       if (context.files !== undefined && input.overwrite !== true) {
-        const current = await box
-          .readFile(path)
-          .then(existing => (existing.truncated ? undefined : versionOf(existing.content)))
-          .catch(() => ABSENT);
+        // Three outcomes, kept apart: a version we can compare, a file that is genuinely absent
+        // (creating it is safe), and a read that *failed* — which is not the same as absent. A
+        // transient daemon error or a permission fault used to collapse to ABSENT, the one state
+        // the check always permits, so a hiccup while reading an existing file let the next write
+        // silently overwrite it. "Could not read" and "not there" are opposite answers.
+        let current: string | undefined;
+        try {
+          const existing = await box.readFile(path);
+          current = existing.truncated ? undefined : versionOf(existing.content);
+        } catch (error) {
+          const message = error instanceof Error ? error.message : String(error);
+          if (/does not exist|no such file/i.test(message)) {
+            current = ABSENT;
+          } else {
+            return {
+              text:
+                `${path} could not be read to check whether it changed since you last saw it ` +
+                `(${message}). It was not written, because a read failure is not the same as the ` +
+                `file being absent. Try again, or pass overwrite: true if you mean to replace it ` +
+                `whatever it now holds.`,
+              isError: true,
+            };
+          }
+        }
         if (current === undefined) {
           // Too large to read whole, so there is nothing to compare against. Refused rather than
           // allowed: "I could not check" and "I checked and it is fine" are different answers, and

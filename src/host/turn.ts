@@ -679,14 +679,6 @@ export async function runTurn(
   // Recorded before anything else, so a process that dies at any point after this leaves a begin
   // with no end — a fact, rather than a turn that simply stopped existing.
   const turnId = randomUUID();
-  deps.turns?.begin({
-    id: turnId,
-    agentId: agent.id,
-    about: inbound.map(message => message.text).join(" / "),
-    ...(deps.resumeOf !== undefined
-      ? { resumeOf: deps.resumeOf.id, attempt: deps.resumeOf.attempt }
-      : {}),
-  });
   let ended = false;
   const finish = (how: string) => {
     if (ended) return;
@@ -789,6 +781,20 @@ export async function runTurn(
   // One entry per completed round, for the loop and progress judgements. Held out here rather than
   // inside runRounds so a continuation can reset it: a fresh budget deserves a fresh judgement.
   const rounds: RoundRecord[] = [];
+
+  // The ledger opens here, not during setup. Its job is to record that a turn was *executing* — a
+  // model call, a tool — when the process died, so the next startup resumes it. Everything above is
+  // assembly that ran nothing; a death there loses no work (the accepted message is still in the
+  // inbox) and would otherwise have left an open ledger that read a setup failure as an interrupted
+  // turn and resumed one that had already reported failing.
+  deps.turns?.begin({
+    id: turnId,
+    agentId: agent.id,
+    about: inbound.map(message => message.text).join(" / "),
+    ...(deps.resumeOf !== undefined
+      ? { resumeOf: deps.resumeOf.id, attempt: deps.resumeOf.attempt }
+      : {}),
+  });
 
   try {
     // Continuations are a loop here rather than recursion inside runRounds: each pass gets a fresh

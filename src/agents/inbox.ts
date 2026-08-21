@@ -20,7 +20,8 @@
  */
 
 import { envNumber } from "../config.ts";
-import { appendFileSync, existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
+import { appendLine } from "../host/jsonl.ts";
 import { dirname, join } from "node:path";
 import { agentboxHome } from "../config.ts";
 
@@ -125,7 +126,7 @@ export class Inbox<T> {
     if (this.path === undefined) return false;
     try {
       mkdirSync(dirname(this.path), { recursive: true });
-      appendFileSync(this.path, `${JSON.stringify(record)}\n`, "utf8");
+      appendLine(this.path, JSON.stringify(record));
       this.lines += 1;
       return true;
     } catch (error) {

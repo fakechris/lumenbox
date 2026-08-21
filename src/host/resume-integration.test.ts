@@ -45,6 +45,10 @@ test("an interrupted turn comes back as a turn, carrying what it may not assume"
     const orch = orchestrator();
     assert.deepEqual(orch.resumeInterrupted(), { resumed: 1, abandoned: 0 });
 
+    // Queued AND woken: resumeInterrupted used to only enqueue, so a resumed turn sat until some
+    // unrelated later traffic happened to run it. (Here the runner is a no-op, so the queue drains.)
+    void orch;
+
     // It is queued as work for that agent, and the text is the resumption note rather than a copy
     // of the original request — re-sending the request would be asking for the whole thing again.
     assert.equal(orch.bus.pendingCount(ada.id), 1);
@@ -160,6 +164,53 @@ test("nothing outstanding means nothing happens", () => {
   try {
     registry.create({ name: "Ada" });
     assert.deepEqual(orchestrator().resumeInterrupted(), { resumed: 0, abandoned: 0 });
+  } finally {
+    cleanup();
+  }
+});
+
+
+test("a resumed turn actually runs, not just sits in the queue", async () => {
+  // resumeInterrupted enqueued the resumption but never woke the agent, so nothing ran it until
+  // unrelated later traffic arrived. It wakes now.
+  const { registry, ledger, ledgerPath, cleanup } = fixture();
+  try {
+    const ada = registry.create({ name: "Ada" });
+    ledger().begin({ id: "t1", agentId: ada.id, about: "finish the deploy" });
+
+    let ran: string[] = [];
+    const orch = new Orchestrator({
+      registry,
+      useBox: false,
+      inbox: null,
+      turns: new TurnLedger(ledgerPath),
+      client: {
+        messages: {
+          stream() {
+            return {
+              on() {
+                return this;
+              },
+              finalMessage: async () => ({
+                id: "m",
+                type: "message",
+                role: "assistant",
+                model: "claude-opus-5",
+                content: [{ type: "text", text: "resumed and done" }],
+                stop_reason: "end_turn",
+                stop_sequence: null,
+                usage: { input_tokens: 1, output_tokens: 1, cache_read_input_tokens: 0, cache_creation_input_tokens: 0 },
+              }),
+            };
+          },
+        },
+      } as never,
+    });
+
+    assert.equal(orch.resumeInterrupted().resumed, 1);
+    await orch.settle();
+    ran = (registry.readTranscript(ada.id) as { role?: string }[]).filter(e => e.role === "assistant").map(() => "x");
+    assert.ok(ran.length >= 1, "the resumed turn produced an assistant reply, so it ran");
   } finally {
     cleanup();
   }

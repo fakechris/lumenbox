@@ -381,3 +381,39 @@ test("an empty claim is refused rather than colliding with everything", async ()
     cleanup();
   }
 });
+
+
+test("a read that fails is not treated as the file being absent", async () => {
+  // A transient daemon error or permission fault used to collapse to ABSENT, the one state the
+  // version check always permits, so a hiccup reading an existing file let the next write overwrite
+  // it silently. "Could not read" and "not there" are opposite answers.
+  const { registry, context, cleanup } = toolFixture();
+  try {
+    const files = new FileVersions();
+    const path = "/home/box/work/report.md";
+    let mode: "ok" | "fail" | "missing" = "ok";
+    const box = {
+      readFile: async () => {
+        if (mode === "fail") throw new Error("the box was restarting");
+        if (mode === "missing") throw new Error("/home/box/work/report.md does not exist");
+        return { path, content: "someone's work", total_lines: 1, truncated: false };
+      },
+      writeFile: async (p: string, content: string) => ({ path: p, bytes_written: content.length }),
+    } as never;
+    const ada = { ...context, box, files };
+
+    // A read failure that is not "absent" refuses the write, rather than overwriting blind.
+    mode = "fail";
+    const refused = await dispatchTool("write_file", { path, content: "mine" }, ada);
+    assert.equal(refused.isError, true);
+    assert.match(refused.text, /could not be read/);
+    assert.match(refused.text, /not the same as the file being absent/);
+
+    // A genuinely missing file still writes — creating it is safe.
+    mode = "missing";
+    const created = await dispatchTool("write_file", { path, content: "new" }, ada);
+    assert.equal(created.isError, undefined);
+  } finally {
+    cleanup();
+  }
+});

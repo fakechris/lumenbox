@@ -21,7 +21,8 @@
  */
 
 import { envNumber } from "../config.ts";
-import { appendFileSync, existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
+import { appendLine } from "./jsonl.ts";
 import { dirname, join } from "node:path";
 import { agentboxHome } from "../config.ts";
 
@@ -123,7 +124,7 @@ export class UsageLog {
     const full: UsageRecord = { seq: this.nextSeq++, at: now.toISOString(), ...entry };
     try {
       mkdirSync(dirname(this.path), { recursive: true });
-      appendFileSync(this.path, `${JSON.stringify(full)}\n`, "utf8");
+      appendLine(this.path, JSON.stringify(full));
       this.lines++;
       if (this.lines > COMPACT_AT) this.compact();
     } catch (error) {

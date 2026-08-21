@@ -32,7 +32,8 @@
  */
 
 import { envNumber } from "../config.ts";
-import { appendFileSync, existsSync, mkdirSync, readFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync } from "node:fs";
+import { appendLine } from "./jsonl.ts";
 import { dirname, join } from "node:path";
 import { agentboxHome } from "../config.ts";
 
@@ -430,10 +431,9 @@ export class Scheduler {
     if (this.path === undefined) return;
     try {
       mkdirSync(dirname(this.path), { recursive: true });
-      appendFileSync(
+      appendLine(
         this.path,
-        `${JSON.stringify({ slug, at: this.now().toISOString(), event } satisfies RunRecord)}\n`,
-        "utf8"
+        JSON.stringify({ slug, at: this.now().toISOString(), event } satisfies RunRecord)
       );
     } catch (error) {
       // Never stop firing over bookkeeping. The cost of a lost record is a window that may repeat

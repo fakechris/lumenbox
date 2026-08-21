@@ -149,31 +149,6 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
     onBusEvent: broadcast,
   });
 
-  // Work that was accepted before the last shutdown and never begun. Replayed here rather than
-  // silently forgotten: a request answered with 202, or a message whose sender was told "Sent",
-  // used to exist only in memory. Only unstarted work is here, so nothing is re-executed.
-  const restored = orchestrator.bus.recover();
-  if (restored > 0) {
-    log(
-      `resumed ${restored} message${restored === 1 ? "" : "s"} accepted before the last restart ` +
-        `and never started`
-    );
-  }
-
-  // Turns the last process died underneath. Resumed after the inbox, because a turn that was
-  // already running is further along than a message that was only accepted, and the order they are
-  // queued in is the order they will run.
-  const picked = orchestrator.resumeInterrupted();
-  if (picked.resumed > 0) {
-    log(`picking up ${picked.resumed} turn${picked.resumed === 1 ? "" : "s"} interrupted by a restart`);
-  }
-  if (picked.abandoned > 0) {
-    log(
-      `${picked.abandoned} interrupted turn${picked.abandoned === 1 ? "" : "s"} not picked up again ` +
-        `after repeated failures; said so in the transcript`
-    );
-  }
-
   // Backups on a timer, off unless asked for. The state this protects is the only part of the
   // system that cannot be rebuilt, and the previous instruction — stop the box, then `cp -a` —
   // required both stopping and remembering, so it did not happen.
@@ -192,6 +167,29 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
 
   const box = await orchestrator.connectBox();
   log(box.connected ? `box: ${box.detail}` : `box: unavailable — ${box.detail}`);
+
+  // Recovery happens only now, after the box is connected — a recovered turn captures whatever box
+  // the orchestrator holds when it is built, and a turn that started before the box was up would run
+  // without shell, files, or a desktop and could finish or fail before the box ever arrived. The
+  // inbox first, then interrupted turns: a turn already running is further along than a message only
+  // accepted, and they run in the order queued.
+  const restored = orchestrator.bus.recover();
+  if (restored > 0) {
+    log(
+      `resumed ${restored} message${restored === 1 ? "" : "s"} accepted before the last restart ` +
+        `and never started`
+    );
+  }
+  const picked = orchestrator.resumeInterrupted();
+  if (picked.resumed > 0) {
+    log(`picking up ${picked.resumed} turn${picked.resumed === 1 ? "" : "s"} interrupted by a restart`);
+  }
+  if (picked.abandoned > 0) {
+    log(
+      `${picked.abandoned} interrupted turn${picked.abandoned === 1 ? "" : "s"} not picked up again ` +
+        `after repeated failures; said so in the transcript`
+    );
+  }
 
   // Every agent's desktop, up front: the point of this UI is that a person can
   // take over any of them at any moment, which cannot wait on that agent's first

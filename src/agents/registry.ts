@@ -20,9 +20,9 @@ import {
   renameSync,
   writeFileSync,
   existsSync,
-  appendFileSync,
   statSync,
 } from "node:fs";
+import { appendLine } from "../host/jsonl.ts";
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 import { isTodoStatus, type DurableState, type TodoItem } from "../host/durable.ts";
@@ -521,11 +521,9 @@ export class AgentRegistry {
   appendMemoryRecords(agentId: string, records: readonly MemoryRecord[]): void {
     if (records.length === 0) return;
     mkdirSync(this.dirFor(agentId), { recursive: true });
-    appendFileSync(
-      this.memoryRecordsPathFor(agentId),
-      records.map(record => `${JSON.stringify(record)}\n`).join(""),
-      "utf8"
-    );
+    for (const record of records) {
+      appendLine(this.memoryRecordsPathFor(agentId), JSON.stringify(record));
+    }
   }
 
   private sharedMemoryDir(): string {
@@ -576,11 +574,9 @@ export class AgentRegistry {
   appendSharedMemory(agentId: string, records: readonly MemoryRecord[]): void {
     if (records.length === 0) return;
     mkdirSync(this.sharedMemoryDir(), { recursive: true });
-    appendFileSync(
-      this.sharedMemoryPathFor(agentId),
-      records.map(record => `${JSON.stringify(record)}\n`).join(""),
-      "utf8"
-    );
+    for (const record of records) {
+      appendLine(this.sharedMemoryPathFor(agentId), JSON.stringify(record));
+    }
   }
 
   readMemory(agentId: string): string {
@@ -603,11 +599,7 @@ export class AgentRegistry {
 
   appendTranscript(agentId: string, entry: unknown): void {
     mkdirSync(this.dirFor(agentId), { recursive: true });
-    appendFileSync(
-      this.transcriptPathFor(agentId),
-      `${JSON.stringify(entry)}\n`,
-      "utf8"
-    );
+    appendLine(this.transcriptPathFor(agentId), JSON.stringify(entry));
   }
 
   readTranscript(agentId: string): unknown[] {

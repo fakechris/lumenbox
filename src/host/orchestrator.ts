@@ -398,6 +398,10 @@ export class Orchestrator {
       this.turns?.end(turn.id, "resumed");
       this.resuming.set(agent.id, { id: turn.id, attempt: turn.attempt + 1 });
       this.bus.sendFromUser(agent.id, resumePrompt(turn.about, turn.at));
+      // Enqueuing is not running. sendFromUser only queues; without this the resumed turn sat until
+      // some unrelated later traffic happened to wake the agent. recover() wakes for the inbox; this
+      // path did not.
+      void this.bus.wake(agent.id);
       resumed += 1;
     }
 

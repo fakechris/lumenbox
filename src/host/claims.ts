@@ -21,7 +21,8 @@
  * make.
  */
 
-import { appendFileSync, existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
+import { appendLine } from "./jsonl.ts";
 import { dirname, join } from "node:path";
 import { agentboxHome, envNumber } from "../config.ts";
 
@@ -153,7 +154,13 @@ export class Claims {
     const held = new Map<string, Claim>();
     for (const record of this.read()) {
       if (record.event === "release") {
-        held.delete(record.key);
+        // Only its own holder may release a claim. A late release from an agent whose claim already
+        // expired and was taken over by someone else must not delete the *new* holder's claim —
+        // which would let a third agent take the work while the second is still doing it.
+        const current = held.get(record.key);
+        if (current !== undefined && current.agentId === record.agentId) {
+          held.delete(record.key);
+        }
         continue;
       }
       held.set(record.key, {
@@ -173,7 +180,7 @@ export class Claims {
     if (this.path === undefined) return;
     try {
       mkdirSync(dirname(this.path), { recursive: true });
-      appendFileSync(this.path, `${JSON.stringify(record)}\n`, "utf8");
+      appendLine(this.path, JSON.stringify(record));
       this.lines += 1;
     } catch (error) {
       // Never fail a turn over bookkeeping. What is lost is the claim, which means the work can be

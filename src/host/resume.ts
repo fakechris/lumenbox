@@ -24,7 +24,8 @@
  * that also restarts itself is worse than a task that stopped.
  */
 
-import { appendFileSync, existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
+import { appendLine } from "./jsonl.ts";
 import { dirname, join } from "node:path";
 import { agentboxHome, envNumber } from "../config.ts";
 
@@ -155,7 +156,7 @@ export class TurnLedger {
     if (this.path === undefined) return;
     try {
       mkdirSync(dirname(this.path), { recursive: true });
-      appendFileSync(this.path, `${JSON.stringify(record)}\n`, "utf8");
+      appendLine(this.path, JSON.stringify(record));
       this.lines += 1;
     } catch (error) {
       // Never fail a turn over bookkeeping. What is lost is the ability to notice that this turn
