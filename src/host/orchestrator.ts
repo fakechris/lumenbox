@@ -480,10 +480,39 @@ export class Orchestrator {
  * Order matters: the first is the one a CLI and a fresh UI select, so it is the one that talks to
  * people. The rest are its colleagues.
  */
+/**
+ * Everything a coordinator may do, which is everything.
+ *
+ * Written as a list rather than as "undefined means all" so the differences below read as
+ * subtraction from a stated whole, and so the test that every tool is accounted for has something
+ * to compare against.
+ */
+const ALL_TOOLS: readonly string[] = [
+  "computer",
+  "bash",
+  "read_file",
+  "write_file",
+  "list_dir",
+  "SendToAgent",
+  "CreateAgent",
+  "UpdateAgent",
+  "SetPlan",
+  "SetTodos",
+  "ReadHistory",
+  "ClaimWork",
+  "RememberFact",
+];
+
+/** Everyone except the coordinator: building the team is the coordinator's job. */
+const NO_TEAM_BUILDING: readonly string[] = ALL_TOOLS.filter(
+  tool => tool !== "CreateAgent" && tool !== "UpdateAgent"
+);
+
 export const STARTER_TEAM: readonly {
   name: string;
   title: string;
   description: string;
+  tools?: readonly string[];
 }[] = [
   {
     name: "Ada",
@@ -494,6 +523,7 @@ export const STARTER_TEAM: readonly {
       "you did; when the team is missing someone the work clearly needs, propose creating " +
       "them rather than creating them unasked. Do the work yourself when it is faster than " +
       "delegating — a single file read or a one-line shell command is not worth a handoff.",
+    tools: ALL_TOOLS,
   },
   {
     name: "Rex",
@@ -504,6 +534,7 @@ export const STARTER_TEAM: readonly {
       "what you found in a file under /home/box/work so it outlives the conversation. You are " +
       "explicit about what you could not confirm — an unmarked guess in a document you wrote is " +
       "worse than an admitted gap, because the next person cannot tell them apart.",
+    tools: NO_TEAM_BUILDING,
   },
   {
     name: "Ops",
@@ -514,6 +545,7 @@ export const STARTER_TEAM: readonly {
       "what happened, and you read what a command actually printed rather than assuming it worked. " +
       "When something needs to survive a rebuild it goes under /home/box/work; when a change is " +
       "hard to undo you say so before making it.",
+    tools: NO_TEAM_BUILDING,
   },
   {
     name: "Vera",
@@ -525,5 +557,10 @@ export const STARTER_TEAM: readonly {
       "where a step looked like it worked and did not. You report plainly: what you verified, what " +
       "you could not, and what you found wrong. You do not soften a real problem, and you do not " +
       "invent one to look useful.",
+    // The one real division, and the reason this mechanism exists. A reviewer that can rewrite the
+    // work is no longer reviewing it — and the failure is not that it would cheat, it is that
+    // "fixed it" and "checked it" become the same act and nobody can tell afterwards which happened.
+    // It keeps `bash`, because reproducing a step is its whole job and reproducing needs running.
+    tools: NO_TEAM_BUILDING.filter(tool => tool !== "write_file"),
   },
 ];

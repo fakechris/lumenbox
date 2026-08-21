@@ -185,13 +185,39 @@ const actionSchema = {
 };
 
 /**
+ * Tools an agent is not allowed to be offered, by name.
+ *
+ * Withholding rather than refusing: a tool an agent cannot use should not be in its prompt at all.
+ * Offering it and rejecting the call spends a round, teaches the model that its tool list is not
+ * true, and produces a refusal the model then has to explain to somebody.
+ *
+ * Absent means everything, which is what every agent had before this existed.
+ */
+export function withheldFrom(
+  allowed: readonly string[] | undefined,
+  tools: readonly Anthropic.Tool[]
+): Anthropic.Tool[] {
+  if (allowed === undefined) return [...tools];
+  const permitted = new Set(allowed);
+  return tools.filter(tool => permitted.has(tool.name));
+}
+
+/**
  * The tool set for one turn.
  *
  * `vision` withholds the computer tool when the model cannot see image blocks.
  * Offering it anyway would be worse than useless: the agent would receive a note
  * saying a screenshot is attached, see nothing, and narrate a screen it invented.
+ *
+ * `allowed` narrows it further, per agent. Four agents holding identical tools are four agents
+ * differing only in the prose that describes them — which is not a division of labour, it is a
+ * division of tone. A reviewer that cannot write is a different thing from one that is asked not to.
  */
-export function buildTools(hasBox: boolean, vision = true): Anthropic.Tool[] {
+export function buildTools(
+  hasBox: boolean,
+  vision = true,
+  allowed?: readonly string[]
+): Anthropic.Tool[] {
   const tools: Anthropic.Tool[] = [];
 
   if (hasBox && vision) {
@@ -553,7 +579,7 @@ export function buildTools(hasBox: boolean, vision = true): Anthropic.Tool[] {
     }
   );
 
-  return tools;
+  return withheldFrom(allowed, tools);
 }
 
 /**
@@ -888,11 +914,22 @@ export async function dispatchTool(
         name: String(input.name ?? ""),
         description: String(input.description ?? ""),
         title: input.title ? String(input.title) : undefined,
+        // A colleague cannot be given tools its creator does not have. Without this, an agent that
+        // may not write files creates one that may and asks it to write — and the restriction was
+        // never a restriction, only a longer path. Same rule as a teammate's message carrying no
+        // authority: nothing here can grant what the granter does not hold.
+        ...(context.agent.profile.tools !== undefined
+          ? { tools: context.agent.profile.tools }
+          : {}),
       });
+      const inherited =
+        context.agent.profile.tools === undefined
+          ? ""
+          : " It has the same tools you do — an agent cannot hand out what it does not hold.";
       return {
         text:
           `Created agent "${created.profile.name}" (id: ${created.id}). ` +
-          "Message it with SendToAgent using that id.",
+          `Message it with SendToAgent using that id.${inherited}`,
       };
     }
 

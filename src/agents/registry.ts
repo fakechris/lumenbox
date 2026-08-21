@@ -103,6 +103,20 @@ export interface AgentProfile {
    * docs/09-tenancy.md §3.2.
    */
   visibility?: "shared" | "private";
+  /**
+   * The tools this agent may be offered, by name. Absent means all of them.
+   *
+   * Four agents holding identical tools are four agents differing only in the prose that describes
+   * them, which is a division of tone rather than of labour. A reviewer that *cannot* write is a
+   * different thing from one that is asked not to.
+   *
+   * Withheld rather than refused: a tool an agent cannot use is not in its prompt. Offering it and
+   * rejecting the call spends a round and teaches the model that its tool list is not true.
+   *
+   * An agent can never widen this — not for itself, and not by creating a colleague. See
+   * `CreateAgent`, which passes its creator's set down.
+   */
+  tools?: readonly string[];
   createdAt: string;
   updatedAt: string;
 }
@@ -278,6 +292,8 @@ export class AgentRegistry {
     /** Who created it, when the box knows. */
     ownerUserId?: string;
     visibility?: "shared" | "private";
+    /** Which tools it may be offered. Absent means all; see AgentProfile.tools. */
+    tools?: readonly string[];
   }): AgentRecord {
     const name = clampLine(input.name ?? "", AGENT_NAME_MAX_LENGTH);
     if (!name) throw new Error("An agent needs a non-empty name.");
@@ -293,6 +309,7 @@ export class AgentRegistry {
       displayIndex: this.nextDisplayIndex(),
       ...(input.ownerUserId !== undefined ? { ownerUserId: input.ownerUserId } : {}),
       visibility: input.visibility ?? "shared",
+      ...(input.tools !== undefined ? { tools: [...input.tools] } : {}),
       createdAt: now,
       updatedAt: now,
     };

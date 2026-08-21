@@ -68,6 +68,8 @@ turns, money and trust.
 - F2.4 One turn at a time per agent, whatever wakes it.
 - F2.5 Agents may create agents, and may not delete or overwrite each other.
 - F2.6 Each agent has a desktop no other agent can drive.
+- F2.7 An agent's tools are part of what it is, and no agent can widen its own set or
+  hand a colleague one it does not hold.
 
 ### F3 Observation and control
 

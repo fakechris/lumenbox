@@ -759,7 +759,9 @@ export async function runTurn(
     causedBy: inbound.map(message => message.id),
   } satisfies TranscriptEntry);
 
-  const tools = buildTools(box !== undefined, provider.vision);
+  // Narrowed by this agent's profile. Withheld, not refused: a tool it may not use is not in its
+  // prompt at all.
+  const tools = buildTools(box !== undefined, provider.vision, agent.profile.tools);
 
   // One entry per completed round, for the loop and progress judgements. Held out here rather than
   // inside runRounds so a continuation can reset it: a fresh budget deserves a fresh judgement.

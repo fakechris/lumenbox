@@ -384,3 +384,32 @@ property that matters when the thing that stopped running is the process that he
 work visible and refusable, not impossible — and the matching is on words, so two agents describing
 one task differently will not collide. Nothing textual can fix that, and pretending otherwise would
 be the failure the mechanism exists to avoid.
+
+## 20. What an agent may do, as opposed to what it is asked to do
+
+The starter team used to differ only in its descriptions: four agents with identical tools, which is
+a division of tone rather than of labour. It is also the criterion by which a multi-agent design is
+judged worth having at all — different tools, different permissions — and the one this system most
+clearly failed.
+
+Tools are now part of the profile, and withheld rather than refused: a tool an agent may not use is
+not in its prompt. Offering it and rejecting the call spends a round, teaches the model its tool list
+is not true, and produces a refusal somebody then has to explain.
+
+The divisions are deliberately few, because a restriction nobody can justify is worse than none:
+
+- **Only the coordinator builds the team.** `CreateAgent` and `UpdateAgent` belong to the one agent
+  whose description is about deciding who should exist.
+- **The reviewer cannot write files.** The failure this prevents is not dishonesty; it is that
+  "fixed it" and "checked it" become the same act and nobody can tell afterwards which happened. It
+  keeps `bash`, because reproducing a step is its whole job and reproducing means running.
+
+**An agent cannot widen its own set.** `UpdateAgent` never touched tools, and `CreateAgent` now
+passes the creator's set down — otherwise an agent that may not write creates one that may and asks
+it to write, and the restriction was only a longer path. This is the same rule as a teammate's
+message carrying no authority: nothing here can grant what the granter does not hold.
+
+An allowlist fails closed, which is the right direction for a restriction and the wrong one for
+discovery: adding a tool would silently withhold it from three of four agents. So a test asserts the
+coordinator's list covers every tool that exists, which makes adding one a decision rather than an
+omission.

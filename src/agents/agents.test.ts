@@ -13,6 +13,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { AgentRegistry } from "./registry.ts";
 import { STARTER_TEAM } from "../host/orchestrator.ts";
+import { buildTools, dispatchTool } from "../host/tools.ts";
 import { AGENT_MESSAGE_MAX_LENGTH, AgentBus, type BusEvent, type InboundMessage } from "./bus.ts";
 
 function tempRegistry(): { registry: AgentRegistry; cleanup: () => void } {
@@ -613,6 +614,64 @@ test("a failure notice cannot cause another one", async () => {
 
     assert.ok(adaTurns <= 2, `Ada ran ${adaTurns} turns; a notice must not beget notices`);
     assert.equal(bus.pendingCount(rex.id), 0, "and nothing bounced back to Rex");
+  } finally {
+    cleanup();
+  }
+});
+
+
+test("the team differs in what it may do, not only in how it is described", () => {
+  // Four agents holding identical tools are four agents differing only in prose — a division of
+  // tone rather than of labour, and the thing that makes a multi-agent claim hollow.
+  const byName = new Map(STARTER_TEAM.map(profile => [profile.name, profile]));
+
+  const ada = byName.get("Ada")?.tools ?? [];
+  const vera = byName.get("Vera")?.tools ?? [];
+  const rex = byName.get("Rex")?.tools ?? [];
+
+  assert.ok(ada.includes("CreateAgent"), "the coordinator builds the team");
+  assert.ok(!rex.includes("CreateAgent"), "and nobody else does");
+
+  // The one real division: a reviewer that can rewrite the work is no longer reviewing it, and
+  // "fixed it" and "checked it" stop being distinguishable afterwards.
+  assert.ok(!vera.includes("write_file"));
+  // It keeps bash, because reproducing a step is its whole job and reproducing means running.
+  assert.ok(vera.includes("bash"));
+  assert.ok(vera.includes("ReadHistory"));
+});
+
+test("every tool is accounted for in the coordinator's set", () => {
+  // The guard that makes an allowlist safe to use. A restriction expressed as an allowlist fails
+  // closed, which is right — but adding a tool would then silently withhold it from three of four
+  // agents, and nobody would notice until someone wondered why the reviewer could not use it. This
+  // makes adding a tool a decision rather than an omission.
+  const offered = buildTools(true, true).map(tool => tool.name).sort();
+  const coordinator = [...(STARTER_TEAM.find(profile => profile.name === "Ada")?.tools ?? [])].sort();
+  assert.deepEqual(
+    offered.filter(name => !coordinator.includes(name)),
+    [],
+    "a tool exists that the starter team's own lists have never heard of"
+  );
+});
+
+test("a restricted agent cannot create an unrestricted one", async () => {
+  // Otherwise the restriction is not a restriction, only a longer path: an agent that may not write
+  // creates one that may, and asks it to write.
+  const { registry, cleanup } = tempRegistry();
+  try {
+    const vera = registry.create({ name: "Vera", tools: ["SendToAgent", "CreateAgent", "read_file"] });
+    const bus = new AgentBus(registry, async () => {});
+    const result = await dispatchTool(
+      "CreateAgent",
+      { name: "Helper", description: "writes things" },
+      { agent: vera, registry, bus, box: undefined }
+    );
+    assert.equal(result.isError, undefined);
+    assert.match(result.text, /same tools you do/);
+
+    const helper = registry.list().find(agent => agent.profile.name === "Helper");
+    assert.deepEqual([...(helper?.profile.tools ?? [])], ["SendToAgent", "CreateAgent", "read_file"]);
+    assert.ok(!(helper?.profile.tools ?? []).includes("write_file"));
   } finally {
     cleanup();
   }
