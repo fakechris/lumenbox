@@ -34,7 +34,7 @@ import {
   FIRST_TOKEN_DEADLINE_MS,
 } from "./transient.ts";
 import type { UsageLog } from "./usage.ts";
-import { chooseRelevant } from "./memory.ts";
+import { chooseRelevant, recall } from "./memory.ts";
 import {
   activeWindow,
   buildSummaryPrompt,
@@ -711,22 +711,26 @@ export async function runTurn(
     log: line => console.error(`[memory] ${agent.profile.name}: ${line}`),
   });
 
-  const promptParts = buildSystemPromptParts({
-    agent,
-    teammates: registry.list(),
-    memory: ownMemory,
-    memoryRecall,
-    sharedMemory: registry.readSharedMemory(),
-    skills: deps.skills,
-    transcript: registry.readTranscript(agent.id),
-    // Read fresh every turn, which is what makes the plan and the todo list survive a compaction:
-    // they are in the prompt rather than in the history a summary replaces.
-    durable: registry.readDurableState(agent.id),
-    resolution: deps.resolution,
-    agentsRoot: registry.root,
-    hasBox: box !== undefined,
-    vision: provider.vision,
-  });
+  // Built once, and the volatile half rebuilt on every continuation — see `rebuildVolatile`. The
+  // stable half never changes for one agent, so it is fixed here.
+  const buildParts = (recallToUse: typeof memoryRecall) =>
+    buildSystemPromptParts({
+      agent,
+      teammates: registry.list(),
+      memory: registry.readMemoryRecords(agent.id),
+      memoryRecall: recallToUse,
+      sharedMemory: registry.readSharedMemory(),
+      skills: deps.skills,
+      transcript: registry.readTranscript(agent.id),
+      // Read fresh, which is what makes the plan and the todo list survive a compaction: they are in
+      // the prompt rather than in the history a summary replaces.
+      durable: registry.readDurableState(agent.id),
+      resolution: deps.resolution,
+      agentsRoot: registry.root,
+      hasBox: box !== undefined,
+      vision: provider.vision,
+    });
+  const promptParts = buildParts(memoryRecall);
 
   // Two breakpoints, one per stability tier. The first covers the tool
   // definitions and the invariant prompt; the second extends the cache over
@@ -843,6 +847,14 @@ export async function runTurn(
       // In place: `runRounds` closes over this array.
       messages.length = 0;
       messages.push(...historyToMessages(history));
+
+      // Rebuild the volatile system block from disk too. The durable blocks — plan, todos — are the
+      // whole point of surviving compaction, and an agent updates them *mid-turn*: it marks a todo
+      // done in round five, and a continuation compacts that tool result away while the system block,
+      // built once at turn start, still says the todo is pending. The stable half is unchanged, so
+      // only system[1] is rewritten. Memory is not re-selected here — that is a model call, and the
+      // thing that goes stale across a continuation is the durable state, not the recalled facts.
+      system[1] = { type: "text", text: buildParts(recall(registry.readMemoryRecords(agent.id))).volatile, ...cache };
 
       rounds.length = 0; // a fresh budget means a fresh judgement about looping
     }

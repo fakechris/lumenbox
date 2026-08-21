@@ -58,6 +58,44 @@ release, so an agent that stopped parked a desktop until the container was recre
 persisting the claim earlier the same day had extended that from the daemon's lifetime to the
 container's. It is a lease now, renewed by use, which is the shape work claims already had.
 
+### The adversarial round, part two
+
+After the coordination batch and the changes that followed it landed, four more codex reviews ran over the
+changed files. They returned about fifty findings, almost all CONFIRMED, and the great majority were
+real — a much higher hit rate than the first round, because the new code was younger and less
+verified. Most are now fixed; a handful are deferred with reasons, which is the honest half of a
+review.
+
+**The one that mattered most: a security feature that was entirely broken.** The view-only desktop
+returned 404 for the whole page — the `/vnc-ro/` prefix was parsed and its WebSocket handled, but the
+HTTP dispatch only routed `/vnc/`, so a viewer's page never loaded. The RFB injection-refusal was
+verified against the raw port; the routing to reach it was not. The same "verified the wrong layer"
+trap as the compaction claim two rounds earlier, and the reason to keep running end-to-end checks:
+this was found by a review, not by the container test that was supposed to cover it.
+
+**The recurring bug class, again.** A read failure read as file-absent; five lease states collapsed
+to "unowned"; size-zero meant both empty and unbounded; a zero budget meant unlimited. Each is the
+same two-states-one-representation defect, and each is now distinguished.
+
+**What was deferred, and why — because a review that only lists what was fixed is not honest:**
+
+- **OCC across two agents is not atomic** (the file-version check and the write are separate box
+  calls). Documented as advisory from the start; a real fix needs a compare-and-write in boxd, which
+  is a bigger change than the accident it prevents warrants today.
+- **Concurrent allocation can still split a container's credentials** between two racers. Closing it
+  needs per-tenant serialisation of allocation, which is architectural; the honest correction is that
+  the earlier "all F10 races closed" claim was too strong for the compose allocator.
+- **A recording start is optimistic**: a spawn failure surfaces on the next status or stop, not at
+  the 200. The fatal half (an unhandled `error` killing the daemon) is fixed; making the 200 itself
+  conditional means threading async spawn confirmation through the HTTP route, which is invasive for a
+  low-severity wrong-answer.
+- **The policy `checked` audit still stands if its write fails** for an ordinary allow. Halting all
+  work over a full policy log is worse than an unlogged allow; the consent path (approval-used) does
+  fail closed, which is the case that matters.
+- **The lease uses wall-clock time**, so a large clock correction can move it. Mitigated (a future
+  timestamp reads as fresh, the TTL is floored) rather than eliminated, because the persisted half
+  genuinely needs wall-clock.
+
 ### The adversarial round
 
 An independent reviewer was pointed at four areas — architecture and long-task

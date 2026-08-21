@@ -400,9 +400,13 @@ The divisions are deliberately few, because a restriction nobody can justify is 
 
 - **Only the coordinator builds the team.** `CreateAgent` and `UpdateAgent` belong to the one agent
   whose description is about deciding who should exist.
-- **The reviewer cannot write files.** The failure this prevents is not dishonesty; it is that
-  "fixed it" and "checked it" become the same act and nobody can tell afterwards which happened. It
-  keeps `bash`, because reproducing a step is its whole job and reproducing means running.
+- **The reviewer is not offered `write_file`.** The failure this discourages is not dishonesty; it is
+  that "fixed it" and "checked it" become the same act and nobody can tell afterwards which happened.
+  It is discouragement, not a wall: the reviewer keeps `bash` — reproducing a step is its whole job
+  and reproducing means running — and `sed -i` or a heredoc through `bash` can still write. Removing
+  the natural tool makes writing a deliberate shell act rather than an accident, which is the same
+  accident-prevention line the whole tool-division draws. A reviewer determined to rewrite the work
+  can; the point is that it will not do so by reflex.
 
 **An agent cannot widen its own set.** `UpdateAgent` never touched tools, and `CreateAgent` now
 passes the creator's set down — otherwise an agent that may not write creates one that may and asks
