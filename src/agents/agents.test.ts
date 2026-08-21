@@ -118,8 +118,10 @@ test("send returns an acknowledgement and queues for the recipient", async () =>
     const bob = registry.create({ name: "Bob" });
 
     const ack = bus.send({ fromId: ada.id, toId: bob.id, text: "please review" });
-    assert.match(ack, /Sent to Bob/);
-    assert.match(ack, /asynchronous/i, "the ack must tell the model not to wait");
+    assert.match(ack, /queued for Bob/);
+    // It must tell the model not to wait, which it now does by saying what it will and will not
+    // hear rather than by using the word.
+    assert.match(ack, /You will hear again only if they reply, or if their turn fails/);
 
     await bus.idle();
     assert.equal(seen.length, 1, "Bob ran exactly one turn");
@@ -527,6 +529,90 @@ test("a message too long to deliver says it was cut", async () => {
     bus.sendFromUser(ada.id, "short one");
     await bus.wake(ada.id);
     assert.equal(seen[1], "short one");
+  } finally {
+    cleanup();
+  }
+});
+
+
+test("an acknowledgement says what it promises, and what it does not", () => {
+  // "Sent" reads like "received and understood", and never meant that. An acknowledgement that
+  // cannot be told apart from agreement is where a team of agents starts building the ack layer it
+  // does not have — "you sure?" / "sure" / "ok starting" — a turn each, confirming nothing.
+  const { registry, cleanup } = tempRegistry();
+  try {
+    const ada = registry.create({ name: "Ada" });
+    const rex = registry.create({ name: "Rex" });
+    const bus = new AgentBus(registry, async () => {});
+
+    const ack = bus.send({ fromId: ada.id, toId: rex.id, text: "look at the logs" });
+    assert.match(ack, /Recorded and queued for Rex/);
+    assert.match(ack, /written down and it will be delivered/);
+    assert.match(ack, /does not mean Rex has read it, agrees with it, or is doing it/);
+    // And it heads off the confirmation loop directly, because that loop is the observed failure.
+    assert.match(ack, /asking them to confirm receipt buys nothing/);
+  } finally {
+    cleanup();
+  }
+});
+
+test("a sender is told when the turn its message reached failed", async () => {
+  // Their acknowledgement promised delivery, and delivery happened — into a turn that then failed.
+  // Without this the sender waits forever on something that will never be acted on, which is what
+  // turns that promise into a lie.
+  const { registry, cleanup } = tempRegistry();
+  try {
+    const ada = registry.create({ name: "Ada" });
+    const rex = registry.create({ name: "Rex" });
+    const seen: { agent: string; text: string }[] = [];
+
+    const bus = new AgentBus(registry, async (agent, inbound) => {
+      for (const message of inbound) seen.push({ agent: agent.profile.name, text: message.text });
+      if (agent.id === rex.id) throw new Error("the provider was down");
+    });
+
+    const ack = bus.send({ fromId: ada.id, toId: rex.id, text: "deploy it" });
+    const id = /message ([0-9a-f-]{36})/.exec(ack)?.[1];
+    assert.ok(id);
+    await bus.wake(rex.id).catch(() => {});
+    // idle(), not wake(): the notice schedules Ada's wake itself, and a second wake call returns
+    // straight away because one is already queued.
+    await bus.idle();
+
+    const notice = seen.find(entry => entry.agent === "Ada");
+    assert.ok(notice, `Ada should have been told; saw ${JSON.stringify(seen)}`);
+    assert.match(notice.text, /reached a turn that then failed/);
+    assert.match(notice.text, new RegExp(id));
+    assert.match(notice.text, /the provider was down/);
+    // The distinction that decides what the sender does next.
+    assert.match(notice.text, /delivered and not acted on/);
+    assert.match(notice.text, /Nothing has been retried/);
+  } finally {
+    cleanup();
+  }
+});
+
+test("a failure notice cannot cause another one", async () => {
+  // A notification about a notification is how one failing agent becomes a broadcast storm.
+  const { registry, cleanup } = tempRegistry();
+  try {
+    const ada = registry.create({ name: "Ada" });
+    const rex = registry.create({ name: "Rex" });
+    let adaTurns = 0;
+
+    const bus = new AgentBus(registry, async agent => {
+      if (agent.id === rex.id) throw new Error("rex is broken");
+      adaTurns += 1;
+      throw new Error("ada is broken too");
+    });
+
+    bus.send({ fromId: ada.id, toId: rex.id, text: "deploy it" });
+    await bus.wake(rex.id);
+    await bus.wake(ada.id);
+    await bus.wake(ada.id);
+
+    assert.ok(adaTurns <= 2, `Ada ran ${adaTurns} turns; a notice must not beget notices`);
+    assert.equal(bus.pendingCount(rex.id), 0, "and nothing bounced back to Rex");
   } finally {
     cleanup();
   }

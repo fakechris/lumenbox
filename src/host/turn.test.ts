@@ -325,8 +325,8 @@ test("SendToAgent from a turn actually wakes the other agent", async () => {
     const blocks = second.messages.at(-1)!.content as Anthropic.ContentBlockParam[];
     const result = blocks[0] as Anthropic.ToolResultBlockParam;
     const text = (result.content as Anthropic.TextBlockParam[])[0]!.text;
-    assert.match(text, /Sent to Bob/);
-    assert.match(text, /asynchronous/i);
+    assert.match(text, /queued for Bob/);
+    assert.match(text, /You will hear again only if they reply/);
   } finally {
     cleanup();
   }

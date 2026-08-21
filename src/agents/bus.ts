@@ -25,6 +25,14 @@ export const AGENT_MESSAGE_MAX_LENGTH = 8000;
 /** Prefix that marks a turn as woken by a teammate rather than the user. */
 export const AGENT_WAKE_CUE = "[agent]";
 
+/**
+ * The sender of a message the system generates about itself.
+ *
+ * Its own name so these cannot cascade: a failure notice never produces another one, whatever
+ * happens to the turn that receives it.
+ */
+export const SYSTEM_SENDER = "system";
+
 export interface InboundMessage {
   fromId: string;
   fromName: string;
@@ -156,12 +164,62 @@ export class AgentBus {
     // Fire-and-forget: waking the recipient must not block the sender's turn.
     void this.wake(target.id);
 
+    // What this acknowledgement actually promises, said rather than implied.
+    //
+    // "Sent" reads like "received and understood", and it never meant that: it means the message is
+    // recorded and queued. An acknowledgement that cannot be told apart from agreement is where a
+    // team of agents starts holding conversations to build the ack layer it does not have — "you
+    // sure?" / "sure" / "ok starting" — which costs a turn each and confirms nothing.
+    const promise =
+      `Recorded and queued for ${target.profile.name}, as message ${message.id}. That is the whole ` +
+      `of what this guarantees: it is written down and it will be delivered. It does not mean ` +
+      `${target.profile.name} has read it, agrees with it, or is doing it. You will hear again only ` +
+      `if they reply, or if their turn fails — asking them to confirm receipt buys nothing this ` +
+      `line has not already told you.`;
+
     return priority
-      ? `Sent to ${target.profile.name} (message ${message.id}) as a priority message — it interrupts their current ` +
-          `non-user work and wakes them now. Delivery is asynchronous: if they reply it will ` +
-          `arrive later as a new message that wakes you. Don't wait on it.`
-      : `Sent to ${target.profile.name} (message ${message.id}). Delivery is asynchronous: if they reply it will arrive ` +
-          `later as a new message that wakes you. Don't wait on it.`;
+      ? `${promise} Marked priority, so it interrupts their current non-user work and wakes them now.`
+      : promise;
+  }
+
+  /**
+   * Tells whoever sent a message that the turn it reached did not finish.
+   *
+   * Only agents, and only about their own messages: the user watches turns fail in the UI, and a
+   * notification about a notification is how a failing agent turns into a broadcast storm. Sent as
+   * `system` for the same reason — nothing generated here can generate more of itself.
+   */
+  private notifySenders(
+    agent: AgentRecord,
+    inbound: readonly InboundMessage[],
+    error: unknown
+  ): void {
+    const reason = error instanceof Error ? error.message : String(error);
+    const senders = new Set(
+      inbound
+        .filter(message => message.fromId !== "user" && message.fromId !== SYSTEM_SENDER)
+        .map(message => message.fromId)
+    );
+
+    for (const senderId of senders) {
+      if (this.registry.tryGet(senderId) === undefined) continue;
+      const theirs = inbound
+        .filter(message => message.fromId === senderId)
+        .map(message => message.id);
+      this.enqueue(senderId, {
+        id: randomUUID(),
+        fromId: SYSTEM_SENDER,
+        fromName: SYSTEM_SENDER,
+        text:
+          `Your message${theirs.length === 1 ? "" : "s"} to ${agent.profile.name} ` +
+          `(${theirs.join(", ")}) reached a turn that then failed: ${reason}. It was delivered and ` +
+          `not acted on. Nothing has been retried. Decide whether this still needs doing — and if ` +
+          `it does, whether ${agent.profile.name} is the one to do it.`,
+        priority: false,
+        receivedAt: new Date().toISOString(),
+      });
+      void this.wake(senderId);
+    }
   }
 
   /** Queues an inbound message and interrupts the recipient if it is priority. */
@@ -232,10 +290,11 @@ export class AgentBus {
         userDriven: options.userDriven ?? false,
       });
 
+      let inbound: InboundMessage[] = [];
       try {
         // Drain inside the exclusive section, so messages that arrived while we
         // were queued are picked up by this turn instead of spawning another.
-        const inbound = this.drain(agentId);
+        inbound = this.drain(agentId);
         // Marked started before the turn runs, not after it finishes. After would mean replaying
         // half-finished turns, and a turn that deployed something before dying would deploy it
         // twice; resuming one properly needs per-step checkpoints, which do not exist yet.
@@ -243,6 +302,12 @@ export class AgentBus {
         this.onEvent({ type: "turn_started", agentId, inboundCount: inbound.length });
         await this.runTurn(agent, inbound, controller.signal);
         this.onEvent({ type: "turn_finished", agentId });
+      } catch (error) {
+        // The senders are told. Their acknowledgement said the message would be delivered, and it
+        // was — into a turn that then failed, which they would otherwise wait on forever. This is
+        // the one case where silence turns that acknowledgement into a lie.
+        this.notifySenders(agent, inbound, error);
+        throw error;
       } finally {
         if (this.active.get(agentId)?.controller === controller) {
           this.active.delete(agentId);
