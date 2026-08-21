@@ -351,7 +351,19 @@ export type TurnEvent =
  * `tool_use` and `tool_result` blocks are a separate channel it cannot type into.
  */
 export type TranscriptEntry =
-  | { role: "user" | "assistant"; text: string; at: string }
+  | {
+      role: "user" | "assistant";
+      text: string;
+      at: string;
+      /**
+       * The messages that caused this turn, by id.
+       *
+       * For whoever is reconstructing what happened afterwards, not for the model — which has no
+       * use for a list of uuids and never sees this field. Every agent runs in one process against
+       * one clock, so ordering was never the missing piece; the link was.
+       */
+      causedBy?: readonly string[];
+    }
   /** An assistant turn that called tools; carries text and tool_use blocks. */
   | { role: "assistant"; kind: "blocks"; blocks: Anthropic.ContentBlockParam[]; at: string }
   /** The matching results. Must immediately follow its `blocks` entry. */
@@ -737,6 +749,11 @@ export async function runTurn(
     role: "user",
     text: turnText,
     at: new Date().toISOString(),
+    // Which messages caused this turn. Recorded on the entry rather than written into the text: it
+    // is for whoever is reconstructing what happened afterwards, and the model has no use for a
+    // list of uuids. Without it a turn holds no trace of what set it off, so "who caused this" can
+    // not be walked backwards however precisely everything was timed.
+    causedBy: inbound.map(message => message.id),
   } satisfies TranscriptEntry);
 
   const tools = buildTools(box !== undefined, provider.vision);

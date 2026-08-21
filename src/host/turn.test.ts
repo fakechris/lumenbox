@@ -201,7 +201,7 @@ test("a turn caches the system prompt and sends the tool set", async () => {
 
     await runTurn(
       ada,
-      [{ fromId: "user", fromName: "user", text: "hi", priority: false, receivedAt: "" }],
+      [{ id: "m-test", fromId: "user", fromName: "user", text: "hi", priority: false, receivedAt: "" }],
       new AbortController().signal,
       { client, registry, bus, box: undefined, resolution: undefined }
     );
@@ -251,7 +251,7 @@ test("a computer tool_use reaches the box and returns a screenshot image block",
 
     await runTurn(
       ada,
-      [{ fromId: "user", fromName: "user", text: "look", priority: false, receivedAt: "" }],
+      [{ id: "m-test", fromId: "user", fromName: "user", text: "look", priority: false, receivedAt: "" }],
       new AbortController().signal,
       {
         client,
@@ -312,7 +312,7 @@ test("SendToAgent from a turn actually wakes the other agent", async () => {
 
     await runTurn(
       ada,
-      [{ fromId: "user", fromName: "user", text: "get Bob on it", priority: false, receivedAt: "" }],
+      [{ id: "m-test", fromId: "user", fromName: "user", text: "get Bob on it", priority: false, receivedAt: "" }],
       new AbortController().signal,
       { client, registry, bus, box: undefined, resolution: undefined }
     );
@@ -350,7 +350,7 @@ test("a tool that throws is reported to the model, not the caller", async () => 
 
     await runTurn(
       ada,
-      [{ fromId: "user", fromName: "user", text: "look", priority: false, receivedAt: "" }],
+      [{ id: "m-test", fromId: "user", fromName: "user", text: "look", priority: false, receivedAt: "" }],
       new AbortController().signal,
       { client, registry, bus, box: undefined, resolution: undefined }
     );
@@ -379,7 +379,7 @@ test("an already-aborted signal stops the turn before calling the model", async 
     await assert.rejects(
       runTurn(
         ada,
-        [{ fromId: "user", fromName: "user", text: "hi", priority: false, receivedAt: "" }],
+        [{ id: "m-test", fromId: "user", fromName: "user", text: "hi", priority: false, receivedAt: "" }],
         controller.signal,
         { client, registry, bus, box: undefined, resolution: undefined }
       ),
@@ -401,7 +401,7 @@ test("the turn records both sides in the transcript", async () => {
 
     await runTurn(
       ada,
-      [{ fromId: "user", fromName: "user", text: "Hello", priority: false, receivedAt: "" }],
+      [{ id: "m-test", fromId: "user", fromName: "user", text: "Hello", priority: false, receivedAt: "" }],
       new AbortController().signal,
       { client, registry, bus, box: undefined, resolution: undefined }
     );
@@ -481,7 +481,7 @@ test("a turn releases the display even when it throws", async () => {
     await assert.rejects(
       runTurn(
         ada,
-        [{ fromId: "user", fromName: "user", text: "look", priority: false, receivedAt: "" }],
+        [{ id: "m-test", fromId: "user", fromName: "user", text: "look", priority: false, receivedAt: "" }],
         new AbortController().signal,
         { client, registry, bus, box, display, resolution: undefined }
       ),
@@ -519,7 +519,7 @@ test("the transcript records what tools a turn actually ran", async () => {
 
     await runTurn(
       ada,
-      [{ fromId: "user", fromName: "user", text: "make a dir", priority: false, receivedAt: "" }],
+      [{ id: "m-test", fromId: "user", fromName: "user", text: "make a dir", priority: false, receivedAt: "" }],
       new AbortController().signal,
       { client, registry, bus, box, resolution: undefined }
     );
@@ -576,7 +576,7 @@ test("a failed tool is recorded as an error, not as work done", async () => {
 
     await runTurn(
       ada,
-      [{ fromId: "user", fromName: "user", text: "look", priority: false, receivedAt: "" }],
+      [{ id: "m-test", fromId: "user", fromName: "user", text: "look", priority: false, receivedAt: "" }],
       new AbortController().signal,
       { client, registry, bus, box: undefined, resolution: undefined }
     );
@@ -609,7 +609,7 @@ test("a peer wake is presented differently from a user message", async () => {
       ada,
       [
         {
-          fromId: bob.id,
+          id: "m-test", fromId: bob.id,
           fromName: "Bob",
           text: "the build is green",
           priority: true,
@@ -708,7 +708,7 @@ test("an oversized history is summarised before the request, and the summary per
     const events: { type: string }[] = [];
     await runTurn(
       ada,
-      [{ fromId: "user", fromName: "user", text: "carry on", priority: false, receivedAt: "" }],
+      [{ id: "m-test", fromId: "user", fromName: "user", text: "carry on", priority: false, receivedAt: "" }],
       new AbortController().signal,
       {
         client,
@@ -755,7 +755,7 @@ test("an oversized history is summarised before the request, and the summary per
     // The second turn must not summarise again: that is the whole point of persisting it.
     await runTurn(
       ada,
-      [{ fromId: "user", fromName: "user", text: "again", priority: false, receivedAt: "" }],
+      [{ id: "m-test", fromId: "user", fromName: "user", text: "again", priority: false, receivedAt: "" }],
       new AbortController().signal,
       { client, registry, bus, box: undefined, resolution: undefined }
     );
@@ -788,7 +788,7 @@ test("a turn still runs when the summariser fails", async () => {
     const events: { type: string }[] = [];
     await runTurn(
       ada,
-      [{ fromId: "user", fromName: "user", text: "carry on", priority: false, receivedAt: "" }],
+      [{ id: "m-test", fromId: "user", fromName: "user", text: "carry on", priority: false, receivedAt: "" }],
       new AbortController().signal,
       {
         client,
@@ -908,7 +908,7 @@ test("a turn that overflows mid-way sheds screenshots and finishes", async () =>
     const events: { type: string; detail?: string }[] = [];
     await runTurn(
       ada,
-      [{ fromId: "user", fromName: "user", text: "drive the desktop", priority: false, receivedAt: "" }],
+      [{ id: "m-test", fromId: "user", fromName: "user", text: "drive the desktop", priority: false, receivedAt: "" }],
       new AbortController().signal,
       {
         client,
@@ -968,7 +968,7 @@ test("a request that cannot be made to fit fails with a usable message", async (
     await assert.rejects(
       runTurn(
         ada,
-        [{ fromId: "user", fromName: "user", text: "hi", priority: false, receivedAt: "" }],
+        [{ id: "m-test", fromId: "user", fromName: "user", text: "hi", priority: false, receivedAt: "" }],
         new AbortController().signal,
         { client, registry, bus, box: undefined, resolution: undefined }
       ),
@@ -1025,7 +1025,7 @@ test("a summary is prepared in the background and adopted without a wait", async
     };
 
     const deps = { client, registry, bus, box: undefined, resolution: undefined };
-    const first = { fromId: "user", fromName: "user", text: "one", priority: false, receivedAt: "" };
+    const first = { id: "m-test", fromId: "user", fromName: "user", text: "one", priority: false, receivedAt: "" };
 
     // Turn one: in the background band. It must complete while the summariser is still blocked.
     await runTurn(ada, [first], new AbortController().signal, deps);
@@ -1120,7 +1120,7 @@ test("a stop ends a running turn at the next round, and says so in the transcrip
 
     await runTurn(
       ada,
-      [{ fromId: "user", fromName: "user", text: "loop", priority: false, receivedAt: "" }],
+      [{ id: "m-test", fromId: "user", fromName: "user", text: "loop", priority: false, receivedAt: "" }],
       new AbortController().signal,
       { client, registry, bus, box, resolution: undefined, displayIndex: 1, policy: policy.gate }
     );
@@ -1161,7 +1161,7 @@ test("the next turn is not refused by the previous turn's stop", async () => {
     // refused — which reads as the agent having broken rather than having been stopped.
     await runTurn(
       ada,
-      [{ fromId: "user", fromName: "user", text: "again", priority: false, receivedAt: "" }],
+      [{ id: "m-test", fromId: "user", fromName: "user", text: "again", priority: false, receivedAt: "" }],
       new AbortController().signal,
       deps
     );
@@ -1184,7 +1184,7 @@ test("an exhausted budget refuses the turn before it spends anything", async () 
 
     await runTurn(
       ada,
-      [{ fromId: "user", fromName: "user", text: "work", priority: false, receivedAt: "" }],
+      [{ id: "m-test", fromId: "user", fromName: "user", text: "work", priority: false, receivedAt: "" }],
       new AbortController().signal,
       { client, registry, bus, box: undefined, resolution: undefined, policy: policy.gate }
     );
@@ -1219,7 +1219,7 @@ test("a gated tool call comes back as a tool error, not as a crash", async () =>
 
     await runTurn(
       ada,
-      [{ fromId: "user", fromName: "user", text: "clean up", priority: false, receivedAt: "" }],
+      [{ id: "m-test", fromId: "user", fromName: "user", text: "clean up", priority: false, receivedAt: "" }],
       new AbortController().signal,
       { client, registry, bus, box, resolution: undefined, displayIndex: 1, policy: policy.gate }
     );
@@ -1270,7 +1270,7 @@ test("the wake limit stops two agents from waking each other forever", async () 
 
     await runTurn(
       ada,
-      [{ fromId: "user", fromName: "user", text: "delegate", priority: false, receivedAt: "" }],
+      [{ id: "m-test", fromId: "user", fromName: "user", text: "delegate", priority: false, receivedAt: "" }],
       new AbortController().signal,
       { client, registry, bus, box: undefined, resolution: undefined, policy: policy.gate }
     );
@@ -1327,7 +1327,7 @@ test("a dropped connection mid-turn is retried, and the turn finishes", async ()
     const events: { type: string; discardPartial?: boolean; kind?: string }[] = [];
     await runTurn(
       ada,
-      [{ fromId: "user", fromName: "user", text: "work", priority: false, receivedAt: "" }],
+      [{ id: "m-test", fromId: "user", fromName: "user", text: "work", priority: false, receivedAt: "" }],
       new AbortController().signal,
       {
         client,
@@ -1387,7 +1387,7 @@ test("a rejected request is not retried, and the error is not hidden behind dela
     await assert.rejects(
       runTurn(
         ada,
-        [{ fromId: "user", fromName: "user", text: "work", priority: false, receivedAt: "" }],
+        [{ id: "m-test", fromId: "user", fromName: "user", text: "work", priority: false, receivedAt: "" }],
         new AbortController().signal,
         { client, registry, bus, box: undefined, resolution: undefined }
       ),
@@ -1429,7 +1429,7 @@ test("a plan and todo list survive a compaction that replaces the conversation",
 
     await runTurn(
       ada,
-      [{ fromId: "user", fromName: "user", text: "carry on", priority: false, receivedAt: "" }],
+      [{ id: "m-test", fromId: "user", fromName: "user", text: "carry on", priority: false, receivedAt: "" }],
       new AbortController().signal,
       { client, registry, bus, box: undefined, resolution: undefined }
     );
@@ -1480,7 +1480,7 @@ test("SetPlan and SetTodos round-trip through the tools", async () => {
 
     await runTurn(
       ada,
-      [{ fromId: "user", fromName: "user", text: "plan it", priority: false, receivedAt: "" }],
+      [{ id: "m-test", fromId: "user", fromName: "user", text: "plan it", priority: false, receivedAt: "" }],
       new AbortController().signal,
       { client, registry, bus, box: undefined, resolution: undefined }
     );
@@ -1520,7 +1520,7 @@ test("a looping agent is stopped early, with the repeated call named", async () 
 
     await runTurn(
       ada,
-      [{ fromId: "user", fromName: "user", text: "look around", priority: false, receivedAt: "" }],
+      [{ id: "m-test", fromId: "user", fromName: "user", text: "look around", priority: false, receivedAt: "" }],
       new AbortController().signal,
       { client, registry, bus, box, resolution: undefined, displayIndex: 1 }
     );
@@ -1578,7 +1578,7 @@ test("a turn that is still working continues instead of being abandoned", async 
     await assert.rejects(
       runTurn(
         ada,
-        [{ fromId: "user", fromName: "user", text: "work", priority: false, receivedAt: "" }],
+        [{ id: "m-test", fromId: "user", fromName: "user", text: "work", priority: false, receivedAt: "" }],
         new AbortController().signal,
         { client, registry, bus, box, resolution: undefined, displayIndex: 1 }
       ),
@@ -1619,7 +1619,7 @@ test("a turn that ends with nothing to say says that, rather than ending silentl
     const events: { type: string; delta?: string }[] = [];
     await runTurn(
       ada,
-      [{ fromId: "user", fromName: "user", text: "do it", priority: false, receivedAt: "" }],
+      [{ id: "m-test", fromId: "user", fromName: "user", text: "do it", priority: false, receivedAt: "" }],
       new AbortController().signal,
       {
         client,
@@ -1690,7 +1690,7 @@ test("a round that streams only tool calls is not mistaken for a stalled one", a
 
     await runTurn(
       ada,
-      [{ fromId: "user", fromName: "user", text: "remember this", priority: false, receivedAt: "" }],
+      [{ id: "m-test", fromId: "user", fromName: "user", text: "remember this", priority: false, receivedAt: "" }],
       new AbortController().signal,
       { client, registry, bus, box: undefined, resolution: undefined }
     );
@@ -1749,7 +1749,7 @@ test("a stop pressed while the history is being compacted is not cleared by the 
 
     await runTurn(
       ada,
-      [{ fromId: "user", fromName: "user", text: "go", priority: false, receivedAt: "" }],
+      [{ id: "m-test", fromId: "user", fromName: "user", text: "go", priority: false, receivedAt: "" }],
       new AbortController().signal,
       {
         client,
@@ -1815,7 +1815,7 @@ test("a continuation reassembles its request instead of growing the old one", as
 
     await runTurn(
       ada,
-      [{ fromId: "user", fromName: "user", text: "keep going", priority: false, receivedAt: "" }],
+      [{ id: "m-test", fromId: "user", fromName: "user", text: "keep going", priority: false, receivedAt: "" }],
       new AbortController().signal,
       { client, registry, bus, box, resolution: undefined }
     ).catch(() => {
@@ -1869,7 +1869,7 @@ test("a turn killed mid-flight leaves a record that it was interrupted", async (
 
     void runTurn(
       ada,
-      [{ fromId: "user", fromName: "user", text: "deploy the release", priority: false, receivedAt: "" }],
+      [{ id: "m-test", fromId: "user", fromName: "user", text: "deploy the release", priority: false, receivedAt: "" }],
       new AbortController().signal,
       { client: wedged, registry, bus, box: undefined, resolution: undefined, turns: ledger }
     );
@@ -1899,7 +1899,7 @@ test("a turn that finishes leaves nothing to resume", async () => {
 
     await runTurn(
       ada,
-      [{ fromId: "user", fromName: "user", text: "hi", priority: false, receivedAt: "" }],
+      [{ id: "m-test", fromId: "user", fromName: "user", text: "hi", priority: false, receivedAt: "" }],
       new AbortController().signal,
       { client, registry, bus, box: undefined, resolution: undefined, turns: ledger }
     );
@@ -1938,7 +1938,7 @@ test("a turn that throws is closed too, not left looking interrupted", async () 
     await assert.rejects(
       runTurn(
         ada,
-        [{ fromId: "user", fromName: "user", text: "hi", priority: false, receivedAt: "" }],
+        [{ id: "m-test", fromId: "user", fromName: "user", text: "hi", priority: false, receivedAt: "" }],
         new AbortController().signal,
         { client: exploding, registry, bus, box: undefined, resolution: undefined, turns: ledger }
       )
@@ -1979,7 +1979,7 @@ test("the call that was in flight survives into the resumed turn, marked unknown
 
     await runTurn(
       ada,
-      [{ fromId: "user", fromName: "user", text: "[resumed] carry on", priority: false, receivedAt: "" }],
+      [{ id: "m-test", fromId: "user", fromName: "user", text: "[resumed] carry on", priority: false, receivedAt: "" }],
       new AbortController().signal,
       { client, registry, bus, box: undefined, resolution: undefined }
     );

@@ -12,7 +12,7 @@ import { buildWakePrompt, parseWakePrompt } from "../host/prompt.ts";
 import { toDisplayEntries } from "./transcript.ts";
 
 const inbound = (from: string, text: string, priority = false) => ({
-  fromId: `id-${from}`,
+  id: "m-test", fromId: `id-${from}`,
   fromName: from,
   text,
   priority,

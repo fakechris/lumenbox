@@ -11,6 +11,7 @@
  * inside one turn, so its transcript and profile have a single writer.
  */
 
+import { randomUUID } from "node:crypto";
 import type { Inbox } from "./inbox.ts";
 import {
   AgentNotFoundError,
@@ -30,6 +31,18 @@ export interface InboundMessage {
   text: string;
   priority: boolean;
   receivedAt: string;
+  /**
+   * This message, identified, so both ends can point at the same thing.
+   *
+   * Ordering is not the hard part here and a logical clock would be machinery for a problem this
+   * system does not have: every agent runs in one process against one clock, so timestamps already
+   * put events in order. What was missing is the *link* — a turn recorded no trace of which message
+   * caused it, and a sent message recorded no trace of which turn sent it, so "who caused this"
+   * could not be walked backwards however precisely everything was timed. The moment there are two
+   * orchestrators this stops being enough and a real clock is needed; it is not enough now for the
+   * reason stated, not by accident.
+   */
+  id: string;
   /**
    * Its handle in the durable inbox, so the turn that takes it can mark it started.
    *
@@ -121,6 +134,7 @@ export class AgentBus {
     const priority = input.priority ?? false;
 
     const message: InboundMessage = {
+      id: randomUUID(),
       fromId: input.fromId,
       fromName,
       text,
@@ -143,10 +157,10 @@ export class AgentBus {
     void this.wake(target.id);
 
     return priority
-      ? `Sent to ${target.profile.name} as a priority message — it interrupts their current ` +
+      ? `Sent to ${target.profile.name} (message ${message.id}) as a priority message — it interrupts their current ` +
           `non-user work and wakes them now. Delivery is asynchronous: if they reply it will ` +
           `arrive later as a new message that wakes you. Don't wait on it.`
-      : `Sent to ${target.profile.name}. Delivery is asynchronous: if they reply it will arrive ` +
+      : `Sent to ${target.profile.name} (message ${message.id}). Delivery is asynchronous: if they reply it will arrive ` +
           `later as a new message that wakes you. Don't wait on it.`;
   }
 
@@ -174,6 +188,7 @@ export class AgentBus {
   /** Injects a message from the user (or an operator) into an agent's queue. */
   sendFromUser(agentId: string, text: string): void {
     this.enqueue(agentId, {
+      id: randomUUID(),
       fromId: "user",
       fromName: "user",
       text: clampMessage(text, AGENT_MESSAGE_MAX_LENGTH),

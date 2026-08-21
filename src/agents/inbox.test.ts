@@ -21,6 +21,7 @@ function tempPath(name = "inbox.jsonl"): { path: string; cleanup: () => void } {
 }
 
 const message = (text: string): InboundMessage => ({
+  id: "m-test",
   fromId: "user",
   fromName: "user",
   text,
