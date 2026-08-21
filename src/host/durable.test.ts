@@ -17,6 +17,7 @@ import { AgentRegistry } from "../agents/registry.ts";
 import { AgentBus } from "../agents/bus.ts";
 import { dispatchTool, type ToolContext } from "./tools.ts";
 import { recall, renderMemory } from "./memory.ts";
+import { FileVersions } from "./files.ts";
 import {
   describeTodos,
   isTodoStatus,
@@ -232,6 +233,104 @@ test("RememberFact can withdraw what it replaces, and refuses when nothing match
     const view = renderMemory(recall(registry.readMemoryRecords(ada.id)));
     assert.ok(!view.includes("us-east-1"), `still showing the old region: ${view}`);
     assert.ok(view.includes("eu-west-1"));
+  } finally {
+    cleanup();
+  }
+});
+
+
+test("two agents writing one file: the second is refused rather than winning silently", async () => {
+  // The lost update, through the real tool path. Both agents share one work directory as one uid,
+  // so before this the second write simply won and the first agent went on believing its work was
+  // there.
+  const { registry, context, cleanup } = toolFixture();
+  try {
+    const rex = registry.create({ name: "Rex" });
+    const files = new FileVersions();
+    const disk = new Map<string, string>();
+
+    // A box that is just a filesystem, which is all these two tools need.
+    const box = {
+      readFile: async (path: string) => {
+        const content = disk.get(path);
+        if (content === undefined) throw new Error("no such file");
+        return { path, content, total_lines: 1, truncated: false };
+      },
+      writeFile: async (path: string, content: string) => {
+        disk.set(path, content);
+        return { path, bytes_written: content.length };
+      },
+    } as never;
+
+    const ada = { ...context, box, files };
+    const rexContext = { ...context, agent: rex, box, files };
+    const path = "/home/box/work/report.md";
+
+    // Ada creates it, then Rex reads and changes it.
+    await dispatchTool("write_file", { path, content: "Ada's draft" }, ada);
+    await dispatchTool("read_file", { path }, rexContext);
+    await dispatchTool("write_file", { path, content: "Rex's revision" }, rexContext);
+
+    // Ada, still holding her version, writes again.
+    const refused = await dispatchTool("write_file", { path, content: "Ada's second draft" }, ada);
+    assert.equal(refused.isError, true);
+    assert.match(refused.text, /changed since you last read it/);
+    assert.match(refused.text, /Rex/);
+    assert.equal(disk.get(path), "Rex's revision", "and Rex's work is still there");
+
+    // Reading it is the way forward, and then the write goes through.
+    await dispatchTool("read_file", { path }, ada);
+    const accepted = await dispatchTool("write_file", { path, content: "merged" }, ada);
+    assert.equal(accepted.isError, undefined);
+    assert.equal(disk.get(path), "merged");
+
+    // And the deliberate escape works, for when an agent has looked and decided.
+    await dispatchTool("write_file", { path, content: "Rex again" }, rexContext);
+    const forced = await dispatchTool(
+      "write_file",
+      { path, content: "Ada insists", overwrite: true },
+      ada
+    );
+    assert.equal(forced.isError, undefined);
+    assert.equal(disk.get(path), "Ada insists");
+  } finally {
+    cleanup();
+  }
+});
+
+test("a file that cannot be checked is refused, not waved through", async () => {
+  // Two things at once, and they are the same thing. Reading ten lines is not knowledge of the
+  // whole file, so it establishes nothing; and a file too large to read whole cannot be compared
+  // against anything, so "I could not check" must not pass as "I checked and it is fine" — that is
+  // how a guarantee quietly stops applying to exactly the largest files.
+  const { context, cleanup } = toolFixture();
+  try {
+    const files = new FileVersions();
+    const box = {
+      readFile: async (path: string) => ({
+        path,
+        content: "line 1",
+        total_lines: 900,
+        truncated: true,
+      }),
+      writeFile: async (path: string, content: string) => ({ path, bytes_written: content.length }),
+    } as never;
+    const ada = { ...context, box, files };
+    const path = "/home/box/work/big.log";
+
+    await dispatchTool("read_file", { path, start_line: 1, end_line: 10 }, ada);
+    const refused = await dispatchTool("write_file", { path, content: "replaced" }, ada);
+    assert.equal(refused.isError, true);
+    assert.match(refused.text, /too large to read in full/);
+    assert.match(refused.text, /overwrite: true/, "and the deliberate way through is named");
+
+    // Which still works, because the point is that it is a decision rather than an accident.
+    const forced = await dispatchTool(
+      "write_file",
+      { path, content: "replaced", overwrite: true },
+      ada
+    );
+    assert.equal(forced.isError, undefined);
   } finally {
     cleanup();
   }

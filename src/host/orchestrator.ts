@@ -9,6 +9,7 @@
 import type Anthropic from "@anthropic-ai/sdk";
 import { AgentBus, type BusEvent, type InboundMessage } from "../agents/bus.ts";
 import { Inbox, inboxPath } from "../agents/inbox.ts";
+import { FileVersions } from "./files.ts";
 import {
   giveUpNote,
   MAX_RESUMES,
@@ -116,6 +117,15 @@ export class Orchestrator {
    * would be retried forever — the count is the whole of the crash-loop guard.
    */
   private readonly resuming = new Map<string, { id: string; attempt: number }>();
+
+  /**
+   * What each agent last saw each shared file as.
+   *
+   * One per orchestrator, because the whole point is that it spans agents: they share one work
+   * directory as one uid, and two of them writing one file is a lost update with nothing else in
+   * the system able to see it.
+   */
+  private readonly files = new FileVersions();
 
   /**
    * Notices what a conversation taught, after the fact.
@@ -301,6 +311,7 @@ export class Orchestrator {
       skills,
       client: this.client,
       registry: this.registry,
+      files: this.files,
       bus: this.bus,
       box: this.box,
       display: this.display,

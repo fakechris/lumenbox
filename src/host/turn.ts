@@ -14,6 +14,7 @@ import type { AgentBus, InboundMessage } from "../agents/bus.ts";
 import type { BoxClient } from "../box/client.ts";
 import type { DisplayLease } from "../box/display-lease.ts";
 import type { PolicyGate } from "./policy.ts";
+import type { FileVersions } from "./files.ts";
 import type { TurnLedger } from "./resume.ts";
 import type { Skill } from "./skills.ts";
 import {
@@ -234,6 +235,11 @@ export interface TurnDeps {
   skills?: readonly Skill[];
   /** Guards one desktop against two agents; moot when each has its own. */
   display?: DisplayLease;
+  /**
+   * What each agent last saw each shared file as, so two of them writing one file is noticed
+   * rather than silently resolved by whoever wrote last.
+   */
+  files?: FileVersions;
   resolution: ResolutionConfig | undefined;
   /** Which endpoint and what it can do. Omitted in tests to mean full Claude. */
   provider?: ProviderProfile;
@@ -1132,6 +1138,7 @@ export async function runTurn(
             registry,
             bus,
             box,
+            files: deps.files,
             policy: deps.policy,
             caller: deps.caller,
             display: deps.display,

@@ -14,6 +14,7 @@ import type { AgentRecord, AgentRegistry } from "../agents/registry.ts";
 import type { PolicyGate } from "./policy.ts";
 import { describeHistory, readHistory } from "./history.ts";
 import { dedupeKey, validateRecord } from "./memory.ts";
+import { ABSENT, versionOf, type FileVersions } from "./files.ts";
 import {
   describeTodos,
   isTodoStatus,
@@ -42,6 +43,13 @@ export interface ToolContext {
    * that reach the box and the ones that wake a teammate.
    */
   policy?: PolicyGate;
+  /**
+   * What each agent last saw each file as, so two of them writing one file is noticed.
+   *
+   * Optional and absent means no checking, which is what every turn did before and what a test that
+   * is not about this wants.
+   */
+  files?: FileVersions;
   registry: AgentRegistry;
   bus: AgentBus;
   box: BoxClient | undefined;
@@ -282,6 +290,12 @@ export function buildTools(hasBox: boolean, vision = true): Anthropic.Tool[] {
           type: "object",
           properties: {
             path: { type: "string", description: "Absolute path to write." },
+            overwrite: {
+              type: "boolean",
+              description:
+                "Write even though the file has changed since you read it. Only after you have " +
+                "looked and decided your version is the one that should survive.",
+            },
             content: { type: "string", description: "The full file contents." },
           },
           required: ["path", "content"],
@@ -693,6 +707,12 @@ export async function dispatchTool(
         startLine: input.start_line ? Number(input.start_line) : undefined,
         endLine: input.end_line ? Number(input.end_line) : undefined,
       });
+      // Only a whole-file read establishes what this agent has seen. A range read tells it about
+      // part of the file, and treating that as knowledge of the whole would let it overwrite the
+      // rest on the strength of having looked at ten lines.
+      if (!result.truncated) {
+        context.files?.observed(context.agent.id, result.path, versionOf(result.content));
+      }
       const header = result.truncated
         ? `${result.path} (showing part of ${result.total_lines} lines)`
         : `${result.path} (${result.total_lines} lines)`;
@@ -701,10 +721,43 @@ export async function dispatchTool(
 
     case "write_file": {
       const box = requireBox(context);
-      const result = await box.writeFile(
-        String(input.path ?? ""),
-        String(input.content ?? "")
-      );
+      const path = String(input.path ?? "");
+      const content = String(input.content ?? "");
+
+      // What the file is right now, read immediately before writing. Compared against what this
+      // agent last saw, which is what turns "the second write wins silently" into a refusal.
+      if (context.files !== undefined && input.overwrite !== true) {
+        const current = await box
+          .readFile(path)
+          .then(existing => (existing.truncated ? undefined : versionOf(existing.content)))
+          .catch(() => ABSENT);
+        if (current === undefined) {
+          // Too large to read whole, so there is nothing to compare against. Refused rather than
+          // allowed: "I could not check" and "I checked and it is fine" are different answers, and
+          // letting the first pass as the second is how the guarantee quietly stops applying to
+          // exactly the biggest files. The way through is the same deliberate flag as any other
+          // conflict.
+          return {
+            text:
+              `${path} is too large to read in full, so there is no way to tell whether it has ` +
+              `changed since you last saw it. It was not written. If you mean to replace it ` +
+              `whatever it now contains, pass overwrite: true.`,
+            isError: true,
+          };
+        }
+        const { refusal } = context.files.check({
+          agentId: context.agent.id,
+          path,
+          current,
+          nameOf: id => context.registry.tryGet(id)?.profile.name ?? id,
+        });
+        if (refusal !== undefined) return { text: refusal, isError: true };
+      }
+
+      const result = await box.writeFile(path, content);
+      // Its own write is the newest thing it has seen, so writing twice in a row is not a conflict
+      // with itself.
+      context.files?.observed(context.agent.id, result.path, versionOf(content));
       return { text: `Wrote ${result.bytes_written} bytes to ${result.path}.` };
     }
 

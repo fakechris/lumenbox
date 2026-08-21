@@ -310,3 +310,31 @@ that a person needs to look.
 
 Ordering at startup: accepted-but-unstarted work first, then interrupted turns — a turn already
 running is further along than a message only accepted, and they run in the order they are queued.
+
+## 17. Two agents, one file (F10.3)
+
+Every agent shares one `/home/box/work` as one uid. Two of them editing the same file is a lost
+update — the ordinary one, not an agent-shaped novelty — and nothing could see it: the second write
+won, silently, and the first agent went on believing its work was there.
+
+Optimistic concurrency control, because that is what fits: conflicts between agents are rare and
+re-reading is cheap. Each agent's last-seen version of each file is remembered; a write is refused
+when the file is no longer that. Nothing is locked, so an agent alone in a file never learns this
+exists.
+
+Three decisions worth keeping:
+
+- **Never read, and it already exists, is a conflict.** Overwriting a file you have not read is the
+  same loss whether or not you knew about it.
+- **Cannot check is not the same as checked.** A file too large to read whole has no version to
+  compare, and letting that pass as "fine" is how the guarantee quietly stops applying to exactly
+  the biggest files. It is refused, with the same deliberate flag as the way through.
+- **Not persisted.** After a restart no agent has seen anything, so the first write to an existing
+  file asks for a read first. The alternative is trusting a record of the world from before a gap in
+  which anything could have happened.
+
+**What it does not cover, stated rather than implied.** An agent with a shell can write the same
+file with `sed -i` or a heredoc and nothing sees it — though the *next* tool write will, because the
+comparison is against the file's real content rather than a record of who did what. So this turns
+the both-used-the-tools case into a refusal, and the one-used-the-shell case into a refusal for the
+other agent rather than a silent loss. It is not a lock and does not pretend to be one.
