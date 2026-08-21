@@ -413,3 +413,26 @@ An allowlist fails closed, which is the right direction for a restriction and th
 discovery: adding a tool would silently withhold it from three of four agents. So a test asserts the
 coordinator's list covers every tool that exists, which makes adding one a decision rather than an
 omission.
+
+## 21. Choosing which memories are dropped
+
+Recall scores by weight and recency and fills a character budget. When everything fits, that is the
+whole story and it is fine: nothing is being decided, because nothing is being left out.
+
+When it does not fit, the score is deciding something it is not qualified to decide — the newest
+memory is not the one that bears on the question. So at that point, and only at that point, a cheap
+model call reads the candidates and the current message and says which ones matter.
+
+The gate is the design. `docs/05-data.md` §7 committed to lexical recall until there was evidence it
+was failing, and "the budget is dropping memories" is that evidence rather than an impression. Below
+the budget no call is made, which is almost always. Above it, one small call decides which of the
+things that were going to be discarded should not be.
+
+Three properties it has to have, each of which is a way it could go wrong:
+
+- **Failing changes nothing.** Any error, or an answer that cannot be read, falls back to the score.
+  It improves which memories are dropped; it is never why a turn did not happen.
+- **Choosing none is a decision, and different from failing.** An empty selection is respected; an
+  unparseable answer is not read as "none".
+- **The prompt says padding is worse than omitting.** An irrelevant memory in front of an agent is
+  worse than a missing one, because it will be treated as relevant.

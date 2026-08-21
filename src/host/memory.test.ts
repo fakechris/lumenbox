@@ -11,6 +11,9 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import {
+  buildSelectionPrompt,
+  chooseRelevant,
+  parseSelection,
   buildEpisodePrompt,
   buildExtractionPrompt,
   dedupe,
@@ -374,4 +377,101 @@ test("a retraction withdraws what came before it, not what comes after", () => {
     { at: "2026-07-01T00:00:00Z", kind: "retraction", text: "something never recorded" },
   ];
   assert.deepEqual(dedupe(unrelated).map(record => record.text), ["they prefer short answers"]);
+});
+
+
+// ── choosing what survives the budget ────────────────────────────────────────────────
+
+const factAt = (at: string, text: string): MemoryRecord => ({ at, kind: "fact", text });
+
+test("nothing is dropped, so nothing is asked", async () => {
+  // The gate, and the whole reason this is allowed to exist at all. docs/05-data.md §7 says lexical
+  // recall stays until there is evidence it is failing; "memories are being left out" is that
+  // evidence. When everything fits there is nothing to choose between, and a model call would be
+  // pure cost on every turn forever.
+  let asked = 0;
+  const result = await chooseRelevant({
+    records: [factAt("2026-08-01T00:00:00Z", "they prefer short answers")],
+    query: "what do you know about me",
+    ask: async () => {
+      asked += 1;
+      return '{"selected": [1]}';
+    },
+  });
+  assert.equal(asked, 0);
+  assert.equal(result.records.length, 1);
+});
+
+test("when the budget forces a choice, the chosen memories are the ones kept", async () => {
+  // Twenty facts, room for a few. The scoring would keep the newest; the selector keeps the ones
+  // that bear on the question, which is the entire point.
+  const records = Array.from({ length: 20 }, (_, index) =>
+    factAt(`2026-08-${String(index + 1).padStart(2, "0")}T00:00:00Z`, `fact number ${index + 1} about something`)
+  );
+  records.push(factAt("2026-06-01T00:00:00Z", "the deployment region is eu-west-1"));
+
+  const result = await chooseRelevant({
+    records,
+    query: "which region do we deploy to",
+    budget: 120,
+    // The oldest and lowest-scoring record, which recency alone would have dropped.
+    ask: async prompt => {
+      const line = prompt.split("\n").find(text => text.includes("eu-west-1")) ?? "";
+      const number = /^(\d+)\./.exec(line.trim())?.[1];
+      return `{"selected": [${number}]}`;
+    },
+  });
+
+  assert.ok(
+    result.records.some(record => record.text.includes("eu-west-1")),
+    `the chosen memory should have survived; got ${JSON.stringify(result.records.map(r => r.text))}`
+  );
+  assert.ok(result.omitted > 0, "and it still says how many did not fit");
+});
+
+test("a selector that fails, or answers nonsense, changes nothing", async () => {
+  const records = Array.from({ length: 30 }, (_, index) =>
+    factAt(`2026-08-${String((index % 28) + 1).padStart(2, "0")}T00:00:00Z`, `fact ${index} with some words`)
+  );
+  const scored = recall(records, 200);
+
+  for (const ask of [
+    async () => {
+      throw new Error("the provider was down");
+    },
+    async () => "I think memory 3 and 5 are relevant",
+    async () => undefined,
+  ]) {
+    const result = await chooseRelevant({ records, query: "anything", budget: 200, ask });
+    assert.deepEqual(
+      result.records.map(record => record.text),
+      scored.records.map(record => record.text),
+      "a failure improves nothing and breaks nothing"
+    );
+  }
+});
+
+test("choosing none is a decision, and is different from failing", () => {
+  const candidates = [factAt("2026-08-01T00:00:00Z", "one"), factAt("2026-08-02T00:00:00Z", "two")];
+  // An empty selection is an answer: the model looked and found nothing worth showing.
+  assert.deepEqual(parseSelection('{"selected": []}', candidates), []);
+  // These are not answers at all, and must not be read as "none".
+  assert.equal(parseSelection("no idea", candidates), undefined);
+  assert.equal(parseSelection('{"selected": "all of them"}', candidates), undefined);
+
+  // An invented number is skipped rather than discarding the rest of the answer.
+  assert.deepEqual(parseSelection('{"selected": [2, 99, 1]}', candidates), [
+    candidates[1],
+    candidates[0],
+  ]);
+});
+
+test("the selection prompt says that choosing nothing is allowed", () => {
+  const prompt = buildSelectionPrompt([factAt("2026-08-01T00:00:00Z", "a fact")], "a question");
+  assert.match(prompt, /what would change the/);
+  // Without this a model pads to look useful, and an irrelevant memory in front of an agent is
+  // worse than a missing one because it will be treated as relevant.
+  assert.match(prompt, /Choose nothing rather than padding/);
+  assert.match(prompt, /is a real answer/);
+  assert.match(prompt, /a fact/);
 });

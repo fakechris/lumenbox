@@ -193,11 +193,28 @@ export interface MemoryRecall {
 export function recall(
   records: readonly MemoryRecord[],
   budget = MEMORY_CHAR_BUDGET,
-  now = Date.now()
+  now = Date.now(),
+  /**
+   * Records to prefer over the score, by dedupe key.
+   *
+   * Empty or absent leaves the behaviour exactly as it was. This exists so that *which* memories
+   * are dropped can be decided by something better than recency and weight, without changing what
+   * happens when nothing has to be dropped at all — see `chooseRelevant`.
+   */
+  preferred?: ReadonlySet<string>
 ): MemoryRecall {
   const ranked = dedupe(records)
     .map(record => ({ record, score: scoreOf(record, now) }))
     .sort((a, b) => b.score - a.score || b.record.at.localeCompare(a.record.at));
+  if (preferred !== undefined && preferred.size > 0) {
+    // A stable partition rather than a re-sort: within the preferred set and within the rest, the
+    // existing order still decides, so this narrows what is dropped without discarding the scoring.
+    ranked.sort((a, b) => {
+      const left = preferred.has(dedupeKey(a.record.text)) ? 0 : 1;
+      const right = preferred.has(dedupeKey(b.record.text)) ? 0 : 1;
+      return left - right;
+    });
+  }
 
   const kept: MemoryRecord[] = [];
   let used = 0;
@@ -470,4 +487,132 @@ export function importMarkdown(markdown: string, fallback = new Date()): MemoryR
     });
   }
   return out;
+}
+
+
+// ── choosing what survives the budget ────────────────────────────────────────────────
+
+/**
+ * The most a selection pass will consider, and the most it may return.
+ *
+ * Bounded because the candidate list goes into a prompt: a thousand memories rendered for a model
+ * to choose between costs more than the memories themselves would have. Beyond this the scoring
+ * decides, which is what happened before this existed.
+ */
+export const MAX_SELECTION_CANDIDATES = envNumber("AGENTBOX_MEMORY_CANDIDATES", 60);
+export const MAX_SELECTED = envNumber("AGENTBOX_MEMORY_SELECTED", 8);
+
+/** The candidate list a selector reads: one line each, numbered, nothing else. */
+export function buildSelectionPrompt(
+  candidates: readonly MemoryRecord[],
+  query: string
+): string {
+  const lines = candidates.map(
+    (record, index) => `${index + 1}. [${record.kind}] ${record.text.replace(/\s+/g, " ")}`
+  );
+  return [
+    "You are choosing which of an agent's memories are worth putting in front of it for the",
+    "message below. There is not room for all of them, so this is about what would change the",
+    "answer — not about what is interesting.",
+    "",
+    "The message:",
+    query.replace(/\s+/g, " ").slice(0, 1_000),
+    "",
+    "The memories:",
+    ...lines,
+    "",
+    `Reply with the numbers of at most ${MAX_SELECTED}, most useful first, as JSON:`,
+    '{"selected": [3, 1, 7]}',
+    "",
+    "Choose nothing rather than padding: an irrelevant memory in front of the agent is worse",
+    'than a missing one, because it will be treated as relevant. `{"selected": []}` is a real answer.',
+  ].join("\n");
+}
+
+/**
+ * The chosen records, or undefined when the answer could not be used.
+ *
+ * Undefined rather than an empty list, because "the selector said none" and "the selector failed"
+ * must not be the same answer: the first is a decision to respect, the second is a reason to fall
+ * back to the scoring.
+ */
+export function parseSelection(
+  text: string,
+  candidates: readonly MemoryRecord[]
+): MemoryRecord[] | undefined {
+  const match = /\{[\s\S]*\}/.exec(text ?? "");
+  if (!match) return undefined;
+  let parsed: { selected?: unknown };
+  try {
+    parsed = JSON.parse(match[0]) as { selected?: unknown };
+  } catch {
+    return undefined;
+  }
+  if (!Array.isArray(parsed.selected)) return undefined;
+
+  const chosen: MemoryRecord[] = [];
+  for (const entry of parsed.selected.slice(0, MAX_SELECTED)) {
+    const index = Number(entry);
+    // One-based, as the prompt shows them. An out-of-range number is skipped rather than treated as
+    // a failure: a model that invents one number has not invalidated the others.
+    if (!Number.isInteger(index) || index < 1 || index > candidates.length) continue;
+    const record = candidates[index - 1];
+    if (record !== undefined && !chosen.includes(record)) chosen.push(record);
+  }
+  return chosen;
+}
+
+/**
+ * Decides which memories survive the budget, asking a model only when something has to be dropped.
+ *
+ * The discipline this respects is written down in docs/05-data.md §7: lexical recall stays until
+ * there is evidence it is failing, and a vector store would be infrastructure bought for an
+ * unmeasured problem. This is not that — it is a cheap model call, and it is gated on the one
+ * condition that *is* a measurement: memories are being left out. Below the budget nothing is
+ * dropped, so there is nothing to choose between and no call is made.
+ *
+ * Falls back to the scoring on any failure. The selector improves which memories are dropped; it is
+ * never the reason a turn does not happen.
+ */
+export async function chooseRelevant(options: {
+  records: readonly MemoryRecord[];
+  query: string;
+  budget?: number;
+  now?: number;
+  ask: (prompt: string) => Promise<string | undefined>;
+  log?: (line: string) => void;
+}): Promise<MemoryRecall> {
+  const budget = options.budget ?? MEMORY_CHAR_BUDGET;
+  const now = options.now ?? Date.now();
+  const first = recall(options.records, budget, now);
+  if (first.omitted === 0 || options.query.trim() === "") return first;
+
+  const candidates = dedupe(options.records)
+    .map(record => ({ record, score: scoreOf(record, now) }))
+    .sort((a, b) => b.score - a.score || b.record.at.localeCompare(a.record.at))
+    .slice(0, MAX_SELECTION_CANDIDATES)
+    .map(entry => entry.record);
+
+  try {
+    const answer = await options.ask(buildSelectionPrompt(candidates, options.query));
+    if (answer === undefined) return first;
+    const chosen = parseSelection(answer, candidates);
+    if (chosen === undefined) {
+      options.log?.("the memory selector's answer could not be read; keeping the scored order");
+      return first;
+    }
+    if (chosen.length === 0) return first;
+    return recall(
+      options.records,
+      budget,
+      now,
+      new Set(chosen.map(record => dedupeKey(record.text)))
+    );
+  } catch (error) {
+    options.log?.(
+      `the memory selector failed (${error instanceof Error ? error.message : String(error)}); ` +
+        "keeping the scored order"
+    );
+    return first;
+  }
 }

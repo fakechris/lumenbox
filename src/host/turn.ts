@@ -34,6 +34,7 @@ import {
   FIRST_TOKEN_DEADLINE_MS,
 } from "./transient.ts";
 import type { UsageLog } from "./usage.ts";
+import { chooseRelevant } from "./memory.ts";
 import {
   activeWindow,
   buildSummaryPrompt,
@@ -243,6 +244,13 @@ export interface TurnDeps {
   files?: FileVersions;
   /** Who has taken which piece of work, so two agents do not take the same one. */
   claims?: Claims;
+  /**
+   * Asks a cheap model which memories matter for this message.
+   *
+   * Only consulted when the budget forces a choice. Absent means the scoring decides, which is what
+   * happened before this existed and what still happens whenever everything fits.
+   */
+  selectMemory?: (prompt: string) => Promise<string | undefined>;
   resolution: ResolutionConfig | undefined;
   /** Which endpoint and what it can do. Omitted in tests to mean full Claude. */
   provider?: ProviderProfile;
@@ -686,10 +694,25 @@ export async function runTurn(
     deps.turns?.end(turnId, how);
   };
 
+  // Which memories survive the budget, decided by a model only when the budget forces a choice.
+  //
+  // Below the budget nothing is dropped, so there is nothing to choose between and no call is made —
+  // which is almost always. The discipline this respects is in docs/05-data.md §7: lexical recall
+  // stays until there is evidence it is failing, and "memories are being left out" is that evidence
+  // rather than an impression.
+  const ownMemory = registry.readMemoryRecords(agent.id);
+  const memoryRecall = await chooseRelevant({
+    records: ownMemory,
+    query: inbound.map(message => message.text).join(" "),
+    ask: deps.selectMemory ?? (async () => undefined),
+    log: line => console.error(`[memory] ${agent.profile.name}: ${line}`),
+  });
+
   const promptParts = buildSystemPromptParts({
     agent,
     teammates: registry.list(),
-    memory: registry.readMemoryRecords(agent.id),
+    memory: ownMemory,
+    memoryRecall,
     sharedMemory: registry.readSharedMemory(),
     skills: deps.skills,
     transcript: registry.readTranscript(agent.id),

@@ -16,6 +16,7 @@ import {
   renderMemory,
   renderSharedMemory,
   SHARED_CHAR_BUDGET,
+  type MemoryRecall,
   type MemoryRecord,
 } from "./memory.ts";
 import { renderSkills, visibleTo, type Skill } from "./skills.ts";
@@ -146,6 +147,14 @@ export interface PromptContext {
    * budget, because pasting a file that only grows makes memory a second unbounded context.
    */
   memory: readonly MemoryRecord[];
+  /**
+   * The memories to show, already chosen, when something better than the score chose them.
+   *
+   * Present only when the budget forced a choice and a selection pass was worth making. Absent
+   * means "score them here", which is what always happened and what happens whenever everything
+   * fits.
+   */
+  memoryRecall?: MemoryRecall;
   /**
    * What the team has kept, merged across every agent's shard.
    *
@@ -302,7 +311,7 @@ export function buildSystemPromptParts(
       // Before memory and the roster: this is what the agent is doing *now*, and a model reading
       // top-down should meet its own objective before its background.
       renderDurableBlocks(context.durable ?? {}),
-      renderMemory(recall(context.memory)),
+      renderMemory(context.memoryRecall ?? recall(context.memory)),
       renderSkills(visibleTo(context.skills ?? [], context.agent.profile.name)),
       // Only when something has actually been summarised — see renderHistoryBlock.
       renderHistoryBlock(context.transcript ?? []),

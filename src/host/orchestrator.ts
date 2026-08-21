@@ -336,6 +336,9 @@ export class Orchestrator {
       provider: this.provider,
       effort: this.options.effort,
       turns: this.turns,
+      // The same cheap profile the summariser and the note-taker use. Choosing which memories to
+      // show is the least interesting work in the system and should be billed accordingly.
+      selectMemory: prompt => this.askCheaply(prompt),
       resumeOf,
       onEvent: this.options.onTurnEvent,
     }).catch(error => {
@@ -391,6 +394,29 @@ export class Orchestrator {
     }
 
     return { resumed, abandoned };
+  }
+
+  /**
+   * One short question to the cheap model, or `undefined` if it could not be asked.
+   *
+   * Undefined rather than a throw: every caller of this is an improvement to something that already
+   * works, so a failure here must degrade rather than propagate.
+   */
+  private async askCheaply(prompt: string): Promise<string | undefined> {
+    try {
+      const profile = resolveSummaryProvider(this.provider);
+      const response = await this.client.messages.create({
+        model: profile.model,
+        max_tokens: Math.min(512, profile.maxTokens),
+        messages: [{ role: "user", content: prompt }],
+      });
+      return response.content
+        .filter((block): block is Anthropic.TextBlock => block.type === "text")
+        .map(block => block.text)
+        .join("\n");
+    } catch {
+      return undefined;
+    }
   }
 
   /** Sends a user message to an agent and runs its turn to completion. */

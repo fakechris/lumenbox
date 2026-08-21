@@ -418,12 +418,17 @@ The last row is the one that took work: a killed recorder used to leave an unpla
 
 Honestly, since these are the findings a review should raise:
 
-- **Retrieval is lexical.** Word overlap over short facts, which is what the baseline design also
-  does and defends. It will stop being enough when a memory set is large *and* the vocabulary varies
-  — the falsifiable trigger is: an agent with more than roughly 500 records where word overlap
-  demonstrably misses something it should have recalled, with a specific example rather than an
-  impression. Until then a vector store would be infrastructure bought for a problem nobody has
-  measured.
+- **Retrieval is lexical, and now has one exception.** Word overlap over short facts is the easy
+  case, and a vector store would still be infrastructure bought for an unmeasured problem — that
+  trigger stands: roughly 500 records where word overlap demonstrably misses something, with a
+  specific example rather than an impression.
+
+  What changed is narrower. When the character budget forces memories to be *dropped*, a cheap model
+  call decides which ones survive, because "memories are being left out" is a measurement rather
+  than an impression, and it is the only moment when the choice can be wrong. Below the budget
+  nothing is dropped, nothing is chosen, and no call is made — which is almost always. The selector
+  is an improvement to which memories are discarded and never a reason a turn does not happen: any
+  failure, or an answer that cannot be read, falls back to the score.
 - **Unbounded growth on disk.** Requests are now bounded by compaction (§2.2.1), but the files are
   not: a transcript grows forever and nothing rotates or archives it. That is deliberate — the
   record is the product's provenance claim — and it means disk is the eventual limit, which
