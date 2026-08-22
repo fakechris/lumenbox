@@ -124,6 +124,30 @@ export class FeishuChannel implements ChannelAdapter {
     | undefined;
   /** The chat each identity last spoke in, for routing a reply or a notice back. */
   private readonly chats = new Map<string, string>();
+  /**
+   * Message ids already handled, id → arrival ms. Feishu redelivers events across
+   * reconnects and slow acks, and a redelivered event is a duplicate turn. Keyed on
+   * message_id (the id of the *message*, which is what must run once), TTL-pruned.
+   * In memory only for now: a restart re-answering one message is the cost accepted;
+   * the mature reference persists this map, which is the upgrade path if it bites.
+   */
+  private readonly seenMessages = new Map<string, number>();
+
+  /** Records an id and says whether it was already seen. Prunes by TTL and size. */
+  private alreadySeen(messageId: string): boolean {
+    const now = Date.now();
+    const ttlMs = 24 * 60 * 60_000;
+    if (this.seenMessages.has(messageId)) return true;
+    this.seenMessages.set(messageId, now);
+    if (this.seenMessages.size > 2048) {
+      for (const [id, at] of this.seenMessages) {
+        if (now - at > ttlMs || this.seenMessages.size > 2048) this.seenMessages.delete(id);
+        else break;
+      }
+    }
+    return false;
+  }
+
   /** Set by the manager before start; a press with no handler is acknowledged and dropped. */
   private approvalHandler:
     | ((press: {
@@ -158,11 +182,19 @@ export class FeishuChannel implements ChannelAdapter {
     const dispatcher = new lark.EventDispatcher({}).register({
       "im.message.receive_v1": (data: {
         sender?: { sender_id?: { open_id?: string } };
-        message?: { chat_id?: string; message_type?: string; content?: string; mentions?: unknown[] };
+        message?: {
+          message_id?: string;
+          chat_id?: string;
+          message_type?: string;
+          content?: string;
+          mentions?: unknown[];
+        };
       }) => {
         const openId = data.sender?.sender_id?.open_id ?? "unknown";
         const chatId = data.message?.chat_id ?? "";
         if (data.message?.message_type !== "text" || chatId === "") return {};
+        const messageId = data.message.message_id;
+        if (messageId !== undefined && this.alreadySeen(messageId)) return {};
         let text = "";
         try {
           text = String(
