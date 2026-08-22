@@ -19,7 +19,7 @@ import { AgentRegistry } from "../agents/registry.ts";
 import { AgentBus } from "../agents/bus.ts";
 import type { BoxClient } from "../box/client.ts";
 import { DisplayLease } from "../box/display-lease.ts";
-import { runTurn, TurnAborted, type TranscriptEntry } from "./turn.ts";
+import { isTruncatedByContext, runTurn, TurnAborted, type TranscriptEntry } from "./turn.ts";
 import {
   compactionUrgency,
   DEFAULT_POLICY,
@@ -28,6 +28,7 @@ import {
 } from "./compaction.ts";
 import { buildSystemPrompt } from "./prompt.ts";
 import { PolicyGate, type PolicyLimits } from "./policy.ts";
+import { UsageLog } from "./usage.ts";
 import { buildTools, dispatchTool } from "./tools.ts";
 
 interface Capture {
@@ -1990,5 +1991,95 @@ test("the call that was in flight survives into the resumed turn, marked unknown
     assert.doesNotMatch(sent, /"is_error":true/, "not reported as a failure it can undo");
   } finally {
     cleanup();
+  }
+});
+
+test("a max_tokens stop is truncation only when output sits well below the intended cap", () => {
+  const at = (output: number, stop: string | null = "max_tokens") => ({
+    stop_reason: stop,
+    usage: { output_tokens: output },
+  });
+  assert.ok(isTruncatedByContext(at(5), 32_000), "an empty response claiming max_tokens is a squeeze");
+  assert.ok(isTruncatedByContext(at(31_000), 32_000), "well below the cap: squeezed");
+  assert.ok(!isTruncatedByContext(at(32_000), 32_000), "at the cap: a genuine limit stop");
+  assert.ok(!isTruncatedByContext(at(31_990), 32_000), "a few tokens short of the cap still counts as reaching it");
+  assert.ok(!isTruncatedByContext(at(5, "end_turn"), 32_000), "only max_tokens is ambiguous");
+  assert.ok(!isTruncatedByContext(at(5), 0), "no intended cap, no classification");
+});
+
+test("a context-squeezed response is discarded, billed, and the round retried", async () => {
+  const { registry, cleanup } = fixture();
+  const previousTrigger = DEFAULT_POLICY.triggerTokens;
+  const usagePath = join(mkdtempSync(join(tmpdir(), "agentbox-truncusage-")), "usage.jsonl");
+  try {
+    const ada = registry.create({ name: "Ada" });
+    const bus = new AgentBus(registry, async () => {});
+    const { box } = stubBox();
+    const capture: Capture = { params: [] };
+    DEFAULT_POLICY.triggerTokens = 10_000_000; // keep proactive compaction out of the way
+
+    // Two computer rounds put two screenshots into the request, so the shed path has
+    // something to drop. Then the provider returns a response squeezed by context —
+    // stop max_tokens with 5 output tokens against a 32k intent — then a real answer.
+    const truncated = message([textBlock("TRUNCATED-GARBAGE")], "max_tokens");
+    const replies: Anthropic.Message[] = [
+      message([toolUseBlock("computer", { actions: [{ action: "left_click", coordinate: [10, 10] }] }, "toolu_a")], "tool_use"),
+      message([toolUseBlock("computer", { actions: [{ action: "left_click", coordinate: [20, 20] }] }, "toolu_b")], "tool_use"),
+      truncated,
+      message([textBlock("done properly")]),
+    ];
+    const { client } = stubClient(replies, capture);
+
+    const usage = new UsageLog(usagePath);
+    const events: { type: string; kind?: string; detail?: string }[] = [];
+    await runTurn(
+      ada,
+      [{ id: "m-trunc", fromId: "user", fromName: "user", text: "drive", priority: false, receivedAt: "" }],
+      new AbortController().signal,
+      {
+        client,
+        registry,
+        bus,
+        box,
+        usage,
+        resolution: undefined,
+        displayIndex: 1,
+        provider: {
+          label: "test",
+          model: "test-model",
+          maxTokens: 32_000,
+          vision: true,
+          adaptiveThinking: false,
+          effort: false,
+          promptCaching: false,
+          auth: "bearer",
+          keyEnv: "TEST_KEY",
+        },
+        onEvent: event => events.push(event as { type: string }),
+      }
+    );
+
+    // The garbage never reached the transcript; the retried round's answer did.
+    const transcript = JSON.stringify(registry.readTranscript(ada.id));
+    assert.ok(!transcript.includes("TRUNCATED-GARBAGE"), "the squeezed response was discarded");
+    assert.ok(transcript.includes("done properly"), "the retry produced the real answer");
+
+    // The retry consumed no extra round: four requests for three rounds of work.
+    assert.equal(capture.params.length, 4);
+
+    // The watcher was told to drop what it had rendered, the same way a connection
+    // retry says it.
+    assert.ok(
+      events.some(event => event.type === "retrying" && event.kind === "truncated"),
+      `a truncation retry event exists: ${JSON.stringify(events.filter(e => e.type === "retrying"))}`
+    );
+
+    // And the discarded response is on the bill: every request settled, every request
+    // recorded — spend must not vanish with a response we chose to throw away.
+    assert.equal(usage.totals().records, 4, "all four requests billed, the discarded one included");
+  } finally {
+    DEFAULT_POLICY.triggerTokens = previousTrigger;
+    cleanup();
+    rmSync(join(usagePath, ".."), { recursive: true, force: true });
   }
 });
