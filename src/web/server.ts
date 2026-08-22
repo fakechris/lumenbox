@@ -293,6 +293,23 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
 
   const channels = new ChannelManager({
     mayDrive: identity => roleAtLeast(principals.roleOf(identity), "driver"),
+    // A chat reply of allow/always/deny answers the approval that was pushed there.
+    answerApproval: (approvalId, reply) => {
+      const target = orchestrator.policy.pending().find(item => item.id === approvalId);
+      if (target === undefined) return undefined;
+      if (reply === "deny") {
+        orchestrator.policy.deny(approvalId, "channel");
+        broadcast({ type: "error", message: `${target.agentName} was refused from a chat.` });
+        return "Refused. The turn will not run that action.";
+      }
+      orchestrator.policy.grant(approvalId, "channel", reply);
+      return reply === "always"
+        ? "Allowed, and I will not ask you for this exact action again. " +
+          "Send the agent a message to have it retry."
+        : reply === "session"
+          ? "Allowed for this session. Send the agent a message to have it retry."
+          : "Allowed once. Send the agent a message to have it retry.";
+    },
     log: line => log(line),
     ask: async (agentName, text, identity, chatKey) => {
       const agent =
@@ -343,12 +360,13 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
 
   orchestrator.policy.onApprovalRequested = approval => {
     announceApproval(approval);
-    // Whoever asked from a phone is the person who can unblock this, and they are
-    // exactly the person not looking at the page.
-    channels.notifyAsker(
+    // Whoever asked from a phone is the person who can unblock this — and can now do
+    // it with a one-word reply, without opening the app.
+    channels.notifyApproval(
       approval.agentId,
-      `${approval.agentName || "An agent"} needs your consent:\n${approval.description}\n` +
-        `The turn is paused. Open LumenBox to allow or refuse.`
+      approval.id,
+      approval.agentName,
+      approval.description
     );
   };
 
