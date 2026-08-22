@@ -39,6 +39,13 @@ export const AGENT_NAME_MAX_LENGTH = 72;
 export const AGENT_DESCRIPTION_MAX_LENGTH = 2000;
 export const PROFILE_FILENAME = "profile.json";
 export const TRANSCRIPT_FILENAME = "conversation.jsonl";
+/**
+ * The conversation every agent always has: the one the web page, teammates and the
+ * scheduler share. Outside chats get their own — context belongs to the room it
+ * happened in, and two groups talking to one agent must not read each other.
+ */
+export const MAIN_CONVERSATION = "main";
+export const CONVERSATIONS_DIRNAME = "conversations";
 export const MEMORY_FILENAME = "memory.md";
 
 /**
@@ -190,8 +197,18 @@ export class AgentRegistry {
     return join(this.dirFor(agentId), PROFILE_FILENAME);
   }
 
-  transcriptPathFor(agentId: string): string {
-    return join(this.dirFor(agentId), TRANSCRIPT_FILENAME);
+  /**
+   * Where a conversation's transcript lives.
+   *
+   * The main conversation keeps the original filename, so every transcript that
+   * existed before conversations did *is* its agent's team room — no migration, and
+   * an old install wakes up with its history where it always was.
+   */
+  transcriptPathFor(agentId: string, conversation = MAIN_CONVERSATION): string {
+    if (conversation === MAIN_CONVERSATION) {
+      return join(this.dirFor(agentId), TRANSCRIPT_FILENAME);
+    }
+    return join(this.dirFor(agentId), CONVERSATIONS_DIRNAME, `${conversation}.jsonl`);
   }
 
   memoryPathFor(agentId: string): string {
@@ -746,13 +763,13 @@ export class AgentRegistry {
     renameSync(temp, path);
   }
 
-  appendTranscript(agentId: string, entry: unknown): void {
-    mkdirSync(this.dirFor(agentId), { recursive: true });
-    appendLine(this.transcriptPathFor(agentId), JSON.stringify(entry));
+  appendTranscript(agentId: string, entry: unknown, conversation = MAIN_CONVERSATION): void {
+    mkdirSync(dirname(this.transcriptPathFor(agentId, conversation)), { recursive: true });
+    appendLine(this.transcriptPathFor(agentId, conversation), JSON.stringify(entry));
   }
 
-  readTranscript(agentId: string): unknown[] {
-    const path = this.transcriptPathFor(agentId);
+  readTranscript(agentId: string, conversation = MAIN_CONVERSATION): unknown[] {
+    const path = this.transcriptPathFor(agentId, conversation);
     if (!existsSync(path)) return [];
     return readFileSync(path, "utf8")
       .split("\n")
@@ -765,4 +782,45 @@ export class AgentRegistry {
         }
       });
   }
+
+  /**
+   * Every conversation this agent has, the team room first.
+   *
+   * "main" is the room the web page, teammates and the scheduler share; the others
+   * are one per outside chat — a Telegram DM, a Feishu group — so two groups talking
+   * to the same agent never see each other's context.
+   */
+  listConversations(agentId: string): { id: string; lastAt?: string }[] {
+    const conversations: { id: string; lastAt?: string }[] = [];
+    const main = this.transcriptPathFor(agentId);
+    conversations.push({
+      id: MAIN_CONVERSATION,
+      ...(existsSync(main) ? { lastAt: statSync(main).mtime.toISOString() } : {}),
+    });
+    const dir = join(this.dirFor(agentId), CONVERSATIONS_DIRNAME);
+    if (!existsSync(dir)) return conversations;
+    try {
+      for (const entry of readdirSync(dir, { withFileTypes: true })) {
+        if (!entry.isFile() || !entry.name.endsWith(".jsonl")) continue;
+        conversations.push({
+          id: entry.name.slice(0, -".jsonl".length),
+          lastAt: statSync(join(dir, entry.name)).mtime.toISOString(),
+        });
+      }
+    } catch {
+      // A listing that cannot be read is an empty listing, not a broken page.
+    }
+    return conversations;
+  }
+}
+
+/**
+ * A conversation id from an outside chat's identity, safe as a filename.
+ *
+ * The identity is already `channel:id`; what changes is only what a filesystem
+ * refuses. Distinct chats must stay distinct, so anything unsafe is replaced
+ * one-for-one rather than collapsed.
+ */
+export function conversationIdFor(chatIdentity: string): string {
+  return chatIdentity.replace(/[^\p{L}\p{N}._-]/gu, "-").slice(0, 120);
 }

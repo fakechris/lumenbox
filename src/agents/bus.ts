@@ -16,6 +16,7 @@ import type { Inbox } from "./inbox.ts";
 import {
   AgentNotFoundError,
   clampMessage,
+  MAIN_CONVERSATION,
   type AgentRecord,
   type AgentRegistry,
 } from "./registry.ts";
@@ -58,13 +59,21 @@ export interface InboundMessage {
    * still delivered in this process; what it loses is the ability to survive a restart.
    */
   admission?: number;
+  /**
+   * Which conversation this belongs to. Absent means the main one — the team room —
+   * which is where every teammate and system message goes: agents talk to each other
+   * in the room, not inside somebody's Telegram thread. Rides inside the message so
+   * the durable inbox persists it for free.
+   */
+  conversation?: string;
 }
 
 /** Runs one turn for an agent. Returns when the agent's turn is finished. */
 export type TurnRunner = (
   agent: AgentRecord,
   inbound: readonly InboundMessage[],
-  signal: AbortSignal
+  signal: AbortSignal,
+  conversation: string
 ) => Promise<void>;
 
 interface ActiveTurn {
@@ -244,7 +253,7 @@ export class AgentBus {
   }
 
   /** Injects a message from the user (or an operator) into an agent's queue. */
-  sendFromUser(agentId: string, text: string): void {
+  sendFromUser(agentId: string, text: string, options: { conversation?: string } = {}): void {
     this.enqueue(agentId, {
       id: randomUUID(),
       fromId: "user",
@@ -252,13 +261,35 @@ export class AgentBus {
       text: clampMessage(text, AGENT_MESSAGE_MAX_LENGTH),
       priority: false,
       receivedAt: new Date().toISOString(),
+      ...(options.conversation !== undefined ? { conversation: options.conversation } : {}),
     });
   }
 
-  drain(agentId: string): InboundMessage[] {
+  /**
+   * Takes the queued messages for one conversation, leaving the others queued.
+   *
+   * One turn reads one conversation — a turn that mixed a Telegram group's question
+   * with the team room's instructions would answer both into the wrong context. What
+   * stays queued wakes a follow-up turn of its own.
+   */
+  drain(agentId: string, conversation: string = MAIN_CONVERSATION): InboundMessage[] {
     const queue = this.pending.get(agentId) ?? [];
-    this.pending.delete(agentId);
-    return queue;
+    const taken = queue.filter(
+      message => (message.conversation ?? MAIN_CONVERSATION) === conversation
+    );
+    const left = queue.filter(
+      message => (message.conversation ?? MAIN_CONVERSATION) !== conversation
+    );
+    if (left.length === 0) this.pending.delete(agentId);
+    else this.pending.set(agentId, left);
+    return taken;
+  }
+
+  /** The conversation of the oldest queued message, for waking in arrival order. */
+  private nextConversation(agentId: string): string | undefined {
+    const queue = this.pending.get(agentId);
+    if (queue === undefined || queue.length === 0) return undefined;
+    return queue[0]?.conversation ?? MAIN_CONVERSATION;
   }
 
   pendingCount(agentId: string): number {
@@ -272,10 +303,11 @@ export class AgentBus {
    */
   async runExclusive(
     agentId: string,
-    options: { userDriven?: boolean } = {}
+    options: { userDriven?: boolean; conversation?: string } = {}
   ): Promise<void> {
     const agent = this.registry.tryGet(agentId);
     if (!agent) throw new AgentNotFoundError(agentId);
+    const conversation = options.conversation ?? MAIN_CONVERSATION;
 
     // Every caller chains onto the current tail, so turns for one agent run in
     // arrival order and exactly one is ever in flight.
@@ -293,14 +325,15 @@ export class AgentBus {
       let inbound: InboundMessage[] = [];
       try {
         // Drain inside the exclusive section, so messages that arrived while we
-        // were queued are picked up by this turn instead of spawning another.
-        inbound = this.drain(agentId);
+        // were queued are picked up by this turn instead of spawning another —
+        // this conversation's messages only; the rest wake their own turns.
+        inbound = this.drain(agentId, conversation);
         // Marked started before the turn runs, not after it finishes. After would mean replaying
         // half-finished turns, and a turn that deployed something before dying would deploy it
         // twice; resuming one properly needs per-step checkpoints, which do not exist yet.
         this.inbox?.start(inbound.map(message => message.admission));
         this.onEvent({ type: "turn_started", agentId, inboundCount: inbound.length });
-        await this.runTurn(agent, inbound, controller.signal);
+        await this.runTurn(agent, inbound, controller.signal, conversation);
         this.onEvent({ type: "turn_finished", agentId });
       } catch (error) {
         // The senders are told. Their acknowledgement said the message would be delivered, and it
@@ -349,7 +382,12 @@ export class AgentBus {
     try {
       while (this.pendingCount(agentId) > 0) {
         try {
-          await this.runExclusive(agentId, { userDriven: false });
+          // One conversation per turn, oldest message first: a Telegram group's
+          // question and the team room's instruction each get their own context.
+          await this.runExclusive(agentId, {
+            userDriven: false,
+            conversation: this.nextConversation(agentId),
+          });
         } catch (error) {
           // Stop the loop, keep the queue. Anything still here arrived *after* the failed turn
           // started — the message that turn was given was taken off the queue before it ran — so

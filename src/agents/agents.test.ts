@@ -678,3 +678,64 @@ test("a restricted agent cannot create an unrestricted one", async () => {
     cleanup();
   }
 });
+
+// ── conversations: one agent, threads that do not read each other ─────────────────────
+
+test("two chats to one agent are separate transcripts and separate turns", async () => {
+  const { registry, cleanup } = tempRegistry();
+  try {
+    const ada = registry.create({ name: "Ada" });
+    // Each turn records which conversation it saw, and appends to that conversation.
+    const seen: { conversation: string; texts: string[] }[] = [];
+    const bus = new AgentBus(registry, async (agent, inbound, _signal, conversation) => {
+      seen.push({ conversation, texts: inbound.map(m => m.text) });
+      registry.appendTranscript(agent.id, { role: "user", text: inbound[0]!.text }, conversation);
+      registry.appendTranscript(agent.id, { role: "assistant", text: `re: ${inbound[0]!.text}` }, conversation);
+    });
+
+    // The team room (default) and two outside chats. Each send wakes the agent, as
+    // the real send path does; the wake loop runs one conversation per turn.
+    bus.sendFromUser(ada.id, "room question");
+    bus.sendFromUser(ada.id, "group A question", { conversation: "telegram-1" });
+    bus.sendFromUser(ada.id, "group B question", { conversation: "feishu-2" });
+    await bus.wake(ada.id);
+    await bus.idle(5000);
+
+    // Three turns, one per conversation — never a mixed drain.
+    assert.equal(seen.length, 3, `one turn each, got ${seen.length}`);
+    for (const turn of seen) assert.equal(turn.texts.length, 1, "no cross-conversation mixing");
+
+    // Each thread on disk holds only its own exchange.
+    const room = registry.readTranscript(ada.id).map((e: any) => e.text);
+    const a = registry.readTranscript(ada.id, "telegram-1").map((e: any) => e.text);
+    const b = registry.readTranscript(ada.id, "feishu-2").map((e: any) => e.text);
+    assert.deepEqual(room, ["room question", "re: room question"]);
+    assert.deepEqual(a, ["group A question", "re: group A question"]);
+    assert.deepEqual(b, ["group B question", "re: group B question"]);
+    assert.ok(!a.join(" ").includes("group B"), "chat A never sees chat B");
+
+    // And the agent knows what conversations it has.
+    const ids = registry.listConversations(ada.id).map(c => c.id).sort();
+    assert.deepEqual(ids, ["feishu-2", "main", "telegram-1"]);
+  } finally {
+    cleanup();
+  }
+});
+
+test("the main conversation keeps the original filename, so old history is the team room", () => {
+  const { registry, cleanup } = tempRegistry();
+  try {
+    const ada = registry.create({ name: "Ada" });
+    // What every pre-conversations install has: a bare conversation.jsonl.
+    registry.appendTranscript(ada.id, { role: "user", text: "from before conversations existed" });
+    assert.equal(
+      registry.transcriptPathFor(ada.id),
+      join(registry.dirFor(ada.id), "conversation.jsonl"),
+      "main is the original path"
+    );
+    const room = registry.readTranscript(ada.id).map((e: any) => e.text);
+    assert.deepEqual(room, ["from before conversations existed"]);
+  } finally {
+    cleanup();
+  }
+});

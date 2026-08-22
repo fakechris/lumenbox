@@ -55,7 +55,7 @@ test("nobody is allowed until somebody is: the refusal names the id and only the
   const adapter = testAdapter();
   const asked: string[] = [];
   const manager = new ChannelManager({
-    allow: () => [],
+    mayDrive: () => false,
     ask: async (_agent, text) => {
       asked.push(text);
       return "done";
@@ -80,7 +80,7 @@ test("nobody is allowed until somebody is: the refusal names the id and only the
 test("an allowed sender runs a turn and gets what the agent said", async () => {
   const adapter = testAdapter();
   const manager = new ChannelManager({
-    allow: () => ["telegram:7"],
+    mayDrive: identity => identity === "telegram:7",
     ask: async (agentName, text, identity) => {
       assert.equal(agentName, "Bob");
       assert.equal(identity, "telegram:7");
@@ -101,7 +101,7 @@ test("an allowed sender runs a turn and gets what the agent said", async () => {
 
   // An empty reply is still an answer, not silence.
   const quiet = new ChannelManager({
-    allow: () => ["telegram:7"],
+    mayDrive: identity => identity === "telegram:7",
     ask: async () => "",
     log: () => {},
   });
@@ -118,7 +118,7 @@ test("an allowed sender runs a turn and gets what the agent said", async () => {
 test("a notice reaches whoever last drove the agent from a channel, and nobody else", () => {
   const adapter = testAdapter();
   const manager = new ChannelManager({
-    allow: () => ["telegram:7"],
+    mayDrive: identity => identity === "telegram:7",
     ask: async () => "ok",
     log: () => {},
   });

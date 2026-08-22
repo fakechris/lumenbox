@@ -23,7 +23,7 @@ import { readFileSync } from "node:fs";
 import { connect as netConnect, type Socket } from "node:net";
 import { join, posix } from "node:path";
 import { fileURLToPath } from "node:url";
-import { AgentRegistry } from "../agents/registry.ts";
+import { AgentRegistry, MAIN_CONVERSATION, conversationIdFor } from "../agents/registry.ts";
 import type { BusEvent } from "../agents/bus.ts";
 import { BoxManager, defaultBoxConfig } from "../box/docker.ts";
 import { resolveBoxProvisioner, type BoxProvisioner } from "../box/provisioner.ts";
@@ -125,6 +125,7 @@ import { TelegramChannel } from "../channels/telegram.ts";
 import { HostRunner, hostRunnerConfig } from "../host/host-runner.ts";
 import { ALL_TOOLS } from "../host/orchestrator.ts";
 import { PRESET_MODELS, providerNames, resolveProvider, testProvider } from "../host/provider.ts";
+import { Principals, roleAtLeast, type Principal, type Role } from "../host/principals.ts";
 import { seedStarterSkills } from "../host/starter-skills.ts";
 import { ActivityLog } from "./activity.ts";
 import { vendorPath } from "./markdown.ts";
@@ -150,7 +151,7 @@ export interface WebOptions {
 type OutboundEvent =
   | TurnEvent
   | BusEvent
-  | { type: "prompt"; agentId: string; text: string; userId?: string }
+  | { type: "prompt"; agentId: string; text: string; userId?: string; conversation?: string }
   | { type: "error"; message: string }
   /** One line of docker output while the box is brought up from the page. */
   | { type: "box_setup"; line: string; done?: boolean; ok?: boolean }
@@ -261,20 +262,46 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
   // file's env map — and every message runs an ordinary turn through the ordinary
   // gates. The allow list is read fresh per message, so adding someone needs no
   // restart.
+  // The people, and the one-time migration from the old flat allow list: every
+  // identity that used to be a bare channel grant becomes a driver principal, so a
+  // person's existing access survives the upgrade rather than being silently revoked.
+  const principals = new Principals();
+  {
+    const legacy = loadConfig().channelAllow ?? [];
+    const unclaimed = legacy.filter(identity => !principals.isKnown(identity));
+    if (unclaimed.length > 0) {
+      principals.save([
+        ...principals.list(),
+        ...unclaimed.map(identity => ({
+          id: identity,
+          name: identity,
+          role: "driver" as const,
+          identities: [identity],
+        })),
+      ]);
+      saveConfig({ channelAllow: null });
+      log(`migrated ${unclaimed.length} channel grant(s) to driver principals`);
+    }
+  }
+
   const channels = new ChannelManager({
-    allow: () => loadConfig().channelAllow ?? [],
+    mayDrive: identity => roleAtLeast(principals.roleOf(identity), "driver"),
     log: line => log(line),
-    ask: async (agentName, text, identity) => {
+    ask: async (agentName, text, identity, chatKey) => {
       const agent =
         agentName !== undefined
           ? registry.resolve(agentName)
           : (registry.list()[0] ?? orchestrator.ensureDefaultAgent());
       channels.remember(agent.id, identity.split(":")[0] ?? "", identity);
-      const before = registry.readTranscript(agent.id).length;
-      broadcast({ type: "prompt", agentId: agent.id, text, userId: identity });
-      await orchestrator.prompt(agent.id, text, { userId: identity });
+      // Each outside chat is its own conversation thread: two groups talking to the
+      // same agent never read each other's context. Permission stays with the person
+      // (identity); context stays with the room (chatKey).
+      const conversation = conversationIdFor(chatKey);
+      const before = registry.readTranscript(agent.id, conversation).length;
+      broadcast({ type: "prompt", agentId: agent.id, text, userId: identity, conversation });
+      await orchestrator.prompt(agent.id, text, { userId: identity }, { conversation });
       await orchestrator.settle();
-      return orchestrator.replySince(agent.id, before);
+      return orchestrator.replySince(agent.id, before, conversation);
     },
   });
   {
@@ -568,6 +595,24 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
         return true;
       };
 
+      /**
+       * Refuses a request the caller's role is too low for.
+       *
+       * The web token holder is the machine's operator — they run it, they are admin;
+       * a gateway that asserts a userId resolves that identity through the roster. So
+       * the local UI is unrestricted (as it always was) while a channel-authenticated
+       * or gateway user is held to their role.
+       */
+      const refusedRole = (need: Role): boolean => {
+        const role: Role =
+          caller.userId === undefined ? "admin" : principals.roleOf(caller.userId);
+        if (roleAtLeast(role, need)) return false;
+        send(res, 403, {
+          error: `This needs the ${need} role; you are ${role}. Ask an admin.`,
+        });
+        return true;
+      };
+
       try {
         if (route === "GET /") {
           send(res, 200, APP_HTML, "text/html");
@@ -719,25 +764,45 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
           return;
         }
 
-        // The chat channels: which exist, which are running, and who may use them.
+        // The chat channels: which exist, which are running, and the people who may
+        // use them. The roster is the access-control list now, not a flat allow list.
         if (route === "GET /api/channels") {
           send(res, 200, {
             channels: channels.list(),
-            allow: loadConfig().channelAllow ?? [],
+            principals: principals.list(),
           });
           return;
         }
 
-        if (route === "POST /api/channels/allow") {
-          if (refused()) return;
+        // Replaces the whole people roster. Only an admin edits who may do what —
+        // otherwise a driver could promote themselves, which is the access-control
+        // check being decorative.
+        if (route === "POST /api/principals") {
+          if (refusedRole("admin")) return;
           const body = await readJson(req);
-          if (!Array.isArray(body.allow) || body.allow.some(item => typeof item !== "string")) {
-            send(res, 400, { error: "allow must be an array of channel:id strings" });
+          if (!Array.isArray(body.principals)) {
+            send(res, 400, { error: "principals must be an array" });
             return;
           }
-          const list = (body.allow as string[]).map(item => item.trim()).filter(item => item !== "");
-          saveConfig({ channelAllow: list.length > 0 ? list : null });
-          send(res, 200, { allow: list });
+          const roster: Principal[] = [];
+          for (const raw of body.principals as Record<string, unknown>[]) {
+            const name = typeof raw.name === "string" ? raw.name.trim() : "";
+            if (name === "") continue;
+            const role: Role =
+              raw.role === "admin" || raw.role === "driver" ? (raw.role as Role) : "viewer";
+            const identities = Array.isArray(raw.identities)
+              ? (raw.identities as unknown[]).filter((i): i is string => typeof i === "string")
+              : [];
+            roster.push({
+              id: typeof raw.id === "string" && raw.id !== "" ? raw.id : (identities[0] ?? name),
+              name,
+              role,
+              identities,
+            });
+          }
+          principals.save(roster);
+          log(`principals roster updated (${roster.length} people)`);
+          send(res, 200, { principals: principals.list() });
           return;
         }
 
