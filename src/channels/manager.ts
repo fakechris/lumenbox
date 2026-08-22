@@ -6,6 +6,13 @@
  * it said comes back as the reply — the same transcript, the same policy gate, the
  * same budget as every other way in. A channel is a front door, not a second product.
  *
+ * **Accepted is not answered.** A turn runs for minutes; a chat platform's event
+ * handler must return in seconds or the platform redelivers the event, and a
+ * redelivered event is a duplicate turn. So `handle` acknowledges on the wire
+ * immediately and the work runs behind it: a quick turn just posts its answer, a slow
+ * one first says it is under way (a card where the adapter can, a line where it
+ * cannot), and the result is pushed to the chat when it lands.
+ *
  * **Closed by default.** A bot handle is discoverable, and "anyone who finds it can
  * drive a machine with a shell" is not a default anyone chose. The allow list lives in
  * the config file; an unauthorised sender is told their own `channel:id`, which is
@@ -33,6 +40,28 @@ export interface InboundMessage {
   text: string;
 }
 
+/**
+ * A task as a chat renders it: one card per request, updated in place.
+ *
+ * The states are the ones a person in a group actually distinguishes — waiting,
+ * happening, finished, broken — not the turn engine's internals. `action` is the
+ * latest one-line answer to "what is it doing right now", which is the whole reason
+ * to look at the card while it runs.
+ */
+export interface TaskCardState {
+  /** The instruction, first line, for the card header. */
+  title: string;
+  /** Who is doing it — the addressed agent, or empty for the default. */
+  agentName: string;
+  /** Who asked, as the wire names them. */
+  requesterLabel: string;
+  status: "queued" | "working" | "done" | "failed";
+  /** The latest one-line action, e.g. `bash: npm test`. Absent when not started or finished. */
+  action?: string;
+  /** How many requests are ahead of this one, when queued. */
+  ahead?: number;
+}
+
 export interface ChannelAdapter {
   readonly name: string;
   /** Resolves once the wire is up; rejects when it cannot come up. */
@@ -40,6 +69,20 @@ export interface ChannelAdapter {
   stop(): void;
   /** Pushes a line to where this identity's messages come from, if the wire allows it. */
   send(identity: string, text: string): Promise<void>;
+  /**
+   * Pushes a line to a chat by its chatKey. Preferred over `send` for task results:
+   * `send` routes to wherever the identity last spoke, which may have moved to another
+   * chat while a long task ran. Absent means the identity is the chat and `send` is right.
+   */
+  sendToChat?(chatKey: string, text: string): Promise<void>;
+  /**
+   * Posts a task card to a chat and returns the handle `updateTaskCard` accepts, or
+   * undefined when the card could not be posted. Adapters without cards leave both
+   * absent and get plain acknowledgement lines instead.
+   */
+  postTaskCard?(chatKey: string, card: TaskCardState): Promise<string | undefined>;
+  /** Rewrites a posted card in place. Updates are quiet; a chat is not notified for one. */
+  updateTaskCard?(handle: string, card: TaskCardState): Promise<void>;
 }
 
 export interface ChannelStatus {
@@ -88,15 +131,36 @@ export interface ChannelManagerDeps {
    * Runs one turn and returns what the agent said. `agentName` is undefined for the
    * default agent; unknown names should throw with a message worth relaying.
    * `chatKey` names the chat, for the conversation thread the turn runs in.
+   * `onProgress`, when given, receives a one-line description of each action the turn
+   * takes, for the task card — coarse by design, a card is not a transcript.
    */
   ask: (
     agentName: string | undefined,
     text: string,
     identity: string,
-    chatKey: string
+    chatKey: string,
+    onProgress?: (action: string) => void
   ) => Promise<string>;
+  /**
+   * How many requests are ahead of a new one for this agent and chat. Zero means it
+   * starts now. Absent means unknown, which is treated as zero — the acknowledgement
+   * then says less rather than guessing.
+   */
+  ahead?: (agentName: string | undefined, chatKey: string) => number;
+  /**
+   * How long a turn may run before the chat is told it is under way. A quick answer
+   * should arrive as itself, not behind a "working on it" — the threshold is what
+   * separates the two. Queued work skips the wait: queued is known-slow.
+   */
+  ackAfterMs?: number;
   log: (line: string) => void;
 }
+
+/** After this long, a running task without a card says it is under way. */
+const ACK_AFTER_MS = 8_000;
+
+/** Card rewrites are rate-limited to this; the final state is always written. */
+const CARD_UPDATE_MS = 3_000;
 
 /** `@Name rest of the message` addresses a specific agent; anything else is the default. */
 export function parseAddress(text: string): { agentName?: string; text: string } {
@@ -127,6 +191,12 @@ export class ChannelManager {
    * does not approve something new.
    */
   private readonly awaitingApproval = new Map<string, { approvalId: string; description: string }>();
+  /**
+   * Tasks still running behind an already-acknowledged wire. Held so `idle` can wait
+   * for them — a shutdown that drops a task mid-push loses a result somebody was told
+   * would arrive — and so a test can await the work `handle` deliberately does not.
+   */
+  private readonly inflight = new Set<Promise<void>>();
 
   constructor(private readonly deps: ChannelManagerDeps) {}
 
@@ -153,6 +223,13 @@ export class ChannelManager {
 
   stop(): void {
     for (const adapter of this.adapters) adapter.stop();
+  }
+
+  /** Resolves when every accepted task has pushed its result (or its failure). */
+  async idle(): Promise<void> {
+    while (this.inflight.size > 0) {
+      await Promise.allSettled([...this.inflight]);
+    }
   }
 
   list(): ChannelStatus[] {
@@ -218,16 +295,126 @@ export class ChannelManager {
 
     const { agentName, text } = parseAddress(message.text);
     if (text === "") return "Say what you need done; @AgentName first to pick who does it.";
+
+    // The work runs behind this return; the decisions above stay synchronous because
+    // a refusal or an approval answer *is* the whole response.
+    const task = this.runTask(adapter, message, agentName, text).finally(() => {
+      this.inflight.delete(task);
+    });
+    this.inflight.add(task);
+    return undefined;
+  }
+
+  /**
+   * One accepted request, from acknowledgement to pushed result.
+   *
+   * Everything here degrades by capability: a card where the adapter has one, a line
+   * where it does not; a chat-addressed push where the wire distinguishes chats from
+   * senders, an identity-addressed one where it does not. Failures to *deliver* are
+   * logged and swallowed — the turn itself already ran, and its record is the
+   * transcript, not the chat.
+   */
+  private async runTask(
+    adapter: ChannelAdapter,
+    message: InboundMessage,
+    agentName: string | undefined,
+    text: string
+  ): Promise<void> {
+    const chatKey = message.chatKey ?? message.identity;
+    const deliver = async (line: string) => {
+      try {
+        if (adapter.sendToChat !== undefined) await adapter.sendToChat(chatKey, line);
+        else await adapter.send(message.identity, line);
+      } catch (error) {
+        const detail = error instanceof Error ? error.message : String(error);
+        this.deps.log(`channel ${adapter.name}: push failed (${detail})`);
+      }
+    };
+
+    const ahead = this.deps.ahead?.(agentName, chatKey) ?? 0;
+    const card: TaskCardState = {
+      title: firstLine(text),
+      agentName: agentName ?? "",
+      requesterLabel: message.senderLabel,
+      status: ahead > 0 ? "queued" : "working",
+      ...(ahead > 0 ? { ahead } : {}),
+    };
+
+    // The acknowledgement, when one is owed: a card if the adapter can, a line if not.
+    // Queued work is acknowledged immediately — queued is known-slow — while work that
+    // starts now gets the threshold, so a quick answer arrives as itself.
+    let cardHandle: string | undefined;
+    let acknowledged = false;
+    let lastCardWrite = 0;
+    const acknowledge = async () => {
+      if (acknowledged) return;
+      acknowledged = true;
+      if (adapter.postTaskCard !== undefined) {
+        try {
+          cardHandle = await adapter.postTaskCard(chatKey, { ...card });
+          lastCardWrite = Date.now();
+        } catch (error) {
+          const detail = error instanceof Error ? error.message : String(error);
+          this.deps.log(`channel ${adapter.name}: card failed (${detail})`);
+        }
+        return;
+      }
+      await deliver(ackLine(card));
+    };
+
+    const ackTimer = setTimeout(() => {
+      void acknowledge();
+    }, this.deps.ackAfterMs ?? ACK_AFTER_MS);
+    if (ahead > 0) void acknowledge();
+
+    // Progress rewrites the card, rate-limited; without a card it goes nowhere, on
+    // purpose — a plain chat told "tool call #14" fourteen times is spam, not progress.
+    const onProgress = (action: string) => {
+      card.status = "working";
+      delete card.ahead;
+      card.action = action;
+      if (cardHandle === undefined || adapter.updateTaskCard === undefined) return;
+      const now = Date.now();
+      if (now - lastCardWrite < CARD_UPDATE_MS) return;
+      lastCardWrite = now;
+      void adapter.updateTaskCard(cardHandle, { ...card }).catch(() => {});
+    };
+
+    const finishCard = (status: "done" | "failed") => {
+      if (cardHandle === undefined || adapter.updateTaskCard === undefined) return;
+      card.status = status;
+      delete card.action;
+      delete card.ahead;
+      void adapter.updateTaskCard(cardHandle, { ...card }).catch(() => {});
+    };
+
     try {
-      const reply = await this.deps.ask(
-        agentName,
-        text,
-        message.identity,
-        message.chatKey ?? message.identity
+      const reply = await this.deps.ask(agentName, text, message.identity, chatKey, onProgress);
+      clearTimeout(ackTimer);
+      finishCard("done");
+      await deliver(
+        reply.trim() === "" ? "Done. (The agent finished without saying anything.)" : reply
       );
-      return reply.trim() === "" ? "Done. (The agent finished without saying anything.)" : reply;
     } catch (error) {
-      return error instanceof Error ? error.message : String(error);
+      clearTimeout(ackTimer);
+      finishCard("failed");
+      await deliver(error instanceof Error ? error.message : String(error));
     }
   }
+}
+
+/** The instruction as a card header: its first line, clamped. */
+function firstLine(text: string): string {
+  const line = text.split("\n", 1)[0] ?? "";
+  return line.length > 80 ? `${line.slice(0, 79)}…` : line;
+}
+
+/** The plain-text acknowledgement, for adapters without cards. */
+function ackLine(card: TaskCardState): string {
+  const who = card.agentName === "" ? "The team" : card.agentName;
+  if (card.status === "queued" && card.ahead !== undefined) {
+    const others = card.ahead === 1 ? "1 request" : `${card.ahead} requests`;
+    return `Got it — ${who} has ${others} ahead of this one. The result will be posted here.`;
+  }
+  return `${who} is on it. This may take a while; the result will be posted here.`;
 }
