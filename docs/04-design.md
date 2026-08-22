@@ -473,3 +473,114 @@ nothing has to be told the capability exists or it never starts.
 The rendering functions themselves live with the things they render — `durable.ts`, `memory.ts`,
 `skills.ts`, `history.ts` — which is where the separation already was. What this adds is the names,
 the order, and one place that states why.
+
+## 23. Conversations: context belongs to the room it happened in
+
+A transcript used to be per-agent, so two groups messaging the same agent read each
+other's context. Now every agent has a **main conversation** — the team room the web
+page, teammates, the scheduler and resume prompts share — and one thread per outside
+chat, keyed by the chat's identity. The main conversation keeps the original
+`conversation.jsonl` filename, so every install that predates conversations wakes up
+with its history exactly where it was.
+
+The bus serializes per (agent, conversation) and runs different conversations of one
+agent **concurrently**: a long team-room task does not block a quick question from a
+chat thread. Three things are keyed per conversation so concurrent workers cannot
+clobber each other: the shell session (each thread keeps its own cwd and env), and the
+plan and todo files. The one shared resource is the screen — an agent has a single
+desktop and the operator watches the team room's — so the desktop tool is offered only
+in the main conversation; side threads work headless, which is exactly what lets them
+run alongside the room. Turn events, the resume ledger and speculative compaction
+summaries all carry their conversation, so a resume lands in the thread it left and a
+page viewing one thread ignores the stream of another.
+
+## 24. People
+
+A person used to be a bearer token. Now they are a Principal: a named subject with a
+role — **viewer** reads, **driver** commands agents, **admin** also changes what the
+system is — and a stable id that several channel identities (a personal phone, a work
+account) resolve to, so one person's history and spend are one person's. An unknown
+identity resolves to a viewer named after itself: a fresh install works and is safe
+before anyone is configured. The file is 0600 because it is the access-control list.
+Spend is attributed to the principal who drove the turn; work nobody drove — a wake, a
+scheduled run — is grouped separately so the parts still sum to the whole.
+
+## 25. The task board
+
+Work that outlives one reply becomes a Task: title, assignee, status
+(open/doing/blocked/review/done/dropped), and a history of who moved it, when, in
+which turn — the turn id on every agent-made change is what links a board movement
+back to the transcript that is its evidence. Ids are small numbers people can say in
+chat, and a counter marker survives compaction so an id never means two things.
+
+The board is advisory like claims, with one enforced exception: **when a task names a
+reviewer, its assignee cannot move it to done** — the attempt lands in `review` with a
+note saying so. A gate the worker can wave itself through is decoration; everything
+else is visible rather than impossible, the same trust model as the rest of the
+system. Agents hold one tool (create/take/update/list) and see their own live tasks in
+every prompt beside the plan, because a board nobody re-reads is a board nobody works
+from.
+
+## 26. The credential vault
+
+A secret is a named value with grants: holder (`agent:<id>`, `principal:<id>`, or
+`*`), optional expiry. Resolution hands back a value only when a live grant covers the
+caller, and every resolution — allowed or refused — is audited, because a credential
+whose use leaves no trace is the thing an audit exists to prevent. An expired or
+unreadable expiry is dead, which is the safe direction. No read path returns a value;
+a list shows names, descriptions and grants.
+
+Delivery is coupled to host execution on purpose: a granted secret enters exactly one
+host command's environment on the operator's machine and never enters the box, never
+a file, never the prompt. A secret an agent needs *inside* the box cannot be kept out
+of it by definition, and the vault refuses that case rather than leaking into it.
+
+## 27. The door out of the box
+
+`RunOnHost` is the one way an agent reaches the machine the orchestrator runs on: a
+USB device, a desktop automation script, a CLI installed on the host. It is off by
+default, and off means the tool is **absent** — not offered and refused — so an agent
+on a box without it never learns it might have asked. On, every host command still
+pauses for a person to approve the exact text, by construction rather than by a
+configurable list an operator might leave empty. Commands run under a directory the
+operator chose (no default: a default would be this code choosing what an agent may
+reach), through the login shell, as a single shell argument so a filename with a
+space is data. Not a security boundary — an approved command runs with the
+orchestrator's privileges, which is the point of approving it — but an accident
+boundary and an audit trail.
+
+## 28. Chat channels
+
+A channel is a front door, not a second product: one message in, the addressed agent
+runs an ordinary turn through the ordinary gates, and what it said goes back as the
+reply. Closed by default — a bot handle is discoverable, and an unauthorised sender is
+told exactly one thing: their own `channel:id`, which is the string an admin needs to
+add them as a person. Permission belongs to the person (their role); context belongs
+to the room (each chat is its own conversation). An approval that pauses a
+channel-driven turn is pushed back to whoever asked, because the person on the phone
+is exactly the person not looking at the page.
+
+## 29. The turn engine, hardened
+
+Four properties added after a comparative review of durable-harness practice:
+
+- **Truncation honesty.** A `max_tokens` stop with output far below the cap this code
+  sent is a response the context squeezed, not an answer. It is discarded — a tool
+  call cut mid-JSON is not evidence — and the round sheds and retries under the same
+  bounded counter as a rejected request. Its cost is recorded *before* that
+  classification runs, an ordering that is now load-bearing: spend must not vanish
+  with a response we chose to throw away.
+- **The race catalog.** Every check-then-act across an await boundary has its two
+  legal histories stated in a test that forces both orders with a gated turn runner.
+  The catalog is the contract: the next concurrency change breaks a named test, not a
+  user.
+- **Mid-turn steering.** The user's queued messages for a conversation are consumed at
+  the running turn's next round boundary, mid-task, with the work intact. Only the
+  user's own messages steer; a teammate's message keeps its own turn and causal
+  record, and scheduled or resume kickoffs are exempt so their reports are never
+  buried inside an unrelated reply.
+- **Safe replay on resume.** The transcript's tool_use block is already the durable
+  record of a call — nothing mutates arguments between the model and the tool — so a
+  resumed turn re-executes interrupted *pure reads* from the block alone, marked as
+  re-run so a second resume does nothing twice. Everything with a side effect keeps
+  the honest "outcome unknown" treatment.
