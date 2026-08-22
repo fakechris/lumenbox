@@ -15,7 +15,36 @@
  * is typing, not where.
  */
 
-import type { ChannelAdapter, InboundMessage } from "./manager.ts";
+import type { ChannelAdapter, InboundMessage, TaskCardState } from "./manager.ts";
+
+/**
+ * A task card as Feishu renders it: header carries the instruction and the status
+ * colour, the body says who is on it and what it is doing right now, the footnote
+ * says who asked. Exported for its test — the mapping from state to card is the
+ * part that can be wrong quietly.
+ */
+export function renderCard(card: TaskCardState): object {
+  const template = { queued: "grey", working: "blue", done: "green", failed: "red" }[card.status];
+  const status =
+    card.status === "queued"
+      ? `Queued${card.ahead !== undefined ? ` — ${card.ahead} ahead` : ""}`
+      : card.status === "working"
+        ? "Working"
+        : card.status === "done"
+          ? "Done"
+          : "Failed";
+  const who = card.agentName === "" ? "The team" : card.agentName;
+  const lines = [`**${who}** · ${status}`];
+  if (card.action !== undefined) lines.push(`\`${card.action}\``);
+  return {
+    config: { wide_screen_mode: true },
+    header: { title: { tag: "plain_text", content: card.title }, template },
+    elements: [
+      { tag: "div", text: { tag: "lark_md", content: lines.join("\n") } },
+      { tag: "note", elements: [{ tag: "plain_text", content: `for ${card.requesterLabel}` }] },
+    ],
+  };
+}
 
 export class FeishuChannel implements ChannelAdapter {
   readonly name = "feishu";
@@ -27,6 +56,11 @@ export class FeishuChannel implements ChannelAdapter {
             create: (options: {
               params: { receive_id_type: string };
               data: { receive_id: string; msg_type: string; content: string };
+            }) => Promise<{ data?: { message_id?: string } } | undefined>;
+            /** What updates a posted card in place. Quiet: Feishu does not notify for it. */
+            patch: (options: {
+              path: { message_id: string };
+              data: { content: string };
             }) => Promise<unknown>;
           };
         };
@@ -107,6 +141,44 @@ export class FeishuChannel implements ChannelAdapter {
     await this.apiClient.im.message.create({
       params: { receive_id_type: "chat_id" },
       data: { receive_id: chatId, msg_type: "text", content: JSON.stringify({ text }) },
+    });
+  }
+
+  /**
+   * Pushes to the chat itself, not to wherever the sender last spoke.
+   *
+   * `send` routes through the identity's last chat, which is right for a notice to a
+   * person and wrong for a task result: the person may have moved on to another group
+   * while the task ran, and the answer belongs to the room that asked.
+   */
+  async sendToChat(chatKey: string, text: string): Promise<void> {
+    const chatId = chatKey.replace(/^feishu:/, "");
+    if (chatId === "" || this.apiClient === undefined) return;
+    await this.apiClient.im.message.create({
+      params: { receive_id_type: "chat_id" },
+      data: { receive_id: chatId, msg_type: "text", content: JSON.stringify({ text }) },
+    });
+  }
+
+  async postTaskCard(chatKey: string, card: TaskCardState): Promise<string | undefined> {
+    const chatId = chatKey.replace(/^feishu:/, "");
+    if (chatId === "" || this.apiClient === undefined) return undefined;
+    const response = await this.apiClient.im.message.create({
+      params: { receive_id_type: "chat_id" },
+      data: {
+        receive_id: chatId,
+        msg_type: "interactive",
+        content: JSON.stringify(renderCard(card)),
+      },
+    });
+    return response?.data?.message_id;
+  }
+
+  async updateTaskCard(handle: string, card: TaskCardState): Promise<void> {
+    if (this.apiClient === undefined) return;
+    await this.apiClient.im.message.patch({
+      path: { message_id: handle },
+      data: { content: JSON.stringify(renderCard(card)) },
     });
   }
 }
