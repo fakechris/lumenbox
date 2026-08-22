@@ -1072,6 +1072,7 @@ export async function runTurn(
       agentId: agent.id,
       agentName: agent.profile.name,
       round,
+      ...(deps.caller?.userId !== undefined ? { principalId: deps.caller.userId } : {}),
     });
     if (permitted !== undefined && !permitted.allow) {
       registry.appendTranscript(agent.id, {

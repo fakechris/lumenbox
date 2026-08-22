@@ -573,3 +573,41 @@ test("compaction does not turn 'always' back into 'ask me every time'", () => {
     cleanup();
   }
 });
+
+test("the per-principal cap refuses one person while the box budget still has room", () => {
+  const dir = mkdtempSync(join(tmpdir(), "agentbox-ppb-"));
+  try {
+    // Chris has spent 900; the per-person cap is 1000, the box budget is 100000.
+    const spentByPrincipal: Record<string, number> = { chris: 900, sam: 100 };
+    const gate = new PolicyGate({
+      path: join(dir, "policy.jsonl"),
+      limits: {
+        budgetTokens: 100_000,
+        perPrincipalBudgetTokens: 1_000,
+        budgetWindowHours: 24,
+        wakesPerWindow: 30,
+        wakeWindowMinutes: 10,
+        approvalRequiredTools: [],
+        approvalRequiredCommands: [],
+      },
+      spentSince: () => 1000, // box total, well under 100k
+      spentSincePrincipal: (_since, principalId) => spentByPrincipal[principalId] ?? 0,
+    });
+
+    // Chris is under his cap: allowed.
+    assert.ok(gate.check({ kind: "model-call", agentId: "a", agentName: "Ada", round: 0, principalId: "chris" }).allow);
+
+    // Push Chris over.
+    spentByPrincipal.chris = 1_000;
+    const refused = gate.check({ kind: "model-call", agentId: "a", agentName: "Ada", round: 0, principalId: "chris" });
+    assert.ok(!refused.allow && /their .*cap/.test(refused.reason), `refused with a per-person reason: ${JSON.stringify(refused)}`);
+
+    // Sam, on the same box, is unaffected — the box budget is not the constraint.
+    assert.ok(gate.check({ kind: "model-call", agentId: "a", agentName: "Ada", round: 0, principalId: "sam" }).allow);
+
+    // Work nobody drove (no principal) is only subject to the box budget.
+    assert.ok(gate.check({ kind: "model-call", agentId: "a", agentName: "Ada", round: 0 }).allow);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});

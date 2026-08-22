@@ -196,6 +196,19 @@ export class UsageLog {
     );
   }
 
+  /** One person's total billed tokens since a moment — for the per-principal cap. */
+  spentSincePrincipal(sinceMs: number, principalId: string): number {
+    let total = 0;
+    for (const record of this.since(0, Number.MAX_SAFE_INTEGER)) {
+      if ((record.principal ?? "") !== principalId) continue;
+      const at = Date.parse(record.at ?? "");
+      if (!Number.isNaN(at) && at < sinceMs) continue;
+      total +=
+        record.inputTokens + record.outputTokens + record.cacheReadTokens + record.cacheWriteTokens;
+    }
+    return total;
+  }
+
   /** Totals over what is still in the file. Not a billing figure: compaction drops the tail. */
   totals(afterSeq = 0): UsageTotals {
     return this.sum(this.since(afterSeq, Number.MAX_SAFE_INTEGER));

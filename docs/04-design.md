@@ -618,3 +618,15 @@ orchestrator caches one client per distinct provider shape, because building one
 turn would be waste. A per-agent provider whose credential is missing is *not*
 silently fallen back to the default — that is the exact silent-model-swap the config
 work fixed — so the turn fails with the clear message `createClient` already throws.
+
+## 32. Per-person spend caps
+
+The box budget (`AGENTBOX_BUDGET_TOKENS`) caps everyone together; a run can be under it
+and still be one person spending everything. A per-person cap
+(`AGENTBOX_PRINCIPAL_BUDGET_TOKENS`) turns the spend attribution of §24 into control:
+"no one channel user gets more than X in the window". The model-call gate carries the
+driving principal, and refuses on their behalf when their own windowed spend is at or
+over the cap — while the same box, and every other person on it, is unaffected. Work
+nobody drove (a wake, a scheduled run) has no principal and is subject only to the box
+budget. Configured the same way the box budget is: an environment variable, or the
+config file's env map.
