@@ -47,6 +47,15 @@ export interface AgentboxConfig {
    * from it is placed inside the box.
    */
   env?: Record<string, string>;
+  /**
+   * Who may drive the agents from a chat channel, as `channel:id` strings
+   * (`telegram:123456`, `feishu:ou_abc`, `dingtalk:staff1`).
+   *
+   * Empty or absent means nobody: a bot handle is discoverable, and "anyone who
+   * finds it owns your machine" is not a default anyone chose. An unauthorised
+   * sender is told their own id, which is exactly what the owner needs to add here.
+   */
+  channelAllow?: string[];
 }
 
 export const DEFAULT_CONFIG: AgentboxConfig = {
@@ -124,7 +133,24 @@ export function loadConfig(onWarn: (message: string) => void = () => {}): Agentb
       ? { baseUrl: readString(raw.baseUrl, "baseUrl", onWarn) }
       : {}),
     ...(readEnvMap(raw.env, onWarn) !== undefined ? { env: readEnvMap(raw.env, onWarn) } : {}),
+    ...(readStringList(raw.channelAllow, "channelAllow", onWarn) !== undefined
+      ? { channelAllow: readStringList(raw.channelAllow, "channelAllow", onWarn) }
+      : {}),
   };
+}
+
+function readStringList(
+  value: unknown,
+  key: string,
+  warn: (message: string) => void
+): string[] | undefined {
+  if (value === undefined || value === null) return undefined;
+  if (!Array.isArray(value)) {
+    warn(`config: ${key} must be an array of strings, ignoring it`);
+    return undefined;
+  }
+  const list = value.filter((item): item is string => typeof item === "string" && item.trim() !== "");
+  return list.length > 0 ? list.map(item => item.trim()) : undefined;
 }
 
 function readString(
@@ -193,6 +219,7 @@ export function applyConfigEnv(config: AgentboxConfig): void {
 export function saveConfig(
   changes: Partial<Record<"provider" | "model" | "baseUrl", string | null>> & {
     env?: Record<string, string | null>;
+    channelAllow?: string[] | null;
   }
 ): string {
   const path = configPath();
@@ -214,6 +241,13 @@ export function saveConfig(
     if (value === undefined) continue;
     if (value === null) delete raw[key];
     else raw[key] = value;
+  }
+  if (changes.channelAllow !== undefined) {
+    if (changes.channelAllow === null || changes.channelAllow.length === 0) {
+      delete raw.channelAllow;
+    } else {
+      raw.channelAllow = changes.channelAllow;
+    }
   }
   if (changes.env !== undefined) {
     const current =

@@ -635,6 +635,15 @@ export const APP_HTML = String.raw`<!doctype html>
       </div>
       <pre id="setboxlog" style="display:none;max-height:140px;overflow:auto;background:var(--code-bg);color:var(--code-text);border:1px solid var(--border);border-radius:var(--radius-md);padding:10px 12px;font-family:var(--font-mono);font-size:11px;line-height:1.6;margin:0;white-space:pre-wrap"></pre>
     </div>
+    <div class="field">
+      <label>Channels</label>
+      <div id="setchannels" style="display:flex;flex-direction:column;gap:6px"></div>
+      <div class="fieldnote">A channel turns on when its credentials are in the environment or the
+        env map of the config file, and answers only the ids below. Anyone else who messages the bot
+        is told their id and nothing more.</div>
+      <input id="setallow" placeholder="telegram:123456, feishu:ou_abc, dingtalk:staff1" spellcheck="false">
+      <div class="fieldnote" id="setallowstatus"></div>
+    </div>
     <div class="field" id="setgrantswrap" style="display:none">
       <label>Standing approvals</label>
       <div id="setgrants" style="display:flex;flex-direction:column;gap:6px"></div>
@@ -782,10 +791,46 @@ function openSettings() {
       settingsProviderChanged();
       renderStandingGrants();
       renderBoxSection();
+      renderChannels();
       $("settingswrap").style.display = "flex";
     })
     .catch(function () { feed("could not load settings", "err"); });
 }
+
+/** Which chat channels exist, whether each is up, and who may use them. */
+function renderChannels() {
+  fetch("/api/channels")
+    .then(function (r) { return r.json(); })
+    .then(function (data) {
+      $("setchannels").innerHTML = (data.channels || []).map(function (ch) {
+        var cls = ch.running ? "ok" : ch.configured ? "bad" : "";
+        return '<div style="display:flex;gap:9px;align-items:center;font-size:13px">' +
+          '<span class="dot ' + cls + '"></span>' +
+          "<span style=\"min-width:70px\">" + esc(ch.name) + "</span>" +
+          '<span class="dim mono" style="font-size:11px">' + esc(ch.detail) + "</span></div>";
+      }).join("");
+      $("setallow").value = (data.allow || []).join(", ");
+      $("setallowstatus").textContent = "";
+    })
+    .catch(function () {});
+}
+
+$("setallow").addEventListener("change", function () {
+  var list = $("setallow").value.split(",").map(function (s) { return s.trim(); })
+    .filter(function (s) { return s !== ""; });
+  fetch("/api/channels/allow", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ allow: list })
+  })
+    .then(function (r) { return r.json(); })
+    .then(function (d) {
+      $("setallowstatus").textContent = d.error
+        ? d.error
+        : "Saved — applies to the next message, no restart needed.";
+    })
+    .catch(function (error) { $("setallowstatus").textContent = error.message; });
+});
 
 function renderBoxSection() {
   $("setboxstate").textContent = boxState.ok
