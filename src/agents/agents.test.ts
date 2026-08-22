@@ -645,7 +645,9 @@ test("every tool is accounted for in the coordinator's set", () => {
   // closed, which is right — but adding a tool would then silently withhold it from three of four
   // agents, and nobody would notice until someone wondered why the reviewer could not use it. This
   // makes adding a tool a decision rather than an omission.
-  const offered = buildTools(true, true).map(tool => tool.name).sort();
+  // With the host door open too, so a tool reachable only in that mode is still
+  // accounted for rather than slipping past because the default build omits it.
+  const offered = buildTools(true, true, undefined, true).map(tool => tool.name).sort();
   const coordinator = [...(STARTER_TEAM.find(profile => profile.name === "Ada")?.tools ?? [])].sort();
   assert.deepEqual(
     offered.filter(name => !coordinator.includes(name)),

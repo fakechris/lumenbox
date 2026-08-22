@@ -25,6 +25,7 @@ import { resolveBoxProvisioner, type BoxProvisioner } from "../box/provisioner.t
 import type { ResolutionConfig } from "../protocol/index.ts";
 import { runTurn, TurnAborted, type TurnEvent } from "./turn.ts";
 import { PolicyGate } from "./policy.ts";
+import type { HostRunner } from "./host-runner.ts";
 import { Rememberer, summariseExchange } from "./remember.ts";
 import { SkillCache } from "./skills.ts";
 import { Scheduler } from "./schedule.ts";
@@ -66,6 +67,12 @@ export interface OrchestratorOptions {
   turns?: TurnLedger | null;
   /** Who has taken which piece of work. `null` keeps none. */
   claims?: Claims | null;
+  /**
+   * The door out of the box, when an operator built one. Absent means no host
+   * execution, and — because the tool is offered only when this is present — an agent
+   * never learns it might have asked.
+   */
+  hostRunner?: HostRunner;
 }
 
 export class Orchestrator {
@@ -341,6 +348,7 @@ export class Orchestrator {
       box: this.box,
       display: this.display,
       resolution: this.resolution,
+      hostRunner: this.options.hostRunner,
       provider: this.provider,
       effort: this.options.effort,
       turns: this.turns,
@@ -542,6 +550,7 @@ export const ALL_TOOLS: readonly string[] = [
   "ReadHistory",
   "ClaimWork",
   "RememberFact",
+  "RunOnHost",
 ];
 
 /** Everyone except the coordinator: building the team is the coordinator's job. */

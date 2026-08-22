@@ -56,6 +56,21 @@ export interface AgentboxConfig {
    * sender is told their own id, which is exactly what the owner needs to add here.
    */
   channelAllow?: string[];
+  /**
+   * Letting an agent run commands on this machine, outside the box.
+   *
+   * Off unless an operator turns it on, because it is the one door through the box's
+   * wall — the way an agent reaches a USB device, an AppleScript, or a `pi`/`claude`
+   * CLI on the host. Enabled, every host command still pauses for approval; `cwd` is
+   * the directory those commands run under, and there is no default for it because a
+   * default would be this code choosing what an agent may reach on someone's machine.
+   */
+  hostExec?: {
+    enabled?: boolean;
+    cwd?: string;
+    timeoutMs?: number;
+    maxOutputBytes?: number;
+  };
 }
 
 export const DEFAULT_CONFIG: AgentboxConfig = {
@@ -136,7 +151,32 @@ export function loadConfig(onWarn: (message: string) => void = () => {}): Agentb
     ...(readStringList(raw.channelAllow, "channelAllow", onWarn) !== undefined
       ? { channelAllow: readStringList(raw.channelAllow, "channelAllow", onWarn) }
       : {}),
+    ...(readHostExec(raw.hostExec, onWarn) !== undefined
+      ? { hostExec: readHostExec(raw.hostExec, onWarn) }
+      : {}),
   };
+}
+
+function readHostExec(
+  value: unknown,
+  warn: (message: string) => void
+): AgentboxConfig["hostExec"] | undefined {
+  if (value === undefined || value === null) return undefined;
+  if (typeof value !== "object" || Array.isArray(value)) {
+    warn("config: hostExec must be an object, ignoring it");
+    return undefined;
+  }
+  const raw = value as Record<string, unknown>;
+  const result: NonNullable<AgentboxConfig["hostExec"]> = {};
+  if (typeof raw.enabled === "boolean") result.enabled = raw.enabled;
+  if (typeof raw.cwd === "string" && raw.cwd.trim() !== "") result.cwd = raw.cwd.trim();
+  if (typeof raw.timeoutMs === "number" && Number.isFinite(raw.timeoutMs)) {
+    result.timeoutMs = raw.timeoutMs;
+  }
+  if (typeof raw.maxOutputBytes === "number" && Number.isFinite(raw.maxOutputBytes)) {
+    result.maxOutputBytes = raw.maxOutputBytes;
+  }
+  return Object.keys(result).length > 0 ? result : undefined;
 }
 
 function readStringList(
@@ -220,6 +260,7 @@ export function saveConfig(
   changes: Partial<Record<"provider" | "model" | "baseUrl", string | null>> & {
     env?: Record<string, string | null>;
     channelAllow?: string[] | null;
+    hostExec?: AgentboxConfig["hostExec"] | null;
   }
 ): string {
   const path = configPath();
@@ -248,6 +289,10 @@ export function saveConfig(
     } else {
       raw.channelAllow = changes.channelAllow;
     }
+  }
+  if (changes.hostExec !== undefined) {
+    if (changes.hostExec === null) delete raw.hostExec;
+    else raw.hostExec = changes.hostExec;
   }
   if (changes.env !== undefined) {
     const current =

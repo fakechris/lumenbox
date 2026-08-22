@@ -636,6 +636,17 @@ export const APP_HTML = String.raw`<!doctype html>
       <pre id="setboxlog" style="display:none;max-height:140px;overflow:auto;background:var(--code-bg);color:var(--code-text);border:1px solid var(--border);border-radius:var(--radius-md);padding:10px 12px;font-family:var(--font-mono);font-size:11px;line-height:1.6;margin:0;white-space:pre-wrap"></pre>
     </div>
     <div class="field">
+      <label>Host execution</label>
+      <label class="radio"><input type="checkbox" id="sethostenabled">
+        Let agents run commands on this computer, outside the box</label>
+      <input id="sethostcwd" placeholder="Working directory, e.g. /Users/you/projects" spellcheck="false">
+      <div class="fieldnote">Off by default, and the one door through the box's wall — the way an
+        agent reaches a USB device, an AppleScript, or a CLI tool on the host like <code>pi</code>,
+        <code>claude</code> or <code>git</code>. Every host command still stops for your approval
+        before it runs. Takes effect after a restart.</div>
+      <div class="fieldnote" id="sethoststatus"></div>
+    </div>
+    <div class="field">
       <label>Channels</label>
       <div id="setchannels" style="display:flex;flex-direction:column;gap:6px"></div>
       <div class="fieldnote">A channel turns on when its credentials are in the environment or the
@@ -787,6 +798,12 @@ function openSettings() {
       $("setmodel").value = (data.config && data.config.model) || "";
       $("setbase").value = (data.config && data.config.baseUrl) || "";
       $("setkey").value = "";
+      var host = data.hostExec || {};
+      $("sethostenabled").checked = !!host.enabled;
+      $("sethostcwd").value = host.cwd || "";
+      $("sethoststatus").textContent = host.enabled
+        ? (host.unavailableReason ? "Enabled, but: " + host.unavailableReason : "Enabled and ready.")
+        : "";
       $("setstatus").textContent = "Now running: " + (data.current || "");
       settingsProviderChanged();
       renderStandingGrants();
@@ -935,6 +952,7 @@ function saveSettings(thenRestart) {
   body.baseUrl = base === "" ? null : base;
   var key = $("setkey").value.trim();
   if (key !== "") body.key = key;
+  body.hostExec = { enabled: $("sethostenabled").checked, cwd: $("sethostcwd").value.trim() };
   $("setstatus").textContent = "Saving…";
   fetch("/api/config", {
     method: "POST",
