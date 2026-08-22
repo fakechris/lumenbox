@@ -753,7 +753,7 @@ export async function runTurn(
       transcript: registry.readTranscript(agent.id, conversation),
       // Read fresh, which is what makes the plan and the todo list survive a compaction: they are in
       // the prompt rather than in the history a summary replaces.
-      durable: registry.readDurableState(agent.id),
+      durable: registry.readDurableState(agent.id, conversation),
       resolution: deps.resolution,
       agentsRoot: registry.root,
       hasBox: box !== undefined,
@@ -825,7 +825,12 @@ export async function runTurn(
     box !== undefined,
     provider.vision,
     agent.profile.tools,
-    deps.hostRunner?.enabled === true
+    deps.hostRunner?.enabled === true,
+    // The desktop is offered only in the main conversation: an agent has one screen,
+    // the operator is watching the team room's, and a side chat driving it would fight
+    // for pixels with the room. Side conversations keep shell, files and the rest and
+    // do their work headless — which is what lets them run at the same time as the room.
+    conversation === MAIN_CONVERSATION
   );
 
   // One entry per completed round, for the loop and progress judgements. Held out here rather than
@@ -1261,6 +1266,7 @@ export async function runTurn(
             boxOwner: deps.boxOwner,
             hostRunner: deps.hostRunner,
             vault: deps.vault,
+            conversation,
           }
         );
       } catch (error) {
@@ -1308,7 +1314,7 @@ export async function runTurn(
     // tools ran, so a todo ticked off during the round counts as the change it is.
     rounds.push({
       signatures: toolUses.map(use => signatureOf(use.name, use.input)),
-      stateHash: stateHashOf(registry.readDurableState(agent.id)),
+      stateHash: stateHashOf(registry.readDurableState(agent.id, conversation)),
     });
 
     // Detected as it starts rather than at the limit. An agent repeating one call has already wasted
