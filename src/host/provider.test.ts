@@ -9,7 +9,7 @@
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { describeProvider, providerNames, resolveProvider } from "./provider.ts";
+import { describeProvider, effectiveProviderFor, providerNames, resolveProvider } from "./provider.ts";
 import { buildTools } from "./tools.ts";
 import { buildSystemPrompt } from "./prompt.ts";
 import { AgentRegistry } from "../agents/registry.ts";
@@ -195,4 +195,24 @@ test("describeProvider surfaces what is missing", () => {
     assert.match(describeProvider(resolveProvider("minimax")), /no prompt caching/);
     assert.doesNotMatch(describeProvider(resolveProvider("anthropic")), /no /);
   });
+});
+
+test("effectiveProviderFor: an agent's override wins; no override reuses the default object", () => {
+  const fallback = resolveProvider("anthropic");
+
+  // No override → the very same object, so the caller reuses the default client.
+  assert.equal(effectiveProviderFor({}, fallback), fallback, "identity, not a copy");
+  assert.equal(effectiveProviderFor({ provider: "", model: "" }, fallback), fallback, "empty is no override");
+
+  // Model-only override keeps the provider, swaps the model, on a fresh object.
+  const modelOnly = effectiveProviderFor({ model: "claude-haiku-4-5" }, fallback);
+  assert.notEqual(modelOnly, fallback, "a copy, so the default is untouched");
+  assert.equal(modelOnly.label, "Anthropic");
+  assert.equal(modelOnly.model, "claude-haiku-4-5");
+  assert.equal(fallback.model, "claude-opus-5", "the default object was not mutated");
+
+  // Provider override resolves that preset; a model on top applies to it.
+  const other = effectiveProviderFor({ provider: "minimax", model: "MiniMax-M2" }, fallback);
+  assert.equal(other.label, "MiniMax (China)");
+  assert.equal(other.model, "MiniMax-M2");
 });

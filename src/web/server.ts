@@ -1417,6 +1417,8 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
                 // null means unrestricted — every tool, including ones added later.
                 tools: record.profile.tools ?? null,
                 ...(record.profile.scopeId !== undefined ? { scopeId: record.profile.scopeId } : {}),
+                ...(record.profile.provider !== undefined ? { provider: record.profile.provider } : {}),
+                ...(record.profile.model !== undefined ? { model: record.profile.model } : {}),
                 // Every agent has its own desktop, so the UI shows whichever one
                 // belongs to the agent you are looking at.
                 displayIndex: index,
@@ -1498,6 +1500,8 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
             // front, which is the single-user case and stays as it was.
             ...(caller.userId !== undefined ? { ownerUserId: caller.userId } : {}),
             ...(typeof body.scopeId === "string" && body.scopeId !== "" ? { scopeId: body.scopeId } : {}),
+            ...(typeof body.provider === "string" && body.provider !== "" ? { provider: body.provider } : {}),
+            ...(typeof body.model === "string" && body.model !== "" ? { model: body.model } : {}),
             visibility: body.visibility === "private" ? "private" : "shared",
           });
           log(
@@ -1570,6 +1574,8 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
               ? { tools: tools === null || tools.length >= ALL_TOOLS.length ? null : tools }
               : {}),
             ...(typeof body.scopeId === "string" ? { scopeId: body.scopeId === "" ? null : body.scopeId } : {}),
+            ...(typeof body.provider === "string" ? { provider: body.provider === "" ? null : body.provider } : {}),
+            ...(typeof body.model === "string" ? { model: body.model === "" ? null : body.model } : {}),
           });
           log(`updated agent ${updated.profile.name} (${agentId}) from the UI`);
           send(res, 200, { id: agentId, name: updated.profile.name });

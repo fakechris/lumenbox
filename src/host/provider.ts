@@ -395,6 +395,32 @@ export function resolveProvider(name?: string, configuredDefault?: string): Prov
   return profile;
 }
 
+/**
+ * The provider an agent runs on: its own override, or the installation default.
+ *
+ * Pure and separate from client-building so the decision is testable without a
+ * credential in the environment. Returns the fallback object itself (not a copy) when
+ * there is no override, so callers can reuse the default client; a real override is a
+ * fresh profile with the model applied.
+ */
+export function effectiveProviderFor(
+  override: { provider?: string; model?: string },
+  fallback: ProviderProfile
+): ProviderProfile {
+  if (
+    (override.provider === undefined || override.provider === "") &&
+    (override.model === undefined || override.model === "")
+  ) {
+    return fallback;
+  }
+  const profile =
+    override.provider !== undefined && override.provider !== ""
+      ? resolveProvider(override.provider)
+      : { ...fallback };
+  if (override.model !== undefined && override.model !== "") profile.model = override.model;
+  return profile;
+}
+
 export class MissingCredentialError extends Error {
   constructor(profile: ProviderProfile) {
     super(

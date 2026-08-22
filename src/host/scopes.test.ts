@@ -76,10 +76,8 @@ test("a broken scopes file is empty, not fatal", () => {
 
 test("a scope's tool list replaces the agent's own when both are set", () => {
   // The effective-tools rule the turn applies: scope wins. Modeled here directly.
-  const scopeTools = ["bash", "read_file"];
   const profileTools = ["bash", "read_file", "write_file", "computer"];
-  const effective = scopeTools ?? profileTools;
-  assert.deepEqual(effective, scopeTools, "in a scope, the scope defines the tools");
-  const noScope = undefined ?? profileTools;
-  assert.deepEqual(noScope, profileTools, "with no scope, the profile's own list stands");
+  const effectiveTools = (scopeTools: string[] | undefined) => scopeTools ?? profileTools;
+  assert.deepEqual(effectiveTools(["bash", "read_file"]), ["bash", "read_file"], "in a scope, the scope defines the tools");
+  assert.deepEqual(effectiveTools(undefined), profileTools, "with no scope, the profile's own list stands");
 });
