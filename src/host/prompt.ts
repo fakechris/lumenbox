@@ -11,6 +11,7 @@ import type { AgentRecord } from "../agents/registry.ts";
 import type { InboundMessage } from "../agents/bus.ts";
 import { AGENT_WAKE_CUE } from "../agents/bus.ts";
 import { renderDurableBlocks, type DurableState } from "./durable.ts";
+import { describeTask, type Task } from "./tasks.ts";
 import {
   recall,
   renderMemory,
@@ -187,6 +188,13 @@ export interface PromptContext {
    * rebuilt every turn, so there is no path by which a summary could lose them. See durable.ts.
    */
   durable?: DurableState;
+  /**
+   * The agent's live tasks from the team board, already filtered to this agent.
+   *
+   * In the prompt for the same reason the plan is: a board nobody re-reads is a board
+   * nobody works from. Only this agent's — the whole board is a `Tasks list` call away.
+   */
+  tasks?: readonly Task[];
 }
 
 /** One teammate line: name, id, and a clamped description. */
@@ -336,8 +344,26 @@ export const STABLE_SECTIONS: readonly PromptSection[] = [
  * 6. **team** — who else exists. Last, because delegation is a decision made after the work is
  *    understood, not a lens for reading it.
  */
+/** The agent's plate, as board rows. Empty renders nothing — no section for no tasks. */
+function renderTasks(context: PromptContext): string {
+  const tasks = context.tasks ?? [];
+  if (tasks.length === 0) return "";
+  const nameOf = (id: string) =>
+    context.teammates.find(mate => mate.id === id)?.profile.name ?? id;
+  const rows = tasks.slice(0, 10).map(task => `- ${describeTask(task, nameOf)}`);
+  const more = tasks.length > 10 ? `\n(and ${tasks.length - 10} more — Tasks list shows all)` : "";
+  return (
+    "## Your tasks on the board\n\n" +
+    rows.join("\n") +
+    more +
+    "\n\nMove them with the Tasks tool as they progress; a task in `review` is waiting on its " +
+    "reviewer, not on you. Finish what is doing before taking more."
+  );
+}
+
 export const VOLATILE_SECTIONS: readonly PromptSection[] = [
   { name: "plan", render: context => renderDurableBlocks(context.durable ?? {}) },
+  { name: "tasks", render: renderTasks },
   {
     name: "memory",
     render: context => renderMemory(context.memoryRecall ?? recall(context.memory)),

@@ -126,6 +126,7 @@ import { HostRunner, hostRunnerConfig } from "../host/host-runner.ts";
 import { ALL_TOOLS } from "../host/orchestrator.ts";
 import { PRESET_MODELS, providerNames, resolveProvider, testProvider } from "../host/provider.ts";
 import { Principals, roleAtLeast, type Principal, type Role } from "../host/principals.ts";
+import { isTaskStatus } from "../host/tasks.ts";
 import { Vault, type Grant } from "../host/vault.ts";
 import { seedStarterSkills } from "../host/starter-skills.ts";
 import { ActivityLog } from "./activity.ts";
@@ -769,6 +770,72 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
               .filter(agent => orchestrator.policy.isStopped(agent.id))
               .map(agent => agent.id),
           });
+          return;
+        }
+
+        // The task board: work as an object. Reading is open to any session; moving
+        // things needs the driver role, same as prompting — a board a viewer can
+        // rearrange is not a record of anything.
+        if (route === "GET /api/tasks") {
+          const board = orchestrator.tasks;
+          send(res, 200, { tasks: board === undefined ? [] : board.list() });
+          return;
+        }
+
+        if (route === "POST /api/tasks") {
+          if (refused()) return;
+          const board = orchestrator.tasks;
+          if (board === undefined) {
+            send(res, 503, { error: "No task board on this installation." });
+            return;
+          }
+          const body = await readJson(req);
+          const created = board.create({
+            title: String(body.title ?? ""),
+            ...(typeof body.description === "string" ? { description: body.description } : {}),
+            requester: caller.userId ?? "web",
+            ...(typeof body.assigneeId === "string" && body.assigneeId !== ""
+              ? { assigneeId: body.assigneeId }
+              : {}),
+            ...(typeof body.reviewerId === "string" && body.reviewerId !== ""
+              ? { reviewerId: body.reviewerId }
+              : {}),
+          });
+          if (created === undefined) {
+            send(res, 400, { error: "A task needs a title." });
+            return;
+          }
+          send(res, 200, { task: created });
+          return;
+        }
+
+        if (route === "POST /api/tasks/update") {
+          if (refused()) return;
+          const board = orchestrator.tasks;
+          if (board === undefined) {
+            send(res, 503, { error: "No task board on this installation." });
+            return;
+          }
+          const body = await readJson(req);
+          const status = String(body.status ?? "");
+          const updated = board.update(
+            String(body.id ?? ""),
+            {
+              ...(isTaskStatus(status) ? { status } : {}),
+              ...(typeof body.note === "string" && body.note.trim() !== ""
+                ? { note: body.note }
+                : {}),
+              ...(typeof body.assigneeId === "string"
+                ? { assigneeId: body.assigneeId === "" ? null : body.assigneeId }
+                : {}),
+            },
+            caller.userId ?? "web"
+          );
+          if (updated === undefined) {
+            send(res, 404, { error: `No task ${String(body.id ?? "")}.` });
+            return;
+          }
+          send(res, 200, { task: updated.task, ...(updated.coerced ? { note: updated.coerced } : {}) });
           return;
         }
 

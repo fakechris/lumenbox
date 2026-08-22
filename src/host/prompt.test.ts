@@ -145,7 +145,8 @@ test("the prompt's sections have an order, and it is the documented one", () => 
   // are appended by whoever adds one, and "wherever it landed" is not a reason.
   assert.deepEqual(
     VOLATILE_SECTIONS.map(section => section.name),
-    ["plan", "memory", "skills", "history", "shared-memory", "team"]
+    // tasks sits beside plan: both are current intent, the board's just shared.
+    ["plan", "tasks", "memory", "skills", "history", "shared-memory", "team"]
   );
 
   // The one that carries an argument: an agent meets its own objective before its background. Put

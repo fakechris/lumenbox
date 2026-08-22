@@ -18,6 +18,7 @@ import { describeHistory, readHistory } from "./history.ts";
 import { dedupeKey, validateRecord } from "./memory.ts";
 import { Claims, heldElsewhere } from "./claims.ts";
 import { MAIN_CONVERSATION } from "../agents/registry.ts";
+import { describeTask, isLive, isTaskStatus, TASK_STATUSES, type TaskStore } from "./tasks.ts";
 import { ABSENT, versionOf, type FileVersions } from "./files.ts";
 import {
   describeTodos,
@@ -97,6 +98,14 @@ export interface ToolContext {
    * keep separate working directories and separate intent. Absent means the main one.
    */
   conversation?: string;
+  /** The team's task board. Absent means the Tasks tool answers that there is none. */
+  tasks?: TaskStore;
+  /**
+   * The turn this call belongs to — the Run, in work-control terms. Recorded on every
+   * task change an agent makes, which is what links a board movement back to the
+   * transcript that is its evidence.
+   */
+  turnId?: string;
 }
 
 /** A tool result: text for the model, plus optional images. */
@@ -603,6 +612,62 @@ export function buildTools(
           },
         },
         required: ["fact"],
+      },
+    },
+    {
+      name: "Tasks",
+      description:
+        "The team's task board — work as an object everyone can see, not a message that " +
+        "scrolls away. Use it when work outlives one reply: create a task before starting " +
+        "something a teammate or the user will want to track, take a task before working " +
+        "it so nobody duplicates you, move it as it progresses, and put a note on it when " +
+        "something a successor needs to know happens. Statuses: open (nobody on it), " +
+        "doing, blocked (say why in the note), review (finished, awaiting acceptance), " +
+        "done, dropped. If a task names a reviewer, only the reviewer can move it to " +
+        "done — your finish is `review`, and that is not a formality you can skip. " +
+        "Your own live tasks are already in your instructions every turn; `list` is for " +
+        "seeing the whole board.",
+      input_schema: {
+        type: "object",
+        properties: {
+          action: {
+            type: "string",
+            enum: ["create", "take", "update", "list"],
+            description:
+              "create a task; take one (assigns it to you, status doing); update one's " +
+              "status/note/assignee; list the board.",
+          },
+          id: { type: "string", description: "The task id, e.g. \"t12\". For take and update." },
+          title: { type: "string", description: "For create: one line of what is to be done." },
+          description: { type: "string", description: "For create: details a stranger would need." },
+          status: {
+            type: "string",
+            enum: [...TASK_STATUSES],
+            description: "For update: where it is now.",
+          },
+          note: {
+            type: "string",
+            description: "For update: what happened — a blocker, a finding, a handoff note.",
+          },
+          assignee: {
+            type: "string",
+            description:
+              "For create or update: an agent's id or name to put on it. Omit on create to " +
+              "leave it open for anyone.",
+          },
+          reviewer: {
+            type: "string",
+            description:
+              "For create: who must accept it before it is done. Name a reviewer for work " +
+              "worth a second pair of eyes; leave off for routine work.",
+          },
+          list_status: {
+            type: "string",
+            enum: [...TASK_STATUSES],
+            description: "For list: only this status. Omit for everything live.",
+          },
+        },
+        required: ["action"],
       },
     }
   );
@@ -1128,6 +1193,100 @@ export async function dispatchTool(
       };
       const whose = target.id === context.agent.id ? "" : `${target.profile.name}: `;
       return { text: whose + describeHistory(readHistory(entries, query), query) };
+    }
+
+    case "Tasks": {
+      const board = context.tasks;
+      if (board === undefined) {
+        return { text: "There is no task board on this installation.", isError: true };
+      }
+      const action = String(input.action ?? "");
+      const nameOf = (id: string) => context.registry.tryGet(id)?.profile.name ?? id;
+      /** An id or a name; teammates say names, the board stores ids. */
+      const resolveAgent = (raw: string): string | undefined => {
+        const direct = context.registry.tryGet(raw);
+        if (direct !== undefined) return direct.id;
+        const byName = context.registry
+          .list()
+          .find(agent => agent.profile.name.toLowerCase() === raw.toLowerCase());
+        return byName?.id;
+      };
+
+      if (action === "list") {
+        const wanted = String(input.list_status ?? "");
+        const all = isTaskStatus(wanted)
+          ? board.list({ status: wanted })
+          : board.list().filter(task => isLive(task.status));
+        if (all.length === 0) return { text: "The board is empty for that view." };
+        return { text: all.map(task => describeTask(task, nameOf)).join("\n") };
+      }
+
+      if (action === "create") {
+        const assigneeRaw = String(input.assignee ?? "").trim();
+        const reviewerRaw = String(input.reviewer ?? "").trim();
+        const assigneeId = assigneeRaw === "" ? undefined : resolveAgent(assigneeRaw);
+        const reviewerId = reviewerRaw === "" ? undefined : resolveAgent(reviewerRaw);
+        if (assigneeRaw !== "" && assigneeId === undefined) {
+          return { text: `No agent called "${assigneeRaw}" to assign.`, isError: true };
+        }
+        if (reviewerRaw !== "" && reviewerId === undefined) {
+          return { text: `No agent called "${reviewerRaw}" to review.`, isError: true };
+        }
+        const created = board.create({
+          title: String(input.title ?? ""),
+          ...(typeof input.description === "string" ? { description: input.description } : {}),
+          requester: context.agent.id,
+          ...(assigneeId !== undefined ? { assigneeId } : {}),
+          ...(reviewerId !== undefined ? { reviewerId } : {}),
+          ...(context.conversation !== undefined ? { conversation: context.conversation } : {}),
+        });
+        if (created === undefined) return { text: "A task needs a title.", isError: true };
+        return { text: `Created ${describeTask(created, nameOf)}.` };
+      }
+
+      if (action === "take") {
+        const taken = board.update(
+          String(input.id ?? ""),
+          { assigneeId: context.agent.id, status: "doing" },
+          context.agent.id,
+          context.turnId
+        );
+        if (taken === undefined) {
+          return { text: `No task ${String(input.id ?? "")} on the board.`, isError: true };
+        }
+        return { text: `You are on it: ${describeTask(taken.task, nameOf)}.` };
+      }
+
+      if (action === "update") {
+        const status = String(input.status ?? "");
+        const assigneeRaw = String(input.assignee ?? "").trim();
+        const assigneeId = assigneeRaw === "" ? undefined : resolveAgent(assigneeRaw);
+        if (assigneeRaw !== "" && assigneeId === undefined) {
+          return { text: `No agent called "${assigneeRaw}" to assign.`, isError: true };
+        }
+        const updated = board.update(
+          String(input.id ?? ""),
+          {
+            ...(isTaskStatus(status) ? { status } : {}),
+            ...(typeof input.note === "string" && input.note.trim() !== ""
+              ? { note: input.note }
+              : {}),
+            ...(assigneeId !== undefined ? { assigneeId } : {}),
+          },
+          context.agent.id,
+          context.turnId
+        );
+        if (updated === undefined) {
+          return { text: `No task ${String(input.id ?? "")} on the board.`, isError: true };
+        }
+        return {
+          text:
+            `${describeTask(updated.task, nameOf)}.` +
+            (updated.coerced !== undefined ? `\n\n${updated.coerced}` : ""),
+        };
+      }
+
+      return { text: `Unknown action "${action}". Use create, take, update or list.`, isError: true };
     }
 
     case "ClaimWork": {

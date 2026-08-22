@@ -551,6 +551,7 @@ export const APP_HTML = String.raw`<!doctype html>
     <span class="lead">
       <a href="#" id="tabdesktop" class="tab on">Desktop</a>
       <a href="#" id="tabfiles" class="tab">Files</a>
+      <a href="#" id="tabtasks" class="tab">Tasks</a>
       <span id="desktoptitle"></span>
     </span>
     <span class="headactions">
@@ -590,6 +591,16 @@ export const APP_HTML = String.raw`<!doctype html>
       <div class="scroll" id="fileslist" style="width:44%;border-right:1px solid var(--border)"></div>
       <div class="scroll" id="filespreview" style="flex:1"><div class="dim" style="padding:10px 14px">Select a file.</div></div>
     </div>
+  </div>
+  <!-- The task board: work as an object the whole team sees. Rows grouped by status;
+       creating and moving needs the driver role, same as prompting. -->
+  <div id="tasksview" style="display:none;flex:1;min-height:0;flex-direction:column">
+    <div class="bar" style="display:flex;gap:8px;align-items:center;border-bottom:1px solid var(--border)">
+      <input id="tasknew" placeholder="New task title&hellip;" spellcheck="false" style="flex:1;min-width:0;padding:4px 9px;border-radius:var(--radius-input);border:1px solid var(--border-strong);background:var(--surface);color:var(--text);font:inherit;font-size:13px">
+      <select id="taskassign" style="height:28px;border-radius:var(--radius-input);border:1px solid var(--border-strong);background:var(--surface);color:var(--text);font-size:12px"></select>
+      <button class="btn sm" id="taskadd">Add</button>
+    </div>
+    <div class="scroll" id="tasklist"></div>
   </div>
   <div class="eyebrow-row activityhead"><span class="eyebrow">Activity &mdash; all agents</span></div>
   <div class="feed" id="feed"></div>
@@ -1791,17 +1802,103 @@ filesView.addEventListener("drop", function (event) {
   uploadFiles(event.dataTransfer && event.dataTransfer.files);
 });
 
-/** Which of the two views the right-hand pane is showing. */
+/** Which of the three views the right-hand pane is showing. */
 function showTab(which) {
-  var files = which === "files";
-  $("desktopview").style.display = files ? "none" : "";
-  $("filesview").style.display = files ? "flex" : "none";
-  $("tabfiles").className = "tab" + (files ? " on" : "");
-  $("tabdesktop").className = "tab" + (files ? "" : " on");
-  if (files) refreshFiles();
+  $("desktopview").style.display = which === "desktop" ? "" : "none";
+  $("filesview").style.display = which === "files" ? "flex" : "none";
+  $("tasksview").style.display = which === "tasks" ? "flex" : "none";
+  $("tabdesktop").className = "tab" + (which === "desktop" ? " on" : "");
+  $("tabfiles").className = "tab" + (which === "files" ? " on" : "");
+  $("tabtasks").className = "tab" + (which === "tasks" ? " on" : "");
+  if (which === "files") refreshFiles();
+  if (which === "tasks") refreshTasks();
 }
 document.getElementById("tabdesktop").addEventListener("click", function (e) { e.preventDefault(); showTab("desktop"); });
 document.getElementById("tabfiles").addEventListener("click", function (e) { e.preventDefault(); showTab("files"); });
+document.getElementById("tabtasks").addEventListener("click", function (e) { e.preventDefault(); showTab("tasks"); });
+
+// ── the task board ─────────────────────────────────────────────────────────
+var TASK_STATUSES = ["open", "doing", "blocked", "review", "done", "dropped"];
+
+function taskStatusColor(status) {
+  if (status === "doing") return "var(--accent)";
+  if (status === "blocked") return "var(--warn)";
+  if (status === "review") return "var(--accent-2)";
+  if (status === "done") return "var(--success)";
+  if (status === "dropped") return "var(--muted)";
+  return "var(--muted)";
+}
+
+function refreshTasks() {
+  // The assignee picker doubles as the roster; refreshed with the board.
+  $("taskassign").innerHTML = '<option value="">unassigned</option>' +
+    agents.map(function (a) { return '<option value="' + esc(a.id) + '">' + esc(a.name) + "</option>"; }).join("");
+  return fetch("/api/tasks")
+    .then(function (r) { return r.json(); })
+    .then(function (data) {
+      var tasks = data.tasks || [];
+      if (!tasks.length) {
+        $("tasklist").innerHTML = '<div class="dim" style="padding:12px 16px;font-size:13px">Nothing on the board. Add a task above, or an agent will when work outlives one reply.</div>';
+        return;
+      }
+      // Live statuses first, closed at the bottom; within a group, newest change first.
+      var order = { open: 0, doing: 1, blocked: 2, review: 3, done: 4, dropped: 5 };
+      tasks.sort(function (a, b) {
+        return (order[a.status] - order[b.status]) || b.updatedAt.localeCompare(a.updatedAt);
+      });
+      $("tasklist").innerHTML = tasks.map(function (t) {
+        var assignee = t.assigneeId ? nameOf(t.assigneeId) : "unassigned";
+        var reviewer = t.reviewerId ? " · review by " + esc(nameOf(t.reviewerId)) : "";
+        var last = t.history && t.history.length ? t.history[t.history.length - 1] : null;
+        var lastNote = last && last.note ? esc(last.note) : "";
+        return '<div style="padding:10px 16px;border-bottom:1px solid var(--border)">' +
+          '<div style="display:flex;gap:9px;align-items:baseline">' +
+            '<span class="mono" style="font-size:11px;color:var(--muted)">' + esc(t.id) + "</span>" +
+            '<span style="flex:1;font-size:13px;font-weight:500">' + esc(t.title) + "</span>" +
+            '<select data-task="' + esc(t.id) + '" style="height:24px;border-radius:6px;border:1px solid var(--border);background:var(--surface);color:' + taskStatusColor(t.status) + ';font-size:11px">' +
+              TASK_STATUSES.map(function (s) {
+                return '<option value="' + s + '"' + (s === t.status ? " selected" : "") + ">" + s + "</option>";
+              }).join("") +
+            "</select>" +
+          "</div>" +
+          '<div class="dim" style="font-size:11px;padding-left:26px">' + esc(assignee) + reviewer +
+            (lastNote ? ' — <span style="font-style:italic">' + lastNote + "</span>" : "") + "</div>" +
+        "</div>";
+      }).join("");
+    })
+    .catch(function () {});
+}
+
+$("taskadd").onclick = function () {
+  var title = $("tasknew").value.trim();
+  if (!title) return;
+  fetch("/api/tasks", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ title: title, assigneeId: $("taskassign").value })
+  }).then(function () { $("tasknew").value = ""; refreshTasks(); });
+};
+
+document.getElementById("tasklist").addEventListener("change", function (event) {
+  var id = event.target.getAttribute && event.target.getAttribute("data-task");
+  if (!id) return;
+  fetch("/api/tasks/update", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ id: id, status: event.target.value })
+  })
+    .then(function (r) { return r.json(); })
+    .then(function (d) {
+      // The review gate may have redirected the move; re-render shows the truth.
+      if (d.note) feed(esc(d.note), "warn");
+      refreshTasks();
+    });
+});
+
+// The board changes as agents work; refresh it while it is the visible tab.
+setInterval(function () {
+  if ($("tasksview").style.display !== "none") refreshTasks();
+}, 8000);
 
 /**
  * Turns a work path an agent mentioned into a link.
