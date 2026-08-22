@@ -130,6 +130,8 @@ export class Orchestrator {
         totals.cacheWriteTokens
       );
     },
+    spentSincePrincipal: (sinceMs, principalId) =>
+      this.usage.spentSincePrincipal(sinceMs, principalId),
     log: line => console.error(`[policy] ${line}`),
   });
 

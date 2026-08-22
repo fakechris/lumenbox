@@ -39,7 +39,7 @@ import { agentboxHome } from "../config.ts";
 
 export type PolicyRequest =
   /** About to call the model. Asked once per round. */
-  | { kind: "model-call"; agentId: string; agentName: string; round: number }
+  | { kind: "model-call"; agentId: string; agentName: string; round: number; principalId?: string }
   /** About to wake a teammate. Asked before the message is delivered. */
   | { kind: "wake"; agentId: string; agentName: string; targetId: string; targetName: string }
   /** About to run a tool. Asked with the tool's real input, before anything happens. */
@@ -88,6 +88,12 @@ export interface PolicyLimits {
    * some number that would surprise someone.
    */
   budgetTokens?: number;
+  /**
+   * A ceiling each person's own spend may not cross in the window — "no one channel
+   * user gets more than X". Distinct from the box-wide budgetTokens, which caps
+   * everyone together; a run can be under the box budget and over one person's.
+   */
+  perPrincipalBudgetTokens?: number;
   /** The window the budget applies over, in hours. */
   budgetWindowHours: number;
   /** How many times one agent may wake teammates in the window below. */
@@ -113,6 +119,7 @@ export interface PolicyLimits {
 
 export const DEFAULT_LIMITS: PolicyLimits = {
   budgetTokens: envLimit("AGENTBOX_BUDGET_TOKENS"),
+  perPrincipalBudgetTokens: envLimit("AGENTBOX_PRINCIPAL_BUDGET_TOKENS"),
   budgetWindowHours: envLimit("AGENTBOX_BUDGET_WINDOW_HOURS") ?? 24,
   wakesPerWindow: envLimit("AGENTBOX_WAKES_PER_WINDOW") ?? 30,
   wakeWindowMinutes: envLimit("AGENTBOX_WAKE_WINDOW_MINUTES") ?? 10,
@@ -207,6 +214,8 @@ export interface PolicyGateOptions {
    * records happened to push the old ones out of the file.
    */
   spentSince?: (sinceMs: number) => number;
+  /** Spend since a moment for one person, for the per-principal cap. */
+  spentSincePrincipal?: (sinceMs: number, principalId: string) => number;
   /**
    * Why spend cannot be measured right now, when it cannot.
    *
@@ -233,6 +242,7 @@ export class PolicyGate {
   private readonly now: () => Date;
   private readonly log: (line: string) => void;
   private readonly spentSince: (sinceMs: number) => number;
+  private readonly spentSincePrincipal: (sinceMs: number, principalId: string) => number;
   private readonly spendUnavailable: () => string | undefined;
 
   /**
@@ -269,6 +279,7 @@ export class PolicyGate {
     this.log = options.log ?? (() => {});
     this.spentSince = options.spentSince ?? (() => 0);
     this.spendUnavailable = options.spendUnavailable ?? (() => undefined);
+    this.spentSincePrincipal = options.spentSincePrincipal ?? (() => 0);
     this.replay();
   }
 
@@ -329,12 +340,26 @@ export class PolicyGate {
       };
     }
 
-    if (request.kind === "model-call") return { decision: this.decideSpend() };
+    if (request.kind === "model-call") return { decision: this.decideSpend(request.principalId) };
     if (request.kind === "wake") return { decision: this.decideWake(request.agentId) };
     return this.decideTool(request);
   }
 
-  private decideSpend(): PolicyDecision {
+  private decideSpend(principalId?: string): PolicyDecision {
+    const perPerson = this.limits.perPrincipalBudgetTokens;
+    if (perPerson !== undefined && principalId !== undefined) {
+      const windowMs = Math.max(0, this.limits.budgetWindowHours) * 3_600_000;
+      const theirs = this.spentSincePrincipal(this.now().getTime() - windowMs, principalId);
+      if (theirs >= perPerson) {
+        return {
+          allow: false,
+          reason:
+            `This person has spent ${theirs} tokens in the last ${this.limits.budgetWindowHours}h, ` +
+            `at or over their ${perPerson}-token cap. No further model calls will be made on their ` +
+            `behalf until the window rolls over or the cap is raised. Stop here and say so.`,
+        };
+      }
+    }
     const budget = this.limits.budgetTokens;
     // No ceiling means nothing depends on the number, so a broken accounting file is not this
     // function's problem and refusing over it would be gratuitous.
