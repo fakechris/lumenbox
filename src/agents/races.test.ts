@@ -309,3 +309,87 @@ test("R5: interleaved arrivals never cross lanes, whatever the order", async () 
     cleanup();
   }
 });
+
+// ── R6: the user speaks while a turn runs — steering vs the queued follow-up ──────
+//
+// Histories: (a) the running turn takes it as steering at a round boundary — the
+// queued runExclusive then drains empty and must NOT burn a turn; (b) the turn
+// finishes first — the message runs as an ordinary next turn. Never: both.
+
+test("R6a: a running turn steers; the queued follow-up drains empty and runs nothing", async () => {
+  const { registry, cleanup } = tempRegistry();
+  try {
+    const ada = registry.create({ name: "Ada" });
+    const { turns, runner } = gatedRunner();
+    const bus = new AgentBus(registry, runner);
+
+    bus.sendFromUser(ada.id, "long task");
+    const done = bus.wake(ada.id);
+    await tick(); // turn 1 parked
+
+    bus.sendFromUser(ada.id, "actually, also do X");
+    const followUp = bus.runExclusive(ada.id, { userDriven: true }); // what prompt() does
+
+    // The running turn takes it, as runTurn would at a round boundary.
+    const steered = bus.takeSteering(ada.id);
+    assert.deepEqual(steered.map(m => m.text), ["actually, also do X"]);
+
+    turns[0]!.release();
+    await done;
+    await followUp; // resolves without running anything
+
+    assert.equal(turns.length, 1, "no empty turn was burned for the consumed message");
+    assert.equal(bus.pendingCount(ada.id), 0);
+  } finally {
+    cleanup();
+  }
+});
+
+test("R6b: the turn finishes first; the message runs as an ordinary next turn", async () => {
+  const { registry, cleanup } = tempRegistry();
+  try {
+    const ada = registry.create({ name: "Ada" });
+    const { turns, runner } = gatedRunner();
+    const bus = new AgentBus(registry, runner);
+
+    bus.sendFromUser(ada.id, "quick task");
+    const done = bus.wake(ada.id);
+    await tick();
+    turns[0]!.release();
+    await done; // fully finished; nothing steered
+
+    bus.sendFromUser(ada.id, "next thing");
+    const followUp = bus.runExclusive(ada.id, { userDriven: true });
+    await until(() => turns.length === 2, "the ordinary turn started");
+    turns[1]!.release();
+    await followUp;
+
+    assert.deepEqual(turns[1]!.texts, ["next thing"], "consumed once, as its own turn");
+  } finally {
+    cleanup();
+  }
+});
+
+test("R6c: steering never takes a peer message or a kickoff flagged steerable:false", async () => {
+  const { registry, cleanup } = tempRegistry();
+  try {
+    const ada = registry.create({ name: "Ada" });
+    const bob = registry.create({ name: "Bob" });
+    const { runner } = gatedRunner();
+    const bus = new AgentBus(registry, runner);
+
+    bus.send({ fromId: bob.id, toId: ada.id, text: "peer note" });
+    bus.sendFromUser(ada.id, "scheduled kickoff", { steerable: false });
+    bus.sendFromUser(ada.id, "steer me", { conversation: "telegram-1" });
+
+    assert.deepEqual(bus.takeSteering(ada.id), [], "main: the peer note and the kickoff stay queued");
+    assert.deepEqual(
+      bus.takeSteering(ada.id, "telegram-1").map(m => m.text),
+      ["steer me"],
+      "the other conversation's user message steers its own lane only"
+    );
+    assert.equal(bus.pendingCount(ada.id), 2, "the exempt messages still wait for their own turns");
+  } finally {
+    cleanup();
+  }
+});
