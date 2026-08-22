@@ -132,6 +132,37 @@ function classifyOverflow(error: unknown): Overflow | undefined {
 }
 
 /**
+ * Output this close to the intended cap counts as reaching it: tokenizers land a few
+ * tokens short of a hard limit, and misreading a genuine cap stop as truncation would
+ * discard a legitimate long answer and pay to regenerate it.
+ */
+const GENUINE_CAP_MARGIN_TOKENS = 64;
+
+/**
+ * Whether a `max_tokens` stop means "the context squeezed the output", not "the
+ * answer reached its intended length".
+ *
+ * The stop reason alone is ambiguous. Output at (or within a margin of) the cap we
+ * asked for is a genuine limit stop — append it and move on. Output well *below* that
+ * cap with the same stop reason means the provider clamped the output budget to what
+ * little context remained: the documented MiniMax shape (thinking eats the clamped
+ * budget and an empty message comes back looking complete), and the standard shape on
+ * OpenAI-wire endpoints. Such a response is not an answer; it is a symptom of a
+ * request that no longer fits.
+ *
+ * The reference is the cap we *intended* — what this code sends as `max_tokens` —
+ * which for this codebase is always `provider.maxTokens`, never a clamped value.
+ */
+export function isTruncatedByContext(
+  response: { stop_reason: string | null; usage: { output_tokens: number } },
+  intendedMaxOutput: number
+): boolean {
+  if (response.stop_reason !== "max_tokens") return false;
+  if (intendedMaxOutput <= 0) return false;
+  return response.usage.output_tokens < intendedMaxOutput - GENUINE_CAP_MARGIN_TOKENS;
+}
+
+/**
  * Sheds content in place so the same round can be retried, and says what it did.
  *
  * Ordered by what costs least to lose. Images first, because they are the bulk and only the newest
@@ -1183,6 +1214,46 @@ export async function runTurn(
       round,
       ...usage,
     });
+
+    // A response the context squeezed rather than finished. Discarded, never
+    // appended: a tool call cut mid-JSON is not evidence of anything, and an answer
+    // cut mid-sentence would be continued as though it were finished. Its cost is
+    // already on the books — the usage record above is written before this
+    // classification *on purpose*: spend must not vanish with a response we chose to
+    // throw away. Shed and retry under the same bounded counter as a rejected
+    // request; when nothing further can shed, the truncated response is kept, because
+    // degraded is better than dead and the truncation is at least visible.
+    if (isTruncatedByContext(response, provider.maxTokens) && shed < MAX_SHED_ATTEMPTS) {
+      shed += 1;
+      const relief = shedForRetry(messages, "context-window");
+      console.error(
+        `[compaction] ${agent.profile.name}: response truncated by context ` +
+          `(${usage.outputTokens} of ${provider.maxTokens} output tokens); ${relief.detail}; ` +
+          `retrying round ${round}`
+      );
+      if (relief.dropped > 0) {
+        // The watcher may have rendered the truncated stream; this is what tells the
+        // page to drop it, exactly as a connection retry does.
+        emit({
+          type: "retrying",
+          agentId: agent.id,
+          round,
+          attempt: shed,
+          delayMs: 0,
+          kind: "truncated",
+          discardPartial: outputProduced,
+          detail:
+            `the response was cut off by context pressure (${usage.outputTokens} of ` +
+            `${provider.maxTokens} output tokens); ${relief.detail}`,
+        });
+        round -= 1; // retry this round rather than consuming one
+        continue;
+      }
+      console.error(
+        `[compaction] ${agent.profile.name}: nothing further can be dropped; ` +
+          `keeping the truncated response`
+      );
+    }
 
     // Safety classifiers can decline a request; content is empty or partial.
     if (response.stop_reason === "refusal") {
