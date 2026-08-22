@@ -153,6 +153,30 @@ produce the same anomalies with a single agent in the system.
 - F10.7 A turn interrupted by the process ending is resumed or reported, not silently lost, and a
   turn that keeps ending the process is reported rather than retried.
 
+### F11 Organization
+
+The system is not one person and one agent. Several people and several agents share it, over
+several channels, and "who did what, on whose behalf, and who may" has to have answers that are
+objects rather than assumptions.
+
+- F11.1 **Conversations.** An agent's context is per-room: the team room the web page and teammates
+  share, and one thread per outside chat. Two rooms talking to one agent never read each other, and
+  different rooms of one agent may run at the same time.
+- F11.2 **People.** A person is a named subject with a role (viewer / driver / admin) and a stable
+  id that several channel identities resolve to. Permission is a property of the person; an unknown
+  identity is a viewer, so a fresh install is safe.
+- F11.3 **Tasks.** Work that outlives one reply is an object with an assignee, a status history, and
+  a reviewer whose acceptance is what "done" means — the one place the board is enforced rather than
+  advisory.
+- F11.4 **Credentials.** A secret is granted to a holder with an optional expiry, used only where it
+  never enters the box, and every use is audited. No read path returns a value.
+- F11.5 **Reach.** An agent can reach the host machine (a device, a host CLI) only through an
+  explicitly enabled door, and only with a person's per-command approval.
+- F11.6 **Channels.** The agents are reachable from a chat channel, closed by default, with the same
+  gates as every other way in.
+- F11.7 **Attribution.** Spend and audit are attributed to the person who drove the work; work
+  nobody drove is grouped separately, and the parts sum to the whole.
+
 ### F5 Lifecycle
 
 - F5.1 A box can be created, stopped, restarted and destroyed.
