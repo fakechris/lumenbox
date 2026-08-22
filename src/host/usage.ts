@@ -32,6 +32,12 @@ export interface UsageRecord {
   at: string;
   agentId: string;
   agentName: string;
+  /**
+   * Who this spend is on behalf of — the principal id of whoever drove the turn.
+   * Absent for work no person triggered directly: a teammate's wake, a scheduled run.
+   * This is what makes "what did each person cost" answerable.
+   */
+  principal?: string;
   provider: string;
   model: string;
   /** Which round of the turn: a turn that ran long is visible as such. */
@@ -193,6 +199,26 @@ export class UsageLog {
   /** Totals over what is still in the file. Not a billing figure: compaction drops the tail. */
   totals(afterSeq = 0): UsageTotals {
     return this.sum(this.since(afterSeq, Number.MAX_SAFE_INTEGER));
+  }
+
+  /**
+   * Spend since a moment, broken out by the person it was on behalf of.
+   *
+   * Work no person triggered directly — a teammate's wake, a scheduled run — is
+   * grouped under an empty principal, so nothing is dropped and the parts sum to the
+   * whole. This is the "what did each person cost" the framework asks for.
+   */
+  byPrincipalSince(sinceMs: number): { principal: string; totals: UsageTotals }[] {
+    const groups = new Map<string, UsageRecord[]>();
+    for (const record of this.since(0, Number.MAX_SAFE_INTEGER)) {
+      const at = Date.parse(record.at ?? "");
+      if (!Number.isNaN(at) && at < sinceMs) continue;
+      const key = record.principal ?? "";
+      (groups.get(key) ?? groups.set(key, []).get(key)!).push(record);
+    }
+    return [...groups.entries()]
+      .map(([principal, records]) => ({ principal, totals: this.sum(records) }))
+      .sort((a, b) => b.totals.outputTokens - a.totals.outputTokens);
   }
 
   private sum(records: readonly UsageRecord[]): UsageTotals {

@@ -515,6 +515,7 @@ export const APP_HTML = String.raw`<!doctype html>
     <span class="lead">
       <span id="title">&mdash;</span>
       <span id="titlerole" class="dim" style="font-size:12px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis"></span>
+      <select id="convpick" style="display:none;height:28px;border-radius:var(--radius-input);border:1px solid var(--border-strong);background:var(--surface);color:var(--text);font:inherit;font-size:12px;padding:0 6px;max-width:180px"></select>
       <a href="#" id="agentcfg" style="font-size:12px;flex:none">Configure</a>
     </span>
     <span class="headactions">
@@ -1106,6 +1107,8 @@ $("settingswrap").addEventListener("click", function (event) {
 var agents = [];
 var allTools = [];
 var current = null;
+/** Which conversation the middle pane is showing. Empty = the team room ("main"). */
+var currentConversation = "main";
 /** The last /api/state box report, for the settings dialog's box section. */
 var boxState = { ok: false, detail: "" };
 var onboardChecked = false;
@@ -1319,8 +1322,10 @@ function agentById(id) {
   return null;
 }
 
-function select(id) {
+function select(id, conversation) {
+  var switching = id !== current;
   current = id;
+  currentConversation = conversation || (switching ? "main" : currentConversation);
   $("title").textContent = nameOf(id);
   var selected = agentById(id);
   $("titlerole").textContent = selected ? String(selected.title || "") : "";
@@ -1330,16 +1335,42 @@ function select(id) {
   roundLabel = "";
   renderAgents();
   showDesktop(id);
+  if (switching) refreshConversations(id);
   $("chat").innerHTML = "";
   live.delete(id);
 
-  return fetch("/api/transcript?agent=" + encodeURIComponent(id))
+  return fetch("/api/transcript?agent=" + encodeURIComponent(id) +
+      "&conversation=" + encodeURIComponent(currentConversation))
     .then(function (r) { return r.json(); })
     .then(function (entries) {
       for (var i = 0; i < entries.length; i++) replayEntry(id, entries[i]);
       $("chat").scrollTop = $("chat").scrollHeight;
     });
 }
+
+/**
+ * The conversation switcher, shown only when an agent has more than the team room —
+ * an agent nobody has messaged from a channel does not need a one-item dropdown.
+ */
+function refreshConversations(id) {
+  return fetch("/api/conversations?agent=" + encodeURIComponent(id))
+    .then(function (r) { return r.json(); })
+    .then(function (data) {
+      var list = data.conversations || [];
+      var pick = $("convpick");
+      if (list.length <= 1) { pick.style.display = "none"; return; }
+      pick.style.display = "";
+      pick.innerHTML = list.map(function (c) {
+        var label = c.id === "main" ? "Team room" : c.id;
+        return '<option value="' + esc(c.id) + '"' + (c.id === currentConversation ? " selected" : "") + ">" + esc(label) + "</option>";
+      }).join("");
+    })
+    .catch(function () {});
+}
+
+$("convpick").onchange = function () {
+  if (current) select(current, $("convpick").value);
+};
 
 function refresh() {
   return fetch("/api/state").then(function (r) { return r.json(); }).then(function (state) {
@@ -1361,6 +1392,13 @@ function refresh() {
       $("spendtoday").textContent = today.records === 0
         ? ""
         : "today " + fmtTokens(today.inputTokens) + " in / " + fmtTokens(today.outputTokens) + " out";
+      // Who spent it, on hover — the per-person breakdown the enterprise framework asks for.
+      var by = state.usageByPrincipal || [];
+      $("spendtoday").title = by.length
+        ? "Today, by person:\n" + by.map(function (p) {
+            return "  " + p.name + ": " + fmtTokens(p.inputTokens) + " in / " + fmtTokens(p.outputTokens) + " out";
+          }).join("\n")
+        : "Tokens spent today, all agents";
     }
     if (!current && agents.length) return select(agents[0].id);
     renderAgents();
@@ -1850,18 +1888,30 @@ var spend = { input: 0, output: 0 };
 var spendLabel = "";
 var roundLabel = "";
 
+/**
+ * Whether an event belongs in the conversation the middle pane is showing.
+ *
+ * The activity feed stays global — it is cross-agent on purpose — but a chat bubble
+ * must match both the selected agent and the selected thread, or a Telegram reply
+ * would splice itself into the team room the operator is reading. An event with no
+ * conversation is the main room, matching how a pre-conversations turn is stored.
+ */
+function inView(e) {
+  return e.agentId === current && (e.conversation || "main") === currentConversation;
+}
+
 stream.onmessage = function (raw) {
   var e = JSON.parse(raw.data);
   var line = activityLine(e);
   if (line) feed(line.html, line.cls);
 
   if (e.type === "prompt") {
-    if (e.agentId === current) bubble("user", "you", e.text);
+    if (inView(e)) bubble("user", "you", e.text);
     return;
   }
 
   if (e.type === "text") {
-    if (e.agentId !== current) return;
+    if (!inView(e)) return;
     var open = live.get(e.agentId);
     if (!open) {
       open = { node: bubble("", e.agentName, ""), text: "", queued: false };
@@ -1890,7 +1940,7 @@ stream.onmessage = function (raw) {
   if (e.type === "tool_start") {
     live.delete(e.agentId);
     // Held so the result can be folded into the same row when it arrives.
-    if (e.agentId === current) {
+    if (inView(e)) {
       openTool.set(e.agentId, toolCall(e.tool, toolDetail(e.tool, e.input)));
     }
     return;
@@ -1899,7 +1949,7 @@ stream.onmessage = function (raw) {
   if (e.type === "tool_end") {
     var row = openTool.get(e.agentId);
     openTool.delete(e.agentId);
-    if (e.agentId !== current || !row) return;
+    if (!inView(e) || !row) return;
     appendDetail(row, e.summary);
     if (e.screenshot) {
       var img = document.createElement("img");
@@ -1912,6 +1962,9 @@ stream.onmessage = function (raw) {
   }
 
   if (e.type === "message_sent") {
+    // Teammates talk in the team room, never inside someone's outside chat, so these
+    // only render when the team room is the one on screen.
+    if (currentConversation !== "main") return;
     // Both sides, in their own chat: the sender's record of messaging a teammate, and
     // the recipient's of being messaged. Without the second, the pane jumps from
     // nothing to a reply and what prompted it only shows up on reload.
@@ -1942,7 +1995,7 @@ stream.onmessage = function (raw) {
   }
 
   if (e.type === "round") {
-    if (e.agentId === current) {
+    if (inView(e)) {
       // A round starting is the clearest signal a turn is live, and the only one that is not a guess.
       $("stop").style.display = "";
       roundLabel = "round " + (e.round + 1);
@@ -1973,7 +2026,7 @@ stream.onmessage = function (raw) {
         " in " + Math.round(e.delayMs / 100) / 10 + "s &mdash; " + esc(e.detail),
       "warn"
     );
-    if (e.agentId === current && e.discardPartial) {
+    if (inView(e) && e.discardPartial) {
       // The partial answer exists only here: nothing was written to the transcript, so dropping it
       // is what stops the retry showing the same text twice.
       var last = $("chat").lastElementChild;
@@ -1985,7 +2038,7 @@ stream.onmessage = function (raw) {
   if (e.type === "usage") {
     // Shown while it is being spent, not after: a turn that is costing more than it should is
     // something to notice during, and this is the only number that says so.
-    if (e.agentId !== current) return;
+    if (!inView(e)) return;
     spend.input += e.inputTokens;
     spend.output += e.outputTokens;
     spendLabel = fmtTokens(spend.input) + " in / " + fmtTokens(spend.output) + " out";

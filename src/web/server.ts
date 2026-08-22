@@ -295,11 +295,13 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
       channels.remember(agent.id, identity.split(":")[0] ?? "", identity);
       // Each outside chat is its own conversation thread: two groups talking to the
       // same agent never read each other's context. Permission stays with the person
-      // (identity); context stays with the room (chatKey).
+      // (identity); context stays with the room (chatKey); spend is billed to the
+      // principal the identity resolves to, so one person's several phones are one bill.
       const conversation = conversationIdFor(chatKey);
+      const principal = principals.resolve(identity).id;
       const before = registry.readTranscript(agent.id, conversation).length;
-      broadcast({ type: "prompt", agentId: agent.id, text, userId: identity, conversation });
-      await orchestrator.prompt(agent.id, text, { userId: identity }, { conversation });
+      broadcast({ type: "prompt", agentId: agent.id, text, userId: principal, conversation });
+      await orchestrator.prompt(agent.id, text, { userId: principal }, { conversation });
       await orchestrator.settle();
       return orchestrator.replySince(agent.id, before, conversation);
     },
@@ -1218,6 +1220,15 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
             provider: describeProvider(options.provider),
             build,
             usageToday: orchestrator.usage.totalsSince(midnight.getTime()),
+            // Broken out by person, with a readable name where the id is a principal.
+            usageByPrincipal: orchestrator.usage
+              .byPrincipalSince(midnight.getTime())
+              .map(entry => ({
+                principal: entry.principal,
+                name: entry.principal === "" ? "unattributed" : principals.resolve(entry.principal).name,
+                inputTokens: entry.totals.inputTokens,
+                outputTokens: entry.totals.outputTokens,
+              })),
             box: { ...box, ok: box.connected },
             allTools: ALL_TOOLS,
             agents: registry.list().map(record => {
@@ -1252,6 +1263,8 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
             send(res, 404, { error: `No agent ${id}` });
             return;
           }
+          // Which thread — the team room by default, or one outside chat.
+          const conversation = url.searchParams.get("conversation") ?? MAIN_CONVERSATION;
           // Mapped for reading, not replayed raw: the stored form is written for the
           // model, and the roster is what lets a wake prompt be split back into the
           // messages that caused it.
@@ -1259,7 +1272,24 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
             id: record.id,
             name: record.profile.name,
           }));
-          send(res, 200, toDisplayEntries(registry.readTranscript(id), roster));
+          send(res, 200, toDisplayEntries(registry.readTranscript(id, conversation), roster));
+          return;
+        }
+
+        // Every thread an agent has, so the page can offer a switcher. The team room
+        // is always first; the rest are outside chats, newest activity first.
+        if (route === "GET /api/conversations") {
+          const id = url.searchParams.get("agent") ?? "";
+          if (!registry.has(id)) {
+            send(res, 404, { error: `No agent ${id}` });
+            return;
+          }
+          const list = registry.listConversations(id).sort((a, b) => {
+            if (a.id === MAIN_CONVERSATION) return -1;
+            if (b.id === MAIN_CONVERSATION) return 1;
+            return String(b.lastAt ?? "").localeCompare(String(a.lastAt ?? ""));
+          });
+          send(res, 200, { conversations: list });
           return;
         }
 

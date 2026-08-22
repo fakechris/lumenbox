@@ -146,3 +146,26 @@ test("a windowed total ignores spend that has aged out, and keeps unreadable dat
   );
   assert.equal(log.totalsSince(boundary).inputTokens, 507);
 });
+
+test("spend groups by principal, and unattributed work is its own group that still sums", () => {
+  const log = new UsageLog(logPath());
+  const now = Date.now();
+  // Two people and one scheduled (unattributed) run, all "today".
+  log.record({ ...entry("Ada"), principal: "chris", outputTokens: 30 });
+  log.record({ ...entry("Ada"), principal: "chris", outputTokens: 10 });
+  log.record({ ...entry("Bob"), principal: "sam", outputTokens: 50 });
+  log.record({ ...entry("Ada"), outputTokens: 7 }); // no principal: a wake or a cron
+
+  const groups = log.byPrincipalSince(now - 60_000);
+  const byId = Object.fromEntries(groups.map(g => [g.principal, g.totals.outputTokens]));
+  assert.equal(byId["chris"], 40, "one person's runs sum together");
+  assert.equal(byId["sam"], 50);
+  assert.equal(byId[""], 7, "unattributed work is grouped, not dropped");
+
+  // The parts sum to the whole.
+  const whole = log.totalsSince(now - 60_000).outputTokens;
+  assert.equal(whole, groups.reduce((s, g) => s + g.totals.outputTokens, 0));
+
+  // Sorted by spend, biggest first.
+  assert.equal(groups[0]!.principal, "sam");
+});
