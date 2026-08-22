@@ -59,6 +59,7 @@ import { buildSystemPromptParts, buildTurnPrompt } from "./prompt.ts";
 import { buildTools, dispatchTool, type ToolOutcome } from "./tools.ts";
 import type { HostRunner } from "./host-runner.ts";
 import type { Vault } from "./vault.ts";
+import type { TaskStore } from "./tasks.ts";
 import { MAIN_CONVERSATION } from "../agents/registry.ts";
 import { resolveSummaryProvider } from "./provider.ts";
 import type { Effort, ProviderProfile } from "./provider.ts";
@@ -252,6 +253,8 @@ export interface TurnDeps {
   hostRunner?: HostRunner;
   /** The credential vault, for secrets a host command asks for by grant. */
   vault?: Vault;
+  /** The team's task board. Absent means no Tasks tool behaviour and no tasks section. */
+  tasks?: TaskStore;
   /**
    * Which conversation this turn runs in. Absent means the main one — the team room.
    * The transcript read, every entry written, the compaction state and every event
@@ -754,6 +757,7 @@ export async function runTurn(
       // Read fresh, which is what makes the plan and the todo list survive a compaction: they are in
       // the prompt rather than in the history a summary replaces.
       durable: registry.readDurableState(agent.id, conversation),
+      tasks: deps.tasks?.forAgent(agent.id),
       resolution: deps.resolution,
       agentsRoot: registry.root,
       hasBox: box !== undefined,
@@ -1266,6 +1270,8 @@ export async function runTurn(
             boxOwner: deps.boxOwner,
             hostRunner: deps.hostRunner,
             vault: deps.vault,
+            tasks: deps.tasks,
+            turnId,
             conversation,
           }
         );

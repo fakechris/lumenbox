@@ -25,6 +25,7 @@ import { resolveBoxProvisioner, type BoxProvisioner } from "../box/provisioner.t
 import type { ResolutionConfig } from "../protocol/index.ts";
 import { runTurn, TurnAborted, type TurnEvent } from "./turn.ts";
 import { PolicyGate } from "./policy.ts";
+import { TaskStore } from "./tasks.ts";
 import { MAIN_CONVERSATION } from "../agents/registry.ts";
 import type { HostRunner } from "./host-runner.ts";
 import type { Vault } from "./vault.ts";
@@ -77,6 +78,8 @@ export interface OrchestratorOptions {
   hostRunner?: HostRunner;
   /** The credential vault, for secrets a host command may ask for by grant. */
   vault?: Vault;
+  /** The team's task board. `null` keeps none, which a test that must not touch the state directory wants. */
+  tasks?: TaskStore | null;
 }
 
 export class Orchestrator {
@@ -127,6 +130,12 @@ export class Orchestrator {
   });
 
   readonly provider: ProviderProfile;
+
+  /**
+   * The team's task board. One per process, like the usage log: its file is
+   * replay-and-compact and a second writer would interleave two views of the board.
+   */
+  readonly tasks: TaskStore | undefined;
 
   /** Begin/end per turn. A begin with no end is a turn the process died underneath. */
   private readonly turns: TurnLedger | undefined;
@@ -204,6 +213,10 @@ export class Orchestrator {
   });
 
   constructor(private readonly options: OrchestratorOptions = {}) {
+    this.tasks =
+      options.tasks === null
+        ? undefined
+        : (options.tasks ?? new TaskStore(undefined, line => console.error(`[tasks] ${line}`)));
     this.claims =
       options.claims === null
         ? new Claims(null)
@@ -355,6 +368,7 @@ export class Orchestrator {
       resolution: this.resolution,
       hostRunner: this.options.hostRunner,
       vault: this.options.vault,
+      tasks: this.tasks,
       conversation,
       provider: this.provider,
       effort: this.options.effort,
@@ -563,6 +577,7 @@ export const ALL_TOOLS: readonly string[] = [
   "ReadHistory",
   "ClaimWork",
   "RememberFact",
+  "Tasks",
   "RunOnHost",
 ];
 
