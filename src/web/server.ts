@@ -115,6 +115,22 @@ function withinWork(path: string): boolean {
   const normalised = posix.normalize(path);
   return normalised === WORK_DIR || normalised.startsWith(`${WORK_DIR}/`);
 }
+
+/**
+ * One line of "what is it doing", for a chat task card.
+ *
+ * The tool name is the truth; the argument shown is the one a person recognises — a
+ * command, a path, a URL — clamped hard, because a card is glanced at, not read.
+ */
+function actionLine(tool: string, input: unknown): string {
+  const record =
+    typeof input === "object" && input !== null ? (input as Record<string, unknown>) : {};
+  const detail = [record.command, record.path, record.action, record.url].find(
+    (value): value is string => typeof value === "string" && value !== ""
+  );
+  const line = detail === undefined ? tool : `${tool}: ${detail}`;
+  return line.length > 64 ? `${line.slice(0, 63)}…` : line;
+}
 import { agentboxHome, loadConfig, saveConfig, type AgentboxConfig } from "../config.ts";
 
 type AgentboxConfigHostExec = NonNullable<AgentboxConfig["hostExec"]>;
@@ -252,6 +268,12 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
   // holds this one instance, so a granted secret is usable on the next host command.
   const vault = new Vault();
 
+  // Channel task cards listen here while their ask is in flight: each listener is a
+  // narrow filter on (agent, conversation), added before the prompt and removed after
+  // it settles. A set rather than a rewiring of onTurnEvent per ask, because two chats
+  // can be driving two agents at once.
+  const channelTurnListeners = new Set<(event: TurnEvent) => void>();
+
   const orchestrator = new Orchestrator({
     registry,
     provider: options.provider,
@@ -259,7 +281,10 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
     boxProvisioner: provisioner,
     hostRunner,
     vault,
-    onTurnEvent: broadcast,
+    onTurnEvent: event => {
+      broadcast(event);
+      for (const listener of channelTurnListeners) listener(event);
+    },
     onBusEvent: broadcast,
   });
 
@@ -311,7 +336,7 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
           : "Allowed once. Send the agent a message to have it retry.";
     },
     log: line => log(line),
-    ask: async (agentName, text, identity, chatKey) => {
+    ask: async (agentName, text, identity, chatKey, onProgress) => {
       const agent =
         agentName !== undefined
           ? registry.resolve(agentName)
@@ -325,9 +350,42 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
       const principal = principals.resolve(identity).id;
       const before = registry.readTranscript(agent.id, conversation).length;
       broadcast({ type: "prompt", agentId: agent.id, text, userId: principal, conversation });
-      await orchestrator.prompt(agent.id, text, { userId: principal }, { conversation });
-      await orchestrator.settle();
+      // The card's one-line answer to "what is it doing": each tool call as it starts,
+      // for this agent in this conversation only. Coarse on purpose — a card is not a
+      // transcript, and the transcript is where the real record already lives.
+      const listener =
+        onProgress === undefined
+          ? undefined
+          : (event: TurnEvent) => {
+              if (event.type !== "tool_start") return;
+              if (event.agentId !== agent.id || event.conversation !== conversation) return;
+              onProgress(actionLine(event.tool, event.input));
+            };
+      if (listener !== undefined) channelTurnListeners.add(listener);
+      try {
+        await orchestrator.prompt(agent.id, text, { userId: principal }, { conversation });
+        await orchestrator.settle();
+      } finally {
+        if (listener !== undefined) channelTurnListeners.delete(listener);
+      }
       return orchestrator.replySince(agent.id, before, conversation);
+    },
+    // What a queued acknowledgement says: the running turn counts as one ahead, plus
+    // whatever is already waiting in this chat's lane. An unknown agent name answers
+    // zero — the ask that follows throws the message worth relaying.
+    ahead: (agentName, chatKey) => {
+      try {
+        const agent =
+          agentName !== undefined ? registry.resolve(agentName) : registry.list()[0];
+        if (agent === undefined) return 0;
+        const conversation = conversationIdFor(chatKey);
+        return (
+          (orchestrator.bus.isActive(agent.id, conversation) ? 1 : 0) +
+          orchestrator.bus.queuedCount(agent.id, conversation)
+        );
+      } catch {
+        return 0;
+      }
     },
   });
   {

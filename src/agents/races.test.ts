@@ -393,3 +393,42 @@ test("R6c: steering never takes a peer message or a kickoff flagged steerable:fa
     cleanup();
   }
 });
+
+// ── Queue status: what a channel acknowledgement reads ────────────────────────────
+//
+// Not a race — a read-only view — but it lives with the harness that can hold a turn
+// open, because "while a turn is in flight" is the only state worth asserting.
+
+test("queuedCount and isActive answer per conversation, while turns run", async () => {
+  const { registry, cleanup } = tempRegistry();
+  try {
+    const ada = registry.create({ name: "Ada" });
+    const { turns, runner } = gatedRunner();
+    const bus = new AgentBus(registry, runner);
+
+    assert.equal(bus.isActive(ada.id, "chat-1"), false);
+    assert.equal(bus.queuedCount(ada.id, "chat-1"), 0);
+
+    bus.sendFromUser(ada.id, "task one", { conversation: "chat-1" });
+    const done = bus.wake(ada.id);
+    await tick(); // turn parked, drain taken
+
+    assert.equal(bus.isActive(ada.id, "chat-1"), true);
+    assert.equal(bus.queuedCount(ada.id, "chat-1"), 0, "in flight is not queued");
+    assert.equal(bus.isActive(ada.id, "chat-2"), false, "another conversation is idle");
+
+    bus.sendFromUser(ada.id, "task two", { conversation: "chat-1" });
+    assert.equal(bus.queuedCount(ada.id, "chat-1"), 1, "waiting behind the running turn");
+    assert.equal(bus.queuedCount(ada.id, "chat-2"), 0);
+
+    turns[0]!.release();
+    await until(() => turns.length === 2, "the queued turn started");
+    turns[1]!.release();
+    await done;
+
+    assert.equal(bus.isActive(ada.id, "chat-1"), false, "nothing in flight after the drain");
+    assert.equal(bus.queuedCount(ada.id, "chat-1"), 0);
+  } finally {
+    cleanup();
+  }
+});
