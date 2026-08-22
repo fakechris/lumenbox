@@ -25,6 +25,7 @@ import { resolveBoxProvisioner, type BoxProvisioner } from "../box/provisioner.t
 import type { ResolutionConfig } from "../protocol/index.ts";
 import { runTurn, TurnAborted, type TurnEvent } from "./turn.ts";
 import { PolicyGate } from "./policy.ts";
+import { MAIN_CONVERSATION } from "../agents/registry.ts";
 import type { HostRunner } from "./host-runner.ts";
 import { Rememberer, summariseExchange } from "./remember.ts";
 import { SkillCache } from "./skills.ts";
@@ -221,7 +222,7 @@ export class Orchestrator {
 
     this.bus = new AgentBus(
       this.registry,
-      (agent, inbound, signal) => this.executeTurn(agent, inbound, signal),
+      (agent, inbound, signal, conversation) => this.executeTurn(agent, inbound, signal, conversation),
       options.onBusEvent,
       options.inbox === null
         ? undefined
@@ -320,7 +321,8 @@ export class Orchestrator {
   private async executeTurn(
     agent: AgentRecord,
     inbound: readonly InboundMessage[],
-    signal: AbortSignal
+    signal: AbortSignal,
+    conversation: string = MAIN_CONVERSATION
   ): Promise<void> {
     // Taken, not read: a resumption marker belongs to exactly one turn. Leaving it in place would
     // make every later turn for this agent look like another attempt at the interrupted one, and
@@ -349,6 +351,7 @@ export class Orchestrator {
       display: this.display,
       resolution: this.resolution,
       hostRunner: this.options.hostRunner,
+      conversation,
       provider: this.provider,
       effort: this.options.effort,
       turns: this.turns,
@@ -405,7 +408,11 @@ export class Orchestrator {
       // unfinished turn rather than two.
       this.turns?.end(turn.id, "resumed");
       this.resuming.set(agent.id, { id: turn.id, attempt: turn.attempt + 1 });
-      this.bus.sendFromUser(agent.id, resumePrompt(turn.about, turn.at));
+      this.bus.sendFromUser(agent.id, resumePrompt(turn.about, turn.at), {
+        // The turn resumes in the conversation it was interrupted in: an answer to a
+        // group chat's question must not surface in the team room.
+        ...(turn.conversation !== undefined ? { conversation: turn.conversation } : {}),
+      });
       // Enqueuing is not running. sendFromUser only queues; without this the resumed turn sat until
       // some unrelated later traffic happened to wake the agent. recover() wakes for the inbox; this
       // path did not.
@@ -443,21 +450,23 @@ export class Orchestrator {
   async prompt(
     agentIdOrName: string,
     text: string,
-    caller?: { userId?: string }
+    caller?: { userId?: string },
+    options: { conversation?: string } = {}
   ): Promise<void> {
     const agent = this.registry.resolve(agentIdOrName);
+    const conversation = options.conversation ?? MAIN_CONVERSATION;
     // Remembered for the turn, so a memory kept during it records who it is about. Per agent because
     // two people can be driving two agents at once; overwritten on each prompt because the most
     // recent person to speak to *this* agent is the one its memories are about.
     if (caller?.userId !== undefined) this.callers.set(agent.id, caller);
-    this.bus.sendFromUser(agent.id, text);
-    const before = this.registry.readTranscript(agent.id).length;
-    await this.bus.runExclusive(agent.id, { userDriven: true });
+    this.bus.sendFromUser(agent.id, text, { conversation });
+    const before = this.registry.readTranscript(agent.id, conversation).length;
+    await this.bus.runExclusive(agent.id, { userDriven: true, conversation });
 
     // After the turn, and not awaited: a person waiting on an answer should not also wait on
     // bookkeeping. What the agent said is read back from the transcript rather than threaded through
     // the turn loop, which keeps the loop unaware that any of this exists.
-    const said = this.replySince(agent.id, before);
+    const said = this.replySince(agent.id, before, conversation);
     if (said !== "") {
       void this.rememberer
         .record({ agentId: agent.id, text: summariseExchange(text, said) })
@@ -471,8 +480,8 @@ export class Orchestrator {
    * The agent's own prose since a transcript position — what an extractor reasons
    * over, and what a chat channel sends back as the reply.
    */
-  replySince(agentId: string, from: number): string {
-    return (this.registry.readTranscript(agentId) as { role?: string; text?: string; kind?: string }[])
+  replySince(agentId: string, from: number, conversation: string = MAIN_CONVERSATION): string {
+    return (this.registry.readTranscript(agentId, conversation) as { role?: string; text?: string; kind?: string }[])
       .slice(from)
       .filter(entry => entry.role === "assistant" && entry.kind === undefined && entry.text)
       .map(entry => entry.text as string)

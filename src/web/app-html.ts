@@ -650,10 +650,26 @@ export const APP_HTML = String.raw`<!doctype html>
       <label>Channels</label>
       <div id="setchannels" style="display:flex;flex-direction:column;gap:6px"></div>
       <div class="fieldnote">A channel turns on when its credentials are in the environment or the
-        env map of the config file, and answers only the ids below. Anyone else who messages the bot
-        is told their id and nothing more.</div>
-      <input id="setallow" placeholder="telegram:123456, feishu:ou_abc, dingtalk:staff1" spellcheck="false">
-      <div class="fieldnote" id="setallowstatus"></div>
+        env map of the config file. Who may command the agents is the people list below; anyone
+        else who messages the bot is told their id and nothing more.</div>
+    </div>
+    <div class="field">
+      <label>People</label>
+      <div id="setpeople" style="display:flex;flex-direction:column;gap:6px"></div>
+      <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
+        <input id="setpname" placeholder="Name" spellcheck="false" style="flex:1;min-width:90px;font-family:var(--font-sans)">
+        <input id="setpid" placeholder="telegram:123456" spellcheck="false" style="flex:1.4;min-width:120px">
+        <select id="setprole" style="height:38px;border-radius:var(--radius-input);border:1px solid var(--border-strong);background:var(--bg);color:var(--text);padding:0 8px">
+          <option value="viewer">viewer</option>
+          <option value="driver" selected>driver</option>
+          <option value="admin">admin</option>
+        </select>
+        <button class="btn sm" id="setpadd">Add</button>
+      </div>
+      <div class="fieldnote">viewer reads, driver commands the agents, admin also changes settings.
+        A person can have several ids (home phone, work account) — add a row per id, same name.
+        Applies to the next message, no restart.</div>
+      <div class="fieldnote" id="setpeoplestatus"></div>
     </div>
     <div class="field" id="setgrantswrap" style="display:none">
       <label>Standing approvals</label>
@@ -814,7 +830,9 @@ function openSettings() {
     .catch(function () { feed("could not load settings", "err"); });
 }
 
-/** Which chat channels exist, whether each is up, and who may use them. */
+/** The people list: one row per identity, grouped nowhere — flat and editable. */
+var people = [];
+
 function renderChannels() {
   fetch("/api/channels")
     .then(function (r) { return r.json(); })
@@ -826,27 +844,69 @@ function renderChannels() {
           "<span style=\"min-width:70px\">" + esc(ch.name) + "</span>" +
           '<span class="dim mono" style="font-size:11px">' + esc(ch.detail) + "</span></div>";
       }).join("");
-      $("setallow").value = (data.allow || []).join(", ");
-      $("setallowstatus").textContent = "";
+      // Flatten to one row per identity, which is what a person edits.
+      people = [];
+      (data.principals || []).forEach(function (p) {
+        (p.identities.length ? p.identities : [""]).forEach(function (identity) {
+          people.push({ id: p.id, name: p.name, role: p.role, identity: identity });
+        });
+      });
+      renderPeople();
     })
     .catch(function () {});
 }
 
-$("setallow").addEventListener("change", function () {
-  var list = $("setallow").value.split(",").map(function (s) { return s.trim(); })
-    .filter(function (s) { return s !== ""; });
-  fetch("/api/channels/allow", {
+function renderPeople() {
+  if (!people.length) {
+    $("setpeople").innerHTML = '<div class="fieldnote" style="margin:0">Nobody yet. Add a person to let them command the agents from a channel.</div>';
+    return;
+  }
+  $("setpeople").innerHTML = people.map(function (p, i) {
+    return '<div style="display:flex;gap:8px;align-items:center;font-size:13px">' +
+      '<span style="min-width:80px;font-weight:600">' + esc(p.name) + "</span>" +
+      '<span class="mono" style="flex:1;font-size:12px;overflow:hidden;text-overflow:ellipsis">' + esc(p.identity) + "</span>" +
+      '<span class="dim" style="min-width:48px">' + esc(p.role) + "</span>" +
+      '<a href="#" data-remove="' + i + '" style="color:var(--danger);font-size:12px">Remove</a></div>";
+  }).join("");
+}
+
+function savePeople() {
+  // Regroup rows back into principals by id, so one person's several ids are one entry.
+  var byId = {};
+  people.forEach(function (p) {
+    if (!byId[p.id]) byId[p.id] = { id: p.id, name: p.name, role: p.role, identities: [] };
+    if (p.identity) byId[p.id].identities.push(p.identity);
+  });
+  $("setpeoplestatus").textContent = "Saving…";
+  fetch("/api/principals", {
     method: "POST",
     headers: { "content-type": "application/json" },
-    body: JSON.stringify({ allow: list })
+    body: JSON.stringify({ principals: Object.keys(byId).map(function (k) { return byId[k]; }) })
   })
-    .then(function (r) { return r.json(); })
-    .then(function (d) {
-      $("setallowstatus").textContent = d.error
-        ? d.error
-        : "Saved — applies to the next message, no restart needed.";
-    })
-    .catch(function (error) { $("setallowstatus").textContent = error.message; });
+    .then(function (r) { return r.json().then(function (d) { if (!r.ok) throw new Error(d.error || "save failed"); return d; }); })
+    .then(function () { $("setpeoplestatus").textContent = "Saved."; renderChannels(); })
+    .catch(function (error) { $("setpeoplestatus").textContent = error.message; });
+}
+
+$("setpadd").onclick = function () {
+  var name = $("setpname").value.trim();
+  var identity = $("setpid").value.trim();
+  if (!name || !identity) { $("setpeoplestatus").textContent = "A person needs a name and an id."; return; }
+  // Same name = same person; reuse their id so several identities group together.
+  var existing = people.filter(function (p) { return p.name === name; })[0];
+  people.push({ id: existing ? existing.id : identity, name: name, role: $("setprole").value, identity: identity });
+  $("setpname").value = ""; $("setpid").value = "";
+  renderPeople();
+  savePeople();
+};
+
+document.getElementById("setpeople").addEventListener("click", function (event) {
+  var idx = event.target.getAttribute && event.target.getAttribute("data-remove");
+  if (idx === null || idx === undefined) return;
+  event.preventDefault();
+  people.splice(Number(idx), 1);
+  renderPeople();
+  savePeople();
 });
 
 function renderBoxSection() {

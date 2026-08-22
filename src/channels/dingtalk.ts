@@ -131,6 +131,7 @@ export class DingTalkChannel implements ChannelAdapter {
       if (text === "") return;
       void onMessage({
         identity,
+        chatKey: `dingtalk:${payload.conversationId ?? sender}`,
         senderLabel: payload.senderNick ?? sender,
         text,
       })

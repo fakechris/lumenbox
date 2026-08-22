@@ -76,7 +76,7 @@ export class FeishuChannel implements ChannelAdapter {
         if (text === "") return {};
         const identity = `feishu:${openId}`;
         this.chats.set(identity, chatId);
-        void onMessage({ identity, senderLabel: openId, text })
+        void onMessage({ identity, chatKey: `feishu:${chatId}`, senderLabel: openId, text })
           .then(reply => (reply ? this.send(identity, reply) : undefined))
           .catch((error: unknown) => {
             const detail = error instanceof Error ? error.message : String(error);

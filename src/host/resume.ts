@@ -58,6 +58,8 @@ interface BeginRecord {
   attempt: number;
   /** What the turn was about, in one line, so an operator reading the file learns something. */
   about: string;
+  /** Which conversation it ran in, when not the main one — so the resume lands in the same thread. */
+  conversation?: string;
 }
 
 interface EndRecord {
@@ -78,6 +80,8 @@ export interface InterruptedTurn {
   about: string;
   /** Attempts already made, so the caller can stop rather than loop. */
   attempt: number;
+  /** The conversation the turn belonged to, absent for the main one. */
+  conversation?: string;
 }
 
 export class TurnLedger {
@@ -105,6 +109,7 @@ export class TurnLedger {
     id: string;
     resumeOf?: string;
     attempt?: number;
+    conversation?: string;
     now?: Date;
   }): string {
     const record: BeginRecord = {
@@ -115,6 +120,7 @@ export class TurnLedger {
       ...(options.resumeOf !== undefined ? { resumeOf: options.resumeOf } : {}),
       attempt: options.attempt ?? 1,
       about: options.about.replace(/\s+/g, " ").trim().slice(0, 200),
+      ...(options.conversation !== undefined ? { conversation: options.conversation } : {}),
     };
     this.append(record);
     return record.id;
@@ -144,6 +150,7 @@ export class TurnLedger {
           at: record.at,
           about: record.about,
           attempt: record.attempt,
+          ...(record.conversation !== undefined ? { conversation: record.conversation } : {}),
         });
       } else {
         open.delete(record.id);

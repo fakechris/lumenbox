@@ -18,8 +18,16 @@
  */
 
 export interface InboundMessage {
-  /** `telegram:123` — stable, and what the allow list matches. */
+  /** `telegram:123` — stable, and what the allow list matches. Who is *speaking*. */
   identity: string;
+  /**
+   * Which chat the message came from, when that is not the same thing as who sent
+   * it — a Feishu group's id, a DingTalk conversation. This is what the agent's
+   * conversation thread is keyed on: context belongs to the room it happened in,
+   * while permission belongs to the person. Absent means the identity is the chat
+   * (a Telegram chat id already is one).
+   */
+  chatKey?: string;
   /** For a person reading the activity feed: a name, not an id, where the wire has one. */
   senderLabel: string;
   text: string;
@@ -42,13 +50,24 @@ export interface ChannelStatus {
 }
 
 export interface ChannelManagerDeps {
-  /** The current allow list, read fresh each message so an edit needs no restart. */
-  allow: () => readonly string[];
+  /**
+   * Whether this identity may command the agents from a channel, read fresh each
+   * message so a role change needs no restart. A viewer (or an unknown sender) is
+   * refused and told their id; a driver or admin is let through. Permission is a
+   * property of the person, which is why this takes an identity and not a chat.
+   */
+  mayDrive: (identity: string) => boolean;
   /**
    * Runs one turn and returns what the agent said. `agentName` is undefined for the
    * default agent; unknown names should throw with a message worth relaying.
+   * `chatKey` names the chat, for the conversation thread the turn runs in.
    */
-  ask: (agentName: string | undefined, text: string, identity: string) => Promise<string>;
+  ask: (
+    agentName: string | undefined,
+    text: string,
+    identity: string,
+    chatKey: string
+  ) => Promise<string>;
   log: (line: string) => void;
 }
 
@@ -133,8 +152,7 @@ export class ChannelManager {
     adapter: ChannelAdapter,
     message: InboundMessage
   ): Promise<string | undefined> {
-    const allowed = this.deps.allow();
-    if (!allowed.includes(message.identity)) {
+    if (!this.deps.mayDrive(message.identity)) {
       this.deps.log(
         `channel ${adapter.name}: refused ${message.identity} (${message.senderLabel})`
       );
@@ -144,7 +162,12 @@ export class ChannelManager {
     const { agentName, text } = parseAddress(message.text);
     if (text === "") return "Say what you need done; @AgentName first to pick who does it.";
     try {
-      const reply = await this.deps.ask(agentName, text, message.identity);
+      const reply = await this.deps.ask(
+        agentName,
+        text,
+        message.identity,
+        message.chatKey ?? message.identity
+      );
       return reply.trim() === "" ? "Done. (The agent finished without saying anything.)" : reply;
     } catch (error) {
       return error instanceof Error ? error.message : String(error);

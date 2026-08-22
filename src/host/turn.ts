@@ -58,6 +58,7 @@ import type { ResolutionConfig } from "../protocol/index.ts";
 import { buildSystemPromptParts, buildTurnPrompt } from "./prompt.ts";
 import { buildTools, dispatchTool, type ToolOutcome } from "./tools.ts";
 import type { HostRunner } from "./host-runner.ts";
+import { MAIN_CONVERSATION } from "../agents/registry.ts";
 import { resolveSummaryProvider } from "./provider.ts";
 import type { Effort, ProviderProfile } from "./provider.ts";
 
@@ -249,6 +250,12 @@ export interface TurnDeps {
   /** The door out of the box, when an operator built one. Absent means no host tool. */
   hostRunner?: HostRunner;
   /**
+   * Which conversation this turn runs in. Absent means the main one — the team room.
+   * The transcript read, every entry written, the compaction state and every event
+   * emitted belong to this conversation and no other.
+   */
+  conversation?: string;
+  /**
    * Asks a cheap model which memories matter for this message.
    *
    * Only consulted when the budget forces a choice. Absent means the scoring decides, which is what
@@ -289,7 +296,14 @@ const FULL_CLAUDE: ProviderProfile = {
   keyEnv: "ANTHROPIC_API_KEY",
 };
 
-export type TurnEvent =
+/**
+ * Which conversation an event belongs to, stamped onto every turn event by the
+ * emit wrapper in runTurn — one field on the union rather than repeated in each
+ * variant, because every event of a turn belongs to that turn's conversation.
+ */
+export type TurnEvent = TurnEventBody & { conversation?: string };
+
+type TurnEventBody =
   | { type: "text"; agentId: string; agentName: string; delta: string }
   | { type: "tool_start"; agentId: string; agentName: string; tool: string; input: unknown }
   | {
@@ -506,15 +520,19 @@ async function compactHistory(options: {
   provider: ProviderProfile;
   log: (line: string) => void;
   onCompacted: (event: { type: "compacted"; covers: number; summarised: boolean; detail: string }) => void;
+  conversation: string;
 }): Promise<TranscriptEntry[]> {
-  const { history, agent, registry, client, provider, log, onCompacted } = options;
+  const { history, agent, registry, client, provider, log, onCompacted, conversation } = options;
+  // Speculative summaries are per conversation: each thread compacts its own history,
+  // and a summary prepared for the team room must never be adopted by a Telegram chat.
+  const summaryKey = `${agent.id}/${conversation}`;
   const active = activeWindow(history as HistoryEntry[]);
   // Derived from the model's real window once one response has reported it, so the same code is
   // right for a 200k model and a 1M one.
   const policy = policyForModel(provider.model);
   const urgency = compactionUrgency(active, policy);
   if (urgency === "none") {
-    pendingSummaries.delete(agent.id);
+    pendingSummaries.delete(summaryKey);
     return history;
   }
 
@@ -528,12 +546,12 @@ async function compactHistory(options: {
   if (urgency === "background") {
     // Start it and walk away. Nothing here is awaited, and a failure is swallowed on purpose: this
     // is speculative work, and the `now` path will report properly if it ever becomes necessary.
-    if (!pendingSummaries.has(agent.id)) {
+    if (!pendingSummaries.has(summaryKey)) {
       log(
         `pre-summarising ${cut.index} entries in the background on ${summaryProvider.model}; ` +
           `this turn proceeds uncompacted`
       );
-      pendingSummaries.set(agent.id, {
+      pendingSummaries.set(summaryKey, {
         covers: cut.index,
         computedFrom: active.length,
         promise: summarise(olderEntries, cut.index, client, summaryProvider).catch(() => undefined),
@@ -546,7 +564,7 @@ async function compactHistory(options: {
 
   let entry: SummaryEntry;
   try {
-    const pending = pendingSummaries.get(agent.id);
+    const pending = pendingSummaries.get(summaryKey);
     let ready: SummaryEntry | undefined;
     if (pendingIsUsable(pending, active.length)) {
       ready = await pending!.promise;
@@ -574,10 +592,10 @@ async function compactHistory(options: {
   } finally {
     // Consumed either way: a summary that was adopted must not be adopted twice, and one that
     // failed must not be retried forever.
-    pendingSummaries.delete(agent.id);
+    pendingSummaries.delete(summaryKey);
   }
 
-  registry.appendTranscript(agent.id, entry);
+  registry.appendTranscript(agent.id, entry, conversation);
   return [...history, entry as TranscriptEntry];
 }
 
@@ -688,7 +706,11 @@ export async function runTurn(
   if (inbound.length === 0) return;
 
   const { registry, bus, box, client } = deps;
-  const emit = deps.onEvent ?? (() => {});
+  const conversation = deps.conversation ?? MAIN_CONVERSATION;
+  // Every event names its conversation, so a page viewing one thread can ignore the
+  // stream of another instead of splicing an outside chat's reply into the team room.
+  const baseEmit = deps.onEvent ?? (() => {});
+  const emit: typeof baseEmit = event => baseEmit({ ...event, conversation });
   const provider = deps.provider ?? FULL_CLAUDE;
 
   // Recorded before anything else, so a process that dies at any point after this leaves a begin
@@ -725,7 +747,7 @@ export async function runTurn(
       memoryRecall: recallToUse,
       sharedMemory: registry.readSharedMemory(),
       skills: deps.skills,
-      transcript: registry.readTranscript(agent.id),
+      transcript: registry.readTranscript(agent.id, conversation),
       // Read fresh, which is what makes the plan and the todo list survive a compaction: they are in
       // the prompt rather than in the history a summary replaces.
       durable: registry.readDurableState(agent.id),
@@ -760,7 +782,7 @@ export async function runTurn(
   // starting", and clearing the first threw away the second. The Stop button did nothing, silently.
   deps.policy?.resume(agent.id);
 
-  let history = registry.readTranscript(agent.id) as TranscriptEntry[];
+  let history = registry.readTranscript(agent.id, conversation) as TranscriptEntry[];
   const turnText = buildTurnPrompt(inbound);
 
   // Before assembling: a conversation that has grown past what fits is summarised, once, and the
@@ -775,6 +797,7 @@ export async function runTurn(
     provider,
     log: line => console.error(`[compaction] ${agent.profile.name}: ${line}`),
     onCompacted: event => emit({ ...event, agentId: agent.id }),
+    conversation,
   });
 
   const messages: Anthropic.MessageParam[] = [
@@ -791,7 +814,7 @@ export async function runTurn(
     // list of uuids. Without it a turn holds no trace of what set it off, so "who caused this" can
     // not be walked backwards however precisely everything was timed.
     causedBy: inbound.map(message => message.id),
-  } satisfies TranscriptEntry);
+  } satisfies TranscriptEntry, conversation);
 
   // Narrowed by this agent's profile. Withheld, not refused: a tool it may not use is not in its
   // prompt at all.
@@ -815,6 +838,7 @@ export async function runTurn(
     id: turnId,
     agentId: agent.id,
     about: inbound.map(message => message.text).join(" / "),
+    ...(conversation !== MAIN_CONVERSATION ? { conversation } : {}),
     ...(deps.resumeOf !== undefined
       ? { resumeOf: deps.resumeOf.id, attempt: deps.resumeOf.attempt }
       : {}),
@@ -833,7 +857,7 @@ export async function runTurn(
         role: "user",
         text: outcome.continueWith,
         at: new Date().toISOString(),
-      } satisfies TranscriptEntry);
+      } satisfies TranscriptEntry, conversation);
 
       // Reassembled from the transcript, and compacted on the way, which is what the comment above
       // has always claimed and what the code did not do: a continuation used to push one more
@@ -845,13 +869,14 @@ export async function runTurn(
       // Everything a completed round produced is on disk by now, so re-reading loses nothing; and
       // an orphaned call left by the round limit is paired up during assembly.
       history = await compactHistory({
-        history: registry.readTranscript(agent.id) as TranscriptEntry[],
+        history: registry.readTranscript(agent.id, conversation) as TranscriptEntry[],
         agent,
         registry,
         client,
         provider,
         log: line => console.error(`[compaction] ${agent.profile.name}: ${line}`),
         onCompacted: event => emit({ ...event, agentId: agent.id }),
+        conversation,
       });
       // In place: `runRounds` closes over this array.
       messages.length = 0;
@@ -908,7 +933,7 @@ export async function runTurn(
         role: "assistant",
         text: permitted.reason,
         at: new Date().toISOString(),
-      } satisfies TranscriptEntry);
+      } satisfies TranscriptEntry, conversation);
       emit({
         type: "text",
         agentId: agent.id,
@@ -1152,7 +1177,7 @@ export async function runTurn(
         role: "assistant",
         text: note,
         at: new Date().toISOString(),
-      } satisfies TranscriptEntry);
+      } satisfies TranscriptEntry, conversation);
       emit({ type: "text", agentId: agent.id, agentName: agent.profile.name, delta: note });
       return;
     }
@@ -1175,7 +1200,7 @@ export async function runTurn(
           role: "assistant",
           text: finalText,
           at: new Date().toISOString(),
-        } satisfies TranscriptEntry);
+        } satisfies TranscriptEntry, conversation);
         return;
       }
 
@@ -1193,7 +1218,7 @@ export async function runTurn(
         role: "assistant",
         text: silent,
         at: new Date().toISOString(),
-      } satisfies TranscriptEntry);
+      } satisfies TranscriptEntry, conversation);
       emit({ type: "text", agentId: agent.id, agentName: agent.profile.name, delta: silent });
       console.error(`[turn] ${agent.profile.name}: ended with no text on round ${round}`);
       return;
@@ -1262,13 +1287,13 @@ export async function runTurn(
           block.type === "text" || block.type === "tool_use"
       ),
       at,
-    } satisfies TranscriptEntry);
+    } satisfies TranscriptEntry, conversation);
     registry.appendTranscript(agent.id, {
       role: "user",
       kind: "results",
       blocks: results.map(storableResult),
       at,
-    } satisfies TranscriptEntry);
+    } satisfies TranscriptEntry, conversation);
 
     messages.push({ role: "user", content: results });
 
@@ -1288,7 +1313,7 @@ export async function runTurn(
         role: "assistant",
         text: report,
         at: new Date().toISOString(),
-      } satisfies TranscriptEntry);
+      } satisfies TranscriptEntry, conversation);
       emit({
         type: "text",
         agentId: agent.id,
@@ -1311,7 +1336,7 @@ export async function runTurn(
       role: "assistant",
       text: report,
       at: new Date().toISOString(),
-    } satisfies TranscriptEntry);
+    } satisfies TranscriptEntry, conversation);
     throw new TurnRoundLimitExceeded(report);
   }
 
@@ -1326,7 +1351,7 @@ export async function runTurn(
       role: "assistant",
       text: note,
       at: new Date().toISOString(),
-    } satisfies TranscriptEntry);
+    } satisfies TranscriptEntry, conversation);
     emit({ type: "text", agentId: agent.id, agentName: agent.profile.name, delta: note });
     console.error(`[turn] ${agent.profile.name}: ${note}`);
 
@@ -1359,7 +1384,7 @@ export async function runTurn(
     role: "assistant",
     text: note,
     at: new Date().toISOString(),
-  } satisfies TranscriptEntry);
+  } satisfies TranscriptEntry, conversation);
   throw new TurnRoundLimitExceeded(note);
   }
 }
