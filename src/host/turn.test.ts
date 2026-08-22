@@ -2134,3 +2134,112 @@ test("a user message during a running turn steers the next round instead of wait
     cleanup();
   }
 });
+
+test("a resumed turn re-runs the safe half of an interrupted batch and leaves the rest unknown", async () => {
+  const { registry, cleanup } = fixture();
+  try {
+    const ada = registry.create({ name: "Ada" });
+    const bus = new AgentBus(registry, async () => {});
+    const capture: Capture = { params: [] };
+
+    // What a crash leaves behind: an assistant entry calling read_file and bash,
+    // with no results entry — the process died mid-batch.
+    registry.appendTranscript(ada.id, {
+      role: "user",
+      text: "check the config and restart the service",
+      at: new Date().toISOString(),
+    });
+    registry.appendTranscript(ada.id, {
+      role: "assistant",
+      kind: "blocks",
+      blocks: [
+        { type: "tool_use", id: "toolu_read", name: "read_file", input: { path: "/home/box/work/config.txt" } },
+        { type: "tool_use", id: "toolu_bash", name: "bash", input: { command: "systemctl restart svc" } },
+      ],
+      at: new Date().toISOString(),
+    });
+
+    const box = {
+      readFile: async (path: string) => ({
+        path,
+        content: "port=8080",
+        total_lines: 1,
+        truncated: false,
+      }),
+      exec: async () => {
+        throw new Error("bash must not be replayed on resume");
+      },
+    } as unknown as BoxClient;
+
+    const { client } = stubClient([message([textBlock("resumed and done")])], capture);
+    await runTurn(
+      ada,
+      [{ id: "m-resume", fromId: "user", fromName: "user", text: "[resumed] pick up where you left off", priority: false, receivedAt: "" }],
+      new AbortController().signal,
+      {
+        client,
+        registry,
+        bus,
+        box,
+        resolution: undefined,
+        displayIndex: 1,
+        resumeOf: { id: "turn-before-crash", attempt: 2 },
+      }
+    );
+
+    const request = JSON.stringify(capture.params[0]?.messages ?? []);
+    assert.ok(request.includes("port=8080"), "the read-only call was answered fresh, not guessed");
+    assert.ok(request.includes("Re-run on resume"), "and says it was re-run");
+    assert.ok(
+      request.includes("never recorded"),
+      "the bash call keeps the honest unknown treatment"
+    );
+
+    // The replayed results are on the record, so a second resume would not re-run them.
+    const transcript = registry.readTranscript(ada.id) as TranscriptEntry[];
+    const resultsEntries = transcript.filter(entry => "kind" in entry && entry.kind === "results");
+    assert.ok(resultsEntries.length >= 1, "the replay is a transcript entry");
+  } finally {
+    cleanup();
+  }
+});
+
+test("an ordinary (non-resumed) turn never replays a trailing batch", async () => {
+  const { registry, cleanup } = fixture();
+  try {
+    const ada = registry.create({ name: "Ada" });
+    const bus = new AgentBus(registry, async () => {});
+    const capture: Capture = { params: [] };
+    let reads = 0;
+
+    registry.appendTranscript(ada.id, {
+      role: "assistant",
+      kind: "blocks",
+      blocks: [{ type: "tool_use", id: "toolu_r", name: "read_file", input: { path: "/x" } }],
+      at: new Date().toISOString(),
+    });
+
+    const box = {
+      readFile: async () => {
+        reads += 1;
+        return { path: "/x", content: "data", total_lines: 1, truncated: false };
+      },
+    } as unknown as BoxClient;
+
+    const { client } = stubClient([message([textBlock("ok")])], capture);
+    await runTurn(
+      ada,
+      [{ id: "m-plain", fromId: "user", fromName: "user", text: "hello", priority: false, receivedAt: "" }],
+      new AbortController().signal,
+      { client, registry, bus, box, resolution: undefined, displayIndex: 1 }
+    );
+
+    assert.equal(reads, 0, "replay is a resume-only behaviour");
+    assert.ok(
+      JSON.stringify(capture.params[0]?.messages ?? []).includes("never recorded"),
+      "the trailing batch still gets the honest unknown at assembly"
+    );
+  } finally {
+    cleanup();
+  }
+});

@@ -132,6 +132,21 @@ function classifyOverflow(error: unknown): Overflow | undefined {
 }
 
 /**
+ * Whether re-executing this call changes nothing outside the conversation.
+ *
+ * The declaration a resumed turn consults before re-running an interrupted call
+ * instead of marking its outcome unknown. Conservative on purpose: only pure reads.
+ * `Tasks` is safe for `list` alone — the same tool's `create` makes a task, which is
+ * exactly the double-effect this list exists to prevent. `computer` is excluded even
+ * for screenshots, because a batch mixes actions and a batch is judged whole.
+ */
+function safeToReplay(name: string, input: Record<string, unknown>): boolean {
+  if (name === "read_file" || name === "list_dir" || name === "ReadHistory") return true;
+  if (name === "Tasks" && input.action === "list") return true;
+  return false;
+}
+
+/**
  * Output this close to the intended cap counts as reaching it: tokenizers land a few
  * tokens short of a hard limit, and misreading a genuine cap stop as truncation would
  * discard a legitimate long answer and pay to regenerate it.
@@ -821,6 +836,67 @@ export async function runTurn(
   deps.policy?.resume(agent.id);
 
   let history = registry.readTranscript(agent.id, conversation) as TranscriptEntry[];
+
+  // A resumed turn re-executes the safe half of an interrupted tool batch instead of
+  // guessing at it. The trailing assistant entry's tool_use blocks are the durable
+  // record of what was asked — nothing here mutates arguments, so the block *is* the
+  // call — and a read-only call answered fresh beats a result declared unknown.
+  // Everything not declared safe keeps the honest "never recorded" treatment at
+  // assembly, and the model is still told to look before redoing those.
+  if (deps.resumeOf !== undefined && history.length > 0) {
+    const last = history[history.length - 1]!;
+    if ("kind" in last && last.kind === "blocks") {
+      const calls = last.blocks.filter(
+        (block): block is Anthropic.ToolUseBlockParam =>
+          (block as { type?: string }).type === "tool_use"
+      );
+      const replayed: Anthropic.ToolResultBlockParam[] = [];
+      for (const call of calls) {
+        const input = (call.input ?? {}) as Record<string, unknown>;
+        if (!safeToReplay(call.name, input)) continue;
+        // Policy is deliberately not re-consulted: the block's presence in the
+        // transcript is the record that the original call already passed the gate.
+        const outcome = await dispatchTool(call.name, input, {
+          agent,
+          registry,
+          bus,
+          box,
+          files: deps.files,
+          claims: deps.claims,
+          caller: deps.caller,
+          displayIndex: deps.displayIndex,
+          boxOwner: deps.boxOwner,
+          tasks: deps.tasks,
+          turnId,
+          conversation,
+        });
+        replayed.push({
+          type: "tool_result",
+          tool_use_id: call.id,
+          content: [
+            {
+              type: "text",
+              text:
+                "[Re-run on resume: this read-only call was interrupted before its result " +
+                `was recorded.]\n\n${outcome.text}`,
+            },
+          ],
+          ...(outcome.isError ? { is_error: true } : {}),
+        });
+      }
+      if (replayed.length > 0) {
+        const entry = {
+          role: "user",
+          kind: "results",
+          blocks: replayed,
+          at: new Date().toISOString(),
+        } satisfies TranscriptEntry;
+        registry.appendTranscript(agent.id, entry, conversation);
+        history = [...history, entry];
+      }
+    }
+  }
+
   const turnText = buildTurnPrompt(inbound);
 
   // Before assembling: a conversation that has grown past what fits is summarised, once, and the
