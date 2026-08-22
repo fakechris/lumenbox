@@ -85,6 +85,30 @@ export interface ChannelAdapter {
   updateTaskCard?(handle: string, card: TaskCardState): Promise<void>;
   /** Posts an image (base64 WebP) to a chat. Absent means the wire cannot show one. */
   sendImage?(chatKey: string, base64: string): Promise<void>;
+  /**
+   * Posts a consent request with buttons to wherever this identity's messages come
+   * from. Absent means the wire has no buttons and the text-verb path is used.
+   */
+  postApprovalCard?(identity: string, card: ApprovalCardState): Promise<void>;
+  /**
+   * Registers the handler for a pressed approval button. The handler returns the
+   * line to show in the chat, or undefined when the press was refused or stale.
+   */
+  onApprovalAction?(
+    handler: (press: {
+      approvalId: string;
+      reply: ApprovalReply;
+      identity: string;
+    }) => Promise<string | undefined>
+  ): void;
+}
+
+/** A pending consent, as a card with buttons renders it. */
+export interface ApprovalCardState {
+  approvalId: string;
+  agentName: string;
+  /** The original action, verbatim — an approval that paraphrases is an injection surface. */
+  description: string;
 }
 
 export interface ChannelStatus {
@@ -257,6 +281,22 @@ export class ChannelManager {
 
   start(): void {
     for (const adapter of this.adapters) {
+      // A button in a room is pressable by whoever the room trusts to drive — the
+      // same set the text verbs trust — checked at press time, not at render time,
+      // because a card outlives the moment it was posted.
+      adapter.onApprovalAction?.(async press => {
+        if (!this.deps.mayDrive(press.identity)) return undefined;
+        const result = this.deps.answerApproval?.(press.approvalId, press.reply);
+        // However it was answered, nobody's one-word reply should now hit something else.
+        for (const [identity, waiting] of this.awaitingApproval) {
+          if (waiting.approvalId === press.approvalId) this.awaitingApproval.delete(identity);
+        }
+        return (
+          result ??
+          "That consent is no longer waiting — it may have been answered from the app, " +
+            "or the turn moved on."
+        );
+      });
       adapter
         .start(message => this.handle(adapter, message))
         .then(() => {
@@ -301,6 +341,16 @@ export class ChannelManager {
     const asker = this.lastAsker.get(agentId);
     if (asker === undefined) return;
     this.awaitingApproval.set(asker.identity, { approvalId, description });
+    // Buttons where the wire has them; the word path stays open either way, because a
+    // person answering "允许" at a card is right, not wrong.
+    if (asker.adapter.postApprovalCard !== undefined) {
+      void asker.adapter
+        .postApprovalCard(asker.identity, { approvalId, agentName, description })
+        .catch(() => {
+          // The web UI still shows it; a failed push is not a lost approval.
+        });
+      return;
+    }
     const message =
       `${agentName || "An agent"} needs your consent:\n${description}\n\n` +
       `Reply "allow" for once, "always" to stop asking for this, or "deny". ` +

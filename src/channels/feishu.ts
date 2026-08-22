@@ -15,7 +15,57 @@
  * is typing, not where.
  */
 
-import type { ChannelAdapter, InboundMessage, TaskCardState } from "./manager.ts";
+import type {
+  ApprovalCardState,
+  ApprovalReply,
+  ChannelAdapter,
+  InboundMessage,
+  TaskCardState,
+} from "./manager.ts";
+
+/**
+ * The consent request as a card: the original action verbatim in the body, the three
+ * answers as buttons, and a note that the words still work — because a person typing
+ * "允许" at a card is right, not wrong.
+ */
+export function renderApprovalCard(card: ApprovalCardState): object {
+  const button = (label: string, type: string, reply: string) => ({
+    tag: "button",
+    text: { tag: "plain_text", content: label },
+    type,
+    value: { approval: card.approvalId, reply },
+  });
+  return {
+    config: { wide_screen_mode: true },
+    header: {
+      title: {
+        tag: "plain_text",
+        content: `${card.agentName || "An agent"} needs your consent`,
+      },
+      template: "orange",
+    },
+    elements: [
+      { tag: "div", text: { tag: "lark_md", content: card.description } },
+      {
+        tag: "action",
+        actions: [
+          button("Allow once", "primary", "once"),
+          button("Allow always", "default", "always"),
+          button("Deny", "danger", "deny"),
+        ],
+      },
+      {
+        tag: "note",
+        elements: [
+          {
+            tag: "plain_text",
+            content: "The turn is paused until someone answers. Replying allow / deny works too.",
+          },
+        ],
+      },
+    ],
+  };
+}
 
 /**
  * A task card as Feishu renders it: header carries the instruction and the status
@@ -74,6 +124,18 @@ export class FeishuChannel implements ChannelAdapter {
     | undefined;
   /** The chat each identity last spoke in, for routing a reply or a notice back. */
   private readonly chats = new Map<string, string>();
+  /** Set by the manager before start; a press with no handler is acknowledged and dropped. */
+  private approvalHandler:
+    | ((press: {
+        approvalId: string;
+        reply: ApprovalReply;
+        identity: string;
+      }) => Promise<string | undefined>)
+    | undefined;
+
+  onApprovalAction(handler: NonNullable<FeishuChannel["approvalHandler"]>): void {
+    this.approvalHandler = handler;
+  }
 
   constructor(
     private readonly appId: string,
@@ -121,6 +183,38 @@ export class FeishuChannel implements ChannelAdapter {
           .catch((error: unknown) => {
             const detail = error instanceof Error ? error.message : String(error);
             this.log(`channel feishu: reply failed (${detail})`);
+          });
+        return {};
+      },
+      // A pressed approval button. The press carries who pressed and which consent;
+      // authorisation is the manager's, and the returned line lands in the chat as an
+      // ordinary message — the SDK's own response to the event is just the ack.
+      "card.action.trigger": (data: {
+        operator?: { open_id?: string };
+        action?: { value?: { approval?: string; reply?: string } };
+        context?: { open_chat_id?: string };
+      }) => {
+        const approvalId = data.action?.value?.approval;
+        const reply = data.action?.value?.reply;
+        const openId = data.operator?.open_id;
+        const chatId = data.context?.open_chat_id;
+        if (
+          approvalId === undefined ||
+          openId === undefined ||
+          this.approvalHandler === undefined ||
+          (reply !== "once" && reply !== "always" && reply !== "session" && reply !== "deny")
+        ) {
+          return {};
+        }
+        void this.approvalHandler({ approvalId, reply, identity: `feishu:${openId}` })
+          .then(line =>
+            line !== undefined && chatId !== undefined
+              ? this.sendToChat(`feishu:${chatId}`, line)
+              : undefined
+          )
+          .catch((error: unknown) => {
+            const detail = error instanceof Error ? error.message : String(error);
+            this.log(`channel feishu: card action failed (${detail})`);
           });
         return {};
       },
@@ -185,6 +279,20 @@ export class FeishuChannel implements ChannelAdapter {
     await this.apiClient.im.message.patch({
       path: { message_id: handle },
       data: { content: JSON.stringify(renderCard(card)) },
+    });
+  }
+
+  /** The consent card, to wherever this identity's messages come from — like `send`. */
+  async postApprovalCard(identity: string, card: ApprovalCardState): Promise<void> {
+    const chatId = this.chats.get(identity);
+    if (chatId === undefined || this.apiClient === undefined) return;
+    await this.apiClient.im.message.create({
+      params: { receive_id_type: "chat_id" },
+      data: {
+        receive_id: chatId,
+        msg_type: "interactive",
+        content: JSON.stringify(renderApprovalCard(card)),
+      },
     });
   }
 

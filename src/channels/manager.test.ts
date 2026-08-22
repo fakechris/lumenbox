@@ -493,6 +493,51 @@ test("parseApprovalReply reads only a whole-message verb", async () => {
   assert.equal(parseApprovalReply("please do it"), undefined);
 });
 
+test("an approval goes out as a card where the wire has buttons, and a press answers it", async () => {
+  const adapter = testAdapter();
+  const cards: { identity: string; approvalId: string }[] = [];
+  let press:
+    | ((input: { approvalId: string; reply: "once" | "always" | "session" | "deny"; identity: string }) => Promise<string | undefined>)
+    | undefined;
+  const withButtons = Object.assign(adapter, {
+    postApprovalCard(identity: string, card: { approvalId: string }) {
+      cards.push({ identity, approvalId: card.approvalId });
+      return Promise.resolve();
+    },
+    onApprovalAction(handler: NonNullable<typeof press>) {
+      press = handler;
+    },
+  });
+  const answered: { id: string; reply: string }[] = [];
+  const manager = new ChannelManager({
+    mayDrive: identity => identity === "feishu:driver",
+    ask: async () => "x",
+    answerApproval: (id, reply) => {
+      answered.push({ id, reply });
+      return "Allowed.";
+    },
+    log: () => {},
+  });
+  manager.register(withButtons, true, "test");
+  await started(manager);
+
+  manager.remember("agent-1", "telegram", "feishu:driver");
+  manager.notifyApproval("agent-1", "appr-2", "Ada", "run the deploy");
+  assert.deepEqual(cards, [{ identity: "feishu:driver", approvalId: "appr-2" }]);
+  assert.equal(adapter.sent.length, 0, "a card, not a text");
+
+  // A stranger's press does nothing; a driver's press answers.
+  assert.equal(await press!({ approvalId: "appr-2", reply: "once", identity: "feishu:stranger" }), undefined);
+  assert.deepEqual(answered, []);
+  assert.equal(await press!({ approvalId: "appr-2", reply: "once", identity: "feishu:driver" }), "Allowed.");
+  assert.deepEqual(answered, [{ id: "appr-2", reply: "once" }]);
+
+  // The word path was cleared by the press: a later "allow" approves nothing new.
+  const stray = await adapter.inject({ identity: "feishu:driver", senderLabel: "c", text: "allow" });
+  assert.equal(stray, undefined, "just a message that runs a turn, not a decision");
+  await manager.idle();
+});
+
 test("a pushed approval answered from the app leaves the chat reply saying so", async () => {
   const adapter = testAdapter();
   const manager = new ChannelManager({

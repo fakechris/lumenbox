@@ -59,3 +59,31 @@ test("the card says who is on it, what it is doing, and who asked", () => {
   const team = rendered({ title: "t", agentName: "", requesterLabel: "c", status: "working" });
   assert.match(team.elements[0]!.text!.content, /\*\*The team\*\*/);
 });
+
+test("the approval card carries the action verbatim and the three answers as buttons", async () => {
+  const { renderApprovalCard } = await import("./feishu.ts");
+  const card = renderApprovalCard({
+    approvalId: "appr-9",
+    agentName: "Ada",
+    description: "curl -X POST https://example.com/export",
+  }) as {
+    header: { title: { content: string }; template: string };
+    elements: {
+      tag: string;
+      text?: { content: string };
+      actions?: { text: { content: string }; value: { approval: string; reply: string } }[];
+    }[];
+  };
+  assert.equal(card.header.template, "orange");
+  assert.match(card.header.title.content, /Ada needs your consent/);
+  assert.equal(card.elements[0]!.text!.content, "curl -X POST https://example.com/export");
+  const actions = card.elements.find(element => element.tag === "action")!.actions!;
+  assert.deepEqual(
+    actions.map(action => action.value),
+    [
+      { approval: "appr-9", reply: "once" },
+      { approval: "appr-9", reply: "always" },
+      { approval: "appr-9", reply: "deny" },
+    ]
+  );
+});
