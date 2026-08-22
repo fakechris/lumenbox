@@ -49,6 +49,25 @@ export interface ChannelStatus {
   detail: string;
 }
 
+/** How a one-word reply on a chat answers a pending approval. */
+export type ApprovalReply = "once" | "always" | "session" | "deny";
+
+/**
+ * Reads a whole message as an approval answer, or nothing.
+ *
+ * The message must be *only* the verb — "allow" answers, "allow the download" does not,
+ * because the second is a person talking about the request, not deciding it, and a
+ * loose match would approve a dangerous action from an offhand sentence.
+ */
+export function parseApprovalReply(text: string): ApprovalReply | undefined {
+  const t = text.trim().toLowerCase().replace(/[.!]+$/, "");
+  if (["allow", "approve", "yes", "ok", "y", "允许", "同意", "批准", "好"].includes(t)) return "once";
+  if (["allow always", "always", "一直允许", "总是允许"].includes(t)) return "always";
+  if (["allow session", "session", "本次会话"].includes(t)) return "session";
+  if (["deny", "refuse", "reject", "no", "n", "拒绝", "不"].includes(t)) return "deny";
+  return undefined;
+}
+
 export interface ChannelManagerDeps {
   /**
    * Whether this identity may command the agents from a channel, read fresh each
@@ -57,6 +76,14 @@ export interface ChannelManagerDeps {
    * property of the person, which is why this takes an identity and not a chat.
    */
   mayDrive: (identity: string) => boolean;
+  /**
+   * Answers a pending approval by id, at a scope. Returns a line to send back, or
+   * undefined when the approval is no longer waiting (answered from the web meanwhile,
+   * or the turn moved on). The manager only calls this for an approval it pushed to
+   * this identity, so authorization is already the mayDrive check that let the pushed
+   * turn run.
+   */
+  answerApproval?: (approvalId: string, reply: ApprovalReply) => string | undefined;
   /**
    * Runs one turn and returns what the agent said. `agentName` is undefined for the
    * default agent; unknown names should throw with a message worth relaying.
@@ -92,6 +119,14 @@ export class ChannelManager {
   private readonly statuses = new Map<string, ChannelStatus>();
   /** Where each agent's last channel instruction came from, for routing notices back. */
   private readonly lastAsker = new Map<string, { adapter: ChannelAdapter; identity: string }>();
+  /**
+   * The approval each channel person can answer right now, keyed by their identity.
+   *
+   * Set when an approval for a turn they drove is pushed to their chat; a one-word
+   * reply from that identity answers it. Cleared once answered, so a stray "ok" later
+   * does not approve something new.
+   */
+  private readonly awaitingApproval = new Map<string, { approvalId: string; description: string }>();
 
   constructor(private readonly deps: ChannelManagerDeps) {}
 
@@ -124,23 +159,28 @@ export class ChannelManager {
     return [...this.statuses.values()];
   }
 
-  /**
-   * A notice for whoever last drove this agent from a channel — an approval waiting,
-   * mostly. Quietly nothing when the agent was never driven from a channel: the web
-   * page covers that case already.
-   */
-  notifyAsker(agentId: string, text: string): void {
-    const asker = this.lastAsker.get(agentId);
-    if (asker === undefined) return;
-    void asker.adapter.send(asker.identity, text).catch(() => {
-      // The notice is best-effort; the approval itself still shows in the UI.
-    });
-  }
-
   /** Remembers who to notify for an agent. Called by `ask` wiring with the agent id. */
   remember(agentId: string, adapterName: string, identity: string): void {
     const adapter = this.adapters.find(a => a.name === adapterName);
     if (adapter !== undefined) this.lastAsker.set(agentId, { adapter, identity });
+  }
+
+  /**
+   * Pushes a pending approval to whoever last drove this agent from a chat, and
+   * remembers it so a one-word reply from them answers it. Nothing when the agent was
+   * not driven from a channel — the web page covers that.
+   */
+  notifyApproval(agentId: string, approvalId: string, agentName: string, description: string): void {
+    const asker = this.lastAsker.get(agentId);
+    if (asker === undefined) return;
+    this.awaitingApproval.set(asker.identity, { approvalId, description });
+    const message =
+      `${agentName || "An agent"} needs your consent:\n${description}\n\n` +
+      `Reply "allow" for once, "always" to stop asking for this, or "deny". ` +
+      `The turn is paused until you answer.`;
+    void asker.adapter.send(asker.identity, message).catch(() => {
+      // The web UI still shows it; a failed push is not a lost approval.
+    });
   }
 
   private setStatus(name: string, patch: Partial<ChannelStatus>): void {
@@ -157,6 +197,23 @@ export class ChannelManager {
         `channel ${adapter.name}: refused ${message.identity} (${message.senderLabel})`
       );
       return refusal(message.identity);
+    }
+
+    // A one-word answer to a consent this person was asked for is a decision, not a
+    // new instruction: answer the approval and do not start a turn. Checked before
+    // address parsing, so "allow" is never read as a message to an agent named allow.
+    const pending = this.awaitingApproval.get(message.identity);
+    if (pending !== undefined) {
+      const reply = parseApprovalReply(message.text);
+      if (reply !== undefined) {
+        this.awaitingApproval.delete(message.identity);
+        const result = this.deps.answerApproval?.(pending.approvalId, reply);
+        return (
+          result ??
+          "That consent is no longer waiting — it may have been answered from the app, " +
+            "or the turn moved on. Send the request again if it still needs doing."
+        );
+      }
     }
 
     const { agentName, text } = parseAddress(message.text);

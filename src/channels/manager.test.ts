@@ -115,7 +115,7 @@ test("an allowed sender runs a turn and gets what the agent said", async () => {
   );
 });
 
-test("a notice reaches whoever last drove the agent from a channel, and nobody else", () => {
+test("an approval notice reaches whoever last drove the agent from a channel, and nobody else", () => {
   const adapter = testAdapter();
   const manager = new ChannelManager({
     mayDrive: identity => identity === "telegram:7",
@@ -123,10 +123,73 @@ test("a notice reaches whoever last drove the agent from a channel, and nobody e
     log: () => {},
   });
   manager.register(adapter, true, "test");
-  manager.notifyAsker("agent-1", "needs consent");
-  assert.deepEqual(adapter.sent, [], "an agent never driven from a channel notifies nobody");
+  manager.notifyApproval("agent-1", "a1", "Ada", "needs consent");
+  assert.equal(adapter.sent.length, 0, "an agent never driven from a channel notifies nobody");
 
   manager.remember("agent-1", "telegram", "telegram:7");
-  manager.notifyAsker("agent-1", "needs consent");
-  assert.deepEqual(adapter.sent, [{ identity: "telegram:7", text: "needs consent" }]);
+  manager.notifyApproval("agent-1", "a1", "Ada", "needs consent");
+  assert.equal(adapter.sent.length, 1);
+  const pushed = adapter.sent[0]!;
+  assert.equal(pushed.identity, "telegram:7");
+  assert.match(pushed.text, /needs consent/);
+});
+
+test("a one-word reply answers the approval that was pushed to that chat", async () => {
+  const adapter = testAdapter();
+  const answered: { id: string; reply: string }[] = [];
+  const manager = new ChannelManager({
+    mayDrive: () => true,
+    ask: async () => "running",
+    answerApproval: (id, reply) => {
+      answered.push({ id, reply });
+      return reply === "deny" ? "Refused." : "Allowed.";
+    },
+    log: () => {},
+  });
+  manager.register(adapter, true, "test");
+  manager.start();
+  await new Promise(resolve => setImmediate(resolve));
+
+  // No approval pending yet: "allow" is just a message and runs a turn.
+  manager.remember("agent-1", "telegram", "telegram:7");
+  await adapter.inject({ identity: "telegram:7", senderLabel: "c", text: "allow" });
+  assert.deepEqual(answered, [], "with nothing pending, a word is not a decision");
+
+  // Push an approval to this chat, then a one-word reply answers it — no turn.
+  manager.notifyApproval("agent-1", "appr-9", "Ada", "download from unlisted host");
+  const reply = await adapter.inject({ identity: "telegram:7", senderLabel: "c", text: "Allow" });
+  assert.deepEqual(answered, [{ id: "appr-9", reply: "once" }], "case-insensitive, answered once");
+  assert.equal(reply, "Allowed.");
+
+  // The mapping is cleared: a later "allow" does not approve something new.
+  answered.length = 0;
+  await adapter.inject({ identity: "telegram:7", senderLabel: "c", text: "allow" });
+  assert.deepEqual(answered, [], "a stray word later approves nothing");
+});
+
+test("parseApprovalReply reads only a whole-message verb", async () => {
+  const { parseApprovalReply } = await import("./manager.ts");
+  assert.equal(parseApprovalReply("allow"), "once");
+  assert.equal(parseApprovalReply("  ALWAYS "), "always");
+  assert.equal(parseApprovalReply("deny."), "deny");
+  assert.equal(parseApprovalReply("同意"), "once");
+  assert.equal(parseApprovalReply("allow the download"), undefined, "a sentence is not a decision");
+  assert.equal(parseApprovalReply("please do it"), undefined);
+});
+
+test("a pushed approval answered from the app leaves the chat reply saying so", async () => {
+  const adapter = testAdapter();
+  const manager = new ChannelManager({
+    mayDrive: () => true,
+    ask: async () => "x",
+    answerApproval: () => undefined, // no longer pending
+    log: () => {},
+  });
+  manager.register(adapter, true, "test");
+  manager.start();
+  await new Promise(resolve => setImmediate(resolve));
+  manager.remember("agent-1", "telegram", "telegram:7");
+  manager.notifyApproval("agent-1", "appr-1", "Ada", "do the thing");
+  const reply = await adapter.inject({ identity: "telegram:7", senderLabel: "c", text: "deny" });
+  assert.match(reply ?? "", /no longer waiting/);
 });
