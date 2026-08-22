@@ -26,6 +26,7 @@ import type { ResolutionConfig } from "../protocol/index.ts";
 import { runTurn, TurnAborted, type TurnEvent } from "./turn.ts";
 import { PolicyGate } from "./policy.ts";
 import { TaskStore } from "./tasks.ts";
+import { ScopeStore } from "./scopes.ts";
 import { MAIN_CONVERSATION } from "../agents/registry.ts";
 import type { HostRunner } from "./host-runner.ts";
 import type { Vault } from "./vault.ts";
@@ -80,6 +81,8 @@ export interface OrchestratorOptions {
   vault?: Vault;
   /** The team's task board. `null` keeps none, which a test that must not touch the state directory wants. */
   tasks?: TaskStore | null;
+  /** The scopes registry. `null` keeps none. */
+  scopes?: ScopeStore | null;
 }
 
 export class Orchestrator {
@@ -136,6 +139,7 @@ export class Orchestrator {
    * replay-and-compact and a second writer would interleave two views of the board.
    */
   readonly tasks: TaskStore | undefined;
+  readonly scopes: ScopeStore | undefined;
 
   /** Begin/end per turn. A begin with no end is a turn the process died underneath. */
   private readonly turns: TurnLedger | undefined;
@@ -219,6 +223,7 @@ export class Orchestrator {
       options.tasks === null
         ? undefined
         : (options.tasks ?? new TaskStore(undefined, line => console.error(`[tasks] ${line}`)));
+    this.scopes = options.scopes === null ? undefined : (options.scopes ?? new ScopeStore());
     this.claims =
       options.claims === null
         ? new Claims(null)
@@ -371,6 +376,7 @@ export class Orchestrator {
       hostRunner: this.options.hostRunner,
       vault: this.options.vault,
       tasks: this.tasks,
+      scopes: this.scopes,
       conversation,
       provider: this.provider,
       effort: this.options.effort,

@@ -584,3 +584,26 @@ Four properties added after a comparative review of durable-harness practice:
   resumed turn re-executes interrupted *pure reads* from the block alone, marked as
   re-run so a second resume does nothing twice. Everything with a side effect keeps
   the honest "outcome unknown" treatment.
+
+## 30. Scopes: authority as one named object
+
+An agent's power was scattered — a tool allowlist on its profile, secret grants in the
+vault, an egress list on the relay, a work directory in the box — and lining them up by
+hand for "this agent, on the vendor project" was several edits that could disagree. A
+**Scope** binds them into one named object that agents are placed into: name it once,
+add a secret or narrow the tools, and everyone in the scope moves together; remove an
+agent from the scope and it loses all of the scope's authority at once. This is the
+vault's Grant grown up — a grant answered "may this holder use this one secret", a
+scope answers "what may an agent in this project reach at all", and a secret grant is
+now one line of it.
+
+Two facets are enforced today. **Tools**: a scoped agent's offered tools are the
+scope's list, replacing the profile's own, because an agent in a scope is defined by
+it. **Secrets**: `RunOnHost` resolves a secret the caller's scope lists, audited as a
+scope grant exactly as a direct vault grant is — the vault still owns the value, the
+scope owns the authorization. Two facets are declared but not yet enforced —
+`egressHosts` and `filesRoot` — because the relay's allow list and the box's work
+directory are global infrastructure whose per-scope enforcement is a box-protocol
+change of its own; the fields are here so that change has a place to read from and no
+migration when it lands. `scopes.json` is 0600, because a scope names secrets and is
+the shape of who-may-do-what.

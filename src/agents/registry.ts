@@ -131,6 +131,12 @@ export interface AgentProfile {
    * `CreateAgent`, which passes its creator's set down.
    */
   tools?: readonly string[];
+  /**
+   * The scope this agent works in, if any. A scope confers a tool set and secret
+   * grants as one named bundle — see host/scopes.ts. When set, the scope's tool list
+   * is the agent's, replacing `tools`, because an agent in a scope is defined by it.
+   */
+  scopeId?: string;
   createdAt: string;
   updatedAt: string;
 }
@@ -318,6 +324,8 @@ export class AgentRegistry {
     visibility?: "shared" | "private";
     /** Which tools it may be offered. Absent means all; see AgentProfile.tools. */
     tools?: readonly string[];
+    /** The scope to place it in. Its tool set and secrets then come from the scope. */
+    scopeId?: string;
   }): AgentRecord {
     const name = clampLine(input.name ?? "", AGENT_NAME_MAX_LENGTH);
     if (!name) throw new Error("An agent needs a non-empty name.");
@@ -334,6 +342,7 @@ export class AgentRegistry {
       ...(input.ownerUserId !== undefined ? { ownerUserId: input.ownerUserId } : {}),
       visibility: input.visibility ?? "shared",
       ...(input.tools !== undefined ? { tools: [...input.tools] } : {}),
+      ...(input.scopeId !== undefined && input.scopeId !== "" ? { scopeId: input.scopeId } : {}),
       createdAt: now,
       updatedAt: now,
     };
@@ -363,6 +372,8 @@ export class AgentRegistry {
        * which is what keeps "nothing grants what the granter does not hold" true.
        */
       tools?: readonly string[] | null;
+      /** The scope to place it in, `null`/`""` to remove it from one. UI path only. */
+      scopeId?: string | null;
     }
   ): AgentRecord {
     const existing = this.get(agentId);
@@ -384,6 +395,10 @@ export class AgentRegistry {
     if (changes.tools !== undefined) {
       if (changes.tools === null) delete profile.tools;
       else profile.tools = [...changes.tools];
+    }
+    if (changes.scopeId !== undefined) {
+      if (changes.scopeId === null || changes.scopeId === "") delete profile.scopeId;
+      else profile.scopeId = changes.scopeId;
     }
 
     profile.updatedAt = new Date().toISOString();

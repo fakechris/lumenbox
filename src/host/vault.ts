@@ -168,19 +168,27 @@ export class Vault {
    */
   resolve(
     id: string,
-    caller: { agentId: string; agentName?: string; principalId?: string },
+    caller: {
+      agentId: string;
+      agentName?: string;
+      principalId?: string;
+      /** True when the caller's scope grants this secret — decided by the ScopeStore. */
+      scopeGrants?: boolean;
+    },
     now: Date = new Date()
   ): string | undefined {
     const secret = this.secrets.find(s => s.id === id);
     const allowed =
       secret !== undefined &&
-      secret.grants.some(grant => grantCovers(grant, caller, now.getTime()));
+      (caller.scopeGrants === true ||
+        secret.grants.some(grant => grantCovers(grant, caller, now.getTime())));
     this.audit({
       at: now.toISOString(),
       secretId: id,
       agentId: caller.agentId,
       ...(caller.agentName !== undefined ? { agentName: caller.agentName } : {}),
       ...(caller.principalId !== undefined ? { principalId: caller.principalId } : {}),
+      ...(caller.scopeGrants === true ? { via: "scope" } : {}),
       allowed,
       known: secret !== undefined,
     });
