@@ -13,6 +13,7 @@ import type { AgentBus } from "../agents/bus.ts";
 import type { AgentRecord, AgentRegistry } from "../agents/registry.ts";
 import type { PolicyGate } from "./policy.ts";
 import type { HostRunner } from "./host-runner.ts";
+import type { Vault } from "./vault.ts";
 import { describeHistory, readHistory } from "./history.ts";
 import { dedupeKey, validateRecord } from "./memory.ts";
 import { Claims, heldElsewhere } from "./claims.ts";
@@ -83,6 +84,12 @@ export interface ToolContext {
    * box without this never learns it might have asked.
    */
   hostRunner?: HostRunner;
+  /**
+   * The credential vault. Present, a host command may ask for named secrets by their
+   * grants; absent, the `secrets` argument is quietly nothing, since there is nowhere
+   * to resolve it from.
+   */
+  vault?: Vault;
 }
 
 /** A tool result: text for the model, plus optional images. */
@@ -602,11 +609,24 @@ export function buildTools(
         "through their shell, so their PATH and aliases apply. " +
         "Every call stops for the person to approve the exact command before it runs, " +
         "so write the command you mean and say in your message why you need it. " +
-        "Returns stdout, stderr and the exit code, the same as `bash`.",
+        "Returns stdout, stderr and the exit code, the same as `bash`.\n\n" +
+        "If the command needs a credential — a token to push to git, an API key — name " +
+        "the vault secrets it needs in `secrets`, and they are placed in the command's " +
+        "environment for that one run. They live on the host, never enter your box, and " +
+        "are yours to use only if a person has granted them to you. You never see the " +
+        "values; you refer to them by the environment variable name the operator chose.",
       input_schema: {
         type: "object",
         properties: {
           command: { type: "string", description: "The command to run on the host." },
+          secrets: {
+            type: "array",
+            items: { type: "string" },
+            description:
+              "Vault secret ids to place in the command's environment for this run, " +
+              "e.g. [\"GITHUB_TOKEN\"]. Each must be granted to you; an ungranted one " +
+              "is left out and named back to you.",
+          },
         },
         required: ["command"],
       },
@@ -804,14 +824,36 @@ export async function dispatchTool(
       }
       const command = String(input.command ?? "").trim();
       if (command === "") return { text: "`command` is required.", isError: true };
+
+      // Named secrets, resolved through the vault against this agent's grants. Every
+      // resolution is audited inside the vault; a refused one is left out of the
+      // environment and named back, so the model learns it lacks the grant rather
+      // than the command failing opaquely.
+      const secretEnv: Record<string, string> = {};
+      const refusedSecrets: string[] = [];
+      const asked = Array.isArray(input.secrets) ? (input.secrets as unknown[]) : [];
+      for (const raw of asked) {
+        const secretId = String(raw);
+        const value = context.vault?.resolve(secretId, {
+          agentId: context.agent.id,
+          agentName: context.agent.profile.name,
+          ...(context.caller?.userId !== undefined ? { principalId: context.caller.userId } : {}),
+        });
+        if (value === undefined) refusedSecrets.push(secretId);
+        else secretEnv[secretId] = value;
+      }
+
       try {
-        const result = await context.hostRunner.run(command);
+        const result = await context.hostRunner.run(command, secretEnv);
         const parts = [
           result.stdout.trim() !== "" ? result.stdout : "(no stdout)",
           result.stderr.trim() !== "" ? `stderr:\n${result.stderr}` : "",
           result.timedOut ? "The command hit the host time limit and was killed." : "",
           result.truncatedBytes > 0
             ? `(${result.truncatedBytes} bytes of output dropped for length.)`
+            : "",
+          refusedSecrets.length > 0
+            ? `Not run with these secrets — you have not been granted them: ${refusedSecrets.join(", ")}.`
             : "",
           `exit code: ${result.code === null ? "unknown" : result.code}`,
         ].filter(part => part !== "");

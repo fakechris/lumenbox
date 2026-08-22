@@ -94,8 +94,15 @@ export class HostRunner {
     return undefined;
   }
 
-  /** Runs one command through the shell, on the host, under the configured root. */
-  run(command: string): Promise<HostRunResult> {
+  /**
+   * Runs one command through the shell, on the host, under the configured root.
+   *
+   * `secretEnv` is merged over the process environment for this one command only —
+   * this is how a vaulted credential reaches a `git push` without ever being written
+   * anywhere. It lives in the child's environment for the life of the command and
+   * nowhere else; nothing is persisted, and it never enters the box.
+   */
+  run(command: string, secretEnv: Record<string, string> = {}): Promise<HostRunResult> {
     const reason = this.unavailableReason();
     if (reason !== undefined) return Promise.reject(new Error(reason));
 
@@ -112,6 +119,9 @@ export class HostRunner {
           timeout: this.config.timeoutMs,
           maxBuffer: this.config.maxOutputBytes + 1_000_000,
           killSignal: "SIGKILL",
+          ...(Object.keys(secretEnv).length > 0
+            ? { env: { ...process.env, ...secretEnv } }
+            : {}),
         },
         (error, stdout, stderr) => {
           const cap = (text: string): [string, number] => {

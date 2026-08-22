@@ -126,6 +126,7 @@ import { HostRunner, hostRunnerConfig } from "../host/host-runner.ts";
 import { ALL_TOOLS } from "../host/orchestrator.ts";
 import { PRESET_MODELS, providerNames, resolveProvider, testProvider } from "../host/provider.ts";
 import { Principals, roleAtLeast, type Principal, type Role } from "../host/principals.ts";
+import { Vault, type Grant } from "../host/vault.ts";
 import { seedStarterSkills } from "../host/starter-skills.ts";
 import { ActivityLog } from "./activity.ts";
 import { vendorPath } from "./markdown.ts";
@@ -246,12 +247,17 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
   const hostRunner = new HostRunner(hostRunnerConfig(loadConfig().hostExec ?? {}));
   if (hostRunner.enabled) log("host execution is on; every host command still asks for approval");
 
+  // The credential vault. Read fresh on each edit through the routes; the orchestrator
+  // holds this one instance, so a granted secret is usable on the next host command.
+  const vault = new Vault();
+
   const orchestrator = new Orchestrator({
     registry,
     provider: options.provider,
     useBox: options.useBox,
     boxProvisioner: provisioner,
     hostRunner,
+    vault,
     onTurnEvent: broadcast,
     onBusEvent: broadcast,
   });
@@ -763,6 +769,51 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
               .filter(agent => orchestrator.policy.isStopped(agent.id))
               .map(agent => agent.id),
           });
+          return;
+        }
+
+        // The credential vault: names, descriptions and grants — never values. Admin
+        // only, because a secret's grants are who-may-do-what.
+        if (route === "GET /api/vault") {
+          if (refusedRole("admin")) return;
+          send(res, 200, { secrets: vault.list() });
+          return;
+        }
+
+        if (route === "POST /api/vault") {
+          if (refusedRole("admin")) return;
+          const body = await readJson(req);
+          const id = typeof body.id === "string" ? body.id.trim() : "";
+          if (id === "") {
+            send(res, 400, { error: "A secret needs an id (the environment variable name)." });
+            return;
+          }
+          const grants: Grant[] = Array.isArray(body.grants)
+            ? (body.grants as Record<string, unknown>[])
+                .filter(g => typeof g.holder === "string" && g.holder !== "")
+                .map(g => ({
+                  holder: g.holder as string,
+                  ...(typeof g.expiresAt === "string" && g.expiresAt !== ""
+                    ? { expiresAt: g.expiresAt }
+                    : {}),
+                }))
+            : [];
+          vault.setSecret({
+            id,
+            ...(typeof body.description === "string" ? { description: body.description } : {}),
+            ...(typeof body.value === "string" && body.value !== "" ? { value: body.value } : {}),
+            grants,
+          });
+          log(`vault: saved secret ${id}`);
+          send(res, 200, { secrets: vault.list() });
+          return;
+        }
+
+        if (route === "POST /api/vault/remove") {
+          if (refusedRole("admin")) return;
+          const body = await readJson(req);
+          vault.removeSecret(String(body.id ?? ""));
+          send(res, 200, { secrets: vault.list() });
           return;
         }
 
