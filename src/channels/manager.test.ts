@@ -415,6 +415,74 @@ test("a one-word reply answers the approval that was pushed to that chat", async
   assert.deepEqual(answered, [], "a stray word later approves nothing");
 });
 
+test("a stranger's knock is recorded, and the refusal says the owner was told", async () => {
+  const adapter = testAdapter();
+  const knocks: { identity: string; senderLabel: string; channel: string }[] = [];
+  const manager = new ChannelManager({
+    mayDrive: () => false,
+    ask: async () => "x",
+    knock: request => knocks.push(request),
+    log: () => {},
+  });
+  manager.register(adapter, true, "test");
+  await started(manager);
+
+  const reply = await adapter.inject({
+    identity: "feishu:ou_9",
+    senderLabel: "newcomer",
+    text: "hello?",
+  });
+  assert.deepEqual(knocks, [
+    { identity: "feishu:ou_9", senderLabel: "newcomer", channel: "telegram" },
+  ]);
+  assert.match(reply ?? "", /owner has been notified/);
+  assert.match(reply ?? "", /feishu:ou_9/, "the manual path still shows the id");
+});
+
+test("bind <code> is redeemed before the allow list, and a sentence is not a code", async () => {
+  const adapter = testAdapter();
+  const bound: { code: string; identity: string }[] = [];
+  const asked: string[] = [];
+  const manager = new ChannelManager({
+    mayDrive: () => false, // nobody is allowed: binding must still work
+    ask: async (_a, text) => {
+      asked.push(text);
+      return "x";
+    },
+    bind: (code, identity) => {
+      bound.push({ code, identity });
+      return code === "4F7KQZ" ? "You're in as driver." : "That code is not live.";
+    },
+    log: () => {},
+  });
+  manager.register(adapter, true, "test");
+  await started(manager);
+
+  const ok = await adapter.inject({ identity: "tg:1", senderLabel: "n", text: "绑定 4f7kqz" });
+  assert.equal(ok, "You're in as driver.");
+  assert.deepEqual(bound, [{ code: "4F7KQZ", identity: "tg:1" }], "case-normalised");
+
+  const miss = await adapter.inject({ identity: "tg:1", senderLabel: "n", text: "bind NOPE99" });
+  assert.match(miss ?? "", /not live/);
+
+  const sentence = await adapter.inject({
+    identity: "tg:1",
+    senderLabel: "n",
+    text: "bind the library to the app please",
+  });
+  assert.match(sentence ?? "", /Not authorised|notified/, "a sentence knocks, it does not bind");
+  assert.deepEqual(asked, [], "no turn ran for any of it");
+});
+
+test("push routes a line through the named adapter to the identity", async () => {
+  const adapter = testAdapter();
+  const manager = new ChannelManager({ mayDrive: () => true, ask: async () => "x", log: () => {} });
+  manager.register(adapter, true, "test");
+  await manager.push("telegram", "telegram:7", "You're in.");
+  await manager.push("feishu", "feishu:ou_1", "lost"); // no such adapter: dropped, not thrown
+  assert.deepEqual(adapter.sent, [{ identity: "telegram:7", text: "You're in." }]);
+});
+
 test("parseApprovalReply reads only a whole-message verb", async () => {
   const { parseApprovalReply } = await import("./manager.ts");
   assert.equal(parseApprovalReply("allow"), "once");

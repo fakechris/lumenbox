@@ -161,6 +161,18 @@ export interface ChannelManagerDeps {
    * one thing no other chat product can put in a group.
    */
   screenshot?: (agentName: string | undefined) => Promise<string | undefined>;
+  /**
+   * Redeems an invite code for this identity and returns the line to send back —
+   * "you're in as driver", or why not. Reached *before* the allow check, because the
+   * whole point of a code is that the sender is not authorised yet.
+   */
+  bind?: (code: string, identity: string, senderLabel: string) => string;
+  /**
+   * Records that somebody unknown knocked, for one-click approval in the app. The
+   * refusal then says the owner was told, instead of handing the person an id to
+   * copy around — the refusal is the registration page.
+   */
+  knock?: (request: { identity: string; senderLabel: string; channel: string }) => void;
   log: (line: string) => void;
 }
 
@@ -195,6 +207,25 @@ export function refusal(identity: string): string {
     `The owner can add it under Settings → Channels, or to channelAllow in ` +
     `~/.agentbox/config.json, and this message is the whole reason the id is shown.`
   );
+}
+
+/**
+ * The refusal when the owner was just told about the knock: an invitation to wait,
+ * not an id to copy around. The id still appears, last, for the manual path.
+ */
+export function knockRefusal(identity: string): string {
+  return (
+    `You're not on this LumenBox's list yet. The owner has been notified and can let ` +
+    `you in with one click — you'll hear back here once they do. If they gave you an ` +
+    `invite code, send it as: bind <code>\n` +
+    `(Your id, for the manual path: ${identity})`
+  );
+}
+
+/** A whole message of the shape `bind <code>` / `绑定 <码>`, or nothing. */
+export function parseBind(text: string): string | undefined {
+  const match = /^(?:bind|绑定)[\s::]+([a-z0-9-]{4,12})$/i.exec(text.trim());
+  return match === null ? undefined : match[1]!.toUpperCase();
 }
 
 export class ChannelManager {
@@ -284,14 +315,36 @@ export class ChannelManager {
     if (current !== undefined) this.statuses.set(name, { ...current, ...patch });
   }
 
+  /** Pushes a line to an identity through a named adapter. The approve-notification path. */
+  push(adapterName: string, identity: string, text: string): Promise<void> {
+    const adapter = this.adapters.find(a => a.name === adapterName);
+    if (adapter === undefined) return Promise.resolve();
+    return adapter.send(identity, text).catch(() => {});
+  }
+
   private async handle(
     adapter: ChannelAdapter,
     message: InboundMessage
   ): Promise<string | undefined> {
+    // An invite code is checked before the allow list: the sender not being on it yet
+    // is the whole reason codes exist. A non-code message from a stranger still knocks.
+    const code = parseBind(message.text);
+    if (code !== undefined && this.deps.bind !== undefined) {
+      return this.deps.bind(code, message.identity, message.senderLabel);
+    }
+
     if (!this.deps.mayDrive(message.identity)) {
       this.deps.log(
         `channel ${adapter.name}: refused ${message.identity} (${message.senderLabel})`
       );
+      if (this.deps.knock !== undefined) {
+        this.deps.knock({
+          identity: message.identity,
+          senderLabel: message.senderLabel,
+          channel: adapter.name,
+        });
+        return knockRefusal(message.identity);
+      }
       return refusal(message.identity);
     }
 

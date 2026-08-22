@@ -316,8 +316,56 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
     }
   }
 
+  // Letting somebody in is one click, not an id copied around. A stranger's message
+  // records a knock; the settings dialog approves it with one button, or the owner
+  // hands out a short-lived invite code the person redeems in the chat itself.
+  // In memory on purpose: a knock lost to a restart costs the person one more
+  // message, and a code that did not outlive the process is a *property* of a code.
+  const knocks = new Map<
+    string,
+    { identity: string; senderLabel: string; channel: string; at: string }
+  >();
+  const invites = new Map<string, { role: Role; principalId?: string; expiresAt: number }>();
+  const INVITE_TTL_MS = 15 * 60_000;
+  const newInviteCode = (): string => {
+    // Unambiguous alphabet — no 0/O, 1/I/L — because this travels by voice and by
+    // hand. Six characters of 31 ≈ 10^9, plenty for 15 minutes and one use.
+    const alphabet = "23456789ABCDEFGHJKMNPQRSTUVWXYZ";
+    return Array.from(randomBytes(6), byte => alphabet[byte % alphabet.length]!).join("");
+  };
+
   const channels = new ChannelManager({
     mayDrive: identity => roleAtLeast(principals.roleOf(identity), "driver"),
+    knock: request => {
+      knocks.set(request.identity, { ...request, at: new Date().toISOString() });
+      log(`channel ${request.channel}: ${request.senderLabel} (${request.identity}) knocked`);
+    },
+    bind: (code, identity, senderLabel) => {
+      const invite = invites.get(code);
+      if (invite === undefined || invite.expiresAt < Date.now()) {
+        invites.delete(code);
+        return "That code is not live — codes last 15 minutes and work once. Ask for a fresh one.";
+      }
+      // Deleted before the roster write: a code that races two senders admits one.
+      invites.delete(code);
+      const roster = principals.list();
+      const target =
+        invite.principalId !== undefined
+          ? roster.find(principal => principal.id === invite.principalId)
+          : undefined;
+      if (target !== undefined) {
+        target.identities.push(identity);
+        principals.save(roster);
+        knocks.delete(identity);
+        log(`channel bind: ${identity} linked to ${target.name}`);
+        return `Linked — you are ${target.name} (${target.role}) here now. Just say what you need done.`;
+      }
+      roster.push({ id: identity, name: senderLabel, role: invite.role, identities: [identity] });
+      principals.save(roster);
+      knocks.delete(identity);
+      log(`channel bind: ${identity} joined as ${invite.role}`);
+      return `You're in as ${invite.role}. Just say what you need done; @AgentName first picks who does it.`;
+    },
     // A chat reply of allow/always/deny answers the approval that was pushed there.
     answerApproval: (approvalId, reply) => {
       const target = orchestrator.policy.pending().find(item => item.id === approvalId);
@@ -1015,10 +1063,77 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
         // The chat channels: which exist, which are running, and the people who may
         // use them. The roster is the access-control list now, not a flat allow list.
         if (route === "GET /api/channels") {
+          for (const [code, invite] of invites) {
+            if (invite.expiresAt < Date.now()) invites.delete(code);
+          }
           send(res, 200, {
             channels: channels.list(),
             principals: principals.list(),
+            knocks: [...knocks.values()],
+            invites: [...invites.entries()].map(([code, invite]) => ({
+              code,
+              role: invite.role,
+              principalId: invite.principalId,
+              expiresAt: invite.expiresAt,
+            })),
           });
+          return;
+        }
+
+        // A short-lived, single-use code. With a principalId it links a new identity
+        // to an existing person (same human, second phone); without one it admits a
+        // new person at the named role.
+        if (route === "POST /api/channels/invite") {
+          if (refusedRole("admin")) return;
+          const body = await readJson(req);
+          const role: Role =
+            body.role === "admin" || body.role === "driver" || body.role === "viewer"
+              ? (body.role as Role)
+              : "driver";
+          const code = newInviteCode();
+          invites.set(code, {
+            role,
+            ...(typeof body.principalId === "string" && body.principalId !== ""
+              ? { principalId: body.principalId }
+              : {}),
+            expiresAt: Date.now() + INVITE_TTL_MS,
+          });
+          log(`channel invite: ${code} (${role}) created`);
+          send(res, 200, { code, role, expiresAt: Date.now() + INVITE_TTL_MS });
+          return;
+        }
+
+        // One click on a knock. The person is told on the channel they knocked from,
+        // because "approved silently" reads as "still ignored" from their side.
+        if (route === "POST /api/channels/approve") {
+          if (refusedRole("admin")) return;
+          const body = await readJson(req);
+          const identity = String(body.identity ?? "");
+          const knock = knocks.get(identity);
+          if (knock === undefined) {
+            send(res, 404, { error: "Nobody with that id is waiting." });
+            return;
+          }
+          const role: Role = body.role === "viewer" || body.role === "admin" ? body.role : "driver";
+          const roster = principals.list();
+          roster.push({ id: identity, name: knock.senderLabel, role, identities: [identity] });
+          principals.save(roster);
+          knocks.delete(identity);
+          log(`channel approve: ${identity} (${knock.senderLabel}) as ${role}`);
+          void channels.push(
+            knock.channel,
+            identity,
+            `You're in as ${role}. Just say what you need done; @AgentName first picks who does it.`
+          );
+          send(res, 200, { principals: principals.list(), knocks: [...knocks.values()] });
+          return;
+        }
+
+        if (route === "POST /api/channels/dismiss") {
+          if (refusedRole("admin")) return;
+          const body = await readJson(req);
+          knocks.delete(String(body.identity ?? ""));
+          send(res, 200, { knocks: [...knocks.values()] });
           return;
         }
 
