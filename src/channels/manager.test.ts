@@ -44,18 +44,21 @@ function testAdapter(): ChannelAdapter & {
   };
 }
 
-/** An adapter that can address chats and render cards, the way Feishu can. */
+/** An adapter that can address chats, render cards and show images, the way Feishu can. */
 function cardAdapter(): ReturnType<typeof testAdapter> & {
   chatSent: { chatKey: string; text: string }[];
   cards: { handle: string; card: TaskCardState }[];
+  images: { chatKey: string; base64: string }[];
 } {
   const base = testAdapter();
   const chatSent: { chatKey: string; text: string }[] = [];
   const cards: { handle: string; card: TaskCardState }[] = [];
+  const images: { chatKey: string; base64: string }[] = [];
   let nextHandle = 0;
   return Object.assign(base, {
     chatSent,
     cards,
+    images,
     sendToChat(chatKey: string, text: string) {
       chatSent.push({ chatKey, text });
       return Promise.resolve();
@@ -67,6 +70,10 @@ function cardAdapter(): ReturnType<typeof testAdapter> & {
     },
     updateTaskCard(handle: string, card: TaskCardState) {
       cards.push({ handle, card });
+      return Promise.resolve();
+    },
+    sendImage(chatKey: string, base64: string) {
+      images.push({ chatKey, base64 });
       return Promise.resolve();
     },
   });
@@ -259,6 +266,100 @@ test("a card-capable chat gets a card that finishes, and the answer addressed to
 
   assert.deepEqual(adapter.chatSent, [{ chatKey: "feishu:oc_room", text: "report ready" }]);
   assert.deepEqual(adapter.sent, [], "nothing routed by identity when the chat is addressable");
+});
+
+test("a whole-message screen request posts the desktop and runs no turn", async () => {
+  const adapter = cardAdapter();
+  const asked: string[] = [];
+  const manager = new ChannelManager({
+    mayDrive: () => true,
+    ask: async (_a, text) => {
+      asked.push(text);
+      return "x";
+    },
+    screenshot: async agentName => {
+      assert.equal(agentName, "Rex");
+      return "img64";
+    },
+    log: () => {},
+  });
+  manager.register(adapter, true, "test");
+  await started(manager);
+
+  await adapter.inject({
+    identity: "feishu:ou_1",
+    chatKey: "feishu:oc_room",
+    senderLabel: "chris",
+    text: "@Rex 屏幕",
+  });
+  await manager.idle();
+  assert.deepEqual(adapter.images, [{ chatKey: "feishu:oc_room", base64: "img64" }]);
+  assert.deepEqual(asked, [], "a look is not a task");
+
+  // A sentence about the screen is a task, not a look.
+  await adapter.inject({
+    identity: "feishu:ou_1",
+    chatKey: "feishu:oc_room",
+    senderLabel: "chris",
+    text: "看看屏幕上的报错是什么",
+  });
+  await manager.idle();
+  assert.equal(asked.length, 1, "the sentence ran a turn");
+});
+
+test("a screen request degrades honestly: no image wire, or no desktop", async () => {
+  const adapter = testAdapter(); // no sendImage
+  const manager = new ChannelManager({
+    mayDrive: () => true,
+    ask: async () => "x",
+    screenshot: async () => "img64",
+    log: () => {},
+  });
+  manager.register(adapter, true, "test");
+  await started(manager);
+  await adapter.inject({ identity: "telegram:7", senderLabel: "c", text: "screen" });
+  await manager.idle();
+  assert.match(adapter.sent[0]!.text, /cannot show images/);
+
+  const noDesk = cardAdapter();
+  const manager2 = new ChannelManager({
+    mayDrive: () => true,
+    ask: async () => "x",
+    screenshot: async () => undefined,
+    log: () => {},
+  });
+  manager2.register(noDesk, true, "test");
+  await started(manager2);
+  await noDesk.inject({ identity: "feishu:ou_1", chatKey: "feishu:oc_r", senderLabel: "c", text: "屏幕" });
+  await manager2.idle();
+  assert.match(noDesk.chatSent[0]!.text, /No desktop to show/);
+  assert.deepEqual(noDesk.images, []);
+});
+
+test("a finished task attaches the desktop, but only when it was long enough to acknowledge", async () => {
+  const adapter = cardAdapter();
+  let slow = false;
+  const manager = new ChannelManager({
+    mayDrive: () => true,
+    ask: async () => {
+      if (slow) await sleep(60);
+      return "answer";
+    },
+    screenshot: async () => "final-desk",
+    ackAfterMs: 25,
+    log: () => {},
+  });
+  manager.register(adapter, true, "test");
+  await started(manager);
+
+  await adapter.inject({ identity: "feishu:ou_1", chatKey: "feishu:oc_r", senderLabel: "c", text: "quick" });
+  await manager.idle();
+  assert.deepEqual(adapter.images, [], "a quick answer does not need a poster");
+
+  slow = true;
+  await adapter.inject({ identity: "feishu:ou_1", chatKey: "feishu:oc_r", senderLabel: "c", text: "long" });
+  await manager.idle();
+  assert.deepEqual(adapter.images, [{ chatKey: "feishu:oc_r", base64: "final-desk" }]);
 });
 
 test("an approval notice reaches whoever last drove the agent from a channel, and nobody else", () => {

@@ -370,6 +370,21 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
       }
       return orchestrator.replySince(agent.id, before, conversation);
     },
+    // The desktop as it is right now, for "屏幕" and for the finished-task poster.
+    // Captured with the agent's own owner token, the same proof a turn presents; an
+    // agent whose desktop never started answers undefined and the chat is told so.
+    screenshot: async agentName => {
+      const client = orchestrator.boxClient();
+      if (client === undefined) return undefined;
+      const agent =
+        agentName !== undefined ? registry.resolve(agentName) : registry.list()[0];
+      if (agent === undefined) return undefined;
+      const result = await client.computer([{ action: "screenshot" }], {
+        display: registry.displayIndexFor(agent.id),
+        owner: registry.boxOwnerTokenFor(agent.id),
+      });
+      return result.screenshot;
+    },
     // What a queued acknowledgement says: the running turn counts as one ahead, plus
     // whatever is already waiting in this chat's lane. An unknown agent name answers
     // zero — the ask that follows throws the message worth relaying.

@@ -83,6 +83,8 @@ export interface ChannelAdapter {
   postTaskCard?(chatKey: string, card: TaskCardState): Promise<string | undefined>;
   /** Rewrites a posted card in place. Updates are quiet; a chat is not notified for one. */
   updateTaskCard?(handle: string, card: TaskCardState): Promise<void>;
+  /** Posts an image (base64 WebP) to a chat. Absent means the wire cannot show one. */
+  sendImage?(chatKey: string, base64: string): Promise<void>;
 }
 
 export interface ChannelStatus {
@@ -153,6 +155,12 @@ export interface ChannelManagerDeps {
    * separates the two. Queued work skips the wait: queued is known-slow.
    */
   ackAfterMs?: number;
+  /**
+   * The agent's desktop right now, as base64 WebP, or undefined when there is no
+   * desktop to show. What "屏幕" asks for, and what a finished task attaches — the
+   * one thing no other chat product can put in a group.
+   */
+  screenshot?: (agentName: string | undefined) => Promise<string | undefined>;
   log: (line: string) => void;
 }
 
@@ -161,6 +169,17 @@ const ACK_AFTER_MS = 8_000;
 
 /** Card rewrites are rate-limited to this; the final state is always written. */
 const CARD_UPDATE_MS = 3_000;
+
+/**
+ * Whether a whole message is a request to see the desktop.
+ *
+ * Whole-message like the approval verbs, and for the same reason: "看看屏幕上的报错"
+ * is a person talking about the screen, not asking for a picture of it.
+ */
+export function parseScreenRequest(text: string): boolean {
+  const t = text.trim().toLowerCase().replace(/[.!?。!?]+$/, "");
+  return ["screen", "screenshot", "屏幕", "看屏幕", "看看屏幕", "截图"].includes(t);
+}
 
 /** `@Name rest of the message` addresses a specific agent; anything else is the default. */
 export function parseAddress(text: string): { agentName?: string; text: string } {
@@ -296,13 +315,73 @@ export class ChannelManager {
     const { agentName, text } = parseAddress(message.text);
     if (text === "") return "Say what you need done; @AgentName first to pick who does it.";
 
+    // "屏幕" is a look, not a task: no turn runs, the desktop is captured as it is.
+    const work =
+      parseScreenRequest(text) && this.deps.screenshot !== undefined
+        ? this.runScreenshot(adapter, message, agentName)
+        : this.runTask(adapter, message, agentName, text);
+
     // The work runs behind this return; the decisions above stay synchronous because
     // a refusal or an approval answer *is* the whole response.
-    const task = this.runTask(adapter, message, agentName, text).finally(() => {
+    const task = work.finally(() => {
       this.inflight.delete(task);
     });
     this.inflight.add(task);
     return undefined;
+  }
+
+  /** A line to the room that asked, or to the sender where the wire has no rooms. */
+  private async deliver(
+    adapter: ChannelAdapter,
+    chatKey: string,
+    identity: string,
+    line: string
+  ): Promise<void> {
+    try {
+      if (adapter.sendToChat !== undefined) await adapter.sendToChat(chatKey, line);
+      else await adapter.send(identity, line);
+    } catch (error) {
+      const detail = error instanceof Error ? error.message : String(error);
+      this.deps.log(`channel ${adapter.name}: push failed (${detail})`);
+    }
+  }
+
+  /** The desktop, now, into the chat — or the honest reason there is no picture. */
+  private async runScreenshot(
+    adapter: ChannelAdapter,
+    message: InboundMessage,
+    agentName: string | undefined
+  ): Promise<void> {
+    const chatKey = message.chatKey ?? message.identity;
+    try {
+      const image = await this.deps.screenshot!(agentName);
+      if (image === undefined) {
+        await this.deliver(
+          adapter,
+          chatKey,
+          message.identity,
+          "No desktop to show — the box may be off, or this agent has not started one."
+        );
+        return;
+      }
+      if (adapter.sendImage === undefined) {
+        await this.deliver(
+          adapter,
+          chatKey,
+          message.identity,
+          "This channel cannot show images; open the app to watch the desktop."
+        );
+        return;
+      }
+      await adapter.sendImage(chatKey, image);
+    } catch (error) {
+      await this.deliver(
+        adapter,
+        chatKey,
+        message.identity,
+        error instanceof Error ? error.message : String(error)
+      );
+    }
   }
 
   /**
@@ -321,15 +400,7 @@ export class ChannelManager {
     text: string
   ): Promise<void> {
     const chatKey = message.chatKey ?? message.identity;
-    const deliver = async (line: string) => {
-      try {
-        if (adapter.sendToChat !== undefined) await adapter.sendToChat(chatKey, line);
-        else await adapter.send(message.identity, line);
-      } catch (error) {
-        const detail = error instanceof Error ? error.message : String(error);
-        this.deps.log(`channel ${adapter.name}: push failed (${detail})`);
-      }
-    };
+    const deliver = (line: string) => this.deliver(adapter, chatKey, message.identity, line);
 
     const ahead = this.deps.ahead?.(agentName, chatKey) ?? 0;
     const card: TaskCardState = {
@@ -395,6 +466,17 @@ export class ChannelManager {
       await deliver(
         reply.trim() === "" ? "Done. (The agent finished without saying anything.)" : reply
       );
+      // The desk as the task left it: evidence at a glance. Only for work long enough
+      // to have been acknowledged — a quick answer does not need a poster — and never
+      // a failure: the reply already landed, and its record is the transcript.
+      if (acknowledged && adapter.sendImage !== undefined && this.deps.screenshot !== undefined) {
+        try {
+          const image = await this.deps.screenshot(agentName);
+          if (image !== undefined) await adapter.sendImage(chatKey, image);
+        } catch {
+          // Nothing: the missing poster is not worth a line in the chat.
+        }
+      }
     } catch (error) {
       clearTimeout(ackTimer);
       finishCard("failed");

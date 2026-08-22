@@ -63,6 +63,12 @@ export class FeishuChannel implements ChannelAdapter {
               data: { content: string };
             }) => Promise<unknown>;
           };
+          image: {
+            /** Uploads bytes; the returned key is what an image message references. */
+            create: (options: {
+              data: { image_type: string; image: Buffer };
+            }) => Promise<{ data?: { image_key?: string } } | undefined>;
+          };
         };
       }
     | undefined;
@@ -179,6 +185,25 @@ export class FeishuChannel implements ChannelAdapter {
     await this.apiClient.im.message.patch({
       path: { message_id: handle },
       data: { content: JSON.stringify(renderCard(card)) },
+    });
+  }
+
+  /** Upload, then reference: Feishu takes bytes first and a key in the message. */
+  async sendImage(chatKey: string, base64: string): Promise<void> {
+    const chatId = chatKey.replace(/^feishu:/, "");
+    if (chatId === "" || this.apiClient === undefined) return;
+    const uploaded = await this.apiClient.im.image.create({
+      data: { image_type: "message", image: Buffer.from(base64, "base64") },
+    });
+    const imageKey = uploaded?.data?.image_key;
+    if (imageKey === undefined) throw new Error("feishu image upload returned no key");
+    await this.apiClient.im.message.create({
+      params: { receive_id_type: "chat_id" },
+      data: {
+        receive_id: chatId,
+        msg_type: "image",
+        content: JSON.stringify({ image_key: imageKey }),
+      },
     });
   }
 }
