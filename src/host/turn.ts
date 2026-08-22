@@ -60,6 +60,7 @@ import { buildTools, dispatchTool, type ToolOutcome } from "./tools.ts";
 import type { HostRunner } from "./host-runner.ts";
 import type { Vault } from "./vault.ts";
 import type { TaskStore } from "./tasks.ts";
+import type { ScopeStore } from "./scopes.ts";
 import { MAIN_CONVERSATION } from "../agents/registry.ts";
 import { resolveSummaryProvider } from "./provider.ts";
 import type { Effort, ProviderProfile } from "./provider.ts";
@@ -301,6 +302,8 @@ export interface TurnDeps {
   vault?: Vault;
   /** The team's task board. Absent means no Tasks tool behaviour and no tasks section. */
   tasks?: TaskStore;
+  /** The scopes registry, for an agent placed in a scope. Absent means no scoping. */
+  scopes?: ScopeStore;
   /**
    * Which conversation this turn runs in. Absent means the main one — the team room.
    * The transcript read, every entry written, the compaction state and every event
@@ -932,10 +935,13 @@ export async function runTurn(
 
   // Narrowed by this agent's profile. Withheld, not refused: a tool it may not use is not in its
   // prompt at all.
+  // An agent in a scope is defined by it: the scope's tool list replaces the profile's.
+  const scope = deps.scopes?.get(agent.profile.scopeId);
+  const effectiveTools = scope?.tools ?? agent.profile.tools;
   const tools = buildTools(
     box !== undefined,
     provider.vision,
-    agent.profile.tools,
+    effectiveTools,
     deps.hostRunner?.enabled === true,
     // The desktop is offered only in the main conversation: an agent has one screen,
     // the operator is watching the team room's, and a side chat driving it would fight
@@ -1438,6 +1444,7 @@ export async function runTurn(
             hostRunner: deps.hostRunner,
             vault: deps.vault,
             tasks: deps.tasks,
+            scopes: deps.scopes,
             turnId,
             conversation,
           }

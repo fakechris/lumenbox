@@ -857,6 +857,43 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
           return;
         }
 
+        // Scopes: named authority bundles (tools + secret grants). Admin only, because
+        // a scope is who-may-do-what for every agent placed in it.
+        if (route === "GET /api/scopes") {
+          if (refusedRole("admin")) return;
+          send(res, 200, { scopes: orchestrator.scopes?.list() ?? [], allTools: ALL_TOOLS });
+          return;
+        }
+
+        if (route === "POST /api/scopes") {
+          if (refusedRole("admin")) return;
+          if (orchestrator.scopes === undefined) {
+            send(res, 503, { error: "No scopes on this installation." });
+            return;
+          }
+          const body = await readJson(req);
+          if (!Array.isArray(body.scopes)) {
+            send(res, 400, { error: "scopes must be an array" });
+            return;
+          }
+          const scopes = (body.scopes as Record<string, unknown>[])
+            .filter(s => typeof s.name === "string" && s.name.trim() !== "")
+            .map(s => ({
+              id: typeof s.id === "string" ? s.id : "",
+              name: s.name as string,
+              ...(Array.isArray(s.tools) ? { tools: (s.tools as unknown[]).filter((t): t is string => typeof t === "string") } : {}),
+              secretIds: Array.isArray(s.secretIds)
+                ? (s.secretIds as unknown[]).filter((x): x is string => typeof x === "string")
+                : [],
+              ...(Array.isArray(s.egressHosts) ? { egressHosts: (s.egressHosts as unknown[]).filter((h): h is string => typeof h === "string") } : {}),
+              ...(typeof s.filesRoot === "string" ? { filesRoot: s.filesRoot } : {}),
+            }));
+          orchestrator.scopes.save(scopes);
+          log(`scopes updated (${scopes.length})`);
+          send(res, 200, { scopes: orchestrator.scopes.list() });
+          return;
+        }
+
         // The credential vault: names, descriptions and grants — never values. Admin
         // only, because a secret's grants are who-may-do-what.
         if (route === "GET /api/vault") {
@@ -1379,6 +1416,7 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
                 description: record.profile.description,
                 // null means unrestricted — every tool, including ones added later.
                 tools: record.profile.tools ?? null,
+                ...(record.profile.scopeId !== undefined ? { scopeId: record.profile.scopeId } : {}),
                 // Every agent has its own desktop, so the UI shows whichever one
                 // belongs to the agent you are looking at.
                 displayIndex: index,
@@ -1459,6 +1497,7 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
             // Recorded so "whose agent is this" has an answer. Undefined on a box with no gateway in
             // front, which is the single-user case and stays as it was.
             ...(caller.userId !== undefined ? { ownerUserId: caller.userId } : {}),
+            ...(typeof body.scopeId === "string" && body.scopeId !== "" ? { scopeId: body.scopeId } : {}),
             visibility: body.visibility === "private" ? "private" : "shared",
           });
           log(
@@ -1530,6 +1569,7 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
             ...(tools !== undefined
               ? { tools: tools === null || tools.length >= ALL_TOOLS.length ? null : tools }
               : {}),
+            ...(typeof body.scopeId === "string" ? { scopeId: body.scopeId === "" ? null : body.scopeId } : {}),
           });
           log(`updated agent ${updated.profile.name} (${agentId}) from the UI`);
           send(res, 200, { id: agentId, name: updated.profile.name });

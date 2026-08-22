@@ -659,6 +659,18 @@ export const APP_HTML = String.raw`<!doctype html>
       <div class="fieldnote" id="sethoststatus"></div>
     </div>
     <div class="field">
+      <label>Scopes</label>
+      <div id="setscopes" style="display:flex;flex-direction:column;gap:6px"></div>
+      <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
+        <input id="setscopename" placeholder="Scope name, e.g. vendor-work" spellcheck="false" style="flex:1;min-width:120px;font-family:var(--font-sans)">
+        <button class="btn sm" id="setscopeadd">Add</button>
+      </div>
+      <div class="fieldnote">A scope is a named authority bundle — a tool set and the secrets it
+        grants — that agents are placed into (in the agent's Configure dialog). Adding a secret to a
+        scope grants it to every agent in the scope; removing an agent from the scope revokes it.</div>
+      <div class="fieldnote" id="setscopestatus"></div>
+    </div>
+    <div class="field">
       <label>Secrets</label>
       <div id="setsecrets" style="display:flex;flex-direction:column;gap:6px"></div>
       <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
@@ -731,6 +743,12 @@ export const APP_HTML = String.raw`<!doctype html>
     <div class="field">
       <label>Persona</label>
       <textarea id="agpersona" placeholder="What is this agent for? This becomes its system prompt."></textarea>
+    </div>
+    <div class="field">
+      <label>Scope</label>
+      <select id="agscope"></select>
+      <div class="fieldnote">A scope confers a tool set and secret grants as one named bundle
+        (managed in Settings). In a scope, the tools below are set by it and locked here.</div>
     </div>
     <div class="field">
       <label>Tools</label>
@@ -853,10 +871,91 @@ function openSettings() {
       renderBoxSection();
       renderChannels();
       renderSecrets();
+      renderScopes();
       $("settingswrap").style.display = "flex";
     })
     .catch(function () { feed("could not load settings", "err"); });
 }
+
+/** Scopes: named authority bundles. Each row edits its tool set and secret list inline. */
+var scopes = [];
+var scopeTools = [];
+
+function renderScopes() {
+  fetch("/api/scopes")
+    .then(function (r) { return r.status === 403 ? null : r.json(); })
+    .then(function (data) {
+      if (!data) { $("setscopes").innerHTML = ""; return; }
+      scopes = data.scopes || [];
+      scopeTools = data.allTools || [];
+      if (!scopes.length) {
+        $("setscopes").innerHTML = '<div class="fieldnote" style="margin:0">No scopes yet. Add one to bundle a tool set and secrets for a project.</div>';
+        return;
+      }
+      $("setscopes").innerHTML = scopes.map(function (s, i) {
+        var toolText = s.tools ? s.tools.length + " tools" : "all tools";
+        var secText = (s.secretIds || []).length + " secrets";
+        return '<div style="border:1px solid var(--border);border-radius:var(--radius-md);padding:8px 10px;display:flex;flex-direction:column;gap:6px">' +
+          '<div style="display:flex;gap:8px;align-items:center">' +
+            '<span style="flex:1;font-weight:600;font-size:13px">' + esc(s.name) + "</span>" +
+            '<span class="dim" style="font-size:11px">' + toolText + " · " + secText + "</span>" +
+            '<a href="#" data-scoperm="' + i + '" style="color:var(--danger);font-size:12px">Remove</a>' +
+          "</div>" +
+          '<div class="toolchips" data-scopetools="' + i + '">' +
+            scopeTools.map(function (t) {
+              var on = !s.tools || s.tools.indexOf(t) >= 0;
+              return '<span class="toolchip' + (on ? " on" : "") + '" data-scopetool="' + esc(t) + '">' + esc(t) + "</span>";
+            }).join("") +
+          "</div>" +
+          '<input data-scopesecrets="' + i + '" value="' + esc((s.secretIds || []).join(", ")) + '" placeholder="secret ids, comma-separated" spellcheck="false" style="padding:4px 8px;border-radius:var(--radius-input);border:1px solid var(--border-strong);background:var(--surface);color:var(--text);font-family:var(--font-mono);font-size:12px">' +
+        "</div>";
+      }).join("");
+    })
+    .catch(function () {});
+}
+
+function saveScopes() {
+  $("setscopestatus").textContent = "Saving…";
+  fetch("/api/scopes", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ scopes: scopes })
+  })
+    .then(function (r) { return r.json().then(function (d) { if (!r.ok) throw new Error(d.error || "save failed"); return d; }); })
+    .then(function () { $("setscopestatus").textContent = "Saved."; renderScopes(); })
+    .catch(function (error) { $("setscopestatus").textContent = error.message; });
+}
+
+$("setscopeadd").onclick = function () {
+  var name = $("setscopename").value.trim();
+  if (!name) return;
+  scopes.push({ id: "", name: name, secretIds: [] });
+  $("setscopename").value = "";
+  saveScopes();
+};
+
+document.getElementById("setscopes").addEventListener("click", function (event) {
+  var rm = event.target.getAttribute && event.target.getAttribute("data-scoperm");
+  if (rm !== null && rm !== undefined) { event.preventDefault(); scopes.splice(Number(rm), 1); saveScopes(); return; }
+  var chip = event.target.closest && event.target.closest("[data-scopetool]");
+  if (chip) {
+    var wrap = chip.closest("[data-scopetools]");
+    var idx = Number(wrap.getAttribute("data-scopetools"));
+    var tool = chip.getAttribute("data-scopetool");
+    var scope = scopes[idx];
+    if (!scope.tools) scope.tools = scopeTools.slice(); // was "all"; materialize before removing one
+    var at = scope.tools.indexOf(tool);
+    if (at >= 0) scope.tools.splice(at, 1); else scope.tools.push(tool);
+    chip.className = "toolchip" + (scope.tools.indexOf(tool) >= 0 ? " on" : "");
+  }
+});
+
+document.getElementById("setscopes").addEventListener("change", function (event) {
+  var sec = event.target.getAttribute && event.target.getAttribute("data-scopesecrets");
+  if (sec === null || sec === undefined) return;
+  scopes[Number(sec)].secretIds = event.target.value.split(",").map(function (x) { return x.trim(); }).filter(Boolean);
+  saveScopes();
+});
 
 /** The vault secrets: names, descriptions and grants, never values. */
 var secrets = [];
@@ -2466,6 +2565,7 @@ function openAgentModal(mode, agent) {
     return '<span class="toolchip' + (on ? " on" : "") + '" data-tool="' + esc(tool) + '">' +
       esc(tool) + "</span>";
   }).join("");
+  renderAgentScope(agent ? String(agent.scopeId || "") : "");
   $("agstatus").textContent = "";
   $("agdanger").style.display = mode === "edit" ? "" : "none";
   $("agdel1").style.display = "";
@@ -2510,10 +2610,48 @@ $("agdelconfirm").onclick = function () {
 $("agtools").addEventListener("click", function (event) {
   var chip = event.target.closest && event.target.closest("[data-tool]");
   if (!chip) return;
+  // In a scope the tools come from the scope, not from here.
+  if ($("agscope").value !== "") return;
   var tool = chip.getAttribute("data-tool");
   agentModal.tools[tool] = !agentModal.tools[tool];
   chip.className = "toolchip" + (agentModal.tools[tool] ? " on" : "");
 });
+
+/** Loads the scope options (admin-only endpoint; empty if not admin) and selects one. */
+var agentScopes = [];
+function renderAgentScope(selected) {
+  fetch("/api/scopes")
+    .then(function (r) { return r.status === 403 ? null : r.json(); })
+    .then(function (data) {
+      agentScopes = data ? (data.scopes || []) : [];
+      $("agscope").innerHTML = '<option value="">— no scope (tools set here) —</option>' +
+        agentScopes.map(function (s) {
+          return '<option value="' + esc(s.id) + '"' + (s.id === selected ? " selected" : "") + ">" + esc(s.name) + "</option>";
+        }).join("");
+      applyScopeToTools();
+    })
+    .catch(function () { $("agscope").innerHTML = '<option value="">— no scope —</option>'; });
+}
+
+/** When a scope is chosen, its tool set fills and locks the chips. */
+function applyScopeToTools() {
+  var id = $("agscope").value;
+  var scope = agentScopes.filter(function (s) { return s.id === id; })[0];
+  var dim = id !== "" ? "0.5" : "1";
+  var chips = document.querySelectorAll("#agtools .toolchip");
+  if (scope && scope.tools) {
+    for (var i = 0; i < chips.length; i++) {
+      var tool = chips[i].getAttribute("data-tool");
+      var on = scope.tools.indexOf(tool) >= 0;
+      agentModal.tools[tool] = on;
+      chips[i].className = "toolchip" + (on ? " on" : "");
+      chips[i].style.opacity = dim;
+    }
+  } else {
+    for (var j = 0; j < chips.length; j++) chips[j].style.opacity = dim;
+  }
+}
+$("agscope").onchange = applyScopeToTools;
 
 function saveAgentModal() {
   var name = $("agname").value.trim();
@@ -2528,7 +2666,10 @@ function saveAgentModal() {
     title: $("agrole").value.trim(),
     description: $("agpersona").value,
     // A full set is sent as null — "everything", which stays true for future tools.
-    tools: granted.length === allTools.length ? null : granted
+    tools: granted.length === allTools.length ? null : granted,
+    // In a scope, the scope owns the tools; send them anyway as the fallback for if
+    // it is ever removed from the scope.
+    scopeId: $("agscope").value
   };
   if (!isNew) body.id = agentModal.id;
   $("agstatus").textContent = "Saving…";

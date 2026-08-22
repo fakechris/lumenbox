@@ -14,6 +14,7 @@ import type { AgentRecord, AgentRegistry } from "../agents/registry.ts";
 import type { PolicyGate } from "./policy.ts";
 import type { HostRunner } from "./host-runner.ts";
 import type { Vault } from "./vault.ts";
+import type { ScopeStore } from "./scopes.ts";
 import { describeHistory, readHistory } from "./history.ts";
 import { dedupeKey, validateRecord } from "./memory.ts";
 import { Claims, heldElsewhere } from "./claims.ts";
@@ -100,6 +101,8 @@ export interface ToolContext {
   conversation?: string;
   /** The team's task board. Absent means the Tasks tool answers that there is none. */
   tasks?: TaskStore;
+  /** The scopes registry, so a secret granted by the caller's scope resolves. */
+  scopes?: ScopeStore;
   /**
    * The turn this call belongs to — the Run, in work-control terms. Recorded on every
    * task change an agent makes, which is what links a board movement back to the
@@ -917,6 +920,8 @@ export async function dispatchTool(
           agentId: context.agent.id,
           agentName: context.agent.profile.name,
           ...(context.caller?.userId !== undefined ? { principalId: context.caller.userId } : {}),
+          // A scope the agent is in can grant the secret without a direct vault grant.
+          scopeGrants: context.scopes?.grantsSecret(context.agent.profile.scopeId, secretId) === true,
         });
         if (value === undefined) refusedSecrets.push(secretId);
         else secretEnv[secretId] = value;
