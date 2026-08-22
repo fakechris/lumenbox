@@ -207,7 +207,9 @@ export class Orchestrator {
     },
     // Through the ordinary prompt path, so a scheduled turn is checked by the policy gate exactly
     // like any other: a box over its budget stops firing rather than quietly draining it.
-    run: (agent, prompt) => this.prompt(agent, prompt),
+    // Its own turn always: a scheduled kickoff absorbed as steering into whatever
+    // happens to be running would bury the run's report inside an unrelated reply.
+    run: (agent, prompt) => this.prompt(agent, prompt, undefined, { steerable: false }),
     defaultAgent: () => this.registry.list()[0]?.id,
     log: line => console.error(`[schedule] ${line}`),
   });
@@ -430,6 +432,9 @@ export class Orchestrator {
         // The turn resumes in the conversation it was interrupted in: an answer to a
         // group chat's question must not surface in the team room.
         ...(turn.conversation !== undefined ? { conversation: turn.conversation } : {}),
+        // And always on its own turn: a resume absorbed as steering into some other
+        // running work would bury the recovery in an unrelated reply.
+        steerable: false,
       });
       // Enqueuing is not running. sendFromUser only queues; without this the resumed turn sat until
       // some unrelated later traffic happened to wake the agent. recover() wakes for the inbox; this
@@ -469,7 +474,7 @@ export class Orchestrator {
     agentIdOrName: string,
     text: string,
     caller?: { userId?: string },
-    options: { conversation?: string } = {}
+    options: { conversation?: string; steerable?: boolean } = {}
   ): Promise<void> {
     const agent = this.registry.resolve(agentIdOrName);
     const conversation = options.conversation ?? MAIN_CONVERSATION;
@@ -477,7 +482,10 @@ export class Orchestrator {
     // two people can be driving two agents at once; overwritten on each prompt because the most
     // recent person to speak to *this* agent is the one its memories are about.
     if (caller?.userId !== undefined) this.callers.set(agent.id, caller);
-    this.bus.sendFromUser(agent.id, text, { conversation });
+    this.bus.sendFromUser(agent.id, text, {
+      conversation,
+      ...(options.steerable === false ? { steerable: false } : {}),
+    });
     const before = this.registry.readTranscript(agent.id, conversation).length;
     await this.bus.runExclusive(agent.id, { userDriven: true, conversation });
 

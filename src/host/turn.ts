@@ -962,6 +962,26 @@ export async function runTurn(
       emit({ type: "aborted", agentId: agent.id });
       throw new TurnAborted();
     }
+
+    // Steering: what the user said while this turn was running, consumed at the round
+    // boundary instead of waiting for the whole turn to end. "Actually, also change
+    // the title" lands in the next request, mid-task, with all the work so far intact
+    // — the alternative was minutes of latency or an interrupt that threw the work
+    // away. Only the user's own messages steer: a teammate's message is new work that
+    // deserves its own turn and its own causal record, and that behaviour is pinned
+    // by the race catalog. Appended at the tail, which keeps the provider's prefix
+    // cache warm — the same reason compaction is the only mid-turn rewrite.
+    const steered = deps.bus.takeSteering(agent.id, conversation);
+    if (steered.length > 0) {
+      const steerText = buildTurnPrompt(steered);
+      registry.appendTranscript(agent.id, {
+        role: "user",
+        text: steerText,
+        at: new Date().toISOString(),
+        causedBy: steered.map(message => message.id),
+      } satisfies TranscriptEntry, conversation);
+      messages.push({ role: "user", content: steerText });
+    }
     // Asked before spending anything. A stop or an exhausted budget ends the turn here, at a round
     // boundary, where the transcript is consistent — aborting mid-request would leave a call with no
     // result, which is a shape the next turn cannot replay.

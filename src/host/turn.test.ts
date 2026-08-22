@@ -2083,3 +2083,54 @@ test("a context-squeezed response is discarded, billed, and the round retried", 
     rmSync(join(usagePath, ".."), { recursive: true, force: true });
   }
 });
+
+test("a user message during a running turn steers the next round instead of waiting", async () => {
+  const { registry, cleanup } = fixture();
+  try {
+    const ada = registry.create({ name: "Ada" });
+    const capture: Capture = { params: [] };
+    // Round 1 calls bash; while the tool runs, the user speaks. Round 2 must see it.
+    const replies: Anthropic.Message[] = [
+      message([toolUseBlock("bash", { command: "sleep-ish" }, "toolu_steer")], "tool_use"),
+      message([textBlock("did both things")]),
+    ];
+    const { client } = stubClient(replies, capture);
+
+    // The bus is real; the box's exec is the mid-turn moment the user types.
+    const bus = new AgentBus(registry, async () => {});
+    const box = {
+      exec: async () => {
+        bus.sendFromUser(ada.id, "actually, also change the title");
+        return { stdout: "ok", stderr: "", exit_code: 0, timed_out: false };
+      },
+    } as unknown as BoxClient;
+
+    await runTurn(
+      ada,
+      [{ id: "m-steer", fromId: "user", fromName: "user", text: "do the task", priority: false, receivedAt: "" }],
+      new AbortController().signal,
+      { client, registry, bus, box, resolution: undefined, displayIndex: 1 }
+    );
+
+    // The steer reached the model in the same turn: round 2's request carries it.
+    const secondRequest = JSON.stringify(capture.params[1]?.messages ?? []);
+    assert.ok(
+      secondRequest.includes("also change the title"),
+      "the next round's request contains the mid-turn message"
+    );
+    // It is on the record as a user entry in this conversation, causally linked.
+    const transcript = registry.readTranscript(ada.id) as TranscriptEntry[];
+    const steerEntry = transcript.find(
+      entry =>
+        "role" in entry &&
+        entry.role === "user" &&
+        "text" in entry &&
+        entry.text.includes("also change the title")
+    );
+    assert.ok(steerEntry, "the steering is a transcript entry, not a ghost");
+    // And nothing is left queued: consumed exactly once, by this turn.
+    assert.equal(bus.pendingCount(ada.id), 0);
+  } finally {
+    cleanup();
+  }
+});
