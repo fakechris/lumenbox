@@ -17,6 +17,7 @@ import type { Vault } from "./vault.ts";
 import { describeHistory, readHistory } from "./history.ts";
 import { dedupeKey, validateRecord } from "./memory.ts";
 import { Claims, heldElsewhere } from "./claims.ts";
+import { MAIN_CONVERSATION } from "../agents/registry.ts";
 import { ABSENT, versionOf, type FileVersions } from "./files.ts";
 import {
   describeTodos,
@@ -90,6 +91,12 @@ export interface ToolContext {
    * to resolve it from.
    */
   vault?: Vault;
+  /**
+   * Which conversation this tool call belongs to. The shell session, the plan and the
+   * todo list are all keyed on it, so two of an agent's conversations running at once
+   * keep separate working directories and separate intent. Absent means the main one.
+   */
+  conversation?: string;
 }
 
 /** A tool result: text for the model, plus optional images. */
@@ -231,11 +238,17 @@ export function buildTools(
   hasBox: boolean,
   vision = true,
   allowed?: readonly string[],
-  hasHostRunner = false
+  hasHostRunner = false,
+  /**
+   * Whether the desktop tool may be offered. False withholds `computer` while keeping
+   * shell and files — the shape a side conversation runs in, so it does headless work
+   * concurrently with the main one rather than fighting it for the single screen.
+   */
+  canUseDesktop = true
 ): Anthropic.Tool[] {
   const tools: Anthropic.Tool[] = [];
 
-  if (hasBox && vision) {
+  if (hasBox && vision && canUseDesktop) {
     tools.push({
       name: "computer",
         description:
@@ -799,9 +812,10 @@ export async function dispatchTool(
       const result = await box.exec(command, {
         cwd: input.cwd ? String(input.cwd) : undefined,
         timeoutMs: input.timeout_ms ? Number(input.timeout_ms) : undefined,
-        // Per-agent session, so each agent keeps its own working directory and
-        // environment without inheriting a teammate's.
-        session: context.agent.id,
+        // Per-agent AND per-conversation session, so each agent keeps its own working
+        // directory and environment without inheriting a teammate's — and two of its
+        // own conversations running at once do not cross cwd or env either.
+        session: `${context.agent.id}/${context.conversation ?? MAIN_CONVERSATION}`,
         // So a GUI the agent launches from the shell opens on its own desktop.
         display: context.displayIndex,
         owner: context.boxOwner,
@@ -987,7 +1001,7 @@ export async function dispatchTool(
       // Returned as an error so the model reads it and can act: a refusal that does not say what
       // would be accepted produces a retry of the same thing.
       if (rejected !== undefined) return { text: rejected.reason, isError: true };
-      context.registry.writePlan(context.agent.id, plan);
+      context.registry.writePlan(context.agent.id, plan, context.conversation);
       return {
         text:
           "Plan saved. It is in your system prompt from the next turn, and in this turn it is the " +
@@ -1032,7 +1046,7 @@ export async function dispatchTool(
       });
       const rejected = validateTodos(todos);
       if (rejected !== undefined) return { text: rejected.reason, isError: true };
-      context.registry.writeTodos(context.agent.id, todos);
+      context.registry.writeTodos(context.agent.id, todos, context.conversation);
       // The whole new list, echoed back. The system prompt is built once per turn, so this is what
       // makes an update at round 5 visible at round 300.
       return { text: describeTodos(todos) };

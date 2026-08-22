@@ -1568,7 +1568,8 @@ document.getElementById("stop").addEventListener("click", function () {
 /** The selected agent's plan and todo list, which is what a long task's progress looks like. */
 function refreshProgress() {
   if (!current) return Promise.resolve();
-  return fetch("/api/progress?agent=" + encodeURIComponent(current))
+  return fetch("/api/progress?agent=" + encodeURIComponent(current) +
+      "&conversation=" + encodeURIComponent(currentConversation))
     .then(function (r) { return r.json(); })
     .then(function (state) {
       var head = $("progresshead");

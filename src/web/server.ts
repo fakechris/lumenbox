@@ -986,7 +986,10 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
             send(res, 404, { error: `No agent ${agentId}` });
             return;
           }
-          send(res, 200, orchestrator.registry.readDurableState(agentId));
+          // The plan and todos belong to a conversation now; the page shows whichever
+          // thread it is viewing, defaulting to the team room.
+          const conversation = url.searchParams.get("conversation") ?? MAIN_CONVERSATION;
+          send(res, 200, orchestrator.registry.readDurableState(agentId, conversation));
           return;
         }
 

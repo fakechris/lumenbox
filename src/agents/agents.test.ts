@@ -739,3 +739,69 @@ test("the main conversation keeps the original filename, so old history is the t
     cleanup();
   }
 });
+
+test("two conversations of one agent run concurrently, not one after the other", async () => {
+  const { registry, cleanup } = tempRegistry();
+  try {
+    const ada = registry.create({ name: "Ada" });
+    // Each turn holds for a beat; if the two conversations were serialized, the second
+    // could not start until the first finished. We record max concurrency.
+    let inFlight = 0;
+    let maxInFlight = 0;
+    const order: string[] = [];
+    const bus = new AgentBus(registry, async (_agent, inbound, _signal, conversation) => {
+      inFlight += 1;
+      maxInFlight = Math.max(maxInFlight, inFlight);
+      order.push(conversation + ":start");
+      await new Promise(r => setTimeout(r, 40));
+      order.push(conversation + ":end");
+      inFlight -= 1;
+    });
+
+    bus.sendFromUser(ada.id, "room task");
+    bus.sendFromUser(ada.id, "telegram task", { conversation: "telegram-1" });
+    await bus.wake(ada.id);
+
+    assert.equal(maxInFlight, 2, "both conversations were in flight at once");
+    // Each conversation's start precedes its own end (single writer within a thread).
+    assert.ok(order.indexOf("main:start") < order.indexOf("main:end"));
+    assert.ok(order.indexOf("telegram-1:start") < order.indexOf("telegram-1:end"));
+  } finally {
+    cleanup();
+  }
+});
+
+test("the same conversation is still serialized: one writer at a time", async () => {
+  const { registry, cleanup } = tempRegistry();
+  try {
+    const ada = registry.create({ name: "Ada" });
+    let inFlight = 0;
+    let maxInFlight = 0;
+    const bus = new AgentBus(registry, async () => {
+      inFlight += 1;
+      maxInFlight = Math.max(maxInFlight, inFlight);
+      await new Promise(r => setTimeout(r, 20));
+      inFlight -= 1;
+    });
+
+    // Three messages, all the same (main) conversation.
+    bus.sendFromUser(ada.id, "one");
+    const a = bus.runExclusive(ada.id, { userDriven: true });
+    bus.sendFromUser(ada.id, "two");
+    const b = bus.runExclusive(ada.id, { userDriven: true });
+    await Promise.all([a, b]);
+    assert.equal(maxInFlight, 1, "one conversation is never two turns at once");
+  } finally {
+    cleanup();
+  }
+});
+
+test("the desktop tool is offered only in the main conversation", () => {
+  // One screen per agent, watched by the operator on the team room. A side chat gets
+  // shell and files (headless work it can do concurrently) but not the desktop.
+  const main = buildTools(true, true, undefined, false, true).map(t => t.name);
+  const side = buildTools(true, true, undefined, false, false).map(t => t.name);
+  assert.ok(main.includes("computer"), "the room drives the screen");
+  assert.ok(!side.includes("computer"), "a side chat does not");
+  assert.ok(side.includes("bash") && side.includes("read_file"), "but keeps shell and files");
+});

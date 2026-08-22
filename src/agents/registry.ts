@@ -486,12 +486,23 @@ export class AgentRegistry {
     return owner ? this.boxOwnerTokenFor(owner.id) : undefined;
   }
 
-  planPathFor(agentId: string): string {
-    return join(this.dirFor(agentId), PLAN_FILENAME);
+  /**
+   * The plan and todo files, per conversation.
+   *
+   * The main conversation keeps the original filenames — so an old install's plan and
+   * todos are its team room's, untouched — and side conversations (outside chats
+   * running concurrently) get their own under the conversations directory, because two
+   * threads of one agent working at once are two separate pieces of intent and must
+   * not overwrite each other's list.
+   */
+  planPathFor(agentId: string, conversation = MAIN_CONVERSATION): string {
+    if (conversation === MAIN_CONVERSATION) return join(this.dirFor(agentId), PLAN_FILENAME);
+    return join(this.dirFor(agentId), CONVERSATIONS_DIRNAME, `${conversation}.plan.md`);
   }
 
-  todosPathFor(agentId: string): string {
-    return join(this.dirFor(agentId), TODOS_FILENAME);
+  todosPathFor(agentId: string, conversation = MAIN_CONVERSATION): string {
+    if (conversation === MAIN_CONVERSATION) return join(this.dirFor(agentId), TODOS_FILENAME);
+    return join(this.dirFor(agentId), CONVERSATIONS_DIRNAME, `${conversation}.todos.json`);
   }
 
   /**
@@ -501,9 +512,9 @@ export class AgentRegistry {
    * the plan being shown, and neither must stop a turn. A lost list is recoverable — the agent will
    * write a new one — while a turn that will not start is not.
    */
-  readDurableState(agentId: string): DurableState {
+  readDurableState(agentId: string, conversation = MAIN_CONVERSATION): DurableState {
     const state: DurableState = {};
-    const planPath = this.planPathFor(agentId);
+    const planPath = this.planPathFor(agentId, conversation);
     if (existsSync(planPath)) {
       try {
         state.plan = readFileSync(planPath, "utf8");
@@ -512,7 +523,7 @@ export class AgentRegistry {
         // Left absent, which renders as nothing rather than as an empty plan.
       }
     }
-    const todosPath = this.todosPathFor(agentId);
+    const todosPath = this.todosPathFor(agentId, conversation);
     if (existsSync(todosPath)) {
       try {
         const parsed = JSON.parse(readFileSync(todosPath, "utf8")) as unknown;
@@ -532,12 +543,12 @@ export class AgentRegistry {
     return state;
   }
 
-  writePlan(agentId: string, plan: string): void {
-    this.writeAtomic(this.planPathFor(agentId), plan);
+  writePlan(agentId: string, plan: string, conversation = MAIN_CONVERSATION): void {
+    this.writeAtomic(this.planPathFor(agentId, conversation), plan);
   }
 
-  writeTodos(agentId: string, todos: readonly TodoItem[]): void {
-    this.writeAtomic(this.todosPathFor(agentId), `${JSON.stringify(todos, null, 2)}\n`);
+  writeTodos(agentId: string, todos: readonly TodoItem[], conversation = MAIN_CONVERSATION): void {
+    this.writeAtomic(this.todosPathFor(agentId, conversation), `${JSON.stringify(todos, null, 2)}\n`);
   }
 
   /** Temp plus rename, so a reader never sees half a file. */
