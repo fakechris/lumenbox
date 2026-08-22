@@ -22,7 +22,10 @@
     "test:ci": "node scripts/test-floor.mjs",
     "check": "npm run typecheck && npm run lint && npm run test:ci",
     "app": "electron .",
-    "dist:app": "electron-builder --mac --dir"
+    "dist:app": "electron-builder --dir",
+    "dist:mac": "electron-builder --mac",
+    "dist:win": "electron-builder --win",
+    "dist:linux": "electron-builder --linux"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.117.1",
@@ -62,13 +65,51 @@
     ],
     "mac": {
       "icon": "assets/app-icon/lumenbox.icns",
-      "category": "public.app-category.developer-tools"
+      "category": "public.app-category.developer-tools",
+      "target": [
+        {
+          "target": "dmg",
+          "arch": [
+            "arm64",
+            "x64"
+          ]
+        },
+        {
+          "target": "zip",
+          "arch": [
+            "arm64",
+            "x64"
+          ]
+        }
+      ]
     },
     "win": {
-      "icon": "assets/app-icon/lumenbox.ico"
+      "icon": "assets/app-icon/lumenbox.ico",
+      "target": [
+        {
+          "target": "nsis",
+          "arch": [
+            "x64"
+          ]
+        }
+      ]
     },
     "linux": {
-      "icon": "assets/app-icon/png"
+      "icon": "assets/app-icon/png",
+      "category": "Development",
+      "target": [
+        "AppImage",
+        "deb"
+      ],
+      "maintainer": "LumenBox"
+    },
+    "dmg": {
+      "title": "LumenBox ${version}"
+    },
+    "nsis": {
+      "oneClick": false,
+      "allowToChangeInstallationDirectory": true,
+      "perMachine": false
     }
   }
 }

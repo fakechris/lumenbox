@@ -189,3 +189,20 @@ State it plainly, because a deployment decision depends on it.
 For anything shared, the three things to add are identities, per-tenant boxes, and a credential
 relay so the model key never enters a box. The seams are named in
 [03-architecture.md](03-architecture.md) §7.
+
+## Packaging the desktop app
+
+The desktop shell (Electron) packages per platform through electron-builder. asar is
+off on purpose — the shell supervises the CLI as a child process and spawns it from
+plain files, so there is no archive to unpack at runtime.
+
+- `npm run dist:app` — a quick unpacked build for the current platform (development).
+- `npm run dist:mac` — signed `.dmg` and `.zip`, arm64 and x64. Notarization is a
+  separate step and is skipped without credentials.
+- `npm run dist:win` — an NSIS installer (x64). Built on Windows, or on another
+  platform with wine present.
+- `npm run dist:linux` — AppImage and `.deb`. Built on Linux.
+
+The macOS menu-bar name reads "Electron" only under `npm run app` (the dev launch);
+the packaged app carries `productName` (LumenBox) in its bundle. Icons come from
+`assets/app-icon/`, regenerated from the SVG sources by `scripts/make-icons.sh`.
