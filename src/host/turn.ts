@@ -57,6 +57,7 @@ import {
 import type { ResolutionConfig } from "../protocol/index.ts";
 import { buildSystemPromptParts, buildTurnPrompt } from "./prompt.ts";
 import { buildTools, dispatchTool, type ToolOutcome } from "./tools.ts";
+import type { HostRunner } from "./host-runner.ts";
 import { resolveSummaryProvider } from "./provider.ts";
 import type { Effort, ProviderProfile } from "./provider.ts";
 
@@ -245,6 +246,8 @@ export interface TurnDeps {
   files?: FileVersions;
   /** Who has taken which piece of work, so two agents do not take the same one. */
   claims?: Claims;
+  /** The door out of the box, when an operator built one. Absent means no host tool. */
+  hostRunner?: HostRunner;
   /**
    * Asks a cheap model which memories matter for this message.
    *
@@ -792,7 +795,12 @@ export async function runTurn(
 
   // Narrowed by this agent's profile. Withheld, not refused: a tool it may not use is not in its
   // prompt at all.
-  const tools = buildTools(box !== undefined, provider.vision, agent.profile.tools);
+  const tools = buildTools(
+    box !== undefined,
+    provider.vision,
+    agent.profile.tools,
+    deps.hostRunner?.enabled === true
+  );
 
   // One entry per completed round, for the loop and progress judgements. Held out here rather than
   // inside runRounds so a continuation can reset it: a fresh budget deserves a fresh judgement.
@@ -1220,6 +1228,7 @@ export async function runTurn(
             display: deps.display,
             displayIndex: deps.displayIndex,
             boxOwner: deps.boxOwner,
+            hostRunner: deps.hostRunner,
           }
         );
       } catch (error) {

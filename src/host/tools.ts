@@ -12,6 +12,7 @@ import type { DisplayLease } from "../box/display-lease.ts";
 import type { AgentBus } from "../agents/bus.ts";
 import type { AgentRecord, AgentRegistry } from "../agents/registry.ts";
 import type { PolicyGate } from "./policy.ts";
+import type { HostRunner } from "./host-runner.ts";
 import { describeHistory, readHistory } from "./history.ts";
 import { dedupeKey, validateRecord } from "./memory.ts";
 import { Claims, heldElsewhere } from "./claims.ts";
@@ -76,6 +77,12 @@ export interface ToolContext {
    * per-agent, and kept for the case where two are deliberately pointed at one.
    */
   display?: DisplayLease;
+  /**
+   * The door out of the box, when an operator has built one. Absent means no host
+   * execution — and, more than absent, the tool is not even offered, so an agent on a
+   * box without this never learns it might have asked.
+   */
+  hostRunner?: HostRunner;
 }
 
 /** A tool result: text for the model, plus optional images. */
@@ -216,7 +223,8 @@ export function withheldFrom(
 export function buildTools(
   hasBox: boolean,
   vision = true,
-  allowed?: readonly string[]
+  allowed?: readonly string[],
+  hasHostRunner = false
 ): Anthropic.Tool[] {
   const tools: Anthropic.Tool[] = [];
 
@@ -579,6 +587,32 @@ export function buildTools(
     }
   );
 
+  // The door out of the box, only when an operator has built one. Not added-and-
+  // withheld — absent, so a box without host execution never puts the idea in an
+  // agent's prompt.
+  if (hasHostRunner) {
+    tools.push({
+      name: "RunOnHost",
+      description:
+        "Run a command on the person's own computer — the machine LumenBox runs on, " +
+        "outside your box. This is how you reach things the box cannot: a device on a " +
+        "USB port, AppleScript that drives desktop apps, or a command-line tool " +
+        "installed on the host such as `pi`, `claude`, `codex`, `git` against a local " +
+        "checkout, or `arduino-cli`. It runs under a directory the operator chose, " +
+        "through their shell, so their PATH and aliases apply. " +
+        "Every call stops for the person to approve the exact command before it runs, " +
+        "so write the command you mean and say in your message why you need it. " +
+        "Returns stdout, stderr and the exit code, the same as `bash`.",
+      input_schema: {
+        type: "object",
+        properties: {
+          command: { type: "string", description: "The command to run on the host." },
+        },
+        required: ["command"],
+      },
+    });
+  }
+
   return withheldFrom(allowed, tools);
 }
 
@@ -755,6 +789,39 @@ export async function dispatchTool(
       return {
         text: formatExec(result, input.timeout_ms ? Number(input.timeout_ms) : undefined),
       };
+    }
+
+    case "RunOnHost": {
+      // The policy gate above already required approval for this call, so reaching
+      // here means a person read the command and allowed it. The runner is still
+      // checked, because "enabled" can change and the tool could linger in a prompt
+      // built a moment earlier.
+      if (context.hostRunner === undefined || !context.hostRunner.enabled) {
+        return {
+          text: "Host execution is not available on this box.",
+          isError: true,
+        };
+      }
+      const command = String(input.command ?? "").trim();
+      if (command === "") return { text: "`command` is required.", isError: true };
+      try {
+        const result = await context.hostRunner.run(command);
+        const parts = [
+          result.stdout.trim() !== "" ? result.stdout : "(no stdout)",
+          result.stderr.trim() !== "" ? `stderr:\n${result.stderr}` : "",
+          result.timedOut ? "The command hit the host time limit and was killed." : "",
+          result.truncatedBytes > 0
+            ? `(${result.truncatedBytes} bytes of output dropped for length.)`
+            : "",
+          `exit code: ${result.code === null ? "unknown" : result.code}`,
+        ].filter(part => part !== "");
+        return { text: parts.join("\n\n"), isError: result.code !== 0 && !result.timedOut };
+      } catch (error) {
+        return {
+          text: error instanceof Error ? error.message : String(error),
+          isError: true,
+        };
+      }
     }
 
     case "read_file": {

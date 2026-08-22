@@ -462,6 +462,10 @@ export class PolicyGate {
   }
 
   private needsApproval(request: Extract<PolicyRequest, { kind: "tool" }>): boolean {
+    // Host execution always asks, by construction rather than by configuration: it is
+    // the one tool that runs outside the box, and an operator turning it off is done
+    // by not enabling it at all, not by trusting an empty approval list.
+    if (request.tool === "RunOnHost") return true;
     if (this.limits.approvalRequiredTools.includes(request.tool)) return true;
     const command = typeof request.input.command === "string" ? request.input.command : "";
     if (command === "") return false;

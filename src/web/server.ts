@@ -115,11 +115,14 @@ function withinWork(path: string): boolean {
   const normalised = posix.normalize(path);
   return normalised === WORK_DIR || normalised.startsWith(`${WORK_DIR}/`);
 }
-import { agentboxHome, loadConfig, saveConfig } from "../config.ts";
+import { agentboxHome, loadConfig, saveConfig, type AgentboxConfig } from "../config.ts";
+
+type AgentboxConfigHostExec = NonNullable<AgentboxConfig["hostExec"]>;
 import { ChannelManager } from "../channels/manager.ts";
 import { DingTalkChannel } from "../channels/dingtalk.ts";
 import { FeishuChannel } from "../channels/feishu.ts";
 import { TelegramChannel } from "../channels/telegram.ts";
+import { HostRunner, hostRunnerConfig } from "../host/host-runner.ts";
 import { ALL_TOOLS } from "../host/orchestrator.ts";
 import { PRESET_MODELS, providerNames, resolveProvider, testProvider } from "../host/provider.ts";
 import { seedStarterSkills } from "../host/starter-skills.ts";
@@ -236,11 +239,18 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
     });
   };
 
+  // The door out of the box, built from config: off unless an operator turned it on.
+  // Read once at construction — a change to it takes effect at the next restart, the
+  // same as the provider, because it decides what tools an agent is even offered.
+  const hostRunner = new HostRunner(hostRunnerConfig(loadConfig().hostExec ?? {}));
+  if (hostRunner.enabled) log("host execution is on; every host command still asks for approval");
+
   const orchestrator = new Orchestrator({
     registry,
     provider: options.provider,
     useBox: options.useBox,
     boxProvisioner: provisioner,
+    hostRunner,
     onTurnEvent: broadcast,
     onBusEvent: broadcast,
   });
@@ -916,6 +926,14 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
               model: config.model ?? null,
               baseUrl: config.baseUrl ?? null,
             },
+            // The host door, and why it is or is not usable right now.
+            hostExec: {
+              enabled: hostRunner.enabled,
+              cwd: config.hostExec?.cwd ?? null,
+              // Present only after a restart with it on; the live runner is what an
+              // agent would actually reach, so its reason is the honest one.
+              unavailableReason: hostRunner.unavailableReason() ?? null,
+            },
             // Whether a credential is present is worth showing; the credential is not.
             presets: providerNames().map(name => {
               const profile = resolveProvider(name);
@@ -960,10 +978,27 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
             loadConfig().provider ??
             "anthropic";
           const key = field(body.key);
+          // Host execution: a whole object or nothing. Enabling without a working
+          // directory is refused here rather than saved and failed later.
+          let hostExecChange: AgentboxConfigHostExec | null | undefined;
+          if (body.hostExec !== undefined) {
+            const incoming = (body.hostExec ?? {}) as { enabled?: unknown; cwd?: unknown };
+            const enabled = incoming.enabled === true;
+            const cwd = typeof incoming.cwd === "string" ? incoming.cwd.trim() : "";
+            if (enabled && cwd === "") {
+              send(res, 400, {
+                error: "Turning host execution on needs a working directory for its commands.",
+              });
+              return;
+            }
+            hostExecChange =
+              enabled || cwd !== "" ? { enabled, ...(cwd !== "" ? { cwd } : {}) } : null;
+          }
           const path = saveConfig({
             provider: providerValue === null ? null : field(providerValue)?.toLowerCase(),
             model: body.model === null ? null : field(body.model),
             baseUrl: body.baseUrl === null ? null : field(body.baseUrl),
+            ...(hostExecChange !== undefined ? { hostExec: hostExecChange } : {}),
             ...(key !== undefined && key !== null
               ? { env: { [resolveProvider(chosenName).keyEnv]: key } }
               : {}),
