@@ -1161,6 +1161,9 @@ export async function runTurn(
     deps.usage?.record({
       agentId: agent.id,
       agentName: agent.profile.name,
+      // Who this spend is on behalf of. Absent when no person drove it — a wake, a
+      // scheduled run — which is exactly what byPrincipalSince groups separately.
+      ...(deps.caller?.userId !== undefined ? { principal: deps.caller.userId } : {}),
       // Recorded from what was actually used, with a fallback rather than an optional field: a
       // usage record whose model is missing cannot be priced later.
       provider: deps.provider?.label ?? "unknown",
