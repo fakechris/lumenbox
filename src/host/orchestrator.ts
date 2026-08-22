@@ -459,8 +459,11 @@ export class Orchestrator {
     }
   }
 
-  /** The agent's own prose from this turn, which is what an extractor should reason over. */
-  private replySince(agentId: string, from: number): string {
+  /**
+   * The agent's own prose since a transcript position — what an extractor reasons
+   * over, and what a chat channel sends back as the reply.
+   */
+  replySince(agentId: string, from: number): string {
     return (this.registry.readTranscript(agentId) as { role?: string; text?: string; kind?: string }[])
       .slice(from)
       .filter(entry => entry.role === "assistant" && entry.kind === undefined && entry.text)

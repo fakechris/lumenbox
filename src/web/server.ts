@@ -116,8 +116,13 @@ function withinWork(path: string): boolean {
   return normalised === WORK_DIR || normalised.startsWith(`${WORK_DIR}/`);
 }
 import { agentboxHome, loadConfig, saveConfig } from "../config.ts";
+import { ChannelManager } from "../channels/manager.ts";
+import { DingTalkChannel } from "../channels/dingtalk.ts";
+import { FeishuChannel } from "../channels/feishu.ts";
+import { TelegramChannel } from "../channels/telegram.ts";
 import { ALL_TOOLS } from "../host/orchestrator.ts";
 import { PRESET_MODELS, providerNames, resolveProvider, testProvider } from "../host/provider.ts";
+import { seedStarterSkills } from "../host/starter-skills.ts";
 import { ActivityLog } from "./activity.ts";
 import { vendorPath } from "./markdown.ts";
 import { toDisplayEntries } from "./transcript.ts";
@@ -142,7 +147,7 @@ export interface WebOptions {
 type OutboundEvent =
   | TurnEvent
   | BusEvent
-  | { type: "prompt"; agentId: string; text: string }
+  | { type: "prompt"; agentId: string; text: string; userId?: string }
   | { type: "error"; message: string }
   /** One line of docker output while the box is brought up from the page. */
   | { type: "box_setup"; line: string; done?: boolean; ok?: boolean }
@@ -240,7 +245,66 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
     onBusEvent: broadcast,
   });
 
-  orchestrator.policy.onApprovalRequested = announceApproval;
+  // ── chat channels ────────────────────────────────────────────────────────────
+  //
+  // Each is enabled by its credentials being present — including via the config
+  // file's env map — and every message runs an ordinary turn through the ordinary
+  // gates. The allow list is read fresh per message, so adding someone needs no
+  // restart.
+  const channels = new ChannelManager({
+    allow: () => loadConfig().channelAllow ?? [],
+    log: line => log(line),
+    ask: async (agentName, text, identity) => {
+      const agent =
+        agentName !== undefined
+          ? registry.resolve(agentName)
+          : (registry.list()[0] ?? orchestrator.ensureDefaultAgent());
+      channels.remember(agent.id, identity.split(":")[0] ?? "", identity);
+      const before = registry.readTranscript(agent.id).length;
+      broadcast({ type: "prompt", agentId: agent.id, text, userId: identity });
+      await orchestrator.prompt(agent.id, text, { userId: identity });
+      await orchestrator.settle();
+      return orchestrator.replySince(agent.id, before);
+    },
+  });
+  {
+    const telegramToken = process.env.TELEGRAM_BOT_TOKEN;
+    channels.register(
+      new TelegramChannel(telegramToken ?? "", line => log(line)),
+      telegramToken !== undefined,
+      telegramToken !== undefined ? "starting" : "set TELEGRAM_BOT_TOKEN"
+    );
+    const feishuId = process.env.FEISHU_APP_ID;
+    const feishuSecret = process.env.FEISHU_APP_SECRET;
+    channels.register(
+      new FeishuChannel(feishuId ?? "", feishuSecret ?? "", line => log(line)),
+      feishuId !== undefined && feishuSecret !== undefined,
+      feishuId !== undefined && feishuSecret !== undefined
+        ? "starting"
+        : "set FEISHU_APP_ID and FEISHU_APP_SECRET"
+    );
+    const dingId = process.env.DINGTALK_CLIENT_ID;
+    const dingSecret = process.env.DINGTALK_CLIENT_SECRET;
+    channels.register(
+      new DingTalkChannel(dingId ?? "", dingSecret ?? "", line => log(line)),
+      dingId !== undefined && dingSecret !== undefined,
+      dingId !== undefined && dingSecret !== undefined
+        ? "starting"
+        : "set DINGTALK_CLIENT_ID and DINGTALK_CLIENT_SECRET"
+    );
+  }
+  channels.start();
+
+  orchestrator.policy.onApprovalRequested = approval => {
+    announceApproval(approval);
+    // Whoever asked from a phone is the person who can unblock this, and they are
+    // exactly the person not looking at the page.
+    channels.notifyAsker(
+      approval.agentId,
+      `${approval.agentName || "An agent"} needs your consent:\n${approval.description}\n` +
+        `The turn is paused. Open LumenBox to allow or refuse.`
+    );
+  };
 
   // The box dying is exactly the event nobody is looking at the page for. A light
   // health probe, and only the ok→gone *transition* is announced — a box that stays
@@ -312,6 +376,8 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
   // take over any of them at any moment, which cannot wait on that agent's first
   // turn. Costs a few seconds at startup and nothing after.
   if (box.connected) {
+    const boxClient = orchestrator.boxClient();
+    if (boxClient) void seedStarterSkills(boxClient, line => log(line));
     const desktops = await orchestrator.ensureAllDesktops();
     for (const desktop of desktops) {
       log(
@@ -640,6 +706,28 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
               .filter(agent => orchestrator.policy.isStopped(agent.id))
               .map(agent => agent.id),
           });
+          return;
+        }
+
+        // The chat channels: which exist, which are running, and who may use them.
+        if (route === "GET /api/channels") {
+          send(res, 200, {
+            channels: channels.list(),
+            allow: loadConfig().channelAllow ?? [],
+          });
+          return;
+        }
+
+        if (route === "POST /api/channels/allow") {
+          if (refused()) return;
+          const body = await readJson(req);
+          if (!Array.isArray(body.allow) || body.allow.some(item => typeof item !== "string")) {
+            send(res, 400, { error: "allow must be an array of channel:id strings" });
+            return;
+          }
+          const list = (body.allow as string[]).map(item => item.trim()).filter(item => item !== "");
+          saveConfig({ channelAllow: list.length > 0 ? list : null });
+          send(res, 200, { allow: list });
           return;
         }
 
@@ -1363,6 +1451,7 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
     // firing alongside the new — two backups a tick, sharing a timestamp and a partial directory.
     backups?.stop();
     clearInterval(boxWatch);
+    channels.stop();
     orchestrator.scheduler.stop();
     server.close();
   };
