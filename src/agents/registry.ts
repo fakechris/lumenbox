@@ -137,6 +137,16 @@ export interface AgentProfile {
    * is the agent's, replacing `tools`, because an agent in a scope is defined by it.
    */
   scopeId?: string;
+  /**
+   * The provider this agent runs on, when it should differ from the installation's.
+   *
+   * Agent identity and runtime are separate: the reviewer can run the big model while
+   * the tidy-up agent runs the cheap one, without either knowing. Absent means the
+   * global default. `provider` is a preset name; `model` overrides the model on
+   * whichever provider is effective.
+   */
+  provider?: string;
+  model?: string;
   createdAt: string;
   updatedAt: string;
 }
@@ -326,6 +336,9 @@ export class AgentRegistry {
     tools?: readonly string[];
     /** The scope to place it in. Its tool set and secrets then come from the scope. */
     scopeId?: string;
+    /** Provider preset and model override; absent means the installation default. */
+    provider?: string;
+    model?: string;
   }): AgentRecord {
     const name = clampLine(input.name ?? "", AGENT_NAME_MAX_LENGTH);
     if (!name) throw new Error("An agent needs a non-empty name.");
@@ -343,6 +356,8 @@ export class AgentRegistry {
       visibility: input.visibility ?? "shared",
       ...(input.tools !== undefined ? { tools: [...input.tools] } : {}),
       ...(input.scopeId !== undefined && input.scopeId !== "" ? { scopeId: input.scopeId } : {}),
+      ...(input.provider !== undefined && input.provider !== "" ? { provider: input.provider } : {}),
+      ...(input.model !== undefined && input.model !== "" ? { model: input.model } : {}),
       createdAt: now,
       updatedAt: now,
     };
@@ -374,6 +389,9 @@ export class AgentRegistry {
       tools?: readonly string[] | null;
       /** The scope to place it in, `null`/`""` to remove it from one. UI path only. */
       scopeId?: string | null;
+      /** Provider preset and model override; `null`/`""` clears back to the default. */
+      provider?: string | null;
+      model?: string | null;
     }
   ): AgentRecord {
     const existing = this.get(agentId);
@@ -399,6 +417,14 @@ export class AgentRegistry {
     if (changes.scopeId !== undefined) {
       if (changes.scopeId === null || changes.scopeId === "") delete profile.scopeId;
       else profile.scopeId = changes.scopeId;
+    }
+    if (changes.provider !== undefined) {
+      if (changes.provider === null || changes.provider === "") delete profile.provider;
+      else profile.provider = changes.provider;
+    }
+    if (changes.model !== undefined) {
+      if (changes.model === null || changes.model === "") delete profile.model;
+      else profile.model = changes.model;
     }
 
     profile.updatedAt = new Date().toISOString();

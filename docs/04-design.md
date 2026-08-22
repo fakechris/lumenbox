@@ -607,3 +607,14 @@ directory are global infrastructure whose per-scope enforcement is a box-protoco
 change of its own; the fields are here so that change has a place to read from and no
 migration when it lands. `scopes.json` is 0600, because a scope names secrets and is
 the shape of who-may-do-what.
+
+## 31. Provider per agent
+
+Agent identity and runtime are separate: an agent may name its own provider preset and
+model, and the reviewer can run a bigger model than the tidy-up agent without either
+knowing. Absent, an agent runs on the installation's default. The selection is a pure
+function (`effectiveProviderFor`) so it is testable without a credential; the
+orchestrator caches one client per distinct provider shape, because building one per
+turn would be waste. A per-agent provider whose credential is missing is *not*
+silently fallen back to the default — that is the exact silent-model-swap the config
+work fixed — so the turn fails with the clear message `createClient` already throws.

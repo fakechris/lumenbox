@@ -38,6 +38,7 @@ import {
   createClient,
   resolveSummaryProvider,
   resolveProvider,
+  effectiveProviderFor,
   type Effort,
   type ProviderProfile,
 } from "./provider.ts";
@@ -358,6 +359,10 @@ export class Orchestrator {
     // skills directory is the normal state of a fresh install.
     const { skills } = await this.skills.refresh();
 
+    // Agent identity and runtime are separate: an agent may name its own provider or
+    // model, and gets its own client for it. Absent, it runs on the installation's.
+    const runtime = this.runtimeForAgent(agent);
+
     return runTurn(agent, inbound, signal, {
       displayIndex,
       boxOwner: this.registry.boxOwnerTokenFor(agent.id),
@@ -365,7 +370,7 @@ export class Orchestrator {
       policy: this.policy,
       caller: this.callers.get(agent.id),
       skills,
-      client: this.client,
+      client: runtime.client,
       registry: this.registry,
       files: this.files,
       claims: this.claims,
@@ -378,7 +383,7 @@ export class Orchestrator {
       tasks: this.tasks,
       scopes: this.scopes,
       conversation,
-      provider: this.provider,
+      provider: runtime.provider,
       effort: this.options.effort,
       turns: this.turns,
       // The same cheap profile the summariser and the note-taker use. Choosing which memories to
@@ -450,6 +455,29 @@ export class Orchestrator {
     }
 
     return { resumed, abandoned };
+  }
+
+  /**
+   * The client and provider an agent runs on — its own override, or the default.
+   *
+   * Clients are cached by the provider's shape (label, model, base URL): building one
+   * per turn would be waste, and a run is bounded by desktops. A per-agent provider
+   * whose credential is missing is *not* silently fallen back to the default — that is
+   * the exact silent-model-swap the config work fixed; the turn should fail with a
+   * clear message, which `createClient` already throws. So a build failure here is
+   * caught by the turn, not hidden.
+   */
+  private readonly runtimeCache = new Map<string, { client: Anthropic; provider: ProviderProfile }>();
+
+  private runtimeForAgent(agent: AgentRecord): { client: Anthropic; provider: ProviderProfile } {
+    const provider = effectiveProviderFor(agent.profile, this.provider);
+    if (provider === this.provider) return { client: this.client, provider: this.provider };
+    const key = `${provider.label} ${provider.model} ${provider.baseUrl ?? ""}`;
+    const cached = this.runtimeCache.get(key);
+    if (cached !== undefined) return cached;
+    const runtime = { client: createClient(provider), provider };
+    this.runtimeCache.set(key, runtime);
+    return runtime;
   }
 
   /**

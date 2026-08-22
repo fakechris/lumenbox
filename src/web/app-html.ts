@@ -745,6 +745,16 @@ export const APP_HTML = String.raw`<!doctype html>
       <textarea id="agpersona" placeholder="What is this agent for? This becomes its system prompt."></textarea>
     </div>
     <div class="field">
+      <label>Runtime</label>
+      <div style="display:flex;gap:8px">
+        <select id="agprovider" style="flex:1"></select>
+        <input id="agmodel" placeholder="model (optional)" spellcheck="false" style="flex:1;font-family:var(--font-mono);font-size:12px">
+      </div>
+      <div class="fieldnote">Which model this agent runs on. Blank uses the installation default —
+        set it to run, say, the reviewer on a bigger model than the tidy-up agent. The provider's
+        key must be present in the environment.</div>
+    </div>
+    <div class="field">
       <label>Scope</label>
       <select id="agscope"></select>
       <div class="fieldnote">A scope confers a tool set and secret grants as one named bundle
@@ -2566,6 +2576,8 @@ function openAgentModal(mode, agent) {
       esc(tool) + "</span>";
   }).join("");
   renderAgentScope(agent ? String(agent.scopeId || "") : "");
+  renderAgentProvider(agent ? String(agent.provider || "") : "");
+  $("agmodel").value = agent ? String(agent.model || "") : "";
   $("agstatus").textContent = "";
   $("agdanger").style.display = mode === "edit" ? "" : "none";
   $("agdel1").style.display = "";
@@ -2653,6 +2665,20 @@ function applyScopeToTools() {
 }
 $("agscope").onchange = applyScopeToTools;
 
+/** The provider dropdown reuses the settings presets list. */
+function renderAgentProvider(selected) {
+  fetch("/api/config")
+    .then(function (r) { return r.status === 403 ? null : r.json(); })
+    .then(function (data) {
+      var presets = data ? (data.presets || []) : [];
+      $("agprovider").innerHTML = '<option value="">— installation default —</option>' +
+        presets.map(function (p) {
+          return '<option value="' + esc(p.name) + '"' + (p.name === selected ? " selected" : "") + ">" + esc(p.label) + "</option>";
+        }).join("");
+    })
+    .catch(function () { $("agprovider").innerHTML = '<option value="">— default —</option>'; });
+}
+
 function saveAgentModal() {
   var name = $("agname").value.trim();
   if (!name) {
@@ -2669,7 +2695,9 @@ function saveAgentModal() {
     tools: granted.length === allTools.length ? null : granted,
     // In a scope, the scope owns the tools; send them anyway as the fallback for if
     // it is ever removed from the scope.
-    scopeId: $("agscope").value
+    scopeId: $("agscope").value,
+    provider: $("agprovider").value,
+    model: $("agmodel").value.trim()
   };
   if (!isNew) body.id = agentModal.id;
   $("agstatus").textContent = "Saving…";
