@@ -1416,6 +1416,7 @@ function select(id, conversation) {
   renderAgents();
   showDesktop(id);
   if (switching) refreshConversations(id);
+  updateComposerTarget();
   $("chat").innerHTML = "";
   live.delete(id);
 
@@ -1451,6 +1452,14 @@ function refreshConversations(id) {
 $("convpick").onchange = function () {
   if (current) select(current, $("convpick").value);
 };
+
+/** The composer says which thread it will reach, so a reply never surprises anyone. */
+function updateComposerTarget() {
+  var name = nameOf(current);
+  $("input").placeholder = currentConversation === "main"
+    ? "Message " + name + "…"
+    : "Reply in " + currentConversation + " — reaches that chat, not the team room…";
+}
 
 function refresh() {
   return fetch("/api/state").then(function (r) { return r.json(); }).then(function (state) {
@@ -2230,7 +2239,9 @@ $("form").onsubmit = function (event) {
   fetch("/api/prompt", {
     method: "POST",
     headers: { "content-type": "application/json" },
-    body: JSON.stringify({ agent: current, text: text })
+    // Send to the thread on screen, not always the team room: reading a chat thread
+    // and replying should reach that chat, not surface in the room the reader left.
+    body: JSON.stringify({ agent: current, text: text, conversation: currentConversation })
   }).then(function (res) {
     if (!res.ok) return res.text().then(function (t) { feed("prompt rejected: " + esc(t), "err"); });
   }).catch(function (error) {

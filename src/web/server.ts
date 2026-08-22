@@ -1532,6 +1532,11 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
             send(res, 400, { error: "text is required" });
             return;
           }
+          // Which thread the page was viewing; defaults to the team room.
+          const conversation =
+            typeof body.conversation === "string" && body.conversation !== ""
+              ? body.conversation
+              : MAIN_CONVERSATION;
 
           // Echo the prompt so every connected page shows it, then answer
           // immediately: the turn's output arrives over the event stream, and a
@@ -1542,12 +1547,13 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
             type: "prompt",
             agentId,
             text,
+            conversation,
             ...(caller.userId !== undefined ? { userId: caller.userId } : {}),
           });
           send(res, 202, { accepted: true });
 
           void orchestrator
-            .prompt(agentId, text, caller)
+            .prompt(agentId, text, caller, { conversation })
             // Teammates woken by this turn are still working; let them finish so
             // their messages and turns show up before the page looks idle.
             .then(() => orchestrator.settle())
