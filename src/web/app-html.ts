@@ -867,7 +867,7 @@ function renderPeople() {
       '<span style="min-width:80px;font-weight:600">' + esc(p.name) + "</span>" +
       '<span class="mono" style="flex:1;font-size:12px;overflow:hidden;text-overflow:ellipsis">' + esc(p.identity) + "</span>" +
       '<span class="dim" style="min-width:48px">' + esc(p.role) + "</span>" +
-      '<a href="#" data-remove="' + i + '" style="color:var(--danger);font-size:12px">Remove</a></div>";
+      '<a href="#" data-remove="' + i + '" style="color:var(--danger);font-size:12px">Remove</a></div>';
   }).join("");
 }
 

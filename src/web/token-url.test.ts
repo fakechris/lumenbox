@@ -59,3 +59,15 @@ test("the token is still accepted on the way in", () => {
     "the ordering is the load-bearing part and is written down next to the code"
   );
 });
+
+test("the whole inline page script parses — a syntax error breaks every feature at once", () => {
+  // token-url only exercised the stripToken IIFE, so a syntax error anywhere else in
+  // the page — a mismatched quote in a template string, say — shipped green while the
+  // real page threw on load and rendered nothing. This parses the entire script the
+  // browser runs, which is the cheapest thing that catches it.
+  const open = APP_HTML.indexOf('<script>\n"use strict"');
+  assert.ok(open > 0, "the inline script is still there");
+  const close = APP_HTML.indexOf("</script>", open);
+  const js = APP_HTML.slice(open + "<script>".length, close);
+  assert.doesNotThrow(() => new Function(js), "the page script must parse");
+});
