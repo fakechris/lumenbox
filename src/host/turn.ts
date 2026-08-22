@@ -58,6 +58,7 @@ import type { ResolutionConfig } from "../protocol/index.ts";
 import { buildSystemPromptParts, buildTurnPrompt } from "./prompt.ts";
 import { buildTools, dispatchTool, type ToolOutcome } from "./tools.ts";
 import type { HostRunner } from "./host-runner.ts";
+import type { Vault } from "./vault.ts";
 import { MAIN_CONVERSATION } from "../agents/registry.ts";
 import { resolveSummaryProvider } from "./provider.ts";
 import type { Effort, ProviderProfile } from "./provider.ts";
@@ -249,6 +250,8 @@ export interface TurnDeps {
   claims?: Claims;
   /** The door out of the box, when an operator built one. Absent means no host tool. */
   hostRunner?: HostRunner;
+  /** The credential vault, for secrets a host command asks for by grant. */
+  vault?: Vault;
   /**
    * Which conversation this turn runs in. Absent means the main one — the team room.
    * The transcript read, every entry written, the compaction state and every event
@@ -1257,6 +1260,7 @@ export async function runTurn(
             displayIndex: deps.displayIndex,
             boxOwner: deps.boxOwner,
             hostRunner: deps.hostRunner,
+            vault: deps.vault,
           }
         );
       } catch (error) {

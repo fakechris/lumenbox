@@ -27,6 +27,7 @@ import { runTurn, TurnAborted, type TurnEvent } from "./turn.ts";
 import { PolicyGate } from "./policy.ts";
 import { MAIN_CONVERSATION } from "../agents/registry.ts";
 import type { HostRunner } from "./host-runner.ts";
+import type { Vault } from "./vault.ts";
 import { Rememberer, summariseExchange } from "./remember.ts";
 import { SkillCache } from "./skills.ts";
 import { Scheduler } from "./schedule.ts";
@@ -74,6 +75,8 @@ export interface OrchestratorOptions {
    * never learns it might have asked.
    */
   hostRunner?: HostRunner;
+  /** The credential vault, for secrets a host command may ask for by grant. */
+  vault?: Vault;
 }
 
 export class Orchestrator {
@@ -351,6 +354,7 @@ export class Orchestrator {
       display: this.display,
       resolution: this.resolution,
       hostRunner: this.options.hostRunner,
+      vault: this.options.vault,
       conversation,
       provider: this.provider,
       effort: this.options.effort,

@@ -648,6 +648,21 @@ export const APP_HTML = String.raw`<!doctype html>
       <div class="fieldnote" id="sethoststatus"></div>
     </div>
     <div class="field">
+      <label>Secrets</label>
+      <div id="setsecrets" style="display:flex;flex-direction:column;gap:6px"></div>
+      <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
+        <input id="setsecid" placeholder="GITHUB_TOKEN" spellcheck="false" style="flex:1;min-width:110px">
+        <input id="setsecval" type="password" placeholder="value" spellcheck="false" autocomplete="off" style="flex:1;min-width:110px">
+        <input id="setsecgrant" placeholder="* or agent:id or principal:id" spellcheck="false" style="flex:1.3;min-width:130px;font-family:var(--font-sans);font-size:12px">
+        <button class="btn sm" id="setsecadd">Add</button>
+      </div>
+      <div class="fieldnote">A credential, given to who may use it. It is delivered only through
+        a host command (RunOnHost) — placed in that one command's environment on your machine,
+        never written into the box. The agent uses it by name and never sees the value. Every use
+        is audited in ~/.agentbox/vault-audit.jsonl.</div>
+      <div class="fieldnote" id="setsecstatus"></div>
+    </div>
+    <div class="field">
       <label>Channels</label>
       <div id="setchannels" style="display:flex;flex-direction:column;gap:6px"></div>
       <div class="fieldnote">A channel turns on when its credentials are in the environment or the
@@ -826,10 +841,64 @@ function openSettings() {
       renderStandingGrants();
       renderBoxSection();
       renderChannels();
+      renderSecrets();
       $("settingswrap").style.display = "flex";
     })
     .catch(function () { feed("could not load settings", "err"); });
 }
+
+/** The vault secrets: names, descriptions and grants, never values. */
+var secrets = [];
+
+function renderSecrets() {
+  fetch("/api/vault")
+    .then(function (r) {
+      if (r.status === 403) { $("setsecrets").innerHTML = ""; return null; }
+      return r.json();
+    })
+    .then(function (data) {
+      if (!data) return;
+      secrets = data.secrets || [];
+      if (!secrets.length) {
+        $("setsecrets").innerHTML = '<div class="fieldnote" style="margin:0">No secrets yet. Add one to give an agent a credential for a host command.</div>';
+        return;
+      }
+      $("setsecrets").innerHTML = secrets.map(function (s, i) {
+        var who = (s.grants || []).map(function (g) { return g.holder + (g.expiresAt ? " (until " + g.expiresAt.slice(0,10) + ")" : ""); }).join(", ") || "nobody yet";
+        return '<div style="display:flex;gap:8px;align-items:center;font-size:13px">' +
+          '<span class="mono" style="min-width:110px;font-weight:600">' + esc(s.id) + "</span>" +
+          '<span class="dim" style="flex:1;font-size:12px;overflow:hidden;text-overflow:ellipsis">' + esc(who) + "</span>" +
+          '<a href="#" data-secrm="' + i + '" style="color:var(--danger);font-size:12px">Remove</a></div>';
+      }).join("");
+    })
+    .catch(function () {});
+}
+
+$("setsecadd").onclick = function () {
+  var id = $("setsecid").value.trim();
+  var value = $("setsecval").value;
+  var grant = $("setsecgrant").value.trim();
+  if (!id || !value) { $("setsecstatus").textContent = "A secret needs a name and a value."; return; }
+  $("setsecstatus").textContent = "Saving…";
+  fetch("/api/vault", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ id: id, value: value, grants: grant ? [{ holder: grant }] : [] })
+  })
+    .then(function (r) { return r.json().then(function (d) { if (!r.ok) throw new Error(d.error || "save failed"); return d; }); })
+    .then(function () { $("setsecid").value = ""; $("setsecval").value = ""; $("setsecgrant").value = ""; $("setsecstatus").textContent = "Saved."; renderSecrets(); })
+    .catch(function (error) { $("setsecstatus").textContent = error.message; });
+};
+
+document.getElementById("setsecrets").addEventListener("click", function (event) {
+  var idx = event.target.getAttribute && event.target.getAttribute("data-secrm");
+  if (idx === null || idx === undefined) return;
+  event.preventDefault();
+  var s = secrets[Number(idx)];
+  if (!s) return;
+  fetch("/api/vault/remove", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ id: s.id }) })
+    .then(renderSecrets);
+});
 
 /** The people list: one row per identity, grouped nowhere — flat and editable. */
 var people = [];
