@@ -93,12 +93,18 @@ export async function seedStarterSkills(
   box: {
     listDir: (path: string) => Promise<{ entries: { name: string }[] }>;
     uploadFile: (path: string, base64: string) => Promise<unknown>;
+    exec: (command: string, options?: { timeoutMs?: number }) => Promise<unknown>;
   },
   log: (line: string) => void
 ): Promise<void> {
   try {
     const listing = await box.listDir(SKILLS_DIR).catch(() => undefined);
     if (listing !== undefined && listing.entries.length > 0) return;
+    // Upload refuses a parent that does not exist — the same refusal that stops a
+    // stray upload inventing directory trees — so the directories are made first,
+    // deliberately, through the shell.
+    const dirs = STARTERS.map(skill => `${SKILLS_DIR}/${skill.slug}`).join(" ");
+    await box.exec(`mkdir -p ${dirs}`, { timeoutMs: 15_000 });
     for (const skill of STARTERS) {
       await box.uploadFile(
         `${SKILLS_DIR}/${skill.slug}/SKILL.md`,
