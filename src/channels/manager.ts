@@ -47,6 +47,8 @@ export interface InboundMessage {
   /** For a person reading the activity feed: a name, not an id, where the wire has one. */
   senderLabel: string;
   text: string;
+  /** Files carried by the message, bytes already fetched off the wire by the adapter. */
+  files?: { name: string; base64: string }[];
 }
 
 /** Where a push should sit: anchored under a message, or loose in the chat. */
@@ -211,6 +213,15 @@ export interface ChannelManagerDeps {
    * one thing no other chat product can put in a group.
    */
   screenshot?: (agentName: string | undefined) => Promise<string | undefined>;
+  /**
+   * Stores files somebody dropped in the chat, into that chat's inbox on the box.
+   * Returns the saved names (as the chat should hear them), or undefined when there
+   * is nowhere to store them — which the chat is told plainly.
+   */
+  receiveFiles?: (
+    chatKey: string,
+    files: { name: string; base64: string }[]
+  ) => Promise<string[] | undefined>;
   /**
    * The files a finished turn left in this chat's outbox — name and bytes, smallest
    * first. Collected once per task, after the reply lands; an empty answer is the
@@ -453,6 +464,17 @@ export class ChannelManager {
       }
     }
 
+    // A dropped file is a delivery, not an instruction: it is stored where the agents
+    // can reach it and the chat is told where it landed. No turn runs — the person
+    // says what they want done with it when they want something done.
+    if (message.files !== undefined && message.files.length > 0) {
+      const drop = this.runFiles(adapter, message).finally(() => {
+        this.inflight.delete(drop);
+      });
+      this.inflight.add(drop);
+      return undefined;
+    }
+
     const { agentName, text } = parseAddress(message.text);
     if (text === "") return "Say what you need done; @AgentName first to pick who does it.";
 
@@ -485,6 +507,42 @@ export class ChannelManager {
     } catch (error) {
       const detail = error instanceof Error ? error.message : String(error);
       this.deps.log(`channel ${adapter.name}: push failed (${detail})`);
+    }
+  }
+
+  /** A dropped file into the chat's inbox, and the chat told where it landed. */
+  private async runFiles(adapter: ChannelAdapter, message: InboundMessage): Promise<void> {
+    const chatKey = message.chatKey ?? message.identity;
+    const anchor: PushOptions | undefined =
+      message.messageId !== undefined ? { replyTo: message.messageId } : undefined;
+    if (this.deps.receiveFiles === undefined) return;
+    try {
+      const saved = await this.deps.receiveFiles(chatKey, message.files ?? []);
+      if (saved === undefined) {
+        await this.deliver(
+          adapter,
+          chatKey,
+          message.identity,
+          "There is no box running to store files on right now.",
+          anchor
+        );
+        return;
+      }
+      await this.deliver(
+        adapter,
+        chatKey,
+        message.identity,
+        `Saved: ${saved.join(", ")}. Say what you want done with it — @AgentName first picks who.`,
+        anchor
+      );
+    } catch (error) {
+      await this.deliver(
+        adapter,
+        chatKey,
+        message.identity,
+        error instanceof Error ? error.message : String(error),
+        anchor
+      );
     }
   }
 

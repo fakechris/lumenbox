@@ -120,6 +120,13 @@ export class FeishuChannel implements ChannelAdapter {
               data: { content: string; msg_type: string; reply_in_thread?: boolean };
             }) => Promise<{ data?: { message_id?: string }; message_id?: string } | undefined>;
           };
+          messageResource: {
+            /** Binary download; the SDK wraps the stream, shape probed defensively. */
+            get: (options: {
+              path: { message_id: string; file_key: string };
+              params: { type: string };
+            }) => Promise<unknown>;
+          };
           messageReaction: {
             create: (options: {
               path: { message_id: string };
@@ -279,9 +286,48 @@ export class FeishuChannel implements ChannelAdapter {
       }) => {
         const openId = data.sender?.sender_id?.open_id ?? "unknown";
         const chatId = data.message?.chat_id ?? "";
-        if (data.message?.message_type !== "text" || chatId === "") return {};
+        const messageType = data.message?.message_type;
+        if (chatId === "" || data.message === undefined) return {};
         const messageId = data.message.message_id;
         if (messageId !== undefined && this.alreadySeen(messageId)) return {};
+
+        // A file or an image is bytes to fetch, then an ordinary inbound message that
+        // carries them. The download happens here because the wire (key, resource
+        // API, quirks) is this adapter's business and nobody else's.
+        if ((messageType === "file" || messageType === "image") && messageId !== undefined) {
+          let parsed: { file_key?: string; image_key?: string; file_name?: string } = {};
+          try {
+            parsed = JSON.parse(data.message.content ?? "{}") as typeof parsed;
+          } catch {
+            return {};
+          }
+          const fileKey = parsed.file_key ?? parsed.image_key;
+          if (fileKey === undefined) return {};
+          const name = parsed.file_name ?? `image-${messageId.slice(-8)}.png`;
+          const identity = `feishu:${openId}`;
+          this.chats.set(identity, chatId);
+          void this.downloadResource(messageId, fileKey, messageType)
+            .then(async base64 => {
+              if (base64 === undefined) return;
+              const senderLabel = await this.labelFor(openId, chatId);
+              const reply = await onMessage({
+                identity,
+                chatKey: `feishu:${chatId}`,
+                messageId,
+                senderLabel,
+                text: "",
+                files: [{ name, base64 }],
+              });
+              if (reply !== undefined && reply !== "") await this.send(identity, reply);
+            })
+            .catch((error: unknown) => {
+              const detail = error instanceof Error ? error.message : String(error);
+              this.log(`channel feishu: file receive failed (${detail})`);
+            });
+          return {};
+        }
+
+        if (messageType !== "text") return {};
         let text = "";
         try {
           text = String(
@@ -372,6 +418,69 @@ export class FeishuChannel implements ChannelAdapter {
       params: { receive_id_type: "chat_id" },
       data: { receive_id: chatId, msg_type: "text", content: JSON.stringify({ text }) },
     });
+  }
+
+  /**
+   * The bytes of a message's file or image, base64, or undefined with the reason
+   * logged. Audio and media downloads sometimes refuse their own type and answer to
+   * `type=file` — the mature reference retries exactly that way, so this does too.
+   * Capped at 25MB: past that, the box is the wrong transport.
+   */
+  private async downloadResource(
+    messageId: string,
+    fileKey: string,
+    kind: string
+  ): Promise<string | undefined> {
+    if (this.apiClient === undefined) return undefined;
+    const fetchAs = (type: string) =>
+      this.apiClient!.im.messageResource.get({
+        path: { message_id: messageId, file_key: fileKey },
+        params: { type },
+      });
+    let resource: unknown;
+    try {
+      resource = await fetchAs(kind === "image" ? "image" : "file");
+    } catch {
+      try {
+        resource = await fetchAs("file");
+      } catch (error) {
+        const detail = error instanceof Error ? error.message : String(error);
+        this.log(`channel feishu: resource download failed (${detail})`);
+        return undefined;
+      }
+    }
+    try {
+      if (Buffer.isBuffer(resource)) return resource.toString("base64");
+      const wrapped = resource as {
+        getReadableStream?: () => NodeJS.ReadableStream;
+        on?: unknown;
+      };
+      const stream =
+        typeof wrapped.getReadableStream === "function"
+          ? wrapped.getReadableStream()
+          : typeof wrapped.on === "function"
+            ? (resource as NodeJS.ReadableStream)
+            : undefined;
+      if (stream === undefined) {
+        this.log("channel feishu: resource response has no readable shape");
+        return undefined;
+      }
+      const chunks: Buffer[] = [];
+      let total = 0;
+      for await (const chunk of stream as AsyncIterable<Buffer>) {
+        total += chunk.length;
+        if (total > 25 * 1024 * 1024) {
+          this.log("channel feishu: resource past the 25MB cap, dropped");
+          return undefined;
+        }
+        chunks.push(Buffer.from(chunk));
+      }
+      return Buffer.concat(chunks).toString("base64");
+    } catch (error) {
+      const detail = error instanceof Error ? error.message : String(error);
+      this.log(`channel feishu: resource read failed (${detail})`);
+      return undefined;
+    }
   }
 
   /**

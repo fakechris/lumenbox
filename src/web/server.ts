@@ -418,6 +418,34 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
       }
       return orchestrator.replySince(agent.id, before, conversation);
     },
+    // A file dropped in the chat lands in that chat's inbox on the box, under a name
+    // that never overwrites: a second report.pdf becomes report-2.pdf, because the
+    // first one may be exactly what the agent is reading.
+    receiveFiles: async (chatKey, files) => {
+      const client = orchestrator.boxClient();
+      if (client === undefined) return undefined;
+      const dir = `${WORK_DIR}/chats/${conversationIdFor(chatKey)}/inbox`;
+      await client.exec(`mkdir -p '${dir}'`);
+      let existing: Set<string>;
+      try {
+        existing = new Set((await client.listDir(dir)).entries.map(entry => entry.name));
+      } catch {
+        existing = new Set();
+      }
+      const saved: string[] = [];
+      for (const file of files) {
+        const clean = file.name.replace(/[/\\\0]/g, "_").slice(0, 120) || "file";
+        let name = clean;
+        for (let n = 2; existing.has(name); n++) {
+          const dot = clean.lastIndexOf(".");
+          name = dot > 0 ? `${clean.slice(0, dot)}-${n}${clean.slice(dot)}` : `${clean}-${n}`;
+        }
+        existing.add(name);
+        await client.uploadFile(`${dir}/${name}`, file.base64);
+        saved.push(`inbox/${name}`);
+      }
+      return saved;
+    },
     // The chat's outbox on the box: list, download, and — once pushed — move to
     // sent/, so nothing is delivered twice and nothing undelivered is lost. A chat
     // that never used files has no directory, and that is the cheap ordinary case.

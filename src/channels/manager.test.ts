@@ -577,6 +577,61 @@ test("everything a task says sits under the message that asked for it", async ()
   assert.deepEqual(bare.statuses, []);
 });
 
+test("a dropped file is stored and acknowledged, and no turn runs", async () => {
+  const adapter = cardAdapter();
+  const asked: string[] = [];
+  const received: { chatKey: string; names: string[] }[] = [];
+  const manager = new ChannelManager({
+    mayDrive: () => true,
+    ask: async (_a, text) => {
+      asked.push(text);
+      return "x";
+    },
+    receiveFiles: async (chatKey, files) => {
+      received.push({ chatKey, names: files.map(file => file.name) });
+      return files.map(file => `inbox/${file.name}`);
+    },
+    log: () => {},
+  });
+  manager.register(adapter, true, "test");
+  await started(manager);
+
+  await adapter.inject({
+    identity: "feishu:ou_1",
+    chatKey: "feishu:oc_room",
+    messageId: "om_file",
+    senderLabel: "chris",
+    text: "",
+    files: [{ name: "report.pdf", base64: "cGRm" }],
+  });
+  await manager.idle();
+
+  assert.deepEqual(received, [{ chatKey: "feishu:oc_room", names: ["report.pdf"] }]);
+  assert.deepEqual(asked, [], "a delivery is not an instruction");
+  assert.match(adapter.chatSent[0]!.text, /Saved: inbox\/report\.pdf/);
+  assert.equal(adapter.chatSent[0]!.replyTo, "om_file", "the receipt sits under the drop");
+
+  // Nowhere to store: the chat is told plainly, not left to wonder.
+  const boxless = new ChannelManager({
+    mayDrive: () => true,
+    ask: async () => "x",
+    receiveFiles: async () => undefined,
+    log: () => {},
+  });
+  const adapter2 = cardAdapter();
+  boxless.register(adapter2, true, "test");
+  await started(boxless);
+  await adapter2.inject({
+    identity: "feishu:ou_1",
+    chatKey: "feishu:oc_r",
+    senderLabel: "c",
+    text: "",
+    files: [{ name: "a.txt", base64: "eA==" }],
+  });
+  await boxless.idle();
+  assert.match(adapter2.chatSent[0]!.text, /no box running/);
+});
+
 test("a finished task ships the outbox — images as images, files as files, delivered once", async () => {
   const adapter = cardAdapter();
   const delivered: string[][] = [];
