@@ -25,7 +25,8 @@ import { resolveBoxProvisioner, type BoxProvisioner } from "../box/provisioner.t
 import type { ResolutionConfig } from "../protocol/index.ts";
 import { runTurn, TurnAborted, type TurnEvent } from "./turn.ts";
 import { PolicyGate } from "./policy.ts";
-import { TaskStore } from "./tasks.ts";
+import { TaskStore, type Task } from "./tasks.ts";
+import { buildAuditPrompt, manifestDiff, MANIFEST_COMMAND, parseManifest } from "./audit.ts";
 import { ScopeStore } from "./scopes.ts";
 import { MAIN_CONVERSATION } from "../agents/registry.ts";
 import type { HostRunner } from "./host-runner.ts";
@@ -221,11 +222,88 @@ export class Orchestrator {
     log: line => console.error(`[schedule] ${line}`),
   });
 
+  /** Tasks whose audit turn is in flight, so an invalidation writing review again does not loop. */
+  private readonly auditing = new Set<string>();
+
+  /**
+   * The auto-audit: a task landing in review with an agent reviewer wakes that
+   * reviewer on an audit turn. The reviewer moves the task itself (the board's
+   * review gate is what makes its acceptance mean something); the harness's part
+   * is the workspace snapshot around the turn — a review that changed the work is
+   * void, said on the task rather than silently accepted.
+   */
+  private maybeAudit(task: Task): void {
+    if (task.status !== "review" || task.reviewerId === undefined) return;
+    if (this.auditing.has(task.id)) return;
+    const last = task.history[task.history.length - 1];
+    // The guard's own invalidation and the reviewer's own moves must not retrigger:
+    // after either, the next actor is a person or the assignee, not this machinery.
+    if (last?.by === "audit-guard" || last?.by === task.reviewerId) return;
+    const reviewer = this.registry.tryGet(task.reviewerId);
+    if (reviewer === undefined) return;
+    const assignee =
+      task.assigneeId !== undefined ? this.registry.tryGet(task.assigneeId) : undefined;
+
+    this.auditing.add(task.id);
+    void (async () => {
+      try {
+        const before = await this.workspaceManifest();
+        await this.prompt(
+          reviewer.id,
+          buildAuditPrompt({
+            task,
+            assigneeName: assignee?.profile.name ?? task.assigneeId ?? "the assignee",
+            ...(task.conversation !== undefined ? { conversation: task.conversation } : {}),
+          }),
+          undefined,
+          { steerable: false }
+        );
+        const after = await this.workspaceManifest();
+        if (before !== undefined && after !== undefined) {
+          const changed = manifestDiff(before, after);
+          if (changed.length > 0) {
+            this.tasks?.update(
+              task.id,
+              {
+                status: "review",
+                note:
+                  `audit void: the review itself changed ${changed.length} file(s) ` +
+                  `(${changed.slice(0, 3).join(", ")}${changed.length > 3 ? ", …" : ""}) — ` +
+                  "a reviewer that edits the work is no longer reviewing it",
+              },
+              "audit-guard"
+            );
+          }
+        }
+      } catch (error) {
+        console.error(
+          `[audit] ${task.id}: ${error instanceof Error ? error.message : String(error)}`
+        );
+      } finally {
+        this.auditing.delete(task.id);
+      }
+    })();
+  }
+
+  /** The box workspace as path→hash, or undefined when there is no box to ask. */
+  private async workspaceManifest(): Promise<Map<string, string> | undefined> {
+    if (this.box === undefined) return undefined;
+    try {
+      const result = await this.box.exec(MANIFEST_COMMAND, { timeoutMs: 60_000 });
+      return parseManifest(result.stdout ?? "");
+    } catch {
+      // No manifest means integrity simply is not checked this time — the audit
+      // still runs; a broken find must not block review.
+      return undefined;
+    }
+  }
+
   constructor(private readonly options: OrchestratorOptions = {}) {
     this.tasks =
       options.tasks === null
         ? undefined
         : (options.tasks ?? new TaskStore(undefined, line => console.error(`[tasks] ${line}`)));
+    if (this.tasks !== undefined) this.tasks.onChange = task => this.maybeAudit(task);
     this.scopes = options.scopes === null ? undefined : (options.scopes ?? new ScopeStore());
     this.claims =
       options.claims === null

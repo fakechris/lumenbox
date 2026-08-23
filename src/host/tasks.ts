@@ -82,6 +82,12 @@ export class TaskStore {
   private readonly tasks = new Map<string, Task>();
   private counter = 0;
   private lines = 0;
+  /**
+   * Called after every recorded change with the task as it now stands. The auto-audit
+   * listens here for tasks landing in review. A field rather than a constructor
+   * argument because the orchestrator wires it after both exist.
+   */
+  onChange: ((task: Task) => void) | undefined;
 
   constructor(
     private readonly path: string | null = tasksPath(),
@@ -224,7 +230,9 @@ export class TaskStore {
     this.tasks.set(id, updated);
     this.append({ kind: "task", task: updated });
     if (this.lines > COMPACT_AT) this.compact(now);
-    return { task: this.get(id)!, ...(coerced !== undefined ? { coerced } : {}) };
+    const result = { task: this.get(id)!, ...(coerced !== undefined ? { coerced } : {}) };
+    this.onChange?.(result.task);
+    return result;
   }
 
   private append(line: TaskLine): void {

@@ -112,3 +112,12 @@ test("describeTask reads like a board row", () => {
     cleanup();
   }
 });
+
+test("onChange fires after a recorded change, with the task as it now stands", () => {
+  const store = new TaskStore(null);
+  const seen: string[] = [];
+  store.onChange = task => seen.push(`${task.id}:${task.status}`);
+  const task = store.create({ title: "audit me", requester: "chris", assigneeId: "a1", reviewerId: "v1" })!;
+  store.update(task.id, { status: "done" }, "a1"); // review gate coerces to review
+  assert.deepEqual(seen, [`${task.id}:review`], "create does not fire; the coerced update does");
+});
