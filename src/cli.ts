@@ -4,10 +4,10 @@
  */
 
 import { createInterface } from "node:readline/promises";
-import { existsSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, writeFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
-import { homedir } from "node:os";
+import { homedir, tmpdir } from "node:os";
 import {
   BoxManager,
   defaultBoxConfig,
@@ -729,6 +729,10 @@ Quality:
                            calls and their round trip, parallel calls,
                            streaming, vision, long output, caching. Run before
                            trusting a new provider, and after a vendor update.
+  golden [provider...]     End-to-end golden tasks through a real orchestrator
+                           in a throwaway state directory, graded against the
+                           harness's own records. --box includes the box tasks.
+                           Nightly per model is the intended cadence.
 
 Providers:
   anthropic (default)      claude-opus-5; full vision, caching, thinking
@@ -877,6 +881,72 @@ async function main(): Promise<number> {
         if (results.some(result => result.status === "failed")) anyFailed = true;
       }
       return anyFailed ? 1 : 0;
+    }
+
+    // End-to-end golden tasks: a real orchestrator, real turns, outcomes graded
+    // against the harness's own records rather than the model's account of itself.
+    // Each provider runs in a throwaway state directory — a golden run must neither
+    // write memories into the real installation nor read them.
+    case "golden": {
+      const { GOLDEN_TASKS } = await import("./host/golden.ts");
+      const withBox = rest.includes("--box");
+      const names = rest.filter(argument => !argument.startsWith("--"));
+      const targets = names.length > 0 ? names : [undefined];
+      let anyFail = false;
+      for (const name of targets) {
+        const profile = resolveProvider(name, loadConfig().provider);
+        if (process.env[profile.keyEnv] === undefined) {
+          err(`${profile.label}: needs ${profile.keyEnv}`);
+          anyFail = true;
+          continue;
+        }
+        const home = mkdtempSync(join(tmpdir(), "agentbox-golden-"));
+        process.env.AGENTBOX_HOME = home;
+        const registry = new AgentRegistry(join(home, "agents"));
+        const orchestrator = new Orchestrator({ registry, provider: profile, useBox: withBox });
+        if (withBox) out(dim((await orchestrator.connectBox()).detail));
+        const gold = registry.create({
+          name: "Gold",
+          description: "You are the golden-task agent. Do exactly what each message asks.",
+        });
+        const silver = registry.create({
+          name: "Silver",
+          description: "You acknowledge messages briefly.",
+        });
+        out(`${bold(profile.label)}  ${dim(profile.model)}  ${dim(home)}`);
+        const boxReady = orchestrator.boxClient() !== undefined;
+        for (const task of GOLDEN_TASKS) {
+          if (task.needsBox === true && !boxReady) {
+            out(`  · ${task.id.padEnd(12)} ${dim("needs a box (--box)")}`);
+            continue;
+          }
+          const started = Date.now();
+          try {
+            const before = registry.readTranscript(gold.id).length;
+            await orchestrator.prompt(gold.id, task.prompt({ teammateName: "Silver" }));
+            await orchestrator.settle();
+            const reply = orchestrator.replySince(gold.id, before);
+            const verdict = await task.check({
+              reply,
+              agentId: gold.id,
+              teammateId: silver.id,
+              registry,
+              orchestrator,
+            });
+            const seconds = Math.round((Date.now() - started) / 1000);
+            out(
+              `  ${verdict.pass ? "✓" : "✗"} ${task.id.padEnd(12)} ` +
+                dim(`${verdict.detail} (${seconds}s)`)
+            );
+            if (!verdict.pass) anyFail = true;
+          } catch (error) {
+            anyFail = true;
+            const detail = error instanceof Error ? error.message : String(error);
+            out(`  ✗ ${task.id.padEnd(12)} ${dim(detail)}`);
+          }
+        }
+      }
+      return anyFail ? 1 : 0;
     }
 
     case "where":
