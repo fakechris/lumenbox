@@ -129,6 +129,22 @@ export class FeishuChannel implements ChannelAdapter {
               path: { message_id: string; reaction_id: string };
             }) => Promise<unknown>;
           };
+          chatMembers: {
+            /** Members of a chat, names included — no extra scope, unlike contact. */
+            get: (options: {
+              path: { chat_id: string };
+              params: { member_id_type: string; page_size: number; page_token?: string };
+            }) => Promise<
+              | {
+                  data?: {
+                    items?: { member_id?: string; name?: string }[];
+                    has_more?: boolean;
+                    page_token?: string;
+                  };
+                }
+              | undefined
+            >;
+          };
           image: {
             /**
              * Uploads bytes; the returned key is what an image message references.
@@ -148,6 +164,44 @@ export class FeishuChannel implements ChannelAdapter {
   private releaseLock: (() => void) | undefined;
   /** The Typing reaction placed on each in-progress message, for removal when it lands. */
   private readonly typingReactions = new Map<string, string>();
+  /**
+   * open_id → display name, filled a chat at a time. The event does not carry the
+   * sender's name, and a knock list or a principal named `ou_…` is unreadable — the
+   * chat-members listing has the names and needs no scope the app does not already
+   * hold. A miss refetches once (a member who just joined), then honestly stays an id.
+   */
+  private readonly names = new Map<string, string>();
+
+  private async labelFor(openId: string, chatId: string): Promise<string> {
+    const known = this.names.get(openId);
+    if (known !== undefined) return known;
+    if (this.apiClient !== undefined) {
+      try {
+        let pageToken: string | undefined;
+        for (let page = 0; page < 5; page++) {
+          const response = await this.apiClient.im.chatMembers.get({
+            path: { chat_id: chatId },
+            params: {
+              member_id_type: "open_id",
+              page_size: 100,
+              ...(pageToken !== undefined ? { page_token: pageToken } : {}),
+            },
+          });
+          for (const member of response?.data?.items ?? []) {
+            if (member.member_id !== undefined && member.name !== undefined) {
+              this.names.set(member.member_id, member.name);
+            }
+          }
+          if (response?.data?.has_more !== true || response.data.page_token === undefined) break;
+          pageToken = response.data.page_token;
+        }
+      } catch (error) {
+        const detail = error instanceof Error ? error.message : String(error);
+        this.log(`channel feishu: member names unavailable (${detail})`);
+      }
+    }
+    return this.names.get(openId) ?? openId;
+  }
   /**
    * Message ids already handled, id → arrival ms. Feishu redelivers events across
    * reconnects and slow acks, and a redelivered event is a duplicate turn. Keyed on
@@ -237,13 +291,16 @@ export class FeishuChannel implements ChannelAdapter {
         if (text === "") return {};
         const identity = `feishu:${openId}`;
         this.chats.set(identity, chatId);
-        void onMessage({
-          identity,
-          chatKey: `feishu:${chatId}`,
-          ...(messageId !== undefined ? { messageId } : {}),
-          senderLabel: openId,
-          text,
-        })
+        void this.labelFor(openId, chatId)
+          .then(senderLabel =>
+            onMessage({
+              identity,
+              chatKey: `feishu:${chatId}`,
+              ...(messageId !== undefined ? { messageId } : {}),
+              senderLabel,
+              text,
+            })
+          )
           .then(reply => (reply ? this.send(identity, reply) : undefined))
           .catch((error: unknown) => {
             const detail = error instanceof Error ? error.message : String(error);
