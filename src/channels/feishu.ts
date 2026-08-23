@@ -510,12 +510,27 @@ export class FeishuChannel implements ChannelAdapter {
         this.log(`channel feishu: reply failed, posting to chat (${detail})`);
       }
     }
-    const response = await this.apiClient.im.message.create({
-      params: { receive_id_type: "chat_id" },
-      data: { receive_id: chatId, msg_type: msgType, content },
-    });
-    return response?.data?.message_id;
+    // Only the plain create retries: a failed *reply* is usually a withdrawn anchor,
+    // which three attempts will not un-withdraw, while a failed create is usually the
+    // network having a moment.
+    let last: unknown;
+    for (let attempt = 0; attempt < 3; attempt++) {
+      try {
+        const response = await this.apiClient.im.message.create({
+          params: { receive_id_type: "chat_id" },
+          data: { receive_id: chatId, msg_type: msgType, content },
+        });
+        return response?.data?.message_id;
+      } catch (error) {
+        last = error;
+        if (attempt < 2) await new Promise(resolve => setTimeout(resolve, 1000 * 2 ** attempt));
+      }
+    }
+    throw last;
   }
+
+  /** Feishu renders very long texts poorly and refuses truly long ones; split like a person would. */
+  private static readonly CHUNK = 8000;
 
   /**
    * Pushes to the chat itself, not to wherever the sender last spoke.
@@ -527,7 +542,14 @@ export class FeishuChannel implements ChannelAdapter {
   async sendToChat(chatKey: string, text: string, options?: PushOptions): Promise<void> {
     const chatId = chatKey.replace(/^feishu:/, "");
     if (chatId === "") return;
-    await this.post(chatId, "text", JSON.stringify({ text }), options?.replyTo);
+    for (let at = 0; at < text.length; at += FeishuChannel.CHUNK) {
+      await this.post(
+        chatId,
+        "text",
+        JSON.stringify({ text: text.slice(at, at + FeishuChannel.CHUNK) }),
+        options?.replyTo
+      );
+    }
   }
 
   async postTaskCard(
