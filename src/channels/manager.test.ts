@@ -497,6 +497,62 @@ test("push routes a line through the named adapter to the identity", async () =>
   assert.deepEqual(adapter.sent, [{ identity: "telegram:7", text: "You're in." }]);
 });
 
+test("the digest verbs are decisions, answered on the wire; a sentence about the digest is a task", async () => {
+  const { parseDigestRequest } = await import("./manager.ts");
+  assert.deepEqual(parseDigestRequest("早报"), { kind: "now" });
+  assert.deepEqual(parseDigestRequest("digest"), { kind: "now" });
+  assert.deepEqual(parseDigestRequest("早报 8点"), { kind: "schedule", hour: 8 });
+  assert.deepEqual(parseDigestRequest("digest at 21"), { kind: "schedule", hour: 21 });
+  assert.deepEqual(parseDigestRequest("早报 关"), { kind: "off" });
+  assert.equal(parseDigestRequest("早报什么时候发"), undefined, "a sentence is not a command");
+  assert.equal(parseDigestRequest("digest at 25"), undefined, "25 is not an hour");
+
+  const adapter = testAdapter();
+  const calls: string[] = [];
+  const manager = new ChannelManager({
+    mayDrive: () => true,
+    ask: async (_a, text) => {
+      calls.push(`turn:${text}`);
+      return "x";
+    },
+    digest: {
+      build: chatKey => {
+        calls.push(`build:${chatKey}`);
+        return "Daily digest\nClosed (24h): nothing";
+      },
+      schedule: (_chatKey, hour) => {
+        calls.push(`schedule:${hour}`);
+        return "set";
+      },
+      off: () => {
+        calls.push("off");
+        return "off";
+      },
+    },
+    log: () => {},
+  });
+  manager.register(adapter, true, "test");
+  await started(manager);
+
+  const now = await adapter.inject({
+    identity: "feishu:ou_1",
+    chatKey: "feishu:oc_room",
+    senderLabel: "c",
+    text: "早报",
+  });
+  assert.match(now ?? "", /Daily digest/);
+  await adapter.inject({ identity: "feishu:ou_1", chatKey: "feishu:oc_room", senderLabel: "c", text: "早报 8点" });
+  await adapter.inject({ identity: "feishu:ou_1", chatKey: "feishu:oc_room", senderLabel: "c", text: "digest off" });
+  await adapter.inject({ identity: "feishu:ou_1", chatKey: "feishu:oc_room", senderLabel: "c", text: "早报什么时候发" });
+  await manager.idle();
+  assert.deepEqual(calls, [
+    "build:feishu:oc_room",
+    "schedule:8",
+    "off",
+    "turn:早报什么时候发",
+  ]);
+});
+
 test("parseApprovalReply reads only a whole-message verb", async () => {
   const { parseApprovalReply } = await import("./manager.ts");
   assert.equal(parseApprovalReply("allow"), "once");

@@ -216,6 +216,16 @@ export interface ChannelManagerDeps {
    */
   screenshot?: (agentName: string | undefined) => Promise<string | undefined>;
   /**
+   * The chat's daily report: what closed, what is in flight, what it cost, what waits
+   * on a person. `build` answers "早报" now; `schedule`/`off` manage the standing one.
+   * Each returns the line the chat sees.
+   */
+  digest?: {
+    build: (chatKey: string) => string;
+    schedule: (chatKey: string, hour: number) => string;
+    off: (chatKey: string) => string;
+  };
+  /**
    * The team board, when channel requests should live on it as tasks.
    *
    * `open` returns the board id shown on the card, so "t12" means the same thing in
@@ -321,6 +331,25 @@ export function knockRefusal(identity: string): string {
 export function parseBind(text: string): string | undefined {
   const match = /^(?:bind|绑定)[\s::]+([a-z0-9-]{4,12})$/i.exec(text.trim());
   return match === null ? undefined : match[1]!.toUpperCase();
+}
+
+export type DigestRequest = { kind: "now" } | { kind: "schedule"; hour: number } | { kind: "off" };
+
+/**
+ * A whole message asking about the digest: "早报" reads it now, "早报 8点" schedules
+ * it, "早报 关" stops it. Whole-message like every other verb here, and for the same
+ * reason: a sentence *about* the digest is a task, not a command.
+ */
+export function parseDigestRequest(text: string): DigestRequest | undefined {
+  const t = text.trim().toLowerCase();
+  if (["早报", "日报", "digest"].includes(t)) return { kind: "now" };
+  if (/^(?:早报|日报|digest)\s*(?:off|关|停止?)$/.test(t)) return { kind: "off" };
+  const scheduled = /^(?:早报|日报|digest)\s*(?:at\s*)?(\d{1,2})\s*[点时]?$/.exec(t);
+  if (scheduled !== null) {
+    const hour = Number(scheduled[1]);
+    if (hour >= 0 && hour <= 23) return { kind: "schedule", hour };
+  }
+  return undefined;
 }
 
 export class ChannelManager {
@@ -443,6 +472,17 @@ export class ChannelManager {
     return adapter.send(identity, text).catch(() => {});
   }
 
+  /**
+   * Pushes a line to a chat by its chatKey alone — the scheduled-digest path, where
+   * no inbound message chose the adapter. The chatKey's prefix is the adapter's name,
+   * which is the naming convention every adapter already follows.
+   */
+  pushToChat(chatKey: string, text: string): Promise<void> {
+    const adapter = this.adapters.find(a => chatKey.startsWith(`${a.name}:`));
+    if (adapter?.sendToChat === undefined) return Promise.resolve();
+    return adapter.sendToChat(chatKey, text).catch(() => {});
+  }
+
   private async handle(
     adapter: ChannelAdapter,
     message: InboundMessage
@@ -484,6 +524,16 @@ export class ChannelManager {
             "or the turn moved on. Send the request again if it still needs doing."
         );
       }
+    }
+
+    // The digest verbs are decisions about reporting, not work: answered on the wire.
+    const digestRequest = parseDigestRequest(message.text);
+    if (digestRequest !== undefined && this.deps.digest !== undefined) {
+      const chatKey = message.chatKey ?? message.identity;
+      if (digestRequest.kind === "now") return this.deps.digest.build(chatKey);
+      if (digestRequest.kind === "schedule")
+        return this.deps.digest.schedule(chatKey, digestRequest.hour);
+      return this.deps.digest.off(chatKey);
     }
 
     // A dropped file is a delivery, not an instruction: it is stored where the agents

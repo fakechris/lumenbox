@@ -142,7 +142,7 @@ import { HostRunner, hostRunnerConfig } from "../host/host-runner.ts";
 import { ALL_TOOLS } from "../host/orchestrator.ts";
 import { PRESET_MODELS, providerNames, resolveProvider, testProvider } from "../host/provider.ts";
 import { Principals, roleAtLeast, type Principal, type Role } from "../host/principals.ts";
-import { isTaskStatus } from "../host/tasks.ts";
+import { isLive, isTaskStatus } from "../host/tasks.ts";
 import { Vault, type Grant } from "../host/vault.ts";
 import { seedStarterSkills } from "../host/starter-skills.ts";
 import { ActivityLog } from "./activity.ts";
@@ -334,8 +334,78 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
     return Array.from(randomBytes(6), byte => alphabet[byte % alphabet.length]!).join("");
   };
 
+  // The chat's day, from the objects that already record it: the board for what
+  // happened, usage for what it cost, the policy gate for what waits on a person.
+  // Deliberately not a model call — a digest that could hallucinate its numbers
+  // would poison the one place those numbers are read daily.
+  const digestFor = (chatKey: string): string => {
+    const conversation = conversationIdFor(chatKey);
+    const all = (orchestrator.tasks?.list() ?? []).filter(
+      task => task.conversation === conversation
+    );
+    const since = Date.now() - 24 * 3_600_000;
+    const nameOf = (id: string) =>
+      registry.tryGet(id)?.profile.name ??
+      principals.list().find(person => person.id === id)?.name ??
+      id;
+    const closed = all.filter(
+      task => !isLive(task.status) && Date.parse(task.updatedAt) >= since
+    );
+    const live = all.filter(task => isLive(task.status));
+    const lines = ["Daily digest"];
+    lines.push(
+      closed.length > 0
+        ? `Closed (24h): ${closed.map(task => `${task.id} ${task.title}`).join(" · ")}`
+        : "Closed (24h): nothing"
+    );
+    if (live.length > 0) {
+      lines.push(
+        `In flight: ${live
+          .map(
+            task =>
+              `${task.id} [${task.status}]${task.assigneeId !== undefined ? ` @${nameOf(task.assigneeId)}` : ""} ${task.title}`
+          )
+          .join(" · ")}`
+      );
+    }
+    const requesters = [
+      ...new Set(all.filter(task => Date.parse(task.updatedAt) >= since).map(task => task.requester)),
+    ];
+    const spend = requesters
+      .map(id => ({ id, tokens: orchestrator.usage.spentSincePrincipal(since, id) }))
+      .filter(entry => entry.tokens > 0);
+    if (spend.length > 0) {
+      lines.push(
+        `Spend (24h): ${spend
+          .map(entry => `${nameOf(entry.id)} ~${Math.round(entry.tokens / 1000)}k tokens`)
+          .join(", ")}`
+      );
+    }
+    const pending = orchestrator.policy.pending();
+    if (pending.length > 0) {
+      lines.push(
+        `Waiting on a person: ${pending.length} approval${pending.length === 1 ? "" : "s"} ` +
+          `(${[...new Set(pending.map(item => item.agentName))].join(", ")})`
+      );
+    }
+    return lines.join("\n");
+  };
+
   const channels = new ChannelManager({
     mayDrive: identity => roleAtLeast(principals.roleOf(identity), "driver"),
+    digest: {
+      build: digestFor,
+      schedule: (chatKey, hour) => {
+        saveConfig({ digests: { [chatKey]: hour } });
+        log(`digest: ${chatKey} daily at ${hour}:00`);
+        return `Daily digest set for ${hour}:00. "早报" reads it any time; "早报 关" stops it.`;
+      },
+      off: chatKey => {
+        saveConfig({ digests: { [chatKey]: null } });
+        log(`digest: ${chatKey} off`);
+        return "Daily digest off for this chat.";
+      },
+    },
     knock: request => {
       knocks.set(request.identity, { ...request, at: new Date().toISOString() });
       log(`channel ${request.channel}: ${request.senderLabel} (${request.identity}) knocked`);
@@ -580,6 +650,22 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
     );
   }
   channels.start();
+
+  // The standing digests: checked a few times an hour, sent once per chat per day.
+  // The sent-marker is in memory, so the one failure mode is a duplicate digest after
+  // a restart in the same hour — the cheap side of that trade.
+  const digestsSent = new Map<string, string>();
+  const digestTimer = setInterval(() => {
+    const configured = loadConfig().digests ?? {};
+    const now = new Date();
+    const today = `${now.getFullYear()}-${now.getMonth() + 1}-${now.getDate()}`;
+    for (const [chatKey, hour] of Object.entries(configured)) {
+      if (now.getHours() !== hour || digestsSent.get(chatKey) === today) continue;
+      digestsSent.set(chatKey, today);
+      void channels.pushToChat(chatKey, digestFor(chatKey));
+    }
+  }, 10 * 60_000);
+  digestTimer.unref?.();
 
   orchestrator.policy.onApprovalRequested = approval => {
     announceApproval(approval);
