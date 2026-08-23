@@ -418,6 +418,42 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
       }
       return orchestrator.replySince(agent.id, before, conversation);
     },
+    // The chat's outbox on the box: list, download, and — once pushed — move to
+    // sent/, so nothing is delivered twice and nothing undelivered is lost. A chat
+    // that never used files has no directory, and that is the cheap ordinary case.
+    collectOutbox: async chatKey => {
+      const client = orchestrator.boxClient();
+      if (client === undefined) return [];
+      const dir = `${WORK_DIR}/chats/${conversationIdFor(chatKey)}/outbox`;
+      let entries: { name: string; type: string; size: number }[];
+      try {
+        entries = (await client.listDir(dir)).entries;
+      } catch {
+        return [];
+      }
+      const files: { name: string; base64: string }[] = [];
+      for (const entry of entries) {
+        if (entry.type !== "file") continue;
+        if (entry.size > 25 * 1024 * 1024) {
+          log(`outbox: ${entry.name} skipped (${entry.size} bytes is past the 25MB cap)`);
+          continue;
+        }
+        try {
+          files.push({ name: entry.name, base64: (await client.downloadFile(`${dir}/${entry.name}`)).base64 });
+        } catch (error) {
+          log(`outbox: could not read ${entry.name}: ${error instanceof Error ? error.message : String(error)}`);
+        }
+      }
+      // Smallest first: if a push dies midway, the cheap ones made it out.
+      return files.sort((a, b) => a.base64.length - b.base64.length);
+    },
+    outboxDelivered: async (chatKey, names) => {
+      const client = orchestrator.boxClient();
+      if (client === undefined) return;
+      const dir = `${WORK_DIR}/chats/${conversationIdFor(chatKey)}/outbox`;
+      const quoted = names.map(name => `'${name.replace(/'/g, `'\\''`)}'`).join(" ");
+      await client.exec(`mkdir -p '${dir}/../sent' && cd '${dir}' && mv -- ${quoted} ../sent/`);
+    },
     // The desktop as it is right now, for "屏幕" and for the finished-task poster.
     // Captured with the agent's own owner token, the same proof a turn presents; an
     // agent whose desktop never started answers undefined and the chat is told so.

@@ -85,6 +85,11 @@ function cardAdapter(): ReturnType<typeof testAdapter> & {
       statuses.push({ id, status });
       return Promise.resolve();
     },
+    sentFiles: [] as { name: string; replyTo?: string }[],
+    sendFile(this: { sentFiles: { name: string; replyTo?: string }[] }, _chatKey: string, name: string, _base64: string, options?: { replyTo?: string }) {
+      this.sentFiles.push({ name, ...anchored(options?.replyTo) });
+      return Promise.resolve();
+    },
   });
 }
 
@@ -570,6 +575,46 @@ test("everything a task says sits under the message that asked for it", async ()
   await plain.idle();
   assert.equal(bare.chatSent[0]!.replyTo, undefined);
   assert.deepEqual(bare.statuses, []);
+});
+
+test("a finished task ships the outbox — images as images, files as files, delivered once", async () => {
+  const adapter = cardAdapter();
+  const delivered: string[][] = [];
+  const manager = new ChannelManager({
+    mayDrive: () => true,
+    ask: async () => "here you go",
+    collectOutbox: async chatKey => {
+      assert.equal(chatKey, "feishu:oc_room");
+      return [
+        { name: "chart.png", base64: "cGl4ZWxz" },
+        { name: "report.pdf", base64: "cGRm" },
+      ];
+    },
+    outboxDelivered: async (_chatKey, names) => {
+      delivered.push(names);
+    },
+    log: () => {},
+  });
+  manager.register(adapter, true, "test");
+  await started(manager);
+
+  await adapter.inject({
+    identity: "feishu:ou_1",
+    chatKey: "feishu:oc_room",
+    messageId: "om_files",
+    senderLabel: "c",
+    text: "make the report",
+  });
+  await manager.idle();
+
+  assert.deepEqual(adapter.images, [
+    { chatKey: "feishu:oc_room", base64: "cGl4ZWxz", replyTo: "om_files" },
+  ]);
+  assert.deepEqual(
+    (adapter as unknown as { sentFiles: { name: string; replyTo?: string }[] }).sentFiles,
+    [{ name: "report.pdf", replyTo: "om_files" }]
+  );
+  assert.deepEqual(delivered, [["chart.png", "report.pdf"]]);
 });
 
 test("an approval goes out as a card where the wire has buttons, and a press answers it", async () => {

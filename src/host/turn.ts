@@ -811,6 +811,7 @@ export async function runTurn(
       agentsRoot: registry.root,
       hasBox: box !== undefined,
       vision: provider.vision,
+      conversation,
     });
   const promptParts = buildParts(memoryRecall);
 

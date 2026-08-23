@@ -109,6 +109,8 @@ export interface ChannelAdapter {
    * the quick tasks that never earn a card, and a loud mark when something broke.
    */
   noteStatus?(messageId: string, status: "working" | "done" | "failed"): Promise<void>;
+  /** Posts a named file (base64 bytes) to a chat. Absent means the wire cannot carry one. */
+  sendFile?(chatKey: string, name: string, base64: string, options?: PushOptions): Promise<void>;
   /**
    * Posts a consent request with buttons to wherever this identity's messages come
    * from. Absent means the wire has no buttons and the text-verb path is used.
@@ -209,6 +211,18 @@ export interface ChannelManagerDeps {
    * one thing no other chat product can put in a group.
    */
   screenshot?: (agentName: string | undefined) => Promise<string | undefined>;
+  /**
+   * The files a finished turn left in this chat's outbox — name and bytes, smallest
+   * first. Collected once per task, after the reply lands; an empty answer is the
+   * ordinary case and costs one directory listing.
+   */
+  collectOutbox?: (chatKey: string) => Promise<{ name: string; base64: string }[]>;
+  /**
+   * Marks collected files delivered — moved to sent/ — after their pushes succeeded.
+   * Only what was actually pushed: a file whose push failed stays in the outbox and
+   * goes out with the next task rather than vanishing.
+   */
+  outboxDelivered?: (chatKey: string, names: string[]) => Promise<void>;
   /**
    * Redeems an invite code for this identity and returns the line to send back —
    * "you're in as driver", or why not. Reached *before* the allow check, because the
@@ -609,6 +623,36 @@ export class ChannelManager {
       await deliver(
         reply.trim() === "" ? "Done. (The agent finished without saying anything.)" : reply
       );
+      // Whatever the turn left in the chat's outbox follows the reply — images shown
+      // as images, everything else as a file. What was pushed is marked delivered;
+      // what failed stays in the outbox for the next task rather than vanishing.
+      if (this.deps.collectOutbox !== undefined) {
+        try {
+          const files = await this.deps.collectOutbox(chatKey);
+          const delivered: string[] = [];
+          for (const file of files) {
+            try {
+              const isImage = /\.(png|jpe?g|webp|gif|bmp)$/i.test(file.name);
+              if (isImage && adapter.sendImage !== undefined) {
+                await adapter.sendImage(chatKey, file.base64, anchor);
+              } else if (adapter.sendFile !== undefined) {
+                await adapter.sendFile(chatKey, file.name, file.base64, anchor);
+              } else {
+                await deliver(`(${file.name} is ready on the box; this channel cannot carry files.)`);
+                continue;
+              }
+              delivered.push(file.name);
+            } catch (error) {
+              const detail = error instanceof Error ? error.message : String(error);
+              this.deps.log(`channel ${adapter.name}: file push failed for ${file.name} (${detail})`);
+            }
+          }
+          if (delivered.length > 0) await this.deps.outboxDelivered?.(chatKey, delivered);
+        } catch (error) {
+          const detail = error instanceof Error ? error.message : String(error);
+          this.deps.log(`channel ${adapter.name}: outbox failed (${detail})`);
+        }
+      }
       // The desk as the task left it: evidence at a glance. Only for work long enough
       // to have been acknowledged — a quick answer does not need a poster — and never
       // a failure: the reply already landed, and its record is the transcript.

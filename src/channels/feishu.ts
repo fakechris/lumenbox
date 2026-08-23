@@ -155,6 +155,12 @@ export class FeishuChannel implements ChannelAdapter {
               data: { image_type: string; image: Buffer };
             }) => Promise<{ image_key?: string; data?: { image_key?: string } } | undefined>;
           };
+          file: {
+            /** Uploads a file; the SDK's multipart reader wants a stream with a name. */
+            create: (options: {
+              data: { file_type: string; file_name: string; file: NodeJS.ReadableStream };
+            }) => Promise<{ file_key?: string; data?: { file_key?: string } } | undefined>;
+          };
         };
       }
     | undefined;
@@ -480,6 +486,40 @@ export class FeishuChannel implements ChannelAdapter {
         content: JSON.stringify(renderApprovalCard(card)),
       },
     });
+  }
+
+  /**
+   * A named file into the chat: upload, then a file message referencing the key.
+   *
+   * The typed-document routing (pdf/doc/xls/ppt get their own file_type, everything
+   * else is a stream) is what makes Feishu render a preview instead of a blob.
+   */
+  async sendFile(
+    chatKey: string,
+    name: string,
+    base64: string,
+    options?: PushOptions
+  ): Promise<void> {
+    const chatId = chatKey.replace(/^feishu:/, "");
+    if (chatId === "" || this.apiClient === undefined) return;
+    const extension = name.toLowerCase().split(".").pop() ?? "";
+    const fileType = ["pdf", "doc", "docx", "xls", "xlsx", "ppt", "pptx", "mp4", "opus"].includes(
+      extension
+    )
+      ? extension
+      : "stream";
+    const { Readable } = await import("node:stream");
+    const stream = Readable.from(Buffer.from(base64, "base64")) as NodeJS.ReadableStream & {
+      path?: string;
+    };
+    // The SDK's multipart encoder reads the name off the stream, like fs streams have.
+    stream.path = name;
+    const uploaded = await this.apiClient.im.file.create({
+      data: { file_type: fileType, file_name: name, file: stream },
+    });
+    const fileKey = uploaded?.file_key ?? uploaded?.data?.file_key;
+    if (fileKey === undefined) throw new Error("feishu file upload returned no key");
+    await this.post(chatId, "file", JSON.stringify({ file_key: fileKey }), options?.replyTo);
   }
 
   /** Upload, then reference: Feishu takes bytes first and a key in the message. */

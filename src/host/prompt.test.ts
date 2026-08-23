@@ -146,7 +146,9 @@ test("the prompt's sections have an order, and it is the documented one", () => 
   assert.deepEqual(
     VOLATILE_SECTIONS.map(section => section.name),
     // tasks sits beside plan: both are current intent, the board's just shared.
-    ["plan", "tasks", "memory", "skills", "history", "shared-memory", "team"]
+    // chat-files follows them: where deliverables go is part of this turn's charge,
+    // known before the background is read.
+    ["plan", "tasks", "chat-files", "memory", "skills", "history", "shared-memory", "team"]
   );
 
   // The one that carries an argument: an agent meets its own objective before its background. Put
@@ -207,4 +209,30 @@ test("the stable tier holds nothing that changes between turns", () => {
     transcript: [{ role: "user" as const, kind: "summary" as const, covers: 5, text: "s", at: "" }],
   }).stable;
   assert.equal(first, changed);
+});
+
+// ── the file exchange between an outside chat and the box ──────────────────────────────
+
+test("a chat conversation with a box is told its file-exchange convention; the team room is not", () => {
+  const base = {
+    agent: { id: "a", profile: { name: "Ada", description: "", createdAt: "", updatedAt: "" } } as never,
+    teammates: [],
+    memory: [],
+    resolution: undefined,
+    agentsRoot: "/tmp",
+    hasBox: true,
+  };
+
+  const chat = buildSystemPrompt({ ...base, conversation: "feishu-oc_room" });
+  assert.match(chat, /\/home\/box\/work\/chats\/feishu-oc_room\/outbox/);
+  assert.match(chat, /posted into the chat when your turn ends/);
+  assert.match(chat, /a path pasted into your reply is not a deliverable/i);
+
+  // The team room has no outside audience; without a box there is no directory.
+  assert.doesNotMatch(buildSystemPrompt({ ...base }), /file exchange/);
+  assert.doesNotMatch(buildSystemPrompt({ ...base, conversation: "main" }), /file exchange/);
+  assert.doesNotMatch(
+    buildSystemPrompt({ ...base, hasBox: false, conversation: "feishu-oc_room" }),
+    /file exchange/
+  );
 });
