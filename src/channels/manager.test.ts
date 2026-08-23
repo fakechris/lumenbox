@@ -553,6 +553,43 @@ test("the digest verbs are decisions, answered on the wire; a sentence about the
   ]);
 });
 
+test("reading the chat's scope is open; binding it is an admin's call", async () => {
+  const adapter = testAdapter();
+  const calls: string[] = [];
+  const manager = new ChannelManager({
+    mayDrive: () => true,
+    mayAdmin: identity => identity === "feishu:boss",
+    ask: async (_a, text) => {
+      calls.push(`turn:${text}`);
+      return "x";
+    },
+    chatScope: {
+      show: () => "This chat is bound to scope \"vendor\".",
+      bind: (_chatKey, name) => {
+        calls.push(`bind:${name}`);
+        return "Bound.";
+      },
+      off: () => {
+        calls.push("off");
+        return "Unbound.";
+      },
+    },
+    log: () => {},
+  });
+  manager.register(adapter, true, "test");
+  await started(manager);
+  const at = (identity: string, text: string) =>
+    adapter.inject({ identity, chatKey: "feishu:oc_room", senderLabel: "x", text });
+
+  assert.match((await at("feishu:member", "scope")) ?? "", /vendor/, "anyone may read");
+  assert.match((await at("feishu:member", "scope vendor-work")) ?? "", /admin's call/);
+  assert.match((await at("feishu:boss", "scope vendor-work")) ?? "", /Bound/);
+  assert.match((await at("feishu:boss", "scope off")) ?? "", /Unbound/);
+  await at("feishu:member", "scope out the venue options");
+  await manager.idle();
+  assert.deepEqual(calls, ["bind:vendor-work", "off", "turn:scope out the venue options"]);
+});
+
 test("parseApprovalReply reads only a whole-message verb", async () => {
   const { parseApprovalReply } = await import("./manager.ts");
   assert.equal(parseApprovalReply("allow"), "once");

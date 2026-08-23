@@ -216,6 +216,21 @@ export interface ChannelManagerDeps {
    */
   screenshot?: (agentName: string | undefined) => Promise<string | undefined>;
   /**
+   * Whether this identity may change what the system is — bind scopes, for now.
+   * Separate from mayDrive because a driver commands agents inside the rules and an
+   * admin changes the rules; conflating them is how a permission model goes soft.
+   */
+  mayAdmin?: (identity: string) => boolean;
+  /**
+   * This chat's scope binding: what bounds every task the chat drives. Each returns
+   * the line the chat sees. Bind and unbind are admin verbs, checked by the manager.
+   */
+  chatScope?: {
+    show: (chatKey: string) => string;
+    bind: (chatKey: string, name: string) => string;
+    off: (chatKey: string) => string;
+  };
+  /**
    * The chat's daily report: what closed, what is in flight, what it cost, what waits
    * on a person. `build` answers "早报" now; `schedule`/`off` manage the standing one.
    * Each returns the line the chat sees.
@@ -331,6 +346,18 @@ export function knockRefusal(identity: string): string {
 export function parseBind(text: string): string | undefined {
   const match = /^(?:bind|绑定)[\s::]+([a-z0-9-]{4,12})$/i.exec(text.trim());
   return match === null ? undefined : match[1]!.toUpperCase();
+}
+
+export type ScopeRequest = { kind: "show" } | { kind: "bind"; name: string } | { kind: "off" };
+
+/** A whole message about this chat's scope: `scope` shows, `scope <name>` binds, `scope off` unbinds. */
+export function parseScopeRequest(text: string): ScopeRequest | undefined {
+  const t = text.trim();
+  if (/^scope$/i.test(t)) return { kind: "show" };
+  if (/^scope\s+(?:off|解绑)$/i.test(t)) return { kind: "off" };
+  const bind = /^scope\s+([\p{L}\p{N}._-]{1,60})$/iu.exec(t);
+  if (bind !== null) return { kind: "bind", name: bind[1]! };
+  return undefined;
 }
 
 export type DigestRequest = { kind: "now" } | { kind: "schedule"; hour: number } | { kind: "off" };
@@ -524,6 +551,20 @@ export class ChannelManager {
             "or the turn moved on. Send the request again if it still needs doing."
         );
       }
+    }
+
+    // The scope verbs change what every task in this chat may do: reading is open,
+    // binding is an admin's call.
+    const scopeRequest = parseScopeRequest(message.text);
+    if (scopeRequest !== undefined && this.deps.chatScope !== undefined) {
+      const chatKey = message.chatKey ?? message.identity;
+      if (scopeRequest.kind === "show") return this.deps.chatScope.show(chatKey);
+      if (this.deps.mayAdmin?.(message.identity) !== true) {
+        return "Binding a scope changes what every task in this chat may do — that is an admin's call.";
+      }
+      return scopeRequest.kind === "bind"
+        ? this.deps.chatScope.bind(chatKey, scopeRequest.name)
+        : this.deps.chatScope.off(chatKey);
     }
 
     // The digest verbs are decisions about reporting, not work: answered on the wire.

@@ -393,6 +393,45 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
 
   const channels = new ChannelManager({
     mayDrive: identity => roleAtLeast(principals.roleOf(identity), "driver"),
+    mayAdmin: identity => roleAtLeast(principals.roleOf(identity), "admin"),
+    // One scope per chat: binding moves the chat, it does not accumulate. The scope
+    // itself is created and given tools in Settings; the chat only chooses which one
+    // bounds it.
+    chatScope: {
+      show: chatKey => {
+        const bound = orchestrator.scopes?.boundTo(conversationIdFor(chatKey), conversationIdFor);
+        if (bound === undefined) {
+          return 'This chat is not bound to a scope. An admin binds one with "scope <name>".';
+        }
+        const tools = bound.tools !== undefined ? ` Tools: ${bound.tools.join(", ")}.` : "";
+        return `This chat is bound to scope "${bound.name}".${tools}`;
+      },
+      bind: (chatKey, name) => {
+        const scopes = orchestrator.scopes;
+        if (scopes === undefined) return "Scopes are not available on this installation.";
+        const all = scopes.list();
+        const target = all.find(scope => scope.name === name || scope.id === name);
+        if (target === undefined) {
+          const names = all.map(scope => scope.name).join(", ");
+          return `No scope named "${name}". ${names !== "" ? `Existing: ${names}.` : "Create one under Settings → Scopes first."}`;
+        }
+        for (const scope of all) scope.chats = (scope.chats ?? []).filter(key => key !== chatKey);
+        target.chats = [...(target.chats ?? []), chatKey];
+        scopes.save(all);
+        log(`scope: ${chatKey} bound to ${target.id}`);
+        const tools = target.tools !== undefined ? ` Tools narrow to: ${target.tools.join(", ")}.` : "";
+        return `Bound. Every task in this chat now runs inside "${target.name}".${tools}`;
+      },
+      off: chatKey => {
+        const scopes = orchestrator.scopes;
+        if (scopes === undefined) return "Scopes are not available on this installation.";
+        const all = scopes.list();
+        for (const scope of all) scope.chats = (scope.chats ?? []).filter(key => key !== chatKey);
+        scopes.save(all);
+        log(`scope: ${chatKey} unbound`);
+        return "Unbound. Tasks in this chat run with each agent's own tools again.";
+      },
+    },
     digest: {
       build: digestFor,
       schedule: (chatKey, hour) => {

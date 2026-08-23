@@ -81,3 +81,32 @@ test("a scope's tool list replaces the agent's own when both are set", () => {
   assert.deepEqual(effectiveTools(["bash", "read_file"]), ["bash", "read_file"], "in a scope, the scope defines the tools");
   assert.deepEqual(effectiveTools(undefined), profileTools, "with no scope, the profile's own list stands");
 });
+
+test("a chat binds to one scope, survives the file, and narrows by intersection", async () => {
+  const { narrowTools } = await import("./scopes.ts");
+  const normalize = (chatKey: string) => chatKey.replace(/[^a-zA-Z0-9._-]/g, "-");
+
+  const { store, path, cleanup } = tempStore();
+  try {
+    store.save([
+      { id: "vendor", name: "Vendor work", tools: ["bash", "read_file"], secretIds: [], chats: ["feishu:oc_room"] },
+      { id: "open", name: "Open", secretIds: [] },
+    ]);
+
+    const bound = store.boundTo(normalize("feishu:oc_room"), normalize);
+    assert.equal(bound?.id, "vendor", "found through the normalized conversation id");
+    assert.equal(store.boundTo(normalize("feishu:oc_other"), normalize), undefined);
+
+    // The binding is in the file, not only in memory.
+    const reread = new ScopeStore(path);
+    assert.equal(reread.boundTo(normalize("feishu:oc_room"), normalize)?.id, "vendor");
+  } finally {
+    cleanup();
+  }
+
+  // The intersection rule: a chat scope bounds, it never grants.
+  assert.deepEqual(narrowTools(["bash", "computer"], ["bash", "read_file"]), ["bash"]);
+  assert.deepEqual(narrowTools(undefined, ["bash"]), ["bash"], "an unlimited agent is bounded");
+  assert.deepEqual(narrowTools(["bash"], undefined), ["bash"], "no binding changes nothing");
+  assert.equal(narrowTools(undefined, undefined), undefined, "nobody narrows: stays unlimited");
+});
