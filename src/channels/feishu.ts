@@ -114,10 +114,14 @@ export class FeishuChannel implements ChannelAdapter {
             }) => Promise<unknown>;
           };
           image: {
-            /** Uploads bytes; the returned key is what an image message references. */
+            /**
+             * Uploads bytes; the returned key is what an image message references.
+             * Verified live: the SDK returns `{image_key}` at the top level for this
+             * multipart call, unlike message.create which nests under `data`.
+             */
             create: (options: {
               data: { image_type: string; image: Buffer };
-            }) => Promise<{ data?: { image_key?: string } } | undefined>;
+            }) => Promise<{ image_key?: string; data?: { image_key?: string } } | undefined>;
           };
         };
       }
@@ -335,7 +339,7 @@ export class FeishuChannel implements ChannelAdapter {
     const uploaded = await this.apiClient.im.image.create({
       data: { image_type: "message", image: Buffer.from(base64, "base64") },
     });
-    const imageKey = uploaded?.data?.image_key;
+    const imageKey = uploaded?.image_key ?? uploaded?.data?.image_key;
     if (imageKey === undefined) throw new Error("feishu image upload returned no key");
     await this.apiClient.im.message.create({
       params: { receive_id_type: "chat_id" },
