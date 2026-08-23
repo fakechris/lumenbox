@@ -22,6 +22,7 @@ import type {
   InboundMessage,
   TaskCardState,
 } from "./manager.ts";
+import { acquireConsumerLock } from "./single-consumer.ts";
 
 /**
  * The consent request as a card: the original action verbatim in the body, the three
@@ -128,6 +129,8 @@ export class FeishuChannel implements ChannelAdapter {
     | undefined;
   /** The chat each identity last spoke in, for routing a reply or a notice back. */
   private readonly chats = new Map<string, string>();
+  /** Held while this process is the app's websocket consumer. */
+  private releaseLock: (() => void) | undefined;
   /**
    * Message ids already handled, id → arrival ms. Feishu redelivers events across
    * reconnects and slow acks, and a redelivered event is a duplicate turn. Keyed on
@@ -174,6 +177,9 @@ export class FeishuChannel implements ChannelAdapter {
   async start(
     onMessage: (message: InboundMessage) => Promise<string | undefined>
   ): Promise<void> {
+    // Before anything connects: a second consumer on the same app id would not fail,
+    // it would silently take half the events. Refused loudly instead.
+    this.releaseLock = acquireConsumerLock(this.appId);
     const lark = await import("@larksuiteoapi/node-sdk");
     const domain = process.env.FEISHU_DOMAIN === "lark" ? lark.Domain.Lark : lark.Domain.Feishu;
 
@@ -269,6 +275,8 @@ export class FeishuChannel implements ChannelAdapter {
 
   stop(): void {
     // The SDK offers no close; the process ending is the close. Said rather than hidden.
+    // The consumer lock is released though, so a successor can start without a takeover.
+    this.releaseLock?.();
   }
 
   async send(identity: string, text: string): Promise<void> {
