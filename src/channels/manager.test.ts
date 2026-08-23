@@ -46,34 +46,43 @@ function testAdapter(): ChannelAdapter & {
 
 /** An adapter that can address chats, render cards and show images, the way Feishu can. */
 function cardAdapter(): ReturnType<typeof testAdapter> & {
-  chatSent: { chatKey: string; text: string }[];
-  cards: { handle: string; card: TaskCardState }[];
-  images: { chatKey: string; base64: string }[];
+  chatSent: { chatKey: string; text: string; replyTo?: string }[];
+  cards: { handle: string; card: TaskCardState; replyTo?: string }[];
+  images: { chatKey: string; base64: string; replyTo?: string }[];
+  statuses: { id: string; status: string }[];
 } {
   const base = testAdapter();
-  const chatSent: { chatKey: string; text: string }[] = [];
-  const cards: { handle: string; card: TaskCardState }[] = [];
-  const images: { chatKey: string; base64: string }[] = [];
+  const chatSent: { chatKey: string; text: string; replyTo?: string }[] = [];
+  const cards: { handle: string; card: TaskCardState; replyTo?: string }[] = [];
+  const images: { chatKey: string; base64: string; replyTo?: string }[] = [];
+  const statuses: { id: string; status: string }[] = [];
   let nextHandle = 0;
+  const anchored = (replyTo: string | undefined) =>
+    replyTo === undefined ? {} : { replyTo };
   return Object.assign(base, {
     chatSent,
     cards,
     images,
-    sendToChat(chatKey: string, text: string) {
-      chatSent.push({ chatKey, text });
+    statuses,
+    sendToChat(chatKey: string, text: string, options?: { replyTo?: string }) {
+      chatSent.push({ chatKey, text, ...anchored(options?.replyTo) });
       return Promise.resolve();
     },
-    postTaskCard(_chatKey: string, card: TaskCardState) {
+    postTaskCard(_chatKey: string, card: TaskCardState, options?: { replyTo?: string }) {
       const handle = `card-${nextHandle++}`;
-      cards.push({ handle, card });
+      cards.push({ handle, card, ...anchored(options?.replyTo) });
       return Promise.resolve(handle);
     },
     updateTaskCard(handle: string, card: TaskCardState) {
       cards.push({ handle, card });
       return Promise.resolve();
     },
-    sendImage(chatKey: string, base64: string) {
-      images.push({ chatKey, base64 });
+    sendImage(chatKey: string, base64: string, options?: { replyTo?: string }) {
+      images.push({ chatKey, base64, ...anchored(options?.replyTo) });
+      return Promise.resolve();
+    },
+    noteStatus(id: string, status: string) {
+      statuses.push({ id, status });
       return Promise.resolve();
     },
   });
@@ -491,6 +500,76 @@ test("parseApprovalReply reads only a whole-message verb", async () => {
   assert.equal(parseApprovalReply("同意"), "once");
   assert.equal(parseApprovalReply("allow the download"), undefined, "a sentence is not a decision");
   assert.equal(parseApprovalReply("please do it"), undefined);
+});
+
+test("everything a task says sits under the message that asked for it", async () => {
+  const adapter = cardAdapter();
+  const manager = new ChannelManager({
+    mayDrive: () => true,
+    ask: async () => {
+      await sleep(50);
+      return "threaded answer";
+    },
+    ackAfterMs: 10,
+    log: () => {},
+  });
+  manager.register(adapter, true, "test");
+  await started(manager);
+
+  await adapter.inject({
+    identity: "feishu:ou_1",
+    chatKey: "feishu:oc_room",
+    messageId: "om_ask",
+    senderLabel: "chris",
+    text: "@Rex long thing",
+  });
+  await manager.idle();
+
+  assert.equal(adapter.cards[0]!.replyTo, "om_ask", "the card opens the topic");
+  assert.equal(adapter.chatSent[0]!.replyTo, "om_ask", "the answer lands in it");
+  assert.deepEqual(
+    adapter.statuses,
+    [
+      { id: "om_ask", status: "working" },
+      { id: "om_ask", status: "done" },
+    ],
+    "the asking message is marked while the work runs, and unmarked when it lands"
+  );
+
+  // A failure marks the message instead of leaving the working mark to rot.
+  const failing = new ChannelManager({
+    mayDrive: () => true,
+    ask: async () => {
+      throw new Error("boom");
+    },
+    log: () => {},
+  });
+  const adapter2 = cardAdapter();
+  failing.register(adapter2, true, "test");
+  await started(failing);
+  await adapter2.inject({
+    identity: "feishu:ou_1",
+    chatKey: "feishu:oc_room",
+    messageId: "om_2",
+    senderLabel: "c",
+    text: "do it",
+  });
+  await failing.idle();
+  assert.deepEqual(adapter2.statuses.at(-1), { id: "om_2", status: "failed" });
+
+  // No wire id, no anchoring — and nothing pretends otherwise.
+  const bare = cardAdapter();
+  const plain = new ChannelManager({
+    mayDrive: () => true,
+    ask: async () => "loose answer",
+    log: () => {},
+  });
+  plain.register(bare, true, "test");
+  await started(plain);
+  await bare.inject({ identity: "feishu:ou_1", chatKey: "feishu:oc_room", senderLabel: "c", text: "hi" });
+  await plain.idle();
+  assert.equal(bare.chatSent[0]!.replyTo, undefined);
+  assert.deepEqual(bare.statuses, []);
 });
 
 test("an approval goes out as a card where the wire has buttons, and a press answers it", async () => {

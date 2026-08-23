@@ -20,6 +20,7 @@ import type {
   ApprovalReply,
   ChannelAdapter,
   InboundMessage,
+  PushOptions,
   TaskCardState,
 } from "./manager.ts";
 import { acquireConsumerLock } from "./single-consumer.ts";
@@ -113,6 +114,20 @@ export class FeishuChannel implements ChannelAdapter {
               path: { message_id: string };
               data: { content: string };
             }) => Promise<unknown>;
+            /** A threaded reply: under a topic it stays there; on a chat message it opens one. */
+            reply: (options: {
+              path: { message_id: string };
+              data: { content: string; msg_type: string; reply_in_thread?: boolean };
+            }) => Promise<{ data?: { message_id?: string }; message_id?: string } | undefined>;
+          };
+          messageReaction: {
+            create: (options: {
+              path: { message_id: string };
+              data: { reaction_type: { emoji_type: string } };
+            }) => Promise<{ data?: { reaction_id?: string }; reaction_id?: string } | undefined>;
+            delete: (options: {
+              path: { message_id: string; reaction_id: string };
+            }) => Promise<unknown>;
           };
           image: {
             /**
@@ -131,6 +146,8 @@ export class FeishuChannel implements ChannelAdapter {
   private readonly chats = new Map<string, string>();
   /** Held while this process is the app's websocket consumer. */
   private releaseLock: (() => void) | undefined;
+  /** The Typing reaction placed on each in-progress message, for removal when it lands. */
+  private readonly typingReactions = new Map<string, string>();
   /**
    * Message ids already handled, id → arrival ms. Feishu redelivers events across
    * reconnects and slow acks, and a redelivered event is a duplicate turn. Keyed on
@@ -220,7 +237,13 @@ export class FeishuChannel implements ChannelAdapter {
         if (text === "") return {};
         const identity = `feishu:${openId}`;
         this.chats.set(identity, chatId);
-        void onMessage({ identity, chatKey: `feishu:${chatId}`, senderLabel: openId, text })
+        void onMessage({
+          identity,
+          chatKey: `feishu:${chatId}`,
+          ...(messageId !== undefined ? { messageId } : {}),
+          senderLabel: openId,
+          text,
+        })
           .then(reply => (reply ? this.send(identity, reply) : undefined))
           .catch((error: unknown) => {
             const detail = error instanceof Error ? error.message : String(error);
@@ -289,33 +312,95 @@ export class FeishuChannel implements ChannelAdapter {
   }
 
   /**
+   * One message out: a threaded reply when there is an anchor, a chat post when not.
+   *
+   * The reply carries `reply_in_thread`, so under a topic it stays there and on a
+   * plain chat message it opens one — which is the whole task-thread choreography in
+   * a single rule. A failed reply (anchor withdrawn, unreachable) degrades to a loose
+   * chat post: that cannot create a stray topic, so it is safe where a reply was not.
+   */
+  private async post(
+    chatId: string,
+    msgType: string,
+    content: string,
+    replyTo?: string
+  ): Promise<string | undefined> {
+    if (this.apiClient === undefined) return undefined;
+    if (replyTo !== undefined) {
+      try {
+        const response = await this.apiClient.im.message.reply({
+          path: { message_id: replyTo },
+          data: { content, msg_type: msgType, reply_in_thread: true },
+        });
+        return response?.data?.message_id ?? response?.message_id;
+      } catch (error) {
+        const detail = error instanceof Error ? error.message : String(error);
+        this.log(`channel feishu: reply failed, posting to chat (${detail})`);
+      }
+    }
+    const response = await this.apiClient.im.message.create({
+      params: { receive_id_type: "chat_id" },
+      data: { receive_id: chatId, msg_type: msgType, content },
+    });
+    return response?.data?.message_id;
+  }
+
+  /**
    * Pushes to the chat itself, not to wherever the sender last spoke.
    *
    * `send` routes through the identity's last chat, which is right for a notice to a
    * person and wrong for a task result: the person may have moved on to another group
    * while the task ran, and the answer belongs to the room that asked.
    */
-  async sendToChat(chatKey: string, text: string): Promise<void> {
+  async sendToChat(chatKey: string, text: string, options?: PushOptions): Promise<void> {
     const chatId = chatKey.replace(/^feishu:/, "");
-    if (chatId === "" || this.apiClient === undefined) return;
-    await this.apiClient.im.message.create({
-      params: { receive_id_type: "chat_id" },
-      data: { receive_id: chatId, msg_type: "text", content: JSON.stringify({ text }) },
-    });
+    if (chatId === "") return;
+    await this.post(chatId, "text", JSON.stringify({ text }), options?.replyTo);
   }
 
-  async postTaskCard(chatKey: string, card: TaskCardState): Promise<string | undefined> {
+  async postTaskCard(
+    chatKey: string,
+    card: TaskCardState,
+    options?: PushOptions
+  ): Promise<string | undefined> {
     const chatId = chatKey.replace(/^feishu:/, "");
-    if (chatId === "" || this.apiClient === undefined) return undefined;
-    const response = await this.apiClient.im.message.create({
-      params: { receive_id_type: "chat_id" },
-      data: {
-        receive_id: chatId,
-        msg_type: "interactive",
-        content: JSON.stringify(renderCard(card)),
-      },
-    });
-    return response?.data?.message_id;
+    if (chatId === "") return undefined;
+    return this.post(chatId, "interactive", JSON.stringify(renderCard(card)), options?.replyTo);
+  }
+
+  /**
+   * The state of the message that started a task, as a reaction on it: "Typing"
+   * while the work runs, removed when it lands, swapped for a cross when it broke.
+   * The cheap presence a wire without a typing API can still give.
+   */
+  async noteStatus(messageId: string, status: "working" | "done" | "failed"): Promise<void> {
+    if (this.apiClient === undefined) return;
+    if (status === "working") {
+      const response = await this.apiClient.im.messageReaction.create({
+        path: { message_id: messageId },
+        data: { reaction_type: { emoji_type: "Typing" } },
+      });
+      const reactionId = response?.data?.reaction_id ?? response?.reaction_id;
+      if (reactionId !== undefined) this.typingReactions.set(messageId, reactionId);
+      return;
+    }
+    const typing = this.typingReactions.get(messageId);
+    this.typingReactions.delete(messageId);
+    if (typing !== undefined) {
+      try {
+        await this.apiClient.im.messageReaction.delete({
+          path: { message_id: messageId, reaction_id: typing },
+        });
+      } catch {
+        // A stuck Typing mark is cosmetic; the failure mark below still lands.
+      }
+    }
+    if (status === "failed") {
+      await this.apiClient.im.messageReaction.create({
+        path: { message_id: messageId },
+        data: { reaction_type: { emoji_type: "CrossMark" } },
+      });
+    }
   }
 
   async updateTaskCard(handle: string, card: TaskCardState): Promise<void> {
@@ -341,7 +426,7 @@ export class FeishuChannel implements ChannelAdapter {
   }
 
   /** Upload, then reference: Feishu takes bytes first and a key in the message. */
-  async sendImage(chatKey: string, base64: string): Promise<void> {
+  async sendImage(chatKey: string, base64: string, options?: PushOptions): Promise<void> {
     const chatId = chatKey.replace(/^feishu:/, "");
     if (chatId === "" || this.apiClient === undefined) return;
     const uploaded = await this.apiClient.im.image.create({
@@ -349,13 +434,6 @@ export class FeishuChannel implements ChannelAdapter {
     });
     const imageKey = uploaded?.image_key ?? uploaded?.data?.image_key;
     if (imageKey === undefined) throw new Error("feishu image upload returned no key");
-    await this.apiClient.im.message.create({
-      params: { receive_id_type: "chat_id" },
-      data: {
-        receive_id: chatId,
-        msg_type: "image",
-        content: JSON.stringify({ image_key: imageKey }),
-      },
-    });
+    await this.post(chatId, "image", JSON.stringify({ image_key: imageKey }), options?.replyTo);
   }
 }

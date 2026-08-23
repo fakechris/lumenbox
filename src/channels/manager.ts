@@ -35,9 +35,23 @@ export interface InboundMessage {
    * (a Telegram chat id already is one).
    */
   chatKey?: string;
+  /**
+   * The wire's own id for this message, when it has one. It is what a reply anchors
+   * to and what a status reaction attaches to. One rule downstream: everything a task
+   * says is anchored to the message that asked for it — in a main chat that opens a
+   * topic, inside a topic it stays there. The *conversation* stays keyed on the chat
+   * either way: context belongs to the room, and a reply inside a task's topic must
+   * reach the turn that is running, not open a parallel one.
+   */
+  messageId?: string;
   /** For a person reading the activity feed: a name, not an id, where the wire has one. */
   senderLabel: string;
   text: string;
+}
+
+/** Where a push should sit: anchored under a message, or loose in the chat. */
+export interface PushOptions {
+  replyTo?: string;
 }
 
 /**
@@ -74,17 +88,27 @@ export interface ChannelAdapter {
    * `send` routes to wherever the identity last spoke, which may have moved to another
    * chat while a long task ran. Absent means the identity is the chat and `send` is right.
    */
-  sendToChat?(chatKey: string, text: string): Promise<void>;
+  sendToChat?(chatKey: string, text: string, options?: PushOptions): Promise<void>;
   /**
    * Posts a task card to a chat and returns the handle `updateTaskCard` accepts, or
    * undefined when the card could not be posted. Adapters without cards leave both
    * absent and get plain acknowledgement lines instead.
    */
-  postTaskCard?(chatKey: string, card: TaskCardState): Promise<string | undefined>;
+  postTaskCard?(
+    chatKey: string,
+    card: TaskCardState,
+    options?: PushOptions
+  ): Promise<string | undefined>;
   /** Rewrites a posted card in place. Updates are quiet; a chat is not notified for one. */
   updateTaskCard?(handle: string, card: TaskCardState): Promise<void>;
   /** Posts an image (base64 WebP) to a chat. Absent means the wire cannot show one. */
-  sendImage?(chatKey: string, base64: string): Promise<void>;
+  sendImage?(chatKey: string, base64: string, options?: PushOptions): Promise<void>;
+  /**
+   * Marks the message that started a task with its state — working, done, failed —
+   * however the wire can say that (Feishu: an emoji reaction). Cheap presence for
+   * the quick tasks that never earn a card, and a loud mark when something broke.
+   */
+  noteStatus?(messageId: string, status: "working" | "done" | "failed"): Promise<void>;
   /**
    * Posts a consent request with buttons to wherever this identity's messages come
    * from. Absent means the wire has no buttons and the text-verb path is used.
@@ -438,10 +462,11 @@ export class ChannelManager {
     adapter: ChannelAdapter,
     chatKey: string,
     identity: string,
-    line: string
+    line: string,
+    options?: PushOptions
   ): Promise<void> {
     try {
-      if (adapter.sendToChat !== undefined) await adapter.sendToChat(chatKey, line);
+      if (adapter.sendToChat !== undefined) await adapter.sendToChat(chatKey, line, options);
       else await adapter.send(identity, line);
     } catch (error) {
       const detail = error instanceof Error ? error.message : String(error);
@@ -456,6 +481,8 @@ export class ChannelManager {
     agentName: string | undefined
   ): Promise<void> {
     const chatKey = message.chatKey ?? message.identity;
+    const anchor: PushOptions | undefined =
+      message.messageId !== undefined ? { replyTo: message.messageId } : undefined;
     try {
       const image = await this.deps.screenshot!(agentName);
       if (image === undefined) {
@@ -463,7 +490,8 @@ export class ChannelManager {
           adapter,
           chatKey,
           message.identity,
-          "No desktop to show — the box may be off, or this agent has not started one."
+          "No desktop to show — the box may be off, or this agent has not started one.",
+          anchor
         );
         return;
       }
@@ -472,17 +500,19 @@ export class ChannelManager {
           adapter,
           chatKey,
           message.identity,
-          "This channel cannot show images; open the app to watch the desktop."
+          "This channel cannot show images; open the app to watch the desktop.",
+          anchor
         );
         return;
       }
-      await adapter.sendImage(chatKey, image);
+      await adapter.sendImage(chatKey, image, anchor);
     } catch (error) {
       await this.deliver(
         adapter,
         chatKey,
         message.identity,
-        error instanceof Error ? error.message : String(error)
+        error instanceof Error ? error.message : String(error),
+        anchor
       );
     }
   }
@@ -503,7 +533,16 @@ export class ChannelManager {
     text: string
   ): Promise<void> {
     const chatKey = message.chatKey ?? message.identity;
-    const deliver = (line: string) => this.deliver(adapter, chatKey, message.identity, line);
+    // Everything this task says sits under the message that asked for it.
+    const anchor: PushOptions | undefined =
+      message.messageId !== undefined ? { replyTo: message.messageId } : undefined;
+    const deliver = (line: string) =>
+      this.deliver(adapter, chatKey, message.identity, line, anchor);
+    const mark = (status: "working" | "done" | "failed") => {
+      if (message.messageId === undefined) return;
+      void adapter.noteStatus?.(message.messageId, status).catch(() => {});
+    };
+    mark("working");
 
     const ahead = this.deps.ahead?.(agentName, chatKey) ?? 0;
     const card: TaskCardState = {
@@ -525,7 +564,7 @@ export class ChannelManager {
       acknowledged = true;
       if (adapter.postTaskCard !== undefined) {
         try {
-          cardHandle = await adapter.postTaskCard(chatKey, { ...card });
+          cardHandle = await adapter.postTaskCard(chatKey, { ...card }, anchor);
           lastCardWrite = Date.now();
         } catch (error) {
           const detail = error instanceof Error ? error.message : String(error);
@@ -566,6 +605,7 @@ export class ChannelManager {
       const reply = await this.deps.ask(agentName, text, message.identity, chatKey, onProgress);
       clearTimeout(ackTimer);
       finishCard("done");
+      mark("done");
       await deliver(
         reply.trim() === "" ? "Done. (The agent finished without saying anything.)" : reply
       );
@@ -575,7 +615,7 @@ export class ChannelManager {
       if (acknowledged && adapter.sendImage !== undefined && this.deps.screenshot !== undefined) {
         try {
           const image = await this.deps.screenshot(agentName);
-          if (image !== undefined) await adapter.sendImage(chatKey, image);
+          if (image !== undefined) await adapter.sendImage(chatKey, image, anchor);
         } catch {
           // Nothing: the missing poster is not worth a line in the chat.
         }
@@ -583,6 +623,7 @@ export class ChannelManager {
     } catch (error) {
       clearTimeout(ackTimer);
       finishCard("failed");
+      mark("failed");
       await deliver(error instanceof Error ? error.message : String(error));
     }
   }
