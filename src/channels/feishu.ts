@@ -93,7 +93,16 @@ export function renderCard(card: TaskCardState): object {
     header: { title: { tag: "plain_text", content: card.title }, template },
     elements: [
       { tag: "div", text: { tag: "lark_md", content: lines.join("\n") } },
-      { tag: "note", elements: [{ tag: "plain_text", content: `for ${card.requesterLabel}` }] },
+      {
+        tag: "note",
+        elements: [
+          {
+            tag: "plain_text",
+            content:
+              (card.taskId !== undefined ? `${card.taskId} · ` : "") + `for ${card.requesterLabel}`,
+          },
+        ],
+      },
     ],
   };
 }

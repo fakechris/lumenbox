@@ -577,6 +577,56 @@ test("everything a task says sits under the message that asked for it", async ()
   assert.deepEqual(bare.statuses, []);
 });
 
+test("a channel request lives on the board: opened, started at first work, closed with what happened", async () => {
+  const adapter = cardAdapter();
+  const events: string[] = [];
+  let fail = false;
+  const manager = new ChannelManager({
+    mayDrive: () => true,
+    ask: async (_a, _t, _i, _c, onProgress) => {
+      onProgress?.("bash: run");
+      onProgress?.("bash: run again");
+      if (fail) throw new Error("box on fire");
+      return "done";
+    },
+    ackAfterMs: 10,
+    board: {
+      open: input => {
+        events.push(`open ${input.title} by ${input.senderLabel} for ${input.agentName ?? "-"}`);
+        return "t7";
+      },
+      started: id => events.push(`started ${id}`),
+      closed: (id, outcome, note) => events.push(`closed ${id} ${outcome}${note ? ` (${note})` : ""}`),
+    },
+    log: () => {},
+  });
+  manager.register(adapter, true, "test");
+  await started(manager);
+
+  await adapter.inject({
+    identity: "feishu:ou_1",
+    chatKey: "feishu:oc_room",
+    senderLabel: "chris",
+    text: "@Rex ship the report",
+  });
+  await manager.idle();
+  assert.deepEqual(events, [
+    "open ship the report by chris for Rex",
+    "started t7", // once, not once per progress event
+    "closed t7 done",
+  ]);
+
+  events.length = 0;
+  fail = true;
+  await adapter.inject({ identity: "feishu:ou_1", chatKey: "feishu:oc_room", senderLabel: "chris", text: "again" });
+  await manager.idle();
+  assert.deepEqual(events, [
+    "open again by chris for -",
+    "started t7",
+    "closed t7 failed (box on fire)",
+  ]);
+});
+
 test("a dropped file is stored and acknowledged, and no turn runs", async () => {
   const adapter = cardAdapter();
   const asked: string[] = [];

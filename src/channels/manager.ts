@@ -76,6 +76,8 @@ export interface TaskCardState {
   action?: string;
   /** How many requests are ahead of this one, when queued. */
   ahead?: number;
+  /** The board id ("t12"), when this request lives on the team board. People say these in chat. */
+  taskId?: string;
 }
 
 export interface ChannelAdapter {
@@ -213,6 +215,26 @@ export interface ChannelManagerDeps {
    * one thing no other chat product can put in a group.
    */
   screenshot?: (agentName: string | undefined) => Promise<string | undefined>;
+  /**
+   * The team board, when channel requests should live on it as tasks.
+   *
+   * `open` returns the board id shown on the card, so "t12" means the same thing in
+   * the chat, the web UI and an agent's prompt. Lifecycle is the card's: opened when
+   * accepted, started at the first sign of work, closed with what happened — a
+   * failure closes as blocked-with-a-note rather than vanishing, because a board that
+   * loses failed work answers "what needs somebody" wrong.
+   */
+  board?: {
+    open: (input: {
+      title: string;
+      identity: string;
+      senderLabel: string;
+      agentName?: string;
+      chatKey: string;
+    }) => string | undefined;
+    started: (taskId: string) => void;
+    closed: (taskId: string, outcome: "done" | "failed", note?: string) => void;
+  };
   /**
    * Stores files somebody dropped in the chat, into that chat's inbox on the box.
    * Returns the saved names (as the chat should hear them), or undefined when there
@@ -617,12 +639,20 @@ export class ChannelManager {
     mark("working");
 
     const ahead = this.deps.ahead?.(agentName, chatKey) ?? 0;
+    const taskId = this.deps.board?.open({
+      title: firstLine(text),
+      identity: message.identity,
+      senderLabel: message.senderLabel,
+      ...(agentName !== undefined ? { agentName } : {}),
+      chatKey,
+    });
     const card: TaskCardState = {
       title: firstLine(text),
       agentName: agentName ?? "",
       requesterLabel: message.senderLabel,
       status: ahead > 0 ? "queued" : "working",
       ...(ahead > 0 ? { ahead } : {}),
+      ...(taskId !== undefined ? { taskId } : {}),
     };
 
     // The acknowledgement, when one is owed: a card if the adapter can, a line if not.
@@ -654,7 +684,12 @@ export class ChannelManager {
 
     // Progress rewrites the card, rate-limited; without a card it goes nowhere, on
     // purpose — a plain chat told "tool call #14" fourteen times is spam, not progress.
+    let boardStarted = false;
     const onProgress = (action: string) => {
+      if (!boardStarted && taskId !== undefined) {
+        boardStarted = true;
+        this.deps.board?.started(taskId);
+      }
       card.status = "working";
       delete card.ahead;
       card.action = action;
@@ -678,6 +713,7 @@ export class ChannelManager {
       clearTimeout(ackTimer);
       finishCard("done");
       mark("done");
+      if (taskId !== undefined) this.deps.board?.closed(taskId, "done");
       await deliver(
         reply.trim() === "" ? "Done. (The agent finished without saying anything.)" : reply
       );
@@ -726,7 +762,9 @@ export class ChannelManager {
       clearTimeout(ackTimer);
       finishCard("failed");
       mark("failed");
-      await deliver(error instanceof Error ? error.message : String(error));
+      const detail = error instanceof Error ? error.message : String(error);
+      if (taskId !== undefined) this.deps.board?.closed(taskId, "failed", detail);
+      await deliver(detail);
     }
   }
 }

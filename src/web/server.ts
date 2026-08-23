@@ -418,6 +418,44 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
       }
       return orchestrator.replySince(agent.id, before, conversation);
     },
+    // Channel requests live on the team board: "t12" means the same thing in the
+    // chat's card, the web UI and an agent's prompt. A failure closes as blocked with
+    // its note — a board that loses failed work answers "what needs somebody" wrong.
+    board: {
+      open: input => {
+        const tasks = orchestrator.tasks;
+        if (tasks === undefined) return undefined;
+        let assigneeId: string | undefined;
+        try {
+          assigneeId = (input.agentName !== undefined
+            ? registry.resolve(input.agentName)
+            : registry.list()[0]
+          )?.id;
+        } catch {
+          // The unknown-agent error is thrown (and relayed) by ask; the board entry
+          // simply goes unassigned.
+        }
+        const task = tasks.create({
+          title: input.title,
+          requester: principals.resolve(input.identity).id,
+          ...(assigneeId !== undefined ? { assigneeId } : {}),
+          conversation: conversationIdFor(input.chatKey),
+        });
+        return task?.id;
+      },
+      started: taskId => {
+        orchestrator.tasks?.update(taskId, { status: "doing" }, "channel");
+      },
+      closed: (taskId, outcome, note) => {
+        orchestrator.tasks?.update(
+          taskId,
+          outcome === "done"
+            ? { status: "done" }
+            : { status: "blocked", note: `failed: ${note ?? "unknown"}` },
+          "channel"
+        );
+      },
+    },
     // A file dropped in the chat lands in that chat's inbox on the box, under a name
     // that never overwrites: a second report.pdf becomes report-2.pdf, because the
     // first one may be exactly what the agent is reading.
