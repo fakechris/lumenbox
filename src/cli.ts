@@ -724,6 +724,12 @@ Chat:
 The box runs wherever your Docker engine points: set DOCKER_HOST or use
 \`docker context use\` to put it on a remote machine.
 
+Quality:
+  probe [provider...]      Live conformance probes against an endpoint: tool
+                           calls and their round trip, parallel calls,
+                           streaming, vision, long output, caching. Run before
+                           trusting a new provider, and after a vendor update.
+
 Providers:
   anthropic (default)      claude-opus-5; full vision, caching, thinking
   minimax                  MiniMax-M3 via its Anthropic-compatible endpoint.
@@ -840,6 +846,37 @@ async function main(): Promise<number> {
         out(dim(`  ${describeProvider(profile)}`));
       }
       return 0;
+    }
+
+    // Live conformance probes: does this endpoint behave like the wire the turn
+    // engine assumes? Run before trusting a new provider, and after a vendor "update".
+    case "probe": {
+      const { runConformance } = await import("./host/conformance.ts");
+      const names = rest.filter(argument => !argument.startsWith("--"));
+      const targets = names.length > 0 ? names : [undefined];
+      let anyFailed = false;
+      for (const name of targets) {
+        const profile = resolveProvider(name);
+        if (process.env[profile.keyEnv] === undefined) {
+          err(`${profile.label}: needs ${profile.keyEnv}`);
+          anyFailed = true;
+          continue;
+        }
+        out(`${bold(profile.label)}  ${dim(profile.model)}`);
+        const results = await runConformance(profile, result => {
+          const mark =
+            result.status === "ok"
+              ? "✓"
+              : result.status === "degraded"
+                ? "~"
+                : result.status === "skipped"
+                  ? "·"
+                  : "✗";
+          out(`  ${mark} ${result.name.padEnd(16)} ${dim(`${result.detail} (${result.ms}ms)`)}`);
+        });
+        if (results.some(result => result.status === "failed")) anyFailed = true;
+      }
+      return anyFailed ? 1 : 0;
     }
 
     case "where":
