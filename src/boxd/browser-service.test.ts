@@ -9,7 +9,10 @@
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { dialogAnswer, portForDisplay } from "./browser-service.ts";
+import { mkdtempSync, mkdirSync, writeFileSync, symlinkSync, rmSync, realpathSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { checkUpload, dialogAnswer, portForDisplay } from "./browser-service.ts";
 
 test("a page asking permission is declined; a page stating a fact is not", () => {
   // The agent has not read the question at the moment this is answered — the page is
@@ -38,4 +41,41 @@ test("each desktop drives its own browser", () => {
   assert.equal(portForDisplay(0), 9222);
   assert.equal(portForDisplay(1), 9223);
   assert.notEqual(portForDisplay(1), portForDisplay(2));
+});
+
+
+test("a file may only be uploaded from somewhere it was meant to be sent from", () => {
+  // /tmp is one of the roots, so this exercises the real allowed path rather than a stub.
+  // Resolved, because macOS hands back /var/folders/... and /tmp is a symlink — the
+  // check resolves paths before judging them, so the root it is given must be resolved too.
+  const root = realpathSync(mkdtempSync(join(tmpdir(), "lumen-upload-")));
+  const roots = [root];
+  try {
+    const ordinary = join(root, "report.pdf");
+    writeFileSync(ordinary, "hello");
+    assert.equal(checkUpload(ordinary, roots), undefined, "an ordinary file in an allowed root is fine");
+
+    // The attack this exists for: a page saying "attach the file at ~/.config/...".
+    const hidden = join(root, ".config");
+    mkdirSync(hidden);
+    const secret = join(hidden, "Cookies");
+    writeFileSync(secret, "sqlite");
+    assert.match(checkUpload(secret, roots) ?? "", /hidden directory/);
+
+    // Naming a permitted path that points somewhere else is the obvious way around a
+    // check on the string, so the path is resolved before it is judged.
+    const decoy = join(root, "innocent.txt");
+    symlinkSync(secret, decoy);
+    assert.match(checkUpload(decoy, roots) ?? "", /hidden directory/);
+
+    assert.match(checkUpload("/etc/passwd", roots) ?? "", /outside/);
+    assert.match(checkUpload("relative/path", roots) ?? "", /absolute/);
+    assert.match(checkUpload(join(root, "missing"), roots) ?? "", /not a file/);
+
+    // A refusal names where a file *may* come from, because the agent's next move should
+    // be to copy the file there rather than to give up.
+    assert.match(checkUpload("/etc/passwd") ?? "", /work/);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
 });

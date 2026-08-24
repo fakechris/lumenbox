@@ -984,6 +984,31 @@ export function buildTools(
         },
       },
       {
+        name: "browser_wait_for",
+        description:
+          "Wait until the page says something, then get the outline. Use it whenever you " +
+          "are waiting on the page rather than on yourself: a search that fills in results " +
+          "after loading, a save that shows a confirmation, a redirect you expect. That is " +
+          "most modern sites — the page finishes loading and *then* fetches its content, " +
+          "so acting straight after a click reads a page that is not ready.\n\n" +
+          "Waiting is a substring match, so you do not have to predict a title's suffix or " +
+          "a URL's query. If the wait runs out you still get the page, with a note saying " +
+          "it never happened — read it rather than assuming the site is broken.",
+        input_schema: {
+          type: "object",
+          properties: {
+            for: {
+              type: "string",
+              enum: ["text", "url", "title"],
+              description: "Whether to watch the page's text, its URL, or its title.",
+            },
+            value: { type: "string", description: "The substring to wait for." },
+            seconds: { type: "integer", description: "How long to wait. Defaults to 10, max 60." },
+          },
+          required: ["for", "value"],
+        },
+      },
+      {
         name: "browser_upload",
         description:
           "Attach a file from your box to a file input on the page, without touching the " +
@@ -1658,6 +1683,7 @@ export async function dispatchTool(
     case "browser_read":
     case "browser_act":
     case "browser_scroll":
+    case "browser_wait_for":
     case "browser_upload": {
       const box = requireBox(context);
       // The same desktop guard the pixel tools use. Driving the browser on another
@@ -1674,7 +1700,7 @@ export async function dispatchTool(
       }
 
       const request: BrowserRequest = {
-        op: name.slice("browser_".length),
+        op: name === "browser_wait_for" ? "wait" : name.slice("browser_".length),
         ...(context.displayIndex !== undefined ? { display: context.displayIndex } : {}),
         ...(context.boxOwner !== undefined ? { owner: context.boxOwner } : {}),
       };
@@ -1706,6 +1732,11 @@ export async function dispatchTool(
         request.ref = String(input.ref ?? "");
         request.files = [String(input.path ?? "")];
       }
+      if (name === "browser_wait_for") {
+        request.waitFor = String(input.for ?? "text");
+        request.value = String(input.value ?? "");
+        if (Number.isFinite(input.seconds)) request.seconds = Number(input.seconds);
+      }
 
       try {
         const result = await box.browser(request);
@@ -1713,8 +1744,9 @@ export async function dispatchTool(
           return { text: `${result.url}\n\n${result.text ?? "(the page has no text)"}` };
         }
         const parts = [`${result.title || "(untitled)"} — ${result.url}`];
-        // A dialog the page raised is put first: it is the thing that happened, and the
-        // outline below it is the page as it stands afterwards.
+        // What happened to the page comes before the page. A tab that opened under the
+        // agent, or a wait that ran out, changes how the outline below should be read.
+        if (result.note !== undefined) parts.push(result.note);
         if (result.dialog !== undefined) parts.push(result.dialog);
         parts.push(result.snapshot);
         return { text: parts.join("\n\n") };

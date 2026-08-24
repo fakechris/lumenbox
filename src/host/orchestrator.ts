@@ -746,6 +746,7 @@ export const ALL_TOOLS: readonly string[] = [
   "browser_read",
   "browser_act",
   "browser_scroll",
+  "browser_wait_for",
   "browser_upload",
   "WebFetch",
   "WebSearch",

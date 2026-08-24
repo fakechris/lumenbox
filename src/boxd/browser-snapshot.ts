@@ -39,9 +39,35 @@ export const SNAPSHOT_SCRIPT = String.raw`
   const MAX_NODES = ${MAX_NODES};
   const refs = new Map();
   globalThis.__lumenRefs = refs;
-  let counter = 0;
+  const seen = new Map();
   const lines = [];
   let truncated = false;
+
+  // A ref is derived from what the element *is*, not from where it came in the walk.
+  //
+  // Counting position was the obvious way and is quietly wrong: the counter restarts on
+  // every snapshot, so a banner appearing at the top shifts everything, and e5 in the
+  // snapshot an agent is holding becomes a different element in the next one. Acting on
+  // it then lands somewhere else with nothing to report. Deriving the ref from role, name
+  // and tag means the same element keeps its ref across snapshots, and an element that
+  // changed gets a ref nobody is holding — so the failure is loud again.
+  const refFor = (role, name, tag) => {
+    const signature = role + "|" + name + "|" + tag;
+    const nth = (seen.get(signature) || 0) + 1;
+    seen.set(signature, nth);
+    let hash = 2166136261;
+    const source = signature + "#" + nth;
+    for (let i = 0; i < source.length; i++) {
+      hash ^= source.charCodeAt(i);
+      hash = Math.imul(hash, 16777619) >>> 0;
+    }
+    let ref = "e" + hash.toString(36).slice(0, 4);
+    // Two different elements sharing a ref would make one of them unreachable, so a
+    // collision is resolved rather than left to whichever was walked last.
+    let bump = 1;
+    while (refs.has(ref)) ref = "e" + hash.toString(36).slice(0, 4) + "x" + ++bump;
+    return ref;
+  };
 
   const INTERACTIVE = "a,button,input,textarea,select,summary,[role=button],[role=link]," +
     "[role=checkbox],[role=radio],[role=tab],[role=menuitem],[role=switch],[contenteditable=true]";
@@ -135,8 +161,7 @@ export const SNAPSHOT_SCRIPT = String.raw`
     let line = "  ".repeat(Math.min(depth, 6)) + "- " + role;
     if (name !== "") line += " " + JSON.stringify(name);
     if (interactive && !element.disabled) {
-      counter += 1;
-      const ref = "e" + counter;
+      const ref = refFor(role, name, tag);
       refs.set(ref, element);
       line += " [ref=" + ref + "]";
     }

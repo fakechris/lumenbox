@@ -379,6 +379,13 @@ const routes: Record<string, Handler> = {
         return browser.scroll(display, String(body.direction ?? "down"), Number(body.amount ?? 3));
       case "upload":
         return browser.upload(display, String(body.ref ?? ""), body.files ?? []);
+      case "wait":
+        return browser.waitFor(
+          display,
+          String(body.waitFor ?? "text"),
+          String(body.value ?? ""),
+          body.seconds
+        );
       default:
         throw new Error(`Unknown browser op ${body.op}`);
     }

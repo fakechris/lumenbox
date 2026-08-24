@@ -473,6 +473,10 @@ export interface BrowserRequest {
   amount?: number;
   /** For `upload`: paths inside the box. */
   files?: string[];
+  /** For `wait`: what to watch — text, url or title — and what to watch for. */
+  waitFor?: string;
+  value?: string;
+  seconds?: number;
 }
 
 export interface BrowserResponse {
@@ -484,4 +488,6 @@ export interface BrowserResponse {
   dialog?: string;
   /** For `read`: the page's prose. */
   text?: string;
+  /** Something that happened to the page itself: a tab opened, a tab closed, a wait ended. */
+  note?: string;
 }
