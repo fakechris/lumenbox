@@ -61,7 +61,7 @@ export function renderApprovalCard(card: ApprovalCardState): object {
         elements: [
           {
             tag: "plain_text",
-            content: "The turn is paused until someone answers. Replying allow / deny works too.",
+            content: `${card.stakes} Replying allow / deny works too.`,
           },
         ],
       },

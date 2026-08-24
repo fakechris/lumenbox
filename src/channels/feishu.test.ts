@@ -88,6 +88,7 @@ test("the approval card carries the action verbatim and the three answers as but
     approvalId: "appr-9",
     agentName: "Ada",
     description: "curl -X POST https://example.com/export",
+    stakes: "Until someone answers, this work is stopped.",
   }) as {
     header: { title: { content: string }; template: string };
     elements: {

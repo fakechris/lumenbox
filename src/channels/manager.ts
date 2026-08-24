@@ -141,7 +141,21 @@ export interface ApprovalCardState {
   agentName: string;
   /** The original action, verbatim — an approval that paraphrases is an injection surface. */
   description: string;
+  /**
+   * What is at stake in answering, and in not answering.
+   *
+   * Ours to say, never the agent's: a request that argued its own case would be the
+   * asking party writing the recommendation, which is exactly the surface the verbatim
+   * rule above exists to close. So this states only facts the harness knows — the work
+   * is stopped until someone answers, and refusing is the reversible direction.
+   */
+  stakes: string;
 }
+
+/** The stakes line every consent request carries. One sentence, always the same shape. */
+export const APPROVAL_STAKES =
+  "Until someone answers, this work is stopped. Denying is the reversible answer: " +
+  "the agent is told no and carries on without this step.";
 
 export interface ChannelStatus {
   name: string;
@@ -478,7 +492,12 @@ export class ChannelManager {
     // person answering "允许" at a card is right, not wrong.
     if (asker.adapter.postApprovalCard !== undefined) {
       void asker.adapter
-        .postApprovalCard(asker.identity, { approvalId, agentName, description })
+        .postApprovalCard(asker.identity, {
+          approvalId,
+          agentName,
+          description,
+          stakes: APPROVAL_STAKES,
+        })
         .catch(() => {
           // The web UI still shows it; a failed push is not a lost approval.
         });
@@ -487,7 +506,7 @@ export class ChannelManager {
     const message =
       `${agentName || "An agent"} needs your consent:\n${description}\n\n` +
       `Reply "allow" for once, "always" to stop asking for this, or "deny". ` +
-      `The turn is paused until you answer.`;
+      `${APPROVAL_STAKES}`;
     void asker.adapter.send(asker.identity, message).catch(() => {
       // The web UI still shows it; a failed push is not a lost approval.
     });
