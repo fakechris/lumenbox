@@ -188,14 +188,16 @@ export interface ChannelManagerDeps {
    * default agent; unknown names should throw with a message worth relaying.
    * `chatKey` names the chat, for the conversation thread the turn runs in.
    * `onProgress`, when given, receives a one-line description of each action the turn
-   * takes, for the task card — coarse by design, a card is not a transcript.
+   * takes, for the task card — coarse by design, a card is not a transcript — and
+   * the bare tool name behind it, for judgements that want the tool and not its
+   * rendering.
    */
   ask: (
     agentName: string | undefined,
     text: string,
     identity: string,
     chatKey: string,
-    onProgress?: (action: string) => void
+    onProgress?: (action: string, tool?: string) => void
   ) => Promise<string>;
   /**
    * How many requests are ahead of a new one for this agent and chat. Zero means it
@@ -211,8 +213,8 @@ export interface ChannelManagerDeps {
   ackAfterMs?: number;
   /**
    * The agent's desktop right now, as base64 WebP, or undefined when there is no
-   * desktop to show. What "屏幕" asks for, and what a finished task attaches — the
-   * one thing no other chat product can put in a group.
+   * desktop to show. What "屏幕" asks for, and what a finished task that used the
+   * desktop attaches — the one thing no other chat product can put in a group.
    */
   screenshot?: (agentName: string | undefined) => Promise<string | undefined>;
   /**
@@ -776,7 +778,13 @@ export class ChannelManager {
     // Progress rewrites the card, rate-limited; without a card it goes nowhere, on
     // purpose — a plain chat told "tool call #14" fourteen times is spam, not progress.
     let boardStarted = false;
-    const onProgress = (action: string) => {
+    // Whether this turn touched the desktop at all. The final screenshot is a poster
+    // of the desk the work left behind; a research or calculation turn that never
+    // used the desktop would post the same untouched wallpaper every time, which is
+    // noise wearing the costume of evidence.
+    let touchedDesktop = false;
+    const onProgress = (action: string, tool?: string) => {
+      if (tool === "computer") touchedDesktop = true;
       if (!boardStarted && taskId !== undefined) {
         boardStarted = true;
         this.deps.board?.started(taskId);
@@ -838,10 +846,17 @@ export class ChannelManager {
           this.deps.log(`channel ${adapter.name}: outbox failed (${detail})`);
         }
       }
-      // The desk as the task left it: evidence at a glance. Only for work long enough
-      // to have been acknowledged — a quick answer does not need a poster — and never
-      // a failure: the reply already landed, and its record is the transcript.
-      if (acknowledged && adapter.sendImage !== undefined && this.deps.screenshot !== undefined) {
+      // The desk as the task left it: evidence at a glance — but only when the turn
+      // actually used the desktop (a poster of an untouched desk is noise), only for
+      // work long enough to have been acknowledged — a quick answer does not need a
+      // poster — and never a failure: the reply already landed, and its record is
+      // the transcript.
+      if (
+        acknowledged &&
+        touchedDesktop &&
+        adapter.sendImage !== undefined &&
+        this.deps.screenshot !== undefined
+      ) {
         try {
           const image = await this.deps.screenshot(agentName);
           if (image !== undefined) await adapter.sendImage(chatKey, image, anchor);

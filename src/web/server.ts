@@ -509,14 +509,15 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
       broadcast({ type: "prompt", agentId: agent.id, text, userId: principal, conversation });
       // The card's one-line answer to "what is it doing": each tool call as it starts,
       // for this agent in this conversation only. Coarse on purpose — a card is not a
-      // transcript, and the transcript is where the real record already lives.
+      // transcript, and the transcript is where the real record already lives. The
+      // bare tool name rides along for the manager's own judgements.
       const listener =
         onProgress === undefined
           ? undefined
           : (event: TurnEvent) => {
               if (event.type !== "tool_start") return;
               if (event.agentId !== agent.id || event.conversation !== conversation) return;
-              onProgress(actionLine(event.tool, event.input));
+              onProgress(actionLine(event.tool, event.input), event.tool);
             };
       if (listener !== undefined) channelTurnListeners.add(listener);
       try {
