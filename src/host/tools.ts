@@ -1691,6 +1691,44 @@ export async function dispatchTool(
       return { text: `Kept. It will be in your instructions on future turns.${withdrawn}` };
     }
 
+    case "FindMcpTool": {
+      if (context.mcp === undefined) return { text: "No external services are connected.", isError: true };
+      return {
+        text: context.mcp.describeTools({
+          ...(typeof input.server === "string" ? { server: input.server } : {}),
+          ...(typeof input.tool === "string" ? { tool: input.tool } : {}),
+          ...(typeof input.pattern === "string" ? { pattern: input.pattern } : {}),
+        }),
+      };
+    }
+
+    case "UseMcpTool": {
+      if (context.mcp === undefined) return { text: "No external services are connected.", isError: true };
+      const target = String(input.tool ?? "");
+      if (!context.mcp.owns(target)) {
+        return {
+          text: `No external tool named ${target}. Find it with FindMcpTool first.`,
+          isError: true,
+        };
+      }
+      // The gate above judged `UseMcpTool`; the tool it is about to run is a separate
+      // decision, and skipping it here would make this a way around every rule that
+      // names an external tool.
+      const inner = context.policy?.check({
+        kind: "tool",
+        agentId: context.agent.id,
+        agentName: context.agent.profile.name,
+        tool: target,
+        input: (input.arguments ?? {}) as Record<string, unknown>,
+      });
+      if (inner !== undefined && !inner.allow) return { text: inner.reason, isError: true };
+      try {
+        return { text: await context.mcp.call(target, input.arguments ?? {}) };
+      } catch (error) {
+        return { text: error instanceof Error ? error.message : String(error), isError: true };
+      }
+    }
+
     default: {
       // An MCP server's tool, if one claims the name. Reached last, so nothing here can
       // be shadowed by an external server — and reached *after* the policy gate above,

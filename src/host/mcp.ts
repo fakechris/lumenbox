@@ -25,6 +25,12 @@
 
 import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
 
+/** A description's first sentence, clamped — enough to choose by, not to call by. */
+function firstSentence(text: string): string {
+  const line = text.split(/(?<=[.!?])\s|\n/, 1)[0] ?? text;
+  return line.length > 160 ? `${line.slice(0, 159)}…` : line;
+}
+
 /** Tool names carry their server, so two servers may both offer `search`. */
 export const MCP_SEPARATOR = "__";
 
@@ -51,7 +57,19 @@ export interface McpServerStatus {
   detail: string;
 }
 
-/** Above this many tools from one server, the roster problem is back. Reported, not enforced. */
+/**
+ * Above this many external tools in total, they stop being offered one by one.
+ *
+ * Every tool's name, description and schema is in every agent's prompt on every turn,
+ * so a generous server or three is a permanent tax on every conversation the
+ * installation ever has — the roster problem, arriving through a different door. Past
+ * this line the whole set is replaced by two tools that look it up on demand, which
+ * costs one extra round trip when an external tool is actually wanted and nothing at
+ * all when it is not.
+ *
+ * Thirty because that is roughly where the tool block stops being a list and starts
+ * being a document.
+ */
 export const TOOL_BUDGET_WARNING = 30;
 
 interface Pending {
@@ -296,6 +314,20 @@ export class McpManager {
     await Promise.all(this.servers.map(server => server.ensureStarted()));
   }
 
+  /**
+   * Kicks every server off and returns immediately.
+   *
+   * A turn must not wait on somebody's ticket-system bridge to boot. The first turn
+   * after a restart therefore runs with whatever tools are known — none, at first —
+   * while the servers come up behind it, and the turn after that has them. Trading a
+   * cold first turn for a first turn that starts on time is the right way round: the
+   * tools are an addition to what an agent can do, and an addition that delays the
+   * answer is not obviously an improvement.
+   */
+  warm(): void {
+    for (const server of this.servers) void server.ensureStarted();
+  }
+
   /** Every tool from every started server, prefixed by server name. */
   tools(): McpTool[] {
     return this.servers.flatMap(server => server.listTools());
@@ -303,6 +335,58 @@ export class McpManager {
 
   statuses(): McpServerStatus[] {
     return this.servers.map(server => server.status());
+  }
+
+  /** Whether there are too many external tools to put all of them in every prompt. */
+  overBudget(): boolean {
+    return this.tools().length > TOOL_BUDGET_WARNING;
+  }
+
+  /**
+   * The catalog a model reads when the tools are behind the lookup pair.
+   *
+   * Servers with a one-line count, and each tool as a name plus a clamped first
+   * sentence — enough to decide *which* tool to ask about, not enough to call one.
+   * `pattern` filters by a plain substring over name and description, because a
+   * regular expression from a model is a way to get an error instead of an answer.
+   */
+  describeTools(input: { server?: string; tool?: string; pattern?: string } = {}): string {
+    const all = this.tools();
+    if (all.length === 0) return "No MCP servers are connected.";
+
+    // One named tool: the whole thing, schema included, which is what a caller needs.
+    if (input.tool !== undefined && input.tool !== "") {
+      const found = all.find(tool => tool.name === input.tool);
+      if (found === undefined) return `No tool named ${input.tool}.`;
+      return `${found.name}\n${found.description}\n\ninput schema:\n${JSON.stringify(found.inputSchema, null, 2)}`;
+    }
+
+    const needle = (input.pattern ?? "").toLowerCase();
+    const matching = all.filter(tool => {
+      if (input.server !== undefined && input.server !== "") {
+        if (!tool.name.startsWith(`${input.server}${MCP_SEPARATOR}`)) return false;
+      }
+      if (needle === "") return true;
+      return (
+        tool.name.toLowerCase().includes(needle) ||
+        tool.description.toLowerCase().includes(needle)
+      );
+    });
+    if (matching.length === 0) return "Nothing matched. Call this with no arguments to see everything.";
+
+    const byServer = new Map<string, McpTool[]>();
+    for (const tool of matching) {
+      const server = tool.name.slice(0, tool.name.indexOf(MCP_SEPARATOR));
+      byServer.set(server, [...(byServer.get(server) ?? []), tool]);
+    }
+    return [...byServer.entries()]
+      .map(([server, tools]) =>
+        [
+          `## ${server} (${tools.length})`,
+          ...tools.map(tool => `- ${tool.name}: ${firstSentence(tool.description)}`),
+        ].join("\n")
+      )
+      .join("\n\n");
   }
 
   /** Whether a tool name belongs to one of these servers. */

@@ -62,6 +62,7 @@ import type { Vault } from "./vault.ts";
 import type { TaskStore } from "./tasks.ts";
 import type { ScopeStore } from "./scopes.ts";
 import type { McpManager } from "./mcp.ts";
+import { TOOL_BUDGET_WARNING } from "./mcp.ts";
 import { narrowTools } from "./scopes.ts";
 import { conversationIdFor, MAIN_CONVERSATION } from "../agents/registry.ts";
 import { resolveSummaryProvider } from "./provider.ts";
@@ -975,13 +976,54 @@ export async function runTurn(
   // The tools other people wrote, narrowed by the same allowlist as ours: an MCP tool
   // is an ordinary tool once it arrives, including in what an agent's profile and its
   // scope are allowed to withhold.
-  const mcpTools: Anthropic.Tool[] = (deps.mcp?.tools() ?? [])
-    .filter(tool => effectiveTools === undefined || effectiveTools.includes(tool.name))
-    .map(tool => ({
-      name: tool.name,
-      description: tool.description,
-      input_schema: tool.inputSchema as Anthropic.Tool["input_schema"],
-    }));
+  const allowedMcp = (deps.mcp?.tools() ?? []).filter(
+    tool => effectiveTools === undefined || effectiveTools.includes(tool.name)
+  );
+  // Past a certain number they stop being a list and start being a document that every
+  // turn pays for. Then they go behind a lookup pair instead: one round trip when an
+  // external tool is actually wanted, nothing when it is not.
+  const mcpTools: Anthropic.Tool[] =
+    allowedMcp.length > TOOL_BUDGET_WARNING
+      ? [
+          {
+            name: "FindMcpTool",
+            description:
+              `${allowedMcp.length} tools from connected external services are available, too ` +
+              "many to list in full here. Search them with this, then call one with " +
+              "`UseMcpTool`. No arguments lists every service and its tools with a one-line " +
+              "description each; `pattern` filters by substring; `server` narrows to one " +
+              "service; `tool` returns that one tool's full description and input schema, " +
+              "which is what you need before calling it.",
+            input_schema: {
+              type: "object",
+              properties: {
+                pattern: { type: "string", description: "Substring to look for." },
+                server: { type: "string", description: "Only this service's tools." },
+                tool: { type: "string", description: "One tool's full detail, by exact name." },
+              },
+            },
+          },
+          {
+            name: "UseMcpTool",
+            description:
+              "Call one of the external tools found with `FindMcpTool`. Look the tool up " +
+              "first — its input schema is not shown here, and guessing the arguments wastes " +
+              "the call.",
+            input_schema: {
+              type: "object",
+              properties: {
+                tool: { type: "string", description: "The exact tool name, as `service__tool`." },
+                arguments: { type: "object", description: "Its arguments, per its schema." },
+              },
+              required: ["tool"],
+            },
+          },
+        ]
+      : allowedMcp.map(tool => ({
+          name: tool.name,
+          description: tool.description,
+          input_schema: tool.inputSchema as Anthropic.Tool["input_schema"],
+        }));
 
   const tools = buildTools(
     box !== undefined,

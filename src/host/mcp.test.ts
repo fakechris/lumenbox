@@ -153,6 +153,10 @@ test("an external tool is an ordinary tool: withheld by an allowlist, gated by p
     // Named in the gate's approval list, an external tool waits for a person exactly
     // as `bash` would — the point of routing it through the same gate at all.
     const gate = new PolicyGate({
+      // Its own throwaway log. Without a path the gate replays — and appends to — the
+      // real ~/.agentbox/policy.jsonl, so tests would inherit each other's pending
+      // approvals and write into the installation's own record of who allowed what.
+      path: join(mkdtempSync(join(tmpdir(), "agentbox-policy-")), "policy.jsonl"),
       limits: {
         budgetWindowHours: 24,
         wakesPerWindow: 30,
@@ -168,6 +172,67 @@ test("an external tool is an ordinary tool: withheld by an allowlist, gated by p
     const unknown = await dispatchTool("nobody__owns_this", {}, context);
     assert.ok(unknown.isError);
     assert.match(unknown.text, /Unknown tool/);
+  } finally {
+    manager.stop();
+    cleanup();
+  }
+});
+
+test("past the budget the tools go behind a lookup pair, and the pair still obeys the gate", async () => {
+  const { path, cleanup } = withStub();
+  const { dispatchTool } = await import("./tools.ts");
+  const { PolicyGate } = await import("./policy.ts");
+  const manager = new McpManager([{ name: "stub", command: process.execPath, args: [path] }]);
+  try {
+    await manager.ready();
+    const echo = `stub${MCP_SEPARATOR}echo`;
+    const context = {
+      agent: { id: "a1", profile: { name: "Ada" } },
+      registry: {} as never,
+      bus: {} as never,
+      box: undefined,
+      mcp: manager,
+    } as unknown as Parameters<typeof dispatchTool>[2];
+
+    // The catalog is choose-by, not call-by: names and one line each, no schemas.
+    const catalog = await dispatchTool("FindMcpTool", {}, context);
+    assert.match(catalog.text, /## stub \(2\)/);
+    assert.match(catalog.text, /Says it back\./);
+    assert.doesNotMatch(catalog.text, /inputSchema|properties/i, "schemas are a second call");
+
+    // Searching, and then the one tool in full — which is what you need to call it.
+    assert.match((await dispatchTool("FindMcpTool", { pattern: "back" }, context)).text, /echo/);
+    assert.doesNotMatch((await dispatchTool("FindMcpTool", { pattern: "back" }, context)).text, /boom/);
+    const detail = await dispatchTool("FindMcpTool", { tool: echo }, context);
+    assert.match(detail.text, /input schema/);
+    assert.match(detail.text, /"text"/);
+
+    // Calling through the pair reaches the real server.
+    const ran = await dispatchTool("UseMcpTool", { tool: echo, arguments: { text: "hi" } }, context);
+    assert.equal(ran.text, "echo: hi");
+    assert.ok((await dispatchTool("UseMcpTool", { tool: "stub__ghost" }, context)).isError);
+
+    // The load-bearing one: a rule naming the inner tool is not escaped by wrapping it.
+    const gate = new PolicyGate({
+      // Its own throwaway log. Without a path the gate replays — and appends to — the
+      // real ~/.agentbox/policy.jsonl, so tests would inherit each other's pending
+      // approvals and write into the installation's own record of who allowed what.
+      path: join(mkdtempSync(join(tmpdir(), "agentbox-policy-")), "policy.jsonl"),
+      limits: {
+        budgetWindowHours: 24,
+        wakesPerWindow: 30,
+        wakeWindowMinutes: 10,
+        approvalRequiredTools: [echo],
+        approvalRequiredCommands: [],
+      },
+    });
+    const held = await dispatchTool(
+      "UseMcpTool",
+      { tool: echo, arguments: { text: "sneaky" } },
+      { ...context, policy: gate }
+    );
+    assert.ok(held.isError, "the inner tool is judged on its own name, not on the wrapper's");
+    assert.equal(gate.pending().length, 1);
   } finally {
     manager.stop();
     cleanup();

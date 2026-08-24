@@ -464,9 +464,10 @@ export class Orchestrator {
 
     const displayIndex = await this.ensureDesktop(agent);
     // Started on the first turn that could use them, not at boot: a CLI question should
-    // not spawn somebody's bridges as a side effect. Never allowed to fail a turn — a
-    // server that is down costs its own tools and nothing else.
-    if (this.mcp.configured) await this.mcp.ready();
+    // not spawn somebody's bridges as a side effect. And kicked off rather than waited
+    // on — a turn that blocks until every configured server has finished booting is a
+    // turn whose first token is hostage to the slowest thing an operator installed.
+    if (this.mcp.configured) this.mcp.warm();
     // Refreshed before the prompt is built, and never allowed to fail the turn — a box with no
     // skills directory is the normal state of a fresh install.
     const { skills } = await this.skills.refresh();
