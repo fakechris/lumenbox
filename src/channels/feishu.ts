@@ -107,6 +107,44 @@ export function renderCard(card: TaskCardState): object {
   };
 }
 
+/**
+ * Markdown travels as a post's `md` element — the one wire form Feishu renders
+ * as formatted text (CommonMark + GFM, tables included) rather than as literal
+ * asterisks. The element owns its paragraph, so a chunk rides as one element.
+ */
+export function markdownPost(text: string): string {
+  return JSON.stringify({ zh_cn: { content: [[{ tag: "md", text }]] } });
+}
+
+/**
+ * Whether a message means markdown: the block constructs plain prose never
+ * contains. Snake_case is deliberately not read as emphasis — code speaks in
+ * underscores, people rarely italicize, and a false positive only changes the
+ * wire form, not the words.
+ */
+export function looksLikeMarkdown(text: string): boolean {
+  return (
+    /^#{1,6}\s+\S/m.test(text) ||
+    /```/.test(text) ||
+    /`[^`\n]+`/.test(text) ||
+    /^\s*[-*+]\s+\S/m.test(text) ||
+    /^\s*\d+\.\s+\S/m.test(text) ||
+    /^\s*>/m.test(text) ||
+    /\*\*[^*\n]+\*\*/.test(text) ||
+    /^\s*\|.*\|\s*$/m.test(text) ||
+    /\[[^\]\n]+\]\([^)\n]+\)/.test(text)
+  );
+}
+
+/**
+ * Feishu words a malformed post as a content/format problem; the network words
+ * itself otherwise. Only the former earns the plain-text fallback.
+ */
+function isContentRefusal(error: unknown): boolean {
+  const detail = error instanceof Error ? error.message : String(error);
+  return /content|format|invalid|incorrect/i.test(detail);
+}
+
 export class FeishuChannel implements ChannelAdapter {
   readonly name = "feishu";
   // Typed loosely because the SDK is a lazy import; the surface used is tiny.
@@ -551,13 +589,24 @@ export class FeishuChannel implements ChannelAdapter {
   async sendToChat(chatKey: string, text: string, options?: PushOptions): Promise<void> {
     const chatId = chatKey.replace(/^feishu:/, "");
     if (chatId === "") return;
+    // Markdown or plain is decided once for the whole message: per-chunk decisions
+    // would render a long message's plain halves with literal ** markers.
+    const markdown = looksLikeMarkdown(text);
+    let degraded = false;
     for (let at = 0; at < text.length; at += FeishuChannel.CHUNK) {
-      await this.post(
-        chatId,
-        "text",
-        JSON.stringify({ text: text.slice(at, at + FeishuChannel.CHUNK) }),
-        options?.replyTo
-      );
+      const chunk = text.slice(at, at + FeishuChannel.CHUNK);
+      if (markdown && !degraded) {
+        try {
+          await this.post(chatId, "post", markdownPost(chunk), options?.replyTo);
+          continue;
+        } catch (error) {
+          // A refused post is about the formatting; the words still deserve
+          // delivery, so this chunk and every later one goes as plain text.
+          if (!isContentRefusal(error)) throw error;
+          degraded = true;
+        }
+      }
+      await this.post(chatId, "text", JSON.stringify({ text: chunk }), options?.replyTo);
     }
   }
 

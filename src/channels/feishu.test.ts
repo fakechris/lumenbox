@@ -6,7 +6,7 @@
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { renderCard } from "./feishu.ts";
+import { looksLikeMarkdown, markdownPost, renderCard } from "./feishu.ts";
 import type { TaskCardState } from "./manager.ts";
 
 interface CardShape {
@@ -58,6 +58,28 @@ test("the card says who is on it, what it is doing, and who asked", () => {
   // than showing an empty name.
   const team = rendered({ title: "t", agentName: "", requesterLabel: "c", status: "working" });
   assert.match(team.elements[0]!.text!.content, /\*\*The team\*\*/);
+});
+
+test("markdown detection catches the constructs prose never contains", () => {
+  // The verdict decides the wire form, so a plain sentence must stay plain.
+  assert.equal(looksLikeMarkdown("plain words, 2 + 3 = 5, an * stray, a_b_c"), false);
+  assert.equal(looksLikeMarkdown("all done, nothing to see"), false);
+
+  assert.equal(looksLikeMarkdown("## 验算结论\n\n**已核对**到原始信源"), true);
+  assert.equal(looksLikeMarkdown("| 厂商 | 价格 |\n| --- | --- |\n| A | 1 |"), true);
+  assert.equal(looksLikeMarkdown("run `npm test` first"), true);
+  assert.equal(looksLikeMarkdown("- one\n- two"), true);
+  assert.equal(looksLikeMarkdown("1. first\n2. second"), true);
+  assert.equal(looksLikeMarkdown("see [docs](https://example.com)"), true);
+  assert.equal(looksLikeMarkdown("```js\ncode\n```"), true);
+});
+
+test("markdown rides as a post md element, the form Feishu renders", () => {
+  const content = JSON.parse(markdownPost("**done**")) as {
+    zh_cn: { content: { tag: string; text: string }[][] };
+  };
+  assert.equal(content.zh_cn.content[0]![0]!.tag, "md");
+  assert.equal(content.zh_cn.content[0]![0]!.text, "**done**");
 });
 
 test("the approval card carries the action verbatim and the three answers as buttons", async () => {
