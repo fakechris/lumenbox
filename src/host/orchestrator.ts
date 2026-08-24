@@ -23,7 +23,7 @@ import type { BoxClient } from "../box/client.ts";
 import { DisplayLease } from "../box/display-lease.ts";
 import { resolveBoxProvisioner, type BoxProvisioner } from "../box/provisioner.ts";
 import type { ResolutionConfig } from "../protocol/index.ts";
-import { runTurn, TurnAborted, type TurnEvent } from "./turn.ts";
+import { runTurn, TurnAborted, type TurnDeps, type TurnEvent } from "./turn.ts";
 import { loadConfig } from "../config.ts";
 import { McpManager } from "./mcp.ts";
 import { PolicyGate } from "./policy.ts";
@@ -92,6 +92,12 @@ export interface OrchestratorOptions {
    * keeps none, which is what a test that must not spawn a child process wants.
    */
   mcp?: McpManager | null;
+  /**
+   * How an agent puts a question to the person who gave it the work. Absent means
+   * there is nobody to ask — a CLI run, a test — and the tool says so plainly rather
+   * than pretending a question was delivered.
+   */
+  askUser?: TurnDeps["askUser"];
 }
 
 export class Orchestrator {
@@ -500,6 +506,7 @@ export class Orchestrator {
       tasks: this.tasks,
       scopes: this.scopes,
       mcp: this.mcp,
+      askUser: this.options.askUser,
       conversation,
       provider: runtime.provider,
       effort: this.options.effort,
@@ -732,8 +739,10 @@ export const ALL_TOOLS: readonly string[] = [
   "Fork",
   "read_file",
   "write_file",
+  "edit_file",
   "list_dir",
   "SendToAgent",
+  "AskUser",
   "CreateAgent",
   "UpdateAgent",
   "SetPlan",

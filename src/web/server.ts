@@ -272,6 +272,16 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
 
   const provisioner = options.boxProvisioner ?? resolveBoxProvisioner();
 
+  /**
+   * The channels, once they exist — held with a written type on purpose.
+   *
+   * The orchestrator needs to reach them (to put an agent's question to a person) and
+   * they need to reach the orchestrator (to run a turn), which is a cycle TypeScript
+   * cannot infer its way around: it gives up and hands back `any` in places unrelated
+   * to either. Naming the type breaks the cycle without pretending it is not there.
+   */
+  let chats: ChannelManager | undefined;
+
   // Optional in the type and not in the code: two routes read it unconditionally, so a
   // caller that omitted it got a 500 from the page's own state endpoint. Resolved once
   // here rather than defended at each use, which is how one of them ends up missing it.
@@ -316,6 +326,20 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
     boxProvisioner: provisioner,
     hostRunner,
     vault,
+    // An agent that cannot proceed without knowing something asks the person who gave
+    // it the work — the same routing an approval uses, because the person who asked
+    // for it is the one who can say what they meant. It reaches their chat and the
+    // page; the reply is an ordinary message, so nothing here has to hold a turn open.
+    askUser: async input => {
+      broadcast({
+        type: "error",
+        message: `${input.agentName} asked: ${input.question}`,
+      });
+      const where = chats?.askQuestion(input);
+      // The page is always a place an answer can come from, so a question is never
+      // undeliverable while somebody could be looking at it.
+      return where ?? "in the app";
+    },
     onTurnEvent: event => {
       broadcast(event);
       for (const listener of channelTurnListeners) listener(event);
@@ -778,6 +802,7 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
         : "set DINGTALK_CLIENT_ID and DINGTALK_CLIENT_SECRET"
     );
   }
+  chats = channels;
   channels.start();
 
   // The standing digests: checked a few times an hour, sent once per chat per day.

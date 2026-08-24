@@ -480,6 +480,40 @@ export class ChannelManager {
   }
 
   /**
+   * Puts an agent's question to whoever last drove it from a chat.
+   *
+   * The same routing an approval uses, and for the same reason: the person who asked
+   * for the work is the one who can say what they meant. Returns where it went, or
+   * nothing when this agent has never been driven from a chat — the caller then tells
+   * the agent to decide for itself rather than to wait for an answer nobody will give.
+   */
+  askQuestion(input: {
+    agentId: string;
+    agentName: string;
+    question: string;
+    options?: string[];
+  }): string | undefined {
+    const asker = this.lastAsker.get(input.agentId);
+    if (asker === undefined) return undefined;
+    const choices =
+      input.options !== undefined && input.options.length > 0
+        ? `
+
+${input.options.map(option => `· ${option}`).join("\n")}`
+        : "";
+    void asker.adapter
+      .send(
+        asker.identity,
+        `${input.agentName || "An agent"} needs an answer before it can carry on:\n` +
+          `${input.question}${choices}\n\nReply here and it picks up where it stopped.`
+      )
+      .catch(() => {
+        // The web page shows it too; a failed push is not a lost question.
+      });
+    return asker.identity;
+  }
+
+  /**
    * Pushes a pending approval to whoever last drove this agent from a chat, and
    * remembers it so a one-word reply from them answers it. Nothing when the agent was
    * not driven from a channel — the web page covers that.

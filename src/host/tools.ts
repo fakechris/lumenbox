@@ -52,6 +52,19 @@ export interface ToolContext {
    */
   policy?: PolicyGate;
   /**
+   * Puts a question to whoever gave this agent its work, and says where it went.
+   *
+   * Absent means nobody is reachable to ask — a CLI run, a test — and the tool then
+   * says so rather than pretending the question was delivered.
+   */
+  askUser?: (input: {
+    agentId: string;
+    agentName: string;
+    question: string;
+    options?: string[];
+    conversation?: string;
+  }) => Promise<string | undefined>;
+  /**
    * The MCP servers whose tools are on offer this turn. Absent means none, which is
    * every installation that has configured none — and every test.
    */
@@ -450,6 +463,58 @@ export function buildTools(
             },
           },
           required: ["action"],
+        },
+      },
+      {
+        name: "AskUser",
+        description:
+          "Ask the person who gave you this work a question, when you genuinely cannot " +
+          "proceed without their answer — which of two things they meant, a value only " +
+          "they know, whether an assumption of yours is right.\n\n" +
+          "Your turn ends here. The question reaches them wherever they asked from, and " +
+          "their reply comes back as an ordinary message that wakes you up again, so do " +
+          "not wait or poll. Ask one question, make it answerable in a sentence, and say " +
+          "what you will do with each answer — a question that requires reading your " +
+          "whole transcript to understand is one they will ignore.\n\n" +
+          "Do not use this to check in, to report progress, or to ask permission for an " +
+          "action: permission is asked for you when it is needed. Guessing well is " +
+          "better than asking often; asking beats guessing when being wrong is expensive " +
+          "to undo.",
+        input_schema: {
+          type: "object",
+          properties: {
+            question: { type: "string", description: "One question, answerable in a sentence." },
+            options: {
+              type: "array",
+              description: "The answers you can act on, if it is a choice between a few.",
+              items: { type: "string" },
+            },
+          },
+          required: ["question"],
+        },
+      },
+      {
+        name: "edit_file",
+        description:
+          "Change part of a file by replacing an exact piece of its text. Use this " +
+          "instead of rewriting the whole file when you only need to change some of " +
+          "it: rewriting a long file to alter three lines is where content gets lost, " +
+          "because everything you did not retype is gone.\n\n" +
+          "`old` must appear exactly once, whitespace included — include enough " +
+          "surrounding lines to make it unique rather than hoping a short snippet is. " +
+          "If it appears more than once you are told how many times and nothing is " +
+          "written, because guessing which one you meant is how the wrong line changes.",
+        input_schema: {
+          type: "object",
+          properties: {
+            path: { type: "string", description: "Absolute path to the file." },
+            old: {
+              type: "string",
+              description: "The exact text to replace, unique within the file.",
+            },
+            new: { type: "string", description: "What to put in its place. Empty deletes it." },
+          },
+          required: ["path", "old", "new"],
         },
       },
       {
@@ -1255,6 +1320,107 @@ export async function dispatchTool(
         ? `${result.path} (showing part of ${result.total_lines} lines)`
         : `${result.path} (${result.total_lines} lines)`;
       return { text: `${header}\n\n${result.content}` };
+    }
+
+    case "AskUser": {
+      const question = String(input.question ?? "").trim();
+      if (question === "") return { text: "Ask something.", isError: true };
+      const options = Array.isArray(input.options)
+        ? input.options.map(option => String(option)).filter(option => option !== "")
+        : undefined;
+      if (context.askUser === undefined) {
+        return {
+          text:
+            "There is nobody to ask on this run — it was not started by a person who can " +
+            "answer. Decide it yourself, say plainly which way you went and why, and let " +
+            "them correct you.",
+          isError: true,
+        };
+      }
+      const where = await context.askUser({
+        agentId: context.agent.id,
+        agentName: context.agent.profile.name,
+        question,
+        ...(options !== undefined && options.length > 0 ? { options } : {}),
+        ...(context.conversation !== undefined ? { conversation: context.conversation } : {}),
+      });
+      if (where === undefined) {
+        return {
+          text:
+            "The question could not be delivered — nobody has driven you from a place that " +
+            "can receive one. Decide it yourself and say which way you went.",
+          isError: true,
+        };
+      }
+      // Ending the turn is the answer, not a failure: an agent that kept working after
+      // asking would either act on the guess it just admitted it could not make, or
+      // burn rounds waiting for a message that arrives as a new turn by design.
+      return {
+        text:
+          `Asked ${where}. Your turn ends here — their reply arrives as a new message and ` +
+          `wakes you. Stop now; do not answer it yourself.`,
+      };
+    }
+
+    case "edit_file": {
+      const box = requireBox(context);
+      const path = String(input.path ?? "");
+      const oldText = String(input.old ?? "");
+      const newText = String(input.new ?? "");
+      if (oldText === "") {
+        return { text: "`old` is what to replace; it cannot be empty.", isError: true };
+      }
+
+      let existing: Awaited<ReturnType<typeof box.readFile>>;
+      try {
+        existing = await box.readFile(path);
+      } catch (error) {
+        return {
+          text: `${path} could not be read: ${error instanceof Error ? error.message : String(error)}`,
+          isError: true,
+        };
+      }
+      // A truncated read is a partial view, and editing against a partial view can
+      // "not find" text that is there, or find the wrong instance of it.
+      if (existing.truncated) {
+        return {
+          text:
+            `${path} is too large to edit this way — it was only read in part, and a match ` +
+            `counted against half a file means nothing. Use bash (sed, python) for this one.`,
+          isError: true,
+        };
+      }
+
+      const occurrences = existing.content.split(oldText).length - 1;
+      if (occurrences === 0) {
+        return {
+          text:
+            `That text does not appear in ${path}. It must match exactly, including ` +
+            `whitespace and indentation — read the file and copy the lines rather than ` +
+            `retyping them.`,
+          isError: true,
+        };
+      }
+      if (occurrences > 1) {
+        return {
+          text:
+            `That text appears ${occurrences} times in ${path}, so it does not say which one ` +
+            `you meant. Nothing was written. Include the surrounding lines until it is unique.`,
+          isError: true,
+        };
+      }
+
+      const updated = existing.content.replace(oldText, newText);
+      await box.writeFile(path, updated);
+      // Recorded like any other write, so the next writer still sees a conflict rather
+      // than overwriting an edit nobody else knows happened.
+      context.files?.observed(context.agent.id, path, versionOf(updated));
+      const delta = updated.split("\n").length - existing.content.split("\n").length;
+      return {
+        text:
+          `Edited ${path}` +
+          (delta === 0 ? "." : ` (${delta > 0 ? "+" : ""}${delta} line${Math.abs(delta) === 1 ? "" : "s"}).`),
+      };
     }
 
     case "write_file": {

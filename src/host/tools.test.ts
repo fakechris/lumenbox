@@ -1,0 +1,110 @@
+/**
+ * Tool behaviours worth pinning: the ones where a wrong answer changes a file.
+ */
+
+import { test } from "node:test";
+import assert from "node:assert/strict";
+import { dispatchTool } from "./tools.ts";
+
+test("edit_file changes part of a file, and refuses the two ways it could change the wrong part", async () => {
+  const file = { path: "/home/box/work/app.py", content: "" };
+  const box = {
+    readFile: async () => ({
+      path: file.path,
+      content: file.content,
+      total_lines: file.content.split("\n").length,
+      truncated: false,
+    }),
+    writeFile: async (_path: string, content: string) => {
+      file.content = content;
+      return { path: file.path, bytes: content.length };
+    },
+  };
+  const context = {
+    agent: { id: "a1", profile: { name: "Ada" } },
+    registry: {} as never,
+    bus: {} as never,
+    box,
+  } as unknown as Parameters<typeof dispatchTool>[2];
+
+  file.content = "import os\n\ndef main():\n    print('hello')\n\nmain()\n";
+  const edited = await dispatchTool(
+    "edit_file",
+    { path: file.path, old: "    print('hello')", new: "    print('goodbye')" },
+    context
+  );
+  assert.ok(!edited.isError, edited.text);
+  assert.match(file.content, /print\('goodbye'\)/);
+  assert.match(file.content, /^import os/, "and nothing else moved");
+
+  // Not there: says so, and says why it might not match.
+  const missing = await dispatchTool(
+    "edit_file",
+    { path: file.path, old: "print('nope')", new: "x" },
+    context
+  );
+  assert.ok(missing.isError);
+  assert.match(missing.text, /does not appear/);
+
+  // Ambiguous: refuses rather than picking one, and says how many it found.
+  file.content = "a = 1\nb = 1\n";
+  const ambiguous = await dispatchTool("edit_file", { path: file.path, old: "= 1", new: "= 2" }, context);
+  assert.ok(ambiguous.isError);
+  assert.match(ambiguous.text, /appears 2 times/);
+  assert.equal(file.content, "a = 1\nb = 1\n", "and nothing was written");
+
+  // A file read only in part cannot be matched against honestly.
+  const partial = {
+    ...context,
+    box: { ...box, readFile: async () => ({ path: file.path, content: "a = 1\n", total_lines: 999, truncated: true }) },
+  } as unknown as Parameters<typeof dispatchTool>[2];
+  const tooBig = await dispatchTool("edit_file", { path: file.path, old: "a = 1", new: "a = 2" }, partial);
+  assert.ok(tooBig.isError);
+  assert.match(tooBig.text, /too large/);
+});
+
+test("AskUser hands the question to a person and stops, rather than guessing or waiting", async () => {
+  const asked: { question: string; options?: string[] }[] = [];
+  const context = {
+    agent: { id: "a1", profile: { name: "Rex" } },
+    registry: {} as never,
+    bus: {} as never,
+    box: undefined,
+    askUser: async (input: { question: string; options?: string[] }) => {
+      asked.push({ question: input.question, ...(input.options ? { options: input.options } : {}) });
+      return "feishu:ou_chris";
+    },
+  } as unknown as Parameters<typeof dispatchTool>[2];
+
+  const result = await dispatchTool(
+    "AskUser",
+    { question: "Which quarter did you mean, this one or last?", options: ["this", "last"] },
+    context
+  );
+  assert.ok(!result.isError);
+  assert.deepEqual(asked, [
+    { question: "Which quarter did you mean, this one or last?", options: ["this", "last"] },
+  ]);
+  // The turn ending is the answer. An agent told to carry on would either act on the
+  // guess it just said it could not make, or burn rounds waiting for a message that
+  // arrives as a new turn by design.
+  assert.match(result.text, /turn ends here/);
+  assert.match(result.text, /wakes you/);
+  assert.match(result.text, /feishu:ou_chris/);
+
+  // Nobody to ask: said plainly, so the agent decides and admits which way it went.
+  const alone = await dispatchTool("AskUser", { question: "anything?" }, {
+    ...context,
+    askUser: undefined,
+  } as unknown as Parameters<typeof dispatchTool>[2]);
+  assert.ok(alone.isError);
+  assert.match(alone.text, /nobody to ask/);
+
+  // Reachable in principle, but this agent has never been driven from anywhere.
+  const undeliverable = await dispatchTool("AskUser", { question: "anything?" }, {
+    ...context,
+    askUser: async () => undefined,
+  } as unknown as Parameters<typeof dispatchTool>[2]);
+  assert.ok(undeliverable.isError);
+  assert.match(undeliverable.text, /could not be delivered/);
+});

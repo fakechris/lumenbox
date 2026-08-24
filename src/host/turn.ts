@@ -56,7 +56,7 @@ import {
 } from "./compaction.ts";
 import type { ResolutionConfig } from "../protocol/index.ts";
 import { buildSystemPromptParts, buildTurnPrompt } from "./prompt.ts";
-import { buildTools, dispatchTool, type ToolOutcome } from "./tools.ts";
+import { buildTools, dispatchTool, type ToolContext, type ToolOutcome } from "./tools.ts";
 import type { HostRunner } from "./host-runner.ts";
 import type { Vault } from "./vault.ts";
 import type { TaskStore } from "./tasks.ts";
@@ -309,6 +309,8 @@ export interface TurnDeps {
   scopes?: ScopeStore;
   /** MCP servers whose tools this turn may offer and call. Absent means none. */
   mcp?: McpManager;
+  /** Puts a question to whoever drove this agent. Absent means there is nobody to ask. */
+  askUser?: ToolContext["askUser"];
   /**
    * Which conversation this turn runs in. Absent means the main one — the team room.
    * The transcript read, every entry written, the compaction state and every event
@@ -1534,6 +1536,7 @@ export async function runTurn(
             tasks: deps.tasks,
             scopes: deps.scopes,
             mcp: deps.mcp,
+            askUser: deps.askUser,
             turnId,
             conversation,
           }
