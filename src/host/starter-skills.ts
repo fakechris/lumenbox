@@ -45,6 +45,41 @@ Do not pad. A brief that says "the sources disagree" is a finding.
 `,
   },
   {
+    slug: "study-a-corpus",
+    content: `---
+name: study-a-corpus
+description: Read a large body of documents once, and leave notes that make every later question cheap.
+scope: global
+---
+
+# Study a corpus
+
+For material too large to read per question — a dataroom, an archive, a repository of
+reports. Reading it fresh every time costs the same again and again; reading it once and
+writing down its shape costs once. Do this before the questions start, not during.
+
+1. **Survey without reading.** \`ls\`, \`find\`, \`wc -l\` — how many files, how big, what
+   kinds, how they are grouped. Do not open them yet.
+2. **Find the shape.** Open five or six files spread across the corpus and ask what
+   fields every one of them has: a date, a party, a status, a category. That set is the
+   schema, and it comes from the material rather than from a guess.
+3. **Fork over the slices.** Split the corpus into pieces that do not overlap and give
+   each fork one piece plus the same instruction: for every document, report those
+   fields and one line on what it is. Keep the pieces large enough that a fork reads
+   many documents.
+4. **Write the notes.** Combine the findings into
+   \`/home/box/work/notes/<corpus>/index.md\`: one line per document, the schema fields
+   first. Add \`by-<field>.md\` for the groupings worth having (by date, by category).
+   Aim for the notes to be about a hundredth of what you read.
+5. **Say what the notes cover and what they flatten.** A note that hides its own
+   coverage will be trusted past where it is true.
+
+Afterwards, answer questions by reading the notes first and opening only the documents
+they point at. When an answer is not in the notes, that is a gap worth adding — the
+notes are a living index, not a one-time export.
+`,
+  },
+  {
     slug: "tidy-downloads",
     content: `---
 name: tidy-downloads

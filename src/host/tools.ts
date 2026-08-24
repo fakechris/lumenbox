@@ -126,6 +126,21 @@ export interface ToolOutcome {
   isError?: boolean;
 }
 
+/**
+ * Conversations a fork runs in are named so they are recognisable as forks —
+ * by the tool that refuses to nest them, and by anyone reading the directory.
+ */
+export const FORK_PREFIX = "fork/";
+/**
+ * How many forks one call may open.
+ *
+ * A ceiling because each is a full turn against a model: twelve is a wide sweep over a
+ * dataroom, a hundred is a bill nobody chose. Refused with a number rather than
+ * silently truncated, so the caller sends fewer, larger pieces instead of wondering
+ * where its briefs went.
+ */
+export const MAX_FORKS = 12;
+
 const MOUSE_BUTTONS = ["left", "middle", "right", "back", "forward"] as const;
 const SCROLL_DIRECTIONS = ["up", "down", "left", "right"] as const;
 
@@ -344,6 +359,33 @@ export function buildTools(
             },
           },
           required: ["command"],
+        },
+      },
+      {
+        name: "Fork",
+        description:
+          "Split work across copies of yourself, each with its own fresh context, and " +
+          "get back what each one found. Use this when the material is too large to " +
+          "read yourself — a hundred files, a long log, a dataroom — and it divides into " +
+          "independent pieces. Slice it first with the shell (ls, grep, split) so each " +
+          "brief names its own piece, then fork over the slices.\n\n" +
+          "Each fork starts knowing nothing but its brief: say which files or range it " +
+          "owns, and what to report back. They cannot see each other's work, which is " +
+          "the point — none of them fills your context, and only their answers come " +
+          "back. Give each one work that does not depend on another's, and do the " +
+          "combining yourself: they find, you decide.",
+        input_schema: {
+          type: "object",
+          properties: {
+            briefs: {
+              type: "array",
+              description:
+                "One self-contained brief per fork. Each is the whole of what that fork " +
+                "will be told.",
+              items: { type: "string" },
+            },
+          },
+          required: ["briefs"],
         },
       },
       {
@@ -984,6 +1026,69 @@ export async function dispatchTool(
       });
       return {
         text: formatExec(result, input.timeout_ms ? Number(input.timeout_ms) : undefined),
+      };
+    }
+
+    case "Fork": {
+      const briefs = Array.isArray(input.briefs)
+        ? input.briefs.map(brief => String(brief)).filter(brief => brief.trim() !== "")
+        : [];
+      if (briefs.length === 0) {
+        return { text: "Fork needs at least one brief.", isError: true };
+      }
+      // A fork that forks is a fan-out with no bottom, and the cost is exponential
+      // rather than linear. One level, said plainly rather than silently capped.
+      if ((context.conversation ?? "").startsWith(FORK_PREFIX)) {
+        return {
+          text:
+            "You are already a fork, and a fork cannot fork again — that is a fan-out " +
+            "with no bottom. Do this piece yourself and report back.",
+          isError: true,
+        };
+      }
+      if (briefs.length > MAX_FORKS) {
+        return {
+          text: `${briefs.length} forks is more than the ${MAX_FORKS} allowed at once. Send fewer, larger pieces.`,
+          isError: true,
+        };
+      }
+
+      const parent = context.conversation ?? MAIN_CONVERSATION;
+      const stamp = Date.now().toString(36);
+      const results = await Promise.all(
+        briefs.map(async (brief, index) => {
+          // Each fork is its own conversation of the same agent, which is what makes
+          // the context separate and the runs concurrent — the bus already serialises
+          // per agent *and* conversation, so this needs no new machinery.
+          const conversation = `${FORK_PREFIX}${parent}-${stamp}-${index + 1}`;
+          try {
+            context.bus.sendFromUser(context.agent.id, brief, {
+              conversation,
+              steerable: false,
+            });
+            await context.bus.runExclusive(context.agent.id, { conversation });
+            const said = context.registry
+              .readTranscript(context.agent.id, conversation)
+              .filter(
+                (entry): entry is { role: string; text: string; kind?: string } =>
+                  (entry as { role?: string }).role === "assistant" &&
+                  (entry as { kind?: string }).kind === undefined &&
+                  typeof (entry as { text?: string }).text === "string"
+              )
+              .map(entry => entry.text)
+              .join("\n\n");
+            return `--- fork ${index + 1} ---\n${said.trim() === "" ? "(said nothing)" : said}`;
+          } catch (error) {
+            // One fork failing is a gap in the findings, not a failure of the fan-out:
+            // reported in place so the caller can see which piece is missing.
+            return `--- fork ${index + 1} FAILED ---\n${error instanceof Error ? error.message : String(error)}`;
+          }
+        })
+      );
+      return {
+        text:
+          `${briefs.length} fork${briefs.length === 1 ? "" : "s"} finished. Their findings ` +
+          `are below; combining them is yours to do.\n\n${results.join("\n\n")}`,
       };
     }
 

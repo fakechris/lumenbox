@@ -28,9 +28,12 @@ const start = (jobs: JobService, command: string) =>
 test("a job answers immediately and its output lands in a file, whole", async () => {
   const { jobs, cleanup } = service();
   try {
-    const began = Date.now();
-    const started = start(jobs, "echo first; sleep 0.4; echo second; echo oops >&2");
-    assert.ok(Date.now() - began < 300, "starting a job does not wait for it");
+    const started = start(jobs, "echo first; sleep 1; echo second; echo oops >&2");
+    // The claim is that starting does not wait for the command, and the honest way to
+    // say that is the job's own state rather than a stopwatch: a loaded machine can
+    // take a while to spawn a process, which made a wall-clock bound flaky under the
+    // full suite while the property it stood for was never in doubt.
+    assert.equal(jobs.get(started.job_id)?.running, true, "answered while it still runs");
     assert.match(started.job_id, /^job-/);
     assert.ok(started.pid > 0);
 

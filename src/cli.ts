@@ -915,6 +915,13 @@ async function main(): Promise<number> {
         });
         out(`${bold(profile.label)}  ${dim(profile.model)}  ${dim(home)}`);
         const boxReady = orchestrator.boxClient() !== undefined;
+        // Quality per token, not quality alone. A model that passes one more task by
+        // spending five times the tokens is not better for this product, and the
+        // single number that says so is passes per 100k — the usage log already
+        // counts the denominator, so this costs one division.
+        let passed = 0;
+        let attempted = 0;
+        const spendBefore = orchestrator.usage.totalsSince(0);
         for (const task of GOLDEN_TASKS) {
           if (task.needsBox === true && !boxReady) {
             out(`  · ${task.id.padEnd(12)} ${dim("needs a box (--box)")}`);
@@ -938,13 +945,29 @@ async function main(): Promise<number> {
               `  ${verdict.pass ? "✓" : "✗"} ${task.id.padEnd(12)} ` +
                 dim(`${verdict.detail} (${seconds}s)`)
             );
-            if (!verdict.pass) anyFail = true;
+            attempted += 1;
+            if (verdict.pass) passed += 1;
+            else anyFail = true;
           } catch (error) {
+            attempted += 1;
             anyFail = true;
             const detail = error instanceof Error ? error.message : String(error);
             out(`  ✗ ${task.id.padEnd(12)} ${dim(detail)}`);
           }
         }
+        // The headline number: passes per 100k tokens. Quality alone rewards a model
+        // that buys one more task with five times the spend; this does not.
+        const after = orchestrator.usage.totalsSince(0);
+        const tokens =
+          after.inputTokens - spendBefore.inputTokens +
+          (after.outputTokens - spendBefore.outputTokens) +
+          (after.cacheReadTokens - spendBefore.cacheReadTokens) +
+          (after.cacheWriteTokens - spendBefore.cacheWriteTokens);
+        const perHundredK = tokens > 0 ? (passed / tokens) * 100_000 : 0;
+        out(
+          `  ${bold(`${passed}/${attempted}`)} passed, ${Math.round(tokens / 1000)}k tokens` +
+            (tokens > 0 ? dim(` — ${perHundredK.toFixed(1)} passes per 100k`) : "")
+        );
       }
       return anyFail ? 1 : 0;
     }
