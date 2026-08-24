@@ -26,6 +26,8 @@ import {
   type ClipboardReadRequest,
   type ClipboardResult,
   type ClipboardWriteRequest,
+  type BrowserRequest,
+  type BrowserResponse,
   type ComputerRequest,
   type ComputerResult,
   type ExecRequest,
@@ -60,6 +62,7 @@ import { startEgressProxy } from "../egress/proxy.ts";
 import { RecordService, RECORDINGS_DIR } from "./record-service.ts";
 import { AGENT_NICE, reapSpool, runShell, withoutBoxToken } from "./shell-service.ts";
 import { JobService } from "./job-service.ts";
+import { BrowserService } from "./browser-service.ts";
 import { downloadFile, listDir, readFile, uploadFile, writeFile } from "./fs-service.ts";
 
 const VERSION = "0.1.0";
@@ -314,6 +317,12 @@ const jobs = new JobService();
   if (removed > 0) log(`reaped ${removed} stale spool file(s)`);
 }
 
+/**
+ * The semantic browser, per desktop. Connections are held open between calls, so this
+ * outlives any one request — see browser-service.ts for why that is load-bearing.
+ */
+const browser = new BrowserService();
+
 const routes: Record<string, Handler> = {
   "POST /computer": (body: ComputerRequest) => handleComputer(body),
   "POST /exec": async (body: ExecRequest): Promise<ExecResult | JobStartedResult> => {
@@ -343,6 +352,36 @@ const routes: Record<string, Handler> = {
     const result = jobs.kill(body.job_id);
     if (result === undefined) throw new Error(`No job ${body.job_id}`);
     return result;
+  },
+  // Gated on desktop ownership exactly as /exec and /computer are: driving the browser on
+  // someone else's desktop is driving their screen, whichever protocol it goes over.
+  "POST /browser": async (body: BrowserRequest): Promise<BrowserResponse> => {
+    const display = body.display ?? defaultDisplayIndex;
+    displays.assertOwner(display, body.owner);
+    await displays.ensure(display);
+    switch (body.op) {
+      case "open":
+        return browser.open(display, String(body.url ?? "about:blank"));
+      case "snapshot":
+        return browser.snapshot(display);
+      case "read": {
+        const result = await browser.read(display);
+        return { url: result.url, title: "", snapshot: "", text: result.text };
+      }
+      case "act":
+        return browser.act(display, String(body.action ?? ""), {
+          ...(body.ref !== undefined ? { ref: body.ref } : {}),
+          ...(body.text !== undefined ? { text: body.text } : {}),
+          ...(body.key !== undefined ? { key: body.key } : {}),
+          ...(body.replace !== undefined ? { replace: body.replace } : {}),
+        });
+      case "scroll":
+        return browser.scroll(display, String(body.direction ?? "down"), Number(body.amount ?? 3));
+      case "upload":
+        return browser.upload(display, String(body.ref ?? ""), body.files ?? []);
+      default:
+        throw new Error(`Unknown browser op ${body.op}`);
+    }
   },
   "GET /displays": async (): Promise<DisplayInfo[]> => displays.list(),
   // Per desktop, like everything else: each agent has its own, so "the clipboard" is

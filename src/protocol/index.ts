@@ -446,3 +446,42 @@ export interface ClipboardWriteRequest {
 export interface ClipboardResult {
   text: string;
 }
+
+/**
+ * Driving the box's browser by name rather than by coordinate.
+ *
+ * One request shape for every browser action, because they all answer the same question —
+ * what does the page look like now — and a separate result type per verb would say the
+ * same thing four times.
+ */
+export interface BrowserRequest {
+  display?: number;
+  owner?: string;
+  /** What to do: open, snapshot, read, act, scroll or upload. */
+  op: string;
+  /** For `open`. */
+  url?: string;
+  /** For `act`: click, type, key or hover. */
+  action?: string;
+  /** The handle of the thing to act on, from a snapshot: e4, or e4@f1 inside a frame. */
+  ref?: string;
+  text?: string;
+  key?: string;
+  /** Whether typing replaces what is there. Defaults to true. */
+  replace?: boolean;
+  direction?: string;
+  amount?: number;
+  /** For `upload`: paths inside the box. */
+  files?: string[];
+}
+
+export interface BrowserResponse {
+  url: string;
+  title: string;
+  /** The page as an outline, with a ref on everything actionable. */
+  snapshot: string;
+  /** Present when the page asked a question while we were acting. */
+  dialog?: string;
+  /** For `read`: the page's prose. */
+  text?: string;
+}

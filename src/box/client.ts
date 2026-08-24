@@ -5,6 +5,8 @@
  */
 
 import type {
+  BrowserRequest,
+  BrowserResponse,
   ClipboardResult,
   ComputerAction,
   ComputerResult,
@@ -274,6 +276,14 @@ export class BoxClient {
 
   uploadFile(path: string, base64: string): Promise<UploadFileResult> {
     return this.post<UploadFileResult>("/fs/upload", { path, base64 });
+  }
+
+  /**
+   * Drives the browser on a desktop. Longer than the default timeout because a page
+   * that is slow to settle is normal, and the service already bounds its own waits.
+   */
+  browser(request: BrowserRequest): Promise<BrowserResponse> {
+    return this.post<BrowserResponse>("/browser", request, 120_000);
   }
 
   listDir(path: string): Promise<ListDirResult> {

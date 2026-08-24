@@ -135,3 +135,26 @@ test("searching is offered only where it can work, and is a tool the team knows 
     else process.env[SEARCH_KEY_VARIABLE] = previous;
   }
 });
+
+test("the shell refuses to reach around the browser tools, before it needs a box", async () => {
+  const context = {
+    agent: { id: "a1", profile: { name: "Rex" } },
+    registry: {} as never,
+    bus: {} as never,
+    box: undefined,
+  } as unknown as Parameters<typeof dispatchTool>[2];
+
+  // No box here on purpose. The refusal is about the command, and an agent that got
+  // "no box" instead would reasonably conclude the command was fine and retry it later.
+  const refused = await dispatchTool(
+    "bash",
+    { command: "curl http://127.0.0.1:9222/json/list" },
+    context
+  );
+  assert.ok(refused.isError);
+  assert.match(refused.text, /browser_open/);
+
+  const screen = await dispatchTool("bash", { command: "xdotool key Return" }, context);
+  assert.ok(screen.isError);
+  assert.match(screen.text, /computer/);
+});

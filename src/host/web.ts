@@ -192,6 +192,50 @@ function requestOnce(target: URL): Promise<RawResponse> {
 }
 
 /**
+ * Checks a URL is one an agent may be sent to, and says why not when it is not.
+ *
+ * Shared with the browser tools, which navigate rather than fetch but face the same
+ * instruction on the same hostile page. The check is by necessity weaker there — the
+ * browser resolves the name itself, so this cannot close the gap between checking and
+ * connecting the way the fetch path does — but the address an injected instruction names
+ * is nearly always a literal, and this refuses those outright.
+ */
+export async function guardUrl(rawUrl: string): Promise<URL> {
+  let target: URL;
+  try {
+    target = new URL(rawUrl);
+  } catch {
+    throw new WebError(`${rawUrl} is not a URL. It needs a scheme, like https://example.com.`);
+  }
+  if (target.protocol !== "http:" && target.protocol !== "https:") {
+    throw new WebError(`${target.protocol} is not a scheme this opens; use http or https.`);
+  }
+  const literal = target.hostname.replace(/^\[|\]$/g, "");
+  if (isIP(literal) !== 0) {
+    const reason = forbiddenAddress(literal);
+    if (reason !== undefined) throw new WebError(`${literal} ${reason}.`);
+    return target;
+  }
+  // A name has to be resolved to be judged. Any answer that is inside is refused, which
+  // is the common case for a name that points somewhere it should not.
+  const { promises: dns } = await import("node:dns");
+  let addresses: string[];
+  try {
+    addresses = (await dns.lookup(literal, { all: true })).map(entry => entry.address);
+  } catch {
+    // A name that does not resolve is the browser's problem to report, not ours to guess at.
+    return target;
+  }
+  for (const address of addresses) {
+    const reason = forbiddenAddress(address);
+    if (reason !== undefined) {
+      throw new WebError(`${literal} resolves to ${address}, which ${reason}.`);
+    }
+  }
+  return target;
+}
+
+/**
  * Fetches a page and returns it as text.
  *
  * Redirects are followed by hand rather than by the client, because each hop has to go

@@ -42,6 +42,20 @@ fi
 # relay's network rather than this container's. The bypass list keeps the box's own services
 # — boxd, noVNC, anything an agent serves locally — off the proxy, which would otherwise send
 # a loopback request out to the relay and back.
+# The semantic browser tools drive this through the DevTools protocol, which needs a
+# debugging port. One per desktop, matching the profile split above, so two agents
+# browsing at once cannot drive each other's windows.
+#
+# It binds to loopback *inside the container* and is never published to the host: boxd is
+# the only thing that connects to it, and boxd is already authenticated. Publishing it
+# would be a second way into the box that answers to nobody, since CDP has no auth of its
+# own — anyone who can reach the port owns the browser.
+#
+# It does mean anything running in the box can drive the browser directly, which is why
+# the shell tool refuses commands that try to. Without that, the approval gate on browser
+# actions would be advisory.
+DEBUG_PORT=$((9222 + ${DESKTOP:-0}))
+
 PROXY_ARGS=()
 if [ -n "${AGENTBOX_EGRESS_RELAY:-}" ]; then
   PROXY_ARGS=(
@@ -52,6 +66,8 @@ fi
 
 exec chromium \
   --user-data-dir="$PROFILE" \
+  --remote-debugging-port="$DEBUG_PORT" \
+  --remote-allow-origins=* \
   "${PROXY_ARGS[@]+"${PROXY_ARGS[@]}"}" \
   --no-sandbox \
   --disable-dev-shm-usage \

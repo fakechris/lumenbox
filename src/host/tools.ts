@@ -18,7 +18,8 @@ import type { ScopeStore } from "./scopes.ts";
 import type { McpManager } from "./mcp.ts";
 import { delegateEnv, PRESETS, presetNamed, quoteForShell } from "./presets.ts";
 import { describeHistory, readHistory } from "./history.ts";
-import { canSearch, fetchPage, searchWeb, WebError } from "./web.ts";
+import { canSearch, fetchPage, guardUrl, searchWeb, WebError } from "./web.ts";
+import { guardShellCommand } from "./ui-automation-guard.ts";
 import { dedupeKey, validateRecord } from "./memory.ts";
 import { Claims, heldElsewhere } from "./claims.ts";
 import { MAIN_CONVERSATION } from "../agents/registry.ts";
@@ -33,7 +34,7 @@ import {
   type TodoItem,
   type TodoStatus,
 } from "./durable.ts";
-import type { ComputerAction } from "../protocol/index.ts";
+import type { BrowserRequest, ComputerAction } from "../protocol/index.ts";
 
 export interface ToolContext {
   agent: AgentRecord;
@@ -902,6 +903,104 @@ export function buildTools(
     });
   }
 
+  if (hasBox) {
+    tools.push(
+      {
+        name: "browser_open",
+        description:
+          "Open a URL in your box's browser and get the page back as an outline. Start " +
+          "here for anything you need to *do* on a website — sign in, fill a form, click " +
+          "through an application. For a page you only need to read, WebFetch is cheaper.\n\n" +
+          "The outline gives every actionable thing a handle, like `[ref=e4]`. You act by " +
+          "naming the handle, never by guessing coordinates, and every action hands you a " +
+          "fresh outline — so the refs you hold are always current. Refs inside a frame " +
+          "look like `e2@f1`; use them exactly as written.\n\n" +
+          "The browser is your box's own, on your desktop, and its logins persist between " +
+          "turns. If a page defeats these tools, fall back to `computer` and drive it by " +
+          "eye rather than retrying here harder.",
+        input_schema: {
+          type: "object",
+          properties: { url: { type: "string", description: "The http or https URL to open." } },
+          required: ["url"],
+        },
+      },
+      {
+        name: "browser_snapshot",
+        description:
+          "Re-read the current page as an outline. You rarely need this — every browser " +
+          "action already returns one — but it is how you catch up with a page that " +
+          "changed on its own, or that you navigated by hand with `computer`.",
+        input_schema: { type: "object", properties: {} },
+      },
+      {
+        name: "browser_read",
+        description:
+          "Read the current page's prose, without the outline. Use it once you have " +
+          "navigated somewhere and want what the page *says* rather than what you can " +
+          "click. Returns the main article where the page marks one, otherwise the body.",
+        input_schema: { type: "object", properties: {} },
+      },
+      {
+        name: "browser_act",
+        description:
+          "Do one thing to the current page, and get back what it looks like afterwards.\n\n" +
+          "`click` presses the element; `type` puts text into it (replacing what is there " +
+          "unless you say otherwise); `hover` moves the pointer onto it; `key` sends a key " +
+          "to whatever has focus — Enter, Tab, Escape, Backspace, Delete, the arrows, " +
+          "PageUp, PageDown, Home, End.\n\n" +
+          "click, type and hover need `ref` from the latest outline. If a ref is refused as " +
+          "stale, take a fresh snapshot rather than guessing another one.\n\n" +
+          "Never type somebody's password, one-time code or card number. If a step needs a " +
+          "credential, or a captcha, stop and say so — name the site and the step — so a " +
+          "person can take the box and do it themselves.",
+        input_schema: {
+          type: "object",
+          properties: {
+            action: { type: "string", enum: ["click", "type", "key", "hover"] },
+            ref: { type: "string", description: "Handle from the outline, e.g. e4 or e2@f1." },
+            text: { type: "string", description: "For `type`: what to enter." },
+            key: { type: "string", description: "For `key`: which key, e.g. Enter." },
+            replace: {
+              type: "boolean",
+              description: "For `type`: false to append rather than replace. Defaults to true.",
+            },
+          },
+          required: ["action"],
+        },
+      },
+      {
+        name: "browser_scroll",
+        description:
+          "Scroll the page and get the outline afterwards. The outline already includes " +
+          "things below the fold, so scroll when a page loads more as you go, or when you " +
+          "want the screen to show what you are about to work on.",
+        input_schema: {
+          type: "object",
+          properties: {
+            direction: { type: "string", enum: ["up", "down", "left", "right"] },
+            amount: { type: "integer", description: "Roughly a screen per 8. Defaults to 3." },
+          },
+          required: ["direction"],
+        },
+      },
+      {
+        name: "browser_upload",
+        description:
+          "Attach a file from your box to a file input on the page, without touching the " +
+          "operating system's file chooser. `ref` is the input's handle from the outline; " +
+          "`path` is a path inside your box, so write or download the file first.",
+        input_schema: {
+          type: "object",
+          properties: {
+            ref: { type: "string", description: "Handle of the file input." },
+            path: { type: "string", description: "Absolute path inside your box." },
+          },
+          required: ["ref", "path"],
+        },
+      }
+    );
+  }
+
   tools.push({
     name: "WebFetch",
     description:
@@ -1114,8 +1213,13 @@ export async function dispatchTool(
     }
 
     case "bash": {
-      const box = requireBox(context);
       const command = String(input.command ?? "");
+      // Before the box is even required: a shell that drives the browser or the screen
+      // directly reaches the same outcome as the tools while passing none of the checks
+      // attached to them, and that is true whether or not a box is up.
+      const guarded = guardShellCommand(command);
+      if (guarded.refusal !== undefined) return { text: guarded.refusal, isError: true };
+      const box = requireBox(context);
       if (input.background === true) {
         const started = await box.startJob(command, {
           ...(input.cwd ? { cwd: String(input.cwd) } : {}),
@@ -1547,6 +1651,78 @@ export async function dispatchTool(
           : `${entry.name}  (${entry.size} bytes)`
       );
       return { text: `${result.path}\n\n${lines.join("\n")}` };
+    }
+
+    case "browser_open":
+    case "browser_snapshot":
+    case "browser_read":
+    case "browser_act":
+    case "browser_scroll":
+    case "browser_upload": {
+      const box = requireBox(context);
+      // The same desktop guard the pixel tools use. Driving the browser on another
+      // agent's screen is driving their screen, whichever protocol it travels over.
+      if (context.display && !context.display.acquire(context.agent.id)) {
+        const holderId = context.display.heldBy()!;
+        const holder = context.registry.tryGet(holderId);
+        return {
+          text:
+            `${holder?.profile.name ?? holderId} is using the box's desktop. Do something ` +
+            "that does not need the screen, or wait and try again.",
+          isError: true,
+        };
+      }
+
+      const request: BrowserRequest = {
+        op: name.slice("browser_".length),
+        ...(context.displayIndex !== undefined ? { display: context.displayIndex } : {}),
+        ...(context.boxOwner !== undefined ? { owner: context.boxOwner } : {}),
+      };
+      if (name === "browser_open") {
+        try {
+          // The same check WebFetch makes, for the same reason: the URL an agent is
+          // asked to open is often one it read on a page written by somebody else.
+          const target = await guardUrl(String(input.url ?? ""));
+          request.url = target.toString();
+        } catch (error) {
+          return {
+            text: error instanceof WebError ? error.message : `Cannot open that: ${error}`,
+            isError: true,
+          };
+        }
+      }
+      if (name === "browser_act") {
+        request.action = String(input.action ?? "");
+        if (typeof input.ref === "string") request.ref = input.ref;
+        if (typeof input.text === "string") request.text = input.text;
+        if (typeof input.key === "string") request.key = input.key;
+        if (typeof input.replace === "boolean") request.replace = input.replace;
+      }
+      if (name === "browser_scroll") {
+        request.direction = String(input.direction ?? "down");
+        request.amount = Number.isFinite(input.amount) ? Number(input.amount) : 3;
+      }
+      if (name === "browser_upload") {
+        request.ref = String(input.ref ?? "");
+        request.files = [String(input.path ?? "")];
+      }
+
+      try {
+        const result = await box.browser(request);
+        if (name === "browser_read") {
+          return { text: `${result.url}\n\n${result.text ?? "(the page has no text)"}` };
+        }
+        const parts = [`${result.title || "(untitled)"} — ${result.url}`];
+        // A dialog the page raised is put first: it is the thing that happened, and the
+        // outline below it is the page as it stands afterwards.
+        if (result.dialog !== undefined) parts.push(result.dialog);
+        parts.push(result.snapshot);
+        return { text: parts.join("\n\n") };
+      } catch (error) {
+        // A browser error is nearly always actionable — no browser running, a stale ref,
+        // an element with no position — so it goes back as text rather than as a throw.
+        return { text: error instanceof Error ? error.message : String(error), isError: true };
+      }
     }
 
     case "WebFetch": {
