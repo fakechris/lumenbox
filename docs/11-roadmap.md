@@ -8,7 +8,9 @@ that motivated several items live in the (untracked) `research/` directory.
 
 The system today has the framework's five organization objects (conversations, people,
 tasks, credentials, workers) and a hardened turn engine. What remains is a last mile of
-usability, one large security item, and two structural growths.
+usability, the reference toolset's still-missing members (web, browser, shell jobs,
+edits, questions), a set of honesty surfaces the hardening never finished, one large
+security item, and two structural growths.
 
 ---
 
@@ -33,6 +35,34 @@ actually end to end. Medium-small. Depends on nothing; reuses the policy grant s
 dir) exists. Add the platform targets and a real installer output, and settle the
 macOS app name (packaging fixes the "still says Electron" menu-bar label). Medium.
 Makes it a distributable rather than a dev launch.
+
+### R12. Web search and fetch as first-class tools
+"What is the current X" and "read this page" degrade today to `curl` through an HTML
+stripper, or to pixel-driving the desktop browser — an order of magnitude more
+latency and tokens, and it fails outright on JavaScript-rendered pages. A search
+tool over a pluggable provider and a fetch tool that can render close the largest
+single capability gap for some of the least code. Small. They enter through the same
+allowlist / scope / policy surfaces as every other tool.
+
+### R14. An edit tool, not whole-file rewrites
+`write_file` re-emits the whole file for a one-line change: tokens scale with the
+file, not with the change, and a stale rewrite gets refused by the changed-since-read
+guard — which is honest, but still a failed edit. A `str_replace`-shaped tool (old
+text, new text, optionally several pairs per call) is small and removes both costs.
+
+### R15. An agent can ask a question mid-task
+A turn can only end with a final answer, so an ambiguous instruction forces a guess
+carried to completion. An `ask` tool that suspends the turn, pushes the question to
+the origin chat as a card (answers as buttons, the words still working), and resumes
+on the reply is the approval pipeline wearing different clothes — suspension,
+channel push, and one-shot binding all exist today. Small-medium; the payoff is
+long-task success rate.
+
+### R19. Host-initiated exec, marked as such
+Starter skills and the web UI drive the same `/exec` channel the agent does, so
+host-side housekeeping (`mkdir` for a skill) walks the agent's approval and audit
+surface. A marker on the protocol request — a label, not a bypass — lets the audit
+log say who acted. Small.
 
 ---
 
@@ -70,6 +100,37 @@ block UI-automation binaries (`xdotool`, `wmctrl`, `pyautogui`, `playwright`) in
 shell tool — an agent that finds them routes around the audited `computer` tool and
 takes the screenshot pipeline blind with it. When it lands, the final-screenshot gate
 grows to include the browser tools.
+
+### R13. Shell jobs: background, stream, and await
+A command that runs past the timeout is lost, not slow — a dev server, a large
+build, a long download are a category of task the box simply cannot do. The
+reference shape: `block_until_ms` auto-backgrounds the call, output streams to a
+terminal file the agent can read incrementally, and an `await` tool blocks on a
+regex over that output. Needs a job field on the exec protocol and per-job state in
+boxd. Medium. Rider, nearly free: enrich the box toolchain (`ripgrep`, `gh`, `tmux`,
+`uv`) — the agent's own productivity multiplies, and tmux is a substrate jobs can
+fall back to.
+
+### R16. Webhook and event triggers
+Scheduled skills cover "every morning"; nothing covers "when the build breaks" or
+"when an external system pings". An HTTP ingress whose calls arrive as inbound
+messages — identity-bound, scoped, through the same gate as every other channel —
+turns automations from cron-only into event-driven, and is the entry ticket for the
+enterprise direction. Medium; design the identity story first, because a webhook is
+a credential.
+
+### R17. A project tier of memory
+Memory is self and team today; the third natural boundary is the scope. What was
+learned inside a project stays with it, is injected for whoever works there, and
+dies with it — the Scope object already exists as that boundary, so this is memory's
+third growth rather than a new subsystem. Medium.
+
+### R18. Finish the honest box
+Three half-truths the box surface still tells: uploads can land half-written (no
+`.part` + rename), health carries a version field that nothing compares (a box on an
+older image should say so), and failures arrive as one undifferentiated result when
+refused / timed-out / crashed each have a different remedy. Small each, medium
+together — the unfinished half of the R-05 lineage.
 
 ---
 
@@ -120,3 +181,6 @@ them speculatively is the over-engineering the whole project avoids.
   behind bigger rocks.
 - **Voice, mobile-native, code-mode sandbox, embeddings/CKG retrieval.** Product scale
   or shape the box does not have; the documented retrieval trigger has not fired.
+- **Image generation, video-review subagents, a WebAuthn bridge.** Real in the
+  reference, but each is a product-shape decision waiting for a user who asks, not an
+  architecture gap; recorded so they stop being rediscovered.
