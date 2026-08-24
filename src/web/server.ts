@@ -265,6 +265,11 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
 
   const provisioner = options.boxProvisioner ?? resolveBoxProvisioner();
 
+  // Optional in the type and not in the code: two routes read it unconditionally, so a
+  // caller that omitted it got a 500 from the page's own state endpoint. Resolved once
+  // here rather than defended at each use, which is how one of them ends up missing it.
+  const provider = options.provider ?? resolveProvider(loadConfig().provider);
+
   // The moment an agent starts waiting on a person is worth pushing, not only
   // polling: the desktop shell turns this into a system notification, which is the
   // only way to learn about it while the window is closed.
@@ -299,7 +304,7 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
 
   const orchestrator = new Orchestrator({
     registry,
-    provider: options.provider,
+    provider,
     useBox: options.useBox,
     boxProvisioner: provisioner,
     hostRunner,
@@ -803,20 +808,44 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
   const boxWatch = setInterval(() => {
     void (async () => {
       const client = orchestrator.boxClient();
-      if (!client) return;
-      try {
-        await client.health();
-        boxWasHealthy = true;
-      } catch (error) {
-        if (boxWasHealthy) {
-          boxWasHealthy = false;
+      if (client !== undefined) {
+        try {
+          await client.health();
+          boxWasHealthy = true;
+          return;
+        } catch (error) {
           const detail = error instanceof Error ? error.message : String(error);
-          log(`box stopped answering: ${detail}`);
-          broadcast({ type: "error", message: `The box stopped answering: ${detail}` });
+          // Written every time, not only on the transition: the page reads this, and a
+          // value set once at startup is a claim about one moment presented as the
+          // present. The *announcement* stays edge-triggered — a box that stays down
+          // does not deserve a notification a minute.
+          box = { connected: false, detail };
+          if (boxWasHealthy) {
+            boxWasHealthy = false;
+            log(`box stopped answering: ${detail}`);
+            broadcast({ type: "error", message: `The box stopped answering: ${detail}` });
+          }
         }
       }
+
+      // Down, or never up. Try again — and try *resolving* it again rather than
+      // retrying the address we already have, because a box that was updated or
+      // recreated comes back on a different published port. Watching without
+      // reconnecting is what made "restart the app" the recovery for an event the
+      // product's own promise says should need no attention.
+      const attempt = await orchestrator.connectBox();
+      box = attempt;
+      if (!attempt.connected) return;
+      boxWasHealthy = true;
+      log(`box reachable again: ${attempt.detail}`);
+      broadcast({ type: "error", message: `The box is back: ${attempt.detail}` });
+      // Desktops are brought up on demand and remembered; a box that was replaced has
+      // none of them, and a remembered one would be a screen that never appears.
+      void orchestrator.ensureAllDesktops().catch(() => {});
     })();
-  }, 30_000);
+    // Configurable only so a test can watch a recovery without waiting half a minute
+    // for each tick; nothing in production has a reason to change it.
+  }, envNumber("AGENTBOX_BOX_WATCH_MS", 30_000));
   boxWatch.unref?.();
 
   // Backups on a timer, off unless asked for. The state this protects is the only part of the
@@ -1991,7 +2020,7 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
         if (route === "GET /api/config") {
           const config = loadConfig();
           send(res, 200, {
-            current: describeProvider(options.provider),
+            current: describeProvider(provider),
             config: {
               provider: config.provider ?? null,
               model: config.model ?? null,
@@ -2221,7 +2250,7 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
           const midnight = new Date();
           midnight.setHours(0, 0, 0, 0);
           send(res, 200, {
-            provider: describeProvider(options.provider),
+            provider: describeProvider(provider),
             build,
             usageToday: orchestrator.usage.totalsSince(midnight.getTime()),
             // Broken out by person, with a readable name where the id is a principal.

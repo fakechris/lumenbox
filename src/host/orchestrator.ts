@@ -380,6 +380,10 @@ export class Orchestrator {
       const health = await client.health();
       this.box = client;
       this.resolution = health.resolution;
+      // Connecting again means the box may be a different box: one that was updated,
+      // recreated, or simply restarted. Nothing it had is guaranteed to still be
+      // there, and a remembered desktop is the one that never appears.
+      this.readyDisplays.clear();
       const size = health.resolution
         ? `${health.resolution.display.width}x${health.resolution.display.height}`
         : "no display";
