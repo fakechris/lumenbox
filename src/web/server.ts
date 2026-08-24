@@ -367,10 +367,17 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
       task => !isLive(task.status) && Date.parse(task.updatedAt) >= since
     );
     const live = all.filter(task => isLive(task.status));
-    const lines = ["Daily digest"];
+    // Every line points at the thing it claims. A briefing exists so somebody can
+    // understand the day in a minute and intervene where judgement changes the
+    // outcome — which needs one click from any claim to its evidence, not a summary
+    // to be taken on faith.
+    const base = process.env.AGENTBOX_PUBLIC_URL?.replace(/\/+$/, "");
+    const cite = (task: { id: string }) =>
+      base === undefined || base === "" ? task.id : `${task.id} (${base}/?task=${task.id})`;
+    const lines = ["Daily briefing"];
     lines.push(
       closed.length > 0
-        ? `Closed (24h): ${closed.map(task => `${task.id} ${task.title}`).join(" · ")}`
+        ? `Closed (24h): ${closed.map(task => `${cite(task)} ${task.title}`).join(" · ")}`
         : "Closed (24h): nothing"
     );
     if (live.length > 0) {
@@ -378,9 +385,18 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
         `In flight: ${live
           .map(
             task =>
-              `${task.id} [${task.status}]${task.assigneeId !== undefined ? ` @${nameOf(task.assigneeId)}` : ""} ${task.title}`
+              `${cite(task)} [${task.status}]${task.assigneeId !== undefined ? ` @${nameOf(task.assigneeId)}` : ""} ${task.title}`
           )
           .join(" · ")}`
+      );
+    }
+    // What the board is holding for somebody: the tasks a person, not an agent, has
+    // to move next. Named separately because a blocked row buried in "in flight" is
+    // how work quietly stops.
+    const waiting = live.filter(task => task.status === "blocked" || task.status === "review");
+    if (waiting.length > 0) {
+      lines.push(
+        `Needs a person: ${waiting.map(task => `${cite(task)} [${task.status}]`).join(" · ")}`
       );
     }
     const requesters = [
