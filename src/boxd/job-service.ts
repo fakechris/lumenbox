@@ -93,22 +93,27 @@ export class JobService {
       log_bytes: 0,
     };
 
+    // Resolved when the log is *on disk*, not when the process exited.
+    //
+    // The difference is not theoretical: a wait resolving on `close` alone returned a
+    // tail that was missing the command's last output, because the pipe into the file
+    // had not flushed yet. Anyone waiting for a job and then reading its tail would see
+    // work that had already happened as not having happened — the exact failure this
+    // whole file exists to prevent. So the ending is announced after `finish`.
     const finished = new Promise<void>(resolve => {
-      child.on("close", code => {
+      const settle = (code: number, note?: string) => {
         status.running = false;
-        status.exit_code = code ?? 1;
+        status.exit_code = code;
         status.ended_at = new Date().toISOString();
+        if (note !== undefined) log.write(note);
         log.end();
-        resolve();
-      });
-      child.on("error", error => {
-        status.running = false;
-        status.exit_code = 127;
-        status.ended_at = new Date().toISOString();
-        log.write(`failed to start: ${error.message}\n`);
-        log.end();
-        resolve();
-      });
+        log.on("finish", () => resolve());
+        // A stream that somehow never finishes must not wedge a wait forever.
+        const guard = setTimeout(() => resolve(), 2_000);
+        guard.unref?.();
+      };
+      child.on("close", code => settle(code ?? 1));
+      child.on("error", error => settle(127, `failed to start: ${error.message}\n`));
     });
 
     this.jobs.set(jobId, { status, pid: child.pid ?? -1, finished });
