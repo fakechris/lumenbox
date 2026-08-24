@@ -432,3 +432,67 @@ test("queuedCount and isActive answer per conversation, while turns run", async 
     cleanup();
   }
 });
+
+// ── Lanes: what waits for what ────────────────────────────────────────────────────
+//
+// A person's question and a nightly digest are not the same urgency. The rule is
+// strict priority with one exception, and both halves are load-bearing: without the
+// priority a question queues behind a schedule, without the exception a busy room
+// starves its own audits.
+
+test("a turn takes one lane at a time, highest first, and never mixes them", async () => {
+  const { registry, cleanup } = tempRegistry();
+  try {
+    const ada = registry.create({ name: "Ada" });
+    const { runner } = gatedRunner();
+    const bus = new AgentBus(registry, runner);
+
+    // Queued in the wrong order on purpose: background first, then a teammate, then
+    // the person — arrival order must not decide this.
+    bus.sendFromUser(ada.id, "nightly digest", { lane: "background" });
+    bus.send({ fromId: registry.create({ name: "Bob" }).id, toId: ada.id, text: "peer note" });
+    bus.sendFromUser(ada.id, "what is the status?");
+
+    assert.deepEqual(
+      bus.drain(ada.id).map(m => m.text),
+      ["what is the status?"],
+      "the person goes first, alone — not batched with the digest"
+    );
+    assert.deepEqual(bus.drain(ada.id).map(m => m.text), ["peer note"], "then the teammate");
+    assert.deepEqual(bus.drain(ada.id).map(m => m.text), ["nightly digest"], "then the schedule");
+    assert.deepEqual(bus.drain(ada.id), []);
+  } finally {
+    cleanup();
+  }
+});
+
+test("a lane held down too long goes first anyway, and only while it is held down", async () => {
+  const { chooseLane } = await import("./bus.ts");
+  const at = (lane: "user" | "agent" | "background", secondsAgo: number) =>
+    ({
+      lane,
+      fromId: lane === "user" ? "user" : "someone",
+      fromName: "x",
+      text: "x",
+      priority: false,
+      id: `${lane}-${secondsAgo}`,
+      receivedAt: new Date(Date.now() - secondsAgo * 1000).toISOString(),
+    }) as never;
+  const now = Date.now();
+  const window = 120_000;
+
+  // The ordinary case: everything fresh, priority decides.
+  assert.equal(chooseLane([at("background", 1), at("user", 1)], now, window), "user");
+
+  // Starvation: a stream of *fresh* questions while an audit waits. The audit wins,
+  // which is the whole point of the rule.
+  assert.equal(chooseLane([at("background", 300), at("user", 1)], now, window), "background");
+
+  // Not starvation, just a backlog: when the questions are old too, they are higher
+  // and they go first. Nothing is being held down — the agent is simply behind.
+  assert.equal(chooseLane([at("background", 300), at("user", 300)], now, window), "user");
+
+  // And the promotion cannot repeat, because taking a lane empties it — asserted on
+  // the bus rather than here, since that is where emptying happens.
+  assert.equal(chooseLane([], now, window), undefined);
+});

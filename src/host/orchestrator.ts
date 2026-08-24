@@ -7,7 +7,7 @@
  */
 
 import type Anthropic from "@anthropic-ai/sdk";
-import { AgentBus, type BusEvent, type InboundMessage } from "../agents/bus.ts";
+import { AgentBus, type BusEvent, type InboundMessage, type Lane } from "../agents/bus.ts";
 import { Inbox, inboxPath } from "../agents/inbox.ts";
 import { Claims, claimsPath } from "./claims.ts";
 import { FileVersions } from "./files.ts";
@@ -232,7 +232,8 @@ export class Orchestrator {
     // like any other: a box over its budget stops firing rather than quietly draining it.
     // Its own turn always: a scheduled kickoff absorbed as steering into whatever
     // happens to be running would bury the run's report inside an unrelated reply.
-    run: (agent, prompt) => this.prompt(agent, prompt, undefined, { steerable: false }),
+    run: (agent, prompt) =>
+      this.prompt(agent, prompt, undefined, { steerable: false, lane: "background" }),
     defaultAgent: () => this.registry.list()[0]?.id,
     log: line => console.error(`[schedule] ${line}`),
   });
@@ -271,7 +272,7 @@ export class Orchestrator {
             ...(task.conversation !== undefined ? { conversation: task.conversation } : {}),
           }),
           undefined,
-          { steerable: false }
+          { steerable: false, lane: "background" }
         );
         const after = await this.workspaceManifest();
         if (before !== undefined && after !== undefined) {
@@ -620,7 +621,7 @@ export class Orchestrator {
     agentIdOrName: string,
     text: string,
     caller?: { userId?: string },
-    options: { conversation?: string; steerable?: boolean } = {}
+    options: { conversation?: string; steerable?: boolean; lane?: Lane } = {}
   ): Promise<void> {
     const agent = this.registry.resolve(agentIdOrName);
     const conversation = options.conversation ?? MAIN_CONVERSATION;
@@ -631,6 +632,7 @@ export class Orchestrator {
     this.bus.sendFromUser(agent.id, text, {
       conversation,
       ...(options.steerable === false ? { steerable: false } : {}),
+      ...(options.lane !== undefined ? { lane: options.lane } : {}),
     });
     const before = this.registry.readTranscript(agent.id, conversation).length;
     await this.bus.runExclusive(agent.id, { userDriven: true, conversation });
