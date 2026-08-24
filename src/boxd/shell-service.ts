@@ -9,7 +9,7 @@
 
 import { envNumber } from "../config.ts";
 import { spawn } from "node:child_process";
-import { closeSync, mkdirSync, openSync, writeSync } from "node:fs";
+import { closeSync, mkdirSync, openSync, readdirSync, statSync, unlinkSync, writeSync } from "node:fs";
 import { join } from "node:path";
 import type { ExecRequest, ExecResult } from "../protocol/index.ts";
 
@@ -42,6 +42,20 @@ export const SPOOL_DIR = process.env.BOXD_SPOOL_DIR ?? "/home/box/work/.spool";
 export const SPILL_MARKER = "full output kept:";
 
 /**
+ * Output past this goes to a file, whether or not the daemon itself drops any.
+ *
+ * Two thresholds for two different jobs, and conflating them left a hole. The 2 MiB
+ * cap above protects the daemon's memory and is where bytes are *lost*. This one is
+ * where bytes stop being *showable*: the host trims a tool result to 20k characters
+ * long before the daemon drops anything, so between those two numbers the output was
+ * discarded upstream with nothing behind it — which is the majority of real cases, a
+ * verbose build being a few hundred kilobytes rather than a few megabytes.
+ *
+ * Set below the host's own cap so the file always exists before the trimming starts.
+ */
+export const SPILL_AT_BYTES = envNumber("BOXD_SPILL_AT_BYTES", 16_000);
+
+/**
  * Collects a stream up to the cap and counts the rest.
  *
  * The cap used to be applied at the end, over everything the process had written: every chunk was
@@ -57,6 +71,8 @@ export class BoundedOutput {
   private readonly chunks: Buffer[] = [];
   private kept = 0;
   private dropped = 0;
+  /** Everything the command wrote, including what neither the cap nor the host will show. */
+  private seen = 0;
   /** Where everything went, once there was more of it than fits in a tool result. */
   private spoolPath: string | undefined;
   private spool: number | undefined;
@@ -98,35 +114,28 @@ export class BoundedOutput {
   }
 
   push(chunk: Buffer): void {
+    this.seen += chunk.length;
+    // Large but not yet lossy: the file starts here, because the host will trim this
+    // result long before the daemon drops any of it.
+    if (this.seen > SPILL_AT_BYTES) this.openSpool();
+    if (this.spool !== undefined) {
+      try {
+        writeSync(this.spool, chunk);
+      } catch {
+        // A spool that stops accepting writes stops being complete; the notice still
+        // points at what did land, which beats pointing at nothing.
+      }
+    }
+
     const room = MAX_OUTPUT_BYTES - this.kept;
     if (room <= 0) {
       this.dropped += chunk.length;
-      this.openSpool();
-      if (this.spool !== undefined) {
-        try {
-          writeSync(this.spool, chunk);
-        } catch {
-          // A spool that stops accepting writes stops being complete; the notice
-          // still points at what did land, which beats pointing at nothing.
-        }
-      }
       return;
     }
     const take = chunk.length <= room ? chunk : chunk.subarray(0, room);
     this.chunks.push(take);
     this.kept += take.length;
     this.dropped += chunk.length - take.length;
-    if (take.length < chunk.length) {
-      // The chunk that straddles the cap: open here so the remainder is not lost.
-      this.openSpool();
-      if (this.spool !== undefined) {
-        try {
-          writeSync(this.spool, chunk.subarray(take.length));
-        } catch {
-          // As above.
-        }
-      }
-    }
   }
 
   /** Closes the spool. Safe to call when there never was one. */
@@ -152,16 +161,45 @@ export class BoundedOutput {
 
   toString(label: string): string {
     const text = Buffer.concat(this.chunks).toString("utf8");
-    if (this.dropped === 0) return text;
-    // The notice names where the rest is, when there is a rest to name. Truncation
-    // that says only "12345 more bytes" tells the reader what it lost and nothing
-    // about how to get it — which is the whole complaint this answers.
+    // The pointer rides whenever a file exists, not only when the daemon dropped
+    // something — because the trimming that loses most output happens upstream, and a
+    // result that arrives whole here can still reach the model in pieces. It goes
+    // last, which is where the host's own middle-truncation keeps it.
     const where =
       this.spoolPath === undefined
         ? ""
-        : ` — ${SPILL_MARKER} ${this.spoolPath} holds all ${this.kept + this.dropped} bytes`;
-    return `${text}\n\n[${label} truncated: ${this.dropped} more bytes${where}]`;
+        : `\n\n[${SPILL_MARKER} ${this.spoolPath} — all ${this.seen} bytes of ${label}]`;
+    if (this.dropped === 0) return `${text}${where}`;
+    return `${text}\n\n[${label} truncated: ${this.dropped} more bytes]${where}`;
   }
+}
+
+/**
+ * Deletes spool files older than a day, once, at startup.
+ *
+ * Kept because they are evidence for the turn that made them and dead weight after
+ * it: a box that ran a hundred verbose builds should not carry every one of them
+ * forever. A day is well past the life of any transcript entry that still points here.
+ */
+export function reapSpool(dir: string = SPOOL_DIR, olderThanMs = 24 * 3_600_000): number {
+  let removed = 0;
+  try {
+    const cutoff = Date.now() - olderThanMs;
+    for (const name of readdirSync(dir)) {
+      const path = join(dir, name);
+      try {
+        if (statSync(path).mtimeMs < cutoff) {
+          unlinkSync(path);
+          removed += 1;
+        }
+      } catch {
+        // Raced with something else, or not ours to delete. Skip it.
+      }
+    }
+  } catch {
+    // No spool directory yet, which is the ordinary state of a fresh box.
+  }
+  return removed;
 }
 
 /** Session keys name files, so keep them to characters that cannot escape a path. */

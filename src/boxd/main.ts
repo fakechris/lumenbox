@@ -58,7 +58,7 @@ import { getDisplay, parseDisplayNum } from "../cua/display.ts";
 import { readClipboard, writeClipboard } from "./clipboard-service.ts";
 import { startEgressProxy } from "../egress/proxy.ts";
 import { RecordService, RECORDINGS_DIR } from "./record-service.ts";
-import { AGENT_NICE, runShell, withoutBoxToken } from "./shell-service.ts";
+import { AGENT_NICE, reapSpool, runShell, withoutBoxToken } from "./shell-service.ts";
 import { JobService } from "./job-service.ts";
 import { downloadFile, listDir, readFile, uploadFile, writeFile } from "./fs-service.ts";
 
@@ -307,6 +307,12 @@ type Handler = (body: any) => Promise<unknown>;
 
 /** Background jobs live for the life of the daemon, like the shell sessions do. */
 const jobs = new JobService();
+
+// Yesterday's spilled output is dead weight; today's is evidence.
+{
+  const removed = reapSpool();
+  if (removed > 0) log(`reaped ${removed} stale spool file(s)`);
+}
 
 const routes: Record<string, Handler> = {
   "POST /computer": (body: ComputerRequest) => handleComputer(body),
