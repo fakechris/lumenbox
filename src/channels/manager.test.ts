@@ -350,12 +350,14 @@ test("a screen request degrades honestly: no image wire, or no desktop", async (
   assert.deepEqual(noDesk.images, []);
 });
 
-test("a finished task attaches the desktop, but only when it was long enough to acknowledge", async () => {
+test("a finished task attaches the desktop only when the turn actually used it", async () => {
   const adapter = cardAdapter();
+  let progress: ((action: string, tool?: string) => void) | undefined;
   let slow = false;
   const manager = new ChannelManager({
     mayDrive: () => true,
-    ask: async () => {
+    ask: async (_a, _t, _i, _c, onProgress) => {
+      progress = onProgress;
       if (slow) await sleep(60);
       return "answer";
     },
@@ -371,7 +373,19 @@ test("a finished task attaches the desktop, but only when it was long enough to 
   assert.deepEqual(adapter.images, [], "a quick answer does not need a poster");
 
   slow = true;
-  await adapter.inject({ identity: "feishu:ou_1", chatKey: "feishu:oc_r", senderLabel: "c", text: "long" });
+  await adapter.inject({ identity: "feishu:ou_1", chatKey: "feishu:oc_r", senderLabel: "c", text: "research it" });
+  await sleep(30);
+  progress?.("bash: curl example.com", "bash");
+  await manager.idle();
+  assert.deepEqual(
+    adapter.images,
+    [],
+    "a turn that never touched the desktop has no desk worth showing"
+  );
+
+  await adapter.inject({ identity: "feishu:ou_1", chatKey: "feishu:oc_r", senderLabel: "c", text: "open the site" });
+  await sleep(30);
+  progress?.("computer: click", "computer");
   await manager.idle();
   assert.deepEqual(adapter.images, [{ chatKey: "feishu:oc_r", base64: "final-desk" }]);
 });
