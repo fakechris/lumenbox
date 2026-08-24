@@ -619,20 +619,20 @@ export const APP_HTML = String.raw`<!doctype html>
       key, and the box &mdash; one Linux container with a desktop, a browser and a shell,
       running on this machine. Both are set up here.
     </div>
-    <div class="field">
+    <div class="field" data-tier="installation">
       <label>Provider</label>
       <select id="setprovider"></select>
     </div>
-    <div class="field">
+    <div class="field" data-tier="installation">
       <label>Model</label>
       <input id="setmodel" list="modellist" placeholder="preset default" spellcheck="false">
       <datalist id="modellist"></datalist>
     </div>
-    <div class="field" id="setbasewrap" style="display:none">
+    <div class="field" data-tier="installation" id="setbasewrap" style="display:none">
       <label>Base URL</label>
       <input id="setbase" placeholder="https://&hellip;" spellcheck="false">
     </div>
-    <div class="field">
+    <div class="field" data-tier="installation">
       <label>API key</label>
       <input id="setkey" type="password" spellcheck="false" autocomplete="off">
       <div class="fieldnote" id="setkeynote"></div>
@@ -640,7 +640,7 @@ export const APP_HTML = String.raw`<!doctype html>
     <div class="fieldnote">Saved to ~/.agentbox/config.json on this machine, mode 0600. A key stored
       here is used only when the environment does not already provide one, and is never placed
       inside the box. Changes take effect when the server restarts.</div>
-    <div class="field" id="setboxwrap">
+    <div class="field" data-tier="installation" id="setboxwrap">
       <label>Box</label>
       <div class="fieldnote" id="setboxstate" style="margin:0"></div>
       <div id="setboxactions" style="display:none">
@@ -648,7 +648,7 @@ export const APP_HTML = String.raw`<!doctype html>
       </div>
       <pre id="setboxlog" style="display:none;max-height:140px;overflow:auto;background:var(--code-bg);color:var(--code-text);border:1px solid var(--border);border-radius:var(--radius-md);padding:10px 12px;font-family:var(--font-mono);font-size:11px;line-height:1.6;margin:0;white-space:pre-wrap"></pre>
     </div>
-    <div class="field">
+    <div class="field" data-tier="installation">
       <label>Host execution</label>
       <label class="radio"><input type="checkbox" id="sethostenabled">
         Let agents run commands on this computer, outside the box</label>
@@ -659,7 +659,7 @@ export const APP_HTML = String.raw`<!doctype html>
         before it runs. Takes effect after a restart.</div>
       <div class="fieldnote" id="sethoststatus"></div>
     </div>
-    <div class="field">
+    <div class="field" data-tier="organisation">
       <label>Scopes</label>
       <div id="setscopes" style="display:flex;flex-direction:column;gap:6px"></div>
       <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
@@ -671,7 +671,7 @@ export const APP_HTML = String.raw`<!doctype html>
         scope grants it to every agent in the scope; removing an agent from the scope revokes it.</div>
       <div class="fieldnote" id="setscopestatus"></div>
     </div>
-    <div class="field">
+    <div class="field" data-tier="organisation">
       <label>Secrets</label>
       <div id="setsecrets" style="display:flex;flex-direction:column;gap:6px"></div>
       <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
@@ -686,14 +686,14 @@ export const APP_HTML = String.raw`<!doctype html>
         is audited in ~/.agentbox/vault-audit.jsonl.</div>
       <div class="fieldnote" id="setsecstatus"></div>
     </div>
-    <div class="field">
+    <div class="field" data-tier="installation">
       <label>Channels</label>
       <div id="setchannels" style="display:flex;flex-direction:column;gap:6px"></div>
       <div class="fieldnote">A channel turns on when its credentials are in the environment or the
         env map of the config file (Feishu: FEISHU_APP_ID + FEISHU_APP_SECRET; Telegram:
         TELEGRAM_BOT_TOKEN; DingTalk: DINGTALK_CLIENT_ID + DINGTALK_CLIENT_SECRET).</div>
     </div>
-    <div class="field" id="setmcpwrap" style="display:none">
+    <div class="field" data-tier="installation" id="setmcpwrap" style="display:none">
       <label>MCP servers</label>
       <div id="setmcp" style="display:flex;flex-direction:column;gap:6px"></div>
       <div class="fieldnote">Tools other people wrote. Configured in mcpServers in
@@ -701,13 +701,13 @@ export const APP_HTML = String.raw`<!doctype html>
         adds one, never an agent. Their tools obey the same agent tool lists, scopes and
         approvals as the built-in ones.</div>
     </div>
-    <div class="field" id="setknockswrap" style="display:none">
+    <div class="field" data-tier="organisation" id="setknockswrap" style="display:none">
       <label>Waiting at the door</label>
       <div id="setknocks" style="display:flex;flex-direction:column;gap:6px"></div>
       <div class="fieldnote">People who messaged the bot and are not on the list yet. One click
         lets them in, and they are told so on the channel they knocked from.</div>
     </div>
-    <div class="field">
+    <div class="field" data-tier="organisation">
       <label>People</label>
       <div id="setpeople" style="display:flex;flex-direction:column;gap:6px"></div>
       <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
@@ -738,7 +738,7 @@ export const APP_HTML = String.raw`<!doctype html>
       </details>
       <div class="fieldnote" id="setpeoplestatus"></div>
     </div>
-    <div class="field" id="setgrantswrap" style="display:none">
+    <div class="field" data-tier="personal" id="setgrantswrap" style="display:none">
       <label>Standing approvals</label>
       <div id="setgrants" style="display:flex;flex-direction:column;gap:6px"></div>
       <div class="fieldnote">Each covers one exact action until revoked. Revoking makes the next
@@ -884,6 +884,9 @@ if (navigator.userAgent.indexOf("Electron") >= 0) {
 var settingsPresets = [];
 
 function openSettings() {
+  // Applied on open as well as on load: the dialog is built once and reopened, and
+  // whoever is at the browser may have signed in since the page did.
+  applyRole();
   fetch("/api/config")
     .then(function (r) { return r.json(); })
     .then(function (data) {
@@ -1051,12 +1054,57 @@ document.getElementById("setsecrets").addEventListener("click", function (event)
 /** The people list: one row per identity, grouped nowhere — flat and editable. */
 var people = [];
 
+function renderMcpTokens(tokens) {
+  var mine = (tokens || []).filter(function (t) { return t.mine; });
+  $("setmcptokens").innerHTML = mine.length
+    ? mine.map(function (t) {
+        return '<div style="display:flex;gap:8px;align-items:center;font-size:13px">' +
+          '<span style="flex:1">' + esc(t.label) + "</span>" +
+          '<span class="dim" style="font-size:11px">' + esc(new Date(t.createdAt).toLocaleDateString()) + "</span>" +
+          '<a href="#" data-revoke="' + esc(t.createdAt) + '" style="color:var(--danger);font-size:12px">Revoke</a></div>';
+      }).join("")
+    : '<div class="fieldnote" style="margin:0">None yet.</div>';
+}
+
+$("setmcpadd").onclick = function () {
+  fetch("/api/mcp/tokens", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ label: $("setmcplabel").value })
+  })
+    .then(function (r) { return r.json(); })
+    .then(function (d) {
+      // Shown once, because it is not stored anywhere it could be read back.
+      $("setmcpnew").textContent = d.token
+        ? "Copy it now, it is not shown again: " + d.token
+        : (d.error || "failed");
+      $("setmcplabel").value = "";
+      renderMcp();
+    })
+    .catch(function () { $("setmcpnew").textContent = "failed"; });
+};
+
+document.getElementById("setmcptokens").addEventListener("click", function (event) {
+  var at = event.target.getAttribute && event.target.getAttribute("data-revoke");
+  if (!at) return;
+  event.preventDefault();
+  fetch("/api/mcp/tokens/revoke", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ createdAt: at })
+  }).then(renderMcp);
+});
+
 function renderMcp() {
   fetch("/api/mcp")
     .then(function (r) { return r.json(); })
     .then(function (data) {
       var servers = data.servers || [];
-      document.getElementById("setmcpwrap").style.display = servers.length ? "" : "none";
+      renderMcpTokens(data.tokens);
+      // The server list is an installation matter; an admin who has none still sees
+      // nothing, because there is nothing to say.
+      document.getElementById("setmcpwrap").style.display =
+        servers.length && myRole === "admin" ? "" : "none";
       $("setmcp").innerHTML = servers.map(function (s) {
         // A tool count worth noticing is said where the count is, not in a log nobody reads.
         var heavy = s.toolCount > (data.budget || 30);
@@ -2925,13 +2973,42 @@ $("agentwrap").addEventListener("click", function (event) {
 
 // Who is at this browser. A name in the header rather than a silent identity, because
 // "my work is signed with my name" is the whole difference a second person notices.
+var myRole = "admin";
 fetch("/api/me")
   .then(function (r) { return r.json(); })
   .then(function (me) {
+    myRole = me.role || "viewer";
     $("whoami").textContent = me.name ? me.name + " · " + me.role : "";
     $("whoami").title = me.identity ? "signed in as " + me.identity : "";
+    applyRole();
   })
   .catch(function () {});
+
+/**
+ * What this person may decide, made visible rather than enforced here.
+ *
+ * Three kinds of setting, and they answer to different people. What the *installation*
+ * is — its provider, its key, its box, its channels — and what the *organisation* is —
+ * who may do what, which scopes exist, what things cost — are an admin's to decide.
+ * What is personal is your own. A driver has no use for knowing which provider this
+ * installation bills, and showing them a control that will answer 403 is worse than
+ * never offering it: it promises and then withdraws.
+ */
+function applyRole() {
+  var admin = myRole === "admin";
+  var driver = admin || myRole === "driver";
+  var fields = document.querySelectorAll("[data-tier]");
+  for (var i = 0; i < fields.length; i++) {
+    var tier = fields[i].getAttribute("data-tier");
+    var maySee = tier === "personal" ? driver : admin;
+    fields[i].style.display = maySee ? "" : "none";
+  }
+  // A viewer watches. Everything that starts work is gone rather than greyed out.
+  ["input", "send", "new"].forEach(function (id) {
+    var el = document.getElementById(id);
+    if (el) el.style.display = driver ? "" : "none";
+  });
+}
 
 // Activity after the roster, because its lines name agents.
 refresh().then(loadActivity).then(loadRecordings);

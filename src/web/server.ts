@@ -41,6 +41,7 @@ import {
   mayDrive,
   parseCookies,
   refusalToDrive,
+  type Caller,
 } from "./auth.ts";
 import {
   newWebIdentity,
@@ -183,7 +184,12 @@ export interface WebOptions {
   /** Where the box comes from. Defaults to the environment's choice. */
   boxProvisioner?: BoxProvisioner;
   host?: string;
-  provider: ProviderProfile;
+  /**
+   * Which endpoint to use. Optional because it is resolved from the config when
+   * absent — it was required in the type and defaulted nowhere, so the two routes
+   * that read it answered 500 for any caller that left it out.
+   */
+  provider?: ProviderProfile;
   useBox?: boolean;
   onReady?: (url: string) => void;
   onLog?: (line: string) => void;
@@ -1278,8 +1284,16 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
        * handler ends up missing it.
        */
       const refused = (agentId?: string): boolean => {
+        // Whoever the session says this is, their authority is the roster's answer —
+        // not the gateway header's, which is absent here and therefore reads as the
+        // direct operator. Identity arrived through the session and authority has to
+        // travel with it, or a viewer who signed in is a viewer in name only.
+        const known: Caller =
+          caller.userId !== undefined && !roleAtLeast(principals.roleOf(caller.userId), "driver")
+            ? { ...caller, role: "viewer" }
+            : caller;
         const agent = agentId === undefined ? undefined : registry.tryGet(agentId);
-        const reason = refusalToDrive(caller, agent?.profile);
+        const reason = refusalToDrive(known, agent?.profile);
         if (reason === undefined) return false;
         send(res, 403, { error: reason });
         return true;
@@ -2058,7 +2072,7 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
         }
 
         if (route === "POST /api/config") {
-          if (refused()) return;
+          if (refusedRole("admin")) return;
           const body = await readJson(req);
 
           const providerValue = body.provider;
