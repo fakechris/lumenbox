@@ -176,6 +176,14 @@ identity headers blindly (S-4), and the control-plane key not sitting beside its
 database (S-6). Large. The current single-operator model does not need these, and doing
 them speculatively is the over-engineering the whole project avoids.
 
+### R21. Agent and skill bundles: export and import
+A team's agent (profile, skills, scope shape — never its memories or secrets) packaged
+as a file another installation can import. The sharing unit people actually want, and
+the seed of any future gallery. Deliberately after the delegation preset work: the
+preset's packaging face is this feature's foundation, and building the bundle format
+before a second real installation exists would be designing for an audience of zero.
+Large-ish; design the boundary (what travels, what never does) first.
+
 ---
 
 ## Explicitly not now, with the reason
