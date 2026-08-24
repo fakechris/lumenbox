@@ -64,6 +64,18 @@ host-side housekeeping (`mkdir` for a skill) walks the agent's approval and audi
 surface. A marker on the protocol request — a label, not a bypass — lets the audit
 log say who acted. Small.
 
+### R20. Spill what pruning removes
+Every layer of long-output handling truncates honestly — and what it drops is gone
+everywhere at once: the omitted middle of a shell result capped at 20k characters
+exists nowhere on disk, and the transcript stores only the first 2k of each result,
+so even `ReadHistory` recovers a stub of a stub. The reference discipline is prune +
+spill: the full text always lands somewhere durable, and the pruned copy carries a
+pointer. Smallest full shape: boxd tees exec output past a threshold into a spool
+file, and the truncation note names the path and line count — `read_file`'s line
+ranges already are the read-back side, no new reader needed; `storableResult`'s cut
+gets the same pointer. Small; R13's blood line (a terminal file is a spill), but it
+does not wait for it.
+
 ---
 
 ## Tier 2 — medium, valuable, mostly unblocked
