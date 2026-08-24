@@ -157,8 +157,15 @@ import { HostRunner, hostRunnerConfig } from "../host/host-runner.ts";
 import { ALL_TOOLS } from "../host/orchestrator.ts";
 import { PRESET_MODELS, providerNames, resolveProvider, testProvider } from "../host/provider.ts";
 import { Principals, roleAtLeast, type Principal, type Role } from "../host/principals.ts";
-import { isLive, isTaskStatus } from "../host/tasks.ts";
+import { describeTask, isLive, isTaskStatus } from "../host/tasks.ts";
 import { TOOL_BUDGET_WARNING } from "../host/mcp.ts";
+import {
+  handleMcpRequest,
+  mintMcpToken,
+  principalForToken,
+  type McpAccessToken,
+  type McpServerTool,
+} from "./mcp-server.ts";
 import { Vault, type Grant } from "../host/vault.ts";
 import { seedStarterSkills } from "../host/starter-skills.ts";
 import { ActivityLog } from "./activity.ts";
@@ -337,6 +344,16 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
   // hands out a short-lived invite code the person redeems in the chat itself.
   // In memory on purpose: a knock lost to a restart costs the person one more
   // message, and a code that did not outlive the process is a *property* of a code.
+  /**
+   * Access tokens for the MCP side door, one per person per client.
+   *
+   * In memory, matching the invite codes above: a token that does not survive a
+   * restart is a token nobody has to remember to revoke, and re-issuing one is a
+   * click. Persisting them is the change to make when somebody's IDE is annoyed by
+   * it, not before.
+   */
+  const mcpTokens: McpAccessToken[] = [];
+
   const knocks = new Map<
     string,
     { identity: string; senderLabel: string; channel: string; at: string }
@@ -987,6 +1004,179 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
   /** Signs web sessions; set from the resolved UI token before the server listens. */
   let sessionSecret = "";
 
+  /**
+   * What an outside agent may do here, and nothing more.
+   *
+   * Narrow on purpose, and the narrowness is the product: a persistent computer with a
+   * desktop, and a team that can be given work and asked about later. Not our memory,
+   * not the filesystem wholesale, not the ability to reconfigure the installation —
+   * those belong to the people who live here, and an external agent borrowing a
+   * workforce has no business with them.
+   *
+   * Everything routes through the same objects a person's request does, which is what
+   * makes the attribution real rather than decorative: the task lands on the same
+   * board, the spend lands on the same principal, and a dangerous action raises the
+   * same approval card to the same phone.
+   */
+  const mcpServerTools = (): McpServerTool[] => [
+    {
+      name: "assign_task",
+      description:
+        "Hand a piece of work to this installation's team of agents. They have a " +
+        "persistent Linux box with a desktop and a browser, so this is for work that " +
+        "needs a computer of its own or outlives your session. Returns a task id; ask " +
+        "about it later with task_status rather than waiting.",
+      inputSchema: {
+        type: "object",
+        properties: {
+          brief: { type: "string", description: "The whole request, self-contained." },
+          agent: { type: "string", description: "Which agent, by name. Omit for the coordinator." },
+        },
+        required: ["brief"],
+      },
+      readOnly: false,
+      run: async (input, principalId) => {
+        const brief = String(input.brief ?? "").trim();
+        if (brief === "") throw new Error("A task needs a brief.");
+        const agentName = typeof input.agent === "string" ? input.agent : undefined;
+        const agent =
+          agentName !== undefined
+            ? registry.resolve(agentName)
+            : (registry.list()[0] ?? orchestrator.ensureDefaultAgent());
+        const task = orchestrator.tasks?.create({
+          title: brief.split("\n", 1)[0] ?? brief,
+          description: brief,
+          requester: principalId,
+          assigneeId: agent.id,
+        });
+        // Not awaited: the caller gets an id now and asks later, which is the only
+        // shape that works for work measured in minutes.
+        void orchestrator
+          .prompt(agent.id, brief, { userId: principalId }, { lane: "agent" })
+          .catch(error => log(`mcp task failed: ${error instanceof Error ? error.message : error}`));
+        return task === undefined
+          ? `${agent.profile.name} is on it.`
+          : `${task.id} — ${agent.profile.name} is on it. Ask task_status about ${task.id}.`;
+      },
+    },
+    {
+      name: "task_status",
+      description:
+        "How a task is going: its state, who has it, and every move anybody made on " +
+        "it. With no id, the tasks you asked for that are still open.",
+      inputSchema: {
+        type: "object",
+        properties: { task_id: { type: "string", description: "A task id like t42." } },
+      },
+      readOnly: true,
+      run: async (input, principalId) => {
+        const board = orchestrator.tasks;
+        if (board === undefined) return "This installation has no task board.";
+        const nameOf = (id: string) => registry.tryGet(id)?.profile.name ?? id;
+        const id = typeof input.task_id === "string" ? input.task_id : "";
+        if (id === "") {
+          const mine = board
+            .list()
+            .filter(task => task.requester === principalId && isLive(task.status));
+          return mine.length === 0
+            ? "Nothing of yours is still open."
+            : mine.map(task => describeTask(task, nameOf)).join("\n");
+        }
+        const task = board.get(id);
+        if (task === undefined) return `No task ${id}.`;
+        // Anyone with a token may read any task: the board is the team's shared record,
+        // and hiding a colleague's row from a colleague's agent would be theatre.
+        const history = task.history
+          .map(change => `  ${change.at} ${nameOf(change.by)} ${change.status ?? ""} ${change.note ?? ""}`.trimEnd())
+          .join("\n");
+        return `${describeTask(task, nameOf)}\n${history}`;
+      },
+    },
+    {
+      name: "list_agents",
+      description: "Who is on this installation's team, and what each is for.",
+      inputSchema: { type: "object", properties: {} },
+      readOnly: true,
+      run: async () =>
+        registry
+          .list()
+          .map(agent => `${agent.profile.name}${agent.profile.title ? ` (${agent.profile.title})` : ""} — ${agent.profile.description.slice(0, 160)}`)
+          .join("\n") || "No agents yet.",
+    },
+    {
+      name: "run_on_box",
+      description:
+        "Run a shell command on this installation's box — a persistent Linux machine " +
+        "with a real filesystem, where installed tools stay installed and files " +
+        "outlive your session. Not your machine and not a scratch container.",
+      inputSchema: {
+        type: "object",
+        properties: {
+          command: { type: "string" },
+          cwd: { type: "string", description: "Defaults to the work directory." },
+        },
+        required: ["command"],
+      },
+      readOnly: false,
+      run: async (input, principalId) => {
+        const client = orchestrator.boxClient();
+        if (client === undefined) throw new Error("No box is running on this installation.");
+        const command = String(input.command ?? "").trim();
+        if (command === "") throw new Error("Nothing to run.");
+        // The same gate a resident agent's shell passes, judged under the caller's own
+        // name — so an outside agent cannot do what the person holding its token may
+        // not, and a dangerous command raises a card to that person's phone.
+        const decision = orchestrator.policy.check({
+          kind: "tool",
+          agentId: `mcp:${principalId}`,
+          agentName: principals.resolve(principalId).name,
+          tool: "bash",
+          input: { command },
+        });
+        if (!decision.allow) throw new Error(decision.reason);
+        const result = await client.exec(command, {
+          cwd: typeof input.cwd === "string" ? input.cwd : WORK_DIR,
+          timeoutMs: 120_000,
+        });
+        return [
+          `exit code: ${result.exit_code}`,
+          result.stdout.trim() ? `stdout:\n${result.stdout}` : "",
+          result.stderr.trim() ? `stderr:\n${result.stderr}` : "",
+        ]
+          .filter(Boolean)
+          .join("\n\n");
+      },
+    },
+    {
+      name: "box_screenshot",
+      description:
+        "See the box's desktop as it is now. Useful after asking the team for " +
+        "something visual, or before driving it yourself.",
+      inputSchema: {
+        type: "object",
+        properties: { agent: { type: "string", description: "Whose desktop. Defaults to the first." } },
+      },
+      readOnly: true,
+      run: async input => {
+        const client = orchestrator.boxClient();
+        if (client === undefined) throw new Error("No box is running on this installation.");
+        const agent =
+          typeof input.agent === "string" ? registry.resolve(input.agent) : registry.list()[0];
+        if (agent === undefined) throw new Error("No agents on this installation.");
+        const shot = await client.computer([{ action: "screenshot" }], {
+          display: registry.displayIndexFor(agent.id),
+          owner: registry.boxOwnerTokenFor(agent.id),
+        });
+        // A path rather than the bytes: this bridge carries text, and a screenshot the
+        // caller can fetch beats a megabyte of base64 it did not ask for.
+        const path = `${WORK_DIR}/.mcp-shots/${agent.id}-${Date.now()}.webp`;
+        await client.exec(`mkdir -p ${WORK_DIR}/.mcp-shots`);
+        await client.uploadFile(path, shot.screenshot);
+        return `Saved the current desktop of ${agent.profile.name} to ${path}.`;
+      },
+    },
+  ];
+
   const server = createServer((req, res) => {
     void (async () => {
       const url = new URL(req.url ?? "/", "http://localhost");
@@ -1006,6 +1196,17 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
       // the code is what authenticates them.
       if (route === "GET /login") {
         send(res, 200, LOGIN_HTML, "text/html");
+        return;
+      }
+      // The side door, before the UI's gate and deliberately so: it carries its own
+      // credential, issued to a person, and the UI token is not it.
+      if (
+        await handleMcpRequest(req, res, {
+          tools: mcpServerTools(),
+          principalFor: presented => principalForToken(presented, mcpTokens),
+          log: line => log(line),
+        })
+      ) {
         return;
       }
       if (!decision.allow && route !== "POST /api/login") {
@@ -1444,8 +1645,60 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
         // use them. The roster is the access-control list now, not a flat allow list.
         // The bridges to other people's tools: what is running, and how much of every
         // agent's prompt each one is spending.
+        // Tokens for the side door. Issued to a person, listed without their secrets,
+        // and revocable one at a time — an IDE that no longer needs access should not
+        // require rotating everybody's.
+        if (route === "POST /api/mcp/tokens") {
+          if (refusedRole("driver")) return;
+          const body = await readJson(req);
+          const owner = caller.userId ?? String(body.principalId ?? "");
+          if (owner === "") {
+            send(res, 400, { error: "A token belongs to a person; sign in or name one." });
+            return;
+          }
+          const minted = mintMcpToken(owner, String(body.label ?? ""));
+          mcpTokens.push(minted);
+          log(`mcp token issued to ${owner} (${minted.label})`);
+          // The only time the secret is ever returned: it is not stored anywhere it
+          // could be read back, so a lost one is re-issued rather than recovered.
+          send(res, 200, { token: minted.token, label: minted.label, createdAt: minted.createdAt });
+          return;
+        }
+
+        if (route === "POST /api/mcp/tokens/revoke") {
+          if (refusedRole("driver")) return;
+          const body = await readJson(req);
+          const at = mcpTokens.findIndex(
+            entry =>
+              entry.createdAt === String(body.createdAt ?? "") &&
+              // A driver may only revoke their own; an admin may revoke anyone's.
+              (entry.principalId === caller.userId ||
+                roleAtLeast(
+                  caller.userId === undefined ? "admin" : principals.roleOf(caller.userId),
+                  "admin"
+                ))
+          );
+          if (at < 0) {
+            send(res, 404, { error: "No token of yours matches." });
+            return;
+          }
+          mcpTokens.splice(at, 1);
+          send(res, 200, { revoked: true });
+          return;
+        }
+
         if (route === "GET /api/mcp") {
-          send(res, 200, { servers: orchestrator.mcp.statuses(), budget: TOOL_BUDGET_WARNING });
+          send(res, 200, {
+            servers: orchestrator.mcp.statuses(),
+            budget: TOOL_BUDGET_WARNING,
+            // Never the secrets — only that they exist, whose they are, and when.
+            tokens: mcpTokens.map(entry => ({
+              label: entry.label,
+              principalId: entry.principalId,
+              createdAt: entry.createdAt,
+              mine: entry.principalId === caller.userId,
+            })),
+          });
           return;
         }
 
