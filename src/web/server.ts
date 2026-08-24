@@ -158,6 +158,7 @@ import { ALL_TOOLS } from "../host/orchestrator.ts";
 import { PRESET_MODELS, providerNames, resolveProvider, testProvider } from "../host/provider.ts";
 import { Principals, roleAtLeast, type Principal, type Role } from "../host/principals.ts";
 import { isLive, isTaskStatus } from "../host/tasks.ts";
+import { TOOL_BUDGET_WARNING } from "../host/mcp.ts";
 import { Vault, type Grant } from "../host/vault.ts";
 import { seedStarterSkills } from "../host/starter-skills.ts";
 import { ActivityLog } from "./activity.ts";
@@ -1441,6 +1442,13 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
 
         // The chat channels: which exist, which are running, and the people who may
         // use them. The roster is the access-control list now, not a flat allow list.
+        // The bridges to other people's tools: what is running, and how much of every
+        // agent's prompt each one is spending.
+        if (route === "GET /api/mcp") {
+          send(res, 200, { servers: orchestrator.mcp.statuses(), budget: TOOL_BUDGET_WARNING });
+          return;
+        }
+
         if (route === "GET /api/channels") {
           for (const [code, invite] of invites) {
             if (invite.expiresAt < Date.now()) invites.delete(code);

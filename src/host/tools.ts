@@ -15,6 +15,7 @@ import type { PolicyGate } from "./policy.ts";
 import type { HostRunner } from "./host-runner.ts";
 import type { Vault } from "./vault.ts";
 import type { ScopeStore } from "./scopes.ts";
+import type { McpManager } from "./mcp.ts";
 import { describeHistory, readHistory } from "./history.ts";
 import { dedupeKey, validateRecord } from "./memory.ts";
 import { Claims, heldElsewhere } from "./claims.ts";
@@ -49,6 +50,11 @@ export interface ToolContext {
    * that reach the box and the ones that wake a teammate.
    */
   policy?: PolicyGate;
+  /**
+   * The MCP servers whose tools are on offer this turn. Absent means none, which is
+   * every installation that has configured none — and every test.
+   */
+  mcp?: McpManager;
   /**
    * What each agent last saw each file as, so two of them writing one file is noticed.
    *
@@ -1402,7 +1408,21 @@ export async function dispatchTool(
       return { text: `Kept. It will be in your instructions on future turns.${withdrawn}` };
     }
 
-    default:
+    default: {
+      // An MCP server's tool, if one claims the name. Reached last, so nothing here can
+      // be shadowed by an external server — and reached *after* the policy gate above,
+      // like every other call, so an external tool is governed exactly as ours are.
+      if (context.mcp?.owns(name) === true) {
+        try {
+          return { text: await context.mcp.call(name, input) };
+        } catch (error) {
+          return {
+            text: error instanceof Error ? error.message : String(error),
+            isError: true,
+          };
+        }
+      }
       return { text: `Unknown tool: ${name}`, isError: true };
+    }
   }
 }

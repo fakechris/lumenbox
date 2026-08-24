@@ -24,6 +24,8 @@ import { DisplayLease } from "../box/display-lease.ts";
 import { resolveBoxProvisioner, type BoxProvisioner } from "../box/provisioner.ts";
 import type { ResolutionConfig } from "../protocol/index.ts";
 import { runTurn, TurnAborted, type TurnEvent } from "./turn.ts";
+import { loadConfig } from "../config.ts";
+import { McpManager } from "./mcp.ts";
 import { PolicyGate } from "./policy.ts";
 import { TaskStore, type Task } from "./tasks.ts";
 import { buildAuditPrompt, manifestDiff, MANIFEST_COMMAND, parseManifest } from "./audit.ts";
@@ -85,6 +87,11 @@ export interface OrchestratorOptions {
   tasks?: TaskStore | null;
   /** The scopes registry. `null` keeps none. */
   scopes?: ScopeStore | null;
+  /**
+   * MCP servers whose tools the agents may call. Absent reads the config file; `null`
+   * keeps none, which is what a test that must not spawn a child process wants.
+   */
+  mcp?: McpManager | null;
 }
 
 export class Orchestrator {
@@ -144,6 +151,14 @@ export class Orchestrator {
    */
   readonly tasks: TaskStore | undefined;
   readonly scopes: ScopeStore | undefined;
+
+  /**
+   * The tools other people wrote, if an operator configured any.
+   *
+   * One per process like the other stores: each server is a child process, and two
+   * managers would mean two of every bridge for no gain.
+   */
+  readonly mcp: McpManager;
 
   /** Begin/end per turn. A begin with no end is a turn the process died underneath. */
   private readonly turns: TurnLedger | undefined;
@@ -305,6 +320,18 @@ export class Orchestrator {
         : (options.tasks ?? new TaskStore(undefined, line => console.error(`[tasks] ${line}`)));
     if (this.tasks !== undefined) this.tasks.onChange = task => this.maybeAudit(task);
     this.scopes = options.scopes === null ? undefined : (options.scopes ?? new ScopeStore());
+    this.mcp =
+      options.mcp === null || options.mcp === undefined
+        ? new McpManager(
+            options.mcp === null
+              ? []
+              : Object.entries(loadConfig().mcpServers ?? {}).map(([name, server]) => ({
+                  name,
+                  ...server,
+                })),
+            line => console.error(`[mcp] ${line}`)
+          )
+        : options.mcp;
     this.claims =
       options.claims === null
         ? new Claims(null)
@@ -435,6 +462,10 @@ export class Orchestrator {
     this.resuming.delete(agent.id);
 
     const displayIndex = await this.ensureDesktop(agent);
+    // Started on the first turn that could use them, not at boot: a CLI question should
+    // not spawn somebody's bridges as a side effect. Never allowed to fail a turn — a
+    // server that is down costs its own tools and nothing else.
+    if (this.mcp.configured) await this.mcp.ready();
     // Refreshed before the prompt is built, and never allowed to fail the turn — a box with no
     // skills directory is the normal state of a fresh install.
     const { skills } = await this.skills.refresh();
@@ -462,6 +493,7 @@ export class Orchestrator {
       vault: this.options.vault,
       tasks: this.tasks,
       scopes: this.scopes,
+      mcp: this.mcp,
       conversation,
       provider: runtime.provider,
       effort: this.options.effort,

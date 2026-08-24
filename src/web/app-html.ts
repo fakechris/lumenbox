@@ -693,6 +693,14 @@ export const APP_HTML = String.raw`<!doctype html>
         env map of the config file (Feishu: FEISHU_APP_ID + FEISHU_APP_SECRET; Telegram:
         TELEGRAM_BOT_TOKEN; DingTalk: DINGTALK_CLIENT_ID + DINGTALK_CLIENT_SECRET).</div>
     </div>
+    <div class="field" id="setmcpwrap" style="display:none">
+      <label>MCP servers</label>
+      <div id="setmcp" style="display:flex;flex-direction:column;gap:6px"></div>
+      <div class="fieldnote">Tools other people wrote. Configured in mcpServers in
+        ~/.agentbox/config.json — a stdio server is a process on this machine, so an operator
+        adds one, never an agent. Their tools obey the same agent tool lists, scopes and
+        approvals as the built-in ones.</div>
+    </div>
     <div class="field" id="setknockswrap" style="display:none">
       <label>Waiting at the door</label>
       <div id="setknocks" style="display:flex;flex-direction:column;gap:6px"></div>
@@ -1043,7 +1051,28 @@ document.getElementById("setsecrets").addEventListener("click", function (event)
 /** The people list: one row per identity, grouped nowhere — flat and editable. */
 var people = [];
 
+function renderMcp() {
+  fetch("/api/mcp")
+    .then(function (r) { return r.json(); })
+    .then(function (data) {
+      var servers = data.servers || [];
+      document.getElementById("setmcpwrap").style.display = servers.length ? "" : "none";
+      $("setmcp").innerHTML = servers.map(function (s) {
+        // A tool count worth noticing is said where the count is, not in a log nobody reads.
+        var heavy = s.toolCount > (data.budget || 30);
+        return '<div style="display:flex;gap:9px;align-items:center;font-size:13px">' +
+          '<span class="dot ' + (s.running ? "ok" : "bad") + '"></span>' +
+          '<span style="min-width:80px">' + esc(s.name) + "</span>" +
+          '<span class="dim mono" style="flex:1;font-size:11px">' + esc(s.detail) + "</span>" +
+          (heavy ? '<span style="font-size:11px;color:var(--warn,#b26b00)">in every prompt</span>' : "") +
+        "</div>";
+      }).join("");
+    })
+    .catch(function () {});
+}
+
 function renderChannels() {
+  renderMcp();
   fetch("/api/channels")
     .then(function (r) { return r.json(); })
     .then(function (data) {

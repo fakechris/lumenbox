@@ -61,6 +61,7 @@ import type { HostRunner } from "./host-runner.ts";
 import type { Vault } from "./vault.ts";
 import type { TaskStore } from "./tasks.ts";
 import type { ScopeStore } from "./scopes.ts";
+import type { McpManager } from "./mcp.ts";
 import { narrowTools } from "./scopes.ts";
 import { conversationIdFor, MAIN_CONVERSATION } from "../agents/registry.ts";
 import { resolveSummaryProvider } from "./provider.ts";
@@ -305,6 +306,8 @@ export interface TurnDeps {
   tasks?: TaskStore;
   /** The scopes registry, for an agent placed in a scope. Absent means no scoping. */
   scopes?: ScopeStore;
+  /** MCP servers whose tools this turn may offer and call. Absent means none. */
+  mcp?: McpManager;
   /**
    * Which conversation this turn runs in. Absent means the main one — the team room.
    * The transcript read, every entry written, the compaction state and every event
@@ -957,6 +960,17 @@ export async function runTurn(
       ? undefined
       : deps.scopes?.boundTo(conversation, conversationIdFor);
   const effectiveTools = narrowTools(scope?.tools ?? agent.profile.tools, chatScope?.tools);
+  // The tools other people wrote, narrowed by the same allowlist as ours: an MCP tool
+  // is an ordinary tool once it arrives, including in what an agent's profile and its
+  // scope are allowed to withhold.
+  const mcpTools: Anthropic.Tool[] = (deps.mcp?.tools() ?? [])
+    .filter(tool => effectiveTools === undefined || effectiveTools.includes(tool.name))
+    .map(tool => ({
+      name: tool.name,
+      description: tool.description,
+      input_schema: tool.inputSchema as Anthropic.Tool["input_schema"],
+    }));
+
   const tools = buildTools(
     box !== undefined,
     provider.vision,
@@ -967,7 +981,7 @@ export async function runTurn(
     // for pixels with the room. Side conversations keep shell, files and the rest and
     // do their work headless — which is what lets them run at the same time as the room.
     conversation === MAIN_CONVERSATION
-  );
+  ).concat(mcpTools);
 
   // One entry per completed round, for the loop and progress judgements. Held out here rather than
   // inside runRounds so a continuation can reset it: a fresh budget deserves a fresh judgement.
@@ -1465,6 +1479,7 @@ export async function runTurn(
             vault: deps.vault,
             tasks: deps.tasks,
             scopes: deps.scopes,
+            mcp: deps.mcp,
             turnId,
             conversation,
           }

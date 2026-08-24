@@ -72,6 +72,15 @@ export interface AgentboxConfig {
     maxOutputBytes?: number;
   };
   /**
+   * MCP servers whose tools the agents may use, by name.
+   *
+   * Operator-only, and in this file rather than in any UI an agent can reach: a stdio
+   * server is a process on this machine with this machine's privileges — the same class
+   * of decision as `hostExec`, and not one an agent should be able to make for itself.
+   * An agent is a caller of these tools, never an installer of them.
+   */
+  mcpServers?: Record<string, { command: string; args?: string[]; env?: Record<string, string> }>;
+  /**
    * Chats that asked for a daily digest, chatKey → local hour (0–23). Written by the
    * chat itself ("早报 8点" / "digest at 8"); in the file so the schedule survives a
    * restart, which is the whole difference between a digest and a reply.
@@ -163,7 +172,56 @@ export function loadConfig(onWarn: (message: string) => void = () => {}): Agentb
     ...(readDigests(raw.digests, onWarn) !== undefined
       ? { digests: readDigests(raw.digests, onWarn) }
       : {}),
+    ...(readMcpServers(raw.mcpServers, onWarn) !== undefined
+      ? { mcpServers: readMcpServers(raw.mcpServers, onWarn) }
+      : {}),
   };
+}
+
+function readMcpServers(
+  value: unknown,
+  warn: (message: string) => void
+): AgentboxConfig["mcpServers"] {
+  if (value === undefined) return undefined;
+  if (value === null || typeof value !== "object" || Array.isArray(value)) {
+    warn("config: mcpServers must be an object of name to {command, args}, ignoring it");
+    return undefined;
+  }
+  const servers: NonNullable<AgentboxConfig["mcpServers"]> = {};
+  for (const [name, raw] of Object.entries(value as Record<string, unknown>)) {
+    if (raw === null || typeof raw !== "object" || Array.isArray(raw)) {
+      warn(`config: mcpServers.${name} must be an object, ignoring it`);
+      continue;
+    }
+    const entry = raw as Record<string, unknown>;
+    if (typeof entry.command !== "string" || entry.command === "") {
+      warn(`config: mcpServers.${name} needs a command, ignoring it`);
+      continue;
+    }
+    // The name travels into tool names, where a separator or a space would make the
+    // routing ambiguous — refused here rather than producing an uncallable tool.
+    if (!/^[A-Za-z0-9-]+$/.test(name)) {
+      warn(`config: mcpServers.${name} — a server name may only be letters, digits and -`);
+      continue;
+    }
+    const args = Array.isArray(entry.args)
+      ? entry.args.filter((value): value is string => typeof value === "string")
+      : undefined;
+    const env =
+      entry.env !== null && typeof entry.env === "object" && !Array.isArray(entry.env)
+        ? Object.fromEntries(
+            Object.entries(entry.env as Record<string, unknown>).filter(
+              (pair): pair is [string, string] => typeof pair[1] === "string"
+            )
+          )
+        : undefined;
+    servers[name] = {
+      command: entry.command,
+      ...(args !== undefined && args.length > 0 ? { args } : {}),
+      ...(env !== undefined && Object.keys(env).length > 0 ? { env } : {}),
+    };
+  }
+  return Object.keys(servers).length > 0 ? servers : undefined;
 }
 
 function readDigests(
