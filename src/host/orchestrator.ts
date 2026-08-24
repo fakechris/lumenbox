@@ -720,6 +720,7 @@ export class Orchestrator {
 export const ALL_TOOLS: readonly string[] = [
   "computer",
   "bash",
+  "Jobs",
   "read_file",
   "write_file",
   "list_dir",

@@ -14,6 +14,10 @@ import type {
   DownloadFileResult,
   UploadFileResult,
   ListDirResult,
+  JobStartedResult,
+  JobStatus,
+  JobWaitRequest,
+  JobWaitResult,
   ReadFileResult,
   RecordListResult,
   RecordingInfo,
@@ -174,6 +178,41 @@ export class BoxClient {
       // command that times out reports its output instead of aborting the request.
       commandTimeout + 15_000
     );
+  }
+
+  /**
+   * Starts a command and answers now, with a job id instead of its output.
+   *
+   * For work that outlives a tool call. Its output goes to a file in the box, which is
+   * both how a wait reads it later and how truncation stops being loss.
+   */
+  startJob(
+    command: string,
+    options: { cwd?: string; env?: Record<string, string>; display?: number; owner?: string } = {}
+  ): Promise<JobStartedResult> {
+    return this.post<JobStartedResult>("/exec", {
+      command,
+      background: true,
+      cwd: options.cwd,
+      env: options.env,
+      display: options.display,
+      owner: options.owner,
+    });
+  }
+
+  jobs(): Promise<{ jobs: JobStatus[] }> {
+    return this.post<{ jobs: JobStatus[] }>("/jobs", {});
+  }
+
+  /** Waits for a job to finish, for a line to appear, or for the time to run out. */
+  waitForJob(request: JobWaitRequest): Promise<JobWaitResult> {
+    // The HTTP timeout has to outlast the wait the box is doing, or the request dies
+    // before the answer it is waiting for exists.
+    return this.post<JobWaitResult>("/jobs/wait", request, (request.timeout_ms ?? 60_000) + 15_000);
+  }
+
+  killJob(jobId: string): Promise<JobStatus> {
+    return this.post<JobStatus>("/jobs/kill", { job_id: jobId });
   }
 
   /** What is on a desktop's clipboard. Empty when nothing owns the selection. */

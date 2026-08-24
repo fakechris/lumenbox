@@ -30,6 +30,10 @@ import {
   type ComputerResult,
   type ExecRequest,
   type ExecResult,
+  type JobStartedResult,
+  type JobStatus,
+  type JobWaitRequest,
+  type JobWaitResult,
   type DisplayInfo,
   type EnsureDisplayRequest,
   type EnsureDisplayResult,
@@ -54,7 +58,8 @@ import { getDisplay, parseDisplayNum } from "../cua/display.ts";
 import { readClipboard, writeClipboard } from "./clipboard-service.ts";
 import { startEgressProxy } from "../egress/proxy.ts";
 import { RecordService, RECORDINGS_DIR } from "./record-service.ts";
-import { runShell } from "./shell-service.ts";
+import { AGENT_NICE, runShell, withoutBoxToken } from "./shell-service.ts";
+import { JobService } from "./job-service.ts";
 import { downloadFile, listDir, readFile, uploadFile, writeFile } from "./fs-service.ts";
 
 const VERSION = "0.1.0";
@@ -300,13 +305,38 @@ function proxyVnc(req: IncomingMessage, res: ServerResponse, path: string): void
 // biome-ignore lint/suspicious/noExplicitAny: see above — the handlers' own parameter types are the contract
 type Handler = (body: any) => Promise<unknown>;
 
+/** Background jobs live for the life of the daemon, like the shell sessions do. */
+const jobs = new JobService();
+
 const routes: Record<string, Handler> = {
   "POST /computer": (body: ComputerRequest) => handleComputer(body),
-  "POST /exec": (body: ExecRequest): Promise<ExecResult> => {
+  "POST /exec": async (body: ExecRequest): Promise<ExecResult | JobStartedResult> => {
     // A shell on someone else's desktop can do everything computer-use can — start a
     // window on it, type with xdotool — so it is gated the same way.
     if (body.display !== undefined) displays.assertOwner(body.display, body.owner);
+    if (body.background === true) {
+      return jobs.start({
+        command: body.command,
+        ...(body.cwd !== undefined ? { cwd: body.cwd } : {}),
+        ...(body.env !== undefined ? { env: body.env } : {}),
+        ...(body.display !== undefined ? { display: body.display } : {}),
+        nice: AGENT_NICE,
+        scrubbedEnv: withoutBoxToken(process.env),
+      });
+    }
     return runShell(body);
+  },
+  // Background work, once started, is asked about rather than waited on.
+  "POST /jobs": async (): Promise<{ jobs: JobStatus[] }> => ({ jobs: jobs.list() }),
+  "POST /jobs/wait": async (body: JobWaitRequest): Promise<JobWaitResult> => {
+    const result = await jobs.wait(body);
+    if (result === undefined) throw new Error(`No job ${body.job_id}`);
+    return result;
+  },
+  "POST /jobs/kill": async (body: { job_id: string }): Promise<JobStatus> => {
+    const result = jobs.kill(body.job_id);
+    if (result === undefined) throw new Error(`No job ${body.job_id}`);
+    return result;
   },
   "GET /displays": async (): Promise<DisplayInfo[]> => displays.list(),
   // Per desktop, like everything else: each agent has its own, so "the clipboard" is

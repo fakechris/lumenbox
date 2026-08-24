@@ -332,8 +332,47 @@ export function buildTools(
                 "Kill the command after this long. Defaults to 120000, and the box will not " +
                 "apply more than 600000 whatever is asked for.",
             },
+            background: {
+              type: "boolean",
+              description:
+                "Start it and answer immediately with a job id instead of waiting. Use this " +
+                "for anything that outlives one call — a long build or test run, a server " +
+                "you need running while you do something else, a delegated engine. Its " +
+                "output goes to a file rather than into this result, so nothing is lost to " +
+                "truncation. Then use `Jobs` to wait for it, read it, or stop it.",
+            },
           },
           required: ["command"],
+        },
+      },
+      {
+        name: "Jobs",
+        description:
+          "The background commands you started with `bash` and background: true. " +
+          "`list` shows them; `wait` blocks until one finishes, until a line you name " +
+          "appears in its output, or until your timeout runs out — whichever comes " +
+          "first, and it tells you which; `kill` stops one. Waiting for a line is how " +
+          "you handle something that never exits: a server that has printed its ready " +
+          "line is ready, and waiting for it to finish would wait forever. Every job's " +
+          "full output is in a file, so read_file it when the tail a wait returns is " +
+          "not enough.",
+        input_schema: {
+          type: "object",
+          properties: {
+            action: { type: "string", enum: ["list", "wait", "kill"] },
+            job_id: { type: "string", description: "Which job, for wait and kill." },
+            until: {
+              type: "string",
+              description:
+                "For wait: stop waiting when this text appears in the output, instead of " +
+                "only when the job exits.",
+            },
+            timeout_ms: {
+              type: "integer",
+              description: "For wait: how long to wait before answering. Defaults to 60000.",
+            },
+          },
+          required: ["action"],
         },
       },
       {
@@ -883,6 +922,20 @@ export async function dispatchTool(
     case "bash": {
       const box = requireBox(context);
       const command = String(input.command ?? "");
+      if (input.background === true) {
+        const started = await box.startJob(command, {
+          ...(input.cwd ? { cwd: String(input.cwd) } : {}),
+          ...(context.displayIndex !== undefined ? { display: context.displayIndex } : {}),
+          ...(context.boxOwner !== undefined ? { owner: context.boxOwner } : {}),
+        });
+        return {
+          text:
+            `Started as ${started.job_id} (pid ${started.pid}).\n` +
+            `Its output is going to ${started.log_path} — read_file it any time.\n` +
+            `Use Jobs to wait for it, watch for a line, or stop it. It keeps running ` +
+            `whether or not you wait.`,
+        };
+      }
       const result = await box.exec(command, {
         cwd: input.cwd ? String(input.cwd) : undefined,
         timeoutMs: input.timeout_ms ? Number(input.timeout_ms) : undefined,
@@ -896,6 +949,51 @@ export async function dispatchTool(
       });
       return {
         text: formatExec(result, input.timeout_ms ? Number(input.timeout_ms) : undefined),
+      };
+    }
+
+    case "Jobs": {
+      const box = requireBox(context);
+      const action = String(input.action ?? "list");
+      if (action === "list") {
+        const { jobs } = await box.jobs();
+        if (jobs.length === 0) return { text: "No background jobs." };
+        return {
+          text: jobs
+            .map(
+              job =>
+                `${job.job_id} ${job.running ? "running" : `exited ${job.exit_code}`} — ` +
+                `${job.command.slice(0, 80)} (${job.log_bytes} bytes at ${job.log_path})`
+            )
+            .join("\n"),
+        };
+      }
+      const jobId = String(input.job_id ?? "");
+      if (jobId === "") return { text: "Which job? Pass job_id.", isError: true };
+      if (action === "kill") {
+        const killed = await box.killJob(jobId);
+        return { text: `${killed.job_id} stopped. Its output is at ${killed.log_path}.` };
+      }
+      if (action !== "wait") {
+        return { text: `Unknown Jobs action: ${action}. Use list, wait or kill.`, isError: true };
+      }
+      const waited = await box.waitForJob({
+        job_id: jobId,
+        ...(input.until !== undefined ? { until: String(input.until) } : {}),
+        ...(input.timeout_ms !== undefined ? { timeout_ms: Number(input.timeout_ms) } : {}),
+      });
+      // The reason is said first and plainly: "still running" and "finished" call for
+      // different next moves, and a tail alone does not distinguish them.
+      const headline =
+        waited.reason === "exited"
+          ? `${waited.job_id} finished with exit code ${waited.exit_code}.`
+          : waited.reason === "matched"
+            ? `${waited.job_id} printed what you were waiting for. It is still running.`
+            : `${waited.job_id} is still running; the wait timed out.`;
+      return {
+        text:
+          `${headline}\nFull output: ${waited.log_path} (${waited.log_bytes} bytes)\n\n` +
+          `--- the last of it ---\n${waited.tail}`,
       };
     }
 

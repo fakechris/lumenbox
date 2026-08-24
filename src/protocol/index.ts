@@ -160,6 +160,56 @@ export interface ExecRequest {
    * activated virtualenv survive between commands. Usually the agent's id.
    */
   session?: string;
+  /**
+   * Start it and answer now, rather than holding the request until it exits.
+   *
+   * For the work that outlives a tool call: a build, a test suite, a delegated coding
+   * engine. The reply carries a job id; its output goes to a file that survives the
+   * turn, and `/jobs/*` is how anyone asks what became of it.
+   */
+  background?: boolean;
+}
+
+/** What starting a background job answers with, instead of its output. */
+export interface JobStartedResult {
+  job_id: string;
+  pid: number;
+  /** Where the combined output is being written, readable with the file tools. */
+  log_path: string;
+}
+
+export interface JobStatus {
+  job_id: string;
+  command: string;
+  running: boolean;
+  /** Absent while it runs. */
+  exit_code?: number;
+  started_at: string;
+  ended_at?: string;
+  log_path: string;
+  /** Bytes written to the log so far — how a caller sees progress without reading it. */
+  log_bytes: number;
+}
+
+export interface JobWaitRequest {
+  job_id: string;
+  /** How long to wait before answering with whatever is true then. */
+  timeout_ms?: number;
+  /**
+   * Stop waiting when this appears in the output, rather than only at exit.
+   *
+   * A server that says "listening on 3000" is ready long before it is finished, and
+   * waiting for exit would wait forever. A plain substring; the whole point is that
+   * the caller already knows the line it is looking for.
+   */
+  until?: string;
+}
+
+export interface JobWaitResult extends JobStatus {
+  /** Why the wait ended: the job finished, the text appeared, or time ran out. */
+  reason: "exited" | "matched" | "timeout";
+  /** The last of the output, for reading without a second call. */
+  tail: string;
 }
 
 export interface ExecResult {
