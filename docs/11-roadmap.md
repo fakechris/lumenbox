@@ -57,6 +57,20 @@ Spend is now attributed per person; the budget gate is still global. A cap per
 principal (or per conversation) turns attribution into control — "this channel user
 gets $2/day". Medium. Depends on nothing; extends the existing policy budget.
 
+### R11. A semantic browser toolset over the box's own browser
+Pixel-driving the desktop works for any GUI app, but for the browser it is the slow
+and unreliable path: locating a button in a screenshot misreads coordinates, and every
+step costs an image. The reference shape is a page-level toolset — navigate, a
+structured snapshot with element refs, click/type/fill by ref, tabs, screenshot —
+attached over CDP to **the same visible Chromium the desktop shows**, so semantic
+automation, the person's view and the persistent logins are one browser, not two.
+Medium-large; pairs with the fork/delegation work (browser snapshots are exactly the
+context traffic an isolated sub-conversation should eat). Rider, cheap and immediate:
+block UI-automation binaries (`xdotool`, `wmctrl`, `pyautogui`, `playwright`) in the
+shell tool — an agent that finds them routes around the audited `computer` tool and
+takes the screenshot pipeline blind with it. When it lands, the final-screenshot gate
+grows to include the browser tools.
+
 ---
 
 ## Tier 3 — large, or needs a design decision first
