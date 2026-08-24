@@ -60,9 +60,27 @@ export function readSession(value: string | undefined, key: string): string | un
   return timingSafeEqual(presented, expected) ? identity : undefined;
 }
 
+/**
+ * How long a sign-in lasts.
+ *
+ * Long, and deliberately: an invite code works once and expires in fifteen minutes, so
+ * a session that died with the browser window would lock a person out the moment they
+ * closed it — with no way back in that does not involve interrupting an admin. That is
+ * not a security posture, it is an outage with a login page in front of it.
+ *
+ * What makes the length safe is that revocation does not depend on it: removing
+ * somebody from the roster drops them to viewer on their very next request, and
+ * rotating the UI token invalidates every session at once, because the signing key is
+ * derived from that token rather than stored beside it.
+ */
+export const SESSION_MAX_AGE_SECONDS = 30 * 24 * 3_600;
+
 /** The Set-Cookie line for a fresh session. HttpOnly: nothing in the page reads it. */
 export function sessionCookie(identity: string, key: string): string {
-  return `${SESSION_COOKIE}=${encodeURIComponent(makeSession(identity, key))}; Path=/; HttpOnly; SameSite=Lax`;
+  return (
+    `${SESSION_COOKIE}=${encodeURIComponent(makeSession(identity, key))}; Path=/; ` +
+    `Max-Age=${SESSION_MAX_AGE_SECONDS}; HttpOnly; SameSite=Lax`
+  );
 }
 
 /** A web identity for somebody who has only ever arrived through a browser. */

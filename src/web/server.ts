@@ -48,6 +48,7 @@ import {
   SESSION_COOKIE,
   sessionCookie,
   sessionKey,
+  SESSION_MAX_AGE_SECONDS,
 } from "./session.ts";
 
 /**
@@ -1498,7 +1499,10 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
           // is their roster role, checked on every request that changes something.
           const admit = [
             ...(token !== undefined
-              ? [`${COOKIE_NAME}=${encodeURIComponent(token)}; Path=/; HttpOnly; SameSite=Lax`]
+              ? [
+                  `${COOKIE_NAME}=${encodeURIComponent(token)}; Path=/; ` +
+                    `Max-Age=${SESSION_MAX_AGE_SECONDS}; HttpOnly; SameSite=Lax`,
+                ]
               : []),
             sessionCookie(identity, sessionSecret),
           ];

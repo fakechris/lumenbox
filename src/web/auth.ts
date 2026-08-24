@@ -192,8 +192,12 @@ export function authorize(
     return {
       allow: true,
       reason: "token",
+      // Durable, for the same reason the identity cookie is: a person who closes the
+      // window should not need the ?token= URL again to come back. Rotating the token
+      // is what ends these, which is the revocation story either way.
       setCookie:
-        `${COOKIE_NAME}=${encodeURIComponent(config.token)}; Path=/; HttpOnly; SameSite=Lax`,
+        `${COOKIE_NAME}=${encodeURIComponent(config.token)}; Path=/; ` +
+        `Max-Age=${30 * 24 * 3_600}; HttpOnly; SameSite=Lax`,
     };
   }
 

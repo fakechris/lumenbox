@@ -45,6 +45,9 @@ test("the cookie is HttpOnly and scoped to the whole app; web identities are dis
   assert.match(line, /HttpOnly/);
   assert.match(line, /Path=\//);
   assert.match(line, /SameSite=Lax/);
+  // Durable, because a one-use fifteen-minute code plus a cookie that dies with the
+  // window is a lockout with a login page in front of it.
+  assert.match(line, /Max-Age=\d{6,}/, "a sign-in outlives the browser window");
   assert.notEqual(newWebIdentity(), newWebIdentity());
   assert.match(newWebIdentity(), /^web:[0-9a-f]{12}$/);
 });
