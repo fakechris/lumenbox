@@ -45,6 +45,28 @@ export interface Scope {
   egressHosts?: string[];
   /** The work directory this scope confines to. Declared; box enforcement is a later change. */
   filesRoot?: string;
+  /**
+   * Chats bound to this scope, as chatKeys ("feishu:oc_x"). A bound chat's turns are
+   * *narrowed* by the scope's tools — an intersection with the agent's own, never a
+   * grant: the room's authority bounds the work, it does not hand an agent tools its
+   * own definition withheld. Secrets and egress follow the same declared-then-enforced
+   * path as the fields above.
+   */
+  chats?: string[];
+}
+
+/**
+ * The tools a turn may offer: the agent's own, bounded by the chat's scope when one
+ * is bound. Undefined means "no narrowing" on either side, which is why the both-
+ * undefined case stays undefined rather than becoming an empty list.
+ */
+export function narrowTools(
+  own: readonly string[] | undefined,
+  chat: readonly string[] | undefined
+): string[] | undefined {
+  if (chat === undefined) return own === undefined ? undefined : [...own];
+  if (own === undefined) return [...chat];
+  return own.filter(tool => chat.includes(tool));
 }
 
 interface ScopesFile {
@@ -82,6 +104,9 @@ export class ScopeStore {
           ...(typeof raw.filesRoot === "string" && raw.filesRoot !== ""
             ? { filesRoot: raw.filesRoot }
             : {}),
+          ...(Array.isArray(raw.chats)
+            ? { chats: raw.chats.filter((c): c is string => typeof c === "string") }
+            : {}),
         });
       }
     } catch {
@@ -96,7 +121,22 @@ export class ScopeStore {
       ...(scope.tools ? { tools: [...scope.tools] } : {}),
       secretIds: [...scope.secretIds],
       ...(scope.egressHosts ? { egressHosts: [...scope.egressHosts] } : {}),
+      ...(scope.chats ? { chats: [...scope.chats] } : {}),
     }));
+  }
+
+  /**
+   * The scope bound to a chat's conversation, if any. `normalize` maps a stored
+   * chatKey to a conversation id, because the two spell the same chat differently
+   * (a conversation id is filename-safe) and the caller owns that mapping.
+   */
+  boundTo(conversation: string, normalize: (chatKey: string) => string): Scope | undefined {
+    for (const scope of this.scopes.values()) {
+      if ((scope.chats ?? []).some(chatKey => normalize(chatKey) === conversation)) {
+        return this.get(scope.id);
+      }
+    }
+    return undefined;
   }
 
   get(id: string | undefined): Scope | undefined {
@@ -124,6 +164,7 @@ export class ScopeStore {
           ? { egressHosts: [...new Set(scope.egressHosts)] }
           : {}),
         ...(scope.filesRoot ? { filesRoot: scope.filesRoot } : {}),
+        ...(scope.chats && scope.chats.length > 0 ? { chats: [...new Set(scope.chats)] } : {}),
       }));
     mkdirSync(dirname(this.path), { recursive: true });
     const temp = `${this.path}.${process.pid}.tmp`;

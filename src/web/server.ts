@@ -115,6 +115,22 @@ function withinWork(path: string): boolean {
   const normalised = posix.normalize(path);
   return normalised === WORK_DIR || normalised.startsWith(`${WORK_DIR}/`);
 }
+
+/**
+ * One line of "what is it doing", for a chat task card.
+ *
+ * The tool name is the truth; the argument shown is the one a person recognises — a
+ * command, a path, a URL — clamped hard, because a card is glanced at, not read.
+ */
+function actionLine(tool: string, input: unknown): string {
+  const record =
+    typeof input === "object" && input !== null ? (input as Record<string, unknown>) : {};
+  const detail = [record.command, record.path, record.action, record.url].find(
+    (value): value is string => typeof value === "string" && value !== ""
+  );
+  const line = detail === undefined ? tool : `${tool}: ${detail}`;
+  return line.length > 64 ? `${line.slice(0, 63)}…` : line;
+}
 import { agentboxHome, loadConfig, saveConfig, type AgentboxConfig } from "../config.ts";
 
 type AgentboxConfigHostExec = NonNullable<AgentboxConfig["hostExec"]>;
@@ -126,7 +142,7 @@ import { HostRunner, hostRunnerConfig } from "../host/host-runner.ts";
 import { ALL_TOOLS } from "../host/orchestrator.ts";
 import { PRESET_MODELS, providerNames, resolveProvider, testProvider } from "../host/provider.ts";
 import { Principals, roleAtLeast, type Principal, type Role } from "../host/principals.ts";
-import { isTaskStatus } from "../host/tasks.ts";
+import { isLive, isTaskStatus } from "../host/tasks.ts";
 import { Vault, type Grant } from "../host/vault.ts";
 import { seedStarterSkills } from "../host/starter-skills.ts";
 import { ActivityLog } from "./activity.ts";
@@ -252,6 +268,12 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
   // holds this one instance, so a granted secret is usable on the next host command.
   const vault = new Vault();
 
+  // Channel task cards listen here while their ask is in flight: each listener is a
+  // narrow filter on (agent, conversation), added before the prompt and removed after
+  // it settles. A set rather than a rewiring of onTurnEvent per ask, because two chats
+  // can be driving two agents at once.
+  const channelTurnListeners = new Set<(event: TurnEvent) => void>();
+
   const orchestrator = new Orchestrator({
     registry,
     provider: options.provider,
@@ -259,7 +281,10 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
     boxProvisioner: provisioner,
     hostRunner,
     vault,
-    onTurnEvent: broadcast,
+    onTurnEvent: event => {
+      broadcast(event);
+      for (const listener of channelTurnListeners) listener(event);
+    },
     onBusEvent: broadcast,
   });
 
@@ -291,8 +316,165 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
     }
   }
 
+  // Letting somebody in is one click, not an id copied around. A stranger's message
+  // records a knock; the settings dialog approves it with one button, or the owner
+  // hands out a short-lived invite code the person redeems in the chat itself.
+  // In memory on purpose: a knock lost to a restart costs the person one more
+  // message, and a code that did not outlive the process is a *property* of a code.
+  const knocks = new Map<
+    string,
+    { identity: string; senderLabel: string; channel: string; at: string }
+  >();
+  const invites = new Map<string, { role: Role; principalId?: string; expiresAt: number }>();
+  const INVITE_TTL_MS = 15 * 60_000;
+  const newInviteCode = (): string => {
+    // Unambiguous alphabet — no 0/O, 1/I/L — because this travels by voice and by
+    // hand. Six characters of 31 ≈ 10^9, plenty for 15 minutes and one use.
+    const alphabet = "23456789ABCDEFGHJKMNPQRSTUVWXYZ";
+    return Array.from(randomBytes(6), byte => alphabet[byte % alphabet.length]!).join("");
+  };
+
+  // The chat's day, from the objects that already record it: the board for what
+  // happened, usage for what it cost, the policy gate for what waits on a person.
+  // Deliberately not a model call — a digest that could hallucinate its numbers
+  // would poison the one place those numbers are read daily.
+  const digestFor = (chatKey: string): string => {
+    const conversation = conversationIdFor(chatKey);
+    const all = (orchestrator.tasks?.list() ?? []).filter(
+      task => task.conversation === conversation
+    );
+    const since = Date.now() - 24 * 3_600_000;
+    const nameOf = (id: string) =>
+      registry.tryGet(id)?.profile.name ??
+      principals.list().find(person => person.id === id)?.name ??
+      id;
+    const closed = all.filter(
+      task => !isLive(task.status) && Date.parse(task.updatedAt) >= since
+    );
+    const live = all.filter(task => isLive(task.status));
+    const lines = ["Daily digest"];
+    lines.push(
+      closed.length > 0
+        ? `Closed (24h): ${closed.map(task => `${task.id} ${task.title}`).join(" · ")}`
+        : "Closed (24h): nothing"
+    );
+    if (live.length > 0) {
+      lines.push(
+        `In flight: ${live
+          .map(
+            task =>
+              `${task.id} [${task.status}]${task.assigneeId !== undefined ? ` @${nameOf(task.assigneeId)}` : ""} ${task.title}`
+          )
+          .join(" · ")}`
+      );
+    }
+    const requesters = [
+      ...new Set(all.filter(task => Date.parse(task.updatedAt) >= since).map(task => task.requester)),
+    ];
+    const spend = requesters
+      .map(id => ({ id, tokens: orchestrator.usage.spentSincePrincipal(since, id) }))
+      .filter(entry => entry.tokens > 0);
+    if (spend.length > 0) {
+      lines.push(
+        `Spend (24h): ${spend
+          .map(entry => `${nameOf(entry.id)} ~${Math.round(entry.tokens / 1000)}k tokens`)
+          .join(", ")}`
+      );
+    }
+    const pending = orchestrator.policy.pending();
+    if (pending.length > 0) {
+      lines.push(
+        `Waiting on a person: ${pending.length} approval${pending.length === 1 ? "" : "s"} ` +
+          `(${[...new Set(pending.map(item => item.agentName))].join(", ")})`
+      );
+    }
+    return lines.join("\n");
+  };
+
   const channels = new ChannelManager({
     mayDrive: identity => roleAtLeast(principals.roleOf(identity), "driver"),
+    mayAdmin: identity => roleAtLeast(principals.roleOf(identity), "admin"),
+    // One scope per chat: binding moves the chat, it does not accumulate. The scope
+    // itself is created and given tools in Settings; the chat only chooses which one
+    // bounds it.
+    chatScope: {
+      show: chatKey => {
+        const bound = orchestrator.scopes?.boundTo(conversationIdFor(chatKey), conversationIdFor);
+        if (bound === undefined) {
+          return 'This chat is not bound to a scope. An admin binds one with "scope <name>".';
+        }
+        const tools = bound.tools !== undefined ? ` Tools: ${bound.tools.join(", ")}.` : "";
+        return `This chat is bound to scope "${bound.name}".${tools}`;
+      },
+      bind: (chatKey, name) => {
+        const scopes = orchestrator.scopes;
+        if (scopes === undefined) return "Scopes are not available on this installation.";
+        const all = scopes.list();
+        const target = all.find(scope => scope.name === name || scope.id === name);
+        if (target === undefined) {
+          const names = all.map(scope => scope.name).join(", ");
+          return `No scope named "${name}". ${names !== "" ? `Existing: ${names}.` : "Create one under Settings → Scopes first."}`;
+        }
+        for (const scope of all) scope.chats = (scope.chats ?? []).filter(key => key !== chatKey);
+        target.chats = [...(target.chats ?? []), chatKey];
+        scopes.save(all);
+        log(`scope: ${chatKey} bound to ${target.id}`);
+        const tools = target.tools !== undefined ? ` Tools narrow to: ${target.tools.join(", ")}.` : "";
+        return `Bound. Every task in this chat now runs inside "${target.name}".${tools}`;
+      },
+      off: chatKey => {
+        const scopes = orchestrator.scopes;
+        if (scopes === undefined) return "Scopes are not available on this installation.";
+        const all = scopes.list();
+        for (const scope of all) scope.chats = (scope.chats ?? []).filter(key => key !== chatKey);
+        scopes.save(all);
+        log(`scope: ${chatKey} unbound`);
+        return "Unbound. Tasks in this chat run with each agent's own tools again.";
+      },
+    },
+    digest: {
+      build: digestFor,
+      schedule: (chatKey, hour) => {
+        saveConfig({ digests: { [chatKey]: hour } });
+        log(`digest: ${chatKey} daily at ${hour}:00`);
+        return `Daily digest set for ${hour}:00. "早报" reads it any time; "早报 关" stops it.`;
+      },
+      off: chatKey => {
+        saveConfig({ digests: { [chatKey]: null } });
+        log(`digest: ${chatKey} off`);
+        return "Daily digest off for this chat.";
+      },
+    },
+    knock: request => {
+      knocks.set(request.identity, { ...request, at: new Date().toISOString() });
+      log(`channel ${request.channel}: ${request.senderLabel} (${request.identity}) knocked`);
+    },
+    bind: (code, identity, senderLabel) => {
+      const invite = invites.get(code);
+      if (invite === undefined || invite.expiresAt < Date.now()) {
+        invites.delete(code);
+        return "That code is not live — codes last 15 minutes and work once. Ask for a fresh one.";
+      }
+      // Deleted before the roster write: a code that races two senders admits one.
+      invites.delete(code);
+      const roster = principals.list();
+      const target =
+        invite.principalId !== undefined
+          ? roster.find(principal => principal.id === invite.principalId)
+          : undefined;
+      if (target !== undefined) {
+        target.identities.push(identity);
+        principals.save(roster);
+        knocks.delete(identity);
+        log(`channel bind: ${identity} linked to ${target.name}`);
+        return `Linked — you are ${target.name} (${target.role}) here now. Just say what you need done.`;
+      }
+      roster.push({ id: identity, name: senderLabel, role: invite.role, identities: [identity] });
+      principals.save(roster);
+      knocks.delete(identity);
+      log(`channel bind: ${identity} joined as ${invite.role}`);
+      return `You're in as ${invite.role}. Just say what you need done; @AgentName first picks who does it.`;
+    },
     // A chat reply of allow/always/deny answers the approval that was pushed there.
     answerApproval: (approvalId, reply) => {
       const target = orchestrator.policy.pending().find(item => item.id === approvalId);
@@ -311,7 +493,7 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
           : "Allowed once. Send the agent a message to have it retry.";
     },
     log: line => log(line),
-    ask: async (agentName, text, identity, chatKey) => {
+    ask: async (agentName, text, identity, chatKey, onProgress) => {
       const agent =
         agentName !== undefined
           ? registry.resolve(agentName)
@@ -325,9 +507,159 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
       const principal = principals.resolve(identity).id;
       const before = registry.readTranscript(agent.id, conversation).length;
       broadcast({ type: "prompt", agentId: agent.id, text, userId: principal, conversation });
-      await orchestrator.prompt(agent.id, text, { userId: principal }, { conversation });
-      await orchestrator.settle();
+      // The card's one-line answer to "what is it doing": each tool call as it starts,
+      // for this agent in this conversation only. Coarse on purpose — a card is not a
+      // transcript, and the transcript is where the real record already lives.
+      const listener =
+        onProgress === undefined
+          ? undefined
+          : (event: TurnEvent) => {
+              if (event.type !== "tool_start") return;
+              if (event.agentId !== agent.id || event.conversation !== conversation) return;
+              onProgress(actionLine(event.tool, event.input));
+            };
+      if (listener !== undefined) channelTurnListeners.add(listener);
+      try {
+        await orchestrator.prompt(agent.id, text, { userId: principal }, { conversation });
+        await orchestrator.settle();
+      } finally {
+        if (listener !== undefined) channelTurnListeners.delete(listener);
+      }
       return orchestrator.replySince(agent.id, before, conversation);
+    },
+    // Channel requests live on the team board: "t12" means the same thing in the
+    // chat's card, the web UI and an agent's prompt. A failure closes as blocked with
+    // its note — a board that loses failed work answers "what needs somebody" wrong.
+    board: {
+      open: input => {
+        const tasks = orchestrator.tasks;
+        if (tasks === undefined) return undefined;
+        let assigneeId: string | undefined;
+        try {
+          assigneeId = (input.agentName !== undefined
+            ? registry.resolve(input.agentName)
+            : registry.list()[0]
+          )?.id;
+        } catch {
+          // The unknown-agent error is thrown (and relayed) by ask; the board entry
+          // simply goes unassigned.
+        }
+        const task = tasks.create({
+          title: input.title,
+          requester: principals.resolve(input.identity).id,
+          ...(assigneeId !== undefined ? { assigneeId } : {}),
+          conversation: conversationIdFor(input.chatKey),
+        });
+        return task?.id;
+      },
+      started: taskId => {
+        orchestrator.tasks?.update(taskId, { status: "doing" }, "channel");
+      },
+      closed: (taskId, outcome, note) => {
+        orchestrator.tasks?.update(
+          taskId,
+          outcome === "done"
+            ? { status: "done" }
+            : { status: "blocked", note: `failed: ${note ?? "unknown"}` },
+          "channel"
+        );
+      },
+    },
+    // A file dropped in the chat lands in that chat's inbox on the box, under a name
+    // that never overwrites: a second report.pdf becomes report-2.pdf, because the
+    // first one may be exactly what the agent is reading.
+    receiveFiles: async (chatKey, files) => {
+      const client = orchestrator.boxClient();
+      if (client === undefined) return undefined;
+      const dir = `${WORK_DIR}/chats/${conversationIdFor(chatKey)}/inbox`;
+      await client.exec(`mkdir -p '${dir}'`);
+      let existing: Set<string>;
+      try {
+        existing = new Set((await client.listDir(dir)).entries.map(entry => entry.name));
+      } catch {
+        existing = new Set();
+      }
+      const saved: string[] = [];
+      for (const file of files) {
+        const clean = file.name.replace(/[/\\\0]/g, "_").slice(0, 120) || "file";
+        let name = clean;
+        for (let n = 2; existing.has(name); n++) {
+          const dot = clean.lastIndexOf(".");
+          name = dot > 0 ? `${clean.slice(0, dot)}-${n}${clean.slice(dot)}` : `${clean}-${n}`;
+        }
+        existing.add(name);
+        await client.uploadFile(`${dir}/${name}`, file.base64);
+        saved.push(`inbox/${name}`);
+      }
+      return saved;
+    },
+    // The chat's outbox on the box: list, download, and — once pushed — move to
+    // sent/, so nothing is delivered twice and nothing undelivered is lost. A chat
+    // that never used files has no directory, and that is the cheap ordinary case.
+    collectOutbox: async chatKey => {
+      const client = orchestrator.boxClient();
+      if (client === undefined) return [];
+      const dir = `${WORK_DIR}/chats/${conversationIdFor(chatKey)}/outbox`;
+      let entries: { name: string; type: string; size: number }[];
+      try {
+        entries = (await client.listDir(dir)).entries;
+      } catch {
+        return [];
+      }
+      const files: { name: string; base64: string }[] = [];
+      for (const entry of entries) {
+        if (entry.type !== "file") continue;
+        if (entry.size > 25 * 1024 * 1024) {
+          log(`outbox: ${entry.name} skipped (${entry.size} bytes is past the 25MB cap)`);
+          continue;
+        }
+        try {
+          files.push({ name: entry.name, base64: (await client.downloadFile(`${dir}/${entry.name}`)).base64 });
+        } catch (error) {
+          log(`outbox: could not read ${entry.name}: ${error instanceof Error ? error.message : String(error)}`);
+        }
+      }
+      // Smallest first: if a push dies midway, the cheap ones made it out.
+      return files.sort((a, b) => a.base64.length - b.base64.length);
+    },
+    outboxDelivered: async (chatKey, names) => {
+      const client = orchestrator.boxClient();
+      if (client === undefined) return;
+      const dir = `${WORK_DIR}/chats/${conversationIdFor(chatKey)}/outbox`;
+      const quoted = names.map(name => `'${name.replace(/'/g, `'\\''`)}'`).join(" ");
+      await client.exec(`mkdir -p '${dir}/../sent' && cd '${dir}' && mv -- ${quoted} ../sent/`);
+    },
+    // The desktop as it is right now, for "屏幕" and for the finished-task poster.
+    // Captured with the agent's own owner token, the same proof a turn presents; an
+    // agent whose desktop never started answers undefined and the chat is told so.
+    screenshot: async agentName => {
+      const client = orchestrator.boxClient();
+      if (client === undefined) return undefined;
+      const agent =
+        agentName !== undefined ? registry.resolve(agentName) : registry.list()[0];
+      if (agent === undefined) return undefined;
+      const result = await client.computer([{ action: "screenshot" }], {
+        display: registry.displayIndexFor(agent.id),
+        owner: registry.boxOwnerTokenFor(agent.id),
+      });
+      return result.screenshot;
+    },
+    // What a queued acknowledgement says: the running turn counts as one ahead, plus
+    // whatever is already waiting in this chat's lane. An unknown agent name answers
+    // zero — the ask that follows throws the message worth relaying.
+    ahead: (agentName, chatKey) => {
+      try {
+        const agent =
+          agentName !== undefined ? registry.resolve(agentName) : registry.list()[0];
+        if (agent === undefined) return 0;
+        const conversation = conversationIdFor(chatKey);
+        return (
+          (orchestrator.bus.isActive(agent.id, conversation) ? 1 : 0) +
+          orchestrator.bus.queuedCount(agent.id, conversation)
+        );
+      } catch {
+        return 0;
+      }
     },
   });
   {
@@ -357,6 +689,22 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
     );
   }
   channels.start();
+
+  // The standing digests: checked a few times an hour, sent once per chat per day.
+  // The sent-marker is in memory, so the one failure mode is a duplicate digest after
+  // a restart in the same hour — the cheap side of that trade.
+  const digestsSent = new Map<string, string>();
+  const digestTimer = setInterval(() => {
+    const configured = loadConfig().digests ?? {};
+    const now = new Date();
+    const today = `${now.getFullYear()}-${now.getMonth() + 1}-${now.getDate()}`;
+    for (const [chatKey, hour] of Object.entries(configured)) {
+      if (now.getHours() !== hour || digestsSent.get(chatKey) === today) continue;
+      digestsSent.set(chatKey, today);
+      void channels.pushToChat(chatKey, digestFor(chatKey));
+    }
+  }, 10 * 60_000);
+  digestTimer.unref?.();
 
   orchestrator.policy.onApprovalRequested = approval => {
     announceApproval(approval);
@@ -942,10 +1290,77 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
         // The chat channels: which exist, which are running, and the people who may
         // use them. The roster is the access-control list now, not a flat allow list.
         if (route === "GET /api/channels") {
+          for (const [code, invite] of invites) {
+            if (invite.expiresAt < Date.now()) invites.delete(code);
+          }
           send(res, 200, {
             channels: channels.list(),
             principals: principals.list(),
+            knocks: [...knocks.values()],
+            invites: [...invites.entries()].map(([code, invite]) => ({
+              code,
+              role: invite.role,
+              principalId: invite.principalId,
+              expiresAt: invite.expiresAt,
+            })),
           });
+          return;
+        }
+
+        // A short-lived, single-use code. With a principalId it links a new identity
+        // to an existing person (same human, second phone); without one it admits a
+        // new person at the named role.
+        if (route === "POST /api/channels/invite") {
+          if (refusedRole("admin")) return;
+          const body = await readJson(req);
+          const role: Role =
+            body.role === "admin" || body.role === "driver" || body.role === "viewer"
+              ? (body.role as Role)
+              : "driver";
+          const code = newInviteCode();
+          invites.set(code, {
+            role,
+            ...(typeof body.principalId === "string" && body.principalId !== ""
+              ? { principalId: body.principalId }
+              : {}),
+            expiresAt: Date.now() + INVITE_TTL_MS,
+          });
+          log(`channel invite: ${code} (${role}) created`);
+          send(res, 200, { code, role, expiresAt: Date.now() + INVITE_TTL_MS });
+          return;
+        }
+
+        // One click on a knock. The person is told on the channel they knocked from,
+        // because "approved silently" reads as "still ignored" from their side.
+        if (route === "POST /api/channels/approve") {
+          if (refusedRole("admin")) return;
+          const body = await readJson(req);
+          const identity = String(body.identity ?? "");
+          const knock = knocks.get(identity);
+          if (knock === undefined) {
+            send(res, 404, { error: "Nobody with that id is waiting." });
+            return;
+          }
+          const role: Role = body.role === "viewer" || body.role === "admin" ? body.role : "driver";
+          const roster = principals.list();
+          roster.push({ id: identity, name: knock.senderLabel, role, identities: [identity] });
+          principals.save(roster);
+          knocks.delete(identity);
+          log(`channel approve: ${identity} (${knock.senderLabel}) as ${role}`);
+          void channels.push(
+            knock.channel,
+            identity,
+            `You're in as ${role}. Just say what you need done; @AgentName first picks who does it.`
+          );
+          send(res, 200, { principals: principals.list(), knocks: [...knocks.values()] });
+          return;
+        }
+
+        if (route === "POST /api/channels/dismiss") {
+          if (refusedRole("admin")) return;
+          const body = await readJson(req);
+          knocks.delete(String(body.identity ?? ""));
+          send(res, 200, { knocks: [...knocks.values()] });
           return;
         }
 

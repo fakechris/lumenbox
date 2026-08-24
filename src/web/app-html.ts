@@ -689,25 +689,44 @@ export const APP_HTML = String.raw`<!doctype html>
       <label>Channels</label>
       <div id="setchannels" style="display:flex;flex-direction:column;gap:6px"></div>
       <div class="fieldnote">A channel turns on when its credentials are in the environment or the
-        env map of the config file. Who may command the agents is the people list below; anyone
-        else who messages the bot is told their id and nothing more.</div>
+        env map of the config file (Feishu: FEISHU_APP_ID + FEISHU_APP_SECRET; Telegram:
+        TELEGRAM_BOT_TOKEN; DingTalk: DINGTALK_CLIENT_ID + DINGTALK_CLIENT_SECRET).</div>
+    </div>
+    <div class="field" id="setknockswrap" style="display:none">
+      <label>Waiting at the door</label>
+      <div id="setknocks" style="display:flex;flex-direction:column;gap:6px"></div>
+      <div class="fieldnote">People who messaged the bot and are not on the list yet. One click
+        lets them in, and they are told so on the channel they knocked from.</div>
     </div>
     <div class="field">
       <label>People</label>
       <div id="setpeople" style="display:flex;flex-direction:column;gap:6px"></div>
       <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
-        <input id="setpname" placeholder="Name" spellcheck="false" style="flex:1;min-width:90px;font-family:var(--font-sans)">
-        <input id="setpid" placeholder="telegram:123456" spellcheck="false" style="flex:1.4;min-width:120px">
-        <select id="setprole" style="height:38px;border-radius:var(--radius-input);border:1px solid var(--border-strong);background:var(--bg);color:var(--text);padding:0 8px">
-          <option value="viewer">viewer</option>
+        <select id="setinvrole" style="height:38px;border-radius:var(--radius-input);border:1px solid var(--border-strong);background:var(--bg);color:var(--text);padding:0 8px">
           <option value="driver" selected>driver</option>
+          <option value="viewer">viewer</option>
           <option value="admin">admin</option>
         </select>
-        <button class="btn sm" id="setpadd">Add</button>
+        <button class="btn sm" id="setinvite">New invite code</button>
+        <span id="setinviteout" class="mono" style="font-size:12px"></span>
       </div>
-      <div class="fieldnote">viewer reads, driver commands the agents, admin also changes settings.
-        A person can have several ids (home phone, work account) — add a row per id, same name.
-        Applies to the next message, no restart.</div>
+      <div class="fieldnote">An invite code works once, for 15 minutes: the person sends
+        <span class="mono">bind CODE</span> to the bot on any channel and they are in — no ids
+        to copy. viewer reads, driver commands the agents, admin also changes settings; changing
+        a role below applies to the next message, no restart.</div>
+      <details style="margin-top:2px">
+        <summary class="fieldnote" style="cursor:pointer;margin:0">Add by id manually…</summary>
+        <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-top:6px">
+          <input id="setpname" placeholder="Name" spellcheck="false" style="flex:1;min-width:90px;font-family:var(--font-sans)">
+          <input id="setpid" placeholder="telegram:123456" spellcheck="false" style="flex:1.4;min-width:120px">
+          <select id="setprole" style="height:38px;border-radius:var(--radius-input);border:1px solid var(--border-strong);background:var(--bg);color:var(--text);padding:0 8px">
+            <option value="viewer">viewer</option>
+            <option value="driver" selected>driver</option>
+            <option value="admin">admin</option>
+          </select>
+          <button class="btn sm" id="setpadd">Add</button>
+        </div>
+      </details>
       <div class="fieldnote" id="setpeoplestatus"></div>
     </div>
     <div class="field" id="setgrantswrap" style="display:none">
@@ -1034,6 +1053,18 @@ function renderChannels() {
           "<span style=\"min-width:70px\">" + esc(ch.name) + "</span>" +
           '<span class="dim mono" style="font-size:11px">' + esc(ch.detail) + "</span></div>";
       }).join("");
+      // The door: whoever knocked, with the two answers that matter side by side.
+      var knocks = data.knocks || [];
+      document.getElementById("setknockswrap").style.display = knocks.length ? "" : "none";
+      $("setknocks").innerHTML = knocks.map(function (k) {
+        return '<div style="display:flex;gap:8px;align-items:center;font-size:13px;flex-wrap:wrap">' +
+          '<span style="font-weight:600">' + esc(k.senderLabel) + "</span>" +
+          '<span class="dim">' + esc(k.channel) + "</span>" +
+          '<span class="mono dim" style="font-size:11px;flex:1;min-width:80px;overflow:hidden;text-overflow:ellipsis">' + esc(k.identity) + "</span>" +
+          '<button class="btn sm" data-approve="' + esc(k.identity) + '" data-role="driver">Let in as driver</button>' +
+          '<button class="btn sm ghost" data-approve="' + esc(k.identity) + '" data-role="viewer">Viewer</button>' +
+          '<a href="#" data-dismiss="' + esc(k.identity) + '" style="color:var(--danger);font-size:12px">Ignore</a></div>';
+      }).join("");
       // Flatten to one row per identity, which is what a person edits.
       people = [];
       (data.principals || []).forEach(function (p) {
@@ -1046,19 +1077,73 @@ function renderChannels() {
     .catch(function () {});
 }
 
+document.getElementById("setknocks").addEventListener("click", function (event) {
+  var target = event.target;
+  if (!target.getAttribute) return;
+  var approve = target.getAttribute("data-approve");
+  if (approve) {
+    fetch("/api/channels/approve", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ identity: approve, role: target.getAttribute("data-role") })
+    }).then(function () { renderChannels(); });
+    return;
+  }
+  var dismiss = target.getAttribute("data-dismiss");
+  if (dismiss) {
+    event.preventDefault();
+    fetch("/api/channels/dismiss", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ identity: dismiss })
+    }).then(function () { renderChannels(); });
+  }
+});
+
+$("setinvite").onclick = function () {
+  $("setinviteout").textContent = "…";
+  fetch("/api/channels/invite", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ role: $("setinvrole").value })
+  })
+    .then(function (r) { return r.json(); })
+    .then(function (d) {
+      $("setinviteout").textContent = d.code
+        ? 'Have them send: bind ' + d.code + '  (15 min, once)'
+        : (d.error || "failed");
+    })
+    .catch(function () { $("setinviteout").textContent = "failed"; });
+};
+
 function renderPeople() {
   if (!people.length) {
     $("setpeople").innerHTML = '<div class="fieldnote" style="margin:0">Nobody yet. Add a person to let them command the agents from a channel.</div>';
     return;
   }
   $("setpeople").innerHTML = people.map(function (p, i) {
+    var roles = ["viewer", "driver", "admin"].map(function (role) {
+      return '<option value="' + role + '"' + (p.role === role ? " selected" : "") + ">" + role + "</option>";
+    }).join("");
     return '<div style="display:flex;gap:8px;align-items:center;font-size:13px">' +
       '<span style="min-width:80px;font-weight:600">' + esc(p.name) + "</span>" +
       '<span class="mono" style="flex:1;font-size:12px;overflow:hidden;text-overflow:ellipsis">' + esc(p.identity) + "</span>" +
-      '<span class="dim" style="min-width:48px">' + esc(p.role) + "</span>" +
+      '<select data-role-of="' + i + '" style="height:28px;border-radius:6px;border:1px solid var(--border-strong);background:var(--bg);color:var(--text);padding:0 4px;font-size:12px">' + roles + "</select>" +
       '<a href="#" data-remove="' + i + '" style="color:var(--danger);font-size:12px">Remove</a></div>';
   }).join("");
 }
+
+// A role changed in place applies to the person, not the row: the same human's other
+// identities move with them, because two roles for one person is a contradiction.
+document.getElementById("setpeople").addEventListener("change", function (event) {
+  var idx = event.target.getAttribute && event.target.getAttribute("data-role-of");
+  if (idx === null || idx === undefined) return;
+  var person = people[Number(idx)];
+  if (!person) return;
+  people.forEach(function (p) { if (p.id === person.id) p.role = event.target.value; });
+  renderPeople();
+  savePeople();
+});
 
 function savePeople() {
   // Regroup rows back into principals by id, so one person's several ids are one entry.

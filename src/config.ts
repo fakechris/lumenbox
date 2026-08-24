@@ -71,6 +71,12 @@ export interface AgentboxConfig {
     timeoutMs?: number;
     maxOutputBytes?: number;
   };
+  /**
+   * Chats that asked for a daily digest, chatKey → local hour (0–23). Written by the
+   * chat itself ("早报 8点" / "digest at 8"); in the file so the schedule survives a
+   * restart, which is the whole difference between a digest and a reply.
+   */
+  digests?: Record<string, number>;
 }
 
 export const DEFAULT_CONFIG: AgentboxConfig = {
@@ -154,7 +160,30 @@ export function loadConfig(onWarn: (message: string) => void = () => {}): Agentb
     ...(readHostExec(raw.hostExec, onWarn) !== undefined
       ? { hostExec: readHostExec(raw.hostExec, onWarn) }
       : {}),
+    ...(readDigests(raw.digests, onWarn) !== undefined
+      ? { digests: readDigests(raw.digests, onWarn) }
+      : {}),
   };
+}
+
+function readDigests(
+  value: unknown,
+  warn: (message: string) => void
+): Record<string, number> | undefined {
+  if (value === undefined) return undefined;
+  if (value === null || typeof value !== "object" || Array.isArray(value)) {
+    warn("config: digests must be an object of chatKey to hour, ignoring it");
+    return undefined;
+  }
+  const digests: Record<string, number> = {};
+  for (const [key, hour] of Object.entries(value as Record<string, unknown>)) {
+    if (typeof hour === "number" && Number.isInteger(hour) && hour >= 0 && hour <= 23) {
+      digests[key] = hour;
+    } else {
+      warn(`config: digests["${key}"] must be an hour 0-23, ignoring it`);
+    }
+  }
+  return Object.keys(digests).length > 0 ? digests : undefined;
 }
 
 function readHostExec(
@@ -261,6 +290,8 @@ export function saveConfig(
     env?: Record<string, string | null>;
     channelAllow?: string[] | null;
     hostExec?: AgentboxConfig["hostExec"] | null;
+    /** Per-chat patch: a null hour removes that chat's digest, others are left alone. */
+    digests?: Record<string, number | null>;
   }
 ): string {
   const path = configPath();
@@ -293,6 +324,18 @@ export function saveConfig(
   if (changes.hostExec !== undefined) {
     if (changes.hostExec === null) delete raw.hostExec;
     else raw.hostExec = changes.hostExec;
+  }
+  if (changes.digests !== undefined) {
+    const current =
+      raw.digests !== null && typeof raw.digests === "object" && !Array.isArray(raw.digests)
+        ? { ...(raw.digests as Record<string, unknown>) }
+        : {};
+    for (const [key, hour] of Object.entries(changes.digests)) {
+      if (hour === null) delete current[key];
+      else current[key] = hour;
+    }
+    if (Object.keys(current).length > 0) raw.digests = current;
+    else delete raw.digests;
   }
   if (changes.env !== undefined) {
     const current =

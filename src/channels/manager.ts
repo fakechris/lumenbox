@@ -6,6 +6,13 @@
  * it said comes back as the reply — the same transcript, the same policy gate, the
  * same budget as every other way in. A channel is a front door, not a second product.
  *
+ * **Accepted is not answered.** A turn runs for minutes; a chat platform's event
+ * handler must return in seconds or the platform redelivers the event, and a
+ * redelivered event is a duplicate turn. So `handle` acknowledges on the wire
+ * immediately and the work runs behind it: a quick turn just posts its answer, a slow
+ * one first says it is under way (a card where the adapter can, a line where it
+ * cannot), and the result is pushed to the chat when it lands.
+ *
  * **Closed by default.** A bot handle is discoverable, and "anyone who finds it can
  * drive a machine with a shell" is not a default anyone chose. The allow list lives in
  * the config file; an unauthorised sender is told their own `channel:id`, which is
@@ -28,9 +35,49 @@ export interface InboundMessage {
    * (a Telegram chat id already is one).
    */
   chatKey?: string;
+  /**
+   * The wire's own id for this message, when it has one. It is what a reply anchors
+   * to and what a status reaction attaches to. One rule downstream: everything a task
+   * says is anchored to the message that asked for it — in a main chat that opens a
+   * topic, inside a topic it stays there. The *conversation* stays keyed on the chat
+   * either way: context belongs to the room, and a reply inside a task's topic must
+   * reach the turn that is running, not open a parallel one.
+   */
+  messageId?: string;
   /** For a person reading the activity feed: a name, not an id, where the wire has one. */
   senderLabel: string;
   text: string;
+  /** Files carried by the message, bytes already fetched off the wire by the adapter. */
+  files?: { name: string; base64: string }[];
+}
+
+/** Where a push should sit: anchored under a message, or loose in the chat. */
+export interface PushOptions {
+  replyTo?: string;
+}
+
+/**
+ * A task as a chat renders it: one card per request, updated in place.
+ *
+ * The states are the ones a person in a group actually distinguishes — waiting,
+ * happening, finished, broken — not the turn engine's internals. `action` is the
+ * latest one-line answer to "what is it doing right now", which is the whole reason
+ * to look at the card while it runs.
+ */
+export interface TaskCardState {
+  /** The instruction, first line, for the card header. */
+  title: string;
+  /** Who is doing it — the addressed agent, or empty for the default. */
+  agentName: string;
+  /** Who asked, as the wire names them. */
+  requesterLabel: string;
+  status: "queued" | "working" | "done" | "failed";
+  /** The latest one-line action, e.g. `bash: npm test`. Absent when not started or finished. */
+  action?: string;
+  /** How many requests are ahead of this one, when queued. */
+  ahead?: number;
+  /** The board id ("t12"), when this request lives on the team board. People say these in chat. */
+  taskId?: string;
 }
 
 export interface ChannelAdapter {
@@ -40,6 +87,58 @@ export interface ChannelAdapter {
   stop(): void;
   /** Pushes a line to where this identity's messages come from, if the wire allows it. */
   send(identity: string, text: string): Promise<void>;
+  /**
+   * Pushes a line to a chat by its chatKey. Preferred over `send` for task results:
+   * `send` routes to wherever the identity last spoke, which may have moved to another
+   * chat while a long task ran. Absent means the identity is the chat and `send` is right.
+   */
+  sendToChat?(chatKey: string, text: string, options?: PushOptions): Promise<void>;
+  /**
+   * Posts a task card to a chat and returns the handle `updateTaskCard` accepts, or
+   * undefined when the card could not be posted. Adapters without cards leave both
+   * absent and get plain acknowledgement lines instead.
+   */
+  postTaskCard?(
+    chatKey: string,
+    card: TaskCardState,
+    options?: PushOptions
+  ): Promise<string | undefined>;
+  /** Rewrites a posted card in place. Updates are quiet; a chat is not notified for one. */
+  updateTaskCard?(handle: string, card: TaskCardState): Promise<void>;
+  /** Posts an image (base64 WebP) to a chat. Absent means the wire cannot show one. */
+  sendImage?(chatKey: string, base64: string, options?: PushOptions): Promise<void>;
+  /**
+   * Marks the message that started a task with its state — working, done, failed —
+   * however the wire can say that (Feishu: an emoji reaction). Cheap presence for
+   * the quick tasks that never earn a card, and a loud mark when something broke.
+   */
+  noteStatus?(messageId: string, status: "working" | "done" | "failed"): Promise<void>;
+  /** Posts a named file (base64 bytes) to a chat. Absent means the wire cannot carry one. */
+  sendFile?(chatKey: string, name: string, base64: string, options?: PushOptions): Promise<void>;
+  /**
+   * Posts a consent request with buttons to wherever this identity's messages come
+   * from. Absent means the wire has no buttons and the text-verb path is used.
+   */
+  postApprovalCard?(identity: string, card: ApprovalCardState): Promise<void>;
+  /**
+   * Registers the handler for a pressed approval button. The handler returns the
+   * line to show in the chat, or undefined when the press was refused or stale.
+   */
+  onApprovalAction?(
+    handler: (press: {
+      approvalId: string;
+      reply: ApprovalReply;
+      identity: string;
+    }) => Promise<string | undefined>
+  ): void;
+}
+
+/** A pending consent, as a card with buttons renders it. */
+export interface ApprovalCardState {
+  approvalId: string;
+  agentName: string;
+  /** The original action, verbatim — an approval that paraphrases is an injection surface. */
+  description: string;
 }
 
 export interface ChannelStatus {
@@ -88,14 +187,130 @@ export interface ChannelManagerDeps {
    * Runs one turn and returns what the agent said. `agentName` is undefined for the
    * default agent; unknown names should throw with a message worth relaying.
    * `chatKey` names the chat, for the conversation thread the turn runs in.
+   * `onProgress`, when given, receives a one-line description of each action the turn
+   * takes, for the task card — coarse by design, a card is not a transcript.
    */
   ask: (
     agentName: string | undefined,
     text: string,
     identity: string,
-    chatKey: string
+    chatKey: string,
+    onProgress?: (action: string) => void
   ) => Promise<string>;
+  /**
+   * How many requests are ahead of a new one for this agent and chat. Zero means it
+   * starts now. Absent means unknown, which is treated as zero — the acknowledgement
+   * then says less rather than guessing.
+   */
+  ahead?: (agentName: string | undefined, chatKey: string) => number;
+  /**
+   * How long a turn may run before the chat is told it is under way. A quick answer
+   * should arrive as itself, not behind a "working on it" — the threshold is what
+   * separates the two. Queued work skips the wait: queued is known-slow.
+   */
+  ackAfterMs?: number;
+  /**
+   * The agent's desktop right now, as base64 WebP, or undefined when there is no
+   * desktop to show. What "屏幕" asks for, and what a finished task attaches — the
+   * one thing no other chat product can put in a group.
+   */
+  screenshot?: (agentName: string | undefined) => Promise<string | undefined>;
+  /**
+   * Whether this identity may change what the system is — bind scopes, for now.
+   * Separate from mayDrive because a driver commands agents inside the rules and an
+   * admin changes the rules; conflating them is how a permission model goes soft.
+   */
+  mayAdmin?: (identity: string) => boolean;
+  /**
+   * This chat's scope binding: what bounds every task the chat drives. Each returns
+   * the line the chat sees. Bind and unbind are admin verbs, checked by the manager.
+   */
+  chatScope?: {
+    show: (chatKey: string) => string;
+    bind: (chatKey: string, name: string) => string;
+    off: (chatKey: string) => string;
+  };
+  /**
+   * The chat's daily report: what closed, what is in flight, what it cost, what waits
+   * on a person. `build` answers "早报" now; `schedule`/`off` manage the standing one.
+   * Each returns the line the chat sees.
+   */
+  digest?: {
+    build: (chatKey: string) => string;
+    schedule: (chatKey: string, hour: number) => string;
+    off: (chatKey: string) => string;
+  };
+  /**
+   * The team board, when channel requests should live on it as tasks.
+   *
+   * `open` returns the board id shown on the card, so "t12" means the same thing in
+   * the chat, the web UI and an agent's prompt. Lifecycle is the card's: opened when
+   * accepted, started at the first sign of work, closed with what happened — a
+   * failure closes as blocked-with-a-note rather than vanishing, because a board that
+   * loses failed work answers "what needs somebody" wrong.
+   */
+  board?: {
+    open: (input: {
+      title: string;
+      identity: string;
+      senderLabel: string;
+      agentName?: string;
+      chatKey: string;
+    }) => string | undefined;
+    started: (taskId: string) => void;
+    closed: (taskId: string, outcome: "done" | "failed", note?: string) => void;
+  };
+  /**
+   * Stores files somebody dropped in the chat, into that chat's inbox on the box.
+   * Returns the saved names (as the chat should hear them), or undefined when there
+   * is nowhere to store them — which the chat is told plainly.
+   */
+  receiveFiles?: (
+    chatKey: string,
+    files: { name: string; base64: string }[]
+  ) => Promise<string[] | undefined>;
+  /**
+   * The files a finished turn left in this chat's outbox — name and bytes, smallest
+   * first. Collected once per task, after the reply lands; an empty answer is the
+   * ordinary case and costs one directory listing.
+   */
+  collectOutbox?: (chatKey: string) => Promise<{ name: string; base64: string }[]>;
+  /**
+   * Marks collected files delivered — moved to sent/ — after their pushes succeeded.
+   * Only what was actually pushed: a file whose push failed stays in the outbox and
+   * goes out with the next task rather than vanishing.
+   */
+  outboxDelivered?: (chatKey: string, names: string[]) => Promise<void>;
+  /**
+   * Redeems an invite code for this identity and returns the line to send back —
+   * "you're in as driver", or why not. Reached *before* the allow check, because the
+   * whole point of a code is that the sender is not authorised yet.
+   */
+  bind?: (code: string, identity: string, senderLabel: string) => string;
+  /**
+   * Records that somebody unknown knocked, for one-click approval in the app. The
+   * refusal then says the owner was told, instead of handing the person an id to
+   * copy around — the refusal is the registration page.
+   */
+  knock?: (request: { identity: string; senderLabel: string; channel: string }) => void;
   log: (line: string) => void;
+}
+
+/** After this long, a running task without a card says it is under way. */
+const ACK_AFTER_MS = 8_000;
+
+/** Card rewrites are rate-limited to this; the final state is always written. */
+const CARD_UPDATE_MS = 3_000;
+
+/**
+ * Whether a whole message is a request to see the desktop.
+ *
+ * Whole-message like the approval verbs, and for the same reason: "看看屏幕上的报错"
+ * is a person talking about the screen, not asking for a picture of it.
+ */
+export function parseScreenRequest(text: string): boolean {
+  const t = text.trim().toLowerCase().replace(/[.!?。!?]+$/, "");
+  return ["screen", "screenshot", "屏幕", "看屏幕", "看看屏幕", "截图"].includes(t);
 }
 
 /** `@Name rest of the message` addresses a specific agent; anything else is the default. */
@@ -114,6 +329,56 @@ export function refusal(identity: string): string {
   );
 }
 
+/**
+ * The refusal when the owner was just told about the knock: an invitation to wait,
+ * not an id to copy around. The id still appears, last, for the manual path.
+ */
+export function knockRefusal(identity: string): string {
+  return (
+    `You're not on this LumenBox's list yet. The owner has been notified and can let ` +
+    `you in with one click — you'll hear back here once they do. If they gave you an ` +
+    `invite code, send it as: bind <code>\n` +
+    `(Your id, for the manual path: ${identity})`
+  );
+}
+
+/** A whole message of the shape `bind <code>` / `绑定 <码>`, or nothing. */
+export function parseBind(text: string): string | undefined {
+  const match = /^(?:bind|绑定)[\s::]+([a-z0-9-]{4,12})$/i.exec(text.trim());
+  return match === null ? undefined : match[1]!.toUpperCase();
+}
+
+export type ScopeRequest = { kind: "show" } | { kind: "bind"; name: string } | { kind: "off" };
+
+/** A whole message about this chat's scope: `scope` shows, `scope <name>` binds, `scope off` unbinds. */
+export function parseScopeRequest(text: string): ScopeRequest | undefined {
+  const t = text.trim();
+  if (/^scope$/i.test(t)) return { kind: "show" };
+  if (/^scope\s+(?:off|解绑)$/i.test(t)) return { kind: "off" };
+  const bind = /^scope\s+([\p{L}\p{N}._-]{1,60})$/iu.exec(t);
+  if (bind !== null) return { kind: "bind", name: bind[1]! };
+  return undefined;
+}
+
+export type DigestRequest = { kind: "now" } | { kind: "schedule"; hour: number } | { kind: "off" };
+
+/**
+ * A whole message asking about the digest: "早报" reads it now, "早报 8点" schedules
+ * it, "早报 关" stops it. Whole-message like every other verb here, and for the same
+ * reason: a sentence *about* the digest is a task, not a command.
+ */
+export function parseDigestRequest(text: string): DigestRequest | undefined {
+  const t = text.trim().toLowerCase();
+  if (["早报", "日报", "digest"].includes(t)) return { kind: "now" };
+  if (/^(?:早报|日报|digest)\s*(?:off|关|停止?)$/.test(t)) return { kind: "off" };
+  const scheduled = /^(?:早报|日报|digest)\s*(?:at\s*)?(\d{1,2})\s*[点时]?$/.exec(t);
+  if (scheduled !== null) {
+    const hour = Number(scheduled[1]);
+    if (hour >= 0 && hour <= 23) return { kind: "schedule", hour };
+  }
+  return undefined;
+}
+
 export class ChannelManager {
   private readonly adapters: ChannelAdapter[] = [];
   private readonly statuses = new Map<string, ChannelStatus>();
@@ -127,6 +392,12 @@ export class ChannelManager {
    * does not approve something new.
    */
   private readonly awaitingApproval = new Map<string, { approvalId: string; description: string }>();
+  /**
+   * Tasks still running behind an already-acknowledged wire. Held so `idle` can wait
+   * for them — a shutdown that drops a task mid-push loses a result somebody was told
+   * would arrive — and so a test can await the work `handle` deliberately does not.
+   */
+  private readonly inflight = new Set<Promise<void>>();
 
   constructor(private readonly deps: ChannelManagerDeps) {}
 
@@ -137,6 +408,22 @@ export class ChannelManager {
 
   start(): void {
     for (const adapter of this.adapters) {
+      // A button in a room is pressable by whoever the room trusts to drive — the
+      // same set the text verbs trust — checked at press time, not at render time,
+      // because a card outlives the moment it was posted.
+      adapter.onApprovalAction?.(async press => {
+        if (!this.deps.mayDrive(press.identity)) return undefined;
+        const result = this.deps.answerApproval?.(press.approvalId, press.reply);
+        // However it was answered, nobody's one-word reply should now hit something else.
+        for (const [identity, waiting] of this.awaitingApproval) {
+          if (waiting.approvalId === press.approvalId) this.awaitingApproval.delete(identity);
+        }
+        return (
+          result ??
+          "That consent is no longer waiting — it may have been answered from the app, " +
+            "or the turn moved on."
+        );
+      });
       adapter
         .start(message => this.handle(adapter, message))
         .then(() => {
@@ -153,6 +440,13 @@ export class ChannelManager {
 
   stop(): void {
     for (const adapter of this.adapters) adapter.stop();
+  }
+
+  /** Resolves when every accepted task has pushed its result (or its failure). */
+  async idle(): Promise<void> {
+    while (this.inflight.size > 0) {
+      await Promise.allSettled([...this.inflight]);
+    }
   }
 
   list(): ChannelStatus[] {
@@ -174,6 +468,16 @@ export class ChannelManager {
     const asker = this.lastAsker.get(agentId);
     if (asker === undefined) return;
     this.awaitingApproval.set(asker.identity, { approvalId, description });
+    // Buttons where the wire has them; the word path stays open either way, because a
+    // person answering "允许" at a card is right, not wrong.
+    if (asker.adapter.postApprovalCard !== undefined) {
+      void asker.adapter
+        .postApprovalCard(asker.identity, { approvalId, agentName, description })
+        .catch(() => {
+          // The web UI still shows it; a failed push is not a lost approval.
+        });
+      return;
+    }
     const message =
       `${agentName || "An agent"} needs your consent:\n${description}\n\n` +
       `Reply "allow" for once, "always" to stop asking for this, or "deny". ` +
@@ -188,14 +492,47 @@ export class ChannelManager {
     if (current !== undefined) this.statuses.set(name, { ...current, ...patch });
   }
 
+  /** Pushes a line to an identity through a named adapter. The approve-notification path. */
+  push(adapterName: string, identity: string, text: string): Promise<void> {
+    const adapter = this.adapters.find(a => a.name === adapterName);
+    if (adapter === undefined) return Promise.resolve();
+    return adapter.send(identity, text).catch(() => {});
+  }
+
+  /**
+   * Pushes a line to a chat by its chatKey alone — the scheduled-digest path, where
+   * no inbound message chose the adapter. The chatKey's prefix is the adapter's name,
+   * which is the naming convention every adapter already follows.
+   */
+  pushToChat(chatKey: string, text: string): Promise<void> {
+    const adapter = this.adapters.find(a => chatKey.startsWith(`${a.name}:`));
+    if (adapter?.sendToChat === undefined) return Promise.resolve();
+    return adapter.sendToChat(chatKey, text).catch(() => {});
+  }
+
   private async handle(
     adapter: ChannelAdapter,
     message: InboundMessage
   ): Promise<string | undefined> {
+    // An invite code is checked before the allow list: the sender not being on it yet
+    // is the whole reason codes exist. A non-code message from a stranger still knocks.
+    const code = parseBind(message.text);
+    if (code !== undefined && this.deps.bind !== undefined) {
+      return this.deps.bind(code, message.identity, message.senderLabel);
+    }
+
     if (!this.deps.mayDrive(message.identity)) {
       this.deps.log(
         `channel ${adapter.name}: refused ${message.identity} (${message.senderLabel})`
       );
+      if (this.deps.knock !== undefined) {
+        this.deps.knock({
+          identity: message.identity,
+          senderLabel: message.senderLabel,
+          channel: adapter.name,
+        });
+        return knockRefusal(message.identity);
+      }
       return refusal(message.identity);
     }
 
@@ -216,18 +553,325 @@ export class ChannelManager {
       }
     }
 
+    // The scope verbs change what every task in this chat may do: reading is open,
+    // binding is an admin's call.
+    const scopeRequest = parseScopeRequest(message.text);
+    if (scopeRequest !== undefined && this.deps.chatScope !== undefined) {
+      const chatKey = message.chatKey ?? message.identity;
+      if (scopeRequest.kind === "show") return this.deps.chatScope.show(chatKey);
+      if (this.deps.mayAdmin?.(message.identity) !== true) {
+        return "Binding a scope changes what every task in this chat may do — that is an admin's call.";
+      }
+      return scopeRequest.kind === "bind"
+        ? this.deps.chatScope.bind(chatKey, scopeRequest.name)
+        : this.deps.chatScope.off(chatKey);
+    }
+
+    // The digest verbs are decisions about reporting, not work: answered on the wire.
+    const digestRequest = parseDigestRequest(message.text);
+    if (digestRequest !== undefined && this.deps.digest !== undefined) {
+      const chatKey = message.chatKey ?? message.identity;
+      if (digestRequest.kind === "now") return this.deps.digest.build(chatKey);
+      if (digestRequest.kind === "schedule")
+        return this.deps.digest.schedule(chatKey, digestRequest.hour);
+      return this.deps.digest.off(chatKey);
+    }
+
+    // A dropped file is a delivery, not an instruction: it is stored where the agents
+    // can reach it and the chat is told where it landed. No turn runs — the person
+    // says what they want done with it when they want something done.
+    if (message.files !== undefined && message.files.length > 0) {
+      const drop = this.runFiles(adapter, message).finally(() => {
+        this.inflight.delete(drop);
+      });
+      this.inflight.add(drop);
+      return undefined;
+    }
+
     const { agentName, text } = parseAddress(message.text);
     if (text === "") return "Say what you need done; @AgentName first to pick who does it.";
+
+    // "屏幕" is a look, not a task: no turn runs, the desktop is captured as it is.
+    const work =
+      parseScreenRequest(text) && this.deps.screenshot !== undefined
+        ? this.runScreenshot(adapter, message, agentName)
+        : this.runTask(adapter, message, agentName, text);
+
+    // The work runs behind this return; the decisions above stay synchronous because
+    // a refusal or an approval answer *is* the whole response.
+    const task = work.finally(() => {
+      this.inflight.delete(task);
+    });
+    this.inflight.add(task);
+    return undefined;
+  }
+
+  /** A line to the room that asked, or to the sender where the wire has no rooms. */
+  private async deliver(
+    adapter: ChannelAdapter,
+    chatKey: string,
+    identity: string,
+    line: string,
+    options?: PushOptions
+  ): Promise<void> {
     try {
-      const reply = await this.deps.ask(
-        agentName,
-        text,
-        message.identity,
-        message.chatKey ?? message.identity
-      );
-      return reply.trim() === "" ? "Done. (The agent finished without saying anything.)" : reply;
+      if (adapter.sendToChat !== undefined) await adapter.sendToChat(chatKey, line, options);
+      else await adapter.send(identity, line);
     } catch (error) {
-      return error instanceof Error ? error.message : String(error);
+      const detail = error instanceof Error ? error.message : String(error);
+      this.deps.log(`channel ${adapter.name}: push failed (${detail})`);
     }
   }
+
+  /** A dropped file into the chat's inbox, and the chat told where it landed. */
+  private async runFiles(adapter: ChannelAdapter, message: InboundMessage): Promise<void> {
+    const chatKey = message.chatKey ?? message.identity;
+    const anchor: PushOptions | undefined =
+      message.messageId !== undefined ? { replyTo: message.messageId } : undefined;
+    if (this.deps.receiveFiles === undefined) return;
+    try {
+      const saved = await this.deps.receiveFiles(chatKey, message.files ?? []);
+      if (saved === undefined) {
+        await this.deliver(
+          adapter,
+          chatKey,
+          message.identity,
+          "There is no box running to store files on right now.",
+          anchor
+        );
+        return;
+      }
+      await this.deliver(
+        adapter,
+        chatKey,
+        message.identity,
+        `Saved: ${saved.join(", ")}. Say what you want done with it — @AgentName first picks who.`,
+        anchor
+      );
+    } catch (error) {
+      await this.deliver(
+        adapter,
+        chatKey,
+        message.identity,
+        error instanceof Error ? error.message : String(error),
+        anchor
+      );
+    }
+  }
+
+  /** The desktop, now, into the chat — or the honest reason there is no picture. */
+  private async runScreenshot(
+    adapter: ChannelAdapter,
+    message: InboundMessage,
+    agentName: string | undefined
+  ): Promise<void> {
+    const chatKey = message.chatKey ?? message.identity;
+    const anchor: PushOptions | undefined =
+      message.messageId !== undefined ? { replyTo: message.messageId } : undefined;
+    try {
+      const image = await this.deps.screenshot!(agentName);
+      if (image === undefined) {
+        await this.deliver(
+          adapter,
+          chatKey,
+          message.identity,
+          "No desktop to show — the box may be off, or this agent has not started one.",
+          anchor
+        );
+        return;
+      }
+      if (adapter.sendImage === undefined) {
+        await this.deliver(
+          adapter,
+          chatKey,
+          message.identity,
+          "This channel cannot show images; open the app to watch the desktop.",
+          anchor
+        );
+        return;
+      }
+      await adapter.sendImage(chatKey, image, anchor);
+    } catch (error) {
+      await this.deliver(
+        adapter,
+        chatKey,
+        message.identity,
+        error instanceof Error ? error.message : String(error),
+        anchor
+      );
+    }
+  }
+
+  /**
+   * One accepted request, from acknowledgement to pushed result.
+   *
+   * Everything here degrades by capability: a card where the adapter has one, a line
+   * where it does not; a chat-addressed push where the wire distinguishes chats from
+   * senders, an identity-addressed one where it does not. Failures to *deliver* are
+   * logged and swallowed — the turn itself already ran, and its record is the
+   * transcript, not the chat.
+   */
+  private async runTask(
+    adapter: ChannelAdapter,
+    message: InboundMessage,
+    agentName: string | undefined,
+    text: string
+  ): Promise<void> {
+    const chatKey = message.chatKey ?? message.identity;
+    // Everything this task says sits under the message that asked for it.
+    const anchor: PushOptions | undefined =
+      message.messageId !== undefined ? { replyTo: message.messageId } : undefined;
+    const deliver = (line: string) =>
+      this.deliver(adapter, chatKey, message.identity, line, anchor);
+    const mark = (status: "working" | "done" | "failed") => {
+      if (message.messageId === undefined) return;
+      void adapter.noteStatus?.(message.messageId, status).catch(() => {});
+    };
+    mark("working");
+
+    const ahead = this.deps.ahead?.(agentName, chatKey) ?? 0;
+    const taskId = this.deps.board?.open({
+      title: firstLine(text),
+      identity: message.identity,
+      senderLabel: message.senderLabel,
+      ...(agentName !== undefined ? { agentName } : {}),
+      chatKey,
+    });
+    const card: TaskCardState = {
+      title: firstLine(text),
+      agentName: agentName ?? "",
+      requesterLabel: message.senderLabel,
+      status: ahead > 0 ? "queued" : "working",
+      ...(ahead > 0 ? { ahead } : {}),
+      ...(taskId !== undefined ? { taskId } : {}),
+    };
+
+    // The acknowledgement, when one is owed: a card if the adapter can, a line if not.
+    // Queued work is acknowledged immediately — queued is known-slow — while work that
+    // starts now gets the threshold, so a quick answer arrives as itself.
+    let cardHandle: string | undefined;
+    let acknowledged = false;
+    let lastCardWrite = 0;
+    const acknowledge = async () => {
+      if (acknowledged) return;
+      acknowledged = true;
+      if (adapter.postTaskCard !== undefined) {
+        try {
+          cardHandle = await adapter.postTaskCard(chatKey, { ...card }, anchor);
+          lastCardWrite = Date.now();
+        } catch (error) {
+          const detail = error instanceof Error ? error.message : String(error);
+          this.deps.log(`channel ${adapter.name}: card failed (${detail})`);
+        }
+        return;
+      }
+      await deliver(ackLine(card));
+    };
+
+    const ackTimer = setTimeout(() => {
+      void acknowledge();
+    }, this.deps.ackAfterMs ?? ACK_AFTER_MS);
+    if (ahead > 0) void acknowledge();
+
+    // Progress rewrites the card, rate-limited; without a card it goes nowhere, on
+    // purpose — a plain chat told "tool call #14" fourteen times is spam, not progress.
+    let boardStarted = false;
+    const onProgress = (action: string) => {
+      if (!boardStarted && taskId !== undefined) {
+        boardStarted = true;
+        this.deps.board?.started(taskId);
+      }
+      card.status = "working";
+      delete card.ahead;
+      card.action = action;
+      if (cardHandle === undefined || adapter.updateTaskCard === undefined) return;
+      const now = Date.now();
+      if (now - lastCardWrite < CARD_UPDATE_MS) return;
+      lastCardWrite = now;
+      void adapter.updateTaskCard(cardHandle, { ...card }).catch(() => {});
+    };
+
+    const finishCard = (status: "done" | "failed") => {
+      if (cardHandle === undefined || adapter.updateTaskCard === undefined) return;
+      card.status = status;
+      delete card.action;
+      delete card.ahead;
+      void adapter.updateTaskCard(cardHandle, { ...card }).catch(() => {});
+    };
+
+    try {
+      const reply = await this.deps.ask(agentName, text, message.identity, chatKey, onProgress);
+      clearTimeout(ackTimer);
+      finishCard("done");
+      mark("done");
+      if (taskId !== undefined) this.deps.board?.closed(taskId, "done");
+      await deliver(
+        reply.trim() === "" ? "Done. (The agent finished without saying anything.)" : reply
+      );
+      // Whatever the turn left in the chat's outbox follows the reply — images shown
+      // as images, everything else as a file. What was pushed is marked delivered;
+      // what failed stays in the outbox for the next task rather than vanishing.
+      if (this.deps.collectOutbox !== undefined) {
+        try {
+          const files = await this.deps.collectOutbox(chatKey);
+          const delivered: string[] = [];
+          for (const file of files) {
+            try {
+              const isImage = /\.(png|jpe?g|webp|gif|bmp)$/i.test(file.name);
+              if (isImage && adapter.sendImage !== undefined) {
+                await adapter.sendImage(chatKey, file.base64, anchor);
+              } else if (adapter.sendFile !== undefined) {
+                await adapter.sendFile(chatKey, file.name, file.base64, anchor);
+              } else {
+                await deliver(`(${file.name} is ready on the box; this channel cannot carry files.)`);
+                continue;
+              }
+              delivered.push(file.name);
+            } catch (error) {
+              const detail = error instanceof Error ? error.message : String(error);
+              this.deps.log(`channel ${adapter.name}: file push failed for ${file.name} (${detail})`);
+            }
+          }
+          if (delivered.length > 0) await this.deps.outboxDelivered?.(chatKey, delivered);
+        } catch (error) {
+          const detail = error instanceof Error ? error.message : String(error);
+          this.deps.log(`channel ${adapter.name}: outbox failed (${detail})`);
+        }
+      }
+      // The desk as the task left it: evidence at a glance. Only for work long enough
+      // to have been acknowledged — a quick answer does not need a poster — and never
+      // a failure: the reply already landed, and its record is the transcript.
+      if (acknowledged && adapter.sendImage !== undefined && this.deps.screenshot !== undefined) {
+        try {
+          const image = await this.deps.screenshot(agentName);
+          if (image !== undefined) await adapter.sendImage(chatKey, image, anchor);
+        } catch {
+          // Nothing: the missing poster is not worth a line in the chat.
+        }
+      }
+    } catch (error) {
+      clearTimeout(ackTimer);
+      finishCard("failed");
+      mark("failed");
+      const detail = error instanceof Error ? error.message : String(error);
+      if (taskId !== undefined) this.deps.board?.closed(taskId, "failed", detail);
+      await deliver(detail);
+    }
+  }
+}
+
+/** The instruction as a card header: its first line, clamped. */
+function firstLine(text: string): string {
+  const line = text.split("\n", 1)[0] ?? "";
+  return line.length > 80 ? `${line.slice(0, 79)}…` : line;
+}
+
+/** The plain-text acknowledgement, for adapters without cards. */
+function ackLine(card: TaskCardState): string {
+  const who = card.agentName === "" ? "The team" : card.agentName;
+  if (card.status === "queued" && card.ahead !== undefined) {
+    const others = card.ahead === 1 ? "1 request" : `${card.ahead} requests`;
+    return `Got it — ${who} has ${others} ahead of this one. The result will be posted here.`;
+  }
+  return `${who} is on it. This may take a while; the result will be posted here.`;
 }

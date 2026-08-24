@@ -8,6 +8,7 @@
  */
 
 import type { AgentRecord } from "../agents/registry.ts";
+import { MAIN_CONVERSATION } from "../agents/registry.ts";
 import type { InboundMessage } from "../agents/bus.ts";
 import { AGENT_WAKE_CUE } from "../agents/bus.ts";
 import { renderDurableBlocks, type DurableState } from "./durable.ts";
@@ -195,6 +196,12 @@ export interface PromptContext {
    * nobody works from. Only this agent's — the whole board is a `Tasks list` call away.
    */
   tasks?: readonly Task[];
+  /**
+   * Which conversation this turn runs in. An outside chat's conversation carries a
+   * file-exchange directory on the box, and the agent has to be told the convention
+   * or deliverables end up as pasted paths nobody outside the box can open.
+   */
+  conversation?: string;
 }
 
 /** One teammate line: name, id, and a clamped description. */
@@ -361,9 +368,33 @@ function renderTasks(context: PromptContext): string {
   );
 }
 
+/**
+ * The file exchange between an outside chat and the box, stated when it exists.
+ *
+ * Only for chat conversations with a box: the team room has no outside audience to
+ * deliver to, and without a box there is no directory to point at. The reason this
+ * is in the prompt at all: an agent that does not know the convention answers with
+ * a path, and a path is not a deliverable to somebody reading a phone.
+ */
+function renderChatFiles(context: PromptContext): string {
+  const conversation = context.conversation ?? "";
+  if (conversation === "" || conversation === MAIN_CONVERSATION || !context.hasBox) return "";
+  const root = `/home/box/work/chats/${conversation}`;
+  return (
+    "## This conversation's file exchange\n\n" +
+    `This turn belongs to an outside chat. Its directory on the box is ${root}/ :\n` +
+    `- ${root}/inbox/ — files people sent in the chat land here.\n` +
+    `- ${root}/outbox/ — anything you save here is posted into the chat when your turn ends, ` +
+    "then moved to sent/.\n\n" +
+    "A deliverable belongs in outbox/ — a path pasted into your reply is not a deliverable, " +
+    "because the person is reading a phone, not the box."
+  );
+}
+
 export const VOLATILE_SECTIONS: readonly PromptSection[] = [
   { name: "plan", render: context => renderDurableBlocks(context.durable ?? {}) },
   { name: "tasks", render: renderTasks },
+  { name: "chat-files", render: renderChatFiles },
   {
     name: "memory",
     render: context => renderMemory(context.memoryRecall ?? recall(context.memory)),

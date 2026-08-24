@@ -61,7 +61,8 @@ import type { HostRunner } from "./host-runner.ts";
 import type { Vault } from "./vault.ts";
 import type { TaskStore } from "./tasks.ts";
 import type { ScopeStore } from "./scopes.ts";
-import { MAIN_CONVERSATION } from "../agents/registry.ts";
+import { narrowTools } from "./scopes.ts";
+import { conversationIdFor, MAIN_CONVERSATION } from "../agents/registry.ts";
 import { resolveSummaryProvider } from "./provider.ts";
 import type { Effort, ProviderProfile } from "./provider.ts";
 
@@ -811,6 +812,7 @@ export async function runTurn(
       agentsRoot: registry.root,
       hasBox: box !== undefined,
       vision: provider.vision,
+      conversation,
     });
   const promptParts = buildParts(memoryRecall);
 
@@ -937,7 +939,14 @@ export async function runTurn(
   // prompt at all.
   // An agent in a scope is defined by it: the scope's tool list replaces the profile's.
   const scope = deps.scopes?.get(agent.profile.scopeId);
-  const effectiveTools = scope?.tools ?? agent.profile.tools;
+  // A chat bound to a scope narrows every turn it drives — an intersection with the
+  // agent's own tools, never a replacement: the room's authority bounds the work, it
+  // does not hand an agent tools its own definition withheld.
+  const chatScope =
+    conversation === MAIN_CONVERSATION
+      ? undefined
+      : deps.scopes?.boundTo(conversation, conversationIdFor);
+  const effectiveTools = narrowTools(scope?.tools ?? agent.profile.tools, chatScope?.tools);
   const tools = buildTools(
     box !== undefined,
     provider.vision,
