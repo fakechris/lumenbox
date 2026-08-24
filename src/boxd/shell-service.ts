@@ -9,6 +9,8 @@
 
 import { envNumber } from "../config.ts";
 import { spawn } from "node:child_process";
+import { closeSync, mkdirSync, openSync, writeSync } from "node:fs";
+import { join } from "node:path";
 import type { ExecRequest, ExecResult } from "../protocol/index.ts";
 
 const DEFAULT_TIMEOUT_MS = 120_000;
@@ -29,6 +31,17 @@ export const MAX_TIMEOUT_MS = 600_000;
 export const MAX_OUTPUT_BYTES = 2 * 1024 * 1024;
 
 /**
+ * Where output too large for a tool result is kept, and the words that announce it.
+ *
+ * The marker is a contract between two sides that never call each other: the daemon
+ * writes it into the truncation notice, and the host recognises it when trimming that
+ * notice down for the transcript — because a pointer that survives one truncation and
+ * not the next points at nothing. Grep for the marker to find both halves.
+ */
+export const SPOOL_DIR = process.env.BOXD_SPOOL_DIR ?? "/home/box/work/.spool";
+export const SPILL_MARKER = "full output kept:";
+
+/**
  * Collects a stream up to the cap and counts the rest.
  *
  * The cap used to be applied at the end, over everything the process had written: every chunk was
@@ -44,17 +57,87 @@ export class BoundedOutput {
   private readonly chunks: Buffer[] = [];
   private kept = 0;
   private dropped = 0;
+  /** Where everything went, once there was more of it than fits in a tool result. */
+  private spoolPath: string | undefined;
+  private spool: number | undefined;
+
+  /**
+   * @param spoolDir where to keep the full output when it outgrows the cap. Absent
+   * means no spilling, which is what every existing caller and test gets.
+   * @param spoolName the file's name, unique per stream per command.
+   */
+  constructor(
+    private readonly spoolDir?: string,
+    private readonly spoolName?: string
+  ) {}
+
+  /**
+   * Opens the spool on first overflow and back-fills what was already kept.
+   *
+   * Lazily, because the overwhelming majority of commands produce a line or two and
+   * should not pay for a file descriptor, and eagerly-from-the-start would put every
+   * `ls` on disk. The back-fill is what makes the file the *whole* output rather than
+   * only the part that did not fit.
+   */
+  private openSpool(): void {
+    if (this.spool !== undefined || this.spoolDir === undefined || this.spoolName === undefined) {
+      return;
+    }
+    try {
+      mkdirSync(this.spoolDir, { recursive: true });
+      const path = join(this.spoolDir, this.spoolName);
+      this.spool = openSync(path, "w");
+      this.spoolPath = path;
+      for (const chunk of this.chunks) writeSync(this.spool, chunk);
+    } catch {
+      // No spool is the old behaviour, not a failed command: the truncation notice
+      // then simply has no path to offer.
+      this.spool = undefined;
+      this.spoolPath = undefined;
+    }
+  }
 
   push(chunk: Buffer): void {
     const room = MAX_OUTPUT_BYTES - this.kept;
     if (room <= 0) {
       this.dropped += chunk.length;
+      this.openSpool();
+      if (this.spool !== undefined) {
+        try {
+          writeSync(this.spool, chunk);
+        } catch {
+          // A spool that stops accepting writes stops being complete; the notice
+          // still points at what did land, which beats pointing at nothing.
+        }
+      }
       return;
     }
     const take = chunk.length <= room ? chunk : chunk.subarray(0, room);
     this.chunks.push(take);
     this.kept += take.length;
     this.dropped += chunk.length - take.length;
+    if (take.length < chunk.length) {
+      // The chunk that straddles the cap: open here so the remainder is not lost.
+      this.openSpool();
+      if (this.spool !== undefined) {
+        try {
+          writeSync(this.spool, chunk.subarray(take.length));
+        } catch {
+          // As above.
+        }
+      }
+    }
+  }
+
+  /** Closes the spool. Safe to call when there never was one. */
+  close(): void {
+    if (this.spool === undefined) return;
+    try {
+      closeSync(this.spool);
+    } catch {
+      // Nothing useful to do; the bytes that were flushed are still there.
+    }
+    this.spool = undefined;
   }
 
   /** Bytes actually held. The claim the cap makes, and the one worth asserting on. */
@@ -70,7 +153,14 @@ export class BoundedOutput {
   toString(label: string): string {
     const text = Buffer.concat(this.chunks).toString("utf8");
     if (this.dropped === 0) return text;
-    return `${text}\n\n[${label} truncated: ${this.dropped} more bytes]`;
+    // The notice names where the rest is, when there is a rest to name. Truncation
+    // that says only "12345 more bytes" tells the reader what it lost and nothing
+    // about how to get it — which is the whole complaint this answers.
+    const where =
+      this.spoolPath === undefined
+        ? ""
+        : ` — ${SPILL_MARKER} ${this.spoolPath} holds all ${this.kept + this.dropped} bytes`;
+    return `${text}\n\n[${label} truncated: ${this.dropped} more bytes${where}]`;
   }
 }
 
@@ -208,8 +298,11 @@ export function runShell(request: ExecRequest): Promise<ExecResult> {
       detached: true,
     });
 
-    const stdout = new BoundedOutput();
-    const stderr = new BoundedOutput();
+    // One spool pair per command, named by time and a short random suffix so two
+    // concurrent commands cannot collide.
+    const runId = `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
+    const stdout = new BoundedOutput(SPOOL_DIR, `${runId}.out.log`);
+    const stderr = new BoundedOutput(SPOOL_DIR, `${runId}.err.log`);
     let timedOut = false;
     let settled = false;
 
@@ -252,6 +345,9 @@ export function runShell(request: ExecRequest): Promise<ExecResult> {
       if (settled) return;
       settled = true;
       clearTimeout(timer);
+      // Closed before the strings are built, so the notice describes a complete file.
+      stdout.close();
+      stderr.close();
       resolve({
         stdout: stdout.toString("stdout"),
         stderr:

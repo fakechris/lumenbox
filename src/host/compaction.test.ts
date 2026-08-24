@@ -540,3 +540,28 @@ test("a summary has a shape, so what it left out is visible", () => {
   // A cap, because the failure of an unbounded summary is that it becomes a narrative.
   assert.match(prompt, new RegExp(`Under ${SUMMARY_WORD_CAP} words`));
 });
+
+test("the spill pointer survives the transcript's own truncation", async () => {
+  const { storableResult } = await import("./turn.ts");
+  // What the box returns for a command that outran the cap: a big head, then a notice
+  // naming the file. The head alone is longer than what the transcript keeps.
+  const notice = "[stdout truncated: 918273 more bytes — full output kept: /home/box/work/.spool/abc.out.log holds all 920273 bytes]";
+  const stored = storableResult({
+    type: "tool_result",
+    tool_use_id: "toolu_1",
+    content: [{ type: "text", text: `${"build output line\n".repeat(400)}\n\n${notice}` }],
+  });
+
+  const text = (stored.content as { type: string; text: string }[])[0]!.text;
+  assert.ok(text.length < 2_500, "still trimmed for the transcript");
+  assert.match(text, /full output kept: \/home\/box\/work\/\.spool\/abc\.out\.log/,
+    "the trail to the whole output is what must not be trimmed away");
+
+  // A result that fits is untouched, pointer or not.
+  const small = storableResult({
+    type: "tool_result",
+    tool_use_id: "toolu_2",
+    content: [{ type: "text", text: "two lines\nof output" }],
+  });
+  assert.equal((small.content as { text: string }[])[0]!.text, "two lines\nof output");
+});

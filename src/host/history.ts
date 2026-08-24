@@ -224,5 +224,10 @@ export function renderHistoryBlock(entries: readonly unknown[]): string {
     "",
     "Worth doing before you conclude something never happened, or repeat work you may already have",
     "done. A summary is a paraphrase, and the thing it left out is exactly the thing you are missing.",
+    "",
+    "One more hop is available when you need it. A command that printed more than a tool result can",
+    "hold says so where it was cut, and names a file holding all of it — `full output kept: <path>`.",
+    "That file is still on the box, so a truncated build log or a huge listing is one `read_file`",
+    "away rather than gone.",
   ].join("\n");
 }

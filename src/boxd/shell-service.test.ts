@@ -11,7 +11,9 @@
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { realpathSync, rmSync } from "node:fs";
+import { existsSync, mkdtempSync, realpathSync, rmSync, statSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { BoundedOutput, MAX_OUTPUT_BYTES, MAX_TIMEOUT_MS, runShell } from "./shell-service.ts";
 
 function cleanup(key: string): void {
@@ -190,4 +192,42 @@ test("a descendant that escapes the kill does not wedge the request", async () =
   // And says so, because "timed out" alone would suggest everything it started is gone.
   assert.match(result.stderr, /left the process group and is still running/);
   assert.match(result.stderr, /it was not stopped/);
+});
+
+test("output past the cap is kept on disk, and the notice says where", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "agentbox-spool-"));
+  try {
+    // Small cap via a direct BoundedOutput, so the test does not have to produce 2 MiB.
+    const out = new BoundedOutput(dir, "big.out.log");
+    const line = Buffer.from(`${"x".repeat(999)}\n`);
+    // Enough pushes to pass MAX_OUTPUT_BYTES.
+    const pushes = Math.ceil((MAX_OUTPUT_BYTES / line.length) * 1.5);
+    for (let n = 0; n < pushes; n++) out.push(line);
+    out.close();
+
+    assert.ok(out.discarded() > 0, "the cap did its job");
+    const notice = out.toString("stdout");
+    assert.match(notice, /truncated: \d+ more bytes/);
+    assert.match(notice, /full output kept:/, "and it says where the rest is");
+
+    // The file holds everything, not only the part that did not fit.
+    const spooled = statSync(join(dir, "big.out.log")).size;
+    assert.equal(spooled, pushes * line.length, "the spool is the whole output");
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("a command small enough to fit writes no spool file at all", () => {
+  const dir = mkdtempSync(join(tmpdir(), "agentbox-spool-"));
+  try {
+    const out = new BoundedOutput(dir, "small.out.log");
+    out.push(Buffer.from("two lines\nof output\n"));
+    out.close();
+    assert.equal(out.discarded(), 0);
+    assert.doesNotMatch(out.toString("stdout"), /full output kept:/);
+    assert.equal(existsSync(join(dir, "small.out.log")), false, "no fd for an ordinary ls");
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
 });

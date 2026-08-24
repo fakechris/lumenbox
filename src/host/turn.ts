@@ -491,7 +491,7 @@ const REPLAYED_RESULT_LIMIT = 2_000;
  * conversation. The text stays, so the model still sees that it looked and what
  * it was told.
  */
-function storableResult(
+export function storableResult(
   block: Anthropic.ToolResultBlockParam
 ): Anthropic.ToolResultBlockParam {
   const content = Array.isArray(block.content) ? block.content : [];
@@ -500,7 +500,19 @@ function storableResult(
     .map(part => part.text);
   const imageCount = content.filter(part => part.type === "image").length;
 
-  let text = texts.join("\n").slice(0, REPLAYED_RESULT_LIMIT);
+  const whole = texts.join("\n");
+  let text = whole.slice(0, REPLAYED_RESULT_LIMIT);
+  // A pointer that survives one truncation and not the next points at nothing.
+  //
+  // The box appends "the full output is at <path>" to the end of an over-long result;
+  // this cut takes the head, so on exactly the results where the pointer matters most
+  // — the big ones — it was the first thing lost. Carried across explicitly, which is
+  // what lets a later ReadHistory walk from a 2,000-character remnant to the whole
+  // file. Trimming is not the same as losing, but only if the trail is kept.
+  if (whole.length > text.length) {
+    const pointer = whole.slice(text.length).match(/\[[^\]]*full output kept:[^\]]*\]/);
+    if (pointer !== null) text += `\n${pointer[0]}`;
+  }
   if (imageCount > 0) {
     text += `\n[${imageCount} screenshot(s) were attached and shown at the time]`;
   }
