@@ -394,6 +394,16 @@ type TurnEventBody =
     }
   | { type: "aborted"; agentId: string }
   /**
+   * The turn stopped because it was going in circles, not because it finished.
+   *
+   * Its own event because the *turn* ending here is an outcome rather than a failure —
+   * the agent was told why it stopped, and the report is in its transcript — while for
+   * anyone watching from outside it is neither done nor broken but *waiting for a
+   * person*. A surface that cannot tell those apart shows a green tick over abandoned
+   * work, which is the one thing a board must never do.
+   */
+  | { type: "stuck"; agentId: string; reason: string }
+  /**
    * A round failed in a way a retry can fix, and is being retried.
    *
    * `discardPartial` is the load-bearing field: nothing was written to the transcript, so a partial
@@ -1523,6 +1533,9 @@ export async function runTurn(
         agentName: agent.profile.name,
         delta: report,
       });
+      // Said twice, to two audiences: as prose to whoever is reading the conversation,
+      // and as an event to whoever is tracking whether this work needs a person now.
+      emit({ type: "stuck", agentId: agent.id, reason: report });
       // Ended, not thrown: the agent stopped for a reason it has been told, which is an outcome
       // rather than a failure of the machinery.
       return;

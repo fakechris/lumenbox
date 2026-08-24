@@ -125,7 +125,7 @@ test("a task card offers the workshop only when there is somewhere to send peopl
     "no public url, no button — a link that opens nothing is worse than none"
   );
 
-  const withUrl = renderCard({ ...base, taskUrl: "https://box.example/?task=t17" }) as CardShape & {
+  const withUrl = renderCard({ ...base, taskUrl: "https://box.example/?task=t17" }) as {
     elements: { tag: string; actions?: { url?: string; text: { content: string } }[] }[];
   };
   const action = withUrl.elements.find(element => element.tag === "action")!;

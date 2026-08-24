@@ -526,21 +526,28 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
       // for this agent in this conversation only. Coarse on purpose — a card is not a
       // transcript, and the transcript is where the real record already lives. The
       // bare tool name rides along for the manager's own judgements.
-      const listener =
-        onProgress === undefined
-          ? undefined
-          : (event: TurnEvent) => {
-              if (event.type !== "tool_start") return;
-              if (event.agentId !== agent.id || event.conversation !== conversation) return;
-              onProgress(actionLine(event.tool, event.input), event.tool);
-            };
-      if (listener !== undefined) channelTurnListeners.add(listener);
+      // A turn that gave up is not a turn that finished: the chat should see the red
+      // card and the board the blocked row, so the loop report is raised as the
+      // failure it is for anyone waiting on this work.
+      let stuck: string | undefined;
+      const listener = (event: TurnEvent) => {
+        if (event.agentId !== agent.id || event.conversation !== conversation) return;
+        if (event.type === "stuck") {
+          stuck = event.reason;
+          return;
+        }
+        if (event.type === "tool_start") {
+          onProgress?.(actionLine(event.tool, event.input), event.tool);
+        }
+      };
+      channelTurnListeners.add(listener);
       try {
         await orchestrator.prompt(agent.id, text, { userId: principal }, { conversation });
         await orchestrator.settle();
       } finally {
-        if (listener !== undefined) channelTurnListeners.delete(listener);
+        channelTurnListeners.delete(listener);
       }
+      if (stuck !== undefined) throw new Error(stuck);
       return orchestrator.replySince(agent.id, before, conversation);
     },
     // Channel requests live on the team board: "t12" means the same thing in the
@@ -560,10 +567,22 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
           // The unknown-agent error is thrown (and relayed) by ask; the board entry
           // simply goes unassigned.
         }
+        // A reviewer if the team has one that is not the assignee: naming it here is
+        // what makes the review gate — and the audit turn behind it — apply to work
+        // asked for from a chat, where nobody is watching the board. An installation
+        // with no reviewer agent keeps the old behaviour rather than inventing one.
+        const reviewerId = registry
+          .list()
+          .find(
+            candidate =>
+              candidate.id !== assigneeId &&
+              /review/i.test(candidate.profile.title ?? "")
+          )?.id;
         const task = tasks.create({
           title: input.title,
           requester: principals.resolve(input.identity).id,
           ...(assigneeId !== undefined ? { assigneeId } : {}),
+          ...(reviewerId !== undefined ? { reviewerId } : {}),
           conversation: conversationIdFor(input.chatKey),
         });
         return task?.id;
