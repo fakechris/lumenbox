@@ -721,6 +721,7 @@ export const ALL_TOOLS: readonly string[] = [
   "computer",
   "bash",
   "Jobs",
+  "Delegate",
   "read_file",
   "write_file",
   "list_dir",

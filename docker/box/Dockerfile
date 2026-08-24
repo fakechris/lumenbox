@@ -206,6 +206,25 @@ RUN mkdir -p /home/box/Desktop /home/box/.config/pcmanfm/default \
     && mkdir -p /usr/local/share/agentbox/skel \
     && cp -a /home/box/Desktop /home/box/.config /usr/local/share/agentbox/skel/
 
+# ── delegation presets ────────────────────────────────────────────────────────────
+#
+# A specialist engine the agents can hand deep repository work to. Off by default, and
+# a *pinned* version when on: an engine that upgrades itself under a running
+# installation changes what every delegated task does, and the first anyone hears of it
+# is different results. Upgrading is an explicit rebuild with a new version here.
+#
+#   docker build --build-arg OPENCODE_VERSION=0.4.2 ...
+#
+# The skills directory is linked, not copied, so a method written once is the same file
+# the engine reads — the projection face of the preset contract.
+ARG OPENCODE_VERSION=""
+RUN if [ -n "$OPENCODE_VERSION" ]; then \
+      npm install -g "opencode-ai@${OPENCODE_VERSION}" \
+      && mkdir -p /home/box/.config/opencode \
+      && ln -sfn /home/box/work/skills /home/box/.config/opencode/skill \
+      && chown -R box:box /home/box/.config/opencode; \
+    fi
+
 # The entrypoint runs as root and drops privileges per process: the desktop and the
 # daemon to `box`, the orchestrator to `hostd`. Nothing stays root.
 #

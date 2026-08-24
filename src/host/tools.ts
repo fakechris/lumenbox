@@ -16,6 +16,7 @@ import type { HostRunner } from "./host-runner.ts";
 import type { Vault } from "./vault.ts";
 import type { ScopeStore } from "./scopes.ts";
 import type { McpManager } from "./mcp.ts";
+import { delegateEnv, PRESETS, presetNamed, quoteForShell } from "./presets.ts";
 import { describeHistory, readHistory } from "./history.ts";
 import { dedupeKey, validateRecord } from "./memory.ts";
 import { Claims, heldElsewhere } from "./claims.ts";
@@ -343,6 +344,40 @@ export function buildTools(
             },
           },
           required: ["command"],
+        },
+      },
+      {
+        name: "Delegate",
+        description:
+          "Hand a self-contained piece of work to a specialist engine installed in your " +
+          "box — deep work on a repository, where reading dozens of files and iterating " +
+          "against tests is the job itself. Available engines: " +
+          PRESETS.map(preset => `${preset.name} (${preset.summary})`).join(" ") +
+          "\n\nIt runs as a background job, so you get a job id back and use `Jobs` to " +
+          "wait for it and read what it did. Say what done looks like — the engine cannot " +
+          "ask you a question, so an ambiguous brief comes back as confident work on the " +
+          "wrong thing. It works in the directory you name and can change files there. " +
+          "What it spends is billed to whoever asked you, like everything else you do.",
+        input_schema: {
+          type: "object",
+          properties: {
+            preset: {
+              type: "string",
+              enum: PRESETS.map(preset => preset.name),
+              description: "Which engine.",
+            },
+            prompt: {
+              type: "string",
+              description:
+                "The whole brief, self-contained: what to do, where, and what finished " +
+                "looks like. It is the only thing the engine will be told.",
+            },
+            cwd: {
+              type: "string",
+              description: "Directory to work in — usually a repository checkout.",
+            },
+          },
+          required: ["preset", "prompt"],
         },
       },
       {
@@ -949,6 +984,51 @@ export async function dispatchTool(
       });
       return {
         text: formatExec(result, input.timeout_ms ? Number(input.timeout_ms) : undefined),
+      };
+    }
+
+    case "Delegate": {
+      const box = requireBox(context);
+      const preset = presetNamed(String(input.preset ?? ""));
+      if (preset === undefined) {
+        return {
+          text: `No preset named ${String(input.preset ?? "")}. Installed: ${PRESETS.map(p => p.name).join(", ")}.`,
+          isError: true,
+        };
+      }
+      const prompt = String(input.prompt ?? "").trim();
+      if (prompt === "") {
+        return { text: "Delegating needs a brief; the engine cannot ask you what you meant.", isError: true };
+      }
+      // Checked rather than assumed, and said as an install problem rather than as a
+      // failed run: an engine that is not there produces a shell error the model would
+      // otherwise try to debug.
+      const probe = await box.exec(preset.probe, { timeoutMs: 15_000 });
+      if (probe.exit_code !== 0) {
+        return {
+          text:
+            `The ${preset.name} engine is not installed in this box. An operator adds it ` +
+            `to the image — it is a pinned part of the box, not something to install ` +
+            `mid-task.`,
+          isError: true,
+        };
+      }
+      const env = delegateEnv(preset);
+      const started = await box.startJob(preset.run(quoteForShell(prompt)), {
+        ...(input.cwd ? { cwd: String(input.cwd) } : {}),
+        ...(Object.keys(env).length > 0 ? { env } : {}),
+        ...(context.boxOwner !== undefined ? { owner: context.boxOwner } : {}),
+      });
+      return {
+        text:
+          `Delegated to ${preset.name} as ${started.job_id}.\n` +
+          `Its work is going to ${started.log_path}.\n` +
+          (Object.keys(env).length > 0
+            ? "It is billed through this installation, so its spend is on the same budget as yours.\n"
+            : "No model relay is configured here, so it is using whatever credential the box " +
+              "itself has — if it has none, it will say so in its output.\n") +
+          `Use Jobs to wait for it. It is doing the work; you are still the one who ` +
+          `has to check it did the right thing.`,
       };
     }
 
