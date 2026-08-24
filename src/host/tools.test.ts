@@ -4,7 +4,7 @@
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { dispatchTool } from "./tools.ts";
+import { buildTools, dispatchTool } from "./tools.ts";
 
 test("edit_file changes part of a file, and refuses the two ways it could change the wrong part", async () => {
   const file = { path: "/home/box/work/app.py", content: "" };
@@ -107,4 +107,31 @@ test("AskUser hands the question to a person and stops, rather than guessing or 
   } as unknown as Parameters<typeof dispatchTool>[2]);
   assert.ok(undeliverable.isError);
   assert.match(undeliverable.text, /could not be delivered/);
+});
+
+test("searching is offered only where it can work, and is a tool the team knows about", async () => {
+  const { SEARCH_KEY_VARIABLE } = await import("./web.ts");
+  const { ALL_TOOLS } = await import("./orchestrator.ts");
+  const previous = process.env[SEARCH_KEY_VARIABLE];
+  try {
+    // A tool that is always present and always answers "not configured" teaches an agent
+    // to stop trying — including on the installations where it would have worked.
+    delete process.env[SEARCH_KEY_VARIABLE];
+    assert.ok(!buildTools(true, true).some(tool => tool.name === "WebSearch"));
+
+    process.env[SEARCH_KEY_VARIABLE] = "test-key";
+    assert.ok(buildTools(true, true).some(tool => tool.name === "WebSearch"));
+
+    // Reading a page needs nothing configured, so it is always there.
+    assert.ok(buildTools(true, true).some(tool => tool.name === "WebFetch"));
+
+    // The "every tool is accounted for" guard in agents.test.ts runs without a key, so
+    // it cannot see this one. Named here instead, or a coordinator's allowlist would
+    // silently withhold search from every installation that configured it.
+    assert.ok(ALL_TOOLS.includes("WebSearch"));
+    assert.ok(ALL_TOOLS.includes("WebFetch"));
+  } finally {
+    if (previous === undefined) delete process.env[SEARCH_KEY_VARIABLE];
+    else process.env[SEARCH_KEY_VARIABLE] = previous;
+  }
 });

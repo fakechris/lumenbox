@@ -597,7 +597,7 @@ export class Orchestrator {
   private runtimeForAgent(agent: AgentRecord): { client: Anthropic; provider: ProviderProfile } {
     const provider = effectiveProviderFor(agent.profile, this.provider);
     if (provider === this.provider) return { client: this.client, provider: this.provider };
-    const key = `${provider.label} ${provider.model} ${provider.baseUrl ?? ""}`;
+    const key = `${provider.label}\0${provider.model}\0${provider.baseUrl ?? ""}`;
     const cached = this.runtimeCache.get(key);
     if (cached !== undefined) return cached;
     const runtime = { client: createClient(provider), provider };
@@ -741,6 +741,8 @@ export const ALL_TOOLS: readonly string[] = [
   "write_file",
   "edit_file",
   "list_dir",
+  "WebFetch",
+  "WebSearch",
   "SendToAgent",
   "AskUser",
   "CreateAgent",
