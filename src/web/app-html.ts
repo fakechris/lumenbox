@@ -490,6 +490,7 @@ export const APP_HTML = String.raw`<!doctype html>
   </span>
   <span class="mid"><span id="model">&mdash;</span></span>
   <span id="spendtoday" class="mono" style="font-size:12px;color:var(--muted);white-space:nowrap" title="Tokens spent today, all agents"></span>
+  <span id="whoami" style="font-size:12px;color:var(--muted);white-space:nowrap"></span>
   <button id="settingsbtn" title="Settings" aria-label="Settings">
     <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3.2"/><path d="M19.4 15a1.7 1.7 0 0 0 .34 1.87l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.7 1.7 0 0 0-1.87-.34 1.7 1.7 0 0 0-1.03 1.56V21a2 2 0 1 1-4 0v-.09a1.7 1.7 0 0 0-1.11-1.56 1.7 1.7 0 0 0-1.87.34l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.7 1.7 0 0 0 .34-1.87 1.7 1.7 0 0 0-1.56-1.03H3a2 2 0 1 1 0-4h.09a1.7 1.7 0 0 0 1.56-1.11 1.7 1.7 0 0 0-.34-1.87l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.7 1.7 0 0 0 1.87.34h.09a1.7 1.7 0 0 0 1.03-1.56V3a2 2 0 1 1 4 0v.09a1.7 1.7 0 0 0 1.03 1.56 1.7 1.7 0 0 0 1.87-.34l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.7 1.7 0 0 0-.34 1.87v.09a1.7 1.7 0 0 0 1.56 1.03H21a2 2 0 1 1 0 4h-.09a1.7 1.7 0 0 0-1.56 1.03Z"/></svg>
   </button>
@@ -2032,6 +2033,46 @@ function taskStatusColor(status) {
   return "var(--muted)";
 }
 
+/** Which task is expanded, and whether we have already scrolled to a deep-linked one. */
+var openTask = new URLSearchParams(location.search).get("task") || "";
+var taskScrolled = false;
+
+/**
+ * One task, opened out: who owns it, what it cost, and every move anybody made on it.
+ *
+ * The history is the point. A status alone says where a task is; the history says who
+ * put it there and why — including the audit that refused it and the guard that voided
+ * an audit. That is the evidence trail a person needs before accepting work, and it is
+ * already recorded, so showing it costs nothing but the markup.
+ */
+function taskDetail(t) {
+  var rows = (t.history || []).slice().reverse().map(function (h) {
+    var when = new Date(h.at).toLocaleString();
+    var who = nameOf(h.by) || h.by;
+    return '<div style="display:flex;gap:8px;padding:3px 0;font-size:11px">' +
+      '<span class="dim mono" style="white-space:nowrap">' + esc(when) + "</span>" +
+      '<span style="white-space:nowrap">' + esc(who) + "</span>" +
+      (h.status ? '<span style="color:' + taskStatusColor(h.status) + '">' + esc(h.status) + "</span>" : "") +
+      (h.note ? '<span class="dim" style="flex:1;font-style:italic">' + esc(h.note) + "</span>" : "") +
+    "</div>";
+  }).join("");
+  // The conversation is a link only when there is an agent whose transcript to open it
+  // in: a conversation without an assignee has nowhere to take you.
+  var conversation = t.conversation
+    ? (t.assigneeId
+        ? '<a href="#" data-openconv="' + esc(t.conversation) + '" data-agent="' + esc(t.assigneeId) + '">' + esc(t.conversation) + "</a>"
+        : esc(t.conversation))
+    : "the team room";
+  return '<div style="margin:8px 0 2px 26px;padding:8px 10px;border-left:2px solid var(--border)">' +
+    (t.description ? '<div style="font-size:12px;margin-bottom:6px">' + esc(t.description) + "</div>" : "") +
+    '<div class="dim" style="font-size:11px;margin-bottom:6px">' +
+      "asked by " + esc(nameOf(t.requester) || t.requester) + " · in " + conversation +
+      " · created " + esc(new Date(t.createdAt).toLocaleString()) +
+    "</div>" +
+    (rows ? '<div style="max-height:220px;overflow:auto">' + rows + "</div>" : "") +
+  "</div>";
+}
+
 function refreshTasks() {
   // The assignee picker doubles as the roster; refreshed with the board.
   $("taskassign").innerHTML = '<option value="">unassigned</option>' +
@@ -2054,10 +2095,12 @@ function refreshTasks() {
         var reviewer = t.reviewerId ? " · review by " + esc(nameOf(t.reviewerId)) : "";
         var last = t.history && t.history.length ? t.history[t.history.length - 1] : null;
         var lastNote = last && last.note ? esc(last.note) : "";
-        return '<div style="padding:10px 16px;border-bottom:1px solid var(--border)">' +
+        var open = t.id === openTask;
+        return '<div style="padding:10px 16px;border-bottom:1px solid var(--border)' +
+            (open ? ";background:var(--surface)" : "") + '">' +
           '<div style="display:flex;gap:9px;align-items:baseline">' +
-            '<span class="mono" style="font-size:11px;color:var(--muted)">' + esc(t.id) + "</span>" +
-            '<span style="flex:1;font-size:13px;font-weight:500">' + esc(t.title) + "</span>" +
+            '<a href="#" data-open="' + esc(t.id) + '" class="mono" style="font-size:11px;color:var(--muted);text-decoration:none">' + esc(t.id) + "</a>" +
+            '<a href="#" data-open="' + esc(t.id) + '" style="flex:1;font-size:13px;font-weight:500;color:var(--text);text-decoration:none">' + esc(t.title) + "</a>" +
             '<select data-task="' + esc(t.id) + '" style="height:24px;border-radius:6px;border:1px solid var(--border);background:var(--surface);color:' + taskStatusColor(t.status) + ';font-size:11px">' +
               TASK_STATUSES.map(function (s) {
                 return '<option value="' + s + '"' + (s === t.status ? " selected" : "") + ">" + s + "</option>";
@@ -2066,8 +2109,13 @@ function refreshTasks() {
           "</div>" +
           '<div class="dim" style="font-size:11px;padding-left:26px">' + esc(assignee) + reviewer +
             (lastNote ? ' — <span style="font-style:italic">' + lastNote + "</span>" : "") + "</div>" +
+          (open ? taskDetail(t) : "") +
         "</div>";
       }).join("");
+      if (openTask) {
+        var row = document.querySelector('[data-open="' + openTask + '"]');
+        if (row && !taskScrolled) { row.scrollIntoView({ block: "center" }); taskScrolled = true; }
+      }
     })
     .catch(function () {});
 }
@@ -2081,6 +2129,27 @@ $("taskadd").onclick = function () {
     body: JSON.stringify({ title: title, assigneeId: $("taskassign").value })
   }).then(function () { $("tasknew").value = ""; refreshTasks(); });
 };
+
+// Opening a task, and following it to the conversation it came from. Both are links
+// rather than buttons because they are navigation: a person expects to click the id.
+document.getElementById("tasklist").addEventListener("click", function (event) {
+  var target = event.target;
+  if (!target.getAttribute) return;
+  var id = target.getAttribute("data-open");
+  if (id) {
+    event.preventDefault();
+    openTask = openTask === id ? "" : id;
+    taskScrolled = true;
+    refreshTasks();
+    return;
+  }
+  var conversation = target.getAttribute("data-openconv");
+  if (conversation) {
+    event.preventDefault();
+    select(target.getAttribute("data-agent"), conversation);
+    showTab("desktop");
+  }
+});
 
 document.getElementById("tasklist").addEventListener("change", function (event) {
   var id = event.target.getAttribute && event.target.getAttribute("data-task");
@@ -2825,9 +2894,95 @@ $("agentwrap").addEventListener("click", function (event) {
   if (event.target === $("agentwrap")) $("agentwrap").style.display = "none";
 });
 
+// Who is at this browser. A name in the header rather than a silent identity, because
+// "my work is signed with my name" is the whole difference a second person notices.
+fetch("/api/me")
+  .then(function (r) { return r.json(); })
+  .then(function (me) {
+    $("whoami").textContent = me.name ? me.name + " · " + me.role : "";
+    $("whoami").title = me.identity ? "signed in as " + me.identity : "";
+  })
+  .catch(function () {});
+
 // Activity after the roster, because its lines name agents.
 refresh().then(loadActivity).then(loadRecordings);
 setInterval(refresh, 15000);
+
+// A chat card's "open in the workshop" link lands here: the board, with that task
+// already open. Done after the first refresh so the roster is there to name people.
+if (openTask) showTab("tasks");
+</script>
+</body>
+</html>`;
+
+/**
+ * The door, for somebody who has an invite code and no session yet.
+ *
+ * Its own page rather than a mode of the app, because it is reached *before*
+ * authentication and must therefore be the one place the token gate lets through.
+ * Redeeming a code hands out the installation's UI token as well as the identity
+ * cookie: the code is the credential that admits a person, and their role — what
+ * they may actually do once inside — comes from the roster, checked per request.
+ * Removing somebody from the roster drops them to viewer; rotating the token ends
+ * every session at once. Both are said plainly here rather than discovered later.
+ */
+export const LOGIN_HTML = String.raw`<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>LumenBox &mdash; sign in</title>
+<style>
+  :root { color-scheme: light dark; --bg:#fbfbfa; --text:#1d1d1b; --muted:#6b6b66; --border:#e3e3df; --accent:#2f6f4f; }
+  @media (prefers-color-scheme: dark) { :root { --bg:#161615; --text:#eceae4; --muted:#9a9a92; --border:#2c2c2a; --accent:#7fbf9a; } }
+  body { margin:0; min-height:100vh; display:flex; align-items:center; justify-content:center;
+         background:var(--bg); color:var(--text);
+         font:15px/1.5 ui-sans-serif,-apple-system,"Segoe UI",system-ui,sans-serif; }
+  .card { width:min(420px,92vw); padding:28px 30px; border:1px solid var(--border); border-radius:14px; }
+  h1 { margin:0 0 4px; font-size:19px; font-weight:600; }
+  p.sub { margin:0 0 20px; color:var(--muted); font-size:13px; }
+  label { display:block; font-size:12px; color:var(--muted); margin:14px 0 5px; }
+  input { width:100%; box-sizing:border-box; padding:9px 11px; font:inherit; border-radius:9px;
+          border:1px solid var(--border); background:transparent; color:var(--text); }
+  #code { font-family:ui-monospace,SFMono-Regular,Menlo,monospace; letter-spacing:2px; text-transform:uppercase; }
+  button { margin-top:18px; width:100%; padding:10px; font:inherit; font-weight:500; cursor:pointer;
+           border:0; border-radius:9px; background:var(--accent); color:#fff; }
+  .note { margin-top:16px; font-size:12px; color:var(--muted); }
+  .err { margin-top:14px; font-size:13px; color:#b3261e; min-height:18px; }
+</style>
+</head>
+<body>
+<div class="card">
+  <h1>Sign in to LumenBox</h1>
+  <p class="sub">An admin gives you a code &mdash; the same one that works in chat.</p>
+  <label for="code">Invite code</label>
+  <input id="code" autocomplete="off" spellcheck="false" placeholder="4F7KQZ" autofocus>
+  <label for="name">Your name</label>
+  <input id="name" autocomplete="name" placeholder="How your work should be signed">
+  <button id="go">Sign in</button>
+  <div class="err" id="err"></div>
+  <div class="note">Codes last 15 minutes and work once. What you may do here comes from
+    the role the admin gave you, not from the code.</div>
+</div>
+<script>
+var go = document.getElementById("go");
+function submit() {
+  var code = document.getElementById("code").value.trim();
+  var name = document.getElementById("name").value.trim();
+  if (!code) { document.getElementById("err").textContent = "Enter the code you were given."; return; }
+  go.disabled = true;
+  document.getElementById("err").textContent = "";
+  fetch("/api/login", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ code: code, name: name })
+  })
+    .then(function (r) { return r.json().then(function (d) { if (!r.ok) throw new Error(d.error || "sign-in failed"); return d; }); })
+    .then(function () { location.href = "/"; })
+    .catch(function (error) { go.disabled = false; document.getElementById("err").textContent = error.message; });
+}
+go.onclick = submit;
+document.addEventListener("keydown", function (e) { if (e.key === "Enter") submit(); });
 </script>
 </body>
 </html>`;

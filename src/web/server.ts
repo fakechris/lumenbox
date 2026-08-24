@@ -32,8 +32,23 @@ import { BackupSchedule, backupRoot } from "../host/backup.ts";
 import { Orchestrator } from "../host/orchestrator.ts";
 import { describeProvider, type ProviderProfile } from "../host/provider.ts";
 import type { TurnEvent } from "../host/turn.ts";
-import { APP_HTML } from "./app-html.ts";
-import { authorize, callerOf, isLoopback, mayDrive, refusalToDrive } from "./auth.ts";
+import { APP_HTML, LOGIN_HTML } from "./app-html.ts";
+import {
+  authorize,
+  callerOf,
+  COOKIE_NAME,
+  isLoopback,
+  mayDrive,
+  parseCookies,
+  refusalToDrive,
+} from "./auth.ts";
+import {
+  newWebIdentity,
+  readSession,
+  SESSION_COOKIE,
+  sessionCookie,
+  sessionKey,
+} from "./session.ts";
 
 /**
  * The one directory a person may browse, and the one that survives a rebuild.
@@ -553,6 +568,15 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
         });
         return task?.id;
       },
+      // Only when an operator said where this installation is reachable from a phone.
+      // Guessing (the bind address, a container's hostname) would put a link in a chat
+      // that opens nothing, which is worse than no link.
+      urlFor: taskId => {
+        const base = process.env.AGENTBOX_PUBLIC_URL;
+        return base === undefined || base === ""
+          ? undefined
+          : `${base.replace(/\/+$/, "")}/?task=${encodeURIComponent(taskId)}`;
+      },
       started: taskId => {
         orchestrator.tasks?.update(taskId, { status: "doing" }, "channel");
       },
@@ -924,6 +948,9 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
     return JSON.parse(Buffer.concat(chunks).toString("utf8")) as Record<string, unknown>;
   }
 
+  /** Signs web sessions; set from the resolved UI token before the server listens. */
+  let sessionSecret = "";
+
   const server = createServer((req, res) => {
     void (async () => {
       const url = new URL(req.url ?? "/", "http://localhost");
@@ -937,7 +964,15 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
           query: url.searchParams.get("token"),
         }
       );
-      if (!decision.allow) {
+      // The door itself is before the gate, and must be: a person holding an invite
+      // code has no token yet, and a sign-in page that requires being signed in is a
+      // locked door with the key inside. These two routes are the only exemption, and
+      // the code is what authenticates them.
+      if (route === "GET /login") {
+        send(res, 200, LOGIN_HTML, "text/html");
+        return;
+      }
+      if (!decision.allow && route !== "POST /api/login") {
         // No WWW-Authenticate: a browser prompt would be the wrong shape for this, and the
         // token belongs in the URL once rather than typed into a dialog.
         send(res, 401, {
@@ -954,7 +989,19 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
 
       // Who this is, read once and in one place. `decision.allow` is passed rather than re-derived,
       // so identity cannot be trusted on a request that authentication did not accept.
-      const caller = callerOf(req.headers, decision.allow);
+      //
+      // Two identity paths, in order of authority: a gateway that vouches for someone
+      // (headers, the deployed shape), then a web session somebody redeemed an invite
+      // code for. Both are only read on an authorised request, and the second is signed
+      // by a key derived from the token that authorised it.
+      const gatewayCaller = callerOf(req.headers, decision.allow);
+      const webIdentity = decision.allow
+        ? readSession(parseCookies(req.headers.cookie).get(SESSION_COOKIE), sessionSecret)
+        : undefined;
+      const caller =
+        gatewayCaller.userId === undefined && webIdentity !== undefined
+          ? { ...gatewayCaller, userId: webIdentity }
+          : gatewayCaller;
 
       /**
        * Refuses a mutating request the caller may not make, and says which role would allow it.
@@ -1143,6 +1190,75 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
         // The task board: work as an object. Reading is open to any session; moving
         // things needs the driver role, same as prompting — a board a viewer can
         // rearrange is not a record of anything.
+        // Who the browser is, for the page's own header. Deliberately readable by any
+        // authorised request: it says nothing the caller does not already know.
+        if (route === "GET /api/me") {
+          const principal =
+            caller.userId === undefined ? undefined : principals.resolve(caller.userId);
+          send(res, 200, {
+            identity: caller.userId ?? null,
+            name: principal?.name ?? null,
+            // No identity at all is the direct operator: the token holder, unrestricted,
+            // exactly as this UI has always behaved.
+            role: caller.userId === undefined ? "admin" : (principal?.role ?? "viewer"),
+          });
+          return;
+        }
+
+        // Redeeming an invite code in a browser: the same code the chat's `bind` takes,
+        // because one code for two surfaces is the whole point — a person the owner
+        // invited can arrive either way and be the same principal either way.
+        if (route === "POST /api/login") {
+          const body = await readJson(req);
+          const code = String(body.code ?? "").trim().toUpperCase();
+          const invite = invites.get(code);
+          if (invite === undefined || invite.expiresAt < Date.now()) {
+            invites.delete(code);
+            send(res, 400, {
+              error: "That code is not live — codes last 15 minutes and work once.",
+            });
+            return;
+          }
+          invites.delete(code);
+          const roster = principals.list();
+          const existing =
+            invite.principalId !== undefined
+              ? roster.find(person => person.id === invite.principalId)
+              : undefined;
+          const identity = newWebIdentity();
+          // Two cookies, because they answer different questions: the token says this
+          // browser may reach the installation at all, the session says who it is. The
+          // code delivers the first and mints the second; what the person may then *do*
+          // is their roster role, checked on every request that changes something.
+          const admit = [
+            ...(token !== undefined
+              ? [`${COOKIE_NAME}=${encodeURIComponent(token)}; Path=/; HttpOnly; SameSite=Lax`]
+              : []),
+            sessionCookie(identity, sessionSecret),
+          ];
+          if (existing !== undefined) {
+            // A code made for somebody already known links this browser to them: same
+            // human, second surface, one bill.
+            existing.identities.push(identity);
+            principals.save(roster);
+            res.setHeader("set-cookie", admit);
+            log(`web login: ${identity} linked to ${existing.name}`);
+            send(res, 200, { name: existing.name, role: existing.role });
+            return;
+          }
+          const name = String(body.name ?? "").trim().slice(0, 60);
+          if (name === "") {
+            send(res, 400, { error: "Say who you are, so your work has a name on it." });
+            return;
+          }
+          roster.push({ id: identity, name, role: invite.role, identities: [identity] });
+          principals.save(roster);
+          res.setHeader("set-cookie", admit);
+          log(`web login: ${name} joined as ${invite.role}`);
+          send(res, 200, { name, role: invite.role });
+          return;
+        }
+
         if (route === "GET /api/tasks") {
           const board = orchestrator.tasks;
           send(res, 200, { tasks: board === undefined ? [] : board.list() });
@@ -2168,6 +2284,9 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
   if (!token) {
     log("no UI token: anything that can reach this port can drive the agents");
   }
+  // Derived, so rotating the token ends every web session with it — and so there is no
+  // second secret to store. Assigned before anything can serve a request.
+  sessionSecret = sessionKey(token);
   await new Promise<void>(resolve => server.listen(options.port, host, resolve));
 
   const address = server.address();

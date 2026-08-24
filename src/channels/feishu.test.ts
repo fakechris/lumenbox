@@ -109,3 +109,26 @@ test("the approval card carries the action verbatim and the three answers as but
     ]
   );
 });
+
+test("a task card offers the workshop only when there is somewhere to send people", async () => {
+  const base: TaskCardState = {
+    title: "weekly report",
+    agentName: "Rex",
+    requesterLabel: "chris",
+    status: "working",
+    taskId: "t17",
+  };
+  const withoutUrl = rendered(base);
+  assert.equal(
+    withoutUrl.elements.find(element => element.tag === "action"),
+    undefined,
+    "no public url, no button — a link that opens nothing is worse than none"
+  );
+
+  const withUrl = renderCard({ ...base, taskUrl: "https://box.example/?task=t17" }) as CardShape & {
+    elements: { tag: string; actions?: { url?: string; text: { content: string } }[] }[];
+  };
+  const action = withUrl.elements.find(element => element.tag === "action")!;
+  assert.equal(action.actions![0]!.url, "https://box.example/?task=t17");
+  assert.match(action.actions![0]!.text.content, /workshop/i);
+});

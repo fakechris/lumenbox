@@ -78,6 +78,8 @@ export interface TaskCardState {
   ahead?: number;
   /** The board id ("t12"), when this request lives on the team board. People say these in chat. */
   taskId?: string;
+  /** Where to watch this task in the workshop: the desktop, the evidence, the history. */
+  taskUrl?: string;
 }
 
 export interface ChannelAdapter {
@@ -259,6 +261,8 @@ export interface ChannelManagerDeps {
       agentName?: string;
       chatKey: string;
     }) => string | undefined;
+    /** Where a person can watch this task work, when this installation is reachable. */
+    urlFor?: (taskId: string) => string | undefined;
     started: (taskId: string) => void;
     closed: (taskId: string, outcome: "done" | "failed", note?: string) => void;
   };
@@ -746,6 +750,9 @@ export class ChannelManager {
       status: ahead > 0 ? "queued" : "working",
       ...(ahead > 0 ? { ahead } : {}),
       ...(taskId !== undefined ? { taskId } : {}),
+      ...(taskId !== undefined && this.deps.board?.urlFor?.(taskId) !== undefined
+        ? { taskUrl: this.deps.board.urlFor(taskId)! }
+        : {}),
     };
 
     // The acknowledgement, when one is owed: a card if the adapter can, a line if not.

@@ -93,6 +93,24 @@ export function renderCard(card: TaskCardState): object {
     header: { title: { tag: "plain_text", content: card.title }, template },
     elements: [
       { tag: "div", text: { tag: "lark_md", content: lines.join("\n") } },
+      // The way into the workshop: the desktop it is working on, the evidence behind
+      // each step, the history of who moved it. A chat can carry the conclusion; only
+      // the workshop can carry the proof.
+      ...(card.taskUrl !== undefined
+        ? [
+            {
+              tag: "action",
+              actions: [
+                {
+                  tag: "button",
+                  text: { tag: "plain_text", content: "Open in the workshop" },
+                  type: "default",
+                  url: card.taskUrl,
+                },
+              ],
+            },
+          ]
+        : []),
       {
         tag: "note",
         elements: [
