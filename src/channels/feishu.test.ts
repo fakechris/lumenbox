@@ -190,3 +190,35 @@ test("a picture pasted into rich text is not lost", () => {
   // Marked in place, so the agent knows where in the message the picture sat.
   assert.match(text, /before \[image 1\] after/);
 });
+
+test("a thread is the conversation; a direct chat still is", () => {
+  const adapter = new FeishuChannel("a", "b", () => {});
+  const key = (
+    adapter as unknown as { conversationKeyFor: (m: Record<string, string>) => string }
+  ).conversationKeyFor.bind(adapter);
+
+  // A topic reply and a reply chain both name their own subject.
+  assert.equal(key({ chat_id: "oc_1", thread_id: "omt_9", message_id: "om_a" }), "feishu:oc_1:omt_9");
+  assert.equal(key({ chat_id: "oc_1", root_id: "om_root", message_id: "om_b" }), "feishu:oc_1:om_root");
+
+  // A new top-level message in a group is a new subject. Keying it on the room is what
+  // made one room one endless conversation, and a finished topic keep steering new ones.
+  assert.equal(
+    key({ chat_id: "oc_1", chat_type: "group", message_id: "om_c" }),
+    "feishu:oc_1:om_c"
+  );
+
+  // A direct message is different: there the chat *is* the subject, and a key per message
+  // would throw away every follow-up the person makes.
+  assert.equal(key({ chat_id: "oc_2", chat_type: "p2p", message_id: "om_d" }), "feishu:oc_2");
+
+  // Two messages in the same thread share a conversation; two new topics do not.
+  assert.equal(
+    key({ chat_id: "oc_1", thread_id: "omt_9", message_id: "om_e" }),
+    key({ chat_id: "oc_1", thread_id: "omt_9", message_id: "om_f" })
+  );
+  assert.notEqual(
+    key({ chat_id: "oc_1", chat_type: "group", message_id: "om_g" }),
+    key({ chat_id: "oc_1", chat_type: "group", message_id: "om_h" })
+  );
+});

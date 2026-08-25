@@ -542,6 +542,11 @@ test("a summary has a shape, so what it left out is visible", () => {
   assert.match(prompt, /an empty section is a fact/);
   assert.match(prompt, /a room, not a task/);
   assert.match(prompt, /Mark finished ones finished/);
+  // Against the two ways a summary of a summary goes wrong: finished work reading as
+  // pending, and a claim losing the person who made it and becoming the agent's own.
+  assert.match(prompt, /dated past tense/);
+  assert.match(prompt, /Collapse a resolved exchange to its conclusion/);
+  assert.match(prompt, /stays attributed to them/);
 
   // Failures belong in the history, or the summary reads as a plan rather than a record.
   assert.match(prompt, /Attempts that failed belong here too/);

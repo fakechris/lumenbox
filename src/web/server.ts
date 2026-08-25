@@ -420,9 +420,13 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
   // Deliberately not a model call — a digest that could hallucinate its numbers
   // would poison the one place those numbers are read daily.
   const digestFor = (chatKey: string): string => {
+    // Every thread in the chat, not just one. A digest is about the room's day, and the
+    // room's day is now spread across a conversation per topic.
     const conversation = conversationIdFor(chatKey);
     const all = (orchestrator.tasks?.list() ?? []).filter(
-      task => task.conversation === conversation
+      task =>
+        task.conversation === conversation ||
+        (task.conversation ?? "").startsWith(`${conversation}-`)
     );
     const since = Date.now() - 24 * 3_600_000;
     const nameOf = (id: string) =>
@@ -597,7 +601,7 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
           : "Allowed once. Send the agent a message to have it retry.";
     },
     log: line => log(line),
-    ask: async (agentName, text, identity, chatKey, onProgress, taskId) => {
+    ask: async (agentName, text, identity, chatKey, onProgress, threadKey, taskId) => {
       const agent =
         agentName !== undefined
           ? registry.resolve(agentName)
@@ -607,7 +611,11 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
       // same agent never read each other's context. Permission stays with the person
       // (identity); context stays with the room (chatKey); spend is billed to the
       // principal the identity resolves to, so one person's several phones are one bill.
-      const conversation = conversationIdFor(chatKey);
+      // The thread, not the chat. A room running for days was one unbounded transcript,
+      // so a finished investigation kept steering unrelated questions; every mature
+      // integration read for this keys on the thread and falls back to the message. The
+      // chat stays the address — replies, files and the outbox still go to the room.
+      const conversation = conversationIdFor(threadKey ?? chatKey);
       const principal = principals.resolve(identity).id;
       const before = registry.readTranscript(agent.id, conversation).length;
       // Written before the turn runs, not after it returns. This note is what lets any

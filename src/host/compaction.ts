@@ -382,14 +382,20 @@ export function buildSummaryPrompt(entries: readonly HistoryEntry[]): string {
     "Use exactly these four headings, in this order, and put nothing outside them:\n\n" +
     "**Threads** — each distinct piece of work, one per line: what was asked, what was " +
     "concluded, and whether it is finished or still open. Mark finished ones finished.\n" +
-    "**Done** — what you actually did, and what came of it. Attempts that failed belong here too; " +
-    "a summary that lists only successes reads as a plan rather than a history.\n" +
+    "**Done** — what you actually did, and what came of it, written as dated past tense so " +
+    "finished work cannot be read as pending. Attempts that failed belong here too; a " +
+    "summary that lists only successes reads as a plan rather than a history.\n" +
     "**State** — where the work stands right now, and anything open, blocked or waiting.\n" +
     "**Artifacts** — every file you created or changed, by full path, one per line, with a few " +
     "words on what each holds. If there are none, write \"none\" — an empty section is a fact, and " +
     "leaving it out looks like forgetting.\n\n" +
     `Under ${SUMMARY_WORD_CAP} words. Be specific and dense: omit narration, apologies and ` +
     "anything you would not need again. Do not invent progress.\n\n" +
+    "Collapse a resolved exchange to its conclusion — the back and forth that got there is " +
+    "not needed again, and carrying it forward is what makes each summary of a summary " +
+    "bigger than the last. And keep the provenance: something a person or a page asserted " +
+    "stays attributed to them. A claim that loses its source becomes your own knowledge on " +
+    "the next pass, which is how an unchecked figure ends up being repeated as fact.\n\n" +
     "--- history ---\n" +
     rendered
   );

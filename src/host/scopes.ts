@@ -132,7 +132,15 @@ export class ScopeStore {
    */
   boundTo(conversation: string, normalize: (chatKey: string) => string): Scope | undefined {
     for (const scope of this.scopes.values()) {
-      if ((scope.chats ?? []).some(chatKey => normalize(chatKey) === conversation)) {
+      // Prefix, not equality. A conversation is keyed on the thread now, so a scope bound
+      // to a chat must still bound every thread inside it — an exact match would silently
+      // unbind every room the moment threads started their own conversations.
+      if (
+        (scope.chats ?? []).some(chatKey => {
+          const bound = normalize(chatKey);
+          return conversation === bound || conversation.startsWith(`${bound}-`);
+        })
+      ) {
         return this.get(scope.id);
       }
     }

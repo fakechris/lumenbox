@@ -30,6 +30,18 @@ export interface InboundMessage {
   /** `telegram:123` — stable, and what the allow list matches. Who is *speaking*. */
   identity: string;
   /**
+   * Which conversation this belongs to, when the platform has a finer idea than the chat.
+   *
+   * A chat is an address; a thread is a subject. Keyed on the chat alone, a group running
+   * for days is one unbounded history, and an investigation finished on Monday steers an
+   * unrelated question on Wednesday. Every mature integration read for this keys on the
+   * thread and falls back to the message itself, so a new top-level message starts clean.
+   *
+   * Absent means "the chat is the conversation", which is right for a direct message and
+   * for any platform without threads.
+   */
+  threadKey?: string;
+  /**
    * Which chat the message came from, when that is not the same thing as who sent
    * it — a Feishu group's id, a DingTalk conversation. This is what the agent's
    * conversation thread is keyed on: context belongs to the room it happened in,
@@ -216,6 +228,13 @@ export interface ChannelManagerDeps {
     identity: string,
     chatKey: string,
     onProgress?: (action: string, tool?: string) => void,
+    /**
+     * Which conversation to think in, when it differs from the chat to reply into.
+     *
+     * The chat is an address, the thread is a subject, and the two are not the same
+     * once a room has been running for days.
+     */
+    threadKey?: string,
     /**
      * The board entry this request opened, when it opened one.
      *
@@ -931,6 +950,7 @@ ${input.options.map(option => `· ${option}`).join("\n")}`
         message.identity,
         chatKey,
         onProgress,
+        message.threadKey ?? chatKey,
         taskId
       );
       clearTimeout(ackTimer);

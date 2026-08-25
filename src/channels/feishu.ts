@@ -331,6 +331,32 @@ export class FeishuChannel implements ChannelAdapter {
     return { text: lines.join("\n"), imageKeys };
   }
 
+  /**
+   * Which conversation a message belongs to.
+   *
+   * The thread if it has one, the reply chain's root if it is a reply, and otherwise the
+   * message itself when this is a group — a new top-level message in a room is a new
+   * subject, and keying it on the room is what made one room one endless conversation.
+   *
+   * A direct message falls back to the chat, because there the chat *is* the subject and
+   * a per-message key would throw away every follow-up.
+   */
+  private conversationKeyFor(message: {
+    message_id?: string;
+    chat_id?: string;
+    thread_id?: string;
+    root_id?: string;
+    chat_type?: string;
+  }): string {
+    const chatId = message.chat_id ?? "";
+    const thread = message.thread_id ?? message.root_id;
+    if (thread !== undefined && thread !== "") return `feishu:${chatId}:${thread}`;
+    if (message.chat_type === "p2p") return `feishu:${chatId}`;
+    return message.message_id !== undefined
+      ? `feishu:${chatId}:${message.message_id}`
+      : `feishu:${chatId}`;
+  }
+
   private alreadySeen(messageId: string): boolean {
     const now = Date.now();
     const ttlMs = 24 * 60 * 60_000;
@@ -474,6 +500,7 @@ export class FeishuChannel implements ChannelAdapter {
               const reply = await onMessage({
                 identity,
                 chatKey: `feishu:${chatId}`,
+                threadKey: this.conversationKeyFor(data.message ?? {}),
                 messageId,
                 senderLabel,
                 text: "",
@@ -564,6 +591,7 @@ export class FeishuChannel implements ChannelAdapter {
             return onMessage({
               identity,
               chatKey: `feishu:${chatId}`,
+              threadKey: this.conversationKeyFor(data.message ?? {}),
               ...(messageId !== undefined ? { messageId } : {}),
               senderLabel,
               text,
