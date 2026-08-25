@@ -738,6 +738,18 @@ export const APP_HTML = String.raw`<!doctype html>
       </details>
       <div class="fieldnote" id="setpeoplestatus"></div>
     </div>
+    <div class="field" data-tier="personal" id="setmcptokenswrap" style="display:none">
+      <label>Your MCP tokens</label>
+      <div id="setmcptokens" style="display:flex;flex-direction:column;gap:6px"></div>
+      <div style="display:flex;gap:6px;margin-top:6px">
+        <input id="setmcplabel" placeholder="what it is for, e.g. my editor" style="flex:1">
+        <button class="btn" id="setmcpadd">Issue</button>
+      </div>
+      <div class="fieldnote" id="setmcpnew" style="word-break:break-all"></div>
+      <div class="fieldnote">Lets an editor or another agent drive this installation over MCP,
+        as you. The token is shown once — copy it now. Work done through it is attributed to
+        you, and revoking one stops it immediately.</div>
+    </div>
     <div class="field" data-tier="personal" id="setgrantswrap" style="display:none">
       <label>Standing approvals</label>
       <div id="setgrants" style="display:flex;flex-direction:column;gap:6px"></div>
