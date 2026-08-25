@@ -53,21 +53,26 @@ point at it if you like, but recreate against the version tag so the previous on
 on disk when the new one turns out to be wrong.
 
 **R3 — Refuse to run on a version mismatch.** boxd and the orchestrator are separate
-binaries speaking a private HTTP protocol, and they are upgraded independently. Today
-`health()` returns a version and **nothing compares it**, so a box running ahead of its
-host is undefined behaviour that presents as unrelated failures. A handshake that refuses
-loudly is worth more than any amount of care during the upgrade itself.
+binaries speaking a private HTTP protocol, and they are upgraded independently. `BOXD_PROTOCOL`
+is compared when the host connects and a mismatch is refused, naming which half is behind.
+Before that existed, `health()` returned a version hardcoded to `"0.1.0"` that nothing
+compared, and a box running behind its host presented as unrelated failures in whichever
+route had moved.
 
-**R4 — Back up the volumes, not just the host state.** The existing backup covers
-`~/.agentbox` on the reasoning that the box is disposable and its work directory is on a
-volume. That is true of `docker rm` and false of `docker volume rm`, a bad migration, and
-a disk. The config volume is not scratch either — it is where people's logged-in browser
-sessions live, and on a working box it is the larger of the two.
+**R4 — Back up the volumes, not just the host state.** `box up --recreate` copies both
+box volumes into a dated directory under the backup root before it destroys anything, and
+stops if the copy fails — the next step is the irreversible one. The host-side backup
+covers `~/.agentbox` on the reasoning that the box is disposable and its work is on a
+volume; that is true of `docker rm` and false of `docker volume rm`, a bad migration, and
+a disk. The config volume is not scratch either — it holds people's logged-in browser
+sessions, and on a working box it is by far the larger of the two.
 
 **R5 — Say what is about to be lost.** The prompt tells agents to put durable work under
 `/home/box/work`, and an agent that wrote a report to its home directory did not read that
-sentence. Before recreating, list files modified recently outside the two volumes. This is
-the difference between silent loss and a warning somebody can act on.
+sentence. `box up --recreate` lists recently-changed files outside the two volumes and
+refuses unless `--yes` is given. Pruning matters as much as finding: the first version also
+listed the image's own files and the desktop launchers, and the two files that actually
+mattered were lost in the middle of it.
 
 **R6 — Nobody's box is upgraded without them being told.** A box serves more than one
 person once a channel is bound to it. Upgrading closes their tabs and interrupts whatever
@@ -86,19 +91,87 @@ fix shipped in the image actually arrives. The other side of that: a person's ch
 those specific files are reverted silently. Everything else in the volume, browser profiles
 included, is deliberately left alone.
 
-## 4. What is missing before this is safe unattended
+## 4. The flow: who is asked, and when nobody is
+
+### There is no owner, and there should not be one
+
+The roster has three roles — `viewer`, `driver`, `admin` — and no notion of an owner.
+That is the right shape and worth keeping. An owner is a single point of absence: they go
+on holiday, change phone, leave the company, and the box can no longer be upgraded by
+anybody. Authority to upgrade belongs to the **admin** tier, the same tier that already
+owns the provider, the roster and the channel bindings.
+
+Where "which admin" needs an answer, the answer is **all of them, first reply wins**.
+Asking one nominated admin reintroduces the single point of absence; asking all of them
+and requiring consensus reintroduces it once for each of them. A notice goes to every
+admin, whoever answers first decides, and the others are told what was decided and by
+whom.
+
+### The decision is about cost, not preference
+
+Neither "always unattended" nor "always ask" is right, and choosing between them globally
+is the wrong axis. What decides is what the upgrade costs *at that moment*:
+
+| Situation | What happens |
+| --- | --- |
+| Preflight quiet, nobody connected, no protocol change | Upgrade unattended, report afterwards |
+| Preflight quiet, but people are connected and watching | Announce, short countdown, anyone may postpone |
+| Preflight found running jobs or stray files | Ask an admin, with the findings; never automatic |
+| Protocol version changes | Ask an admin; a client may need upgrading with it |
+| The box is already refusing to serve (failed handshake, broken desktop) | Upgrade is the repair; proceed and say so |
+
+The last row is why `preflight` never throws: a box too broken to inspect is often a box
+somebody is upgrading in order to fix, and a check that blocks the repair is worse than no
+check.
+
+The principle is the one the approval gate already uses: act when it costs nobody
+anything, ask when a person would want to have been asked.
+
+### Quiet hours
+
+"Convenient" is a local-time question, and the scheduler already expresses that — digests
+are configured as an hour in each chat's own local time. An upgrade window is the same
+shape: a preferred hour, per installation, with the upgrade waiting for it unless the box
+is already failing. A box that has been waiting for its window for a week should say so
+rather than waiting forever.
+
+### The sequence
+
+1. **Notice** a new image is available.
+2. **Preflight** — running jobs, stray files, whether the box answers at all.
+3. **Decide** — the table above.
+4. **Announce** to whoever is connected, with a way to postpone.
+5. **Back up** the volumes. This is the last reversible moment.
+6. **Recreate** against a version tag, not `:latest`.
+7. **Verify** — health, then one real action. A snapshot of a known page is the right one:
+   it exercises the display, the browser and the debugging port together, where a health
+   check exercises only boxd.
+8. **Roll back** to the previous tag if verification fails.
+9. **Report** what was lost — jobs killed, tabs closed — to the people who were told in
+   step 4, and to whoever decided in step 3.
+
+Steps 2 and 5 exist in code (`src/box/preflight.ts`, `BoxManager.backupVolumes`) and run
+on `box up --recreate`, which refuses when the preflight is not quiet unless `--yes` is
+given. Steps 1, 3, 4, 6, 8 and 9 are design, not code.
+
+## 5. What is missing before this is safe unattended
 
 Ordered by (risk × impact) ÷ effort, the same lens as the roadmap.
 
-1. **A version handshake (R3).** Small, and the only item here that turns a class of
-   confusing failures into one clear message. Nothing exists today.
-2. **A preflight check (R1, R5).** Refuse on running jobs; list stray files outside the
-   volumes. Turns two kinds of silent loss into a refusal and a warning.
-3. **Version-tagged images (R2).** Mostly a build and release convention, but there is no
-   rollback at all without it.
-4. **Volume backup (R4).** Extend the existing backup to snapshot the two box volumes.
-5. **Notice and consent (R6).** Depends on the channel adapters already being able to
-   reach the people bound to a box, which they can.
+Done: the version handshake (R3), the preflight check (R1, R5), and the volume backup
+(R4) — the last two wired into `box up --recreate`.
 
-Until 1 and 2 exist, an upgrade is an attended operation: a person runs it, watches it, and
-has the previous image still on disk.
+Still missing, in order:
+
+1. **Version-tagged images (R2).** A build and release convention rather than much code,
+   but there is no rollback at all without it, and rollback is what makes step 8 above
+   more than a sentence. This is now the single largest gap.
+2. **Verify-then-roll-back (R7).** Cheap once tagged images exist; meaningless before.
+3. **Notice and consent (R6).** The channel adapters can already reach the people bound to
+   a box, so this is a matter of deciding the wording and the postpone window.
+4. **A quiet-hours window.** Follows the digest scheduling that already exists.
+
+Until version-tagged images exist, an upgrade is an **attended** operation: a person runs
+it, watches it, and can rebuild the previous image from a checkout if it goes wrong. The
+volume backup means the data is safe either way; what is missing is a fast way back to a
+working image.

@@ -18,7 +18,8 @@ import {
 } from "./box/docker.ts";
 import { describeControlPlane, startControlPlane } from "./control/main.ts";
 import { STARTER_TEAM } from "./host/orchestrator.ts";
-import { backupNow } from "./host/backup.ts";
+import { backupNow, backupRoot } from "./host/backup.ts";
+import { describePreflight, isQuiet, preflight } from "./box/preflight.ts";
 import { AgentRegistry, defaultAgentsRoot } from "./agents/registry.ts";
 import { startEgressRelay } from "./egress/relay.ts";
 import { DEFAULT_DISPLAY_INDEX } from "./protocol/index.ts";
@@ -83,8 +84,41 @@ async function cmdBoxUp(argv: string[]): Promise<number> {
   // only thing outside the box is a browser. Without it the box is driven from here.
   const withHost = argv.includes("--with-host");
   const manager = new BoxManager(boxConfig({ withHost }));
+  const recreate = argv.includes("--recreate");
+
+  // Recreating destroys everything not on a volume, so it asks before it does — but only
+  // when there is something to lose, because a confirmation that always appears is one
+  // that is always dismissed.
+  if (recreate && (await manager.state()) !== "missing") {
+    const findings = await inspectBeforeUpgrade(manager);
+    if (findings !== undefined) {
+      out("");
+      out(bold("Upgrading recreates the box. Before it does:"));
+      out(findings);
+      out("");
+      if (!argv.includes("--yes")) {
+        err("Re-run with --yes to go ahead, or deal with the above first.");
+        return 1;
+      }
+      out(dim("--yes given; continuing."));
+    }
+    if (!argv.includes("--no-backup")) {
+      const stamp = new Date().toISOString().replace(/[:.]/g, "-").slice(0, 19);
+      const destination = join(backupRoot(), `${stamp}-volumes`);
+      out(dim(`Backing up volumes to ${destination} …`));
+      try {
+        for (const file of await manager.backupVolumes(destination)) out(dim(`  ${file}`));
+      } catch (error) {
+        // A failed backup stops the upgrade. The whole point of taking it here is that
+        // the next step is the irreversible one.
+        err(`Backup failed, so the box was not upgraded: ${error instanceof Error ? error.message : error}`);
+        return 1;
+      }
+    }
+  }
+
   const { status } = await manager.up({
-    recreate: argv.includes("--recreate"),
+    recreate,
     onOutput: line => out(dim(line)),
   });
   out("");
@@ -99,6 +133,24 @@ async function cmdBoxUp(argv: string[]): Promise<number> {
     out("Each agent gets its own desktop inside the box. Run `agentbox web` to see them.");
   }
   return 0;
+}
+
+/**
+ * What the box would lose, as text, or undefined when it would lose nothing.
+ *
+ * Best-effort by design: a box too broken to answer is a box somebody may well be
+ * upgrading in order to fix, and a preflight that refuses to look is not a reason to
+ * block the repair.
+ */
+async function inspectBeforeUpgrade(manager: BoxManager): Promise<string | undefined> {
+  try {
+    const box = await manager.connect();
+    const findings = await preflight(box);
+    if (isQuiet(findings)) return undefined;
+    return describePreflight(findings);
+  } catch {
+    return undefined;
+  }
 }
 
 async function cmdBoxStatus(): Promise<number> {
@@ -698,6 +750,11 @@ Usage: agentbox <command> [args]
 Box:
   box build                 Build the box image (needs \`npm run build:boxd\` first)
   box up [--recreate]       Start the box and wait for its desktop
+                            --recreate upgrades: destroys and rebuilds the
+                            container from the image. Only the work and config
+                            volumes survive. It backs them up first and refuses
+                            if anything would be lost; --yes goes ahead anyway,
+                            --no-backup skips the copy.
              --with-host    also run the orchestrator inside it (web UI on 7777)
   box status                Show container state, ports, and health
   box down [--rm]           Stop the box, optionally removing the container

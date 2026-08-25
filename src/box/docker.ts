@@ -585,6 +585,54 @@ export class BoxManager {
     }
   }
 
+  /**
+   * Copies the box's volumes somewhere they survive the box.
+   *
+   * The existing backup covers `~/.agentbox` on the reasoning that the box is disposable
+   * and its work lives on a volume. That is true of `docker rm` and false of
+   * `docker volume rm`, a mistyped migration, and a disk — and the config volume is not
+   * scratch either: it is where people's logged-in browser sessions live, and on a box
+   * that has been used it is the larger of the two.
+   *
+   * Streamed through a container rather than read from the host, because a named volume
+   * has no path on the host worth relying on: Docker Desktop and OrbStack keep it inside
+   * a VM. The box image is used as the tar because it is already local — pulling a
+   * separate one would make backup depend on a registry at exactly the wrong moment.
+   *
+   * Not stopped first, deliberately, matching the host-side backup: a browser profile
+   * copied while Chromium is writing it can be inconsistent, which is the same state a
+   * crash leaves and which Chromium already recovers from.
+   */
+  async backupVolumes(destination: string): Promise<string[]> {
+    mkdirSync(destination, { recursive: true, mode: 0o700 });
+    const written: string[] = [];
+    for (const suffix of ["work", "config"] as const) {
+      const volume = `${this.config.containerName}-${suffix}`;
+      const file = `${volume}.tar.gz`;
+      await docker(
+        [
+          "run",
+          "--rm",
+          "--volume",
+          `${volume}:/src:ro`,
+          "--volume",
+          `${destination}:/backup`,
+          "--entrypoint",
+          "tar",
+          this.config.image,
+          "czf",
+          `/backup/${file}`,
+          "-C",
+          "/src",
+          ".",
+        ],
+        600_000
+      );
+      written.push(join(destination, file));
+    }
+    return written;
+  }
+
   logs(tail = 200): Promise<string> {
     return docker(["logs", "--tail", String(tail), this.config.containerName], 30_000);
   }
