@@ -1110,6 +1110,11 @@ async function main(): Promise<number> {
         const home = mkdtempSync(join(tmpdir(), "agentbox-golden-"));
         process.env.AGENTBOX_HOME = home;
         const registry = new AgentRegistry(join(home, "agents"));
+        // Away from the desktops a running installation is using. The suite shares the
+        // box with whatever else is up, and both registries counting from 1 meant both
+        // claimed desktop 1 — the box then refused the suite's agent, and two tasks
+        // failed for a reason that had nothing to do with what they test.
+        registry.displayFloor = 20;
         const orchestrator = new Orchestrator({
           registry,
           provider: profile,

@@ -310,14 +310,29 @@ export class AgentRegistry {
     throw new AgentNotFoundError(idOrName);
   }
 
-  /** The lowest display index no agent holds, so a deleted agent's slot is reused. */
-  private nextDisplayIndex(): number {
+  /**
+   * Where this registry starts handing out desktops.
+   *
+   * Raised by a registry that shares a box with another one, so the two do not both
+   * claim desktop 1.
+   */
+  displayFloor = 1;
+
+  /**
+   * The lowest display index no agent holds, so a deleted agent's slot is reused.
+   *
+   * `from` exists for a registry that shares a box with another one — the golden suite
+   * against a running installation. Both count from 1, so both hand out desktop 1, and
+   * the box refuses the second because it belongs to another agent. Two of the suite's
+   * tasks failed that way while testing nothing about themselves.
+   */
+  private nextDisplayIndex(from = this.displayFloor): number {
     const taken = new Set(
       this.list()
         .map(record => record.profile.displayIndex)
         .filter((index): index is number => typeof index === "number")
     );
-    for (let index = 1; index <= 32; index++) {
+    for (let index = from; index <= 32; index++) {
       if (!taken.has(index)) return index;
     }
     throw new Error("No free desktop: all 32 display slots are assigned.");

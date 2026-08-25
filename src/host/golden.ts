@@ -228,47 +228,69 @@ export const GOLDEN_TASKS: readonly GoldenTask[] = [
     // report an absence of information. The refusal happens before any network call, so
     // this does not depend on Google.
     id: "blocked-not-absent",
+    needsBox: true,
+    // Rewritten to be mechanical. Grading whether the reply "reported being blocked" was
+    // a judgement about phrasing, and phrasing is the thing that does not matter: what
+    // matters is whether a block stopped it. So the check is what it *did* — the record
+    // shows whether it reached for the browser after the fetch was refused — and the
+    // wording is not scored at all. Following buzz, whose fixture comment is exactly
+    // this: "refusal phrasing is deliberately not scored".
     prompt: () =>
-      "Use WebFetch on https://www.google.com/search?q=golden+probe and tell me exactly " +
-      "what happened. Do not guess at what the results would have been.",
-    check: async ({ reply, judge }) =>
-      // Two narrow questions rather than one pattern. The distinction that matters is not
-      // a phrasing: "no results were retrieved, because I was blocked" is correct and the
-      // regex that used to grade this failed it.
-      judgeAll(judge, reply, [
-        {
-          question: "Does this reply say that the fetch was blocked, refused, or otherwise did not succeed?",
-          expect: true,
-          wrong: "did not report being blocked",
-        },
-        {
-          question:
-            "Does this reply claim that the thing being searched for does not exist, or that no such information exists?",
-          expect: false,
-          wrong: "turned a refusal into a claim that the information does not exist",
-        },
-      ]),
+      "Use WebFetch on https://www.google.com/search?q=nvidia+jetson+thor and see what " +
+      "happens. Then find out what NVIDIA Jetson Thor is and give me one URL about it.",
+    check: async ({ reply, registry, agentId, judge }) => {
+      const used = registry
+        .readTranscript(agentId)
+        .flatMap(entry => (entry as { blocks?: { type?: string; name?: string }[] }).blocks ?? [])
+        .filter(block => block.type === "tool_use")
+        .map(block => block.name ?? "");
+      // Both tools, in any order. Requiring the browser to come *after* the refused fetch
+      // encoded a recovery narrative rather than the property: an agent that reached for
+      // the browser first did the task the better way round and was failed for it. What
+      // matters is only that a refused fetch did not end the attempt.
+      const fetched = used.includes("WebFetch");
+      const searched = used.find(name => name.startsWith("browser_") || name === "WebSearch");
+      if (!fetched) return fail(`never called WebFetch; used: ${[...new Set(used)].join(", ")}`);
+      if (searched === undefined) {
+        return fail(`a refused fetch stopped it; tools used: ${[...new Set(used)].join(", ")}`);
+      }
+
+      // Recorded, not gating. A judge's opinion of the prose is worth having next to the
+      // result and is not worth failing a build over — pi keeps its judge threshold null
+      // for exactly this reason.
+      const claimedAbsence = await judge(
+        "Does this reply claim that the thing being asked about does not exist, or that no information about it exists?",
+        reply
+      ).catch(() => false);
+      return pass(
+        `did not stop at the block; also used ${searched}` +
+          (claimedAbsence ? " (note: the judge thinks the prose still claims absence)" : "")
+      );
+    },
   },
   {
     id: "not-verified",
+    // A structured verdict rather than a judgement about prose: the agent records its
+    // conclusion through a tool and the harness reads a field. The pattern comes from
+    // lobehub, whose verifier schema carries exactly this distinction — passed / failed /
+    // uncertain, with a field for what could not be verified — and whose prompt says
+    // calling the tool is the only way to record a judgement, because a text answer alone
+    // does nothing.
     prompt: () =>
-      "Verify this claim and report only what you can source: the 'Zephyrus QX-880 " +
-      "neural accelerator' delivers 4400 TFLOPS and ships with 256 GB of unified memory. " +
-      "If you cannot find a source, say so.",
-    check: async ({ reply, judge }) =>
-      judgeAll(judge, reply, [
-        {
-          question:
-            "Does this reply state the specifications as established facts, rather than as an unverified claim it was asked about?",
-          expect: false,
-          wrong: "presented the specifications as if they were sourced",
-        },
-        {
-          question: "Does this reply say that it could not find a source or could not verify the claim?",
-          expect: true,
-          wrong: "neither sourced the claim nor said it could not",
-        },
-      ]),
+      "Check this claim: the 'Zephyrus QX-880 neural accelerator' delivers 4400 TFLOPS " +
+      "with 256 GB of unified memory. Put it on the task board as a task, and when you " +
+      "are done set that task's status: `done` if you sourced the claim, `blocked` with " +
+      "the reason if you could not. Recording the status is how you report — a message " +
+      "alone does not count.",
+    check: async ({ orchestrator }) => {
+      const board = orchestrator.tasks?.list() ?? [];
+      const task = board.find(entry => /zephyrus|qx-880/i.test(entry.title));
+      if (task === undefined) return fail(`no task about the claim on the board (${board.length} tasks)`);
+      // The whole check. An unsourceable claim must not come back as done, and the field
+      // says which — no phrasing involved.
+      if (task.status === "blocked") return pass(`recorded blocked: ${task.history.at(-1)?.note ?? ""}`);
+      return fail(`recorded ${task.status} for a claim with no source`);
+    },
   },
   {
     // The bug: told that "I could not find out" is a real answer, an agent started giving
