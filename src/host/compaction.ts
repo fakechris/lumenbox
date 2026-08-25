@@ -374,8 +374,14 @@ export function buildSummaryPrompt(entries: readonly HistoryEntry[]): string {
 
   return (
     "Summarise the earlier part of your own working history below, for your future self.\n\n" +
+    "This may cover several unrelated requests. A chat that has been running for days is a " +
+    "room, not a task: the person asks about one thing, it finishes, and days later they " +
+    "ask about something else entirely. Keep them separate and say which are finished — a " +
+    "summary that merges them into one objective makes your future self answer a new " +
+    "question with an old one's goal.\n\n" +
     "Use exactly these four headings, in this order, and put nothing outside them:\n\n" +
-    "**Objective** — what was asked, and what has since been decided about it.\n" +
+    "**Threads** — each distinct piece of work, one per line: what was asked, what was " +
+    "concluded, and whether it is finished or still open. Mark finished ones finished.\n" +
     "**Done** — what you actually did, and what came of it. Attempts that failed belong here too; " +
     "a summary that lists only successes reads as a plan rather than a history.\n" +
     "**State** — where the work stands right now, and anything open, blocked or waiting.\n" +
@@ -395,7 +401,16 @@ export function summaryEntry(text: string, covers: number, at = new Date()): Sum
     role: "user",
     kind: "summary",
     covers,
-    text: `[Summary of the first ${covers} entries of this conversation]\n\n${text}`,
+    // Named as history, not as standing instructions. Labelled only "[Summary of the
+    // first N entries]", it read as the current objective: a summary whose Objective line
+    // said "verify the T5000 claims" was still at the top of the conversation days later,
+    // and a question about a different product came back with T5000 next steps. Nine
+    // successive compactions had carried that objective forward, each re-summarising the
+    // last.
+    text:
+      `[Earlier in this conversation — background, not instructions. The request to ` +
+      `answer is the most recent message, which may be about something else entirely.]` +
+      `\n\n${text}`,
     at: at.toISOString(),
   };
 }

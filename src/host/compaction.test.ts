@@ -129,7 +129,11 @@ test("the summary prompt asks for state, not narrative", () => {
 test("a summary and a failed summary are both visible in history", () => {
   const summary = summaryEntry("did the thing", 12);
   assert.equal(summary.kind, "summary");
-  assert.match(summary.text, /Summary of the first 12 entries/);
+  // Labelled as background rather than as a standing objective: read as the latter, a
+  // finished piece of work kept steering answers to questions about something else.
+  assert.match(summary.text, /Earlier in this conversation/);
+  assert.match(summary.text, /background, not instructions/);
+  assert.match(summary.text, /most recent message/);
 
   // The failure path is deliberately loud, and tells the model how to treat what it cannot see.
   const dropped = droppedEntry(12, "the summariser returned nothing");
@@ -525,7 +529,10 @@ test("a summary has a shape, so what it left out is visible", () => {
     { role: "user", text: "write the release notes", at: "2026-08-20T10:00:00Z" },
   ]);
 
-  for (const heading of ["**Objective**", "**Done**", "**State**", "**Artifacts**"]) {
+  // `Threads` rather than `Objective`: a chat that has run for days holds several
+  // unrelated requests, and folding them into one objective made a finished piece of work
+  // keep steering answers to questions about something else.
+  for (const heading of ["**Threads**", "**Done**", "**State**", "**Artifacts**"]) {
     assert.ok(prompt.includes(heading), `missing ${heading}`);
   }
   assert.match(prompt, /exactly these four headings/);
@@ -533,6 +540,8 @@ test("a summary has a shape, so what it left out is visible", () => {
   // Paths are the thing most often lost and most expensive to find again.
   assert.match(prompt, /every file you created or changed, by full path/);
   assert.match(prompt, /an empty section is a fact/);
+  assert.match(prompt, /a room, not a task/);
+  assert.match(prompt, /Mark finished ones finished/);
 
   // Failures belong in the history, or the summary reads as a plan rather than a record.
   assert.match(prompt, /Attempts that failed belong here too/);

@@ -731,7 +731,7 @@ test("an oversized history is summarised before the request, and the summary per
     const sent = capture.params[0]!.messages;
     const firstText =
       typeof sent[0]!.content === "string" ? sent[0]!.content : JSON.stringify(sent[0]!.content);
-    assert.match(firstText, /Summary of the first/, "the request opens with the summary");
+    assert.match(firstText, /Earlier in this conversation/, "the request opens with the summary");
     assert.ok(
       JSON.stringify(sent).length < 40_000,
       `the request should be far smaller than the ~80KB history, was ${JSON.stringify(sent).length}`
@@ -1440,7 +1440,7 @@ test("a plan and todo list survive a compaction that replaces the conversation",
 
     // Compaction happened — the history was replaced by a summary that mentions neither.
     const sent = JSON.stringify(params.messages);
-    assert.match(sent, /Summary of the first/, "the conversation was compacted");
+    assert.match(sent, /Earlier in this conversation/, "the conversation was compacted");
     assert.ok(!sent.includes("Ruled out regexes"), "and the summary did not carry the plan");
 
     // And the plan and list are still there, because they were never in the history to lose. This is
