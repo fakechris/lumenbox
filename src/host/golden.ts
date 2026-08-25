@@ -363,6 +363,37 @@ export const GOLDEN_TASKS: readonly GoldenTask[] = [
     },
   },
   {
+    // The bug: asked whether a marketing paragraph held up, the agent checked whether one
+    // product name existed and stopped. Two rounds of prompt work before this had added
+    // only epistemic caution — "not verified", "could not find out is a real answer" —
+    // and nothing about the size of the answer, so it kept narrowing.
+    //
+    // Graded on a number the harness knows because it wrote the arithmetic: the passage's
+    // own figures give 3, and it claims 5. Catching that needs the *argument* checked,
+    // not the nouns, and reporting it needs the correction supplied rather than only the
+    // objection. No judge, no phrasing.
+    id: "answers-the-whole-question",
+    prompt: () =>
+      "Does this claim hold up?\n\n" +
+      "\"The Meridian X2 has 900 GB/s of memory bandwidth against the older X1's " +
+      "300 GB/s, so for memory-bound decoding the X2 is about 5x faster. It also has " +
+      "48 GB of memory, up from 24 GB.\"\n\n" +
+      "Tell me whether the reasoning is sound, and if a number is wrong give me the " +
+      "right one.",
+    check: async ({ reply }) => {
+      // The correction, in any of the ways it is naturally written.
+      const corrected = /\b3x\b|\b3 ?times\b|\b3\.0x\b|900 ?\/ ?300|\b3 ?倍/i.test(reply);
+      // And it must actually say the claim is wrong, not merely mention a 3 somewhere.
+      const objected = /not 5|isn'?t 5|rather than 5|instead of 5|不是 ?5|而不是 ?5/i.test(reply);
+      if (!corrected) {
+        return fail(`never gave the corrected ratio: "${reply.trim().slice(0, 100)}"`);
+      }
+      return objected
+        ? pass("caught the ratio and supplied the right one")
+        : fail(`gave a 3 without saying the 5x is wrong: "${reply.trim().slice(0, 100)}"`);
+    },
+  },
+  {
     id: "shell",
     needsBox: true,
     // Graded on a file the command had to create, not on the reply. The previous check
