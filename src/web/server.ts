@@ -159,6 +159,8 @@ import { HostRunner, hostRunnerConfig } from "../host/host-runner.ts";
 import { ALL_TOOLS } from "../host/orchestrator.ts";
 import { preflight } from "../box/preflight.ts";
 import { rescueMessage, rescueStuck } from "../host/rescue.ts";
+import { Deliveries, deliveriesPath } from "../host/deliveries.ts";
+import { randomUUID } from "node:crypto";
 import { adminRecipients, decideUpgrade, upgradeMessage } from "../host/upgrade.ts";
 import { PRESET_MODELS, providerNames, resolveProvider, testProvider } from "../host/provider.ts";
 import { Principals, roleAtLeast, type Principal, type Role } from "../host/principals.ts";
@@ -274,6 +276,12 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
   };
 
   const provisioner = options.boxProvisioner ?? resolveBoxProvisioner();
+
+  /**
+   * Answers owed to a chat, so one that was earned while the process died still arrives.
+   * See deliveries.ts: the reply itself is never stored, only where it belongs.
+   */
+  const deliveries = new Deliveries(deliveriesPath(agentboxHome()));
 
   /**
    * The channels, once they exist — held with a written type on purpose.
@@ -594,6 +602,19 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
       const conversation = conversationIdFor(chatKey);
       const principal = principals.resolve(identity).id;
       const before = registry.readTranscript(agent.id, conversation).length;
+      // Written before the turn runs, not after it returns. This note is what lets any
+      // later process recover the answer: everything the agent says past `before` in this
+      // conversation is the reply to this request, and the transcript is already durable.
+      const owed = randomUUID();
+      deliveries.open({
+        id: owed,
+        chatKey,
+        conversation,
+        agentId: agent.id,
+        before,
+        identity,
+        at: new Date().toISOString(),
+      });
       broadcast({ type: "prompt", agentId: agent.id, text, userId: principal, conversation });
       // The card's one-line answer to "what is it doing": each tool call as it starts,
       // for this agent in this conversation only. Coarse on purpose — a card is not a
@@ -620,8 +641,17 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
       } finally {
         channelTurnListeners.delete(listener);
       }
-      if (stuck !== undefined) throw new Error(stuck);
-      return orchestrator.replySince(agent.id, before, conversation);
+      if (stuck !== undefined) {
+        // A turn that gave up owes no answer; the card goes red and the board blocked.
+        deliveries.close(owed);
+        throw new Error(stuck);
+      }
+      const reply = orchestrator.replySince(agent.id, before, conversation);
+      // Closed here rather than after the channel's send: the channel is about to deliver
+      // it in this same tick, and a send that fails leaves the message in the outbox
+      // rather than needing this queue as a second retry mechanism.
+      deliveries.close(owed);
+      return reply;
     },
     // Channel requests live on the team board: "t12" means the same thing in the
     // chat's card, the web UI and an agent's prompt. A failure closes as blocked with
@@ -808,27 +838,68 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
   chats = channels;
   channels.start();
 
-  // Work that was in flight when this process last stopped. A channel request is answered
-  // by an awaited promise — finish the card, close the task, deliver the reply — and that
-  // continuation dies with the process, while the turn itself is recovered from the ledger
-  // and runs to completion. So the agent does the work and the person watches a card that
-  // says "Working" for ever. Nothing in memory can find that; the board can.
+  // Answers that were owed when this process last stopped.
   //
-  // Deliberately not re-run: the work may well have finished, and repeating a turn that
-  // already sent an email is a worse failure than the one being repaired.
-  if (orchestrator.tasks !== undefined) {
-    // Nothing is running yet at this point in startup, so no conversation is live.
-    const rescued = rescueStuck(orchestrator.tasks, new Set());
-    for (const stuck of rescued) {
-      log(`rescued ${stuck.task.id}: ${stuck.task.title}`);
-      const message = rescueMessage(stuck);
-      broadcast({ type: "error", message });
-      if (stuck.conversation?.startsWith("feishu-") === true || stuck.requester !== undefined) {
-        // Told where it was asked for, which is the only place the person is looking.
-        void channels.pushToChat(stuck.conversation ?? "", message).catch(() => {});
+  // A channel request is answered by an awaited promise, and that promise is the only
+  // thing that knows where the answer goes. It dies with the process — while the turn is
+  // recovered from the ledger and runs to completion, so the work is done, the money is
+  // spent, and the reply is delivered nowhere. Observed: t12 sat in `doing` with its turn
+  // finished half an hour earlier and its answer sitting unread in the transcript.
+  //
+  // Nothing about the reply was stored. It is recovered the same way the live path builds
+  // it — everything the agent said past the recorded index — because the transcript is
+  // already durable and the promise was never where the answer lived.
+  void (async () => {
+    for (const owed of deliveries.pending()) {
+      let reply = "";
+      try {
+        reply = orchestrator.replySince(owed.agentId, owed.before, owed.conversation).trim();
+      } catch {
+        // A transcript that cannot be read is a delivery that cannot be recovered; it
+        // falls through to the rescue below rather than holding up the others.
+      }
+      if (reply === "") continue;
+      log(`delivering an answer owed since ${owed.at} to ${owed.chatKey}`);
+      const late =
+        `This finished while I was restarting, so it is arriving late:\n\n${reply}`;
+      try {
+        await channels.pushToChat(owed.chatKey, late);
+        // Found by conversation rather than carried on the record: the board entry and the
+        // delivery note are made by two different callbacks and neither sees the other's
+        // id. Closing it matters — the rescue below would otherwise reopen a task whose
+        // answer was just handed over, and ask the person to request it again.
+        const answered = orchestrator.tasks
+          ?.list()
+          .find(task => task.status === "doing" && task.conversation === owed.conversation);
+        if (answered !== undefined) {
+          orchestrator.tasks?.update(
+            answered.id,
+            { status: "done", note: "answered after a restart" },
+            "restart"
+          );
+        }
+        deliveries.close(owed.id);
+      } catch {
+        // Left owed, so the next start tries again. A delivery that is dropped because
+        // the chat was briefly unreachable is the bug this exists to fix.
       }
     }
-  }
+
+    // Whatever is still owed had no answer to recover — the turn never got far enough.
+    // Those are the ones the person has to be told about, because there is nothing to
+    // hand over and re-running may repeat work that already had effects.
+    if (orchestrator.tasks !== undefined) {
+      const rescued = rescueStuck(orchestrator.tasks, new Set());
+      for (const stuck of rescued) {
+        log(`rescued ${stuck.task.id}: ${stuck.task.title}`);
+        const message = rescueMessage(stuck);
+        broadcast({ type: "error", message });
+        if (stuck.conversation !== undefined) {
+          void channels.pushToChat(stuck.conversation, message).catch(() => {});
+        }
+      }
+    }
+  })();
 
   // The standing digests: checked a few times an hour, sent once per chat per day.
   // The sent-marker is in memory, so the one failure mode is a duplicate digest after
