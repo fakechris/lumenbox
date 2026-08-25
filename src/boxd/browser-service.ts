@@ -56,6 +56,8 @@ const NAVIGATION_GRACE_MS = 500;
 /** How long to keep waiting for a script-rendered page to stop growing. */
 const CONTENT_SETTLE_MAX_MS = 6_000;
 const CONTENT_POLL_MS = 400;
+/** How many identical empty samples mean "this page has no text at all", not "not yet". */
+const EMPTY_SETTLE_SAMPLES = 3;
 
 /** How long to wait for a browser we started to become drivable. */
 const BROWSER_START_TIMEOUT_MS = 30_000;
@@ -167,6 +169,7 @@ class BrowserPage {
   private readonly contexts = new Map<string, number>();
   private frames: FrameContext[] = [];
   private lastDialog: string | undefined;
+  lastDownload: string | undefined;
   private loaded = false;
   private navigating = false;
   private mainFrameId: string | undefined;
@@ -196,6 +199,13 @@ class BrowserPage {
     session.on("Page.loadEventFired", () => {
       page.loaded = true;
       page.navigating = false;
+    });
+    // The events fire whether or not anyone is listening, so a download used to produce
+    // no navigation, no DOM change, an identical snapshot and no note — and the agent,
+    // reasonably concluding the click did nothing, clicked again.
+    session.on("Page.downloadWillBegin", params => {
+      const name = String(params.suggestedFilename ?? "a file");
+      page.lastDownload = `The page started downloading ${name}. It is going to the browser's download directory, and your file tools can read it once it has finished.`;
     });
     session.on("Page.javascriptDialogOpening", params => {
       void page.answerDialog(params as { message?: string; type?: string });
@@ -274,6 +284,7 @@ class BrowserPage {
   private async waitForContent(): Promise<void> {
     const deadline = Date.now() + CONTENT_SETTLE_MAX_MS;
     let previous = -1;
+    let samples = 0;
     while (Date.now() < deadline) {
       let size = 0;
       try {
@@ -285,9 +296,13 @@ class BrowserPage {
       } catch {
         return;
       }
-      // Stable, and actually has something on it. A page that is genuinely empty would
-      // otherwise settle instantly at zero and learn nothing.
-      if (size > 0 && size === previous) return;
+      samples += 1;
+      // Stable *and* has something on it — a page mid-load is briefly empty, and settling
+      // instantly at zero would learn nothing. But a viewer page (a PDF, an image) has an
+      // empty body for ever, so an empty page that has stayed empty for a few samples has
+      // told us what it is going to tell us; without this it burned the whole budget on
+      // every PDF.
+      if (size === previous && (size > 0 || samples >= EMPTY_SETTLE_SAMPLES)) return;
       previous = size;
       await new Promise(resolve => setTimeout(resolve, CONTENT_POLL_MS));
     }
@@ -346,14 +361,44 @@ class BrowserPage {
       }
     }
     const info = (await this.session.send("Runtime.evaluate", {
-      expression: "JSON.stringify({url: location.href, title: document.title})",
+      expression:
+        "JSON.stringify({url: location.href, title: document.title, type: document.contentType," +
+        " y: Math.round(scrollY), h: Math.round(document.documentElement.scrollHeight)," +
+        " v: Math.round(innerHeight)})",
       returnByValue: true,
     })) as { result?: { value?: string } };
     const parsed = JSON.parse(info.result?.value ?? '{"url":"","title":""}') as {
       url: string;
       title: string;
+      type?: string;
+      y?: number;
+      h?: number;
+      v?: number;
     };
-    return { text: parts.join("\n") || "(the page has nothing to act on)", ...parsed };
+
+    // A PDF, an image or a video renders in a viewer with an empty body, so the outline
+    // is empty and the honest-looking answer — "nothing to act on" — reads as "this page
+    // is blank". Naming what it actually is stops the agent reasoning about an absence.
+    if (parsed.type !== undefined && !/html|xml/i.test(parsed.type) && parts.length === 0) {
+      return {
+        text: `(this is ${parsed.type}, not a web page — the browser is displaying it in a viewer, so there is nothing to act on. Download it and read it with your file tools instead.)`,
+        url: parsed.url,
+        title: parsed.title,
+      };
+    }
+
+    // Where we are in the page, which the outline alone cannot say. Without it, a feed
+    // longer than the node cap returns a byte-identical outline after every scroll, and
+    // the agent correctly concludes nothing more is loading — which is false.
+    const position =
+      parsed.h !== undefined && parsed.v !== undefined && parsed.h > parsed.v + 4
+        ? `(showing ${parsed.y}–${(parsed.y ?? 0) + parsed.v} of ${parsed.h} pixels; scroll for more)\n`
+        : "";
+    return {
+      text: position + (parts.join("\n") || "(the page has nothing to act on)"),
+      url: parsed.url,
+      title: parsed.title,
+    };
   }
 
   /** Turns a ref back into a live element handle, in whichever frame owns it. */
@@ -408,6 +453,36 @@ class BrowserPage {
   async click(ref: string): Promise<void> {
     const objectId = await this.resolve(ref);
     const { x, y } = await this.centreOf(objectId);
+
+    // What is actually on top at that point. A cookie wall or a modal changes none of the
+    // things visibility is tested on — it is not hidden, the element under it still has a
+    // box — so the click dispatches at real coordinates and the overlay receives it, with
+    // nothing anywhere reporting the difference. This is the failure behind every "the
+    // agent kept clicking and nothing happened" on a consent-walled site.
+    //
+    // Main frame only: the box model is in page coordinates while elementFromPoint inside
+    // a frame is in that frame's, and a wrong comparison would refuse valid clicks.
+    if (!ref.includes("@")) {
+      const covered = (await this.session.send("Runtime.callFunctionOn", {
+        objectId,
+        arguments: [{ value: x }, { value: y }],
+        returnByValue: true,
+        functionDeclaration:
+          "function(x, y){ const hit = document.elementFromPoint(x, y);" +
+          " if (!hit || hit === this || this.contains(hit) || hit.contains(this)) return '';" +
+          " const name = hit.tagName.toLowerCase() + (hit.id ? '#' + hit.id : '');" +
+          " return name + ' ' + (hit.textContent || '').replace(/\\s+/g, ' ').trim().slice(0, 60); }",
+      })) as { result?: { value?: string } };
+      const blocker = covered.result?.value ?? "";
+      if (blocker !== "") {
+        throw new CdpError(
+          `That click would land on "${blocker}" instead — something is covering the ` +
+            `element. Deal with what is on top first (a cookie banner, a modal, a sticky ` +
+            `header), then try again.`
+        );
+      }
+    }
+
     this.loaded = false;
     // A real mouse event rather than element.click(), so hover states, focus and handlers
     // that check for a trusted-looking event all behave as they do for a person.
@@ -574,7 +649,15 @@ class BrowserPage {
     const { text, url, title } = await this.snapshot();
     const dialog = this.lastDialog;
     this.lastDialog = undefined;
-    return { url, title, snapshot: text, ...(dialog !== undefined ? { dialog } : {}) };
+    const download = this.lastDownload;
+    this.lastDownload = undefined;
+    return {
+      url,
+      title,
+      snapshot: text,
+      ...(dialog !== undefined ? { dialog } : {}),
+      ...(download !== undefined ? { note: download } : {}),
+    };
   }
 
   close(): void {

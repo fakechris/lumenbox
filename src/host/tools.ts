@@ -1758,7 +1758,26 @@ export async function dispatchTool(
       } catch (error) {
         // A browser error is nearly always actionable — no browser running, a stale ref,
         // an element with no position — so it goes back as text rather than as a throw.
-        return { text: error instanceof Error ? error.message : String(error), isError: true };
+        const message = error instanceof Error ? error.message : String(error);
+        // With the page, not on its own. An agent told only "that ref is stale" has to
+        // guess what to do; an agent shown the page can see what happened instead. This
+        // is the reasoning `browser_wait_for` already used for its timeout, applied to
+        // every failure rather than the one.
+        try {
+          const now = await box.browser({
+            op: "snapshot",
+            ...(context.displayIndex !== undefined ? { display: context.displayIndex } : {}),
+            ...(context.boxOwner !== undefined ? { owner: context.boxOwner } : {}),
+          });
+          return {
+            text: `${message}\n\nThe page as it stands: ${now.title || "(untitled)"} — ${now.url}\n\n${now.snapshot}`,
+            isError: true,
+          };
+        } catch {
+          // The snapshot failing too means the browser is the problem, and the original
+          // message already says so.
+          return { text: message, isError: true };
+        }
       }
     }
 

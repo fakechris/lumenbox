@@ -70,7 +70,7 @@ const serving = (pages: Record<string, { status?: number; type?: string; body?: 
         ...(page.to !== undefined ? { location: page.to } : {}),
         "content-type": page.type ?? "text/html",
       },
-      body: page.body ?? "",
+      body: Buffer.from(page.body ?? ""),
       truncated: false,
     };
   };
@@ -168,7 +168,7 @@ test("a block page is a failure, not an empty answer", async () => {
     fetchPage("https://example.test/s", async () => ({
       status: 200,
       headers: { "content-type": "text/html" },
-      body: google,
+      body: Buffer.from(google),
       truncated: false,
     })),
     /block or consent screen/
@@ -178,7 +178,7 @@ test("a block page is a failure, not an empty answer", async () => {
     fetchPage("https://example.test/s", async () => ({
       status: 200,
       headers: { "content-type": "text/html" },
-      body: google,
+      body: Buffer.from(google),
       truncated: false,
     })),
     /browser_open/
@@ -211,7 +211,7 @@ test("a status code is never handed over bare, because it gets reasoned from", a
     fetchPage("https://example.test/x", async () => ({
       status: code,
       headers: {},
-      body: "",
+      body: Buffer.from(""),
       truncated: false,
     }));
   // An agent read a 401 as proof a repository existed and was merely private, and built

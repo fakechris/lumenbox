@@ -130,8 +130,49 @@ const guardedLookup: LookupFunction = (hostname, options, callback) => {
 interface RawResponse {
   status: number;
   headers: Record<string, string | string[] | undefined>;
-  body: string;
+  /** Undecoded on purpose: which decoder to use is decided from the headers and the bytes. */
+  body: Buffer;
   truncated: boolean;
+}
+
+/**
+ * Content types worth turning into text. Everything else is refused by name.
+ *
+ * Because the alternative is what happened: fetching a PDF returned forty thousand
+ * characters containing seventeen thousand replacement characters, with a confident
+ * `Source:` header on top, and no error. The model cannot tell that from a badly written
+ * page. Refusing is not a limitation here — it is the only honest answer available, and
+ * it tells the agent to go and get the thing another way.
+ */
+const READABLE_TYPES = /^(?:text\/|application\/(?:json|xml|xhtml|javascript|x-ndjson|ld\+json))/i;
+
+/**
+ * How the bytes should be read.
+ *
+ * A page served as GBK or Big5 decoded as UTF-8 is not an error — it is eight replacement
+ * characters where "中文测试" was, with HTTP 200 and no warning. Both the header and the
+ * document declare the encoding and both were being ignored, which for a product used
+ * from Feishu is not a hypothetical.
+ */
+export function charsetOf(contentType: string, head: Buffer): string {
+  const declared = /charset=["']?([\w-]+)/i.exec(contentType)?.[1];
+  if (declared !== undefined) return declared.toLowerCase();
+  // Sniffed from the document when the header is silent, which is common. Latin-1 is safe
+  // for the sniff itself: every encoding this looks for is ASCII-compatible in its tags.
+  const sniffed = /<meta[^>]+charset=["']?([\w-]+)/i.exec(head.toString("latin1").slice(0, 2048));
+  return (sniffed?.[1] ?? "utf-8").toLowerCase();
+}
+
+function decodeBody(body: Buffer, contentType: string): string {
+  const charset = charsetOf(contentType, body);
+  if (charset === "utf-8" || charset === "utf8") return body.toString("utf8");
+  try {
+    // Node's TextDecoder speaks gbk, big5, shift_jis and the iso-8859 family already.
+    return new TextDecoder(charset).decode(body);
+  } catch {
+    // An encoding Node does not know is better read as UTF-8 than not at all.
+    return body.toString("utf8");
+  }
 }
 
 /** One request, no redirect following, body capped. */
@@ -174,7 +215,7 @@ function requestOnce(target: URL): Promise<RawResponse> {
           resolve({
             status: response.statusCode ?? 0,
             headers: response.headers,
-            body: Buffer.concat(chunks).toString("utf8"),
+            body: Buffer.concat(chunks),
             truncated,
           });
         response.on("end", finish);
@@ -322,8 +363,20 @@ export async function fetchPage(
     }
 
     const type = String(response.headers["content-type"] ?? "");
-    const isHtml = type.includes("html") || (type === "" && /^\s*</.test(response.body));
-    const extracted = isHtml ? htmlToText(response.body) : { text: response.body };
+    // Checked before anything decodes it. A PDF read as text is not a degraded read, it
+    // is noise that looks like content.
+    const kind = type.split(";")[0]?.trim() ?? "";
+    if (kind !== "" && !READABLE_TYPES.test(kind)) {
+      throw new WebError(
+        `${target} is ${kind}, which is not something this reads as text. Save it with a ` +
+          `shell command if you need the file itself, or open it with browser_open if the ` +
+          `browser can display it.`
+      );
+    }
+
+    const decoded = decodeBody(response.body, type);
+    const isHtml = type.includes("html") || (kind === "" && /^\s*</.test(decoded));
+    const extracted = isHtml ? htmlToText(decoded) : { text: decoded };
     // Checked before returning, so a block page never reaches the model looking like
     // content. Raised as an error because that is what it is — the page was not read.
     const blocked = blockedBy(extracted.text);
