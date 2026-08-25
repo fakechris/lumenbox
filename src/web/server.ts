@@ -158,6 +158,7 @@ import { TelegramChannel } from "../channels/telegram.ts";
 import { HostRunner, hostRunnerConfig } from "../host/host-runner.ts";
 import { ALL_TOOLS } from "../host/orchestrator.ts";
 import { preflight } from "../box/preflight.ts";
+import { rescueMessage, rescueStuck } from "../host/rescue.ts";
 import { adminRecipients, decideUpgrade, upgradeMessage } from "../host/upgrade.ts";
 import { PRESET_MODELS, providerNames, resolveProvider, testProvider } from "../host/provider.ts";
 import { Principals, roleAtLeast, type Principal, type Role } from "../host/principals.ts";
@@ -806,6 +807,28 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
   }
   chats = channels;
   channels.start();
+
+  // Work that was in flight when this process last stopped. A channel request is answered
+  // by an awaited promise — finish the card, close the task, deliver the reply — and that
+  // continuation dies with the process, while the turn itself is recovered from the ledger
+  // and runs to completion. So the agent does the work and the person watches a card that
+  // says "Working" for ever. Nothing in memory can find that; the board can.
+  //
+  // Deliberately not re-run: the work may well have finished, and repeating a turn that
+  // already sent an email is a worse failure than the one being repaired.
+  if (orchestrator.tasks !== undefined) {
+    // Nothing is running yet at this point in startup, so no conversation is live.
+    const rescued = rescueStuck(orchestrator.tasks, new Set());
+    for (const stuck of rescued) {
+      log(`rescued ${stuck.task.id}: ${stuck.task.title}`);
+      const message = rescueMessage(stuck);
+      broadcast({ type: "error", message });
+      if (stuck.conversation?.startsWith("feishu-") === true || stuck.requester !== undefined) {
+        // Told where it was asked for, which is the only place the person is looking.
+        void channels.pushToChat(stuck.conversation ?? "", message).catch(() => {});
+      }
+    }
+  }
 
   // The standing digests: checked a few times an hour, sent once per chat per day.
   // The sent-marker is in memory, so the one failure mode is a duplicate digest after
