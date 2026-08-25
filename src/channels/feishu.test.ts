@@ -197,9 +197,20 @@ test("a thread is the conversation; a direct chat still is", () => {
     adapter as unknown as { conversationKeyFor: (m: Record<string, string>) => string }
   ).conversationKeyFor.bind(adapter);
 
-  // A topic reply and a reply chain both name their own subject.
-  assert.equal(key({ chat_id: "oc_1", thread_id: "omt_9", message_id: "om_a" }), "feishu:oc_1:omt_9");
-  assert.equal(key({ chat_id: "oc_1", root_id: "om_root", message_id: "om_b" }), "feishu:oc_1:om_root");
+  // The case that matters, taken from the ledger. A chain's opening message carries
+  // neither field and is keyed on its own id; its replies carry `root_id` equal to that
+  // id and a `thread_id` that is something else entirely. Keying on `thread_id` put the
+  // question in one conversation and every answer in another.
+  const opening = key({ chat_id: "oc_1", chat_type: "group", message_id: "om_root" });
+  const reply = key({
+    chat_id: "oc_1",
+    chat_type: "group",
+    message_id: "om_b",
+    root_id: "om_root",
+    thread_id: "omt_minted_later",
+  });
+  assert.equal(opening, "feishu:oc_1:om_root");
+  assert.equal(reply, opening, "a reply must land in the conversation it answers");
 
   // A new top-level message in a group is a new subject. Keying it on the room is what
   // made one room one endless conversation, and a finished topic keep steering new ones.
@@ -212,10 +223,10 @@ test("a thread is the conversation; a direct chat still is", () => {
   // would throw away every follow-up the person makes.
   assert.equal(key({ chat_id: "oc_2", chat_type: "p2p", message_id: "om_d" }), "feishu:oc_2");
 
-  // Two messages in the same thread share a conversation; two new topics do not.
+  // Two replies to the same opening share a conversation; two new topics do not.
   assert.equal(
-    key({ chat_id: "oc_1", thread_id: "omt_9", message_id: "om_e" }),
-    key({ chat_id: "oc_1", thread_id: "omt_9", message_id: "om_f" })
+    key({ chat_id: "oc_1", chat_type: "group", message_id: "om_e", root_id: "om_root" }),
+    key({ chat_id: "oc_1", chat_type: "group", message_id: "om_f", root_id: "om_root" })
   );
   assert.notEqual(
     key({ chat_id: "oc_1", chat_type: "group", message_id: "om_g" }),

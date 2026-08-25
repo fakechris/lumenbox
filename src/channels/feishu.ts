@@ -349,8 +349,20 @@ export class FeishuChannel implements ChannelAdapter {
     chat_type?: string;
   }): string {
     const chatId = message.chat_id ?? "";
-    const thread = message.thread_id ?? message.root_id;
-    if (thread !== undefined && thread !== "") return `feishu:${chatId}:${thread}`;
+    // `root_id`, deliberately not `thread_id`. The root of a chain *is* the first message,
+    // so `root_id` equals that message's own id and the opening message and its replies
+    // agree. `thread_id` is a separate identifier Feishu mints when the first reply
+    // arrives, which the opening message never carries — so preferring it split every
+    // topic in two: the question in one conversation and every answer in another, and the
+    // agent never saw how the subject began.
+    //
+    // Verified against the ledger: a root arrived with neither field and was keyed on its
+    // own id; its replies carried `root_id` equal to that id and `thread_id` equal to
+    // something else entirely.
+    const root = message.root_id;
+    if (root !== undefined && root !== "") return `feishu:${chatId}:${root}`;
+    // A direct chat is its own subject, and keying per message there would discard every
+    // follow-up somebody makes.
     if (message.chat_type === "p2p") return `feishu:${chatId}`;
     return message.message_id !== undefined
       ? `feishu:${chatId}:${message.message_id}`
