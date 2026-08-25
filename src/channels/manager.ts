@@ -304,6 +304,8 @@ export interface ChannelManagerDeps {
       senderLabel: string;
       agentName?: string;
       chatKey: string;
+      /** Which conversation the work happens in, when that is not the chat itself. */
+      threadKey?: string;
     }) => string | undefined;
     /** Where a person can watch this task work, when this installation is reachable. */
     urlFor?: (taskId: string) => string | undefined;
@@ -864,6 +866,12 @@ ${input.options.map(option => `· ${option}`).join("\n")}`
       senderLabel: message.senderLabel,
       ...(agentName !== undefined ? { agentName } : {}),
       chatKey,
+      // The conversation the turn will actually run in. Without it the board recorded the
+      // room while the transcript went to the thread, so every channel task named a
+      // conversation that was empty — and an audit, whose whole job is to read a task's
+      // evidence, was pointed at the wrong file. Found by adversarial review, not by use:
+      // a task with the wrong conversation looks exactly like a task with a quiet one.
+      threadKey: message.threadKey ?? chatKey,
     });
     const card: TaskCardState = {
       title: firstLine(text),

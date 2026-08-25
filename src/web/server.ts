@@ -719,7 +719,7 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
           requester: principals.resolve(input.identity).id,
           ...(assigneeId !== undefined ? { assigneeId } : {}),
           ...(reviewerId !== undefined ? { reviewerId } : {}),
-          conversation: conversationIdFor(input.chatKey),
+          conversation: conversationIdFor(input.threadKey ?? input.chatKey),
         });
         return task?.id;
       },

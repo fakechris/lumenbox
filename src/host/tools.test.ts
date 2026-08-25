@@ -158,3 +158,27 @@ test("the shell refuses to reach around the browser tools, before it needs a box
   assert.ok(screen.isError);
   assert.match(screen.text, /computer/);
 });
+
+test("ReadHistory reads the conversation the agent is in, not the team room", async () => {
+  // It read the default, so an agent working in a bound chat and asking what was said
+  // earlier was handed the *team room's* history — a different room it may never have
+  // been in. Silent, because a wrong history reads exactly like a thin one.
+  const asked: (string | undefined)[] = [];
+  const context = {
+    agent: { id: "a1", profile: { name: "Rex" } },
+    conversation: "feishu-oc_room-om_topic",
+    registry: {
+      tryGet: () => undefined,
+      list: () => [],
+      readTranscript: (_id: string, conversation?: string) => {
+        asked.push(conversation);
+        return [];
+      },
+    },
+    bus: {},
+    box: undefined,
+  } as unknown as Parameters<typeof dispatchTool>[2];
+
+  await dispatchTool("ReadHistory", { search: "anything" }, context);
+  assert.deepEqual(asked, ["feishu-oc_room-om_topic"]);
+});
