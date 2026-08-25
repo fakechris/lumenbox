@@ -14,6 +14,7 @@ import {
   blockedBy,
   fetchPage,
   forbiddenAddress,
+  guardUrl,
   htmlToText,
   isSearchEngine,
   searchWeb,
@@ -227,4 +228,20 @@ test("search engines are named as the wrong tool, not left to fail as a fetch", 
   // A page that merely lives on a search engine's domain is an ordinary page.
   assert.ok(!isSearchEngine("https://www.google.com/about/"));
   assert.ok(!isSearchEngine("https://example.com/search?q=x"));
+});
+
+test("what `file:` means depends on which machine is asking", async () => {
+  // On the host it reads the operator's disk — the one machine an agent is deliberately
+  // not on — so a fetch refuses it.
+  await assert.rejects(guardUrl("file:///etc/passwd"), /not a scheme this opens/);
+  await assert.rejects(guardUrl("data:text/html,<h1>x</h1>"), /not a scheme this opens/);
+
+  // In the box it is the agent's own filesystem, which it can already read and write with
+  // its file tools. Refusing it there only stops it looking at a report it just wrote.
+  const local = await guardUrl("file:///home/box/work/report.html", true);
+  assert.equal(local.protocol, "file:");
+  assert.equal((await guardUrl("data:text/html,<h1>x</h1>", true)).protocol, "data:");
+
+  // The address guard still applies to anything with a host to resolve, either way.
+  await assert.rejects(guardUrl("http://169.254.169.254/latest/", true), /credentials/);
 });

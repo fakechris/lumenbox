@@ -200,16 +200,34 @@ function requestOnce(target: URL): Promise<RawResponse> {
  * connecting the way the fetch path does — but the address an injected instruction names
  * is nearly always a literal, and this refuses those outright.
  */
-export async function guardUrl(rawUrl: string): Promise<URL> {
+export async function guardUrl(
+  rawUrl: string,
+  /**
+   * Whether the caller runs inside the box.
+   *
+   * It decides what `file:` means, and the two answers are opposite. For a fetch made on
+   * the host, `file:` reads the operator's own disk — the one machine an agent is
+   * deliberately not on — so it is refused. For the browser, which runs in the box,
+   * `file:` is the box's own filesystem: the agent can already read and write every one
+   * of those files with its file tools, so refusing it only stops it from *looking* at an
+   * HTML report it just wrote, which is an ordinary thing to want.
+   */
+  local = false
+): Promise<URL> {
   let target: URL;
   try {
     target = new URL(rawUrl);
   } catch {
     throw new WebError(`${rawUrl} is not a URL. It needs a scheme, like https://example.com.`);
   }
-  if (target.protocol !== "http:" && target.protocol !== "https:") {
-    throw new WebError(`${target.protocol} is not a scheme this opens; use http or https.`);
+  const localSchemes = local && (target.protocol === "file:" || target.protocol === "data:");
+  if (!localSchemes && target.protocol !== "http:" && target.protocol !== "https:") {
+    throw new WebError(
+      `${target.protocol} is not a scheme this opens; use http or https${local ? ", file, or data" : ""}.`
+    );
   }
+  // Nothing below applies to a scheme with no host to resolve.
+  if (localSchemes) return target;
   const literal = target.hostname.replace(/^\[|\]$/g, "");
   if (isIP(literal) !== 0) {
     const reason = forbiddenAddress(literal);

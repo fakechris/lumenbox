@@ -1709,9 +1709,11 @@ export async function dispatchTool(
       };
       if (name === "browser_open") {
         try {
-          // The same check WebFetch makes, for the same reason: the URL an agent is
-          // asked to open is often one it read on a page written by somebody else.
-          const target = await guardUrl(String(input.url ?? ""));
+          // The same address check WebFetch makes, for the same reason: the URL an agent
+          // is asked to open is often one it read on a page written by somebody else.
+          // `local` because this browser runs in the box, where file: is the agent's own
+          // work directory rather than the operator's disk.
+          const target = await guardUrl(String(input.url ?? ""), true);
           request.url = target.toString();
         } catch (error) {
           return {

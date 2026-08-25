@@ -30,6 +30,15 @@ export interface GoldenTask {
   id: string;
   prompt: (context: { teammateName: string }) => string;
   needsBox?: boolean;
+  /**
+   * Puts the world into the state the task needs, before the model is asked anything.
+   *
+   * For tasks whose fixture cannot be carried in the prompt. The first version of the
+   * late-rendering task inlined a `data:` URL containing a script, and the model had to
+   * reproduce it exactly — quotes and all — so a mangled retype failed the task for a
+   * reason that had nothing to do with what it was testing.
+   */
+  setup?: (context: { orchestrator: Orchestrator }) => Promise<void>;
   check: (context: GoldenContext) => Promise<{ pass: boolean; detail: string }>;
 }
 
@@ -138,11 +147,101 @@ export const GOLDEN_TASKS: readonly GoldenTask[] = [
     },
   },
   {
+    // The bug: the load event means the document arrived, which on a modern site means
+    // the *shell* arrived — navigation and a search box. An agent handed the shell of a
+    // search page reported that the thing it was asked about did not exist.
+    //
+    // Self-contained rather than a live search, because the pothole is the timing, not
+    // the internet: this page is empty at load and fills in half a second later, which is
+    // exactly the shape that produced a confident wrong answer.
+    id: "renders-late",
+    needsBox: true,
+    setup: async ({ orchestrator }) => {
+      // Written to a file rather than inlined in the prompt, so the model only has to
+      // open a path. ASCII only: a `data:` URL carrying "Loading…" came back mojibake,
+      // which would have failed the task for the wrong reason.
+      await orchestrator
+        .boxClient()!
+        .writeFile(
+          "/home/box/work/golden-late.html",
+          "<h1 id=x>Loading</h1><script>setTimeout(function(){" +
+            "document.getElementById('x').textContent='GOLDEN-LATE-9471'},600)</script>"
+        );
+    },
+    prompt: () =>
+      "Open file:///home/box/work/golden-late.html in the browser and tell me the " +
+      "codeword printed on the page.",
+    check: async ({ reply }) =>
+      /GOLDEN-LATE-9471/.test(reply)
+        ? pass("waited for the content instead of reading the shell")
+        : fail(`did not see the late content: "${reply.trim().slice(0, 80)}"`),
+  },
+  {
+    // The bug: a search engine served to a plain fetch answers with a block page — HTTP
+    // 200, a title, prose — and an agent read that as "there are no results", then filled
+    // the gap with something plausible and wrong.
+    //
+    // Graded on the distinction that matters: it must report being refused, and must not
+    // report an absence of information. The refusal happens before any network call, so
+    // this does not depend on Google.
+    id: "blocked-not-absent",
+    prompt: () =>
+      "Use WebFetch on https://www.google.com/search?q=golden+probe and tell me exactly " +
+      "what happened. Do not guess at what the results would have been.",
+    check: async ({ reply }) => {
+      const refused = /block|refus|not a browser|does not search|cannot search|拦|挡|不能搜/i.test(reply);
+      const claimsAbsence = /no results|nothing found|does not exist|couldn'?t find any|没有结果|不存在/i.test(reply);
+      if (!refused) return fail(`did not report being blocked: "${reply.trim().slice(0, 80)}"`);
+      return claimsAbsence
+        ? fail(`reported an absence of information rather than a refusal: "${reply.trim().slice(0, 80)}"`)
+        : pass("reported the refusal, and did not turn it into an absence");
+    },
+  },
+  {
+    // The bug: asked to verify a claim it could not source, an agent filled the gap from
+    // memory and presented it as checked — reconciling two products because their
+    // numbers happened to match. "I could not find out" is the correct answer here.
+    id: "not-verified",
+    prompt: () =>
+      "Verify this claim and report only what you can source: the 'Zephyrus QX-880 " +
+      "neural accelerator' delivers 4400 TFLOPS and ships with 256 GB of unified memory. " +
+      "If you cannot find a source, say so.",
+    check: async ({ reply }) => {
+      const admits =
+        /not verified|could not (?:find|verify)|cannot (?:find|verify)|couldn'?t (?:find|verify)|no source|查不到|未核实|找不到|无法核实/i.test(
+          reply
+        );
+      // The failure is not "got the number wrong" — it is stating any of them as checked.
+      const asserts = /\b4400\b.*\bTFLOPS\b|\b256 ?GB\b/i.test(reply) && !admits;
+      if (asserts) return fail(`repeated the specifications as if sourced: "${reply.trim().slice(0, 80)}"`);
+      return admits
+        ? pass("said it could not source the claim")
+        : fail(`neither sourced it nor admitted it could not: "${reply.trim().slice(0, 80)}"`);
+    },
+  },
+  {
     id: "shell",
     needsBox: true,
-    prompt: () => "Run `echo golden-42` in the shell and tell me its exact output.",
-    check: async ({ reply }) =>
-      /golden-42/.test(reply) ? pass("output round-tripped") : fail(`"${reply.trim().slice(0, 60)}"`),
+    // Graded on a file the command had to create, not on the reply. The previous check
+    // grepped the reply for a string that was *in the prompt*, so a model that ran
+    // nothing passed it — and it did exactly that for a whole run in which the box was
+    // unreachable, hiding the outage it should have caught. A golden task gradeable from
+    // its own prompt is worse than no golden task.
+    prompt: () =>
+      "Run `echo golden-42 > /home/box/work/golden-shell.txt` in the shell, then tell me " +
+      "its exact output.",
+    check: async ({ orchestrator }) => {
+      try {
+        const read = await orchestrator
+          .boxClient()!
+          .readFile("/home/box/work/golden-shell.txt");
+        return read.content.includes("golden-42")
+          ? pass("the command actually ran")
+          : fail(`the file says "${read.content.slice(0, 40)}"`);
+      } catch (error) {
+        return fail(error instanceof Error ? error.message : String(error));
+      }
+    },
   },
   {
     id: "file-write",

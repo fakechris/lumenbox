@@ -21,6 +21,7 @@ import { describeControlPlane, startControlPlane } from "./control/main.ts";
 import { STARTER_TEAM } from "./host/orchestrator.ts";
 import { backupNow, backupRoot } from "./host/backup.ts";
 import { describePreflight, isQuiet, preflight, verifyBox } from "./box/preflight.ts";
+import { DockerBoxProvisioner } from "./box/provisioner.ts";
 import { decideUpgrade } from "./host/upgrade.ts";
 import { AgentRegistry, defaultAgentsRoot } from "./agents/registry.ts";
 import { startEgressRelay } from "./egress/relay.ts";
@@ -1097,10 +1098,22 @@ async function main(): Promise<number> {
           anyFail = true;
           continue;
         }
+        // Resolved before AGENTBOX_HOME moves. The box's token lives in the real home,
+        // and a golden run pointed at a fresh temp home was minting a *new* one — so
+        // every authenticated box route answered 401 while `GET /health` (which is
+        // deliberately unauthenticated, for container health checks) still said the box
+        // was ready. The run looked fine and could not touch the box at all.
+        const boxProvisioner = withBox ? new DockerBoxProvisioner(defaultBoxConfig()) : undefined;
+
         const home = mkdtempSync(join(tmpdir(), "agentbox-golden-"));
         process.env.AGENTBOX_HOME = home;
         const registry = new AgentRegistry(join(home, "agents"));
-        const orchestrator = new Orchestrator({ registry, provider: profile, useBox: withBox });
+        const orchestrator = new Orchestrator({
+          registry,
+          provider: profile,
+          useBox: withBox,
+          ...(boxProvisioner !== undefined ? { boxProvisioner } : {}),
+        });
         if (withBox) out(dim((await orchestrator.connectBox()).detail));
         const gold = registry.create({
           name: "Gold",
@@ -1126,6 +1139,7 @@ async function main(): Promise<number> {
           }
           const started = Date.now();
           try {
+            await task.setup?.({ orchestrator });
             const before = registry.readTranscript(gold.id).length;
             await orchestrator.prompt(gold.id, task.prompt({ teammateName: "Silver" }));
             await orchestrator.settle();
