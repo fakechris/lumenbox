@@ -44,6 +44,17 @@ export interface Arrival {
   /** The wire's own type, since being an unhandled one is a real reason to disappear. */
   kind: string;
   chars: number;
+  /**
+   * The platform's own idea of which conversation this belongs to, when it has one.
+   *
+   * Recorded but not yet used. A conversation here is keyed on the chat alone, so a room
+   * running for days is one unbounded history and a finished topic keeps steering new
+   * questions. Whether to key on the thread instead is a decision with visible
+   * consequences, so the evidence is collected before it is taken.
+   */
+  threadId?: string;
+  rootId?: string;
+  chatType?: string;
   at: string;
 }
 

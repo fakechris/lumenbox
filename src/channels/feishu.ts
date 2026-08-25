@@ -407,6 +407,19 @@ export class FeishuChannel implements ChannelAdapter {
           message_type?: string;
           content?: string;
           mentions?: unknown[];
+          /**
+           * Which topic or reply chain this belongs to.
+           *
+           * Feishu has sent these all along — its own SDK types declare them — and we
+           * read none of them, so every message in a group landed in one unbounded
+           * conversation. Recorded before deciding anything, so the choice of what to key
+           * a conversation on is made against how this installation is actually used
+           * rather than against a guess.
+           */
+          thread_id?: string;
+          root_id?: string;
+          parent_id?: string;
+          chat_type?: string;
         };
       }) => {
         const openId = data.sender?.sender_id?.open_id ?? "unknown";
@@ -426,6 +439,9 @@ export class FeishuChannel implements ChannelAdapter {
             chatKey: `feishu:${chatId}`,
             kind: messageType ?? "unknown",
             chars: String(data.message?.content ?? "").length,
+            ...(data.message?.thread_id !== undefined ? { threadId: data.message.thread_id } : {}),
+            ...(data.message?.root_id !== undefined ? { rootId: data.message.root_id } : {}),
+            ...(data.message?.chat_type !== undefined ? { chatType: data.message.chat_type } : {}),
             at: new Date().toISOString(),
           });
         }
