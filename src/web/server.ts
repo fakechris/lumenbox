@@ -160,6 +160,7 @@ import { ALL_TOOLS } from "../host/orchestrator.ts";
 import { preflight } from "../box/preflight.ts";
 import { rescueMessage, rescueStuck } from "../host/rescue.ts";
 import { Deliveries, deliveriesPath } from "../host/deliveries.ts";
+import { Ingress, ingressPath } from "../channels/ingress.ts";
 import { randomUUID } from "node:crypto";
 import { adminRecipients, decideUpgrade, upgradeMessage } from "../host/upgrade.ts";
 import { PRESET_MODELS, providerNames, resolveProvider, testProvider } from "../host/provider.ts";
@@ -487,7 +488,14 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
     return lines.join("\n");
   };
 
+  /**
+   * Every arrival from outside, and what became of it. See ingress.ts: a message that
+   * arrived and went nowhere used to leave the same trace as one that never arrived.
+   */
+  const ingress = new Ingress(ingressPath(agentboxHome()));
+
   const channels = new ChannelManager({
+    ingress,
     mayDrive: identity => roleAtLeast(principals.roleOf(identity), "driver"),
     mayAdmin: identity => roleAtLeast(principals.roleOf(identity), "admin"),
     // One scope per chat: binding moves the chat, it does not accumulate. The scope
@@ -820,7 +828,7 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
     const feishuId = process.env.FEISHU_APP_ID;
     const feishuSecret = process.env.FEISHU_APP_SECRET;
     channels.register(
-      new FeishuChannel(feishuId ?? "", feishuSecret ?? "", line => log(line)),
+      new FeishuChannel(feishuId ?? "", feishuSecret ?? "", line => log(line), ingress),
       feishuId !== undefined && feishuSecret !== undefined,
       feishuId !== undefined && feishuSecret !== undefined
         ? "starting"

@@ -313,9 +313,14 @@ export class Orchestrator {
     try {
       const result = await this.box.exec(MANIFEST_COMMAND, { timeoutMs: 60_000 });
       return parseManifest(result.stdout ?? "");
-    } catch {
+    } catch (error) {
       // No manifest means integrity simply is not checked this time — the audit
-      // still runs; a broken find must not block review.
+      // still runs; a broken find must not block review. The reason is still worth
+      // having: "integrity was not checked" and "integrity was checked and passed"
+      // read the same in a review that does not say which happened.
+      console.error(
+        `[audit] no workspace manifest: ${error instanceof Error ? error.message : String(error)}`
+      );
       return undefined;
     }
   }

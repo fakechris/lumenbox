@@ -24,6 +24,8 @@
  * config file's env map — never as constructor literals.
  */
 
+import type { Ingress } from "./ingress.ts";
+
 export interface InboundMessage {
   /** `telegram:123` — stable, and what the allow list matches. Who is *speaking*. */
   identity: string;
@@ -323,6 +325,11 @@ export interface ChannelManagerDeps {
    */
   knock?: (request: { identity: string; senderLabel: string; channel: string }) => void;
   log: (line: string) => void;
+  /**
+   * Where every arrival and its fate is recorded. Absent means no ledger, which is what
+   * a test that is not about this wants.
+   */
+  ingress?: Ingress;
 }
 
 /** After this long, a running task without a card says it is under way. */
@@ -564,7 +571,14 @@ ${input.options.map(option => `· ${option}`).join("\n")}`
   push(adapterName: string, identity: string, text: string): Promise<void> {
     const adapter = this.adapters.find(a => a.name === adapterName);
     if (adapter === undefined) return Promise.resolve();
-    return adapter.send(identity, text).catch(() => {});
+    // Said out loud. A reply that never reached the person is the failure they actually
+    // experience, and swallowing it here made it identical to never having been written.
+    return adapter.send(identity, text).catch((error: unknown) => {
+      this.deps.log(
+        `channel ${adapterName}: could not deliver to ${identity} — ` +
+          `${error instanceof Error ? error.message : String(error)}`
+      );
+    });
   }
 
   /**
@@ -574,8 +588,18 @@ ${input.options.map(option => `· ${option}`).join("\n")}`
    */
   pushToChat(chatKey: string, text: string): Promise<void> {
     const adapter = this.adapters.find(a => chatKey.startsWith(`${a.name}:`));
-    if (adapter?.sendToChat === undefined) return Promise.resolve();
-    return adapter.sendToChat(chatKey, text).catch(() => {});
+    if (adapter?.sendToChat === undefined) {
+      // Not an error to ignore: a digest, a rescue notice or a late answer was addressed
+      // to a chat whose channel is no longer configured, and it is going nowhere.
+      this.deps.log(`channel: nothing can send to ${chatKey}; message dropped`);
+      return Promise.resolve();
+    }
+    return adapter.sendToChat(chatKey, text).catch((error: unknown) => {
+      this.deps.log(
+        `channel ${adapter.name}: could not send to ${chatKey} — ` +
+          `${error instanceof Error ? error.message : String(error)}`
+      );
+    });
   }
 
   private async handle(
@@ -590,6 +614,9 @@ ${input.options.map(option => `· ${option}`).join("\n")}`
     }
 
     if (!this.deps.mayDrive(message.identity)) {
+      if (message.messageId !== undefined) {
+        this.deps.ingress?.decided(message.messageId, "refused", message.identity);
+      }
       this.deps.log(
         `channel ${adapter.name}: refused ${message.identity} (${message.senderLabel})`
       );
@@ -602,6 +629,13 @@ ${input.options.map(option => `· ${option}`).join("\n")}`
         return knockRefusal(message.identity);
       }
       return refusal(message.identity);
+    }
+
+    // Past the door. Recorded here rather than at the end, because everything below can
+    // take a long time or throw, and "admitted then something went wrong" is a different
+    // report from "never got in".
+    if (message.messageId !== undefined) {
+      this.deps.ingress?.decided(message.messageId, "admitted");
     }
 
     // A one-word answer to a consent this person was asked for is a decision, not a
@@ -865,7 +899,14 @@ ${input.options.map(option => `· ${option}`).join("\n")}`
       const now = Date.now();
       if (now - lastCardWrite < CARD_UPDATE_MS) return;
       lastCardWrite = now;
-      void adapter.updateTaskCard(cardHandle, { ...card }).catch(() => {});
+      void adapter.updateTaskCard(cardHandle, { ...card }).catch((error: unknown) => {
+        // A card that stops updating is the "Working forever" symptom from the other
+        // direction, so the reason belongs somewhere findable.
+        this.deps.log(
+          `channel ${adapter.name}: card update failed — ` +
+            `${error instanceof Error ? error.message : String(error)}`
+        );
+      });
     };
 
     const finishCard = (status: "done" | "failed") => {
@@ -873,7 +914,14 @@ ${input.options.map(option => `· ${option}`).join("\n")}`
       card.status = status;
       delete card.action;
       delete card.ahead;
-      void adapter.updateTaskCard(cardHandle, { ...card }).catch(() => {});
+      void adapter.updateTaskCard(cardHandle, { ...card }).catch((error: unknown) => {
+        // A card that stops updating is the "Working forever" symptom from the other
+        // direction, so the reason belongs somewhere findable.
+        this.deps.log(
+          `channel ${adapter.name}: card update failed — ` +
+            `${error instanceof Error ? error.message : String(error)}`
+        );
+      });
     };
 
     try {

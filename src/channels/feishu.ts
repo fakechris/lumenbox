@@ -346,8 +346,27 @@ export class FeishuChannel implements ChannelAdapter {
   constructor(
     private readonly appId: string,
     private readonly appSecret: string,
-    private readonly log: (line: string) => void
+    private readonly log: (line: string) => void,
+    /** Where arrivals and discards are recorded. Absent in tests. */
+    private readonly ingress?: {
+      arrived: (a: {
+        id: string;
+        channel: string;
+        identity: string;
+        chatKey: string;
+        kind: string;
+        chars: number;
+        at: string;
+      }) => void;
+      decided: (id: string, fate: "admitted" | "refused" | "dropped", reason?: string) => void;
+    }
   ) {}
+
+  /** Records a discard against the arrival, so no drop is silent. */
+  private discard(messageId: string | undefined, reason: string): void {
+    this.log(`channel feishu: dropped ${messageId ?? "?"} — ${reason}`);
+    if (messageId !== undefined) this.ingress?.decided(messageId, "dropped", reason);
+  }
 
   async start(
     onMessage: (message: InboundMessage) => Promise<string | undefined>
@@ -383,14 +402,22 @@ export class FeishuChannel implements ChannelAdapter {
         // is not answering" and "the connection is delivering nothing" looked identical
         // from the log, and the only way to tell them apart was to add this and ask
         // somebody to type again.
-        this.log(
-          `channel feishu: message from ${openId} in ${chatId || "(no chat)"} ` +
-            `type=${messageType ?? "?"} id=${data.message?.message_id ?? "?"}`
-        );
+        const arrivedId = data.message?.message_id;
+        if (arrivedId !== undefined) {
+          this.ingress?.arrived({
+            id: arrivedId,
+            channel: "feishu",
+            identity: `feishu:${openId}`,
+            chatKey: `feishu:${chatId}`,
+            kind: messageType ?? "unknown",
+            chars: String(data.message?.content ?? "").length,
+            at: new Date().toISOString(),
+          });
+        }
         if (chatId === "" || data.message === undefined) return {};
         const messageId = data.message.message_id;
         if (messageId !== undefined && this.alreadySeen(messageId)) {
-          this.log(`channel feishu: ${messageId} seen before, ignoring`);
+          this.discard(messageId, "delivered more than once");
           return {};
         }
 
@@ -431,7 +458,7 @@ export class FeishuChannel implements ChannelAdapter {
         }
 
         if (messageType !== "text" && messageType !== "post") {
-          this.log(`channel feishu: ignoring ${messageType ?? "?"} message ${messageId ?? "?"}`);
+          this.discard(messageId, `unhandled message type ${messageType ?? "?"}`);
           return {};
         }
         let text = "";
@@ -458,7 +485,7 @@ export class FeishuChannel implements ChannelAdapter {
             .replace(/@_user_\d+/g, "")
             .trim();
         } catch {
-          this.log(`channel feishu: content of ${messageId ?? "?"} did not parse`);
+          this.discard(messageId, "content did not parse");
           return {};
         }
         if (text === "") {
@@ -471,9 +498,9 @@ export class FeishuChannel implements ChannelAdapter {
           // being spoken to rather than being handed an empty string.
           const mentionOnly = /@_user_\d+/.test(String(data.message.content ?? ""));
           if (!mentionOnly) {
-            this.log(
-              `channel feishu: ${messageId ?? "?"} had no usable text; ` +
-                `raw=${String(data.message.content ?? "").slice(0, 120)}`
+            this.discard(
+              messageId,
+              `no usable text; raw=${String(data.message.content ?? "").slice(0, 100)}`
             );
             return {};
           }

@@ -93,6 +93,10 @@ export class DingTalkChannel implements ChannelAdapter {
       try {
         frame = JSON.parse(String(event.data));
       } catch {
+        // A whole frame discarded. Silent, this is the same failure Feishu had: a message
+        // that arrived and vanished looks exactly like one that never arrived, and the
+        // only way to tell was to add a log line and ask somebody to send it again.
+        this.log(`channel dingtalk: frame did not parse, dropped`);
         return;
       }
       const messageId = frame.headers?.messageId ?? "";
@@ -122,6 +126,7 @@ export class DingTalkChannel implements ChannelAdapter {
       try {
         payload = JSON.parse(frame.data ?? "{}");
       } catch {
+        this.log(`channel dingtalk: dropped ${messageId || "?"} — body did not parse`);
         return;
       }
       const text = payload.text?.content?.trim() ?? "";
