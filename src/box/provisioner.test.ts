@@ -7,6 +7,8 @@
  */
 
 import { test } from "node:test";
+import { assertCompatible } from "./client.ts";
+import { BOXD_PROTOCOL } from "../protocol/index.ts";
 import assert from "node:assert/strict";
 import { mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -81,4 +83,26 @@ test("the Docker provisioner reports no endpoint rather than throwing", async ()
   });
 
   assert.equal(await provisioner.endpoint(), undefined);
+});
+
+test("a box the host cannot correctly drive is refused at the door, not mid-turn", () => {
+  // The message has to say which half is behind, because the two are upgraded
+  // independently and the fix differs — and because `box down` + `box up` restarts the
+  // *existing* container, so "I already restarted it" is the normal way to get here.
+  const older = () => assertCompatible({ protocol: BOXD_PROTOCOL - 1 } as never, "the box");
+  assert.throws(older, /older than this host/);
+  assert.throws(older, /--recreate/);
+  // Named explicitly, because it is the mistake this check exists to catch.
+  assert.throws(older, /box down.*will not fix this/s);
+
+  // A box built before the handshake existed announces nothing, which is its own answer.
+  assert.throws(() => assertCompatible({} as never, "the box"), /older than this host/);
+
+  assert.throws(
+    () => assertCompatible({ protocol: BOXD_PROTOCOL + 1 } as never, "the box"),
+    /newer than this host/
+  );
+
+  // The matching case must stay silent, or every connection fails closed.
+  assert.doesNotThrow(() => assertCompatible({ protocol: BOXD_PROTOCOL } as never, "the box"));
 });

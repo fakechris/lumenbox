@@ -17,7 +17,7 @@
  * code — which is the point of doing this before we have a cluster to test against.
  */
 
-import { BoxClient } from "./client.ts";
+import { assertCompatible, BoxClient } from "./client.ts";
 import {
   BoxManager,
   defaultBoxConfig,
@@ -77,7 +77,7 @@ export class AttachedBoxProvisioner implements BoxProvisioner {
     const client = new BoxClient({ baseUrl: this.baseUrl, token: this.token });
     // Checked here rather than on first use: "the box is unreachable" is a much better
     // failure than a tool call that mysteriously times out mid-turn.
-    await client.health();
+    assertCompatible(await client.health(), this.baseUrl);
     return client;
   }
 }
@@ -105,8 +105,10 @@ export class DockerBoxProvisioner implements BoxProvisioner {
     }
   }
 
-  connect(): Promise<BoxClient> {
-    return this.manager.connect();
+  async connect(): Promise<BoxClient> {
+    const client = await this.manager.connect();
+    assertCompatible(await client.health(), this.label);
+    return client;
   }
 }
 

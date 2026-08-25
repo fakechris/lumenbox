@@ -4,6 +4,7 @@
  * Everything the agent does inside the box goes through here.
  */
 
+import { BOXD_PROTOCOL } from "../protocol/index.ts";
 import type {
   BrowserRequest,
   BrowserResponse,
@@ -47,6 +48,32 @@ export class BoxError extends Error {
 const DEFAULT_TIMEOUT_MS = 60_000;
 /** Computer batches can legitimately include waits and long typing runs. */
 const COMPUTER_TIMEOUT_MS = 180_000;
+
+/**
+ * Refuses a box this host cannot correctly drive, and says which half to upgrade.
+ *
+ * On connect rather than on first use, for the same reason unreachability is: a mismatch
+ * that surfaces mid-turn as one route behaving oddly is far harder to recognise than a
+ * refusal at the door. Boxes and hosts are upgraded independently, and `box down` followed
+ * by `box up` restarts the *existing* container — so "I upgraded and restarted" and "the
+ * box is still the old one" is the normal way to arrive here, not an exotic one.
+ */
+export function assertCompatible(health: HealthResult, where: string): void {
+  const speaks = health.protocol;
+  if (speaks === BOXD_PROTOCOL) return;
+  const box = `The box at ${where}`;
+  throw new BoxError(
+    speaks === undefined || speaks < BOXD_PROTOCOL
+      ? `${box} is older than this host expects (it speaks ${speaks ?? "no announced"} ` +
+        `version; this host needs ${BOXD_PROTOCOL}). Rebuild the image and recreate the ` +
+        `container: \`npm run build:box\`, rebuild the image, then \`agentbox box up ` +
+        `--recreate\`. Note that \`box down\` and \`box up\` restart the old container ` +
+        `and will not fix this.`
+      : `${box} is newer than this host (it speaks ${speaks}; this host understands ` +
+        `${BOXD_PROTOCOL}). Update this host, or recreate the box from the image this ` +
+        `host was built alongside.`
+  );
+}
 
 export class BoxClient {
   private readonly baseUrl: string;

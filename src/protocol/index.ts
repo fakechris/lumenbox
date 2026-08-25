@@ -276,6 +276,11 @@ export interface ListDirResult {
 export interface HealthResult {
   ok: boolean;
   version: string;
+  /**
+   * The surface version this box speaks. Absent from any box built before it existed,
+   * which is itself the answer: that box is too old for this host.
+   */
+  protocol?: number;
   display: string;
   /** Absent when no X server is reachable; shell and fs still work. */
   resolution?: ResolutionConfig;
@@ -346,6 +351,20 @@ export interface ErrorResult {
 
 /** Port the box daemon listens on inside the container. */
 export const BOXD_PORT = 1337;
+
+/**
+ * The version of the surface boxd and the host speak to each other over.
+ *
+ * Separate from any package version and bumped only when this HTTP surface changes in a
+ * way an older peer cannot survive — a route removed, a field's meaning changed, a
+ * required argument added. Cosmetic releases leave it alone.
+ *
+ * It exists because the two are upgraded independently and, until this, silently: the box
+ * reported a version string that was hardcoded to "0.1.0" and that nothing compared. A box
+ * running ahead of its host then presents as unrelated failures in whichever route moved,
+ * which is a bad way to find out you restarted only half of the system.
+ */
+export const BOXD_PROTOCOL = 1;
 
 /** Handing a work product to a person, verbatim. Confined to the work directory — see fs-service. */
 export interface DownloadFileRequest {

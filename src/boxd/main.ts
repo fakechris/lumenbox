@@ -23,6 +23,7 @@ import { resolveRange } from "./range.ts";
 import { timingSafeEqual } from "node:crypto";
 import {
   BOXD_PORT,
+  BOXD_PROTOCOL,
   type ClipboardReadRequest,
   type ClipboardResult,
   type ClipboardWriteRequest,
@@ -172,6 +173,7 @@ async function handleHealth(): Promise<HealthResult> {
   return {
     ok: true,
     version: VERSION,
+    protocol: BOXD_PROTOCOL,
     display,
     resolution: primary?.resolution,
     refresh_rate: undefined,
