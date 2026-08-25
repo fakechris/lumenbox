@@ -20,6 +20,7 @@
  */
 
 import type { BoxClient } from "./client.ts";
+import { SCRATCH_DISPLAY } from "../boxd/browser-service.ts";
 
 /** How recent a file has to be for its loss to be worth mentioning. */
 const RECENT_DAYS = 30;
@@ -147,7 +148,10 @@ export async function verifyBox(box: BoxClient): Promise<string | undefined> {
     // Exercises the desktop, the browser and the debugging port in one call, which is
     // three of the four things an image change can break.
     const page = await box.browser({
-      op: "open",
+      // `check` rather than `open`, on a desktop no agent has: opening drove the tab
+      // somebody was using, and every upgrade left the check page on their screen.
+      op: "check",
+      display: SCRATCH_DISPLAY,
       url: `data:text/html,<title>ok</title><h1>${encodeURIComponent(marker)}</h1>`,
     });
     if (!page.snapshot.includes(marker)) {

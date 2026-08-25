@@ -65,6 +65,15 @@ export async function openTarget(port: number, url: string): Promise<CdpTarget> 
 
 
 /**
+ * Closes a tab. Best effort: a tab that has already gone is the outcome we wanted.
+ */
+export async function closeTarget(port: number, targetId: string): Promise<void> {
+  await fetch(`http://127.0.0.1:${port}/json/close/${targetId}`, {
+    signal: AbortSignal.timeout(5000),
+  }).catch(() => {});
+}
+
+/**
  * A live connection to one page.
  *
  * Events are delivered to whoever registered for them by name. Only a handful matter —

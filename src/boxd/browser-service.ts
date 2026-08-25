@@ -23,8 +23,19 @@
 
 import { spawn } from "node:child_process";
 import { realpathSync, statSync } from "node:fs";
-import { CdpError, CdpSession, listTargets, openTarget, type CdpTarget } from "./cdp.ts";
+import { CdpError, CdpSession, closeTarget, listTargets, openTarget, type CdpTarget } from "./cdp.ts";
 import { READ_SCRIPT, SNAPSHOT_SCRIPT } from "./browser-snapshot.ts";
+
+/**
+ * The desktop the upgrade check runs on.
+ *
+ * Not an agent's. The check drives a real browser on a real X display, and doing that on
+ * display 1 meant every upgrade navigated whatever Ada had open away to the check page —
+ * in front of whoever was watching. The top of the range boxd allows rather than an arbitrary high number, which it rejects outright. Agents are given desktops from 1 upward, so the last one is furthest from anything in use, and it is
+ * brought up on demand like any other desktop, so this still exercises the path agents
+ * actually use rather than a headless imitation of it.
+ */
+export const SCRATCH_DISPLAY = 32;
 
 /** Debugging ports are per desktop, matching the profile-per-desktop split in box-chrome. */
 export const CDP_PORT_BASE = 9222;
@@ -748,6 +759,45 @@ export class BrowserService {
         : `Waited ${Math.round(waitedMs / 1000)}s and the ${kind} never contained ` +
           `${JSON.stringify(value)}. The page as it stands is below.`,
     };
+  }
+
+  /**
+   * Opens a page in a tab of its own, reads it, and closes it again.
+   *
+   * For checking that the browser works after an upgrade, which must not be done by
+   * driving the browser somebody is using. The obvious implementation reused the current
+   * tab, and so every upgrade navigated whatever an agent had open away to the check page
+   * and left it there — which is how "lumenbox upgrade check" started turning up on
+   * people's screens.
+   *
+   * Deliberately outside the session bookkeeping: no page is remembered, no known-target
+   * set is touched, so the tab this opens is not mistaken for a popup to follow.
+   */
+  async check(display: number, url: string): Promise<{ snapshot: string; title: string }> {
+    const port = portForDisplay(display);
+    // Started if it is not up. A freshly recreated box has no browser at all, which is
+    // exactly when this runs — going straight to openTarget failed there, and the upgrade
+    // rolled back a working image because the *check* was broken rather than the box.
+    try {
+      await listTargets(port);
+    } catch {
+      await this.launch(display, port);
+    }
+    const target = await openTarget(port, url);
+    let page: BrowserPage | undefined;
+    try {
+      page = await BrowserPage.attach(port, target);
+      const result = await page.report(true);
+      return { snapshot: result.snapshot, title: result.title };
+    } finally {
+      page?.close();
+      // Closed even when the check failed: a failed upgrade should not also leave a tab
+      // behind on somebody's desktop.
+      await closeTarget(port, target.id);
+      // The tab existed while a popup sweep might have seen it, so it is registered as
+      // already-known rather than left to look new on the next action.
+      this.knownTargets.get(display)?.add(target.id);
+    }
   }
 
   /** Drops the connection for a desktop, so the next call attaches afresh. */

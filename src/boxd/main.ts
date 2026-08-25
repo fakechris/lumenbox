@@ -381,6 +381,10 @@ const routes: Record<string, Handler> = {
         return browser.scroll(display, String(body.direction ?? "down"), Number(body.amount ?? 3));
       case "upload":
         return browser.upload(display, String(body.ref ?? ""), body.files ?? []);
+      case "check": {
+        const checked = await browser.check(display, String(body.url ?? "about:blank"));
+        return { url: String(body.url ?? ""), title: checked.title, snapshot: checked.snapshot };
+      }
       case "wait":
         return browser.waitFor(
           display,
