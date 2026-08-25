@@ -33,6 +33,8 @@ import {
   describeProvider,
   providerNames,
   resolveProvider,
+  resolveSummaryProvider,
+  createClient,
   type ProviderProfile,
 } from "./host/provider.ts";
 import { applyConfigEnv, ensureConfigFile, loadConfig } from "./config.ts";
@@ -1125,6 +1127,39 @@ async function main(): Promise<number> {
         });
         out(`${bold(profile.label)}  ${dim(profile.model)}  ${dim(home)}`);
         const boxReady = orchestrator.boxClient() !== undefined;
+
+        // The judge, for the checks a program cannot make. On the summary profile rather
+        // than the agent's own: a model should not grade itself, and this is exactly the
+        // cheap-and-mechanical shape that profile exists for.
+        const judgeProfile = resolveSummaryProvider(profile);
+        const judgeClient = createClient(judgeProfile);
+        const judge = async (question: string, text: string): Promise<boolean> => {
+          const response = await judgeClient.messages.create({
+            model: judgeProfile.model,
+            max_tokens: 4,
+            // Zero, because a grader that disagrees with itself between runs turns a
+            // regression suite into noise.
+            temperature: 0,
+            messages: [
+              {
+                role: "user",
+                content:
+                  `${question}\n\nAnswer with exactly one word, "yes" or "no".\n\n` +
+                  `--- the text ---\n${text}`,
+              },
+            ],
+          });
+          const said = (response.content as { type: string; text?: string }[])
+            .map(block => (block.type === "text" ? (block.text ?? "") : ""))
+            .join(" ")
+            .trim()
+            .toLowerCase();
+          if (/^yes\b/.test(said)) return true;
+          if (/^no\b/.test(said)) return false;
+          // Neither, which means the rubric or the model failed — not the agent. Raised
+          // rather than guessed, so it cannot be silently scored as a pass.
+          throw new Error(`the judge answered ${JSON.stringify(said.slice(0, 40))}`);
+        };
         // Quality per token, not quality alone. A model that passes one more task by
         // spending five times the tokens is not better for this product, and the
         // single number that says so is passes per 100k — the usage log already
@@ -1150,6 +1185,7 @@ async function main(): Promise<number> {
               teammateId: silver.id,
               registry,
               orchestrator,
+              judge,
             });
             const seconds = Math.round((Date.now() - started) / 1000);
             out(
