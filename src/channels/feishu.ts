@@ -290,6 +290,32 @@ export class FeishuChannel implements ChannelAdapter {
   private readonly seenMessages = new Map<string, number>();
 
   /** Records an id and says whether it was already seen. Prunes by TTL and size. */
+  /**
+   * A Feishu rich-text body as plain text.
+   *
+   * Links keep their address: an agent handed "see the docs" without the URL cannot
+   * follow it, and following it is usually the point of pasting one.
+   */
+  private renderPostBody(title: unknown, content: unknown): string {
+    const lines: string[] = [];
+    if (typeof title === "string" && title.trim() !== "") lines.push(title.trim());
+    for (const paragraph of Array.isArray(content) ? content : []) {
+      const runs: string[] = [];
+      for (const run of Array.isArray(paragraph) ? paragraph : []) {
+        const part = run as { tag?: string; text?: string; href?: string; user_name?: string };
+        if (part.tag === "a" && typeof part.href === "string") {
+          runs.push(part.text ? `${part.text} (${part.href})` : part.href);
+        } else if (part.tag === "at") {
+          runs.push(part.user_name ? `@${part.user_name}` : "");
+        } else if (typeof part.text === "string") {
+          runs.push(part.text);
+        }
+      }
+      lines.push(runs.join(""));
+    }
+    return lines.join("\n");
+  }
+
   private alreadySeen(messageId: string): boolean {
     const now = Date.now();
     const ttlMs = 24 * 60 * 60_000;
@@ -352,9 +378,21 @@ export class FeishuChannel implements ChannelAdapter {
         const openId = data.sender?.sender_id?.open_id ?? "unknown";
         const chatId = data.message?.chat_id ?? "";
         const messageType = data.message?.message_type;
+        // Logged before anything can drop it. A message that arrives and is discarded —
+        // no chat id, a duplicate, an unhandled type — left no trace at all, so "the bot
+        // is not answering" and "the connection is delivering nothing" looked identical
+        // from the log, and the only way to tell them apart was to add this and ask
+        // somebody to type again.
+        this.log(
+          `channel feishu: message from ${openId} in ${chatId || "(no chat)"} ` +
+            `type=${messageType ?? "?"} id=${data.message?.message_id ?? "?"}`
+        );
         if (chatId === "" || data.message === undefined) return {};
         const messageId = data.message.message_id;
-        if (messageId !== undefined && this.alreadySeen(messageId)) return {};
+        if (messageId !== undefined && this.alreadySeen(messageId)) {
+          this.log(`channel feishu: ${messageId} seen before, ignoring`);
+          return {};
+        }
 
         // A file or an image is bytes to fetch, then an ordinary inbound message that
         // carries them. The download happens here because the wire (key, resource
@@ -392,20 +430,57 @@ export class FeishuChannel implements ChannelAdapter {
           return {};
         }
 
-        if (messageType !== "text") return {};
+        if (messageType !== "text" && messageType !== "post") {
+          this.log(`channel feishu: ignoring ${messageType ?? "?"} message ${messageId ?? "?"}`);
+          return {};
+        }
         let text = "";
         try {
-          text = String(
-            (JSON.parse(data.message.content ?? "{}") as { text?: string }).text ?? ""
-          )
+          const parsed = JSON.parse(data.message.content ?? "{}") as {
+            text?: string;
+            title?: string;
+            content?: unknown;
+          };
+          // Rich text arrives as `post`, not `text`, and was being dropped whole. Anything
+          // pasted with a link, a line break or an emoji is a post — which is most of what
+          // a person actually sends — so the bot appeared to ignore them at random.
+          //
+          // The shape is paragraphs of runs: [[{tag:"text",text}, {tag:"a",text,href}, …]].
+          // Flattened here rather than anywhere else, because the wire format is this
+          // adapter's business and everything downstream wants a string.
+          text =
+            messageType === "post"
+              ? this.renderPostBody(parsed.title, parsed.content)
+              : String(parsed.text ?? "");
+          text = text
             // Mention tokens read as noise in an instruction; the bot being mentioned
             // is how the message reached us at all.
             .replace(/@_user_\d+/g, "")
             .trim();
         } catch {
+          this.log(`channel feishu: content of ${messageId ?? "?"} did not parse`);
           return {};
         }
-        if (text === "") return {};
+        if (text === "") {
+          // A bare mention is a person addressing you, not an empty message. Dropping it
+          // silently is the worst possible answer: they get nothing back and reasonably
+          // conclude the bot is broken, which is exactly what happened — "@bot" with no
+          // other words went nowhere and looked like an outage.
+          //
+          // Passed on as a real message saying what it was, so the agent answers it as
+          // being spoken to rather than being handed an empty string.
+          const mentionOnly = /@_user_\d+/.test(String(data.message.content ?? ""));
+          if (!mentionOnly) {
+            this.log(
+              `channel feishu: ${messageId ?? "?"} had no usable text; ` +
+                `raw=${String(data.message.content ?? "").slice(0, 120)}`
+            );
+            return {};
+          }
+          text =
+            "(They mentioned you with no other words — they are getting your attention. " +
+            "Say briefly that you are here and what you are in the middle of, if anything.)";
+        }
         const identity = `feishu:${openId}`;
         this.chats.set(identity, chatId);
         void this.labelFor(openId, chatId)

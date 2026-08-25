@@ -6,7 +6,7 @@
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { looksLikeMarkdown, markdownPost, renderCard } from "./feishu.ts";
+import { FeishuChannel, looksLikeMarkdown, markdownPost, renderCard } from "./feishu.ts";
 import type { TaskCardState } from "./manager.ts";
 
 interface CardShape {
@@ -132,4 +132,38 @@ test("a task card offers the workshop only when there is somewhere to send peopl
   const action = withUrl.elements.find(element => element.tag === "action")!;
   assert.equal(action.actions![0]!.url, "https://box.example/?task=t17");
   assert.match(action.actions![0]!.text.content, /workshop/i);
+});
+
+test("a rich-text message is read, not dropped", () => {
+  // Anything pasted with a link, a line break or an emoji arrives as `post` rather than
+  // `text`, which is most of what a person actually sends. The whole type was being
+  // dropped in silence, so the bot appeared to ignore messages at random.
+  const adapter = new FeishuChannel("a", "b", () => {});
+  const body = (adapter as unknown as {
+    renderPostBody: (title: unknown, content: unknown) => string;
+  }).renderPostBody.bind(adapter);
+
+  const text = body("Release notes", [
+    [{ tag: "text", text: "See " }, { tag: "a", text: "the docs", href: "https://example.com/d" }],
+    [{ tag: "at", user_name: "Ada" }, { tag: "text", text: " please look" }],
+  ]);
+
+  assert.match(text, /Release notes/);
+  assert.match(text, /See the docs/);
+  // The address survives: an agent handed "see the docs" with no URL cannot follow it,
+  // and following it is usually why somebody pasted one.
+  assert.match(text, /https:\/\/example\.com\/d/);
+  assert.match(text, /@Ada please look/);
+  // Paragraphs stay separate rather than running together.
+  assert.equal(text.split("\n").length, 3);
+});
+
+test("a rich-text message with nothing in it is still empty", () => {
+  const adapter = new FeishuChannel("a", "b", () => {});
+  const body = (adapter as unknown as {
+    renderPostBody: (title: unknown, content: unknown) => string;
+  }).renderPostBody.bind(adapter);
+  assert.equal(body(undefined, []).trim(), "");
+  // Malformed content is empty rather than a crash: this parses somebody else's wire.
+  assert.equal(body(undefined, "not an array").trim(), "");
 });
