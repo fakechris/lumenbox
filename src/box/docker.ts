@@ -633,6 +633,34 @@ export class BoxManager {
     return written;
   }
 
+  /**
+   * Whether the image on disk is newer than the one this container is running.
+   *
+   * By image id rather than by tag, because a tag is a name and the question is about
+   * identity: `:latest` points somewhere different after every build, and a container
+   * started from the old one still reports the tag it was created with. Comparing names
+   * would say everything is fine while the container runs an image from last month —
+   * which is exactly the confusion `box down` + `box up` produces.
+   */
+  async upgradeAvailable(): Promise<{ available: boolean; running?: string; built?: string }> {
+    const running = await docker(
+      ["inspect", "--format", "{{.Image}}", this.config.containerName],
+      20_000
+    ).catch(() => undefined);
+    const built = await docker(
+      ["image", "inspect", "--format", "{{.Id}}", this.config.image],
+      20_000
+    ).catch(() => undefined);
+    if (running === undefined || built === undefined) return { available: false };
+    const from = running.trim();
+    const to = built.trim();
+    return {
+      available: from !== to,
+      running: from.slice(7, 19),
+      built: to.slice(7, 19),
+    };
+  }
+
   logs(tail = 200): Promise<string> {
     return docker(["logs", "--tail", String(tail), this.config.containerName], 30_000);
   }

@@ -38,6 +38,14 @@ export interface AgentboxConfig {
   provider?: string;
   /** Model override, applied exactly as `--model` is — only when nothing else set one. */
   model?: string;
+  /**
+   * The local hour (0–23) at which an unattended upgrade may run.
+   *
+   * Absent means any hour, which is right for a laptop: an upgrade that waits for 4am on a
+   * machine that is asleep at 4am never happens. Set it where the box runs continuously and
+   * the interruption should land somewhere nobody is working.
+   */
+  upgradeHour?: number;
   /** Base URL for the `custom` preset, applied only when `AGENTBOX_BASE_URL` is not set. */
   baseUrl?: string;
   /**
@@ -126,6 +134,18 @@ function readInteger(
 }
 
 /** The config as written, with defaults for anything missing or unusable. */
+/** An hour of the day, or nothing when it is not one. */
+function readHour(value: unknown, onWarn: (message: string) => void): number | undefined {
+  if (value === undefined) return undefined;
+  if (typeof value !== "number" || !Number.isInteger(value) || value < 0 || value > 23) {
+    // Ignored rather than defaulted: a mistyped hour silently becoming midnight would
+    // schedule the interruption at the one time nobody chose.
+    onWarn("config: upgradeHour must be a whole number from 0 to 23, ignoring it");
+    return undefined;
+  }
+  return value;
+}
+
 export function loadConfig(onWarn: (message: string) => void = () => {}): AgentboxConfig {
   const path = configPath();
   if (!existsSync(path)) return { ...DEFAULT_CONFIG };
@@ -153,6 +173,9 @@ export function loadConfig(onWarn: (message: string) => void = () => {}): Agentb
       "activityLimit",
       onWarn
     ),
+    ...(readHour(raw.upgradeHour, onWarn) !== undefined
+      ? { upgradeHour: readHour(raw.upgradeHour, onWarn) }
+      : {}),
     ...(readString(raw.provider, "provider", onWarn) !== undefined
       ? { provider: readString(raw.provider, "provider", onWarn) }
       : {}),

@@ -157,6 +157,8 @@ import { FeishuChannel } from "../channels/feishu.ts";
 import { TelegramChannel } from "../channels/telegram.ts";
 import { HostRunner, hostRunnerConfig } from "../host/host-runner.ts";
 import { ALL_TOOLS } from "../host/orchestrator.ts";
+import { preflight } from "../box/preflight.ts";
+import { adminRecipients, decideUpgrade, upgradeMessage } from "../host/upgrade.ts";
 import { PRESET_MODELS, providerNames, resolveProvider, testProvider } from "../host/provider.ts";
 import { Principals, roleAtLeast, type Principal, type Role } from "../host/principals.ts";
 import { describeTask, isLive, isTaskStatus } from "../host/tasks.ts";
@@ -820,6 +822,50 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
     }
   }, 10 * 60_000);
   digestTimer.unref?.();
+
+  // An upgrade nobody knows about is an upgrade that does not happen. This tells the
+  // people who may decide, and deliberately does not act: a web server that recreates the
+  // box underneath the people using it is a worse surprise than an out-of-date image.
+  // Performing an upgrade is `agentbox box upgrade`, which is safe to put on a timer.
+  let upgradeToldAbout: string | undefined;
+  const upgradeTimer = setInterval(() => {
+    void (async () => {
+      try {
+        const availability = await provisioner.upgradeAvailable?.();
+        if (availability?.available !== true) return;
+        // Once per image, not once per check: a notice repeated every six hours is one
+        // people filter out, including the time it matters.
+        if (upgradeToldAbout === availability.built) return;
+
+        const box = await provisioner.connect().catch(() => undefined);
+        const findings = box
+          ? await preflight(box)
+          : { runningJobs: [], strayFiles: [], moreStrayFiles: false, unknown: "the box could not be reached" };
+        const decision = decideUpgrade({
+          preflight: findings,
+          watching: clients.size,
+          ...(loadConfig().upgradeHour !== undefined
+            ? { quietHour: loadConfig().upgradeHour as number }
+            : {}),
+          hour: new Date().getHours(),
+        });
+        // "wait" and "go" are for whatever performs upgrades to act on; there is nothing
+        // here a person needs to read, and saying it anyway is how notices get ignored.
+        if (decision.action !== "ask" && decision.action !== "announce") return;
+
+        upgradeToldAbout = availability.built;
+        const text = upgradeMessage(decision, "Your box");
+        broadcast({ type: "error", message: text });
+        for (const { adapter, identity } of adminRecipients(principals.list())) {
+          void channels.push(adapter, identity, text);
+        }
+        log(`upgrade available (${availability.running} -> ${availability.built}): ${decision.action}`);
+      } catch {
+        // Never the reason the server falls over: this is a notice about housekeeping.
+      }
+    })();
+  }, 6 * 60 * 60_000);
+  upgradeTimer.unref?.();
 
   orchestrator.policy.onApprovalRequested = approval => {
     announceApproval(approval);

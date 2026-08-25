@@ -40,6 +40,14 @@ export interface BoxProvisioner {
   endpoint(): Promise<BoxEndpoint | undefined>;
   /** A client for the box, provisioning it first if this implementation can. */
   connect(): Promise<BoxClient>;
+  /**
+   * Whether a newer image than the running one is on disk.
+   *
+   * Optional because only an implementation that owns the container's lifecycle can know.
+   * A box somebody else runs is upgraded by whoever runs it, and guessing on their behalf
+   * would be both wrong and unhelpful.
+   */
+  upgradeAvailable?(): Promise<{ available: boolean; running?: string; built?: string }>;
 }
 
 /**
@@ -109,6 +117,10 @@ export class DockerBoxProvisioner implements BoxProvisioner {
     const client = await this.manager.connect();
     assertCompatible(await client.health(), this.label);
     return client;
+  }
+
+  upgradeAvailable(): Promise<{ available: boolean; running?: string; built?: string }> {
+    return this.manager.upgradeAvailable();
   }
 }
 

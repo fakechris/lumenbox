@@ -21,6 +21,7 @@ import { describeControlPlane, startControlPlane } from "./control/main.ts";
 import { STARTER_TEAM } from "./host/orchestrator.ts";
 import { backupNow, backupRoot } from "./host/backup.ts";
 import { describePreflight, isQuiet, preflight, verifyBox } from "./box/preflight.ts";
+import { decideUpgrade } from "./host/upgrade.ts";
 import { AgentRegistry, defaultAgentsRoot } from "./agents/registry.ts";
 import { startEgressRelay } from "./egress/relay.ts";
 import { DEFAULT_DISPLAY_INDEX } from "./protocol/index.ts";
@@ -258,6 +259,69 @@ async function cmdBoxDown(argv: string[]): Promise<number> {
  * Puts the box back on its previous image, for when it breaks later rather than during
  * the upgrade. The automatic rollback only covers the minutes right after one.
  */
+/**
+ * Decides whether to upgrade, and does it when the answer is yes.
+ *
+ * This is the unattended path: put it on a timer and it upgrades a box that nobody is
+ * using, at the hour you chose, and refuses to touch one where somebody would lose
+ * something. The judgement lives in decideUpgrade so it is testable; this only supplies
+ * the situation and acts on the verdict.
+ */
+async function cmdBoxUpgrade(argv: string[]): Promise<number> {
+  const withHost = argv.includes("--with-host");
+  const manager = new BoxManager(boxConfig({ withHost }));
+
+  const availability = await manager.upgradeAvailable();
+  if (!availability.available) {
+    out(`The box is already running the image on disk (${availability.built ?? "unknown"}).`);
+    out(dim("Build a new one with `npm run build:image`."));
+    return 0;
+  }
+  out(`An upgrade is available: ${availability.running} -> ${availability.built}`);
+
+  // Both are best-effort. A box that cannot be reached is a box that is failing, which is
+  // itself an answer — and the decision handles that case rather than crashing on it.
+  let findings = { runningJobs: [], strayFiles: [], moreStrayFiles: false } as Awaited<
+    ReturnType<typeof preflight>
+  >;
+  let failing: string | undefined;
+  try {
+    const box = await manager.connect();
+    findings = await preflight(box);
+    failing = await verifyBox(box);
+  } catch (error) {
+    failing = error instanceof Error ? error.message : String(error);
+  }
+
+  const config = loadConfig();
+  const decision = decideUpgrade({
+    preflight: findings,
+    // Nobody is counted as watching from here: this command is the operator's, and the
+    // web server is what knows who is connected. Announcing is its job, not this one's.
+    watching: 0,
+    ...(failing !== undefined ? { boxFailing: failing } : {}),
+    ...(config.upgradeHour !== undefined ? { quietHour: config.upgradeHour } : {}),
+    hour: new Date().getHours(),
+  });
+
+  out("");
+  out(`${bold(decision.action)}: ${decision.why}`);
+  if (decision.action === "ask") {
+    out("");
+    out(decision.detail);
+    if (!argv.includes("--yes")) {
+      out("");
+      err("Not upgrading. Re-run with --yes once you have decided.");
+      return 1;
+    }
+    out(dim("--yes given; continuing."));
+  }
+  if (decision.action === "wait" && !argv.includes("--yes")) return 0;
+
+  out("");
+  return cmdBoxUp([...argv, "--recreate", "--yes"]);
+}
+
 async function cmdBoxRollback(argv: string[]): Promise<number> {
   const withHost = argv.includes("--with-host");
   const status = await rollBack(withHost, line => out(dim(line)));
@@ -813,6 +877,8 @@ Usage: agentbox <command> [args]
 
 Box:
   box build                 Build the box image (needs \`npm run build:boxd\` first)
+  box upgrade [--yes]       Upgrade if it costs nobody anything; explain if not.
+                            Safe to run on a timer.
   box rollback              Put the box back on agentbox/box:previous
   box up [--recreate]       Start the box and wait for its desktop
                             --recreate upgrades: destroys and rebuilds the
@@ -931,6 +997,8 @@ async function main(): Promise<number> {
           return cmdBoxStatus();
         case "down":
           return cmdBoxDown(boxArgs);
+        case "upgrade":
+          return cmdBoxUpgrade(boxArgs);
         case "rollback":
           return cmdBoxRollback(boxArgs);
         case "logs":

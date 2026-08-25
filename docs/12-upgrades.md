@@ -168,20 +168,34 @@ design, and are what the multi-person work will need to supply.
 
 Ordered by (risk × impact) ÷ effort, the same lens as the roadmap.
 
-All eight rules are implemented for the operator-driven path. `npm run build:image`
-followed by `agentbox box up --recreate` refuses if anything would be lost, backs up both
-volumes, upgrades, checks the box that came back, and puts the previous image back if it
-does not work.
+All eight rules are implemented.
 
-What is left is the part that involves other people rather than the machine:
+- `npm run build:image` builds and keeps the image it replaced as `:previous`.
+- `agentbox box upgrade` is the whole sequence, and is safe to put on a timer: it notices
+  whether a new image exists, inspects the box, decides, and either upgrades or explains
+  what it is waiting for. It backs up both volumes before the destructive step, verifies
+  the box that came back, and rolls back if it does not work.
+- `agentbox box up --recreate` is the same destructive step without the deciding, for when
+  a person has already decided.
+- `agentbox box rollback` goes back a version by hand.
+- The web server notices an available upgrade and tells every admin, once per image. It
+  deliberately does not perform one — a server that recreates the box underneath the people
+  using it is a worse surprise than an out-of-date image.
 
-1. **Notice and consent (R6).** The channel adapters can already reach the people bound to
-   a box, so this is a matter of deciding the wording, the countdown, and how postponing
-   works — not of new plumbing.
-2. **A quiet-hours window.** Follows the digest scheduling that already exists.
-3. **Noticing that a new image exists at all** (step 1 of the sequence). Today a person
-   decides to upgrade; nothing offers.
+### Where the judgement lives
 
-So an upgrade is still **initiated** by a person, and is now safe to *complete* without
-one watching: the destructive step refuses when it would destroy something, the data is
-copied first, and a broken image undoes itself.
+`decideUpgrade` in `src/host/upgrade.ts` is a pure function of the situation, separate from
+everything that performs an upgrade. That separation is the point: the interesting cases
+are a half-broken box with two people watching at three in the morning, and those cannot be
+arranged in a test any other way.
+
+Its rule order matters. Safety is decided before convenience — a broken box is not repaired
+by waiting for 4am, and work that would be destroyed is not made expendable by everyone
+being asleep.
+
+### What is left
+
+Postponing is a design, not code: the announcement says to reply "wait", and nothing yet
+listens for it. `ANNOUNCE_MINUTES` is likewise a number nothing counts down. Both belong
+with the multi-person work, because both are really questions about how a bot holds a
+conversation with a room rather than with a person.
