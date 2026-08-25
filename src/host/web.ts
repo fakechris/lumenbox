@@ -288,12 +288,36 @@ export async function fetchPage(
       continue;
     }
     if (response.status >= 400) {
-      throw new WebError(`${target} returned HTTP ${response.status}.`);
+      // A bare status code invites the model to reason from it, and it will reason
+      // wrongly: an agent read a 401 from a code-hosting site as proof that the
+      // repository existed and was merely private, and built a claim on it.
+      const meaning =
+        response.status === 404
+          ? " Nothing is at that address — the URL may be one you guessed rather than one you saw."
+          : response.status === 401 || response.status === 403
+            ? " This says nothing about whether the page exists; sites answer this way for " +
+              "missing pages, private pages, and unwelcome clients alike. Try browser_open."
+            : response.status === 429
+              ? " You are being rate-limited, not told the page is absent."
+              : "";
+      throw new WebError(`${target} returned HTTP ${response.status}.${meaning}`);
     }
 
     const type = String(response.headers["content-type"] ?? "");
     const isHtml = type.includes("html") || (type === "" && /^\s*</.test(response.body));
     const extracted = isHtml ? htmlToText(response.body) : { text: response.body };
+    // Checked before returning, so a block page never reaches the model looking like
+    // content. Raised as an error because that is what it is — the page was not read.
+    const blocked = blockedBy(extracted.text);
+    if (blocked !== undefined) {
+      throw new WebError(
+        `${target.hostname} did not serve the page — it answered with a block or consent ` +
+          `screen ("${blocked.trim()}"). This says nothing about whether the information ` +
+          `exists. Open it with browser_open instead: the box's browser is a real browser ` +
+          `and usually gets through where a plain fetch does not.`
+      );
+    }
+
     const clipped = extracted.text.length > MAX_TEXT;
     return {
       url: target.toString(),
@@ -389,6 +413,59 @@ export function htmlToText(html: string): { title?: string; text: string } {
     .trim();
 
   return { ...(title !== undefined && title !== "" ? { title } : {}), text };
+}
+
+/**
+ * Pages that are not the page you asked for: anti-bot interstitials, consent walls,
+ * "checking your browser", captchas.
+ *
+ * These arrive as HTTP 200 with a title and prose, so they read as a successful fetch —
+ * and an agent that cannot tell "I was blocked" from "there is nothing there" reports
+ * confidently that a thing does not exist. That is not hypothetical: an agent fetched
+ * Google's block page, concluded the chip it was asked about could not be found anywhere,
+ * and then reconciled the gap with a plausible wrong answer.
+ *
+ * The length test is what keeps this from eating real articles. Every one of these pages
+ * is short, because there is nothing on it; a page discussing Cloudflare at length is not
+ * one of them.
+ */
+const BLOCK_SIGNS = [
+  /having trouble accessing/i,
+  /unusual traffic from your computer network/i,
+  /enable ?javascript and cookies to continue/i,
+  /checking (?:if the site connection is secure|your browser)/i,
+  /just a moment\.\.\./i,
+  /attention required/i,
+  /(?:access denied|you have been blocked)/i,
+  /are you a (?:robot|human)/i,
+  /before you continue to/i,
+  /verify you are human/i,
+];
+/** Longer than this and it is a real page that merely mentions one of the phrases. */
+const BLOCK_MAX_CHARS = 1500;
+
+export function blockedBy(text: string): string | undefined {
+  if (text.length > BLOCK_MAX_CHARS) return undefined;
+  const sign = BLOCK_SIGNS.find(pattern => pattern.test(text));
+  return sign === undefined ? undefined : text.match(sign)?.[0];
+}
+
+/**
+ * Search engines, which cannot be searched by fetching them.
+ *
+ * Worth naming rather than letting the block detection catch it, because the advice
+ * differs: this is not a site being unavailable, it is the wrong tool entirely.
+ */
+const SEARCH_ENGINES =
+  /^(?:www\.)?(?:google\.[a-z.]+|bing\.com|duckduckgo\.com|baidu\.com|search\.brave\.com|yandex\.[a-z]+|search\.yahoo\.com)$/i;
+
+export function isSearchEngine(url: string): boolean {
+  try {
+    const target = new URL(url);
+    return SEARCH_ENGINES.test(target.hostname) && /[?&](q|wd|p|text)=/.test(target.search);
+  } catch {
+    return false;
+  }
 }
 
 export interface SearchResult {

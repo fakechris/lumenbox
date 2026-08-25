@@ -18,7 +18,7 @@ import type { ScopeStore } from "./scopes.ts";
 import type { McpManager } from "./mcp.ts";
 import { delegateEnv, PRESETS, presetNamed, quoteForShell } from "./presets.ts";
 import { describeHistory, readHistory } from "./history.ts";
-import { canSearch, fetchPage, guardUrl, searchWeb, WebError } from "./web.ts";
+import { canSearch, fetchPage, guardUrl, isSearchEngine, searchWeb, WebError } from "./web.ts";
 import { guardShellCommand } from "./ui-automation-guard.ts";
 import { dedupeKey, validateRecord } from "./memory.ts";
 import { Claims, heldElsewhere } from "./claims.ts";
@@ -1758,8 +1758,25 @@ export async function dispatchTool(
     }
 
     case "WebFetch": {
+      const target = String(input.url ?? "");
+      // Named before it is attempted, because the advice differs from "the site is down":
+      // a search engine served to a plain fetch is a block page, and an agent that reads
+      // that as "no results" reports that a thing does not exist.
+      if (isSearchEngine(target)) {
+        return {
+          text:
+            "Fetching a search engine does not search it — they serve a block page to " +
+            "anything that is not a browser, and it reads like an empty result.\n\n" +
+            (canSearch()
+              ? "Use WebSearch."
+              : "This installation has no search key configured, so WebSearch is not " +
+                "available. Open the search engine with browser_open instead: the box's " +
+                "browser is a real browser and searches normally."),
+          isError: true,
+        };
+      }
       try {
-        const page = await fetchPage(String(input.url ?? ""));
+        const page = await fetchPage(target);
         const heading = [
           page.title !== undefined ? `# ${page.title}` : undefined,
           // The URL that answered, not the one asked for — a redirect means the agent is

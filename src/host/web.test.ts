@@ -10,7 +10,15 @@
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { fetchPage, forbiddenAddress, htmlToText, searchWeb, SEARCH_KEY_VARIABLE } from "./web.ts";
+import {
+  blockedBy,
+  fetchPage,
+  forbiddenAddress,
+  htmlToText,
+  isSearchEngine,
+  searchWeb,
+  SEARCH_KEY_VARIABLE,
+} from "./web.ts";
 
 test("addresses that mean 'somewhere inside' are named as such, in both families", () => {
   // The reason this exists at all: cloud instance credentials.
@@ -147,4 +155,76 @@ test("searching with no key configured says so, rather than failing as if nothin
   } finally {
     if (previous !== undefined) process.env[SEARCH_KEY_VARIABLE] = previous;
   }
+});
+
+test("a block page is a failure, not an empty answer", async () => {
+  // The exact shape that caused a real wrong answer: HTTP 200, a title, prose. An agent
+  // read it as "this chip does not exist anywhere" and reconciled the gap by inventing.
+  const google =
+    "<title>Google Search</title><body>If you're having trouble accessing Google " +
+    "Search, please click here, or send feedback.</body>";
+  await assert.rejects(
+    fetchPage("https://example.test/s", async () => ({
+      status: 200,
+      headers: { "content-type": "text/html" },
+      body: google,
+      truncated: false,
+    })),
+    /block or consent screen/
+  );
+  // And it must say what to do instead, or the agent simply gives up here.
+  await assert.rejects(
+    fetchPage("https://example.test/s", async () => ({
+      status: 200,
+      headers: { "content-type": "text/html" },
+      body: google,
+      truncated: false,
+    })),
+    /browser_open/
+  );
+
+  for (const wall of [
+    "<body>Just a moment...</body>",
+    "<body>Enable JavaScript and cookies to continue</body>",
+    "<body>Verify you are human</body>",
+    "<body>Attention Required! Access denied</body>",
+  ]) {
+    assert.ok(blockedBy(htmlToText(wall).text) !== undefined, wall);
+  }
+});
+
+test("a real article that merely mentions blocking is not treated as blocked", () => {
+  // The false positive that would matter: an agent told a page was a block screen stops
+  // reading a page that was fine. Length is what separates them — a block page is short
+  // because there is nothing on it.
+  const article = (
+    "Cloudflare's interstitial says 'checking your browser' while it runs its " +
+    "challenge. "
+  ).repeat(40);
+  assert.equal(blockedBy(article), undefined);
+  assert.ok(article.length > 1500);
+});
+
+test("a status code is never handed over bare, because it gets reasoned from", async () => {
+  const status = (code: number) =>
+    fetchPage("https://example.test/x", async () => ({
+      status: code,
+      headers: {},
+      body: "",
+      truncated: false,
+    }));
+  // An agent read a 401 as proof a repository existed and was merely private, and built
+  // a claim on it. Sites answer 401 for absent pages too.
+  await assert.rejects(status(401), /says nothing about whether the page exists/);
+  await assert.rejects(status(404), /may be one you guessed/);
+  await assert.rejects(status(429), /rate-limited, not told the page is absent/);
+});
+
+test("search engines are named as the wrong tool, not left to fail as a fetch", () => {
+  assert.ok(isSearchEngine("https://www.google.com/search?q=thor+t5000"));
+  assert.ok(isSearchEngine("https://duckduckgo.com/?q=x"));
+  assert.ok(isSearchEngine("https://www.baidu.com/s?wd=x"));
+  // A page that merely lives on a search engine's domain is an ordinary page.
+  assert.ok(!isSearchEngine("https://www.google.com/about/"));
+  assert.ok(!isSearchEngine("https://example.com/search?q=x"));
 });
