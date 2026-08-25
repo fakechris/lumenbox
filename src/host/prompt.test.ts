@@ -148,14 +148,27 @@ test("the prompt's sections have an order, and it is the documented one", () => 
     // tasks sits beside plan: both are current intent, the board's just shared.
     // chat-files follows them: where deliverables go is part of this turn's charge,
     // known before the background is read.
-    ["plan", "tasks", "chat-files", "memory", "skills", "history", "shared-memory", "team"]
+    // critical is last, always: a model reads the edges best, and the tail was being spent
+    // on the teammate roster. Every mature prompt reserves it for its own contract.
+    [
+      "plan",
+      "tasks",
+      "chat-files",
+      "memory",
+      "skills",
+      "history",
+      "shared-memory",
+      "team",
+      "critical",
+    ]
   );
 
   // The one that carries an argument: an agent meets its own objective before its background. Put
   // memory first and the objective arrives as a footnote to a pile of facts.
   assert.equal(VOLATILE_SECTIONS[0]?.name, "plan");
   // And delegation is a decision made after the work is understood, not a lens for reading it.
-  assert.equal(VOLATILE_SECTIONS.at(-1)?.name, "team");
+  assert.equal(VOLATILE_SECTIONS.at(-2)?.name, "team");
+  assert.equal(VOLATILE_SECTIONS.at(-1)?.name, "critical");
 });
 
 test("a section is left out when empty, unless its emptiness is worth saying", () => {
