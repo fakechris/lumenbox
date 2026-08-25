@@ -53,6 +53,10 @@ const LOAD_TIMEOUT_MS = 15_000;
  * the snapshot before then reads the old page.
  */
 const NAVIGATION_GRACE_MS = 500;
+/** How long to keep waiting for a script-rendered page to stop growing. */
+const CONTENT_SETTLE_MAX_MS = 6_000;
+const CONTENT_POLL_MS = 400;
+
 /** How long to wait for a browser we started to become drivable. */
 const BROWSER_START_TIMEOUT_MS = 30_000;
 /** How long a wait-for condition may be waited on, unless the caller asks for less. */
@@ -248,6 +252,45 @@ class BrowserPage {
       await waitUntil(() => this.loaded, LOAD_TIMEOUT_MS);
     }
     await new Promise(resolve => setTimeout(resolve, SETTLE_MS));
+    await this.waitForContent();
+  }
+
+  /**
+   * Waits for the page to stop growing, not merely to finish loading.
+   *
+   * The load event means the document arrived, which on a modern site means the shell
+   * arrived: navigation, a search box, and nothing else. Content comes afterwards, by
+   * script. A snapshot taken at the load event plus a fixed pause catches the shell — and
+   * an agent handed the shell of a search page reasonably concludes there were no results.
+   *
+   * That is not hypothetical. An agent searched for a real product, was handed a page
+   * containing the search box and the navigation, and reported that the part did not
+   * exist. The results were there a second later.
+   *
+   * Two consecutive samples of the same size mean the page has settled. Cheap — it is one
+   * small evaluate per sample — and it stops early, so a page that was already complete
+   * pays one round trip.
+   */
+  private async waitForContent(): Promise<void> {
+    const deadline = Date.now() + CONTENT_SETTLE_MAX_MS;
+    let previous = -1;
+    while (Date.now() < deadline) {
+      let size = 0;
+      try {
+        const result = (await this.session.send("Runtime.evaluate", {
+          expression: "(document.body && document.body.innerText || '').length",
+          returnByValue: true,
+        })) as { result?: { value?: number } };
+        size = Number(result.result?.value ?? 0);
+      } catch {
+        return;
+      }
+      // Stable, and actually has something on it. A page that is genuinely empty would
+      // otherwise settle instantly at zero and learn nothing.
+      if (size > 0 && size === previous) return;
+      previous = size;
+      await new Promise(resolve => setTimeout(resolve, CONTENT_POLL_MS));
+    }
   }
 
   private async frameTree(): Promise<FrameContext[]> {

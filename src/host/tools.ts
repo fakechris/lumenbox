@@ -917,7 +917,10 @@ export function buildTools(
           "look like `e2@f1`; use them exactly as written.\n\n" +
           "The browser is your box's own, on your desktop, and its logins persist between " +
           "turns. If a page defeats these tools, fall back to `computer` and drive it by " +
-          "eye rather than retrying here harder.",
+          "eye rather than retrying here harder.\n\n" +
+          "If what comes back is only navigation, a search box, or a skeleton, the page's " +
+          "content had not rendered yet — that is not an empty page and not a missing " +
+          "result. Use `browser_wait_for` on something you expect to see, and look again.",
         input_schema: {
           type: "object",
           properties: { url: { type: "string", description: "The http or https URL to open." } },
