@@ -589,7 +589,7 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
           : "Allowed once. Send the agent a message to have it retry.";
     },
     log: line => log(line),
-    ask: async (agentName, text, identity, chatKey, onProgress) => {
+    ask: async (agentName, text, identity, chatKey, onProgress, taskId) => {
       const agent =
         agentName !== undefined
           ? registry.resolve(agentName)
@@ -613,6 +613,7 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
         agentId: agent.id,
         before,
         identity,
+        ...(taskId !== undefined ? { taskId } : {}),
         at: new Date().toISOString(),
       });
       broadcast({ type: "prompt", agentId: agent.id, text, userId: principal, conversation });
@@ -864,16 +865,12 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
         `This finished while I was restarting, so it is arriving late:\n\n${reply}`;
       try {
         await channels.pushToChat(owed.chatKey, late);
-        // Found by conversation rather than carried on the record: the board entry and the
-        // delivery note are made by two different callbacks and neither sees the other's
-        // id. Closing it matters — the rescue below would otherwise reopen a task whose
-        // answer was just handed over, and ask the person to request it again.
-        const answered = orchestrator.tasks
-          ?.list()
-          .find(task => task.status === "doing" && task.conversation === owed.conversation);
-        if (answered !== undefined) {
+        // Closed by the id the request carried. It matters: the sweep below would
+        // otherwise reopen a task whose answer had just been handed over and ask the
+        // person to request it again.
+        if (owed.taskId !== undefined) {
           orchestrator.tasks?.update(
-            answered.id,
+            owed.taskId,
             { status: "done", note: "answered after a restart" },
             "restart"
           );

@@ -213,7 +213,16 @@ export interface ChannelManagerDeps {
     text: string,
     identity: string,
     chatKey: string,
-    onProgress?: (action: string, tool?: string) => void
+    onProgress?: (action: string, tool?: string) => void,
+    /**
+     * The board entry this request opened, when it opened one.
+     *
+     * Passed rather than looked up afterwards. The alternative — finding the task by its
+     * conversation when an answer is recovered after a restart — is an inference where an
+     * exact link is already to hand, and it closes the wrong task the moment a
+     * conversation has two of them open.
+     */
+    taskId?: string
   ) => Promise<string>;
   /**
    * How many requests are ahead of a new one for this agent and chat. Zero means it
@@ -868,7 +877,14 @@ ${input.options.map(option => `· ${option}`).join("\n")}`
     };
 
     try {
-      const reply = await this.deps.ask(agentName, text, message.identity, chatKey, onProgress);
+      const reply = await this.deps.ask(
+        agentName,
+        text,
+        message.identity,
+        chatKey,
+        onProgress,
+        taskId
+      );
       clearTimeout(ackTimer);
       finishCard("done");
       mark("done");
