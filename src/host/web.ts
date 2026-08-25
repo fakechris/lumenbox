@@ -447,16 +447,30 @@ export function htmlToText(html: string): { title?: string; text: string } {
   // budget before the prose starts — a fetch of a Wikipedia page came back as several
   // hundred characters of sidebar. Where a page says which part is the content, believe
   // it; where it does not, keep everything, because a wrong guess loses the page.
-  // Only these two, and only because both have a matching closing tag this can find
-  // without parsing. A `[role=main]` on an arbitrary element cannot be closed correctly
-  // by a regex — it would end at the first `</...>` inside and silently drop the rest of
-  // the article, which is worse than keeping the navigation.
+  //
+  // Only when there is exactly one. A blog index, a forum, a changelog and a search
+  // results page are all several <article> elements, and taking the first silently
+  // returned one entry and dropped the rest — the agent then reported that there was one
+  // post. Keeping the whole body there costs some navigation and loses nothing.
+  const articles = html.match(/<article\b[^>]*>/gi)?.length ?? 0;
   const main =
     /<main\b[^>]*>([\s\S]*?)<\/main>/i.exec(html) ??
-    /<article\b[^>]*>([\s\S]*?)<\/article>/i.exec(html);
+    (articles === 1 ? /<article\b[^>]*>([\s\S]*?)<\/article>/i.exec(html) : null);
   const body = main?.[1] !== undefined && main[1].length > 200 ? main[1] : html;
 
-  let text = body
+  // Preformatted text is lifted out before anything touches whitespace, and put back
+  // afterwards. Everything below collapses runs of spaces and strips indentation, which
+  // for prose is right and for code is destruction: `def f():` and its indented body came
+  // back flattened to the left margin — syntactically plausible Python that means
+  // something else. An agent sent to read documentation gets the payload it was sent for,
+  // silently corrupted.
+  const preserved: string[] = [];
+  const withoutPre = body.replace(/<pre\b[^>]*>([\s\S]*?)<\/pre>/gi, (_match, inner: string) => {
+    preserved.push(decodeEntities(String(inner).replace(/<[^>]+>/g, "")));
+    return `\n\u0000PRE${preserved.length - 1}\u0000\n`;
+  });
+
+  let text = withoutPre
     // Whole subtrees that are never content. Dropped with their contents, unlike tags.
     .replace(/<(script|style|noscript|template|svg|head)\b[\s\S]*?<\/\1>/gi, " ")
     .replace(/<!--[\s\S]*?-->/g, " ")
@@ -481,7 +495,9 @@ export function htmlToText(html: string): { title?: string; text: string } {
     .replace(/[^\S\n]+/g, " ")
     .replace(/ *\n */g, "\n")
     .replace(/\n{3,}/g, "\n\n")
-    .trim();
+    .trim()
+    // Put back exactly as it was written.
+    .replace(/\u0000PRE(\d+)\u0000/g, (_match, index: string) => preserved[Number(index)] ?? "");
 
   return { ...(title !== undefined && title !== "" ? { title } : {}), text };
 }

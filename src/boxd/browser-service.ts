@@ -24,7 +24,7 @@
 import { spawn } from "node:child_process";
 import { realpathSync, statSync } from "node:fs";
 import { CdpError, CdpSession, closeTarget, listTargets, openTarget, type CdpTarget } from "./cdp.ts";
-import { READ_SCRIPT, SNAPSHOT_SCRIPT } from "./browser-snapshot.ts";
+import { MAX_NODES, MAX_READ_CHARS, READ_SCRIPT, snapshotScript } from "./browser-snapshot.ts";
 
 /**
  * The desktop the upgrade check runs on.
@@ -36,6 +36,11 @@ import { READ_SCRIPT, SNAPSHOT_SCRIPT } from "./browser-snapshot.ts";
  * actually use rather than a headless imitation of it.
  */
 export const SCRATCH_DISPLAY = 32;
+
+interface FrameNode {
+  frame: { id: string; url: string };
+  childFrames?: FrameNode[];
+}
 
 /** Debugging ports are per desktop, matching the profile-per-desktop split in box-chrome. */
 export const CDP_PORT_BASE = 9222;
@@ -153,10 +158,28 @@ export interface BrowserResult {
 }
 
 interface FrameContext {
-  /** Empty for the main frame; "f1", "f2"… for children, which is what qualifies a ref. */
+  /** Empty for the main frame; "@f<hash>" for the rest, which is what qualifies a ref. */
   suffix: string;
-  contextId: number;
+  /** Absent for a cross-origin frame, whose contents this session cannot reach. */
+  contextId?: number;
   url: string;
+}
+
+/**
+ * A frame's handle, derived from its address rather than its position.
+ *
+ * Numbering frames by enumeration order is the same mistake element refs used to make:
+ * an advertisement iframe appearing shifts every later frame, and a ref an agent is
+ * holding quietly comes to mean a different document. Derived from the URL, `@f3k2s` is
+ * the same frame in the next snapshot or it is gone.
+ */
+function frameSuffix(url: string): string {
+  let hash = 2166136261;
+  for (let index = 0; index < url.length; index++) {
+    hash ^= url.charCodeAt(index);
+    hash = Math.imul(hash, 16777619) >>> 0;
+  }
+  return `@f${hash.toString(36).slice(0, 4)}`;
 }
 
 /**
@@ -310,24 +333,26 @@ class BrowserPage {
 
   private async frameTree(): Promise<FrameContext[]> {
     const tree = (await this.session.send("Page.getFrameTree")) as {
-      frameTree: {
-        frame: { id: string; url: string };
-        childFrames?: { frame: { id: string; url: string } }[];
-      };
+      frameTree: { frame: { id: string; url: string }; childFrames?: FrameNode[] };
     };
     const found: FrameContext[] = [];
     const main = this.contexts.get(tree.frameTree.frame.id);
     if (main !== undefined) found.push({ suffix: "", contextId: main, url: tree.frameTree.frame.url });
-    let index = 0;
-    for (const child of tree.frameTree.childFrames ?? []) {
-      index += 1;
-      const contextId = this.contexts.get(child.frame.id);
-      // A frame with no execution context has not run yet; it will appear on the next
-      // snapshot rather than being reported as an error now.
-      if (contextId !== undefined) {
-        found.push({ suffix: `@f${index}`, contextId, url: child.frame.url });
+
+    // Recursive: only the top level was walked, so a frame inside a frame — which is what
+    // a payment form inside a checkout widget is — was missing entirely and silently.
+    const descend = (nodes: FrameNode[]): void => {
+      for (const child of nodes) {
+        const contextId = this.contexts.get(child.frame.id);
+        found.push({
+          suffix: frameSuffix(child.frame.url),
+          ...(contextId !== undefined ? { contextId } : {}),
+          url: child.frame.url,
+        });
+        descend(child.childFrames ?? []);
       }
-    }
+    };
+    descend(tree.frameTree.childFrames ?? []);
     return found;
   }
 
@@ -342,15 +367,29 @@ class BrowserPage {
   async snapshot(): Promise<{ text: string; url: string; title: string }> {
     this.frames = await this.frameTree();
     const parts: string[] = [];
+    let budget = MAX_NODES;
     for (const frame of this.frames) {
+      // A frame with no execution context is cross-origin and out of process: its
+      // contents are unreachable from this session. Said out loud rather than skipped,
+      // because a checkout page whose card fields are simply absent is a page an agent
+      // reasons about the absence of.
+      if (frame.contextId === undefined) {
+        parts.push(`\n[frame ${frame.suffix.slice(1)} (${frame.url}) is cross-origin; its contents cannot be read from here. Open it directly if you need what is inside.]`);
+        continue;
+      }
+      if (budget <= 0) {
+        parts.push("\n(the rest of this page's frames were not read — the outline is full)");
+        break;
+      }
       const result = (await this.session.send("Runtime.evaluate", {
-        expression: SNAPSHOT_SCRIPT,
+        expression: snapshotScript(budget),
         contextId: frame.contextId,
         returnByValue: true,
       })) as { result?: { value?: string }; exceptionDetails?: unknown };
       if (result.exceptionDetails !== undefined) continue;
       const body = (result.result?.value ?? "").trim();
       if (body === "") continue;
+      budget -= body.split("\n").length;
       if (frame.suffix === "") {
         parts.push(body);
       } else {
@@ -403,7 +442,7 @@ class BrowserPage {
 
   /** Turns a ref back into a live element handle, in whichever frame owns it. */
   private async resolve(ref: string): Promise<string> {
-    const match = /^(e[0-9a-z]+)(@f\d+)?$/i.exec(ref.trim());
+    const match = /^(e[0-9a-z]+)(@f[0-9a-z]+)?$/i.exec(ref.trim());
     if (match === null) {
       throw new CdpError(`"${ref}" is not a ref. Refs look like e1k4t, or e1k4t@f1 inside a frame.`);
     }
@@ -640,7 +679,13 @@ class BrowserPage {
       expression: READ_SCRIPT,
       returnByValue: true,
     })) as { result?: { value?: string } };
-    return result.result?.value ?? "";
+    const text = result.result?.value ?? "";
+    // Bounded like WebFetch is. The same content reached the model through two tools, one
+    // of which had a limit and one of which did not, so a long article was affordable to
+    // fetch and ruinous to read.
+    return text.length > MAX_READ_CHARS
+      ? `${text.slice(0, MAX_READ_CHARS)}\n\n[... the rest of the page is not shown]`
+      : text;
   }
 
   /** Everything an action returns: what happened, then what the page looks like now. */

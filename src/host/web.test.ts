@@ -245,3 +245,35 @@ test("what `file:` means depends on which machine is asking", async () => {
   // The address guard still applies to anything with a host to resolve, either way.
   await assert.rejects(guardUrl("http://169.254.169.254/latest/", true), /credentials/);
 });
+
+test("a page of several articles keeps all of them", () => {
+  // Taking the first <article> silently returned one entry from a blog index, a forum, a
+  // changelog or a results page — and the agent then reported that there was one post.
+  const index =
+    "<body><article><h2>First</h2><p>one</p></article>" +
+    "<article><h2>SECOND</h2><p>two</p></article>" +
+    "<article><h2>THIRD</h2><p>three</p></article></body>";
+  const { text } = htmlToText(index);
+  assert.match(text, /SECOND/);
+  assert.match(text, /THIRD/);
+
+  // One article is still the content, and its navigation still goes.
+  const body = "The real content here is long enough to matter and should be kept. ".repeat(5);
+  const single = `<body><nav>MENUITEM Home</nav><article><h1>T</h1><p>${body}</p></article></body>`;
+  assert.doesNotMatch(htmlToText(single).text, /MENUITEM/);
+});
+
+test("preformatted text keeps its indentation, because code is the payload", () => {
+  // Everything else here collapses runs of spaces, which for prose is right and for code
+  // is destruction: this came back flattened to the left margin as syntactically
+  // plausible Python that means something else.
+  const { text } = htmlToText(
+    "<body><p>Example:</p><pre><code>def f():\n    if x:\n        return 1</code></pre></body>"
+  );
+  assert.match(text, /def f\(\):\n {4}if x:\n {8}return 1/);
+  assert.match(text, /Example:/);
+
+  // Entities inside a code block are still decoded — otherwise a generic type comes back
+  // as &lt;T&gt; and the agent copies that into a file.
+  assert.match(htmlToText("<pre>Map&lt;K, V&gt;</pre>").text, /Map<K, V>/);
+});

@@ -23,7 +23,13 @@
  * something on a changed page, and a click that lands on the wrong element.
  */
 
-/** How many elements one frame may contribute before the outline is cut. */
+/**
+ * How many elements the whole outline may contain before it is cut.
+ *
+ * Across every frame together, not per frame. It was per frame, which meant a page with
+ * ten iframes could return four thousand lines — the cap was the one thing keeping a
+ * snapshot affordable, and frames quietly multiplied it.
+ */
 export const MAX_NODES = 400;
 
 /**
@@ -34,9 +40,9 @@ export const MAX_NODES = 400;
  * break in surprising ways when something walks them and leaves attributes behind, and
  * this has to work on sites nobody tested it against.
  */
-export const SNAPSHOT_SCRIPT = String.raw`
+const SNAPSHOT_BODY = String.raw`
 (() => {
-  const MAX_NODES = ${MAX_NODES};
+  const MAX_NODES = __BUDGET__;
   const refs = new Map();
   globalThis.__lumenRefs = refs;
   const seen = new Map();
@@ -216,3 +222,18 @@ export const READ_SCRIPT = String.raw`
   return main.innerText.replace(/\n{3,}/g, "\n\n").trim();
 })()
 `;
+
+
+/**
+ * The walker, with however much of the node budget is left.
+ *
+ * A page's frames share one budget rather than each having their own, so the main
+ * document is walked first and an advertising iframe cannot spend the allowance the
+ * content needed.
+ */
+export function snapshotScript(budget: number): string {
+  return SNAPSHOT_BODY.replace("__BUDGET__", String(Math.max(0, Math.floor(budget))));
+}
+
+/** How much text `browser_read` may return, matching WebFetch's own limit. */
+export const MAX_READ_CHARS = 40_000;
