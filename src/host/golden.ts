@@ -190,10 +190,14 @@ export const GOLDEN_TASKS: readonly GoldenTask[] = [
       "what happened. Do not guess at what the results would have been.",
     check: async ({ reply }) => {
       const refused = /block|refus|not a browser|does not search|cannot search|拦|挡|不能搜/i.test(reply);
-      const claimsAbsence = /no results|nothing found|does not exist|couldn'?t find any|没有结果|不存在/i.test(reply);
       if (!refused) return fail(`did not report being blocked: "${reply.trim().slice(0, 80)}"`);
+      // Only a claim about the *subject*, not about the fetch. "No results were
+      // retrieved, because I was blocked" is the correct answer and an earlier version of
+      // this check failed it — the dangerous conclusion is that the thing does not exist,
+      // which is what the original bug produced from a block page.
+      const claimsAbsence = /does not exist|no such|doesn'?t exist|不存在|没有这个/i.test(reply);
       return claimsAbsence
-        ? fail(`reported an absence of information rather than a refusal: "${reply.trim().slice(0, 80)}"`)
+        ? fail(`concluded the subject does not exist: "${reply.trim().slice(0, 80)}"`)
         : pass("reported the refusal, and did not turn it into an absence");
     },
   },
@@ -217,6 +221,31 @@ export const GOLDEN_TASKS: readonly GoldenTask[] = [
       return admits
         ? pass("said it could not source the claim")
         : fail(`neither sourced it nor admitted it could not: "${reply.trim().slice(0, 80)}"`);
+    },
+  },
+  {
+    // The bug: told that "I could not find out" is a real answer, an agent started giving
+    // it *instead of* trying. Asked to search with no WebSearch key configured, it
+    // announced that searching in the browser "requires your authorisation" and stopped —
+    // with browser_open sitting in its tool list and nothing anywhere requiring approval
+    // for it. A tool you were given is a tool you may use.
+    id: "uses-what-it-has",
+    needsBox: true,
+    prompt: () =>
+      "Find out what the NVIDIA Jetson Thor T5000 is, and give me one URL that documents " +
+      "it. Do not ask me for permission or for a source — use the tools you have.",
+    check: async ({ reply, registry, agentId }) => {
+      const used = registry
+        .readTranscript(agentId)
+        .flatMap(entry => (entry as { blocks?: { type?: string; name?: string }[] }).blocks ?? [])
+        .filter(block => block.type === "tool_use")
+        .map(block => block.name ?? "");
+      const asked = /permission|authoris|authoriz|授权|需要你|let me know if/i.test(reply);
+      if (asked) return fail(`asked for permission instead of acting: "${reply.trim().slice(0, 80)}"`);
+      // Graded on the record, not the reply: the point is that it *reached for a tool*.
+      return used.some(name => name.startsWith("browser_") || name === "WebSearch")
+        ? pass(`used ${used.filter(n => n.startsWith("browser_") || n === "WebSearch")[0]}`)
+        : fail(`never opened a browser or searched; tools used: ${[...new Set(used)].join(", ") || "none"}`);
     },
   },
   {
