@@ -617,6 +617,22 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
       // chat stays the address — replies, files and the outbox still go to the room.
       const conversation = conversationIdFor(threadKey ?? chatKey);
       const principal = principals.resolve(identity).id;
+
+      // Made before the turn, because the prompt states the path as a fact — "its
+      // directory on the box is X/" — while the directory was created lazily, on the first
+      // file in or out. An agent that went looking found nothing and said so, correctly;
+      // it then put a deliverable somewhere nobody would collect it. Rare before, because
+      // most turns never touch the outbox, and constant afterwards, because a conversation
+      // per topic means most turns now start with no directory at all.
+      void orchestrator
+        .boxClient()
+        ?.exec(`mkdir -p '${WORK_DIR}/chats/${conversation}/inbox' '${WORK_DIR}/chats/${conversation}/outbox'`)
+        .catch((error: unknown) => {
+          log(
+            `could not create the file exchange for ${conversation}: ` +
+              `${error instanceof Error ? error.message : String(error)}`
+          );
+        });
       const before = registry.readTranscript(agent.id, conversation).length;
       // Written before the turn runs, not after it returns. This note is what lets any
       // later process recover the answer: everything the agent says past `before` in this

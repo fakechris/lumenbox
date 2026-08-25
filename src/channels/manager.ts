@@ -751,7 +751,14 @@ ${input.options.map(option => `· ${option}`).join("\n")}`
       message.messageId !== undefined ? { replyTo: message.messageId } : undefined;
     if (this.deps.receiveFiles === undefined) return;
     try {
-      const saved = await this.deps.receiveFiles(chatKey, message.files ?? []);
+      // The conversation, not the room: the prompt tells the agent its files are under
+      // the conversation's directory, and after conversations began following threads the
+      // two disagreed — the agent was sent to a path nothing wrote and nothing read, which
+      // it noticed and reported. One key for both, and the room stays the delivery address.
+      const saved = await this.deps.receiveFiles(
+        message.threadKey ?? chatKey,
+        message.files ?? []
+      );
       if (saved === undefined) {
         await this.deliver(
           adapter,
@@ -965,7 +972,7 @@ ${input.options.map(option => `· ${option}`).join("\n")}`
       // what failed stays in the outbox for the next task rather than vanishing.
       if (this.deps.collectOutbox !== undefined) {
         try {
-          const files = await this.deps.collectOutbox(chatKey);
+          const files = await this.deps.collectOutbox(message.threadKey ?? chatKey);
           const delivered: string[] = [];
           for (const file of files) {
             try {
@@ -984,7 +991,9 @@ ${input.options.map(option => `· ${option}`).join("\n")}`
               this.deps.log(`channel ${adapter.name}: file push failed for ${file.name} (${detail})`);
             }
           }
-          if (delivered.length > 0) await this.deps.outboxDelivered?.(chatKey, delivered);
+          if (delivered.length > 0) {
+            await this.deps.outboxDelivered?.(message.threadKey ?? chatKey, delivered);
+          }
         } catch (error) {
           const detail = error instanceof Error ? error.message : String(error);
           this.deps.log(`channel ${adapter.name}: outbox failed (${detail})`);

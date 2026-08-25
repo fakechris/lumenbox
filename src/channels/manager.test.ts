@@ -889,3 +889,37 @@ test("a pushed approval answered from the app leaves the chat reply saying so", 
   const reply = await adapter.inject({ identity: "telegram:7", senderLabel: "c", text: "deny" });
   assert.match(reply ?? "", /no longer waiting/);
 });
+
+test("a chat's files follow the conversation, and its reply follows the room", async () => {
+  // These came apart when conversations began following threads: the prompt told the agent
+  // its files were under the conversation's directory while the server read the room's, so
+  // it was sent to a path nothing wrote and nothing read. It noticed and said so, which is
+  // the only reason this was caught before somebody lost a deliverable.
+  const adapter = cardAdapter();
+  const asked: string[] = [];
+  const manager = new ChannelManager({
+    mayDrive: () => true,
+    ask: async () => "done",
+    collectOutbox: async key => {
+      asked.push(key);
+      return [];
+    },
+    log: () => {},
+  });
+  manager.register(adapter, true, "test");
+  await started(manager);
+
+  await adapter.inject({
+    identity: "feishu:ou_1",
+    chatKey: "feishu:oc_room",
+    threadKey: "feishu:oc_room:omt_topic",
+    messageId: "om_1",
+    senderLabel: "chris",
+    text: "do a thing",
+  });
+  await manager.idle();
+
+  // The topic owns the files; the room is still where the answer is posted.
+  assert.deepEqual(asked, ["feishu:oc_room:omt_topic"]);
+  assert.equal(adapter.chatSent.at(-1)?.text, "done");
+});
