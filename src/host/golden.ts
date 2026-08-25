@@ -41,11 +41,23 @@ export interface GoldenContext {
    * summary profile is already the cheap-and-mechanical one.
    */
   judge: (question: string, text: string) => Promise<boolean>;
+  /**
+   * A value unique to this attempt, planted in the prompt and required by the check.
+   *
+   * Because a fixed marker is residue. `shell` wrote golden-42 to a fixed path and the
+   * check read that path — so once any run had passed, a later run in which the command
+   * never executed would read the old file and pass on it. The suite would keep saying
+   * yes long after the thing stopped working, which is the same failure as grading the
+   * reply for a string that was in the prompt, arriving from the other direction.
+   *
+   * Per attempt rather than per run, so a retry cannot pass on what the first try left.
+   */
+  token: string;
 }
 
 export interface GoldenTask {
   id: string;
-  prompt: (context: { teammateName: string }) => string;
+  prompt: (context: { teammateName: string; token: string }) => string;
   needsBox?: boolean;
   /**
    * Puts the world into the state the task needs, before the model is asked anything.
@@ -55,19 +67,34 @@ export interface GoldenTask {
    * reproduce it exactly — quotes and all — so a mangled retype failed the task for a
    * reason that had nothing to do with what it was testing.
    */
-  setup?: (context: { orchestrator: Orchestrator }) => Promise<void>;
-  check: (context: GoldenContext) => Promise<{ pass: boolean; detail: string }>;
+  setup?: (context: { orchestrator: Orchestrator; token: string }) => Promise<void>;
+  check: (context: GoldenContext) => Promise<{
+    pass: boolean;
+    detail: string;
+    /** True when the harness, not the agent, is what failed. */
+    infrastructure?: boolean;
+  }>;
 }
 
 export interface GoldenResult {
   id: string;
-  status: "pass" | "fail" | "skipped";
+  /**
+   * `error` is not a failure of the agent.
+   *
+   * The box being unreachable, a desktop belonging to somebody else, a judge that would
+   * not answer — none of those say anything about the model, and scoring them as failures
+   * makes a red suite mean two different things. Two tasks failed on a desktop collision
+   * while testing nothing about themselves, and the row looked exactly like a regression.
+   */
+  status: "pass" | "fail" | "skipped" | "error";
   detail: string;
   ms: number;
 }
 
 const pass = (detail: string) => ({ pass: true, detail });
 const fail = (detail: string) => ({ pass: false, detail });
+/** Something outside the agent went wrong; this is not evidence about the model. */
+const broken = (detail: string) => ({ pass: false, infrastructure: true, detail });
 
 /**
  * Puts several closed questions to the judge and requires the expected answer to each.
@@ -87,7 +114,8 @@ async function judgeAll(
     } catch (error) {
       // A suite that cannot grade must not report a pass. Said as its own kind of
       // failure so nobody reads it as the agent having done something wrong.
-      return fail(`could not be graded: ${error instanceof Error ? error.message : error}`);
+      // The rubric or the judge failed, not the agent.
+      return broken(`could not be graded: ${error instanceof Error ? error.message : error}`);
     }
     if (answer !== item.expect) return fail(`${item.wrong}: "${reply.trim().slice(0, 80)}"`);
   }
@@ -199,23 +227,23 @@ export const GOLDEN_TASKS: readonly GoldenTask[] = [
     // exactly the shape that produced a confident wrong answer.
     id: "renders-late",
     needsBox: true,
-    setup: async ({ orchestrator }) => {
+    setup: async ({ orchestrator, token }) => {
       // Written to a file rather than inlined in the prompt, so the model only has to
       // open a path. ASCII only: a `data:` URL carrying "Loading…" came back mojibake,
       // which would have failed the task for the wrong reason.
       await orchestrator
         .boxClient()!
         .writeFile(
-          "/home/box/work/golden-late.html",
+          `/home/box/work/golden-late-${token}.html`,
           "<h1 id=x>Loading</h1><script>setTimeout(function(){" +
-            "document.getElementById('x').textContent='GOLDEN-LATE-9471'},600)</script>"
+            `document.getElementById('x').textContent='LATE-${token}'},600)</script>`
         );
     },
-    prompt: () =>
-      "Open file:///home/box/work/golden-late.html in the browser and tell me the " +
-      "codeword printed on the page.",
-    check: async ({ reply }) =>
-      /GOLDEN-LATE-9471/.test(reply)
+    prompt: ({ token }) =>
+      `Open file:///home/box/work/golden-late-${token}.html in the browser and tell me ` +
+      "the codeword printed on the page.",
+    check: async ({ reply, token }) =>
+      new RegExp(`LATE-${token}`).test(reply)
         ? pass("waited for the content instead of reading the shell")
         : fail(`did not see the late content: "${reply.trim().slice(0, 80)}"`),
   },
@@ -252,6 +280,11 @@ export const GOLDEN_TASKS: readonly GoldenTask[] = [
       const searched = used.find(name => name.startsWith("browser_") || name === "WebSearch");
       if (!fetched) return fail(`never called WebFetch; used: ${[...new Set(used)].join(", ")}`);
       if (searched === undefined) {
+        // A desktop that belongs to somebody else is the harness sharing a box, not the
+        // agent giving up, and the two must not read the same on a board.
+        if (/belongs to another agent|no browser is listening/i.test(reply)) {
+          return broken(`the box refused the browser: "${reply.trim().slice(0, 70)}"`);
+        }
         return fail(`a refused fetch stopped it; tools used: ${[...new Set(used)].join(", ")}`);
       }
 
@@ -284,8 +317,14 @@ export const GOLDEN_TASKS: readonly GoldenTask[] = [
       "alone does not count.",
     check: async ({ orchestrator }) => {
       const board = orchestrator.tasks?.list() ?? [];
-      const task = board.find(entry => /zephyrus|qx-880/i.test(entry.title));
-      if (task === undefined) return fail(`no task about the claim on the board (${board.length} tasks)`);
+      const matches = board.filter(entry => /zephyrus|qx-880/i.test(entry.title));
+      if (matches.length === 0) return fail(`no task about the claim on the board (${board.length} tasks)`);
+      // Exactly one. Several means it recorded the same verdict more than once, and
+      // taking the first would let a `blocked` duplicate hide a `done` original.
+      if (matches.length > 1) {
+        return fail(`${matches.length} tasks about the claim: ${matches.map(t => `${t.id}=${t.status}`).join(", ")}`);
+      }
+      const task = matches[0]!;
       // The whole check. An unsourceable claim must not come back as done, and the field
       // says which — no phrasing involved.
       if (task.status === "blocked") return pass(`recorded blocked: ${task.history.at(-1)?.note ?? ""}`);
@@ -331,32 +370,35 @@ export const GOLDEN_TASKS: readonly GoldenTask[] = [
     // nothing passed it — and it did exactly that for a whole run in which the box was
     // unreachable, hiding the outage it should have caught. A golden task gradeable from
     // its own prompt is worse than no golden task.
-    prompt: () =>
-      "Run `echo golden-42 > /home/box/work/golden-shell.txt` in the shell, then tell me " +
-      "its exact output.",
-    check: async ({ orchestrator }) => {
+    prompt: ({ token }) =>
+      `Run \`echo ${token} > /home/box/work/golden-${token}.txt\` in the shell, then tell ` +
+      "me its exact output.",
+    check: async ({ orchestrator, token }) => {
       try {
-        const read = await orchestrator
-          .boxClient()!
-          .readFile("/home/box/work/golden-shell.txt");
-        return read.content.includes("golden-42")
+        const read = await orchestrator.boxClient()!.readFile(`/home/box/work/golden-${token}.txt`);
+        return read.content.includes(token)
           ? pass("the command actually ran")
           : fail(`the file says "${read.content.slice(0, 40)}"`);
-      } catch (error) {
-        return fail(error instanceof Error ? error.message : String(error));
+      } catch {
+        // Absent means it never ran. Previously both the marker and the path were fixed,
+        // so once any run had passed, a run in which nothing executed read the old file
+        // and passed on it.
+        return fail("the file the command should have written is not there");
       }
     },
   },
   {
     id: "file-write",
     needsBox: true,
-    prompt: () =>
-      "Write the single line 'golden file' to /home/box/work/golden.txt using your " +
-      "file tools, then confirm.",
-    check: async ({ orchestrator }) => {
+    prompt: ({ token }) =>
+      `Write the single line '${token}' to /home/box/work/golden-file-${token}.txt using ` +
+      "your file tools, then confirm.",
+    check: async ({ orchestrator, token }) => {
       try {
-        const read = await orchestrator.boxClient()!.readFile("/home/box/work/golden.txt");
-        return read.content.includes("golden file")
+        const read = await orchestrator
+          .boxClient()!
+          .readFile(`/home/box/work/golden-file-${token}.txt`);
+        return read.content.includes(token)
           ? pass("the file exists with the line")
           : fail(`file content: "${read.content.slice(0, 40)}"`);
       } catch (error) {

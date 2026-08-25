@@ -1702,9 +1702,23 @@ export async function dispatchTool(
         };
       }
 
+      // Refused rather than left to a default. With no display named, boxd falls back to
+      // the first one — which belongs to whichever agent was given it — so an agent whose
+      // own desktop failed to start would silently drive somebody else's screen. Observed:
+      // a desktop that would not come up produced "Desktop 1 belongs to another agent",
+      // which reads as a permissions problem and is actually this.
+      if (context.displayIndex === undefined) {
+        return {
+          text:
+            "Your desktop is not available, so the browser cannot be driven — and it must " +
+            "not fall back to another agent's screen. Try again shortly, or use WebFetch " +
+            "if you only need to read a page.",
+          isError: true,
+        };
+      }
       const request: BrowserRequest = {
         op: name === "browser_wait_for" ? "wait" : name.slice("browser_".length),
-        ...(context.displayIndex !== undefined ? { display: context.displayIndex } : {}),
+        display: context.displayIndex,
         ...(context.boxOwner !== undefined ? { owner: context.boxOwner } : {}),
       };
       if (name === "browser_open") {

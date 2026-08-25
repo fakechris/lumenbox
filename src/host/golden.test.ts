@@ -32,6 +32,7 @@ const context = (over: Partial<GoldenContext>): GoldenContext =>
     orchestrator: { tasks: { list: () => [] }, boxClient: () => undefined },
     // Answers whatever the grader hopes for, so a grader leaning on it is caught.
     judge: async () => true,
+    token: "test-token",
     ...over,
   }) as unknown as GoldenContext;
 
@@ -110,4 +111,61 @@ test("no grader that can be fooled by a cooperative judge remains", async () => 
     const result = await task.check(empty).catch(() => ({ pass: false, detail: "threw" }));
     assert.equal(result.pass, false, `${task.id} passed on empty records`);
   }
+});
+
+test("what a previous run left behind cannot pass for work this one did", async () => {
+  // Both the marker and the path used to be fixed, so once any run had passed, a run in
+  // which the command never executed read the old file and passed on it — a suite that
+  // keeps saying yes long after the thing stopped working.
+  const stale = "residue-from-an-earlier-run";
+  for (const id of ["shell", "file-write"]) {
+    const result = await taskNamed(id).check(
+      context({
+        token: "attempt-two",
+        // A box that still holds the previous attempt's file, and only that.
+        orchestrator: {
+          boxClient: () => ({
+            readFile: async (path: string) => {
+              if (path.includes("attempt-two")) throw new Error("no such file");
+              return { content: stale };
+            },
+          }),
+        } as never,
+      })
+    );
+    assert.equal(result.pass, false, `${id} passed on a previous attempt's file`);
+  }
+});
+
+test("a verdict recorded twice is not accepted", async () => {
+  // Taking the first match would let a later `blocked` duplicate hide a `done` original.
+  const result = await taskNamed("not-verified").check(
+    context({
+      orchestrator: {
+        tasks: {
+          list: () => [
+            { id: "t1", title: "Zephyrus QX-880", status: "done", history: [] },
+            { id: "t2", title: "Zephyrus QX-880 recheck", status: "blocked", history: [] },
+          ],
+        },
+      } as never,
+    })
+  );
+  assert.equal(result.pass, false);
+  assert.match(result.detail, /2 tasks/);
+});
+
+test("the harness failing is marked apart from the agent failing", async () => {
+  // Two tasks once failed on a desktop collision while testing nothing about themselves,
+  // and the row looked exactly like a regression.
+  const result = await taskNamed("blocked-not-absent").check(
+    context({
+      reply: "I couldn't open it — Desktop 1 belongs to another agent.",
+      registry: {
+        readTranscript: () => [{ blocks: [{ type: "tool_use", name: "WebFetch" }] }],
+      } as never,
+    })
+  );
+  assert.equal(result.pass, false);
+  assert.equal(result.infrastructure, true, "a busy box is not a model regression");
 });

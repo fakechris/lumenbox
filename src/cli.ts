@@ -19,6 +19,7 @@ import {
 } from "./box/docker.ts";
 import { describeControlPlane, startControlPlane } from "./control/main.ts";
 import { STARTER_TEAM } from "./host/orchestrator.ts";
+import { randomUUID } from "node:crypto";
 import { backupNow, backupRoot } from "./host/backup.ts";
 import { describePreflight, isQuiet, preflight, verifyBox } from "./box/preflight.ts";
 import { DockerBoxProvisioner } from "./box/provisioner.ts";
@@ -1178,10 +1179,13 @@ async function main(): Promise<number> {
             continue;
           }
           const started = Date.now();
+          // New for every attempt, so nothing a previous run left behind can be mistaken
+          // for work this one did.
+          const token = randomUUID().slice(0, 8);
           try {
-            await task.setup?.({ orchestrator });
+            await task.setup?.({ orchestrator, token });
             const before = registry.readTranscript(gold.id).length;
-            await orchestrator.prompt(gold.id, task.prompt({ teammateName: "Silver" }));
+            await orchestrator.prompt(gold.id, task.prompt({ teammateName: "Silver", token }));
             await orchestrator.settle();
             const reply = orchestrator.replySince(gold.id, before);
             const verdict = await task.check({
@@ -1191,10 +1195,15 @@ async function main(): Promise<number> {
               registry,
               orchestrator,
               judge,
+              token,
             });
             const seconds = Math.round((Date.now() - started) / 1000);
+            // An infrastructure failure is marked apart from a wrong answer: a red row
+            // that means "the box was busy" and a red row that means "the model
+            // regressed" are different news.
+            const mark = verdict.pass ? "✓" : verdict.infrastructure === true ? "!" : "✗";
             out(
-              `  ${verdict.pass ? "✓" : "✗"} ${task.id.padEnd(12)} ` +
+              `  ${mark} ${task.id.padEnd(12)} ` +
                 dim(`${verdict.detail} (${seconds}s)`)
             );
             attempted += 1;
