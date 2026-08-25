@@ -47,10 +47,14 @@ log file, and a turn interrupted mid-way leaves a ledger entry that will be retr
 a box that is no longer the one it started on. Drain first, or refuse and say what is
 running.
 
-**R2 — Deploy a version tag, never `:latest`.** `:latest` is overwritten in place, which
-means there is nothing to roll back to. Build `agentbox/box:<version>`, move `:latest` to
-point at it if you like, but recreate against the version tag so the previous one is still
-on disk when the new one turns out to be wrong.
+**R2 — Never leave yourself without the image you replaced.** `docker build -t …:latest`
+overwrites the tag in place, and the image it replaced survives only as an untagged layer
+until the next `docker image prune` — which is to say until the moment somebody is tidying
+up because something is wrong. `npm run build:image` writes three tags: a content tag
+naming what was built, `:latest`, and `:previous` moved to whatever `:latest` used to be.
+The content tag is a hash of the build directory rather than the package version, because
+the version changes on release and the image changes on every edit to a Dockerfile or a
+bundled daemon.
 
 **R3 — Refuse to run on a version mismatch.** boxd and the orchestrator are separate
 binaries speaking a private HTTP protocol, and they are upgraded independently. `BOXD_PROTOCOL`
@@ -79,11 +83,15 @@ person once a channel is bound to it. Upgrading closes their tabs and interrupts
 they were watching. Upgrading is an admin action — the same tier that owns the provider,
 the roster and the channels — and the people connected get told before, not after.
 
-**R7 — Verify after, and roll back on failure.** A health check is necessary and not
-sufficient: boxd answering says nothing about whether the desktop came up or the browser
-can be driven. Do one real action — a snapshot of a known page is a good one, since it
-exercises the display, the browser, and the debugging port together — and if it fails,
-recreate against the previous version tag.
+**R7 — Verify after, and roll back on failure.** A health check is necessary and nowhere
+near sufficient, and this is not theoretical: an image whose `box-chrome` pointed at a
+nonexistent binary still printed `box ready: display :1` and still passed health. So
+`box up --recreate` opens a known page and checks it rendered, which exercises the desktop,
+the browser and the debugging port together, and recreates from `:previous` when it does
+not. The page is a `data:` URL, not a website — a verification that reaches the network
+turns every passing blip into a rollback, which is a more destructive failure than the one
+it guards against. `agentbox box rollback` does the same by hand, for a box that breaks
+later rather than during an upgrade.
 
 **R8 — Re-seeding overwrites image-owned config.** The entrypoint copies the image's
 desktop launchers and file-manager settings over the config volume on every start, so a
@@ -150,28 +158,30 @@ rather than waiting forever.
 9. **Report** what was lost — jobs killed, tabs closed — to the people who were told in
    step 4, and to whoever decided in step 3.
 
-Steps 2 and 5 exist in code (`src/box/preflight.ts`, `BoxManager.backupVolumes`) and run
-on `box up --recreate`, which refuses when the preflight is not quiet unless `--yes` is
-given. Steps 1, 3, 4, 6, 8 and 9 are design, not code.
+Steps 2, 5, 6, 7 and 8 exist in code and run on `box up --recreate`:
+`src/box/preflight.ts` for the check before and the verification after,
+`BoxManager.backupVolumes` for the copy, `scripts/build-image.mjs` for the tags that make
+step 8 possible. Steps 1, 3, 4 and 9 — noticing, deciding, announcing and reporting — are
+design, and are what the multi-person work will need to supply.
 
 ## 5. What is missing before this is safe unattended
 
 Ordered by (risk × impact) ÷ effort, the same lens as the roadmap.
 
-Done: the version handshake (R3), the preflight check (R1, R5), and the volume backup
-(R4) — the last two wired into `box up --recreate`.
+All eight rules are implemented for the operator-driven path. `npm run build:image`
+followed by `agentbox box up --recreate` refuses if anything would be lost, backs up both
+volumes, upgrades, checks the box that came back, and puts the previous image back if it
+does not work.
 
-Still missing, in order:
+What is left is the part that involves other people rather than the machine:
 
-1. **Version-tagged images (R2).** A build and release convention rather than much code,
-   but there is no rollback at all without it, and rollback is what makes step 8 above
-   more than a sentence. This is now the single largest gap.
-2. **Verify-then-roll-back (R7).** Cheap once tagged images exist; meaningless before.
-3. **Notice and consent (R6).** The channel adapters can already reach the people bound to
-   a box, so this is a matter of deciding the wording and the postpone window.
-4. **A quiet-hours window.** Follows the digest scheduling that already exists.
+1. **Notice and consent (R6).** The channel adapters can already reach the people bound to
+   a box, so this is a matter of deciding the wording, the countdown, and how postponing
+   works — not of new plumbing.
+2. **A quiet-hours window.** Follows the digest scheduling that already exists.
+3. **Noticing that a new image exists at all** (step 1 of the sequence). Today a person
+   decides to upgrade; nothing offers.
 
-Until version-tagged images exist, an upgrade is an **attended** operation: a person runs
-it, watches it, and can rebuild the previous image from a checkout if it goes wrong. The
-volume backup means the data is safe either way; what is missing is a fast way back to a
-working image.
+So an upgrade is still **initiated** by a person, and is now safe to *complete* without
+one watching: the destructive step refuses when it would destroy something, the data is
+copied first, and a broken image undoes itself.

@@ -15,11 +15,12 @@ import {
   resolveDockerHostAddress,
   uiToken,
   type BoxConfig,
+  type BoxStatus,
 } from "./box/docker.ts";
 import { describeControlPlane, startControlPlane } from "./control/main.ts";
 import { STARTER_TEAM } from "./host/orchestrator.ts";
 import { backupNow, backupRoot } from "./host/backup.ts";
-import { describePreflight, isQuiet, preflight } from "./box/preflight.ts";
+import { describePreflight, isQuiet, preflight, verifyBox } from "./box/preflight.ts";
 import { AgentRegistry, defaultAgentsRoot } from "./agents/registry.ts";
 import { startEgressRelay } from "./egress/relay.ts";
 import { DEFAULT_DISPLAY_INDEX } from "./protocol/index.ts";
@@ -117,10 +118,37 @@ async function cmdBoxUp(argv: string[]): Promise<number> {
     }
   }
 
-  const { status } = await manager.up({
+  let { status } = await manager.up({
     recreate,
     onOutput: line => out(dim(line)),
   });
+
+  // Only after a recreate. A plain start returns the same container that was working a
+  // moment ago, and rolling *that* back would be inventing a problem.
+  if (recreate) {
+    out(dim("checking the box that came back …"));
+    const broken = await verifyBox(await manager.connect());
+    if (broken !== undefined) {
+      err("");
+      err(`The upgraded box does not work: ${broken}`);
+      const rolled = await rollBack(withHost, line => out(dim(line)));
+      if (rolled === undefined) {
+        err("");
+        err(
+          "There is no `agentbox/box:previous` to go back to, so the box has been left as " +
+            "it is. Rebuild a working image and run `agentbox box up --recreate` again. " +
+            "Your data is in the backup taken a moment ago."
+        );
+        return 1;
+      }
+      status = rolled;
+      out("");
+      out(bold("Rolled back to the previous image."));
+      // Said plainly: a rollback that reports success looks like an upgrade that worked,
+      // and the broken image is still what the next build starts from.
+      out("The box is running the image it had before. The new one is still broken.");
+    }
+  }
   out("");
   out(`${bold("Box running")} (${status.containerName})`);
   if (status.boxdUrl) out(`  daemon:  ${status.boxdUrl}`);
@@ -142,6 +170,25 @@ async function cmdBoxUp(argv: string[]): Promise<number> {
  * upgrading in order to fix, and a preflight that refuses to look is not a reason to
  * block the repair.
  */
+/**
+ * Puts the box back on the image it had before, if there is one.
+ *
+ * `:previous` is moved by the image build rather than tracked here, so this needs no state
+ * of its own — which matters, because the state would have to survive exactly the failure
+ * it exists for.
+ */
+async function rollBack(
+  withHost: boolean,
+  onOutput: (line: string) => void
+): Promise<BoxStatus | undefined> {
+  const image = `${process.env.AGENTBOX_IMAGE_REPO ?? "agentbox/box"}:previous`;
+  const manager = new BoxManager(boxConfig({ withHost, image }));
+  if (!(await manager.imageExists())) return undefined;
+  onOutput(`going back to ${image}`);
+  const { status } = await manager.up({ recreate: true, onOutput });
+  return status;
+}
+
 async function inspectBeforeUpgrade(manager: BoxManager): Promise<string | undefined> {
   try {
     const box = await manager.connect();
@@ -204,6 +251,23 @@ async function cmdBoxDown(argv: string[]): Promise<number> {
   const manager = new BoxManager(boxConfig());
   await manager.down({ remove: argv.includes("--rm") });
   out(argv.includes("--rm") ? "Box stopped and removed." : "Box stopped.");
+  return 0;
+}
+
+/**
+ * Puts the box back on its previous image, for when it breaks later rather than during
+ * the upgrade. The automatic rollback only covers the minutes right after one.
+ */
+async function cmdBoxRollback(argv: string[]): Promise<number> {
+  const withHost = argv.includes("--with-host");
+  const status = await rollBack(withHost, line => out(dim(line)));
+  if (status === undefined) {
+    err("There is no `agentbox/box:previous` image, so there is nothing to go back to.");
+    return 1;
+  }
+  out("");
+  out(`${bold("Box running")} (${status.containerName}) on the previous image.`);
+  out("Rebuild with `npm run build:image` when you have a fix; that moves :previous again.");
   return 0;
 }
 
@@ -749,6 +813,7 @@ Usage: agentbox <command> [args]
 
 Box:
   box build                 Build the box image (needs \`npm run build:boxd\` first)
+  box rollback              Put the box back on agentbox/box:previous
   box up [--recreate]       Start the box and wait for its desktop
                             --recreate upgrades: destroys and rebuilds the
                             container from the image. Only the work and config
@@ -866,6 +931,8 @@ async function main(): Promise<number> {
           return cmdBoxStatus();
         case "down":
           return cmdBoxDown(boxArgs);
+        case "rollback":
+          return cmdBoxRollback(boxArgs);
         case "logs":
           return cmdBoxLogs(boxArgs);
         case "shot":

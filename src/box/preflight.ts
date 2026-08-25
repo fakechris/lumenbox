@@ -14,6 +14,9 @@
  * Everything here goes through BoxClient rather than through Docker, so it works the same
  * for a box on this machine and a box somewhere else. The one thing that cannot is the
  * volume backup, which needs the volumes themselves; that lives with the Docker manager.
+ *
+ * The check *after* an upgrade lives here too, because it is the other half of the same
+ * question — whether the box that came back is one anybody can use.
  */
 
 import type { BoxClient } from "./client.ts";
@@ -117,4 +120,41 @@ export async function preflight(box: BoxClient): Promise<Preflight> {
   } catch (error) {
     return { ...empty, unknown: error instanceof Error ? error.message : String(error) };
   }
+}
+
+
+/**
+ * Whether the box that came back actually works. Returns why not, or nothing.
+ *
+ * A health check is necessary and not sufficient: boxd answering says only that boxd
+ * answered. It says nothing about whether the desktop came up, whether the browser starts,
+ * or whether the debugging port is open — and the last of those is exactly the kind of
+ * thing an image change breaks, silently, until the first agent tries to browse.
+ *
+ * So it does one real thing, and does it against a `data:` URL rather than a website. A
+ * verification that reaches the network turns every passing blip into a rollback, which
+ * would be a far more destructive failure than the one it is guarding against.
+ */
+export async function verifyBox(box: BoxClient): Promise<string | undefined> {
+  const marker = "lumenbox upgrade check";
+  try {
+    const health = await box.health();
+    if (!health.ok) return "the box reports that it is not healthy";
+  } catch (error) {
+    return `the box did not answer: ${error instanceof Error ? error.message : error}`;
+  }
+  try {
+    // Exercises the desktop, the browser and the debugging port in one call, which is
+    // three of the four things an image change can break.
+    const page = await box.browser({
+      op: "open",
+      url: `data:text/html,<title>ok</title><h1>${encodeURIComponent(marker)}</h1>`,
+    });
+    if (!page.snapshot.includes(marker)) {
+      return `the browser came up but did not render a known page (got: ${page.snapshot.slice(0, 120)})`;
+    }
+  } catch (error) {
+    return `the browser could not be driven: ${error instanceof Error ? error.message : error}`;
+  }
+  return undefined;
 }

@@ -13,6 +13,7 @@
     "build:cli": "esbuild src/cli.ts --bundle --platform=node --target=node22 --format=esm --packages=external --outfile=dist/cli.js",
     "build:boxd": "esbuild src/boxd/main.ts --bundle --platform=node --target=node22 --format=cjs --outfile=docker/box/boxd.cjs",
     "build:box": "npm run build:boxd && npm run build:hostd",
+    "build:image": "npm run build:box && node scripts/build-image.mjs",
     "typecheck": "tsc -p tsconfig.json",
     "test": "node --experimental-transform-types --test --test-timeout=30000 'src/**/*.test.ts'",
     "agentbox": "node --experimental-transform-types src/cli.ts",

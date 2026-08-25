@@ -79,3 +79,42 @@ test("a box that cannot be asked reports that, rather than reporting nothing fou
   assert.match(describePreflight(findings), /could not be checked/);
   assert.match(describePreflight(findings), /connection refused/);
 });
+
+test("verification does one real thing, because health alone proves too little", async () => {
+  const { verifyBox } = await import("./preflight.ts");
+
+  // The case that motivated it. A box with a broken browser still brings up its desktop
+  // and still reports healthy — observed, not hypothesised: an image with box-chrome
+  // pointed at a nonexistent binary printed "box ready: display :1" and passed health.
+  const healthyButBroken = {
+    health: async () => ({ ok: true }),
+    browser: async () => {
+      throw new Error("The browser did not start on desktop 1 within 30s.");
+    },
+  } as never;
+  assert.match((await verifyBox(healthyButBroken)) ?? "", /browser could not be driven/);
+
+  const dead = {
+    health: async () => {
+      throw new Error("connection refused");
+    },
+  } as never;
+  assert.match((await verifyBox(dead)) ?? "", /did not answer/);
+
+  const unhealthy = { health: async () => ({ ok: false }) } as never;
+  assert.match((await verifyBox(unhealthy)) ?? "", /not healthy/);
+
+  // A browser that answers but renders nothing is a failure too — otherwise the check
+  // passes on a box where the debugging port works and the display does not.
+  const blank = {
+    health: async () => ({ ok: true }),
+    browser: async () => ({ snapshot: "", url: "", title: "" }),
+  } as never;
+  assert.match((await verifyBox(blank)) ?? "", /did not render a known page/);
+
+  const working = {
+    health: async () => ({ ok: true }),
+    browser: async () => ({ snapshot: '- heading "lumenbox upgrade check"', url: "", title: "ok" }),
+  } as never;
+  assert.equal(await verifyBox(working), undefined);
+});
