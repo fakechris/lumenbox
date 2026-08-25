@@ -55,7 +55,7 @@ import {
   type SummaryEntry,
 } from "./compaction.ts";
 import type { ResolutionConfig } from "../protocol/index.ts";
-import { buildSystemPromptParts, buildTurnPrompt } from "./prompt.ts";
+import { emptySectionFaults, buildSystemPromptParts, buildTurnPrompt } from "./prompt.ts";
 import { buildTools, dispatchTool, type ToolContext, type ToolOutcome } from "./tools.ts";
 import type { HostRunner } from "./host-runner.ts";
 import type { Vault } from "./vault.ts";
@@ -841,8 +841,29 @@ export async function runTurn(
       hasBox: box !== undefined,
       vision: provider.vision,
       conversation,
+      siblingConversations: registry
+        .listConversations(agent.id)
+        .filter(entry => entry.id !== conversation).length,
     });
   const promptParts = buildParts(memoryRecall);
+
+  // A section that rendered nothing for a suspicious reason says so, once, into the log.
+  // Every context bug this week arrived as an absence — a history read from the wrong
+  // conversation, a task naming one that did not exist, a directory nobody created — and
+  // an absence is indistinguishable from "nothing to say" unless something checks.
+  for (const fault of emptySectionFaults({
+    agent,
+    teammates: registry.list(),
+    memory: [],
+    agentsRoot: registry.root,
+    hasBox: box !== undefined,
+    conversation,
+    siblingConversations: registry
+      .listConversations(agent.id)
+      .filter(entry => entry.id !== conversation).length,
+  })) {
+    console.error(`[context] ${agent.profile.name}: ${fault}`);
+  }
 
   // Two breakpoints, one per stability tier. The first covers the tool
   // definitions and the invariant prompt; the second extends the cache over

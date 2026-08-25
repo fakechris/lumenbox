@@ -1037,6 +1037,57 @@ export function buildTools(
   }
 
   tools.push({
+    name: "OtherThreads",
+    description:
+      "List the other conversations in this same chat, and read one. A room has a " +
+      "conversation per topic, so what a person said last week — or ten minutes ago under a " +
+      "different heading — is in a sibling of this one, not in your history.\n\n" +
+      "Use it when somebody refers to something you have no record of, when a subject arrives " +
+      "with no beginning, or before telling a person you do not know what they mean. It reaches " +
+      "only this chat's own conversations: it is a way to find the start of a subject, not a " +
+      "search of everything that has ever happened.",
+    input_schema: {
+      type: "object",
+      properties: {
+        read: {
+          type: "string",
+          description:
+            "The id of one to read, from the list. Omit to list them, newest first.",
+        },
+        search: {
+          type: "string",
+          description: "Words that must all appear, when reading one.",
+        },
+      },
+    },
+  });
+
+  tools.push({
+    name: "Recall",
+    description:
+      "Search everything you have kept, including what the memory section did not show you. " +
+      "That section is a selection under a budget — when it says older or weaker memories are " +
+      "not shown, this is how you reach them, and 'it is not in my prompt' is not evidence " +
+      "that you never knew it.\n\n" +
+      "Search when a person refers to something you agreed before, when a task sounds like one " +
+      "you have done, or when you are about to say you have no record of something. Plain word " +
+      "matching, so use words that would actually have been written.",
+    input_schema: {
+      type: "object",
+      properties: {
+        search: {
+          type: "string",
+          description: "Words to look for. Omit to list everything you have kept, newest first.",
+        },
+        shared: {
+          type: "boolean",
+          description: "Search what the team kept rather than your own. Defaults to your own.",
+        },
+      },
+    },
+  });
+
+  tools.push({
     name: "WebFetch",
     description:
       "Read a web page as text. Use this whenever you need what a page *says* — an " +
@@ -1800,6 +1851,76 @@ export async function dispatchTool(
           return { text: message, isError: true };
         }
       }
+    }
+
+    case "OtherThreads": {
+      const here = context.conversation ?? MAIN_CONVERSATION;
+      // Bounded to this chat, deliberately. An agent told to go looking with no bounded
+      // target loops — one harness tried it and reverted, after bots hunting the open web
+      // got stuck on a 404 page. The room a person is speaking in is the boundary.
+      const room = here.includes("-") ? here.slice(0, here.lastIndexOf("-")) : here;
+      const siblings = context.registry
+        .listConversations(context.agent.id)
+        .filter(entry => entry.id !== here && entry.id.startsWith(room))
+        .sort((a, b) => String(b.lastAt ?? "").localeCompare(String(a.lastAt ?? "")));
+
+      const wanted = String(input.read ?? "").trim();
+      if (wanted === "") {
+        if (siblings.length === 0) return { text: "This chat has no other conversations." };
+        const lines = siblings
+          .slice(0, 30)
+          .map(entry => `- ${entry.id}${entry.lastAt ? `  (last ${entry.lastAt.slice(0, 16)})` : ""}`);
+        return {
+          text:
+            `${siblings.length} other conversation(s) in this chat, newest first. ` +
+            `Read one with OtherThreads({read: "<id>"}).\n\n${lines.join("\n")}`,
+        };
+      }
+      if (!siblings.some(entry => entry.id === wanted)) {
+        // Named rather than silently empty: an id from another chat is a mistake worth
+        // saying, and an empty read would look like an empty conversation.
+        return {
+          text: `${wanted} is not a conversation in this chat. List them with no arguments first.`,
+          isError: true,
+        };
+      }
+      const entries = context.registry.readTranscript(context.agent.id, wanted);
+      const query =
+        typeof input.search === "string" && input.search.trim() !== ""
+          ? { search: input.search.trim() }
+          : {};
+      return { text: `${wanted}:\n${describeHistory(readHistory(entries, query), query)}` };
+    }
+
+    case "Recall": {
+      const shared = input.shared === true;
+      const records = shared
+        ? context.registry.readSharedMemory()
+        : context.registry.readMemoryRecords(context.agent.id);
+      const words = String(input.search ?? "")
+        .toLowerCase()
+        .split(/\s+/)
+        .filter(word => word !== "");
+      const found = records.filter(record =>
+        words.every(word => record.text.toLowerCase().includes(word))
+      );
+      const whose = shared ? "the team has kept" : "you have kept";
+      if (found.length === 0) {
+        // Distinguished from "nothing was kept at all", because an agent that reads the
+        // two the same way concludes it has no memory when it merely has no match.
+        return {
+          text:
+            records.length === 0
+              ? `Nothing ${whose} yet.`
+              : `No match among the ${records.length} things ${whose}. Try fewer or different words.`,
+        };
+      }
+      const lines = found
+        .slice(-40)
+        .reverse()
+        .map(record => `- (${record.at.slice(0, 10)}) ${record.text}`);
+      const more = found.length > 40 ? `\n\n(${found.length - 40} older matches not shown.)` : "";
+      return { text: `${found.length} of ${records.length} things ${whose}:\n\n${lines.join("\n")}${more}` };
     }
 
     case "WebFetch": {

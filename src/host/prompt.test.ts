@@ -16,8 +16,7 @@ import {
   buildSystemPromptParts,
   buildWakePrompt,
   sectionsPresent,
-  VOLATILE_SECTIONS,
-} from "./prompt.ts";
+  VOLATILE_SECTIONS, emptySectionFaults } from "./prompt.ts";
 
 // ── the guidance that decides which tool an agent reaches for ──────────────────────────
 
@@ -247,5 +246,40 @@ test("a chat conversation with a box is told its file-exchange convention; the t
   assert.doesNotMatch(
     buildSystemPrompt({ ...base, hasBox: false, conversation: "feishu-oc_room" }),
     /file exchange/
+  );
+});
+
+test("a section that is empty for a suspicious reason says so", () => {
+  const base = {
+    agent: { id: "a", profile: { name: "Ada", description: "", createdAt: "", updatedAt: "" } },
+    teammates: [],
+    memory: [],
+    agentsRoot: "/tmp",
+    hasBox: true,
+  } as never;
+
+  // A first message in a new topic has no history and no siblings: ordinary, silent.
+  assert.deepEqual(
+    emptySectionFaults({ ...(base as object), conversation: "feishu-oc_x-om_1" } as never),
+    []
+  );
+
+  // The same emptiness beside several other conversations in the same chat is the shape
+  // every context bug this week had: a key pointing at a file nobody wrote. Every one of
+  // them arrived as an absence, which is indistinguishable from "nothing to say" unless
+  // something checks.
+  const faults = emptySectionFaults({
+    ...(base as object),
+    conversation: "feishu-oc_x-om_1",
+    siblingConversations: 4,
+  } as never);
+  assert.equal(faults.length, 1);
+  assert.match(faults[0]!, /^history: /);
+  assert.match(faults[0]!, /conversation key may be wrong/);
+
+  // The team room is not a bound chat and is expected to be quiet.
+  assert.deepEqual(
+    emptySectionFaults({ ...(base as object), conversation: "main", siblingConversations: 4 } as never),
+    []
   );
 });

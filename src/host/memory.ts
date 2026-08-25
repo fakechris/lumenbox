@@ -328,6 +328,7 @@ export function renderMemory(recalled: MemoryRecall): string {
           "",
           `${recalled.omitted} older or weaker memories are not shown. This is a selection, not`,
           "everything you know — so do not conclude something never happened from its absence here.",
+          "`Recall` searches all of them, including these.",
         ]
       : [];
 

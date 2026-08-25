@@ -287,6 +287,13 @@ export interface PromptContext {
    * or deliverables end up as pasted paths nobody outside the box can open.
    */
   conversation?: string;
+  /**
+   * How many other conversations this chat already has.
+   *
+   * Only so an empty history can be told from a misdirected one: a first message has no
+   * siblings, while a wrong key usually lands beside several.
+   */
+  siblingConversations?: number;
 }
 
 /** One teammate line: name, id, and a clamped description. */
@@ -402,6 +409,37 @@ export interface SystemPromptParts {
 export interface PromptSection {
   name: string;
   render: (context: PromptContext) => string;
+  /**
+   * Why this section rendered nothing, when it did.
+   *
+   * A section is dropped when it is empty, and an empty section has two very different
+   * causes that look identical in the finished prompt: there is nothing to say, or the
+   * thing that would have said it was handed the wrong key. Three of the day's bugs were
+   * the second — a history read from the wrong conversation, a task naming a conversation
+   * that did not exist, a file directory the agent was told about and nobody created —
+   * and every one of them arrived as an absence rather than an error.
+   *
+   * So a section that can be wrongly empty declares how to tell. `undefined` means the
+   * emptiness is ordinary; a string is a fault worth surfacing.
+   */
+  explainEmpty?: (context: PromptContext) => string | undefined;
+}
+
+/**
+ * Sections that rendered nothing for a reason worth knowing about.
+ *
+ * Not thrown, because a prompt that refuses to build leaves a person with no agent at all
+ * over what is usually a cosmetic gap. Reported instead, so a wrong key stops being
+ * invisible — which is the whole of what made today's failures expensive to find.
+ */
+export function emptySectionFaults(context: PromptContext): string[] {
+  const faults: string[] = [];
+  for (const section of [...STABLE_SECTIONS, ...VOLATILE_SECTIONS]) {
+    if (section.render(context).trim() !== "") continue;
+    const why = section.explainEmpty?.(context);
+    if (why !== undefined) faults.push(`${section.name}: ${why}`);
+  }
+  return faults;
 }
 
 /**
@@ -512,7 +550,21 @@ export const VOLATILE_SECTIONS: readonly PromptSection[] = [
     name: "skills",
     render: context => renderSkills(visibleTo(context.skills ?? [], context.agent.profile.name)),
   },
-  { name: "history", render: context => renderHistoryBlock(context.transcript ?? []) },
+  {
+    name: "history",
+    render: context => renderHistoryBlock(context.transcript ?? []),
+    // A bound chat with no history at all is either its first message or a key that
+    // points at a file nobody wrote. The first is common and fine; the second is the bug
+    // that hid all day, so the two are told apart here rather than in a person's report.
+    explainEmpty: context =>
+      context.conversation !== undefined &&
+      context.conversation !== MAIN_CONVERSATION &&
+      (context.siblingConversations ?? 0) > 0
+        ? `no transcript for ${context.conversation}, though this chat has ` +
+          `${context.siblingConversations} other conversation(s) — if this is not a new ` +
+          `subject, the conversation key may be wrong`
+        : undefined,
+  },
   {
     name: "shared-memory",
     render: context =>

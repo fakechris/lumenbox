@@ -764,6 +764,8 @@ export const ALL_TOOLS: readonly string[] = [
   "ReadHistory",
   "ClaimWork",
   "RememberFact",
+  "Recall",
+  "OtherThreads",
   "Tasks",
   "RunOnHost",
 ];
