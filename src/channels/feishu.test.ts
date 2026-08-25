@@ -139,11 +139,13 @@ test("a rich-text message is read, not dropped", () => {
   // `text`, which is most of what a person actually sends. The whole type was being
   // dropped in silence, so the bot appeared to ignore messages at random.
   const adapter = new FeishuChannel("a", "b", () => {});
-  const body = (adapter as unknown as {
-    renderPostBody: (title: unknown, content: unknown) => string;
-  }).renderPostBody.bind(adapter);
+  const body = (
+    adapter as unknown as {
+      renderPostBody: (title: unknown, content: unknown) => { text: string; imageKeys: string[] };
+    }
+  ).renderPostBody.bind(adapter);
 
-  const text = body("Release notes", [
+  const { text } = body("Release notes", [
     [{ tag: "text", text: "See " }, { tag: "a", text: "the docs", href: "https://example.com/d" }],
     [{ tag: "at", user_name: "Ada" }, { tag: "text", text: " please look" }],
   ]);
@@ -160,10 +162,31 @@ test("a rich-text message is read, not dropped", () => {
 
 test("a rich-text message with nothing in it is still empty", () => {
   const adapter = new FeishuChannel("a", "b", () => {});
-  const body = (adapter as unknown as {
-    renderPostBody: (title: unknown, content: unknown) => string;
-  }).renderPostBody.bind(adapter);
-  assert.equal(body(undefined, []).trim(), "");
+  const body = (
+    adapter as unknown as {
+      renderPostBody: (title: unknown, content: unknown) => { text: string; imageKeys: string[] };
+    }
+  ).renderPostBody.bind(adapter);
+  assert.equal(body(undefined, []).text.trim(), "");
   // Malformed content is empty rather than a crash: this parses somebody else's wire.
-  assert.equal(body(undefined, "not an array").trim(), "");
+  assert.equal(body(undefined, "not an array").text.trim(), "");
+});
+
+
+test("a picture pasted into rich text is not lost", () => {
+  // The words arrived and the picture did not, and nothing said so — the same silent
+  // discard as the whole message type before it, one level down.
+  const adapter = new FeishuChannel("a", "b", () => {});
+  const body = (
+    adapter as unknown as {
+      renderPostBody: (title: unknown, content: unknown) => { text: string; imageKeys: string[] };
+    }
+  ).renderPostBody.bind(adapter);
+
+  const { text, imageKeys } = body(undefined, [
+    [{ tag: "text", text: "before " }, { tag: "img", image_key: "img_v3_abc" }, { tag: "text", text: " after" }],
+  ]);
+  assert.deepEqual(imageKeys, ["img_v3_abc"]);
+  // Marked in place, so the agent knows where in the message the picture sat.
+  assert.match(text, /before \[image 1\] after/);
 });

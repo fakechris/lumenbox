@@ -1000,9 +1000,26 @@ ${input.options.map(option => `· ${option}`).join("\n")}`
 }
 
 /** The instruction as a card header: its first line, clamped. */
+/**
+ * A card's title, from the message it came from.
+ *
+ * The first line alone is not enough. People write a short heading and put the substance
+ * underneath — "最近 24小时" over a figure, "Update" over a paragraph — and two such
+ * messages produce two identically-named rows on a board nobody can then read. So a short
+ * opening line borrows from the next one until there is enough to tell it apart.
+ */
 function firstLine(text: string): string {
-  const line = text.split("\n", 1)[0] ?? "";
-  return line.length > 80 ? `${line.slice(0, 79)}…` : line;
+  const lines = text
+    .split("\n")
+    .map(line => line.trim())
+    .filter(line => line !== "");
+  let title = lines[0] ?? "";
+  // Short enough that it cannot stand alone. "weekly report" can; "最近 24小时" over a
+  // figure cannot, and two of those make two identical rows on a board.
+  for (let index = 1; index < lines.length && title.length < 12; index++) {
+    title = `${title} · ${lines[index]}`;
+  }
+  return title.length > 80 ? `${title.slice(0, 79)}…` : title;
 }
 
 /** The plain-text acknowledgement, for adapters without cards. */

@@ -923,7 +923,14 @@ export function buildTools(
           "result. Use `browser_wait_for` on something you expect to see, and look again.",
         input_schema: {
           type: "object",
-          properties: { url: { type: "string", description: "The http or https URL to open." } },
+          properties: {
+            url: {
+              type: "string",
+              description:
+                "The URL to open: http, https, or a file:// path inside your box — the " +
+                "browser runs in the box, so it can open an HTML file you just wrote.",
+            },
+          },
           required: ["url"],
         },
       },

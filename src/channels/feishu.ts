@@ -296,14 +296,29 @@ export class FeishuChannel implements ChannelAdapter {
    * Links keep their address: an agent handed "see the docs" without the URL cannot
    * follow it, and following it is usually the point of pasting one.
    */
-  private renderPostBody(title: unknown, content: unknown): string {
+  private renderPostBody(
+    title: unknown,
+    content: unknown
+  ): { text: string; imageKeys: string[] } {
     const lines: string[] = [];
+    const imageKeys: string[] = [];
     if (typeof title === "string" && title.trim() !== "") lines.push(title.trim());
     for (const paragraph of Array.isArray(content) ? content : []) {
       const runs: string[] = [];
       for (const run of Array.isArray(paragraph) ? paragraph : []) {
-        const part = run as { tag?: string; text?: string; href?: string; user_name?: string };
-        if (part.tag === "a" && typeof part.href === "string") {
+        const part = run as {
+          tag?: string;
+          text?: string;
+          href?: string;
+          user_name?: string;
+          image_key?: string;
+        };
+        if (part.tag === "img" && typeof part.image_key === "string") {
+          // Collected rather than skipped. An image pasted into rich text was vanishing
+          // in silence — the words arrived and the picture did not, and nothing said so.
+          imageKeys.push(part.image_key);
+          runs.push(`[image ${imageKeys.length}]`);
+        } else if (part.tag === "a" && typeof part.href === "string") {
           runs.push(part.text ? `${part.text} (${part.href})` : part.href);
         } else if (part.tag === "at") {
           runs.push(part.user_name ? `@${part.user_name}` : "");
@@ -313,7 +328,7 @@ export class FeishuChannel implements ChannelAdapter {
       }
       lines.push(runs.join(""));
     }
-    return lines.join("\n");
+    return { text: lines.join("\n"), imageKeys };
   }
 
   private alreadySeen(messageId: string): boolean {
@@ -462,6 +477,7 @@ export class FeishuChannel implements ChannelAdapter {
           return {};
         }
         let text = "";
+        let postImages: string[] = [];
         try {
           const parsed = JSON.parse(data.message.content ?? "{}") as {
             text?: string;
@@ -475,10 +491,13 @@ export class FeishuChannel implements ChannelAdapter {
           // The shape is paragraphs of runs: [[{tag:"text",text}, {tag:"a",text,href}, …]].
           // Flattened here rather than anywhere else, because the wire format is this
           // adapter's business and everything downstream wants a string.
-          text =
-            messageType === "post"
-              ? this.renderPostBody(parsed.title, parsed.content)
-              : String(parsed.text ?? "");
+          if (messageType === "post") {
+            const rendered = this.renderPostBody(parsed.title, parsed.content);
+            text = rendered.text;
+            postImages = rendered.imageKeys;
+          } else {
+            text = String(parsed.text ?? "");
+          }
           text = text
             // Mention tokens read as noise in an instruction; the bot being mentioned
             // is how the message reached us at all.
@@ -511,15 +530,30 @@ export class FeishuChannel implements ChannelAdapter {
         const identity = `feishu:${openId}`;
         this.chats.set(identity, chatId);
         void this.labelFor(openId, chatId)
-          .then(senderLabel =>
-            onMessage({
+          .then(async senderLabel => {
+            // Pictures pasted into rich text are fetched like a standalone image message,
+            // because to the person who sent it there is no difference — they put a
+            // screenshot in the message and expect it to be looked at.
+            const files: { name: string; base64: string }[] = [];
+            for (const [index, key] of postImages.entries()) {
+              const base64 = await this.downloadResource(messageId ?? "", key, "image").catch(
+                () => undefined
+              );
+              if (base64 === undefined) {
+                this.log(`channel feishu: image ${index + 1} in ${messageId ?? "?"} could not be fetched`);
+                continue;
+              }
+              files.push({ name: `image-${index + 1}.png`, base64 });
+            }
+            return onMessage({
               identity,
               chatKey: `feishu:${chatId}`,
               ...(messageId !== undefined ? { messageId } : {}),
               senderLabel,
               text,
-            })
-          )
+              ...(files.length > 0 ? { files } : {}),
+            });
+          })
           .then(reply => (reply ? this.send(identity, reply) : undefined))
           .catch((error: unknown) => {
             const detail = error instanceof Error ? error.message : String(error);

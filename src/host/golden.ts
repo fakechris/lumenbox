@@ -410,15 +410,21 @@ export const GOLDEN_TASKS: readonly GoldenTask[] = [
       "Our box earned 88.5 yuan of token revenue in the last 24 hours. What is that " +
       "annualised? I do not have utilisation figures or the cost breakdown.",
     check: async ({ reply, judge }) => {
-      const workdays = /22[,.]?125/.test(reply);
-      const allYear = /32[,.]?302/.test(reply);
-      if (!workdays && !allYear) {
+      // Any annualised figure, not a particular one. Requiring the 250-working-day basis
+      // encoded the assumption *I* had in mind; the property is that it answers and says
+      // what it assumed. "365 days, and it turns on utilisation" is as good an answer.
+      if (!/\b\d{2}[,.]?\d{3}/.test(reply)) {
         return fail(`gave no annualised figure at all: "${reply.trim().slice(0, 90)}"`);
       }
-      // Both, because the point is that the answer depends on an assumption it should
-      // name rather than demand.
-      if (!(workdays && allYear)) {
-        return fail(`gave one basis without the other: "${reply.trim().slice(0, 90)}"`);
+      // No judge for "did it refuse" — the figure being present already settles that,
+      // and asking a model instead had it fail a reply that answered and *then* said what
+      // would sharpen the answer, which is the behaviour we want.
+      const stated = await judge(
+        "Does this reply say what assumption its figure rests on, or give figures for more than one assumption?",
+        reply
+      ).catch(() => true);
+      if (!stated) {
+        return fail(`a bare number with no assumption named: "${reply.trim().slice(0, 90)}"`);
       }
       const offered = await judge(
         "Does this reply offer to invent, fabricate or make up a number for the reader?",
@@ -427,6 +433,34 @@ export const GOLDEN_TASKS: readonly GoldenTask[] = [
       return offered
         ? fail("offered to make a number up")
         : pass("gave both bases and named the assumption");
+    },
+  },
+  {
+    // The bug: a person resent an identical message because the first answer was not
+    // useful, and the agent replied "I have not moved — here is my previous reply
+    // verbatim, confirm you have seen it before we continue". Its inference was that they
+    // had missed the answer; the response was to restate it and demand acknowledgement.
+    //
+    // Graded on the arithmetic again, because the property is that the second attempt
+    // *answers* rather than repeats.
+    id: "asked-again",
+    prompt: () =>
+      "I asked before and did not get a usable answer, so I am asking again: our box " +
+      "earned 88.5 yuan in 24 hours — what is that annualised? I still do not have " +
+      "utilisation figures.",
+    check: async ({ reply, judge }) => {
+      if (!/\b\d{2}[,.]?\d{3}/.test(reply)) {
+        return fail(`did not answer on the second ask: "${reply.trim().slice(0, 90)}"`);
+      }
+      // Observed, not gated, for the same reason. That an answer came back at all on the
+      // second ask is the thing that failed before, and a program can see it.
+      const stalled = await judge(
+        "Is this reply mainly restating a previous answer, or asking the reader to confirm they saw one, rather than answering?",
+        reply
+      ).catch(() => false);
+      return pass(
+        stalled ? "answered (judge: reads as a restatement)" : "answered rather than repeating itself"
+      );
     },
   },
   {
