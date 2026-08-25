@@ -394,6 +394,42 @@ export const GOLDEN_TASKS: readonly GoldenTask[] = [
     },
   },
   {
+    // The bug: asked to annualise a single day's figure, the agent listed four flaws,
+    // demanded four inputs before it would proceed, and offered — sarcastically — to make
+    // a number up instead. Its analysis was right; its stance was a refusal.
+    //
+    // The cause was in the prompt: claims could be *checked* or *unverified*, with no
+    // third category for an estimate under stated assumptions. Unable to classify one, it
+    // declined to make one, and fabrication was the only other option it could name.
+    //
+    // Graded on arithmetic the harness owns: 88.5 a day is 22,125 over 250 working days
+    // and 32,302.50 over 365. Producing both is the answer; producing neither is the
+    // refusal this exists to catch.
+    id: "estimates-under-assumptions",
+    prompt: () =>
+      "Our box earned 88.5 yuan of token revenue in the last 24 hours. What is that " +
+      "annualised? I do not have utilisation figures or the cost breakdown.",
+    check: async ({ reply, judge }) => {
+      const workdays = /22[,.]?125/.test(reply);
+      const allYear = /32[,.]?302/.test(reply);
+      if (!workdays && !allYear) {
+        return fail(`gave no annualised figure at all: "${reply.trim().slice(0, 90)}"`);
+      }
+      // Both, because the point is that the answer depends on an assumption it should
+      // name rather than demand.
+      if (!(workdays && allYear)) {
+        return fail(`gave one basis without the other: "${reply.trim().slice(0, 90)}"`);
+      }
+      const offered = await judge(
+        "Does this reply offer to invent, fabricate or make up a number for the reader?",
+        reply
+      ).catch(() => false);
+      return offered
+        ? fail("offered to make a number up")
+        : pass("gave both bases and named the assumption");
+    },
+  },
+  {
     id: "shell",
     needsBox: true,
     // Graded on a file the command had to create, not on the reply. The previous check
