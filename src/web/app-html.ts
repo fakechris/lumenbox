@@ -421,6 +421,28 @@ export const APP_HTML = String.raw`<!doctype html>
   #slashmenu .row:hover, #slashmenu .row.on { background: var(--accent-soft); }
   #slashmenu b { font-size: 0.92rem; }
 
+  /* The thread panel: a list, because a native select cannot paginate, filter, or
+     survive fifty threads. Anchored under its button in the pane header. */
+  #convpanel {
+    position: absolute; top: 100%; left: 0; margin-top: 4px; width: 360px;
+    background: var(--surface); border: 1px solid var(--border-strong);
+    border-radius: var(--radius-md); box-shadow: var(--shadow-pop);
+    z-index: 6; padding: 6px;
+  }
+  #convfilter {
+    width: 100%; box-sizing: border-box; height: 28px; margin-bottom: 6px;
+    border: 1px solid var(--border-strong); border-radius: var(--radius-input);
+    background: var(--bg); color: var(--text); font: inherit; font-size: 12px; padding: 0 8px;
+  }
+  #convfilter:focus { outline: 0; border-color: var(--accent); }
+  #convlist { max-height: 300px; overflow: auto; }
+  #convpanel .row { padding: 6px 8px; cursor: pointer; border-radius: var(--radius-input); font-size: 12px; display: block; text-decoration: none; color: var(--text); }
+  #convpanel .row:hover { background: var(--accent-soft); }
+  #convpanel .row.on { background: var(--accent-soft); }
+  #convpanel .row .who { font-weight: 600; }
+  #convpanel .row .when { color: var(--muted); float: right; }
+  #convpanel .row .what { color: var(--text); display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
   /* ── right pane: what is happening now ────────────────────────────────────── */
   .tab {
     padding: 4px 12px; border-radius: var(--radius-pill); text-decoration: none;
@@ -516,7 +538,14 @@ export const APP_HTML = String.raw`<!doctype html>
     <span class="lead">
       <span id="title">&mdash;</span>
       <span id="titlerole" class="dim" style="font-size:12px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis"></span>
-      <select id="convpick" style="display:none;height:28px;border-radius:var(--radius-input);border:1px solid var(--border-strong);background:var(--surface);color:var(--text);font:inherit;font-size:12px;padding:0 6px;max-width:280px"></select>
+      <span id="convwrap" style="position:relative;flex:none">
+        <a href="#" id="convbtn" class="btn sm" style="display:none;text-decoration:none;max-width:280px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap"></a>
+        <div id="convpanel" style="display:none">
+          <input id="convfilter" placeholder="Filter threads&hellip;" autocomplete="off">
+          <div id="convlist"></div>
+          <a href="#" id="convmore" class="row dim" style="display:none">Load more&hellip;</a>
+        </div>
+      </span>
       <a href="#" id="agentcfg" style="font-size:12px;flex:none">Configure</a>
     </span>
     <span class="headactions">
@@ -1713,10 +1742,12 @@ function select(id, conversation) {
     });
 }
 
-/**
- * The conversation switcher, shown only when an agent has more than the team room —
- * an agent nobody has messaged from a channel does not need a one-item dropdown.
- */
+/* ── the thread panel ─────────────────────────────────────────────────────────
+   A native <select> cannot paginate, cannot filter, and renders raw ids; with a
+   room's worth of topics it is a wall of uids. This is a list: newest first,
+   labelled by channel, the person's first words and age, filterable as you type,
+   loading more on demand. */
+
 /** "3m" / "2h" / "5d" — enough to pick the thread from this morning over last week's. */
 function fmtAgo(iso) {
   if (!iso) return "";
@@ -1729,50 +1760,128 @@ function fmtAgo(iso) {
   return Math.floor(minutes / (60 * 24)) + "d";
 }
 
-/** What a conversation is called in the picker: where it came from, what was said, when. */
+/** One line for the button: where it came from and what was said. */
 function conversationLabel(c) {
-  if (c.id === "main") return "Team room";
+  if (!c || c.id === "main") return "Team room";
   var channel = String(c.id).split("-")[0] || "chat";
   var words = c.firstLine ? String(c.firstLine).slice(0, 40) : c.id;
-  var ago = fmtAgo(c.lastAt);
-  return channel + " · " + words + (ago ? " · " + ago : "");
+  return channel + " · " + words;
+}
+
+var convLoaded = [];      // pages fetched so far, newest first, main pinned on top
+var convTotal = 0;
+var CONV_PAGE = 50;
+
+function fetchConversations(id, offset) {
+  return fetch("/api/conversations?agent=" + encodeURIComponent(id) +
+      "&limit=" + CONV_PAGE + "&offset=" + offset)
+    .then(function (r) { return r.json(); });
+}
+
+/** Keeps the button honest: label of the viewed thread, and how many exist. */
+function renderConvButton() {
+  var btn = $("convbtn");
+  if (convTotal <= 1) { btn.style.display = "none"; return; }
+  var viewed = null;
+  for (var i = 0; i < convLoaded.length; i++) {
+    if (convLoaded[i].id === currentConversation) { viewed = convLoaded[i]; break; }
+  }
+  btn.style.display = "";
+  btn.textContent = conversationLabel(viewed || { id: currentConversation }) +
+    " (" + convTotal + ") ▾";
+}
+
+function renderConvList() {
+  var needle = $("convfilter").value.trim().toLowerCase();
+  var rows = convLoaded.filter(function (c) {
+    if (!needle) return true;
+    return (String(c.firstLine || "") + " " + c.id).toLowerCase().indexOf(needle) !== -1;
+  }).map(function (c) {
+    var channel = c.id === "main" ? "team" : (String(c.id).split("-")[0] || "chat");
+    var words = c.id === "main" ? "Team room" : (c.firstLine || c.id);
+    return '<a href="#" class="row' + (c.id === currentConversation ? " on" : "") + '" data-conv="' + esc(c.id) + '">' +
+      '<span class="when">' + esc(fmtAgo(c.lastAt)) + '</span>' +
+      '<span class="who">' + esc(channel) + '</span> ' +
+      '<span class="what">' + esc(words) + '</span></a>';
+  }).join("");
+  $("convlist").innerHTML = rows || '<div class="row dim">Nothing matches</div>';
+  // More pages exist and no filter is narrowing: filtering only searches what is
+  // loaded, so the link stays visible then too, as the way to widen the search.
+  $("convmore").style.display = convLoaded.length < convTotal ? "" : "none";
 }
 
 function refreshConversations(id) {
-  return fetch("/api/conversations?agent=" + encodeURIComponent(id))
-    .then(function (r) { return r.json(); })
-    .then(function (data) {
-      var list = data.conversations || [];
-      var pick = $("convpick");
-      if (list.length <= 1) { pick.style.display = "none"; return; }
-      // Rebuilding a <select> the person has open snaps it shut under their pointer.
-      if (document.activeElement === pick) return;
-      var options = list.map(function (c) {
-        return '<option value="' + esc(c.id) + '"' + (c.id === currentConversation ? " selected" : "") + ">" + esc(conversationLabel(c)) + "</option>";
-      }).join("");
-      // Only touch the DOM when something changed; times move, so labels count too.
-      if (pick.innerHTML === options && pick.style.display !== "none") return;
-      pick.style.display = "";
-      pick.innerHTML = options;
-    })
-    .catch(function () {});
+  return fetchConversations(id, 0).then(function (data) {
+    var page = data.conversations || [];
+    convTotal = data.total !== undefined ? data.total : page.length;
+    // A refresh replaces the first page; deeper pages someone loaded stay behind it.
+    var deeper = convLoaded.slice(page.length).filter(function (c) {
+      return !page.some(function (p) { return p.id === c.id; });
+    });
+    convLoaded = page.concat(deeper);
+    renderConvButton();
+    if ($("convpanel").style.display !== "none") renderConvList();
+  }).catch(function () {});
 }
 
 // A thread that starts while the page is open must be reachable without switching
-// agents: the picker only loaded on a switch, so a new Feishu topic was invisible
-// until a reload — and a reload did not help either, because nothing re-fetched.
+// agents; the button also keeps its count and label current. The list itself only
+// re-renders while the panel is open.
 setInterval(function () { if (current) refreshConversations(current); }, 5000);
 
-$("convpick").onchange = function () {
-  if (current) select(current, $("convpick").value);
+$("convbtn").onclick = function (event) {
+  event.preventDefault();
+  var panel = $("convpanel");
+  var open = panel.style.display !== "none";
+  panel.style.display = open ? "none" : "";
+  if (!open) {
+    $("convfilter").value = "";
+    renderConvList();
+    $("convfilter").focus();
+  }
 };
+
+$("convfilter").oninput = function () { renderConvList(); };
+
+$("convlist").onclick = function (event) {
+  var row = event.target.closest("[data-conv]");
+  if (!row) return;
+  event.preventDefault();
+  $("convpanel").style.display = "none";
+  if (current) select(current, row.getAttribute("data-conv"));
+};
+
+$("convmore").onclick = function (event) {
+  event.preventDefault();
+  if (!current) return;
+  fetchConversations(current, convLoaded.length).then(function (data) {
+    var page = data.conversations || [];
+    convTotal = data.total !== undefined ? data.total : convTotal;
+    var known = {};
+    convLoaded.forEach(function (c) { known[c.id] = true; });
+    convLoaded = convLoaded.concat(page.filter(function (c) { return !known[c.id]; }));
+    renderConvList();
+  }).catch(function () {});
+};
+
+// Clicking anywhere else closes the panel, like every other transient surface.
+document.addEventListener("click", function (event) {
+  var panel = $("convpanel");
+  if (panel.style.display === "none") return;
+  if (!$("convwrap").contains(event.target)) panel.style.display = "none";
+});
 
 /** The composer says which thread it will reach, so a reply never surprises anyone. */
 function updateComposerTarget() {
   var name = nameOf(current);
+  var viewed = null;
+  for (var i = 0; i < convLoaded.length; i++) {
+    if (convLoaded[i].id === currentConversation) { viewed = convLoaded[i]; break; }
+  }
   $("input").placeholder = currentConversation === "main"
     ? "Message " + name + "…"
-    : "Reply in " + currentConversation + " — reaches that chat, not the team room…";
+    : "Reply in " + conversationLabel(viewed || { id: currentConversation }) +
+      " — reaches that chat, not the team room…";
 }
 
 function refresh() {

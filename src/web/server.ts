@@ -2538,23 +2538,25 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
             send(res, 404, { error: `No agent ${id}` });
             return;
           }
-          const list = registry
-            .listConversations(id)
-            .sort((a, b) => {
-              if (a.id === MAIN_CONVERSATION) return -1;
-              if (b.id === MAIN_CONVERSATION) return 1;
-              return String(b.lastAt ?? "").localeCompare(String(a.lastAt ?? ""));
-            })
+          const sorted = registry.listConversations(id).sort((a, b) => {
+            if (a.id === MAIN_CONVERSATION) return -1;
+            if (b.id === MAIN_CONVERSATION) return 1;
+            return String(b.lastAt ?? "").localeCompare(String(a.lastAt ?? ""));
+          });
+          // Paged, because the label below costs a file-head read per conversation and
+          // a room's worth of topics would pay it for entries nobody scrolled to.
+          const limit = Math.min(Math.max(Number(url.searchParams.get("limit")) || 50, 1), 200);
+          const offset = Math.max(Number(url.searchParams.get("offset")) || 0, 0);
+          const page = sorted.slice(offset, offset + limit).map(conversation => {
             // Labelled by what was said, because the id is a flattened chatKey nobody
-            // can read. Head-of-file only, so a long list stays cheap.
-            .map(conversation => {
-              const firstLine =
-                conversation.id === MAIN_CONVERSATION
-                  ? undefined
-                  : registry.conversationFirstLine(id, conversation.id);
-              return { ...conversation, ...(firstLine !== undefined ? { firstLine } : {}) };
-            });
-          send(res, 200, { conversations: list });
+            // can read. Head-of-file only, so a page stays cheap.
+            const firstLine =
+              conversation.id === MAIN_CONVERSATION
+                ? undefined
+                : registry.conversationFirstLine(id, conversation.id);
+            return { ...conversation, ...(firstLine !== undefined ? { firstLine } : {}) };
+          });
+          send(res, 200, { conversations: page, total: sorted.length });
           return;
         }
 
