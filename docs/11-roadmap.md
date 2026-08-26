@@ -18,10 +18,11 @@ the browser work has made *larger*, and the structural growth into multi-person 
 existing entries (R30, R8) after reading **FrontierAgent** (ApodexAI, Apache-2.0) against
 its own launch copy: the copy oversold mid-run steering as impact analysis and partial
 recomputation, which the code does not do — and undersold a code-level submission gate,
-which it does. They are not new ambitions: most are gaps that pass
-found in code we had already shipped, each with the measurement that established it. R25
-also carries forward the adversarial-review findings that were recorded on 2026-08-25 and
-never acted on.
+which it does.
+
+None of these are new ambitions. Most are gaps that a pass found in code we had already
+shipped, each recorded with the measurement that established it. R25 also carries forward
+the adversarial-review findings from 2026-08-25 that were recorded and never acted on.
 
 **Shipped since this document was written**, and struck from the tiers below: R2, R5, R6,
 R9, R11, R12, R13, R14, R15, R20, and the version-handshake third of R18. Alongside them,
