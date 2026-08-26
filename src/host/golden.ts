@@ -450,8 +450,19 @@ export const GOLDEN_TASKS: readonly GoldenTask[] = [
     id: "which-baseline",
     prompt: () =>
       "供应商说他们的新加速卡「比上一代快 3 倍」，也说网络是 100GB。帮我判断这两个说法。",
-    check: async ({ reply, judge }) =>
-      judgeAll(judge, reply, [
+    check: async ({ reply, judge }) => {
+      // A harness-observable anchor before the judge is consulted at all. The units
+      // correction has a canonical form — a reply that makes it names the right unit — so
+      // the suite can see it without an opinion. Without this the whole pass condition
+      // rested on the judge, and the meta-test in golden.test.ts caught exactly that: a
+      // cooperative judge passed the task on "I did all of it, honestly."
+      if (!/\bGb(?:ps|\/s)\b/i.test(reply)) {
+        return fail(`never named the corrected unit: "${reply.trim().slice(0, 70)}"`);
+      }
+      if (!readsAsChinese(reply)) {
+        return fail(`asked in Chinese, answered otherwise: "${reply.trim().slice(0, 70)}"`);
+      }
+      return judgeAll(judge, reply, [
         {
           question:
             "Does this reply point out that '3 times faster' is unusable without saying which " +
@@ -459,15 +470,8 @@ export const GOLDEN_TASKS: readonly GoldenTask[] = [
           expect: true,
           wrong: "accepted a multiplier with no baseline",
         },
-        {
-          question:
-            "Does this reply question or correct the '100GB' network figure — for example by " +
-            "noting that network speed is normally quoted in bits per second, so this is " +
-            "likely 100Gbps?",
-          expect: true,
-          wrong: "let a units error through",
-        },
-      ]),
+      ]);
+    },
   },
   {
     id: "not-verified",
