@@ -317,9 +317,36 @@ additions that are cheap once R23 lands:
 - **Trigger evals** for skills: does a skill fire when it should and stay quiet when it
   should not. Irrelevant at four skills, the whole problem at a hundred, so it is R26's
   dependency rather than a separate wish.
-- **An ablation**: remove memory and measure the delta. With 2 facts and 15 notes, this is
-  the honest test of a component we keep proposing to extend — if the score barely moves,
-  the memory layer is theatre.
+- **An ablation** — redefined, because the obvious version measures the wrong thing.
+  `AGENTBOX_ABLATE=memory` exists (`prompt.ts`) and running the suite with it would show
+  no difference, for two reasons that took measuring to see. Golden runs in a fresh state
+  directory, so its memory is empty and removing it changes nothing. And more
+  fundamentally, **what is stored and what the suite grades are different dimensions**:
+
+  | what the 16 records hold | what golden grades |
+  |---|---|
+  | style — "answer in Chinese", "definition first, then context", "prefer tables" | is the number 36 |
+  | domain corrections — "100Gbps is often mistyped as 100GB", "DGX is a family, ask which SKU" | did the task reach the board |
+  | scepticism — "flag unverified specifics" | did it report the absence |
+
+  Almost all of it is about *how* to answer; the suite grades *what*. So the run would
+  come back flat, and flat would be read as "the memory layer is theatre" — a clean-looking
+  number from an experiment aimed at the wrong axis, which is worse than no experiment.
+
+  **The cost half is exact and worth having now: 16 records, 3,002 characters, ≈1,200
+  tokens injected into every single turn.**
+
+  The experiment that would answer it grades style with the `judge` that already exists —
+  is it in the user's language, is it structured, did it ask which baseline — over a set of
+  tasks written for that, which makes it the process-invariant work above rather than an
+  ablation.
+
+  And the cheaper question to answer first, because it can retire a whole layer: **2 of
+  the 16 are `fact` (deliberate, via `RememberFact`) and 14 are `note` (auto-extracted,
+  nobody vouched for them), and the notes are most of the 1,200 tokens.** Keep only the
+  facts and measure the style delta. If it barely moves, the note tier — extractor, decay,
+  budget — is scaffolding that can be deleted, and deleting it also settles the finding in
+  docs/14 that the memory which survives is the memory nobody vouched for.
 
 And the validation step that makes a suite trustworthy at all: our seventeen tasks were
 invented and have never been compared to real traffic. Both halves of that comparison are

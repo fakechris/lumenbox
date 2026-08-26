@@ -12,11 +12,15 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import {
+  ablated,
   buildSystemPrompt,
   buildSystemPromptParts,
   buildWakePrompt,
   sectionsPresent,
-  VOLATILE_SECTIONS, emptySectionFaults, STABLE_SECTIONS } from "./prompt.ts";
+  VOLATILE_SECTIONS,
+  emptySectionFaults,
+  STABLE_SECTIONS,
+} from "./prompt.ts";
 
 // ── the guidance that decides which tool an agent reaches for ──────────────────────────
 
@@ -306,5 +310,25 @@ test("a section that cannot say why it is empty is only ever ordinarily empty", 
   for (const section of declared) {
     const state = section.observe!(bare);
     assert.ok(["ordinary", "unavailable"].includes(state.kind), section.name);
+  }
+});
+
+test("a section can be withheld to measure what it is worth", () => {
+  // An experiment somebody runs on purpose, never a state an installation drifts into —
+  // which is why it is an environment variable and not a config-file setting.
+  const previous = process.env.AGENTBOX_ABLATE;
+  try {
+    delete process.env.AGENTBOX_ABLATE;
+    assert.equal(ablated("memory"), false);
+    process.env.AGENTBOX_ABLATE = "memory";
+    assert.equal(ablated("memory"), true);
+    assert.equal(ablated("skills"), false, "one section named must not withhold another");
+    process.env.AGENTBOX_ABLATE = "skills, memory";
+    assert.equal(ablated("memory"), true, "a list is comma-separated and tolerates spaces");
+    process.env.AGENTBOX_ABLATE = "";
+    assert.equal(ablated("memory"), false, "empty is not an ablation of everything");
+  } finally {
+    if (previous === undefined) delete process.env.AGENTBOX_ABLATE;
+    else process.env.AGENTBOX_ABLATE = previous;
   }
 });

@@ -579,13 +579,33 @@ function renderChatFiles(context: PromptContext): string {
   );
 }
 
+/**
+ * Whether a section is being deliberately withheld, to measure what it is worth.
+ *
+ * Comma-separated section names in `AGENTBOX_ABLATE`. Read per call rather than cached so
+ * a suite can set it between runs, and deliberately not a config-file setting: an
+ * ablation is an experiment somebody runs on purpose, never a state an installation
+ * drifts into.
+ */
+export function ablated(section: string): boolean {
+  const list = process.env.AGENTBOX_ABLATE;
+  if (list === undefined || list === "") return false;
+  return list.split(",").map(name => name.trim()).includes(section);
+}
+
 export const VOLATILE_SECTIONS: readonly PromptSection[] = [
   { name: "plan", render: context => renderDurableBlocks(context.durable ?? {}) },
   { name: "tasks", render: renderTasks },
   { name: "chat-files", render: renderChatFiles },
   {
     name: "memory",
-    render: context => renderMemory(context.memoryRecall ?? recall(context.memory)),
+    // `AGENTBOX_ABLATE` names sections to render empty, for measuring what a component is
+    // worth rather than arguing about it. "If removing memory barely moves the score, the
+    // memory layer is theatre" — the ablation half of docs/14's experiment designs, and
+    // the honest test of a component we keep proposing to extend while it holds two facts
+    // somebody chose to keep and fifteen nobody vouched for.
+    render: context =>
+      ablated("memory") ? "" : renderMemory(context.memoryRecall ?? recall(context.memory)),
   },
   {
     name: "skills",
