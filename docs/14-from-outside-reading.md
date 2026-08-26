@@ -1028,7 +1028,7 @@ limitations — are checkable, so they were checked. The first measurement said 
 said what it returns; that was a regex catching only the first segment of a concatenated
 string literal. Re-measured against whole descriptions (median 518 chars), the real figures
 were 31/31 active verb, 11/31 said what comes back, 22/31 stated a limit, with six tools
-saying neither. Those six now do: **17/31 and 27/31, none silent on both** (`5c60b0f`).
+saying neither. Those six now do: **17/31 and 27/31, none silent on both** (`ae228d3`).
 
 Third first-pass measurement in this document to be wrong and caught by checking it. Worth
 the pattern being noted rather than each instance apologised for: a number that has not
