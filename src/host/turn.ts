@@ -54,7 +54,7 @@ import {
   type HistoryEntry,
   type SummaryEntry,
 } from "./compaction.ts";
-import type { ResolutionConfig } from "../protocol/index.ts";
+import { DURABLE_RESULT_CHARS, type ResolutionConfig } from "../protocol/index.ts";
 import { emptySectionFaults, buildSystemPromptParts, buildTurnPrompt } from "./prompt.ts";
 import { buildTools, dispatchTool, type ToolContext, type ToolOutcome } from "./tools.ts";
 import type { HostRunner } from "./host-runner.ts";
@@ -484,7 +484,8 @@ export type TranscriptEntry =
     };
 
 /** Tool-result text kept in replayed history. Enough to be evidence, not bulky. */
-const REPLAYED_RESULT_LIMIT = 2_000;
+/** Shared with the box, which spills to a file before this cut loses anything. */
+const REPLAYED_RESULT_LIMIT = DURABLE_RESULT_CHARS;
 
 /**
  * Strips a tool result down for storage.

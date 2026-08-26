@@ -314,9 +314,19 @@ type Handler = (body: any) => Promise<unknown>;
 const jobs = new JobService();
 
 // Yesterday's spilled output is dead weight; today's is evidence.
+//
+// On a timer as well as at startup. It used to run once, here, which made "a 24-hour
+// buffer" untrue of any daemon that stays up: a box running for a week held week-old
+// output, and the adversarial review of docs/15 said so. Hourly is far more often than
+// needed to keep a 24-hour promise, and costs one directory listing.
 {
-  const removed = reapSpool();
-  if (removed > 0) log(`reaped ${removed} stale spool file(s)`);
+  const reap = (): void => {
+    const removed = reapSpool();
+    if (removed > 0) log(`reaped ${removed} stale spool file(s)`);
+  };
+  reap();
+  // Unref'd: a sweep of temporary files is not a reason for the process to stay alive.
+  setInterval(reap, 3_600_000).unref();
 }
 
 /**
