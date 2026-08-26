@@ -333,3 +333,115 @@ MPEP page. A preset that carries skills and no tools ships the instructions with
 ground truth, which is the [eyeballing failure](#a-bot-is-a-role-plus-the-tools-that-make-it-accountable)
 under a different name. So the two halves of "skill+mcp preset" are not two features; they
 are one, and shipping only the skills half would look like it worked.
+
+---
+
+## A memory nothing can check is not a memory
+
+Sources: *Building Self-Correcting Memory in OpenWiki* (LangChain, 2026-08-25) and
+*Knowledge Flywheels* (2026-08-05).
+
+### The breakdown behind the 17
+
+The [first entry](#conversation-as-knowledge) counted 17 memories against 445 transcript
+entries. Split by kind, it is worse than the total suggested:
+
+| kind | how it got there | count |
+|---|---|---|
+| `fact` | `RememberFact` — the agent decided to keep it | **2** |
+| `note` | extracted automatically after a turn, nobody vouched for it | 15 |
+| shared | any agent, for any other agent | **0** |
+
+The one deliberate act has happened twice. Everything else is the extractor's residue —
+and `note` is by design the kind that decays fastest and is dropped first when the budget
+is tight. **The memory that survives is the memory nobody vouched for.**
+
+And one of the fifteen is this:
+
+```json
+{"at":"2026-08-23T19:33:46.932Z","kind":"note","text":"(NOTHING)","source":"extracted"}
+```
+
+`NOTHING` is the sentinel the extractor asks for when a turn taught it nothing. It is
+guarded in three places, all of them exact — `=== "NOTHING"` or `startsWith("NOTHING")` —
+and the model wrote `(NOTHING)`. So one memory in fifteen is the extractor's own way of
+saying it had nothing to say, stored as a thing it learned.
+
+The bug is two lines to fix. The reason it survived for days is the interesting part, and
+it is the next section's whole point: **nothing in this system can check a memory against
+anything.** A stored line has no evidence attached, so there is no operation that could
+have found this except a person reading the file.
+
+### What OpenWiki does instead
+
+When it writes a page it also records the *claims* that page makes and the code that
+supports each one, **with the evidence's version**. Then:
+
+- Staleness is `stored version != current version`. A deterministic sweep, **no model
+  calls**, run before the agent does anything — so it stays fast at thousands of claims.
+- **Stale is not wrong.** It means the claim can no longer be assumed without rechecking,
+  and that uncertainty is durable: it persists across updates until somebody verifies.
+- The agent never sweeps. Stale claims are surfaced *alongside the page when it reads it*,
+  and it resolves them inside work it was doing anyway. So **cost scales with how much the
+  source changed, not with how much is remembered.**
+- Measured over a replayed commit history: stale claims 80 → 9, hallucinated 15 → **0**.
+  In one run a change left 17% of claims stale; by the next checkpoint stale was 0% and
+  supported had gone 77% → 98%.
+
+The sentence to keep:
+
+> Forgetting is not about deleting old memories. It is about **knowing when a belief should
+> no longer be trusted**.
+
+Our memory has decay — a score that fades with time — which is age, not doubt. Age is a
+proxy that gets both cases wrong: a fact about how someone likes to be addressed is as
+true in November as in August, and a fact about which port the box listens on can be false
+an hour later. Evidence-linked claims distinguish them; a decay curve cannot.
+
+That said, this is the piece most in need of its own [scaffolding test](#two-arguments-that-point-opposite-ways-and-both-are-right):
+OpenWiki's evidence is code with a commit hash. Ours would be a chat message, a web page,
+a file in the box — and only the last of those versions cleanly. A claims runtime with no
+verifiable evidence is bookkeeping. **The subset worth doing first is the subset whose
+evidence is a file in the box, because that is the one where the check is real.**
+
+### Why this is not just hygiene
+
+*Knowledge Flywheels* names the reason to care. Three scaling axes: models scale through
+data and compute, agents through tools and harnesses, and knowledge through *distilling
+what worked, what failed, when, and why* — with the claim that the third improves what the
+**next** task can build on, at substantially lower cost than more elaborate
+agent-centric self-improvement.
+
+Its formulation is the one to steal, because it inverts what we treat as the asset:
+
+> task + model + tools + **knowledge** → task-specific harness
+>
+> The persistent asset is not one harness, but the knowledge from which many harnesses can
+> be constructed.
+
+Set against the skills entry above, that is the same claim twice: a skill *is* distilled
+experience made reusable, and our agents have written zero of them. Two memories and no
+skills, from 445 turns, is not a memory problem or a skills problem. It is one missing
+step — nothing ever asks *what did we learn* at a point where the answer could be written
+down.
+
+### And the install-path gap, confirmed in miniature
+
+Checking that claim against the running box turned up a third one. `STARTERS` defines four
+skills. The box has three: `morning-summary`, `research-brief`, `tidy-downloads`.
+`study-a-corpus` is missing, and always will be, because seeding is guarded on the
+directory being empty:
+
+```ts
+if (listing !== undefined && listing.entries.length > 0) return;
+```
+
+The guard landed in `5c5fee2`; `study-a-corpus` was added later, in `8545db0`. So it was
+written, tested, committed — and cannot reach any box that already existed. Seeding is a
+one-time event, and the code treats "has any skills" as "has the current skills."
+
+Three findings in this document now share one shape: **a capability that is present in the
+source, absent at runtime, and silent about the difference** — the unset relay variables,
+the unconfigured search key, and this. That is a pattern worth a check of its own rather
+than three separate fixes, and it is the same argument the preflight already makes for the
+box: state what should be there, compare it to what is, and say so out loud.
