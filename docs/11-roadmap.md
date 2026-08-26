@@ -106,7 +106,14 @@ channel push, and one-shot binding all exist today. Small-medium; the payoff is
 long-task success rate.
 </details>
 
-### R22. Say out loud what is configured but absent
+### ~~R22. Say out loud what is configured but absent~~ — shipped (`fe573a3`)
+`absences.ts` names each gap at both boot sites with its degradation and one-line remedy;
+starter seeding is per-skill with a `.seeded` marker (deletions stick, new starters
+arrive — `study-a-corpus` reached the running box on the next restart); the presets
+metering comment now describes the seam it has instead of the metering it does not.
+
+<details><summary>original entry</summary>
+
 Three findings from [outside reading](14-from-outside-reading.md) share one shape — present
 in the source, absent at runtime, silent about the difference. `WebSearch` needs
 `BRAVE_SEARCH_API_KEY`, which is unset, so it was called twice and refused twice while
@@ -117,8 +124,14 @@ into an empty directory, so `study-a-corpus` — added after that guard — can 
 box that already exists. One startup check that states what should be there, compares it
 to what is, and names the gaps, plus the three fixes under it. Small, and it is the same
 argument the box preflight already makes.
+</details>
 
-### R23. Stamp a tool result when the result arrives
+### ~~R23. Stamp a tool result when the result arrives~~ — shipped (`f883d7f`)
+The `blocks` entry says when the model asked, the `results` entry when the answers were
+in. No format change; the existing field started telling the truth.
+
+<details><summary>original entry</summary>
+
 The `blocks` entry and its `results` entry carry an identical timestamp, because both are
 written when the exchange is appended. So all 172 tool batches on disk derive a duration of
 0.00s and the transcript records *when a pair was written*, not *how long anything took*.
@@ -126,6 +139,7 @@ That is the gap the `--sync` click bug fell through: it never failed, it returne
 in fifteen seconds, and a pass/fail suite cannot see that by construction. **One line**,
 and the dead records become a latency surface. Smallest item on this page and the
 prerequisite for R24.
+</details>
 
 ### R24. A run has to say which model and which code produced it
 Every transcript entry carries `at, blocks, causedBy, covers, kind, role, text`. `causedBy`
@@ -408,12 +422,8 @@ and several measurements of our own state. The new items win on the lens not bec
 matter more than R1 or R7, but because three of them are one line to a day each and every
 one of them makes the *next* problem findable.
 
-1. **R23, stamp the tool result.** One line. Every duration on disk is currently 0.00s, so
-   the class of defect that succeeds slowly is invisible by construction — which is how a
-   click that took fifteen seconds survived. Nothing else on this list changes the ratio of
-   found-to-hidden bugs as cheaply.
-2. **R22, say what is missing.** Three capabilities are in the source and absent at
-   runtime, and all three were found by accident. One startup check ends the class.
+1. ~~**R23, stamp the tool result.**~~ Shipped (`f883d7f`).
+2. ~~**R22, say what is missing.**~~ Shipped (`fe573a3`).
 3. ~~**R1, the composer.**~~ Shipped — see the entry. Its second half also landed the
    first slice of R25 (the explicit conversation record), which shrinks that item.
 4. ~~**R18's remaining two thirds.**~~ Shipped (`ccb0875`).
