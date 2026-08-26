@@ -150,11 +150,12 @@ confused" are both unanswerable from our own records, while "how often did this 
 an empty result" is answerable and was answered. Small; needs a decision about where the
 prompt hash lives, not a subsystem.
 
-### R19. Host-initiated exec, marked as such
-Starter skills and the web UI drive the same `/exec` channel the agent does, so
-host-side housekeeping (`mkdir` for a skill) walks the agent's approval and audit
-surface. A marker on the protocol request — a label, not a bypass — lets the audit
-log say who acted. Small.
+### ~~R19. Host-initiated exec, marked as such~~ — shipped (`0d4fcba`)
+`ExecRequest.actor` labels who asked, and boxd logs every command with it. The gap
+turned out to be larger than the entry said: nothing logged exec *at all*, so the one
+endpoint where "who did that" matters most was the one that could not answer. Untrusted
+by construction — evidence about our own callers, not proof about a stranger — and
+`unlabelled` rather than a guess when absent.
 
 ### ~~R20. Spill what pruning removes~~ — shipped
 <details><summary>original entry</summary>
@@ -435,8 +436,7 @@ one of them makes the *next* problem findable.
 4. ~~**R18's remaining two thirds.**~~ Shipped (`ccb0875`).
 5. **R28's cheapest third.** The failure modes in docs/14 as eval cases. The suite passed
    the Seltz refusal by luck and has no way to keep it.
-6. **R19, the exec marker.** Host housekeeping walks the agent's audit surface, so the log
-   cannot say who acted.
+6. ~~**R19, the exec marker.**~~ Shipped (`0d4fcba`).
 7. **R7, secret redaction.** Still the heaviest security item and still growing on its own:
    the web and browser tools mean an agent reads far more text written by other people, and
    every token in a URL or an API response lands in the transcript in clear. Needs design
