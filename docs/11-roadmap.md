@@ -188,6 +188,18 @@ so "this agent, in this project scope" is a single authorization rather than fiv
 separate settings. The framework's largest remaining object. Medium-large; design
 first, because the boundary shape is the whole decision.
 
+**And it inherited a requirement from R7's review.** The only thing that would actually
+keep a credential out of the record is a **capability proxy**: the host performs the
+privileged operation and the model never holds the value. Today's `RunOnHost` is the
+gesture without the enforcement — it injects a real secret into a child process, and an
+approved command can print it straight back into a tool result. The vault is honest that
+it refuses the in-box case; it does not, and cannot as built, prove the value stays out of
+the *record*.
+
+So `secrets` in the list above is not "which secrets may this scope name". It is **which
+operations may this scope perform with a secret it never sees** — a different and larger
+object than a grant, and the reason the boundary shape really is the whole decision.
+
 ### ~~R5. Provider per agent~~ — shipped
 <details><summary>original entry</summary>
 
@@ -345,9 +357,36 @@ transcript; the volume backup now copies the browser profile too; and the browse
 tools mean an agent reads far more third-party text than it did. The browser snapshot
 redacts password fields, which is the narrowest possible version of this — a token in a URL,
 in a page body, or in a fetched API response still lands in the transcript in clear. An agent
-that reads a `.env` or a key puts it in its own history in clear. Needs a redaction
-design that does not also destroy legitimate content — the hard part is deciding what a
-secret looks like without a false positive eating a real answer. Large; design first.
+that reads a `.env` or a key puts it in its own history in clear.
+
+**Designed, reviewed, and the design's central claim did not survive.** The full account is
+[docs/15](15-secrets-in-the-record.md); what the roadmap needs to carry is that this entry's
+own framing was wrong. It asked for "a redaction design that does not destroy legitimate
+content", and the measurement — now reproducible as `agentbox scan-records` — says the
+detection half of that has no true positives to find on our records and only false ones:
+two matches over 1.8 MB, a Chinese search term in a URL parameter named `key` and a snippet
+demonstrating reading a key from the environment.
+
+What the adversarial review then established, and this entry now inherits:
+
+- **Redaction at storage is at-rest hygiene, not containment.** `turn.ts` stores the
+  redacted copy and pushes the raw results to the model on the next line; the model can
+  re-emit the value base64'd, split, or quoted, and that lands verbatim. Worth doing,
+  worth not overclaiming.
+- **Containment needs a capability proxy**, where the host performs the privileged
+  operation and the model never holds the credential. That is not a redaction feature. It
+  is the shape `RunOnHost` gestures at and does not enforce — a `RunOnHost` command can
+  simply print the value it was given — and it belongs with **R4's Scope growth**, which
+  is the object that would own it.
+- **A path list cannot police credential files while `bash` exists.** `~/.config/gh/hosts.yml`
+  matches no plausible glob, and the shell reads anything the uid can. Refusing to serve a
+  `.env` body through `read_file` is still worth having; calling it a boundary is not.
+
+Shipped from this pass rather than deferred with it: the record scanner and its CLI
+(`ec8bad1`), and the spool's three corrections — spill before durable truncation, a
+non-configurable spool path so the backup exclusion cannot be bypassed, and hourly reaping
+(`79112a0`). Remaining work is large and now correctly named: **at-rest hygiene here, and
+containment under R4.**
 
 ### R8. Per-step checkpoint and resume of side effects
 The oldest deferral. Today a turn interrupted mid-batch resumes by re-reading its
@@ -496,11 +535,11 @@ one of them makes the *next* problem findable.
 5. **R28's cheapest third.** The failure modes in docs/14 as eval cases. The suite passed
    the Seltz refusal by luck and has no way to keep it.
 6. ~~**R19, the exec marker.**~~ Shipped (`0d4fcba`).
-7. **R7, secret redaction.** Still the heaviest security item and still growing on its own:
-   the web and browser tools mean an agent reads far more text written by other people, and
-   every token in a URL or an API response lands in the transcript in clear. Needs design
-   before code — the hard part remains what a secret looks like without a false positive
-   eating a real answer.
+7. **R7, secret redaction.** Designed and reviewed this pass; the design's central claim
+   did not survive and the entry now says so. Three pieces shipped (the reproducible
+   scanner, and the spool's three corrections), the detection half is measurably the wrong
+   approach on our records, and the part that would actually be containment moved to R4.
+   What remains under R7 is at-rest hygiene, correctly named and no longer overclaimed.
 
 Then the structural choice, which is a product decision rather than a ranking:
 **the multi-person direction** (rooms, group-as-interface, task-as-state, box-as-
