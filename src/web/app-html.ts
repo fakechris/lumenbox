@@ -313,6 +313,22 @@ export const APP_HTML = String.raw`<!doctype html>
     background: var(--surface-2); border: 1px solid var(--border);
     border-radius: var(--radius-card); padding: 12px 15px;
   }
+  /* An agent's running commentary, told apart from its answer.
+     The distinction is not decoration: a reader scrolling a long piece of research needs
+     to find where the work stops and the conclusion starts, and identical type makes the
+     whole thing one undifferentiated wall. Narration is smaller, quieter, and in the sans
+     face the rest of the operational surface uses; the answer keeps the serif. */
+  .msg.aside .body {
+    font-family: var(--font-sans); font-size: 0.86rem; line-height: 1.55;
+    color: var(--muted); max-width: 620px;
+    border-left: 2px solid var(--border); padding-left: 11px;
+  }
+  .msg.aside .who { opacity: 0.6; }
+  .msg.aside .body h1, .msg.aside .body h2, .msg.aside .body h3,
+  .msg.aside .body h4, .msg.aside .body h5, .msg.aside .body h6 {
+    font-size: 0.86rem; font-weight: 600; color: var(--muted); margin: 6px 0 3px;
+  }
+  .msg.aside .body p { margin: 0 0 5px; }
   .msg .body > :first-child { margin-top: 0; }
   .msg .body > :last-child { margin-bottom: 0; }
   .msg .body p { margin: 0 0 8px; }
@@ -1707,7 +1723,9 @@ function replayEntry(id, entry) {
     }
     return;
   }
-  bubble(entry.role === "user" ? "user" : "", entry.role === "user" ? "you" : nameOf(id), entry.text);
+  var body = bubble(entry.role === "user" ? "user" : "", entry.role === "user" ? "you" : nameOf(id), entry.text);
+  // Narration on reload reads the way it read live.
+  if (entry.aside && body.parentNode) body.parentNode.classList.add("aside");
 }
 
 function agentById(id) {
@@ -2605,6 +2623,14 @@ stream.onmessage = function (raw) {
   }
 
   if (e.type === "tool_start") {
+    // Text followed by a tool call is narration, not the answer — the same distinction
+    // turn.ts already makes when it decides whether a round is final. Marking it here is
+    // what lets the two read differently: the process de-emphasised, the answer not.
+    var narrating = live.get(e.agentId);
+    if (narrating && narrating.node) {
+      var block = narrating.node.parentNode;
+      if (block && block.classList) block.classList.add("aside");
+    }
     live.delete(e.agentId);
     // Held so the result can be folded into the same row when it arrives.
     if (inView(e)) {

@@ -87,7 +87,16 @@ test("tool traffic becomes tool rows, not empty bubbles", () => {
   const display = toDisplayEntries(entries, [{ id: "id-Ada", name: "Ada" }]);
 
   assert.deepEqual(display[0], { kind: "text", role: "user", text: "take a screenshot" });
-  assert.deepEqual(display[1], { kind: "text", role: "assistant", text: "Looking now." });
+  // Marked `aside`: prose in the same turn as tool calls is running commentary, not the
+  // answer, and the reader of a long piece of research needs to see where the work stops
+  // and the conclusion starts. Known here by construction rather than guessed — a
+  // `blocks` entry is by definition a round that went on to call something.
+  assert.deepEqual(display[1], {
+    kind: "text",
+    role: "assistant",
+    text: "Looking now.",
+    aside: true,
+  });
   // The result is folded into the call it answers, so the page has one row to collapse.
   assert.deepEqual(display[2], {
     kind: "tools",
@@ -178,4 +187,39 @@ test("genuine multiple peer messages still parse, because they carry ids", () =>
   assert.equal(parsed?.[0]?.from, "Rex");
   assert.equal(parsed?.[1]?.from, "Ada");
   assert.match(parsed?.[1]?.text ?? "", /Bob: not a message/, "the body line did not split");
+});
+
+test("the final answer is not marked as commentary", () => {
+  // The distinction only means something if the two differ: a turn that ends without
+  // calling anything is the answer, and marking it aside would grey out the thing the
+  // person actually asked for.
+  const display = toDisplayEntries(
+    [
+      { role: "user", text: "which is faster?", at: "t" },
+      {
+        role: "assistant",
+        kind: "blocks",
+        blocks: [
+          { type: "text", text: "Checking both." },
+          { type: "tool_use", id: "1", name: "bash", input: { command: "true" } },
+        ],
+        at: "t",
+      },
+      {
+        role: "user",
+        kind: "results",
+        blocks: [{ type: "tool_result", tool_use_id: "1", content: [{ type: "text", text: "ok" }] }],
+        at: "t",
+      },
+      { role: "assistant", text: "The second one, by about 3x.", at: "t" },
+    ] as never,
+    []
+  );
+  const texts = display.filter(
+    (entry): entry is Extract<typeof entry, { kind: "text" }> =>
+      entry.kind === "text" && entry.role === "assistant"
+  );
+  assert.equal(texts.length, 2);
+  assert.equal((texts[0] as { aside?: true }).aside, true, "the narration");
+  assert.equal((texts[1] as { aside?: true }).aside, undefined, "the answer");
 });
