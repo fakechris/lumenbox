@@ -323,5 +323,35 @@ Three corrections to work already shipped in `3c6030c`:
 Correct, and it is the sharpest procedural finding here. The measurement that this entire
 design turns on was an ad-hoc script run once in a shell and never committed. A number
 nobody else can re-run is a claim, not a measurement — which is the same standard this
-document applies to everything else. **The scanner belongs in the tree before the design
-proceeds.**
+document applies to everything else.
+
+**Fixed first, before anything else in the design.** `src/host/secret-scan.ts` and
+`agentbox scan-records` make the figure reproducible, and the tests pin the two false
+positives *as the evidence* — the moment a pattern stops matching them, the case against
+pattern redaction quietly evaporates and nobody notices.
+
+Re-run against a corpus that is now broader than the original (43 files, 1.8 MB, taking in
+`.json` and `.md` rather than only `.jsonl`):
+
+```
+2 credential-shaped string(s) — each needs a human verdict; a match is not a secret:
+  assign-secret      apiKey: process.env.XAI_API_KEY
+  url-token          &key=全国中小企业融资综合信用服务平台
+no held value appears verbatim in any record
+```
+
+The finding holds on the wider corpus. Two matches, both false, no true positives, and no
+held value anywhere it should not be.
+
+Building it also produced two of its own corrections, both caught by running it rather
+than by reading it:
+
+- The first run reported *the credential store as a leak* — "rotate `FEISHU_APP_SECRET`,
+  it appears in `config.json`", which is where it is kept.
+- The first repair excluded the stores from the exact half only, reasoning that a pattern
+  hit there would mean a secret was in a file with no business holding one. That is exactly
+  backwards, and the next run proved it by flagging a `cli_…` app id in `config.json`. A
+  credential store's business is holding credentials; it is now not scanned at all.
+
+A tool that cries wolf about its own source of truth teaches people to ignore it, on the
+one occasion it matters.

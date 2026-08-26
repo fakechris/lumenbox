@@ -4,7 +4,7 @@
  */
 
 import { createInterface } from "node:readline/promises";
-import { existsSync, mkdtempSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { homedir, tmpdir } from "node:os";
@@ -914,6 +914,10 @@ State:
   backup [dir]              Snapshot ~/.agentbox without stopping anything.
                             Transcripts, memory, plans and skills are the only
                             things here that cannot be rebuilt.
+  scan-records              What credential-shaped text is in the records, and
+                            whether any value you hold appears verbatim. Values
+                            are compared, never printed. A pattern match is not
+                            a secret — each needs your verdict. See docs/15.
 
 Chat:
   chat [agent] [message]    Talk to an agent. Omit the message for a REPL,
@@ -1291,6 +1295,45 @@ async function main(): Promise<number> {
       out(`state:  ${agentboxHome()}`);
       out(`agents: ${defaultAgentsRoot()}`);
       return 0;
+
+    case "scan-records": {
+      // The measurement docs/15 turns on, as something anybody can re-run. The review's
+      // sharpest finding was that the original figure came from a script typed into a
+      // shell once and never kept, which makes it a claim rather than a measurement.
+      const { scanRecords, describeScan } = await import("./host/secret-scan.ts");
+      // Values are read here rather than through Vault, deliberately: `list()` omits
+      // values on purpose, and adding a value-enumeration API would open the surface the
+      // vault exists to keep closed. This runs on the operator's own machine, against
+      // their own files, at the same trust level as reading the config.
+      const held = new Map<string, string>();
+      const collect = (source: string, object: unknown, prefix = ""): void => {
+        if (object === null || typeof object !== "object") return;
+        for (const [key, value] of Object.entries(object as Record<string, unknown>)) {
+          if (typeof value === "string") held.set(`${source}${prefix}.${key}`, value);
+          else collect(source, value, `${prefix}.${key}`);
+        }
+      };
+      try {
+        collect("config", JSON.parse(readFileSync(join(agentboxHome(), "config.json"), "utf8")));
+      } catch {
+        // No config is an ordinary state, not a scan failure.
+      }
+      try {
+        const vault = JSON.parse(readFileSync(join(agentboxHome(), "vault.json"), "utf8")) as {
+          secrets?: { id?: unknown; value?: unknown }[];
+        };
+        for (const secret of vault.secrets ?? []) {
+          if (typeof secret?.id === "string" && typeof secret?.value === "string") {
+            held.set(`vault:${secret.id}`, secret.value);
+          }
+        }
+      } catch {
+        // Likewise.
+      }
+      out(dim(`${held.size} held value(s) to compare against; values are never printed`));
+      for (const line of describeScan(scanRecords(agentboxHome(), held))) out(line);
+      return 0;
+    }
 
     default:
       err(`Unknown command: ${command}`);
