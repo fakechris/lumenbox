@@ -144,9 +144,12 @@ The design is to extend that principle outward instead of building a filter:
    command an agent ran — the part the transcript deliberately did *not* keep — travels
    out of the box with every upgrade.
 
-   This is the one place in the design where a concrete thing is broken today rather than
-   latent, and the fix is small: exclude `.spool` from `backupVolumes`, and let `reapSpool`
-   remain the only thing that outlives a command. *(An earlier draft of this document
+   This was the one place in the design where a concrete thing was broken today rather
+   than latent. **Fixed in `3c6030c`**, ahead of the rest of the design because it needed
+   no part of it: `.spool` is excluded from `backupVolumes`, and `reapSpool` is again the
+   only thing that outlives a command. Verified by planting a marker in the spool and
+   taking a real `box up --recreate` — spool entries in the work archive went 1 to 0, the
+   marker absent, the skills directory still backed up. *(An earlier draft of this document
    asserted the spool was already excluded. It is not. The claim was written from the
    module comment saying the box is disposable, and checked afterwards — which is the
    failure mode this whole document is about.)*
