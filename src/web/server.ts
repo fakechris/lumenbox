@@ -2538,11 +2538,22 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
             send(res, 404, { error: `No agent ${id}` });
             return;
           }
-          const list = registry.listConversations(id).sort((a, b) => {
-            if (a.id === MAIN_CONVERSATION) return -1;
-            if (b.id === MAIN_CONVERSATION) return 1;
-            return String(b.lastAt ?? "").localeCompare(String(a.lastAt ?? ""));
-          });
+          const list = registry
+            .listConversations(id)
+            .sort((a, b) => {
+              if (a.id === MAIN_CONVERSATION) return -1;
+              if (b.id === MAIN_CONVERSATION) return 1;
+              return String(b.lastAt ?? "").localeCompare(String(a.lastAt ?? ""));
+            })
+            // Labelled by what was said, because the id is a flattened chatKey nobody
+            // can read. Head-of-file only, so a long list stays cheap.
+            .map(conversation => {
+              const firstLine =
+                conversation.id === MAIN_CONVERSATION
+                  ? undefined
+                  : registry.conversationFirstLine(id, conversation.id);
+              return { ...conversation, ...(firstLine !== undefined ? { firstLine } : {}) };
+            });
           send(res, 200, { conversations: list });
           return;
         }

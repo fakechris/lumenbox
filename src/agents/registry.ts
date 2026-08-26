@@ -14,8 +14,11 @@
 
 import { randomBytes, randomUUID } from "node:crypto";
 import {
+  closeSync,
   mkdirSync,
+  openSync,
   readFileSync,
+  readSync,
   readdirSync,
   renameSync,
   rmSync,
@@ -857,6 +860,50 @@ export class AgentRegistry {
    * are one per outside chat — a Telegram DM, a Feishu group — so two groups talking
    * to the same agent never see each other's context.
    */
+  /**
+   * The first words a person said in a conversation — what a picker labels it with.
+   *
+   * The picker showed raw ids (`feishu-oc_59aee…-om_x100b…`), and a person hunting for
+   * "the thread where I asked about the report" had to click through them one by one.
+   * Reads only the head of the file, because a label must not cost a transcript read.
+   */
+  conversationFirstLine(agentId: string, conversation: string): string | undefined {
+    const path =
+      conversation === MAIN_CONVERSATION
+        ? this.transcriptPathFor(agentId)
+        : join(this.dirFor(agentId), CONVERSATIONS_DIRNAME, `${conversation}.jsonl`);
+    if (!existsSync(path)) return undefined;
+    let head = "";
+    try {
+      const fd = openSync(path, "r");
+      try {
+        const buffer = Buffer.alloc(16_384);
+        const bytes = readSync(fd, buffer, 0, buffer.length, 0);
+        head = buffer.toString("utf8", 0, bytes);
+      } finally {
+        closeSync(fd);
+      }
+    } catch {
+      return undefined;
+    }
+    let fallback: string | undefined;
+    for (const line of head.split("\n")) {
+      if (line.trim() === "") continue;
+      let entry: { role?: string; text?: string };
+      try {
+        entry = JSON.parse(line);
+      } catch {
+        continue; // The head may end mid-line; that line is simply not readable yet.
+      }
+      if (typeof entry.text !== "string" || entry.text.trim() === "") continue;
+      const first = entry.text.trim().split("\n")[0] ?? "";
+      // What the person said names the topic; what the agent said merely answers it.
+      if (entry.role === "user") return first;
+      fallback ??= first;
+    }
+    return fallback;
+  }
+
   listConversations(agentId: string): { id: string; lastAt?: string }[] {
     const conversations: { id: string; lastAt?: string }[] = [];
     const main = this.transcriptPathFor(agentId);

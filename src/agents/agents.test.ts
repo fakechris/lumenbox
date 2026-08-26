@@ -805,3 +805,37 @@ test("the desktop tool is offered only in the main conversation", () => {
   assert.ok(!side.includes("computer"), "a side chat does not");
   assert.ok(side.includes("bash") && side.includes("read_file"), "but keeps shell and files");
 });
+
+test("a conversation is labelled by what the person first said", () => {
+  // The picker showed raw flattened chatKeys, and finding "the thread about the report"
+  // meant clicking through them one by one.
+  const root = mkdtempSync(join(tmpdir(), "agentbox-firstline-"));
+  try {
+    const registry = new AgentRegistry(root);
+    const ada = registry.create({ name: "Ada" });
+    const conversation = "feishu-oc_room-om_topic";
+    registry.appendTranscript(
+      ada.id,
+      { role: "user", text: "帮我分析这份报告\n第二行不属于标签", at: "2026-08-26T00:00:00Z" },
+      conversation
+    );
+    registry.appendTranscript(
+      ada.id,
+      { role: "assistant", text: "好的,开始分析。", at: "2026-08-26T00:00:05Z" },
+      conversation
+    );
+    assert.equal(registry.conversationFirstLine(ada.id, conversation), "帮我分析这份报告");
+    // A conversation that opens with the agent (a digest, a rescue) still gets a label.
+    const opened = "feishu-oc_room-om_agentfirst";
+    registry.appendTranscript(
+      ada.id,
+      { role: "assistant", text: "早报:昨天完成了三件事", at: "2026-08-26T01:00:00Z" },
+      opened
+    );
+    assert.equal(registry.conversationFirstLine(ada.id, opened), "早报:昨天完成了三件事");
+    // And one that does not exist labels as nothing rather than throwing.
+    assert.equal(registry.conversationFirstLine(ada.id, "feishu-oc_gone"), undefined);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});

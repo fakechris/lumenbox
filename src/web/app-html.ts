@@ -516,7 +516,7 @@ export const APP_HTML = String.raw`<!doctype html>
     <span class="lead">
       <span id="title">&mdash;</span>
       <span id="titlerole" class="dim" style="font-size:12px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis"></span>
-      <select id="convpick" style="display:none;height:28px;border-radius:var(--radius-input);border:1px solid var(--border-strong);background:var(--surface);color:var(--text);font:inherit;font-size:12px;padding:0 6px;max-width:180px"></select>
+      <select id="convpick" style="display:none;height:28px;border-radius:var(--radius-input);border:1px solid var(--border-strong);background:var(--surface);color:var(--text);font:inherit;font-size:12px;padding:0 6px;max-width:280px"></select>
       <a href="#" id="agentcfg" style="font-size:12px;flex:none">Configure</a>
     </span>
     <span class="headactions">
@@ -1717,6 +1717,27 @@ function select(id, conversation) {
  * The conversation switcher, shown only when an agent has more than the team room —
  * an agent nobody has messaged from a channel does not need a one-item dropdown.
  */
+/** "3m" / "2h" / "5d" — enough to pick the thread from this morning over last week's. */
+function fmtAgo(iso) {
+  if (!iso) return "";
+  var ms = Date.now() - Date.parse(iso);
+  if (!isFinite(ms) || ms < 0) return "";
+  var minutes = Math.floor(ms / 60000);
+  if (minutes < 1) return "now";
+  if (minutes < 60) return minutes + "m";
+  if (minutes < 60 * 24) return Math.floor(minutes / 60) + "h";
+  return Math.floor(minutes / (60 * 24)) + "d";
+}
+
+/** What a conversation is called in the picker: where it came from, what was said, when. */
+function conversationLabel(c) {
+  if (c.id === "main") return "Team room";
+  var channel = String(c.id).split("-")[0] || "chat";
+  var words = c.firstLine ? String(c.firstLine).slice(0, 40) : c.id;
+  var ago = fmtAgo(c.lastAt);
+  return channel + " · " + words + (ago ? " · " + ago : "");
+}
+
 function refreshConversations(id) {
   return fetch("/api/conversations?agent=" + encodeURIComponent(id))
     .then(function (r) { return r.json(); })
@@ -1724,14 +1745,23 @@ function refreshConversations(id) {
       var list = data.conversations || [];
       var pick = $("convpick");
       if (list.length <= 1) { pick.style.display = "none"; return; }
-      pick.style.display = "";
-      pick.innerHTML = list.map(function (c) {
-        var label = c.id === "main" ? "Team room" : c.id;
-        return '<option value="' + esc(c.id) + '"' + (c.id === currentConversation ? " selected" : "") + ">" + esc(label) + "</option>";
+      // Rebuilding a <select> the person has open snaps it shut under their pointer.
+      if (document.activeElement === pick) return;
+      var options = list.map(function (c) {
+        return '<option value="' + esc(c.id) + '"' + (c.id === currentConversation ? " selected" : "") + ">" + esc(conversationLabel(c)) + "</option>";
       }).join("");
+      // Only touch the DOM when something changed; times move, so labels count too.
+      if (pick.innerHTML === options && pick.style.display !== "none") return;
+      pick.style.display = "";
+      pick.innerHTML = options;
     })
     .catch(function () {});
 }
+
+// A thread that starts while the page is open must be reachable without switching
+// agents: the picker only loaded on a switch, so a new Feishu topic was invisible
+// until a reload — and a reload did not help either, because nothing re-fetched.
+setInterval(function () { if (current) refreshConversations(current); }, 5000);
 
 $("convpick").onchange = function () {
   if (current) select(current, $("convpick").value);
