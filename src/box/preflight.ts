@@ -107,7 +107,7 @@ export async function preflight(box: BoxClient): Promise<Preflight> {
       `-o -path /opt/boxd -o -path /opt/hostd ` +
       `-o \\( -type d -name '.*' \\) -o -name node_modules -o -name .git ` +
       `\\) -prune -o -type f -mtime -${RECENT_DAYS} -print 2>/dev/null | head -${MAX_LISTED + 1}`;
-    const found = await box.exec(find, { timeoutMs: 30_000 });
+    const found = await box.exec(find, { timeoutMs: 30_000, actor: "host:preflight" });
     const paths = found.stdout
       .split("\n")
       .map(line => line.trim())

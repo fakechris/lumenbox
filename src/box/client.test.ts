@@ -30,6 +30,26 @@ function serve(
   });
 }
 
+/** A server that records each request body and answers as a successful exec. */
+function serveBodies(into: Record<string, unknown>[]): Promise<{ server: Server; url: string }> {
+  return new Promise(done => {
+    const server = createServer((req, res) => {
+      let body = "";
+      req.on("data", chunk => (body += chunk));
+      req.on("end", () => {
+        into.push(JSON.parse(body));
+        res.writeHead(200, { "content-type": "application/json" });
+        res.end(JSON.stringify({ stdout: "", stderr: "", exit_code: 0, timed_out: false }));
+      });
+    });
+    server.listen(0, "127.0.0.1", () => {
+      const address = server.address();
+      const port = typeof address === "object" && address !== null ? address.port : 0;
+      done({ server, url: `http://127.0.0.1:${port}` });
+    });
+  });
+}
+
 async function failureOf(work: Promise<unknown>): Promise<BoxError> {
   try {
     await work;
@@ -90,5 +110,26 @@ test("a timeout says the operation may still be running", async () => {
     assert.match(failure.message, /may still be running/);
   } finally {
     server.close();
+  }
+});
+
+test("who asked rides with the command, and changes nothing about it", async () => {
+  // Host housekeeping and an agent's own shell arrive on one endpoint looking
+  // identical, so `mkdir` for a starter skill and anything a model typed were the same
+  // (absent) line in the box's record. The label is evidence, never a permission: the
+  // request is otherwise byte-for-byte what it was.
+  const seen: Record<string, unknown>[] = [];
+  const captured = await serveBodies(seen);
+  try {
+    const client = new BoxClient({ baseUrl: captured.url, token: "t", timeoutMs: 2000 });
+    await client.exec("mkdir -p /home/box/work/x", { actor: "host:starter-skills" });
+    await client.exec("ls", {});
+    assert.equal(seen[0]?.actor, "host:starter-skills");
+    assert.equal(seen[0]?.command, "mkdir -p /home/box/work/x");
+    // Absent rather than invented when nobody said: the box logs it as unlabelled, and a
+    // fabricated attribution would be worse than none.
+    assert.equal(seen[1]?.actor, undefined);
+  } finally {
+    captured.server.close();
   }
 });

@@ -632,7 +632,10 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
       // per topic means most turns now start with no directory at all.
       void orchestrator
         .boxClient()
-        ?.exec(`mkdir -p '${WORK_DIR}/chats/${conversation}/inbox' '${WORK_DIR}/chats/${conversation}/outbox'`)
+        ?.exec(
+          `mkdir -p '${WORK_DIR}/chats/${conversation}/inbox' '${WORK_DIR}/chats/${conversation}/outbox'`,
+          { actor: "host:chat-exchange" }
+        )
         .catch((error: unknown) => {
           log(
             `could not create the file exchange for ${conversation}: ` +
@@ -758,7 +761,7 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
       const client = orchestrator.boxClient();
       if (client === undefined) return undefined;
       const dir = `${WORK_DIR}/chats/${conversationIdFor(chatKey)}/inbox`;
-      await client.exec(`mkdir -p '${dir}'`);
+      await client.exec(`mkdir -p '${dir}'`, { actor: "host:chat-inbox" });
       let existing: Set<string>;
       try {
         existing = new Set((await client.listDir(dir)).entries.map(entry => entry.name));
@@ -813,7 +816,9 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
       if (client === undefined) return;
       const dir = `${WORK_DIR}/chats/${conversationIdFor(chatKey)}/outbox`;
       const quoted = names.map(name => `'${name.replace(/'/g, `'\\''`)}'`).join(" ");
-      await client.exec(`mkdir -p '${dir}/../sent' && cd '${dir}' && mv -- ${quoted} ../sent/`);
+      await client.exec(`mkdir -p '${dir}/../sent' && cd '${dir}' && mv -- ${quoted} ../sent/`, {
+        actor: "host:outbox-delivered",
+      });
     },
     // The desktop as it is right now, for "屏幕" and for the finished-task poster.
     // Captured with the agent's own owner token, the same proof a turn presents; an
@@ -1373,6 +1378,9 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
         const result = await client.exec(command, {
           cwd: typeof input.cwd === "string" ? input.cwd : WORK_DIR,
           timeoutMs: 120_000,
+          // An outside MCP client driving the shell as a person, not one of our agents:
+          // the same principal the policy check above was made against.
+          actor: `mcp:${principalId}`,
         });
         return [
           `exit code: ${result.exit_code}`,
@@ -1406,7 +1414,7 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
         // A path rather than the bytes: this bridge carries text, and a screenshot the
         // caller can fetch beats a megabyte of base64 it did not ask for.
         const path = `${WORK_DIR}/.mcp-shots/${agent.id}-${Date.now()}.webp`;
-        await client.exec(`mkdir -p ${WORK_DIR}/.mcp-shots`);
+        await client.exec(`mkdir -p ${WORK_DIR}/.mcp-shots`, { actor: "host:mcp-screenshot" });
         await client.uploadFile(path, shot.screenshot);
         return `Saved the current desktop of ${agent.profile.name} to ${path}.`;
       },

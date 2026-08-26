@@ -235,6 +235,8 @@ export class BoxClient {
       session?: string;
       display?: number;
       owner?: string;
+      /** Who asked, for the box's record. A label, not a permission. */
+      actor?: string;
     } = {}
   ): Promise<ExecResult> {
     const commandTimeout = options.timeoutMs ?? 120_000;
@@ -247,6 +249,7 @@ export class BoxClient {
         session: options.session,
         display: options.display,
         owner: options.owner,
+        actor: options.actor,
       },
       // Give the HTTP layer headroom over the command's own timeout, so a
       // command that times out reports its output instead of aborting the request.

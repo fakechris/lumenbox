@@ -1330,6 +1330,8 @@ export async function dispatchTool(
         // So a GUI the agent launches from the shell opens on its own desktop.
         display: context.displayIndex,
         owner: context.boxOwner,
+        // For the box's record: this one is the model's own shell, not housekeeping.
+        actor: `agent:${context.agent.id}`,
       });
       return {
         text: formatExec(result, input.timeout_ms ? Number(input.timeout_ms) : undefined),

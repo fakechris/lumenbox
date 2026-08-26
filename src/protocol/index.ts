@@ -168,6 +168,21 @@ export interface ExecRequest {
    * turn, and `/jobs/*` is how anyone asks what became of it.
    */
   background?: boolean;
+  /**
+   * Who asked for this, for the record — an agent id, or what the host was doing.
+   *
+   * A label, never a bypass. It changes nothing about what runs, what is allowed, or
+   * who may call: the token is the access control and stays the access control. It
+   * exists because host housekeeping and an agent's own shell arrive on this one
+   * endpoint looking identical, so `mkdir` for a starter skill and `rm -rf` typed by a
+   * model were the same line in the box's log — and, until this landed, that line did
+   * not exist at all. A record that cannot say who acted answers the only question
+   * anybody asks it with a shrug.
+   *
+   * Untrusted by construction. Anything holding the token can write anything here, so
+   * it is evidence about *our* callers and not proof about a stranger's.
+   */
+  actor?: string;
 }
 
 /** What starting a background job answers with, instead of its output. */

@@ -399,7 +399,11 @@ async function cmdBoxExec(argv: string[]): Promise<number> {
   const manager = new BoxManager(boxConfig());
   const client = await manager.connect();
   const display = displayArg(argv);
-  const result = await client.exec(command, { display, owner: ownerFor(display) });
+  const result = await client.exec(command, {
+    display,
+    owner: ownerFor(display),
+    actor: "console:box-run",
+  });
   if (result.stdout) process.stdout.write(result.stdout);
   if (result.stderr) process.stderr.write(result.stderr);
   return result.exit_code;

@@ -156,7 +156,10 @@ export async function seedStarterSkills(
   box: {
     listDir: (path: string) => Promise<{ entries: { name: string }[] }>;
     uploadFile: (path: string, base64: string) => Promise<unknown>;
-    exec: (command: string, options?: { timeoutMs?: number }) => Promise<unknown>;
+    exec: (
+      command: string,
+      options?: { timeoutMs?: number; actor?: string }
+    ) => Promise<unknown>;
   },
   log: (line: string) => void
 ): Promise<void> {
@@ -165,7 +168,10 @@ export async function seedStarterSkills(
     const existing = listing?.entries.map(entry => entry.name) ?? [];
     // `|| true` because an absent marker is the ordinary first-run case, not an error.
     const raw = (await box
-      .exec(`cat ${SKILLS_DIR}/${SEEDED_MARKER} 2>/dev/null || true`, { timeoutMs: 15_000 })
+      .exec(`cat ${SKILLS_DIR}/${SEEDED_MARKER} 2>/dev/null || true`, {
+        timeoutMs: 15_000,
+        actor: "host:starter-skills",
+      })
       .catch(() => undefined)) as { stdout?: unknown } | undefined;
     const markerText = typeof raw?.stdout === "string" ? raw.stdout : undefined;
 
@@ -176,7 +182,7 @@ export async function seedStarterSkills(
     // stray upload inventing directory trees — so the directories are made first,
     // deliberately, through the shell.
     const dirs = missing.map(slug => `${SKILLS_DIR}/${slug}`).join(" ");
-    await box.exec(`mkdir -p ${dirs}`, { timeoutMs: 15_000 });
+    await box.exec(`mkdir -p ${dirs}`, { timeoutMs: 15_000, actor: "host:starter-skills" });
     for (const skill of STARTERS) {
       if (!missing.includes(skill.slug)) continue;
       await box.uploadFile(

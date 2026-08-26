@@ -331,6 +331,13 @@ const routes: Record<string, Handler> = {
     // A shell on someone else's desktop can do everything computer-use can — start a
     // window on it, type with xdotool — so it is gated the same way.
     if (body.display !== undefined) displays.assertOwner(body.display, body.owner);
+    // Every shell command, with who asked for it. Nothing recorded this before, so the
+    // box could not answer "who ran that" for the one endpoint where the answer matters
+    // most. Truncated because a log is not a transcript; the spool files hold output.
+    log(
+      `exec [${body.actor ?? "unlabelled"}]${body.background === true ? " (background)" : ""}: ` +
+        `${body.command.replace(/\s+/g, " ").slice(0, 200)}`
+    );
     if (body.background === true) {
       return jobs.start({
         command: body.command,
