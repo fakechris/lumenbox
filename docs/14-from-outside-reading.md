@@ -132,3 +132,57 @@ Buying a structured index. The honest paragraph in the article is its own "when 
 with open web search" — open web for discovery, the index for depth once you have a list.
 Note that our MCP client support means any such index is pluggable without us building
 one, which is the reason not to build one.
+
+---
+
+## A bot is a role plus the tools that make it accountable
+
+Source: *Designing Grok Bot with Grok Bot*, a SpaceXAI designer, 2026-08-25. First-person
+practice, not architecture — which is why it is worth reading: it says what the shape is
+actually used for.
+
+Four bots, each named for one job. **Figma Bro** does repetitive production. **Motion
+God** prototypes motion. **Experiments** is where ideas go before anyone knows what they
+should be. **Devbot** answers engineering questions *and helps the other bots understand
+how an idea would get built*. They huddle, delegate, and bring the work back — one task
+had Experiments hand movement to Motion God and desktop behaviour to Devbot, then
+assemble the prototypes.
+
+The line that matters is not about design at all:
+
+> I don't want Figma Bro eyeballing any of this. Through the Figma MCP, it can inspect the
+> actual file and use exact x and y positions… If there's an existing frame or component,
+> that is the source of truth.
+
+That is the same argument that got us a semantic snapshot instead of screenshots, arriving
+from the other end. **A bot is not distinguished by its personality. It is distinguished
+by which tool it has and what that tool lets it treat as ground truth.** Figma Bro without
+the Figma MCP is a bot that eyeballs, and no amount of prompt fixes that.
+
+Second thing worth taking: Motion God built *a playground on localhost around the real
+animation spec file*, so its human could tune deterministically **and** direct in language
+against the same running thing. An agent's best output is sometimes an environment, not an
+artifact — and a box with its own computer and browser is the one thing here uniquely able
+to produce that.
+
+### Where this lands on us: the box has no MCP
+
+Our agents differ by prompt and by allowlist. They cannot differ by *capability*, because:
+
+- MCP servers are spawned by the host, over stdio, as host child processes. That is the
+  right default — it is why a secret never enters the box.
+- `presets.ts` names five faces of a preset: packaging, interface, skills, metering,
+  acceptance. **There is no MCP face.**
+- So a delegated engine running inside the box has skills and no external tools at all,
+  and this installation's vault MCP — being configured host-side in another session — will
+  reach the host and stop there.
+
+The seam already exists and is already proven: presets point an engine's *model* traffic
+at the relay so the key stays outside the box. Tool calls could travel the same way — the
+box asks the host to run the MCP tool, the host holds the credential, the call lands in
+the same transcript and passes the same policy gate as any other tool. That preserves the
+one property the design is built on.
+
+Which is a decision that crosses a boundary between two components that each already
+work — [precisely the class](13-design-review.md) that goes to a hostile review before it
+is built, not after. Recorded here as the argument for doing that, not as the design.
