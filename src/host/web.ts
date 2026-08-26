@@ -568,50 +568,164 @@ export interface SearchResult {
  * this installation keeps model credentials — `env` in the config file, written 0600,
  * never placed inside the box.
  */
-export const SEARCH_KEY_VARIABLE = "BRAVE_SEARCH_API_KEY";
+/**
+ * The search providers, in the order they are tried.
+ *
+ * More than one because the tool was unusable for want of a single key, and an
+ * installation that has *a* provider should search. The order is a preference, not a
+ * ranking: the first with a key configured is used, and the others are what a failure
+ * falls through to — a rate limit or an outage at one provider is not a reason for an
+ * agent to go back to guessing URLs, which is what it did for a week (docs/14).
+ *
+ * Each is normalised to the same three fields. Anything a provider offers beyond them is
+ * dropped here rather than leaked into the tool's contract, so swapping providers cannot
+ * change what an agent has learned to expect.
+ */
+export interface SearchProvider {
+  name: string;
+  keyEnv: string;
+  /** Requests per second the provider allows, for the caller's own pacing. */
+  ratePerSecond: number;
+  search: (key: string, query: string, count: number) => Promise<SearchResult[]>;
+}
 
-/** Whether searching is possible at all. Absent, the tool is not offered. */
-export function canSearch(): boolean {
-  const key = process.env[SEARCH_KEY_VARIABLE];
-  return key !== undefined && key !== "";
+export const SEARCH_PROVIDERS: readonly SearchProvider[] = [
+  {
+    name: "keenable",
+    keyEnv: "KEENABLE_API_KEY",
+    ratePerSecond: 10,
+    search: async (key, query, count) => {
+      const response = await fetch("https://api.keenable.ai/v1/search", {
+        method: "POST",
+        headers: { "content-type": "application/json", "x-api-key": key },
+        body: JSON.stringify({ query }),
+        signal: AbortSignal.timeout(TIMEOUT_MS),
+      });
+      if (!response.ok) throw providerError("keenable", "KEENABLE_API_KEY", response.status);
+      const payload = (await response.json()) as {
+        results?: { title?: string; url?: string; description?: string; snippet?: string }[];
+      };
+      return (payload.results ?? [])
+        .filter(item => typeof item.url === "string")
+        .slice(0, count)
+        .map(item => ({
+          title: cleanText(item.title),
+          url: item.url as string,
+          // `snippet` is the passage; `description` is the page's own blurb. The passage
+          // is what tells you whether the page answers the question.
+          description: cleanText(item.snippet ?? item.description),
+        }));
+    },
+  },
+  {
+    name: "brave",
+    keyEnv: "BRAVE_SEARCH_API_KEY",
+    ratePerSecond: 1,
+    search: async (key, query, count) => {
+      const url = new URL("https://api.search.brave.com/res/v1/web/search");
+      url.searchParams.set("q", query);
+      url.searchParams.set("count", String(Math.min(Math.max(count, 1), 20)));
+      const response = await fetch(url, {
+        headers: { accept: "application/json", "x-subscription-token": key },
+        signal: AbortSignal.timeout(TIMEOUT_MS),
+      });
+      if (!response.ok) throw providerError("brave", "BRAVE_SEARCH_API_KEY", response.status);
+      const payload = (await response.json()) as {
+        web?: { results?: { title?: string; url?: string; description?: string }[] };
+      };
+      return (payload.web?.results ?? [])
+        .filter(item => typeof item.url === "string")
+        .map(item => ({
+          title: cleanText(item.title),
+          url: item.url as string,
+          description: cleanText(item.description),
+        }));
+    },
+  },
+  {
+    name: "tavily",
+    keyEnv: "TAVILY_API_KEY",
+    ratePerSecond: 1,
+    search: async (key, query, count) => {
+      const response = await fetch("https://api.tavily.com/search", {
+        method: "POST",
+        headers: { "content-type": "application/json", authorization: `Bearer ${key}` },
+        body: JSON.stringify({ query, max_results: Math.min(Math.max(count, 1), 20) }),
+        signal: AbortSignal.timeout(TIMEOUT_MS),
+      });
+      if (!response.ok) throw providerError("tavily", "TAVILY_API_KEY", response.status);
+      const payload = (await response.json()) as {
+        results?: { title?: string; url?: string; content?: string }[];
+      };
+      return (payload.results ?? [])
+        .filter(item => typeof item.url === "string")
+        .map(item => ({
+          title: cleanText(item.title),
+          url: item.url as string,
+          description: cleanText(item.content),
+        }));
+    },
+  },
+];
+
+function providerError(name: string, keyEnv: string, status: number): WebError {
+  return new WebError(
+    status === 401 || status === 403
+      ? `${name} refused the key (HTTP ${status}). Check ${keyEnv}.`
+      : status === 429
+        ? `${name} is rate-limiting (HTTP 429).`
+        : `${name} returned HTTP ${status}.`
+  );
+}
+
+/** Markup and entities are the provider's rendering, not part of the answer. */
+function cleanText(value: unknown): string {
+  return decodeEntities(String(value ?? "").replace(/<[^>]+>/g, "")).trim();
+}
+
+/** Providers this installation actually has a key for, in preference order. */
+export function configuredProviders(
+  env: NodeJS.ProcessEnv = process.env
+): SearchProvider[] {
+  return SEARCH_PROVIDERS.filter(provider => {
+    const key = env[provider.keyEnv];
+    return key !== undefined && key !== "";
+  });
 }
 
 /**
- * Asks a search engine for places to look.
+ * The variable named when there is no provider at all.
  *
- * Brave rather than a scrape of somebody's results page: scraping breaks silently and
- * at the worst moment, and an agent that cannot tell "no results" from "we were
- * blocked" will confidently report that a thing does not exist.
+ * The first one, because a person with no search needs one instruction rather than a
+ * menu. `describeAbsences` says the rest.
  */
+export const SEARCH_KEY_VARIABLE = SEARCH_PROVIDERS[0]!.keyEnv;
+
+/** Whether searching is possible at all. Absent, the tool is not offered. */
+export function canSearch(): boolean {
+  return configuredProviders().length > 0;
+}
+
 export async function searchWeb(query: string, count = 8): Promise<SearchResult[]> {
-  const key = process.env[SEARCH_KEY_VARIABLE];
-  if (key === undefined || key === "") {
+  const providers = configuredProviders();
+  if (providers.length === 0) {
     throw new WebError(
-      `Searching needs ${SEARCH_KEY_VARIABLE} set in this installation's config; it is not.`
+      `Searching needs a provider key in this installation's config — one of ` +
+        `${SEARCH_PROVIDERS.map(provider => provider.keyEnv).join(", ")}. None is set.`
     );
   }
-  const url = new URL("https://api.search.brave.com/res/v1/web/search");
-  url.searchParams.set("q", query);
-  url.searchParams.set("count", String(Math.min(Math.max(count, 1), 20)));
-  const response = await fetch(url, {
-    headers: { accept: "application/json", "x-subscription-token": key },
-    signal: AbortSignal.timeout(TIMEOUT_MS),
-  });
-  if (!response.ok) {
-    throw new WebError(
-      response.status === 401 || response.status === 403
-        ? `The search key was refused (HTTP ${response.status}). Check ${SEARCH_KEY_VARIABLE}.`
-        : `Search returned HTTP ${response.status}.`
-    );
+  // Each provider is tried in turn, and only a *failure* moves on. An empty result is an
+  // answer, not a failure: falling through on it would turn "nothing matches" into three
+  // times the latency and the same answer, and would hide which provider was asked.
+  const failures: string[] = [];
+  for (const provider of providers) {
+    try {
+      return await provider.search(process.env[provider.keyEnv]!, query, count);
+    } catch (error) {
+      failures.push(`${provider.name}: ${error instanceof Error ? error.message : error}`);
+    }
   }
-  const payload = (await response.json()) as {
-    web?: { results?: { title?: string; url?: string; description?: string }[] };
-  };
-  return (payload.web?.results ?? [])
-    .filter((result): result is { url: string } & typeof result => typeof result.url === "string")
-    .map(result => ({
-      title: decodeEntities(String(result.title ?? "").replace(/<[^>]+>/g, "")),
-      url: result.url,
-      description: decodeEntities(String(result.description ?? "").replace(/<[^>]+>/g, "")),
-    }));
+  // Every provider failed, which is a different situation from no results and is reported
+  // as one — an agent that cannot tell them apart says a thing does not exist.
+  throw new WebError(`Every configured search provider failed.\n${failures.join("\n")}`);
 }

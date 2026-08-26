@@ -18,7 +18,7 @@
  * can hand it environments that took days to stumble into.
  */
 
-import { SEARCH_KEY_VARIABLE } from "./web.ts";
+import { SEARCH_PROVIDERS, configuredProviders } from "./web.ts";
 import { RELAY_TOKEN_VARIABLE, RELAY_URL_VARIABLE } from "./presets.ts";
 
 export interface Absence {
@@ -33,13 +33,13 @@ export interface Absence {
 export function absences(env: NodeJS.ProcessEnv = process.env): Absence[] {
   const found: Absence[] = [];
 
-  if (env[SEARCH_KEY_VARIABLE] === undefined || env[SEARCH_KEY_VARIABLE] === "") {
+  if (configuredProviders(env).length === 0) {
     found.push({
       capability: "web search",
       detail:
         "WebSearch refuses every call, so web questions degrade to scraping a search " +
         "engine through the browser — which answers with a page, not an error.",
-      remedy: `set env.${SEARCH_KEY_VARIABLE} in config.json`,
+      remedy: `set one of ${SEARCH_PROVIDERS.map(p => `env.${p.keyEnv}`).join(", ")} in config.json`,
     });
   }
 
