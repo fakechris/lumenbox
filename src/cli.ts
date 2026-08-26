@@ -39,6 +39,7 @@ import {
   type ProviderProfile,
 } from "./host/provider.ts";
 import { applyConfigEnv, ensureConfigFile, loadConfig } from "./config.ts";
+import { describeAbsences } from "./host/absences.ts";
 import { startWebServer } from "./web/server.ts";
 
 const here = dirname(fileURLToPath(import.meta.url));
@@ -645,6 +646,8 @@ async function cmdChat(argv: string[]): Promise<number> {
   }
 
   out(dim(`model: ${describeProvider(provider)}`));
+  // After applyConfigEnv, so a key set in config counts as present.
+  for (const line of describeAbsences()) out(dim(line));
 
   const box = await orchestrator.connectBox();
   out(box.connected ? dim(`box: ${box.detail}`) : dim(`box: unavailable — ${box.detail}`));
@@ -843,6 +846,8 @@ async function cmdWeb(argv: string[]): Promise<number> {
   out(dim(`model: ${describeProvider(provider)}`));
   // Written on first run so the settings are visible in an editor, not just in docs.
   out(dim(`config: ${ensureConfigFile()}`));
+  // After applyConfigEnv, so a key set in config counts as present.
+  for (const line of describeAbsences()) out(dim(line));
 
   try {
     await startWebServer({

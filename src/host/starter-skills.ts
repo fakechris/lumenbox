@@ -7,12 +7,40 @@
  * procedure written to be scheduled. All generic on purpose: anything tied to one
  * vendor's account belongs to the person who has that account.
  *
- * Seeded only when the skills directory does not exist yet. A person who deleted a
- * starter skill deleted it; reseeding would put it back every restart, which is the
- * config-file-overwrite bug wearing a different coat.
+ * Seeded per skill, once, with a marker recording what has been offered. The first
+ * version seeded only into an *empty* directory, and that guard aged into a bug:
+ * `study-a-corpus` was added after the guard landed and could never reach a box that
+ * already had the original three — written, tested, committed, and absent at runtime
+ * (docs/14). The rule both versions are protecting still holds: **a person who deleted a
+ * starter skill deleted it**, and reseeding it every restart would be the
+ * config-file-overwrite bug wearing a different coat. Hence the marker: a skill is
+ * seeded only if it has never been offered — neither present on disk nor recorded in
+ * `.seeded` — so a deletion stays deleted and a new starter still arrives.
  */
 
 import { SKILLS_DIR } from "./skills.ts";
+
+/** Records which starters have ever been offered, so deletion and novelty stay distinct. */
+export const SEEDED_MARKER = ".seeded";
+
+/**
+ * Which starters to seed: those neither on disk nor ever offered before.
+ *
+ * Pure, because the mistake this replaces was in exactly this decision and survived
+ * because nothing could test it without a box.
+ */
+export function unseededStarters(
+  markerText: string | undefined,
+  existing: readonly string[],
+  starters: readonly { slug: string }[] = STARTERS
+): string[] {
+  const offered = new Set(existing);
+  for (const line of (markerText ?? "").split("\n")) {
+    const slug = line.trim();
+    if (slug !== "") offered.add(slug);
+  }
+  return starters.map(starter => starter.slug).filter(slug => !offered.has(slug));
+}
 
 interface StarterSkill {
   slug: string;
@@ -123,7 +151,7 @@ announced when they finish, and a missed window is skipped, never replayed.
   },
 ];
 
-/** Uploads the starter skills through the box, when there are none at all. */
+/** Uploads whichever starter skills this box has never been offered. */
 export async function seedStarterSkills(
   box: {
     listDir: (path: string) => Promise<{ entries: { name: string }[] }>;
@@ -134,19 +162,46 @@ export async function seedStarterSkills(
 ): Promise<void> {
   try {
     const listing = await box.listDir(SKILLS_DIR).catch(() => undefined);
-    if (listing !== undefined && listing.entries.length > 0) return;
+    const existing = listing?.entries.map(entry => entry.name) ?? [];
+    // `|| true` because an absent marker is the ordinary first-run case, not an error.
+    const raw = (await box
+      .exec(`cat ${SKILLS_DIR}/${SEEDED_MARKER} 2>/dev/null || true`, { timeoutMs: 15_000 })
+      .catch(() => undefined)) as { stdout?: unknown } | undefined;
+    const markerText = typeof raw?.stdout === "string" ? raw.stdout : undefined;
+
+    const missing = unseededStarters(markerText, existing);
+    if (missing.length === 0) return;
+
     // Upload refuses a parent that does not exist — the same refusal that stops a
     // stray upload inventing directory trees — so the directories are made first,
     // deliberately, through the shell.
-    const dirs = STARTERS.map(skill => `${SKILLS_DIR}/${skill.slug}`).join(" ");
+    const dirs = missing.map(slug => `${SKILLS_DIR}/${slug}`).join(" ");
     await box.exec(`mkdir -p ${dirs}`, { timeoutMs: 15_000 });
     for (const skill of STARTERS) {
+      if (!missing.includes(skill.slug)) continue;
       await box.uploadFile(
         `${SKILLS_DIR}/${skill.slug}/SKILL.md`,
         Buffer.from(skill.content, "utf8").toString("base64")
       );
     }
-    log(`seeded ${STARTERS.length} starter skills into ${SKILLS_DIR}`);
+
+    // The marker records everything offered as of now: what the marker already said,
+    // what was on disk (a pre-marker install has skills the marker never heard of, and
+    // deleting one of those should also stick), and what was just seeded.
+    const starterSlugs = new Set(STARTERS.map(skill => skill.slug));
+    const offered = new Set<string>(missing);
+    for (const line of (markerText ?? "").split("\n")) {
+      if (line.trim() !== "") offered.add(line.trim());
+    }
+    for (const name of existing) {
+      if (starterSlugs.has(name)) offered.add(name);
+    }
+    await box.uploadFile(
+      `${SKILLS_DIR}/${SEEDED_MARKER}`,
+      Buffer.from(`${[...offered].sort().join("\n")}\n`, "utf8").toString("base64")
+    );
+
+    log(`seeded ${missing.length} starter skill(s) into ${SKILLS_DIR}: ${missing.join(", ")}`);
   } catch (error) {
     // A box without starter skills still works; the person just starts from blank.
     const detail = error instanceof Error ? error.message : String(error);
