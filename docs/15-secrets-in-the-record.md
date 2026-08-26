@@ -288,7 +288,7 @@ reads anything the uid can read regardless. A path list is a convention, not a b
   what the vault holds; the common case — a key the operator never vaulted — passes
   through untouched.
 
-### 6. The spool fix is narrower than its commit message said
+### 6. The spool fix is narrower than its commit message said — **all three now repaired (`79112a0`)**
 
 Three corrections to work already shipped in `3c6030c`:
 
@@ -302,6 +302,18 @@ Three corrections to work already shipped in `3c6030c`:
   pins the relationship *at the default*, so it gives confidence it has not earned.
 - **"A 24-hour buffer" is false.** `reapSpool` runs once at daemon startup, so a daemon up
   for a week holds week-old files.
+
+Repaired, and verified on a rebuilt box with the review's own input. `DURABLE_RESULT_CHARS`
+now lives in the protocol because two packages have to agree about it; the transcript cut
+and the spill threshold both derive from it, and a test asserts *spill before anything
+durable is truncated*. `SPOOL_DIR` is no longer configurable, and its test reads the
+declaration rather than the value — a test that reads the same environment as the code
+cannot catch that class of bug, which is exactly what the previous one did. Reaping is
+hourly as well as at startup.
+
+A 2,500-character command now spills and its result carries the pointer; the file holds all
+2,522 bytes. A planted 30-hour-old spool file was reaped on the next sweep while the
+current one survived.
 
 ### What survived
 
