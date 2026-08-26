@@ -186,3 +186,76 @@ one property the design is built on.
 Which is a decision that crosses a boundary between two components that each already
 work — [precisely the class](13-design-review.md) that goes to a hostile review before it
 is built, not after. Recorded here as the argument for doing that, not as the design.
+
+---
+
+## Two arguments that point opposite ways, and both are right
+
+Sources: *LLMs Eat Scaffolding for Breakfast* (2026-01-25) and *Against agent sprawl: what
+comes after harnesses* (2026-08-07). Read together on purpose: one says delete the
+harness, the other says the harness is the product. The seam between them is a useful
+place to stand.
+
+### Delete the scaffolding
+
+The first says most agent infrastructure is bridging a model gap that closes. Its
+sharpest evidence is not an argument, it is a diff: **Codex's system prompt went from 310
+lines under o3 to 104 under GPT-5, a 66% cut** — personality, preambles, when to plan, how
+to validate, all removed as things the model now knows. What remained was only what is
+specific to Codex: sandboxing, tool use, output format. "Instead of *do this and this*, it
+says *here are the tools at your disposal*."
+
+**We measure clean, for now.** `BASE_PROMPT` is 64 lines, 4,033 characters — under the
+104-line reference, and it is already the "here are the tools" shape. Worth re-measuring
+whenever it is edited, because it grew four times in one day and each growth was locally
+justified. The number to watch is not the assembled prompt, which is meant to be volatile;
+it is the behavioural core, which is meant not to be.
+
+The other half of the claim is a warning label for this whole document: *the worst AI
+codebases are the ones that were best practices 12 months ago.* Every candidate recorded
+here should be asked whether it bridges a gap that is closing.
+
+### The harness is not the unit; the fleet is
+
+The second says the opposite and is also right. Harness and model are co-trained and ship
+as one artifact — "swap either half and you pay for it in performance and cost" — so the
+rational setup is a *fleet* of harnesses, each running the model it was tuned with. That
+is exactly the argument `presets.ts` was written from, arriving independently.
+
+Then it names what a fleet needs, and the name is worth having: a **depot** — "a central
+location where agents inside harnesses report status, request human reviews, maintain
+durable execution and permissions, and internally cross-communicate to work as a team."
+That is a description of what this repository is trying to be. Two things sharpen work
+already on the list:
+
+- **The attention criterion, stated exactly.** "You don't really care about which agents
+  are working; you only want to know which agents *need your attention*." That is the
+  missing definition from the briefing candidate above — a digest reports the first, a
+  decision queue reports the second.
+- **Review before the PR, not at it.** Local/agent review as a counterweight to volume,
+  and human review at the level of a preview URL or a demo rather than a diff. Our board
+  and claims machinery is the first; nothing here does the second.
+
+### What checking this against our code found
+
+Following the fleet argument into `presets.ts` turned up something the prose there claims
+as built:
+
+> The engine's model traffic is pointed at the relay, so the key stays outside the box and
+> every token it spends lands in the same usage log as ours.
+
+Neither half holds today.
+
+- `delegateEnv` reads `AGENTBOX_RELAY_URL` and `AGENTBOX_RELAY_TOKEN`. **Nothing in the
+  repository sets either.** They appear in `presets.ts`, its test, and the bundled
+  `hostd.mjs` copy of the same function — and nowhere else. So `delegateEnv` returns `{}`
+  on every real run, the engine gets no credential, and the delegated task cannot start.
+- There is no model-API relay to point at in any case. The only relay is the **egress**
+  relay, which forwards bytes and, by its own header, "never parses the traffic" — so it
+  cannot substitute a key, count a token, or enforce a budget.
+
+`Delegate` has been called **zero times** across every record on disk, which is why this
+has never surfaced as a failure. The fix is not obviously the metering relay; it may be to
+narrow the comment to what is true. Either way, a documented capability that cannot run is
+the same silent-failure shape as the search key, and it was found the same way — by
+checking a claim instead of reading it.
