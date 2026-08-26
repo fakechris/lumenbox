@@ -229,3 +229,99 @@ anybody gathered about whether a filter would work.
 
 Question 5 is the one this design is least sure about, and a reviewer who answers it
 convincingly should be believed over the author.
+
+---
+
+## The review came back, and the design does not survive intact
+
+Adversarial review run 2026-08-26 against baseline `1d9ded6`. Eight ranked findings, two
+critical. The one this document flagged as its own weakest point was answered
+definitively, and against it.
+
+### 1 (critical). Storage-time redaction is not containment
+
+The attack is three lines and needs no cleverness:
+
+```
+RunOnHost({command: "python3 -c 'import os; print(os.environ[\"GITHUB_TOKEN\"])'",
+           secrets: ["GITHUB_TOKEN"]})          → stored as <vault:GITHUB_TOKEN>. Good.
+bash({command: "printf %s 'ghp_0123…xyz' | base64"})   → stored verbatim. Not good.
+```
+
+The mechanism: `turn.ts` stores `results.map(storableResult)` and then pushes the *raw*
+results to the model on the next line. The following assistant text and the following
+tool *input* are both persisted verbatim. So C1 removes one direct occurrence from one
+copy, and the model can put it back in any encoding it likes — base64, URL-encoding,
+splitting, hashing, partial quotation — none of which exact matching sees.
+
+The verdict, which this document accepts:
+
+> C1 is still worth something, but precisely this: it removes direct known-value
+> occurrences from one durable tool-result copy, its backups, and future transcript replay
+> **when the model does not re-emit them**. That is useful at-rest exposure reduction, not
+> theatre — but **calling it containment is theatre.**
+
+It also contradicts a premise stated in measurement 2 above: the vault does *not* prove a
+value cannot reach the record, because an approved `RunOnHost` can simply print it. And
+the vault's audit write is best-effort — a failed audit is swallowed while the resolution
+proceeds.
+
+**So the framing changes.** This is not "containment rather than detection". It is
+**at-rest hygiene with no transformation guarantee**, and the only thing that would be
+containment is a capability proxy: the host performs the privileged operation and never
+hands the model the credential at all. That is a much larger piece of work and it belongs
+in R4/Scope, not here.
+
+### 2 (critical). C2 cannot police credential files while `bash` exists
+
+`~/.config/gh/hosts.yml` is a real credential file matching none of the globs, and `bash`
+reads anything the uid can read regardless. A path list is a convention, not a boundary.
+
+### 3–5. The rejection of A partly applies to C
+
+- **C4 reproduces the exact false positive that killed A.** Stripping credential-*named*
+  query parameters would have removed `&key=全国中小企业融资综合信用服务平台`. Parsing the
+  URL tells you it is a query parameter; it does not tell you the value is a search term.
+- **C1's equality test has false positives too**, and no minimum length fixes it — a short
+  vault value redacts an ordinary word, a long one still collides with quoted documentation.
+- **A non-vault credential crosses every C mechanism and is stored twice.** C only knows
+  what the vault holds; the common case — a key the operator never vaulted — passes
+  through untouched.
+
+### 6. The spool fix is narrower than its commit message said
+
+Three corrections to work already shipped in `3c6030c`:
+
+- **"The whole output of every command is in the spool" is false.** Spilling starts at
+  16 KB; the transcript truncates at 2 KB. Results *between* those thresholds lose their
+  tail with **no spool pointer at all** — a gap neither this document nor the commit knew
+  about.
+- **The exclusion is configuration-sensitive.** `BACKUP_EXCLUDES` is the literal
+  `./.spool`, while `SPOOL_DIR` honours `BOXD_SPOOL_DIR`. Point it at
+  `/home/box/work/full-output` and the archive carries it again. The test added alongside
+  pins the relationship *at the default*, so it gives confidence it has not earned.
+- **"A 24-hour buffer" is false.** `reapSpool` runs once at daemon startup, so a daemon up
+  for a week holds week-old files.
+
+### What survived
+
+- Storage-time replacement of *long* known values, as narrow at-rest hygiene.
+- The default `.spool` exclusion, for the default configuration.
+- Password redaction in browser snapshots — and it covers more than claimed, including
+  `autocomplete=current-password|new-password`, not only `type=password`.
+- Returning a `.env`'s key names and size while refusing its values, **provided the
+  parsing happens outside the model**.
+- Alerting without rewriting, which does not duplicate the credential and does preserve
+  evidentiary text. Its metadata still needs an authorization boundary.
+
+### And one finding about this document
+
+> **UNVERIFIED FROM REPOSITORY EVIDENCE:** the 1.1 MB corpus measurement, two false
+> positives, and zero configured-secret occurrences. The result is stated in `docs/15`,
+> but the corpus, scanner, and result artifact are not present in the reviewed tree.
+
+Correct, and it is the sharpest procedural finding here. The measurement that this entire
+design turns on was an ad-hoc script run once in a shell and never committed. A number
+nobody else can re-run is a claim, not a measurement — which is the same standard this
+document applies to everything else. **The scanner belongs in the tree before the design
+proceeds.**
