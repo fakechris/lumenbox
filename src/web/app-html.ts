@@ -313,22 +313,45 @@ export const APP_HTML = String.raw`<!doctype html>
     background: var(--surface-2); border: 1px solid var(--border);
     border-radius: var(--radius-card); padding: 12px 15px;
   }
-  /* An agent's running commentary, told apart from its answer.
-     The distinction is not decoration: a reader scrolling a long piece of research needs
-     to find where the work stops and the conclusion starts, and identical type makes the
-     whole thing one undifferentiated wall. Narration is smaller, quieter, and in the sans
-     face the rest of the operational surface uses; the answer keeps the serif. */
-  .msg.aside .body {
-    font-family: var(--font-sans); font-size: 0.86rem; line-height: 1.55;
-    color: var(--muted); max-width: 620px;
-    border-left: 2px solid var(--border); padding-left: 11px;
+  /* An agent's running commentary, told apart from its answer — and foldable.
+     Two complaints drove this: the difference was too slight to read at a glance, and a
+     long piece of research had no way to be put away. So narration is now visibly a
+     different *kind* of thing rather than the same thing in a lighter grey — indented off
+     the answer's column, on a tinted panel, in small sans — and every block of it is a
+     panel the reader can shut. The answer keeps the serif at full size and stays
+     where it always was, so the eye finds it by scanning one column. */
+  .msg.aside { padding: 0; margin: 2px 0 2px 14px; }
+  .msg.aside > .who { display: none; }
+  details.think {
+    border: 1px solid var(--border); border-left: 3px solid var(--border-strong);
+    border-radius: var(--radius-input); background: var(--surface-2);
+    max-width: 660px; overflow: hidden;
   }
-  .msg.aside .who { opacity: 0.6; }
+  details.think > summary {
+    cursor: pointer; list-style: none; padding: 5px 10px;
+    font-family: var(--font-sans); font-size: 11px; letter-spacing: 0.04em;
+    color: var(--muted); user-select: none;
+  }
+  details.think > summary::-webkit-details-marker { display: none; }
+  details.think > summary::before { content: "\\25b8"; margin-right: 7px; opacity: 0.7; }
+  details.think[open] > summary::before { content: "\\25be"; }
+  details.think > summary:hover { background: var(--surface-hover); color: var(--text-soft); }
+  .msg.aside .body {
+    font-family: var(--font-sans); font-size: 0.82rem; line-height: 1.5;
+    color: var(--muted); max-width: none; padding: 0 11px 9px;
+  }
   .msg.aside .body h1, .msg.aside .body h2, .msg.aside .body h3,
   .msg.aside .body h4, .msg.aside .body h5, .msg.aside .body h6 {
-    font-size: 0.86rem; font-weight: 600; color: var(--muted); margin: 6px 0 3px;
+    font-size: 0.82rem; font-weight: 600; color: var(--muted); margin: 6px 0 3px;
   }
-  .msg.aside .body p { margin: 0 0 5px; }
+  .msg.aside .body p { margin: 0 0 4px; }
+  /* One control for the whole conversation, because a reader who wants the answer wants
+     it without shutting fifteen panels by hand. */
+  #foldall {
+    font-size: 11px; letter-spacing: 0.04em; color: var(--muted);
+    cursor: pointer; text-decoration: none; flex: none;
+  }
+  #foldall:hover { color: var(--text); }
   .msg .body > :first-child { margin-top: 0; }
   .msg .body > :last-child { margin-bottom: 0; }
   .msg .body p { margin: 0 0 8px; }
@@ -565,6 +588,7 @@ export const APP_HTML = String.raw`<!doctype html>
       <a href="#" id="agentcfg" style="font-size:12px;flex:none">Configure</a>
     </span>
     <span class="headactions">
+      <a href="#" id="foldall" title="Fold or unfold every step in this conversation">fold steps</a>
       <span id="round" class="roundpill"></span>
       <!-- Only shown while a turn is running: a stop button with nothing to stop invites a click
            that does nothing, and then the real one is not trusted. -->
@@ -1592,6 +1616,37 @@ function renderAgents() {
   }
 }
 
+/**
+ * Turns a message into a foldable step.
+ *
+ * Called from both the live stream and the replay so the two render identically — the
+ * previous version styled them in two places and they were already drifting apart in
+ * padding. The summary says what the step was, so a folded conversation still reads as a
+ * sequence of actions rather than a row of identical grey boxes.
+ */
+function foldAside(body, summary) {
+  var msg = body.parentNode;
+  if (!msg || msg.querySelector("details.think")) return;
+  msg.classList.add("aside");
+  var wrap = document.createElement("details");
+  wrap.className = "think";
+  wrap.open = !folded;
+  var head = document.createElement("summary");
+  head.textContent = summary || firstLineOf(body.textContent) || "step";
+  wrap.appendChild(head);
+  msg.insertBefore(wrap, body);
+  wrap.appendChild(body);
+}
+
+/** The first sentence or line, clamped — enough to know what a folded step was. */
+function firstLineOf(text) {
+  var line = String(text || "").trim().split(/[\n。.!?]/)[0] || "";
+  return line.length > 58 ? line.slice(0, 58) + "…" : line;
+}
+
+/** Whether new steps arrive folded. Flipped by the header control, remembered per page. */
+var folded = false;
+
 function bubble(role, who, text) {
   var el = $("chat");
   var stick = nearBottom(el);
@@ -1724,8 +1779,8 @@ function replayEntry(id, entry) {
     return;
   }
   var body = bubble(entry.role === "user" ? "user" : "", entry.role === "user" ? "you" : nameOf(id), entry.text);
-  // Narration on reload reads the way it read live.
-  if (entry.aside && body.parentNode) body.parentNode.classList.add("aside");
+  // Narration on reload reads the way it read live, through the same helper.
+  if (entry.aside) foldAside(body);
 }
 
 function agentById(id) {
@@ -1846,6 +1901,16 @@ function refreshConversations(id) {
 // agents; the button also keeps its count and label current. The list itself only
 // re-renders while the panel is open.
 setInterval(function () { if (current) refreshConversations(current); }, 5000);
+
+$("foldall").onclick = function (event) {
+  event.preventDefault();
+  folded = !folded;
+  // Applies to what is on screen and to what arrives next, because a reader who folded
+  // the steps away did not mean "until the agent says something else".
+  var panels = document.querySelectorAll("details.think");
+  for (var i = 0; i < panels.length; i++) panels[i].open = !folded;
+  $("foldall").textContent = folded ? "unfold steps" : "fold steps";
+};
 
 $("convbtn").onclick = function (event) {
   event.preventDefault();
@@ -2627,10 +2692,7 @@ stream.onmessage = function (raw) {
     // turn.ts already makes when it decides whether a round is final. Marking it here is
     // what lets the two read differently: the process de-emphasised, the answer not.
     var narrating = live.get(e.agentId);
-    if (narrating && narrating.node) {
-      var block = narrating.node.parentNode;
-      if (block && block.classList) block.classList.add("aside");
-    }
+    if (narrating && narrating.node) foldAside(narrating.node);
     live.delete(e.agentId);
     // Held so the result can be folded into the same row when it arrives.
     if (inView(e)) {
