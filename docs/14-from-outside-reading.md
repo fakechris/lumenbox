@@ -728,6 +728,114 @@ dominated by the screenshot, with the pointer confirmed sitting on the clicked c
 for the second one. Before the change the second call would have spent fifteen seconds in
 `mousemove --sync`.
 
+---
+
+## Our suite grades the one surface we already trusted
+
+Sources: *Hidden Technical Debt of AI Systems: Agent Evaluation Infrastructure* (Han-chung
+Lee, 2026-06-12) and *Inside DoorDash's one-click simulation and evaluation platform*
+(2026-06-01).
+
+### Five surfaces, and we score one
+
+The argument: agents complete tasks by *changing the environment*, so scoring the final
+answer is no longer sufficient. A coding agent can end with a passing patch whose trace
+shows it deleted the tests it could not pass. The five surfaces to evaluate are **output,
+trace, memory, environment**, and model internals.
+
+`golden.ts` does better than output-only — it grades against the harness's own durable
+records rather than the model's account of itself, which is a *state* check, and the
+`RECORD`/`VALUE`/`JUDGE` split is a version of the same discipline. But it is the outcome
+surface. Nothing in it looks at the path.
+
+The line that lands hardest on a file literally named `golden.ts`:
+
+> Traces should not be scored primarily on whether they follow one golden path. Golden
+> paths are useful for protocol compliance, regression tests, and regulated workflows, but
+> they are a weak measure of agent intelligence. The stronger target is **process
+> invariants** — "no unsafe writes", "no jumping straight to a conclusion".
+
+An invariant is checkable on every run rather than on the seventeen we wrote down, which
+is the property that makes it worth more than another task.
+
+The canonical trace failure it names is **the empty tool result hallucination**: the tool
+returns an empty list and the agent fabricates a plausible answer, so the output looks
+fine and is unsupported by the only evidence the agent saw. We have a live instance of the
+*good* branch of it — the [Seltz thread](#what-a-retrieval-layer-returns-decides-what-can-be-answered),
+where search returned a captcha and a parked domain and the agent stopped rather than
+inventing. Nothing in the suite tests for that, so it passing was luck we have no way to
+keep.
+
+### What our trace does not record
+
+The article's minimum per-step record: run id, task id, step index, model and harness
+version, prompt hash, tool name, argument hash, observation hash, **latency, cost**,
+permission boundary, state-delta pointer, checkpoint id, verifier result, failure labels.
+
+Ours is `{type, tool_use_id, content}` on the result block, with an `at` on the enclosing
+entry. So the derived question — how long did anything take — should still be answerable
+from two timestamps. It is not:
+
+```
+tool batches with a measurable duration: 172
+median 0.00s    p90 0.00s
+```
+
+**Every one is zero.** The `blocks` entry and its `results` entry carry an identical
+timestamp, because both are stamped when the exchange is written rather than when the
+tools ran. The transcript records *when a pair was appended*, not *how long anything
+took*, and no amount of analysis recovers it.
+
+That is the gap the `--sync` bug fell through, and it is worth being precise about why.
+The defect never failed — it returned success in fifteen seconds. A pass/fail suite cannot
+see it by construction, and the surface that would have is a **latency slice**, which the
+article lists among the ordinary ways to cut results (task type, tool family, memory
+state, cost bucket, latency bucket, failure mode). We have neither the slice nor the data
+to build one. The bug was found by measuring the box directly, which does not generalise
+to the next one.
+
+**Cheapest thing in this document:** stamp the results entry when the results arrive. One
+line, and 172 dead records become a latency surface — with the rest of the field list as
+the follow-on rather than the prerequisite.
+
+### Two experiment designs we could run today
+
+- **Ablation** — remove one component and measure the delta. "If removing memory barely
+  moves the score, the memory layer is theater." Given [2 facts and 15 notes, one of them
+  the string `(NOTHING)`](#a-memory-nothing-can-check-is-not-a-memory), this is both cheap
+  and the honest test of a component we keep proposing to extend.
+- **Perturbation** — hold the task fixed, vary the path: fail a tool at random, revoke a
+  permission, plant stale documentation that contradicts the source. It doubles as the
+  guardrail test, and its stated purpose is to separate an agent that learned the task
+  from one that memorised a single golden path. Which is to say: it is the direct check on
+  whether our seventeen tasks measure anything general.
+
+One thing we already get right, and should not lose: golden runs in a per-provider
+temporary state directory, so a run cannot read or write the real installation's memories.
+That is the article's point — *an eval infrastructure that cannot restore state to a
+checkpoint is logs, not eval infra* — already implemented, and it is why an ablation is
+cheap to attempt.
+
+### The validation step that makes a suite trustworthy
+
+DoorDash's number is the useful part. They validated the simulator against production on
+the same business metric:
+
+| | volume | time | escalation rate |
+|---|---|---|---|
+| simulation | 302 conversations | 5 minutes | 46% |
+| production, 1% traffic | 175 conversations | 7 hours | 44% |
+
+The claim is not that simulation is fast. It is that the simulated conversations were
+*representative*, and the matching rate is the evidence. Their pipeline builds scenarios
+**from production transcripts**, which is what earns that alignment.
+
+Our seventeen golden tasks were invented, and nothing has ever compared them to what
+actually happens. We have 445 transcript entries sitting next to them. The question worth
+answering before adding an eighteenth task is whether the seventeen resemble the traffic at
+all — and unlike most of this document, both halves of that comparison already exist on
+disk.
+
 *Boundary, since this section is about stating them:* wall time around `xdotool` inside a
 single `docker exec`, excluding our daemon's dispatch and the host round trip. It is a
 floor on process cost, not the cost of a tool call.
