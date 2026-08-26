@@ -367,3 +367,83 @@ than by reading it:
 
 A tool that cries wolf about its own source of truth teaches people to ignore it, on the
 one occasion it matters.
+
+---
+
+## The two criticals, measured before designing
+
+Both remaining findings are about paths that could carry a secret. Before designing for
+them, the same question this document opened with: **do they carry one now?**
+
+| measurement | result |
+|---|---|
+| Vault entries | **`vault.json` does not exist.** Nothing has ever been stored. |
+| `RunOnHost` calls on disk | **three**, all `cat proof.txt`, none carrying a secret |
+| Credential files inside the box (`.aws`, `.ssh`, `.netrc`, `.config/gh`, `.env`, `*.pem`, `id_*`) | **none** |
+| Durable box volumes | `/home/box/work` **and `/home/box/.config`** |
+
+The last row is the one that matters, and it was not in the review or in this document.
+
+### Critical 1 — containment: build the cheap half, and wait for the other
+
+The secret-delivery path the containment critique is about **has never carried a secret**.
+Designing a capability proxy now would be designing for an audience of zero, which is the
+mistake [R21 explicitly declines to make](11-roadmap.md) for bundles. It stays under R4,
+and it stays the correct answer when a real use appears — the question a proxy answers is
+*which operations may this scope perform with a secret it never sees*, and that question
+needs a real operation before it has a real answer.
+
+But one property is available today, is enforceable, and is exactly what R7 is about.
+`RunOnHost` takes `secrets: [...]`, so **the harness knows with certainty which results may
+contain a credential** — no pattern, no guess, no model judgement. The rule follows:
+
+> **A `RunOnHost` result from a call that was given secrets is not stored in the
+> transcript.** The record keeps the command, the secret *names*, the exit code, and a
+> marker saying the output was withheld. The model still sees the output — it asked for an
+> operation whose answer is the point — but the durable record never holds it.
+
+This is not containment from the model, and the review's argument still applies: nothing
+stops the next assistant message restating what it saw. It is containment from the
+*record*, applied at the one place with **positive knowledge** rather than at every place
+with a suspicion. That is a strictly better trade than pattern redaction, and it is small.
+
+Its honest limits, stated so they are not discovered later: it protects the known channel
+and not the model's memory of it; a result the agent genuinely needs to keep must be
+written to a file by the command itself rather than read back through the transcript; and
+it makes those turns harder to debug, which is the cost being paid deliberately.
+
+### Critical 2 — the path list: withdraw it, and name what the measurement found
+
+The review said a glob list cannot police credential files while `bash` exists. True, and
+the measurement makes it moot from the other side: **the box holds none of those files**,
+and `~/.config` is a volume *precisely so that logins survive a rebuild*. Persistent
+sessions in the box's own browser are a stated feature, not an oversight.
+
+So the premise was wrong. **The box is supposed to hold credentials — that is what a
+workstation does.** Adding globs to a read-blocker would defend a boundary that does not
+exist: the agent has a shell as its own uid, the container is the boundary, and a refusal
+in `read_file` is a speed bump wearing a boundary's clothes. **C2 is withdrawn.**
+
+What survives from it is narrower and worth keeping: refusing to serve a `.env` *body*
+while answering "which variables does this define" is a good answer to a real request, and
+the review agreed — *provided the parsing happens outside the model*. That is a helpful
+tool, not a security control, and it should be described as one.
+
+What the measurement found instead is the thing nobody had written down:
+
+> **`/home/box/.config` is a durable, archived credential store that nobody designed as
+> one.** A `gh auth login` run inside the box writes `~/.config/gh/hosts.yml`, which
+> survives every rebuild and is copied into every upgrade archive by `backupVolumes`.
+
+This is the spool's shape with the **opposite** conclusion. The spool was excluded because
+it is rebuildable and nobody needs it outside the box. The config volume must *not* be
+excluded — losing it would destroy the persistent-login feature the whole browser design
+rests on. So the action is not a fix. It is a statement:
+
+- The upgrade documentation should say that a volume archive contains whatever the agent
+  logged into, because a person deciding whether to copy one somewhere needs to know.
+- The box's own preflight already reports what an upgrade would lose; the same surface is
+  where "and what it would carry" belongs.
+
+That is the whole action, and it is smaller than either critical suggested — which is the
+argument for measuring first rather than designing from a threat model.
