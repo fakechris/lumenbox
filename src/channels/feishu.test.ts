@@ -233,3 +233,27 @@ test("a thread is the conversation; a direct chat still is", () => {
     key({ chat_id: "oc_1", chat_type: "group", message_id: "om_h" })
   );
 });
+
+test("a push to a topic thread rides as a reply to its root", async () => {
+  // conversationKeyFor mints `feishu:{chatId}:{rootId}` for a topic; a push to that key
+  // must land in the thread, not at the bottom of the room. The room-level key keeps
+  // its old shape and its old behaviour.
+  const adapter = new FeishuChannel("a", "b", () => {});
+  const posts: { chatId: string; replyTo?: string }[] = [];
+  (adapter as unknown as { post: unknown }).post = async (
+    chatId: string,
+    _type: string,
+    _content: string,
+    replyTo?: string
+  ) => {
+    posts.push({ chatId, ...(replyTo !== undefined ? { replyTo } : {}) });
+    return undefined;
+  };
+
+  await adapter.sendToChat("feishu:oc_room:om_root", "into the thread");
+  await adapter.sendToChat("feishu:oc_room", "into the room");
+  assert.deepEqual(posts, [
+    { chatId: "oc_room", replyTo: "om_root" },
+    { chatId: "oc_room" },
+  ]);
+});

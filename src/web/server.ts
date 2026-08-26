@@ -161,6 +161,7 @@ import { preflight } from "../box/preflight.ts";
 import { rescueMessage, rescueStuck } from "../host/rescue.ts";
 import { Deliveries, deliveriesPath } from "../host/deliveries.ts";
 import { Ingress, ingressPath } from "../channels/ingress.ts";
+import { ConversationDirectory, conversationsPath } from "../channels/conversations.ts";
 import { randomUUID } from "node:crypto";
 import { adminRecipients, decideUpgrade, upgradeMessage } from "../host/upgrade.ts";
 import { PRESET_MODELS, providerNames, resolveProvider, testProvider } from "../host/provider.ts";
@@ -497,6 +498,10 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
    * arrived and went nowhere used to leave the same trace as one that never arrived.
    */
   const ingress = new Ingress(ingressPath(agentboxHome()));
+  // Which chat each conversation came from — written here because the channel path is
+  // where both halves are last seen together, read by the console-interjection path
+  // where only the conversation id survives.
+  const conversations = new ConversationDirectory(conversationsPath(agentboxHome()));
 
   const channels = new ChannelManager({
     ingress,
@@ -616,6 +621,7 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
       // integration read for this keys on the thread and falls back to the message. The
       // chat stays the address — replies, files and the outbox still go to the room.
       const conversation = conversationIdFor(threadKey ?? chatKey);
+      conversations.record(conversation, threadKey ?? chatKey);
       const principal = principals.resolve(identity).id;
 
       // Made before the turn, because the prompt states the path as a fact — "its
@@ -2671,6 +2677,28 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
               ? body.conversation
               : MAIN_CONVERSATION;
 
+          // A console message into a channel thread is a room message, not a whisper.
+          // Without this, an operator's interjection and the agent's answer were visible
+          // only on the web page: the chat's members saw the agent's behaviour change
+          // with no visible cause, and the thread history the agent reasons over
+          // contained an exchange they never witnessed. Context that two readers see
+          // differently is the distributed-system failure everything else here is built
+          // to avoid, so the interjection goes to the chat, marked as coming from the
+          // console, and the reply follows it.
+          const chatKey =
+            conversation === MAIN_CONVERSATION
+              ? undefined
+              : conversations.chatKeyFor(conversation);
+          if (conversation !== MAIN_CONVERSATION && chatKey === undefined) {
+            // A thread from before the directory existed; addressable again on its next
+            // inbound message. Said out loud, because a message that quietly goes
+            // nowhere is the failure this codebase keeps finding.
+            log(`console message to ${conversation} stays on the web: no chat recorded for it`);
+          }
+          if (chatKey !== undefined) {
+            void channels.pushToChat(chatKey, `〔控制台〕${text}`);
+          }
+
           // Echo the prompt so every connected page shows it, then answer
           // immediately: the turn's output arrives over the event stream, and a
           // long turn must not hold the HTTP request open.
@@ -2685,8 +2713,17 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
           });
           send(res, 202, { accepted: true });
 
+          const before = registry.readTranscript(agentId, conversation).length;
           void orchestrator
             .prompt(agentId, text, caller, { conversation })
+            .then(() => {
+              // The reply belongs to the same room the interjection went to. Read back
+              // from the transcript, the same way the channel path recovers an answer.
+              if (chatKey !== undefined) {
+                const said = orchestrator.replySince(agentId, before, conversation);
+                if (said !== "") void channels.pushToChat(chatKey, said);
+              }
+            })
             // Teammates woken by this turn are still working; let them finish so
             // their messages and turns show up before the page looks idle.
             .then(() => orchestrator.settle())

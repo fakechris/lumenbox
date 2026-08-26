@@ -797,8 +797,14 @@ export class FeishuChannel implements ChannelAdapter {
    * while the task ran, and the answer belongs to the room that asked.
    */
   async sendToChat(chatKey: string, text: string, options?: PushOptions): Promise<void> {
-    const chatId = chatKey.replace(/^feishu:/, "");
+    // `feishu:{chatId}` addresses the room; `feishu:{chatId}:{rootId}` addresses one
+    // topic thread inside it — the shape conversationKeyFor mints. A push to a thread
+    // key rides as a reply to the root, so it lands where the topic's readers are
+    // rather than at the bottom of the room. An explicit replyTo still wins: it is a
+    // more precise anchor inside the same thread.
+    const [chatId = "", rootId] = chatKey.replace(/^feishu:/, "").split(":");
     if (chatId === "") return;
+    const anchor = options?.replyTo ?? rootId;
     // Markdown or plain is decided once for the whole message: per-chunk decisions
     // would render a long message's plain halves with literal ** markers.
     const markdown = looksLikeMarkdown(text);
@@ -807,7 +813,7 @@ export class FeishuChannel implements ChannelAdapter {
       const chunk = text.slice(at, at + FeishuChannel.CHUNK);
       if (markdown && !degraded) {
         try {
-          await this.post(chatId, "post", markdownPost(chunk), options?.replyTo);
+          await this.post(chatId, "post", markdownPost(chunk), anchor);
           continue;
         } catch (error) {
           // A refused post is about the formatting; the words still deserve
@@ -816,7 +822,7 @@ export class FeishuChannel implements ChannelAdapter {
           degraded = true;
         }
       }
-      await this.post(chatId, "text", JSON.stringify({ text: chunk }), options?.replyTo);
+      await this.post(chatId, "text", JSON.stringify({ text: chunk }), anchor);
     }
   }
 
@@ -825,9 +831,15 @@ export class FeishuChannel implements ChannelAdapter {
     card: TaskCardState,
     options?: PushOptions
   ): Promise<string | undefined> {
-    const chatId = chatKey.replace(/^feishu:/, "");
+    // Same key shapes as sendToChat: a card for a topic thread anchors to its root.
+    const [chatId = "", rootId] = chatKey.replace(/^feishu:/, "").split(":");
     if (chatId === "") return undefined;
-    return this.post(chatId, "interactive", JSON.stringify(renderCard(card)), options?.replyTo);
+    return this.post(
+      chatId,
+      "interactive",
+      JSON.stringify(renderCard(card)),
+      options?.replyTo ?? rootId
+    );
   }
 
   /**
