@@ -259,3 +259,77 @@ has never surfaced as a failure. The fix is not obviously the metering relay; it
 narrow the comment to what is true. Either way, a documented capability that cannot run is
 the same silent-failure shape as the search key, and it was found the same way — by
 checking a claim instead of reading it.
+
+---
+
+## Skills have a standard, we already speak it, and we cannot install one
+
+Sources: `google/skills` (~80 skills, 2026-08-04), `niqinggood/openkitty-skills` (173
+skills in 21 categories, 2026-08-14), `gfodor/legal-skills` (2026-08-14),
+`joeseesun/qiaomu-meta-skill` (2026-08-05).
+
+Four unrelated projects, same artifact, no coordination:
+
+```
+my-skill/
+  SKILL.md      required: name, description, when it applies, the rules
+  scripts/      optional: deterministic code
+  references/   optional: source documents
+```
+
+Installed by copying the directory into whatever the host calls its skills folder —
+`~/.grok/skills/`, `~/.claude/skills/`, ours is `/home/box/work/skills/`. Distributed by
+`git clone`, or by a registry: `npx skills add google/skills`.
+
+**Our format is already this.** That is luck worth banking: the ecosystem is directly
+consumable. What we do not have is any way to consume it — `starter-skills.ts` bundles
+four, an agent can write more, and **no code in the repository can bring in a skill from
+outside.** openkitty also settles the question that creates: `external_skills` is an
+ordered list, and your own directory wins. qiaomu says the same as advice — *fork it,
+don't worship it*: install, run one real task, then delete the rules that are not yours.
+
+### The boundary question, answered by someone who hit it
+
+This is the best answer yet to *what belongs to the model and what belongs to the
+harness*. From `legal-skills`, on why a markdown skill ships with Python:
+
+> The scripts exist because models also cannot count, cannot do date arithmetic, and will
+> report "all numerals consistent" after finding 19 of 20.
+
+Three named failures, and the third is the one that matters: **the model's report of its
+own completeness is not evidence.** So the rule is not "gate the prose" — which is what
+made the regex grader wrong — it is:
+
+> **Deterministic code goes exactly where the model is known to fail: counting, arithmetic
+> over dates and quantities, and any claim about its own coverage.** Everything the model
+> is actually good at — reading, judging, drafting, arguing — is left alone.
+
+A 316-item checklist is gateable because "did all 316 get touched" is a count. "Is this
+answer helpful" is not, and no amount of pattern-matching makes it one.
+
+Three more things from the same repo, each a mechanism we lack:
+
+- **A partitioned fan-out.** "11 specialized agents, each with the *whole* application and
+  a part-file of checklist items they are forbidden to skip." Full context to everyone,
+  the *work* partitioned — not the context. Our `Fork` partitions neither.
+- **A convergence criterion.** The pipeline iterates "until two examiners and two
+  adversaries clear the same packet." A stopping rule stated as agreement between
+  independent checks. Our loops stop when the model decides they are done.
+- **Freshness as skill content.** The skill instructs the agent to re-fetch the statutes
+  and MPEP pages *on every run*, because the law moves. That is the pull argument arriving
+  for the third time from a third direction — and note it is written in the skill, not in
+  the harness, which is where a fact's expiry actually belongs.
+
+And from `qiaomu-meta-skill`, the test that scaling makes mandatory: **触发评测** —
+23/23 trigger evals, checking that a skill fires when it should and stays quiet when it
+should not. With four skills the index is browsable and this does not matter. With 173 it
+is the whole problem, and it is the one thing our golden suite has no case for.
+
+### What this makes of the preset gap
+
+A skill and an MCP server answer different halves. The skill says *how*; the MCP is what
+lets the agent check rather than assume — Figma Bro's actual file, legal-skills' current
+MPEP page. A preset that carries skills and no tools ships the instructions without the
+ground truth, which is the [eyeballing failure](#a-bot-is-a-role-plus-the-tools-that-make-it-accountable)
+under a different name. So the two halves of "skill+mcp preset" are not two features; they
+are one, and shipping only the skills half would look like it worked.
