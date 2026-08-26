@@ -522,3 +522,124 @@ turn, so an installation configured onto Haiku silently loses reasoning continui
 same conversation would have had on Opus. Not observed, because nothing here has run on
 Haiku as the main model; recorded because it is the same shape as the rest of this
 document — a behaviour that differs at runtime and says nothing about it.
+
+---
+
+## Emergent orchestration has a literature, and it is not encouraging
+
+Sources: chengyongru, *multiagent 协作问题的初步整理* (2026-08-17), a survey of eight 2026
+papers; and *Subagents on Subagents: How Many Layers Deep Is Too Many* (2026-08-13).
+
+### First, the test a multi-agent design has to pass
+
+Two results say the default answer is "use one agent". **OneFlow** found that across seven
+benchmarks, a multiagent workflow on one base model can usually be simulated by a single
+agent over multiple turns — and *cheaper*, through KV cache reuse. A second paper matched
+thinking-token budgets and found single agents matching or beating multi-agent setups
+across two benchmarks, three model families and five MAS architectures, suggesting much of
+the apparent multiagent gain is just extra inference compute.
+
+So the bar:
+
+> A multiagent workflow must show it uses a condition a single agent does not have:
+> different models, tools or real capabilities; different private information; different
+> permissions and trust domains; environment actions that must run in parallel; different
+> owners, goals or incentives; long-term state beyond one agent's capacity. Otherwise it is
+> a more expensive single-agent workflow.
+
+**We pass, and it is worth being able to say why.** Our agents hold different private
+context (different chats), different permissions (principals and scopes), and answer to
+different owners. That is three of the six, and none of them is available to one agent.
+The corollary is a constraint: any *new* fan-out we add has to clear the same bar, and
+`Fork` — same model, same tools, same principal, work split by volume — currently clears
+it only on the last condition.
+
+### Then, what goes wrong at scale
+
+- **SILO-BENCH** (ACL 2026) removed predefined roles and gave each agent part of the truth.
+  Agents communicated actively; communication did not convert into correct distributed
+  reasoning. Performance fell sharply with task and agent count, reaching **zero success at
+  ≥50 agents** on the hardest class. They call it the *Communication-Reasoning Gap*.
+- **SIGDIAL 2026**, embodied: letting agents talk cut action conflicts by 40–90 points and
+  **lowered** final task success versus silent collaboration. The transcript in the article
+  is two agents spending six turns confirming that one of them will move a table.
+- **Multi-Agent Teams Hold Experts Back** (ICML 2026): even told explicitly who the real
+  expert is, teams fail to use them — they average the expert's answer with the wrong
+  members'. Worse with more agents. The one upside is that the same averaging dampens a
+  malicious member, so there is a genuine trade-off between using expertise and resisting
+  a bad actor.
+- **When 20 Agents Fail to Sort** (MAS-BENCH): a distributed sort collapses on inconsistent
+  shared state, inconsistent conventions, duplicate submissions, and no agreement on
+  whether the task is finished. Under simultaneous resource competition, **deadlock rates
+  of 90% by default and 100% under a minimal prompt.**
+
+And the aside that reframes all of it: humans need natural language because brains cannot
+share state. Much of this literature may be studying *how several ChatGPTs converse*
+rather than *how several agents coordinate*.
+
+The conclusion is the part to keep:
+
+> A real multiagent runtime has to re-confront the coordination problems of ordinary
+> distributed systems — commit protocols, resource ordering, locks and leases, state
+> versions, idempotent operations, termination detection. These cannot be solved by saying
+> "please avoid duplicate work" in a prompt. Wherever the rule ends up encoded, it has to
+> become **an explicit, executable, verifiable protocol rather than a behavioural
+> suggestion.**
+
+### Read against our own orchestrator
+
+`orchestrator.ts` opens with:
+
+> There is deliberately no router here: which agent handles what, and when to involve a
+> teammate, is decided by the models through the messaging tools. The orchestration you see
+> at runtime is **emergent, not encoded**.
+
+And `claims.ts`, on the mechanism meant to stop two agents doing the same work:
+
+> Nothing enforces that an agent claims before working — the model decides — so this makes
+> duplicate work *visible and refusable* rather than impossible.
+
+Emergent routing, natural-language messaging, advisory claims. That is, precisely, the
+configuration the papers above degrade. Which is not an argument to change it now — at two
+agents with different owners it is the right trade, and the honesty of both comments is why
+this was easy to check. It is an argument about **what has to exist before agent count
+grows**, and the list is no longer a guess:
+
+| mechanism | ours |
+|---|---|
+| locks and leases | `claims.ts`, `DisplayLease` — advisory |
+| state versions | `files.ts` — present |
+| idempotent operations | partial: `deliveries` and `ingress` replay |
+| commit protocol | none |
+| resource ordering | none |
+| **termination detection** | **none** |
+
+Termination detection is the third time this document has arrived at the same hole —
+legal-skills stops when two examiners and two adversaries clear the same packet, MAS-BENCH
+fails partly because agents cannot agree a task is done, and our loops stop when a model
+says so. And `DisplayLease` is the concrete place to look first for the deadlock result:
+it is a scarce resource that multiple agents contend for, which is exactly the setting
+where the measured rate was 90%.
+
+### Blast radius, not depth
+
+The second article asks how deep recursive delegation should go and answers that depth is
+the wrong metric:
+
+> For any agent-generated artifact, ask **what else becomes wrong if that artifact is
+> wrong.**
+
+An error at a leaf damages a leaf; an error at the root sets premises that every
+downstream node treats as given, and fan-out multiplies it. Worse, **every handoff hardens
+a mistake**: each node works on the previous node's artifact rather than the original
+evidence, so "a small mistake can gradually become an assumption." Context isolation is
+the benefit of subagents and also what puts distance between the final decision and the
+evidence.
+
+Its prescription for high-influence nodes — a verifier, structured output, independent
+replication, human approval before fan-out, or **the original evidence travelling
+alongside the conclusion** — contains the same idea as
+[OpenWiki's claims](#a-memory-nothing-can-check-is-not-a-memory), reached from an entirely
+different problem. Two independent arrivals at *attach the evidence to the belief* is the
+strongest signal in this document so far, and it is one mechanism serving both: stale
+knowledge and propagated error are the same failure seen at different times.
