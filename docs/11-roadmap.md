@@ -603,11 +603,85 @@ evidence check". That number *is* the termination condition, so reporting it is 
 cannot drift from the truth the way a progress estimate does. The task card already
 updates in place and is the surface for it.
 
-Per [docs/13](13-design-review.md) this goes to hostile review before it is built — it
-defines what counts as finished, which is the definition every other record is measured
-against. The review gets a concrete attack to work with, which is unusual and worth using:
-**LoopTrap against layer 2, and a Fork that spawns while its parent is acknowledging
-against layer 1.**
+Per [docs/13](13-design-review.md) this went to hostile review before being built.
+
+### The review came back and layer 1 does not survive as scoped
+
+Three findings rated fatal, all verified against the code. **This is the entry's own
+correction, kept rather than rewritten, because the wrong version is the useful record.**
+
+**1. There is no durable fork edge to count.** `Fork` injects each brief through
+`sendFromUser`; the child queue is marked started before the turn ledger begins, and the
+parent's tool-use blocks are appended only after the whole batch returns. Die in that
+window and the child is invisible to both inbox recovery and turn recovery, with nothing
+linking it to the parent. A persisted counter hangs at one; a process-local counter resets
+to zero and permits early completion. Both crash orders for a separate acknowledgement
+write are unrecoverable without a commit protocol. `rescue.ts` rescues board tasks, not
+forks, edges or counts.
+
+**2. A scalar acknowledgement cannot tell success from terminal failure.** A fork whose
+child times out or throws comes back as `--- fork N FAILED ---` inside a tool result that
+is *not* an error, and the parent then answers and the task closes `done` — which
+`fork.test.ts` asserts today. Decrement on failure and the gate finishes early with work
+missing; do not, and it hangs. **Early completion is the worse half**, because it is
+exactly the wrong-still-looks-correct shape docs/13 exists for. The states needed are at
+least `pending | running | succeeded | failed | unknown | abandoned`, and failure has to be
+an explicit obligation rather than a settlement.
+
+**3. `Fork` is a one-level star, and the real work graph is a DAG with detached work.**
+Children are *forbidden* from forking (the tool refuses a conversation already under
+`fork/`), so depth is exactly one. Meanwhile work escapes the star in four ways the count
+would never see: `SendToAgent` returns immediately while the teammate runs on; the bus
+batches two senders into one turn, making a merge node rather than a unique-parent tree
+node; `bash --background` and `Delegate` return a job id and outlive everybody; and a
+scheduled skill enters through `orchestrator.prompt()` as an independent turn.
+
+So **"Fork is already a spawn tree, this needs a counter and a rule" was wrong**, and it
+was the load-bearing claim.
+
+### What the review says survives
+
+- The **critique of the board predicate** — mutable, advisory, not consulted at completion,
+  and not a stable causal termination condition.
+- **Dijkstra–Scholten's shape**, for a closed and reliably accounted computation. What the
+  repository does not supply is the reliable message protocol, the stable root, and the
+  durable graph it assumes. The algorithm can sit on that protocol; it cannot replace it.
+- **Semantic verification as a veto and never the sole permit** — with the harness owning
+  the verifier's identity and provider, and a verdict bound to an artifact version. Fork
+  does neither today.
+- **A hard budget as fail-safe**, persistent, enforced before spawn across total
+  descendants, wall time and spend. Reaching it means *stopped incomplete*, not *finished*.
+- **Mandatory completion accounting can coexist** with advisory claims and model-driven
+  routing, once routing decisions are distinguished from encoded protocol invariants.
+
+### Ten claims this document made about our own code, and what is true
+
+Recorded because the pattern matters more than any single one: **every one of these was
+written from a module comment or a memory of the design rather than from the code.**
+
+| claimed | actually |
+|---|---|
+| agents have different owners, so we pass the multi-agent bar | `ownerUserId` is optional; default agents have none. Ownership diversity is *supported*, not guaranteed |
+| `DisplayLease` is advisory | it is **enforced** — a second agent is refused. No TTL, so it is closer to an in-memory mutex than a lease |
+| `DisplayLease` is the deadlock case to look at | it never waits or queues, so it cannot deadlock. Retrying models may livelock or starve, which is a different thing |
+| termination detection: none | `AgentBus.idle()` already detects in-process quiescence and `settle()` is called in production. What is missing is a *submission gate*, not the predicate |
+| our loops stop when a model says so | they also stop on budget refusal, model refusal, abort, provider failure, repeated-call detection, and round limits |
+| `golden.ts` judges on a different provider | `resolveSummaryProvider` may return the same provider and model; only Anthropic has a cheaper-model mapping. **Independence is configurable, not guaranteed** |
+| `deliveries`/`ingress` show idempotent operations | they are replayable ledgers. On the live path delivery debt is closed *before* the reply is sent, so a crash between loses it |
+| the task card is a general progress surface | only adapters implementing both card methods get one; plain chats get none, and fork-child events are filtered out |
+
+And one the review found on its own: **`activeAgentIds()` is already broken.** Worker keys
+use a NUL delimiter and the helper searches for a space, so `indexOf(" ")` returns −1 and
+it yields a truncated composite key instead of an agent id. Web deletion can miss an active
+agent today, and this helper cannot back a completion gate.
+
+### Where that leaves R30
+
+The gate is **not** the next thing to build. What comes first is the protocol underneath
+it: durable fork ids, parent turn ids, child conversation ids, terminal states, idempotent
+acknowledgement, and restart reconciliation. Until that exists, a completion gate would be
+a counter over a graph that is not recorded — which is the same failure as the board
+predicate, wearing a proof.
 
 ### R21. Agent and skill bundles: export and import
 A team's agent (profile, skills, scope shape — never its memories or secrets) packaged
