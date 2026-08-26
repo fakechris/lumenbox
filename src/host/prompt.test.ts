@@ -16,7 +16,7 @@ import {
   buildSystemPromptParts,
   buildWakePrompt,
   sectionsPresent,
-  VOLATILE_SECTIONS, emptySectionFaults } from "./prompt.ts";
+  VOLATILE_SECTIONS, emptySectionFaults, STABLE_SECTIONS } from "./prompt.ts";
 
 // ── the guidance that decides which tool an agent reaches for ──────────────────────────
 
@@ -282,4 +282,29 @@ test("a section that is empty for a suspicious reason says so", () => {
     emptySectionFaults({ ...(base as object), conversation: "main", siblingConversations: 4 } as never),
     []
   );
+});
+
+test("a section that cannot say why it is empty is only ever ordinarily empty", () => {
+  // The contract, borrowed from opencode: a source that cannot distinguish "nothing to
+  // say" from "could not look" should not be pushed. Sections without `observe` are the
+  // ones where emptiness has one meaning; the rest must declare which they are.
+  const declared = [...STABLE_SECTIONS, ...VOLATILE_SECTIONS].filter(s => s.observe !== undefined);
+  assert.ok(
+    declared.some(s => s.name === "history"),
+    "history can be wrongly empty and must say so"
+  );
+
+  // Every declaring section returns one of the two states for any context, rather than
+  // throwing — a diagnostic that can crash the prompt is worse than the fault it reports.
+  const bare = {
+    agent: { id: "a", profile: { name: "Ada", description: "", createdAt: "", updatedAt: "" } },
+    teammates: [],
+    memory: [],
+    agentsRoot: "/tmp",
+    hasBox: false,
+  } as never;
+  for (const section of declared) {
+    const state = section.observe!(bare);
+    assert.ok(["ordinary", "unavailable"].includes(state.kind), section.name);
+  }
 });

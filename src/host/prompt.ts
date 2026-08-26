@@ -406,11 +406,23 @@ export interface SystemPromptParts {
 }
 
 /** One named piece of the prompt. Empty output means the piece does not apply and is left out. */
+/**
+ * What a section found when it looked.
+ *
+ * Three states rather than two, because "nothing to say" and "could not look" are the
+ * pair that kept being confused, and only the second is a fault.
+ */
+export type SectionState =
+  /** Nothing to say, and that is expected. */
+  | { kind: "ordinary" }
+  /** Could not be observed. Something is wrong upstream, not merely quiet. */
+  | { kind: "unavailable"; why: string };
+
 export interface PromptSection {
   name: string;
   render: (context: PromptContext) => string;
   /**
-   * Why this section rendered nothing, when it did.
+   * Whether this section having nothing is ordinary, or a fault.
    *
    * A section is dropped when it is empty, and an empty section has two very different
    * causes that look identical in the finished prompt: there is nothing to say, or the
@@ -419,10 +431,14 @@ export interface PromptSection {
    * that did not exist, a file directory the agent was told about and nobody created —
    * and every one of them arrived as an absence rather than an error.
    *
-   * So a section that can be wrongly empty declares how to tell. `undefined` means the
-   * emptiness is ordinary; a string is a fault worth surfacing.
+   * The distinction is opencode's, and it is worth stating in their words: observing a
+   * source and failing "differs from removing a source from the context — replacement
+   * waits rather than silently constructing an incomplete baseline". A source that cannot
+   * say which of the two happened should not be pushed at all.
+   *
+   * Absent here means the section can only ever be ordinarily empty.
    */
-  explainEmpty?: (context: PromptContext) => string | undefined;
+  observe?: (context: PromptContext) => SectionState;
 }
 
 /**
@@ -436,8 +452,8 @@ export function emptySectionFaults(context: PromptContext): string[] {
   const faults: string[] = [];
   for (const section of [...STABLE_SECTIONS, ...VOLATILE_SECTIONS]) {
     if (section.render(context).trim() !== "") continue;
-    const why = section.explainEmpty?.(context);
-    if (why !== undefined) faults.push(`${section.name}: ${why}`);
+    const state = section.observe?.(context);
+    if (state?.kind === "unavailable") faults.push(`${section.name}: ${state.why}`);
   }
   return faults;
 }
@@ -529,10 +545,15 @@ function renderChatFiles(context: PromptContext): string {
   const root = `/home/box/work/chats/${conversation}`;
   return (
     "## This conversation's file exchange\n\n" +
-    `This turn belongs to an outside chat. Its directory on the box is ${root}/ :\n` +
+    // Stated as somewhere to write rather than as somewhere that exists. It used to
+    // assert the directory as established while it was created on first use, so an agent
+    // that went looking found nothing, said so, and put a deliverable where nobody would
+    // collect it. It is made before the turn now, and the wording no longer depends on
+    // that having worked.
+    `This turn belongs to an outside chat. Its files live under ${root}/ :\n` +
     `- ${root}/inbox/ — files people sent in the chat land here.\n` +
     `- ${root}/outbox/ — anything you save here is posted into the chat when your turn ends, ` +
-    "then moved to sent/.\n\n" +
+    "then moved to sent/. Create the directory if it is not there yet.\n\n" +
     "A deliverable belongs in outbox/ — a path pasted into your reply is not a deliverable, " +
     "because the person is reading a phone, not the box."
   );
@@ -556,14 +577,18 @@ export const VOLATILE_SECTIONS: readonly PromptSection[] = [
     // A bound chat with no history at all is either its first message or a key that
     // points at a file nobody wrote. The first is common and fine; the second is the bug
     // that hid all day, so the two are told apart here rather than in a person's report.
-    explainEmpty: context =>
+    observe: context =>
       context.conversation !== undefined &&
       context.conversation !== MAIN_CONVERSATION &&
       (context.siblingConversations ?? 0) > 0
-        ? `no transcript for ${context.conversation}, though this chat has ` +
-          `${context.siblingConversations} other conversation(s) — if this is not a new ` +
-          `subject, the conversation key may be wrong`
-        : undefined,
+        ? {
+            kind: "unavailable",
+            why:
+              `no transcript for ${context.conversation}, though this chat has ` +
+              `${context.siblingConversations} other conversation(s) — if this is not a new ` +
+              `subject, the conversation key may be wrong`,
+          }
+        : { kind: "ordinary" },
   },
   {
     name: "shared-memory",
