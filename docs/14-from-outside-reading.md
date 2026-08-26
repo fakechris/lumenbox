@@ -685,25 +685,36 @@ program, a temp PNG, a reopen, versus an XShm session held open and encoded in m
 `xdotool` per action, and captures via `ffmpeg` to a temp file which it then reads and
 unlinks. So the fix should be worth ~145 ms per action.
 
-Measured in the running box, it is not:
+Measuring it in the running box produced two answers that differ by three orders of
+magnitude, and the disagreement is more interesting than either number.
 
-| | measured |
+| how it was run | per action |
 |---|---|
-| `xdotool mousemove --sync` | **19 ms** |
-| `xdotool mousemove` (no sync) | 17 ms |
-| second `--sync` to the same position | 46 ms |
+| one invocation, wrapped in `timeout 5`, box quiet | **17–46 ms** |
+| 20 invocations in a bare `for` loop, box quiet | **13,662 ms** |
 
-**About 19 ms per invocation, not 146**, which caps the whole optimisation at roughly
-19 ms per action here — real over a fifty-turn loop, and nowhere near a reason to hold a
-persistent X11 connection. Two things account for the gap: their number is a move *plus* a
-click with more per-action work, and their measurement includes surrounding transport we
-do not pay the same way. The advice is sound and the magnitude is not transferable, which
-is the section above arriving from the other side.
+Both are `xdotool mousemove` against `DISPLAY=:1` in the same container, minutes apart.
+The loop was run twice — once while the box was still busy with a previous command, once
+on an idle box at load 0.01 — and hung both times. Single invocations are consistently
+fast.
 
-*Boundary, stated as required:* single `docker exec` into the running box against
-`DISPLAY=:1`, wall time around one `xdotool` invocation, three samples. It excludes our
-daemon's own dispatch and the host round trip, so it is a floor on the process cost and
-not a figure for what a tool call costs.
+**This is unresolved and it is not a benchmarking curiosity.** A computer-use loop is
+exactly a long run of repeated `xdotool` invocations against one display, so if repeated
+invocation is what degrades, the degradation is in the production path and the per-action
+figure that matters is the second one, not the first. Candidate explanations not yet
+distinguished: X server client-slot or connection-handshake pressure under rapid
+reconnection; something in our own container's X setup; or an artefact of measuring inside
+a shell loop. Until one of them is shown, no number here should be quoted.
+
+What this does establish is that the article's *conclusion* may hold for us after all,
+through a mechanism it never mentions: not that a process costs 146 ms, but that repeated
+process creation against a display degrades. A persistent connection would remove the
+whole question. So the honest ranking is: **find out which of the three explanations it
+is, before deciding whether the optimisation is worth 19 ms or worth seconds.**
+
+*Boundary, since this section is about stating them:* wall time around `xdotool` inside a
+single `docker exec`, excluding our daemon's dispatch and the host round trip. It is a
+floor on process cost, not the cost of a tool call.
 
 One thing we already get for free and should not lose: **we batch.** A click with
 modifiers is `keydown … mousemove … click … keyup` in *one* `xdotool` invocation — one
