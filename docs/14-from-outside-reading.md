@@ -103,12 +103,22 @@ model.** The article had been in the vault, processed, since the day before.
 
 ### The mechanism finding, which is ours
 
-`WebSearch` needs `BRAVE_SEARCH_API_KEY`. It is not in `~/.agentbox/config.json`, and
-across every conversation on disk **the tool has been called zero times.** `WebFetch` on a
-search engine correctly refuses and advises `browser_open` instead — which is what the
-agent did, and what Google captchas. So every web question in this installation degrades
-to scraping a search engine through a browser, and the degradation is invisible: it
-returns a page, not an error.
+`WebSearch` needs `BRAVE_SEARCH_API_KEY`, and it is not in `~/.agentbox/config.json`. On
+disk the tool has been called twice, and both calls returned the same thing:
+
+```
+Searching needs BRAVE_SEARCH_API_KEY set in this installation's config; it is not.
+```
+
+So this is demand that was refused, not a tool nobody wanted. `WebFetch` on a search engine
+correctly declines and advises `browser_open` instead — which is what the agent then did,
+and what Google captchas. Every web question in this installation degrades to scraping a
+search engine through a browser, and that degradation is the invisible half: it returns a
+page, not an error.
+
+*(An earlier version of this section said the tool had never been called. That was a
+grep for `web_search` against a tool named `WebSearch` — the wrong-name failure this
+document opens with, committed while writing it up.)*
 
 ### Candidates
 
@@ -728,6 +738,17 @@ dominated by the screenshot, with the pointer confirmed sitting on the clicked c
 for the second one. Before the change the second call would have spent fifteen seconds in
 `mousemove --sync`.
 
+
+### On forking the box
+
+AgentENV forks a *running sandbox* into independent children: microVM snapshots, dirty
+page tracking, copy-on-write layers. We do not have that and, on the scaffolding test,
+should not chase it. It exists to serve post-training and evaluation, where thousands of
+short-lived environments branch from a prepared template. Our box is one long-lived
+container per installation with a work volume that survives rebuilds — a workstation, not
+a rollout. The two designs optimise opposite things, and the only reason to revisit is if
+*branch my whole computer and try both* ever becomes something a person asks for.
+
 ---
 
 ## Our suite grades the one surface we already trusted
@@ -865,12 +886,94 @@ per display, so actions on a screen are already serialised — and from the firs
 short-lived processes. Both protections are properties of the thing the optimisation would
 remove.
 
-### On forking the box
+---
 
-AgentENV forks a *running sandbox* into independent children: microVM snapshots, dirty
-page tracking, copy-on-write layers. We do not have that and, on the scaffolding test,
-should not chase it. It exists to serve post-training and evaluation, where thousands of
-short-lived environments branch from a prepared template. Our box is one long-lived
-container per installation with a work volume that survives rebuilds — a workstation, not
-a rollout. The two designs optimise opposite things, and the only reason to revisit is if
-*branch my whole computer and try both* ever becomes something a person asks for.
+## The prompt has three parts, and a trace has to say which code produced it
+
+Source: *Hard Lessons Building Agents Since GPT-3.5* (Nicolas Bustamante, 2026-04-21).
+
+### It names the failure we spent a day fixing
+
+> A prompt is three things stacked together: an **identity** (who the model is), a
+> **contract** (what it must and must not do), and a **context** (what it has to work with
+> on this turn). Get the identity wrong and the model is confused about its role. Get the
+> contract wrong and it **hedges, over-refuses, or hallucinates authority it doesn't
+> have**.
+
+That is the exact symptom list we chased on 2026-08-25 — first a hallucinated product,
+then, after over-correcting, an agent whose defensiveness read as unhelpful. Both were
+contract failures, and four rounds of edits were a search for a contract. Having the
+category named makes the next one diagnosable rather than a guess.
+
+It corroborates the tail placement independently, too:
+
+> Instructions at the top compete with instructions at the bottom, and **the middle is a
+> dead zone** where both fade… the freshest context at the bottom where recency bias works
+> for you.
+
+Which is why `CRITICAL_RECAP` is the last volatile section. We arrived there by watching a
+golden task flip; here it is as a stated rule.
+
+### And it argues against the entry above it
+
+The skills entry treats a missing install path as a gap. This article treats skills as the
+*current* fashionable scaffolding:
+
+> The next generation of frontier models will be post-trained on exactly these kinds of
+> skills… And when that happens, the right move is to delete the skill. **Not update it.
+> Delete it.**
+
+Its own hardest deletion was a year of RAG infrastructure, removed once agents could
+`grep` a filesystem. Both positions hold, and the reconciling test is cheap: a skill that
+encodes *how this installation works* — where files live, which channel a person uses,
+what the house style is — cannot be baked into anyone's weights. A skill that teaches a
+general method can. **Build the first kind; borrow the second kind and expect to delete
+it.** Which is also the argument for an install path rather than an authoring push.
+
+### Two lines that indict our suite more precisely than the eval entry did
+
+> Don't start by writing the agent. Start by writing the eval. **If you can't produce 100
+> concrete examples of "correct," you don't understand the problem well enough.**
+
+We have seventeen.
+
+> If your eval doesn't include the failure modes you've seen in the wild, it's a **vanity
+> scorecard**.
+
+And this document is a list of failure modes seen in the wild — an empty search result and
+a wrong domain, a sentinel string stored as a memory, an over-refusing contract, a click
+that succeeded in fifteen seconds. **Not one of them is a case in the suite.** Converting
+this file into eval cases is the concrete work it has been accumulating toward.
+
+### What a trace must carry, against what ours does
+
+The requirement: the exact prompt the model received *after templating and context
+assembly*, the tool definitions it had, every call with arguments and response,
+intermediate reasoning, the final output, and **a stable ID tying the run to the user, the
+model version, and the code SHA**.
+
+Every transcript entry we write has these keys:
+
+```
+at, blocks, causedBy, covers, kind, role, text
+```
+
+`causedBy` and `covers` are ours and the article does not ask for them — they carry
+causality between entries, and what a summary replaced. But **nothing identifies the model,
+the harness version, or the code that produced the run**, and the assembled prompt is never
+stored. So of the article's three example questions:
+
+| question | answerable from our records |
+|---|---|
+| Did this regression start the day we swapped the model? | **no** — nothing records the model |
+| What was the context length when the model got confused? | **no** — the prompt is not stored |
+| How often did this tool return an empty result? | **yes** |
+
+The third works, so here it is. Of 218 recorded tool results, returns under 40 characters:
+`computer` 6 of 6, `bash` 14 of 102, `Tasks` 5 of 13, and `WebFetch`, `browser_open`,
+`read_file`, `write_file` none. The `computer` row is not a defect — that tool answers with
+a screenshot rather than text — which is the point: this surface is legible enough to ask a
+real question of, and it is the only one of the three that is.
+
+Two of three unanswerable is the same shape as the latency finding. The records are a
+faithful account of *what was said* and carry nothing about *what produced it*.
