@@ -685,32 +685,40 @@ program, a temp PNG, a reopen, versus an XShm session held open and encoded in m
 `xdotool` per action, and captures via `ffmpeg` to a temp file which it then reads and
 unlinks. So the fix should be worth ~145 ms per action.
 
-Measuring it in the running box produced two answers that differ by three orders of
-magnitude, and the disagreement is more interesting than either number.
+Measuring it in the running box did not reproduce the article's cost at all, and found a
+production bug instead. Twenty invocations per condition, idle box at load 0.01:
 
-| how it was run | per action |
+| condition | per action |
 |---|---|
-| one invocation, wrapped in `timeout 5`, box quiet | **17–46 ms** |
-| 20 invocations in a bare `for` loop, box quiet | **13,662 ms** |
+| `mousemove --sync` to a position the pointer **is already at** | **15,541 ms** |
+| `mousemove --sync` to a new position each time | **2 ms** |
+| `mousemove` with no `--sync`, moving | **1 ms** |
 
-Both are `xdotool mousemove` against `DISPLAY=:1` in the same container, minutes apart.
-The loop was run twice — once while the box was still busy with a previous command, once
-on an idle box at load 0.01 — and hung both times. Single invocations are consistently
-fast.
+So the process cost the article set out to remove is **1–2 ms here**, not 146. On that
+number a persistent X11 connection buys nothing and the optimisation is correctly
+declined; their figure evidently includes work, or an environment, we do not share.
 
-**This is unresolved and it is not a benchmarking curiosity.** A computer-use loop is
-exactly a long run of repeated `xdotool` invocations against one display, so if repeated
-invocation is what degrades, the degradation is in the production path and the per-action
-figure that matters is the second one, not the first. Candidate explanations not yet
-distinguished: X server client-slot or connection-handshake pressure under rapid
-reconnection; something in our own container's X setup; or an artefact of measuring inside
-a shell loop. Until one of them is shown, no number here should be quoted.
+The first row is the finding. **`xdotool mousemove --sync` blocks for roughly fifteen
+seconds when the pointer is already where it is being sent.** `--sync` waits for the
+pointer to arrive, and when no motion occurs there is nothing to wait for. It then returns
+success.
 
-What this does establish is that the article's *conclusion* may hold for us after all,
-through a mechanism it never mentions: not that a process costs 146 ms, but that repeated
-process creation against a display degrades. A persistent connection would remove the
-whole question. So the honest ranking is: **find out which of the three explanations it
-is, before deciding whether the optimisation is worth 19 ms or worth seconds.**
+`x11-executor.ts` uses `mousemove --sync` on six paths, including every click, drag and
+scroll. So an action targeting the coordinate the pointer already occupies stalls for
+~15 s, with any modifier keys held down for the duration — and the case that produces it is
+not exotic. It is **clicking the same place twice**: a double-click expressed as two
+clicks, a menu item under a button just pressed, or a model retrying a click that appeared
+not to land — which is the single most likely thing a model does when a click appears not
+to land.
+
+It never surfaced as an error because `shell.ts` bounds these at 30 s and 15.5 s sits
+comfortably inside. The action succeeds, slowly, and reports nothing: the same
+silent-success shape as the rest of this document, here costing fifteen seconds of a
+person's attention per occurrence.
+
+The fix is not the article's. `--sync` is only meaningful when the pointer actually has to
+travel, so the repair is to drop it or to skip the move when the pointer is already at the
+target — not to hold a display connection open.
 
 *Boundary, since this section is about stating them:* wall time around `xdotool` inside a
 single `docker exec`, excluding our daemon's dispatch and the host round trip. It is a
