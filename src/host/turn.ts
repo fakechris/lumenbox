@@ -1525,6 +1525,13 @@ export async function runTurn(
 
     // Execute every requested tool and return all results in one user message.
     // Splitting them across messages trains the model out of parallel calls.
+    //
+    // Stamped before the tools run, so the `blocks` entry says when the model asked and
+    // the `results` entry says when the answers were all in. Both used to share one
+    // timestamp taken after the batch, which made every duration on disk derive to zero —
+    // and a defect that succeeds slowly (a click that took fifteen seconds) invisible to
+    // any reading of the transcript.
+    const requestedAt = new Date().toISOString();
     const results: Anthropic.ToolResultBlockParam[] = [];
     for (const toolUse of toolUses) {
       emit({
@@ -1584,7 +1591,6 @@ export async function runTurn(
     // Persist the exchange as blocks, in the order the API requires: the calling
     // assistant turn, then its results. Thinking blocks are not kept — they are
     // only valid within the turn that produced them.
-    const at = new Date().toISOString();
     registry.appendTranscript(agent.id, {
       role: "assistant",
       kind: "blocks",
@@ -1592,13 +1598,13 @@ export async function runTurn(
         (block): block is Anthropic.TextBlock | Anthropic.ToolUseBlock =>
           block.type === "text" || block.type === "tool_use"
       ),
-      at,
+      at: requestedAt,
     } satisfies TranscriptEntry, conversation);
     registry.appendTranscript(agent.id, {
       role: "user",
       kind: "results",
       blocks: results.map(storableResult),
-      at,
+      at: new Date().toISOString(),
     } satisfies TranscriptEntry, conversation);
 
     messages.push({ role: "user", content: results });

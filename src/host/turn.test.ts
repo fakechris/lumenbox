@@ -2243,3 +2243,53 @@ test("an ordinary (non-resumed) turn never replays a trailing batch", async () =
     cleanup();
   }
 });
+
+test("the transcript records when a tool batch started and when its results were in", async () => {
+  // Both entries used to share one timestamp taken after the tools ran, so every duration
+  // on disk derived to zero -- and a defect that succeeds slowly (a click that took
+  // fifteen seconds to land) was invisible to any reading of the transcript.
+  const { registry, cleanup } = fixture();
+  try {
+    const ada = registry.create({ name: "Ada" });
+    const bus = new AgentBus(registry, async () => {});
+    const slowBox = {
+      computer: async () => {
+        await new Promise(resolve => setTimeout(resolve, 25));
+        return {
+          success: true,
+          screenshot: Buffer.from("fake-webp-bytes").toString("base64"),
+          action_count: 1,
+          duration_ms: 25,
+          cursor_position: { x: 1, y: 2 },
+        };
+      },
+    } as unknown as BoxClient;
+
+    const { client } = stubClient(
+      [
+        message([toolUseBlock("computer", { actions: [{ action: "screenshot" }] })], "tool_use"),
+        message([textBlock("Done.")]),
+      ],
+      { params: [] }
+    );
+
+    await runTurn(
+      ada,
+      [{ id: "m-test", fromId: "user", fromName: "user", text: "look", priority: false, receivedAt: "" }],
+      new AbortController().signal,
+      { client, registry, bus, box: slowBox, resolution: undefined }
+    );
+
+    const transcript = registry.readTranscript(ada.id) as TranscriptEntry[];
+    const blocks = transcript.find(entry => "kind" in entry && entry.kind === "blocks");
+    const results = transcript.find(entry => "kind" in entry && entry.kind === "results");
+    assert.ok(blocks && results, "the exchange must be persisted");
+    const elapsed = Date.parse(results.at!) - Date.parse(blocks.at!);
+    assert.ok(
+      elapsed >= 20,
+      `results.at - blocks.at should cover the tool's ~25ms run, got ${elapsed}ms`
+    );
+  } finally {
+    cleanup();
+  }
+});
