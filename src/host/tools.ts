@@ -546,7 +546,12 @@ export function buildTools(
         description:
           "Write a text file in your box, creating parent directories as needed and " +
           "overwriting any existing file at that path. Use this for creating scripts, " +
-          "configuration, and notes — it is more reliable than heredocs through `bash`.",
+          "configuration, and notes — it is more reliable than heredocs through `bash`.\n\n" +
+          "You get back the path and the number of bytes written. It refuses rather than " +
+          "overwrite when the file changed since you last read it, when it is too large to " +
+          "read whole (so the check cannot be made), or when reading it failed — a read " +
+          "failure is not the same as the file being absent. Each refusal says which case " +
+          "it was; `overwrite: true` is the deliberate way past all three.",
         input_schema: {
           type: "object",
           properties: {
@@ -566,7 +571,11 @@ export function buildTools(
         name: "list_dir",
         description:
           "List a directory in your box, with entry types and sizes. Use it to orient " +
-          "yourself before reading files, rather than guessing paths.",
+          "yourself before reading files, rather than guessing paths.\n\n" +
+          "You get the directory's own path and one line per entry. An empty directory says " +
+          "so plainly — that is an answer, not a failure, and it does not mean the files are " +
+          "somewhere else. One level only: it does not recurse, so use `bash` with `find` " +
+          "when you need a tree.",
         input_schema: {
           type: "object",
           properties: {
@@ -692,7 +701,10 @@ export function buildTools(
         "Replace your todo list. Like the plan, it survives summarisation, so it is how you know " +
         "what is left after a long piece of work. Send the whole list every time, not a change to " +
         "it. Keep it accurate in both directions: an item left pending after you finished it will " +
-        "make you redo the work, and one marked done that is not will make you skip it.",
+        "make you redo the work, and one marked done that is not will make you skip it.\n\n" +
+        "You get the stored list back, so you can see what it now holds. Whole-list replacement " +
+        "is the only mode — there is no way to amend one item, and a partial list silently " +
+        "discards everything you left out. To clear it, pass an empty list.",
       input_schema: {
         type: "object",
         properties: {
@@ -939,7 +951,11 @@ export function buildTools(
         description:
           "Re-read the current page as an outline. You rarely need this — every browser " +
           "action already returns one — but it is how you catch up with a page that " +
-          "changed on its own, or that you navigated by hand with `computer`.",
+          "changed on its own, or that you navigated by hand with `computer`.\n\n" +
+          "You get an indented outline: each element's role, its visible text, and a `ref` " +
+          "you can act on. Password fields come back redacted. The outline is capped at a " +
+          "few hundred elements shared across the page and its frames, so a very large page " +
+          "is cut and says so — `browser_read` is how you get a region's full text.",
         input_schema: { type: "object", properties: {} },
       },
       {
@@ -983,7 +999,11 @@ export function buildTools(
         description:
           "Scroll the page and get the outline afterwards. The outline already includes " +
           "things below the fold, so scroll when a page loads more as you go, or when you " +
-          "want the screen to show what you are about to work on.",
+          "want the screen to show what you are about to work on.\n\n" +
+          "You get the outline as it stands after scrolling. Scrolling is not how you reach " +
+          "an element — refs work wherever they are on the page — so this is for pages that " +
+          "load more content as you go, and for putting something on screen before a " +
+          "screenshot. A page that loads nothing new returns the same outline.",
         input_schema: {
           type: "object",
           properties: {
@@ -1023,7 +1043,10 @@ export function buildTools(
         description:
           "Attach a file from your box to a file input on the page, without touching the " +
           "operating system's file chooser. `ref` is the input's handle from the outline; " +
-          "`path` is a path inside your box, so write or download the file first.",
+          "`path` is a path inside your box, so write or download the file first.\n\n" +
+          "You get the outline back with the input showing the attached file. It attaches " +
+          "only — it does not submit the form, so click whatever sends it afterwards. The " +
+          "ref has to be a file input; anything else is refused rather than clicked.",
         input_schema: {
           type: "object",
           properties: {
