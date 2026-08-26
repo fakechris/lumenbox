@@ -30,11 +30,23 @@ three-tier permission boundary, and the upgrade safety story now in docs/12-upgr
 
 These close loops the recent work opened. Days, not weeks, each.
 
-### R1. The composer respects the viewed conversation
+### ~~R1. The composer respects the viewed conversation~~ — shipped, in two halves
+The composer half landed on 08-22 (`779f24e`), thirteen minutes after this entry was
+written, and the entry survived unstruck. The second half landed on 08-26 (`6c74e1b`)
+after the product decision it was waiting on: a console message into a channel thread is
+**a room message, not a whisper** — the interjection is pushed to the chat marked
+〔控制台〕 and the agent's reply follows it, so the chat's members and the agent read the
+same history. The enabling piece, `ConversationDirectory`, is R25's first slice built
+early: the explicit id → chatKey record the adversarial review asked for, because the
+derived id is one-way and nothing could answer "which chat is this?".
+
+<details><summary>original entry</summary>
+
 The middle pane can *view* any conversation, but the composer always sends to `main`.
 Read a Telegram thread, reply, and the reply lands in the team room instead. Either
 send to the viewed conversation, or disable the composer when viewing a side thread
 and say why. Small; a correctness gap the conversation viewer created.
+</details>
 
 ### ~~R2. Answer an approval from the chat channel~~ — shipped
 <details><summary>original entry</summary>
@@ -399,8 +411,8 @@ one of them makes the *next* problem findable.
    found-to-hidden bugs as cheaply.
 2. **R22, say what is missing.** Three capabilities are in the source and absent at
    runtime, and all three were found by accident. One startup check ends the class.
-3. **R1, the composer.** Unchanged and still right: a reply typed while reading a Telegram
-   thread lands in the team room. Small, and wrong in the way users notice and remember.
+3. ~~**R1, the composer.**~~ Shipped — see the entry. Its second half also landed the
+   first slice of R25 (the explicit conversation record), which shrinks that item.
 4. **R18's remaining two thirds.** Atomic uploads and differentiated failures — the
    difference between a box that reports what happened and one that reports that something
    happened.
