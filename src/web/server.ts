@@ -948,9 +948,26 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
         log(`rescued ${stuck.task.id}: ${stuck.task.title}`);
         const message = rescueMessage(stuck);
         broadcast({ type: "error", message });
-        if (stuck.conversation !== undefined) {
-          void channels.pushToChat(stuck.conversation, message).catch(() => {});
+        // A task carries a *conversation id* — the chatKey with every unsafe character
+        // flattened to `-` — and `pushToChat` finds its adapter by the `feishu:` prefix.
+        // `feishu-oc_…` never matched, so every rescue notice this code exists to send
+        // was routed nowhere, and `.catch(() => {})` swallowed the miss. The directory is
+        // the way back; a thread from before it exists has no route and says so rather
+        // than failing quietly.
+        if (stuck.conversation === undefined) continue;
+        const chatKey = conversations.chatKeyFor(stuck.conversation);
+        if (chatKey === undefined) {
+          log(`rescued ${stuck.task.id} but cannot reach ${stuck.conversation}: no chat recorded`);
+          continue;
         }
+        void channels.pushToChat(chatKey, message).catch((error: unknown) => {
+          // Not swallowed. This is the notice that exists so an interrupted request is
+          // not lost, and losing *it* silently is the same failure one level up.
+          log(
+            `rescued ${stuck.task.id} but could not tell ${chatKey}: ` +
+              `${error instanceof Error ? error.message : String(error)}`
+          );
+        });
       }
     }
   })();
@@ -970,6 +987,33 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
     }
   }, 10 * 60_000);
   digestTimer.unref?.();
+
+  // Work that came back and was never picked up again.
+  //
+  // The rescue above runs once, at startup, and moves an interrupted task back to `open`
+  // with a note saying why. Nothing reads the board after that. A request interrupted by
+  // a restart sat `open` for a day with its note intact and nobody — person or agent —
+  // ever looked: the record was correct and unread, which is the same outcome as no
+  // record. Every other check here asks a question on a schedule; this is the board's.
+  //
+  // Only tasks the restart itself reopened, and only once each: an `open` task is the
+  // ordinary state of a backlog, and a daily complaint about one is how a person learns
+  // to ignore the surface.
+  const abandonedTold = new Set<string>();
+  const abandonedTimer = setInterval(() => {
+    const stale = (orchestrator.tasks?.list() ?? []).filter(
+      task =>
+        task.status === "open" &&
+        !abandonedTold.has(task.id) &&
+        task.history.some(entry => entry.by === "restart")
+    );
+    for (const task of stale) {
+      abandonedTold.add(task.id);
+      const since = task.history.find(entry => entry.by === "restart")?.at ?? task.createdAt;
+      log(`${task.id} has been waiting since ${since}, reopened by a restart: ${task.title}`);
+    }
+  }, 30 * 60_000);
+  abandonedTimer.unref();
 
   // Is anything still listening? A channel said "connected" once and ninety minutes later
   // had no socket at all, having logged nothing in between — and because the ingress
