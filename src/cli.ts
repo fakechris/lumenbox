@@ -1110,6 +1110,13 @@ async function main(): Promise<number> {
       const targets = names.length > 0 ? names : [undefined];
       let anyFail = false;
       for (const name of targets) {
+        // The env from config, applied before anything reads it. Without this the suite
+        // ran with no search key while the installation it is meant to represent had
+        // three, so a task about research behaviour was measuring a system nobody uses —
+        // and passed or failed for reasons that had nothing to do with the change under
+        // test. `chat` and `web` have always done this; golden was the one path that did
+        // not, which is the worst place for the omission to sit.
+        applyConfigEnv(loadConfig(() => {}));
         const profile = resolveProvider(name, loadConfig().provider);
         if (process.env[profile.keyEnv] === undefined) {
           err(`${profile.label}: needs ${profile.keyEnv}`);

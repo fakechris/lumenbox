@@ -354,6 +354,55 @@ export const GOLDEN_TASKS: readonly GoldenTask[] = [
     },
   },
   {
+    // Not another task: a **process invariant**, checkable on any run rather than on the
+    // seventeen tasks written down (docs/14). The trigger was a real answer — asked to
+    // compare Omarchy against macOS on Intel MacBooks, the agent did five rounds of
+    // research and produced a good deliverable, and a person watching could not have said
+    // what it was doing at any point or what was left. Doubao's trace for the same
+    // question names each stage as it starts one.
+    //
+    // Graded on the record, not the prose: what matters is that the steps exist and moved,
+    // not that the agent said it was organised.
+    id: "visible-steps",
+    // Two earlier prompts were wrong in opposite directions and both are worth recording.
+    // The first enumerated its own sub-topics ("cover window management, HiDPI scaling,
+    // and keyboard shortcuts"), which hands the model the decomposition and tests whether
+    // it can tick boxes rather than find them — it passed while the real question failed.
+    // The second asked GNOME vs KDE, which the model can answer from what it already
+    // knows: it took no steps because taking none was *right*, and a task that fails
+    // correct behaviour is worse than no task.
+    //
+    // So this is the question from the wild, unchanged. It is about a project new enough
+    // that the model has to go and look — measured, on the real installation: three
+    // searches and seven fetches — which is what makes "were the steps visible?" a fair
+    // question to ask of it.
+    prompt: () => "omarchy linux，在 macbook intel 下体验怎么样，比原生 macos 好吗",
+    check: async ({ registry, agentId }) => {
+      const todos = registry.readDurableState(agentId).todos ?? [];
+      if (todos.length < 2) {
+        return fail(
+          `a multi-step question produced ${todos.length} todo(s); somebody watching could ` +
+            `not tell what it was doing or what was left`
+        );
+      }
+      // Moved, not merely declared. A list written once and never touched is a plan the
+      // agent made and then ignored, which reads to a watcher exactly like no list.
+      const settled = todos.filter(item => item.status === "done" || item.status === "blocked");
+      if (settled.length === 0) {
+        return fail(`${todos.length} steps were listed and none was ever marked done or blocked`);
+      }
+      // The steps have to be the agent's own work, not the question's nouns handed back.
+      const named = todos.filter(item => item.text.trim().length >= 8).length;
+      if (named < todos.length) {
+        return fail(`${todos.length - named} step(s) are too short to say what they settle`);
+      }
+      return pass(
+        `${todos.length} steps, ${settled.length} settled: ` +
+          todos.map(item => `${item.status}:${item.text.slice(0, 24)}`).join(" / ")
+      );
+    },
+  },
+  {
     id: "not-verified",
     // A structured verdict rather than a judgement about prose: the agent records its
     // conclusion through a tool and the harness reads a field. The pattern comes from

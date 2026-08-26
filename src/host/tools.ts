@@ -726,8 +726,12 @@ export function buildTools(
     {
       name: "SetTodos",
       description:
-        "Replace your todo list. Like the plan, it survives summarisation, so it is how you know " +
-        "what is left after a long piece of work. Send the whole list every time, not a change to " +
+        "Set out the steps you are about to take, and keep them current as you take them. Call " +
+        "this *before* the work when a question needs you to go and find something out — the " +
+        "list is how anyone watching knows what you are doing now and what is left, and it is " +
+        "how you know it yourself after summarisation. It does not need a list to already " +
+        "exist; the first call creates one.\n\n" +
+        "Send the whole list every time, not a change to " +
         "it. Keep it accurate in both directions: an item left pending after you finished it will " +
         "make you redo the work, and one marked done that is not will make you skip it.\n\n" +
         "You get the stored list back, so you can see what it now holds. Whole-list replacement " +
