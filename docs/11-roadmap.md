@@ -280,7 +280,13 @@ false in an hour. **Start with the subset whose evidence is a file in the box**,
 that is the only kind we can version cleanly; a claims runtime over unversionable evidence
 is bookkeeping. Medium; design first.
 
-### R28. Turn the observed failures into eval cases
+### R28. Turn the observed failures into eval cases — first third landed
+`4bf2a77`: the memory sentinel is now matched by letters rather than exactly (the stored
+`(NOTHING)` removed, the next one impossible), and the Seltz failure is a golden task —
+`empty-is-not-an-answer`, an empty directory the prompt insists holds notes, graded on
+having actually looked and then on reporting absence without describing features. Passed
+live on its first run. Remaining: process invariants, trigger evals (waits on R26), the
+memory ablation, and the seventeen-tasks-versus-traffic comparison.
 "If your eval doesn't include the failure modes you've seen in the wild, it's a vanity
 scorecard" — and docs/14 is a list of failure modes seen in the wild, none of which is a
 case in the suite: an empty search result plus a wrong domain, a sentinel string stored as
