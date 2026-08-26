@@ -19,6 +19,7 @@ import type { McpManager } from "./mcp.ts";
 import { delegateEnv, PRESETS, presetNamed, quoteForShell } from "./presets.ts";
 import { describeHistory, readHistory } from "./history.ts";
 import { canSearch, fetchPage, guardUrl, isSearchEngine, searchWeb, WebError } from "./web.ts";
+import { describeEnvShape, envShape, looksLikeEnvFile } from "./env-shape.ts";
 import { guardShellCommand } from "./ui-automation-guard.ts";
 import { dedupeKey, validateRecord } from "./memory.ts";
 import { Claims, heldElsewhere } from "./claims.ts";
@@ -139,6 +140,21 @@ export interface ToolOutcome {
   /** base64 image payloads to attach to the tool result. */
   images?: { mediaType: "image/webp" | "image/png"; data: string }[];
   isError?: boolean;
+  /**
+   * What the transcript stores instead of `text`, when the two must differ.
+   *
+   * The model sees `text`; the durable record sees this. Exactly one tool uses it, and
+   * the reason is the only reason worth having: `RunOnHost` is told which vault secrets a
+   * command was given, so for those calls the harness *knows* the output may contain a
+   * credential — no pattern, no guess, no model judgement (docs/15). Every other approach
+   * to keeping secrets out of the record is a suspicion applied everywhere; this is
+   * certainty applied in one place.
+   *
+   * It is not containment from the model, which nothing achieves: the model read the
+   * output and can restate it. It is containment from the *record*, which is what R7 is
+   * about.
+   */
+  recordAs?: string;
 }
 
 /**
@@ -524,7 +540,12 @@ export function buildTools(
         description:
           "Read a text file from your box. Use this instead of `cat` when you want the " +
           "content itself rather than shell output, and pass a line range when you only " +
-          "need part of a large file.",
+          "need part of a large file.\n\n" +
+          "You get the file's text, or a line range of it. A `.env` answers with its " +
+          "*shape* instead — which variables it defines and how long each value is — " +
+          "because that is what is usually being asked and it keeps the values out of " +
+          "this conversation. Pass `values: true` when you genuinely need them, and " +
+          "prefer having the command that needs a value read the file itself.",
         input_schema: {
           type: "object",
           properties: {
@@ -536,6 +557,13 @@ export function buildTools(
             end_line: {
               type: "integer",
               description: "Last line to return, inclusive.",
+            },
+            values: {
+              type: "boolean",
+              description:
+                "For a .env only: return the file's contents rather than its shape. " +
+                "Everything you read lands in this conversation, so ask for it when you " +
+                "need it and not by habit.",
             },
           },
           required: ["path"],
@@ -1562,7 +1590,32 @@ export async function dispatchTool(
             : "",
           `exit code: ${result.code === null ? "unknown" : result.code}`,
         ].filter(part => part !== "");
-        return { text: parts.join("\n\n"), isError: result.code !== 0 && !result.timedOut };
+        const granted = Object.keys(secretEnv);
+        return {
+          text: parts.join("\n\n"),
+          isError: result.code !== 0 && !result.timedOut,
+          // A command that was handed a credential may have printed it. The record keeps
+          // everything that makes the call auditable — what ran, which secrets by name,
+          // how it ended — and not the one part that might be the secret itself.
+          ...(granted.length > 0
+            ? {
+                recordAs: [
+                  `$ ${command}`,
+                  `ran on the host with ${granted.join(", ")} in its environment.`,
+                  `Output withheld from this record: a command given a credential may ` +
+                    `print it, and this is the one place that is known rather than guessed. ` +
+                    `The agent saw it; the transcript does not keep it.`,
+                  refusedSecrets.length > 0
+                    ? `Not granted: ${refusedSecrets.join(", ")}.`
+                    : "",
+                  result.timedOut ? "The command hit the host time limit and was killed." : "",
+                  `exit code: ${result.code === null ? "unknown" : result.code}`,
+                ]
+                  .filter(part => part !== "")
+                  .join("\n\n"),
+              }
+            : {}),
+        };
       } catch (error) {
         return {
           text: error instanceof Error ? error.message : String(error),
@@ -1573,7 +1626,17 @@ export async function dispatchTool(
 
     case "read_file": {
       const box = requireBox(context);
-      const result = await box.readFile(String(input.path ?? ""), {
+      const path = String(input.path ?? "");
+      // The shape answers the question people actually ask of a `.env`, and keeps its
+      // values out of the transcript on the way. Not a control -- `bash` reads the same
+      // file -- so it is opt-out rather than a refusal (docs/15).
+      if (looksLikeEnvFile(path) && input.values !== true) {
+        const whole = await box.readFile(path);
+        return {
+          text: describeEnvShape(whole.path, envShape(whole.content)),
+        };
+      }
+      const result = await box.readFile(path, {
         startLine: input.start_line ? Number(input.start_line) : undefined,
         endLine: input.end_line ? Number(input.end_line) : undefined,
       });

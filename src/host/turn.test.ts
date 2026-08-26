@@ -19,7 +19,13 @@ import { AgentRegistry } from "../agents/registry.ts";
 import { AgentBus } from "../agents/bus.ts";
 import type { BoxClient } from "../box/client.ts";
 import { DisplayLease } from "../box/display-lease.ts";
-import { isTruncatedByContext, runTurn, TurnAborted, type TranscriptEntry } from "./turn.ts";
+import {
+  isTruncatedByContext,
+  runTurn,
+  storableResult,
+  TurnAborted,
+  type TranscriptEntry,
+} from "./turn.ts";
 import {
   compactionUrgency,
   DEFAULT_POLICY,
@@ -2292,4 +2298,27 @@ test("the transcript records when a tool batch started and when its results were
   } finally {
     cleanup();
   }
+});
+
+test("output from a command given a credential is not kept in the transcript", () => {
+  // The one place the harness *knows* a result may hold a secret, because the caller named
+  // the secrets it wanted (docs/15). Not containment from the model, which nothing
+  // achieves -- containment from the record, which is what R7 is about.
+  const shown = "ghp_realtokenvalue0123456789\n\nexit code: 0";
+  const block: Anthropic.ToolResultBlockParam = {
+    type: "tool_result",
+    tool_use_id: "call-1",
+    content: [{ type: "text", text: shown }],
+  };
+  const record = "$ gh auth status\n\nran on the host with GITHUB_TOKEN in its environment.";
+
+  const stored = storableResult(block, record);
+  const text = (stored.content as Anthropic.TextBlockParam[])[0]!.text;
+  assert.equal(text, record);
+  assert.ok(!text.includes("ghp_realtokenvalue0123456789"), "the value must not be stored");
+  assert.equal(stored.tool_use_id, "call-1", "the record still ties to the call it answers");
+
+  // And without a substitute, nothing changes: every other tool stores what it showed.
+  const plain = storableResult(block);
+  assert.match((plain.content as Anthropic.TextBlockParam[])[0]!.text, /ghp_realtokenvalue/);
 });

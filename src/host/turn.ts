@@ -496,8 +496,23 @@ const REPLAYED_RESULT_LIMIT = DURABLE_RESULT_CHARS;
  * it was told.
  */
 export function storableResult(
-  block: Anthropic.ToolResultBlockParam
+  block: Anthropic.ToolResultBlockParam,
+  /**
+   * What to store instead, when a tool said the record and the model must see different
+   * things. Only `RunOnHost` with vault secrets does — see `ToolOutcome.recordAs`.
+   */
+  recordAs?: string
 ): Anthropic.ToolResultBlockParam {
+  if (recordAs !== undefined) {
+    // Not truncated and not scanned for a spill pointer: this text was written to be
+    // stored, and it is already short.
+    return {
+      type: "tool_result",
+      tool_use_id: block.tool_use_id,
+      content: [{ type: "text", text: recordAs }],
+      ...(block.is_error === true ? { is_error: true } : {}),
+    };
+  }
   const content = Array.isArray(block.content) ? block.content : [];
   const texts = content
     .filter((part): part is Anthropic.TextBlockParam => part.type === "text")
@@ -1534,6 +1549,8 @@ export async function runTurn(
     // any reading of the transcript.
     const requestedAt = new Date().toISOString();
     const results: Anthropic.ToolResultBlockParam[] = [];
+    /** Tool-use ids whose stored text differs from what the model was shown. */
+    const withheld = new Map<string, string>();
     for (const toolUse of toolUses) {
       emit({
         type: "tool_start",
@@ -1587,6 +1604,10 @@ export async function runTurn(
       });
 
       results.push(toolResultBlock(toolUse.id, outcome));
+      // Kept beside the result rather than inside it: what the API is sent and what the
+      // record keeps are two different things, and the block that goes to the model must
+      // not carry the substitute anywhere it could be mistaken for the answer.
+      if (outcome.recordAs !== undefined) withheld.set(toolUse.id, outcome.recordAs);
     }
 
     // Persist the exchange as blocks, in the order the API requires: the calling
@@ -1604,7 +1625,7 @@ export async function runTurn(
     registry.appendTranscript(agent.id, {
       role: "user",
       kind: "results",
-      blocks: results.map(storableResult),
+      blocks: results.map(block => storableResult(block, withheld.get(block.tool_use_id))),
       at: new Date().toISOString(),
     } satisfies TranscriptEntry, conversation);
 

@@ -9,6 +9,7 @@ import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { homedir, tmpdir } from "node:os";
 import {
+  BACKUP_CARRIES,
   BoxManager,
   defaultBoxConfig,
   loadBoxToken,
@@ -115,6 +116,7 @@ async function cmdBoxUp(argv: string[]): Promise<number> {
       out(dim(`Backing up volumes to ${destination} …`));
       try {
         for (const file of await manager.backupVolumes(destination)) out(dim(`  ${file}`));
+        out(dim(`  ${BACKUP_CARRIES}`));
       } catch (error) {
         // A failed backup stops the upgrade. The whole point of taking it here is that
         // the next step is the irreversible one.
