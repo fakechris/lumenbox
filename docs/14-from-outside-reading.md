@@ -643,3 +643,99 @@ alongside the conclusion** — contains the same idea as
 different problem. Two independent arrivals at *attach the evidence to the belief* is the
 strongest signal in this document so far, and it is one mechanism serving both: stale
 knowledge and propagated error are the same failure seen at different times.
+
+---
+
+## Two performance articles, and why neither number is ours
+
+Sources: *Inside Kimi K3's AgentENV: Can It Really Fork in 100 ms* (2026-08-03) and *How I
+Got Computer-Use Clicks to under 10 ms on Modal* (2026-07-31).
+
+### The measurement-boundary lesson
+
+AgentENV advertises snapshot-backed boot or resume under 50 ms and incremental snapshots
+under 100 ms. The author measured the boundary a *user* experiences — pause source,
+capture VM and memory state, publish layers, resume source, create child, first successful
+command — and got:
+
+```
+first-use latency ≈ 381.6 ms + 0.6728 ms × dirty MiB     (R² = 0.996)
+```
+
+360 ms at zero dirty memory, 1.75 s at 2 GiB. Then the fair conclusion, which is the
+reason to record this at all:
+
+> This does not contradict AgentENV's narrower under-100-millisecond claim. **The
+> boundaries answer different questions.**
+
+Not a debunking — a discipline. Every performance number in our own comments should name
+the boundary it measured, because the one a person feels is almost never the one that was
+easy to instrument.
+
+### Measuring ourselves, and getting the opposite answer
+
+The Modal article is directly about our X11 path. Its central finding is that per-action
+process spawning dominates: `xdotool` wraps three XTest calls in an entire process
+lifetime — fork, load the binary and its shared libraries, open a display connection,
+close it — and a move-plus-click went **146 ms → 1.2 ms** by holding one display
+connection open for the daemon's lifetime. Screenshots had the same shape: a capture
+program, a temp PNG, a reopen, versus an XShm session held open and encoded in memory.
+
+`x11-executor.ts` does exactly what it describes: it builds a `parts` array and spawns one
+`xdotool` per action, and captures via `ffmpeg` to a temp file which it then reads and
+unlinks. So the fix should be worth ~145 ms per action.
+
+Measured in the running box, it is not:
+
+| | measured |
+|---|---|
+| `xdotool mousemove --sync` | **19 ms** |
+| `xdotool mousemove` (no sync) | 17 ms |
+| second `--sync` to the same position | 46 ms |
+
+**About 19 ms per invocation, not 146**, which caps the whole optimisation at roughly
+19 ms per action here — real over a fifty-turn loop, and nowhere near a reason to hold a
+persistent X11 connection. Two things account for the gap: their number is a move *plus* a
+click with more per-action work, and their measurement includes surrounding transport we
+do not pay the same way. The advice is sound and the magnitude is not transferable, which
+is the section above arriving from the other side.
+
+*Boundary, stated as required:* single `docker exec` into the running box against
+`DISPLAY=:1`, wall time around one `xdotool` invocation, three samples. It excludes our
+daemon's own dispatch and the host round trip, so it is a floor on the process cost and
+not a figure for what a tool call costs.
+
+One thing we already get for free and should not lose: **we batch.** A click with
+modifiers is `keydown … mousemove … click … keyup` in *one* `xdotool` invocation — one
+process rather than five, and atomic because a single process is.
+
+### The hazard attached to the optimisation, recorded before attempting it
+
+If we ever do hold a persistent connection, the article names two failures that appear
+only *after* the optimisation:
+
+1. **The free flush disappears.** A process cannot exit without closing its display
+   connection, and closing it flushes whatever Xlib has buffered — so waiting for
+   `xdotool` to exit is also waiting for the events to land. A daemon holding the
+   connection open never closes it, and without an explicit sync it can **report a click
+   that never reached the screen.** Precisely the silent-success failure this document
+   keeps finding, except here it would be *introduced* by a performance fix.
+2. **Shared input state across concurrent requests.** One request sends Ctrl+L, another
+   starts typing; if a `w` lands before Ctrl is released, the browser reads Ctrl+W and
+   closes the tab. Their fix is an input lock held from the first press to the final
+   release, and the same for drags.
+
+We are protected from the second by accident of design — `DisplayLease` gives one holder
+per display, so actions on a screen are already serialised — and from the first by using
+short-lived processes. Both protections are properties of the thing the optimisation would
+remove.
+
+### On forking the box
+
+AgentENV forks a *running sandbox* into independent children: microVM snapshots, dirty
+page tracking, copy-on-write layers. We do not have that and, on the scaffolding test,
+should not chase it. It exists to serve post-training and evaluation, where thousands of
+short-lived environments branch from a prepared template. Our box is one long-lived
+container per installation with a work volume that survives rebuilds — a workstation, not
+a rollout. The two designs optimise opposite things, and the only reason to revisit is if
+*branch my whole computer and try both* ever becomes something a person asks for.
