@@ -10,8 +10,9 @@ The system today has the framework's five organization objects (conversations, p
 tasks, credentials, workers), a hardened turn engine, and — as of the 2026-08 run — the
 reference toolset is complete: web fetch and search, a semantic browser, background shell
 jobs, an edit tool, and a way for an agent to ask a question. What remains is a last mile
-of usability, the unfinished half of the honesty surfaces, one large security item that
-the browser work has made *larger*, and the structural growth into multi-person use.
+of usability, the honesty surfaces (now finished — R18, R22, R23), one large security item
+that turned out to be two (R7 keeps at-rest hygiene, R4 inherits containment), and the
+structural growth into multi-person use.
 
 **R22–R30 were added on 2026-08-26** from the outside-reading pass in
 [docs/14](14-from-outside-reading.md). The same day, three mechanisms were added to
