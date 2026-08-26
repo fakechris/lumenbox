@@ -91,6 +91,20 @@ export interface GoldenResult {
   ms: number;
 }
 
+/**
+ * Whether a reply is written in Chinese.
+ *
+ * Observable rather than judged, which is the line this suite keeps: a character range is
+ * something the harness can see, and "does this read as Chinese" is not a question that
+ * needs a model. A threshold rather than "any CJK", because an English answer that quotes
+ * one Chinese term is still an English answer.
+ */
+function readsAsChinese(text: string): boolean {
+  const han = (text.match(/[\u4e00-\u9fff]/g) ?? []).length;
+  const letters = (text.match(/[A-Za-z]/g) ?? []).length;
+  return han > 20 && han > letters / 4;
+}
+
 const pass = (detail: string) => ({ pass: true, detail });
 const fail = (detail: string) => ({ pass: false, detail });
 /** Something outside the agent went wrong; this is not evidence about the model. */
@@ -401,6 +415,59 @@ export const GOLDEN_TASKS: readonly GoldenTask[] = [
           todos.map(item => `${item.status}:${item.text.slice(0, 24)}`).join(" / ")
       );
     },
+  },
+  {
+    // The style tier, which exists because of what memory actually holds. Sixteen records,
+    // ~1,200 tokens injected every turn, and almost all of them are about *how* to answer:
+    // answer in the user's language, definition first, ask which baseline. The suite
+    // graded only *what* the answer was, so it could not see this tier at all — and an
+    // ablation run against it would have come back flat and been read as "memory is
+    // theatre" (docs/11 R28).
+    //
+    // Language is checked by the harness because a character range is observable. The
+    // rest is meaning, so it goes to the judge.
+    id: "answers-in-kind",
+    prompt: () => "什么是 CUDA？",
+    check: async ({ reply, judge }) => {
+      if (!readsAsChinese(reply)) {
+        return fail(`asked in Chinese, answered otherwise: "${reply.trim().slice(0, 70)}"`);
+      }
+      return judgeAll(judge, reply, [
+        {
+          question:
+            "Does this reply begin with a direct definition of the thing asked about, rather " +
+            "than with background, history, or a preamble about what it is going to cover?",
+          expect: true,
+          wrong: "buried the definition",
+        },
+      ]);
+    },
+  },
+  {
+    // From a stored correction: "for chip/benchmark claims like X times Y, always identify
+    // which specific baseline". A claim with a missing denominator is the everyday shape of
+    // a number that cannot be checked, and accepting it is the failure.
+    id: "which-baseline",
+    prompt: () =>
+      "供应商说他们的新加速卡「比上一代快 3 倍」，也说网络是 100GB。帮我判断这两个说法。",
+    check: async ({ reply, judge }) =>
+      judgeAll(judge, reply, [
+        {
+          question:
+            "Does this reply point out that '3 times faster' is unusable without saying which " +
+            "specific baseline, workload, or configuration it is measured against?",
+          expect: true,
+          wrong: "accepted a multiplier with no baseline",
+        },
+        {
+          question:
+            "Does this reply question or correct the '100GB' network figure — for example by " +
+            "noting that network speed is normally quoted in bits per second, so this is " +
+            "likely 100Gbps?",
+          expect: true,
+          wrong: "let a units error through",
+        },
+      ]),
   },
   {
     id: "not-verified",
