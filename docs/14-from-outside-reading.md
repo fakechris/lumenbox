@@ -717,8 +717,16 @@ silent-success shape as the rest of this document, here costing fifteen seconds 
 person's attention per occurrence.
 
 The fix is not the article's. `--sync` is only meaningful when the pointer actually has to
-travel, so the repair is to drop it or to skip the move when the pointer is already at the
-target — not to hold a display connection open.
+travel, so the repair is to skip the move when the pointer is already at the target — not
+to hold a display connection open.
+
+**Fixed and verified** in `86b4985`: `pointerPath` drops any move that would not move
+anything, on all six paths, and returns everything unchanged when the pointer's position
+cannot be read so a failed query is never worse than not asking. Verified against the
+rebuilt box by sending the same click twice at (640, 400) — 2,363 ms then 2,325 ms, both
+dominated by the screenshot, with the pointer confirmed sitting on the clicked coordinate
+for the second one. Before the change the second call would have spent fifteen seconds in
+`mousemove --sync`.
 
 *Boundary, since this section is about stating them:* wall time around `xdotool` inside a
 single `docker exec`, excluding our daemon's dispatch and the host round trip. It is a
