@@ -54,3 +54,39 @@ test("the ids this has already caught are present", () => {
     assert.ok(definedIds.has(id), `${id} is missing from the settings dialog`);
   }
 });
+
+test("a round's calls are nested inside it, not laid beside it", () => {
+  // The trace is rounds: the agent says what it is about to do, then does it. Rendering
+  // those as siblings threw the structure away — six fetches with nothing to say they
+  // belonged to the sentence above them — and folding one row did not fold its calls,
+  // which is not what folding a node in a tree means.
+  //
+  // A browser cannot run here, so what this pins is the contract the two paths share:
+  // rows are appended to the open round rather than to the chat, and a round has a place
+  // to put them.
+  assert.match(
+    APP_HTML,
+    /function stepHost\(\)\s*\{\s*return openStep && openStep\.isConnected \? openStep\.querySelector\("\.kids"\)/,
+    "rows must target the open round, falling back to the chat only when none is open"
+  );
+  assert.match(APP_HTML, /var el = stepHost\(\);/, "collapsedRow must append into the round");
+  assert.match(APP_HTML, /class="kids"/, "a round needs a container for its children");
+  // The indent and the guide are what make the nesting visible rather than implied.
+  assert.match(APP_HTML, /details\.step > \.kids \{ padding: [^}]*18px/, "children are indented");
+  assert.match(APP_HTML, /details\.step \{[^}]*border-left/, "the guide line hangs off the parent");
+});
+
+test("the answer is not a node in the tree", () => {
+  // Nesting the answer would bury the thing the rounds were for. Both paths close the
+  // round before rendering prose that no call follows.
+  assert.match(APP_HTML, /endStep\(\);\s*\n\s*bubble\(entry\.role/, "replay closes before the answer");
+  assert.match(APP_HTML, /function endStep\(\) \{\s*openStep = null;/, "closing is explicit");
+});
+
+test("no backtick reaches the page script", () => {
+  // Three separate edits have terminated this template literal by writing a backtick in
+  // a comment, twice in CSS and once in prose. It compiles into gibberish or fails to
+  // compile, and neither failure names the cause.
+  const script = APP_HTML.slice(APP_HTML.indexOf("<script"));
+  assert.ok(!script.includes("`"), "a backtick in the page script ends the template early");
+});

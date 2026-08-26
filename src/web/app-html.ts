@@ -313,40 +313,42 @@ export const APP_HTML = String.raw`<!doctype html>
     background: var(--surface-2); border: 1px solid var(--border);
     border-radius: var(--radius-card); padding: 12px 15px;
   }
-  /* An agent's running commentary, told apart from its answer — and foldable.
-     Two complaints drove this: the difference was too slight to read at a glance, and a
-     long piece of research had no way to be put away. So narration is now visibly a
-     different *kind* of thing rather than the same thing in a lighter grey — indented off
-     the answer's column, on a tinted panel, in small sans — and every block of it is a
-     panel the reader can shut. The answer keeps the serif at full size and stays
-     where it always was, so the eye finds it by scanning one column. */
-  .msg.aside { padding: 0; margin: 2px 0 2px 14px; }
-  .msg.aside > .who { display: none; }
-  details.think {
-    border: 1px solid var(--border); border-left: 3px solid var(--border-strong);
-    border-radius: var(--radius-input); background: var(--surface-2);
-    max-width: 660px; overflow: hidden;
+  /* The trace as a tree.
+     A round is a node: what the agent said it was about to do, with the calls it made
+     nested under it. The nesting is drawn, not implied — children are indented and hang
+     off a guide line, so six fetches visibly belong to the sentence above them. Folding
+     the node takes its children with it, which is what folding means in a tree and is
+     what the previous version failed to do. The answer is not a node: no indent, no
+     rule, full serif, so one scan down the left edge finds it. */
+  details.step {
+    margin: 3px 0; border-left: 2px solid var(--border); padding-left: 0;
+    max-width: 700px;
   }
-  details.think > summary {
-    cursor: pointer; list-style: none; padding: 5px 10px;
-    font-family: var(--font-sans); font-size: 11px; letter-spacing: 0.04em;
-    color: var(--muted); user-select: none;
+  details.step > summary {
+    cursor: pointer; list-style: none; padding: 3px 0 3px 10px; margin-left: -2px;
+    border-left: 2px solid transparent;
+    font-family: var(--font-sans); font-size: 12px; line-height: 1.45;
+    color: var(--text-soft); user-select: none;
   }
-  details.think > summary::-webkit-details-marker { display: none; }
-  details.think > summary::before { content: "\\25b8"; margin-right: 7px; opacity: 0.7; }
-  details.think[open] > summary::before { content: "\\25be"; }
-  details.think > summary:hover { background: var(--surface-hover); color: var(--text-soft); }
-  .msg.aside .body {
+  details.step > summary::-webkit-details-marker { display: none; }
+  details.step > summary::before {
+    content: "\\25b8"; display: inline-block; width: 11px;
+    color: var(--muted); font-size: 9px;
+  }
+  details.step[open] > summary::before { content: "\\25be"; }
+  details.step > summary:hover { color: var(--text); border-left-color: var(--accent); }
+  details.step > summary .lbl { font-weight: 500; }
+  /* The children. The left padding is the indent; the parent's border is the guide. */
+  details.step > .kids { padding: 1px 0 3px 18px; }
+  /* Whatever the agent said beyond the one line in the summary. */
+  details.step .saidfull {
     font-family: var(--font-sans); font-size: 0.82rem; line-height: 1.5;
-    color: var(--muted); max-width: none; padding: 0 11px 9px;
+    color: var(--muted); margin: 0 0 5px;
   }
-  .msg.aside .body h1, .msg.aside .body h2, .msg.aside .body h3,
-  .msg.aside .body h4, .msg.aside .body h5, .msg.aside .body h6 {
-    font-size: 0.82rem; font-weight: 600; color: var(--muted); margin: 6px 0 3px;
-  }
-  .msg.aside .body p { margin: 0 0 4px; }
-  /* One control for the whole conversation, because a reader who wants the answer wants
-     it without shutting fifteen panels by hand. */
+  details.step .saidfull p { margin: 0 0 4px; }
+  /* Tool rows inside a round are quieter than they are on their own, because the round
+     already says what this group of them was for. */
+  details.step details.tool { font-size: 11.5px; }
   #foldall {
     font-size: 11px; letter-spacing: 0.04em; color: var(--muted);
     cursor: pointer; text-decoration: none; flex: none;
@@ -1616,26 +1618,55 @@ function renderAgents() {
   }
 }
 
+/* ── the trace as a tree ───────────────────────────────────────────────────────
+   A turn is rounds: the model says what it is about to do, then does it. That is a
+   parent and its children, and rendering them as siblings — which is what this did —
+   throws the structure away and leaves a flat wall in which nothing indicates that six
+   fetches belong to the sentence above them.
+   So a round is one details element. Its summary is what the model said it was doing; its
+   children are the calls it made. Folding it folds the calls with it, which is what
+   folding a node in a tree means. The final answer is not a round: it is the thing the
+   rounds were for, and it stays unindented in the serif so one scan of the left edge
+   finds it. */
+
+/** The element new steps are appended to: the open round, or the chat when none is. */
+var openStep = null;
+
+function stepHost() {
+  return openStep && openStep.isConnected ? openStep.querySelector(".kids") : $("chat");
+}
+
 /**
- * Turns a message into a foldable step.
+ * Opens a round whose summary is what the agent said it was about to do.
  *
- * Called from both the live stream and the replay so the two render identically — the
- * previous version styled them in two places and they were already drifting apart in
- * padding. The summary says what the step was, so a folded conversation still reads as a
- * sequence of actions rather than a row of identical grey boxes.
+ * Called when narration is followed by tool calls — the point at which that sentence is
+ * revealed to have been a heading rather than an answer.
  */
-function foldAside(body, summary) {
-  var msg = body.parentNode;
-  if (!msg || msg.querySelector("details.think")) return;
-  msg.classList.add("aside");
-  var wrap = document.createElement("details");
-  wrap.className = "think";
-  wrap.open = !folded;
-  var head = document.createElement("summary");
-  head.textContent = summary || firstLineOf(body.textContent) || "step";
-  wrap.appendChild(head);
-  msg.insertBefore(wrap, body);
-  wrap.appendChild(body);
+function beginStep(text) {
+  var chat = $("chat");
+  var stick = nearBottom(chat);
+  var step = document.createElement("details");
+  step.className = "step";
+  step.open = !folded;
+  step.innerHTML =
+    "<summary><span class=\"lbl\"></span></summary>" +
+    '<div class="kids"></div>';
+  step.querySelector(".lbl").textContent = firstLineOf(text) || "working";
+  if (text && firstLineOf(text) !== String(text).trim()) {
+    var full = document.createElement("div");
+    full.className = "saidfull";
+    full.innerHTML = renderMarkdown(text);
+    step.querySelector(".kids").appendChild(full);
+  }
+  chat.appendChild(step);
+  openStep = step;
+  if (stick) chat.scrollTop = chat.scrollHeight;
+  return step;
+}
+
+/** Closes the current round, so what follows is not filed under it. */
+function endStep() {
+  openStep = null;
 }
 
 /** The first sentence or line, clamped — enough to know what a folded step was. */
@@ -1682,15 +1713,15 @@ function toolDetail(tool, input) {
 }
 
 function collapsedRow(cls, summaryHtml, detail) {
-  var el = $("chat");
-  var stick = nearBottom(el);
+  var el = stepHost();
+  var stick = nearBottom($("chat"));
   var row = document.createElement("details");
   row.className = "tool " + (cls || "");
   row.innerHTML = "<summary>" + summaryHtml + '</summary><div class="det"></div>';
   // textContent, not innerHTML: this is output from a command or another agent.
   row.querySelector(".det").textContent = String(detail == null ? "" : detail);
   el.appendChild(row);
-  if (stick) el.scrollTop = el.scrollHeight;
+  if (stick) $("chat").scrollTop = $("chat").scrollHeight;
   return row;
 }
 
@@ -1772,15 +1803,23 @@ function replayEntry(id, entry) {
     return;
   }
   if (entry.kind === "tools") {
+    // The transcript emits a round's prose immediately before its calls, so the pairing
+    // needs no guessing — if no round was opened by that prose, this round had none.
+    if (!openStep) beginStep("");
     for (var t = 0; t < entry.tools.length; t++) {
       var call = entry.tools[t];
       toolCall(call.name, call.detail, call.result, call.isError);
     }
+    endStep();
     return;
   }
-  var body = bubble(entry.role === "user" ? "user" : "", entry.role === "user" ? "you" : nameOf(id), entry.text);
-  // Narration on reload reads the way it read live, through the same helper.
-  if (entry.aside) foldAside(body);
+  // Narration opens the round its calls will be filed under; anything else is a message.
+  if (entry.aside) {
+    beginStep(entry.text);
+    return;
+  }
+  endStep();
+  bubble(entry.role === "user" ? "user" : "", entry.role === "user" ? "you" : nameOf(id), entry.text);
 }
 
 function agentById(id) {
@@ -1907,7 +1946,7 @@ $("foldall").onclick = function (event) {
   folded = !folded;
   // Applies to what is on screen and to what arrives next, because a reader who folded
   // the steps away did not mean "until the agent says something else".
-  var panels = document.querySelectorAll("details.think");
+  var panels = document.querySelectorAll("details.step");
   for (var i = 0; i < panels.length; i++) panels[i].open = !folded;
   $("foldall").textContent = folded ? "unfold steps" : "fold steps";
 };
@@ -2656,12 +2695,16 @@ stream.onmessage = function (raw) {
   if (line) feed(line.html, line.cls);
 
   if (e.type === "prompt") {
+    endStep();
     if (inView(e)) bubble("user", "you", e.text);
     return;
   }
 
   if (e.type === "text") {
     if (!inView(e)) return;
+    // Prose arriving with no round open is the answer, and prose after a round has run is
+    // the answer too — either way it belongs outside the tree.
+    endStep();
     var open = live.get(e.agentId);
     if (!open) {
       open = { node: bubble("", e.agentName, ""), text: "", queued: false };
@@ -2691,8 +2734,18 @@ stream.onmessage = function (raw) {
     // Text followed by a tool call is narration, not the answer — the same distinction
     // turn.ts already makes when it decides whether a round is final. Marking it here is
     // what lets the two read differently: the process de-emphasised, the answer not.
+    // The sentence that was streaming is revealed to have been a heading: the calls that
+    // follow belong under it. Opening the round here rather than at text time is what
+    // makes a final answer — text with no calls after it — stay out of the tree.
     var narrating = live.get(e.agentId);
-    if (narrating && narrating.node) foldAside(narrating.node);
+    if (narrating && narrating.node) {
+      var said = narrating.text;
+      var block = narrating.node.parentNode;
+      if (block && block.parentNode) block.parentNode.removeChild(block);
+      beginStep(said);
+    } else if (!openStep) {
+      beginStep("");
+    }
     live.delete(e.agentId);
     // Held so the result can be folded into the same row when it arrives.
     if (inView(e)) {
