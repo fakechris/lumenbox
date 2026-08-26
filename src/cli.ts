@@ -1179,6 +1179,10 @@ async function main(): Promise<number> {
         let attempted = 0;
         const spendBefore = orchestrator.usage.totalsSince(0);
         for (const task of GOLDEN_TASKS) {
+          // `--only=id,id` narrows the run: the ordinary need after editing one task is
+          // to re-run that task, not to pay for seventeen others to find out.
+          const only = rest.find(argument => argument.startsWith("--only="))?.slice(7);
+          if (only !== undefined && !only.split(",").includes(task.id)) continue;
           if (task.needsBox === true && !boxReady) {
             out(`  · ${task.id.padEnd(12)} ${dim("needs a box (--box)")}`);
             continue;
