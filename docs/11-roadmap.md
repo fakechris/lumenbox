@@ -300,11 +300,14 @@ learned inside a project stays with it, is injected for whoever works there, and
 dies with it — the Scope object already exists as that boundary, so this is memory's
 third growth rather than a new subsystem. Medium.
 
-### R18. Finish the honest box — one of three done
-The version field is now compared (`BOXD_PROTOCOL`), and a box behind its host is refused
-by name. Two half-truths remain: uploads can still land half-written (no `.part` + rename),
-and failures still arrive as one undifferentiated result when refused / timed-out / crashed
-each have a different remedy. Small each.
+### ~~R18. Finish the honest box~~ — shipped, all three
+The version handshake (`BOXD_PROTOCOL`) landed with the upgrade work; the last two thirds
+landed 08-26 (`ccb0875`). Uploads write to a `.part` name and take the final name in one
+atomic rename — through an in-tree symlink the write goes to the resolved target, where
+the direct write went. And a failed box call now says which of four situations it is,
+with the remedy in the message because the reader is usually a model: refused (4xx) will
+be refused again unchanged; crashed (5xx) and timeout mean the effect is unknown, check
+before redoing; unreachable means nothing was delivered and retry is safe.
 
 ---
 
@@ -413,9 +416,7 @@ one of them makes the *next* problem findable.
    runtime, and all three were found by accident. One startup check ends the class.
 3. ~~**R1, the composer.**~~ Shipped — see the entry. Its second half also landed the
    first slice of R25 (the explicit conversation record), which shrinks that item.
-4. **R18's remaining two thirds.** Atomic uploads and differentiated failures — the
-   difference between a box that reports what happened and one that reports that something
-   happened.
+4. ~~**R18's remaining two thirds.**~~ Shipped (`ccb0875`).
 5. **R28's cheapest third.** The failure modes in docs/14 as eval cases. The suite passed
    the Seltz refusal by luck and has no way to keep it.
 6. **R19, the exec marker.** Host housekeeping walks the agent's audit surface, so the log
