@@ -785,6 +785,20 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
     // The chat's outbox on the box: list, download, and — once pushed — move to
     // sent/, so nothing is delivered twice and nothing undelivered is lost. A chat
     // that never used files has no directory, and that is the cheap ordinary case.
+    // For a reply that named a deliverable instead of sending it. Confined to the work
+    // directory by the box's own upload/download guard, and refused above 25MB the same
+    // way the outbox is.
+    readBoxFile: async path => {
+      const client = orchestrator.boxClient();
+      if (client === undefined) return undefined;
+      try {
+        const file = await client.downloadFile(path);
+        const name = path.split("/").pop() ?? "file";
+        return { name, base64: file.base64 };
+      } catch {
+        return undefined;
+      }
+    },
     collectOutbox: async chatKey => {
       const client = orchestrator.boxClient();
       if (client === undefined) return [];

@@ -26,6 +26,7 @@
 
 import type { Ingress } from "./ingress.ts";
 import { channelHealth, type ChannelHealth } from "./liveness.ts";
+import { boxPathsNamed, undelivered } from "../host/named-files.ts";
 
 export interface InboundMessage {
   /** `telegram:123` — stable, and what the allow list matches. Who is *speaking*. */
@@ -338,6 +339,11 @@ export interface ChannelManagerDeps {
    * ordinary case and costs one directory listing.
    */
   collectOutbox?: (chatKey: string) => Promise<{ name: string; base64: string }[]>;
+  /**
+   * Reads one file out of the box by absolute path, for a reply that named a deliverable
+   * instead of handing it over. Undefined when there is no box to read from.
+   */
+  readBoxFile?: (path: string) => Promise<{ name: string; base64: string } | undefined>;
   /**
    * Marks collected files delivered — moved to sent/ — after their pushes succeeded.
    * Only what was actually pushed: a file whose push failed stays in the outbox and
@@ -1041,6 +1047,30 @@ ${input.options.map(option => `· ${option}`).join("\n")}`
           }
           if (delivered.length > 0) {
             await this.deps.outboxDelivered?.(message.threadKey ?? chatKey, delivered);
+          }
+
+          // A file the reply *names* but never handed over. An agent wrote its research
+          // to a path under the work directory and said "the full version is at «path»",
+          // which is a real file in the box and an unopenable string to the person
+          // reading it in a chat — they had to ask for it again. The outbox convention is
+          // in the prompt and was not followed, and whether it was is a path comparison
+          // rather than a judgement, so the harness checks rather than asks harder.
+          const named = undelivered(boxPathsNamed(reply), delivered);
+          for (const path of named.slice(0, 3)) {
+            const file = await this.deps.readBoxFile?.(path).catch(() => undefined);
+            if (file === undefined) continue;
+            try {
+              const isImage = /\.(png|jpe?g|webp|gif|bmp)$/i.test(file.name);
+              if (isImage && adapter.sendImage !== undefined) {
+                await adapter.sendImage(chatKey, file.base64, anchor);
+              } else if (adapter.sendFile !== undefined) {
+                await adapter.sendFile(chatKey, file.name, file.base64, anchor);
+              } else continue;
+              this.deps.log(`channel ${adapter.name}: sent ${file.name}, which the reply only named`);
+            } catch (error) {
+              const detail = error instanceof Error ? error.message : String(error);
+              this.deps.log(`channel ${adapter.name}: could not send named file ${path} (${detail})`);
+            }
           }
         } catch (error) {
           const detail = error instanceof Error ? error.message : String(error);

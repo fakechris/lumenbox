@@ -163,6 +163,24 @@ function isContentRefusal(error: unknown): boolean {
   return /content|format|invalid|incorrect/i.test(detail);
 }
 
+/**
+ * A chatKey split into the room and, when the key names one, the topic thread in it.
+ *
+ * `feishu:{chatId}` addresses the room; `feishu:{chatId}:{rootId}` addresses one topic
+ * inside it — the shape `conversationKeyFor` mints. Every outbound path needs both halves
+ * and each used to parse the key itself, which is how `sendFile` and `sendImage` were
+ * left behind when the thread-scoped form arrived: they kept treating the whole thing as
+ * a chat id, so a file answering a message in a topic was uploaded and then posted to a
+ * chat id that does not exist. The reporter noticed it as "it used to send the file
+ * itself, now it just tells me the path".
+ *
+ * One parser, so there is no next one to forget.
+ */
+export function splitChatKey(chatKey: string): { chatId: string; rootId?: string } {
+  const [chatId = "", rootId] = chatKey.replace(/^feishu:/, "").split(":");
+  return rootId === undefined || rootId === "" ? { chatId } : { chatId, rootId };
+}
+
 export class FeishuChannel implements ChannelAdapter {
   readonly name = "feishu";
   // Typed loosely because the SDK is a lazy import; the surface used is tiny.
@@ -833,7 +851,7 @@ export class FeishuChannel implements ChannelAdapter {
     // key rides as a reply to the root, so it lands where the topic's readers are
     // rather than at the bottom of the room. An explicit replyTo still wins: it is a
     // more precise anchor inside the same thread.
-    const [chatId = "", rootId] = chatKey.replace(/^feishu:/, "").split(":");
+    const { chatId, rootId } = splitChatKey(chatKey);
     if (chatId === "") return;
     const anchor = options?.replyTo ?? rootId;
     // Markdown or plain is decided once for the whole message: per-chunk decisions
@@ -863,7 +881,7 @@ export class FeishuChannel implements ChannelAdapter {
     options?: PushOptions
   ): Promise<string | undefined> {
     // Same key shapes as sendToChat: a card for a topic thread anchors to its root.
-    const [chatId = "", rootId] = chatKey.replace(/^feishu:/, "").split(":");
+    const { chatId, rootId } = splitChatKey(chatKey);
     if (chatId === "") return undefined;
     return this.post(
       chatId,
@@ -942,7 +960,7 @@ export class FeishuChannel implements ChannelAdapter {
     base64: string,
     options?: PushOptions
   ): Promise<void> {
-    const chatId = chatKey.replace(/^feishu:/, "");
+    const { chatId, rootId } = splitChatKey(chatKey);
     if (chatId === "" || this.apiClient === undefined) return;
     const extension = name.toLowerCase().split(".").pop() ?? "";
     const fileType = ["pdf", "doc", "docx", "xls", "xlsx", "ppt", "pptx", "mp4", "opus"].includes(
@@ -961,18 +979,18 @@ export class FeishuChannel implements ChannelAdapter {
     });
     const fileKey = uploaded?.file_key ?? uploaded?.data?.file_key;
     if (fileKey === undefined) throw new Error("feishu file upload returned no key");
-    await this.post(chatId, "file", JSON.stringify({ file_key: fileKey }), options?.replyTo);
+    await this.post(chatId, "file", JSON.stringify({ file_key: fileKey }), options?.replyTo ?? rootId);
   }
 
   /** Upload, then reference: Feishu takes bytes first and a key in the message. */
   async sendImage(chatKey: string, base64: string, options?: PushOptions): Promise<void> {
-    const chatId = chatKey.replace(/^feishu:/, "");
+    const { chatId, rootId } = splitChatKey(chatKey);
     if (chatId === "" || this.apiClient === undefined) return;
     const uploaded = await this.apiClient.im.image.create({
       data: { image_type: "message", image: Buffer.from(base64, "base64") },
     });
     const imageKey = uploaded?.image_key ?? uploaded?.data?.image_key;
     if (imageKey === undefined) throw new Error("feishu image upload returned no key");
-    await this.post(chatId, "image", JSON.stringify({ image_key: imageKey }), options?.replyTo);
+    await this.post(chatId, "image", JSON.stringify({ image_key: imageKey }), options?.replyTo ?? rootId);
   }
 }
