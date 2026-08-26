@@ -1033,3 +1033,54 @@ saying neither. Those six now do: **17/31 and 27/31, none silent on both** (`ae2
 Third first-pass measurement in this document to be wrong and caught by checking it. Worth
 the pattern being noted rather than each instance apologised for: a number that has not
 survived one deliberate attempt to break it is not yet a finding.
+
+---
+
+## The pattern this document kept finding, stated once
+
+Seven instances now, all the same shape and all found by accident until the last two:
+
+> **A capability reports success once and never reports its own failure.**
+
+| what | how it was found |
+|---|---|
+| `WebSearch` needs a key nobody set | an agent walked into a captcha and guessed Apple KB numbers |
+| `AGENTBOX_RELAY_URL` is read and never set | a comment claimed metering that could not happen |
+| starter skills seed only into an empty directory | a count came up one short |
+| nothing logged `exec` at all | looking for who ran a command and finding no line |
+| `golden` never applied the config environment | a research task behaved as if it had no search |
+| **a channel that stops listening** | `lsof` showed zero sockets ninety minutes after "connected" |
+| **`sendFile` never learned the thread-scoped key** | a person said "it used to send the file itself" |
+
+The last two are worth separating from the rest, because they are the only ones a **user**
+noticed rather than an audit. Both cost somebody a message they had to send twice.
+
+### What the shape actually is
+
+Not "we forgot to log". Every one of these announces itself correctly at the moment it
+starts working, and none of them has any way to say that it stopped. The asymmetry is the
+whole thing: *starting* is an event with an obvious place to put a line, and *having
+quietly stopped* is a non-event with nowhere to put one.
+
+So the fixes that work are the ones that ask a question on a schedule instead of waiting
+for an event:
+
+- `absences.ts` at startup: what should be here, what is, name the difference.
+- `preflight` before an upgrade: what would be lost.
+- `channelHealth` on a timer: is anyone still listening — **proved by an independent
+  route, because asking the component that failed to notice is asking the wrong witness.**
+- `scan-records` on demand: does any held value appear where it should not.
+
+And the ledgers are the other half. `ingress.jsonl` did its job the day the socket died —
+it recorded, correctly, that nothing had arrived. It simply could not distinguish that
+from a quiet afternoon, which is what `channelHealth` was built to add. **A record that
+answers one question well is not a record that answers the neighbouring one at all**, and
+noticing which question is unanswered is most of the work.
+
+### The one that is different
+
+`sendFile` is not an observability failure. It is a **regression I introduced** that
+morning, teaching two of four outbound paths a new key format and leaving two behind. The
+repair was one parser rather than two more call sites, and the test asserts the property
+(`splitChatKey` handles both forms) rather than the instances — because the reason the
+bug existed is that instances are what the previous fix enumerated.
