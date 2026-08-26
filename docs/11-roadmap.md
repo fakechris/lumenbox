@@ -511,6 +511,77 @@ parent-spawned "checker" is whatever the parent said it is. If a verify-fork is 
 the identity of the verifier has to come from the harness, or the check is the parent
 marking its own work with extra steps.
 
+### The gate has a 1980 solution, and the board predicate is not it
+
+The objection that has to be answered before building any of this: **a gate that blocks on
+"is there unresolved work" can livelock, because working is what produces unresolved
+work.** Done badly it is a system arguing with itself and never finishing.
+
+This is *termination detection*, and it was solved by
+[Dijkstra and Scholten in 1980](https://www.cs.utexas.edu/~EWD/transcriptions/EWD06xx/EWD687a.html)
+for exactly our shape — an initiator that dispatches work, nodes that may dispatch further,
+and the question of how the initiator knows the whole thing is over. The protocol runs
+along the spawn tree: a node joins as a child of whoever first messaged it, acknowledges
+every later message immediately, and returns *that first* acknowledgement only once it is
+idle **and** has no outstanding acknowledgements of its own. The initiator declares
+termination when it is idle with none outstanding. Nodes are explicitly allowed to go
+active again mid-computation, which is the discover-more-work case.
+
+The difference from FrontierAgent's gate is the whole point:
+
+| | what it checks | property |
+|---|---|---|
+| board predicate | "is anything open right now" | **global and non-monotone** — anyone can make it true again, at any time |
+| Dijkstra–Scholten | outstanding acknowledgements along the tree | **structural** — a child's new work increments its own parent's count, which is that parent's own act rather than a predicate being flipped underneath it |
+
+**`Fork` is already a spawn tree.** Parent dispatches, children report. So this needs a
+counter and a rule, not an architecture: each outstanding fork is one unacknowledged
+child, and a parent may finish only when idle with a count of zero.
+
+### And the semantic half must never be the only authority
+
+[LoopTrap](https://arxiv.org/html/2605.05846v1) demonstrates *termination poisoning*:
+injecting content into what an agent reads — a page, a document, an API response — to
+corrupt the progress signals it uses to judge completion, so it never terminates. Its
+authors note this is stealthier than resource exhaustion because the agent **genuinely
+believes the task is unfinished**. Anything we build where a model's judgement of "am I
+done" is the sole gate is attackable through every tool that reads the outside world,
+which is most of them.
+
+So the design is three layers, and the ranking between them is not negotiable:
+
+1. **Structural** — no agent has outstanding work. Dijkstra–Scholten-shaped, provable,
+   unattackable by content because it never reads any.
+2. **Semantic** — the work is actually right. Verifier agents, consensus, quality. This is
+   the layer that catches wrong answers and the layer an attacker owns; it may refuse to
+   finish and must never be what *permits* finishing on its own.
+3. **Budget** — tokens, wall clock, spawn depth. Crude, and the only one that terminates
+   unconditionally. It exists because the first two can both be wrong at once.
+
+Empirical support for caring: a
+[trace-observability study on GAIA](https://arxiv.org/html/2606.01365v1) classifies
+tool-using multi-agent failures and finds the deeper levels dominated by repeated-action
+loops and max-step termination — the most common real failure is the termination judgement
+itself, not the work.
+
+### What the gate says while it is closed
+
+A gate that is honest and silent reproduces the experience reported of Apodex: more
+trustworthy, and an afternoon with no answer. In a research console that is acceptable;
+in a chat where somebody asked one question it is not.
+
+The answer falls out of layer 1 rather than needing a design of its own: **the count is
+the message.** Not "still working" — "two of three sub-questions settled, waiting on the
+evidence check". That number *is* the termination condition, so reporting it is free and
+cannot drift from the truth the way a progress estimate does. The task card already
+updates in place and is the surface for it.
+
+Per [docs/13](13-design-review.md) this goes to hostile review before it is built — it
+defines what counts as finished, which is the definition every other record is measured
+against. The review gets a concrete attack to work with, which is unusual and worth using:
+**LoopTrap against layer 2, and a Fork that spawns while its parent is acknowledging
+against layer 1.**
+
 ### R21. Agent and skill bundles: export and import
 A team's agent (profile, skills, scope shape — never its memories or secrets) packaged
 as a file another installation can import. The sharing unit people actually want, and
