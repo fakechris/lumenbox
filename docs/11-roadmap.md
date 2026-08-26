@@ -14,7 +14,11 @@ of usability, the unfinished half of the honesty surfaces, one large security it
 the browser work has made *larger*, and the structural growth into multi-person use.
 
 **R22–R30 were added on 2026-08-26** from the outside-reading pass in
-[docs/14](14-from-outside-reading.md). They are not new ambitions: most are gaps that pass
+[docs/14](14-from-outside-reading.md). The same day, three mechanisms were added to
+existing entries (R30, R8) after reading **FrontierAgent** (ApodexAI, Apache-2.0) against
+its own launch copy: the copy oversold mid-run steering as impact analysis and partial
+recomputation, which the code does not do — and undersold a code-level submission gate,
+which it does. They are not new ambitions: most are gaps that pass
 found in code we had already shipped, each with the measurement that established it. R25
 also carries forward the adversarial-review findings that were recorded on 2026-08-25 and
 never acted on.
@@ -353,6 +357,23 @@ a write-ahead intent record per effect plus provisioned ids (pi harness-v2 §5�
 The current coarse-boundary approach is honest and tested; this is an upgrade, not a
 fix, which is why it has waited.
 
+**Two boundary conditions worth stealing separately, and much cheaper.** FrontierAgent's
+mid-run steering (`apodex/steer.py`, `observers.py`) is, despite its marketing, only
+"queue typed lines and inject them as the next user message at a turn boundary" — it
+credits Claude Code and kimi for the pattern, and there is no dependency analysis or
+partial recomputation anywhere in it. But two conditions around the injection are real
+engineering we do not have:
+
+- **Do not inject on a turn that made no tool calls.** The model is finishing; an injected
+  message there leaves a dangling user turn on a loop about to stop.
+- **Wake an idle coordinator when an instruction arrives.** Their fan-in can park a
+  coordinator for minutes waiting on sub-agents; steering wakes it instead of waiting out
+  a timeout. Our `Fork` join has exactly that shape, and nothing can currently interrupt it.
+
+Both are small and neither depends on the write-ahead design, so they need not wait for it.
+Recorded here rather than in a new entry because they are the same subject: what a turn is
+allowed to do at a boundary it did not choose.
+
 ### ~~R9. Auto-review as a state machine~~ — shipped
 <details><summary>original entry</summary>
 
@@ -411,6 +432,43 @@ they are done, where the reference stops when two independent checks agree on th
 artifact. `DisplayLease` is the concrete place to look first for the deadlock result — a
 scarce resource that several agents contend for is precisely the measured setting. Large;
 a dependency of the multi-person direction rather than a parallel track.
+
+**A worked implementation exists and it is small.** FrontierAgent (ApodexAI, Apache-2.0,
+read at `~/sdcard/source/FrontierAgent`) gates submission in code, in one function —
+`plugins/tools/finalize_answer.py`:
+
+> Checks (in order): empty answer (blocks) · sub-agents created but never assigned
+> (WARN-only, never blocks) · **task-board items still open/in_progress (blocks)** ·
+> (Planning Mode) solo submission (blocks) · (Planning Mode) **answer not independently
+> verified (blocks)**.
+
+Two things to take, neither of which is code to copy:
+
+1. **A board with an unresolved item refuses the answer.** That is termination detection,
+   and the reason it works is the detail in its own docstring: the gate is "identical
+   regardless of HOW the agent signals done" — one implementation behind both the explicit
+   finish tool *and* the bare-text terminator. A gate on one exit is a gate on no exits.
+   Our board already carries the states this needs; nothing consults them at the end of a
+   turn.
+2. **Be precise about what such a gate buys.** Theirs checks that a verifier *ran*, not
+   that it *approved* — nothing in that file reads a verdict. So it enforces "somebody
+   independent looked", which is weaker than legal-skills' "two examiners cleared the same
+   version" and much stronger than nothing. Worth implementing as the first, and worth not
+   describing as the second.
+
+And one mechanism from the same repo that answers a question this entry did not think to
+ask: **who guarantees the independent check is independent?** In `create_subagent`, any
+sub-agent whose name contains `verifier` is force-fed a verifier prompt and *the caller's
+own `system_prompt` for it is ignored*. The coordinator therefore cannot write itself a
+compliant reviewer — the harness owns the reviewer's identity, and the caller only chooses
+to have one.
+
+We already hold the equivalent property in one place and not the other. `golden.ts` runs
+its judge on a different provider on the stated grounds that a model should not grade
+itself. `Fork` has no such notion: the parent writes each child's brief, so a
+parent-spawned "checker" is whatever the parent said it is. If a verify-fork is ever added,
+the identity of the verifier has to come from the harness, or the check is the parent
+marking its own work with extra steps.
 
 ### R21. Agent and skill bundles: export and import
 A team's agent (profile, skills, scope shape — never its memories or secrets) packaged
