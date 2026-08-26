@@ -445,3 +445,80 @@ source, absent at runtime, and silent about the difference** — the unset relay
 the unconfigured search key, and this. That is a pattern worth a check of its own rather
 than three separate fixes, and it is the same argument the preflight already makes for the
 box: state what should be there, compare it to what is, and say so out loud.
+
+---
+
+## What is in the context matters less than what else is
+
+Sources: *Context Rot: How Increasing Input Tokens Impacts LLM Performance* (Chroma,
+2026-08-18) and Anthropic's *Context editing* API documentation (2026-08-06).
+
+### The measurements
+
+Chroma tested 18 models on deliberately trivial tasks — find one planted fact, replicate a
+repeated string — while varying only input length. Four results worth carrying:
+
+1. **Degradation is non-uniform and starts early**, even where the task is trivial enough
+   that a model should behave like a computing system and does not.
+2. **Low similarity between the question and the fact degrades fastest.** When the user's
+   words resemble the stored fact, length costs little; when they do not — which is the
+   normal case — length costs a lot.
+3. **One distractor measurably hurts. Four compound it. Their impact is not uniform** —
+   one of four produced a much larger decline than its siblings.
+4. **Every model did better on a shuffled haystack than a logically structured one.** The
+   authors' proposed explanation is that structure makes a planted fact stand out; the
+   result held across all 18 either way. Worth knowing, not yet worth acting on.
+
+The sentence the whole report reduces to:
+
+> Whether relevant information is present in a model's context is not all that matters;
+> what matters more is **how that information is presented**.
+
+Result 3 is the one that pays here. It is the quantitative case for the three-state
+`SectionState` contract and for narrowing `OtherThreads` to one chat — **every irrelevant
+item we assemble is a distractor with a measurable cost, and one is already enough.** It
+is also the counterweight to the Slack article's "widen the surface area", and settles
+that disagreement on evidence rather than taste: widen what an agent *can reach*, never
+what it is *handed*.
+
+### The API already ships what we hand-rolled
+
+`compaction.ts` was written around two decisions: compaction changes what is *sent* and
+not what is stored, and a summary becomes an extra entry while the tail goes verbatim.
+Anthropic's context editing makes the first of those a server-side feature:
+
+- **`clear_tool_uses_20250919`** clears the oldest tool *results* past a threshold and
+  "replaces each cleared result with placeholder text so Claude knows it was removed."
+  That is [opencode's contract](13-design-review.md) — *unavailable is not the same as
+  never existed* — shipped by the vendor. Optionally clears tool inputs too.
+- **It happens server-side and the client keeps the full unmodified history.** Which is
+  our first decision, implemented by someone else and with no estimator to be wrong.
+
+This is the clearest instance in this document of scaffolding being eaten. Our compaction
+exists because an agent hit 158KB in a day; the surgical version of that fix now exists
+upstream. Two reasons not to simply delete ours: it is beta, and its failure mode is
+different — ours degrades to dropping oldest entries *and saying so*, which is a property
+worth keeping whatever runs above it. The honest next step is to measure one against the
+other, not to assume either.
+
+One thing to know before enabling: **tool-result clearing invalidates the cached prefix**
+at the point of the clear, a direct interaction with the stable/volatile cache breakpoints
+in `prompt.ts`. The parameter for that is `clear_at_least` — clear enough to be worth the
+cache write, rather than nibbling.
+
+### A default we never set
+
+The same page documents `clear_thinking_20251015`, whose default varies by model class:
+Opus 4.5+ and Sonnet 4.6+ keep all prior thinking; Haiku through 4.5 keeps only the last
+turn's. Then the explicit instruction:
+
+> If your code runs across multiple model tiers, set `keep` explicitly rather than relying
+> on the per-model default.
+
+We run thinking (`adaptive` / `summarized`), we permit four Claude models —
+`claude-opus-5`, `claude-sonnet-5`, `claude-opus-4-6`, `claude-haiku-4-5` — and we set
+`keep` nowhere. Three of the four keep all prior thinking and one keeps only the last
+turn, so an installation configured onto Haiku silently loses reasoning continuity the
+same conversation would have had on Opus. Not observed, because nothing here has run on
+Haiku as the main model; recorded because it is the same shape as the rest of this
+document — a behaviour that differs at runtime and says nothing about it.
