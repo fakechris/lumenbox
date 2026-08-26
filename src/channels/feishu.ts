@@ -668,6 +668,37 @@ export class FeishuChannel implements ChannelAdapter {
     this.releaseLock?.();
   }
 
+  /**
+   * Reaches Feishu over HTTPS, deliberately not over the event socket.
+   *
+   * The socket is the thing in doubt, and the SDK exposes neither its state nor a close
+   * hook — so this asks the vendor for a tenant token instead, which needs only the
+   * credentials. A success here alongside a long silence is the signal that was missing
+   * the day the socket died quietly: the account is fine and nothing is listening.
+   */
+  async probe(): Promise<string | undefined> {
+    const host =
+      process.env.FEISHU_DOMAIN === "lark" ? "open.larksuite.com" : "open.feishu.cn";
+    try {
+      const response = await fetch(
+        `https://${host}/open-apis/auth/v3/tenant_access_token/internal`,
+        {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ app_id: this.appId, app_secret: this.appSecret }),
+          signal: AbortSignal.timeout(15_000),
+        }
+      );
+      if (!response.ok) return `HTTP ${response.status}`;
+      const payload = (await response.json()) as { code?: number; msg?: string };
+      // Feishu answers 200 with a non-zero code for a refused credential, so the status
+      // alone would report a revoked app as healthy.
+      return payload.code === 0 ? undefined : `${payload.msg ?? "refused"} (code ${payload.code})`;
+    } catch (error) {
+      return error instanceof Error ? error.message : String(error);
+    }
+  }
+
   async send(identity: string, text: string): Promise<void> {
     const chatId = this.chats.get(identity);
     if (chatId === undefined || this.apiClient === undefined) return;

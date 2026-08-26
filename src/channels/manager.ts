@@ -25,6 +25,7 @@
  */
 
 import type { Ingress } from "./ingress.ts";
+import { channelHealth, type ChannelHealth } from "./liveness.ts";
 
 export interface InboundMessage {
   /** `telegram:123` — stable, and what the allow list matches. Who is *speaking*. */
@@ -101,6 +102,16 @@ export interface ChannelAdapter {
   /** Resolves once the wire is up; rejects when it cannot come up. */
   start(onMessage: (message: InboundMessage) => Promise<string | undefined>): Promise<void>;
   stop(): void;
+  /**
+   * Reaches the vendor without using the inbound socket, and says why not when it fails.
+   *
+   * Evidence from outside the component under test. A channel said "connected" once and
+   * ninety minutes later had no socket at all, having logged nothing in between — asking
+   * the SDK for its state is asking the thing that already failed to notice, so this
+   * takes an independent route. Absent on an adapter whose transport cannot fail this
+   * way. See liveness.ts.
+   */
+  probe?(): Promise<string | undefined>;
   /** Pushes a line to where this identity's messages come from, if the wire allows it. */
   send(identity: string, text: string): Promise<void>;
   /**
@@ -497,6 +508,35 @@ export class ChannelManager {
 
   stop(): void {
     for (const adapter of this.adapters) adapter.stop();
+  }
+
+  /**
+   * Whether anything is still listening, per adapter that can answer.
+   *
+   * The ingress ledger says whether a message arrived; nothing said whether anyone was
+   * there to receive one, and the two look identical from outside — a channel whose
+   * socket had been dead for ninety minutes produced exactly the same records as a quiet
+   * afternoon. `lastInboundAt` comes from the ledger rather than from the adapter,
+   * because an adapter that has stopped noticing its own traffic is the failure being
+   * tested for.
+   */
+  async health(now = Date.now()): Promise<ChannelHealth[]> {
+    const lastByChannel = new Map<string, string>();
+    for (const record of this.deps.ingress?.list() ?? []) {
+      const seen = lastByChannel.get(record.channel);
+      if (seen === undefined || record.at > seen) lastByChannel.set(record.channel, record.at);
+    }
+    const checks = this.adapters
+      .filter(adapter => adapter.probe !== undefined)
+      .map(adapter =>
+        channelHealth({
+          channel: adapter.name,
+          lastInboundAt: lastByChannel.get(adapter.name),
+          now,
+          probe: () => adapter.probe!(),
+        })
+      );
+    return Promise.all(checks);
   }
 
   /** Resolves when every accepted task has pushed its result (or its failure). */

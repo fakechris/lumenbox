@@ -957,6 +957,27 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
   }, 10 * 60_000);
   digestTimer.unref?.();
 
+  // Is anything still listening? A channel said "connected" once and ninety minutes later
+  // had no socket at all, having logged nothing in between — and because the ingress
+  // ledger correctly recorded that nothing had arrived, the records were indistinguishable
+  // from a quiet afternoon. This is the signal that was missing.
+  //
+  // Said once per transition, not once per check: a warning repeated every ten minutes is
+  // one people filter out, including on the occasion it is true.
+  const channelState = new Map<string, string>();
+  const livenessTimer = setInterval(() => {
+    void (async () => {
+      for (const health of await channels.health().catch(() => [])) {
+        const channel = health.detail.split(/[\s:]/)[0] ?? "channel";
+        if (channelState.get(channel) === health.state) continue;
+        channelState.set(channel, health.state);
+        if (health.state !== "ok") log(`channel health: ${health.detail}`);
+        else log(`channel health: ${channel} is answering again`);
+      }
+    })();
+  }, 10 * 60_000);
+  livenessTimer.unref();
+
   // An upgrade nobody knows about is an upgrade that does not happen. This tells the
   // people who may decide, and deliberately does not act: a web server that recreates the
   // box underneath the people using it is a worse surprise than an out-of-date image.
