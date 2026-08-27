@@ -36,7 +36,7 @@ test("each status has its colour, and queued says how many are ahead", () => {
 
   const queued = rendered({ ...base, status: "queued", ahead: 2 });
   assert.equal(queued.header.template, "grey");
-  assert.match(queued.elements[0]!.text!.content, /Queued — 2 ahead/);
+  assert.match(queued.elements[0]!.text!.content, /排队中 — 前面还有 2 件/);
 });
 
 test("the card says who is on it, what it is doing, and who asked", () => {
@@ -49,7 +49,7 @@ test("the card says who is on it, what it is doing, and who asked", () => {
   });
 
   assert.equal(card.header.title.content, "weekly report");
-  assert.match(card.elements[0]!.text!.content, /\*\*Rex\*\* · Working/);
+  assert.match(card.elements[0]!.text!.content, /\*\*Rex\*\* · 进行中/);
   assert.match(card.elements[0]!.text!.content, /`bash: build-report`/);
   const note = card.elements.find(element => element.tag === "note");
   assert.match(note!.elements![0]!.content, /chris/);
@@ -57,7 +57,7 @@ test("the card says who is on it, what it is doing, and who asked", () => {
   // No addressed agent: the team as a whole is on it, and the card says so rather
   // than showing an empty name.
   const team = rendered({ title: "t", agentName: "", requesterLabel: "c", status: "working" });
-  assert.match(team.elements[0]!.text!.content, /\*\*The team\*\*/);
+  assert.match(team.elements[0]!.text!.content, /\*\*团队\*\*/);
 });
 
 test("markdown detection catches the constructs prose never contains", () => {
@@ -98,7 +98,7 @@ test("the approval card carries the action verbatim and the three answers as but
     }[];
   };
   assert.equal(card.header.template, "orange");
-  assert.match(card.header.title.content, /Ada needs your consent/);
+  assert.match(card.header.title.content, /Ada 请你确认/);
   assert.equal(card.elements[0]!.text!.content, "curl -X POST https://example.com/export");
   const actions = card.elements.find(element => element.tag === "action")!.actions!;
   assert.deepEqual(
@@ -131,7 +131,7 @@ test("a task card offers the workshop only when there is somewhere to send peopl
   };
   const action = withUrl.elements.find(element => element.tag === "action")!;
   assert.equal(action.actions![0]!.url, "https://box.example/?task=t17");
-  assert.match(action.actions![0]!.text.content, /workshop/i);
+  assert.match(action.actions![0]!.text.content, /工作台/);
 });
 
 test("a rich-text message is read, not dropped", () => {
@@ -314,6 +314,6 @@ test("a task waiting on a person does not read as finished", () => {
     requesterLabel: "chris",
     status: "review",
   });
-  assert.match(card.elements[0]?.text?.content ?? "", /review/i);
+  assert.match(card.elements[0]?.text?.content ?? "", /待你验收/);
   assert.notEqual(card.header.template, "green", "green is the colour of nothing-left-to-do");
 });

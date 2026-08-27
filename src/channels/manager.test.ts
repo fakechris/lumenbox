@@ -169,7 +169,7 @@ test("an allowed sender's answer arrives as a push, not as the wire reply", asyn
   await started(quiet);
   await adapter2.inject({ identity: "telegram:7", senderLabel: "c", text: "hi" });
   await quiet.idle();
-  assert.match(adapter2.sent[0]?.text ?? "", /finished without saying/);
+  assert.match(adapter2.sent[0]?.text ?? "", /没有留下说明/);
 });
 
 test("a quick turn posts its answer alone; a slow one says it is under way first", async () => {
@@ -200,8 +200,8 @@ test("a quick turn posts its answer alone; a slow one says it is under way first
   await adapter.inject({ identity: "telegram:7", senderLabel: "c", text: "@Ada slow one" });
   await manager.idle();
   assert.equal(adapter.sent.length, 2);
-  assert.match(adapter.sent[0]!.text, /Ada is on it/);
-  assert.match(adapter.sent[0]!.text, /posted here/);
+  assert.match(adapter.sent[0]!.text, /Ada开工了/);
+  assert.match(adapter.sent[0]!.text, /发在这里/);
   assert.equal(adapter.sent[1]!.text, "the answer");
 });
 
@@ -220,7 +220,7 @@ test("queued work is acknowledged immediately, with how many are ahead", async (
   await adapter.inject({ identity: "telegram:7", senderLabel: "c", text: "another thing" });
   await manager.idle();
   assert.equal(adapter.sent.length, 2, "queued is known-slow: no threshold wait");
-  assert.match(adapter.sent[0]!.text, /2 requests ahead/);
+  assert.match(adapter.sent[0]!.text, /前面还有 2 件/);
   assert.equal(adapter.sent[1]!.text, "eventually");
 });
 
@@ -596,7 +596,7 @@ test("reading the chat's scope is open; binding it is an admin's call", async ()
     adapter.inject({ identity, chatKey: "feishu:oc_room", senderLabel: "x", text });
 
   assert.match((await at("feishu:member", "scope")) ?? "", /vendor/, "anyone may read");
-  assert.match((await at("feishu:member", "scope vendor-work")) ?? "", /admin's call/);
+  assert.match((await at("feishu:member", "scope vendor-work")) ?? "", /管理员来定/);
   assert.match((await at("feishu:boss", "scope vendor-work")) ?? "", /Bound/);
   assert.match((await at("feishu:boss", "scope off")) ?? "", /Unbound/);
   await at("feishu:member", "scope out the venue options");
@@ -768,7 +768,7 @@ test("a dropped file is stored and acknowledged, and no turn runs", async () => 
 
   assert.deepEqual(received, [{ chatKey: "feishu:oc_room", names: ["report.pdf"] }]);
   assert.deepEqual(asked, [], "a delivery is not an instruction");
-  assert.match(adapter.chatSent[0]!.text, /Saved: inbox\/report\.pdf/);
+  assert.match(adapter.chatSent[0]!.text, /收到:report\.pdf/);
   assert.equal(adapter.chatSent[0]!.replyTo, "om_file", "the receipt sits under the drop");
 
   // Nowhere to store: the chat is told plainly, not left to wonder.
@@ -789,7 +789,7 @@ test("a dropped file is stored and acknowledged, and no turn runs", async () => 
     files: [{ name: "a.txt", base64: "eA==" }],
   });
   await boxless.idle();
-  assert.match(adapter2.chatSent[0]!.text, /no box running/);
+  assert.match(adapter2.chatSent[0]!.text, /没有开着的工作机/);
 });
 
 test("a finished task ships the outbox — images as images, files as files, delivered once", async () => {

@@ -28,6 +28,21 @@ import type { Ingress } from "./ingress.ts";
 import { channelHealth, type ChannelHealth } from "./liveness.ts";
 import { boxPathsNamed, undelivered } from "../host/named-files.ts";
 
+import {
+  APPROVAL_STAKES,
+  CONSENT_GONE,
+  EMPTY_REPLY_NOTE,
+  NO_BOX_FOR_FILES,
+  SAY_WHAT_YOU_NEED,
+  SCOPE_IS_ADMIN_CALL,
+  TEAM,
+  ackQueued,
+  ackWorking,
+  consentFallbackText,
+  filesSaved,
+  questionText,
+} from "./strings.ts";
+
 export interface InboundMessage {
   /** `telegram:123` — stable, and what the allow list matches. Who is *speaking*. */
   identity: string;
@@ -186,9 +201,7 @@ export interface ApprovalCardState {
 }
 
 /** The stakes line every consent request carries. One sentence, always the same shape. */
-export const APPROVAL_STAKES =
-  "Until someone answers, this work is stopped. Denying is the reversible answer: " +
-  "the agent is told no and carries on without this step.";
+export { APPROVAL_STAKES } from "./strings.ts";
 
 export interface ChannelStatus {
   name: string;
@@ -508,8 +521,7 @@ export class ChannelManager {
         }
         return (
           result ??
-          "That consent is no longer waiting — it may have been answered from the app, " +
-            "or the turn moved on."
+          CONSENT_GONE
         );
       });
       adapter
@@ -601,8 +613,7 @@ ${input.options.map(option => `· ${option}`).join("\n")}`
     void asker.adapter
       .send(
         asker.identity,
-        `${input.agentName || "An agent"} needs an answer before it can carry on:\n` +
-          `${input.question}${choices}\n\nReply here and it picks up where it stopped.`
+        questionText(input.agentName, input.question, choices)
       )
       .catch(() => {
         // The web page shows it too; a failed push is not a lost question.
@@ -634,10 +645,7 @@ ${input.options.map(option => `· ${option}`).join("\n")}`
         });
       return;
     }
-    const message =
-      `${agentName || "An agent"} needs your consent:\n${description}\n\n` +
-      `Reply "allow" for once, "always" to stop asking for this, or "deny". ` +
-      `${APPROVAL_STAKES}`;
+    const message = consentFallbackText(agentName, description);
     void asker.adapter.send(asker.identity, message).catch(() => {
       // The web UI still shows it; a failed push is not a lost approval.
     });
@@ -743,7 +751,7 @@ ${input.options.map(option => `· ${option}`).join("\n")}`
       const chatKey = message.chatKey ?? message.identity;
       if (scopeRequest.kind === "show") return this.deps.chatScope.show(chatKey);
       if (this.deps.mayAdmin?.(message.identity) !== true) {
-        return "Binding a scope changes what every task in this chat may do — that is an admin's call.";
+        return SCOPE_IS_ADMIN_CALL;
       }
       return scopeRequest.kind === "bind"
         ? this.deps.chatScope.bind(chatKey, scopeRequest.name)
@@ -773,7 +781,7 @@ ${input.options.map(option => `· ${option}`).join("\n")}`
     }
 
     const { agentName, text } = parseAddress(message.text);
-    if (text === "") return "Say what you need done; @AgentName first to pick who does it.";
+    if (text === "") return SAY_WHAT_YOU_NEED;
 
     // "屏幕" is a look, not a task: no turn runs, the desktop is captured as it is.
     const work =
@@ -847,7 +855,7 @@ ${input.options.map(option => `· ${option}`).join("\n")}`
           adapter,
           message.chatKey ?? message.identity,
           message.identity,
-          `Saved: ${saved.join(", ")}. Say what you want done with it — @AgentName first picks who.`,
+          filesSaved(saved),
           message.messageId !== undefined ? { replyTo: message.messageId } : undefined
         );
       }
@@ -882,7 +890,7 @@ ${input.options.map(option => `· ${option}`).join("\n")}`
           adapter,
           chatKey,
           message.identity,
-          "There is no box running to store files on right now.",
+          NO_BOX_FOR_FILES,
           anchor
         );
         return undefined;
@@ -1097,7 +1105,7 @@ ${input.options.map(option => `· ${option}`).join("\n")}`
       // The reaction is about the *message*, which has been answered either way.
       mark("done");
       await deliver(
-        reply.trim() === "" ? "Done. (The agent finished without saying anything.)" : reply
+        reply.trim() === "" ? EMPTY_REPLY_NOTE : reply
       );
       // Whatever the turn left in the chat's outbox follows the reply — images shown
       // as images, everything else as a file. What was pushed is marked delivered;
@@ -1209,10 +1217,7 @@ function firstLine(text: string): string {
 
 /** The plain-text acknowledgement, for adapters without cards. */
 function ackLine(card: TaskCardState): string {
-  const who = card.agentName === "" ? "The team" : card.agentName;
-  if (card.status === "queued" && card.ahead !== undefined) {
-    const others = card.ahead === 1 ? "1 request" : `${card.ahead} requests`;
-    return `Got it — ${who} has ${others} ahead of this one. The result will be posted here.`;
-  }
-  return `${who} is on it. This may take a while; the result will be posted here.`;
+  const who = card.agentName === "" ? TEAM : card.agentName;
+  if (card.status === "queued" && card.ahead !== undefined) return ackQueued(who, card.ahead);
+  return ackWorking(who);
 }

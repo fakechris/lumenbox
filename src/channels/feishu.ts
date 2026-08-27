@@ -15,6 +15,14 @@
  * is typing, not where.
  */
 
+import {
+  CARD_STATUS,
+  CONSENT_BUTTONS,
+  OPEN_WORKSHOP,
+  TEAM,
+  cardFootnote,
+  consentTitle,
+} from "./strings.ts";
 import type {
   ApprovalCardState,
   ApprovalReply,
@@ -44,7 +52,7 @@ export function renderApprovalCard(card: ApprovalCardState): object {
     header: {
       title: {
         tag: "plain_text",
-        content: `${card.agentName || "An agent"} needs your consent`,
+        content: consentTitle(card.agentName),
       },
       template: "orange",
     },
@@ -53,9 +61,9 @@ export function renderApprovalCard(card: ApprovalCardState): object {
       {
         tag: "action",
         actions: [
-          button("Allow once", "primary", "once"),
-          button("Allow always", "default", "always"),
-          button("Deny", "danger", "deny"),
+          button(CONSENT_BUTTONS.once, "primary", "once"),
+          button(CONSENT_BUTTONS.always, "default", "always"),
+          button(CONSENT_BUTTONS.deny, "danger", "deny"),
         ],
       },
       {
@@ -63,7 +71,7 @@ export function renderApprovalCard(card: ApprovalCardState): object {
         elements: [
           {
             tag: "plain_text",
-            content: `${card.stakes} Replying allow / deny works too.`,
+            content: `${card.stakes} 直接回复"允许"或"拒绝"也可以。`,
           },
         ],
       },
@@ -88,16 +96,8 @@ export function renderCard(card: TaskCardState): object {
     failed: "red",
   }[card.status];
   const status =
-    card.status === "queued"
-      ? `Queued${card.ahead !== undefined ? ` — ${card.ahead} ahead` : ""}`
-      : card.status === "working"
-        ? "Working"
-        : card.status === "review"
-          ? "In review — your turn"
-          : card.status === "done"
-            ? "Done"
-            : "Failed";
-  const who = card.agentName === "" ? "The team" : card.agentName;
+    card.status === "queued" ? CARD_STATUS.queued(card.ahead) : CARD_STATUS[card.status];
+  const who = card.agentName === "" ? TEAM : card.agentName;
   const lines = [`**${who}** · ${status}`];
   if (card.action !== undefined) lines.push(`\`${card.action}\``);
   return {
@@ -115,7 +115,7 @@ export function renderCard(card: TaskCardState): object {
               actions: [
                 {
                   tag: "button",
-                  text: { tag: "plain_text", content: "Open in the workshop" },
+                  text: { tag: "plain_text", content: OPEN_WORKSHOP },
                   type: "default",
                   url: card.taskUrl,
                 },
@@ -128,8 +128,7 @@ export function renderCard(card: TaskCardState): object {
         elements: [
           {
             tag: "plain_text",
-            content:
-              (card.taskId !== undefined ? `${card.taskId} · ` : "") + `for ${card.requesterLabel}`,
+            content: cardFootnote(card.taskId, card.requesterLabel),
           },
         ],
       },
