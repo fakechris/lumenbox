@@ -25,10 +25,17 @@ None of these are new ambitions. Most are gaps that a pass found in code we had 
 shipped, each recorded with the measurement that established it. R25 also carries forward
 the adversarial-review findings from 2026-08-25 that were recorded and never acted on.
 
-**Shipped since this document was written**, and struck from the tiers below: R2, R5, R6,
-R9, R11, R12, R13, R14, R15, R20, and the version-handshake third of R18. Alongside them,
-work that predated this list: the MCP client and server, Delegate, Fork, lanes, the
-three-tier permission boundary, and the upgrade safety story now in docs/12-upgrades.md.
+**Shipped and struck from the tiers below:** R1, R2, R5, R6, R9, R11, R12, R13, R14, R15,
+R18, R19, R20, R22, R23, and the first third of R28. Alongside them, work that predated
+this list: the MCP client and server, Delegate, Fork, lanes, the three-tier permission
+boundary, and the upgrade safety story in [docs/12](12-upgrades.md).
+
+**Designed but deliberately not built**, each with the review that stopped it:
+[R7](15-secrets-in-the-record.md) — the containment framing did not survive, and what is
+left is at-rest hygiene with containment moved to R4. [R30](16-long-work.md) — the
+completion gate's load-bearing claim was false, and the protocol underneath it comes
+first. Both documents keep the wrong version rather than rewriting it, because the
+correction is the useful part.
 
 ---
 
