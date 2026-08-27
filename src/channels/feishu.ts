@@ -24,6 +24,8 @@ import type {
   TaskCardState,
 } from "./manager.ts";
 import { acquireConsumerLock } from "./single-consumer.ts";
+import { looksLikeMarkdown as sharedLooksLikeMarkdown } from "./markdown.ts";
+const looksLikeMarkdown = sharedLooksLikeMarkdown;
 
 /**
  * The consent request as a card: the original action verbatim in the body, the three
@@ -135,24 +137,10 @@ export function markdownPost(text: string): string {
 }
 
 /**
- * Whether a message means markdown: the block constructs plain prose never
- * contains. Snake_case is deliberately not read as emphasis — code speaks in
- * underscores, people rarely italicize, and a false positive only changes the
- * wire form, not the words.
+ * Re-exported: the verdict is shared with the other markdown-rendering adapters
+ * (see markdown.ts). Its tests still reach it here.
  */
-export function looksLikeMarkdown(text: string): boolean {
-  return (
-    /^#{1,6}\s+\S/m.test(text) ||
-    /```/.test(text) ||
-    /`[^`\n]+`/.test(text) ||
-    /^\s*[-*+]\s+\S/m.test(text) ||
-    /^\s*\d+\.\s+\S/m.test(text) ||
-    /^\s*>/m.test(text) ||
-    /\*\*[^*\n]+\*\*/.test(text) ||
-    /^\s*\|.*\|\s*$/m.test(text) ||
-    /\[[^\]\n]+\]\([^)\n]+\)/.test(text)
-  );
-}
+export { looksLikeMarkdown } from "./markdown.ts";
 
 /**
  * Feishu words a malformed post as a content/format problem; the network words
