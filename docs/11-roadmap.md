@@ -421,6 +421,41 @@ What this entry adds on its own, beyond the join:
 Medium, and mostly assembly rather than invention: the ledgers are already append-only,
 replayable and on disk. What is missing is one id and one reader.
 
+### R32. The answer has to land where the person is looking
+Measured on t51, 2026-08-27, from the records rather than from the complaint. The person
+asked which local models fit a new Mac. The agent ran `free -h`, found 16GB, worked out the
+tier and wrote a table of what fits and what does not — **and the person's screen said
+"已记下。t51 进入 review,等你下一步。"**
+
+Where the answer went instead, all three places verified in the files:
+
+| written to | who reads it |
+|---|---|
+| assistant narration between tool calls | the transcript, and the web UI as a folded step |
+| the `Tasks.update` note | the board |
+| a `RememberFact` | the agent's own future prompts |
+
+Two of those are now less wrong — the card can say `review` and the board keeps it — but
+**none of them is the chat**, and the chat is where the question was asked.
+
+The shape is familiar and it is the third instance: an agent that names a file path instead
+of sending the file ([`named-files.ts`](../src/host/named-files.ts)), a trace whose reasoning
+is legible while its answer is a receipt, and now a turn whose conclusion is filed rather
+than delivered. Each time the model did the work and put it somewhere reasonable; each time
+"reasonable" did not mean "in front of the person".
+
+And as with the file case, this is not a judgement about meaning: **whether the reply
+contains the conclusion the turn produced is checkable.** A turn that wrote a substantial
+task note and then delivered only a status line is a specific, detectable shape, which puts
+it on the harness's side of the line this codebase keeps drawing.
+
+What needs deciding before it is built, and why this is an entry rather than a commit: the
+obvious fix — deliver the note whenever a task moves to review — double-posts every time the
+agent *does* say the substance, and a product that repeats itself is its own complaint. The
+narrower rule (deliver the note only when the reply carries nothing the note does not) needs
+a definition of "carries nothing" that is not a model's opinion, which is the same trap as
+the completion gate. Small once decided; the decision is the work.
+
 ### R16. Webhook and event triggers
 Scheduled skills cover "every morning"; nothing covers "when the build breaks" or
 "when an external system pings". An HTTP ingress whose calls arrive as inbound
