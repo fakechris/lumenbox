@@ -32,10 +32,12 @@ boundary, and the upgrade safety story in [docs/12](12-upgrades.md).
 
 **Designed but deliberately not built**, each with the review that stopped it:
 [R7](15-secrets-in-the-record.md) — the containment framing did not survive, and what is
-left is at-rest hygiene with containment moved to R4. [R30](16-long-work.md) — the
-completion gate's load-bearing claim was false, and the protocol underneath it comes
-first. Both documents keep the wrong version rather than rewriting it, because the
-correction is the useful part.
+left is at-rest hygiene with containment moved to R4. [R30](16-long-work.md) — designed
+twice and stopped twice. The first review killed the completion gate's load-bearing claim;
+the [second](reviews/2026-08-26-obligation-ledger.md) killed the protocol that was supposed
+to come first, and found ten false claims about our own code in the document proposing it.
+What survives is one field, not a ledger. All three documents keep the wrong version rather
+than rewriting it, because the correction is the useful part.
 
 ---
 
@@ -780,58 +782,117 @@ Large-ish; design the boundary (what travels, what never does) first.
 
 ---
 
-## What to do next, as of 2026-08-26
+## What to do next, as of 2026-08-27
 
-Reranked after a pass over outside reading (docs/14) that produced one fixed production bug
-and several measurements of our own state. The new items win on the lens not because they
-matter more than R1 or R7, but because three of them are one line to a day each and every
-one of them makes the *next* problem findable.
+The previous version of this section ranked seven items and then, twice in the same
+paragraph, deferred to "the structural choice". It has been rewritten rather than appended
+to, because the obligation review changed the dependency order underneath three of them.
 
-1. ~~**R23, stamp the tool result.**~~ Shipped (`f883d7f`).
-2. ~~**R22, say what is missing.**~~ Shipped (`fe573a3`).
-3. ~~**R1, the composer.**~~ Shipped — see the entry. Its second half also landed the
-   first slice of R25 (the explicit conversation record), which shrinks that item.
-4. ~~**R18's remaining two thirds.**~~ Shipped (`ccb0875`).
-5. **R28's cheapest third.** The failure modes in docs/14 as eval cases. The suite passed
-   the Seltz refusal by luck and has no way to keep it.
-6. ~~**R19, the exec marker.**~~ Shipped (`0d4fcba`).
-7. **R7, secret redaction.** Designed and reviewed this pass; the design's central claim
-   did not survive and the entry now says so. Three pieces shipped (the reproducible
-   scanner, and the spool's three corrections), the detection half is measurably the wrong
-   approach on our records, and the part that would actually be containment moved to R4.
-   What remains under R7 is at-rest hygiene, correctly named and no longer overclaimed.
+### Shipped since the last ranking
 
-Then the structural choice, which is a product decision rather than a ranking:
-**the multi-person direction** (rooms, group-as-interface, task-as-state, box-as-
-workstation). Everything under it — R4's Scope growth, R16's webhooks, R17's project
-memory, R21's bundles — is either a dependency of it or considerably easier after it. Two
-items now sit squarely on that path and did not before: **R25** (a conversation's identity,
-which is the object a room is made of) and **R30** (coordination as protocol, which is what
-stops being optional as the agent count grows).
+- **R23** (`f883d7f`), **R22** (`fe573a3`), **R1** the composer, **R18**'s remaining two
+  thirds (`ccb0875`), **R19** the exec marker (`0d4fcba`).
+- **R7's shippable half**: the reproducible scanner and the spool's three corrections. The
+  detection half is measurably the wrong approach on our own records and the containment
+  half moved to R4, so what is left under R7 is at-rest hygiene, correctly named.
+- **The trace UI**, four attempts and one demand from the outside — verified against the
+  running page rather than against its bytes. `scripts/ui-shot.mjs` is what that left behind.
+- **docs/17**, the two-agent convention, written because there are two.
 
-Three candidates recorded from reading and deliberately not promoted, because each needs a
-product decision rather than effort: compaction that keeps *why* a thing was decided and not
-only what; an inbound emoji reaction as a task trigger; and the briefing as a queue of
-decisions rather than a report of state — with the criterion the reading supplied, *you only
-want to know which agents need your attention*.
+### 1. `workId` and `kind`, on records already being written
 
-Then the structural choice, which is a product decision rather than a ranking:
-**the multi-person direction** (rooms, group-as-interface, task-as-state, box-as-
-workstation). Everything under it — R4's Scope growth, R16's webhooks, R17's project
-memory, R21's bundles — is either a dependency of it or considerably easier after it.
+**The next thing to build, and it is small.** One id allocated when work begins, unchanged
+across every resume and continuation, written onto usage rows, turn records and task
+changes. Plus `kind` on the usage row.
 
-Two loops this run left open on purpose, both small and both waiting on the multi-person
-work rather than on effort: nothing yet listens for the "wait" that postpones an upgrade,
-and `ANNOUNCE_MINUTES` is a number nothing counts down. Both are really questions about
-how a bot holds a conversation with a room.
+Why this and not something with a bigger name:
 
-Not on any tier, and worth stating: **the browser work has only met fixtures.** A real
-OAuth flow and a live payment iframe are where it will actually be tested, and neither
-has happened.
+- **Everything downstream needs it.** The gate, the estimate, the drill-down and the
+  heaviest-turn metric are all joins, and there is nothing to join on. `turnId` is minted
+  fresh per attempt (`turn.ts:818`), so it is the wrong key by construction.
+- **It is additive and reversible.** One write site for usage (`turn.ts:1433`), and nothing
+  reads the field on the day it lands. Per docs/13 it does not need a hostile review first:
+  it changes no completion semantics and no test's notion of correct.
+- **The clock starts when it lands, not when it is designed.** `usage.jsonl` keeps 48 hours
+  (`usage.ts:79`) and `kind` has never existed, so every day without this is a day of cost
+  history that cannot be reconstructed afterwards.
+- **`conversation` is already in scope at the write site** and costs nothing to add
+  alongside. It does not solve task attribution — a task spans conversations and a
+  conversation spans tasks — but it makes fork children costable immediately, which is the
+  case the estimate cares about most.
 
-One correction to carry: an earlier count in docs/14 said `WebSearch` had never been
-called. It was called twice and refused twice — a grep for `web_search` against a tool named
-`WebSearch`, which is the same wrong-name failure that started that document.
+### 2. R31, the admin view — now unblocked
+
+It waited on the obligation ledger and no longer does. With the join key in place this is
+assembly: the ledgers are append-only, replayable and on disk. A daily view, drill into one
+task, its rounds, its artifacts, its tokens and its money.
+
+Two things it needs that are not the join: **artifacts as a column** (shared with item 3
+below, which is a second reason to record them) and **a rate table**, because "403,975
+tokens" is a quantity nobody has intuition for.
+
+### 3. Widen `stateHash` to artifacts
+
+Independent of everything above and worth doing in parallel. `detectLoop` catches the honest
+repeat and misses churn and oscillation entirely, because progress is defined by what was
+*called* rather than by what *changed*. Files written, tasks settled, obligations closed.
+Changes what a test asserts is correct, so it goes to review first.
+
+### 4–6. The completion gate, three steps further out than the last plan claimed
+
+In order, each reviewed before it is built:
+
+4. **A dispatch record** — one id preallocated before the effect, shared by inbox admission,
+   child attempt, transcript cause and usage. This is what the obligation ledger was
+   reaching for. It also has to fix two things the review found underneath it: an inbox
+   append failure currently warns and dispatches anyway (`inbox.ts:125`), and `appendLine`
+   does not `fsync` (`jsonl.ts:44`), so "durably written before the effect" is not
+   established even when the order is right.
+5. **Attempt outcome separated from obligation resolution** — bounded retries with new
+   attempt ids, and an explicit waiver from a named authority, both durable. This is the
+   repair for the livelock that `failed`-as-unresolved reintroduced.
+6. **The gate itself**, Dijkstra–Scholten-shaped, over records that exist by then.
+
+**Honest statement of where this stands: nothing has been built.** The design has been
+written twice and killed twice, and the second review found ten false claims about our own
+code in it. What survives is item 1, which is a field.
+
+### Then the structural choice, which is a product decision rather than a ranking
+
+**The multi-person direction** — rooms, group-as-interface, task-as-state,
+box-as-workstation. Everything under it is either a dependency of it or considerably easier
+after it: R4's Scope growth, R16's webhooks, R17's project memory, R21's bundles. Two items
+sit squarely on that path and did not before: **R25** (a conversation's identity, which is
+the object a room is made of) and **R30** (coordination as protocol, which stops being
+optional as the agent count grows).
+
+This is the fork in the road. Items 1–3 are observability and correctness on what exists;
+the multi-person work is a different product. They do not compete for the same week, and
+item 1 is small enough that it does not have to be chosen against anything.
+
+### Still open, still true
+
+- **R28's cheapest third.** The suite passed the Seltz refusal by luck and has no way to
+  keep it. The failure modes in docs/14 are already written down as prose; turning them into
+  cases is mechanical.
+- **The browser work has only met fixtures.** A real OAuth flow and a live payment iframe
+  are where it will actually be tested, and neither has happened.
+- **Two loops left open on purpose**, both waiting on the multi-person work rather than on
+  effort: nothing listens for the "wait" that postpones an upgrade, and `ANNOUNCE_MINUTES`
+  is a number nothing counts down.
+- **Three candidates from reading, deliberately not promoted**, each needing a product
+  decision rather than effort: compaction that keeps *why* a thing was decided; an inbound
+  emoji reaction as a task trigger; and the briefing as a queue of decisions rather than a
+  report of state — with the criterion the reading supplied, *you only want to know which
+  agents need your attention*.
+
+### Corrections carried forward
+
+- An earlier count in docs/14 said `WebSearch` had never been called. It was called twice
+  and refused twice — a grep for `web_search` against a tool named `WebSearch`, the same
+  wrong-name failure that started that document.
+- docs/16's first version claimed the usage ledger records every call attributed to a
+  principal. It records the turn loop only, from one write site, with `principal` optional.
 
 ---
 
