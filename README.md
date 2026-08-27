@@ -713,6 +713,7 @@ The code is the reference; these are the arguments behind it.
 | [14-from-outside-reading](docs/14-from-outside-reading.md) | ideas taken from elsewhere, each with what it changed here |
 | [15-secrets-in-the-record](docs/15-secrets-in-the-record.md) | why redaction is at-rest hygiene and not containment |
 | [16-long-work](docs/16-long-work.md) | how long work finishes, what it costs, and how it stops |
+| [17-two-agents](docs/17-two-agents.md) | worktrees, who owns the running system, and how a branch merges |
 
 Two of those are designs whose central claim was killed by review, kept in their wrong
 form with the correction beside it. That is deliberate: a design document that only ever

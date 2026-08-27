@@ -325,18 +325,28 @@ export const APP_HTML = String.raw`<!doctype html>
     max-width: 700px;
   }
   details.step > summary {
-    cursor: pointer; list-style: none; padding: 3px 0 3px 10px; margin-left: -2px;
-    border-left: 2px solid transparent;
+    cursor: pointer; list-style: none; padding: 4px 9px 4px 6px; margin-left: -2px;
+    border-left: 2px solid transparent; border-radius: 0 var(--radius-input) var(--radius-input) 0;
     font-family: var(--font-sans); font-size: 12px; line-height: 1.45;
     color: var(--text-soft); user-select: none;
+    display: flex; align-items: baseline; gap: 6px;
   }
   details.step > summary::-webkit-details-marker { display: none; }
+  /* The chevron sits in its own tinted well, so the row reads as a control rather than
+     as a line of text that happens to be grey. Without it nobody guessed it could fold. */
   details.step > summary::before {
-    content: "\\25b8"; display: inline-block; width: 11px;
-    color: var(--muted); font-size: 9px;
+    content: "\25b8"; flex: none; width: 14px; height: 14px; line-height: 14px;
+    text-align: center; font-size: 8px; color: var(--muted);
+    background: var(--surface-2); border: 1px solid var(--border);
+    border-radius: 3px; transition: transform 0.12s ease;
   }
-  details.step[open] > summary::before { content: "\\25be"; }
-  details.step > summary:hover { color: var(--text); border-left-color: var(--accent); }
+  details.step[open] > summary::before { content: "\25be"; }
+  details.step > summary:hover {
+    color: var(--text); background: var(--surface-hover); border-left-color: var(--accent);
+  }
+  details.step > summary:hover::before { color: var(--text); border-color: var(--border-strong); }
+  /* How many calls are inside, so a folded step still says how much it did. */
+  details.step > summary .cnt { flex: none; margin-left: auto; color: var(--muted); font-size: 10px; }
   details.step > summary .lbl { font-weight: 500; }
   /* The children. The left padding is the indent; the parent's border is the guide. */
   details.step > .kids { padding: 1px 0 3px 18px; }
@@ -349,6 +359,17 @@ export const APP_HTML = String.raw`<!doctype html>
   /* Tool rows inside a round are quieter than they are on their own, because the round
      already says what this group of them was for. */
   details.step details.tool { font-size: 11.5px; }
+  /* The group: one turn's steps, with one control over all of them. */
+  .steps {
+    margin: 6px 0; padding: 5px 0 4px; max-width: 700px;
+    border-top: 1px solid var(--border);
+  }
+  .steps > .foldgroup {
+    display: inline-block; margin-bottom: 2px;
+    font-family: var(--font-sans); font-size: 10.5px; letter-spacing: 0.04em;
+    color: var(--muted); text-decoration: none; cursor: pointer;
+  }
+  .steps > .foldgroup:hover { color: var(--text); }
   #foldall {
     font-size: 11px; letter-spacing: 0.04em; color: var(--muted);
     cursor: pointer; text-decoration: none; flex: none;
@@ -1642,6 +1663,41 @@ function stepHost() {
  * Called when narration is followed by tool calls — the point at which that sentence is
  * revealed to have been a heading rather than an answer.
  */
+/**
+ * The bar that folds a whole turn's steps at once.
+ *
+ * Per turn rather than per page: "fold everything I can see" is a different wish from
+ * "put this piece of work away", and the second is the one people actually have while
+ * reading. Placed above the first step of the turn, so the control is where the thing it
+ * controls is — the header link was correct and invisible.
+ */
+function stepGroupBar() {
+  var chat = $("chat");
+  var last = chat.lastElementChild;
+  if (last && last.classList && last.classList.contains("steps")) return last;
+  var group = document.createElement("div");
+  group.className = "steps";
+  group.innerHTML = '<a href="#" class="foldgroup"></a>';
+  var link = group.querySelector(".foldgroup");
+  var shut = false;
+  var label = function () {
+    var n = group.querySelectorAll("details.step").length;
+    link.textContent =
+      (shut ? "\u25b8 show " : "\u25be hide ") + n + (n === 1 ? " step" : " steps");
+  };
+  link.onclick = function (event) {
+    event.preventDefault();
+    shut = !shut;
+    var panels = group.querySelectorAll("details.step");
+    for (var i = 0; i < panels.length; i++) panels[i].open = !shut;
+    label();
+  };
+  group.relabel = label;
+  chat.appendChild(group);
+  label();
+  return group;
+}
+
 function beginStep(text) {
   var chat = $("chat");
   var stick = nearBottom(chat);
@@ -1649,16 +1705,23 @@ function beginStep(text) {
   step.className = "step";
   step.open = !folded;
   step.innerHTML =
-    "<summary><span class=\"lbl\"></span></summary>" +
+    '<summary><span class="lbl"></span><span class="cnt"></span></summary>' +
     '<div class="kids"></div>';
-  step.querySelector(".lbl").textContent = firstLineOf(text) || "working";
-  if (text && firstLineOf(text) !== String(text).trim()) {
+  var head = firstLineOf(text);
+  step.querySelector(".lbl").textContent = head || "working";
+  // Only the *rest* goes in the body. Putting the whole thing there repeated the first
+  // sentence directly under itself, which read as a rendering fault rather than as a
+  // heading and its detail.
+  var rest = restAfter(text, head);
+  if (rest !== "") {
     var full = document.createElement("div");
     full.className = "saidfull";
-    full.innerHTML = renderMarkdown(text);
+    full.innerHTML = renderMarkdown(rest);
     step.querySelector(".kids").appendChild(full);
   }
-  chat.appendChild(step);
+  var group = stepGroupBar();
+  group.appendChild(step);
+  if (group.relabel) group.relabel();
   openStep = step;
   if (stick) chat.scrollTop = chat.scrollHeight;
   return step;
@@ -1667,6 +1730,17 @@ function beginStep(text) {
 /** Closes the current round, so what follows is not filed under it. */
 function endStep() {
   openStep = null;
+}
+
+/** Whatever the agent said beyond the line already shown as the heading. */
+function restAfter(text, head) {
+  var whole = String(text || "").trim();
+  if (head === "") return whole;
+  // head is clamped and may end in an ellipsis, so compare on the unclamped prefix.
+  var bare = head.replace(/…$/, "");
+  var at = whole.indexOf(bare);
+  if (at !== 0) return whole;
+  return whole.slice(bare.length).replace(/^[\s。.!?、,，]+/, "").trim();
 }
 
 /** The first sentence or line, clamped — enough to know what a folded step was. */
@@ -1708,8 +1782,36 @@ function toolDetail(tool, input) {
     for (var i = 0; i < actions.length; i++) names.push(actions[i].action);
     return names.join(" + ");
   }
-  var values = Object.keys(args).map(function (key) { return String(args[key]); });
-  return values.length ? values[0] : "";
+  // A structured argument is the common case, not the exception: SetTodos takes a list of
+  // objects and String() on it renders "[object Object],[object Object]" — which is what
+  // the row showed. Summarise by shape instead, so a call is identifiable without being
+  // expanded.
+  var keys = Object.keys(args);
+  if (keys.length === 0) return "";
+  return keys
+    .map(function (key) { return describeArg(args[key]); })
+    .filter(function (part) { return part !== ""; })
+    .join(" · ")
+    .slice(0, 140);
+}
+
+/** One argument, in a form a person can read at a glance. */
+function describeArg(value) {
+  if (value == null) return "";
+  if (Array.isArray(value)) {
+    // The items themselves when they are words; a count when they are structures.
+    var words = value.filter(function (item) { return typeof item !== "object"; });
+    if (words.length === value.length) return words.join(", ");
+    var labels = value.map(function (item) {
+      return item && (item.text || item.title || item.name || item.action || item.id) || "";
+    }).filter(Boolean);
+    return labels.length ? labels.join(" · ") : value.length + " items";
+  }
+  if (typeof value === "object") {
+    return value.text || value.title || value.name || value.command || value.url ||
+      Object.keys(value).join(",");
+  }
+  return String(value);
 }
 
 function collapsedRow(cls, summaryHtml, detail) {
@@ -1721,8 +1823,17 @@ function collapsedRow(cls, summaryHtml, detail) {
   // textContent, not innerHTML: this is output from a command or another agent.
   row.querySelector(".det").textContent = String(detail == null ? "" : detail);
   el.appendChild(row);
+  countStep();
   if (stick) $("chat").scrollTop = $("chat").scrollHeight;
   return row;
+}
+
+/** Keeps a step's summary saying how many calls are inside it, so folding loses nothing. */
+function countStep() {
+  if (!openStep || !openStep.isConnected) return;
+  var n = openStep.querySelectorAll(".kids > details.tool").length;
+  var cnt = openStep.querySelector(".cnt");
+  if (cnt) cnt.textContent = n === 0 ? "" : n === 1 ? "1 call" : n + " calls";
 }
 
 /** Appends to an open row's body, for a result that arrives after the call. */
@@ -1947,6 +2058,8 @@ $("foldall").onclick = function (event) {
   // Applies to what is on screen and to what arrives next, because a reader who folded
   // the steps away did not mean "until the agent says something else".
   var panels = document.querySelectorAll("details.step");
+  var bars = document.querySelectorAll(".steps");
+  for (var b = 0; b < bars.length; b++) if (bars[b].relabel) bars[b].relabel();
   for (var i = 0; i < panels.length; i++) panels[i].open = !folded;
   $("foldall").textContent = folded ? "unfold steps" : "fold steps";
 };
