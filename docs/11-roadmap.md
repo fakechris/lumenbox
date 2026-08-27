@@ -387,10 +387,20 @@ not**: of 46 tasks on the board, zero can be costed. The only available join is 
 agent, near in time", which is a guess rather than a total.
 
 **This is the same gap as [docs/16](16-long-work.md), seen from the reporting side.** The
-work graph is not only what makes a completion gate correct and an estimate honest; it is
-what makes the drill-down possible at all, because it is the missing id that ties a task to
-its turns to their tokens. Two requirements, one substrate — which is the argument for
-building the ledger before either.
+missing thing is the id that ties a task to its turns to their tokens. Two requirements,
+one substrate.
+
+**Corrected 2026-08-26, after the second review of docs/16.** The earlier version of this
+paragraph said the substrate was the obligation ledger and that it should be built before
+either requirement. That was wrong in a way worth naming, because it delayed this entry
+behind a design that has now failed twice: *an obligation ledger is a fourth file with the
+same hole in it.* Adding an id to a new file joins nothing. What both requirements need is
+`workId` **on the records already being written** — one field, one write site for usage
+(`turn.ts:1433`), stable across resumes, which `turnId` is not (`turn.ts:818` mints a fresh
+one per attempt).
+
+Which reverses the dependency: **R31 no longer waits on anything.** It needs the field, the
+field is additive, and nothing about the completion gate has to be settled first.
 
 What this entry adds on its own, beyond the join:
 
@@ -742,11 +752,23 @@ predicate, wearing a proof.
 
 **Designed in [docs/16](16-long-work.md)**, together with the two questions that turn out
 to share its substrate: what long work costs, and how it stops when it is going nowhere.
-The single obligation ledger answers all three, because an estimate needs a shape to
-estimate over and a gate needs a graph to count. The document also records the finding
-that made the cost question urgent: `AGENTBOX_BUDGET_TOKENS` is unset, `config.json` has
-no policy block, and `policy.test.ts` asserts that the default is `undefined` — **the
-spend ceiling is built, tested, and switched off**, so the worst case is unbounded.
+That document also records the finding that made the cost question urgent:
+`AGENTBOX_BUDGET_TOKENS` is unset, `config.json` has no policy block, and
+`policy.test.ts` asserts that the default is `undefined` — **the spend ceiling is built,
+tested, and switched off**, so the worst case is unbounded.
+
+**Second review, 2026-08-26: the single-obligation-ledger design did not survive either.**
+Five fatal findings and five major, with the fatal ones going to the parts that were meant
+to be its strength — write-before-dispatch does not make the two crash orders
+distinguishable, because inbox compaction erases the evidence (`inbox.ts:111`); and
+`parentTurnId` is an *attempt* id that changes on every resume (`turn.ts:818`), so the
+graph has no spine. Ten claims the document made about our own code were false, in a
+document that opened by asserting all of them had been read out of the source.
+
+What survives is smaller and better: **one `workId`, stable across resumes, written onto
+the records that already exist.** The gate comes after a dispatch record and a proper
+separation of attempt outcome from obligation resolution — three steps further out than
+the last plan claimed, and the honest ordering is now in docs/16.
 
 ### R21. Agent and skill bundles: export and import
 A team's agent (profile, skills, scope shape — never its memories or secrets) packaged

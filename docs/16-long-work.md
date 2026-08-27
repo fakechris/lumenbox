@@ -1,11 +1,21 @@
 # Finishing long work: the protocol, the cost, and the stop
 
-**Status: design, not built.** Written after the R30 review found three fatal faults in a
-completion gate whose load-bearing claim — "`Fork` is already a spawn tree, this needs a
-counter and a rule" — was false. The lesson taken from that is procedural and applied
-here: **every claim below about our own code was read out of the code while writing this
-paragraph, not recalled.** Ten claims in the previous version were written from module
-comments and memory, and eight of them were wrong.
+**Status: the design in section 1 was reviewed and did not survive.** Second hostile review,
+2026-08-26: five fatal findings, five major, and ten false claims about our own code — in a
+document whose opening paragraph asserted that every claim in it had been read out of the
+source. Six of the ten were spot-checked against the files before this rewrite and all six
+were the reviewer's, not mine.
+
+The superseded design is kept below under [What was proposed](#what-was-proposed-and-what-it-got-wrong)
+rather than deleted, because a design that fails twice in the same place is evidence about
+the place. The review itself is in
+[docs/reviews/2026-08-26-obligation-ledger.md](reviews/2026-08-26-obligation-ledger.md),
+unedited.
+
+**The finding that reorganises everything else:** the missing thing is not a ledger. It is
+**one identifier that survives a resume and appears on every record** — usage rows,
+transcript entries, task changes, artifacts. Without it there is nothing to join, and a
+ledger of obligations is a second file with the same hole in it.
 
 Three questions, one substrate:
 
@@ -21,11 +31,23 @@ Three questions, one substrate:
 |---|---|---|
 | `MAX_ROUNDS` | `turn.ts:81` | 400 rounds per turn, then stop. A runaway guard, not a task budget — its own comment says so |
 | `MAX_RESUMES` | `resume.ts:45` | 2 continuations after an interrupted turn |
-| `detectLoop` | `progress.ts:91` | 4 consecutive rounds of **one** repeated call, **no other tool alongside**, **plan and todos unchanged** — all three required |
+| `detectLoop` | `progress.ts:91` | 4 consecutive rounds in which exactly **one distinct** signature appears, no empty round, and `stateHash` unchanged — all three required |
 | `hasProgressed` | `progress.ts` | deliberately generous: one todo change in 400 rounds counts |
 | `AgentBus.idle()` | `bus.ts:581` | in-process quiescence; `settle()` calls it in production |
 | `PolicyGate` budget | `policy.ts` | refuses over `budgetTokens` in a rolling window, per installation and per principal — **tested and working** |
-| `Usage` ledger | `usage.ts` | every call's tokens, attributed to a principal |
+| `Usage` ledger | `usage.ts` | tokens for the **turn loop only**, keyed by agent, `principal` optional |
+
+Two corrections to what this table said in the first version, both from the review and both
+confirmed in the source:
+
+- **`detectLoop` does not require one call per round.** It requires one *distinct*
+  signature across the window (`progress.ts:96`), so a round that issues the same call
+  twice still satisfies it. The earlier phrasing described a narrower check than the code.
+- **The usage ledger does not record every call.** There is exactly one `usage.record` call
+  site, in the turn loop (`turn.ts:1433`). Model calls in `remember.ts:157` and
+  `orchestrator.ts` go through no ledger at all, and `principal` is explicitly optional
+  (`usage.ts:34`) — absent for scheduled runs and teammate wakes. So "what did each person
+  cost" is answerable for the traffic a person drove directly and silent about the rest.
 
 **And the finding that matters for question 2:**
 
@@ -40,9 +62,10 @@ the default is `undefined` and calls that correct.
 > **There is no spend ceiling on this installation. There never has been.** The gate that
 > would enforce one is built, tested, and switched off.
 
-Measured: **562 recorded calls, 1,725,069 input and 100,177 output tokens.** Not a large
-bill, and entirely a matter of how the day happened to go rather than of anything
-stopping it.
+Measured: **562 recorded calls, 1,725,069 input and 100,177 output tokens** — recorded
+being the operative word, since the memory and orchestrator calls are not in that figure
+and the file keeps only 48 hours anyway (`usage.ts:79`). Not a large bill, and entirely a
+matter of how the day happened to go rather than of anything stopping it.
 
 This is the ninth instance of the pattern in [docs/14](14-from-outside-reading.md) — a
 capability present in the source and absent at runtime — and the first where the absent
@@ -50,7 +73,55 @@ thing is a *limit* rather than a feature.
 
 ---
 
-## 1. Finishing: the protocol the gate needs first
+## 1. The spine: one id that survives
+
+Both questions — is it finished, what did it cost — are joins, and there is nothing to join
+on. Verified in the source rather than recalled:
+
+| record | has | file |
+|---|---|---|
+| `UsageRecord` | seq, at, agentId, agentName, `principal?`, provider, model, round, tokens | `usage.ts:29` |
+| turn id | a fresh `randomUUID()` **per attempt** — a resume gets a new one | `turn.ts:818` |
+| transcript entry | message ids, not turn ids | `turn.ts:454` |
+| background job | a `Map` in the boxd process; nothing survives its restart | `job-service.ts:43` |
+
+So `principal` is optional and absent for scheduled and teammate-driven work; there is no
+`kind`, no turn, no conversation, no task on a usage row; and `parentTurnId` — the field the
+old design made its spine — **changes every time a turn resumes.** A gate keyed on it sees
+none of the obligations opened by the attempt it replaced.
+
+What the four tables want is one field:
+
+```
+workId:  allocated once, when a piece of work begins
+         unchanged across every resume, retry and continuation of that work
+         written on: usage rows, transcript entries, task changes, artifacts, obligations
+```
+
+`turnId` stays what it is — an attempt id, useful for exactly that. `workId` is the thing
+that is the same in the morning and the afternoon.
+
+This is worth building **before** anything else here and **independently of the gate**,
+because it is what makes R31's question ("where did last month go, drill into that task")
+answerable at all, and because it is additive: a field on records that are already written.
+
+### Retention pulls the two apart
+
+Termination wants the open set and nothing else. Analytics wants months. Every operational
+ledger here already compacts, and the numbers were read out of the source:
+
+- usage keeps a count tail plus **48 hours** (`usage.ts:79`)
+- tasks discard closed work after **30 days** (`tasks.ts:77`)
+- turn history is erased entirely when nothing is open (`resume.ts:132`)
+
+One file cannot hold both policies. So: **a compact index of open obligations** for the
+gate, and **an exported immutable event stream** for the admin view, sharing ids and
+sourced from the same events. That is not a compromise between the two, it is the
+recognition that they are two.
+
+---
+
+## What was proposed, and what it got wrong
 
 The review's verdict was that a completion gate cannot be built yet, because the graph it
 would count over is not recorded. Reading the code confirms each part:
@@ -131,17 +202,72 @@ may finish when it is idle and has no unsettled non-detached obligations. Until 
 place, a gate is a counter over a graph nobody wrote down — the board predicate wearing a
 proof.
 
+### What the review did to each of those four properties
+
+Every one of them, in order.
+
+**"Written before the effect."** There *is* a syntactic place to write it — `Fork` computes
+the child conversation before calling `sendFromUser` (`tools.ts:1420`). But the claimed
+*benefit* is false. The bus marks the inbox item started before invoking the turn runner
+(`bus.ts:483`) and inbox compaction erases the admission once nothing is pending
+(`inbox.ts:111`), so "obligation written, child never dispatched" and "child dispatched and
+died during setup" reduce at restart to **the same observable state**: an obligation, no
+pending message, no child turn. The distinction the design was built on cannot be made.
+
+Two worse details underneath it, neither of which the design accounted for: an inbox append
+failure is *warned about and dispatch continues* (`inbox.ts:125`), and `appendLine` does not
+`fsync` (`jsonl.ts:44`) — so "durably written before the effect" is not established even
+when the order is right.
+
+**"Terminal states are not one state."** Correct as far as it goes, and it reintroduces the
+livelock. A child that fails deterministically settles `failed`; `failed` is unresolved;
+the parent may not finish; the retry fails identically. "The parent may retry, proceed
+without it, or report it" names three *actions* and no *state transition*, and `abandoned`
+has no writer and no evidence rule — so it comes down to the model deciding, which is
+exactly the board predicate the previous review killed. The repair is real but is a
+different design: separate **attempt outcome** from **obligation resolution**, so
+`attempt_failed` is followed either by a bounded retry with a new attempt id or by an
+explicit waiver from a named authority, with the retry and time limits themselves durable.
+
+**"Settlement is idempotent."** It is not. Appending the same fact twice is idempotent;
+allowing *different* facts to overwrite each other is not, and last-write-wins is the
+second thing. The sequence: a restart reconciler reads an obligation and sees no
+settlement; the child finishes and appends `succeeded`; the stale reconciler appends
+`unknown`; replay takes the later one. A durably successful child is now unresolved, and
+reversing the race lets a late child overwrite a deliberate abandonment. What is needed is
+attempt-scoped events with monotonic transitions and one authorised writer.
+
+**"Every producer opens one, or is detached."** Unenforceable, and the schema does not even
+have the field. The bash tool exposes `background`, not dependency (`tools.ts:357`);
+`Delegate` has nothing (`tools.ts:423`); and this repository has a test *proving* a detached
+descendant escapes its process group (`shell-service.test.ts:180`). So detachment is a
+declared intent, which is fine — it is being called a proof that is the problem. A
+background build the answer depends on is not detached in any useful sense, and a dev
+server is never not-detached, and no harness that hands out `/bin/sh -lc` can tell them
+apart.
+
+**And the node contract.** The design quoted "SCHEMA: enforced — free text is rejected" and
+then proposed a settlement of `id, state, at, note` where `note` is free text. A child that
+returns an essay instead of `{supplierIds, citations}` settles `succeeded` with
+`note: "looks good"` and the gate lets the parent finish: wrong still looks complete, which
+is the failure this whole document exists to prevent, reproduced inside the fix for it.
+
 ---
 
 ## 2. Cost: estimated before, bounded during, attributed after
 
 The three are different jobs and only the third exists.
 
-### Attributed after — built
+### Attributed after — half built, and the half that is missing is the join
 
-`usage.jsonl` records every call against a principal. This is the part that works, and it
-is what makes the other two possible: an estimate needs history to be an estimate rather
-than a guess.
+`usage.jsonl` records the turn loop's calls against an agent, and against a principal when
+there was one. What it cannot do is answer "what did *this task* cost", because the row has
+no task, no conversation and no turn on it (`usage.ts:29`) — the answer would have to be
+guessed from timestamps, and two tasks running near each other for the same agent make even
+that guess wrong.
+
+This is the concrete form of the `workId` problem in section 1, and it is the cheapest
+thing on this page to fix: **one field on `UsageRecord`, set at the single write site.**
 
 ### Bounded during — built and switched off
 
@@ -153,20 +279,23 @@ likely; it is that **an unset ceiling means the answer to "what is the worst cas
 The refusal has to be readable as a *stop*, not a failure: reaching a budget means
 **stopped incomplete**, and an agent told only "refused" will report that the work failed.
 
-### Estimated before — not built, and the interesting one
+### Estimated before — not built, and further off than claimed
 
-The obligation ledger makes this possible for the first time, because cost becomes a
-property of a *shape* rather than of a run:
+The shape is right:
 
 ```
 estimate(task) ≈ Σ over planned obligations of  median(cost | obligation kind)
 ```
 
-We have the history for that: 562 calls with kinds and token counts. A fork that fetches
-and summarises has a cost distribution; so does a verifier pass. An estimate from the
-median of past obligations of the same kind is worth far more than a model's guess, and it
-is checkable afterwards — the estimate and the actual go in the same ledger, and the error
-is measurable.
+But the claim that "we have the history for that: 562 calls with kinds and token counts"
+was **false**. `UsageRecord` has no `kind` (`usage.ts:29`) and the write site supplies none
+(`turn.ts:1433`), so there is no distribution to take a median of — and the file's 48-hour
+retention means that even once `kind` exists, the history accumulates from the day it is
+added, not from the ones already spent.
+
+Which makes the ordering clear rather than disappointing: `workId` and `kind` on the usage
+row are what start the clock. Everything estimative here is downstream of a field that
+takes an afternoon.
 
 The product consequence, which is the real reason to want it: **a long task can say what
 it will cost before it starts, and ask.** "This looks like eight sub-questions, roughly
@@ -224,9 +353,14 @@ So the decision is to **observe first**. The risk of that phrase is that it has 
 and "observe first" becomes "never", which is how the other eight instances of this pattern
 happened. So it is written down with what would end it:
 
-- The observation is already running — `usage.jsonl` records every call, attributed.
+- The observation is **partly** running. `usage.jsonl` records the turn loop, keyed by
+  agent, with an optional principal — not every call and not against a task.
 - **What to look at:** the heaviest *day*, and separately the heaviest *single turn*. The
   day bounds a bill; the turn bounds a runaway, and they want different ceilings.
+- **The turn one is not observable today.** Usage rows carry no turn id, and `round`
+  restarts at zero on every continuation (`turn.ts:1159`), so a long turn that resumed
+  twice looks like three short ones. The day figure is sound; the turn figure needs the
+  same field everything else on this page needs.
 - **What would settle it:** a fortnight of ordinary use, or the first turn that costs more
   than a person expected. Either produces a number from evidence rather than from caution.
 - **Today's baseline, for comparison later:** 562 calls, 1,725,069 input and 100,177
@@ -240,19 +374,44 @@ eight were.
 
 ## What to build, in order
 
+Reordered after the second review, and much shorter at the front than it was.
+
 1. ~~**Turn on a budget.**~~ Deferred with a reason and an end condition, above.
-2. **The obligation ledger.** Everything else depends on it: the gate cannot be correct
-   without it, and the estimate cannot be honest without it.
+2. **`workId` on the records that already exist.** One id, allocated when work begins,
+   unchanged across resumes, written onto usage rows, transcript entries and task changes.
+   Plus `kind` on the usage row, because the estimate has no distribution without it.
+   Additive, one write site for the first of them, and it is the thing every later item
+   turns out to need. It also makes R31's dashboard possible on its own, with no gate.
 3. **Widen `stateHash` to artifacts**, closing the churn and oscillation gaps with
-   evidence rather than heuristics.
-4. **The gate**, Dijkstra–Scholten-shaped, over the ledger.
-5. **The estimate**, from the ledger's own history, checked against outcomes.
+   evidence rather than heuristics. Independent of everything above — worth doing in
+   parallel.
+4. **A dispatch record**, preallocated before the effect, shared by inbox admission, child
+   attempt, transcript cause and usage. This is what the obligation ledger was reaching
+   for; it is one id and an ordering rule, not a graph.
+5. **Separate attempt outcome from obligation resolution**, with bounded retries and a
+   named authority for waiving — the repair the review specified for the livelock.
+6. **The gate**, Dijkstra–Scholten-shaped, only once 4 and 5 exist.
+7. **The estimate**, once `kind` has accumulated history, checked against outcomes.
 
-Steps 2 and 4 change what counts as finished and what a persisted record contains, so per
-[docs/13](13-design-review.md) each goes to hostile review before it is built. Step 3
-changes what a test asserts is correct, which is the same category.
+Steps 4, 5 and 6 change what counts as finished and what a persisted record contains, so
+per [docs/13](13-design-review.md) each goes to hostile review before it is built. Step 3
+changes what a test asserts is correct, which is the same category. **Step 2 does not** —
+it adds a field to records already being written, and nothing reads it yet.
 
-The review of the previous attempt is the reason this document leads with measurements. It
-is also worth stating plainly: **the last design's central claim was false because it was
-written from memory of the codebase.** This one may still be wrong, but it is wrong about
-things that were read.
+### What the second review is evidence of
+
+The first version of this document opened by saying its predecessor's central claim was
+false because it was written from memory, and that this one was "wrong about things that
+were read". Ten of its claims about our own code were then found false, and the six checked
+before this rewrite were all genuinely wrong.
+
+So the lesson is not "read the code first" — that was already the lesson, stated in the
+first paragraph, and it did not work. It is narrower and less comfortable: **reading a
+module to confirm a design reads it for what the design needs, and that is not the same
+act as reading it to find out what it does.** Every false claim here was about a field that
+did not exist on a record I had opened. What catches that is not more care; it is printing
+the record.
+
+The same fix that worked for the chevron — [stop reasoning about the artefact and print
+it](17-two-agents.md) — applies to a schema. Before the next version of this design claims
+a field exists, it should quote a line of the actual file.
