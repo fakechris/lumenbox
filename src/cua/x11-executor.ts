@@ -71,6 +71,26 @@ const SCROLL_BUTTON: Record<ScrollDirection, string> = {
 };
 
 /**
+ * The wheel button for a direction, or a complaint naming the field.
+ *
+ * A missing direction used to reach xdotool as the literal word "undefined", and what came
+ * back was a BadValue from the X server quoting an opcode — a message that names neither
+ * the action nor the field, and sends the reader to look at the display. The caller in
+ * that case had written `scroll_direction`, which is the other computer-use dialect.
+ */
+export function scrollButtonFor(direction: unknown): string {
+  const button = SCROLL_BUTTON[direction as ScrollDirection];
+  if (button === undefined) {
+    throw new Error(
+      `A scroll action needs a "direction" field of up, down, left or right, e.g. ` +
+        `{"action":"scroll","direction":"down","amount":3}. ` +
+        `Got ${JSON.stringify(direction)}.`
+    );
+  }
+  return button;
+}
+
+/**
  * How long a keymap change is held before and after the keystrokes relying on it.
  *
  * An application translates a key event against its own cached copy of the
@@ -461,7 +481,7 @@ export class X11Executor {
       }
 
       case "scroll": {
-        const button = SCROLL_BUTTON[action.direction];
+        const button = scrollButtonFor(action.direction);
         const amount = action.amount ?? 3;
         const parts: string[] = [];
 

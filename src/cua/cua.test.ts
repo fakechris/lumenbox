@@ -21,6 +21,7 @@ import {
   patchWebpHeader,
   pointerPath,
   runThatFits,
+  scrollButtonFor,
   windowPointToScreen,
 } from "./x11-executor.ts";
 import { API_WIDTH } from "../protocol/index.ts";
@@ -183,6 +184,15 @@ test("a mixed-up field name is named, not crashed on", () => {
     /needs a non-empty "key" field/
   );
   assert.throws(() => keyForXdotool("   "), /needs a non-empty "key" field/);
+});
+
+test("a scroll with no direction is refused by name, not by the X server", () => {
+  // It reached xdotool as `click --repeat 3 undefined` and came back as a BadValue quoting
+  // an XTEST opcode, which points the reader at the display rather than at the field they
+  // got wrong. The caller had written scroll_direction, the other computer-use dialect.
+  assert.equal(scrollButtonFor("down"), "5");
+  assert.throws(() => scrollButtonFor(undefined), /needs a "direction" field/);
+  assert.throws(() => scrollButtonFor("scroll_down"), /Got "scroll_down"/);
   assert.equal(keyForXdotool("ctrl+shift+v"), "ctrl+shift+v");
   assert.equal(keyForXdotool("meta+a"), "super+a");
 });
