@@ -886,7 +886,7 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
     const dingId = process.env.DINGTALK_CLIENT_ID;
     const dingSecret = process.env.DINGTALK_CLIENT_SECRET;
     channels.register(
-      new DingTalkChannel(dingId ?? "", dingSecret ?? "", line => log(line)),
+      new DingTalkChannel(dingId ?? "", dingSecret ?? "", line => log(line), ingress),
       dingId !== undefined && dingSecret !== undefined,
       dingId !== undefined && dingSecret !== undefined
         ? "starting"

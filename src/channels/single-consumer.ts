@@ -1,24 +1,37 @@
 /**
- * One websocket consumer per Feishu app id, machine-wide.
+ * One websocket consumer per app credential, machine-wide.
  *
  * Feishu treats every long connection opened with the same app id as one consumer
- * group and delivers each event to exactly one of them. Two instances — a dev run
- * and the desktop app, say — therefore *split* the traffic: each sees roughly half
- * the messages, the bot answers people at random, and nothing anywhere reports an
- * error. That failure mode is worse than a crash, so the second instance is refused
- * loudly here instead. The mature reference (hermes-agent) does the same with a
- * scoped lock; this is the smallest honest version — a pid file in the system tmp
- * directory, machine-wide on purpose: two instances in two state directories still
- * collide on the app id, because the collision is at Feishu's end, not ours.
+ * group and delivers each event to exactly one of them; DingTalk's Stream Mode
+ * load-balances callbacks across the connections of one clientId the same way. Two
+ * instances — a dev run and the desktop app, say — therefore *split* the traffic:
+ * each sees roughly half the messages, the bot answers people at random, and nothing
+ * anywhere reports an error. That failure mode is worse than a crash, so the second
+ * instance is refused loudly here instead. The mature references (hermes-agent for
+ * Feishu, dingtalk-stream for DingTalk) do the same with a scoped lock; this is the
+ * smallest honest version — a pid file in the system tmp directory, machine-wide on
+ * purpose: two instances in two state directories still collide on the credentials,
+ * because the collision is at the vendor's end, not ours.
  */
 
 import { closeSync, openSync, readFileSync, unlinkSync, writeSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-export function lockPathFor(appId: string): string {
-  // The app id is Feishu's own token format (cli_…): safe as a filename as-is.
-  return join(tmpdir(), `agentbox-feishu-${appId}.lock`);
+/** How a channel names itself in a lock file path and in the refusal. */
+export interface ConsumerLockChannel {
+  /** Filename-safe token, e.g. "feishu", "dingtalk". */
+  id: string;
+  /** Human name used when telling somebody why they were refused. */
+  label: string;
+}
+
+const FEISHU: ConsumerLockChannel = { id: "feishu", label: "Feishu" };
+
+export function lockPathFor(appId: string, channel: ConsumerLockChannel = FEISHU): string {
+  // The ids are the vendors' own token formats (Feishu cli_…, DingTalk ding…):
+  // safe as filenames as-is.
+  return join(tmpdir(), `agentbox-${channel.id}-${appId}.lock`);
 }
 
 function isAlive(pid: number): boolean {
@@ -32,13 +45,18 @@ function isAlive(pid: number): boolean {
 }
 
 /**
- * Takes the consumer lock for an app id, or throws with who holds it.
+ * Takes the consumer lock for an app credential, or throws with who holds it.
  *
  * Returns the release function. A lock whose owner is dead is stale — the process
  * that crashed cannot release it — and is taken over; that is what the retry is for.
  */
-export function acquireConsumerLock(appId: string, ownPid: number = process.pid): () => void {
-  const path = lockPathFor(appId);
+export function acquireConsumerLock(
+  appId: string,
+  ownPid: number = process.pid,
+  channel: ConsumerLockChannel = FEISHU
+): () => void {
+  const path = lockPathFor(appId, channel);
+  const { label } = channel;
   for (let attempt = 0; attempt < 2; attempt++) {
     try {
       const fd = openSync(path, "wx");
@@ -63,10 +81,10 @@ export function acquireConsumerLock(appId: string, ownPid: number = process.pid)
       }
       if (holder !== undefined && Number.isFinite(holder) && isAlive(holder)) {
         throw new Error(
-          `another process (pid ${holder}) already holds the Feishu connection for this app id. ` +
-            `Feishu delivers each event to only one connection per app, so a second consumer ` +
+          `another process (pid ${holder}) already holds the ${label} connection for this app id. ` +
+            `${label} delivers each event to only one connection per app, so a second consumer ` +
             `silently splits the traffic. Stop the other instance, or give this one its own ` +
-            `Feishu app (a dev bot in a test group).`
+            `${label} app (a dev bot in a test group).`
         );
       }
       try {
@@ -76,5 +94,5 @@ export function acquireConsumerLock(appId: string, ownPid: number = process.pid)
       }
     }
   }
-  throw new Error("could not acquire the Feishu consumer lock after clearing a stale one");
+  throw new Error(`could not acquire the ${label} consumer lock after clearing a stale one`);
 }

@@ -4,18 +4,62 @@
  * Stream Mode is DingTalk's documented no-public-URL path: open a gateway
  * connection with the app credentials, get a websocket endpoint and ticket, and
  * bot messages arrive as JSON frames. Hand-rolled rather than through the vendor
- * SDK because the protocol is small, documented JSON — a subscription frame, a
- * ping to answer, an ack per message — and Node's built-in WebSocket covers it.
+ * SDK because the protocol is small, documented JSON — a subscription frame, a ping
+ * to answer, an ack per message — and Node's built-in WebSocket covers it.
  *
- * Replies go to the `sessionWebhook` each message carries: scoped to that
- * conversation, expiring, and needing no extra token — which is exactly the shape
- * a reply should have.
+ * The wire, spelled out, because several of these facts cost a debugging session:
+ *
+ * - Every frame carries a transport id (`headers.messageId`) that must be acked,
+ *   and every message a business id (`msgId`) that may arrive twice across a
+ *   reconnect. Acking twice is required; answering twice is a duplicate turn.
+ * - A message carries `conversationId` (the room — feeds `chatKey`, so results go
+ *   back to the room that asked rather than to wherever the sender spoke last)
+ *   and `senderStaffId` (the person — feeds `identity`, what the allow list
+ *   matches). `sessionWebhook` is the pre-authorised way out of that exact
+ *   conversation: scoped to it, expiring at `sessionWebhookExpiredTime`.
+ * - Pictures, files, audio and video arrive as a `downloadCode`; the bytes are
+ *   exchanged from it over the REST twin of this topic, with an access token.
+ * - Pushes into a conversation nobody just spoke in ride the robot REST APIs
+ *   (`groupMessages/send`, `oToMessages/batchSend`) — what a scheduled digest or a
+ *   long task's late result arrives by.
+ *
+ * What this adapter deliberately does not have, said so the absence reads as a
+ * decision rather than a gap:
+ *
+ * - No threads. Conversations between a person and a DingTalk bot have no topic
+ *   structure, so there is no `threadKey`: the chat *is* the subject, the reading
+ *   every platform without threads takes.
+ * - No interactive cards. Card instances require a template minted in the developer
+ *   console and button callbacks routed somewhere public; approvals travel as the
+ *   text verbs ("允许", "deny") the manager already treats as first-class.
+ * - No reactions and no outbound media. Robot messages carry no emoji marks, and
+ *   image/file sends take a public URL the box has no reason to have — screenshots
+ *   land as the manager's honest "this channel cannot show images" line instead.
  */
 
 import type { ChannelAdapter, InboundMessage } from "./manager.ts";
+import { acquireConsumerLock } from "./single-consumer.ts";
+import { looksLikeMarkdown } from "./markdown.ts";
 
 const GATEWAY = "https://api.dingtalk.com/v1.0/gateway/connections/open";
-const TOPIC = "/v1.0/im/bot/messages/get";
+/** The callback topic a bot's messages arrive on, and its REST twin's path. */
+export const TOPIC = "/v1.0/im/bot/messages/get";
+const TOKEN_URL = "https://api.dingtalk.com/v1.0/oauth2/accessToken";
+/** The REST twin of the stream topic: exchanges a media downloadCode for bytes. */
+const DOWNLOAD_URL = "https://api.dingtalk.com/v1.0/im/bot/messages/get";
+const GROUP_SEND_URL = "https://api.dingtalk.com/v1.0/robot/groupMessages/send";
+const OTO_SEND_URL = "https://api.dingtalk.com/v1.0/robot/oToMessages/batchSend";
+
+/** Auth header every api.dingtalk.com call except the token endpoint wants. */
+const AUTH_HEADER = "x-acs-dingtalk-access-token";
+
+/**
+ * Where one message ends and the next begins. The session webhook refuses bodies
+ * past a ceiling measured in UTF-8 bytes, and Chinese text spends three bytes per
+ * character — 3500 characters keeps a full report comfortably under it while
+ * leaving room for the JSON envelope around the text.
+ */
+export const CHUNK_CHARS = 3500;
 
 interface StreamFrame {
   specVersion?: string;
@@ -24,46 +68,400 @@ interface StreamFrame {
   data?: string;
 }
 
-interface BotMessage {
-  text?: { content?: string };
-  senderStaffId?: string;
-  senderNick?: string;
+export interface AtUser {
+  dingtalkId?: string;
+  staffId?: string;
+}
+
+export interface RichRun {
+  type?: string;
+  text?: string;
+  downloadCode?: string;
+}
+
+export interface MessageContent {
+  downloadCode?: string;
+  fileName?: string;
+  spaceId?: string;
+  richText?: unknown;
+}
+
+/** One bot message as the wire delivers it, narrowed to everything read here. */
+export interface BotMessage {
+  msgtype?: string;
+  msgId?: string;
   conversationId?: string;
+  /** `"1"` is a direct session, `"2"` a group. */
+  conversationType?: string;
+  senderStaffId?: string;
+  senderId?: string;
+  senderNick?: string;
+  atUsers?: AtUser[];
   sessionWebhook?: string;
+  sessionWebhookExpiredTime?: number;
+  text?: { content?: string };
+  content?: MessageContent;
+}
+
+export interface ChatTarget {
+  route: "group" | "direct";
+  conversationId: string;
+  /** Who to reach on the direct route, when known. */
+  userId?: string;
+}
+
+/** Which conversation id a chatKey addresses. There is no thread half on this wire. */
+export function parseChatKey(chatKey: string): { conversationId: string } {
+  const conversationId = chatKey.replace(/^dingtalk:/, "").split(":")[0] ?? "";
+  return { conversationId };
+}
+
+/**
+ * Which robot API a push to this conversation rides. A group gets
+ * `groupMessages/send`; a direct session has no group-send analogue — it goes by
+ * user id through `oToMessages/batchSend`. Unknown counts as a group, because chat
+ * keys are minted in groups far more often than anywhere else, and a wrong guess
+ * fails loudly once rather than silently always.
+ */
+export function outboundRoute(conversationType?: string): "group" | "direct" {
+  return conversationType === "1" ? "direct" : "group";
+}
+
+/**
+ * A DingTalk rich-text body as plain text, paragraphs joined by newlines.
+ *
+ * Picture runs are collected rather than skipped — a screenshot pasted among words
+ * is part of the instruction — and marked in place, so the agent knows where in the
+ * message each one sat. It is the same contract the Feishu adapter's
+ * `renderPostBody` serves; only the run shape differs (`type`/`downloadCode` rather
+ * than `tag`/`image_key`).
+ */
+export function flattenRichText(paragraphs: unknown): {
+  text: string;
+  pictureCodes: string[];
+} {
+  const lines: string[] = [];
+  const pictureCodes: string[] = [];
+  for (const paragraph of Array.isArray(paragraphs) ? paragraphs : []) {
+    const runs: string[] = [];
+    for (const run of Array.isArray(paragraph) ? paragraph : []) {
+      const part = run as RichRun;
+      if (part.type === "picture" && typeof part.downloadCode === "string") {
+        pictureCodes.push(part.downloadCode);
+        runs.push(`[image ${pictureCodes.length}]`);
+      } else if (typeof part.text === "string") {
+        runs.push(part.text);
+      }
+    }
+    lines.push(runs.join(""));
+  }
+  return { text: lines.join("\n"), pictureCodes };
+}
+
+/** The downloadable media a whole-message body carries, waiting on their bytes. */
+export function mediaOf(
+  msgtype: string | undefined,
+  content: MessageContent | undefined
+): { kind: string; code: string; name?: string }[] {
+  if (!["image", "picture", "audio", "video", "file"].includes(msgtype ?? "")) return [];
+  const code = content?.downloadCode;
+  if (typeof code !== "string" || code === "") return [];
+  // The wire names the type `picture`; everywhere else the word is `image`. `kind`
+  // keeps the wire's own word — it decides how bytes are fetched — while the name a
+  // human sees is built from it.
+  return [
+    {
+      kind: msgtype!,
+      code,
+      ...(msgtype === "file" && typeof content?.fileName === "string"
+        ? { name: content.fileName }
+        : {}),
+    },
+  ];
+}
+
+/**
+ * Whether an empty-looking arrival still deserves a spoken answer.
+ *
+ * In a direct session an empty text frame is somebody getting the bot's attention;
+ * in a group the same holds when anybody was @-mentioned (usually the bot itself —
+ * that mention is how the frame reached us). Dropping either silently looks exactly
+ * like an outage to the person who just pressed enter.
+ */
+export function wantsNudge(message: { conversationType?: string; atUsers?: AtUser[] }): boolean {
+  if (message.conversationType === "1") return true;
+  return Array.isArray(message.atUsers) && message.atUsers.length > 0;
+}
+
+/** The same slicing loop Feishu's chunker runs, extracted because tests care. */
+export function chunkText(text: string, size: number): string[] {
+  const chunks: string[] = [];
+  for (let at = 0; at < text.length; at += size) chunks.push(text.slice(at, at + size));
+  return chunks;
+}
+
+/** A short card-style title for a markdown message, from its first meaningful line. */
+export function markdownTitle(text: string): string {
+  const line =
+    text
+      .split("\n")
+      .map(candidate => candidate.trim())
+      .find(candidate => candidate !== "") ?? "";
+  return line.length > 40 ? `${line.slice(0, 39)}…` : line;
+}
+
+/**
+ * The way out of a conversation, if it is still alive. An absent expiry means
+ * "no death observed yet", not dead: webhooks are issued valid and the expiry
+ * field arrived later than the webhook did.
+ */
+export function freshWebhookOf(
+  conversation: { webhook?: string; webhookExpiresAt?: number } | undefined,
+  now: number
+): string | undefined {
+  return typeof conversation?.webhook === "string" &&
+    (conversation.webhookExpiresAt === undefined || conversation.webhookExpiresAt > now)
+    ? conversation.webhook
+    : undefined;
+}
+
+/**
+ * Whether a refused push was about what the words looked like rather than whether
+ * they could be delivered. Only the former earns the plain-text fallback — retrying
+ * markdown as text against a dead network answers nobody, and degrading on every
+ * failure would dress real delivery problems up as formatting ones.
+ */
+export function isContentRefusal(error: unknown): boolean {
+  const detail = error instanceof Error ? error.message : String(error);
+  return /content|format|invalid|incorrect/i.test(detail);
+}
+
+const NUDGE_LINE =
+  "(You mentioned me with no other words — I am here. Say what you need done and " +
+  "I will get on it.)";
+
+/** Pulls the vendor's own words out of whichever envelope the error arrived in. */
+async function describeFailure(response: Response): Promise<string> {
+  let detail = "";
+  try {
+    const body = (await response.json()) as { code?: string; message?: string };
+    detail = [body.code, body.message].filter(part => part !== undefined).join(" ");
+  } catch {
+    detail = "";
+  }
+  return detail === "" ? `HTTP ${response.status}` : `${response.status} ${detail}`.trim();
+}
+
+/** How a human should hear who is speaking, from what the wire gives. */
+function senderLabel(payload: BotMessage, fallback: string): string {
+  const nick = payload.senderNick?.trim();
+  return nick !== undefined && nick !== "" ? nick : fallback;
+}
+
+/** An honest filename for media that arrived unnamed. */
+function extensionOf(kind: string): string {
+  if (kind === "image" || kind === "picture") return "png";
+  if (kind === "audio") return "mp3";
+  if (kind === "video") return "mp4";
+  return "bin";
 }
 
 export class DingTalkChannel implements ChannelAdapter {
   readonly name = "dingtalk";
   private stopped = false;
   private socket: WebSocket | undefined;
-  /** Reply webhooks by identity, so a later notice can reach the same conversation. */
-  private readonly webhooks = new Map<string, string>();
+  /** Held while this process is the app's stream consumer. */
+  private releaseLock: (() => void) | undefined;
+
+  /**
+   * Each conversation the bot has been seen in: its session webhook and when that
+   * dies, plus the conversation type that decides the REST route. A webhook is the
+   * cheapest way out — pre-authorised, no token — but it expires, so anything older
+   * falls back to the robot APIs underneath.
+   */
+  private readonly conversations = new Map<
+    string,
+    { webhook?: string; webhookExpiresAt?: number; conversationType?: string }
+  >();
+  /** The conversation each identity last spoke in, for routing a notice back. */
+  private readonly identities = new Map<string, string>();
+
+  /**
+   * Message ids already answered, id → arrival ms. DingTalk redelivers frames
+   * across reconnects and slow acks, and a redelivered event is a duplicate turn.
+   * Keyed on `msgId` — the id of the *message*, which is what must run once — not
+   * the transport id, which is regenerated per delivery. Same shape as the Feishu
+   * adapter's: memory-only; a restart re-answering one message is the accepted cost.
+   */
+  private readonly seenMessages = new Map<string, number>();
+
+  private tokenPromise: Promise<string> | undefined;
+  private tokenExpiresAt = 0;
 
   constructor(
     private readonly clientId: string,
     private readonly clientSecret: string,
-    private readonly log: (line: string) => void
+    private readonly log: (line: string) => void,
+    /** Where arrivals and discards are recorded. Absent in tests. */
+    private readonly ingress?: {
+      arrived: (a: {
+        id: string;
+        channel: string;
+        identity: string;
+        chatKey: string;
+        kind: string;
+        chars: number;
+        at: string;
+      }) => void;
+      decided: (id: string, fate: "admitted" | "refused" | "dropped", reason?: string) => void;
+    }
   ) {}
 
-  async start(
-    onMessage: (message: InboundMessage) => Promise<string | undefined>
-  ): Promise<void> {
+  async start(onMessage: (message: InboundMessage) => Promise<string | undefined>): Promise<void> {
+    // Before anything connects. DingTalk load-balances a client's callback frames
+    // across every open stream connection, so a second instance would not fail — it
+    // would silently take half the traffic. Refused loudly instead.
+    this.releaseLock = acquireConsumerLock(this.clientId, process.pid, {
+      id: "dingtalk",
+      label: "DingTalk",
+    });
     await this.connect(onMessage);
   }
 
   stop(): void {
     this.stopped = true;
     this.socket?.close();
+    this.releaseLock?.();
   }
 
-  async send(identity: string, text: string): Promise<void> {
-    const webhook = this.webhooks.get(identity);
-    if (webhook === undefined) return;
-    await fetch(webhook, {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({ msgtype: "text", text: { content: text } }),
+  /**
+   * Reaches DingTalk over HTTPS, deliberately not over the stream socket.
+   *
+   * The socket offers neither state nor a close hook worth trusting, so this asks
+   * the vendor for an access token, which needs only the credentials. A success
+   * here alongside a long silence separates "quiet afternoon" from "dead socket":
+   * the account is fine and nothing is listening. The same proof the Feishu probe
+   * makes with its tenant token.
+   */
+  async probe(): Promise<string | undefined> {
+    try {
+      await this.accessToken();
+      return undefined;
+    } catch (error) {
+      return error instanceof Error ? error.message : String(error);
+    }
+  }
+
+  /** Records an id and says whether it was already seen. Prunes by age and size. */
+  private alreadySeen(messageId: string): boolean {
+    const now = Date.now();
+    const ttlMs = 24 * 60 * 60_000;
+    if (this.seenMessages.has(messageId)) return true;
+    this.seenMessages.set(messageId, now);
+    if (this.seenMessages.size > 2048) {
+      for (const [id, at] of this.seenMessages) {
+        if (now - at > ttlMs || this.seenMessages.size > 2048) this.seenMessages.delete(id);
+        else break;
+      }
+    }
+    return false;
+  }
+
+  /** Records a discard against the arrival, so no drop is silent. */
+  private discard(messageId: string | undefined, reason: string): void {
+    this.log(`channel dingtalk: dropped ${messageId ?? "?"} — ${reason}`);
+    if (messageId !== undefined) this.ingress?.decided(messageId, "dropped", reason);
+  }
+
+  /** An access token, cached to just shy of its stated expiry, fetched in one flight. */
+  private async accessToken(): Promise<string> {
+    // The slot is claimed before fetching, so a burst of concurrent callers waits on
+    // one request instead of stampeding the endpoint; a failed fetch empties the
+    // slot, so the next caller retries rather than replays the rejection.
+    if (this.tokenPromise !== undefined && this.tokenExpiresAt > Date.now()) {
+      return this.tokenPromise;
+    }
+    this.tokenExpiresAt = Date.now();
+    const request = (async () => {
+      const response = await fetch(TOKEN_URL, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ appKey: this.clientId, appSecret: this.clientSecret }),
+        signal: AbortSignal.timeout(15_000),
+      });
+      if (!response.ok) {
+        throw new Error(`dingtalk access token: ${await describeFailure(response)}`);
+      }
+      const body = (await response.json()) as { accessToken?: string; expireIn?: number };
+      if (typeof body.accessToken !== "string" || body.accessToken === "") {
+        throw new Error("dingtalk access token: response carried no token");
+      }
+      this.tokenExpiresAt = Date.now() + Math.max((body.expireIn ?? 7200) * 1000 - 60_000, 0);
+      return body.accessToken;
+    })();
+    this.tokenPromise = request;
+    void request.catch(() => {}).finally(() => {
+      if (this.tokenExpiresAt <= Date.now()) this.tokenPromise = undefined;
     });
+    return request;
+  }
+
+  /**
+   * The bytes behind a downloadCode, base64, or an empty answer with the reason
+   * logged. The exchange has been observed answering in two shapes — the file
+   * itself, and a JSON wrapper carrying a short-lived URL — so both are understood
+   * rather than one being trusted. Capped at 25MB: past that, the box is the wrong
+   * transport.
+   */
+  private async downloadResource(code: string): Promise<{ base64?: string }> {
+    let response: Response;
+    try {
+      const token = await this.accessToken();
+      const query = new URLSearchParams({ downloadCode: code, robotCode: this.clientId });
+      response = await fetch(`${DOWNLOAD_URL}?${query}`, {
+        headers: { [AUTH_HEADER]: token },
+        signal: AbortSignal.timeout(60_000),
+      });
+    } catch (error) {
+      const detail = error instanceof Error ? error.message : String(error);
+      this.log(`channel dingtalk: media fetch failed (${detail})`);
+      return {};
+    }
+    if (!response.ok) {
+      this.log(`channel dingtalk: media refused (${await describeFailure(response)})`);
+      return {};
+    }
+    const readBytes = async (fetched: Response): Promise<string | undefined> => {
+      const buffer = Buffer.from(await fetched.arrayBuffer());
+      if (buffer.byteLength > 25 * 1024 * 1024) {
+        this.log("channel dingtalk: media past the 25MB cap, dropped");
+        return undefined;
+      }
+      return buffer.toString("base64");
+    };
+    try {
+      // Some configurations answer the exchange with a pointer, not the bytes.
+      if ((response.headers.get("content-type") ?? "").includes("application/json")) {
+        const pointed = (await response.json()) as { downloadUrl?: string };
+        if (typeof pointed.downloadUrl !== "string") {
+          this.log("channel dingtalk: media answer named no download url");
+          return {};
+        }
+        const second = await fetch(pointed.downloadUrl, { signal: AbortSignal.timeout(60_000) });
+        if (!second.ok) {
+          this.log(`channel dingtalk: media url refused (HTTP ${second.status})`);
+          return {};
+        }
+        const base64 = await readBytes(second);
+        return base64 === undefined ? {} : { base64 };
+      }
+      const base64 = await readBytes(response);
+      return base64 === undefined ? {} : { base64 };
+    } catch (error) {
+      const detail = error instanceof Error ? error.message : String(error);
+      this.log(`channel dingtalk: media read failed (${detail})`);
+      return {};
+    }
   }
 
   private async connect(
@@ -89,62 +487,20 @@ export class DingTalkChannel implements ChannelAdapter {
     this.socket = socket;
 
     socket.addEventListener("message", event => {
-      let frame: StreamFrame;
-      try {
-        frame = JSON.parse(String(event.data));
-      } catch {
-        // A whole frame discarded. Silent, this is the same failure Feishu had: a message
-        // that arrived and vanished looks exactly like one that never arrived, and the
-        // only way to tell was to add a log line and ask somebody to send it again.
-        this.log(`channel dingtalk: frame did not parse, dropped`);
-        return;
-      }
-      const messageId = frame.headers?.messageId ?? "";
-      // Every frame is acked, ping and message alike: an unacked message is redelivered,
-      // and a redelivered instruction is a turn run twice.
-      const ack = (data: string) =>
-        socket.send(
-          JSON.stringify({
-            code: 200,
-            headers: { messageId, contentType: "application/json" },
-            message: "OK",
-            data,
-          })
-        );
-
-      if (frame.type === "SYSTEM") {
-        ack(frame.data ?? "{}");
-        return;
-      }
-      if (frame.headers?.topic !== TOPIC) {
-        ack("{}");
-        return;
-      }
-      ack(JSON.stringify({ response: {} }));
-
-      let payload: BotMessage;
-      try {
-        payload = JSON.parse(frame.data ?? "{}");
-      } catch {
-        this.log(`channel dingtalk: dropped ${messageId || "?"} — body did not parse`);
-        return;
-      }
-      const text = payload.text?.content?.trim() ?? "";
-      const sender = payload.senderStaffId ?? payload.conversationId ?? "unknown";
-      const identity = `dingtalk:${sender}`;
-      if (payload.sessionWebhook) this.webhooks.set(identity, payload.sessionWebhook);
-      if (text === "") return;
-      void onMessage({
-        identity,
-        chatKey: `dingtalk:${payload.conversationId ?? sender}`,
-        senderLabel: payload.senderNick ?? sender,
-        text,
-      })
-        .then(reply => (reply ? this.send(identity, reply) : undefined))
-        .catch((error: unknown) => {
-          const detail = error instanceof Error ? error.message : String(error);
-          this.log(`channel dingtalk: reply failed (${detail})`);
-        });
+      // The ack echoes the transport id back through the socket. Splitting "reply on
+      // the wire" from "interpret the frame" keeps receive() drivable without one.
+      const wire = {
+        respond: (headers: { messageId: string }, data: string) =>
+          socket.send(
+            JSON.stringify({
+              code: 200,
+              headers: { ...headers, contentType: "application/json" },
+              message: "OK",
+              data,
+            })
+          ),
+      };
+      void this.receive(String(event.data), wire, onMessage);
     });
 
     socket.addEventListener("close", () => {
@@ -164,5 +520,365 @@ export class DingTalkChannel implements ChannelAdapter {
         once: true,
       });
     });
+  }
+
+  /**
+   * One delivered frame, from raw text to handled message.
+   *
+   * Split from the websocket wiring so the ordering rule sits in one place, and so
+   * tests can drive it without a gateway: ack first, then the ledger, then the
+   * dedupe, then whatever work follows.
+   */
+  async receive(
+    raw: string,
+    wire: { respond: (headers: { messageId: string }, data: string) => void },
+    onMessage: (message: InboundMessage) => Promise<string | undefined>
+  ): Promise<void> {
+    let frame: StreamFrame;
+    try {
+      frame = JSON.parse(raw);
+    } catch {
+      // A whole frame discarded. Silent, this is the same failure Feishu had: a message
+      // that arrived and vanished looks exactly like one that never arrived, and the
+      // only way to tell was to add a log line and ask somebody to send it again.
+      this.log(`channel dingtalk: frame did not parse, dropped`);
+      return;
+    }
+    const transportId = frame.headers?.messageId ?? "";
+    const ack = (data: string) => wire.respond({ messageId: transportId }, data);
+
+    // Every frame is acked, ping and message alike: an unacked message is redelivered.
+    if (frame.type === "SYSTEM") {
+      ack(frame.data ?? "{}");
+      return;
+    }
+    if (frame.headers?.topic !== TOPIC) {
+      ack("{}");
+      return;
+    }
+    ack(JSON.stringify({ response: {} }));
+
+    let payload: BotMessage;
+    try {
+      payload = JSON.parse(frame.data ?? "{}");
+    } catch {
+      this.log(`channel dingtalk: dropped ${transportId || "?"} — body did not parse`);
+      return;
+    }
+
+    const chatKey = `dingtalk:${
+      payload.conversationId ?? payload.senderStaffId ?? payload.senderId ?? "unknown"
+    }`;
+    const identity = `dingtalk:${payload.senderStaffId ?? payload.conversationId ?? "unknown"}`;
+    const sender = payload.senderStaffId ?? payload.conversationId ?? "unknown";
+
+    // Logged before anything can drop it, under the business id when there is one:
+    // the transport id changes per redelivery, and the ledger follows the message.
+    const inboundId =
+      typeof payload.msgId === "string" && payload.msgId !== "" ? payload.msgId : transportId;
+    if (inboundId !== "") {
+      this.ingress?.arrived({
+        id: inboundId,
+        channel: "dingtalk",
+        identity,
+        chatKey,
+        kind: payload.msgtype ?? "unknown",
+        chars:
+          payload.msgtype === "text"
+            ? (payload.text?.content ?? "").length
+            : JSON.stringify(payload.content ?? {}).length,
+        ...(payload.conversationType !== undefined
+          ? { chatType: payload.conversationType }
+          : {}),
+        at: new Date().toISOString(),
+      });
+    }
+
+    // Recorded ahead of the dedupe, because a redelivered frame refreshes a webhook
+    // that may be the freshest one known.
+    if (typeof payload.conversationId === "string" && payload.conversationId !== "") {
+      const known = this.conversations.get(payload.conversationId) ?? {};
+      this.conversations.set(payload.conversationId, {
+        ...known,
+        ...(typeof payload.sessionWebhook === "string"
+          ? {
+              webhook: payload.sessionWebhook,
+              webhookExpiresAt:
+                typeof payload.sessionWebhookExpiredTime === "number"
+                  ? payload.sessionWebhookExpiredTime
+                  : undefined,
+            }
+          : {}),
+        ...(payload.conversationType !== undefined
+          ? { conversationType: payload.conversationType }
+          : {}),
+      });
+      this.identities.set(identity, payload.conversationId);
+    }
+
+    const messageId = typeof payload.msgId === "string" && payload.msgId !== "" ? payload.msgId : undefined;
+    if (messageId !== undefined && this.alreadySeen(messageId)) {
+      this.discard(messageId, "delivered more than once");
+      return;
+    }
+
+    // Whole-message media: fetch the bytes here (bounded), then hand over an
+    // ordinary inbound message that carries them. All-failed means told, not silent.
+    const attachments: { name: string; base64: string }[] = [];
+    const wholeMedia = mediaOf(payload.msgtype, payload.content);
+    for (const item of wholeMedia) {
+      const fetched = await this.downloadResource(item.code);
+      if (fetched.base64 === undefined) continue;
+      const name =
+        item.name ??
+        `${item.kind}-${messageId?.slice(-8) ?? "attachment"}.${extensionOf(item.kind)}`;
+      attachments.push({ name, base64: fetched.base64 });
+    }
+    if (wholeMedia.length > 0) {
+      if (attachments.length === 0) {
+        this.discard(messageId ?? transportId, "media could not be fetched");
+        return;
+      }
+      await this.dispatch(
+        identity,
+        chatKey,
+        messageId,
+        senderLabel(payload, sender),
+        "",
+        attachments,
+        onMessage
+      );
+      return;
+    }
+
+    let body = payload.text?.content?.trim() ?? "";
+    let embeddedPictures: string[] = [];
+    if (payload.msgtype === "richText") {
+      // Anything pasted with formatting, a line break or a picture arrives as rich
+      // text, which is most of what a person actually sends.
+      const rendered = flattenRichText(payload.content?.richText);
+      body = rendered.text.trim();
+      embeddedPictures = rendered.pictureCodes;
+    }
+
+    if (body === "") {
+      // A bare mention is a person addressing you, not an empty message. Dropping it
+      // silently is the worst possible answer: they get nothing back and reasonably
+      // conclude the bot is broken (see wantsNudge).
+      if (!wantsNudge(payload)) {
+        this.discard(messageId ?? transportId, "no usable text");
+        return;
+      }
+      body = NUDGE_LINE;
+    }
+
+    const files: { name: string; base64: string }[] = [];
+    for (const [index, code] of embeddedPictures.entries()) {
+      const fetched = await this.downloadResource(code).catch(() => ({}) as { base64?: string });
+      if (fetched.base64 === undefined) {
+        this.log(
+          `channel dingtalk: image ${index + 1} in ${messageId ?? "?"} could not be fetched`
+        );
+        continue;
+      }
+      files.push({ name: `image-${index + 1}.png`, base64: fetched.base64 });
+    }
+    await this.dispatch(
+      identity,
+      chatKey,
+      messageId,
+      senderLabel(payload, sender),
+      body,
+      files,
+      onMessage
+    );
+  }
+
+  /**
+   * Hands one arrival to the bus, and pushes the turn's answer back into the very
+   * conversation it came from.
+   */
+  private async dispatch(
+    identity: string,
+    chatKey: string,
+    messageId: string | undefined,
+    label: string,
+    text: string,
+    files: { name: string; base64: string }[],
+    onMessage: (message: InboundMessage) => Promise<string | undefined>
+  ): Promise<void> {
+    try {
+      const reply = await onMessage({
+        identity,
+        chatKey,
+        // No threads on this wire: the conversation *is* the subject, so no
+        // threadKey is offered and the manager keys context on the chat alone.
+        ...(messageId !== undefined ? { messageId } : {}),
+        senderLabel: label,
+        text,
+        ...(files.length > 0 ? { files } : {}),
+      });
+      if (reply !== undefined && reply !== "") await this.sendToChat(chatKey, reply);
+    } catch (error) {
+      const detail = error instanceof Error ? error.message : String(error);
+      this.log(`channel dingtalk: reply failed (${detail})`);
+    }
+  }
+
+  async send(identity: string, text: string): Promise<void> {
+    // Plain conversational lines — refusals, approval prompts, questions. Formatted
+    // results travel through sendToChat's markdown verdict instead, mirroring how
+    // `send` and `sendToChat` split everywhere else.
+    const conversationId = this.identities.get(identity);
+    await this.transmit(
+      {
+        // No conversation on record means nothing to send a group message into;
+        // the only address left is the user id inside the identity, so force the
+        // direct route even though a group is the usual default.
+        route:
+          conversationId === undefined
+            ? "direct"
+            : outboundRoute(this.conversations.get(conversationId)?.conversationType),
+        conversationId: conversationId ?? "",
+        // The user id inside the identity: what oToMessages addresses when the
+        // webhook has expired and the route turns out to be a direct session.
+        ...(identity.startsWith("dingtalk:") ? { userId: identity.slice("dingtalk:".length) } : {}),
+      },
+      "text",
+      text
+    );
+  }
+
+  /**
+   * Pushes to the conversation itself, not to wherever the sender last spoke.
+   *
+   * `PushOptions.replyTo` is accepted because the manager hands it to every adapter,
+   * but threads do not exist between a person and a DingTalk bot: there is nowhere
+   * to anchor, and inventing an anchor would put a lie in the interface. Markdown
+   * travels as the wire's markdown type; a chunk whose rendering the wire refuses
+   * degrades to plain text for it and every chunk after, so the words arrive either
+   * way — the bargain the Feishu adapter strikes too.
+   */
+  async sendToChat(chatKey: string, text: string, options?: { replyTo?: string }): Promise<void> {
+    void options; // see doc comment: anchoring is not expressible on this wire
+    const { conversationId } = parseChatKey(chatKey);
+    if (conversationId === "") return;
+    const target: ChatTarget = {
+      route: outboundRoute(this.conversations.get(conversationId)?.conversationType),
+      conversationId,
+    };
+    // Decided once for the whole message: per-chunk verdicts would render a long
+    // message's plain halves with literal ** markers.
+    const markdown = looksLikeMarkdown(text);
+    let degraded = false;
+    for (const chunk of chunkText(text, CHUNK_CHARS)) {
+      if (markdown && !degraded) {
+        try {
+          await this.transmit(target, "markdown", chunk, markdownTitle(chunk));
+          continue;
+        } catch (error) {
+          if (!isContentRefusal(error)) throw error;
+          degraded = true;
+        }
+      }
+      await this.transmit(target, "text", chunk);
+    }
+  }
+
+  /**
+   * One message out, on whichever road still works.
+   *
+   * Webhooks win while fresh — no token, no extra round trip, already bound to this
+   * conversation. The robot REST APIs cover everything older: they need an access
+   * token, and the direct route may refuse outright when proactive one-to-one
+   * messaging is switched off for the app. That refusal is relayed rather than
+   * swallowed, because a push that quietly went nowhere is worse than a loud failure.
+   */
+  protected async transmit(
+    target: ChatTarget,
+    kind: "text" | "markdown",
+    body: string,
+    title?: string
+  ): Promise<void> {
+    const freshWebhook = freshWebhookOf(
+      target.conversationId !== ""
+        ? this.conversations.get(target.conversationId)
+        : undefined,
+      Date.now()
+    );
+
+    if (freshWebhook === undefined && target.conversationId === "" && target.userId === undefined) {
+      throw new Error(
+        "nowhere to deliver: this conversation has no webhook and no user id on record"
+      );
+    }
+    if (target.route === "direct" && !target.userId) {
+      throw new Error(
+        "no way to reach this direct session: no fresh webhook, and no user id on record"
+      );
+    }
+
+    if (freshWebhook !== undefined) {
+      let last: unknown;
+      for (let attempt = 0; attempt < 3; attempt++) {
+        try {
+          const response = await fetch(freshWebhook, {
+            method: "POST",
+            headers: { "content-type": "application/json" },
+            body: JSON.stringify(
+              kind === "text"
+                ? { msgtype: "text", text: { content: body } }
+                : { msgtype: "markdown", markdown: { title: title ?? "", text: body } }
+            ),
+            signal: AbortSignal.timeout(15_000),
+          });
+          if (!response.ok) throw new Error(await describeFailure(response));
+          // A satisfied status can still carry an errcode body; that is a refusal.
+          const verdict = (await response.json().catch(() => ({}))) as { errcode?: number };
+          if (verdict.errcode !== undefined && verdict.errcode !== 0) {
+            throw new Error(`webhook errcode ${verdict.errcode}`);
+          }
+          return;
+        } catch (error) {
+          last = error;
+          if (attempt < 2) await new Promise(resolve => setTimeout(resolve, 1000 * 2 ** attempt));
+        }
+      }
+      throw last instanceof Error ? last : new Error(String(last));
+    }
+
+    // msgParam rides this API as a *string*: the inner object serialized again.
+    const msgParam =
+      kind === "text"
+        ? JSON.stringify({ content: body })
+        : JSON.stringify({ title: title ?? markdownTitle(body), text: body });
+    const url =
+      target.route === "group"
+        ? GROUP_SEND_URL
+        : OTO_SEND_URL;
+    const response = await fetch(url, {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        [AUTH_HEADER]: await this.accessToken(),
+      },
+      body: JSON.stringify(
+        target.route === "group"
+          ? {
+              robotCode: this.clientId,
+              openConversationId: target.conversationId,
+              msgKey: kind === "text" ? "sampleText" : "sampleMarkdown",
+              msgParam,
+            }
+          : {
+              robotCode: this.clientId,
+              userIds: [target.userId],
+              msgKey: kind === "text" ? "sampleText" : "sampleMarkdown",
+              msgParam,
+            }
+      ),
+      signal: AbortSignal.timeout(15_000),
+    });
+    if (!response.ok) throw new Error(await describeFailure(response));
   }
 }
