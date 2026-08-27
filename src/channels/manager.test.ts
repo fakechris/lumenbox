@@ -966,3 +966,107 @@ test("a task the agent left in review shows on the card as review, not as done",
   assert.equal(shown.at(-1), "review", "the card ends on what the board decided");
   assert.ok(!shown.includes("done"), "and never passes through Done on the way");
 });
+
+test("a file with its instruction in one message starts the work, files named in the prompt", async () => {
+  // The walkthrough's step zero, and it was broken: any message carrying files was
+  // diverted to the save-only branch, its text ignored, and the person told (in English)
+  // to say what they wanted — which they had just done.
+  const adapter = cardAdapter();
+  const asked: string[] = [];
+  const manager = new ChannelManager({
+    mayDrive: () => true,
+    ask: async (_a, text) => {
+      asked.push(text);
+      return "开工了";
+    },
+    receiveFiles: async (_chatKey, files) => files.map(file => `inbox/${file.name}`),
+    log: () => {},
+  });
+  manager.register(adapter, true, "test");
+  await started(manager);
+
+  await adapter.inject({
+    identity: "feishu:ou_1",
+    chatKey: "feishu:oc_room",
+    messageId: "om_1",
+    senderLabel: "chris",
+    text: "每份提取营收和毛利,汇总一张总表",
+    files: [{ name: "q3.xlsx", base64: "eA==" }],
+  });
+  await manager.idle();
+
+  assert.equal(asked.length, 1, "the instruction runs a turn");
+  assert.match(asked[0]!, /每份提取营收和毛利/);
+  assert.match(asked[0]!, /inbox\/q3\.xlsx/, "the agent is told where the files landed, not left to guess");
+});
+
+test("files first, instruction next: the next message in the conversation picks the files up", async () => {
+  // The Feishu reality: a file message carries no text (text: ""), so drag-folder-then-type
+  // is always two messages. The drop is remembered per conversation and the next
+  // instruction consumes it — once, because the message after that is about something else.
+  const adapter = cardAdapter();
+  const asked: string[] = [];
+  const manager = new ChannelManager({
+    mayDrive: () => true,
+    ask: async (_a, text) => {
+      asked.push(text);
+      return "好";
+    },
+    receiveFiles: async (_chatKey, files) => files.map(file => `inbox/${file.name}`),
+    log: () => {},
+  });
+  manager.register(adapter, true, "test");
+  await started(manager);
+
+  const room = { identity: "feishu:ou_1", chatKey: "feishu:oc_room", senderLabel: "chris" };
+  await adapter.inject({ ...room, messageId: "om_f1", text: "", files: [{ name: "a.xlsx", base64: "eA==" }] });
+  await adapter.inject({ ...room, messageId: "om_f2", text: "", files: [{ name: "b.xlsx", base64: "eA==" }] });
+  await manager.idle();
+  assert.deepEqual(asked, [], "drops alone still run nothing");
+
+  await adapter.inject({ ...room, messageId: "om_t", text: "汇总这两份" });
+  await manager.idle();
+  assert.equal(asked.length, 1);
+  assert.match(asked[0]!, /inbox\/a\.xlsx/);
+  assert.match(asked[0]!, /inbox\/b\.xlsx/, "both drops are handed to the turn");
+
+  await adapter.inject({ ...room, messageId: "om_t2", text: "再检查一遍" });
+  await manager.idle();
+  assert.equal(asked.length, 2);
+  assert.ok(!/inbox\/a\.xlsx/.test(asked[1]!), "consumed once — later asks are not haunted by old files");
+});
+
+test("a drop in one conversation does not leak into another's next instruction", async () => {
+  const adapter = cardAdapter();
+  const asked: string[] = [];
+  const manager = new ChannelManager({
+    mayDrive: () => true,
+    ask: async (_a, text) => {
+      asked.push(text);
+      return "好";
+    },
+    receiveFiles: async (_chatKey, files) => files.map(file => `inbox/${file.name}`),
+    log: () => {},
+  });
+  manager.register(adapter, true, "test");
+  await started(manager);
+
+  await adapter.inject({
+    identity: "feishu:ou_1",
+    chatKey: "feishu:oc_room",
+    threadKey: "feishu:oc_room-om_threadA",
+    senderLabel: "chris",
+    text: "",
+    files: [{ name: "secret.xlsx", base64: "eA==" }],
+  });
+  await adapter.inject({
+    identity: "feishu:ou_2",
+    chatKey: "feishu:oc_room",
+    threadKey: "feishu:oc_room-om_threadB",
+    senderLabel: "b",
+    text: "帮我写个周报",
+  });
+  await manager.idle();
+  assert.equal(asked.length, 1);
+  assert.ok(!/secret\.xlsx/.test(asked[0]!), "files belong to the thread they were dropped in");
+});

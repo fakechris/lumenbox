@@ -760,11 +760,12 @@ ${input.options.map(option => `· ${option}`).join("\n")}`
       return this.deps.digest.off(chatKey);
     }
 
-    // A dropped file is a delivery, not an instruction: it is stored where the agents
-    // can reach it and the chat is told where it landed. No turn runs — the person
-    // says what they want done with it when they want something done.
+    // A dropped file with nothing said is a delivery; with an instruction in the same
+    // message it is work starting. The first version treated every message carrying files
+    // as a delivery and ignored its text — the person had just said what they wanted, and
+    // was told to say what they wanted. Walkthrough step zero, broken at the first second.
     if (message.files !== undefined && message.files.length > 0) {
-      const drop = this.runFiles(adapter, message).finally(() => {
+      const drop = this.runDrop(adapter, message).finally(() => {
         this.inflight.delete(drop);
       });
       this.inflight.add(drop);
@@ -806,12 +807,67 @@ ${input.options.map(option => `· ${option}`).join("\n")}`
     }
   }
 
-  /** A dropped file into the chat's inbox, and the chat told where it landed. */
-  private async runFiles(adapter: ChannelAdapter, message: InboundMessage): Promise<void> {
+  /**
+   * Files dropped without a word, remembered until the next instruction in the same
+   * conversation picks them up.
+   *
+   * On Feishu a file message carries no text at all, so "drag the folder in, then type
+   * what you want" is *always* two messages — the ordinary case, not an edge. Without this
+   * the turn had to guess that the inbox was worth listing. Consumed once: the message
+   * after the one that used them is about something else.
+   */
+  private readonly pendingDrops = new Map<string, { files: string[]; at: number }>();
+
+  /** How long a wordless drop waits for its instruction. */
+  private static readonly DROP_WINDOW_MS = 10 * 60 * 1000;
+
+  /** The files recently dropped in this conversation, handed over exactly once. */
+  private takeDrops(conversationKey: string): string[] | undefined {
+    const drop = this.pendingDrops.get(conversationKey);
+    if (drop === undefined) return undefined;
+    this.pendingDrops.delete(conversationKey);
+    if (Date.now() - drop.at > ChannelManager.DROP_WINDOW_MS) return undefined;
+    return drop.files;
+  }
+
+  /** A message carrying files: store them, then run its instruction if it brought one. */
+  private async runDrop(adapter: ChannelAdapter, message: InboundMessage): Promise<void> {
+    const saved = await this.storeFiles(adapter, message);
+    const { agentName, text } = parseAddress(message.text ?? "");
+    const conversationKey = message.threadKey ?? message.chatKey ?? message.identity;
+    if (text === "") {
+      if (saved !== undefined && saved.length > 0) {
+        // Accumulate rather than replace: a folder arrives as one file message per file.
+        const already = this.pendingDrops.get(conversationKey);
+        this.pendingDrops.set(conversationKey, {
+          files: [...(already?.files ?? []), ...saved],
+          at: Date.now(),
+        });
+        await this.deliver(
+          adapter,
+          message.chatKey ?? message.identity,
+          message.identity,
+          `Saved: ${saved.join(", ")}. Say what you want done with it — @AgentName first picks who.`,
+          message.messageId !== undefined ? { replyTo: message.messageId } : undefined
+        );
+      }
+      return;
+    }
+    // Storing failed and the chat was already told; running the instruction anyway would
+    // have the agent working on files that never arrived, which reads as it ignoring them.
+    if (saved === undefined) return;
+    await this.runTask(adapter, message, agentName, text, saved);
+  }
+
+  /** Files into the chat's inbox. Returns where they landed, or undefined when nowhere. */
+  private async storeFiles(
+    adapter: ChannelAdapter,
+    message: InboundMessage
+  ): Promise<string[] | undefined> {
     const chatKey = message.chatKey ?? message.identity;
     const anchor: PushOptions | undefined =
       message.messageId !== undefined ? { replyTo: message.messageId } : undefined;
-    if (this.deps.receiveFiles === undefined) return;
+    if (this.deps.receiveFiles === undefined) return undefined;
     try {
       // The conversation, not the room: the prompt tells the agent its files are under
       // the conversation's directory, and after conversations began following threads the
@@ -829,15 +885,9 @@ ${input.options.map(option => `· ${option}`).join("\n")}`
           "There is no box running to store files on right now.",
           anchor
         );
-        return;
+        return undefined;
       }
-      await this.deliver(
-        adapter,
-        chatKey,
-        message.identity,
-        `Saved: ${saved.join(", ")}. Say what you want done with it — @AgentName first picks who.`,
-        anchor
-      );
+      return saved;
     } catch (error) {
       await this.deliver(
         adapter,
@@ -846,6 +896,7 @@ ${input.options.map(option => `· ${option}`).join("\n")}`
         error instanceof Error ? error.message : String(error),
         anchor
       );
+      return undefined;
     }
   }
 
@@ -905,9 +956,17 @@ ${input.options.map(option => `· ${option}`).join("\n")}`
     adapter: ChannelAdapter,
     message: InboundMessage,
     agentName: string | undefined,
-    text: string
+    text: string,
+    droppedFiles?: readonly string[]
   ): Promise<void> {
     const chatKey = message.chatKey ?? message.identity;
+    // What this turn should know it was handed: files in this message, plus any dropped
+    // wordlessly in this conversation just before. In the prompt and nowhere else — the
+    // card and the board carry the person's own words, not a path listing.
+    const handedFiles = [
+      ...(this.takeDrops(message.threadKey ?? chatKey) ?? []),
+      ...(droppedFiles ?? []),
+    ];
     // Everything this task says sits under the message that asked for it.
     const anchor: PushOptions | undefined =
       message.messageId !== undefined ? { replyTo: message.messageId } : undefined;
@@ -1021,7 +1080,9 @@ ${input.options.map(option => `· ${option}`).join("\n")}`
     try {
       const reply = await this.deps.ask(
         agentName,
-        text,
+        handedFiles.length > 0
+          ? `${text}\n\n[随这条消息收到的文件: ${handedFiles.join(", ")}]`
+          : text,
         message.identity,
         chatKey,
         onProgress,
