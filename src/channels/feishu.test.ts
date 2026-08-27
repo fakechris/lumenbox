@@ -6,7 +6,7 @@
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { FeishuChannel, looksLikeMarkdown, markdownPost, renderCard, splitChatKey } from "./feishu.ts";
+import { FeishuChannel, looksLikeMarkdown, markdownPost, renderCard, renderQuestionCard, splitChatKey } from "./feishu.ts";
 import type { TaskCardState } from "./manager.ts";
 
 interface CardShape {
@@ -316,4 +316,27 @@ test("a task waiting on a person does not read as finished", () => {
   });
   assert.match(card.elements[0]?.text?.content ?? "", /待你验收/);
   assert.notEqual(card.header.template, "green", "green is the colour of nothing-left-to-do");
+});
+
+test("a question card carries each answer as a button that speaks the answer", () => {
+  const card = renderQuestionCard({
+    agentName: "Ada",
+    question: "有 12 份报表缺'成本'列。跳过并在总表标注,还是停下来等你?",
+    options: ["跳过并标注", "停下来"],
+  }) as {
+    header: { title: { content: string }; template: string };
+    elements: { tag: string; text?: { content: string }; actions?: { text: { content: string }; value: { ask: string } }[]; elements?: { content: string }[] }[];
+  };
+
+  assert.equal(card.header.template, "blue", "a question is not a consent — orange teaches fear");
+  assert.match(card.header.title.content, /Ada 有个问题要先问你/);
+  const actions = card.elements.find(element => element.tag === "action")!.actions!;
+  // The button's value is the answer itself: pressing it goes through the same door as
+  // typing it, so downstream there is one reply path, not two.
+  assert.deepEqual(
+    actions.map(action => action.value),
+    [{ ask: "跳过并标注" }, { ask: "停下来" }]
+  );
+  const note = card.elements.find(element => element.tag === "note");
+  assert.match(note!.elements![0]!.content, /直接把答案打在下面/);
 });

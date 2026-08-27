@@ -170,6 +170,8 @@ export interface ChannelAdapter {
    * from. Absent means the wire has no buttons and the text-verb path is used.
    */
   postApprovalCard?(identity: string, card: ApprovalCardState): Promise<void>;
+  /** A question with its answers as buttons. A pressed button speaks as a typed reply. */
+  postQuestionCard?(identity: string, card: QuestionCardState): Promise<void>;
   /**
    * Registers the handler for a pressed approval button. The handler returns the
    * line to show in the chat, or undefined when the press was refused or stale.
@@ -184,6 +186,13 @@ export interface ChannelAdapter {
 }
 
 /** A pending consent, as a card with buttons renders it. */
+export interface QuestionCardState {
+  agentName: string;
+  question: string;
+  /** The answers the agent can act on. Buttons where the wire has them; words always work. */
+  options: string[];
+}
+
 export interface ApprovalCardState {
   approvalId: string;
   agentName: string;
@@ -604,6 +613,24 @@ export class ChannelManager {
   }): string | undefined {
     const asker = this.lastAsker.get(input.agentId);
     if (asker === undefined) return undefined;
+    // Buttons where the wire has them: the person answers a choice with one tap, and the
+    // press goes through the same door as a typed reply. Words keep working either way.
+    if (
+      asker.adapter.postQuestionCard !== undefined &&
+      input.options !== undefined &&
+      input.options.length > 0
+    ) {
+      void asker.adapter
+        .postQuestionCard(asker.identity, {
+          agentName: input.agentName,
+          question: input.question,
+          options: input.options,
+        })
+        .catch(() => {
+          // The web page shows it too; a failed push is not a lost question.
+        });
+      return asker.identity;
+    }
     const choices =
       input.options !== undefined && input.options.length > 0
         ? `

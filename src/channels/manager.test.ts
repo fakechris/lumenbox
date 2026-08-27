@@ -1070,3 +1070,39 @@ test("a drop in one conversation does not leak into another's next instruction",
   assert.equal(asked.length, 1);
   assert.ok(!/secret\.xlsx/.test(asked[0]!), "files belong to the thread they were dropped in");
 });
+
+test("a question with choices becomes a card where the wire has cards, words elsewhere", async () => {
+  const cards: { question: string; options: string[] }[] = [];
+  const adapter = cardAdapter();
+  (adapter as unknown as { postQuestionCard: unknown }).postQuestionCard = async (
+    _identity: string,
+    card: { question: string; options: string[] }
+  ) => {
+    cards.push({ question: card.question, options: card.options });
+  };
+  const manager = new ChannelManager({
+    mayDrive: () => true,
+    ask: async () => "ok",
+    log: () => {},
+  });
+  manager.register(adapter, true, "test");
+  await started(manager);
+
+  // The asker is whoever last drove this agent from the chat — recorded by the ask
+  // wiring, which in production calls remember() with the agent's real id.
+  manager.remember("a1", adapter.name, "feishu:ou_1");
+
+  manager.askQuestion({ agentId: "a1", agentName: "Ada", question: "跳过还是停?", options: ["跳过", "停"] });
+  await manager.idle();
+  assert.deepEqual(cards, [{ question: "跳过还是停?", options: ["跳过", "停"] }]);
+  assert.ok(
+    !adapter.sent.some(entry => /有个问题/.test(entry.text)),
+    "the card replaces the text push rather than doubling it"
+  );
+
+  // No options: nothing to press, so it stays words.
+  manager.askQuestion({ agentId: "a1", agentName: "Ada", question: "你想怎么办?" });
+  await manager.idle();
+  assert.equal(cards.length, 1);
+  assert.ok(adapter.sent.some(entry => /有个问题要先问你/.test(entry.text)));
+});

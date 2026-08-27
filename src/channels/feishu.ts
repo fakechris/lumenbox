@@ -22,6 +22,7 @@ import {
   TEAM,
   cardFootnote,
   consentTitle,
+  questionTitle,
 } from "./strings.ts";
 import type {
   ApprovalCardState,
@@ -29,6 +30,7 @@ import type {
   ChannelAdapter,
   InboundMessage,
   PushOptions,
+  QuestionCardState,
   TaskCardState,
 } from "./manager.ts";
 import { acquireConsumerLock } from "./single-consumer.ts";
@@ -74,6 +76,40 @@ export function renderApprovalCard(card: ApprovalCardState): object {
             content: `${card.stakes} 直接回复"允许"或"拒绝"也可以。`,
           },
         ],
+      },
+    ],
+  };
+}
+
+/**
+ * A question as Feishu renders it: the question in the body, each answer a button.
+ *
+ * Blue, not orange: orange is consent, and a business question wearing the consent colour
+ * teaches people that questions are dangerous. The note says words still work, because a
+ * person mid-commute answers with a thumb and a person at a desk answers in their own
+ * phrasing — both have to land.
+ */
+export function renderQuestionCard(card: QuestionCardState): object {
+  const button = (option: string) => ({
+    tag: "button",
+    text: { tag: "plain_text", content: option },
+    type: "default",
+    value: { ask: option },
+  });
+  return {
+    config: { wide_screen_mode: true },
+    header: {
+      title: { tag: "plain_text", content: questionTitle(card.agentName) },
+      template: "blue",
+    },
+    elements: [
+      { tag: "div", text: { tag: "lark_md", content: card.question } },
+      // Feishu lays buttons out horizontally and long options wrap badly; six is already
+      // generous for "answerable in a sentence", and past that the words path is better.
+      { tag: "action", actions: card.options.slice(0, 6).map(button) },
+      {
+        tag: "note",
+        elements: [{ tag: "plain_text", content: "点一个按钮,或者直接把答案打在下面。" }],
       },
     ],
   };
@@ -436,9 +472,13 @@ export class FeishuChannel implements ChannelAdapter {
     if (messageId !== undefined) this.ingress?.decided(messageId, "dropped", reason);
   }
 
+  /** The manager's message handler, kept so a pressed answer button can speak as a message. */
+  private messageHandler: ((message: InboundMessage) => Promise<string | undefined>) | undefined;
+
   async start(
     onMessage: (message: InboundMessage) => Promise<string | undefined>
   ): Promise<void> {
+    this.messageHandler = onMessage;
     // Before anything connects: a second consumer on the same app id would not fail,
     // it would silently take half the events. Refused loudly instead.
     this.releaseLock = acquireConsumerLock(this.appId);
@@ -637,13 +677,38 @@ export class FeishuChannel implements ChannelAdapter {
       // ordinary message — the SDK's own response to the event is just the ack.
       "card.action.trigger": (data: {
         operator?: { open_id?: string };
-        action?: { value?: { approval?: string; reply?: string } };
+        action?: { value?: { approval?: string; reply?: string; ask?: string } };
         context?: { open_chat_id?: string };
       }) => {
         const approvalId = data.action?.value?.approval;
         const reply = data.action?.value?.reply;
         const openId = data.operator?.open_id;
         const chatId = data.context?.open_chat_id;
+        // A pressed answer button is the person saying that answer. It goes through the
+        // same door a typed reply would, so everything downstream — waking the agent,
+        // the task flow, the transcript — is one path, not two.
+        const chosen = data.action?.value?.ask;
+        if (chosen !== undefined && openId !== undefined && this.messageHandler !== undefined) {
+          void this.labelFor(openId, chatId ?? "")
+            .then(senderLabel =>
+              this.messageHandler!({
+                identity: `feishu:${openId}`,
+                ...(chatId !== undefined ? { chatKey: `feishu:${chatId}` } : {}),
+                senderLabel,
+                text: chosen,
+              })
+            )
+            .then(line =>
+              line !== undefined && line !== "" && chatId !== undefined
+                ? this.sendToChat(`feishu:${chatId}`, line)
+                : undefined
+            )
+            .catch((error: unknown) => {
+              const detail = error instanceof Error ? error.message : String(error);
+              this.log(`channel feishu: answer button failed (${detail})`);
+            });
+          return {};
+        }
         if (
           approvalId === undefined ||
           openId === undefined ||
@@ -928,6 +993,20 @@ export class FeishuChannel implements ChannelAdapter {
     await this.apiClient.im.message.patch({
       path: { message_id: handle },
       data: { content: JSON.stringify(renderCard(card)) },
+    });
+  }
+
+  /** The question card, to wherever this identity's messages come from — like `send`. */
+  async postQuestionCard(identity: string, card: QuestionCardState): Promise<void> {
+    const chatId = this.chats.get(identity);
+    if (chatId === undefined || this.apiClient === undefined) return;
+    await this.apiClient.im.message.create({
+      params: { receive_id_type: "chat_id" },
+      data: {
+        receive_id: chatId,
+        msg_type: "interactive",
+        content: JSON.stringify(renderQuestionCard(card)),
+      },
     });
   }
 

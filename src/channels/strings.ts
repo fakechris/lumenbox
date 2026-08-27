@@ -84,6 +84,10 @@ export const CONSENT_GONE = "这条确认已经不在等了——可能已经在
 
 // ── questions from the agent ───────────────────────────────────────────────────
 
+export function questionTitle(agentName: string): string {
+  return `${agentName || TEAM} 有个问题要先问你`;
+}
+
 export function questionText(agentName: string, question: string, choices: string): string {
   return `${agentName || TEAM} 有个问题要先问你:\n${question}${choices}\n\n直接在这里回复,它就接着干。`;
 }
