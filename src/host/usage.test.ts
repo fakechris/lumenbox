@@ -169,3 +169,89 @@ test("spend groups by principal, and unattributed work is its own group that sti
   // Sorted by spend, biggest first.
   assert.equal(groups[0]!.principal, "sam");
 });
+
+/** Every model call in the product, and what bills it. Adding one fails until it is listed. */
+const MODEL_CALLS: Record<string, string> = {
+  "turn.ts:runRounds": "the turn loop's own usage.record, ~180 lines below the stream",
+  "turn.ts:summarise": "meter('summarize'), which runTurn binds to usage.recordAside",
+  "remember.ts:ask": "usage.recordAside('memory')",
+  "orchestrator.ts:askCheaply": "usage.recordAside('select')",
+  "provider.ts:testProvider": "unmetered on purpose: an operator's connectivity probe, 16 tokens, no owner",
+};
+
+/**
+ * The nearest *declaration* above a line, which names what the call sits in.
+ *
+ * A declaration and not merely "something with a paren": the first attempt matched call
+ * expressions too and reported the turn loop's stream as living in `emit`, because `emit({`
+ * was the closest line with a bracket on it.
+ */
+function enclosingSymbol(lines: readonly string[], at: number): string {
+  const modifiers = "(?:export\\s+)?(?:private\\s+|public\\s+|protected\\s+)?(?:static\\s+)?(?:async\\s+)?(?:function\\s+)?";
+  // Two shapes: parameters that run onto the next line, and a whole signature on one.
+  const opensParams = new RegExp(`^\\s*${modifiers}([a-zA-Z_]\\w*)\\s*\\($`);
+  const wholeSignature = new RegExp(
+    `^\\s*${modifiers}([a-zA-Z_]\\w*)\\s*\\(.*\\)\\s*(?::[^{]+)?\\{\\s*$`
+  );
+  const notAKeyword = (name: string) =>
+    !["if", "for", "while", "switch", "catch", "return", "constructor"].includes(name);
+  for (let index = at; index >= 0; index--) {
+    const line = lines[index]!.trimEnd();
+    // A name with a dot in it is a call on something, not a declaration — which is how the
+    // first attempt decided the turn loop's stream lived inside `emit`.
+    const match = opensParams.exec(line) ?? wholeSignature.exec(line);
+    if (match && notAKeyword(match[1]!)) return match[1]!;
+  }
+  return "<top level>";
+}
+
+test("every model call in the product is one somebody chose to bill", () => {
+  // docs/16 asserted this ledger "records every call's tokens" and it did not: one write site,
+  // in the turn loop, while three other calls went through nothing at all. They run on the
+  // cheap profile, which explains why nobody noticed and is not an argument that they are free.
+  //
+  // The first version of this test looked for a ledger write within N lines of the call, and a
+  // deliberately unmetered call added next to a metered one passed it — the neighbour's write
+  // was inside the window. That is the "still passes and no longer means anything" failure, so
+  // this enumerates instead: a call site not on the list fails, whatever is near it.
+  const found: string[] = [];
+  for (const name of ["turn.ts", "remember.ts", "orchestrator.ts", "provider.ts"]) {
+    const lines = readFileSync(join(import.meta.dirname, name), "utf8").split("\n");
+    for (const [index, line] of lines.entries()) {
+      if (/\bmessages\.(create|stream)\(/.test(line)) {
+        found.push(`${name}:${enclosingSymbol(lines, index)}`);
+      }
+    }
+  }
+  assert.deepEqual(
+    found.sort(),
+    Object.keys(MODEL_CALLS).sort(),
+    "a model call was added or moved; say what bills it in MODEL_CALLS, or exempt it with a reason"
+  );
+});
+
+test("kinds separate the turn loop from everything it does around the edges", () => {
+  const log = new UsageLog(logPath());
+  log.record({ ...entry("Ada"), kind: "turn", outputTokens: 100 });
+  log.record({ ...entry("Ada"), kind: "summarize", outputTokens: 10 });
+  log.record({ ...entry("Ada"), kind: "memory", outputTokens: 5 });
+  log.record({ ...entry("Ada"), kind: "select", outputTokens: 2 });
+
+  const byKind = Object.fromEntries(log.byKind().map(row => [row.kind, row.totals.outputTokens]));
+  // The reason to want this and not just a grand total: the edges are cheap per call and
+  // frequent, so "the model cost 117" answers nothing about whether to change any of it.
+  assert.equal(byKind.turn, 100);
+  assert.equal(byKind.summarize, 10);
+  assert.equal(byKind.memory, 5);
+  assert.equal(byKind.select, 2);
+});
+
+test("rows written before kinds existed are counted, not dropped", () => {
+  const log = new UsageLog(logPath());
+  log.record(entry("Ada"));
+  const [row] = log.byKind();
+  // Named rather than silently folded into "turn": pretending an old row was a turn would make
+  // the first day after this ships read as a jump in turn cost that never happened.
+  assert.equal(row?.kind, "unattributed");
+  assert.equal(row?.totals.outputTokens, 20);
+});

@@ -25,6 +25,7 @@ import { envNumber } from "../config.ts";
 import type Anthropic from "@anthropic-ai/sdk";
 import type { AgentRegistry } from "../agents/registry.ts";
 import type { ProviderProfile } from "./provider.ts";
+import type { UsageLog } from "./usage.ts";
 import {
   buildEpisodePrompt,
   buildExtractionPrompt,
@@ -65,6 +66,13 @@ export interface RememberDeps {
   client: Anthropic;
   /** The cheap profile, so bookkeeping is not billed at the agent's model. */
   provider: ProviderProfile;
+  /**
+   * Where these calls are billed.
+   *
+   * Optional because a Rememberer without one still works; present because without it these
+   * calls were invisible, and "the model cost X today" quietly meant "the turn loop cost X".
+   */
+  usage?: UsageLog;
   log?: (line: string) => void;
 }
 
@@ -110,7 +118,7 @@ export class Rememberer {
 
     let records: MemoryRecord[];
     try {
-      const reply = await this.ask(buildExtractionPrompt(combined, relevant));
+      const reply = await this.ask(agentId, buildExtractionPrompt(combined, relevant));
       records = parseExtraction(reply, known);
     } catch (error) {
       // Swallowed on purpose, and said once. The turn already succeeded; a failure to take notes is
@@ -140,7 +148,7 @@ export class Rememberer {
 
   private async condense(agentId: string, exchanges: readonly string[]): Promise<void> {
     try {
-      const reply = await this.ask(buildEpisodePrompt(exchanges));
+      const reply = await this.ask(agentId, buildEpisodePrompt(exchanges));
       const episode = parseEpisode(reply);
       if (episode === undefined) return;
       this.deps.registry.appendMemoryRecords(agentId, [episode]);
@@ -153,13 +161,21 @@ export class Rememberer {
   }
 
   /** One plain, tool-free call on the cheap profile. */
-  private async ask(prompt: string): Promise<string> {
+  private async ask(agentId: string, prompt: string): Promise<string> {
     const response = await this.deps.client.messages.create({
       model: this.deps.provider.model,
       // Small: three lines of memory or six sentences of episode. A cap this tight is also a guard
       // against an extractor that decides to narrate.
       max_tokens: Math.min(1024, this.deps.provider.maxTokens),
       messages: [{ role: "user", content: prompt }],
+    });
+    this.deps.usage?.recordAside({
+      kind: "memory",
+      agentId,
+      agentName: this.deps.registry.tryGet(agentId)?.profile.name ?? agentId,
+      provider: this.deps.provider.label,
+      model: this.deps.provider.model,
+      usage: response.usage,
     });
     return response.content
       .filter((block): block is Anthropic.TextBlock => block.type === "text")

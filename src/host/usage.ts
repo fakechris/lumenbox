@@ -26,6 +26,16 @@ import { appendLine } from "./jsonl.ts";
 import { dirname, join } from "node:path";
 import { agentboxHome } from "../config.ts";
 
+/**
+ * What a model call was for. Four, because that is how many kinds of call exist.
+ *
+ * `turn` is the agent thinking. The other three are the harness keeping house around it.
+ */
+export type UsageKind = "turn" | "summarize" | "memory" | "select";
+
+/** What a row with no kind is reported as. Not a kind: the absence of one. */
+export const UNATTRIBUTED = "unattributed";
+
 export interface UsageRecord {
   /** Monotonic within this file. What a collector remembers instead of a time. */
   seq: number;
@@ -47,6 +57,19 @@ export interface UsageRecord {
   workId?: string;
   /** Which thread it ran in. A fork child has its own, which is what makes one costable. */
   conversation?: string;
+  /**
+   * What the call was for.
+   *
+   * The turn loop is one kind of spend and the bookkeeping around it is another: summarising a
+   * history, extracting a memory, choosing which memories to show. Those run on the cheap
+   * profile and are individually trivial, which is exactly why a grand total says nothing
+   * about whether any of them is worth changing.
+   *
+   * Absent on rows written before the field existed. Those read as `unattributed` rather than
+   * being folded into `turn`, because folding them would make the first day after this ships
+   * look like a jump in turn cost that never happened.
+   */
+  kind?: UsageKind;
   /**
    * Who this spend is on behalf of — the principal id of whoever drove the turn.
    * Absent for work no person triggered directly: a teammate's wake, a scheduled run.
@@ -247,6 +270,61 @@ export class UsageLog {
     return [...groups.entries()]
       .map(([principal, records]) => ({ principal, totals: this.sum(records) }))
       .sort((a, b) => b.totals.outputTokens - a.totals.outputTokens);
+  }
+
+  /**
+   * Spend broken out by what the call was for.
+   *
+   * The question this answers that a grand total cannot: the housekeeping calls are cheap and
+   * frequent, so a day that reads as expensive is either an agent doing a lot of thinking or a
+   * compaction loop, and those want completely different responses.
+   */
+  byKind(sinceMs = 0): { kind: string; totals: UsageTotals }[] {
+    const groups = new Map<string, UsageRecord[]>();
+    for (const record of this.since(0, Number.MAX_SAFE_INTEGER)) {
+      const at = Date.parse(record.at ?? "");
+      if (!Number.isNaN(at) && at < sinceMs) continue;
+      const key = record.kind ?? UNATTRIBUTED;
+      (groups.get(key) ?? groups.set(key, []).get(key)!).push(record);
+    }
+    return [...groups.entries()]
+      .map(([kind, records]) => ({ kind, totals: this.sum(records) }))
+      .sort((a, b) => b.totals.outputTokens - a.totals.outputTokens);
+  }
+
+  /**
+   * Bills one call that is not the agent thinking.
+   *
+   * The turn loop writes its own row with everything it knows; this is for the three calls
+   * around the edges, which know their model and their tokens and little else. It exists so
+   * that "what did the model cost" stops meaning "what did the turn loop cost", which is what
+   * it silently meant while these three were unmetered.
+   */
+  recordAside(options: {
+    kind: UsageKind;
+    agentId: string;
+    agentName: string;
+    provider: string;
+    model: string;
+    usage: { input_tokens?: number; output_tokens?: number; cache_read_input_tokens?: number | null; cache_creation_input_tokens?: number | null };
+    workId?: string;
+    conversation?: string;
+  }): void {
+    this.record({
+      kind: options.kind,
+      agentId: options.agentId,
+      agentName: options.agentName,
+      provider: options.provider,
+      model: options.model,
+      // Not a round of anything: these calls sit outside the loop that counts rounds.
+      round: 0,
+      ...(options.workId !== undefined ? { workId: options.workId } : {}),
+      ...(options.conversation !== undefined ? { conversation: options.conversation } : {}),
+      inputTokens: options.usage.input_tokens ?? 0,
+      outputTokens: options.usage.output_tokens ?? 0,
+      cacheReadTokens: options.usage.cache_read_input_tokens ?? 0,
+      cacheWriteTokens: options.usage.cache_creation_input_tokens ?? 0,
+    });
   }
 
   private sum(records: readonly UsageRecord[]): UsageTotals {

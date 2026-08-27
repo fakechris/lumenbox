@@ -33,7 +33,7 @@ import {
   FirstTokenStallError,
   FIRST_TOKEN_DEADLINE_MS,
 } from "./transient.ts";
-import type { UsageLog } from "./usage.ts";
+import type { UsageKind, UsageLog } from "./usage.ts";
 import { chooseRelevant, recall } from "./memory.ts";
 import {
   activeWindow,
@@ -570,12 +570,27 @@ export function storableResult(
  */
 const pendingSummaries = new Map<string, PendingSummary>();
 
+/**
+ * Bills a model call that is not the agent thinking.
+ *
+ * A closure rather than the ledger itself, because the three calls this covers know their model
+ * and their tokens and nothing about which agent, which work or which conversation they belong
+ * to — and threading four more parameters through the compaction path to tell them would be
+ * four chances to pass the wrong one.
+ */
+export type Meter = (
+  kind: UsageKind,
+  profile: ProviderProfile,
+  usage: Anthropic.Message["usage"]
+) => void;
+
 /** Produces one summary of the given entries, or undefined when the model would not cooperate. */
 async function summarise(
   entries: readonly HistoryEntry[],
   covers: number,
   client: Anthropic,
-  summaryProvider: ProviderProfile
+  summaryProvider: ProviderProfile,
+  meter?: Meter
 ): Promise<SummaryEntry | undefined> {
   const response = await client.messages.create({
     model: summaryProvider.model,
@@ -583,6 +598,7 @@ async function summarise(
     max_tokens: Math.min(4096, summaryProvider.maxTokens),
     messages: [{ role: "user", content: buildSummaryPrompt(entries) }],
   });
+  meter?.("summarize", summaryProvider, response.usage);
   const text = response.content
     .filter((block): block is Anthropic.TextBlock => block.type === "text")
     .map(block => block.text)
@@ -621,8 +637,9 @@ async function compactHistory(options: {
   log: (line: string) => void;
   onCompacted: (event: { type: "compacted"; covers: number; summarised: boolean; detail: string }) => void;
   conversation: string;
+  meter?: Meter;
 }): Promise<TranscriptEntry[]> {
-  const { history, agent, registry, client, provider, log, onCompacted, conversation } = options;
+  const { history, agent, registry, client, provider, log, onCompacted, conversation, meter } = options;
   // Speculative summaries are per conversation: each thread compacts its own history,
   // and a summary prepared for the team room must never be adopted by a Telegram chat.
   const summaryKey = `${agent.id}/${conversation}`;
@@ -654,7 +671,7 @@ async function compactHistory(options: {
       pendingSummaries.set(summaryKey, {
         covers: cut.index,
         computedFrom: active.length,
-        promise: summarise(olderEntries, cut.index, client, summaryProvider).catch(() => undefined),
+        promise: summarise(olderEntries, cut.index, client, summaryProvider, meter).catch(() => undefined),
       });
     }
     return history;
@@ -672,7 +689,7 @@ async function compactHistory(options: {
         log(`used the summary prepared in the background (${pending!.covers} entries)`);
       }
     }
-    const produced = ready ?? (await summarise(olderEntries, cut.index, client, summaryProvider));
+    const produced = ready ?? (await summarise(olderEntries, cut.index, client, summaryProvider, meter));
     if (produced === undefined) throw new Error("the summariser returned no text");
     entry = produced;
     const detail =
@@ -820,6 +837,20 @@ export async function runTurn(
   // inherits rather than mints, which is the whole point of the field: without it a turn that
   // resumed twice appears in every report as three unrelated short turns.
   const workId = deps.resumeOf?.workId ?? randomUUID();
+  // Built once, here, because this is the only place that knows all four of the things an aside
+  // has to be attributed to. Passing the ledger down instead would mean passing the agent, the
+  // work and the conversation down with it, which is three more chances to pass the wrong one.
+  const meter: Meter = (kind, profile, usage) =>
+    deps.usage?.recordAside({
+      kind,
+      agentId: agent.id,
+      agentName: agent.profile.name,
+      provider: profile.label,
+      model: profile.model,
+      usage,
+      workId,
+      conversation,
+    });
   let ended = false;
   const finish = (how: string) => {
     if (ended) return;
@@ -986,6 +1017,7 @@ export async function runTurn(
     log: line => console.error(`[compaction] ${agent.profile.name}: ${line}`),
     onCompacted: event => emit({ ...event, agentId: agent.id }),
     conversation,
+    meter,
   });
 
   const messages: Anthropic.MessageParam[] = [
@@ -1133,6 +1165,7 @@ export async function runTurn(
         log: line => console.error(`[compaction] ${agent.profile.name}: ${line}`),
         onCompacted: event => emit({ ...event, agentId: agent.id }),
         conversation,
+        meter,
       });
       // In place: `runRounds` closes over this array.
       messages.length = 0;

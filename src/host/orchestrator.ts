@@ -364,6 +364,7 @@ export class Orchestrator {
       client: this.client,
       provider: resolveSummaryProvider(this.provider),
       log: line => console.error(`[memory] ${line}`),
+      usage: this.usage,
     });
 
     this.bus = new AgentBus(
@@ -521,7 +522,7 @@ export class Orchestrator {
       turns: this.turns,
       // The same cheap profile the summariser and the note-taker use. Choosing which memories to
       // show is the least interesting work in the system and should be billed accordingly.
-      selectMemory: prompt => this.askCheaply(prompt),
+      selectMemory: prompt => this.askCheaply(agent, prompt),
       resumeOf,
       onEvent: this.options.onTurnEvent,
     }).catch(error => {
@@ -626,13 +627,21 @@ export class Orchestrator {
    * Undefined rather than a throw: every caller of this is an improvement to something that already
    * works, so a failure here must degrade rather than propagate.
    */
-  private async askCheaply(prompt: string): Promise<string | undefined> {
+  private async askCheaply(agent: AgentRecord, prompt: string): Promise<string | undefined> {
     try {
       const profile = resolveSummaryProvider(this.provider);
       const response = await this.client.messages.create({
         model: profile.model,
         max_tokens: Math.min(512, profile.maxTokens),
         messages: [{ role: "user", content: prompt }],
+      });
+      this.usage.recordAside({
+        kind: "select",
+        agentId: agent.id,
+        agentName: agent.profile.name,
+        provider: profile.label,
+        model: profile.model,
+        usage: response.usage,
       });
       return response.content
         .filter((block): block is Anthropic.TextBlock => block.type === "text")

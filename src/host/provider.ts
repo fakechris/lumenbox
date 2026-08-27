@@ -500,6 +500,9 @@ export async function testProvider(
   const client = clientFor(profile, key, { maxRetries: 0, timeout: 20_000 });
 
   const started = Date.now();
+  // unmetered: a connectivity probe an operator runs by hand, capped at 16 tokens, and not
+  // attributable to any agent or piece of work. Metering it would put a row with no owner into
+  // a ledger whose whole purpose is attribution.
   const response = await client.messages.create({
     model: profile.model,
     max_tokens: 16,

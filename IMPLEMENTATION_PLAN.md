@@ -61,7 +61,12 @@ a fork child costable immediately, which is the case an estimate cares about mos
 - `byKindSince` returns four kinds on a day with memory extraction in it.
 - The cheap-profile total is separable from the turn-loop total.
 
-**Status**: Not Started
+**Status**: Complete. The guard needed two attempts and the first one is the interesting
+part: it looked for a ledger write within N lines of the call, and a deliberately unmetered
+call added next to a metered one passed, because the neighbour's write was inside the
+window. It now enumerates every call site by its enclosing declaration, and a site that is
+not on the list fails whatever sits near it — verified by adding an unmetered call and
+watching it fail.
 
 ---
 
