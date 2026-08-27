@@ -90,3 +90,36 @@ test("no backtick reaches the page script", () => {
   const script = APP_HTML.slice(APP_HTML.indexOf("<script"));
   assert.ok(!script.includes("`"), "a backtick in the page script ends the template early");
 });
+
+test("a structured tool argument is summarised, not stringified", () => {
+  // SetTodos takes a list of objects, and String() on it rendered
+  // "[object Object],[object Object]" in the row — which is what shipped and what a
+  // screenshot caught. The row has to be identifiable without being expanded.
+  assert.match(APP_HTML, /function describeArg\(value\)/, "structured args need their own reader");
+  assert.match(
+    APP_HTML,
+    /item\.text \|\| item\.title \|\| item\.name/,
+    "a list of objects is labelled by what the objects call themselves"
+  );
+  assert.ok(
+    !/return values\.length \? values\[0\] : ""/.test(APP_HTML),
+    "the String()-the-first-value fallback is what produced [object Object]"
+  );
+});
+
+test("a step's heading is not repeated inside its own body", () => {
+  // The summary carried the first sentence and the body carried the whole text, so the
+  // first sentence appeared twice, directly under itself — which reads as a rendering
+  // fault rather than as a heading and its detail.
+  assert.match(APP_HTML, /function restAfter\(text, head\)/);
+  assert.match(APP_HTML, /var rest = restAfter\(text, head\);/, "the body gets the rest only");
+});
+
+test("folding is offered per turn as well as per step", () => {
+  // Two different wishes: put this piece of work away, and fold everything on the page.
+  // The page-level link existed in the pane header and nobody found it, so the per-turn
+  // control lives where the steps are.
+  assert.match(APP_HTML, /function stepGroupBar\(\)/);
+  assert.match(APP_HTML, /class="foldgroup"/);
+  assert.match(APP_HTML, /group\.appendChild\(step\)/, "steps belong to their turn's group");
+});
