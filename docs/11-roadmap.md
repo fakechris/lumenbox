@@ -449,12 +449,58 @@ contains the conclusion the turn produced is checkable.** A turn that wrote a su
 task note and then delivered only a status line is a specific, detectable shape, which puts
 it on the harness's side of the line this codebase keeps drawing.
 
-What needs deciding before it is built, and why this is an entry rather than a commit: the
-obvious fix — deliver the note whenever a task moves to review — double-posts every time the
-agent *does* say the substance, and a product that repeats itself is its own complaint. The
-narrower rule (deliver the note only when the reply carries nothing the note does not) needs
-a definition of "carries nothing" that is not a model's opinion, which is the same trap as
-the completion gate. Small once decided; the decision is the work.
+### The rule that caused it, found in the code
+
+`turn.ts:1556`, and it is one line:
+
+```ts
+if (toolUses.length === 0) {
+  // …this round's text is the answer, and the turn ends
+```
+
+**Whether a piece of text is "the answer" or "thinking out loud" is decided entirely by
+whether a tool call happens to follow it.** That is a fact about sequencing, not about
+content, and t51 is what it costs: the agent wrote its whole analysis, then tidied up —
+`Tasks.update`, `RememberFact` — and *the tidying demoted the answer to narration.* Had it
+written the same paragraph and stopped, the person would have received all of it.
+
+So this is not a model that withheld its work. It is a harness that reclassified the work as
+internal because the model was conscientious afterwards.
+
+### The plan
+
+**1. Not every tool call is evidence of unfinished work.** Split the toolset in two:
+
+- **investigative** — `bash`, `WebFetch`, `WebSearch`, `computer`, `read_file`… calls whose
+  results the agent has not seen yet, so anything said before them is genuinely provisional.
+- **bookkeeping** — `Tasks`, `RememberFact`, `SetTodos`, `Plan`… calls that record what has
+  already been concluded. Their results tell the agent nothing it did not know.
+
+Text followed **only** by bookkeeping calls is not narration. It is the answer, filed. This
+is a static property of the tool list, not a judgement about any particular call, which is
+what keeps it out of the model's hands.
+
+**2. Deliver it.** When a turn ends and its last substantial text was demoted this way, that
+text is the reply — not a fabricated summary of it, and not a second message.
+
+**3. Say so where the agent can act on it.** `Tasks.update`'s description should state that
+a note goes to the board and not to the person. The tool reads as a way to report; it is a
+way to file.
+
+**Why this is buildable now and the earlier framing was not.** The problem was stated as
+"deliver the note when the reply does not already cover it", which needs a definition of
+"cover" that is not a model's opinion — the completion-gate trap. Recast against the actual
+rule, no such judgement is required: the classification is over tool *names*, fixed at build
+time, and the text to deliver is text the agent already wrote for the person.
+
+**The one risk, named:** a turn that legitimately says "I'll write that down" and then writes
+it down would now deliver "I'll write that down" as its answer, which it already effectively
+does. The floor is a length threshold, and the test that matters is the pair — t51's table
+delivered, a genuine one-line acknowledgement left alone.
+
+Small, and the measurement to check it against is on disk: every turn in the transcripts
+whose last text block was followed only by bookkeeping calls is a case this would have
+changed, and they can be counted before anything ships.
 
 ### R16. Webhook and event triggers
 Scheduled skills cover "every morning"; nothing covers "when the build breaks" or
