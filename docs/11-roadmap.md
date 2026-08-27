@@ -535,6 +535,41 @@ Playwright's `goto` does not — which had it photographing a build that no long
 Next step is a bisect rather than a design: a plain `xterm` on the same display, clicked the
 same way, separates "Chromium ignores XTEST" from "this box ignores XTEST".
 
+### R34. The identity the bot already has, usable as a capability
+Observed 2026-08-27, in one message. A person pasted a Feishu doc link into the Feishu
+chat; the agent answered "这个飞书文档需要登录才能看到正文" and asked what to do.
+**It said this through a Feishu bot identity that was, at that moment, authenticated.**
+The credential that could read the doc is the same one that delivered the apology for not
+reading it.
+
+The gap, named precisely: the channel identity is wired only for *messaging*. The adapter
+uses `im.message.*` and nothing else — no docs, no drive, no wiki, no contacts. A person
+reasonably assumes "the bot is in our Feishu" means "the bot can see what I send it from
+our Feishu", and today the second does not follow.
+
+Two layers, and they sit on opposite sides of the vault line:
+
+- **Host-side identity tools (the near half).** The Feishu credential lives in host config
+  and must stay there. So doc-reading is a *host* tool, shaped like `WebFetch`: the agent
+  asks for a doc by URL, the host resolves it with the channel's own credential, the text
+  comes back as a tool result. Same pattern for DingTalk. Cheap, no new secret movement,
+  and it closes the exact case observed. A `feishu.example.com/docx/...` URL in a message
+  should probably route there *automatically*, the way channel files already land in the
+  chat inbox — the person did not think of the link as different from an attachment.
+- **Box-side identity tooling (the far half, R29's territory).** Real scenarios need more
+  than reading — 建群、拉人、发日程、查审批流. That is CLI/MCP-shaped and wants presets,
+  but a Feishu CLI in the box implies a credential in the box, which the vault forbids and
+  the observed case does not require. The honest shape is the one the model relay already
+  established: **the tool runs in the box, the credential stays on the host, calls go
+  through a narrow authenticated proxy** — per-capability, auditable, revocable. This is
+  R29's MCP preset story with an identity attached, and it should be designed there, not
+  improvised per-platform.
+
+What was actually observed also carried a second, unrelated defect, fixed the same day:
+the AskUser options reached the person as four lines of `[object Object]` — a model sent
+option objects despite the schema saying strings, and `String()` did the rest. The
+question that was supposed to rescue the failed doc-read was itself unreadable.
+
 ### R16. Webhook and event triggers
 Scheduled skills cover "every morning"; nothing covers "when the build breaks" or
 "when an external system pings". An HTTP ingress whose calls arrive as inbound

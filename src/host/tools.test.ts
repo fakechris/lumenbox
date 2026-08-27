@@ -107,6 +107,27 @@ test("AskUser hands the question to a person and stops, rather than guessing or 
   } as unknown as Parameters<typeof dispatchTool>[2]);
   assert.ok(undeliverable.isError);
   assert.match(undeliverable.text, /could not be delivered/);
+
+  // A model that ignores the schema and sends option objects. It happened on the MiniMax
+  // profile with a Feishu-doc question: four choices reached the person's chat as four
+  // lines of "[object Object]", which is a question nobody can answer. The schema says
+  // strings; nothing enforces a schema on a model, so the reader has to.
+  asked.length = 0;
+  const objects = await dispatchTool(
+    "AskUser",
+    {
+      question: "The doc needs a login. What should I do?",
+      options: [
+        { label: "用你已有的飞书身份读", description: "walk the OAuth flow" },
+        { text: "把正文粘给我" },
+        { title: "跳过这篇" },
+        "直接问作者",
+      ],
+    },
+    context
+  );
+  assert.ok(!objects.isError);
+  assert.deepEqual(asked[0]?.options, ["用你已有的飞书身份读", "把正文粘给我", "跳过这篇", "直接问作者"]);
 });
 
 test("searching is offered only where it can work, and is a tool the team knows about", async () => {

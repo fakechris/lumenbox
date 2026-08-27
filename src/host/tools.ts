@@ -1659,8 +1659,23 @@ export async function dispatchTool(
     case "AskUser": {
       const question = String(input.question ?? "").trim();
       if (question === "") return { text: "Ask something.", isError: true };
+      // String() on an option object is "[object Object]", and it shipped: a model sent
+      // {label, description} choices despite the schema saying strings, and the person got
+      // four identical unreadable bullets in their chat. A schema does not bind a model,
+      // so the reader takes what the object calls itself — same rule as describeArg on
+      // the web side, which caught the same failure in SetTodos.
+      const optionText = (option: unknown): string => {
+        if (typeof option === "string") return option;
+        if (option !== null && typeof option === "object") {
+          const named = option as { label?: unknown; text?: unknown; title?: unknown; name?: unknown };
+          const name = named.label ?? named.text ?? named.title ?? named.name;
+          if (typeof name === "string" && name.trim() !== "") return name;
+          return JSON.stringify(option);
+        }
+        return String(option);
+      };
       const options = Array.isArray(input.options)
-        ? input.options.map(option => String(option)).filter(option => option !== "")
+        ? input.options.map(optionText).filter(option => option !== "")
         : undefined;
       if (context.askUser === undefined) {
         return {
