@@ -54,6 +54,17 @@ interface BeginRecord {
   at: string;
   /** The turn this one is picking up, when it is a resumption. */
   resumeOf?: string;
+  /**
+   * The piece of work, as opposed to the attempt at it.
+   *
+   * `id` is a fresh UUID per attempt, so anything keyed on it sees a turn that resumed twice
+   * as three unrelated short turns — which is why no cost report could answer "what did that
+   * task cost". This one is minted once and inherited by every resumption.
+   *
+   * Optional because records written before the field existed have to keep replaying, and an
+   * id synthesised for them would join their rows to nothing while looking like a grouping.
+   */
+  workId?: string;
   /** How many attempts have already been made at the original work, including this one. */
   attempt: number;
   /** What the turn was about, in one line, so an operator reading the file learns something. */
@@ -82,6 +93,15 @@ export interface InterruptedTurn {
   attempt: number;
   /** The conversation the turn belonged to, absent for the main one. */
   conversation?: string;
+  /**
+   * The work this turn was an attempt at, so the resumption inherits it rather than starting
+   * a second one.
+   *
+   * Returned here and not only written to the file, because `resumeOf` is the cautionary
+   * case: it goes into the begin record and never comes out of this shape, so the lineage
+   * exists on disk and never reaches the code that resumes.
+   */
+  workId?: string;
 }
 
 export class TurnLedger {
@@ -108,6 +128,7 @@ export class TurnLedger {
     about: string;
     id: string;
     resumeOf?: string;
+    workId?: string;
     attempt?: number;
     conversation?: string;
     now?: Date;
@@ -118,6 +139,7 @@ export class TurnLedger {
       agentId: options.agentId,
       at: (options.now ?? new Date()).toISOString(),
       ...(options.resumeOf !== undefined ? { resumeOf: options.resumeOf } : {}),
+      ...(options.workId !== undefined ? { workId: options.workId } : {}),
       attempt: options.attempt ?? 1,
       about: options.about.replace(/\s+/g, " ").trim().slice(0, 200),
       ...(options.conversation !== undefined ? { conversation: options.conversation } : {}),
@@ -151,6 +173,7 @@ export class TurnLedger {
           about: record.about,
           attempt: record.attempt,
           ...(record.conversation !== undefined ? { conversation: record.conversation } : {}),
+          ...(record.workId !== undefined ? { workId: record.workId } : {}),
         });
       } else {
         open.delete(record.id);

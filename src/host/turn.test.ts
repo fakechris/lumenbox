@@ -2322,3 +2322,72 @@ test("output from a command given a credential is not kept in the transcript", (
   const plain = storableResult(block);
   assert.match((plain.content as Anthropic.TextBlockParam[])[0]!.text, /ghp_realtokenvalue/);
 });
+
+test("a resumed turn's usage rows carry the work id of the turn it picked up", async () => {
+  const { registry, cleanup } = fixture();
+  const root = mkdtempSync(join(tmpdir(), "agentbox-workid-"));
+  try {
+    const ada = registry.create({ name: "Ada" });
+    const bus = new AgentBus(registry, async () => {});
+    const turns = new TurnLedger(join(root, "turns.jsonl"));
+    const usage = new UsageLog(join(root, "usage.jsonl"));
+    const { client } = stubClient([message([textBlock("done")])], { params: [] });
+    const run = (resumeOf?: { id: string; attempt: number; workId?: string }) =>
+      runTurn(
+        ada,
+        [{ id: "m", fromId: "user", fromName: "user", text: "the long one", priority: false, receivedAt: "" }],
+        new AbortController().signal,
+        { client, registry, bus, box: undefined, resolution: undefined, turns, usage, ...(resumeOf ? { resumeOf } : {}) }
+      );
+
+    await run();
+    const first = turns.interrupted();
+    // The first turn ended, so nothing is outstanding; the work id has to come off the record
+    // the ledger wrote rather than out of the runTurn call, which is the whole handoff.
+    assert.deepEqual(first, [], "a completed turn is not outstanding");
+    const rowsAfterFirst = usage.since(0, 1000);
+    const workId = rowsAfterFirst[0]?.workId;
+    assert.ok(workId, "a usage row carries the work it belongs to");
+
+    // Now the crash-and-resume: the orchestrator hands the previous work id across.
+    await run({ id: "t-earlier", attempt: 2, workId });
+
+    const rows = usage.since(0, 1000);
+    assert.ok(rows.length >= 2, "both turns billed");
+    const distinct = new Set(rows.map(row => row.workId));
+    assert.equal(
+      distinct.size,
+      1,
+      "two attempts at one piece of work bill to one work id — this is the entire point of the field"
+    );
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+    cleanup();
+  }
+});
+
+test("a turn that is not a resumption starts its own work", async () => {
+  const { registry, cleanup } = fixture();
+  const root = mkdtempSync(join(tmpdir(), "agentbox-workid2-"));
+  try {
+    const ada = registry.create({ name: "Ada" });
+    const bus = new AgentBus(registry, async () => {});
+    const usage = new UsageLog(join(root, "usage.jsonl"));
+    const { client } = stubClient([message([textBlock("done")])], { params: [] });
+    for (const text of ["first thing", "unrelated second thing"]) {
+      await runTurn(
+        ada,
+        [{ id: "m", fromId: "user", fromName: "user", text, priority: false, receivedAt: "" }],
+        new AbortController().signal,
+        { client, registry, bus, box: undefined, resolution: undefined, usage }
+      );
+    }
+    // The failure this guards against is the mirror of the one above: an id so stable it
+    // groups everything, which reports as one enormous piece of work that never ends.
+    const distinct = new Set(usage.since(0, 1000).map(row => row.workId));
+    assert.equal(distinct.size, 2, "two separate asks are two pieces of work");
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+    cleanup();
+  }
+});

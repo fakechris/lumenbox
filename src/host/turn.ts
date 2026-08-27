@@ -342,7 +342,7 @@ export interface TurnDeps {
    * Threaded in rather than derived, because only the caller doing the resuming knows which turn
    * this continues and how many attempts have gone before.
    */
-  resumeOf?: { id: string; attempt: number };
+  resumeOf?: { id: string; attempt: number; workId?: string };
   onEvent?: (event: TurnEvent) => void;
 }
 
@@ -816,6 +816,10 @@ export async function runTurn(
   // Recorded before anything else, so a process that dies at any point after this leaves a begin
   // with no end — a fact, rather than a turn that simply stopped existing.
   const turnId = randomUUID();
+  // The turn is the attempt; the work is what the attempts are attempts at. A resumption
+  // inherits rather than mints, which is the whole point of the field: without it a turn that
+  // resumed twice appears in every report as three unrelated short turns.
+  const workId = deps.resumeOf?.workId ?? randomUUID();
   let ended = false;
   const finish = (how: string) => {
     if (ended) return;
@@ -1089,6 +1093,7 @@ export async function runTurn(
     id: turnId,
     agentId: agent.id,
     about: inbound.map(message => message.text).join(" / "),
+    workId,
     ...(conversation !== MAIN_CONVERSATION ? { conversation } : {}),
     ...(deps.resumeOf !== undefined
       ? { resumeOf: deps.resumeOf.id, attempt: deps.resumeOf.attempt }
@@ -1433,6 +1438,13 @@ export async function runTurn(
     deps.usage?.record({
       agentId: agent.id,
       agentName: agent.profile.name,
+      // What a report groups by. `turnId` would be the obvious key and is the wrong one: it
+      // is minted per attempt, so it splits one long piece of work into several short ones.
+      workId,
+      // Already in scope for the event stream, and free here. It does not attribute a task —
+      // a task spans conversations and a conversation spans tasks — but it does make a fork
+      // child costable, which is the case an estimate cares about most.
+      conversation,
       // Who this spend is on behalf of. Absent when no person drove it — a wake, a
       // scheduled run — which is exactly what byPrincipalSince groups separately.
       ...(deps.caller?.userId !== undefined ? { principal: deps.caller.userId } : {}),

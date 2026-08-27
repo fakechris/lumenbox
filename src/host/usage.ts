@@ -33,6 +33,21 @@ export interface UsageRecord {
   agentId: string;
   agentName: string;
   /**
+   * The piece of work this call belongs to, stable across every resume of it.
+   *
+   * The field that was missing. Everything worth asking about long work is a join — what did
+   * this task cost, which turn was the expensive one, what does a fetch-and-summarise usually
+   * run to — and there was nothing to join on: a row carried an agent and a timestamp, so the
+   * only available answer was "same agent, near in time", which is a guess.
+   *
+   * Not `turnId`, which is minted per attempt (`turn.ts`) and would split one long piece of
+   * work into as many rows-groups as it had crashes. Optional because rows written before the
+   * field existed keep replaying, and they should read as unattributed rather than as a group.
+   */
+  workId?: string;
+  /** Which thread it ran in. A fork child has its own, which is what makes one costable. */
+  conversation?: string;
+  /**
    * Who this spend is on behalf of — the principal id of whoever drove the turn.
    * Absent for work no person triggered directly: a teammate's wake, a scheduled run.
    * This is what makes "what did each person cost" answerable.

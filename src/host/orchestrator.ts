@@ -176,7 +176,7 @@ export class Orchestrator {
    * Without the link, every resumption would start its own chain and a turn that kills the process
    * would be retried forever — the count is the whole of the crash-loop guard.
    */
-  private readonly resuming = new Map<string, { id: string; attempt: number }>();
+  private readonly resuming = new Map<string, { id: string; attempt: number; workId?: string }>();
 
   /**
    * What each agent last saw each shared file as.
@@ -571,7 +571,14 @@ export class Orchestrator {
       // Closed before the new one opens, so a crash during the resumption leaves exactly one
       // unfinished turn rather than two.
       this.turns?.end(turn.id, "resumed");
-      this.resuming.set(agent.id, { id: turn.id, attempt: turn.attempt + 1 });
+      // The work id comes across with the attempt. Carrying the one without the other is how
+      // the field would end up written on every record and grouping nothing: the resumed turn
+      // would mint a fresh one and the report would still see two pieces of work.
+      this.resuming.set(agent.id, {
+        id: turn.id,
+        attempt: turn.attempt + 1,
+        ...(turn.workId !== undefined ? { workId: turn.workId } : {}),
+      });
       this.bus.sendFromUser(agent.id, resumePrompt(turn.about, turn.at), {
         // The turn resumes in the conversation it was interrupted in: an answer to a
         // group chat's question must not surface in the team room.

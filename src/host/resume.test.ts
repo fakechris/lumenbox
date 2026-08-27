@@ -138,3 +138,67 @@ test("giving up says why, and says a person is needed", () => {
   assert.match(note, /likely to be in this work rather than in the machine/);
   assert.match(note, /needs a person to look/);
 });
+
+test("a work id survives every resume of the same work", () => {
+  const { path, cleanup } = ledgerPath();
+  try {
+    const ledger = new TurnLedger(path);
+    // Three attempts at one piece of work: the process died twice underneath it.
+    ledger.begin({ id: "t1", agentId: "ada", about: "the long one", workId: "w1" });
+    ledger.end("t1", "resumed");
+    ledger.begin({ id: "t2", agentId: "ada", about: "the long one", workId: "w1", resumeOf: "t1", attempt: 2 });
+    ledger.end("t2", "resumed");
+    ledger.begin({ id: "t3", agentId: "ada", about: "the long one", workId: "w1", resumeOf: "t2", attempt: 3 });
+
+    const outstanding = new TurnLedger(path).interrupted();
+    // The point of the whole field: three turn ids, one work id. A cost report keyed on turn
+    // id sees three unrelated short turns where there was one long piece of work.
+    assert.deepEqual(outstanding.map(turn => turn.id), ["t3"]);
+    assert.equal(outstanding[0]?.workId, "w1");
+    assert.equal(outstanding[0]?.attempt, 3);
+  } finally {
+    cleanup();
+  }
+});
+
+test("interrupted() carries every field a resumption has to pass on", () => {
+  const { path, cleanup } = ledgerPath();
+  try {
+    const ledger = new TurnLedger(path);
+    ledger.begin({
+      id: "t1",
+      agentId: "ada",
+      about: "in a side thread",
+      workId: "w9",
+      conversation: "feishu:oc_1",
+    });
+    const [turn] = new TurnLedger(path).interrupted();
+    // Named individually because this shape has already lost a field once: resumeOf is written
+    // into the record and dropped from what interrupted() returns, so the lineage exists on disk
+    // and never reaches the code that resumes. A workId that did the same would make the whole
+    // field a no-op that still typechecks.
+    assert.equal(turn?.workId, "w9");
+    assert.equal(turn?.conversation, "feishu:oc_1");
+    assert.equal(turn?.agentId, "ada");
+  } finally {
+    cleanup();
+  }
+});
+
+test("a ledger written before workId existed still replays", () => {
+  const { path, cleanup } = ledgerPath();
+  try {
+    // Exactly what an older build wrote: no workId anywhere.
+    writeFileSync(
+      path,
+      `${JSON.stringify({ id: "old", event: "begin", agentId: "ada", at: new Date(0).toISOString(), attempt: 1, about: "before the field" })}\n`
+    );
+    const [turn] = new TurnLedger(path).interrupted();
+    assert.equal(turn?.id, "old");
+    // Absent, not invented. A synthesised id would join this turn's rows to nothing while
+    // looking like a real grouping, which is worse than admitting the record predates the field.
+    assert.equal(turn?.workId, undefined);
+  } finally {
+    cleanup();
+  }
+});
