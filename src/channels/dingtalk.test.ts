@@ -11,16 +11,21 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import {
+  CARD_CALLBACK_TOPIC,
   CHUNK_CHARS,
   DingTalkChannel,
+  approvalPressFrom,
+  approvalVarsFor,
   chunkText,
   flattenRichText,
   freshWebhookOf,
+  imSpaceIdFor,
   isContentRefusal,
   markdownTitle,
   mediaOf,
   outboundRoute,
   parseChatKey,
+  subscriptionsFor,
   TOPIC,
   wantsNudge,
   type BotMessage,
@@ -362,4 +367,103 @@ test("one shared markdown verdict across every rendering adapter", () => {
   // channel; equality of the functions themselves keeps them incapable of drifting.
   assert.equal(fromShared, fromFeishu);
   assert.equal(typeof fromShared("**b**"), "boolean");
+});
+
+test("card buttons subscribe only when a template exists", () => {
+  assert.deepEqual(subscriptionsFor(undefined), [{ type: "CALLBACK", topic: TOPIC }]);
+  assert.deepEqual(subscriptionsFor(""), [{ type: "CALLBACK", topic: TOPIC }]);
+  assert.deepEqual(subscriptionsFor("73370521-7e23-4c8b-9f5f-7fc10a98fbf2.schema"), [
+    { type: "CALLBACK", topic: TOPIC },
+    { type: "CALLBACK", topic: CARD_CALLBACK_TOPIC },
+  ]);
+});
+
+test("a card press parses into a decision or refuses to", () => {
+  const base = { userId: "staff9", outTrackId: "lumenbox-1-x" };
+  assert.equal(approvalPressFrom({ ...base, content: '{"action":"once"}' })?.reply, "once");
+  const always = approvalPressFrom({ ...base, content: '{"action":"always"}' });
+  assert.equal(always?.reply, "always");
+  const deny = approvalPressFrom({ ...base, content: "not json at all" });
+  assert.equal(deny, undefined);
+  assert.equal(approvalPressFrom({ ...base, content: '{"action":"agree"}' }), undefined);
+  assert.equal(approvalPressFrom({ content: '{"action":"once"}' }), undefined,
+    "no user id — nobody to attribute the decision to");
+  assert.equal(approvalPressFrom({ userId: "s", outTrackId: "", content: '{"action":"deny"}' }),
+    undefined, "no instance id — no approval this could answer");
+});
+
+test("approval card variables keep the action verbatim and stakes attached", () => {
+  const vars = approvalVarsFor({
+    approvalId: "appr-9",
+    agentName: "Ada",
+    description: "curl -X POST https://example.com/export",
+    stakes: "Until someone answers, this work is stopped.",
+  });
+  assert.match(vars.title, /Ada needs your consent/);
+  // Verbatim action first; the stakes sentence follows, ours not the agent's.
+  assert.match(vars.description, /^curl -X POST https:\/\/example\.com\/export\n\nUntil someone/);
+});
+
+test("the same card lands in a group space or a robot space depending on route", () => {
+  assert.equal(imSpaceIdFor("group", "cid7"), "dtv1.card//IM_GROUP.cid7");
+  assert.equal(imSpaceIdFor("direct", "staff9"), "dtv1.card//IM_ROBOT.staff9");
+});
+
+test("button approvals exist only when a card template was configured", async () => {
+  const bare = new DingTalkChannel("d1", "s", () => {});
+  assert.equal(bare.postApprovalCard, undefined,
+    "no template, no buttons — the manager must run its text-verb path");
+
+  const withCards = new DingTalkChannel("d1", "s", () => {}, undefined, "tpl.schema");
+  assert.notEqual(withCards.postApprovalCard, undefined);
+  // The handler registration path exists on both: it is inert without presses.
+  withCards.onApprovalAction(async () => "answered");
+});
+
+test("a card press resolves the pending approval and answers in its room", async () => {
+  const state = harness();
+  (state.adapter as unknown as { cardTemplateId: unknown }).cardTemplateId = "tpl.schema";
+  const decisions: { approvalId: string; reply: string; identity: string }[] = [];
+  (state.adapter as unknown as { approvalHandler: unknown }).approvalHandler = async (
+    press: { approvalId: string; reply: string; identity: string }
+  ) => {
+    decisions.push(press);
+    return `${press.reply} recorded`;
+  };
+
+  // Delivery would record the mapping; simulate a live one directly.
+  const map = (state.adapter as unknown as { cardApprovals: Map<string, { approvalId: string }> })
+    .cardApprovals;
+  map.set("lumenbox-1-a", { approvalId: "appr-9" });
+
+  const frame = JSON.stringify({
+    userId: "staff9",
+    outTrackId: "lumenbox-1-a",
+    content: '{"action":"always"}',
+    spaceType: "IM_GROUP",
+    spaceId: "cid7",
+    type: "actionCallback",
+  });
+  await state.adapter.receive(
+    JSON.stringify({
+      type: "CALLBACK",
+      headers: { topic: CARD_CALLBACK_TOPIC, messageId: "tr-c1" },
+      data: frame,
+    }),
+    { respond: (_h, data) => state.acks.push(JSON.parse(data)) },
+    async () => ""
+  );
+
+  assert.deepEqual(decisions, [{ approvalId: "appr-9", reply: "always", identity: "dingtalk:staff9" }]);
+  // Answered exactly once; a replay of the same press finds nothing waiting.
+  await state.adapter.receive(
+    JSON.stringify({
+      type: "CALLBACK",
+      headers: { topic: CARD_CALLBACK_TOPIC, messageId: "tr-c2" },
+      data: frame,
+    }),
+    { respond: (_h, data) => state.acks.push(JSON.parse(data)) },
+    async () => ""
+  );
+  assert.equal(decisions.length, 1);
 });

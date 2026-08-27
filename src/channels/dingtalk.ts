@@ -29,15 +29,23 @@
  * - No threads. Conversations between a person and a DingTalk bot have no topic
  *   structure, so there is no `threadKey`: the chat *is* the subject, the reading
  *   every platform without threads takes.
- * - No interactive cards. Card instances require a template minted in the developer
- *   console and button callbacks routed somewhere public; approvals travel as the
- *   text verbs ("允许", "deny") the manager already treats as first-class.
- * - No reactions and no outbound media. Robot messages carry no emoji marks, and
- *   image/file sends take a public URL the box has no reason to have — screenshots
- *   land as the manager's honest "this channel cannot show images" line instead.
+ * - No reactions and no outbound media files. Robot messages carry no emoji marks,
+ *   and image/file sends take a public URL the box has no reason to have —
+ *   screenshots land as the manager's honest "this channel cannot show images" line.
+ *
+ * Interactive cards ARE supported, conditionally: with `DINGTALK_CARD_TEMPLATE_ID`
+ * configured, consent requests render as an interactive card whose three buttons
+ * answer over the stream (`/v1.0/card/instances/callback`, `callbackType: STREAM`),
+ * no public URL needed; without it the method stays undefined and approvals run on
+ * the text verbs ("允许", "deny") exactly as before.
  */
 
-import type { ChannelAdapter, InboundMessage } from "./manager.ts";
+import type {
+  ApprovalCardState,
+  ApprovalReply,
+  ChannelAdapter,
+  InboundMessage,
+} from "./manager.ts";
 import { acquireConsumerLock } from "./single-consumer.ts";
 import { looksLikeMarkdown } from "./markdown.ts";
 
@@ -49,6 +57,94 @@ const TOKEN_URL = "https://api.dingtalk.com/v1.0/oauth2/accessToken";
 const DOWNLOAD_URL = "https://api.dingtalk.com/v1.0/im/bot/messages/get";
 const GROUP_SEND_URL = "https://api.dingtalk.com/v1.0/robot/groupMessages/send";
 const OTO_SEND_URL = "https://api.dingtalk.com/v1.0/robot/oToMessages/batchSend";
+/** Interactive-card lifecycle: create the instance, then deliver it into a space. */
+const CARD_CREATE_URL = "https://api.dingtalk.com/v1.0/card/instances";
+const CARD_DELIVER_URL = "https://api.dingtalk.com/v1.0/card/instances/deliver";
+/**
+ * Button presses on an interactive card arrive as callback frames over the same
+ * stream connection — no public URL involved — when the template was created with
+ * `callbackType: STREAM` and this topic is subscribed.
+ */
+export const CARD_CALLBACK_TOPIC = "/v1.0/card/instances/callback";
+
+/**
+ * The stream subscriptions for one installation: bot messages always, card button
+ * callbacks only when a card template is configured.
+ */
+export function subscriptionsFor(cardTemplateId: string | undefined): {
+  type: string;
+  topic: string;
+}[] {
+  return [
+    { type: "CALLBACK", topic: TOPIC },
+    ...(cardTemplateId !== undefined && cardTemplateId !== ""
+      ? [{ type: "CALLBACK", topic: CARD_CALLBACK_TOPIC }]
+      : []),
+  ];
+}
+
+/** A pressed button as the wire delivers it, narrowed to everything read here. */
+export interface CardCallbackFrame {
+  userId?: string;
+  /** Stringified JSON of whatever parameters the pressed button was configured to send. */
+  content?: string;
+  /** The card instance id this press belongs to — our handle back to the approval. */
+  outTrackId?: string;
+  spaceType?: string;
+  spaceId?: string;
+  type?: string;
+}
+
+/**
+ * Parses one callback frame into a decision, or undefined when anything is off.
+ * The buttons carry a single static parameter `{ action: once | always | deny }`;
+ * anything else is not a decision we advertised.
+ */
+export function approvalPressFrom(
+  frame: CardCallbackFrame
+): { reply: ApprovalReply; userId: string; instanceId: string; spaceType?: string; spaceId?: string } | undefined {
+  const reply = (() => {
+    try {
+      const parsed = JSON.parse(frame.content ?? "{}") as { action?: unknown };
+      if (parsed.action === "once") return "once" as const;
+      if (parsed.action === "always") return "always" as const;
+      if (parsed.action === "deny") return "deny" as const;
+      return undefined;
+    } catch {
+      return undefined;
+    }
+  })();
+  const userId = typeof frame.userId === "string" ? frame.userId : "";
+  const instanceId = typeof frame.outTrackId === "string" ? frame.outTrackId : "";
+  if (reply === undefined || userId === "" || instanceId === "") return undefined;
+  return {
+    reply,
+    userId,
+    instanceId,
+    ...(frame.spaceType !== undefined ? { spaceType: frame.spaceType } : {}),
+    ...(frame.spaceId !== undefined ? { spaceId: frame.spaceId } : {}),
+  };
+}
+
+/** The card variables the lumenbox-approval template renders. */
+export function approvalVarsFor(card: ApprovalCardState): {
+  title: string;
+  description: string;
+} {
+  return {
+    title: `${card.agentName || "An agent"} needs your consent`,
+    // The original action verbatim, then what answering means — an approval that
+    // paraphrases either is the injection surface the verbatim rule exists to close.
+    description: `${card.description}\n\n${card.stakes}`,
+  };
+}
+
+/** Where in the card system's space taxonomy a conversation lives. */
+export function imSpaceIdFor(route: "group" | "direct", spaceKey: string): string {
+  return route === "group"
+    ? `dtv1.card//IM_GROUP.${spaceKey}`
+    : `dtv1.card//IM_ROBOT.${spaceKey}`;
+}
 
 /** Auth header every api.dingtalk.com call except the token endpoint wants. */
 const AUTH_HEADER = "x-acs-dingtalk-access-token";
@@ -298,6 +394,15 @@ export class DingTalkChannel implements ChannelAdapter {
   private tokenPromise: Promise<string> | undefined;
   private tokenExpiresAt = 0;
 
+  /**
+   * The card instance each pending approval lives behind, instance → approval.
+   * A press carries only the instance id and the button's static value, so this
+   * map is the bridge back to what was being decided. Pruned by count; a stale
+   * entry merely answers "no longer waiting", which is already a safe verdict.
+   */
+  private readonly cardApprovals = new Map<string, { approvalId: string }>();
+  private cardCounter = 0;
+
   constructor(
     private readonly clientId: string,
     private readonly clientSecret: string,
@@ -314,8 +419,30 @@ export class DingTalkChannel implements ChannelAdapter {
         at: string;
       }) => void;
       decided: (id: string, fate: "admitted" | "refused" | "dropped", reason?: string) => void;
+    },
+    /**
+     * A card-platform template id (`….schema`), when the installation built one.
+     * Its presence is what turns button approvals on: without it the class leaves
+     * `postApprovalCard` undefined and the manager runs the text-verb path.
+     */
+    private readonly cardTemplateId?: string
+  ) {
+    if (cardTemplateId !== undefined && cardTemplateId !== "") {
+      this.postApprovalCard = (identity, card) => this.deliverApprovalCard(identity, card);
     }
-  ) {}
+  }
+
+  /**
+   * Posts the consent request as an interactive card, wired to whatever
+   * conversation this identity last spoke from. Defined only when a card template
+   * is configured — the manager checks for the method's existence to choose
+   * between buttons and text verbs, so an unconfigured installation honestly reads
+   * as "no buttons here".
+   */
+  postApprovalCard?: (
+    identity: string,
+    card: ApprovalCardState
+  ) => Promise<void>;
 
   async start(onMessage: (message: InboundMessage) => Promise<string | undefined>): Promise<void> {
     // Before anything connects. DingTalk load-balances a client's callback frames
@@ -326,6 +453,11 @@ export class DingTalkChannel implements ChannelAdapter {
       label: "DingTalk",
     });
     await this.connect(onMessage);
+  }
+
+  /** Which topics this installation subscribes — messages, plus card presses if cards are on. */
+  private subscriptions(): { type: string; topic: string }[] {
+    return subscriptionsFor(this.cardTemplateId);
   }
 
   stop(): void {
@@ -473,7 +605,7 @@ export class DingTalkChannel implements ChannelAdapter {
       body: JSON.stringify({
         clientId: this.clientId,
         clientSecret: this.clientSecret,
-        subscriptions: [{ type: "CALLBACK", topic: TOPIC }],
+        subscriptions: this.subscriptions(),
         ua: "lumenbox",
       }),
     });
@@ -550,6 +682,14 @@ export class DingTalkChannel implements ChannelAdapter {
     // Every frame is acked, ping and message alike: an unacked message is redelivered.
     if (frame.type === "SYSTEM") {
       ack(frame.data ?? "{}");
+      return;
+    }
+    if (frame.headers?.topic === CARD_CALLBACK_TOPIC) {
+      // The response body may carry cardData updates for the pressed card; an empty
+      // one leaves the card as it stands, and the manager's answer travels as a
+      // chat message instead.
+      ack(JSON.stringify({}));
+      await this.handleCardCallback(frame.data ?? "{}", onMessage);
       return;
     }
     if (frame.headers?.topic !== TOPIC) {
@@ -880,5 +1020,146 @@ export class DingTalkChannel implements ChannelAdapter {
       signal: AbortSignal.timeout(15_000),
     });
     if (!response.ok) throw new Error(await describeFailure(response));
+  }
+
+  /** Set by the manager before start; a press with no handler is acknowledged and dropped. */
+  private approvalHandler:
+    | ((press: {
+        approvalId: string;
+        reply: ApprovalReply;
+        identity: string;
+      }) => Promise<string | undefined>)
+    | undefined;
+
+  onApprovalAction(
+    handler: NonNullable<DingTalkChannel["approvalHandler"]>
+  ): void {
+    this.approvalHandler = handler;
+  }
+
+  /**
+   * One button press on a consent card.
+   *
+   * The frame says who pressed and which static value the button carries; this map
+   * through the instance id back to the pending approval is what makes it a
+   * decision. Replies land in the room the card was delivered to when it was a
+   * group, and in the sender's conversation otherwise — mirroring how the Feishu
+   * adapter routes a pressed answer.
+   */
+  private async handleCardCallback(
+    raw: string,
+    onMessage: (message: InboundMessage) => Promise<string | undefined>
+  ): Promise<void> {
+    void onMessage;
+    let frame: CardCallbackFrame;
+    try {
+      frame = JSON.parse(raw) as CardCallbackFrame;
+    } catch {
+      this.log("channel dingtalk: card callback did not parse");
+      return;
+    }
+    const press = approvalPressFrom(frame);
+    if (press === undefined || this.cardTemplateId === undefined) return;
+    const pending = this.cardApprovals.get(press.instanceId);
+    const identity = `dingtalk:${press.userId}`;
+    if (pending === undefined) {
+      this.log(`channel dingtalk: press on unknown card ${press.instanceId} by ${identity}`);
+      await this.send(identity,
+        "That consent is no longer waiting — it may have been answered from the app, " +
+          "or the turn moved on.").catch(() => {});
+      return;
+    }
+    this.cardApprovals.delete(press.instanceId);
+    if (this.approvalHandler === undefined) return;
+    try {
+      const line = await this.approvalHandler({
+        approvalId: pending.approvalId,
+        reply: press.reply,
+        identity,
+      });
+      if (line === undefined) return;
+      if (press.spaceType === "IM_GROUP" && typeof press.spaceId === "string" && press.spaceId !== "") {
+        await this.sendToChat(`dingtalk:${press.spaceId}`, line);
+      } else {
+        await this.send(identity, line);
+      }
+    } catch (error) {
+      const detail = error instanceof Error ? error.message : String(error);
+      this.log(`channel dingtalk: card press handling failed (${detail})`);
+    }
+  }
+
+  /**
+   * Creates one interactive-card instance from the configured template and
+   * delivers it into the target space. Two REST calls with the same access token
+   * as everything else; `callbackType: STREAM` is what routes button presses onto
+   * our long connection instead of demanding a public endpoint.
+   */
+  private async createAndDeliverCard(target: {
+    route: "group" | "direct";
+    conversationId: string;
+    userId?: string;
+  }, vars: Record<string, string>): Promise<string | undefined> {
+    if (this.cardTemplateId === undefined) return undefined;
+    const outTrackId = `lumenbox-${Date.now()}-${(this.cardCounter++).toString(36)}`;
+    const token = await this.accessToken();
+    const created = await fetch(CARD_CREATE_URL, {
+      method: "POST",
+      headers: { "content-type": "application/json", [AUTH_HEADER]: token },
+      body: JSON.stringify({
+        cardTemplateId: this.cardTemplateId,
+        outTrackId,
+        cardData: { cardParamMap: vars },
+        callbackType: "STREAM",
+        imGroupOpenSpaceModel: { supportForward: false },
+        imRobotOpenSpaceModel: { supportForward: false },
+      }),
+      signal: AbortSignal.timeout(15_000),
+    });
+    if (!created.ok) throw new Error(`card create failed: ${await describeFailure(created)}`);
+    const spaceKey = target.route === "group" ? target.conversationId : (target.userId ?? "");
+    if (spaceKey === "") throw new Error("card deliver had nowhere to land: no space key");
+    const delivered = await fetch(CARD_DELIVER_URL, {
+      method: "POST",
+      headers: { "content-type": "application/json", [AUTH_HEADER]: token },
+      body: JSON.stringify({
+        outTrackId,
+        openSpaceId: imSpaceIdFor(target.route, spaceKey),
+        ...(target.route === "group"
+          ? { imGroupOpenDeliverModel: { robotCode: this.clientId, supportForward: false } }
+          : { imRobotOpenDeliverModel: { spaceType: "IM_ROBOT", supportForward: false } }),
+      }),
+      signal: AbortSignal.timeout(15_000),
+    });
+    if (!delivered.ok) throw new Error(`card deliver failed: ${await describeFailure(delivered)}`);
+    return outTrackId;
+  }
+
+  /**
+   * The consent card, into wherever this identity speaks — bound at construction
+   * time only when a template exists (see constructor).
+   */
+  private async deliverApprovalCard(identity: string, card: ApprovalCardState): Promise<void> {
+    const conversationId = this.identities.get(identity);
+    const conversation =
+      conversationId !== undefined ? (this.conversations.get(conversationId) ?? {}) : {};
+    const route = outboundRoute(conversation.conversationType);
+    // A direct session carries no room: the card addresses the person, which the
+    // robot space expresses as their user id rather than any conversation id.
+    const target = {
+      route,
+      conversationId: conversationId ?? "",
+      ...(identity.startsWith("dingtalk:") ? { userId: identity.slice("dingtalk:".length) } : {}),
+    };
+    const approvalId = card.approvalId;
+    const instanceId = await this.createAndDeliverCard(target, approvalVarsFor(card));
+    if (instanceId === undefined) return;
+    this.cardApprovals.set(instanceId, { approvalId });
+    if (this.cardApprovals.size > 512) {
+      for (const key of this.cardApprovals.keys()) {
+        this.cardApprovals.delete(key);
+        if (this.cardApprovals.size <= 384) break;
+      }
+    }
   }
 }

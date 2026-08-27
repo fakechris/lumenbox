@@ -885,8 +885,17 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
     );
     const dingId = process.env.DINGTALK_CLIENT_ID;
     const dingSecret = process.env.DINGTALK_CLIENT_SECRET;
+    const dingCardTemplate = process.env.DINGTALK_CARD_TEMPLATE_ID;
     channels.register(
-      new DingTalkChannel(dingId ?? "", dingSecret ?? "", line => log(line), ingress),
+      new DingTalkChannel(
+        dingId ?? "",
+        dingSecret ?? "",
+        line => log(line),
+        ingress,
+        // Optional: turns button approvals on. Without it DingTalk runs the
+        // text-verb path, same as before cards existed.
+        dingCardTemplate !== undefined && dingCardTemplate !== "" ? dingCardTemplate : undefined
+      ),
       dingId !== undefined && dingSecret !== undefined,
       dingId !== undefined && dingSecret !== undefined
         ? "starting"
