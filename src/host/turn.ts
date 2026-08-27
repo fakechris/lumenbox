@@ -1474,6 +1474,9 @@ export async function runTurn(
       // What a report groups by. `turnId` would be the obvious key and is the wrong one: it
       // is minted per attempt, so it splits one long piece of work into several short ones.
       workId,
+      // The board writes this id against every change an agent makes to a task, so it is
+      // the join that answers "what did t51 cost".
+      turnId,
       // Already in scope for the event stream, and free here. It does not attribute a task —
       // a task spans conversations and a conversation spans tasks — but it does make a fork
       // child costable, which is the case an estimate cares about most.

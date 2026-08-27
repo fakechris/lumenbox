@@ -92,7 +92,19 @@ price does.
 - 48-hour retention is stated in the output, not discovered later — a total over a
   compacted file is a lower bound and has to say so.
 
-**Status**: Not Started
+**Status**: Complete, as `agentbox usage [--day D] [--work ID] [--task tNN]`.
+
+Two things the first real run taught, both now tested. `--task t51` answered "no records",
+because every row on this installation predates `turnId` by a few hours — and a person
+reads that as "the task was free", which is the failure the whole report exists to avoid;
+it now says which field the rows are missing and when it was added. And costing a task
+needed `turnId` on the usage row after all: `workId` is the right thing to *group* by and
+the wrong thing to join on, because the board records the turn each change was made in.
+Both ids, answering different questions.
+
+Money is withheld rather than partial when any model in the window has no rate. Rates come
+from `config.json`; a table in source is a number that goes quietly wrong while still
+looking authoritative.
 
 ---
 

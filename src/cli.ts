@@ -916,6 +916,10 @@ State:
   backup [dir]              Snapshot ~/.agentbox without stopping anything.
                             Transcripts, memory, plans and skills are the only
                             things here that cannot be rebuilt.
+  usage [--day D] [--work ID] [--task tNN]
+                            What the model cost, from the records. A day, one
+                            piece of work across every attempt at it, or one
+                            task through the turns its board history names.
   scan-records              What credential-shaped text is in the records, and
                             whether any value you hold appears verbatim. Values
                             are compared, never printed. A pattern match is not
@@ -1304,6 +1308,59 @@ async function main(): Promise<number> {
       out(`state:  ${agentboxHome()}`);
       out(`agents: ${defaultAgentsRoot()}`);
       return 0;
+
+    case "usage": {
+      // The re-runnable version of the fifteen throwaway scripts from 2026-08-26. The
+      // reading and the arithmetic live in spend.ts, tested; this is the printer.
+      const { UsageLog } = await import("./host/usage.ts");
+      const { describeSpend, summariseSpend } = await import("./host/spend.ts");
+      const { TaskStore } = await import("./host/tasks.ts");
+      const flag = (name: string): string | undefined => {
+        const at = rest.indexOf(name);
+        return at === -1 ? undefined : rest[at + 1];
+      };
+
+      const log = new UsageLog();
+      const records = log.since(0, Number.MAX_SAFE_INTEGER);
+
+      // A task is costed through the turns its own history records, which is the join the
+      // board was already writing down and nothing could use.
+      let turnIds: string[] | undefined;
+      const taskId = flag("--task");
+      if (taskId !== undefined) {
+        const task = new TaskStore().get(taskId);
+        if (task === undefined) {
+          out(`no task ${taskId}`);
+          return 1;
+        }
+        turnIds = [...new Set(task.history.map(change => change.run).filter(run => run !== undefined))];
+        if (turnIds.length === 0) {
+          out(`${taskId} has no agent runs on its history — nothing to cost`);
+          return 0;
+        }
+      }
+
+      // Rates are configuration, never baked in: prices change and differ per account, and a
+      // table in source is a number that goes quietly wrong while still looking authoritative.
+      let rates = {};
+      try {
+        rates =
+          (JSON.parse(readFileSync(join(agentboxHome(), "config.json"), "utf8")) as { rates?: object })
+            .rates ?? {};
+      } catch {
+        // No config, or no rates in it. Tokens are still reported; money is withheld and said so.
+      }
+
+      const report = summariseSpend(records, {
+        ...(flag("--day") !== undefined ? { day: flag("--day")! } : {}),
+        ...(flag("--work") !== undefined ? { workId: flag("--work")! } : {}),
+        ...(turnIds !== undefined ? { turnIds } : {}),
+        rates,
+        compacted: log.compacted(),
+      });
+      for (const line of describeSpend(report)) out(line);
+      return 0;
+    }
 
     case "scan-records": {
       // The measurement docs/15 turns on, as something anybody can re-run. The review's

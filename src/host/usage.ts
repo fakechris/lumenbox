@@ -58,6 +58,15 @@ export interface UsageRecord {
   /** Which thread it ran in. A fork child has its own, which is what makes one costable. */
   conversation?: string;
   /**
+   * The attempt, as opposed to the work — and the key the task board already writes down.
+   *
+   * `workId` is the right thing to *group* by and the wrong thing to join a task on: every
+   * change on the board records the turn it was made in (`TaskChange.run`), and that is a
+   * turn id. Without this column the board's own record pointed at nothing, which is why
+   * "of 46 tasks, zero can be costed" was true while both files were full of numbers.
+   */
+  turnId?: string;
+  /**
    * What the call was for.
    *
    * The turn loop is one kind of spend and the bookkeeping around it is another: summarising a
@@ -245,6 +254,18 @@ export class UsageLog {
         record.inputTokens + record.outputTokens + record.cacheReadTokens + record.cacheWriteTokens;
     }
     return total;
+  }
+
+  /**
+   * Whether anything has been dropped from the front of this file.
+   *
+   * Inferred rather than recorded: sequence numbers start at one and survive restarts, so a
+   * file whose first record is not `seq: 1` has lost its beginning. No new state to keep in
+   * sync, and it stays true for a file compacted by a build that never knew about this.
+   */
+  compacted(): boolean {
+    const first = this.since(0, 1)[0];
+    return first !== undefined && first.seq !== 1;
   }
 
   /** Totals over what is still in the file. Not a billing figure: compaction drops the tail. */

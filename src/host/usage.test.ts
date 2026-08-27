@@ -7,7 +7,7 @@
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { appendFileSync, mkdtempSync, readFileSync } from "node:fs";
+import { appendFileSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { UsageLog, type UsageRecord } from "./usage.ts";
@@ -254,4 +254,17 @@ test("rows written before kinds existed are counted, not dropped", () => {
   // the first day after this ships read as a jump in turn cost that never happened.
   assert.equal(row?.kind, "unattributed");
   assert.equal(row?.totals.outputTokens, 20);
+});
+
+test("a file that lost its beginning says so", () => {
+  const path = logPath();
+  const log = new UsageLog(path);
+  log.record(entry());
+  // Nothing dropped: the file still starts where the numbering does.
+  assert.equal(log.compacted(), false);
+
+  // What compaction leaves behind, written directly because forcing a real compaction needs
+  // thousands of records and the property under test is about the file, not the trigger.
+  writeFileSync(path, `${JSON.stringify({ ...entry(), seq: 4_812, at: new Date().toISOString() })}\n`);
+  assert.equal(new UsageLog(path).compacted(), true, "seq 4812 as the first line means 4811 are gone");
 });
