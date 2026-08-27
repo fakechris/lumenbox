@@ -167,6 +167,7 @@ import { adminRecipients, decideUpgrade, upgradeMessage } from "../host/upgrade.
 import { PRESET_MODELS, providerNames, resolveProvider, testProvider } from "../host/provider.ts";
 import { Principals, roleAtLeast, type Principal, type Role } from "../host/principals.ts";
 import { describeTask, isLive, isTaskStatus } from "../host/tasks.ts";
+import { parseProgressFile, progressLine } from "../host/progress-file.ts";
 import { costOfTasks, spendByDay, summariseSpend, type Rates } from "../host/spend.ts";
 import type { UsageRecord } from "../host/usage.ts";
 import { TOOL_BUDGET_WARNING } from "../host/mcp.ts";
@@ -668,21 +669,46 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
       // card and the board the blocked row, so the loop report is raised as the
       // failure it is for anyone waiting on this work.
       let stuck: string | undefined;
+      // Batch progress outranks tool chatter: once the script starts reporting 37/300,
+      // "bash: python batch.py" is noise and the number is the card. The file convention
+      // is in the prompt; reading it is a poll, because the box cannot push.
+      let batchLine: string | undefined;
       const listener = (event: TurnEvent) => {
         if (event.agentId !== agent.id || event.conversation !== conversation) return;
         if (event.type === "stuck") {
           stuck = event.reason;
           return;
         }
-        if (event.type === "tool_start") {
+        if (event.type === "tool_start" && batchLine === undefined) {
           onProgress?.(actionLine(event.tool, event.input), event.tool);
         }
       };
       channelTurnListeners.add(listener);
+      const progressPath = `${WORK_DIR}/chats/${conversation}/progress.json`;
+      const progressPoll = setInterval(() => {
+        const client = orchestrator.boxClient();
+        if (client === undefined) return;
+        void client
+          .readFile(progressPath)
+          .then(result => {
+            const parsed = parseProgressFile(result.content ?? "");
+            if (parsed === undefined) return;
+            const line = progressLine(parsed);
+            // Only when it moved: a card rewritten every five seconds with the same
+            // number is an update feed pretending to be progress.
+            if (line === batchLine) return;
+            batchLine = line;
+            onProgress?.(line, "batch");
+          })
+          .catch(() => {
+            // No file yet is the ordinary case for most turns.
+          });
+      }, 5_000);
       try {
         await orchestrator.prompt(agent.id, text, { userId: principal }, { conversation });
         await orchestrator.settle();
       } finally {
+        clearInterval(progressPoll);
         channelTurnListeners.delete(listener);
       }
       if (stuck !== undefined) {

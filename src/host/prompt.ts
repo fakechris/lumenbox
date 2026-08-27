@@ -573,7 +573,11 @@ function renderChatFiles(context: PromptContext): string {
     `This turn belongs to an outside chat. Its files live under ${root}/ :\n` +
     `- ${root}/inbox/ — files people sent in the chat land here.\n` +
     `- ${root}/outbox/ — anything you save here is posted into the chat when your turn ends, ` +
-    "then moved to sent/. Create the directory if it is not there yet.\n\n" +
+    "then moved to sent/. Create the directory if it is not there yet.\n" +
+    `- ${root}/progress.json — when a batch script will run for minutes, have it write ` +
+    '{"current": N, "total": M, "failed": [names]} here as it goes. The chat\'s card shows ' +
+    "the person that number live. Write it from the script itself, not by hand between " +
+    "steps, and delete it when the batch is done.\n\n" +
     "A deliverable belongs in outbox/ — a path pasted into your reply is not a deliverable, " +
     "because the person is reading a phone, not the box."
   );
