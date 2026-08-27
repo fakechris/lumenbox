@@ -72,6 +72,29 @@ would count over is not recorded. Reading the code confirms each part:
 One append-only ledger of **obligations**. Not a counter — a counter is a summary of a
 thing we are not keeping.
 
+This is a **work graph**: nodes are jobs, edges are *this job needs what that one
+produced*. Said explicitly because the same phrase names a second, unrelated thing — a
+*knowledge* graph, whose nodes are entities the agents found and whose edges are shared
+suppliers and citations, which is what Kimi's 300-agent swarm builds
+([docs/14](14-from-outside-reading.md)). That one answers "which three share a supplier".
+This one answers "is it finished, what did it cost, is it stuck". **Building the second to
+fix the first would be a large feature aimed at a correctness bug.**
+
+The vocabulary is worth borrowing for one artefact in particular, the **node contract**:
+
+```
+JOB:     one bounded job, nothing else
+IN:      passed in, never assumed
+OUT:     a fixed shape
+SCHEMA:  enforced — free text is rejected
+```
+
+> A node whose output is a wall of free text is a node only a human can read.
+
+Which is exactly today's `Fork` child, whose failure is prose inside a non-error result.
+So the terminal states below are not an invention of this design: **a settlement record is
+a node's `OUT`, enforced.**
+
 ```
 obligation:  id, parentTurnId, childConversationId, kind, openedAt
 settlement:  id, state, at, note
