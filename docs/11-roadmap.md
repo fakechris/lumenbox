@@ -683,6 +683,14 @@ acknowledgement, and restart reconciliation. Until that exists, a completion gat
 a counter over a graph that is not recorded — which is the same failure as the board
 predicate, wearing a proof.
 
+**Designed in [docs/16](16-long-work.md)**, together with the two questions that turn out
+to share its substrate: what long work costs, and how it stops when it is going nowhere.
+The single obligation ledger answers all three, because an estimate needs a shape to
+estimate over and a gate needs a graph to count. The document also records the finding
+that made the cost question urgent: `AGENTBOX_BUDGET_TOKENS` is unset, `config.json` has
+no policy block, and `policy.test.ts` asserts that the default is `undefined` — **the
+spend ceiling is built, tested, and switched off**, so the worst case is unbounded.
+
 ### R21. Agent and skill bundles: export and import
 A team's agent (profile, skills, scope shape — never its memories or secrets) packaged
 as a file another installation can import. The sharing unit people actually want, and
