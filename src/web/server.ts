@@ -807,6 +807,18 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
       started: taskId => {
         orchestrator.tasks?.update(taskId, { status: "doing" }, "channel");
       },
+      // The requester's word closes reviewed work. `by` is their principal id — not the
+      // assignee, so the review gate passes; not "channel", so the record says who
+      // accepted. A task not in review means the word was chat, and the caller lets it
+      // fall through to the agent rather than inventing a verdict.
+      accept: (taskId, identity) => {
+        const task = orchestrator.tasks?.get(taskId);
+        if (task === undefined) return "unknown";
+        if (task.status !== "review") return "not_review";
+        const by = principals.resolve(identity).id;
+        const updated = orchestrator.tasks?.update(taskId, { status: "done", note: "验收通过" }, by);
+        return updated?.task.status === "done" ? "done" : "not_review";
+      },
       closed: (taskId, outcome, note) => {
         // A turn ending is not the work being done, so the success path asks the board what
         // that means rather than asserting it. A failure is different: nothing about a turn

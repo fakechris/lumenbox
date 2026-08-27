@@ -88,9 +88,11 @@ export function buildAuditPrompt(input: {
     "Integrity: clean|suspect",
     "Contract audit: aligned|needs_revision|unknown",
     "",
-    "Finally, move the task with the Tasks tool: to done only if your own headers say complete " +
-      "and clean; otherwise back to doing, with a note quoting your findings so the assignee " +
-      "knows exactly what to fix.",
+    "Finally, move the task with the Tasks tool. If your own headers say complete and clean, " +
+      "add a note saying what you verified and LEAVE IT IN REVIEW — done is the requester's " +
+      "word, not yours; they accept in the chat, and your job was to make that acceptance " +
+      "safe. Otherwise move it back to doing, with a note quoting your findings so the " +
+      "assignee knows exactly what to fix.",
     "",
     `Original request: ${input.task.description ?? input.task.title}`,
   ].join("\n");

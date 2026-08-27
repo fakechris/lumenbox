@@ -1217,3 +1217,50 @@ test("a message addressed to a different agent is parallel work, not steering", 
   release();
   await manager.idle();
 });
+
+test("可以 closes the task waiting on this person; with nothing waiting it is just chat", async () => {
+  const adapter = cardAdapter();
+  const accepts: { taskId: string; identity: string }[] = [];
+  const asked: string[] = [];
+  let reviewing = true;
+  const manager = new ChannelManager({
+    mayDrive: () => true,
+    ask: async (_a, text) => {
+      asked.push(text);
+      return "交付在这里";
+    },
+    board: {
+      open: () => "t63",
+      started: () => {},
+      closed: () => "review" as const,
+      accept: (taskId, identity) => {
+        accepts.push({ taskId, identity });
+        return reviewing ? ("done" as const) : ("not_review" as const);
+      },
+    },
+    log: () => {},
+  });
+  manager.register(adapter, true, "test");
+  await started(manager);
+
+  const room = { identity: "feishu:ou_1", chatKey: "feishu:oc_room", senderLabel: "chris" };
+  await adapter.inject({ ...room, messageId: "m1", text: "汇总报表" });
+  await manager.idle();
+
+  // The work went to review; the person's word is the verdict.
+  const verdict = await adapter.inject({ ...room, messageId: "m2", text: "可以" });
+  assert.deepEqual(accepts, [{ taskId: "t63", identity: "feishu:ou_1" }]);
+  assert.match(String(verdict ?? ""), /t63 算完成了/);
+
+  // Consumed: the next 可以 has nothing to accept and reaches the agent as chat.
+  reviewing = false;
+  await adapter.inject({ ...room, messageId: "m3", text: "好的" });
+  await manager.idle();
+  assert.equal(accepts.length, 1, "no task waiting — the word was chat, not a verdict");
+  assert.ok(asked.some(text => text === "好的"), "and the agent hears it");
+
+  // A pushback that merely contains an acceptance word is not an acceptance.
+  await adapter.inject({ ...room, messageId: "m4", text: "可以再快点吗" });
+  await manager.idle();
+  assert.equal(accepts.length, 1);
+});

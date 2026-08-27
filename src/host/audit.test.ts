@@ -57,6 +57,12 @@ test("the audit prompt carries its load-bearing sentences", () => {
   assert.match(prompt, /open file are not completion/);
   assert.match(prompt, /Do not modify any files/);
   assert.match(prompt, /move the task with the Tasks tool/);
+  // The auditor makes acceptance safe; it does not perform it. An internal reviewer that
+  // marks work done closes the task the requester was waiting to accept — observed on
+  // production t51's successors and named by two reviews as organisational cosplay.
+  assert.match(prompt, /LEAVE IT IN REVIEW/);
+  assert.match(prompt, /done is the requester's word/);
+  assert.doesNotMatch(prompt, /to done only if/);
   assert.match(prompt, /Weekly numbers to the vendor/, "the original request travels verbatim");
   assert.match(prompt, /Status: complete\|incomplete\|blocked/);
 });

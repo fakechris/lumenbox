@@ -102,6 +102,12 @@ export function steered(who: string): string {
   return `带到了,${who}接着做。`;
 }
 
+// ── acceptance(验收)─────────────────────────────────────────────────────────
+
+export function accepted(taskId: string): string {
+  return `好,${taskId} 算完成了。`;
+}
+
 // ── refusals ───────────────────────────────────────────────────────────────────
 
 export const SCOPE_IS_ADMIN_CALL = "绑定 scope 会改变这个群里每件任务的权限,这要管理员来定。";

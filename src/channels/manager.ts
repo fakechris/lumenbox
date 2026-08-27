@@ -41,6 +41,7 @@ import {
   ackQueued,
   ackWorking,
   consentFallbackText,
+  accepted,
   filesSaved,
   questionText,
   steered,
@@ -234,6 +235,18 @@ export function parseStopRequest(text: string): boolean {
   return ["停", "停下", "停下来", "先停", "取消", "算了", "别做了", "stop", "cancel"].includes(t);
 }
 
+/**
+ * A whole message that means "I accept this work".
+ *
+ * The walkthrough drew the person saying "好了"; real people say 可以, 收到, 没问题, OK.
+ * Whole-message only, like every verb here — "可以再快点吗" is a question that contains
+ * an acceptance word, and accepting on it would close work the person was pushing back on.
+ */
+export function parseAcceptance(text: string): boolean {
+  const t = text.trim().toLowerCase().replace(/[.!。!~,,]+$/, "");
+  return ["可以", "好了", "好的", "好", "收到", "没问题", "通过", "验收通过", "就这样", "ok", "okay", "lgtm", "辛苦了"].includes(t);
+}
+
 /** How a one-word reply on a chat answers a pending approval. */
 export type ApprovalReply = "once" | "always" | "session" | "deny";
 
@@ -385,6 +398,11 @@ export interface ChannelManagerDeps {
      * review and the card, deciding for itself, still said Done.
      */
     closed: (taskId: string, outcome: "done" | "failed", note?: string) => TaskCardState["status"] | undefined;
+    /**
+     * The requester accepting reviewed work. "done" when it closed; "not_review" when the
+     * task was not waiting on them — and then the word was ordinary chat, not a verdict.
+     */
+    accept?: (taskId: string, identity: string) => "done" | "not_review" | "unknown";
   };
   /**
    * Stores files somebody dropped in the chat, into that chat's inbox on the box.
@@ -855,6 +873,17 @@ ${input.options.map(option => `· ${option}`).join("\n")}`
       }
     } else if (parseStopRequest(text)) {
       return NOTHING_RUNNING;
+    } else if (parseAcceptance(text)) {
+      // "可以" with a task waiting on this person closes it as their word. With nothing
+      // waiting, the same word is ordinary chat and falls through to the agent.
+      const waiting = this.lastTask.get(conversationKey);
+      if (waiting !== undefined && this.deps.board?.accept !== undefined) {
+        const verdict = this.deps.board.accept(waiting, message.identity);
+        if (verdict === "done") {
+          this.lastTask.delete(conversationKey);
+          return accepted(waiting);
+        }
+      }
     }
 
     // "屏幕" is a look, not a task: no turn runs, the desktop is captured as it is.
@@ -902,6 +931,9 @@ ${input.options.map(option => `· ${option}`).join("\n")}`
 
   /** What each conversation is running right now, for the one-at-a-time routing rule. */
   private readonly runningWork = new Map<string, { agentName: string | undefined }>();
+
+  /** The conversation's most recent board task — what an acceptance word refers to. */
+  private readonly lastTask = new Map<string, string>();
 
   /** How long a wordless drop waits for its instruction. */
   private static readonly DROP_WINDOW_MS = 10 * 60 * 1000;
@@ -1079,6 +1111,7 @@ ${input.options.map(option => `· ${option}`).join("\n")}`
       // a task with the wrong conversation looks exactly like a task with a quiet one.
       threadKey: message.threadKey ?? chatKey,
     });
+    if (taskId !== undefined) this.lastTask.set(runningKey, taskId);
     const card: TaskCardState = {
       title: firstLine(text),
       agentName: agentName ?? "",
