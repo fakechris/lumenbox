@@ -6,7 +6,7 @@
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { FeishuChannel, looksLikeMarkdown, markdownPost, renderCard } from "./feishu.ts";
+import { FeishuChannel, looksLikeMarkdown, markdownPost, renderCard, splitChatKey } from "./feishu.ts";
 import type { TaskCardState } from "./manager.ts";
 
 interface CardShape {
@@ -232,4 +232,72 @@ test("a thread is the conversation; a direct chat still is", () => {
     key({ chat_id: "oc_1", chat_type: "group", message_id: "om_g" }),
     key({ chat_id: "oc_1", chat_type: "group", message_id: "om_h" })
   );
+});
+
+test("a push to a topic thread rides as a reply to its root", async () => {
+  // conversationKeyFor mints `feishu:{chatId}:{rootId}` for a topic; a push to that key
+  // must land in the thread, not at the bottom of the room. The room-level key keeps
+  // its old shape and its old behaviour.
+  const adapter = new FeishuChannel("a", "b", () => {});
+  const posts: { chatId: string; replyTo?: string }[] = [];
+  (adapter as unknown as { post: unknown }).post = async (
+    chatId: string,
+    _type: string,
+    _content: string,
+    replyTo?: string
+  ) => {
+    posts.push({ chatId, ...(replyTo !== undefined ? { replyTo } : {}) });
+    return undefined;
+  };
+
+  await adapter.sendToChat("feishu:oc_room:om_root", "into the thread");
+  await adapter.sendToChat("feishu:oc_room", "into the room");
+  assert.deepEqual(posts, [
+    { chatId: "oc_room", replyTo: "om_root" },
+    { chatId: "oc_room" },
+  ]);
+});
+
+test("every outbound path understands a thread-scoped key, not only the text one", () => {
+  // The regression: sendToChat and postTaskCard were taught the `feishu:{chat}:{root}`
+  // form and sendFile/sendImage were not, so a file answering a message in a topic was
+  // uploaded and then posted to a chat id that does not exist. It surfaced as "it used to
+  // send the file, now it just tells me the path". One parser now, so there is no next
+  // path to forget.
+  assert.deepEqual(splitChatKey("feishu:oc_room"), { chatId: "oc_room" });
+  assert.deepEqual(splitChatKey("feishu:oc_room:om_topic"), {
+    chatId: "oc_room",
+    rootId: "om_topic",
+  });
+  // A trailing colon is a room key with noise, not a thread whose root is the empty
+  // string — the second would anchor a reply to nothing.
+  assert.deepEqual(splitChatKey("feishu:oc_room:"), { chatId: "oc_room" });
+  assert.deepEqual(splitChatKey("feishu:"), { chatId: "" });
+});
+
+test("a file sent into a topic is anchored to that topic", async () => {
+  const adapter = new FeishuChannel("a", "b", () => {});
+  const posts: { chatId: string; type: string; replyTo?: string }[] = [];
+  (adapter as unknown as { post: unknown }).post = async (
+    chatId: string,
+    type: string,
+    _content: string,
+    replyTo?: string
+  ) => {
+    posts.push({ chatId, type, ...(replyTo !== undefined ? { replyTo } : {}) });
+    return undefined;
+  };
+  (adapter as unknown as { apiClient: unknown }).apiClient = {
+    im: {
+      file: { create: async () => ({ file_key: "f1" }) },
+      image: { create: async () => ({ image_key: "i1" }) },
+    },
+  };
+
+  await adapter.sendFile("feishu:oc_room:om_topic", "report.md", Buffer.from("x").toString("base64"));
+  await adapter.sendImage("feishu:oc_room:om_topic", Buffer.from("x").toString("base64"));
+  assert.deepEqual(posts, [
+    { chatId: "oc_room", type: "file", replyTo: "om_topic" },
+    { chatId: "oc_room", type: "image", replyTo: "om_topic" },
+  ]);
 });

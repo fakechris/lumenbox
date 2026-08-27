@@ -161,6 +161,7 @@ import { preflight } from "../box/preflight.ts";
 import { rescueMessage, rescueStuck } from "../host/rescue.ts";
 import { Deliveries, deliveriesPath } from "../host/deliveries.ts";
 import { Ingress, ingressPath } from "../channels/ingress.ts";
+import { ConversationDirectory, conversationsPath } from "../channels/conversations.ts";
 import { randomUUID } from "node:crypto";
 import { adminRecipients, decideUpgrade, upgradeMessage } from "../host/upgrade.ts";
 import { PRESET_MODELS, providerNames, resolveProvider, testProvider } from "../host/provider.ts";
@@ -497,6 +498,10 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
    * arrived and went nowhere used to leave the same trace as one that never arrived.
    */
   const ingress = new Ingress(ingressPath(agentboxHome()));
+  // Which chat each conversation came from — written here because the channel path is
+  // where both halves are last seen together, read by the console-interjection path
+  // where only the conversation id survives.
+  const conversations = new ConversationDirectory(conversationsPath(agentboxHome()));
 
   const channels = new ChannelManager({
     ingress,
@@ -616,6 +621,7 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
       // integration read for this keys on the thread and falls back to the message. The
       // chat stays the address — replies, files and the outbox still go to the room.
       const conversation = conversationIdFor(threadKey ?? chatKey);
+      conversations.record(conversation, threadKey ?? chatKey);
       const principal = principals.resolve(identity).id;
 
       // Made before the turn, because the prompt states the path as a fact — "its
@@ -626,7 +632,10 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
       // per topic means most turns now start with no directory at all.
       void orchestrator
         .boxClient()
-        ?.exec(`mkdir -p '${WORK_DIR}/chats/${conversation}/inbox' '${WORK_DIR}/chats/${conversation}/outbox'`)
+        ?.exec(
+          `mkdir -p '${WORK_DIR}/chats/${conversation}/inbox' '${WORK_DIR}/chats/${conversation}/outbox'`,
+          { actor: "host:chat-exchange" }
+        )
         .catch((error: unknown) => {
           log(
             `could not create the file exchange for ${conversation}: ` +
@@ -752,7 +761,7 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
       const client = orchestrator.boxClient();
       if (client === undefined) return undefined;
       const dir = `${WORK_DIR}/chats/${conversationIdFor(chatKey)}/inbox`;
-      await client.exec(`mkdir -p '${dir}'`);
+      await client.exec(`mkdir -p '${dir}'`, { actor: "host:chat-inbox" });
       let existing: Set<string>;
       try {
         existing = new Set((await client.listDir(dir)).entries.map(entry => entry.name));
@@ -776,6 +785,20 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
     // The chat's outbox on the box: list, download, and — once pushed — move to
     // sent/, so nothing is delivered twice and nothing undelivered is lost. A chat
     // that never used files has no directory, and that is the cheap ordinary case.
+    // For a reply that named a deliverable instead of sending it. Confined to the work
+    // directory by the box's own upload/download guard, and refused above 25MB the same
+    // way the outbox is.
+    readBoxFile: async path => {
+      const client = orchestrator.boxClient();
+      if (client === undefined) return undefined;
+      try {
+        const file = await client.downloadFile(path);
+        const name = path.split("/").pop() ?? "file";
+        return { name, base64: file.base64 };
+      } catch {
+        return undefined;
+      }
+    },
     collectOutbox: async chatKey => {
       const client = orchestrator.boxClient();
       if (client === undefined) return [];
@@ -807,7 +830,9 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
       if (client === undefined) return;
       const dir = `${WORK_DIR}/chats/${conversationIdFor(chatKey)}/outbox`;
       const quoted = names.map(name => `'${name.replace(/'/g, `'\\''`)}'`).join(" ");
-      await client.exec(`mkdir -p '${dir}/../sent' && cd '${dir}' && mv -- ${quoted} ../sent/`);
+      await client.exec(`mkdir -p '${dir}/../sent' && cd '${dir}' && mv -- ${quoted} ../sent/`, {
+        actor: "host:outbox-delivered",
+      });
     },
     // The desktop as it is right now, for "屏幕" and for the finished-task poster.
     // Captured with the agent's own owner token, the same proof a turn presents; an
@@ -923,9 +948,26 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
         log(`rescued ${stuck.task.id}: ${stuck.task.title}`);
         const message = rescueMessage(stuck);
         broadcast({ type: "error", message });
-        if (stuck.conversation !== undefined) {
-          void channels.pushToChat(stuck.conversation, message).catch(() => {});
+        // A task carries a *conversation id* — the chatKey with every unsafe character
+        // flattened to `-` — and `pushToChat` finds its adapter by the `feishu:` prefix.
+        // `feishu-oc_…` never matched, so every rescue notice this code exists to send
+        // was routed nowhere, and `.catch(() => {})` swallowed the miss. The directory is
+        // the way back; a thread from before it exists has no route and says so rather
+        // than failing quietly.
+        if (stuck.conversation === undefined) continue;
+        const chatKey = conversations.chatKeyFor(stuck.conversation);
+        if (chatKey === undefined) {
+          log(`rescued ${stuck.task.id} but cannot reach ${stuck.conversation}: no chat recorded`);
+          continue;
         }
+        void channels.pushToChat(chatKey, message).catch((error: unknown) => {
+          // Not swallowed. This is the notice that exists so an interrupted request is
+          // not lost, and losing *it* silently is the same failure one level up.
+          log(
+            `rescued ${stuck.task.id} but could not tell ${chatKey}: ` +
+              `${error instanceof Error ? error.message : String(error)}`
+          );
+        });
       }
     }
   })();
@@ -945,6 +987,54 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
     }
   }, 10 * 60_000);
   digestTimer.unref?.();
+
+  // Work that came back and was never picked up again.
+  //
+  // The rescue above runs once, at startup, and moves an interrupted task back to `open`
+  // with a note saying why. Nothing reads the board after that. A request interrupted by
+  // a restart sat `open` for a day with its note intact and nobody — person or agent —
+  // ever looked: the record was correct and unread, which is the same outcome as no
+  // record. Every other check here asks a question on a schedule; this is the board's.
+  //
+  // Only tasks the restart itself reopened, and only once each: an `open` task is the
+  // ordinary state of a backlog, and a daily complaint about one is how a person learns
+  // to ignore the surface.
+  const abandonedTold = new Set<string>();
+  const abandonedTimer = setInterval(() => {
+    const stale = (orchestrator.tasks?.list() ?? []).filter(
+      task =>
+        task.status === "open" &&
+        !abandonedTold.has(task.id) &&
+        task.history.some(entry => entry.by === "restart")
+    );
+    for (const task of stale) {
+      abandonedTold.add(task.id);
+      const since = task.history.find(entry => entry.by === "restart")?.at ?? task.createdAt;
+      log(`${task.id} has been waiting since ${since}, reopened by a restart: ${task.title}`);
+    }
+  }, 30 * 60_000);
+  abandonedTimer.unref();
+
+  // Is anything still listening? A channel said "connected" once and ninety minutes later
+  // had no socket at all, having logged nothing in between — and because the ingress
+  // ledger correctly recorded that nothing had arrived, the records were indistinguishable
+  // from a quiet afternoon. This is the signal that was missing.
+  //
+  // Said once per transition, not once per check: a warning repeated every ten minutes is
+  // one people filter out, including on the occasion it is true.
+  const channelState = new Map<string, string>();
+  const livenessTimer = setInterval(() => {
+    void (async () => {
+      for (const health of await channels.health().catch(() => [])) {
+        const channel = health.detail.split(/[\s:]/)[0] ?? "channel";
+        if (channelState.get(channel) === health.state) continue;
+        channelState.set(channel, health.state);
+        if (health.state !== "ok") log(`channel health: ${health.detail}`);
+        else log(`channel health: ${channel} is answering again`);
+      }
+    })();
+  }, 10 * 60_000);
+  livenessTimer.unref();
 
   // An upgrade nobody knows about is an upgrade that does not happen. This tells the
   // people who may decide, and deliberately does not act: a web server that recreates the
@@ -1367,6 +1457,9 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
         const result = await client.exec(command, {
           cwd: typeof input.cwd === "string" ? input.cwd : WORK_DIR,
           timeoutMs: 120_000,
+          // An outside MCP client driving the shell as a person, not one of our agents:
+          // the same principal the policy check above was made against.
+          actor: `mcp:${principalId}`,
         });
         return [
           `exit code: ${result.exit_code}`,
@@ -1400,7 +1493,7 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
         // A path rather than the bytes: this bridge carries text, and a screenshot the
         // caller can fetch beats a megabyte of base64 it did not ask for.
         const path = `${WORK_DIR}/.mcp-shots/${agent.id}-${Date.now()}.webp`;
-        await client.exec(`mkdir -p ${WORK_DIR}/.mcp-shots`);
+        await client.exec(`mkdir -p ${WORK_DIR}/.mcp-shots`, { actor: "host:mcp-screenshot" });
         await client.uploadFile(path, shot.screenshot);
         return `Saved the current desktop of ${agent.profile.name} to ${path}.`;
       },
@@ -2532,12 +2625,25 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
             send(res, 404, { error: `No agent ${id}` });
             return;
           }
-          const list = registry.listConversations(id).sort((a, b) => {
+          const sorted = registry.listConversations(id).sort((a, b) => {
             if (a.id === MAIN_CONVERSATION) return -1;
             if (b.id === MAIN_CONVERSATION) return 1;
             return String(b.lastAt ?? "").localeCompare(String(a.lastAt ?? ""));
           });
-          send(res, 200, { conversations: list });
+          // Paged, because the label below costs a file-head read per conversation and
+          // a room's worth of topics would pay it for entries nobody scrolled to.
+          const limit = Math.min(Math.max(Number(url.searchParams.get("limit")) || 50, 1), 200);
+          const offset = Math.max(Number(url.searchParams.get("offset")) || 0, 0);
+          const page = sorted.slice(offset, offset + limit).map(conversation => {
+            // Labelled by what was said, because the id is a flattened chatKey nobody
+            // can read. Head-of-file only, so a page stays cheap.
+            const firstLine =
+              conversation.id === MAIN_CONVERSATION
+                ? undefined
+                : registry.conversationFirstLine(id, conversation.id);
+            return { ...conversation, ...(firstLine !== undefined ? { firstLine } : {}) };
+          });
+          send(res, 200, { conversations: page, total: sorted.length });
           return;
         }
 
@@ -2671,6 +2777,28 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
               ? body.conversation
               : MAIN_CONVERSATION;
 
+          // A console message into a channel thread is a room message, not a whisper.
+          // Without this, an operator's interjection and the agent's answer were visible
+          // only on the web page: the chat's members saw the agent's behaviour change
+          // with no visible cause, and the thread history the agent reasons over
+          // contained an exchange they never witnessed. Context that two readers see
+          // differently is the distributed-system failure everything else here is built
+          // to avoid, so the interjection goes to the chat, marked as coming from the
+          // console, and the reply follows it.
+          const chatKey =
+            conversation === MAIN_CONVERSATION
+              ? undefined
+              : conversations.chatKeyFor(conversation);
+          if (conversation !== MAIN_CONVERSATION && chatKey === undefined) {
+            // A thread from before the directory existed; addressable again on its next
+            // inbound message. Said out loud, because a message that quietly goes
+            // nowhere is the failure this codebase keeps finding.
+            log(`console message to ${conversation} stays on the web: no chat recorded for it`);
+          }
+          if (chatKey !== undefined) {
+            void channels.pushToChat(chatKey, `〔控制台〕${text}`);
+          }
+
           // Echo the prompt so every connected page shows it, then answer
           // immediately: the turn's output arrives over the event stream, and a
           // long turn must not hold the HTTP request open.
@@ -2685,8 +2813,17 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
           });
           send(res, 202, { accepted: true });
 
+          const before = registry.readTranscript(agentId, conversation).length;
           void orchestrator
             .prompt(agentId, text, caller, { conversation })
+            .then(() => {
+              // The reply belongs to the same room the interjection went to. Read back
+              // from the transcript, the same way the channel path recovers an answer.
+              if (chatKey !== undefined) {
+                const said = orchestrator.replySince(agentId, before, conversation);
+                if (said !== "") void channels.pushToChat(chatKey, said);
+              }
+            })
             // Teammates woken by this turn are still working; let them finish so
             // their messages and turns show up before the page looks idle.
             .then(() => orchestrator.settle())

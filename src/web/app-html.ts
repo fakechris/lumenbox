@@ -313,6 +313,47 @@ export const APP_HTML = String.raw`<!doctype html>
     background: var(--surface-2); border: 1px solid var(--border);
     border-radius: var(--radius-card); padding: 12px 15px;
   }
+  /* The trace as a tree.
+     A round is a node: what the agent said it was about to do, with the calls it made
+     nested under it. The nesting is drawn, not implied — children are indented and hang
+     off a guide line, so six fetches visibly belong to the sentence above them. Folding
+     the node takes its children with it, which is what folding means in a tree and is
+     what the previous version failed to do. The answer is not a node: no indent, no
+     rule, full serif, so one scan down the left edge finds it. */
+  details.step {
+    margin: 3px 0; border-left: 2px solid var(--border); padding-left: 0;
+    max-width: 700px;
+  }
+  details.step > summary {
+    cursor: pointer; list-style: none; padding: 3px 0 3px 10px; margin-left: -2px;
+    border-left: 2px solid transparent;
+    font-family: var(--font-sans); font-size: 12px; line-height: 1.45;
+    color: var(--text-soft); user-select: none;
+  }
+  details.step > summary::-webkit-details-marker { display: none; }
+  details.step > summary::before {
+    content: "\\25b8"; display: inline-block; width: 11px;
+    color: var(--muted); font-size: 9px;
+  }
+  details.step[open] > summary::before { content: "\\25be"; }
+  details.step > summary:hover { color: var(--text); border-left-color: var(--accent); }
+  details.step > summary .lbl { font-weight: 500; }
+  /* The children. The left padding is the indent; the parent's border is the guide. */
+  details.step > .kids { padding: 1px 0 3px 18px; }
+  /* Whatever the agent said beyond the one line in the summary. */
+  details.step .saidfull {
+    font-family: var(--font-sans); font-size: 0.82rem; line-height: 1.5;
+    color: var(--muted); margin: 0 0 5px;
+  }
+  details.step .saidfull p { margin: 0 0 4px; }
+  /* Tool rows inside a round are quieter than they are on their own, because the round
+     already says what this group of them was for. */
+  details.step details.tool { font-size: 11.5px; }
+  #foldall {
+    font-size: 11px; letter-spacing: 0.04em; color: var(--muted);
+    cursor: pointer; text-decoration: none; flex: none;
+  }
+  #foldall:hover { color: var(--text); }
   .msg .body > :first-child { margin-top: 0; }
   .msg .body > :last-child { margin-bottom: 0; }
   .msg .body p { margin: 0 0 8px; }
@@ -421,6 +462,28 @@ export const APP_HTML = String.raw`<!doctype html>
   #slashmenu .row:hover, #slashmenu .row.on { background: var(--accent-soft); }
   #slashmenu b { font-size: 0.92rem; }
 
+  /* The thread panel: a list, because a native select cannot paginate, filter, or
+     survive fifty threads. Anchored under its button in the pane header. */
+  #convpanel {
+    position: absolute; top: 100%; left: 0; margin-top: 4px; width: 360px;
+    background: var(--surface); border: 1px solid var(--border-strong);
+    border-radius: var(--radius-md); box-shadow: var(--shadow-pop);
+    z-index: 6; padding: 6px;
+  }
+  #convfilter {
+    width: 100%; box-sizing: border-box; height: 28px; margin-bottom: 6px;
+    border: 1px solid var(--border-strong); border-radius: var(--radius-input);
+    background: var(--bg); color: var(--text); font: inherit; font-size: 12px; padding: 0 8px;
+  }
+  #convfilter:focus { outline: 0; border-color: var(--accent); }
+  #convlist { max-height: 300px; overflow: auto; }
+  #convpanel .row { padding: 6px 8px; cursor: pointer; border-radius: var(--radius-input); font-size: 12px; display: block; text-decoration: none; color: var(--text); }
+  #convpanel .row:hover { background: var(--accent-soft); }
+  #convpanel .row.on { background: var(--accent-soft); }
+  #convpanel .row .who { font-weight: 600; }
+  #convpanel .row .when { color: var(--muted); float: right; }
+  #convpanel .row .what { color: var(--text); display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
   /* ── right pane: what is happening now ────────────────────────────────────── */
   .tab {
     padding: 4px 12px; border-radius: var(--radius-pill); text-decoration: none;
@@ -516,10 +579,18 @@ export const APP_HTML = String.raw`<!doctype html>
     <span class="lead">
       <span id="title">&mdash;</span>
       <span id="titlerole" class="dim" style="font-size:12px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis"></span>
-      <select id="convpick" style="display:none;height:28px;border-radius:var(--radius-input);border:1px solid var(--border-strong);background:var(--surface);color:var(--text);font:inherit;font-size:12px;padding:0 6px;max-width:180px"></select>
+      <span id="convwrap" style="position:relative;flex:none">
+        <a href="#" id="convbtn" class="btn sm" style="display:none;text-decoration:none;max-width:280px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap"></a>
+        <div id="convpanel" style="display:none">
+          <input id="convfilter" placeholder="Filter threads&hellip;" autocomplete="off">
+          <div id="convlist"></div>
+          <a href="#" id="convmore" class="row dim" style="display:none">Load more&hellip;</a>
+        </div>
+      </span>
       <a href="#" id="agentcfg" style="font-size:12px;flex:none">Configure</a>
     </span>
     <span class="headactions">
+      <a href="#" id="foldall" title="Fold or unfold every step in this conversation">fold steps</a>
       <span id="round" class="roundpill"></span>
       <!-- Only shown while a turn is running: a stop button with nothing to stop invites a click
            that does nothing, and then the real one is not trusted. -->
@@ -1547,6 +1618,66 @@ function renderAgents() {
   }
 }
 
+/* ── the trace as a tree ───────────────────────────────────────────────────────
+   A turn is rounds: the model says what it is about to do, then does it. That is a
+   parent and its children, and rendering them as siblings — which is what this did —
+   throws the structure away and leaves a flat wall in which nothing indicates that six
+   fetches belong to the sentence above them.
+   So a round is one details element. Its summary is what the model said it was doing; its
+   children are the calls it made. Folding it folds the calls with it, which is what
+   folding a node in a tree means. The final answer is not a round: it is the thing the
+   rounds were for, and it stays unindented in the serif so one scan of the left edge
+   finds it. */
+
+/** The element new steps are appended to: the open round, or the chat when none is. */
+var openStep = null;
+
+function stepHost() {
+  return openStep && openStep.isConnected ? openStep.querySelector(".kids") : $("chat");
+}
+
+/**
+ * Opens a round whose summary is what the agent said it was about to do.
+ *
+ * Called when narration is followed by tool calls — the point at which that sentence is
+ * revealed to have been a heading rather than an answer.
+ */
+function beginStep(text) {
+  var chat = $("chat");
+  var stick = nearBottom(chat);
+  var step = document.createElement("details");
+  step.className = "step";
+  step.open = !folded;
+  step.innerHTML =
+    "<summary><span class=\"lbl\"></span></summary>" +
+    '<div class="kids"></div>';
+  step.querySelector(".lbl").textContent = firstLineOf(text) || "working";
+  if (text && firstLineOf(text) !== String(text).trim()) {
+    var full = document.createElement("div");
+    full.className = "saidfull";
+    full.innerHTML = renderMarkdown(text);
+    step.querySelector(".kids").appendChild(full);
+  }
+  chat.appendChild(step);
+  openStep = step;
+  if (stick) chat.scrollTop = chat.scrollHeight;
+  return step;
+}
+
+/** Closes the current round, so what follows is not filed under it. */
+function endStep() {
+  openStep = null;
+}
+
+/** The first sentence or line, clamped — enough to know what a folded step was. */
+function firstLineOf(text) {
+  var line = String(text || "").trim().split(/[\n。.!?]/)[0] || "";
+  return line.length > 58 ? line.slice(0, 58) + "…" : line;
+}
+
+/** Whether new steps arrive folded. Flipped by the header control, remembered per page. */
+var folded = false;
+
 function bubble(role, who, text) {
   var el = $("chat");
   var stick = nearBottom(el);
@@ -1582,15 +1713,15 @@ function toolDetail(tool, input) {
 }
 
 function collapsedRow(cls, summaryHtml, detail) {
-  var el = $("chat");
-  var stick = nearBottom(el);
+  var el = stepHost();
+  var stick = nearBottom($("chat"));
   var row = document.createElement("details");
   row.className = "tool " + (cls || "");
   row.innerHTML = "<summary>" + summaryHtml + '</summary><div class="det"></div>';
   // textContent, not innerHTML: this is output from a command or another agent.
   row.querySelector(".det").textContent = String(detail == null ? "" : detail);
   el.appendChild(row);
-  if (stick) el.scrollTop = el.scrollHeight;
+  if (stick) $("chat").scrollTop = $("chat").scrollHeight;
   return row;
 }
 
@@ -1672,12 +1803,22 @@ function replayEntry(id, entry) {
     return;
   }
   if (entry.kind === "tools") {
+    // The transcript emits a round's prose immediately before its calls, so the pairing
+    // needs no guessing — if no round was opened by that prose, this round had none.
+    if (!openStep) beginStep("");
     for (var t = 0; t < entry.tools.length; t++) {
       var call = entry.tools[t];
       toolCall(call.name, call.detail, call.result, call.isError);
     }
+    endStep();
     return;
   }
+  // Narration opens the round its calls will be filed under; anything else is a message.
+  if (entry.aside) {
+    beginStep(entry.text);
+    return;
+  }
+  endStep();
   bubble(entry.role === "user" ? "user" : "", entry.role === "user" ? "you" : nameOf(id), entry.text);
 }
 
@@ -1713,36 +1854,156 @@ function select(id, conversation) {
     });
 }
 
-/**
- * The conversation switcher, shown only when an agent has more than the team room —
- * an agent nobody has messaged from a channel does not need a one-item dropdown.
- */
-function refreshConversations(id) {
-  return fetch("/api/conversations?agent=" + encodeURIComponent(id))
-    .then(function (r) { return r.json(); })
-    .then(function (data) {
-      var list = data.conversations || [];
-      var pick = $("convpick");
-      if (list.length <= 1) { pick.style.display = "none"; return; }
-      pick.style.display = "";
-      pick.innerHTML = list.map(function (c) {
-        var label = c.id === "main" ? "Team room" : c.id;
-        return '<option value="' + esc(c.id) + '"' + (c.id === currentConversation ? " selected" : "") + ">" + esc(label) + "</option>";
-      }).join("");
-    })
-    .catch(function () {});
+/* ── the thread panel ─────────────────────────────────────────────────────────
+   A native <select> cannot paginate, cannot filter, and renders raw ids; with a
+   room's worth of topics it is a wall of uids. This is a list: newest first,
+   labelled by channel, the person's first words and age, filterable as you type,
+   loading more on demand. */
+
+/** "3m" / "2h" / "5d" — enough to pick the thread from this morning over last week's. */
+function fmtAgo(iso) {
+  if (!iso) return "";
+  var ms = Date.now() - Date.parse(iso);
+  if (!isFinite(ms) || ms < 0) return "";
+  var minutes = Math.floor(ms / 60000);
+  if (minutes < 1) return "now";
+  if (minutes < 60) return minutes + "m";
+  if (minutes < 60 * 24) return Math.floor(minutes / 60) + "h";
+  return Math.floor(minutes / (60 * 24)) + "d";
 }
 
-$("convpick").onchange = function () {
-  if (current) select(current, $("convpick").value);
+/** One line for the button: where it came from and what was said. */
+function conversationLabel(c) {
+  if (!c || c.id === "main") return "Team room";
+  var channel = String(c.id).split("-")[0] || "chat";
+  var words = c.firstLine ? String(c.firstLine).slice(0, 40) : c.id;
+  return channel + " · " + words;
+}
+
+var convLoaded = [];      // pages fetched so far, newest first, main pinned on top
+var convTotal = 0;
+var CONV_PAGE = 50;
+
+function fetchConversations(id, offset) {
+  return fetch("/api/conversations?agent=" + encodeURIComponent(id) +
+      "&limit=" + CONV_PAGE + "&offset=" + offset)
+    .then(function (r) { return r.json(); });
+}
+
+/** Keeps the button honest: label of the viewed thread, and how many exist. */
+function renderConvButton() {
+  var btn = $("convbtn");
+  if (convTotal <= 1) { btn.style.display = "none"; return; }
+  var viewed = null;
+  for (var i = 0; i < convLoaded.length; i++) {
+    if (convLoaded[i].id === currentConversation) { viewed = convLoaded[i]; break; }
+  }
+  btn.style.display = "";
+  btn.textContent = conversationLabel(viewed || { id: currentConversation }) +
+    " (" + convTotal + ") ▾";
+}
+
+function renderConvList() {
+  var needle = $("convfilter").value.trim().toLowerCase();
+  var rows = convLoaded.filter(function (c) {
+    if (!needle) return true;
+    return (String(c.firstLine || "") + " " + c.id).toLowerCase().indexOf(needle) !== -1;
+  }).map(function (c) {
+    var channel = c.id === "main" ? "team" : (String(c.id).split("-")[0] || "chat");
+    var words = c.id === "main" ? "Team room" : (c.firstLine || c.id);
+    return '<a href="#" class="row' + (c.id === currentConversation ? " on" : "") + '" data-conv="' + esc(c.id) + '">' +
+      '<span class="when">' + esc(fmtAgo(c.lastAt)) + '</span>' +
+      '<span class="who">' + esc(channel) + '</span> ' +
+      '<span class="what">' + esc(words) + '</span></a>';
+  }).join("");
+  $("convlist").innerHTML = rows || '<div class="row dim">Nothing matches</div>';
+  // More pages exist and no filter is narrowing: filtering only searches what is
+  // loaded, so the link stays visible then too, as the way to widen the search.
+  $("convmore").style.display = convLoaded.length < convTotal ? "" : "none";
+}
+
+function refreshConversations(id) {
+  return fetchConversations(id, 0).then(function (data) {
+    var page = data.conversations || [];
+    convTotal = data.total !== undefined ? data.total : page.length;
+    // A refresh replaces the first page; deeper pages someone loaded stay behind it.
+    var deeper = convLoaded.slice(page.length).filter(function (c) {
+      return !page.some(function (p) { return p.id === c.id; });
+    });
+    convLoaded = page.concat(deeper);
+    renderConvButton();
+    if ($("convpanel").style.display !== "none") renderConvList();
+  }).catch(function () {});
+}
+
+// A thread that starts while the page is open must be reachable without switching
+// agents; the button also keeps its count and label current. The list itself only
+// re-renders while the panel is open.
+setInterval(function () { if (current) refreshConversations(current); }, 5000);
+
+$("foldall").onclick = function (event) {
+  event.preventDefault();
+  folded = !folded;
+  // Applies to what is on screen and to what arrives next, because a reader who folded
+  // the steps away did not mean "until the agent says something else".
+  var panels = document.querySelectorAll("details.step");
+  for (var i = 0; i < panels.length; i++) panels[i].open = !folded;
+  $("foldall").textContent = folded ? "unfold steps" : "fold steps";
 };
+
+$("convbtn").onclick = function (event) {
+  event.preventDefault();
+  var panel = $("convpanel");
+  var open = panel.style.display !== "none";
+  panel.style.display = open ? "none" : "";
+  if (!open) {
+    $("convfilter").value = "";
+    renderConvList();
+    $("convfilter").focus();
+  }
+};
+
+$("convfilter").oninput = function () { renderConvList(); };
+
+$("convlist").onclick = function (event) {
+  var row = event.target.closest("[data-conv]");
+  if (!row) return;
+  event.preventDefault();
+  $("convpanel").style.display = "none";
+  if (current) select(current, row.getAttribute("data-conv"));
+};
+
+$("convmore").onclick = function (event) {
+  event.preventDefault();
+  if (!current) return;
+  fetchConversations(current, convLoaded.length).then(function (data) {
+    var page = data.conversations || [];
+    convTotal = data.total !== undefined ? data.total : convTotal;
+    var known = {};
+    convLoaded.forEach(function (c) { known[c.id] = true; });
+    convLoaded = convLoaded.concat(page.filter(function (c) { return !known[c.id]; }));
+    renderConvList();
+  }).catch(function () {});
+};
+
+// Clicking anywhere else closes the panel, like every other transient surface.
+document.addEventListener("click", function (event) {
+  var panel = $("convpanel");
+  if (panel.style.display === "none") return;
+  if (!$("convwrap").contains(event.target)) panel.style.display = "none";
+});
 
 /** The composer says which thread it will reach, so a reply never surprises anyone. */
 function updateComposerTarget() {
   var name = nameOf(current);
+  var viewed = null;
+  for (var i = 0; i < convLoaded.length; i++) {
+    if (convLoaded[i].id === currentConversation) { viewed = convLoaded[i]; break; }
+  }
   $("input").placeholder = currentConversation === "main"
     ? "Message " + name + "…"
-    : "Reply in " + currentConversation + " — reaches that chat, not the team room…";
+    : "Reply in " + conversationLabel(viewed || { id: currentConversation }) +
+      " — reaches that chat, not the team room…";
 }
 
 function refresh() {
@@ -2434,12 +2695,16 @@ stream.onmessage = function (raw) {
   if (line) feed(line.html, line.cls);
 
   if (e.type === "prompt") {
+    endStep();
     if (inView(e)) bubble("user", "you", e.text);
     return;
   }
 
   if (e.type === "text") {
     if (!inView(e)) return;
+    // Prose arriving with no round open is the answer, and prose after a round has run is
+    // the answer too — either way it belongs outside the tree.
+    endStep();
     var open = live.get(e.agentId);
     if (!open) {
       open = { node: bubble("", e.agentName, ""), text: "", queued: false };
@@ -2466,6 +2731,21 @@ stream.onmessage = function (raw) {
   }
 
   if (e.type === "tool_start") {
+    // Text followed by a tool call is narration, not the answer — the same distinction
+    // turn.ts already makes when it decides whether a round is final. Marking it here is
+    // what lets the two read differently: the process de-emphasised, the answer not.
+    // The sentence that was streaming is revealed to have been a heading: the calls that
+    // follow belong under it. Opening the round here rather than at text time is what
+    // makes a final answer — text with no calls after it — stay out of the tree.
+    var narrating = live.get(e.agentId);
+    if (narrating && narrating.node) {
+      var said = narrating.text;
+      var block = narrating.node.parentNode;
+      if (block && block.parentNode) block.parentNode.removeChild(block);
+      beginStep(said);
+    } else if (!openStep) {
+      beginStep("");
+    }
     live.delete(e.agentId);
     // Held so the result can be folded into the same row when it arrives.
     if (inView(e)) {

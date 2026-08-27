@@ -19,6 +19,37 @@ import { BoxClient } from "./client.ts";
 
 const execFileAsync = promisify(execFile);
 
+/**
+ * Paths a volume archive leaves behind, as `tar --exclude` patterns.
+ *
+ * A backup exists so nothing that cannot be rebuilt is lost. The spool can be rebuilt —
+ * it is a 24-hour buffer of command output that `reapSpool` deletes — and it is the one
+ * directory in the volume whose whole purpose is to hold text the transcript decided not
+ * to keep. Copying it out of the box on every upgrade converts an expiring buffer into a
+ * permanent copy, in a directory whose contents nobody reviews. Exported so a test can
+ * assert the list rather than trust the command line it is spliced into.
+ */
+export const BACKUP_EXCLUDES: readonly string[] = ["./.spool"];
+
+/**
+ * What a volume archive carries, said at the moment one is written.
+ *
+ * `/home/box/.config` is a volume so that a browser login survives a rebuild — that is
+ * the feature the whole semantic-browser design rests on, and it is why this directory
+ * must *not* be excluded the way the spool was. The consequence, which nothing said out
+ * loud until docs/15 measured it: **an archive contains whatever the agent logged into.**
+ * A session cookie, a `gh auth login`, an `aws configure` — each survives the rebuild it
+ * is meant to survive, and each rides along into every copy of the archive.
+ *
+ * Said here rather than in the preflight, because the preflight only speaks when it has a
+ * complaint, and this is not a complaint. It is what a person needs before they decide to
+ * copy a backup somewhere.
+ */
+export const BACKUP_CARRIES =
+  "These archives contain whatever the agent is logged into — browser sessions, and any " +
+  "credential a tool in the box wrote to ~/.config. That is deliberate: it is how a login " +
+  "survives a rebuild. Treat a copy of one as you would treat those logins.";
+
 export const DEFAULT_IMAGE = "agentbox/box:latest";
 export const DEFAULT_CONTAINER = "agentbox-box";
 
@@ -624,6 +655,14 @@ export class BoxManager {
           `/backup/${file}`,
           "-C",
           "/src",
+          // The spool holds the *untruncated* output of every command an agent ran —
+          // precisely the text the transcript deliberately keeps only 2 KB of, and the
+          // likeliest place a `cat .env` or a token-bearing build log survives in full.
+          // It was travelling out of the box in every upgrade archive, which turns a
+          // 24-hour reaped buffer inside the container into a permanent copy outside it.
+          // Excluded, not moved: the spool is meant to be reachable from the box and to
+          // expire there, and nothing outside needs it. See docs/15.
+          ...BACKUP_EXCLUDES.flatMap(pattern => ["--exclude", pattern]),
           ".",
         ],
         600_000

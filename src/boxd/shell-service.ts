@@ -11,7 +11,7 @@ import { envNumber } from "../config.ts";
 import { spawn } from "node:child_process";
 import { closeSync, mkdirSync, openSync, readdirSync, statSync, unlinkSync, writeSync } from "node:fs";
 import { join } from "node:path";
-import type { ExecRequest, ExecResult } from "../protocol/index.ts";
+import { DURABLE_RESULT_CHARS, type ExecRequest, type ExecResult } from "../protocol/index.ts";
 
 const DEFAULT_TIMEOUT_MS = 120_000;
 /**
@@ -38,22 +38,39 @@ export const MAX_OUTPUT_BYTES = 2 * 1024 * 1024;
  * notice down for the transcript — because a pointer that survives one truncation and
  * not the next points at nothing. Grep for the marker to find both halves.
  */
-export const SPOOL_DIR = process.env.BOXD_SPOOL_DIR ?? "/home/box/work/.spool";
+/**
+ * The spool's fixed home.
+ *
+ * It used to honour `BOXD_SPOOL_DIR`, and that made the backup exclusion a lie: the host
+ * excludes the literal `./.spool` from a volume archive, so pointing the daemon at
+ * `/home/box/work/full-output` put every command's untruncated output back into every
+ * upgrade backup. Two ways to fix it — teach the host the box's environment, or stop the
+ * box having one — and this is the cheaper and the sounder, because the exclusion cannot
+ * drift from a constant it shares.
+ *
+ * The tests that need a different directory pass one to `BoundedOutput` directly, which
+ * is where the parameter always was.
+ */
+export const SPOOL_DIR = "/home/box/work/.spool";
 export const SPILL_MARKER = "full output kept:";
 
 /**
  * Output past this goes to a file, whether or not the daemon itself drops any.
  *
- * Two thresholds for two different jobs, and conflating them left a hole. The 2 MiB
- * cap above protects the daemon's memory and is where bytes are *lost*. This one is
- * where bytes stop being *showable*: the host trims a tool result to 20k characters
- * long before the daemon drops anything, so between those two numbers the output was
- * discarded upstream with nothing behind it — which is the majority of real cases, a
- * verbose build being a few hundred kilobytes rather than a few megabytes.
+ * Three thresholds for three different jobs, and this one was measured against the wrong
+ * one. The 2 MiB cap above protects the daemon's memory and is where bytes are *lost*.
+ * The host shows the model up to 20,000 characters. And the host's *transcript* keeps
+ * `DURABLE_RESULT_CHARS` — two thousand. This threshold was set below the display cap, so
+ * a result between 2 KB and 16 KB was shown to the model in full, stored as a 2 KB head,
+ * and given no pointer: the tail was durably gone and nothing said so. The adversarial
+ * review of docs/15 found it with a command producing 2,500 characters.
  *
- * Set below the host's own cap so the file always exists before the trimming starts.
+ * So it is now pinned to the *durable* limit, which is the only one where bytes stop
+ * being recoverable. Spilling starts earlier and more often than before — that is the
+ * point, and the cost is small files in a directory that is reaped and is no longer
+ * copied into backups.
  */
-export const SPILL_AT_BYTES = envNumber("BOXD_SPILL_AT_BYTES", 16_000);
+export const SPILL_AT_BYTES = envNumber("BOXD_SPILL_AT_BYTES", DURABLE_RESULT_CHARS);
 
 /**
  * Collects a stream up to the cap and counts the rest.

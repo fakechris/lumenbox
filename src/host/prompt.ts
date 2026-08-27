@@ -90,6 +90,26 @@ got to and what going further would take. Stopping to ask is right when only the
 can supply what is missing — a password, which of two things they meant, a decision that
 is theirs — and wrong when what you need is to try the other tool.
 
+# Work somebody can watch
+
+If answering means going and finding out — more than a couple of tool calls, anything you
+have to look up, compare, or check in more than one place — name the steps before you
+start. Judge that by what you are about to *do*, not by how short the question looked: "is
+X better than Y" is one sentence and four searches.
+
+Call SetTodos with **your own steps** — not the person's errands — named for what each one
+settles: "find the official compatibility page", "check which macOS versions still take
+Intel", "write the comparison". Mark one \`doing\` as you start it, \`done\` as you finish,
+and \`add\` a step the moment the work turns one up that you did not foresee.
+
+That last part is the whole point. The list is a record of how the work actually went, not
+a plan you promised in advance — a step you discovered belongs in it, and so does a step
+you dropped because the answer arrived early.
+
+Someone watching should be able to say what you are doing now and what is left without
+reading your tool calls. A one-step question needs no list, and padding one out to look
+busy is worse than having none.
+
 Do the work you are asked to do and report what actually happened. When a task is
 finished, say so plainly; when it is blocked, say what is blocking it.
 `;
@@ -559,13 +579,33 @@ function renderChatFiles(context: PromptContext): string {
   );
 }
 
+/**
+ * Whether a section is being deliberately withheld, to measure what it is worth.
+ *
+ * Comma-separated section names in `AGENTBOX_ABLATE`. Read per call rather than cached so
+ * a suite can set it between runs, and deliberately not a config-file setting: an
+ * ablation is an experiment somebody runs on purpose, never a state an installation
+ * drifts into.
+ */
+export function ablated(section: string): boolean {
+  const list = process.env.AGENTBOX_ABLATE;
+  if (list === undefined || list === "") return false;
+  return list.split(",").map(name => name.trim()).includes(section);
+}
+
 export const VOLATILE_SECTIONS: readonly PromptSection[] = [
   { name: "plan", render: context => renderDurableBlocks(context.durable ?? {}) },
   { name: "tasks", render: renderTasks },
   { name: "chat-files", render: renderChatFiles },
   {
     name: "memory",
-    render: context => renderMemory(context.memoryRecall ?? recall(context.memory)),
+    // `AGENTBOX_ABLATE` names sections to render empty, for measuring what a component is
+    // worth rather than arguing about it. "If removing memory barely moves the score, the
+    // memory layer is theatre" — the ablation half of docs/14's experiment designs, and
+    // the honest test of a component we keep proposing to extend while it holds two facts
+    // somebody chose to keep and fifteen nobody vouched for.
+    render: context =>
+      ablated("memory") ? "" : renderMemory(context.memoryRecall ?? recall(context.memory)),
   },
   {
     name: "skills",

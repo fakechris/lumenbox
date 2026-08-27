@@ -11,9 +11,12 @@ import {
   mkdir,
   readFile as fsReadFile,
   realpath,
+  rename,
   stat,
+  unlink,
   writeFile as fsWriteFile,
 } from "node:fs/promises";
+import { randomBytes } from "node:crypto";
 import { dirname, extname, resolve } from "node:path";
 import type {
   DirEntry,
@@ -179,7 +182,25 @@ export async function uploadFile(request: UploadFileRequest): Promise<UploadFile
   if (bytes.length > MAX_DOWNLOAD_BYTES) {
     throw new Error(`${bytes.length} bytes is over the ${MAX_DOWNLOAD_BYTES}-byte upload limit`);
   }
-  await fsWriteFile(requested, bytes);
+  // Whole or absent, never half. A direct write that dies mid-way leaves a torn file
+  // under the final name, and a torn file *looks* delivered — the reader that finds it
+  // has no way to know bytes are missing. So the bytes land under a temporary name and
+  // take the final name in one rename, which the filesystem makes atomic.
+  //
+  // Through an in-tree symlink, the write goes to its *target* (validated above), the
+  // same place a direct write would have landed — renaming onto the link itself would
+  // quietly replace the link with a plain file, which is a different edit than asked for.
+  const destination =
+    existing?.isSymbolicLink() === true ? await realpath(requested) : requested;
+  const partial = `${destination}.${randomBytes(4).toString("hex")}.part`;
+  try {
+    await fsWriteFile(partial, bytes);
+    await rename(partial, destination);
+  } catch (error) {
+    // The torn half has a distinctive name; nothing mistakes it for the document.
+    await unlink(partial).catch(() => {});
+    throw error;
+  }
   return { path: requested, size: bytes.length };
 }
 

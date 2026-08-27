@@ -19,9 +19,14 @@
  *     we keep: our agent is the one that decides, the preset is the one that works.
  *   - **Skills.** The box's skills directory is projected where the engine looks for
  *     it, so a method written once is available to whoever executes it.
- *   - **Metering.** The engine's model traffic is pointed at the relay, so the key
- *     stays outside the box and every token it spends lands in the same usage log as
- *     ours — under the same per-person budget, the same audit.
+ *   - **Metering.** The *seam* for it: `relayEnv` points the engine's model traffic at
+ *     whatever relay the two environment variables below name, so the key can stay
+ *     outside the box. Nothing in this repository provides that relay yet — the egress
+ *     relay forwards bytes and never parses traffic, so it cannot substitute a key or
+ *     count a token — and with the variables unset `delegateEnv` returns `{}` and the
+ *     engine has no credential at all. Honest, and loud at startup (see absences.ts),
+ *     but not metering. This bullet described the destination as the present tense
+ *     until docs/14 checked it.
  *   - **Acceptance.** A preset carries the golden tasks that prove it still works, so
  *     an upgrade or a provider change is re-checked rather than assumed.
  *
@@ -104,9 +109,13 @@ export function quoteForShell(value: string): string {
  * engine has no credential, says so, and the alternative (handing it ours) is the one
  * thing the vault exists to prevent.
  */
+/** Where a delegated engine's model traffic goes. Named here so absences.ts and this file cannot drift. */
+export const RELAY_URL_VARIABLE = "AGENTBOX_RELAY_URL";
+export const RELAY_TOKEN_VARIABLE = "AGENTBOX_RELAY_TOKEN";
+
 export function delegateEnv(preset: Preset): Record<string, string> {
-  const baseUrl = process.env.AGENTBOX_RELAY_URL;
-  const token = process.env.AGENTBOX_RELAY_TOKEN;
+  const baseUrl = process.env[RELAY_URL_VARIABLE];
+  const token = process.env[RELAY_TOKEN_VARIABLE];
   if (baseUrl === undefined || baseUrl === "" || token === undefined || token === "") return {};
   return preset.relayEnv(baseUrl, token);
 }

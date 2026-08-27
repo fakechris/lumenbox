@@ -405,13 +405,28 @@ function stripMarkers(raw: string): string {
   return text;
 }
 
+/**
+ * Whether a line is the sentinel, however the model dressed it.
+ *
+ * The guards used to compare exactly, and a model wrote `(NOTHING)` — so the extractor's
+ * own way of saying "this turn taught me nothing" was stored as a thing it learned, and
+ * sat in the memory file for days, because no operation in the system checks a memory
+ * against anything (docs/14). Letters only, so punctuation and casing cannot smuggle the
+ * sentinel through, while a real sentence that merely contains the word ("nothing gets
+ * past the reviewer") stays a sentence.
+ */
+function isNothing(text: string): boolean {
+  return text.replace(/[^a-z]/gi, "").toUpperCase() === NOTHING_TO_KEEP;
+}
+
 export function parseExtraction(
   reply: string,
   known: readonly MemoryRecord[],
   now = new Date()
 ): MemoryRecord[] {
   const trimmed = reply.trim();
-  if (trimmed === "" || trimmed.toUpperCase().startsWith(NOTHING_TO_KEEP)) return [];
+  if (trimmed === "" || trimmed.toUpperCase().startsWith(NOTHING_TO_KEEP) || isNothing(trimmed))
+    return [];
 
   const knownKeys = new Set(known.map(record => dedupeKey(record.text)));
   const out: MemoryRecord[] = [];
@@ -420,7 +435,7 @@ export function parseExtraction(
   for (const raw of trimmed.split("\n")) {
     const text = stripMarkers(raw);
     if (text === "" || validateRecord(text) !== undefined) continue;
-    if (text.toUpperCase() === NOTHING_TO_KEEP) continue;
+    if (isNothing(text)) continue;
     const key = dedupeKey(text);
     if (key === "" || knownKeys.has(key) || seen.has(key)) continue;
     seen.add(key);
@@ -448,7 +463,8 @@ export function buildEpisodePrompt(exchanges: readonly string[]): string {
 
 export function parseEpisode(reply: string, now = new Date()): MemoryRecord | undefined {
   const text = reply.trim().replace(/\s+/g, " ");
-  if (text === "" || text.toUpperCase().startsWith(NOTHING_TO_KEEP)) return undefined;
+  if (text === "" || text.toUpperCase().startsWith(NOTHING_TO_KEEP) || isNothing(text))
+    return undefined;
   return {
     at: now.toISOString(),
     kind: "episode",

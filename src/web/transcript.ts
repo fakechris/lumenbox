@@ -24,7 +24,18 @@ export interface DisplayTool {
 }
 
 export type DisplayEntry =
-  | { kind: "text"; role: "user" | "assistant"; text: string }
+  | {
+      kind: "text";
+      role: "user" | "assistant";
+      text: string;
+      /**
+       * Prose that came in the same turn as tool calls: running commentary, not the
+       * answer. Known here by construction — a `blocks` entry is by definition a round
+       * that went on to call something — so a reload renders the same distinction the
+       * live stream draws when a `tool_start` follows an open message.
+       */
+      aside?: true;
+    }
   /** A turn a teammate started: the messages, without the scaffolding around them. */
   | { kind: "peer"; messages: WakeMessage[] }
   | { kind: "tools"; tools: DisplayTool[] };
@@ -90,7 +101,7 @@ export function toDisplayEntries(
         .map(block => String(block.text ?? ""))
         .join("")
         .trim();
-      if (text) display.push({ kind: "text", role: "assistant", text });
+      if (text) display.push({ kind: "text", role: "assistant", text, aside: true });
 
       const calls = blocks.filter(block => block.type === "tool_use");
       const tools: DisplayTool[] = calls.map(block => ({

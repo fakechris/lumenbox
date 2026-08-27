@@ -311,7 +311,10 @@ export class Orchestrator {
   private async workspaceManifest(): Promise<Map<string, string> | undefined> {
     if (this.box === undefined) return undefined;
     try {
-      const result = await this.box.exec(MANIFEST_COMMAND, { timeoutMs: 60_000 });
+      const result = await this.box.exec(MANIFEST_COMMAND, {
+        timeoutMs: 60_000,
+        actor: "host:audit-manifest",
+      });
       return parseManifest(result.stdout ?? "");
     } catch (error) {
       // No manifest means integrity simply is not checked this time — the audit

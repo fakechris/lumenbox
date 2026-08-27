@@ -314,9 +314,19 @@ type Handler = (body: any) => Promise<unknown>;
 const jobs = new JobService();
 
 // Yesterday's spilled output is dead weight; today's is evidence.
+//
+// On a timer as well as at startup. It used to run once, here, which made "a 24-hour
+// buffer" untrue of any daemon that stays up: a box running for a week held week-old
+// output, and the adversarial review of docs/15 said so. Hourly is far more often than
+// needed to keep a 24-hour promise, and costs one directory listing.
 {
-  const removed = reapSpool();
-  if (removed > 0) log(`reaped ${removed} stale spool file(s)`);
+  const reap = (): void => {
+    const removed = reapSpool();
+    if (removed > 0) log(`reaped ${removed} stale spool file(s)`);
+  };
+  reap();
+  // Unref'd: a sweep of temporary files is not a reason for the process to stay alive.
+  setInterval(reap, 3_600_000).unref();
 }
 
 /**
@@ -331,6 +341,13 @@ const routes: Record<string, Handler> = {
     // A shell on someone else's desktop can do everything computer-use can — start a
     // window on it, type with xdotool — so it is gated the same way.
     if (body.display !== undefined) displays.assertOwner(body.display, body.owner);
+    // Every shell command, with who asked for it. Nothing recorded this before, so the
+    // box could not answer "who ran that" for the one endpoint where the answer matters
+    // most. Truncated because a log is not a transcript; the spool files hold output.
+    log(
+      `exec [${body.actor ?? "unlabelled"}]${body.background === true ? " (background)" : ""}: ` +
+        `${body.command.replace(/\s+/g, " ").slice(0, 200)}`
+    );
     if (body.background === true) {
       return jobs.start({
         command: body.command,

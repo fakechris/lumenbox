@@ -277,3 +277,26 @@ test("preformatted text keeps its indentation, because code is the payload", () 
   // as &lt;T&gt; and the agent copies that into a file.
   assert.match(htmlToText("<pre>Map&lt;K, V&gt;</pre>").text, /Map<K, V>/);
 });
+
+test("a provider is chosen by preference, and only a failure falls through", async () => {
+  // The tool was unusable for a week for want of one key (docs/14). More than one
+  // provider is the fix, and the ordering rule is the part worth pinning: an empty
+  // result is an *answer* and must not fall through, or "nothing matches" becomes three
+  // times the latency and the same answer with no way to tell who was asked.
+  const { SEARCH_PROVIDERS, configuredProviders } = await import("./web.ts");
+  assert.equal(SEARCH_PROVIDERS[0]?.name, "keenable", "preference order is the file's order");
+
+  assert.deepEqual(configuredProviders({}).map(p => p.name), [], "no key, no provider");
+  assert.deepEqual(
+    configuredProviders({ TAVILY_API_KEY: "x" }).map(p => p.name),
+    ["tavily"],
+    "a provider is offered when it alone has a key"
+  );
+  assert.deepEqual(
+    configuredProviders({ KEENABLE_API_KEY: "x", BRAVE_SEARCH_API_KEY: "y" }).map(p => p.name),
+    ["keenable", "brave"],
+    "several keys are tried in preference order, not in configuration order"
+  );
+  // An empty string is a key nobody set, which is how it looks in a config file.
+  assert.deepEqual(configuredProviders({ KEENABLE_API_KEY: "" }).map(p => p.name), []);
+});

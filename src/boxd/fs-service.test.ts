@@ -13,7 +13,7 @@
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { lstatSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -71,4 +71,23 @@ test("a path outside the root is refused on its parent, as before", async () => 
 test.after(() => {
   rmSync(ROOT, { recursive: true, force: true });
   rmSync(OUTSIDE, { recursive: true, force: true });
+});
+
+test("an upload arrives whole or not at all, and a link's target stays a link's target", async () => {
+  // A crash mid-write used to leave a torn file under the final name, which looks
+  // delivered to every later reader. The bytes now land under a .part name and take the
+  // final name in one rename; afterwards nothing partial is left behind.
+  await uploadFile({ path: join(ROOT, "whole.txt"), base64: base64("all of it") });
+  assert.equal(readFileSync(join(ROOT, "whole.txt"), "utf8"), "all of it");
+  const leftovers = readdirSync(ROOT).filter(name => name.endsWith(".part"));
+  assert.deepEqual(leftovers, [], "no partial files may survive a completed upload");
+
+  // Writing through an in-tree link must update the *target*, exactly as the direct
+  // write did — an atomic rename onto the link itself would replace the link with a
+  // plain file, which is a different edit than the one asked for.
+  writeFileSync(join(ROOT, "target.txt"), "old");
+  symlinkSync(join(ROOT, "target.txt"), join(ROOT, "alias.txt"));
+  await uploadFile({ path: join(ROOT, "alias.txt"), base64: base64("through the link") });
+  assert.equal(readFileSync(join(ROOT, "target.txt"), "utf8"), "through the link");
+  assert.ok(lstatSync(join(ROOT, "alias.txt")).isSymbolicLink(), "the link must survive");
 });

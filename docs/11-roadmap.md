@@ -10,13 +10,32 @@ The system today has the framework's five organization objects (conversations, p
 tasks, credentials, workers), a hardened turn engine, and — as of the 2026-08 run — the
 reference toolset is complete: web fetch and search, a semantic browser, background shell
 jobs, an edit tool, and a way for an agent to ask a question. What remains is a last mile
-of usability, the unfinished half of the honesty surfaces, one large security item that
-the browser work has made *larger*, and the structural growth into multi-person use.
+of usability, the honesty surfaces (now finished — R18, R22, R23), one large security item
+that turned out to be two (R7 keeps at-rest hygiene, R4 inherits containment), and the
+structural growth into multi-person use.
 
-**Shipped since this document was written**, and struck from the tiers below: R2, R5, R6,
-R9, R11, R12, R13, R14, R15, R20, and the version-handshake third of R18. Alongside them,
-work that predated this list: the MCP client and server, Delegate, Fork, lanes, the
-three-tier permission boundary, and the upgrade safety story now in docs/12-upgrades.md.
+**R22–R30 were added on 2026-08-26** from the outside-reading pass in
+[docs/14](14-from-outside-reading.md). The same day, three mechanisms were added to
+existing entries (R30, R8) after reading **FrontierAgent** (ApodexAI, Apache-2.0) against
+its own launch copy: the copy oversold mid-run steering as impact analysis and partial
+recomputation, which the code does not do — and undersold a code-level submission gate,
+which it does.
+
+None of these are new ambitions. Most are gaps that a pass found in code we had already
+shipped, each recorded with the measurement that established it. R25 also carries forward
+the adversarial-review findings from 2026-08-25 that were recorded and never acted on.
+
+**Shipped and struck from the tiers below:** R1, R2, R5, R6, R9, R11, R12, R13, R14, R15,
+R18, R19, R20, R22, R23, and the first third of R28. Alongside them, work that predated
+this list: the MCP client and server, Delegate, Fork, lanes, the three-tier permission
+boundary, and the upgrade safety story in [docs/12](12-upgrades.md).
+
+**Designed but deliberately not built**, each with the review that stopped it:
+[R7](15-secrets-in-the-record.md) — the containment framing did not survive, and what is
+left is at-rest hygiene with containment moved to R4. [R30](16-long-work.md) — the
+completion gate's load-bearing claim was false, and the protocol underneath it comes
+first. Both documents keep the wrong version rather than rewriting it, because the
+correction is the useful part.
 
 ---
 
@@ -24,11 +43,23 @@ three-tier permission boundary, and the upgrade safety story now in docs/12-upgr
 
 These close loops the recent work opened. Days, not weeks, each.
 
-### R1. The composer respects the viewed conversation
+### ~~R1. The composer respects the viewed conversation~~ — shipped, in two halves
+The composer half landed on 08-22 (`779f24e`), thirteen minutes after this entry was
+written, and the entry survived unstruck. The second half landed on 08-26 (`6c74e1b`)
+after the product decision it was waiting on: a console message into a channel thread is
+**a room message, not a whisper** — the interjection is pushed to the chat marked
+〔控制台〕 and the agent's reply follows it, so the chat's members and the agent read the
+same history. The enabling piece, `ConversationDirectory`, is R25's first slice built
+early: the explicit id → chatKey record the adversarial review asked for, because the
+derived id is one-way and nothing could answer "which chat is this?".
+
+<details><summary>original entry</summary>
+
 The middle pane can *view* any conversation, but the composer always sends to `main`.
 Read a Telegram thread, reply, and the reply lands in the team room instead. Either
 send to the viewed conversation, or disable the composer when viewing a side thread
 and say why. Small; a correctness gap the conversation viewer created.
+</details>
 
 ### ~~R2. Answer an approval from the chat channel~~ — shipped
 <details><summary>original entry</summary>
@@ -88,11 +119,56 @@ channel push, and one-shot binding all exist today. Small-medium; the payoff is
 long-task success rate.
 </details>
 
-### R19. Host-initiated exec, marked as such
-Starter skills and the web UI drive the same `/exec` channel the agent does, so
-host-side housekeeping (`mkdir` for a skill) walks the agent's approval and audit
-surface. A marker on the protocol request — a label, not a bypass — lets the audit
-log say who acted. Small.
+### ~~R22. Say out loud what is configured but absent~~ — shipped (`fe573a3`)
+`absences.ts` names each gap at both boot sites with its degradation and one-line remedy;
+starter seeding is per-skill with a `.seeded` marker (deletions stick, new starters
+arrive — `study-a-corpus` reached the running box on the next restart); the presets
+metering comment now describes the seam it has instead of the metering it does not.
+
+<details><summary>original entry</summary>
+
+Three findings from [outside reading](14-from-outside-reading.md) share one shape — present
+in the source, absent at runtime, silent about the difference. `WebSearch` needs
+`BRAVE_SEARCH_API_KEY`, which is unset, so it was called twice and refused twice while
+every web question quietly degraded to scraping a captcha page. `delegateEnv` reads
+`AGENTBOX_RELAY_URL` and `AGENTBOX_RELAY_TOKEN`, which **nothing in the repository sets**,
+so a delegated engine gets no credential and cannot start. And starter skills seed only
+into an empty directory, so `study-a-corpus` — added after that guard — can never reach a
+box that already exists. One startup check that states what should be there, compares it
+to what is, and names the gaps, plus the three fixes under it. Small, and it is the same
+argument the box preflight already makes.
+</details>
+
+### ~~R23. Stamp a tool result when the result arrives~~ — shipped (`f883d7f`)
+The `blocks` entry says when the model asked, the `results` entry when the answers were
+in. No format change; the existing field started telling the truth.
+
+<details><summary>original entry</summary>
+
+The `blocks` entry and its `results` entry carry an identical timestamp, because both are
+written when the exchange is appended. So all 172 tool batches on disk derive a duration of
+0.00s and the transcript records *when a pair was written*, not *how long anything took*.
+That is the gap the `--sync` click bug fell through: it never failed, it returned success
+in fifteen seconds, and a pass/fail suite cannot see that by construction. **One line**,
+and the dead records become a latency surface. Smallest item on this page and the
+prerequisite for R24.
+</details>
+
+### R24. A run has to say which model and which code produced it
+Every transcript entry carries `at, blocks, causedBy, covers, kind, role, text`. `causedBy`
+and `covers` are more than the reference asks for — but nothing records the model, the
+harness version, or the code SHA, and the assembled prompt is never stored. So "did this
+regression start the day we swapped the model" and "how long was the context when it got
+confused" are both unanswerable from our own records, while "how often did this tool return
+an empty result" is answerable and was answered. Small; needs a decision about where the
+prompt hash lives, not a subsystem.
+
+### ~~R19. Host-initiated exec, marked as such~~ — shipped (`0d4fcba`)
+`ExecRequest.actor` labels who asked, and boxd logs every command with it. The gap
+turned out to be larger than the entry said: nothing logged exec *at all*, so the one
+endpoint where "who did that" matters most was the one that could not answer. Untrusted
+by construction — evidence about our own callers, not proof about a stranger — and
+`unlabelled` rather than a guess when absent.
 
 ### ~~R20. Spill what pruning removes~~ — shipped
 <details><summary>original entry</summary>
@@ -119,6 +195,18 @@ bind `{memory, files, secrets, tools, sandbox, schedule}` into one grantable bou
 so "this agent, in this project scope" is a single authorization rather than five
 separate settings. The framework's largest remaining object. Medium-large; design
 first, because the boundary shape is the whole decision.
+
+**And it inherited a requirement from R7's review.** The only thing that would actually
+keep a credential out of the record is a **capability proxy**: the host performs the
+privileged operation and the model never holds the value. Today's `RunOnHost` is the
+gesture without the enforcement — it injects a real secret into a child process, and an
+approved command can print it straight back into a tool result. The vault is honest that
+it refuses the in-box case; it does not, and cannot as built, prove the value stays out of
+the *record*.
+
+So `secrets` in the list above is not "which secrets may this scope name". It is **which
+operations may this scope perform with a secret it never sees** — a different and larger
+object than a grant, and the reason the boundary shape really is the whole decision.
 
 ### ~~R5. Provider per agent~~ — shipped
 <details><summary>original entry</summary>
@@ -174,6 +262,153 @@ boxd. Medium. Rider, nearly free: enrich the box toolchain (`ripgrep`, `gh`, `tm
 fall back to.
 </details>
 
+### R25. What identifies a conversation, finished
+The adversarial review of 2026-08-25 raised six findings; the top one was fixed and the
+rest were recorded and not acted on. They are still true:
+
+- **P2P conversations are unbounded.** Group messages are keyed on `root_id ?? message_id`,
+  but `feishu.ts` still returns `feishu:${chatId}` for `p2p` — so a direct chat running for
+  weeks is one growing history, which is the problem thread-scoping was built to fix.
+- **A derived key is not a record.** `conversationIdFor`, `scopes.boundTo` and the web
+  server's `digestFor` each re-derive identity by string prefix, so three places have to
+  agree and a chat id that is a prefix of another collides. An explicit conversation record
+  ends the class.
+- **317 records are unreachable.** `feishu-oc_…5ec315f91c2e4a19.jsonl`, the chat-level file
+  written before threading, cannot be addressed by any key the system now produces. Migrate
+  it or declare it archived — either is fine; leaving it is the thing that is not.
+
+Medium. This is the decision that was implemented three times, so per docs/13 it goes to
+review before the fourth.
+
+### R26. Skills you can install, not only write
+Four unrelated projects ship the same artifact — a directory with `SKILL.md`, `scripts/`,
+`references/`, installed by copying into the host's skills folder — and **our format is
+already that**, which makes the ecosystem directly consumable. Nothing in the repository
+can consume it: four bundled starters, agent-authored skills, and no path in from outside.
+`openkitty` settles the question that creates: `external_skills` is an ordered list and
+your own directory wins. Small-medium, and it is the honest version of R21's import half.
+
+Rider, and the reason not to over-invest: a skill that encodes *how this installation
+works* cannot be baked into anyone's weights, and one that teaches a general method can.
+Build the first kind; borrow the second and expect to delete it.
+
+### R27. Evidence attached to the belief
+Two unrelated sources arrive at the same mechanism: OpenWiki stores each claim with the
+*versioned evidence* that supports it, so staleness is a deterministic diff with no model
+calls and "stale" means unverified rather than wrong; and the subagent-depth argument says
+a high-influence artifact should travel with its original evidence, or every handoff
+hardens a mistake into an assumption. Stale knowledge and propagated error are the same
+failure at different times, and one mechanism serves both.
+
+Our memory decays on *age*, which is a proxy that gets both cases wrong — how someone likes
+to be addressed is as true in November as in August; which port the box listens on can be
+false in an hour. **Start with the subset whose evidence is a file in the box**, because
+that is the only kind we can version cleanly; a claims runtime over unversionable evidence
+is bookkeeping. Medium; design first.
+
+### R28. Turn the observed failures into eval cases — first third landed
+`4bf2a77`: the memory sentinel is now matched by letters rather than exactly (the stored
+`(NOTHING)` removed, the next one impossible), and the Seltz failure is a golden task —
+`empty-is-not-an-answer`, an empty directory the prompt insists holds notes, graded on
+having actually looked and then on reporting absence without describing features. Passed
+live on its first run. Remaining: process invariants, trigger evals (waits on R26), the
+memory ablation, and the seventeen-tasks-versus-traffic comparison.
+"If your eval doesn't include the failure modes you've seen in the wild, it's a vanity
+scorecard" — and docs/14 is a list of failure modes seen in the wild, none of which is a
+case in the suite: an empty search result plus a wrong domain, a sentinel string stored as
+a memory, an over-refusing contract, a click that succeeded in fifteen seconds. Three
+additions that are cheap once R23 lands:
+
+- **Process invariants**, checkable on every run rather than on the seventeen tasks we
+  wrote — "no unsafe writes", "did not answer from priors after an empty tool result".
+- **Trigger evals** for skills: does a skill fire when it should and stay quiet when it
+  should not. Irrelevant at four skills, the whole problem at a hundred, so it is R26's
+  dependency rather than a separate wish.
+- **An ablation** — redefined, because the obvious version measures the wrong thing.
+  `AGENTBOX_ABLATE=memory` exists (`prompt.ts`) and running the suite with it would show
+  no difference, for two reasons that took measuring to see. Golden runs in a fresh state
+  directory, so its memory is empty and removing it changes nothing. And more
+  fundamentally, **what is stored and what the suite grades are different dimensions**:
+
+  | what the 16 records hold | what golden grades |
+  |---|---|
+  | style — "answer in Chinese", "definition first, then context", "prefer tables" | is the number 36 |
+  | domain corrections — "100Gbps is often mistyped as 100GB", "DGX is a family, ask which SKU" | did the task reach the board |
+  | scepticism — "flag unverified specifics" | did it report the absence |
+
+  Almost all of it is about *how* to answer; the suite grades *what*. So the run would
+  come back flat, and flat would be read as "the memory layer is theatre" — a clean-looking
+  number from an experiment aimed at the wrong axis, which is worse than no experiment.
+
+  **The cost half is exact and worth having now: 16 records, 3,002 characters, ≈1,200
+  tokens injected into every single turn.**
+
+  The experiment that would answer it grades style with the `judge` that already exists —
+  is it in the user's language, is it structured, did it ask which baseline — over a set of
+  tasks written for that, which makes it the process-invariant work above rather than an
+  ablation.
+
+  And the cheaper question to answer first, because it can retire a whole layer: **2 of
+  the 16 are `fact` (deliberate, via `RememberFact`) and 14 are `note` (auto-extracted,
+  nobody vouched for them), and the notes are most of the 1,200 tokens.** Keep only the
+  facts and measure the style delta. If it barely moves, the note tier — extractor, decay,
+  budget — is scaffolding that can be deleted, and deleting it also settles the finding in
+  docs/14 that the memory which survives is the memory nobody vouched for.
+
+And the validation step that makes a suite trustworthy at all: our seventeen tasks were
+invented and have never been compared to real traffic. Both halves of that comparison are
+already on disk.
+
+### R31. One place to see what happened, and drill into it
+A requirement that grew out of a day of work rather than out of a comparison: **every
+question asked on 2026-08-26 was answered by writing a throwaway script.** How many
+memories, how many tool calls, what a batch of fetches cost, what is on the board, how
+long a turn took. Fifteen or so one-offs, none re-runnable, several wrong on the first
+attempt precisely because they were improvised. `agentbox scan-records` was the first one
+promoted into the tree, on the principle that **a number nobody can re-run is a claim**;
+this entry is that principle applied to the rest.
+
+What is wanted is concrete: a daily view, and the ability to drill from it into one task —
+its execution, its artifacts, its rounds, its token and cost consumption. Over time, the
+thing decisions get made from.
+
+**The data exists and cannot be joined.** Measured:
+
+| ledger | carries | lacks |
+|---|---|---|
+| `usage.jsonl` (562) | `agentId`, `at`, `round`, `seq`, `model`, input/output/cache tokens | **`turnId`, `conversation`, `taskId`** |
+| `tasks.jsonl` (143) | `id`, `status`, `history`, `requester`, `assigneeId`, `conversation` | **`turnId`** |
+| `turns.jsonl` (134) | `id`, `agentId`, `about`, `attempt`, `event` | — |
+| `activity` (511), `policy` (1209), `inbox` (136), `ingress` (48), `deliveries` (68) | their own events | a shared key |
+
+So a daily total is answerable today — 2026-08-25 cost 762,412 tokens, 08-26 cost 403,975,
+and Ada accounts for 1,783,693 of 1,822,631 — while **the thing actually asked for is
+not**: of 46 tasks on the board, zero can be costed. The only available join is "same
+agent, near in time", which is a guess rather than a total.
+
+**This is the same gap as [docs/16](16-long-work.md), seen from the reporting side.** The
+work graph is not only what makes a completion gate correct and an estimate honest; it is
+what makes the drill-down possible at all, because it is the missing id that ties a task to
+its turns to their tokens. Two requirements, one substrate — which is the argument for
+building the ledger before either.
+
+What this entry adds on its own, beyond the join:
+
+- **Artifacts as a first-class column.** "What did this task produce" currently means
+  reading a transcript. Files written, tasks settled, deliverables pushed — the same set
+  that [R28's churn detection](#) wants for `stateHash`, which is a second reason to
+  record them.
+- **Cost in money, not only tokens.** `usage` has `model` and `provider`, so a rate table
+  turns tokens into a number a person can act on. Without it, "403,975 tokens" is a
+  quantity nobody has intuition for.
+- **The admin view is a different question from the agent view.** The web UI answers
+  "what is this agent doing now". This answers "where did the month go" — different
+  audience, different time horizon, and the reason it is a separate surface rather than
+  another tab.
+
+Medium, and mostly assembly rather than invention: the ledgers are already append-only,
+replayable and on disk. What is missing is one id and one reader.
+
 ### R16. Webhook and event triggers
 Scheduled skills cover "every morning"; nothing covers "when the build breaks" or
 "when an external system pings". An HTTP ingress whose calls arrive as inbound
@@ -188,11 +423,14 @@ learned inside a project stays with it, is injected for whoever works there, and
 dies with it — the Scope object already exists as that boundary, so this is memory's
 third growth rather than a new subsystem. Medium.
 
-### R18. Finish the honest box — one of three done
-The version field is now compared (`BOXD_PROTOCOL`), and a box behind its host is refused
-by name. Two half-truths remain: uploads can still land half-written (no `.part` + rename),
-and failures still arrive as one undifferentiated result when refused / timed-out / crashed
-each have a different remedy. Small each.
+### ~~R18. Finish the honest box~~ — shipped, all three
+The version handshake (`BOXD_PROTOCOL`) landed with the upgrade work; the last two thirds
+landed 08-26 (`ccb0875`). Uploads write to a `.part` name and take the final name in one
+atomic rename — through an in-tree symlink the write goes to the resolved target, where
+the direct write went. And a failed box call now says which of four situations it is,
+with the remedy in the message because the reader is usually a model: refused (4xx) will
+be refused again unchanged; crashed (5xx) and timeout mean the effect is unknown, check
+before redoing; unreachable means nothing was delivered and retry is safe.
 
 ---
 
@@ -204,9 +442,36 @@ transcript; the volume backup now copies the browser profile too; and the browse
 tools mean an agent reads far more third-party text than it did. The browser snapshot
 redacts password fields, which is the narrowest possible version of this — a token in a URL,
 in a page body, or in a fetched API response still lands in the transcript in clear. An agent
-that reads a `.env` or a key puts it in its own history in clear. Needs a redaction
-design that does not also destroy legitimate content — the hard part is deciding what a
-secret looks like without a false positive eating a real answer. Large; design first.
+that reads a `.env` or a key puts it in its own history in clear.
+
+**Designed, reviewed, and the design's central claim did not survive.** The full account is
+[docs/15](15-secrets-in-the-record.md); what the roadmap needs to carry is that this entry's
+own framing was wrong. It asked for "a redaction design that does not destroy legitimate
+content", and the measurement — now reproducible as `agentbox scan-records` — says the
+detection half of that has no true positives to find on our records and only false ones:
+two matches over 1.8 MB, a Chinese search term in a URL parameter named `key` and a snippet
+demonstrating reading a key from the environment.
+
+What the adversarial review then established, and this entry now inherits:
+
+- **Redaction at storage is at-rest hygiene, not containment.** `turn.ts` stores the
+  redacted copy and pushes the raw results to the model on the next line; the model can
+  re-emit the value base64'd, split, or quoted, and that lands verbatim. Worth doing,
+  worth not overclaiming.
+- **Containment needs a capability proxy**, where the host performs the privileged
+  operation and the model never holds the credential. That is not a redaction feature. It
+  is the shape `RunOnHost` gestures at and does not enforce — a `RunOnHost` command can
+  simply print the value it was given — and it belongs with **R4's Scope growth**, which
+  is the object that would own it.
+- **A path list cannot police credential files while `bash` exists.** `~/.config/gh/hosts.yml`
+  matches no plausible glob, and the shell reads anything the uid can. Refusing to serve a
+  `.env` body through `read_file` is still worth having; calling it a boundary is not.
+
+Shipped from this pass rather than deferred with it: the record scanner and its CLI
+(`ec8bad1`), and the spool's three corrections — spill before durable truncation, a
+non-configurable spool path so the backup exclusion cannot be bypassed, and hourly reaping
+(`79112a0`). Remaining work is large and now correctly named: **at-rest hygiene here, and
+containment under R4.**
 
 ### R8. Per-step checkpoint and resume of side effects
 The oldest deferral. Today a turn interrupted mid-batch resumes by re-reading its
@@ -216,6 +481,23 @@ never written is still declared unknown rather than completed. The reference des
 a write-ahead intent record per effect plus provisioned ids (pi harness-v2 §5–7). Large.
 The current coarse-boundary approach is honest and tested; this is an upgrade, not a
 fix, which is why it has waited.
+
+**Two boundary conditions worth stealing separately, and much cheaper.** FrontierAgent's
+mid-run steering (`apodex/steer.py`, `observers.py`) is, despite its marketing, only
+"queue typed lines and inject them as the next user message at a turn boundary" — it
+credits Claude Code and kimi for the pattern, and there is no dependency analysis or
+partial recomputation anywhere in it. But two conditions around the injection are real
+engineering we do not have:
+
+- **Do not inject on a turn that made no tool calls.** The model is finishing; an injected
+  message there leaves a dangling user turn on a loop about to stop.
+- **Wake an idle coordinator when an instruction arrives.** Their fan-in can park a
+  coordinator for minutes waiting on sub-agents; steering wakes it instead of waiting out
+  a timeout. Our `Fork` join has exactly that shape, and nothing can currently interrupt it.
+
+Both are small and neither depends on the write-ahead design, so they need not wait for it.
+Recorded here rather than in a new entry because they are the same subject: what a turn is
+allowed to do at a boundary it did not choose.
 
 ### ~~R9. Auto-review as a state machine~~ — shipped
 <details><summary>original entry</summary>
@@ -233,6 +515,239 @@ identity headers blindly (S-4), and the control-plane key not sitting beside its
 database (S-6). Large. The current single-operator model does not need these, and doing
 them speculatively is the over-engineering the whole project avoids.
 
+### R29. The box has no MCP, and a preset has no MCP face
+MCP servers are host child processes over stdio — the right default, and the reason a
+secret never enters the box. The consequence is that **anything running inside the box has
+no external tools at all**, including a delegated preset engine, and `presets.ts` names
+five faces (packaging, interface, skills, metering, acceptance) with no MCP among them. So
+a preset ships instructions without the ground truth that makes them checkable, which is
+the eyeballing failure under another name: a skill says *how*, an MCP is what lets an agent
+verify instead of assume.
+
+The seam exists and is already proven in shape — presets point model traffic at a relay so
+the key stays outside the box; tool calls could travel the same way, with the host holding
+the credential and the call landing in the same transcript and policy gate. Large, and it
+crosses two components that each already work, which is exactly the class docs/13 sends to
+hostile review **before** it is built.
+
+### R30. Coordination as protocol, before agent count grows
+A survey of eight 2026 papers says a multiagent design must use a condition a single agent
+lacks or it is a more expensive single agent. We pass on three counts — different private
+context, different permissions, different owners — and `Fork` clears only one, which is a
+constraint on new fan-out rather than a defence of what exists.
+
+The scale results are the part to act on. Communication does not become coordination;
+letting agents talk cut action conflicts and *lowered* task success; teams average the
+expert away; simultaneous resource competition deadlocked at 90–100%. Our orchestrator says
+orchestration is "emergent, not encoded" and `claims.ts` says its lease is advisory. Both
+are honest, both are fine at two agents, and both are the configuration those papers
+degrade. What has to exist before the count grows:
+
+| mechanism | ours |
+|---|---|
+| locks and leases | `claims.ts`, `DisplayLease` — advisory |
+| state versions | `files.ts` — present |
+| idempotent operations | partial (`deliveries`, `ingress` replay) |
+| commit protocol | none |
+| resource ordering | none |
+| **termination detection** | **none** |
+
+Termination detection is the one that keeps recurring: our loops stop when a model says
+they are done, where the reference stops when two independent checks agree on the same
+artifact. `DisplayLease` is the concrete place to look first for the deadlock result — a
+scarce resource that several agents contend for is precisely the measured setting. Large;
+a dependency of the multi-person direction rather than a parallel track.
+
+**A worked implementation exists and it is small.** FrontierAgent (ApodexAI, Apache-2.0,
+read at `~/sdcard/source/FrontierAgent`) gates submission in code, in one function —
+`plugins/tools/finalize_answer.py`:
+
+> Checks (in order): empty answer (blocks) · sub-agents created but never assigned
+> (WARN-only, never blocks) · **task-board items still open/in_progress (blocks)** ·
+> (Planning Mode) solo submission (blocks) · (Planning Mode) **answer not independently
+> verified (blocks)**.
+
+Two things to take, neither of which is code to copy:
+
+1. **A board with an unresolved item refuses the answer.** That is termination detection,
+   and the reason it works is the detail in its own docstring: the gate is "identical
+   regardless of HOW the agent signals done" — one implementation behind both the explicit
+   finish tool *and* the bare-text terminator. A gate on one exit is a gate on no exits.
+   Our board already carries the states this needs; nothing consults them at the end of a
+   turn.
+2. **Be precise about what such a gate buys.** Theirs checks that a verifier *ran*, not
+   that it *approved* — nothing in that file reads a verdict. So it enforces "somebody
+   independent looked", which is weaker than legal-skills' "two examiners cleared the same
+   version" and much stronger than nothing. Worth implementing as the first, and worth not
+   describing as the second.
+
+And one mechanism from the same repo that answers a question this entry did not think to
+ask: **who guarantees the independent check is independent?** In `create_subagent`, any
+sub-agent whose name contains `verifier` is force-fed a verifier prompt and *the caller's
+own `system_prompt` for it is ignored*. The coordinator therefore cannot write itself a
+compliant reviewer — the harness owns the reviewer's identity, and the caller only chooses
+to have one.
+
+We already hold the equivalent property in one place and not the other. `golden.ts` runs
+its judge on a different provider on the stated grounds that a model should not grade
+itself. `Fork` has no such notion: the parent writes each child's brief, so a
+parent-spawned "checker" is whatever the parent said it is. If a verify-fork is ever added,
+the identity of the verifier has to come from the harness, or the check is the parent
+marking its own work with extra steps.
+
+### The gate has a 1980 solution, and the board predicate is not it
+
+The objection that has to be answered before building any of this: **a gate that blocks on
+"is there unresolved work" can livelock, because working is what produces unresolved
+work.** Done badly it is a system arguing with itself and never finishing.
+
+This is *termination detection*, and it was solved by
+[Dijkstra and Scholten in 1980](https://www.cs.utexas.edu/~EWD/transcriptions/EWD06xx/EWD687a.html)
+for exactly our shape — an initiator that dispatches work, nodes that may dispatch further,
+and the question of how the initiator knows the whole thing is over. The protocol runs
+along the spawn tree: a node joins as a child of whoever first messaged it, acknowledges
+every later message immediately, and returns *that first* acknowledgement only once it is
+idle **and** has no outstanding acknowledgements of its own. The initiator declares
+termination when it is idle with none outstanding. Nodes are explicitly allowed to go
+active again mid-computation, which is the discover-more-work case.
+
+The difference from FrontierAgent's gate is the whole point:
+
+| | what it checks | property |
+|---|---|---|
+| board predicate | "is anything open right now" | **global and non-monotone** — anyone can make it true again, at any time |
+| Dijkstra–Scholten | outstanding acknowledgements along the tree | **structural** — a child's new work increments its own parent's count, which is that parent's own act rather than a predicate being flipped underneath it |
+
+**`Fork` is already a spawn tree.** Parent dispatches, children report. So this needs a
+counter and a rule, not an architecture: each outstanding fork is one unacknowledged
+child, and a parent may finish only when idle with a count of zero.
+
+### And the semantic half must never be the only authority
+
+[LoopTrap](https://arxiv.org/html/2605.05846v1) demonstrates *termination poisoning*:
+injecting content into what an agent reads — a page, a document, an API response — to
+corrupt the progress signals it uses to judge completion, so it never terminates. Its
+authors note this is stealthier than resource exhaustion because the agent **genuinely
+believes the task is unfinished**. Anything we build where a model's judgement of "am I
+done" is the sole gate is attackable through every tool that reads the outside world,
+which is most of them.
+
+So the design is three layers, and the ranking between them is not negotiable:
+
+1. **Structural** — no agent has outstanding work. Dijkstra–Scholten-shaped, provable,
+   unattackable by content because it never reads any.
+2. **Semantic** — the work is actually right. Verifier agents, consensus, quality. This is
+   the layer that catches wrong answers and the layer an attacker owns; it may refuse to
+   finish and must never be what *permits* finishing on its own.
+3. **Budget** — tokens, wall clock, spawn depth. Crude, and the only one that terminates
+   unconditionally. It exists because the first two can both be wrong at once.
+
+Empirical support for caring: a
+[trace-observability study on GAIA](https://arxiv.org/html/2606.01365v1) classifies
+tool-using multi-agent failures and finds the deeper levels dominated by repeated-action
+loops and max-step termination — the most common real failure is the termination judgement
+itself, not the work.
+
+### What the gate says while it is closed
+
+A gate that is honest and silent reproduces the experience reported of Apodex: more
+trustworthy, and an afternoon with no answer. In a research console that is acceptable;
+in a chat where somebody asked one question it is not.
+
+The answer falls out of layer 1 rather than needing a design of its own: **the count is
+the message.** Not "still working" — "two of three sub-questions settled, waiting on the
+evidence check". That number *is* the termination condition, so reporting it is free and
+cannot drift from the truth the way a progress estimate does. The task card already
+updates in place and is the surface for it.
+
+Per [docs/13](13-design-review.md) this went to hostile review before being built.
+
+### The review came back and layer 1 does not survive as scoped
+
+Three findings rated fatal, all verified against the code. **This is the entry's own
+correction, kept rather than rewritten, because the wrong version is the useful record.**
+
+**1. There is no durable fork edge to count.** `Fork` injects each brief through
+`sendFromUser`; the child queue is marked started before the turn ledger begins, and the
+parent's tool-use blocks are appended only after the whole batch returns. Die in that
+window and the child is invisible to both inbox recovery and turn recovery, with nothing
+linking it to the parent. A persisted counter hangs at one; a process-local counter resets
+to zero and permits early completion. Both crash orders for a separate acknowledgement
+write are unrecoverable without a commit protocol. `rescue.ts` rescues board tasks, not
+forks, edges or counts.
+
+**2. A scalar acknowledgement cannot tell success from terminal failure.** A fork whose
+child times out or throws comes back as `--- fork N FAILED ---` inside a tool result that
+is *not* an error, and the parent then answers and the task closes `done` — which
+`fork.test.ts` asserts today. Decrement on failure and the gate finishes early with work
+missing; do not, and it hangs. **Early completion is the worse half**, because it is
+exactly the wrong-still-looks-correct shape docs/13 exists for. The states needed are at
+least `pending | running | succeeded | failed | unknown | abandoned`, and failure has to be
+an explicit obligation rather than a settlement.
+
+**3. `Fork` is a one-level star, and the real work graph is a DAG with detached work.**
+Children are *forbidden* from forking (the tool refuses a conversation already under
+`fork/`), so depth is exactly one. Meanwhile work escapes the star in four ways the count
+would never see: `SendToAgent` returns immediately while the teammate runs on; the bus
+batches two senders into one turn, making a merge node rather than a unique-parent tree
+node; `bash --background` and `Delegate` return a job id and outlive everybody; and a
+scheduled skill enters through `orchestrator.prompt()` as an independent turn.
+
+So **"Fork is already a spawn tree, this needs a counter and a rule" was wrong**, and it
+was the load-bearing claim.
+
+### What the review says survives
+
+- The **critique of the board predicate** — mutable, advisory, not consulted at completion,
+  and not a stable causal termination condition.
+- **Dijkstra–Scholten's shape**, for a closed and reliably accounted computation. What the
+  repository does not supply is the reliable message protocol, the stable root, and the
+  durable graph it assumes. The algorithm can sit on that protocol; it cannot replace it.
+- **Semantic verification as a veto and never the sole permit** — with the harness owning
+  the verifier's identity and provider, and a verdict bound to an artifact version. Fork
+  does neither today.
+- **A hard budget as fail-safe**, persistent, enforced before spawn across total
+  descendants, wall time and spend. Reaching it means *stopped incomplete*, not *finished*.
+- **Mandatory completion accounting can coexist** with advisory claims and model-driven
+  routing, once routing decisions are distinguished from encoded protocol invariants.
+
+### Ten claims this document made about our own code, and what is true
+
+Recorded because the pattern matters more than any single one: **every one of these was
+written from a module comment or a memory of the design rather than from the code.**
+
+| claimed | actually |
+|---|---|
+| agents have different owners, so we pass the multi-agent bar | `ownerUserId` is optional; default agents have none. Ownership diversity is *supported*, not guaranteed |
+| `DisplayLease` is advisory | it is **enforced** — a second agent is refused. No TTL, so it is closer to an in-memory mutex than a lease |
+| `DisplayLease` is the deadlock case to look at | it never waits or queues, so it cannot deadlock. Retrying models may livelock or starve, which is a different thing |
+| termination detection: none | `AgentBus.idle()` already detects in-process quiescence and `settle()` is called in production. What is missing is a *submission gate*, not the predicate |
+| our loops stop when a model says so | they also stop on budget refusal, model refusal, abort, provider failure, repeated-call detection, and round limits |
+| `golden.ts` judges on a different provider | `resolveSummaryProvider` may return the same provider and model; only Anthropic has a cheaper-model mapping. **Independence is configurable, not guaranteed** |
+| `deliveries`/`ingress` show idempotent operations | they are replayable ledgers. On the live path delivery debt is closed *before* the reply is sent, so a crash between loses it |
+| the task card is a general progress surface | only adapters implementing both card methods get one; plain chats get none, and fork-child events are filtered out |
+
+And one the review found on its own: **`activeAgentIds()` is already broken.** Worker keys
+use a NUL delimiter and the helper searches for a space, so `indexOf(" ")` returns −1 and
+it yields a truncated composite key instead of an agent id. Web deletion can miss an active
+agent today, and this helper cannot back a completion gate.
+
+### Where that leaves R30
+
+The gate is **not** the next thing to build. What comes first is the protocol underneath
+it: durable fork ids, parent turn ids, child conversation ids, terminal states, idempotent
+acknowledgement, and restart reconciliation. Until that exists, a completion gate would be
+a counter over a graph that is not recorded — which is the same failure as the board
+predicate, wearing a proof.
+
+**Designed in [docs/16](16-long-work.md)**, together with the two questions that turn out
+to share its substrate: what long work costs, and how it stops when it is going nowhere.
+The single obligation ledger answers all three, because an estimate needs a shape to
+estimate over and a gate needs a graph to count. The document also records the finding
+that made the cost question urgent: `AGENTBOX_BUDGET_TOKENS` is unset, `config.json` has
+no policy block, and `policy.test.ts` asserts that the default is `undefined` — **the
+spend ceiling is built, tested, and switched off**, so the worst case is unbounded.
+
 ### R21. Agent and skill bundles: export and import
 A team's agent (profile, skills, scope shape — never its memories or secrets) packaged
 as a file another installation can import. The sharing unit people actually want, and
@@ -243,23 +758,40 @@ Large-ish; design the boundary (what travels, what never does) first.
 
 ---
 
-## What to do next, as of 2026-08-25
+## What to do next, as of 2026-08-26
 
-Ranked by the usual lens. The first three are small and close loops that are open *now*;
-the fourth is the one that has quietly grown into the biggest risk.
+Reranked after a pass over outside reading (docs/14) that produced one fixed production bug
+and several measurements of our own state. The new items win on the lens not because they
+matter more than R1 or R7, but because three of them are one line to a day each and every
+one of them makes the *next* problem findable.
 
-1. **R1, the composer.** A reply typed while reading a Telegram thread lands in the team
-   room. It is a small fix and it is wrong in the way users notice and remember.
-2. **R18's remaining two thirds.** Atomic uploads and differentiated failures. Small,
-   and they are the difference between a box that reports what happened and one that
-   reports that something happened.
-3. **R19, the exec marker.** Host housekeeping walks the agent's audit surface, so the
-   log cannot say who acted.
-4. **R7, secret redaction.** This has moved up on its own without anyone touching it: the
-   web and browser tools mean an agent now reads far more text written by other people,
-   and every token in a URL or an API response lands in the transcript in clear. Still
-   needs design before code — the hard part remains deciding what a secret looks like
-   without a false positive eating a real answer.
+1. ~~**R23, stamp the tool result.**~~ Shipped (`f883d7f`).
+2. ~~**R22, say what is missing.**~~ Shipped (`fe573a3`).
+3. ~~**R1, the composer.**~~ Shipped — see the entry. Its second half also landed the
+   first slice of R25 (the explicit conversation record), which shrinks that item.
+4. ~~**R18's remaining two thirds.**~~ Shipped (`ccb0875`).
+5. **R28's cheapest third.** The failure modes in docs/14 as eval cases. The suite passed
+   the Seltz refusal by luck and has no way to keep it.
+6. ~~**R19, the exec marker.**~~ Shipped (`0d4fcba`).
+7. **R7, secret redaction.** Designed and reviewed this pass; the design's central claim
+   did not survive and the entry now says so. Three pieces shipped (the reproducible
+   scanner, and the spool's three corrections), the detection half is measurably the wrong
+   approach on our records, and the part that would actually be containment moved to R4.
+   What remains under R7 is at-rest hygiene, correctly named and no longer overclaimed.
+
+Then the structural choice, which is a product decision rather than a ranking:
+**the multi-person direction** (rooms, group-as-interface, task-as-state, box-as-
+workstation). Everything under it — R4's Scope growth, R16's webhooks, R17's project
+memory, R21's bundles — is either a dependency of it or considerably easier after it. Two
+items now sit squarely on that path and did not before: **R25** (a conversation's identity,
+which is the object a room is made of) and **R30** (coordination as protocol, which is what
+stops being optional as the agent count grows).
+
+Three candidates recorded from reading and deliberately not promoted, because each needs a
+product decision rather than effort: compaction that keeps *why* a thing was decided and not
+only what; an inbound emoji reaction as a task trigger; and the briefing as a queue of
+decisions rather than a report of state — with the criterion the reading supplied, *you only
+want to know which agents need your attention*.
 
 Then the structural choice, which is a product decision rather than a ranking:
 **the multi-person direction** (rooms, group-as-interface, task-as-state, box-as-
@@ -274,6 +806,10 @@ how a bot holds a conversation with a room.
 Not on any tier, and worth stating: **the browser work has only met fixtures.** A real
 OAuth flow and a live payment iframe are where it will actually be tested, and neither
 has happened.
+
+One correction to carry: an earlier count in docs/14 said `WebSearch` had never been
+called. It was called twice and refused twice — a grep for `web_search` against a tool named
+`WebSearch`, which is the same wrong-name failure that started that document.
 
 ---
 
@@ -295,3 +831,18 @@ has happened.
 - **Image generation, video-review subagents, a WebAuthn bridge.** Real in the
   reference, but each is a product-shape decision waiting for a user who asks, not an
   architecture gap; recorded so they stop being rediscovered.
+- **Forking a running box.** Snapshot-and-branch sandboxes exist to serve post-training and
+  evaluation, where thousands of short-lived environments branch from a template. Ours is
+  one long-lived container per installation with a work volume that survives rebuilds — a
+  workstation, not a rollout. Revisit only if *branch my whole computer and try both*
+  becomes something a person asks for.
+- **A persistent X11 connection for computer use.** The published case for it measures a
+  move-plus-click at 146 ms; measured here it is 1–2 ms, so the optimisation buys nothing
+  — and it would *remove* two protections we currently get for free: the Xlib flush that a
+  process exit performs, without which a daemon can report a click that never reached the
+  screen, and the serialisation `DisplayLease` already provides against concurrent requests
+  sharing X11 input state. The real defect in that path was `--sync` on a no-op move, fixed
+  in `86b4985`.
+- **Buying a structured web index.** The join-shaped questions it serves are real, but MCP
+  client support means any such index is pluggable — which is precisely the reason not to
+  build one. Set the search key first (R22) and see what is still missing.

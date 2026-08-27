@@ -4,11 +4,12 @@
  */
 
 import { createInterface } from "node:readline/promises";
-import { existsSync, mkdtempSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { homedir, tmpdir } from "node:os";
 import {
+  BACKUP_CARRIES,
   BoxManager,
   defaultBoxConfig,
   loadBoxToken,
@@ -39,6 +40,7 @@ import {
   type ProviderProfile,
 } from "./host/provider.ts";
 import { applyConfigEnv, ensureConfigFile, loadConfig } from "./config.ts";
+import { describeAbsences } from "./host/absences.ts";
 import { startWebServer } from "./web/server.ts";
 
 const here = dirname(fileURLToPath(import.meta.url));
@@ -114,6 +116,7 @@ async function cmdBoxUp(argv: string[]): Promise<number> {
       out(dim(`Backing up volumes to ${destination} …`));
       try {
         for (const file of await manager.backupVolumes(destination)) out(dim(`  ${file}`));
+        out(dim(`  ${BACKUP_CARRIES}`));
       } catch (error) {
         // A failed backup stops the upgrade. The whole point of taking it here is that
         // the next step is the irreversible one.
@@ -398,7 +401,11 @@ async function cmdBoxExec(argv: string[]): Promise<number> {
   const manager = new BoxManager(boxConfig());
   const client = await manager.connect();
   const display = displayArg(argv);
-  const result = await client.exec(command, { display, owner: ownerFor(display) });
+  const result = await client.exec(command, {
+    display,
+    owner: ownerFor(display),
+    actor: "console:box-run",
+  });
   if (result.stdout) process.stdout.write(result.stdout);
   if (result.stderr) process.stderr.write(result.stderr);
   return result.exit_code;
@@ -645,6 +652,8 @@ async function cmdChat(argv: string[]): Promise<number> {
   }
 
   out(dim(`model: ${describeProvider(provider)}`));
+  // After applyConfigEnv, so a key set in config counts as present.
+  for (const line of describeAbsences()) out(dim(line));
 
   const box = await orchestrator.connectBox();
   out(box.connected ? dim(`box: ${box.detail}`) : dim(`box: unavailable — ${box.detail}`));
@@ -843,6 +852,8 @@ async function cmdWeb(argv: string[]): Promise<number> {
   out(dim(`model: ${describeProvider(provider)}`));
   // Written on first run so the settings are visible in an editor, not just in docs.
   out(dim(`config: ${ensureConfigFile()}`));
+  // After applyConfigEnv, so a key set in config counts as present.
+  for (const line of describeAbsences()) out(dim(line));
 
   try {
     await startWebServer({
@@ -905,6 +916,10 @@ State:
   backup [dir]              Snapshot ~/.agentbox without stopping anything.
                             Transcripts, memory, plans and skills are the only
                             things here that cannot be rebuilt.
+  scan-records              What credential-shaped text is in the records, and
+                            whether any value you hold appears verbatim. Values
+                            are compared, never printed. A pattern match is not
+                            a secret — each needs your verdict. See docs/15.
 
 Chat:
   chat [agent] [message]    Talk to an agent. Omit the message for a REPL,
@@ -1095,6 +1110,13 @@ async function main(): Promise<number> {
       const targets = names.length > 0 ? names : [undefined];
       let anyFail = false;
       for (const name of targets) {
+        // The env from config, applied before anything reads it. Without this the suite
+        // ran with no search key while the installation it is meant to represent had
+        // three, so a task about research behaviour was measuring a system nobody uses —
+        // and passed or failed for reasons that had nothing to do with the change under
+        // test. `chat` and `web` have always done this; golden was the one path that did
+        // not, which is the worst place for the omission to sit.
+        applyConfigEnv(loadConfig(() => {}));
         const profile = resolveProvider(name, loadConfig().provider);
         if (process.env[profile.keyEnv] === undefined) {
           err(`${profile.label}: needs ${profile.keyEnv}`);
@@ -1174,6 +1196,10 @@ async function main(): Promise<number> {
         let attempted = 0;
         const spendBefore = orchestrator.usage.totalsSince(0);
         for (const task of GOLDEN_TASKS) {
+          // `--only=id,id` narrows the run: the ordinary need after editing one task is
+          // to re-run that task, not to pay for seventeen others to find out.
+          const only = rest.find(argument => argument.startsWith("--only="))?.slice(7);
+          if (only !== undefined && !only.split(",").includes(task.id)) continue;
           if (task.needsBox === true && !boxReady) {
             out(`  · ${task.id.padEnd(12)} ${dim("needs a box (--box)")}`);
             continue;
@@ -1278,6 +1304,45 @@ async function main(): Promise<number> {
       out(`state:  ${agentboxHome()}`);
       out(`agents: ${defaultAgentsRoot()}`);
       return 0;
+
+    case "scan-records": {
+      // The measurement docs/15 turns on, as something anybody can re-run. The review's
+      // sharpest finding was that the original figure came from a script typed into a
+      // shell once and never kept, which makes it a claim rather than a measurement.
+      const { scanRecords, describeScan } = await import("./host/secret-scan.ts");
+      // Values are read here rather than through Vault, deliberately: `list()` omits
+      // values on purpose, and adding a value-enumeration API would open the surface the
+      // vault exists to keep closed. This runs on the operator's own machine, against
+      // their own files, at the same trust level as reading the config.
+      const held = new Map<string, string>();
+      const collect = (source: string, object: unknown, prefix = ""): void => {
+        if (object === null || typeof object !== "object") return;
+        for (const [key, value] of Object.entries(object as Record<string, unknown>)) {
+          if (typeof value === "string") held.set(`${source}${prefix}.${key}`, value);
+          else collect(source, value, `${prefix}.${key}`);
+        }
+      };
+      try {
+        collect("config", JSON.parse(readFileSync(join(agentboxHome(), "config.json"), "utf8")));
+      } catch {
+        // No config is an ordinary state, not a scan failure.
+      }
+      try {
+        const vault = JSON.parse(readFileSync(join(agentboxHome(), "vault.json"), "utf8")) as {
+          secrets?: { id?: unknown; value?: unknown }[];
+        };
+        for (const secret of vault.secrets ?? []) {
+          if (typeof secret?.id === "string" && typeof secret?.value === "string") {
+            held.set(`vault:${secret.id}`, secret.value);
+          }
+        }
+      } catch {
+        // Likewise.
+      }
+      out(dim(`${held.size} held value(s) to compare against; values are never printed`));
+      for (const line of describeScan(scanRecords(agentboxHome(), held))) out(line);
+      return 0;
+    }
 
     default:
       err(`Unknown command: ${command}`);

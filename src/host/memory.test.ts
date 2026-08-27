@@ -475,3 +475,24 @@ test("the selection prompt says that choosing nothing is allowed", () => {
   assert.match(prompt, /kept; you are not/);
   assert.match(prompt, /a fact/);
 });
+
+test("the sentinel is the sentinel however the model dresses it", () => {
+  // A model wrote "(NOTHING)" and the exact-match guards let it through: the extractor's
+  // own way of saying nothing-learned was stored as a thing it learned, and only a person
+  // reading the file could have found it (docs/14). Punctuation and casing must not
+  // smuggle it past; a sentence that merely contains the word must still be kept.
+  assert.deepEqual(parseExtraction("(NOTHING)", []), []);
+  assert.deepEqual(parseExtraction("**Nothing**", []), []);
+  assert.deepEqual(parseExtraction("- nothing.", []), []);
+  assert.equal(parseEpisode("( nothing )"), undefined);
+  // Line-level: a dressed sentinel among real notes is dropped, the notes are kept —
+  // including one that merely contains the word.
+  const kept = parseExtraction(
+    "User prefers tabs over spaces\n(nothing)\nNothing gets past their reviewer without a test",
+    []
+  );
+  assert.deepEqual(
+    kept.map(record => record.text),
+    ["User prefers tabs over spaces", "Nothing gets past their reviewer without a test"]
+  );
+});

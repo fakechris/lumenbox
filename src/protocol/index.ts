@@ -146,6 +146,21 @@ export interface ComputerResult {
   error?: string;
 }
 
+/**
+ * How much of a tool result survives in the transcript.
+ *
+ * Here, in the protocol, because two packages have to agree about it and did not. The
+ * host trims a stored result to this; the box decides when to spill full output to a
+ * file. Those numbers were set against *different* things — the spill was placed below
+ * the host's 20,000-character **display** cap, while the transcript keeps 2,000 — so a
+ * result between the two was shown to the model in full, stored as a 2 KB head, and
+ * given no spool pointer. Its tail was durably gone, and nothing said so.
+ *
+ * The rule that keeps them honest: **spill before anything durable is truncated.** A
+ * pointer that appears later than the truncation points at nothing.
+ */
+export const DURABLE_RESULT_CHARS = 2_000;
+
 export interface ExecRequest {
   command: string;
   /** Same as on a computer request: proof of ownership when a display is named. */
@@ -168,6 +183,21 @@ export interface ExecRequest {
    * turn, and `/jobs/*` is how anyone asks what became of it.
    */
   background?: boolean;
+  /**
+   * Who asked for this, for the record — an agent id, or what the host was doing.
+   *
+   * A label, never a bypass. It changes nothing about what runs, what is allowed, or
+   * who may call: the token is the access control and stays the access control. It
+   * exists because host housekeeping and an agent's own shell arrive on this one
+   * endpoint looking identical, so `mkdir` for a starter skill and `rm -rf` typed by a
+   * model were the same line in the box's log — and, until this landed, that line did
+   * not exist at all. A record that cannot say who acted answers the only question
+   * anybody asks it with a shrug.
+   *
+   * Untrusted by construction. Anything holding the token can write anything here, so
+   * it is evidence about *our* callers and not proof about a stranger's.
+   */
+  actor?: string;
 }
 
 /** What starting a background job answers with, instead of its output. */

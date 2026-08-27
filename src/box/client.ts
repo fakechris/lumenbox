@@ -35,10 +35,30 @@ export interface BoxClientOptions {
   timeoutMs?: number;
 }
 
+/**
+ * What kind of failure this was, because each has a different remedy:
+ *
+ *   - `refused` — the box answered and said no. The request or its authorization is
+ *     wrong, and sending it again unchanged will be refused again.
+ *   - `timeout` — no answer in time. The operation may still be running in the box, so
+ *     the honest next step is to check its effect, not to redo it.
+ *   - `crashed` — the box hit an internal error mid-request; the effect is unknown.
+ *     Check before redoing, same as a timeout.
+ *   - `unreachable` — the request never reached a box. Nothing was delivered, so a
+ *     retry is safe once the box is back (`agentbox box up`).
+ *   - `protocol` — the box answered something that is not the protocol, which usually
+ *     means a version skew the handshake has not caught yet.
+ *
+ * These used to arrive as one undifferentiated message, and the reader — model or
+ * person — had to guess which of three very different situations they were in.
+ */
+export type BoxFailure = "refused" | "timeout" | "crashed" | "unreachable" | "protocol";
+
 export class BoxError extends Error {
   constructor(
     message: string,
-    readonly status?: number
+    readonly status?: number,
+    readonly kind: BoxFailure = "protocol"
   ) {
     super(message);
     this.name = "BoxError";
@@ -111,23 +131,48 @@ export class BoxClient {
       } catch {
         throw new BoxError(
           `Box returned non-JSON on ${path} (HTTP ${response.status}): ${text.slice(0, 200)}`,
-          response.status
+          response.status,
+          "protocol"
         );
       }
 
       if (!response.ok) {
         const message =
           (parsed as { error?: string }).error ?? `HTTP ${response.status}`;
-        throw new BoxError(`${path}: ${message}`, response.status);
+        // A 4xx is the box saying no; a 5xx is the box breaking. The difference decides
+        // whether redoing the request is pointless or merely needs checking first.
+        if (response.status >= 500) {
+          throw new BoxError(
+            `${path}: ${message}. The box hit an internal error mid-request, so the ` +
+              `effect is unknown — check what happened before redoing it.`,
+            response.status,
+            "crashed"
+          );
+        }
+        throw new BoxError(
+          `${path}: ${message}. The box refused this; sending it again unchanged will ` +
+            `be refused again.`,
+          response.status,
+          "refused"
+        );
       }
       return parsed as T;
     } catch (error) {
       if (error instanceof BoxError) throw error;
       if (error instanceof Error && error.name === "AbortError") {
-        throw new BoxError(`${path} timed out after ${timeoutMs}ms`);
+        throw new BoxError(
+          `${path} timed out after ${timeoutMs}ms. The operation may still be running ` +
+            `in the box — check its effect before redoing it.`,
+          undefined,
+          "timeout"
+        );
       }
       throw new BoxError(
-        `${path} failed: ${error instanceof Error ? error.message : String(error)}`
+        `${path} could not reach the box: ` +
+          `${error instanceof Error ? error.message : String(error)}. Nothing was ` +
+          `delivered, so this is safe to retry once the box is back.`,
+        undefined,
+        "unreachable"
       );
     } finally {
       clearTimeout(timer);
@@ -190,6 +235,8 @@ export class BoxClient {
       session?: string;
       display?: number;
       owner?: string;
+      /** Who asked, for the box's record. A label, not a permission. */
+      actor?: string;
     } = {}
   ): Promise<ExecResult> {
     const commandTimeout = options.timeoutMs ?? 120_000;
@@ -202,6 +249,7 @@ export class BoxClient {
         session: options.session,
         display: options.display,
         owner: options.owner,
+        actor: options.actor,
       },
       // Give the HTTP layer headroom over the command's own timeout, so a
       // command that times out reports its output instead of aborting the request.

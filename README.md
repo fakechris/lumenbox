@@ -699,6 +699,26 @@ node dist/cli.js box logs --tail 50          # daemon and desktop startup
 node dist/cli.js agents                      # who exists
 ```
 
+## Where to read next
+
+The code is the reference; these are the arguments behind it.
+
+| | |
+|---|---|
+| [01–06](docs/) | requirements, product, architecture, design, data, deployment |
+| [07-review](docs/07-review.md) · [10-security-backlog](docs/10-security-backlog.md) | what was reviewed, and what is knowingly outstanding |
+| [11-roadmap](docs/11-roadmap.md) | everything deferred on purpose, ranked, with the measurement that put it there |
+| [12-upgrades](docs/12-upgrades.md) | how a running box is upgraded without losing anything |
+| [13-design-review](docs/13-design-review.md) | which decisions go to hostile review before they are built, and why |
+| [14-from-outside-reading](docs/14-from-outside-reading.md) | ideas taken from elsewhere, each with what it changed here |
+| [15-secrets-in-the-record](docs/15-secrets-in-the-record.md) | why redaction is at-rest hygiene and not containment |
+| [16-long-work](docs/16-long-work.md) | how long work finishes, what it costs, and how it stops |
+
+Two of those are designs whose central claim was killed by review, kept in their wrong
+form with the correction beside it. That is deliberate: a design document that only ever
+records what turned out to be right teaches nobody how the wrong version looked
+reasonable.
+
 ## What this does not do
 
 Documented rather than discovered later: no WebAuthn bridging into the box, no

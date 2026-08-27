@@ -163,6 +163,24 @@ function isContentRefusal(error: unknown): boolean {
   return /content|format|invalid|incorrect/i.test(detail);
 }
 
+/**
+ * A chatKey split into the room and, when the key names one, the topic thread in it.
+ *
+ * `feishu:{chatId}` addresses the room; `feishu:{chatId}:{rootId}` addresses one topic
+ * inside it — the shape `conversationKeyFor` mints. Every outbound path needs both halves
+ * and each used to parse the key itself, which is how `sendFile` and `sendImage` were
+ * left behind when the thread-scoped form arrived: they kept treating the whole thing as
+ * a chat id, so a file answering a message in a topic was uploaded and then posted to a
+ * chat id that does not exist. The reporter noticed it as "it used to send the file
+ * itself, now it just tells me the path".
+ *
+ * One parser, so there is no next one to forget.
+ */
+export function splitChatKey(chatKey: string): { chatId: string; rootId?: string } {
+  const [chatId = "", rootId] = chatKey.replace(/^feishu:/, "").split(":");
+  return rootId === undefined || rootId === "" ? { chatId } : { chatId, rootId };
+}
+
 export class FeishuChannel implements ChannelAdapter {
   readonly name = "feishu";
   // Typed loosely because the SDK is a lazy import; the surface used is tiny.
@@ -668,6 +686,37 @@ export class FeishuChannel implements ChannelAdapter {
     this.releaseLock?.();
   }
 
+  /**
+   * Reaches Feishu over HTTPS, deliberately not over the event socket.
+   *
+   * The socket is the thing in doubt, and the SDK exposes neither its state nor a close
+   * hook — so this asks the vendor for a tenant token instead, which needs only the
+   * credentials. A success here alongside a long silence is the signal that was missing
+   * the day the socket died quietly: the account is fine and nothing is listening.
+   */
+  async probe(): Promise<string | undefined> {
+    const host =
+      process.env.FEISHU_DOMAIN === "lark" ? "open.larksuite.com" : "open.feishu.cn";
+    try {
+      const response = await fetch(
+        `https://${host}/open-apis/auth/v3/tenant_access_token/internal`,
+        {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ app_id: this.appId, app_secret: this.appSecret }),
+          signal: AbortSignal.timeout(15_000),
+        }
+      );
+      if (!response.ok) return `HTTP ${response.status}`;
+      const payload = (await response.json()) as { code?: number; msg?: string };
+      // Feishu answers 200 with a non-zero code for a refused credential, so the status
+      // alone would report a revoked app as healthy.
+      return payload.code === 0 ? undefined : `${payload.msg ?? "refused"} (code ${payload.code})`;
+    } catch (error) {
+      return error instanceof Error ? error.message : String(error);
+    }
+  }
+
   async send(identity: string, text: string): Promise<void> {
     const chatId = this.chats.get(identity);
     if (chatId === undefined || this.apiClient === undefined) return;
@@ -797,8 +846,14 @@ export class FeishuChannel implements ChannelAdapter {
    * while the task ran, and the answer belongs to the room that asked.
    */
   async sendToChat(chatKey: string, text: string, options?: PushOptions): Promise<void> {
-    const chatId = chatKey.replace(/^feishu:/, "");
+    // `feishu:{chatId}` addresses the room; `feishu:{chatId}:{rootId}` addresses one
+    // topic thread inside it — the shape conversationKeyFor mints. A push to a thread
+    // key rides as a reply to the root, so it lands where the topic's readers are
+    // rather than at the bottom of the room. An explicit replyTo still wins: it is a
+    // more precise anchor inside the same thread.
+    const { chatId, rootId } = splitChatKey(chatKey);
     if (chatId === "") return;
+    const anchor = options?.replyTo ?? rootId;
     // Markdown or plain is decided once for the whole message: per-chunk decisions
     // would render a long message's plain halves with literal ** markers.
     const markdown = looksLikeMarkdown(text);
@@ -807,7 +862,7 @@ export class FeishuChannel implements ChannelAdapter {
       const chunk = text.slice(at, at + FeishuChannel.CHUNK);
       if (markdown && !degraded) {
         try {
-          await this.post(chatId, "post", markdownPost(chunk), options?.replyTo);
+          await this.post(chatId, "post", markdownPost(chunk), anchor);
           continue;
         } catch (error) {
           // A refused post is about the formatting; the words still deserve
@@ -816,7 +871,7 @@ export class FeishuChannel implements ChannelAdapter {
           degraded = true;
         }
       }
-      await this.post(chatId, "text", JSON.stringify({ text: chunk }), options?.replyTo);
+      await this.post(chatId, "text", JSON.stringify({ text: chunk }), anchor);
     }
   }
 
@@ -825,9 +880,15 @@ export class FeishuChannel implements ChannelAdapter {
     card: TaskCardState,
     options?: PushOptions
   ): Promise<string | undefined> {
-    const chatId = chatKey.replace(/^feishu:/, "");
+    // Same key shapes as sendToChat: a card for a topic thread anchors to its root.
+    const { chatId, rootId } = splitChatKey(chatKey);
     if (chatId === "") return undefined;
-    return this.post(chatId, "interactive", JSON.stringify(renderCard(card)), options?.replyTo);
+    return this.post(
+      chatId,
+      "interactive",
+      JSON.stringify(renderCard(card)),
+      options?.replyTo ?? rootId
+    );
   }
 
   /**
@@ -899,7 +960,7 @@ export class FeishuChannel implements ChannelAdapter {
     base64: string,
     options?: PushOptions
   ): Promise<void> {
-    const chatId = chatKey.replace(/^feishu:/, "");
+    const { chatId, rootId } = splitChatKey(chatKey);
     if (chatId === "" || this.apiClient === undefined) return;
     const extension = name.toLowerCase().split(".").pop() ?? "";
     const fileType = ["pdf", "doc", "docx", "xls", "xlsx", "ppt", "pptx", "mp4", "opus"].includes(
@@ -918,18 +979,18 @@ export class FeishuChannel implements ChannelAdapter {
     });
     const fileKey = uploaded?.file_key ?? uploaded?.data?.file_key;
     if (fileKey === undefined) throw new Error("feishu file upload returned no key");
-    await this.post(chatId, "file", JSON.stringify({ file_key: fileKey }), options?.replyTo);
+    await this.post(chatId, "file", JSON.stringify({ file_key: fileKey }), options?.replyTo ?? rootId);
   }
 
   /** Upload, then reference: Feishu takes bytes first and a key in the message. */
   async sendImage(chatKey: string, base64: string, options?: PushOptions): Promise<void> {
-    const chatId = chatKey.replace(/^feishu:/, "");
+    const { chatId, rootId } = splitChatKey(chatKey);
     if (chatId === "" || this.apiClient === undefined) return;
     const uploaded = await this.apiClient.im.image.create({
       data: { image_type: "message", image: Buffer.from(base64, "base64") },
     });
     const imageKey = uploaded?.image_key ?? uploaded?.data?.image_key;
     if (imageKey === undefined) throw new Error("feishu image upload returned no key");
-    await this.post(chatId, "image", JSON.stringify({ image_key: imageKey }), options?.replyTo);
+    await this.post(chatId, "image", JSON.stringify({ image_key: imageKey }), options?.replyTo ?? rootId);
   }
 }

@@ -19,7 +19,13 @@ import { AgentRegistry } from "../agents/registry.ts";
 import { AgentBus } from "../agents/bus.ts";
 import type { BoxClient } from "../box/client.ts";
 import { DisplayLease } from "../box/display-lease.ts";
-import { isTruncatedByContext, runTurn, TurnAborted, type TranscriptEntry } from "./turn.ts";
+import {
+  isTruncatedByContext,
+  runTurn,
+  storableResult,
+  TurnAborted,
+  type TranscriptEntry,
+} from "./turn.ts";
 import {
   compactionUrgency,
   DEFAULT_POLICY,
@@ -2242,4 +2248,77 @@ test("an ordinary (non-resumed) turn never replays a trailing batch", async () =
   } finally {
     cleanup();
   }
+});
+
+test("the transcript records when a tool batch started and when its results were in", async () => {
+  // Both entries used to share one timestamp taken after the tools ran, so every duration
+  // on disk derived to zero -- and a defect that succeeds slowly (a click that took
+  // fifteen seconds to land) was invisible to any reading of the transcript.
+  const { registry, cleanup } = fixture();
+  try {
+    const ada = registry.create({ name: "Ada" });
+    const bus = new AgentBus(registry, async () => {});
+    const slowBox = {
+      computer: async () => {
+        await new Promise(resolve => setTimeout(resolve, 25));
+        return {
+          success: true,
+          screenshot: Buffer.from("fake-webp-bytes").toString("base64"),
+          action_count: 1,
+          duration_ms: 25,
+          cursor_position: { x: 1, y: 2 },
+        };
+      },
+    } as unknown as BoxClient;
+
+    const { client } = stubClient(
+      [
+        message([toolUseBlock("computer", { actions: [{ action: "screenshot" }] })], "tool_use"),
+        message([textBlock("Done.")]),
+      ],
+      { params: [] }
+    );
+
+    await runTurn(
+      ada,
+      [{ id: "m-test", fromId: "user", fromName: "user", text: "look", priority: false, receivedAt: "" }],
+      new AbortController().signal,
+      { client, registry, bus, box: slowBox, resolution: undefined }
+    );
+
+    const transcript = registry.readTranscript(ada.id) as TranscriptEntry[];
+    const blocks = transcript.find(entry => "kind" in entry && entry.kind === "blocks");
+    const results = transcript.find(entry => "kind" in entry && entry.kind === "results");
+    assert.ok(blocks && results, "the exchange must be persisted");
+    const elapsed = Date.parse(results.at!) - Date.parse(blocks.at!);
+    assert.ok(
+      elapsed >= 20,
+      `results.at - blocks.at should cover the tool's ~25ms run, got ${elapsed}ms`
+    );
+  } finally {
+    cleanup();
+  }
+});
+
+test("output from a command given a credential is not kept in the transcript", () => {
+  // The one place the harness *knows* a result may hold a secret, because the caller named
+  // the secrets it wanted (docs/15). Not containment from the model, which nothing
+  // achieves -- containment from the record, which is what R7 is about.
+  const shown = "ghp_realtokenvalue0123456789\n\nexit code: 0";
+  const block: Anthropic.ToolResultBlockParam = {
+    type: "tool_result",
+    tool_use_id: "call-1",
+    content: [{ type: "text", text: shown }],
+  };
+  const record = "$ gh auth status\n\nran on the host with GITHUB_TOKEN in its environment.";
+
+  const stored = storableResult(block, record);
+  const text = (stored.content as Anthropic.TextBlockParam[])[0]!.text;
+  assert.equal(text, record);
+  assert.ok(!text.includes("ghp_realtokenvalue0123456789"), "the value must not be stored");
+  assert.equal(stored.tool_use_id, "call-1", "the record still ties to the call it answers");
+
+  // And without a substitute, nothing changes: every other tool stores what it showed.
+  const plain = storableResult(block);
+  assert.match((plain.content as Anthropic.TextBlockParam[])[0]!.text, /ghp_realtokenvalue/);
 });

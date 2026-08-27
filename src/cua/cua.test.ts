@@ -19,6 +19,7 @@ import {
   assertWindowId,
   keyForXdotool,
   patchWebpHeader,
+  pointerPath,
   runThatFits,
   windowPointToScreen,
 } from "./x11-executor.ts";
@@ -223,4 +224,34 @@ test("a point outside the window is refused, not clamped", () => {
     () => windowPointToScreen(geometry, [Number.NaN, 0]),
     /Not a coordinate/
   );
+});
+
+test("a move to where the pointer already is, is not sent", () => {
+  // Measured in the box: `mousemove --sync` costs 2ms when the pointer travels and
+  // 15,541ms when it does not, and succeeds either way. The commands are bounded at 30s,
+  // so this never failed -- it cost fifteen seconds per occurrence and said nothing.
+  assert.deepEqual(pointerPath({ x: 400, y: 300 }, [{ x: 400, y: 300 }]), []);
+  assert.deepEqual(pointerPath({ x: 400, y: 300 }, [{ x: 401, y: 300 }]), [
+    "mousemove --sync 401 300",
+  ]);
+});
+
+test("a repeated point mid-path is dropped too", () => {
+  // A drag path may hold the same point twice, and each repeat is another fifteen seconds.
+  assert.deepEqual(
+    pointerPath({ x: 0, y: 0 }, [
+      { x: 10, y: 10 },
+      { x: 10, y: 10 },
+      { x: 20, y: 20 },
+    ]),
+    ["mousemove --sync 10 10", "mousemove --sync 20 20"]
+  );
+});
+
+test("an unreadable pointer position skips nothing", () => {
+  // The fallback has to be the old behaviour: a query that fails must never be worse than
+  // not asking, because the alternative is a click that silently does not happen.
+  assert.deepEqual(pointerPath(undefined, [{ x: 400, y: 300 }]), [
+    "mousemove --sync 400 300",
+  ]);
 });
