@@ -50,7 +50,17 @@ import { acquireConsumerLock } from "./single-consumer.ts";
 import { looksLikeMarkdown } from "./markdown.ts";
 
 const GATEWAY = "https://api.dingtalk.com/v1.0/gateway/connections/open";
-/** The callback topic a bot's messages arrive on, and its REST twin's path. */
+/**
+ * The callback topic a bot's messages arrive on, and its REST twin's path.
+ *
+ * Note the delivery model this topic implies: in group conversations DingTalk
+ * delivers only the frames where the sender @-mentioned the robot — other
+ * chatter is never pushed, and no console toggle exists to change that. (Feishu's
+ * bot subscribes to every message in chats it joins, which is why the Feishu
+ * adapter answers un-@'d lines and this one cannot.) Direct sessions deliver
+ * everything. So an unanswered group question with no ledger record means the
+ * sender did not @-mention us — said here because it reads exactly like a bug.
+ */
 export const TOPIC = "/v1.0/im/bot/messages/get";
 const TOKEN_URL = "https://api.dingtalk.com/v1.0/oauth2/accessToken";
 /** The REST twin of the stream topic: exchanges a media downloadCode for bytes. */
