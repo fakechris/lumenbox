@@ -124,6 +124,41 @@ test("folding is offered per turn as well as per step", () => {
   assert.match(APP_HTML, /group\.appendChild\(step\)/, "steps belong to their turn's group");
 });
 
+test("a control that says hide leaves nothing on screen to read", () => {
+  // It shipped saying "hide 11 steps" and collapsing eleven rows that all stayed visible,
+  // which is a label describing something other than what it does. A screenshot of the
+  // running page is what caught it; this is what keeps it caught.
+  assert.match(
+    APP_HTML,
+    /\.steps\.shut > details\.step \{ display: none; \}/,
+    "a shut group renders as its one line, not as its collapsed children"
+  );
+  assert.match(
+    APP_HTML,
+    /group\.classList\.toggle\("shut"\)/,
+    "the per-turn control hides the group rather than collapsing each step"
+  );
+  assert.ok(
+    !/for \(var i = 0; i < panels\.length; i\+\+\) panels\[i\]\.open = !shut;/.test(APP_HTML),
+    "reopening must give back the view the reader left, so per-step state is not overwritten"
+  );
+});
+
+test("the page-wide control and the per-turn control mean the same thing", () => {
+  // Two links both labelled some form of "fold" that did different things is worse than
+  // either alone: the header one collapsed bodies while the group one claimed to hide.
+  assert.match(
+    APP_HTML,
+    /bars\[b\]\.classList\.toggle\("shut", folded\)/,
+    "folding the page is folding every group"
+  );
+  assert.match(
+    APP_HTML,
+    /if \(folded\) group\.classList\.add\("shut"\)/,
+    "a turn that starts while the page is folded arrives folded"
+  );
+});
+
 test("every CSS content escape is what a browser will accept", () => {
   // Shipped twice broken. The template literal halves backslashes, so a rule written with
   // one too many reaches the browser as an escaped backslash and the chevron is drawn as

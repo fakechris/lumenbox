@@ -370,6 +370,11 @@ export const APP_HTML = String.raw`<!doctype html>
     color: var(--muted); text-decoration: none; cursor: pointer;
   }
   .steps > .foldgroup:hover { color: var(--text); }
+  /* A shut group is one line, not eleven collapsed ones. The control said "hide 11
+     steps" while leaving eleven rows on screen, which is the kind of label that makes
+     a reader distrust the rest of the page. */
+  .steps.shut > details.step { display: none; }
+  .steps.shut { border-bottom: 1px solid var(--border); }
   #foldall {
     font-size: 11px; letter-spacing: 0.04em; color: var(--muted);
     cursor: pointer; text-decoration: none; flex: none;
@@ -1679,20 +1684,23 @@ function stepGroupBar() {
   group.className = "steps";
   group.innerHTML = '<a href="#" class="foldgroup"></a>';
   var link = group.querySelector(".foldgroup");
-  var shut = false;
+  // The state lives on the element rather than in a closure so that the page-wide control
+  // can set it too, and so that both read the same thing rather than two flags that drift.
   var label = function () {
     var n = group.querySelectorAll("details.step").length;
+    var shut = group.classList.contains("shut");
     link.textContent =
       (shut ? "\u25b8 show " : "\u25be hide ") + n + (n === 1 ? " step" : " steps");
   };
+  // Hiding, not collapsing. Each step keeps whatever it was \u2014 open or shut \u2014 so bringing
+  // the group back gives the reader the view they left, which is what a tree does.
   link.onclick = function (event) {
     event.preventDefault();
-    shut = !shut;
-    var panels = group.querySelectorAll("details.step");
-    for (var i = 0; i < panels.length; i++) panels[i].open = !shut;
+    group.classList.toggle("shut");
     label();
   };
   group.relabel = label;
+  if (folded) group.classList.add("shut");
   chat.appendChild(group);
   label();
   return group;
@@ -2057,10 +2065,13 @@ $("foldall").onclick = function (event) {
   folded = !folded;
   // Applies to what is on screen and to what arrives next, because a reader who folded
   // the steps away did not mean "until the agent says something else".
-  var panels = document.querySelectorAll("details.step");
+  // The same act as clicking every group bar, because two controls that say "fold" and do
+  // different things is worse than either one alone.
   var bars = document.querySelectorAll(".steps");
-  for (var b = 0; b < bars.length; b++) if (bars[b].relabel) bars[b].relabel();
-  for (var i = 0; i < panels.length; i++) panels[i].open = !folded;
+  for (var b = 0; b < bars.length; b++) {
+    bars[b].classList.toggle("shut", folded);
+    if (bars[b].relabel) bars[b].relabel();
+  }
   $("foldall").textContent = folded ? "unfold steps" : "fold steps";
 };
 
