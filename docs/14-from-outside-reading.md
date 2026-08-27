@@ -1084,3 +1084,82 @@ morning, teaching two of four outbound paths a new key format and leaving two be
 repair was one parser rather than two more call sites, and the test asserts the property
 (`splitChatKey` handles both forms) rather than the instances — because the reason the
 bug existed is that instances are what the previous fix enumerated.
+
+---
+
+## The work graph, and the one we are not building
+
+Sources: *Graph Engineering explained* (Kopadze, 2026-07-24), *Context Graph Engineering
+With K3* and *Graph-Native Research* (2026-08, on Kimi's 300-agent swarm), alongside
+*Subagents on Subagents* already recorded above.
+
+Read after designing the obligation ledger in [docs/16](16-long-work.md), and the finding
+is that the ledger **is** graph engineering — the same idea arriving from a direction that
+already has vocabulary for it. Worth taking the vocabulary; worth being precise about
+which of the two graphs these sources describe, because they are not the same graph and we
+only need one.
+
+### Two different graphs share the name
+
+| | the **work** graph | the **knowledge** graph |
+|---|---|---|
+| nodes | jobs — one agent, one task | entities found — a company, a source, a metric |
+| edges | *this job needs what that job produced* | *these two share a supplier, a citation, a market* |
+| built by | the harness, as work is dispatched | the agents, as they discover things |
+| answers | is it finished, what did it cost, is it stuck | which three share a supplier |
+| our need | **this one** | not now |
+
+Kimi's 300-agent swarm and K3 are about the second, and its argument is good — "a flat
+swarm hands you 100 write-ups… the work you actually wanted, the relationships, is the
+work the tool skipped", and it gets worse with scale because a hundred nodes have
+thousands of possible relationships. But that is a *research product* problem. Ours is
+that a fork can die without anyone noticing. **Same word, different graph, and conflating
+them would put us into a large feature to fix a correctness bug.**
+
+### The node contract, which names our fault exactly
+
+The first article's central artefact:
+
+> A node whose output is a wall of free text is a node **only a human can read**. A node
+> with a fixed output shape is one the next node can consume without guessing.
+
+```
+JOB:     one bounded job, nothing else
+IN:      passed in, never assumed
+OUT:     a fixed shape
+SCHEMA:  enforced — free text is rejected and retried
+```
+
+Set that against what the R30 review found: a failed `Fork` child returns
+`--- fork N FAILED ---` **inside a tool result that is not an error**, and `fork.test.ts`
+asserts it. That is precisely a node with no output contract — the parent must read prose
+to learn whether its child succeeded, and today it does not read it at all.
+
+So docs/16's terminal states are not an invention; they are the missing half of the node
+contract. **`OUT` and `SCHEMA` are what a settlement record is.**
+
+### The fake-edge test, applied to us
+
+> At each step ask: does this step actually need the result of the one before? If not,
+> there is no edge, and the wait is wasted.
+
+Our `Fork` fans out and the parent waits for *all* children, which is correct when the
+synthesis needs all of them and wasteful when it does not. Worth knowing; not worth acting
+on until the ledger makes a partial join expressible at all.
+
+### The diamond, and the step we skip
+
+*Fan out → **reduce** → synthesize*, with the reduce done **in plain code**. Our `Fork`
+merges by concatenating child transcripts and hands the lot to the parent model. There is
+no reduce: the compression that plain code should do is paid for in the parent's context
+every time. That is a real and separable improvement, and it needs no protocol.
+
+### What this changes about docs/16
+
+Nothing structural — which is the useful outcome, because the design was written from our
+code and this was written from someone else's, and they met. Two additions:
+
+1. **Name it a work graph** and say so, so the next person does not build a knowledge
+   graph after reading the same articles.
+2. **State the node contract as the reason for terminal states**, rather than deriving
+   them only from the review. A settlement is a node's `OUT`, enforced.
