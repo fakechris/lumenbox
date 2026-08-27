@@ -121,3 +121,64 @@ test("onChange fires after a recorded change, with the task as it now stands", (
   store.update(task.id, { status: "done" }, "a1"); // review gate coerces to review
   assert.deepEqual(seen, [`${task.id}:review`], "create does not fire; the coerced update does");
 });
+
+test("a finished turn does not overrule a status the agent chose", () => {
+  // Found in production, task t51. The agent read the box's memory, produced the answer,
+  // moved the task to review and said in the chat "waiting for your next step". Five
+  // seconds later the channel marked it done, because the turn had ended. The card said
+  // Done while the agent said it was waiting — two surfaces contradicting each other about
+  // the same task, and the one the person looks at was the wrong one.
+  const { store, cleanup } = tempStore();
+  try {
+    const task = store.create({ title: "size the local models", requester: "feishu:ou_1", assigneeId: "ada" })!;
+    store.update(task.id, { status: "review", note: "16GB, here is what fits" }, "ada");
+
+    store.turnFinished(task.id);
+
+    assert.equal(
+      store.get(task.id)?.status,
+      "review",
+      "the turn ending is not the work being done, and the agent said which one this was"
+    );
+  } finally {
+    cleanup();
+  }
+});
+
+test("a finished turn still closes work the agent said nothing about", () => {
+  const { store, cleanup } = tempStore();
+  try {
+    const task = store.create({ title: "say hello", requester: "feishu:ou_1", assigneeId: "ada" })!;
+    store.update(task.id, { status: "doing" }, "channel");
+    // The ordinary case, and the reason this path exists: a one-shot ask from a chat, where
+    // nobody is watching the board and leaving it open forever answers "what needs somebody"
+    // wrong in the other direction.
+    store.turnFinished(task.id);
+    assert.equal(store.get(task.id)?.status, "done");
+  } finally {
+    cleanup();
+  }
+});
+
+test("a finished turn goes through the review gate like everyone else", () => {
+  const { store, cleanup } = tempStore();
+  try {
+    const task = store.create({
+      title: "ship it",
+      requester: "feishu:ou_1",
+      assigneeId: "ada",
+      reviewerId: "bob",
+    })!;
+    // The gate is described in this file as "the one enforced rule", and the channel walked
+    // past it for every chat-initiated task simply by moving the task as "channel" rather
+    // than as the assignee. An agent could not accept its own work; the harness could.
+    store.turnFinished(task.id);
+    assert.equal(
+      store.get(task.id)?.status,
+      "review",
+      "a named reviewer accepting it is what done means, whoever is asking"
+    );
+  } finally {
+    cleanup();
+  }
+});

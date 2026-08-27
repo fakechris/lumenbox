@@ -745,11 +745,16 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
         orchestrator.tasks?.update(taskId, { status: "doing" }, "channel");
       },
       closed: (taskId, outcome, note) => {
+        // A turn ending is not the work being done, so the success path asks the board what
+        // that means rather than asserting it. A failure is different: nothing about a turn
+        // that threw is a judgement the agent made, so it is recorded as-is.
+        if (outcome === "done") {
+          orchestrator.tasks?.turnFinished(taskId);
+          return;
+        }
         orchestrator.tasks?.update(
           taskId,
-          outcome === "done"
-            ? { status: "done" }
-            : { status: "blocked", note: `failed: ${note ?? "unknown"}` },
+          { status: "blocked", note: `failed: ${note ?? "unknown"}` },
           "channel"
         );
       },

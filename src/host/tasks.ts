@@ -155,6 +155,33 @@ export class TaskStore {
    * self-acceptance — so the caller can say so instead of silently disagreeing with
    * what the model believes it did.
    */
+  /**
+   * What the end of a turn means for the task that turn was working.
+   *
+   * Not "done". A turn ending is a fact about a process; done is a judgement about work,
+   * and the two were conflated: the channel marked every chat-initiated task done the
+   * moment its turn returned. Found in production on t51 — the agent produced the answer,
+   * moved the task to `review`, and told the person it was waiting for their next step;
+   * five seconds later the card said Done. Two surfaces contradicting each other about one
+   * task, and the person only looks at one of them.
+   *
+   * Two rules, both of which this path used to break:
+   *
+   * - **A status the agent chose survives.** `review`, `blocked` and `dropped` are all more
+   *   specific than "the turn ended", and an agent that set one meant it.
+   * - **The review gate applies.** It is the one enforced rule in this file, and moving the
+   *   task as "channel" rather than as its assignee walked straight past it: an agent could
+   *   not accept its own work, and the harness closing the turn behind it could.
+   */
+  turnFinished(id: string, now: Date = new Date()): { task: Task; coerced?: string } | undefined {
+    const task = this.tasks.get(id);
+    if (task === undefined) return undefined;
+    if (task.status !== "open" && task.status !== "doing") return { task };
+    // Attributed to whoever the work belongs to, so the gate sees the same thing it sees
+    // when that agent marks its own task done — because that is what is happening.
+    return this.update(id, { status: "done" }, task.assigneeId ?? "channel", undefined, now);
+  }
+
   update(
     id: string,
     changes: {
