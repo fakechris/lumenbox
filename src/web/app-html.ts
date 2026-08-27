@@ -335,12 +335,12 @@ export const APP_HTML = String.raw`<!doctype html>
   /* The chevron sits in its own tinted well, so the row reads as a control rather than
      as a line of text that happens to be grey. Without it nobody guessed it could fold. */
   details.step > summary::before {
-    content: "\\25b8"; flex: none; width: 14px; height: 14px; line-height: 14px;
+    content: "\25b8"; flex: none; width: 14px; height: 14px; line-height: 14px;
     text-align: center; font-size: 8px; color: var(--muted);
     background: var(--surface-2); border: 1px solid var(--border);
     border-radius: 3px; transition: transform 0.12s ease;
   }
-  details.step[open] > summary::before { content: "\\25be"; }
+  details.step[open] > summary::before { content: "\25be"; }
   details.step > summary:hover {
     color: var(--text); background: var(--surface-hover); border-left-color: var(--accent);
   }

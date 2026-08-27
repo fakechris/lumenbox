@@ -123,3 +123,14 @@ test("folding is offered per turn as well as per step", () => {
   assert.match(APP_HTML, /class="foldgroup"/);
   assert.match(APP_HTML, /group\.appendChild\(step\)/, "steps belong to their turn's group");
 });
+
+test("every CSS content escape is what a browser will accept", () => {
+  // Shipped twice broken. The template literal halves backslashes, so a rule written with
+  // one too many reaches the browser as an escaped backslash and the chevron is drawn as
+  // the literal text \25b8 in front of every heading. Reasoning about the layers got it
+  // wrong in both directions; this asserts the bytes that actually ship.
+  const values = [...APP_HTML.matchAll(/content: "([^"]*)"/g)].map(match => match[1]!);
+  assert.ok(values.length > 0, "the check must be looking at something");
+  const wrong = values.filter(value => !/^\\[0-9a-f]{4}$/.test(value));
+  assert.deepEqual(wrong, [], "a CSS unicode escape is one backslash and four hex digits");
+});
