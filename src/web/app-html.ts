@@ -1639,10 +1639,40 @@ function plural(count, word) {
   return num(count) + " " + word + (count === 1 ? "" : "s");
 }
 
-/** A cost that is not on file, said in words. */
-function cost(row) {
-  if (row.unknown) return '<td class="unknown" title="No usage rows name this task\u2019s turns \u2014 it predates the field">not on file</td>';
-  return '<td class="num">' + num(row.totals.outputTokens) + "</td>";
+/**
+ * A task's title, when the title is a bare link.
+ *
+ * A task is created from the first line of the message that asked for it, so pasting a URL
+ * with no words produces a row that is all tracking parameters and identifies nothing:
+ * t24 through t27 were four x.com links differing only in their status id. The full URL
+ * stays on the element, so nothing is lost by showing less of it.
+ */
+function taskLabel(title) {
+  var text = String(title || "");
+  if (!/^https?:\/\/\S+$/.test(text)) return esc(text);
+  try {
+    var link = new URL(text);
+    var tail = link.pathname.replace(/\/+$/, "").split("/").filter(Boolean).slice(-2).join("/");
+    return '<span title="' + esc(text) + '">' + esc(link.hostname.replace(/^www\./, "")) +
+      (tail ? " / " + esc(tail) : "") + "</span>";
+  } catch (error) {
+    return esc(text);
+  }
+}
+
+/**
+ * A figure that is not on file, said as a dash rather than as a number.
+ *
+ * Every task on the board predates the turnId field, so all of them read this way today.
+ * That is the truth and worth showing: a column of zeroes would say these tasks were free.
+ */
+function unknownCell() {
+  return '<td class="unknown" title="No usage row names this task\u2019s turns">\u2014</td>';
+}
+
+function cell(row, key) {
+  if (row.unknown) return unknownCell();
+  return '<td class="num">' + num(row.totals[key]) + "</td>";
 }
 
 function renderSpend(data) {
@@ -1662,8 +1692,10 @@ function renderSpend(data) {
   $("spendhead").innerHTML =
     "<b>" + heading + "</b> &middot; " + plural(report.records, "call") +
     (report.turns ? " across " + plural(report.turns, "turn") : "") + "<br>" +
-    "in " + num(totals.inputTokens) + " &middot; out " + num(totals.outputTokens) +
-    " &middot; cache read " + num(totals.cacheReadTokens) +
+    // Tokens, exactly -- not thousands. Grouped with commas rather than abbreviated, because
+    // a report a person is meant to re-derive by hand should print the number it counted.
+    num(totals.inputTokens) + " tokens in &middot; " + num(totals.outputTokens) +
+    " out &middot; " + num(totals.cacheReadTokens) + " cache read" +
     (report.money !== undefined && report.money !== null
       ? " &middot; <b>$" + report.money.toFixed(2) + "</b>"
       : "");
@@ -1675,10 +1707,15 @@ function renderSpend(data) {
     var label = key.slice(2).toLowerCase();
     sections.push(
       "<table class=\"spend\" style=\"margin-bottom:12px\"><tr><th>" + label +
-      "</th><th style=\"text-align:right\">out</th><th style=\"text-align:right\">in</th></tr>" +
+      "</th><th style=\"text-align:right\">tokens out</th>" +
+      "<th style=\"text-align:right\">tokens in</th>" +
+      // Cache reads are most of the traffic here and were not shown at all, so the two
+      // columns that were shown added to a fraction of the row and looked like all of it.
+      "<th style=\"text-align:right\">cache read</th></tr>" +
       rows.map(function (row) {
         return "<tr><td>" + esc(row[label] || "") + '</td><td class="num">' +
-          num(row.totals.outputTokens) + '</td><td class="num">' + num(row.totals.inputTokens) + "</td></tr>";
+          num(row.totals.outputTokens) + '</td><td class="num">' + num(row.totals.inputTokens) +
+          '</td><td class="num">' + num(row.totals.cacheReadTokens) + "</td></tr>";
       }).join("") + "</table>"
     );
   });
@@ -1687,16 +1724,28 @@ function renderSpend(data) {
   if (tasks.length) {
     sections.push(
       "<table class=\"spend\"><tr><th>task</th><th>status</th><th style=\"text-align:right\">turns</th>" +
-      "<th style=\"text-align:right\">out</th></tr>" +
+      "<th style=\"text-align:right\">tokens out</th><th style=\"text-align:right\">tokens in</th>" +
+      "<th style=\"text-align:right\">cache read</th></tr>" +
       tasks.map(function (row) {
         // The id is a link rather than the row being clickable: a <tr> with a handler is
         // invisible to the keyboard and to anything reading the page aloud, and it gives no
         // sign that it can be clicked. Same defect the header number had.
         return '<tr class="pick"><td><a href="#" data-task="' + esc(row.id) + '">' + esc(row.id) +
-          "</a> " + esc(row.title) + "</td><td>" + esc(row.status) + '</td><td class="num">' +
-          num(row.turns) + "</td>" + cost(row) + "</tr>";
+          "</a> " + taskLabel(row.title) + "</td><td>" + esc(row.status) + "</td>" +
+          // Zero turns and an unknown cost are the same fact; showing one as a figure and
+          // the other as a word invited the reading that these tasks ran and cost nothing.
+          (row.unknown ? unknownCell() : '<td class="num">' + num(row.turns) + "</td>") +
+          cell(row, "outputTokens") + cell(row, "inputTokens") + cell(row, "cacheReadTokens") +
+          "</tr>";
       }).join("") + "</table>"
     );
+  }
+  if (tasks.length && tasks.every(function (row) { return row.unknown; })) {
+    // Otherwise a column of dashes reads as a bug. It is not: workId and turnId landed on
+    // 2026-08-27, and every task older than that has no usage row that names its turns.
+    sections.push('<div class="caveat" style="padding-top:6px">' +
+      "None of these can be costed yet: a usage row only names the turn it ran in from " +
+      "2026-08-27 onwards, and every task above was worked before that.</div>");
   }
   if (data.tasksHidden) {
     // Said rather than filtered quietly: "no tasks" and "no task whose cost is recoverable"
