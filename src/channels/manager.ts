@@ -87,7 +87,14 @@ export interface TaskCardState {
   agentName: string;
   /** Who asked, as the wire names them. */
   requesterLabel: string;
-  status: "queued" | "working" | "done" | "failed";
+  /**
+   * `review` is the one that means the person has to do something.
+   *
+   * It was missing, and the state rendered as `done` — a task the agent had deliberately
+   * left for a human read on the card as finished. A vocabulary that cannot say "your turn"
+   * says "nothing left for you to do" instead, which is the opposite.
+   */
+  status: "queued" | "working" | "review" | "done" | "failed";
   /** The latest one-line action, e.g. `bash: npm test`. Absent when not started or finished. */
   action?: string;
   /** How many requests are ahead of this one, when queued. */
@@ -322,7 +329,14 @@ export interface ChannelManagerDeps {
     /** Where a person can watch this task work, when this installation is reachable. */
     urlFor?: (taskId: string) => string | undefined;
     started: (taskId: string) => void;
-    closed: (taskId: string, outcome: "done" | "failed", note?: string) => void;
+    /**
+     * Reports the turn's outcome and returns what the board made of it.
+     *
+     * A return value rather than `void`, because the card used to be set to Done in
+     * parallel with this call rather than from it: the board learned the task was in
+     * review and the card, deciding for itself, still said Done.
+     */
+    closed: (taskId: string, outcome: "done" | "failed", note?: string) => TaskCardState["status"] | undefined;
   };
   /**
    * Stores files somebody dropped in the chat, into that chat's inbox on the box.
@@ -989,7 +1003,7 @@ ${input.options.map(option => `· ${option}`).join("\n")}`
       });
     };
 
-    const finishCard = (status: "done" | "failed") => {
+    const finishCard = (status: TaskCardState["status"]) => {
       if (cardHandle === undefined || adapter.updateTaskCard === undefined) return;
       card.status = status;
       delete card.action;
@@ -1015,9 +1029,12 @@ ${input.options.map(option => `· ${option}`).join("\n")}`
         taskId
       );
       clearTimeout(ackTimer);
-      finishCard("done");
+      // Asked first, then shown. The board owns what a finished turn means for the work —
+      // it may be review, and saying Done over that is the contradiction t51 produced.
+      const settled = taskId !== undefined ? this.deps.board?.closed(taskId, "done") : undefined;
+      finishCard(settled === "review" ? "review" : "done");
+      // The reaction is about the *message*, which has been answered either way.
       mark("done");
-      if (taskId !== undefined) this.deps.board?.closed(taskId, "done");
       await deliver(
         reply.trim() === "" ? "Done. (The agent finished without saying anything.)" : reply
       );

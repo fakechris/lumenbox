@@ -301,3 +301,19 @@ test("a file sent into a topic is anchored to that topic", async () => {
     { chatId: "oc_room", type: "image", replyTo: "om_topic" },
   ]);
 });
+
+test("a task waiting on a person does not read as finished", () => {
+  // t51: the agent produced the answer, moved the task to review and said in the chat that
+  // it was waiting for the person's next step. The card said Done. The card could not have
+  // said anything else — its vocabulary was queued/working/done/failed, so the one state
+  // that means "your turn" had nowhere to render and came out as the state that means
+  // "nothing left for you to do".
+  const card = rendered({
+    title: "size the local models",
+    agentName: "Ada",
+    requesterLabel: "chris",
+    status: "review",
+  });
+  assert.match(card.elements[0]?.text?.content ?? "", /review/i);
+  assert.notEqual(card.header.template, "green", "green is the colour of nothing-left-to-do");
+});

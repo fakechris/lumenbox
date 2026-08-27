@@ -749,14 +749,18 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
         // that means rather than asserting it. A failure is different: nothing about a turn
         // that threw is a judgement the agent made, so it is recorded as-is.
         if (outcome === "done") {
-          orchestrator.tasks?.turnFinished(taskId);
-          return;
+          const settled = orchestrator.tasks?.turnFinished(taskId);
+          // Only the two the card has words for. Anything else the agent chose — blocked,
+          // dropped — is a board state, and inventing a card colour for it here would be
+          // guessing at a vocabulary the adapters do not have.
+          return settled?.task.status === "review" ? "review" : "done";
         }
         orchestrator.tasks?.update(
           taskId,
           { status: "blocked", note: `failed: ${note ?? "unknown"}` },
           "channel"
         );
+        return "failed";
       },
     },
     // A file dropped in the chat lands in that chat's inbox on the box, under a name

@@ -703,7 +703,10 @@ test("a channel request lives on the board: opened, started at first work, close
         return "t7";
       },
       started: id => events.push(`started ${id}`),
-      closed: (id, outcome, note) => events.push(`closed ${id} ${outcome}${note ? ` (${note})` : ""}`),
+      closed: (id, outcome, note) => {
+        events.push(`closed ${id} ${outcome}${note ? ` (${note})` : ""}`);
+        return outcome;
+      },
     },
     log: () => {},
   });
@@ -922,4 +925,44 @@ test("a chat's files follow the conversation, and its reply follows the room", a
   // The topic owns the files; the room is still where the answer is posted.
   assert.deepEqual(asked, ["feishu:oc_room:omt_topic"]);
   assert.equal(adapter.chatSent.at(-1)?.text, "done");
+});
+
+test("a task the agent left in review shows on the card as review, not as done", async () => {
+  // The other half of t51. The board was corrected to keep the agent's `review`, and the
+  // card still said Done -- because it was being set in parallel with the board call rather
+  // than from its answer. Fixing the record and leaving the lie on screen fixes nothing:
+  // the card is the surface the person actually looks at.
+  const adapter = cardAdapter();
+  const manager = new ChannelManager({
+    mayDrive: () => true,
+    // Slow enough to get a card at all: the card exists to answer "is it working", so a
+    // reply that comes back instantly never posts one.
+    ackAfterMs: 1,
+    ask: async (_a, _t, _i, _c, onProgress) => {
+      onProgress?.("bash: free -h");
+      await new Promise(resolve => setTimeout(resolve, 20));
+      return "waiting for your next step";
+    },
+    board: {
+      open: () => "t51",
+      started: () => {},
+      // What the real board now returns for work the agent deliberately parked.
+      closed: () => "review",
+    },
+    log: () => {},
+  });
+  manager.register(adapter, true, "test");
+  await started(manager);
+
+  await adapter.inject({
+    identity: "feishu:ou_1",
+    chatKey: "feishu:oc_room",
+    senderLabel: "chris",
+    text: "size the local models",
+  });
+  await manager.idle();
+
+  const shown = adapter.cards.map(entry => entry.card.status);
+  assert.equal(shown.at(-1), "review", "the card ends on what the board decided");
+  assert.ok(!shown.includes("done"), "and never passes through Done on the way");
 });

@@ -78,15 +78,25 @@ export function renderApprovalCard(card: ApprovalCardState): object {
  * part that can be wrong quietly.
  */
 export function renderCard(card: TaskCardState): object {
-  const template = { queued: "grey", working: "blue", done: "green", failed: "red" }[card.status];
+  const template = {
+    queued: "grey",
+    working: "blue",
+    // Not green: green is the colour of nothing-left-to-do, and this is the state that
+    // means the opposite. Orange is what the rest of the product uses for waiting on you.
+    review: "orange",
+    done: "green",
+    failed: "red",
+  }[card.status];
   const status =
     card.status === "queued"
       ? `Queued${card.ahead !== undefined ? ` — ${card.ahead} ahead` : ""}`
       : card.status === "working"
         ? "Working"
-        : card.status === "done"
-          ? "Done"
-          : "Failed";
+        : card.status === "review"
+          ? "In review — your turn"
+          : card.status === "done"
+            ? "Done"
+            : "Failed";
   const who = card.agentName === "" ? "The team" : card.agentName;
   const lines = [`**${who}** · ${status}`];
   if (card.action !== undefined) lines.push(`\`${card.action}\``);
