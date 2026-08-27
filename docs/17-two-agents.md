@@ -102,7 +102,18 @@ repository within one day:
 So the check that matters is not `git status`. It is: **does the merged tree build, pass,
 and — for anything a person looks at — actually render?** The third is the one this
 repository keeps failing, which is why UI changes are verified against the running page
-before they are committed, not after.
+before they are committed, not after:
+
+```sh
+node scripts/ui-shot.mjs --find "hide 11 steps"   # click it, photograph the result
+node scripts/ui-shot.mjs --list                   # every ref on the page
+```
+
+That script exists because looking used to cost a dozen curl calls and produce a webp
+nothing on a Mac opens, so nobody looked. The first thing it caught was not a CSS bug: the
+server was running a build from *before* the fix, so the source was right, the tests
+passed, and the page on screen was still broken. A screenshot is the only check that looks
+at what is actually being served.
 
 ---
 
