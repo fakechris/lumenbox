@@ -213,10 +213,34 @@ progress bar renders identically.
 
 ---
 
+## The budget decision, taken and recorded
+
+**Not set, deliberately, on 2026-08-26.** The proposed number — 5M tokens in 24 hours,
+about three times the heaviest day so far — was judged too conservative to be useful, and
+a ceiling that stops real work is worse than none: it teaches people to raise it without
+looking, which is a ceiling in name only.
+
+So the decision is to **observe first**. The risk of that phrase is that it has no end,
+and "observe first" becomes "never", which is how the other eight instances of this pattern
+happened. So it is written down with what would end it:
+
+- The observation is already running — `usage.jsonl` records every call, attributed.
+- **What to look at:** the heaviest *day*, and separately the heaviest *single turn*. The
+  day bounds a bill; the turn bounds a runaway, and they want different ceilings.
+- **What would settle it:** a fortnight of ordinary use, or the first turn that costs more
+  than a person expected. Either produces a number from evidence rather than from caution.
+- **Today's baseline, for comparison later:** 562 calls, 1,725,069 input and 100,177
+  output tokens, no ceiling in force.
+
+Recorded rather than left implicit because an unset limit is a decision, and an
+undocumented decision is indistinguishable from an oversight — which is what the other
+eight were.
+
+---
+
 ## What to build, in order
 
-1. **Turn on a budget.** One config line, today. It is the only item here that reduces
-   worst-case exposure without new code, and the worst case is currently unbounded.
+1. ~~**Turn on a budget.**~~ Deferred with a reason and an end condition, above.
 2. **The obligation ledger.** Everything else depends on it: the gate cannot be correct
    without it, and the estimate cannot be honest without it.
 3. **Widen `stateHash` to artifacts**, closing the churn and oscillation gaps with
