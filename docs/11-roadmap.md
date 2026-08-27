@@ -352,6 +352,56 @@ And the validation step that makes a suite trustworthy at all: our seventeen tas
 invented and have never been compared to real traffic. Both halves of that comparison are
 already on disk.
 
+### R31. One place to see what happened, and drill into it
+A requirement that grew out of a day of work rather than out of a comparison: **every
+question asked on 2026-08-26 was answered by writing a throwaway script.** How many
+memories, how many tool calls, what a batch of fetches cost, what is on the board, how
+long a turn took. Fifteen or so one-offs, none re-runnable, several wrong on the first
+attempt precisely because they were improvised. `agentbox scan-records` was the first one
+promoted into the tree, on the principle that **a number nobody can re-run is a claim**;
+this entry is that principle applied to the rest.
+
+What is wanted is concrete: a daily view, and the ability to drill from it into one task —
+its execution, its artifacts, its rounds, its token and cost consumption. Over time, the
+thing decisions get made from.
+
+**The data exists and cannot be joined.** Measured:
+
+| ledger | carries | lacks |
+|---|---|---|
+| `usage.jsonl` (562) | `agentId`, `at`, `round`, `seq`, `model`, input/output/cache tokens | **`turnId`, `conversation`, `taskId`** |
+| `tasks.jsonl` (143) | `id`, `status`, `history`, `requester`, `assigneeId`, `conversation` | **`turnId`** |
+| `turns.jsonl` (134) | `id`, `agentId`, `about`, `attempt`, `event` | — |
+| `activity` (511), `policy` (1209), `inbox` (136), `ingress` (48), `deliveries` (68) | their own events | a shared key |
+
+So a daily total is answerable today — 2026-08-25 cost 762,412 tokens, 08-26 cost 403,975,
+and Ada accounts for 1,783,693 of 1,822,631 — while **the thing actually asked for is
+not**: of 46 tasks on the board, zero can be costed. The only available join is "same
+agent, near in time", which is a guess rather than a total.
+
+**This is the same gap as [docs/16](16-long-work.md), seen from the reporting side.** The
+work graph is not only what makes a completion gate correct and an estimate honest; it is
+what makes the drill-down possible at all, because it is the missing id that ties a task to
+its turns to their tokens. Two requirements, one substrate — which is the argument for
+building the ledger before either.
+
+What this entry adds on its own, beyond the join:
+
+- **Artifacts as a first-class column.** "What did this task produce" currently means
+  reading a transcript. Files written, tasks settled, deliverables pushed — the same set
+  that [R28's churn detection](#) wants for `stateHash`, which is a second reason to
+  record them.
+- **Cost in money, not only tokens.** `usage` has `model` and `provider`, so a rate table
+  turns tokens into a number a person can act on. Without it, "403,975 tokens" is a
+  quantity nobody has intuition for.
+- **The admin view is a different question from the agent view.** The web UI answers
+  "what is this agent doing now". This answers "where did the month go" — different
+  audience, different time horizon, and the reason it is a separate surface rather than
+  another tab.
+
+Medium, and mostly assembly rather than invention: the ledgers are already append-only,
+replayable and on disk. What is missing is one id and one reader.
+
 ### R16. Webhook and event triggers
 Scheduled skills cover "every morning"; nothing covers "when the build breaks" or
 "when an external system pings". An HTTP ingress whose calls arrive as inbound
