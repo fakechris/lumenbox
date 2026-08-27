@@ -1106,3 +1106,114 @@ test("a question with choices becomes a card where the wire has cards, words els
   assert.equal(cards.length, 1);
   assert.ok(adapter.sent.some(entry => /有个问题要先问你/.test(entry.text)));
 });
+
+test("one conversation runs one piece of work: mid-task words steer, 停 stops, neither opens a card", async () => {
+  const adapter = cardAdapter();
+  const steers: string[] = [];
+  const stops: (string | undefined)[] = [];
+  const opened: string[] = [];
+  let release: () => void = () => {};
+  const manager = new ChannelManager({
+    mayDrive: () => true,
+    // The first ask blocks until released, so the conversation is genuinely mid-task
+    // when the follow-ups arrive. Later asks answer at once.
+    ask: (() => {
+      let first = true;
+      return async () => {
+        if (first) {
+          first = false;
+          await new Promise<void>(resolve => {
+            release = resolve;
+          });
+        }
+        return "做完了";
+      };
+    })(),
+    steer: (_agent, text) => steers.push(text),
+    stop: agentName => {
+      stops.push(agentName);
+      return true;
+    },
+    board: {
+      open: input => {
+        opened.push(input.title);
+        return `t${opened.length}`;
+      },
+      started: () => {},
+      closed: () => "done" as const,
+    },
+    log: () => {},
+  });
+  manager.register(adapter, true, "test");
+  await started(manager);
+
+  const room = { identity: "feishu:ou_1", chatKey: "feishu:oc_room", senderLabel: "chris" };
+  await adapter.inject({ ...room, messageId: "m1", text: "把三百份报表汇总" });
+  await new Promise(resolve => setTimeout(resolve, 20)); // let the task start and block
+
+  // Steering: no second task, no second card, the words reach the turn.
+  const steerReply = await adapter.inject({ ...room, messageId: "m2", text: "毛利改成百分比" });
+  assert.equal(opened.length, 1, "steering does not open a second task");
+  assert.deepEqual(steers, ["毛利改成百分比"]);
+  assert.match(String(steerReply ?? ""), /带到了/);
+
+  // The stop verb: the stop dep fires, still no new task.
+  const stopReply = await adapter.inject({ ...room, messageId: "m3", text: "停" });
+  assert.equal(stops.length, 1);
+  assert.match(String(stopReply ?? ""), /叫停/);
+  assert.equal(opened.length, 1);
+
+  // Work finished: the conversation is free again, and the next message is new work.
+  release();
+  await manager.idle();
+  await adapter.inject({ ...room, messageId: "m4", text: "再出一版周报" });
+  await manager.idle();
+  assert.equal(opened.length, 2, "a finished conversation takes new work");
+
+  // 停 with nothing running is answered honestly, and stop is not fired.
+  const idleStop = await adapter.inject({ ...room, messageId: "m5", text: "停" });
+  assert.match(String(idleStop ?? ""), /没有正在做的事/);
+  assert.equal(stops.length, 1);
+});
+
+test("a message addressed to a different agent is parallel work, not steering", async () => {
+  const adapter = cardAdapter();
+  const steers: string[] = [];
+  const opened: string[] = [];
+  let release: () => void = () => {};
+  const manager = new ChannelManager({
+    mayDrive: () => true,
+    ask: async (agentName) => {
+      if (agentName === "Ada") {
+        await new Promise<void>(resolve => {
+          release = resolve;
+        });
+      }
+      return "好";
+    },
+    steer: (_agent, text) => steers.push(text),
+    board: {
+      open: input => {
+        opened.push(`${input.agentName ?? "-"}:${input.title}`);
+        return `t${opened.length}`;
+      },
+      started: () => {},
+      closed: () => "done" as const,
+    },
+    log: () => {},
+  });
+  manager.register(adapter, true, "test");
+  await started(manager);
+
+  const room = { identity: "feishu:ou_1", chatKey: "feishu:oc_room", senderLabel: "chris" };
+  await adapter.inject({ ...room, messageId: "m1", text: "@Ada 汇总报表" });
+  await new Promise(resolve => setTimeout(resolve, 20));
+
+  await adapter.inject({ ...room, messageId: "m2", text: "@Bob 帮我查个数" });
+  await new Promise(resolve => setTimeout(resolve, 20));
+  // Two agents working in parallel is the team working, not a routing accident.
+  assert.equal(opened.length, 2);
+  assert.deepEqual(steers, []);
+  release();
+  await manager.idle();
+});

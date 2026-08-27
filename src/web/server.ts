@@ -726,6 +726,41 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
     // Channel requests live on the team board: "t12" means the same thing in the
     // chat's card, the web UI and an agent's prompt. A failure closes as blocked with
     // its note — a board that loses failed work answers "what needs somebody" wrong.
+    // "停" from the chat is the web stop button: recorded, effective at the next round
+    // boundary, cleared automatically when the person's next instruction starts a turn.
+    stop: agentName => {
+      let agent: { id: string } | undefined;
+      try {
+        agent = agentName !== undefined ? registry.resolve(agentName) : registry.list()[0];
+      } catch {
+        agent = undefined;
+      }
+      if (agent === undefined) return false;
+      orchestrator.policy.stop(agent.id);
+      return true;
+    },
+    // A mid-task message joins the running turn. Fire-and-forget on purpose: the bus's
+    // own race rules (fixed in races.test.ts) make it steering for the running turn or
+    // the next turn, exactly one of the two — this call must not add a third path.
+    steer: (agentName, text, identity, conversationKey) => {
+      let agent: { id: string } | undefined;
+      try {
+        agent = agentName !== undefined ? registry.resolve(agentName) : registry.list()[0];
+      } catch {
+        agent = undefined;
+      }
+      if (agent === undefined) return;
+      void orchestrator
+        .prompt(
+          agent.id,
+          text,
+          { userId: principals.resolve(identity).id },
+          { conversation: conversationIdFor(conversationKey) }
+        )
+        .catch(error => {
+          log(`steer failed: ${error instanceof Error ? error.message : String(error)}`);
+        });
+    },
     board: {
       open: input => {
         const tasks = orchestrator.tasks;

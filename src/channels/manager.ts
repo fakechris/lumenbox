@@ -36,11 +36,14 @@ import {
   SAY_WHAT_YOU_NEED,
   SCOPE_IS_ADMIN_CALL,
   TEAM,
+  NOTHING_RUNNING,
+  STOPPING,
   ackQueued,
   ackWorking,
   consentFallbackText,
   filesSaved,
   questionText,
+  steered,
 } from "./strings.ts";
 
 export interface InboundMessage {
@@ -219,6 +222,18 @@ export interface ChannelStatus {
   detail: string;
 }
 
+/**
+ * A whole message that means "stop what you are doing".
+ *
+ * The same discipline as approval replies: the message must be *only* the verb. "停下来
+ * 改用另一个文件夹" is an instruction that mentions stopping, and reading it as a stop
+ * would throw away the half that says what to do instead.
+ */
+export function parseStopRequest(text: string): boolean {
+  const t = text.trim().toLowerCase().replace(/[.!。!~]+$/, "");
+  return ["停", "停下", "停下来", "先停", "取消", "算了", "别做了", "stop", "cancel"].includes(t);
+}
+
 /** How a one-word reply on a chat answers a pending approval. */
 export type ApprovalReply = "once" | "always" | "session" | "deny";
 
@@ -254,6 +269,17 @@ export interface ChannelManagerDeps {
    * turn run.
    */
   answerApproval?: (approvalId: string, reply: ApprovalReply) => string | undefined;
+  /**
+   * Stops the named agent's running turn at its next round boundary. Returns false when
+   * there is nobody to stop. The web stop button's semantics, reachable by saying "停".
+   */
+  stop?: (agentName: string | undefined) => boolean;
+  /**
+   * Hands a mid-task message to the running turn as steering, without opening a second
+   * task. Fire-and-forget: the bus's own rules make it steering or the next turn,
+   * exactly one of the two.
+   */
+  steer?: (agentName: string | undefined, text: string, identity: string, conversationKey: string) => void;
   /**
    * Runs one turn and returns what the agent said. `agentName` is undefined for the
    * default agent; unknown names should throw with a message worth relaying.
@@ -810,6 +836,27 @@ ${input.options.map(option => `· ${option}`).join("\n")}`
     const { agentName, text } = parseAddress(message.text);
     if (text === "") return SAY_WHAT_YOU_NEED;
 
+    // The dumb routing rule the product plan chose over the correctness engineering it
+    // deferred: one conversation runs one piece of work at a time. While it runs, a plain
+    // message is steering, "停" is the stop button, and neither opens a second task or a
+    // second card. A message addressed to a *different* agent is new work and passes
+    // through — two agents in parallel is the team working, not a routing accident.
+    const conversationKey = message.threadKey ?? message.chatKey ?? message.identity;
+    const running = this.runningWork.get(conversationKey);
+    if (running !== undefined) {
+      const sameAgent = agentName === undefined || agentName === running.agentName;
+      if (parseStopRequest(text)) {
+        const stopped = this.deps.stop?.(running.agentName) ?? false;
+        return stopped ? STOPPING : NOTHING_RUNNING;
+      }
+      if (sameAgent && this.deps.steer !== undefined) {
+        this.deps.steer(running.agentName, text, message.identity, conversationKey);
+        return steered(running.agentName ?? TEAM);
+      }
+    } else if (parseStopRequest(text)) {
+      return NOTHING_RUNNING;
+    }
+
     // "屏幕" is a look, not a task: no turn runs, the desktop is captured as it is.
     const work =
       parseScreenRequest(text) && this.deps.screenshot !== undefined
@@ -852,6 +899,9 @@ ${input.options.map(option => `· ${option}`).join("\n")}`
    * after the one that used them is about something else.
    */
   private readonly pendingDrops = new Map<string, { files: string[]; at: number }>();
+
+  /** What each conversation is running right now, for the one-at-a-time routing rule. */
+  private readonly runningWork = new Map<string, { agentName: string | undefined }>();
 
   /** How long a wordless drop waits for its instruction. */
   private static readonly DROP_WINDOW_MS = 10 * 60 * 1000;
@@ -995,6 +1045,8 @@ ${input.options.map(option => `· ${option}`).join("\n")}`
     droppedFiles?: readonly string[]
   ): Promise<void> {
     const chatKey = message.chatKey ?? message.identity;
+    const runningKey = message.threadKey ?? chatKey;
+    this.runningWork.set(runningKey, { agentName });
     // What this turn should know it was handed: files in this message, plus any dropped
     // wordlessly in this conversation just before. In the prompt and nowhere else — the
     // card and the board carry the person's own words, not a path listing.
@@ -1215,6 +1267,12 @@ ${input.options.map(option => `· ${option}`).join("\n")}`
       const detail = error instanceof Error ? error.message : String(error);
       if (taskId !== undefined) this.deps.board?.closed(taskId, "failed", detail);
       await deliver(detail);
+    } finally {
+      // Only if it is still this task's entry: a same-conversation task that somehow
+      // started after us must not have its flag wiped by our exit.
+      if (this.runningWork.get(runningKey)?.agentName === agentName) {
+        this.runningWork.delete(runningKey);
+      }
     }
   }
 }

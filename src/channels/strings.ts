@@ -92,6 +92,16 @@ export function questionText(agentName: string, question: string, choices: strin
   return `${agentName || TEAM} 有个问题要先问你:\n${question}${choices}\n\n直接在这里回复,它就接着干。`;
 }
 
+// ── the running task:停 与改 ──────────────────────────────────────────────────
+
+export const STOPPING = "好,叫停了。当前这一步做完就停。";
+
+export const NOTHING_RUNNING = "现在没有正在做的事。";
+
+export function steered(who: string): string {
+  return `带到了,${who}接着做。`;
+}
+
 // ── refusals ───────────────────────────────────────────────────────────────────
 
 export const SCOPE_IS_ADMIN_CALL = "绑定 scope 会改变这个群里每件任务的权限,这要管理员来定。";
