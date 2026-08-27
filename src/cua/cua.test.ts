@@ -15,6 +15,7 @@ import {
   parseXrandrOutput,
 } from "./display.ts";
 import {
+  X11Executor,
   actionRequiresSettle,
   assertWindowId,
   keyForXdotool,
@@ -193,6 +194,22 @@ test("a scroll with no direction is refused by name, not by the X server", () =>
   assert.equal(scrollButtonFor("down"), "5");
   assert.throws(() => scrollButtonFor(undefined), /needs a "direction" field/);
   assert.throws(() => scrollButtonFor("scroll_down"), /Got "scroll_down"/);
+});
+
+test("an action this executor does not know fails instead of reporting success", async () => {
+  // Found by driving the real UI. A {"action":"left_click"} -- Anthropic's computer-use
+  // vocabulary rather than ours -- fell through every case of the switch, the method
+  // returned normally, and the API answered {"success": true, "action_count": 3}. The
+  // pointer had moved (the button under it even showed its hover state), nothing was
+  // clicked, and nothing said so. Two screenshots looked identical and both were "fine".
+  const executor = new X11Executor({
+    display: ":1",
+    resolution: { display: { width: 1280, height: 800 }, api: { width: 1280, height: 800 } },
+  } as never);
+  await assert.rejects(
+    () => executor.execute([{ action: "left_click", coordinate: [1, 2] }] as never),
+    /Unknown computer action "left_click"/
+  );
   assert.equal(keyForXdotool("ctrl+shift+v"), "ctrl+shift+v");
   assert.equal(keyForXdotool("meta+a"), "super+a");
 });

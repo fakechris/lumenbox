@@ -146,8 +146,11 @@ export function summariseSpend(records: readonly UsageRecord[], query: SpendQuer
   ].sort();
   // Withheld rather than partial. A bill missing one model reads low *and reads complete*,
   // which is a number somebody will act on that is wrong by an unknown amount.
+  // And not for an empty window either. Nothing to price sums to zero, which renders as a
+  // confident $0.00 — a figure that says "this cost nothing" where the truth is "nothing
+  // here is costable". Seen on screen the first time a task drill-down was opened.
   const money =
-    unpriced.length > 0
+    unpriced.length > 0 || selected.length === 0
       ? undefined
       : selected.reduce((all, record) => all + (priceOf(record, rates) ?? 0), 0);
 
@@ -184,6 +187,79 @@ export function summariseSpend(records: readonly UsageRecord[], query: SpendQuer
     compacted: query.compacted === true,
     ...(unjoinable !== undefined ? { unjoinable } : {}),
   };
+}
+
+/**
+ * Every day on file, newest first — the entry point of the admin view.
+ *
+ * The day string is the same one `summariseSpend({ day })` filters on, deliberately: a list
+ * whose ids do not open anything is two views of data that only look related.
+ */
+export function spendByDay(
+  records: readonly UsageRecord[],
+  rates: Rates
+): { day: string; totals: UsageTotals; money?: number; unpriced: string[] }[] {
+  const days = new Map<string, UsageRecord[]>();
+  for (const record of records) {
+    const key = dayOf(record);
+    (days.get(key) ?? days.set(key, []).get(key)!).push(record);
+  }
+  return [...days.entries()]
+    .sort((a, b) => (a[0] < b[0] ? 1 : -1))
+    .map(([day, rows]) => {
+      const report = summariseSpend(rows, { rates });
+      return {
+        day,
+        totals: report.totals,
+        ...(report.money !== undefined ? { money: report.money } : {}),
+        unpriced: report.unpriced,
+      };
+    });
+}
+
+/** The minimum a task has to expose to be costed: its identity and the turns it was worked in. */
+export interface CostableTask {
+  id: string;
+  title: string;
+  status: string;
+  /** `TaskChange.run` for every change an agent made, deduplicated. */
+  runs: readonly string[];
+}
+
+export interface TaskCost {
+  id: string;
+  title: string;
+  status: string;
+  turns: number;
+  totals: UsageTotals;
+  money?: number;
+  /**
+   * True when nothing on file can answer this task's cost.
+   *
+   * Distinguished from zero because they render identically in a column of numbers and mean
+   * opposite things: a task nobody spent anything on, and a task whose spend is not
+   * recoverable. Every task created before 2026-08-27 is the second kind.
+   */
+  unknown: boolean;
+}
+
+export function costOfTasks(
+  tasks: readonly CostableTask[],
+  records: readonly UsageRecord[],
+  rates: Rates
+): TaskCost[] {
+  return tasks.map(task => {
+    const report = summariseSpend(records, { turnIds: task.runs, rates });
+    return {
+      id: task.id,
+      title: task.title,
+      status: task.status,
+      turns: report.turns,
+      totals: report.totals,
+      ...(report.money !== undefined ? { money: report.money } : {}),
+      unknown: report.records === 0,
+    };
+  });
 }
 
 const thousands = (value: number) => value.toLocaleString("en-US");

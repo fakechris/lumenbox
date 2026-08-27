@@ -121,7 +121,21 @@ place.
 - Verified against the running page with `scripts/ui-shot.mjs` before it is committed, per
   [docs/17](docs/17-two-agents.md).
 
-**Status**: Not Started
+**Status**: Complete. Reached from the header number that had been showing today's tokens
+and opening nothing since the honesty pass.
+
+Four defects the screenshots caught that no test would have: "1 turns"; a "not on file"
+cell wrapping every task row to three lines; a day view that filtered out every uncostable
+task *silently*, so a day with 51 unjoinable tasks read as a day with no tasks; and a
+confident **$0.00** on a window with nothing in it — in a module whose other tests are
+entirely about that distinction.
+
+Two accessibility defects found the same way, both because the thing had to be driven: the
+header number was a `<span>` with a click handler, and the task drill-down was a clickable
+`<tr>`. Neither was reachable by keyboard or announced as a control. The drill-down is now
+a link, and the whole view is addressable — `#spend?task=t51` — which is useful on its own
+and is the only reason the drill-down could be verified at all, because
+[R33](docs/11-roadmap.md) means synthetic clicks do not reach that browser.
 
 ---
 

@@ -14,7 +14,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import type { UsageRecord } from "./usage.ts";
-import { describeSpend, priceOf, summariseSpend } from "./spend.ts";
+import { costOfTasks, describeSpend, priceOf, spendByDay, summariseSpend } from "./spend.ts";
 
 let seq = 0;
 function row(over: Partial<UsageRecord> = {}): UsageRecord {
@@ -140,4 +140,54 @@ test("records written before the join key existed say so, rather than reading as
   const current = [row({ turnId: "t-b", outputTokens: 500 })];
   const live = describeSpend(summariseSpend(current, { turnIds: ["t-a"] })).join("\n");
   assert.doesNotMatch(live, /before that field existed/);
+});
+
+test("a day list is the entry point, newest first, and every day is drillable", () => {
+  const records = [
+    row({ at: "2026-08-25T10:00:00.000Z", outputTokens: 10 }),
+    row({ at: "2026-08-26T10:00:00.000Z", outputTokens: 20 }),
+    row({ at: "2026-08-26T22:00:00.000Z", outputTokens: 5 }),
+  ];
+  const days = spendByDay(records, {});
+  assert.deepEqual(days.map(day => day.day), ["2026-08-26", "2026-08-25"]);
+  assert.equal(days[0]?.totals.outputTokens, 25, "a day is its calls summed, not its heaviest");
+  // The id the drill-down is keyed on has to be the same string the list shows, or the
+  // dashboard is two views of data that only look related.
+  assert.equal(summariseSpend(records, { day: days[0]!.day }).totals.outputTokens, 25);
+});
+
+test("a task costs what its turns cost, and says when it cannot be known", () => {
+  const records = [
+    row({ turnId: "t-a", outputTokens: 100 }),
+    row({ turnId: "t-b", outputTokens: 25 }),
+  ];
+  const costed = costOfTasks(
+    [
+      { id: "t51", title: "size the local models", status: "review", runs: ["t-a", "t-b"] },
+      { id: "t12", title: "asked before turnId existed", status: "open", runs: [] },
+    ],
+    records,
+    {}
+  );
+
+  assert.equal(costed[0]?.totals.outputTokens, 125);
+  assert.equal(costed[0]?.turns, 2);
+  // A task with no runs is not a free task. It is a task whose cost is not on file, and the
+  // dashboard has to show those differently or the column reads as "these ones were cheap".
+  assert.equal(costed[1]?.totals.outputTokens, 0);
+  assert.equal(costed[1]?.unknown, true);
+  assert.equal(costed[0]?.unknown, false);
+});
+
+test("an empty window has no cost, not a cost of zero", () => {
+  const report = summariseSpend([row({ turnId: "t-b" })], {
+    turnIds: ["t-a"],
+    rates: { "MiniMax-M3": { inputPerM: 1, outputPerM: 1 } },
+  });
+  // Nothing to price sums to zero, and zero renders as $0.00 — a figure that says "this
+  // cost nothing" where the truth is "nothing here is costable". Caught on screen the first
+  // time a task drill-down was opened, in a file whose other tests are all about exactly
+  // this distinction.
+  assert.equal(report.money, undefined);
+  assert.doesNotMatch(describeSpend(report).join("\n"), /\$/);
 });

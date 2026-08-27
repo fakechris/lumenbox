@@ -564,6 +564,20 @@ export class X11Executor {
       case "cursor_position":
         // Handled by the caller, which owns settle timing and the result fields.
         return;
+
+      default: {
+        // Without this the switch simply ended, the method returned, and the caller reported
+        // success. A `left_click` -- Anthropic's computer-use vocabulary, not ours -- moved
+        // nothing, clicked nothing, and came back {"success": true, "action_count": 3}. That
+        // is the failure this codebase keeps finding in other places: a capability that
+        // reports success once and never reports its own failure.
+        const unknown = (action as { action?: unknown }).action;
+        throw new Error(
+          `Unknown computer action ${JSON.stringify(unknown)}. This tool's vocabulary is ` +
+            `click (with "button"), mouse_move, mouse_down, mouse_up, drag, scroll, type, ` +
+            `key, click_in_window, activate_window, wait, screenshot, cursor_position.`
+        );
+      }
     }
   }
 

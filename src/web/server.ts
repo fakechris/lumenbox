@@ -167,6 +167,8 @@ import { adminRecipients, decideUpgrade, upgradeMessage } from "../host/upgrade.
 import { PRESET_MODELS, providerNames, resolveProvider, testProvider } from "../host/provider.ts";
 import { Principals, roleAtLeast, type Principal, type Role } from "../host/principals.ts";
 import { describeTask, isLive, isTaskStatus } from "../host/tasks.ts";
+import { costOfTasks, spendByDay, summariseSpend, type Rates } from "../host/spend.ts";
+import type { UsageRecord } from "../host/usage.ts";
 import { TOOL_BUDGET_WARNING } from "../host/mcp.ts";
 import {
   handleMcpRequest,
@@ -1603,6 +1605,30 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
        * the local UI is unrestricted (as it always was) while a channel-authenticated
        * or gateway user is held to their role.
        */
+      /**
+       * Prices, from configuration.
+       *
+       * Re-read per request rather than cached: an operator who has just added a rate to fix
+       * a blank money column should see it on the next refresh, not the next restart.
+       */
+      const configuredRates = (): Rates => {
+        try {
+          return (
+            (JSON.parse(readFileSync(join(agentboxHome(), "config.json"), "utf8")) as { rates?: Rates })
+              .rates ?? {}
+          );
+        } catch {
+          return {};
+        }
+      };
+
+      /** The local calendar day a record belongs to — the same one `spendByDay` keys on. */
+      const dayOfRecord = (record: UsageRecord): string => {
+        const at = new Date(record.at);
+        const pad = (value: number) => String(value).padStart(2, "0");
+        return `${at.getFullYear()}-${pad(at.getMonth() + 1)}-${pad(at.getDate())}`;
+      };
+
       const refusedRole = (need: Role): boolean => {
         const role: Role =
           caller.userId === undefined ? "admin" : principals.roleOf(caller.userId);
@@ -1743,6 +1769,70 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
           send(res, 200, {
             records: orchestrator.usage.since(afterSeq, 500),
             totals: orchestrator.usage.totals(afterSeq),
+          });
+          return;
+        }
+
+        // ── the admin view: where the month went, drillable to one task ────────────
+        //
+        // A different question from the rest of this API, which answers "what is this agent
+        // doing now". This one answers "where did it go", which is why it is admin-only and
+        // a separate surface rather than another tab on the agent view.
+        if (route === "GET /api/spend") {
+          if (refusedRole("admin")) return;
+          const records = orchestrator.usage.since(0, Number.MAX_SAFE_INTEGER);
+          const rates = configuredRates();
+          const day = url.searchParams.get("day") ?? undefined;
+          const work = url.searchParams.get("work") ?? undefined;
+          const taskId = url.searchParams.get("task") ?? undefined;
+
+          // Drill-down: one task, through the turns its own board history recorded.
+          if (taskId !== undefined) {
+            const task = orchestrator.tasks?.get(taskId);
+            if (task === undefined) {
+              send(res, 404, { error: `no task ${taskId}` });
+              return;
+            }
+            const runs = [...new Set(task.history.map(change => change.run).filter(run => run !== undefined))];
+            send(res, 200, {
+              report: summariseSpend(records, { turnIds: runs, rates, compacted: orchestrator.usage.compacted() }),
+              task: { id: task.id, title: task.title, status: task.status, history: task.history },
+            });
+            return;
+          }
+
+          if (work !== undefined) {
+            send(res, 200, {
+              report: summariseSpend(records, { workId: work, rates, compacted: orchestrator.usage.compacted() }),
+            });
+            return;
+          }
+
+          const inDay = day === undefined ? records : records.filter(record => dayOfRecord(record) === day);
+          const costed = costOfTasks(
+            (orchestrator.tasks?.list() ?? []).map(task => ({
+              id: task.id,
+              title: task.title,
+              status: task.status,
+              runs: [...new Set(task.history.map(change => change.run).filter(run => run !== undefined))],
+            })),
+            inDay,
+            rates
+          );
+          send(res, 200, {
+            days: spendByDay(records, rates),
+            day: day ?? null,
+            report: summariseSpend(records, {
+              ...(day !== undefined ? { day } : {}),
+              rates,
+              compacted: orchestrator.usage.compacted(),
+            }),
+            // Costed against the same window the report covers, so the rows and the total
+            // are answers to one question rather than two.
+            tasks: costed.filter(cost => !cost.unknown || day === undefined),
+            // How many were dropped, and why. Filtering them away silently makes a day with
+            // nothing costable read as a day with no tasks, which is a different claim.
+            tasksHidden: day === undefined ? 0 : costed.filter(cost => cost.unknown).length,
           });
           return;
         }

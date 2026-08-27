@@ -502,6 +502,39 @@ Small, and the measurement to check it against is on disk: every turn in the tra
 whose last text block was followed only by bookkeeping calls is a case this would have
 changed, and they can be counted before anything ships.
 
+### R33. Synthetic clicks do not reach the box's browser
+Found while verifying the admin view, and reproducible from inside the container with no
+part of our code involved:
+
+```sh
+DISPLAY=:1 xdotool mousemove --sync 260 669 click 1   # exit 0
+```
+
+The pointer moves. The button under it renders its hover state. `xdotool getactivewindow`
+names the Chromium window and `getmouselocation` reports the pointer inside it. **The click
+does nothing.** `key Escape` is ignored the same way. Motion arrives; button and key events
+do not.
+
+So the computer-use path against the desktop browser is, on this box, **able to look and
+unable to touch** — and an agent driving it would see hover states change under its cursor
+and conclude its clicks were landing. This is the pattern from
+[docs/14](14-from-outside-reading.md) in its purest form: the capability reports success and
+never reports its own failure.
+
+Not yet diagnosed. The suspects, in order: the Chromium instance is the one Playwright
+launched and may refuse XTEST input; a stale "Restore pages?" bubble may hold a pointer
+grab; or the container's XTEST extension is partially functional. What is established is
+that it is not our executor — the raw command fails identically.
+
+Two things this run fixed in passing, both ours and both real: an action name the executor
+did not recognise fell through its `switch` and came back `{"success": true}` having done
+nothing (`left_click`, which is Anthropic's vocabulary rather than ours), and `agentbox`'s
+own screenshot script now forces a real load when only a URL fragment changes, because
+Playwright's `goto` does not — which had it photographing a build that no longer existed.
+
+Next step is a bisect rather than a design: a plain `xterm` on the same display, clicked the
+same way, separates "Chromium ignores XTEST" from "this box ignores XTEST".
+
 ### R16. Webhook and event triggers
 Scheduled skills cover "every morning"; nothing covers "when the build breaks" or
 "when an external system pings". An HTTP ingress whose calls arrive as inbound

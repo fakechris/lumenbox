@@ -151,8 +151,46 @@ export const APP_HTML = String.raw`<!doctype html>
   body.electron #topbar button, body.electron #topbar a { -webkit-app-region: no-drag; }
   body.electron-mac #topbar { padding-left: 84px; }
 
+  /* ── the admin view ───────────────────────────────────────────────────────── */
+  #spendwrap .modal { width: 860px; }
+  /* The body scrolls and the caveat does not: "this is a lower bound" and "no rate for X"
+     are the two things a reader most needs and the two a long table pushes off screen. */
+  #spendbody { max-height: 46vh; overflow-y: auto; }
+  #spendtoday { cursor: pointer; }
+  #spendtoday:hover { color: var(--text); }
+  .spendgrid { display: grid; grid-template-columns: 150px 1fr; gap: 16px; align-items: start; }
+  .daylist { display: flex; flex-direction: column; gap: 1px; max-height: 320px; overflow-y: auto; }
+  .daylist a {
+    display: flex; justify-content: space-between; gap: 8px; padding: 4px 6px;
+    font-size: 12px; text-decoration: none; color: var(--text-soft); border-radius: 4px;
+  }
+  .daylist a:hover { background: var(--surface-2); color: var(--text); }
+  .daylist a.on { background: var(--surface-2); color: var(--text); font-weight: 600; }
+  table.spend { width: 100%; border-collapse: collapse; font-size: 12px; }
+  table.spend th {
+    text-align: left; font-weight: 500; color: var(--muted); font-size: 10.5px;
+    letter-spacing: 0.06em; text-transform: uppercase; padding: 3px 6px;
+    border-bottom: 1px solid var(--border);
+  }
+  table.spend td { padding: 3px 6px; border-bottom: 1px solid var(--border); }
+  table.spend td.num { text-align: right; font-family: var(--font-mono); }
+  /* A cost that is not on file is not a small cost. Rendered as a word rather than a
+     number so a column of figures cannot be read as if this row were cheap. */
+  table.spend td.unknown {
+    color: var(--muted); font-style: italic; text-align: right; white-space: nowrap;
+  }
+  /* The task title is the only thing here allowed to be long. Everything else is a
+     figure, and a figure that wraps turns one row into three. */
+  table.spend td:not(:first-child) { white-space: nowrap; }
+  /* …except the note, which is the whole point of the history table. */
+  table.spend td:last-child { white-space: normal; }
+  table.spend tr.pick:hover td { background: var(--surface-2); }
+  table.spend a { color: var(--accent, inherit); text-decoration: none; font-weight: 600; }
+  table.spend a:hover { text-decoration: underline; }
+  .caveat { font-size: 11.5px; color: var(--muted); line-height: 1.5; }
+
   /* ── settings ─────────────────────────────────────────────────────────────── */
-  #settingswrap, #agentwrap {
+  #spendwrap, #settingswrap, #agentwrap {
     position: fixed; inset: 0; z-index: 20; display: flex;
     align-items: center; justify-content: center; background: rgba(0,0,0,0.3);
   }
@@ -578,7 +616,12 @@ export const APP_HTML = String.raw`<!doctype html>
     LumenBox
   </span>
   <span class="mid"><span id="model">&mdash;</span></span>
-  <span id="spendtoday" class="mono" style="font-size:12px;color:var(--muted);white-space:nowrap" title="Tokens spent today, all agents"></span>
+  <!-- A control, so it is reachable by keyboard and announced as one. It was a span that
+       opened nothing; now it opens something, and a clickable span nothing can find is a
+       defect whether or not anyone has complained about it yet. -->
+  <span id="spendtoday" class="mono" role="button" tabindex="0"
+        style="font-size:12px;color:var(--muted);white-space:nowrap"
+        title="Tokens spent today, all agents \u2014 open the spend view"></span>
   <span id="whoami" style="font-size:12px;color:var(--muted);white-space:nowrap"></span>
   <button id="settingsbtn" title="Settings" aria-label="Settings">
     <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3.2"/><path d="M19.4 15a1.7 1.7 0 0 0 .34 1.87l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.7 1.7 0 0 0-1.87-.34 1.7 1.7 0 0 0-1.03 1.56V21a2 2 0 1 1-4 0v-.09a1.7 1.7 0 0 0-1.11-1.56 1.7 1.7 0 0 0-1.87.34l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.7 1.7 0 0 0 .34-1.87 1.7 1.7 0 0 0-1.56-1.03H3a2 2 0 1 1 0-4h.09a1.7 1.7 0 0 0 1.56-1.11 1.7 1.7 0 0 0-.34-1.87l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.7 1.7 0 0 0 1.87.34h.09a1.7 1.7 0 0 0 1.03-1.56V3a2 2 0 1 1 4 0v.09a1.7 1.7 0 0 0 1.03 1.56 1.7 1.7 0 0 0 1.87-.34l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.7 1.7 0 0 0-.34 1.87v.09a1.7 1.7 0 0 0 1.56 1.03H21a2 2 0 1 1 0 4h-.09a1.7 1.7 0 0 0-1.56 1.03Z"/></svg>
@@ -704,6 +747,27 @@ export const APP_HTML = String.raw`<!doctype html>
   <div class="feed" id="feed"></div>
 </div>
 
+</div>
+
+<!-- Where the month went. A different question from the rest of this page, which answers
+     "what is this agent doing now" — so a different surface, admin only, reached from the
+     one number that was already in the header and did not open anything. -->
+<div id="spendwrap" style="display:none">
+  <div class="modal">
+    <h3>Spend</h3>
+    <div class="spendgrid">
+      <div>
+        <div style="font-size:10.5px;letter-spacing:0.06em;text-transform:uppercase;color:var(--muted);padding:0 6px 4px">Day &middot; out</div>
+        <div class="daylist" id="spenddays"></div>
+      </div>
+      <div>
+        <div id="spendhead" class="caveat" style="margin-bottom:10px"></div>
+        <div id="spendbody"></div>
+      </div>
+    </div>
+    <div id="spendcaveat" class="caveat"></div>
+    <div class="actions"><button id="spendclose" class="btn ghost sm">Close</button></div>
+  </div>
 </div>
 
 <!-- Settings. What is here is exactly what the config file holds: the provider choice
@@ -1558,6 +1622,172 @@ $("setcancel").onclick = function () {
   markOnboarded();
   $("settingswrap").style.display = "none";
 };
+// ── the admin view ──────────────────────────────────────────────────────────────
+//
+// Reached from the header number, which had been sitting there since the honesty pass
+// showing today's tokens and opening nothing. Everything below reads; nothing here
+// changes anything, which is why one Close is the only control.
+
+var spendDay = null;
+
+function num(value) {
+  return (value || 0).toLocaleString("en-US");
+}
+
+/** "1 turn", not "1 turns". A report that cannot count to one is not read carefully after that. */
+function plural(count, word) {
+  return num(count) + " " + word + (count === 1 ? "" : "s");
+}
+
+/** A cost that is not on file, said in words. */
+function cost(row) {
+  if (row.unknown) return '<td class="unknown" title="No usage rows name this task\u2019s turns \u2014 it predates the field">not on file</td>';
+  return '<td class="num">' + num(row.totals.outputTokens) + "</td>";
+}
+
+function renderSpend(data) {
+  spendDay = data.day || null;
+  $("spenddays").innerHTML = (data.days || []).map(function (d) {
+    return '<a href="#" data-day="' + esc(d.day) + '" class="' + (d.day === spendDay ? "on" : "") + '">' +
+      "<span>" + esc(d.day) + "</span><span>" + num(d.totals.outputTokens) + "</span></a>";
+  }).join("");
+
+  var report = data.report || {};
+  var totals = report.totals || {};
+  // A task drill-down is about a task, so it says which one. "1 turn(s)" was technically
+  // true and told the reader nothing they had not just clicked on.
+  var heading = data.task
+    ? esc(data.task.id) + " " + esc(data.task.title) + " &middot; " + esc(data.task.status)
+    : esc(report.scope || "");
+  $("spendhead").innerHTML =
+    "<b>" + heading + "</b> &middot; " + plural(report.records, "call") +
+    (report.turns ? " across " + plural(report.turns, "turn") : "") + "<br>" +
+    "in " + num(totals.inputTokens) + " &middot; out " + num(totals.outputTokens) +
+    " &middot; cache read " + num(totals.cacheReadTokens) +
+    (report.money !== undefined && report.money !== null
+      ? " &middot; <b>$" + report.money.toFixed(2) + "</b>"
+      : "");
+
+  var sections = [];
+  ["byKind", "byAgent", "byModel"].forEach(function (key) {
+    var rows = report[key] || [];
+    if (rows.length < 2) return;
+    var label = key.slice(2).toLowerCase();
+    sections.push(
+      "<table class=\"spend\" style=\"margin-bottom:12px\"><tr><th>" + label +
+      "</th><th style=\"text-align:right\">out</th><th style=\"text-align:right\">in</th></tr>" +
+      rows.map(function (row) {
+        return "<tr><td>" + esc(row[label] || "") + '</td><td class="num">' +
+          num(row.totals.outputTokens) + '</td><td class="num">' + num(row.totals.inputTokens) + "</td></tr>";
+      }).join("") + "</table>"
+    );
+  });
+
+  var tasks = data.tasks || [];
+  if (tasks.length) {
+    sections.push(
+      "<table class=\"spend\"><tr><th>task</th><th>status</th><th style=\"text-align:right\">turns</th>" +
+      "<th style=\"text-align:right\">out</th></tr>" +
+      tasks.map(function (row) {
+        // The id is a link rather than the row being clickable: a <tr> with a handler is
+        // invisible to the keyboard and to anything reading the page aloud, and it gives no
+        // sign that it can be clicked. Same defect the header number had.
+        return '<tr class="pick"><td><a href="#" data-task="' + esc(row.id) + '">' + esc(row.id) +
+          "</a> " + esc(row.title) + "</td><td>" + esc(row.status) + '</td><td class="num">' +
+          num(row.turns) + "</td>" + cost(row) + "</tr>";
+      }).join("") + "</table>"
+    );
+  }
+  if (data.tasksHidden) {
+    // Said rather than filtered quietly: "no tasks" and "no task whose cost is recoverable"
+    // are different facts and only one of them is true here.
+    sections.push('<div class="caveat" style="padding-top:6px">' + num(data.tasksHidden) +
+      " task(s) not shown: nothing on file names the turns they were worked in.</div>");
+  }
+  // What the board recorded, which is the "execution" half of the drill-down: the cost is
+  // only half the answer to "what happened to this task".
+  if (data.task) {
+    sections.push(
+      "<table class=\"spend\"><tr><th>when</th><th>status</th><th>by</th><th>note</th></tr>" +
+      (data.task.history || []).map(function (change) {
+        return "<tr><td>" + esc((change.at || "").replace("T", " ").slice(0, 19)) + "</td><td>" +
+          esc(change.status || "") + "</td><td>" + esc((change.by || "").slice(0, 18)) +
+          "</td><td>" + esc(change.note || "") + "</td></tr>";
+      }).join("") + "</table>"
+    );
+  }
+  $("spendbody").innerHTML = sections.join("") ||
+    '<div class="caveat">Nothing on file for this.</div>';
+
+  var caveats = [];
+  if (report.compacted) {
+    caveats.push("A lower bound: the usage file has been compacted, so older calls in this window are no longer on disk.");
+  }
+  if ((report.unpriced || []).length) {
+    caveats.push("No cost shown: no rate for " + esc(report.unpriced.join(", ")) +
+      ". Add a \u201crates\u201d block to config.json to price them.");
+  }
+  if (report.unjoinable) caveats.push(esc(report.unjoinable));
+  $("spendcaveat").innerHTML = caveats.join("<br>");
+}
+
+function openSpend(query) {
+  // Addressable, so a day or a task's cost can be linked to rather than described as a
+  // sequence of clicks. It also makes the view checkable by navigating to it, which is the
+  // only way it *could* be checked here: synthetic clicks do not reach this browser.
+  location.hash = "spend" + (query || "");
+  $("spendwrap").style.display = "flex";
+  $("spendbody").innerHTML = '<div class="caveat">Reading&hellip;</div>';
+  fetch("/api/spend" + (query || ""))
+    .then(function (r) { return r.json(); })
+    .then(function (data) {
+      if (data.error) {
+        $("spendbody").innerHTML = '<div class="caveat">' + esc(data.error) + "</div>";
+        return;
+      }
+      renderSpend(data);
+    })
+    .catch(function (error) {
+      $("spendbody").innerHTML = '<div class="caveat">' + esc(String(error)) + "</div>";
+    });
+}
+
+/** Opens the view named by the address, if the address names one. */
+function spendFromHash() {
+  var hash = location.hash.replace(/^#/, "");
+  if (hash.indexOf("spend") !== 0) return;
+  openSpend(hash.slice("spend".length));
+}
+window.addEventListener("hashchange", spendFromHash);
+spendFromHash();
+
+$("spendtoday").onclick = function () { openSpend(""); };
+$("spendtoday").onkeydown = function (event) {
+  if (event.key === "Enter" || event.key === " ") { event.preventDefault(); openSpend(""); }
+};
+function closeSpend() {
+  $("spendwrap").style.display = "none";
+  // Cleared, or the next reload reopens a dialog nobody asked for.
+  if (location.hash.indexOf("#spend") === 0) location.hash = "";
+}
+$("spendclose").onclick = closeSpend;
+$("spendwrap").addEventListener("click", function (event) {
+  if (event.target === $("spendwrap")) closeSpend();
+});
+$("spenddays").addEventListener("click", function (event) {
+  var link = event.target.closest("a[data-day]");
+  if (!link) return;
+  event.preventDefault();
+  openSpend("?day=" + encodeURIComponent(link.getAttribute("data-day")));
+});
+$("spendbody").addEventListener("click", function (event) {
+  var link = event.target.closest("a[data-task]");
+  if (!link) return;
+  event.preventDefault();
+  // The drill-down the whole thing exists for: from a day to one task's execution.
+  openSpend("?task=" + encodeURIComponent(link.getAttribute("data-task")));
+});
+
 $("settingswrap").addEventListener("click", function (event) {
   if (event.target === $("settingswrap")) {
     markOnboarded();

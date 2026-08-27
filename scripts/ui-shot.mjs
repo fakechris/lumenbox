@@ -19,6 +19,8 @@
  *   node scripts/ui-shot.mjs --click e5on9       click it, then shoot
  *   node scripts/ui-shot.mjs --find "hide 11"    find the ref by its label, click, shoot
  *   node scripts/ui-shot.mjs --list              every ref on the page, to pick one
+ *   node scripts/ui-shot.mjs --keep --find "X"   without reloading, to walk a flow
+ *   node scripts/ui-shot.mjs --keep --at 413,567 click a point, for what the snapshot cannot reach
  *
  * Writes /tmp/ui-shot.png, and prints the path so it can be opened or read.
  */
@@ -73,9 +75,19 @@ async function box(path, body) {
  */
 const url = flag("--url") ?? "http://host.docker.internal:7777/";
 
-const opened = await box("/browser", { op: "open", display, url });
-if (!/LumenBox/.test(opened.title ?? "")) {
-  console.error(`Served page is titled ${JSON.stringify(opened.title)} — is the web server up?`);
+// Every invocation reloads by default, which is right for checking one screen and wrong for
+// checking a flow: two commands in a row would lose the dialog the first one opened. --keep
+// drives the page as it stands.
+if (!args.includes("--keep")) {
+  // Navigating to a URL that differs only in its fragment does not reload the document, so
+  // a page already open kept running the *previous* build's script and the screenshot was
+  // of code that no longer existed. Half an hour went into that. about:blank first forces
+  // a real load.
+  if (url.includes("#")) await box("/browser", { op: "open", display, url: "about:blank" });
+  const opened = await box("/browser", { op: "open", display, url });
+  if (!/LumenBox/.test(opened.title ?? "")) {
+    console.error(`Served page is titled ${JSON.stringify(opened.title)} — is the web server up?`);
+  }
 }
 
 /** Every clickable thing the page offers, as the accessibility tree names it. */
@@ -111,6 +123,19 @@ if (find !== undefined) {
   action = "click";
 }
 if (target) await box("/browser", { op: "act", display, action, ref: target });
+
+// The accessibility snapshot is length-capped, and a dialog appended at the end of the
+// document falls off it — every ref inside the spend view was unreachable this way while
+// being perfectly visible on screen. So: click where the screenshot shows it.
+const at = flag("--at");
+if (at !== undefined) {
+  const [x, y] = at.split(",").map(Number);
+  if (!Number.isFinite(x) || !Number.isFinite(y)) throw new Error(`--at wants "x,y", got ${at}`);
+  // "click", not "left_click". The other vocabulary used to fall through the executor's
+  // switch and come back {"success": true} having done nothing at all, which is how this
+  // flag appeared to be broken for half an hour.
+  await box("/computer", { display, actions: [{ action: "click", coordinate: [x, y] }] });
+}
 
 const shot = await box("/computer", { display, actions: [{ action: "screenshot" }] });
 const webp = out.replace(/\.png$/, ".webp");
