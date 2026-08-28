@@ -423,7 +423,7 @@ computer tool and no way for you to look at the desktop. Do the work through
 
 If a task genuinely cannot be done without seeing the screen, say so plainly rather
 than guessing at what is on it. Never describe the contents of a screen — you have
-not seen one.`;
+not seen one.${boxClassParagraph(context.boxAccess)}`;
   }
 
   const computer = COMPUTER_SECTION + boxClassParagraph(context.boxAccess);

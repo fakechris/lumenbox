@@ -368,3 +368,17 @@ test("a shared box tells the agent who else is in the room", () => {
   });
   assert.equal(priv, unclassified, "a private box is the ordinary case and adds nothing");
 });
+
+test("an agent with no vision is still told the box is shared", () => {
+  // It takes a different early return in boxSection and nearly missed this. Not seeing
+  // the screen changes nothing about who else can: it still runs shell commands whose
+  // history is common, still writes files anyone can read, and is still the one standing
+  // there when someone asks whether this box is private.
+  const prompt = buildSystemPrompt({
+    ...sharedBoxContext(),
+    vision: false,
+    boxAccess: { access: "shared" as const, badge: "共享箱子", notice: "…" },
+  });
+  assert.match(prompt, /This box is \*\*shared\*\*/);
+  assert.doesNotMatch(prompt, /Screenshots come to you/, "and it still has no screen");
+});
