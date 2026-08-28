@@ -52,11 +52,13 @@ test("the daemon is published to loopback, because its VNC upgrade is unauthenti
   }
 });
 
-test("a box runs on its own network, so a second box is not a neighbour", () => {
-  // Docker's default bridge puts every container on one subnet, and the daemon's VNC
-  // upgrade is unauthenticated on the premise that only the host reaches it. Loopback
-  // publication closes the outside; this closes the inside. Isolation by topology rather
-  // than by filtering — there is no rule to get wrong, because there is no route.
+test("a box runs on its own network rather than the shared default bridge", () => {
+  // One layer, not the boundary. Measured on Docker 29/OrbStack: a container on the
+  // default bridge still reached a box's daemon at its private-network address, because
+  // that engine's DOCKER-FORWARD chain accepts forwarding out of every bridge. So this
+  // is kept for the engines where it does isolate, and the daemon's upgrade path was
+  // authenticated instead of left resting on it. What this test pins is the topology,
+  // not a reachability claim it cannot make from here.
   const args = new BoxManager({
     containerName: "agentbox-test",
     image: "agentbox/box:latest",

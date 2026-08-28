@@ -588,11 +588,24 @@ if (token.length < 16) {
  * Replayed to the upstream verbatim and then joined byte-for-byte, because
  * everything after the handshake is framed RFB rather than HTTP.
  *
- * Deliberately unauthenticated, like /health: the browser cannot set headers on a
- * WebSocket, and the host proxies this from its own loopback-only server. Publishing
- * boxd to a routable address exposes these desktops — which the README says.
+ * **Authenticated, because the reason it was not no longer holds.** It used to be open
+ * like /health, on the reasoning that a browser cannot set headers on a WebSocket and
+ * that only the host's proxy could reach this port. The second half was measured false
+ * twice on 2026-08-28: the daemon was published on every interface, so the whole LAN
+ * could open a desktop; and after that was fixed, a container on Docker's default bridge
+ * still reached this port at the box's private-network address, because Docker 29's
+ * DOCKER-FORWARD chain accepts forwarding out of every bridge — user-defined networks
+ * are not isolated from each other on that engine, however widely that is believed.
+ *
+ * The browser still cannot set the header, and does not have to: it connects to the
+ * host, which checks the person, and the host puts this token on the hop it makes
+ * itself. What is being authenticated here is the hop, not the human.
  */
 server.on("upgrade", (req, clientSocket: Socket, head: Buffer) => {
+  if (!authorized(req)) {
+    clientSocket.end("HTTP/1.1 401 Unauthorized\r\n\r\n");
+    return;
+  }
   const parsed = parseVncPath((req.url ?? "").split("?")[0] ?? "");
   if (!parsed || !displays.has(parsed.index)) {
     clientSocket.destroy();

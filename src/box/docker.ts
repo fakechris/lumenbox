@@ -404,18 +404,24 @@ export class BoxManager {
       // is opt-in: AGENTBOX_BOXD_PUBLISH_ADDRESS, set by someone who has read this.
       "--publish",
       publishOn(process.env.AGENTBOX_BOXD_PUBLISH_ADDRESS ?? "127.0.0.1", config.boxdPort, BOXD_PORT),
-      // Its own bridge, so a second box on this engine is not a neighbour.
+      // Its own bridge, so a box is not on the same subnet as every other container.
       //
-      // Docker's default bridge puts every container on one subnet: a box could reach any
-      // other box's daemon by container address, and the daemon's VNC upgrade is
-      // unauthenticated (src/boxd/main.ts) on the premise that only the host reaches it.
-      // Loopback publication closes the outside; this closes the inside. Isolation by
-      // topology rather than by filtering — there is no rule to get wrong, because there
-      // is no route. Lifted from qm's local sandbox, which mints one network per
-      // container for exactly this reason.
+      // Worth having and **not sufficient**, which is measured rather than assumed.
+      // Docker's default bridge puts every container on one subnet, so a box was
+      // reachable from any container by address. Giving each box its own network is the
+      // usual answer and is widely believed to isolate them — on Docker 29 with OrbStack
+      // it does not: a container on the default bridge reached this box's daemon at its
+      // private-network address, because DOCKER-FORWARD accepts forwarding out of every
+      // bridge. Tested by running a container and fetching /health; it answered.
       //
-      // The host still reaches the daemon through its published loopback port, and the
-      // box still reaches the internet through this network's own gateway.
+      // So this is one layer of several, kept because it costs nothing and does isolate
+      // on engines that implement the isolation chains — and the daemon's own upgrade
+      // path was authenticated (src/boxd/main.ts) rather than left resting on it.
+      // Enforcing the property here would mean writing host firewall rules for an engine
+      // whose rules live inside a VM, which is a promise this process cannot keep.
+      //
+      // The host reaches the daemon through its published loopback port, and the box
+      // reaches the internet through this network's own gateway.
       "--network",
       networkNameFor(config.containerName),
       "--env",

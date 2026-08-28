@@ -3190,11 +3190,25 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
 
     const upstream = netConnect(origin.port, origin.host, () => {
       const headers = Object.entries(req.headers)
+        // The browser's own Authorization, if any, is dropped in favour of the box
+        // token below: what authorises this hop is being the host, not being the
+        // person — the person was already checked above.
+        .filter(([key]) => key.toLowerCase() !== "authorization")
         .map(([key, value]) =>
           `${key}: ${Array.isArray(value) ? value.join(", ") : value}\r\n`
         )
         .join("");
-      upstream.write(`GET ${upstreamPath} HTTP/1.1\r\n${headers}\r\n`);
+      // The box token on the upgrade, because the premise that only the host can reach
+      // the daemon does not hold. Measured 2026-08-28 on Docker 29/OrbStack: a container
+      // on the default bridge reached this box's daemon at its private-network address,
+      // because that engine's DOCKER-FORWARD chain accepts forwarding out of every
+      // bridge — user-defined networks are not isolated from each other there, however
+      // widely that is believed. The daemon's upgrade handler is deliberately
+      // unauthenticated (src/boxd/main.ts) on the strength of that premise, so the
+      // premise is now carried rather than assumed.
+      const carried =
+        origin.token !== undefined ? `authorization: Bearer ${origin.token}\r\n` : "";
+      upstream.write(`GET ${upstreamPath} HTTP/1.1\r\n${carried}${headers}\r\n`);
       if (head.length > 0) upstream.write(head);
       upstream.pipe(clientSocket);
       clientSocket.pipe(upstream);
