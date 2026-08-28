@@ -541,6 +541,16 @@ export class Orchestrator {
    * every completed round — and decides. A call whose result was never written appears there as
    * having an unknown outcome, which is the truth and the only safe thing to say about it.
    */
+  /**
+   * Whether this agent has a turn that began and has not ended.
+   *
+   * For the owed-delivery sweep: an answer must not be handed over while the turn that is
+   * writing it is still running, or the person gets half a reply followed by silence.
+   */
+  hasOpenTurn(agentId: string): boolean {
+    return (this.turns?.interrupted() ?? []).some(turn => turn.agentId === agentId);
+  }
+
   resumeInterrupted(): { resumed: number; abandoned: number } {
     const outstanding = this.turns?.interrupted() ?? [];
     let resumed = 0;

@@ -991,19 +991,27 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
   // Nothing about the reply was stored. It is recovered the same way the live path builds
   // it — everything the agent said past the recorded index — because the transcript is
   // already durable and the promise was never where the answer lived.
-  void (async () => {
+  // Not once at startup — that was the bug this replaces. The startup sweep ran before
+  // the resumed turn had produced anything, found the transcript empty, and skipped the
+  // debt for the lifetime of the process; the turn then finished a complete, good answer
+  // into a transcript nobody was watching, and the person got silence. Observed on t58:
+  // the delivery sat open in the ledger while its answer sat finished on disk. The sweep
+  // now repeats until the book is clear, and it will not hand over a reply while the turn
+  // writing it is still open.
+  const settleOwed = async () => {
     for (const owed of deliveries.pending()) {
+      // A turn still running is an answer still being written. Wait for the next pass.
+      if (orchestrator.hasOpenTurn(owed.agentId)) continue;
       let reply = "";
       try {
         reply = orchestrator.replySince(owed.agentId, owed.before, owed.conversation).trim();
       } catch {
         // A transcript that cannot be read is a delivery that cannot be recovered; it
-        // falls through to the rescue below rather than holding up the others.
+        // falls through to the stuck-task rescue rather than holding up the others.
       }
       if (reply === "") continue;
       log(`delivering an answer owed since ${owed.at} to ${owed.chatKey}`);
-      const late =
-        `This finished while I was restarting, so it is arriving late:\n\n${reply}`;
+      const late = `晚到了一步——这个在我重启时做完的:\n\n${reply}`;
       try {
         await channels.pushToChat(owed.chatKey, late);
         // Closed by the id the request carried. It matters: the sweep below would
@@ -1018,10 +1026,18 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
         }
         deliveries.close(owed.id);
       } catch {
-        // Left owed, so the next start tries again. A delivery that is dropped because
+        // Left owed, so the next pass tries again. A delivery that is dropped because
         // the chat was briefly unreachable is the bug this exists to fix.
       }
     }
+  };
+  const owedSweep = setInterval(() => {
+    // Cheap when the book is clear; pending() reads a small ledger.
+    if (deliveries.pending().length > 0) void settleOwed();
+  }, 20_000);
+  owedSweep.unref?.();
+  void (async () => {
+    await settleOwed();
 
     // Whatever is still owed had no answer to recover — the turn never got far enough.
     // Those are the ones the person has to be told about, because there is nothing to

@@ -579,7 +579,13 @@ function renderChatFiles(context: PromptContext): string {
     "the person that number live. Write it from the script itself, not by hand between " +
     "steps, and delete it when the batch is done.\n\n" +
     "A deliverable belongs in outbox/ — a path pasted into your reply is not a deliverable, " +
-    "because the person is reading a phone, not the box."
+    "because the person is reading a phone, not the box.\n\n" +
+    "Your closing message is the only thing the person sees. It must stand alone: what was " +
+    "asked, what you did, what came of it, and where the deliverable is — in their language. " +
+    "\"已问。等回复。\" or \"done, see above\" reads as a glitch on a phone, because there is " +
+    "no above; the steps you took are folded away where they are not looking. If you asked " +
+    "someone something, your closing message says what you asked and why. If nothing worked, " +
+    "say what you tried and what you need. One complete paragraph beats a status line."
   );
 }
 
