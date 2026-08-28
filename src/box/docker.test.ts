@@ -15,10 +15,12 @@
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { BACKUP_EXCLUDES, BoxManager, networkNameFor } from "./docker.ts";
+import { BACKUP_EXCLUDES, BoxManager, boxTokenPath, loadBoxToken, networkNameFor, readBoxToken } from "./docker.ts";
 import { SPILL_AT_BYTES, SPOOL_DIR } from "../boxd/shell-service.ts";
 import { DURABLE_RESULT_CHARS } from "../protocol/index.ts";
-import { readFileSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 
 test("the daemon is published to loopback, because its VNC upgrade is unauthenticated", () => {
   // Measured on a running installation, 2026-08-28, before this was fixed: from the
@@ -126,4 +128,52 @@ test("spilling happens before anything durable is truncated", () => {
     `output is spilled at ${SPILL_AT_BYTES} bytes but only ${DURABLE_RESULT_CHARS} ` +
       `characters survive durably, so results between the two lose their tail with no pointer`
   );
+});
+
+test("each box gets its own token, and a new one inherits nothing", () => {
+  // One `~/.agentbox/token` was shared by every box this host started. Harmless while
+  // there was only ever one, and exactly the failure the control plane's own allocator
+  // warns about: "one token across the fleet would mean anyone who reached one tenant's
+  // box could reach another". A box that belongs to one person is the whole of the
+  // identity design, and a shared key would make that boundary a wish.
+  const dir = mkdtempSync(join(tmpdir(), "agentbox-token-"));
+  const home = process.env.AGENTBOX_HOME;
+  const explicit = process.env.AGENTBOX_TOKEN;
+  try {
+    process.env.AGENTBOX_HOME = dir;
+    delete process.env.AGENTBOX_TOKEN;
+
+    const mine = loadBoxToken("agentbox-box");
+    const theirs = loadBoxToken("agentbox-identity-dana");
+    assert.notEqual(mine, theirs, "two boxes, two keys");
+    assert.equal(loadBoxToken("agentbox-box"), mine, "stable across calls, or a running box locks out");
+    assert.match(boxTokenPath("agentbox-identity-dana"), /tokens\/agentbox-identity-dana$/);
+  } finally {
+    if (home === undefined) delete process.env.AGENTBOX_HOME;
+    else process.env.AGENTBOX_HOME = home;
+    if (explicit !== undefined) process.env.AGENTBOX_TOKEN = explicit;
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("the box running right now keeps working, and only it may read the old shared token", () => {
+  // Its environment has the old token baked in and cannot be edited in place, so the
+  // default container still reads the legacy file. Any other box must not: inheriting is
+  // how one key came to open every door.
+  const dir = mkdtempSync(join(tmpdir(), "agentbox-token-"));
+  const home = process.env.AGENTBOX_HOME;
+  const explicit = process.env.AGENTBOX_TOKEN;
+  try {
+    process.env.AGENTBOX_HOME = dir;
+    delete process.env.AGENTBOX_TOKEN;
+    writeFileSync(join(dir, "token"), "legacy-shared-token\n", { mode: 0o600 });
+
+    assert.equal(readBoxToken("agentbox-box"), "legacy-shared-token");
+    assert.equal(readBoxToken("agentbox-identity-dana"), undefined);
+  } finally {
+    if (home === undefined) delete process.env.AGENTBOX_HOME;
+    else process.env.AGENTBOX_HOME = home;
+    if (explicit !== undefined) process.env.AGENTBOX_TOKEN = explicit;
+    rmSync(dir, { recursive: true, force: true });
+  }
 });

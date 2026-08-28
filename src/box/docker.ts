@@ -12,7 +12,7 @@ import { execFile } from "node:child_process";
 import { randomBytes } from "node:crypto";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { promisify } from "node:util";
 import { BOXD_PORT, UI_PORT } from "../protocol/index.ts";
 import { BoxClient } from "./client.ts";
@@ -121,14 +121,35 @@ export interface BoxConfig {
  * Created on first use and then stable, so a container started earlier keeps
  * matching.
  */
-export function loadBoxToken(): string {
-  const existing = readBoxToken();
+/**
+ * Where one box's token lives. One file per container, because a token is a key to a
+ * box and not to the installation.
+ *
+ * It used to be a single `~/.agentbox/token` shared by every box this host started —
+ * harmless while there was only ever one, and exactly the failure the control plane
+ * already warns about in its own allocator: "one token across the fleet would mean
+ * anyone who reached one tenant's box could reach another". A box that belongs to one
+ * person is the whole of the identity design, and a shared key would make that boundary
+ * a wish.
+ */
+export function boxTokenPath(containerName: string): string {
+  const home = process.env.AGENTBOX_HOME ?? join(homedir(), ".agentbox");
+  return join(home, "tokens", containerName);
+}
+
+/** The legacy single token, from before a host could run more than one box. */
+function legacyTokenPath(): string {
+  const home = process.env.AGENTBOX_HOME ?? join(homedir(), ".agentbox");
+  return join(home, "token");
+}
+
+export function loadBoxToken(containerName: string = DEFAULT_CONTAINER): string {
+  const existing = readBoxToken(containerName);
   if (existing) return existing;
 
-  const home = process.env.AGENTBOX_HOME ?? join(homedir(), ".agentbox");
-  const path = join(home, "token");
+  const path = boxTokenPath(containerName);
   const token = generateToken();
-  mkdirSync(home, { recursive: true });
+  mkdirSync(dirname(path), { recursive: true });
   writeFileSync(path, `${token}\n`, { mode: 0o600 });
   return token;
 }
@@ -141,23 +162,36 @@ export function loadBoxToken(): string {
  * minted token cannot match theirs, so every call would come back Unauthorized with the
  * cause looking like a network problem.
  */
-export function readBoxToken(): string | undefined {
+export function readBoxToken(containerName: string = DEFAULT_CONTAINER): string | undefined {
+  // An explicit token still wins: it is how somebody attaches to a box this host did not
+  // start, and inventing one for that case would be worse than failing.
   if (process.env.AGENTBOX_TOKEN) return process.env.AGENTBOX_TOKEN;
 
-  const home = process.env.AGENTBOX_HOME ?? join(homedir(), ".agentbox");
-  const path = join(home, "token");
-  if (!existsSync(path)) return undefined;
+  const own = boxTokenPath(containerName);
+  if (existsSync(own)) {
+    const value = readFileSync(own, "utf8").trim();
+    if (value) return value;
+  }
 
-  const existing = readFileSync(path, "utf8").trim();
-  return existing || undefined;
+  // The legacy shared token, and only for the default container: the box running right
+  // now was started with it and its environment cannot be edited in place, so reading it
+  // is what keeps that box reachable across this change. A *new* box never inherits it —
+  // which is the whole point, since inheriting is how one key came to open every door.
+  if (containerName === DEFAULT_CONTAINER && existsSync(legacyTokenPath())) {
+    const value = readFileSync(legacyTokenPath(), "utf8").trim();
+    if (value) return value;
+  }
+  return undefined;
 }
 
 export function defaultBoxConfig(overrides: Partial<BoxConfig> = {}): BoxConfig {
+  const containerName = overrides.containerName ?? process.env.AGENTBOX_CONTAINER ?? DEFAULT_CONTAINER;
   return {
-    containerName: process.env.AGENTBOX_CONTAINER ?? DEFAULT_CONTAINER,
+    containerName,
     image: process.env.AGENTBOX_IMAGE ?? DEFAULT_IMAGE,
     boxdPort: envNumber("AGENTBOX_BOXD_PORT", 0),
-    token: loadBoxToken(),
+    // Keyed by the container it is for, so two boxes never share a key.
+    token: loadBoxToken(containerName),
     host: process.env.AGENTBOX_BOX_HOST ?? resolveDockerHostAddress(),
     displayWidth: envNumber("AGENTBOX_WIDTH", 1280),
     displayHeight: envNumber("AGENTBOX_HEIGHT", 800),
