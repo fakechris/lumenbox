@@ -20,7 +20,7 @@ v4 stops doing that. Instead:
 >   process in the container.
 > - A **shared box** belongs to a group, a tenant, or everyone. It promises **nothing**
 >   about privacy between the people who can reach it, and it says so where they can read
->   it. Don't keep logins here.
+>   it. Nothing is forbidden there; it is simply not private, and it never pretends to be.
 
 The second class is not a lesser box; it is the honest name for the box we already run.
 `docs/09` reached the same conclusion one level down and said it plainly: *"a private agent
@@ -29,24 +29,26 @@ boxes."* v4 raises that from agents to boxes and puts it in front of the person.
 
 **Why this unlocks the design.** v3's reviewer offered a choice for the login problem:
 build a box-wide fail-closed fence over every turn, schedule, agent, VNC path and recorder
-— *or* have the product explicitly forbid typing secrets into the box. Two classes let us
-take **one answer per class** instead of one answer for both, and each is achievable:
-the fence for private boxes, the prohibition for shared ones.
+— *or* stop promising privacy there at all. Two classes let us take **one answer per class**
+instead of one answer for both: the fence in a private box, where it is achievable because
+it only has to close the ordinary paths for one window; and in a shared box, no promise and
+a permanent label, because the alternative — enforcement — is not achievable in an open
+system and the attempt makes it worse (§3.1).
 
 ## 1. The two classes
 
 | | **Private** | **Shared** |
 | --- | --- | --- |
 | Access | one principal | a group, the tenant, or everyone |
-| Login state | expected; the point of the box | **not kept** — the config volume is ephemeral unless someone opts in, and the opt-in says who will be able to see it |
-| Typing a password on its screen | supported, behind the takeover state (§3) | **refused, and the UI says why** |
+| Login state | expected; the point of the box | **persists like anywhere else, and is visible to everyone with access.** Not wiped: agents log into things to do their work, and a box that silently forgot would break that. The label says who else can see it |
+| Typing a password on its screen | supported, behind the takeover state (§3) | **not refused — labelled.** See §3.1: refusing is not achievable and the attempt would be self-defeating |
 | Recording | pauses during takeover | ordinary |
 | Between the people who can reach it | not applicable — there is one | **no boundary at all**, stated: shell, filesystem, screens and archives are common |
 | Reassignment | revoke-and-wipe (§4) | membership change only |
 
 A box's class is a property of the box, recorded with it, not a setting on a page nobody
-reads. It appears in the desktop header, in the box list, and in the sentence the person
-sees before they are asked to log into anything.
+reads. It is rendered wherever somebody is working in the box, permanently — see §3.1 for
+why permanent rather than at the moment it matters.
 
 **Today's box is shared.** Saying that is the whole of what has to change for it to be
 honest — no new mechanism, and it retires the finding that the team box "cannot promise
@@ -98,8 +100,32 @@ paths for the **duration of a window**, and the residual — an agent that delib
 its own reader — is accepted, because in a private box that agent is yours. A check point,
 not an inventory.
 
-For a shared box there is no fence, because there is nothing to fence: **the product
-refuses secret entry and says why.**
+### 3.1 A shared box labels; it does not refuse
+
+An earlier draft of this document said a shared box would "refuse secret entry". It cannot,
+and trying would be worse than not trying.
+
+**It cannot.** A person types through noVNC into X, into whatever is focused. To refuse
+password entry we would have to either parse RFB key events — building a keylogger in order
+to prevent keylogging, which defeats its own purpose — or watch for a focused password field
+over CDP, which sees only our browser, misses the terminal, misses every other application,
+and misses paste entirely.
+
+**And trying would be worse.** A guard that fires only when we happen to be looking teaches
+people to rely on it, and then does not fire. **An intermittent warning is worse than a
+permanent label**, because the label is true every time somebody looks at it.
+
+This is the same lesson as the capture fences that killed v1 and v2, arriving from the other
+direction: this is an open system by design — a real desktop, a real shell, a real browser —
+and enforcement inside it has holes everywhere. Building a permission system able to close
+them would cost more complexity than the product it is protecting. So a shared box states
+what it is, persistently and where the work happens, and then trusts the person:
+
+> **这是一台共享的箱子。<group> 里的人都能打开它的屏幕、读它的文件和命令历史,备份也会带走你在这里登录过的东西。在这里登录任何账号,等于替他们一起登录。**
+
+Where it appears: the desktop header while the screen is open, the box list, and the box's
+own page. Not a modal, not a one-time acknowledgement — those are read once and dismissed
+forever. A label that is always there is read whenever it matters.
 
 ## 4. Ownership, and what changing it costs
 
@@ -144,8 +170,8 @@ shared class ships first.
 2. **Give a box a class and show it.** Record it; render it in the desktop header, the box
    list, and before any login prompt. Mark the current box `shared`. **This is the whole of
    what makes today honest**, and it needs no new isolation machinery.
-3. **Refuse secret entry on shared boxes** — the UI statement and the takeover flow's
-   refusal.
+3. **Label a shared box where the work happens** (§3.1) — desktop header, box list, box
+   page. No refusal, no modal, no acknowledgement to click through.
 4. **One session resolver** across page, API and RFB, with a route that names the box.
 5. **Box lineage on agents and their state** (§5), and the refusal when it is missing.
 6. **The takeover state** (§3) plus a real recorder pause.
@@ -170,6 +196,8 @@ machinery does not make.
 
 **In a shared box**, add: everyone who can reach it. Your screen, your files, your shell
 history and your archives are theirs too. Don't log in to anything you would not hand them.
+Nothing stops you — this is a real computer and we are not going to pretend otherwise — which
+is exactly why the label is permanent rather than a warning you dismiss.
 
 **Not offered by either class**: an agent that can *use* a credential without being able to
 *see* it. That is broker-shaped injection — the secret never enters the container, a
