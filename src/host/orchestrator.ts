@@ -34,6 +34,7 @@ import { MAIN_CONVERSATION } from "../agents/registry.ts";
 import type { HostRunner } from "./host-runner.ts";
 import type { Vault } from "./vault.ts";
 import { Rememberer, summariseExchange } from "./remember.ts";
+import type { PitfallSource } from "./pitfalls.ts";
 import { SkillCache } from "./skills.ts";
 import { Scheduler } from "./schedule.ts";
 import { UsageLog } from "./usage.ts";
@@ -263,6 +264,58 @@ export class Orchestrator {
    * is the workspace snapshot around the turn — a review that changed the work is
    * void, said on the task rather than silently accepted.
    */
+  /** Board movements this system has already learned something from, so it asks once. */
+  private readonly learnedFrom = new Set<string>();
+
+  /**
+   * Three of the four pitfall sources, all of them board movements the harness saw.
+   *
+   * Keyed by task and change time rather than by task alone: a task can be sent back
+   * twice for different reasons, and the second one is worth the same as the first.
+   */
+  private maybeLearnFrom(task: Task): void {
+    const last = task.history[task.history.length - 1];
+    if (last === undefined || task.assigneeId === undefined) return;
+
+    const source: PitfallSource | undefined =
+      last.coerced === true
+        ? "self-accept-refused"
+        : task.status === "blocked" && last.by === task.assigneeId
+          ? "blocked"
+          : task.status === "doing" &&
+              task.reviewerId !== undefined &&
+              last.by === task.reviewerId
+            ? "audit-returned"
+            : undefined;
+    // Nothing to learn from an ordinary move — and specifically not from the channel's
+    // own failure path, which parks tasks as blocked when a turn threw: that is the
+    // machinery breaking, not the work teaching.
+    if (source === undefined) return;
+    const key = `${task.id}:${last.at}`;
+    if (this.learnedFrom.has(key)) return;
+    this.learnedFrom.add(key);
+
+    // The note is the whole of what was recorded about the failure. Without one there is
+    // nothing to distil — asking a model to explain a status change it cannot see would
+    // produce exactly the invented hazard this is built to avoid.
+    const detail = last.note;
+    if (detail === undefined || detail.trim() === "") return;
+
+    void this.rememberer
+      .recordPitfall({
+        agentId: task.assigneeId,
+        source,
+        attempt: task.description ?? task.title,
+        detail,
+        ...(this.callers.get(task.assigneeId)?.userId !== undefined
+          ? { principal: this.callers.get(task.assigneeId)!.userId! }
+          : {}),
+      })
+      .catch(() => {
+        // Already logged inside; a failure to take notes is not the person's problem.
+      });
+  }
+
   private maybeAudit(task: Task): void {
     if (task.status !== "review" || task.reviewerId === undefined) return;
     if (this.auditing.has(task.id)) return;
@@ -343,6 +396,7 @@ export class Orchestrator {
         ? undefined
         : (options.tasks ?? new TaskStore(undefined, line => console.error(`[tasks] ${line}`)));
     if (this.tasks !== undefined) this.tasks.onChange(task => this.maybeAudit(task));
+    if (this.tasks !== undefined) this.tasks.onChange(task => this.maybeLearnFrom(task));
     this.scopes = options.scopes === null ? undefined : (options.scopes ?? new ScopeStore());
     this.mcp =
       options.mcp === null || options.mcp === undefined
@@ -534,7 +588,25 @@ export class Orchestrator {
       // show is the least interesting work in the system and should be billed accordingly.
       selectMemory: prompt => this.askCheaply(agent, prompt),
       resumeOf,
-      onEvent: this.options.onTurnEvent,
+      // Watched on the way past rather than subscribed to elsewhere: a turn that gave up
+      // in a loop is the fourth pitfall source, and this is the one place that has the
+      // report, the agent and what it was asked to do all in hand.
+      onEvent: event => {
+        if (event.type === "stuck" && event.agentId === agent.id) {
+          void this.rememberer
+            .recordPitfall({
+              agentId: agent.id,
+              source: "loop",
+              attempt: inbound.map(message => message.text).join("\n").slice(0, 2_000),
+              detail: event.reason,
+              ...(this.callers.get(agent.id)?.userId !== undefined
+                ? { principal: this.callers.get(agent.id)!.userId! }
+                : {}),
+            })
+            .catch(() => {});
+        }
+        this.options.onTurnEvent?.(event);
+      },
     }).catch(error => {
       // An aborted turn is a normal outcome — a priority message superseded it,
       // and the bus will schedule the follow-up turn that handles that message.

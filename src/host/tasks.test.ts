@@ -67,6 +67,26 @@ test("the review gate: a named reviewer means the assignee cannot self-accept", 
   }
 });
 
+test("a coerced move is marked as one, so a listener need not read the sentence", () => {
+  // The pitfall writer must fire on a refused self-acceptance and not on an ordinary move
+  // to review. Recognising the coercion by its wording would break the day the wording
+  // changes, and the failure would be silent — the registry would simply stop learning.
+  const { store, cleanup } = tempStore();
+  try {
+    store.create({ title: "Ship it", requester: "web", assigneeId: "ada", reviewerId: "bob" });
+    const coerced = store.update("t1", { status: "done" }, "ada")!;
+    assert.equal(coerced.task.history.at(-1)!.coerced, true);
+
+    // An assignee that parks its own work for review deliberately is not coerced.
+    store.create({ title: "Another", requester: "web", assigneeId: "ada", reviewerId: "bob" });
+    const deliberate = store.update("t2", { status: "review", note: "ready" }, "ada")!;
+    assert.equal(deliberate.task.history.at(-1)!.coerced, undefined);
+    assert.equal(deliberate.coerced, undefined);
+  } finally {
+    cleanup();
+  }
+});
+
 test("the board survives a restart; a torn last line costs one snapshot, not the board", () => {
   const { path, store, reopen, cleanup } = tempStore();
   try {

@@ -34,6 +34,7 @@ import {
   selectRelevant,
   type MemoryRecord,
 } from "./memory.ts";
+import { buildPitfallPrompt, parsePitfall, type PitfallSource } from "./pitfalls.ts";
 
 /**
  * How many exchanges accumulate before extraction runs.
@@ -110,6 +111,38 @@ export class Rememberer {
 
   constructor(private readonly deps: RememberDeps) {
     this.log = deps.log ?? (() => {});
+  }
+
+  /**
+   * Distils one observed failure into a pitfall, or into nothing.
+   *
+   * Fire-and-forget like extraction, and for the same reason: nobody is waiting on it, and
+   * a failure to take notes about a failure must not become a second failure. Written
+   * immediately rather than batched — the four events that trigger it are rare, and a
+   * batch would mix unrelated walls.
+   */
+  async recordPitfall(input: {
+    agentId: string;
+    source: PitfallSource;
+    attempt: string;
+    detail: string;
+    principal?: string;
+  }): Promise<void> {
+    try {
+      const reply = await this.ask(
+        input.agentId,
+        buildPitfallPrompt({ source: input.source, attempt: input.attempt, detail: input.detail }),
+        input.principal
+      );
+      const record = parsePitfall(reply, input.source);
+      if (record === undefined) return;
+      this.deps.registry.appendMemoryRecords(input.agentId, [record]);
+      this.log(`kept a pitfall from ${input.source}: ${record.text.slice(0, 80)}`);
+    } catch (error) {
+      this.log(
+        `could not distil a pitfall: ${error instanceof Error ? error.message : String(error)}`
+      );
+    }
   }
 
   /**

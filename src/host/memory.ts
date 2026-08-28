@@ -12,7 +12,7 @@
  * seam for changing that later is one function (`selectRelevant`), so a vector store is a
  * substitution rather than a rewrite if the evidence ever calls for one.
  *
- * Three kinds, and the distinction is real because each has a different source:
+ * Four kinds, and the distinction is real because each has a different source:
  *
  *   - **`fact`** — the agent chose to keep this, with `RememberFact`. A deliberate act, so it is
  *     trusted and barely decays. "The user prefers tabs" belongs here.
@@ -20,11 +20,16 @@
  *     fastest and is the first thing dropped when the budget is tight.
  *   - **`episode`** — a summary of several turns. It stands in for facts that have already aged out,
  *     so it outlives them.
+ *   - **`pitfall`** — how something went wrong, distilled from a failure the *harness observed*:
+ *     a turn that looped until it was stopped, a task an agent parked as blocked, an audit that
+ *     sent work back, a self-acceptance the review gate refused. See pitfalls.ts. Memory held what
+ *     is true and nothing held what goes wrong, which is where the expensive knowledge is.
  *
  * A separate "profile" tier next to a "recent" one was considered and rejected: that
  * classification has to come from somewhere, and a tier nobody can populate correctly is worse
- * than one list scored honestly. The three kinds above each have an unambiguous source, which is
- * what makes them usable.
+ * than one list scored honestly. The four kinds above each have an unambiguous source, which is
+ * what makes them usable — and it is the admission test for a fifth. `pitfall` passes it only
+ * because its four sources are events this system already detects, not judgements it makes.
  */
 
 import { envNumber } from "../config.ts";
@@ -56,7 +61,7 @@ export interface MemoryRecord {
  * so both sat in the prompt, both dated, both presented as things it knows. Nothing here tries to
  * *detect* the contradiction, which would mean guessing at meaning; the agent that knows says so.
  */
-export type MemoryKind = "fact" | "note" | "episode" | "retraction";
+export type MemoryKind = "fact" | "note" | "episode" | "retraction" | "pitfall";
 
 /**
  * One item's ceiling.
@@ -87,6 +92,11 @@ const HALF_LIFE_DAYS: Record<MemoryKind, number> = {
   note: 30,
   episode: 90,
   retraction: 365,
+  // A hazard is true until the thing that caused it changes, and nothing here can tell
+  // that it did — so a pitfall ages like a deliberate fact and leaves by retraction, not
+  // by decay. A system that quietly forgets a wall because nothing hit it lately is the
+  // failure this kind exists to prevent.
+  pitfall: 365,
 };
 
 /** Relative claim on the prompt at equal age. An episode summarises many facts, so it outranks one. */
@@ -94,6 +104,9 @@ const WEIGHT: Record<MemoryKind, number> = {
   fact: 1,
   note: 0.5,
   episode: 1.5,
+  // Above a fact, below an episode. A pitfall is worth more per line than a preference —
+  // it is about to be walked into — and less than a summary standing in for many facts.
+  pitfall: 1.2,
   // Never scored: a retraction is removed during dedupe and never reaches recall.
   retraction: 0,
 };

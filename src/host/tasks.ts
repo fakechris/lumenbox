@@ -52,6 +52,15 @@ export interface TaskChange {
   note?: string;
   /** The turn (run) an agent made this change in, when it was an agent. */
   run?: string;
+  /**
+   * The review gate redirected this move: the assignee tried to accept its own work.
+   *
+   * Recorded as a field rather than left to be recognised from the note's wording,
+   * because a listener that string-matches a sentence breaks the day the sentence is
+   * reworded — and this one is read by the pitfall writer, which must not fire on an
+   * ordinary move to review. Additive and optional: records written before it read fine.
+   */
+  coerced?: true;
 }
 
 export interface Task {
@@ -233,7 +242,7 @@ export class TaskStore {
       ...(changes.note !== undefined && changes.note.trim() !== ""
         ? { note: changes.note.trim().slice(0, 500) }
         : {}),
-      ...(coerced !== undefined ? { note: coerced } : {}),
+      ...(coerced !== undefined ? { note: coerced, coerced: true as const } : {}),
       ...(run !== undefined ? { run } : {}),
     };
 
