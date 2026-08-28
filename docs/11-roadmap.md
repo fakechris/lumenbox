@@ -45,6 +45,32 @@ than rewriting it, because the correction is the useful part.
 
 These close loops the recent work opened. Days, not weeks, each.
 
+### R35. A Feishu socket that fails on its *first* connect leaves the bot deaf and silent
+
+Observed 2026-08-28, restarting the web server to pick up the box-class work. The process
+logged `channel feishu: connected`, then `[ws] ws connect failed` a few seconds later, and
+then nothing at all — for four minutes, until it was restarted again. A message sent to the
+bot in that window got no reply and produced no error anywhere. The likely cause is
+ordinary: the previous process had been killed three seconds earlier, Feishu still had its
+connection registered, and it refuses a second consumer for one app id. Our consumer lock
+(`src/channels/single-consumer.ts`) correctly showed one holder, because **the collision is
+at the vendor's end and the lock is machine-local** — it cannot see this.
+
+Two separate defects:
+
+1. `wsClient.start({ eventDispatcher })` is fire-and-forget (`feishu.ts:794`) and our
+   `channel feishu: connected` line is logged **because we called start**, not because
+   anything connected. The log asserts a state nobody checked. DingTalk's path does better
+   and says `connection closed; reconnecting in 5s`.
+2. Nothing retried. The SDK reconnects on a socket that *closes*; a socket that never
+   *opened* apparently just stops. The only thing that would eventually notice is the
+   two-hour health check, which is a very long time to be deaf while looking fine.
+
+Smallest honest fix: treat "start returned but no event has ever arrived" as a failure with
+its own retry and its own log line, and stop logging `connected` for a call rather than for
+a connection. A restart that waits for the old process to be gone at the *vendor's* end —
+not just locally — would also help, and there is no signal for that other than time.
+
 ### ~~R1. The composer respects the viewed conversation~~ — shipped, in two halves
 The composer half landed on 08-22 (`779f24e`), thirteen minutes after this entry was
 written, and the entry survived unstruck. The second half landed on 08-26 (`6c74e1b`)
