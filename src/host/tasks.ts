@@ -8,12 +8,22 @@
  * means. This is the work control plane's minimal form; Runs are linked by recording
  * the turn id on every change an agent makes, and the transcript is the evidence.
  *
- * **Advisory, like claims — with one exception.** Statuses are not enforced against a
- * model that decides everything else, and the history makes movement visible rather
- * than impossible. The exception is the review gate: when a task has a reviewer, its
- * assignee cannot move it to done — the attempt lands in review with a note saying so.
- * That one rule is enforced because it is the entire point of naming a reviewer, and a
- * gate the worker can wave itself through is decoration.
+ * **Advisory, like claims — with two exceptions**, both about who may say a task is
+ * done. Statuses are not enforced against a model that decides everything else, and the
+ * history makes movement visible rather than impossible. The exceptions:
+ *
+ *   1. **A named reviewer means the assignee cannot accept its own work.** The attempt
+ *      lands in review with a note saying so. That is the entire point of naming one,
+ *      and a gate the worker can wave itself through is decoration.
+ *   2. **Somebody the task is not about cannot end it.** Chat acceptance is keyed by
+ *      conversation, so an authorised colleague in a shared room could type 可以 and
+ *      close work that was never theirs — the store allowed it because it only ever
+ *      refused the assignee. Their attempt is refused and the task does not move.
+ *
+ * What is deliberately *not* enforced, and is a deferred product decision rather than an
+ * oversight (docs/16): a task with no reviewer still closes when its turn finishes. The
+ * alternative — every one-shot chat request waiting for a person to say 可以 — answers
+ * "what needs somebody" wrong in the other direction.
  *
  * Storage is a jsonl of task snapshots, one line per change, latest line per id wins —
  * the same replay-and-compact shape as every other durable log here. History rides
@@ -77,6 +87,45 @@ export interface Task {
   createdAt: string;
   updatedAt: string;
   history: TaskChange[];
+}
+
+/**
+ * How much of the request a task keeps, and what it says when it kept less.
+ *
+ * The cut is real — a snapshot is one line and an unbounded description makes the board
+ * file unbounded — but it used to be silent, and that is what makes it dangerous rather
+ * than merely lossy. A 4,200-character request whose last sentence is "do not deduplicate
+ * the invoice rows" persisted without that sentence, and every later reader — a person
+ * scanning the board, an auditor told to re-derive the constraints from the original
+ * request — saw a complete-looking request that was not complete. Found by review.
+ *
+ * So the truncation announces itself in the text, in the reader's own line of sight. It
+ * cannot make the words come back; it can stop them from being missed.
+ */
+export const DESCRIPTION_LIMIT = 4_000;
+
+/**
+ * Actors that are the harness rather than a person, moving work on the assignee's behalf.
+ *
+ * They pass the who-may-accept rule because refusing them would break the ordinary case
+ * the board exists to serve: a one-shot ask from a chat, where nobody is watching the
+ * board and leaving the row open forever answers "what needs somebody" wrong in the other
+ * direction. Enumerated rather than inferred, so adding one is a decision somebody makes
+ * on purpose.
+ */
+const HARNESS_ACTORS: ReadonlySet<string> = new Set([
+  "channel",
+  "restart",
+  "host",
+  "web",
+  "audit-guard",
+]);
+
+export function clampDescription(text: string): string {
+  const trimmed = text.trim();
+  if (trimmed.length <= DESCRIPTION_LIMIT) return trimmed;
+  const note = `\n\n[截断:原文 ${trimmed.length} 字,此处只保留前 ${DESCRIPTION_LIMIT} 字。完整内容在原始消息里。]`;
+  return `${trimmed.slice(0, DESCRIPTION_LIMIT - note.length)}${note}`;
 }
 
 /** Kept on each task so a snapshot stays one line, not a graph. */
@@ -147,7 +196,7 @@ export class TaskStore {
       id: `t${this.counter}`,
       title,
       ...(input.description !== undefined && input.description.trim() !== ""
-        ? { description: input.description.trim().slice(0, 4000) }
+        ? { description: clampDescription(input.description) }
         : {}),
       status: "open",
       requester: input.requester,
@@ -218,8 +267,24 @@ export class TaskStore {
     let coerced: string | undefined;
     let status = changes.status;
 
-    // The review gate: the one enforced rule. A reviewer was named precisely so the
-    // assignee cannot accept its own work; the attempt becomes "ready for review".
+    // The review gate. Two rules, both about who may say a thing is finished, because
+    // "done is the requester's word" was prose in an audit prompt and prose is not a gate.
+    //
+    // 1. An assignee may not accept its own work when a reviewer was named. That is the
+    //    original rule and the reason naming a reviewer means anything.
+    // 2. Only the requester or the named reviewer may accept at all. Found by review:
+    //    acceptance in a chat is keyed by *conversation*, so any authorised person in a
+    //    shared room could type 可以 and close somebody else's task — and with no reviewer
+    //    named, the assignee could close its own. The people who may end a piece of work
+    //    are the person who asked for it and the person appointed to check it; anyone else
+    //    saying so is a remark, not a verdict.
+    const belongsToTask =
+      by === task.requester ||
+      by === task.assigneeId ||
+      (task.reviewerId !== undefined && by === task.reviewerId) ||
+      HARNESS_ACTORS.has(by);
+
+    // Rule one, unchanged: a named reviewer means the assignee cannot accept its own work.
     if (
       status === "done" &&
       task.reviewerId !== undefined &&
@@ -230,6 +295,18 @@ export class TaskStore {
       coerced =
         `This task names ${task.reviewerId} as its reviewer, so its assignee cannot mark it ` +
         `done. It is now in review instead; ${task.reviewerId} accepting it is what done means.`;
+    } else if (status === "done" && !belongsToTask) {
+      // Rule two, new: somebody the task is not about cannot end it. Found by review —
+      // chat acceptance is keyed by *conversation*, so any authorised person in a shared
+      // room could type 可以 and close a colleague's task, and the store allowed it because
+      // it only ever refused the assignee. The task does not move: a status change nobody
+      // authorised is the failure, and nudging it somewhere else would be a second one.
+      status = undefined;
+      coerced =
+        `Only ${task.requester}${
+          task.reviewerId !== undefined ? ` or ${task.reviewerId}` : ""
+        } can accept this task, so it has not moved. Put what you found in a note instead — ` +
+        `a verdict from somebody the work was not for is a remark.`;
     }
 
     const change: TaskChange = {
@@ -252,7 +329,7 @@ export class TaskStore {
         ? { title: changes.title.replace(/\s+/g, " ").trim().slice(0, 200) }
         : {}),
       ...(changes.description !== undefined
-        ? { description: changes.description.trim().slice(0, 4000) }
+        ? { description: clampDescription(changes.description) }
         : {}),
       ...(status !== undefined ? { status } : {}),
       ...(changes.assigneeId !== undefined

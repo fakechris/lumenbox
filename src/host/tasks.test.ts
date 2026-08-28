@@ -11,7 +11,7 @@ import assert from "node:assert/strict";
 import { appendFileSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { TaskStore, describeTask } from "./tasks.ts";
+import { DESCRIPTION_LIMIT, TaskStore, describeTask } from "./tasks.ts";
 
 function tempStore(): { path: string; store: TaskStore; reopen: () => TaskStore; cleanup: () => void } {
   const dir = mkdtempSync(join(tmpdir(), "agentbox-tasks-"));
@@ -62,6 +62,65 @@ test("the review gate: a named reviewer means the assignee cannot self-accept", 
     store.update("t2", { status: "review" }, "ada");
     const back = store.update("t2", { status: "doing", note: "the header is wrong" }, "bob")!;
     assert.equal(back.task.status, "doing");
+  } finally {
+    cleanup();
+  }
+});
+
+test("somebody the task is not about cannot end it", () => {
+  // Found by review. Chat acceptance is keyed by *conversation*: in a shared room, any
+  // authorised person typing 可以 reached board.accept for whatever task was last there,
+  // and the store allowed it because it only ever refused the assignee. A colleague could
+  // close work they had never seen — and the audit prompt asking a reviewer to leave a
+  // task in review was prose, not a gate.
+  const { store, cleanup } = tempStore();
+  try {
+    store.create({ title: "整理报表", requester: "feishu:chris", assigneeId: "ada" });
+    store.update("t1", { status: "review" }, "ada");
+
+    const outsider = store.update("t1", { status: "done", note: "看着挺好" }, "feishu:dana")!;
+    assert.equal(outsider.task.status, "review", "refused, and not nudged somewhere else");
+    assert.match(outsider.coerced ?? "", /Only feishu:chris can accept/);
+    assert.match(outsider.coerced ?? "", /a remark/);
+
+    // The requester's word still closes it.
+    const accepted = store.update("t1", { status: "done" }, "feishu:chris")!;
+    assert.equal(accepted.task.status, "done");
+    assert.equal(accepted.coerced, undefined);
+  } finally {
+    cleanup();
+  }
+});
+
+test("the harness may still close work on the assignee's behalf", () => {
+  // The rule is about people the task is not about, not about the machinery. Refusing
+  // "channel" would break the ordinary case the board exists for: a one-shot ask from a
+  // chat, where nobody watches the board and an open row forever is its own wrong answer.
+  const { store, cleanup } = tempStore();
+  try {
+    store.create({ title: "say hello", requester: "feishu:ou_1", assigneeId: "ada" });
+    store.update("t1", { status: "doing" }, "channel");
+    assert.equal(store.turnFinished("t1")?.task.status, "done");
+  } finally {
+    cleanup();
+  }
+});
+
+test("a request too long to keep says so where it was cut", () => {
+  // The cut is real; the silence was the bug. A 4,200-character request whose last line
+  // is "do not deduplicate the invoice rows" persisted without it, and every later reader
+  // — a person scanning the board, an auditor told to re-derive the constraints from the
+  // original request — saw a complete-looking request that was not complete.
+  const { store, cleanup } = tempStore();
+  try {
+    const long = `${"报表要求。".repeat(900)}最后一句:不要对发票行去重。`;
+    assert.ok(long.length > DESCRIPTION_LIMIT);
+    const task = store.create({ title: "整理", description: long, requester: "chris" })!;
+    assert.ok(task.description!.length <= DESCRIPTION_LIMIT);
+    assert.match(task.description!, /\[截断:原文 \d+ 字/, "the reader is told, in their own line of sight");
+    // A request that fits is untouched — no marker, no padding.
+    const short = store.create({ title: "短", description: "两行就够了", requester: "chris" })!;
+    assert.equal(short.description, "两行就够了");
   } finally {
     cleanup();
   }
