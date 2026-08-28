@@ -1004,6 +1004,29 @@ to, because the obligation review changed the dependency order underneath three 
   request, not a name; the person's whole message is kept as the task's description before
   any rewrite). Answering, verbatim: "现在有各种 task,我都对应不上".
 
+### Backlog notes from a Linux-CUA product teardown (2026-08-28, local research note)
+
+Three liftable ideas, ranked; the teardown itself stays outside the repo.
+
+- **Semantic agent cursor.** Render the agent's cursor with visible state (acting /
+  delivering / targeting / idle) and a per-agent colour on the box display. Cheap, and it
+  is the 可围观 story made literal: in noVNC and in recordings, a watcher reads intent at
+  a glance. Prior art exists as a compositor-drawn overlay with a 12-state cursor theme.
+- **AT-SPI click verification — the mechanical half R33 still lacks.** A grab-eaten
+  synthetic click reports success by X11's rules; detection is behavioural today. The
+  accessibility bus (AT-SPI) can read the target element's state before and after a
+  click, turning "reported success, did nothing" into a checkable fact. Also the road to
+  element-handle (not coordinate) targeting later.
+- **Box toolbox for the hero scenario: officecli + local OCR.** The batch-reports user
+  needs solid .docx/.xlsx/.pptx handling and scanned-PDF OCR in the box. Evaluate
+  bundling `iOfficeAI/OfficeCLI` (single-file .NET CLI) and PaddleOCR-small as box CLIs,
+  each taught by a SKILL.md — capability from bash, knowledge from the skill, exactly the
+  knowledge/capability split adopted above. Prior art bundles both rather than rewriting.
+- Confirmation, not an item: a major Linux desktop-CUA product pays for Wayland with a
+  user-installed GNOME Shell extension (logout required), an unsupported KDE, and three
+  compositor branches. X11-in-container avoids that entire class; our R33 was the cheap
+  end of the trade.
+
 ### Backlog note: prefix stability audit (from the Grok Bot teardown, 2026-08-27)
 
 Two independent teams (Manus 2025-07, Cursor's Grok Bot 2026-08) converged on the same
