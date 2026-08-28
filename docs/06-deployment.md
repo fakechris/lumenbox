@@ -224,3 +224,11 @@ deployment can look wired while half the surface is dead:
 
 Neither switch is detectable from our side at boot, so they cannot go into `absences.ts`;
 this note is the substitute.
+
+The card switch has a no-console path: `node scripts/feishu-enable-cards.mjs` runs the
+SDK's registerApp *update* flow — it prints a link whose QR the app's owner scans in
+Feishu, the phone shows exactly the one change being authorized (the
+`card.action.trigger` callback), and on confirm the buttons start arriving over the
+websocket the bot already holds. No restart. This is also the answer to the console
+saying 该应用不存在: an app created through the scan flow is owned by the phone account,
+not by whoever happens to be logged into the console.
