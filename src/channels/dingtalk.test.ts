@@ -27,6 +27,7 @@ import {
   parseChatKey,
   subscriptionsFor,
   TOPIC,
+  taskVarsFor,
   wantsNudge,
   type BotMessage,
 } from "./dingtalk.ts";
@@ -466,4 +467,263 @@ test("a card press resolves the pending approval and answers in its room", async
     async () => ""
   );
   assert.equal(decisions.length, 1);
+});
+
+test("one send delivered twice under two msgIds runs once", async () => {
+  // The wire mints a fresh msgId when a sender's client retries, so the business-id
+  // dedupe passes both frames; the words are what repeat. Observed 0.9s apart.
+  const state = harness();
+  await deliver(state, TEXT_FRAME({ ...GROUP_TEXT, msgId: "msg-a" }));
+  await deliver(state, TEXT_FRAME({ ...GROUP_TEXT, msgId: "msg-b" }).replace('"tr-1"', '"tr-2"'));
+  // Whitespace collapses, so a text-vs-richtext pair of the same send meets too.
+  await deliver(
+    state,
+    TEXT_FRAME({ ...GROUP_TEXT, msgId: "msg-c", text: { content: "hello  there\n" } }).replace(
+      '"tr-1"',
+      '"tr-3"'
+    )
+  );
+
+  assert.equal(state.turns.length, 1);
+  assert.match(state.decided.at(-1)!.reason ?? "", /same words arrived twice/);
+});
+
+test("the same words in another room, or after the window, are a new message", async () => {
+  const state = harness();
+  await deliver(state, TEXT_FRAME({ ...GROUP_TEXT, msgId: "msg-a" }));
+  await deliver(
+    state,
+    TEXT_FRAME({ ...GROUP_TEXT, msgId: "msg-b", conversationId: "cid9" }).replace('"tr-1"', '"tr-2"')
+  );
+  assert.equal(state.turns.length, 2, "another room saying the same thing is not a duplicate");
+
+  const recent = (state.adapter as unknown as { recentTexts: Map<string, number> }).recentTexts;
+  for (const [key, at] of recent) recent.set(key, at - 20_000);
+  await deliver(state, TEXT_FRAME({ ...GROUP_TEXT, msgId: "msg-c" }).replace('"tr-1"', '"tr-3"'));
+  assert.equal(state.turns.length, 3, "a repeat past the window is somebody saying it again");
+});
+
+test("task card variables are the template's whole contract, blanks for what is absent", () => {
+  const full = taskVarsFor({
+    title: "Draft the plan",
+    agentName: "Ada",
+    requesterLabel: "chris",
+    status: "working",
+    action: "bash: npm test",
+    ahead: 2,
+    taskId: "t70",
+    taskUrl: "https://box/tasks/t70",
+  });
+  assert.equal(full.status, "working");
+  assert.equal(full.ahead, "2", "cardParamMap carries strings only");
+  assert.equal(full.taskId, "t70");
+  assert.equal(full.action, "bash: npm test");
+  assert.equal(full.taskUrl, "https://box/tasks/t70");
+
+  const bare = taskVarsFor({ title: "hi", agentName: "", requesterLabel: "x", status: "done" });
+  assert.equal(bare.action, "", "absent variables are blanked, not omitted — no stale lines");
+  assert.equal(bare.ahead, "");
+  assert.equal(bare.taskId, "");
+  assert.equal(bare.taskUrl, "");
+});
+
+test("task cards exist only when a task template was configured", () => {
+  const bare = new DingTalkChannel("d1", "s", () => {});
+  assert.equal(bare.postTaskCard, undefined,
+    "no task template, no card — the manager must run its plain ack line");
+  assert.equal(bare.updateTaskCard, undefined);
+
+  const withCards = new DingTalkChannel("d1", "s", () => {}, undefined, "approval.schema", "task.schema");
+  assert.notEqual(withCards.postTaskCard, undefined);
+  assert.notEqual(withCards.updateTaskCard, undefined);
+});
+
+/** Swaps global fetch for a recorder; restored when the test ends. */
+function recordedFetch(
+  t: { after: (hook: () => void) => unknown },
+  state: { calls: { method: string; url: string; body: unknown }[] },
+  answers: (url: string) => { status: number; payload: unknown }
+): void {
+  const original = globalThis.fetch;
+  globalThis.fetch = (async (input: string | URL | Request, init?: RequestInit) => {
+    const url = String(input);
+    const { status, payload } = answers(url);
+    state.calls.push({
+      method: init?.method ?? "GET",
+      url,
+      body: typeof init?.body === "string" ? JSON.parse(init.body) : init?.body,
+    });
+    return new Response(JSON.stringify(payload), { status });
+  }) as typeof fetch;
+  t.after(() => {
+    globalThis.fetch = original;
+  });
+}
+
+const TOKEN_ANSWER = { status: 200, payload: { accessToken: "tok-1", expireIn: 7200 } };
+
+test("a task card is created into the room's space and rewritten by its handle", async t => {
+  const recorder: { calls: { method: string; url: string; body: unknown }[] } = { calls: [] };
+  recordedFetch(t, recorder, url =>
+    url.includes("oauth2/accessToken") ? TOKEN_ANSWER : { status: 200, payload: {} });
+
+  const adapter = new DingTalkChannel("d1", "s", () => {}, undefined, undefined, "task.schema");
+  const conversations = (adapter as unknown as {
+    conversations: Map<string, { conversationType?: string; userId?: string }>;
+  }).conversations;
+  conversations.set("cid7", { conversationType: "2" });
+
+  const handle = await adapter.postTaskCard!(
+    "dingtalk:cid7",
+    {
+      title: "Draft the plan",
+      agentName: "Ada",
+      requesterLabel: "chris",
+      status: "working",
+      action: "bash: ls",
+    }
+  );
+  assert.match(handle ?? "", /^lumenbox-/);
+  const created = recorder.calls.find(call => call.url.endsWith("/card/instances") && call.method === "POST");
+  assert.ok(created !== undefined);
+  const createdBody = created.body as { cardTemplateId: string; cardData: { cardParamMap: Record<string, string> } };
+  assert.equal(createdBody.cardTemplateId, "task.schema");
+  assert.equal(createdBody.cardData.cardParamMap.status, "working");
+  const delivered = recorder.calls.find(call => call.url.endsWith("/card/instances/deliver"));
+  assert.ok(delivered !== undefined);
+  assert.equal(
+    (delivered.body as { openSpaceId: string }).openSpaceId,
+    "dtv1.card//IM_GROUP.cid7",
+    "a group chatKey lands the card in the group's space"
+  );
+
+  await adapter.updateTaskCard!(
+    handle!,
+    { title: "Draft the plan", agentName: "Ada", requesterLabel: "chris", status: "done" }
+  );
+  const rewritten = recorder.calls.find(call => call.url.endsWith("/card/instances") && call.method === "PUT");
+  assert.ok(rewritten !== undefined);
+  const rewrittenBody = rewritten.body as { outTrackId: string; cardData: { cardParamMap: Record<string, string> } };
+  assert.equal(rewrittenBody.outTrackId, handle);
+  assert.equal(rewrittenBody.cardData.cardParamMap.status, "done");
+  assert.equal(rewrittenBody.cardData.cardParamMap.action, "", "a finished card carries no stale action");
+});
+
+test("a direct session's task card addresses its recorded sender", async t => {
+  const recorder: { calls: { method: string; url: string; body: unknown }[] } = { calls: [] };
+  recordedFetch(t, recorder, url =>
+    url.includes("oauth2/accessToken") ? TOKEN_ANSWER : { status: 200, payload: {} });
+
+  const adapter = new DingTalkChannel("d1", "s", () => {}, undefined, undefined, "task.schema");
+  const conversations = (adapter as unknown as {
+    conversations: Map<string, { conversationType?: string; userId?: string }>;
+  }).conversations;
+  conversations.set("cid8", { conversationType: "1", userId: "staff3" });
+
+  await adapter.postTaskCard!("dingtalk:cid8", {
+    title: "Draft the plan",
+    agentName: "Ada",
+    requesterLabel: "chris",
+    status: "queued",
+  });
+  const delivered = recorder.calls.find(call => call.url.endsWith("/card/instances/deliver"));
+  assert.ok(delivered !== undefined);
+  assert.equal(
+    (delivered.body as { openSpaceId: string }).openSpaceId,
+    "dtv1.card//IM_ROBOT.staff3",
+    "a direct session has no room id to address — the last sender is who is there"
+  );
+});
+
+test("files and images ride the robot api on an uploaded media id", async t => {
+  const recorder: { calls: { method: string; url: string; body: unknown }[] } = { calls: [] };
+  recordedFetch(t, recorder, url =>
+    url.includes("oauth2/accessToken")
+      ? TOKEN_ANSWER
+      : url.includes("media/upload")
+        ? { status: 200, payload: { errcode: 0, media_id: "media-1" } }
+        : { status: 200, payload: {} });
+
+  const adapter = new DingTalkChannel("robot1", "s", () => {});
+  const conversations = (adapter as unknown as {
+    conversations: Map<string, { conversationType?: string }>;
+  }).conversations;
+  conversations.set("cid7", { conversationType: "2" });
+
+  await adapter.sendFile("dingtalk:cid7", "TEAM-v1.md", Buffer.from("# team").toString("base64"));
+  await adapter.sendImage("dingtalk:cid7", Buffer.from("pngbytes").toString("base64"));
+
+  const upload = recorder.calls.find(call => call.url.includes("media/upload"));
+  assert.ok(upload !== undefined);
+  assert.match(upload.url, /type=file/);
+  const sends = recorder.calls.filter(call => call.url.includes("robot/groupMessages/send"));
+  assert.equal(sends.length, 2);
+
+  const fileSend = sends[0]!.body as { msgKey: string; msgParam: string };
+  assert.equal(fileSend.msgKey, "sampleFile");
+  assert.deepEqual(JSON.parse(fileSend.msgParam), {
+    mediaId: "media-1",
+    fileName: "TEAM-v1.md",
+    fileType: "md",
+  });
+  const imageSend = sends[1]!.body as { msgKey: string; msgParam: string };
+  assert.equal(imageSend.msgKey, "sampleImageMsg");
+  assert.equal(JSON.parse(imageSend.msgParam).photoURL, "media-1");
+});
+
+test("an upload past the type's cap refuses loudly instead of shipping a stub", async () => {
+  const adapter = new DingTalkChannel("robot1", "s", () => {});
+  await assert.rejects(
+    adapter.sendFile("dingtalk:cid7", "big.bin", Buffer.alloc(21 * 1024 * 1024).toString("base64")),
+    /too large/
+  );
+  await assert.rejects(
+    adapter.sendImage("dingtalk:cid7", Buffer.alloc(11 * 1024 * 1024).toString("base64")),
+    /too large/
+  );
+});
+
+test("a direct session's card prefers the asker's identity over the last-sender record", async t => {
+  const recorder: { calls: { method: string; url: string; body: unknown }[] } = { calls: [] };
+  recordedFetch(t, recorder, url =>
+    url.includes("oauth2/accessToken") ? TOKEN_ANSWER : { status: 200, payload: {} });
+
+  // Direct on record, but no sender seen since the process came up — the identity
+  // the manager hands over is what the robot space addresses.
+  const adapter = new DingTalkChannel("d1", "s", () => {}, undefined, undefined, "task.schema");
+  const conversations = (adapter as unknown as {
+    conversations: Map<string, { conversationType?: string; userId?: string }>;
+  }).conversations;
+  conversations.set("cidX", { conversationType: "1" });
+
+  const handle = await adapter.postTaskCard!(
+    "dingtalk:cidX",
+    { title: "Draft the plan", agentName: "Ada", requesterLabel: "chris", status: "working" },
+    undefined,
+    "dingtalk:staff5"
+  );
+  assert.match(handle ?? "", /^lumenbox-/);
+  const delivered = recorder.calls.find(call => call.url.endsWith("/card/instances/deliver"));
+  assert.ok(delivered !== undefined);
+  assert.equal(
+    (delivered.body as { openSpaceId: string }).openSpaceId,
+    "dtv1.card//IM_ROBOT.staff5",
+    "the robot space addresses who asked, not the room the chatKey carries"
+  );
+
+  // An unknown conversation counts as a group, and the chatKey's id is its address.
+  const fresh = new DingTalkChannel("d1", "s", () => {}, undefined, undefined, "task.schema");
+  await fresh.postTaskCard!("dingtalk:cidY", {
+    title: "x",
+    agentName: "",
+    requesterLabel: "c",
+    status: "working",
+  });
+  const delivered2 = recorder.calls.filter(call => call.url.endsWith("/card/instances/deliver")).at(-1);
+  assert.ok(delivered2 !== undefined);
+  assert.equal(
+    (delivered2.body as { openSpaceId: string }).openSpaceId,
+    "dtv1.card//IM_GROUP.cidY",
+    "a wrong guess fails loudly once rather than silently always"
+  );
 });

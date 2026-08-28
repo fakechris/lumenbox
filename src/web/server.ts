@@ -886,6 +886,7 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
     const dingId = process.env.DINGTALK_CLIENT_ID;
     const dingSecret = process.env.DINGTALK_CLIENT_SECRET;
     const dingCardTemplate = process.env.DINGTALK_CARD_TEMPLATE_ID;
+    const dingTaskCardTemplate = process.env.DINGTALK_TASK_CARD_TEMPLATE_ID;
     channels.register(
       new DingTalkChannel(
         dingId ?? "",
@@ -894,7 +895,12 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
         ingress,
         // Optional: turns button approvals on. Without it DingTalk runs the
         // text-verb path, same as before cards existed.
-        dingCardTemplate !== undefined && dingCardTemplate !== "" ? dingCardTemplate : undefined
+        dingCardTemplate !== undefined && dingCardTemplate !== "" ? dingCardTemplate : undefined,
+        // Optional: turns task progress cards on. Without it long tasks are
+        // acknowledged with the plain line, same as before cards existed.
+        dingTaskCardTemplate !== undefined && dingTaskCardTemplate !== ""
+          ? dingTaskCardTemplate
+          : undefined
       ),
       dingId !== undefined && dingSecret !== undefined,
       dingId !== undefined && dingSecret !== undefined
