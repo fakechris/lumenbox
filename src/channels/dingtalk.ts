@@ -29,26 +29,172 @@
  * - No threads. Conversations between a person and a DingTalk bot have no topic
  *   structure, so there is no `threadKey`: the chat *is* the subject, the reading
  *   every platform without threads takes.
- * - No interactive cards. Card instances require a template minted in the developer
- *   console and button callbacks routed somewhere public; approvals travel as the
- *   text verbs ("允许", "deny") the manager already treats as first-class.
- * - No reactions and no outbound media. Robot messages carry no emoji marks, and
- *   image/file sends take a public URL the box has no reason to have — screenshots
- *   land as the manager's honest "this channel cannot show images" line instead.
+ * - No reactions. Robot messages carry no emoji marks, so there is no `noteStatus`:
+ *   a task's working/done state lives on the task card (or the plain ack line), not
+ *   on the message that asked.
+ *
+ * Outbound media files and images ARE supported, without a public URL: the box's
+ * bytes go up through the legacy `media/upload` endpoint for a `mediaId`, and the
+ * robot REST APIs deliver them as `sampleFile` / `sampleImageMsg` messages — the
+ * same upload-then-reference bargain Feishu's adapter strikes.
+ *
+ * Interactive cards ARE supported, conditionally: with `DINGTALK_CARD_TEMPLATE_ID`
+ * configured, consent requests render as an interactive card whose three buttons
+ * answer over the stream (`/v1.0/card/instances/callback`, `callbackType: STREAM`),
+ * no public URL needed; without it the method stays undefined and approvals run on
+ * the text verbs ("允许", "deny") exactly as before. With
+ * `DINGTALK_TASK_CARD_TEMPLATE_ID` also configured, long tasks render a task card
+ * whose status and current action are rewritten in place (`PUT /v1.0/card/instances`)
+ * — the progress surface Feishu shows, on the wire DingTalk has. Both templates are
+ * built in the card console (they carry the app's identity), so both are opt-in.
  */
 
-import type { ChannelAdapter, InboundMessage } from "./manager.ts";
+import type {
+  ApprovalCardState,
+  ApprovalReply,
+  ChannelAdapter,
+  InboundMessage,
+  PushOptions,
+  TaskCardState,
+} from "./manager.ts";
 import { acquireConsumerLock } from "./single-consumer.ts";
 import { looksLikeMarkdown } from "./markdown.ts";
 
 const GATEWAY = "https://api.dingtalk.com/v1.0/gateway/connections/open";
-/** The callback topic a bot's messages arrive on, and its REST twin's path. */
+/**
+ * The callback topic a bot's messages arrive on, and its REST twin's path.
+ *
+ * Note the delivery model this topic implies: in group conversations DingTalk
+ * delivers only the frames where the sender @-mentioned the robot — other
+ * chatter is never pushed, and no console toggle exists to change that. (Feishu's
+ * bot subscribes to every message in chats it joins, which is why the Feishu
+ * adapter answers un-@'d lines and this one cannot.) Direct sessions deliver
+ * everything. So an unanswered group question with no ledger record means the
+ * sender did not @-mention us — said here because it reads exactly like a bug.
+ */
 export const TOPIC = "/v1.0/im/bot/messages/get";
 const TOKEN_URL = "https://api.dingtalk.com/v1.0/oauth2/accessToken";
 /** The REST twin of the stream topic: exchanges a media downloadCode for bytes. */
 const DOWNLOAD_URL = "https://api.dingtalk.com/v1.0/im/bot/messages/get";
 const GROUP_SEND_URL = "https://api.dingtalk.com/v1.0/robot/groupMessages/send";
 const OTO_SEND_URL = "https://api.dingtalk.com/v1.0/robot/oToMessages/batchSend";
+/** Interactive-card lifecycle: create the instance, then deliver it into a space. */
+const CARD_CREATE_URL = "https://api.dingtalk.com/v1.0/card/instances";
+const CARD_DELIVER_URL = "https://api.dingtalk.com/v1.0/card/instances/deliver";
+/** Rewrites an existing card instance's variables in place; the handle is `outTrackId`. */
+const CARD_UPDATE_URL = "https://api.dingtalk.com/v1.0/card/instances";
+/**
+ * The legacy media endpoint. Old host, old envelope, new token still accepted —
+ * this is the documented upload-then-reference path behind `sampleFile` and
+ * `sampleImageMsg`, and the reason outbound media needs no public URL.
+ */
+const MEDIA_UPLOAD_URL = "https://oapi.dingtalk.com/media/upload";
+/**
+ * Button presses on an interactive card arrive as callback frames over the same
+ * stream connection — no public URL involved — when the template was created with
+ * `callbackType: STREAM` and this topic is subscribed.
+ */
+export const CARD_CALLBACK_TOPIC = "/v1.0/card/instances/callback";
+
+/**
+ * The stream subscriptions for one installation: bot messages always, card button
+ * callbacks only when a card template is configured.
+ */
+export function subscriptionsFor(cardTemplateId: string | undefined): {
+  type: string;
+  topic: string;
+}[] {
+  return [
+    { type: "CALLBACK", topic: TOPIC },
+    ...(cardTemplateId !== undefined && cardTemplateId !== ""
+      ? [{ type: "CALLBACK", topic: CARD_CALLBACK_TOPIC }]
+      : []),
+  ];
+}
+
+/** A pressed button as the wire delivers it, narrowed to everything read here. */
+export interface CardCallbackFrame {
+  userId?: string;
+  /** Stringified JSON of whatever parameters the pressed button was configured to send. */
+  content?: string;
+  /** The card instance id this press belongs to — our handle back to the approval. */
+  outTrackId?: string;
+  spaceType?: string;
+  spaceId?: string;
+  type?: string;
+}
+
+/**
+ * Parses one callback frame into a decision, or undefined when anything is off.
+ * The buttons carry a single static parameter `{ action: once | always | deny }`;
+ * anything else is not a decision we advertised.
+ */
+export function approvalPressFrom(
+  frame: CardCallbackFrame
+): { reply: ApprovalReply; userId: string; instanceId: string; spaceType?: string; spaceId?: string } | undefined {
+  const reply = (() => {
+    try {
+      const parsed = JSON.parse(frame.content ?? "{}") as { action?: unknown };
+      if (parsed.action === "once") return "once" as const;
+      if (parsed.action === "always") return "always" as const;
+      if (parsed.action === "deny") return "deny" as const;
+      return undefined;
+    } catch {
+      return undefined;
+    }
+  })();
+  const userId = typeof frame.userId === "string" ? frame.userId : "";
+  const instanceId = typeof frame.outTrackId === "string" ? frame.outTrackId : "";
+  if (reply === undefined || userId === "" || instanceId === "") return undefined;
+  return {
+    reply,
+    userId,
+    instanceId,
+    ...(frame.spaceType !== undefined ? { spaceType: frame.spaceType } : {}),
+    ...(frame.spaceId !== undefined ? { spaceId: frame.spaceId } : {}),
+  };
+}
+
+/** The card variables the lumenbox-approval template renders. */
+export function approvalVarsFor(card: ApprovalCardState): {
+  title: string;
+  description: string;
+} {
+  return {
+    title: `${card.agentName || "An agent"} needs your consent`,
+    // The original action verbatim, then what answering means — an approval that
+    // paraphrases either is the injection surface the verbatim rule exists to close.
+    description: `${card.description}\n\n${card.stakes}`,
+  };
+}
+
+/**
+ * The card variables a task-card template renders. The contract a console template
+ * has to bind, all strings because `cardParamMap` carries strings only: `title`,
+ * `agentName`, `requesterLabel`, `status` (queued | working | done | failed),
+ * `action`, `ahead`, `taskId`, `taskUrl`. A variable the state does not carry right
+ * now is sent empty rather than omitted, so a template that binds it re-renders a
+ * blank instead of keeping a stale line alive.
+ */
+export function taskVarsFor(card: TaskCardState): Record<string, string> {
+  return {
+    title: card.title,
+    agentName: card.agentName,
+    requesterLabel: card.requesterLabel,
+    status: card.status,
+    ...(card.action !== undefined ? { action: card.action } : { action: "" }),
+    ...(card.ahead !== undefined ? { ahead: String(card.ahead) } : { ahead: "" }),
+    ...(card.taskId !== undefined ? { taskId: card.taskId } : { taskId: "" }),
+    ...(card.taskUrl !== undefined ? { taskUrl: card.taskUrl } : { taskUrl: "" }),
+  };
+}
+
+/** Where in the card system's space taxonomy a conversation lives. */
+export function imSpaceIdFor(route: "group" | "direct", spaceKey: string): string {
+  return route === "group"
+    ? `dtv1.card//IM_GROUP.${spaceKey}`
+    : `dtv1.card//IM_ROBOT.${spaceKey}`;
+}
 
 /** Auth header every api.dingtalk.com call except the token endpoint wants. */
 const AUTH_HEADER = "x-acs-dingtalk-access-token";
@@ -266,6 +412,25 @@ function extensionOf(kind: string): string {
   return "bin";
 }
 
+/** The upload endpoint sizes its buckets by type; going past earns a loud refusal. */
+const MEDIA_UPLOAD_CAPS: Record<string, number> = {
+  image: 10 * 1024 * 1024,
+  file: 20 * 1024 * 1024,
+  video: 20 * 1024 * 1024,
+  voice: 2 * 1024 * 1024,
+};
+
+/** A part content-type for the upload's multipart body; the endpoint barely reads it. */
+function mimeOf(name: string): string {
+  const extension = name.toLowerCase().split(".").pop() ?? "";
+  if (["png", "jpg", "jpeg", "gif", "webp", "bmp"].includes(extension)) return `image/${extension === "jpg" ? "jpeg" : extension}`;
+  if (extension === "pdf") return "application/pdf";
+  if (extension === "mp4") return "video/mp4";
+  if (extension === "mp3") return "audio/mpeg";
+  if (["txt", "md", "csv", "json"].includes(extension)) return "text/plain";
+  return "application/octet-stream";
+}
+
 export class DingTalkChannel implements ChannelAdapter {
   readonly name = "dingtalk";
   private stopped = false;
@@ -277,11 +442,12 @@ export class DingTalkChannel implements ChannelAdapter {
    * Each conversation the bot has been seen in: its session webhook and when that
    * dies, plus the conversation type that decides the REST route. A webhook is the
    * cheapest way out — pre-authorised, no token — but it expires, so anything older
-   * falls back to the robot APIs underneath.
+   * falls back to the robot APIs underneath. `userId` is the last sender seen in
+   * the room, what a direct-route card addresses.
    */
   private readonly conversations = new Map<
     string,
-    { webhook?: string; webhookExpiresAt?: number; conversationType?: string }
+    { webhook?: string; webhookExpiresAt?: number; conversationType?: string; userId?: string }
   >();
   /** The conversation each identity last spoke in, for routing a notice back. */
   private readonly identities = new Map<string, string>();
@@ -297,6 +463,24 @@ export class DingTalkChannel implements ChannelAdapter {
 
   private tokenPromise: Promise<string> | undefined;
   private tokenExpiresAt = 0;
+
+  /**
+   * The card instance each pending approval lives behind, instance → approval.
+   * A press carries only the instance id and the button's static value, so this
+   * map is the bridge back to what was being decided. Pruned by count; a stale
+   * entry merely answers "no longer waiting", which is already a safe verdict.
+   */
+  private readonly cardApprovals = new Map<string, { approvalId: string }>();
+  private cardCounter = 0;
+
+  /**
+   * Texts just admitted, fingerprint → first-arrival ms. The wire mints a fresh
+   * msgId when a sender's client retries, so the msgId dedupe above cannot see a
+   * message that arrives twice within seconds — the words can. Observed: one paste
+   * delivered as two frames 0.9s apart under two msgIds, both admitted, the prompt
+   * written into the transcript twice. Memory-only, pruned by age and size.
+   */
+  private readonly recentTexts = new Map<string, number>();
 
   constructor(
     private readonly clientId: string,
@@ -314,8 +498,56 @@ export class DingTalkChannel implements ChannelAdapter {
         at: string;
       }) => void;
       decided: (id: string, fate: "admitted" | "refused" | "dropped", reason?: string) => void;
+    },
+    /**
+     * A card-platform template id (`….schema`), when the installation built one.
+     * Its presence is what turns button approvals on: without it the class leaves
+     * `postApprovalCard` undefined and the manager runs the text-verb path.
+     */
+    private readonly cardTemplateId?: string,
+    /**
+     * A second template id, this one rendering task progress (`taskVarsFor` names
+     * the variables it must bind). Its presence is what turns task cards on; the
+     * manager checks for `postTaskCard` and falls back to the plain ack line.
+     */
+    private readonly taskCardTemplateId?: string
+  ) {
+    if (cardTemplateId !== undefined && cardTemplateId !== "") {
+      this.postApprovalCard = (identity, card) => this.deliverApprovalCard(identity, card);
     }
-  ) {}
+    if (taskCardTemplateId !== undefined && taskCardTemplateId !== "") {
+      this.postTaskCard = (chatKey, card, options, identity) =>
+        this.deliverTaskCard(chatKey, card, options, identity);
+      this.updateTaskCard = (handle, card) => this.rewriteTaskCard(handle, card);
+    }
+  }
+
+  /**
+   * Posts the consent request as an interactive card, wired to whatever
+   * conversation this identity last spoke from. Defined only when a card template
+   * is configured — the manager checks for the method's existence to choose
+   * between buttons and text verbs, so an unconfigured installation honestly reads
+   * as "no buttons here".
+   */
+  postApprovalCard?: (
+    identity: string,
+    card: ApprovalCardState
+  ) => Promise<void>;
+
+  /**
+   * Posts the task card and returns the instance id `rewriteTaskCard` accepts.
+   * Defined only when a task-card template is configured, for the same reason the
+   * approval card is: absent means the manager's plain ack line, not a silent hole.
+   */
+  postTaskCard?: (
+    chatKey: string,
+    card: TaskCardState,
+    options?: PushOptions,
+    identity?: string
+  ) => Promise<string | undefined>;
+
+  /** Rewrites a posted task card in place as the task's state moves. */
+  updateTaskCard?: (handle: string, card: TaskCardState) => Promise<void>;
 
   async start(onMessage: (message: InboundMessage) => Promise<string | undefined>): Promise<void> {
     // Before anything connects. DingTalk load-balances a client's callback frames
@@ -326,6 +558,11 @@ export class DingTalkChannel implements ChannelAdapter {
       label: "DingTalk",
     });
     await this.connect(onMessage);
+  }
+
+  /** Which topics this installation subscribes — messages, plus card presses if cards are on. */
+  private subscriptions(): { type: string; topic: string }[] {
+    return subscriptionsFor(this.cardTemplateId);
   }
 
   stop(): void {
@@ -371,6 +608,31 @@ export class DingTalkChannel implements ChannelAdapter {
   private discard(messageId: string | undefined, reason: string): void {
     this.log(`channel dingtalk: dropped ${messageId ?? "?"} — ${reason}`);
     if (messageId !== undefined) this.ingress?.decided(messageId, "dropped", reason);
+  }
+
+  /**
+   * Whether these exact words landed in this room moments ago, recording first
+   * sights. Whitespace is collapsed because the two copies of one send differ in
+   * envelope (text vs rich text) more reliably than in spacing. A person who
+   * genuinely repeats a line inside the window loses the repeat — the cheap price
+   * of not running one prompt twice; the window is deliberately short.
+   */
+  private isRepeatedArrival(chatKey: string, text: string): boolean {
+    const REPEAT_WINDOW_MS = 10_000;
+    const now = Date.now();
+    const fingerprint = `${chatKey}\u0000${text.replace(/\s+/g, " ").trim()}`;
+    const seenAt = this.recentTexts.get(fingerprint);
+    if (seenAt !== undefined && now - seenAt < REPEAT_WINDOW_MS) return true;
+    if (seenAt === undefined) {
+      this.recentTexts.set(fingerprint, now);
+      if (this.recentTexts.size > 512) {
+        for (const [key, at] of this.recentTexts) {
+          if (now - at > 60_000 || this.recentTexts.size > 512) this.recentTexts.delete(key);
+          else break;
+        }
+      }
+    }
+    return false;
   }
 
   /** An access token, cached to just shy of its stated expiry, fetched in one flight. */
@@ -473,7 +735,7 @@ export class DingTalkChannel implements ChannelAdapter {
       body: JSON.stringify({
         clientId: this.clientId,
         clientSecret: this.clientSecret,
-        subscriptions: [{ type: "CALLBACK", topic: TOPIC }],
+        subscriptions: this.subscriptions(),
         ua: "lumenbox",
       }),
     });
@@ -552,6 +814,14 @@ export class DingTalkChannel implements ChannelAdapter {
       ack(frame.data ?? "{}");
       return;
     }
+    if (frame.headers?.topic === CARD_CALLBACK_TOPIC) {
+      // The response body may carry cardData updates for the pressed card; an empty
+      // one leaves the card as it stands, and the manager's answer travels as a
+      // chat message instead.
+      ack(JSON.stringify({}));
+      await this.handleCardCallback(frame.data ?? "{}", onMessage);
+      return;
+    }
     if (frame.headers?.topic !== TOPIC) {
       ack("{}");
       return;
@@ -612,6 +882,9 @@ export class DingTalkChannel implements ChannelAdapter {
         ...(payload.conversationType !== undefined
           ? { conversationType: payload.conversationType }
           : {}),
+        ...(typeof payload.senderStaffId === "string" && payload.senderStaffId !== ""
+          ? { userId: payload.senderStaffId }
+          : {}),
       });
       this.identities.set(identity, payload.conversationId);
     }
@@ -659,6 +932,14 @@ export class DingTalkChannel implements ChannelAdapter {
       const rendered = flattenRichText(payload.content?.richText);
       body = rendered.text.trim();
       embeddedPictures = rendered.pictureCodes;
+    }
+
+    // Ahead of the nudge and the turn: a retried send carries a fresh msgId, so
+    // this is the only net that catches it, and a caught duplicate should not
+    // spend picture downloads on its way out.
+    if (body !== "" && this.isRepeatedArrival(chatKey, body)) {
+      this.discard(messageId ?? transportId, "the same words arrived twice within seconds");
+      return;
     }
 
     if (body === "") {
@@ -847,38 +1128,340 @@ export class DingTalkChannel implements ChannelAdapter {
       throw last instanceof Error ? last : new Error(String(last));
     }
 
+    if (kind === "text") {
+      await this.restSend(target, "sampleText", { content: body });
+      return;
+    }
+    await this.restSend(target, "sampleMarkdown", {
+      title: title ?? markdownTitle(body),
+      text: body,
+    });
+  }
+
+  /**
+   * One message out over the robot REST APIs, whichever msgKey the payload needs —
+   * the text/markdown kinds `transmit` falls back to, and the media kinds
+   * `sendFile`/`sendImage` exist for. Media has no webhook road: a session webhook
+   * carries neither files nor an uploaded image key, so every media message rides
+   * here even when a fresh webhook exists.
+   */
+  private async restSend(
+    target: ChatTarget,
+    msgKey: string,
+    msgParam: Record<string, unknown>
+  ): Promise<void> {
+    if (target.conversationId === "" && target.userId === undefined) {
+      throw new Error(
+        "nowhere to deliver: this conversation has no webhook and no user id on record"
+      );
+    }
+    if (target.route === "direct" && !target.userId) {
+      throw new Error(
+        "no way to reach this direct session: no fresh webhook, and no user id on record"
+      );
+    }
     // msgParam rides this API as a *string*: the inner object serialized again.
-    const msgParam =
-      kind === "text"
-        ? JSON.stringify({ content: body })
-        : JSON.stringify({ title: title ?? markdownTitle(body), text: body });
-    const url =
-      target.route === "group"
-        ? GROUP_SEND_URL
-        : OTO_SEND_URL;
-    const response = await fetch(url, {
+    const response = await fetch(
+      target.route === "group" ? GROUP_SEND_URL : OTO_SEND_URL,
+      {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          [AUTH_HEADER]: await this.accessToken(),
+        },
+        body: JSON.stringify(
+          target.route === "group"
+            ? {
+                robotCode: this.clientId,
+                openConversationId: target.conversationId,
+                msgKey,
+                msgParam: JSON.stringify(msgParam),
+              }
+            : {
+                robotCode: this.clientId,
+                userIds: [target.userId],
+                msgKey,
+                msgParam: JSON.stringify(msgParam),
+              }
+        ),
+        signal: AbortSignal.timeout(15_000),
+      }
+    );
+    if (!response.ok) throw new Error(await describeFailure(response));
+  }
+
+  /** Set by the manager before start; a press with no handler is acknowledged and dropped. */
+  private approvalHandler:
+    | ((press: {
+        approvalId: string;
+        reply: ApprovalReply;
+        identity: string;
+      }) => Promise<string | undefined>)
+    | undefined;
+
+  onApprovalAction(
+    handler: NonNullable<DingTalkChannel["approvalHandler"]>
+  ): void {
+    this.approvalHandler = handler;
+  }
+
+  /**
+   * One button press on a consent card.
+   *
+   * The frame says who pressed and which static value the button carries; this map
+   * through the instance id back to the pending approval is what makes it a
+   * decision. Replies land in the room the card was delivered to when it was a
+   * group, and in the sender's conversation otherwise — mirroring how the Feishu
+   * adapter routes a pressed answer.
+   */
+  private async handleCardCallback(
+    raw: string,
+    onMessage: (message: InboundMessage) => Promise<string | undefined>
+  ): Promise<void> {
+    void onMessage;
+    let frame: CardCallbackFrame;
+    try {
+      frame = JSON.parse(raw) as CardCallbackFrame;
+    } catch {
+      this.log("channel dingtalk: card callback did not parse");
+      return;
+    }
+    const press = approvalPressFrom(frame);
+    if (press === undefined || this.cardTemplateId === undefined) return;
+    const pending = this.cardApprovals.get(press.instanceId);
+    const identity = `dingtalk:${press.userId}`;
+    if (pending === undefined) {
+      this.log(`channel dingtalk: press on unknown card ${press.instanceId} by ${identity}`);
+      await this.send(identity,
+        "That consent is no longer waiting — it may have been answered from the app, " +
+          "or the turn moved on.").catch(() => {});
+      return;
+    }
+    this.cardApprovals.delete(press.instanceId);
+    if (this.approvalHandler === undefined) return;
+    try {
+      const line = await this.approvalHandler({
+        approvalId: pending.approvalId,
+        reply: press.reply,
+        identity,
+      });
+      if (line === undefined) return;
+      if (press.spaceType === "IM_GROUP" && typeof press.spaceId === "string" && press.spaceId !== "") {
+        await this.sendToChat(`dingtalk:${press.spaceId}`, line);
+      } else {
+        await this.send(identity, line);
+      }
+    } catch (error) {
+      const detail = error instanceof Error ? error.message : String(error);
+      this.log(`channel dingtalk: card press handling failed (${detail})`);
+    }
+  }
+
+  /**
+   * Creates one interactive-card instance from the configured template and
+   * delivers it into the target space. Two REST calls with the same access token
+   * as everything else; `callbackType: STREAM` is what routes button presses onto
+   * our long connection instead of demanding a public endpoint.
+   */
+  private async createAndDeliverCard(
+    target: {
+      route: "group" | "direct";
+      conversationId: string;
+      userId?: string;
+    },
+    templateId: string,
+    vars: Record<string, string>
+  ): Promise<string | undefined> {
+    const outTrackId = `lumenbox-${Date.now()}-${(this.cardCounter++).toString(36)}`;
+    const token = await this.accessToken();
+    const created = await fetch(CARD_CREATE_URL, {
       method: "POST",
+      headers: { "content-type": "application/json", [AUTH_HEADER]: token },
+      body: JSON.stringify({
+        cardTemplateId: templateId,
+        outTrackId,
+        cardData: { cardParamMap: vars },
+        callbackType: "STREAM",
+        imGroupOpenSpaceModel: { supportForward: false },
+        imRobotOpenSpaceModel: { supportForward: false },
+      }),
+      signal: AbortSignal.timeout(15_000),
+    });
+    if (!created.ok) throw new Error(`card create failed: ${await describeFailure(created)}`);
+    const spaceKey = target.route === "group" ? target.conversationId : (target.userId ?? "");
+    if (spaceKey === "") throw new Error("card deliver had nowhere to land: no space key");
+    const delivered = await fetch(CARD_DELIVER_URL, {
+      method: "POST",
+      headers: { "content-type": "application/json", [AUTH_HEADER]: token },
+      body: JSON.stringify({
+        outTrackId,
+        openSpaceId: imSpaceIdFor(target.route, spaceKey),
+        ...(target.route === "group"
+          ? { imGroupOpenDeliverModel: { robotCode: this.clientId, supportForward: false } }
+          : { imRobotOpenDeliverModel: { spaceType: "IM_ROBOT", supportForward: false } }),
+      }),
+      signal: AbortSignal.timeout(15_000),
+    });
+    if (!delivered.ok) throw new Error(`card deliver failed: ${await describeFailure(delivered)}`);
+    return outTrackId;
+  }
+  /**
+   * The consent card, into wherever this identity speaks — bound at construction
+   * time only when a template exists (see constructor).
+   */
+  private async deliverApprovalCard(identity: string, card: ApprovalCardState): Promise<void> {
+    const conversationId = this.identities.get(identity);
+    const conversation =
+      conversationId !== undefined ? (this.conversations.get(conversationId) ?? {}) : {};
+    const route = outboundRoute(conversation.conversationType);
+    // A direct session carries no room: the card addresses the person, which the
+    // robot space expresses as their user id rather than any conversation id.
+    const target = {
+      route,
+      conversationId: conversationId ?? "",
+      ...(identity.startsWith("dingtalk:") ? { userId: identity.slice("dingtalk:".length) } : {}),
+    };
+    const approvalId = card.approvalId;
+    const instanceId = await this.createAndDeliverCard(
+      target,
+      this.cardTemplateId ?? "",
+      approvalVarsFor(card)
+    );
+    if (instanceId === undefined) return;
+    this.cardApprovals.set(instanceId, { approvalId });
+    if (this.cardApprovals.size > 512) {
+      for (const key of this.cardApprovals.keys()) {
+        this.cardApprovals.delete(key);
+        if (this.cardApprovals.size <= 384) break;
+      }
+    }
+  }
+
+  /**
+   * The task card, into the chat that asked. Group cards land in the group's space;
+   * a direct session's robot space names a person, not a room, so the card
+   * addresses who asked — their identity when the manager hands it over, else the
+   * last sender on record — and "no card" when neither exists, which the manager
+   * answers with the plain ack line instead of silence.
+   */
+  private async deliverTaskCard(
+    chatKey: string,
+    card: TaskCardState,
+    options?: PushOptions,
+    identity?: string
+  ): Promise<string | undefined> {
+    void options; // see sendToChat: anchoring is not expressible on this wire
+    if (this.taskCardTemplateId === undefined || this.taskCardTemplateId === "") return undefined;
+    const { conversationId } = parseChatKey(chatKey);
+    if (conversationId === "") return undefined;
+    const conversation = this.conversations.get(conversationId) ?? {};
+    const route = outboundRoute(conversation.conversationType);
+    const asker =
+      route === "direct"
+        ? (identity ?? (conversation.userId !== undefined ? `dingtalk:${conversation.userId}` : undefined))
+        : undefined;
+    const target = {
+      route,
+      conversationId,
+      ...(asker?.startsWith("dingtalk:") ? { userId: asker.slice("dingtalk:".length) } : {}),
+    };
+    return this.createAndDeliverCard(target, this.taskCardTemplateId, taskVarsFor(card));
+  }
+
+  /**
+   * Rewrites a posted task card's variables in place — queued → working → done, and
+   * the current action line while it runs. The manager rate-limits callers already;
+   * this is one PUT per allowed update.
+   */
+  private async rewriteTaskCard(handle: string, card: TaskCardState): Promise<void> {
+    const response = await fetch(CARD_UPDATE_URL, {
+      method: "PUT",
       headers: {
         "content-type": "application/json",
         [AUTH_HEADER]: await this.accessToken(),
       },
-      body: JSON.stringify(
-        target.route === "group"
-          ? {
-              robotCode: this.clientId,
-              openConversationId: target.conversationId,
-              msgKey: kind === "text" ? "sampleText" : "sampleMarkdown",
-              msgParam,
-            }
-          : {
-              robotCode: this.clientId,
-              userIds: [target.userId],
-              msgKey: kind === "text" ? "sampleText" : "sampleMarkdown",
-              msgParam,
-            }
-      ),
+      body: JSON.stringify({
+        outTrackId: handle,
+        cardData: { cardParamMap: taskVarsFor(card) },
+      }),
       signal: AbortSignal.timeout(15_000),
     });
-    if (!response.ok) throw new Error(await describeFailure(response));
+    if (!response.ok) throw new Error(`card update failed: ${await describeFailure(response)}`);
+  }
+
+  /**
+   * The box's bytes, up and back as a mediaId. The endpoint is the legacy one —
+   * old host, `errcode` envelope, multipart field named `media` — and it is the
+   * documented source of the ids that `sampleFile`/`sampleImageMsg` reference. The
+   * new access token is accepted there, so no second credential path exists.
+   */
+  private async uploadMedia(type: "image" | "file", name: string, bytes: Buffer): Promise<string> {
+    const cap = MEDIA_UPLOAD_CAPS[type] ?? 20 * 1024 * 1024;
+    if (bytes.byteLength > cap) {
+      throw new Error(
+        `media too large for dingtalk upload: ${bytes.byteLength} bytes against a ${cap}-byte cap`
+      );
+    }
+    const token = await this.accessToken();
+    const form = new FormData();
+    form.append("media", new Blob([new Uint8Array(bytes)], { type: mimeOf(name) }), name);
+    const query = new URLSearchParams({ access_token: token, type });
+    const response = await fetch(`${MEDIA_UPLOAD_URL}?${query}`, {
+      method: "POST",
+      body: form,
+      signal: AbortSignal.timeout(60_000),
+    });
+    if (!response.ok) throw new Error(`media upload: ${await describeFailure(response)}`);
+    const body = (await response.json()) as {
+      errcode?: number;
+      errmsg?: string;
+      media_id?: string;
+      mediaId?: string;
+    };
+    if (body.errcode !== undefined && body.errcode !== 0) {
+      throw new Error(`media upload: ${body.errmsg ?? "refused"} (errcode ${body.errcode})`);
+    }
+    const mediaId = body.media_id ?? body.mediaId;
+    if (mediaId === undefined || mediaId === "") {
+      throw new Error("media upload returned no media id");
+    }
+    return mediaId;
+  }
+
+  /** Which chat a media push addresses, and how: the room, or its last sender. */
+  private mediaTargetFor(chatKey: string): ChatTarget {
+    const { conversationId } = parseChatKey(chatKey);
+    const conversation = this.conversations.get(conversationId) ?? {};
+    return {
+      route: outboundRoute(conversation.conversationType),
+      conversationId,
+      ...(conversation.userId !== undefined ? { userId: conversation.userId } : {}),
+    };
+  }
+
+  /** Which robot msgKey a media send answers to, and the param each one reads. */
+  async sendFile(
+    chatKey: string,
+    name: string,
+    base64: string,
+    options?: PushOptions
+  ): Promise<void> {
+    void options; // see sendToChat: anchoring is not expressible on this wire
+    const mediaId = await this.uploadMedia("file", name, Buffer.from(base64, "base64"));
+    const extension = (name.split(".").pop() ?? "").toLowerCase();
+    await this.restSend(this.mediaTargetFor(chatKey), "sampleFile", {
+      mediaId,
+      fileName: name,
+      fileType: extension !== "" ? extension : "file",
+    });
+  }
+
+  /** Upload the bytes, then reference them — the same bargain Feishu's adapter strikes. */
+  async sendImage(chatKey: string, base64: string, options?: PushOptions): Promise<void> {
+    void options; // see sendToChat: anchoring is not expressible on this wire
+    const mediaId = await this.uploadMedia("image", "image.png", Buffer.from(base64, "base64"));
+    // Verified against production usage elsewhere: the image msgKey reads the
+    // uploaded id out of `photoURL`, not `mediaId`.
+    await this.restSend(this.mediaTargetFor(chatKey), "sampleImageMsg", { photoURL: mediaId });
   }
 }

@@ -152,12 +152,15 @@ export interface ChannelAdapter {
   /**
    * Posts a task card to a chat and returns the handle `updateTaskCard` accepts, or
    * undefined when the card could not be posted. Adapters without cards leave both
-   * absent and get plain acknowledgement lines instead.
+   * absent and get plain acknowledgement lines instead. `identity` — who asked — is
+   * the address a wire needs when its card system does not speak in chat keys:
+   * DingTalk's robot-space cards for a direct session name a person, not a room.
    */
   postTaskCard?(
     chatKey: string,
     card: TaskCardState,
-    options?: PushOptions
+    options?: PushOptions,
+    identity?: string
   ): Promise<string | undefined>;
   /** Rewrites a posted card in place. Updates are quiet; a chat is not notified for one. */
   updateTaskCard?(handle: string, card: TaskCardState): Promise<void>;
@@ -1327,7 +1330,10 @@ ${input.options.map(option => `· ${option}`).join("\n")}`
 
     // The acknowledgement, when one is owed: a card if the adapter can, a line if not.
     // Queued work is acknowledged immediately — queued is known-slow — while work that
-    // starts now gets the threshold, so a quick answer arrives as itself.
+    // starts now gets the threshold, so a quick answer arrives as itself. A card
+    // adapter that posts nothing (a direct session nobody is on record for, a chat
+    // the wire refuses) falls through to the line: the requester gets one of the two,
+    // never silence wearing the costume of a card.
     let cardHandle: string | undefined;
     let acknowledged = false;
     let lastCardWrite = 0;
@@ -1336,7 +1342,7 @@ ${input.options.map(option => `· ${option}`).join("\n")}`
       acknowledged = true;
       if (adapter.postTaskCard !== undefined) {
         try {
-          cardHandle = await adapter.postTaskCard(chatKey, { ...card }, anchor);
+          cardHandle = await adapter.postTaskCard(chatKey, { ...card }, anchor, message.identity);
           lastCardWrite = Date.now();
           // Durably, so the card outlives this closure: an acceptance typed after a
           // restart still finds the handle to flip.
@@ -1352,7 +1358,7 @@ ${input.options.map(option => `· ${option}`).join("\n")}`
           const detail = error instanceof Error ? error.message : String(error);
           this.deps.log(`channel ${adapter.name}: card failed (${detail})`);
         }
-        return;
+        if (cardHandle !== undefined) return;
       }
       await deliver(ackLine(card));
     };
