@@ -167,7 +167,7 @@ import { adminRecipients, decideUpgrade, upgradeMessage } from "../host/upgrade.
 import { PRESET_MODELS, providerNames, resolveProvider, testProvider } from "../host/provider.ts";
 import { Principals, roleAtLeast, type Principal, type Role } from "../host/principals.ts";
 import { describeTask, isLive, isTaskStatus } from "../host/tasks.ts";
-import { blockedAnnouncement, boardMessage } from "../channels/board-view.ts";
+import { blockedAnnouncement, boardView } from "../channels/board-view.ts";
 import { parseProgressFile, progressLine } from "../host/progress-file.ts";
 import { costOfTasks, spendByDay, summariseSpend, type Rates } from "../host/spend.ts";
 import type { UsageRecord } from "../host/usage.ts";
@@ -823,7 +823,7 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
       },
       // "看板": the room's plate right now, grouped by what a person does about each
       // state. All lookups — see board-view.ts.
-      show: chatKey => boardMessage(tasksOfChat(chatKey), displayName, taskUrl),
+      show: chatKey => boardView(tasksOfChat(chatKey), displayName, taskUrl),
       urlFor: taskUrl,
       started: taskId => {
         orchestrator.tasks?.update(taskId, { status: "doing" }, "channel");
@@ -2112,6 +2112,11 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
               ...(typeof body.assigneeId === "string"
                 ? { assigneeId: body.assigneeId === "" ? null : body.assigneeId }
                 : {}),
+              // A board is for telling tasks apart; renaming a row is ordinary curation.
+              ...(typeof body.title === "string" && body.title.trim() !== ""
+                ? { title: body.title }
+                : {}),
+              ...(typeof body.description === "string" ? { description: body.description } : {}),
             },
             caller.userId ?? "web"
           );

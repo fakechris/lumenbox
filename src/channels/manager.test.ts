@@ -741,6 +741,11 @@ test("看板 answers from the board on the wire, and no turn runs", async () => 
   const adapter = cardAdapter();
   const asked: string[] = [];
   const shown: string[] = [];
+  const view = {
+    liveCount: 1,
+    groups: [{ heading: "进行中", tasks: [{ id: "t1", who: "Ada", title: "报表" }] }],
+    done: [],
+  };
   const manager = new ChannelManager({
     mayDrive: () => true,
     ask: async (_a, text) => {
@@ -753,7 +758,7 @@ test("看板 answers from the board on the wire, and no turn runs", async () => 
       closed: () => "done",
       show: chatKey => {
         shown.push(chatKey);
-        return "看板 · 1 件在办";
+        return view;
       },
     },
     log: () => {},
@@ -767,7 +772,7 @@ test("看板 answers from the board on the wire, and no turn runs", async () => 
     senderLabel: "chris",
     text: "看板",
   });
-  assert.equal(reply, "看板 · 1 件在办");
+  assert.equal(reply, "看板 · 1 件在办\n进行中:\n  t1 @Ada 报表");
   assert.deepEqual(shown, ["feishu:oc_room"], "asked for the room's board");
   assert.deepEqual(asked, [], "a look at the board is not work");
 
@@ -780,6 +785,50 @@ test("看板 answers from the board on the wire, and no turn runs", async () => 
   });
   await manager.idle();
   assert.equal(asked.length, 1);
+});
+
+test("看板 rides as a card where the wire draws one, and falls back to text when the card fails", async () => {
+  const adapter = cardAdapter();
+  const boardCards: { chatKey: string; liveCount: number }[] = [];
+  let cardBroken = false;
+  const withBoard = Object.assign(adapter, {
+    postBoardCard(chatKey: string, view: { liveCount: number }) {
+      if (cardBroken) return Promise.reject(new Error("card refused"));
+      boardCards.push({ chatKey, liveCount: view.liveCount });
+      return Promise.resolve();
+    },
+  });
+  const manager = new ChannelManager({
+    mayDrive: () => true,
+    ask: async () => "x",
+    board: {
+      open: () => "t1",
+      started: () => {},
+      closed: () => "done",
+      show: () => ({ liveCount: 2, groups: [], done: [] }),
+    },
+    log: () => {},
+  });
+  manager.register(withBoard, true, "test");
+  await started(manager);
+
+  const asCard = await withBoard.inject({
+    identity: "feishu:ou_1",
+    chatKey: "feishu:oc_room",
+    senderLabel: "chris",
+    text: "看板",
+  });
+  assert.equal(asCard, undefined, "the card is the whole answer");
+  assert.deepEqual(boardCards, [{ chatKey: "feishu:oc_room", liveCount: 2 }]);
+
+  cardBroken = true;
+  const asText = await withBoard.inject({
+    identity: "feishu:ou_1",
+    chatKey: "feishu:oc_room",
+    senderLabel: "chris",
+    text: "看板",
+  });
+  assert.equal(asText, "这个群现在没有挂着的任务。", "a failed card degrades to the text form");
 });
 
 test("the person's whole message rides on the board entry as its description", async () => {

@@ -27,6 +27,7 @@
 import type { Ingress } from "./ingress.ts";
 import { channelHealth, type ChannelHealth } from "./liveness.ts";
 import { boxPathsNamed, undelivered } from "../host/named-files.ts";
+import { boardText, type BoardView } from "./board-view.ts";
 
 import {
   APPROVAL_STAKES,
@@ -176,6 +177,8 @@ export interface ChannelAdapter {
   postApprovalCard?(identity: string, card: ApprovalCardState): Promise<void>;
   /** A question with its answers as buttons. A pressed button speaks as a typed reply. */
   postQuestionCard?(identity: string, card: QuestionCardState): Promise<void>;
+  /** The board as a card, to a chat. Absent means "看板" answers as plain text. */
+  postBoardCard?(chatKey: string, view: BoardView): Promise<void>;
   /**
    * Registers the handler for a pressed approval button. The handler returns the
    * line to show in the chat, or undefined when the press was refused or stale.
@@ -393,8 +396,8 @@ export interface ChannelManagerDeps {
       /** Which conversation the work happens in, when that is not the chat itself. */
       threadKey?: string;
     }) => string | undefined;
-    /** The board as one chat message: what "看板" answers. Absent means the verb is inert. */
-    show?: (chatKey: string) => string;
+    /** The board's facts for one chat: what "看板" answers. Absent means the verb is inert. */
+    show?: (chatKey: string) => BoardView;
     /** Where a person can watch this task work, when this installation is reachable. */
     urlFor?: (taskId: string) => string | undefined;
     started: (taskId: string) => void;
@@ -854,9 +857,22 @@ ${input.options.map(option => `· ${option}`).join("\n")}`
 
     // "看板" is a look at the board, not work — answered on the wire, and deliberately
     // checked before the running-work routing below: asking what is on the plate while
-    // something runs must not be read as steering it.
+    // something runs must not be read as steering it. A card where the wire draws one,
+    // and the text form both as fallback and everywhere else.
     if (parseBoardRequest(message.text) && this.deps.board?.show !== undefined) {
-      return this.deps.board.show(message.chatKey ?? message.identity);
+      const view = this.deps.board.show(message.chatKey ?? message.identity);
+      if (adapter.postBoardCard !== undefined) {
+        try {
+          await adapter.postBoardCard(message.chatKey ?? message.identity, view);
+          return undefined;
+        } catch (error) {
+          this.deps.log(
+            `channel ${adapter.name}: board card failed — ` +
+              `${error instanceof Error ? error.message : String(error)}`
+          );
+        }
+      }
+      return boardText(view);
     }
 
     // The digest verbs are decisions about reporting, not work: answered on the wire.

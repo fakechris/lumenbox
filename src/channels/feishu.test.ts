@@ -341,6 +341,37 @@ test("a question card carries each answer as a button that speaks the answer", (
   assert.match(note!.elements![0]!.content, /直接把答案打在下面/);
 });
 
+test("the board card groups tasks under bold headings, links ids, and footnotes the finishes", async () => {
+  const { renderBoardCard } = await import("./feishu.ts");
+  const card = renderBoardCard({
+    liveCount: 2,
+    groups: [
+      { heading: "待验收", tasks: [{ id: "t1", who: "Ada", title: "整理 Q3 报表", url: "https://box.example/?task=t1" }] },
+      { heading: "进行中", tasks: [{ id: "t2", title: "翻译新闻稿" }] },
+    ],
+    done: [{ id: "t9", title: "周报" }],
+  }) as {
+    header: { title: { content: string }; template: string };
+    elements: { tag: string; text?: { content: string }; elements?: { content: string }[] }[];
+  };
+  assert.equal(card.header.template, "blue", "informational, nothing to consent to");
+  assert.equal(card.header.title.content, "看板 · 2 件在办");
+  const body = card.elements.find(element => element.tag === "div")!.text!.content;
+  assert.match(body, /\*\*待验收\*\*/);
+  assert.match(body, /\[t1\]\(https:\/\/box\.example\/\?task=t1\) @Ada 整理 Q3 报表/);
+  assert.match(body, /\*\*进行中\*\*\nt2 翻译新闻稿/);
+  const note = card.elements.find(element => element.tag === "note");
+  assert.match(note!.elements![0]!.content, /近 24 小时完成:t9 周报/);
+});
+
+test("an empty board card says so in the body instead of an empty div", async () => {
+  const { renderBoardCard } = await import("./feishu.ts");
+  const card = renderBoardCard({ liveCount: 0, groups: [], done: [] }) as {
+    elements: { tag: string; text?: { content: string } }[];
+  };
+  assert.equal(card.elements.find(element => element.tag === "div")!.text!.content, "这个群现在没有挂着的任务。");
+});
+
 test("a file the bot cannot pull down is explained to the sender, by cause", async () => {
   const { fileFetchFailed } = await import("./strings.ts");
   // 234037 is what Feishu answered in production: size limit. Replayed by hand to get the

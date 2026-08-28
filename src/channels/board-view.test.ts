@@ -1,15 +1,16 @@
 /**
- * Tests for the board as a chat message.
+ * Tests for the board as a chat reads it.
  *
  * The claims that matter: every id shown is a real task in this chat's list (no
  * invention — it is all lookups), grouping follows what a person does about a state,
+ * display titles are clamped so a pre-rewrite paragraph-title cannot wall the message,
  * and a blocked landing speaks exactly once-shaped: never for the channel's own
  * failure path, which already told the chat.
  */
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { blockedAnnouncement, boardMessage, BOARD_EMPTY } from "./board-view.ts";
+import { blockedAnnouncement, boardText, boardView, BOARD_EMPTY } from "./board-view.ts";
 import type { Task, TaskStatus } from "../host/tasks.ts";
 
 function task(
@@ -32,21 +33,22 @@ function task(
 }
 
 const NOW = new Date("2026-08-27T12:00:00.000Z");
+const noUrl = (): string | undefined => undefined;
 
 test("live tasks group by what a person does about them, in triage order", () => {
-  const message = boardMessage(
+  const view = boardView(
     [
       task("t3", "doing", "批量转换 PDF", { assigneeId: "agent-ada" }),
       task("t1", "review", "整理 Q3 报表", { assigneeId: "agent-ada" }),
       task("t2", "blocked", "抓取竞品价格", { assigneeId: "agent-bob" }),
       task("t4", "open", "翻译新闻稿"),
     ],
-    id => (id === "agent-ada" ? "Ada" : "Bob"),
-    () => undefined,
+    (id: string) => (id === "agent-ada" ? "Ada" : "Bob"),
+    noUrl,
     NOW
   );
   assert.equal(
-    message,
+    boardText(view),
     [
       "看板 · 4 件在办",
       "待验收:",
@@ -61,8 +63,27 @@ test("live tasks group by what a person does about them, in triage order", () =>
   );
 });
 
+test("a paragraph-length title is clamped: the board tells tasks apart, the full words are a click away", () => {
+  const view = boardView(
+    [
+      task(
+        "t60",
+        "done",
+        "要做啊!你从这个二维码(FoloToy),你能够找到它是一个什么样的项目?它有一个开源的GitHub项目,你找找",
+        { updatedAt: "2026-08-27T09:00:00.000Z" }
+      ),
+    ],
+    () => "Ada",
+    noUrl,
+    NOW
+  );
+  const line = view.done[0]!;
+  assert.equal(line.title.length, 24);
+  assert.match(line.title, /…$/);
+});
+
 test("recent finishes get one compact line; old ones and dropped work do not appear", () => {
-  const message = boardMessage(
+  const view = boardView(
     [
       task("t1", "doing", "在办的", { assigneeId: "agent-ada" }),
       task("t2", "done", "刚完成的", { updatedAt: "2026-08-27T09:00:00.000Z" }),
@@ -70,32 +91,36 @@ test("recent finishes get one compact line; old ones and dropped work do not app
       task("t4", "dropped", "放弃的"),
     ],
     () => "Ada",
-    () => undefined,
+    noUrl,
     NOW
   );
+  const message = boardText(view);
   assert.match(message, /近 24 小时完成:t2 刚完成的/);
   assert.doesNotMatch(message, /t3|t4/);
 });
 
 test("a link rides on the line when the installation is reachable", () => {
-  const message = boardMessage(
+  const view = boardView(
     [task("t1", "doing", "报表", { assigneeId: "agent-ada" })],
     () => "Ada",
-    id => `https://box.example/?task=${id}`,
+    (id: string) => `https://box.example/?task=${id}`,
     NOW
   );
-  assert.match(message, /t1 @Ada 报表 https:\/\/box\.example\/\?task=t1/);
+  assert.equal(view.groups[0]!.tasks[0]!.url, "https://box.example/?task=t1");
+  assert.match(boardText(view), /t1 @Ada 报表 https:\/\/box\.example\/\?task=t1/);
 });
 
 test("an empty board says so instead of sending headings over nothing", () => {
-  assert.equal(boardMessage([], () => "x", () => undefined, NOW), BOARD_EMPTY);
+  assert.equal(boardText(boardView([], () => "x", noUrl, NOW)), BOARD_EMPTY);
   // Only stale finishes is also an empty board: nothing to triage, nothing recent.
   assert.equal(
-    boardMessage(
-      [task("t9", "done", "老任务", { updatedAt: "2026-08-01T00:00:00.000Z" })],
-      () => "x",
-      () => undefined,
-      NOW
+    boardText(
+      boardView(
+        [task("t9", "done", "老任务", { updatedAt: "2026-08-01T00:00:00.000Z" })],
+        () => "x",
+        noUrl,
+        NOW
+      )
     ),
     BOARD_EMPTY
   );

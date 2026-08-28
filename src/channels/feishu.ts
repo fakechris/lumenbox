@@ -35,6 +35,7 @@ import type {
   TaskCardState,
 } from "./manager.ts";
 import { acquireConsumerLock } from "./single-consumer.ts";
+import { BOARD_EMPTY, boardHeadline, type BoardView } from "./board-view.ts";
 import { looksLikeMarkdown as sharedLooksLikeMarkdown } from "./markdown.ts";
 const looksLikeMarkdown = sharedLooksLikeMarkdown;
 
@@ -169,6 +170,50 @@ export function renderCard(card: TaskCardState): object {
           },
         ],
       },
+    ],
+  };
+}
+
+/**
+ * The board as a Feishu card: each group a bold heading, each task one line, the id
+ * a link into the workshop where this installation is reachable. Blue like the
+ * question card — informational, nothing to consent to. Exported for its test.
+ */
+export function renderBoardCard(view: BoardView): object {
+  const lines: string[] = [];
+  for (const group of view.groups) {
+    lines.push(`**${group.heading}**`);
+    for (const task of group.tasks) {
+      const id = task.url !== undefined ? `[${task.id}](${task.url})` : task.id;
+      lines.push(`${id} ${task.who !== undefined ? `@${task.who} ` : ""}${task.title}`);
+    }
+  }
+  return {
+    config: { wide_screen_mode: true },
+    header: {
+      title: { tag: "plain_text", content: boardHeadline(view.liveCount) },
+      template: "blue",
+    },
+    elements: [
+      {
+        tag: "div",
+        text: { tag: "lark_md", content: lines.length > 0 ? lines.join("\n") : BOARD_EMPTY },
+      },
+      ...(view.done.length > 0
+        ? [
+            {
+              tag: "note",
+              elements: [
+                {
+                  tag: "plain_text",
+                  content: `近 24 小时完成:${view.done
+                    .map(task => `${task.id} ${task.title}`)
+                    .join("、")}`,
+                },
+              ],
+            },
+          ]
+        : []),
     ],
   };
 }
@@ -958,6 +1003,13 @@ export class FeishuChannel implements ChannelAdapter {
       JSON.stringify(renderCard(card)),
       options?.replyTo ?? rootId
     );
+  }
+
+  /** "看板" as a card. Same key shapes as sendToChat: a topic thread anchors to its root. */
+  async postBoardCard(chatKey: string, view: BoardView): Promise<void> {
+    const { chatId, rootId } = splitChatKey(chatKey);
+    if (chatId === "") return;
+    await this.post(chatId, "interactive", JSON.stringify(renderBoardCard(view)), rootId);
   }
 
   /**
