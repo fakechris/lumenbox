@@ -351,3 +351,29 @@ test("a file the bot cannot pull down is explained to the sender, by cause", asy
   assert.match(fileFetchFailed("a.pdf", 99991663), /没拿下来.*99991663/);
   assert.match(fileFetchFailed("a.pdf", undefined), /没拿下来/);
 });
+
+test("a 1:1 chat is one conversation, whichever bubble the person typed into", async () => {
+  const { conversationKeyFor } = await import("./feishu.ts");
+  // Observed live: the person talked to the bot "in the same topic the whole time" and
+  // watched it forget everything. Their top-level messages keyed to the chat; their
+  // in-topic replies carried root_id and keyed to chat:root; the agent entered the
+  // reply's conversation with an empty transcript and re-derived work it had already
+  // delivered. In a 1:1 the counterpart is one person — a topic bubble is not a subject
+  // boundary, and root_id must not outrank that.
+  const p2p = { chat_id: "oc_1", chat_type: "p2p" };
+  assert.equal(conversationKeyFor({ ...p2p, message_id: "om_a" }), "feishu:oc_1");
+  assert.equal(
+    conversationKeyFor({ ...p2p, message_id: "om_b", root_id: "om_a", thread_id: "omt_x" }),
+    "feishu:oc_1",
+    "an in-topic reply in a 1:1 stays in the one conversation"
+  );
+
+  // Groups keep topic separation: one room really does hold many subjects.
+  const group = { chat_id: "oc_2", chat_type: "group" };
+  assert.equal(conversationKeyFor({ ...group, message_id: "om_r" }), "feishu:oc_2:om_r");
+  assert.equal(
+    conversationKeyFor({ ...group, message_id: "om_s", root_id: "om_r" }),
+    "feishu:oc_2:om_r",
+    "a group topic's root and its replies agree on the conversation"
+  );
+});

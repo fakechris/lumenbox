@@ -98,8 +98,10 @@ export const STOPPING = "好,叫停了。当前这一步做完就停。";
 
 export const NOTHING_RUNNING = "现在没有正在做的事。";
 
-export function steered(who: string): string {
-  return `带到了,${who}接着做。`;
+export function steered(who: string | undefined): string {
+  // No name is better than a wrong one: without an @-address the manager does not know
+  // which agent is on it, and "团队接着做" read as if a committee had the file.
+  return who !== undefined ? `带到了,${who}接着做。` : "带到了,接着做。";
 }
 
 // ── file fetch failures ────────────────────────────────────────────────────────

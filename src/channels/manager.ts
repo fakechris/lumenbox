@@ -874,7 +874,7 @@ ${input.options.map(option => `· ${option}`).join("\n")}`
       }
       if (sameAgent && this.deps.steer !== undefined) {
         this.deps.steer(running.agentName, text, message.identity, conversationKey);
-        return steered(running.agentName ?? TEAM);
+        return steered(running.agentName);
       }
     } else if (parseStopRequest(text)) {
       return NOTHING_RUNNING;

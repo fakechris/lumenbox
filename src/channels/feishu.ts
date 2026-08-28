@@ -400,26 +400,9 @@ export class FeishuChannel implements ChannelAdapter {
     root_id?: string;
     chat_type?: string;
   }): string {
-    const chatId = message.chat_id ?? "";
-    // `root_id`, deliberately not `thread_id`. The root of a chain *is* the first message,
-    // so `root_id` equals that message's own id and the opening message and its replies
-    // agree. `thread_id` is a separate identifier Feishu mints when the first reply
-    // arrives, which the opening message never carries — so preferring it split every
-    // topic in two: the question in one conversation and every answer in another, and the
-    // agent never saw how the subject began.
-    //
-    // Verified against the ledger: a root arrived with neither field and was keyed on its
-    // own id; its replies carried `root_id` equal to that id and `thread_id` equal to
-    // something else entirely.
-    const root = message.root_id;
-    if (root !== undefined && root !== "") return `feishu:${chatId}:${root}`;
-    // A direct chat is its own subject, and keying per message there would discard every
-    // follow-up somebody makes.
-    if (message.chat_type === "p2p") return `feishu:${chatId}`;
-    return message.message_id !== undefined
-      ? `feishu:${chatId}:${message.message_id}`
-      : `feishu:${chatId}`;
+    return conversationKeyFor(message);
   }
+
 
   private alreadySeen(messageId: string): boolean {
     const now = Date.now();
@@ -574,7 +557,13 @@ export class FeishuChannel implements ChannelAdapter {
                 text: "",
                 files: [{ name, base64 }],
               });
-              if (reply !== undefined && reply !== "") await this.send(identity, reply);
+              // Anchored under the message it answers. `send(identity)` posts at the chat
+              // root, which inside a topic reads as the bot talking to itself somewhere
+              // else — the person who said "停" watched the answer land outside their
+              // thread and could not tell whether the mechanism had heard them.
+              if (reply !== undefined && reply !== "") {
+                await this.sendToChat(`feishu:${chatId}`, reply, { replyTo: messageId });
+              }
             })
             .catch((error: unknown) => {
               const detail = error instanceof Error ? error.message : String(error);
@@ -674,7 +663,16 @@ export class FeishuChannel implements ChannelAdapter {
               ...(files.length > 0 ? { files } : {}),
             });
           })
-          .then(reply => (reply ? this.send(identity, reply) : undefined))
+          .then(reply =>
+            // Anchored under the message it answers, or it lands at the chat root —
+            // which inside a topic thread reads as an unrelated announcement, and the
+            // person cannot tell their "停" was heard.
+            reply
+              ? messageId !== undefined
+                ? this.sendToChat(`feishu:${chatId}`, reply, { replyTo: messageId })
+                : this.send(identity, reply)
+              : undefined
+          )
           .catch((error: unknown) => {
             const detail = error instanceof Error ? error.message : String(error);
             this.log(`channel feishu: reply failed (${detail})`);
@@ -1078,4 +1076,38 @@ export class FeishuChannel implements ChannelAdapter {
     if (imageKey === undefined) throw new Error("feishu image upload returned no key");
     await this.post(chatId, "image", JSON.stringify({ image_key: imageKey }), options?.replyTo ?? rootId);
   }
+}
+
+/** See the method of the same name; exported so the keying rules are testable as rules. */
+export function conversationKeyFor(message: {
+  message_id?: string;
+  chat_id?: string;
+  thread_id?: string;
+  root_id?: string;
+  chat_type?: string;
+}): string {
+    const chatId = message.chat_id ?? "";
+    // A direct chat is one conversation, full stop — checked FIRST, because a reply
+    // inside a topic bubble carries root_id even in a 1:1, and the root branch used to
+    // win. The person talked to the bot "in the same topic the whole time" and watched it
+    // forget everything: their top-level messages keyed to the chat, their in-topic
+    // replies keyed to chat:root, and the agent entered the reply's conversation with an
+    // empty transcript, re-deriving work it had already delivered. In a 1:1 the
+    // counterpart is one person; which bubble they typed into is not a subject boundary.
+    if (message.chat_type === "p2p") return `feishu:${chatId}`;
+    // `root_id`, deliberately not `thread_id`. The root of a chain *is* the first message,
+    // so `root_id` equals that message's own id and the opening message and its replies
+    // agree. `thread_id` is a separate identifier Feishu mints when the first reply
+    // arrives, which the opening message never carries — so preferring it split every
+    // topic in two: the question in one conversation and every answer in another, and the
+    // agent never saw how the subject began.
+    //
+    // Verified against the ledger: a root arrived with neither field and was keyed on its
+    // own id; its replies carried `root_id` equal to that id and `thread_id` equal to
+    // something else entirely.
+    const root = message.root_id;
+    if (root !== undefined && root !== "") return `feishu:${chatId}:${root}`;
+    return message.message_id !== undefined
+      ? `feishu:${chatId}:${message.message_id}`
+      : `feishu:${chatId}`;
 }
