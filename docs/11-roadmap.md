@@ -1004,6 +1004,30 @@ to, because the obligation review changed the dependency order underneath three 
   request, not a name; the person's whole message is kept as the task's description before
   any rewrite). Answering, verbatim: "现在有各种 task,我都对应不上".
 
+### The team box cannot promise anything about its screens (2026-08-29)
+
+Found while reviewing the identity-box design, but it is not about identity boxes — it is
+true of the box running today. `docker/box/start-display` brings up Xvfb with **access
+control off**, and the X socket directory is **1777** (`docker/box/Dockerfile`). Any
+process in the container that can speak X11 or RFB reads any agent's screen without
+touching a tool we control; `docker/box/vnc-probe` is an existing example, in Python, that
+reads the whole framebuffer.
+
+Consequences, in the order they matter:
+
+1. **Do not describe the recordings as evidence of what happened.** Anything in the box
+   can read the screen, and — separately — nothing binds a recording to the session it
+   claims to be of. The private-deployment story leans on 可围观/可审计; that story is
+   currently stronger than the mechanism.
+2. Per-agent desktops are a convenience, not a boundary. Two agents in one box are not
+   isolated from each other in any way an attacker would respect.
+3. Fixing it means X access control on with per-desktop cookies, or one component owning
+   the framebuffer — the same architecture question docs/18 v3 sidesteps by putting each
+   person in their own container.
+
+Not urgent for a single-user installation, where every agent is yours. It becomes
+load-bearing the moment two people share a box, which is what docs/09 says a tenant is.
+
 ### Backlog notes from a Linux-CUA product teardown (2026-08-28, local research note)
 
 Three liftable ideas, ranked; the teardown itself stays outside the repo.
