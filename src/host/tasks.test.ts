@@ -113,13 +113,20 @@ test("describeTask reads like a board row", () => {
   }
 });
 
-test("onChange fires after a recorded change, with the task as it now stands", () => {
+test("every onChange listener fires after a recorded change, with the task as it now stands", () => {
   const store = new TaskStore(null);
   const seen: string[] = [];
-  store.onChange = task => seen.push(`${task.id}:${task.status}`);
+  store.onChange(task => seen.push(`audit ${task.id}:${task.status}`));
+  // A second subscriber must not unseat the first: the auto-audit and the channel's
+  // blocked-ping are wired at different times by different modules.
+  store.onChange(task => seen.push(`channel ${task.id}:${task.status}`));
   const task = store.create({ title: "audit me", requester: "chris", assigneeId: "a1", reviewerId: "v1" })!;
   store.update(task.id, { status: "done" }, "a1"); // review gate coerces to review
-  assert.deepEqual(seen, [`${task.id}:review`], "create does not fire; the coerced update does");
+  assert.deepEqual(
+    seen,
+    [`audit ${task.id}:review`, `channel ${task.id}:review`],
+    "create does not fire; the coerced update reaches both listeners"
+  );
 });
 
 test("a finished turn does not overrule a status the agent chose", () => {

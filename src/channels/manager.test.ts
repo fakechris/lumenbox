@@ -737,6 +737,83 @@ test("a channel request lives on the board: opened, started at first work, close
   ]);
 });
 
+test("看板 answers from the board on the wire, and no turn runs", async () => {
+  const adapter = cardAdapter();
+  const asked: string[] = [];
+  const shown: string[] = [];
+  const manager = new ChannelManager({
+    mayDrive: () => true,
+    ask: async (_a, text) => {
+      asked.push(text);
+      return "x";
+    },
+    board: {
+      open: () => "t1",
+      started: () => {},
+      closed: () => "done",
+      show: chatKey => {
+        shown.push(chatKey);
+        return "看板 · 1 件在办";
+      },
+    },
+    log: () => {},
+  });
+  manager.register(adapter, true, "test");
+  await started(manager);
+
+  const reply = await adapter.inject({
+    identity: "feishu:ou_1",
+    chatKey: "feishu:oc_room",
+    senderLabel: "chris",
+    text: "看板",
+  });
+  assert.equal(reply, "看板 · 1 件在办");
+  assert.deepEqual(shown, ["feishu:oc_room"], "asked for the room's board");
+  assert.deepEqual(asked, [], "a look at the board is not work");
+
+  // A sentence *about* the board is work, not the verb.
+  await adapter.inject({
+    identity: "feishu:ou_1",
+    chatKey: "feishu:oc_room",
+    senderLabel: "chris",
+    text: "看板上加一条明天的任务",
+  });
+  await manager.idle();
+  assert.equal(asked.length, 1);
+});
+
+test("the person's whole message rides on the board entry as its description", async () => {
+  const adapter = cardAdapter();
+  let opened: { title: string; description?: string } | undefined;
+  const manager = new ChannelManager({
+    mayDrive: () => true,
+    ask: async () => "ok",
+    ackAfterMs: 10,
+    board: {
+      open: input => {
+        opened = { title: input.title, ...(input.description !== undefined ? { description: input.description } : {}) };
+        return "t1";
+      },
+      started: () => {},
+      closed: () => "done",
+    },
+    log: () => {},
+  });
+  manager.register(adapter, true, "test");
+  await started(manager);
+
+  await adapter.inject({
+    identity: "feishu:ou_1",
+    chatKey: "feishu:oc_room",
+    senderLabel: "chris",
+    text: "整理报表\n把 Q3 的三个文件夹都算上,输出一个汇总 xlsx",
+  });
+  await manager.idle();
+  assert.equal(opened?.description, "整理报表\n把 Q3 的三个文件夹都算上,输出一个汇总 xlsx");
+  // The title stays the compact form; the description is where the whole message lives.
+  assert.notEqual(opened?.title, opened?.description);
+});
+
 test("a dropped file is stored and acknowledged, and no turn runs", async () => {
   const adapter = cardAdapter();
   const asked: string[] = [];

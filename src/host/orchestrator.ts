@@ -333,7 +333,7 @@ export class Orchestrator {
       options.tasks === null
         ? undefined
         : (options.tasks ?? new TaskStore(undefined, line => console.error(`[tasks] ${line}`)));
-    if (this.tasks !== undefined) this.tasks.onChange = task => this.maybeAudit(task);
+    if (this.tasks !== undefined) this.tasks.onChange(task => this.maybeAudit(task));
     this.scopes = options.scopes === null ? undefined : (options.scopes ?? new ScopeStore());
     this.mcp =
       options.mcp === null || options.mcp === undefined
@@ -660,6 +660,43 @@ export class Orchestrator {
     } catch {
       return undefined;
     }
+  }
+
+  /**
+   * Rewrites a task's title into a short name, from the request that opened it.
+   *
+   * A board row titled with the first line of a request is a request, not a name —
+   * "帮我看一下这个文件里的数据…" tells nobody which task that was a week later, and the
+   * observed complaint was exactly "各种 task 我都对应不上". The person's whole message
+   * is kept as the task's description before this runs, so the rewrite never costs the
+   * board what was actually said.
+   *
+   * Best-effort by design: the cheap model failing, refusing or blowing past the brief
+   * leaves the title as the person's words, which is where it started.
+   */
+  async retitleTask(agentId: string, taskId: string, request: string): Promise<void> {
+    if (this.tasks === undefined) return;
+    const agent = this.registry.tryGet(agentId);
+    if (agent === undefined) return;
+    const answer = await this.askCheaply(
+      agent,
+      "下面是一个人发给团队的任务请求。给它起一个看板标题:12 个字以内,说清这件事是做什么的。" +
+        "只输出标题本身,不要引号、句号或任何解释。\n\n请求:\n" +
+        request.slice(0, 2000)
+    );
+    const title = answer
+      ?.split("\n")
+      .map(line => line.trim())
+      .find(line => line !== "")
+      ?.replace(/^["'「『""]+|["'」』""]+$/g, "")
+      .replace(/[。.!!]+$/, "")
+      .trim();
+    // Too long or empty means the model ignored the brief, and that is not an
+    // improvement over what the person said.
+    if (title === undefined || title === "" || title.length > 24) return;
+    const current = this.tasks.get(taskId);
+    if (current === undefined || title === current.title) return;
+    this.tasks.update(taskId, { title }, "host");
   }
 
   /** Sends a user message to an agent and runs its turn to completion. */

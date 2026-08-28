@@ -167,6 +167,7 @@ import { adminRecipients, decideUpgrade, upgradeMessage } from "../host/upgrade.
 import { PRESET_MODELS, providerNames, resolveProvider, testProvider } from "../host/provider.ts";
 import { Principals, roleAtLeast, type Principal, type Role } from "../host/principals.ts";
 import { describeTask, isLive, isTaskStatus } from "../host/tasks.ts";
+import { blockedAnnouncement, boardMessage } from "../channels/board-view.ts";
 import { parseProgressFile, progressLine } from "../host/progress-file.ts";
 import { costOfTasks, spendByDay, summariseSpend, type Rates } from "../host/spend.ts";
 import type { UsageRecord } from "../host/usage.ts";
@@ -419,24 +420,41 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
     return Array.from(randomBytes(6), byte => alphabet[byte % alphabet.length]!).join("");
   };
 
+  /** An id as the chat says it: an agent's name, a person's name, or the id itself. */
+  const displayName = (id: string): string =>
+    registry.tryGet(id)?.profile.name ??
+    principals.list().find(person => person.id === id)?.name ??
+    id;
+
+  // Only when an operator said where this installation is reachable from a phone.
+  // Guessing (the bind address, a container's hostname) would put a link in a chat
+  // that opens nothing, which is worse than no link.
+  const taskUrl = (taskId: string): string | undefined => {
+    const base = process.env.AGENTBOX_PUBLIC_URL;
+    return base === undefined || base === ""
+      ? undefined
+      : `${base.replace(/\/+$/, "")}/?task=${encodeURIComponent(taskId)}`;
+  };
+
+  // Every thread in the chat, not just one. A room's work is spread across a
+  // conversation per topic, and both the digest and the board are about the room.
+  const tasksOfChat = (chatKey: string) => {
+    const conversation = conversationIdFor(chatKey);
+    return (orchestrator.tasks?.list() ?? []).filter(
+      task =>
+        task.conversation === conversation ||
+        (task.conversation ?? "").startsWith(`${conversation}-`)
+    );
+  };
+
   // The chat's day, from the objects that already record it: the board for what
   // happened, usage for what it cost, the policy gate for what waits on a person.
   // Deliberately not a model call — a digest that could hallucinate its numbers
   // would poison the one place those numbers are read daily.
   const digestFor = (chatKey: string): string => {
-    // Every thread in the chat, not just one. A digest is about the room's day, and the
-    // room's day is now spread across a conversation per topic.
-    const conversation = conversationIdFor(chatKey);
-    const all = (orchestrator.tasks?.list() ?? []).filter(
-      task =>
-        task.conversation === conversation ||
-        (task.conversation ?? "").startsWith(`${conversation}-`)
-    );
+    const all = tasksOfChat(chatKey);
     const since = Date.now() - 24 * 3_600_000;
-    const nameOf = (id: string) =>
-      registry.tryGet(id)?.profile.name ??
-      principals.list().find(person => person.id === id)?.name ??
-      id;
+    const nameOf = displayName;
     const closed = all.filter(
       task => !isLive(task.status) && Date.parse(task.updatedAt) >= since
     );
@@ -660,6 +678,13 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
         ...(taskId !== undefined ? { taskId } : {}),
         at: new Date().toISOString(),
       });
+      // The board row gets a name while the work runs: the first line of a request is
+      // a request, not a name, and rows nobody can tell apart are how "各种 task 都
+      // 对应不上" happened. Fire-and-forget — a title is never worth delaying the turn,
+      // and the person's whole message is already on the task as its description.
+      if (taskId !== undefined) {
+        void orchestrator.retitleTask(agent.id, taskId, text).catch(() => {});
+      }
       broadcast({ type: "prompt", agentId: agent.id, text, userId: principal, conversation });
       // The card's one-line answer to "what is it doing": each tool call as it starts,
       // for this agent in this conversation only. Coarse on purpose — a card is not a
@@ -788,6 +813,7 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
           )?.id;
         const task = tasks.create({
           title: input.title,
+          ...(input.description !== undefined ? { description: input.description } : {}),
           requester: principals.resolve(input.identity).id,
           ...(assigneeId !== undefined ? { assigneeId } : {}),
           ...(reviewerId !== undefined ? { reviewerId } : {}),
@@ -795,15 +821,10 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
         });
         return task?.id;
       },
-      // Only when an operator said where this installation is reachable from a phone.
-      // Guessing (the bind address, a container's hostname) would put a link in a chat
-      // that opens nothing, which is worse than no link.
-      urlFor: taskId => {
-        const base = process.env.AGENTBOX_PUBLIC_URL;
-        return base === undefined || base === ""
-          ? undefined
-          : `${base.replace(/\/+$/, "")}/?task=${encodeURIComponent(taskId)}`;
-      },
+      // "看板": the room's plate right now, grouped by what a person does about each
+      // state. All lookups — see board-view.ts.
+      show: chatKey => boardMessage(tasksOfChat(chatKey), displayName, taskUrl),
+      urlFor: taskUrl,
       started: taskId => {
         orchestrator.tasks?.update(taskId, { status: "doing" }, "channel");
       },
@@ -951,6 +972,27 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
       }
     },
   });
+
+  // A task landing on blocked speaks in the chat it came from, now — a blocked row
+  // waiting for tomorrow's digest is how work quietly stops. Once per landing: repeat
+  // updates while blocked stay quiet, and leaving blocked re-arms the announcement.
+  {
+    const blockedAnnounced = new Set<string>();
+    orchestrator.tasks?.onChange(task => {
+      if (task.status !== "blocked") {
+        blockedAnnounced.delete(task.id);
+        return;
+      }
+      if (blockedAnnounced.has(task.id)) return;
+      blockedAnnounced.add(task.id);
+      const line = blockedAnnouncement(task);
+      if (line === undefined || task.conversation === undefined) return;
+      const chatKey = conversations.chatKeyFor(task.conversation);
+      if (chatKey === undefined) return;
+      void channels.pushToChat(chatKey, line);
+    });
+  }
+
   {
     const telegramToken = process.env.TELEGRAM_BOT_TOKEN;
     channels.register(

@@ -380,6 +380,12 @@ export interface ChannelManagerDeps {
   board?: {
     open: (input: {
       title: string;
+      /**
+       * The person's whole message, kept on the task. The title gets rewritten into a
+       * short name once the work is understood, and the rewrite must never cost the
+       * board the words the person actually said.
+       */
+      description?: string;
       identity: string;
       senderLabel: string;
       agentName?: string;
@@ -387,6 +393,8 @@ export interface ChannelManagerDeps {
       /** Which conversation the work happens in, when that is not the chat itself. */
       threadKey?: string;
     }) => string | undefined;
+    /** The board as one chat message: what "看板" answers. Absent means the verb is inert. */
+    show?: (chatKey: string) => string;
     /** Where a person can watch this task work, when this installation is reachable. */
     urlFor?: (taskId: string) => string | undefined;
     started: (taskId: string) => void;
@@ -512,6 +520,16 @@ export function parseScopeRequest(text: string): ScopeRequest | undefined {
   const bind = /^scope\s+([\p{L}\p{N}._-]{1,60})$/iu.exec(t);
   if (bind !== null) return { kind: "bind", name: bind[1]! };
   return undefined;
+}
+
+/**
+ * A whole message asking to see the board: what is on the plate right now, said in
+ * the chat where the tasks were asked for. Whole-message like every verb here — a
+ * sentence *about* the board ("看板上加一条") is work, not a command.
+ */
+export function parseBoardRequest(text: string): boolean {
+  const t = text.trim().toLowerCase().replace(/[.!?。!?~]+$/, "");
+  return ["看板", "任务", "任务列表", "board", "tasks"].includes(t);
 }
 
 export type DigestRequest = { kind: "now" } | { kind: "schedule"; hour: number } | { kind: "off" };
@@ -834,6 +852,13 @@ ${input.options.map(option => `· ${option}`).join("\n")}`
         : this.deps.chatScope.off(chatKey);
     }
 
+    // "看板" is a look at the board, not work — answered on the wire, and deliberately
+    // checked before the running-work routing below: asking what is on the plate while
+    // something runs must not be read as steering it.
+    if (parseBoardRequest(message.text) && this.deps.board?.show !== undefined) {
+      return this.deps.board.show(message.chatKey ?? message.identity);
+    }
+
     // The digest verbs are decisions about reporting, not work: answered on the wire.
     const digestRequest = parseDigestRequest(message.text);
     if (digestRequest !== undefined && this.deps.digest !== undefined) {
@@ -1116,6 +1141,9 @@ ${input.options.map(option => `· ${option}`).join("\n")}`
       ? undefined
       : this.deps.board?.open({
       title: firstLine(text),
+      // The person's whole message rides on the task, so a later title rewrite never
+      // costs the board what was actually said.
+      description: text,
       identity: message.identity,
       senderLabel: message.senderLabel,
       ...(agentName !== undefined ? { agentName } : {}),

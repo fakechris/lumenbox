@@ -970,6 +970,27 @@ to, because the obligation review changed the dependency order underneath three 
 - **The trace UI**, four attempts and one demand from the outside — verified against the
   running page rather than against its bytes. `scripts/ui-shot.mjs` is what that left behind.
 - **docs/17**, the two-agent convention, written because there are two.
+- **Board 三小件** (2026-08-27): the "看板" whole-message verb (the room's tasks grouped by
+  what a person does about each state — see `board-view.ts`), the blocked-landing
+  announcement (a task an agent parks speaks in its chat now instead of waiting for
+  tomorrow's digest; the channel's own failure path stays silent because it already told
+  the chat), and the title rewrite (`retitleTask` — the first line of a request is a
+  request, not a name; the person's whole message is kept as the task's description before
+  any rewrite). Answering, verbatim: "现在有各种 task,我都对应不上".
+
+### Backlog note: prefix stability audit (from the Grok Bot teardown, 2026-08-27)
+
+Two independent teams (Manus 2025-07, Cursor's Grok Bot 2026-08) converged on the same
+constraint: the serialized tool array and the front of the system prompt must not change
+across rounds, or every round pays full input price instead of the ~10× cached rate — and
+an agent's cost is overwhelmingly input. Our channel prompt has grown sections lately
+(progress.json convention, closing-message rule); if any dynamic value (timestamps, task
+lists) sits early in the prompt, we pay the tax every round. We now have the instrument to
+check: the spend table's cache-read column, over a few days of real traffic. Small audit,
+not urgent, measurable before and after. The same teardown's knowledge/capability split is
+the rule we already follow by instinct — a capability expressible through bash goes in the
+prompt as a convention, not in the tools array — now adopted as an explicit test for every
+"add a tool" impulse.
 
 ### 1. `workId` and `kind`, on records already being written
 

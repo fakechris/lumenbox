@@ -84,10 +84,16 @@ export class TaskStore {
   private lines = 0;
   /**
    * Called after every recorded change with the task as it now stands. The auto-audit
-   * listens here for tasks landing in review. A field rather than a constructor
-   * argument because the orchestrator wires it after both exist.
+   * listens here for tasks landing in review; the channel wiring listens for blocked
+   * landings. Methods rather than constructor arguments because subscribers are wired
+   * after the store exists — and additive, because an assignable field would have the
+   * second subscriber silently unseat the first.
    */
-  onChange: ((task: Task) => void) | undefined;
+  private readonly listeners: ((task: Task) => void)[] = [];
+
+  onChange(listener: (task: Task) => void): void {
+    this.listeners.push(listener);
+  }
 
   constructor(
     private readonly path: string | null = tasksPath(),
@@ -258,7 +264,7 @@ export class TaskStore {
     this.append({ kind: "task", task: updated });
     if (this.lines > COMPACT_AT) this.compact(now);
     const result = { task: this.get(id)!, ...(coerced !== undefined ? { coerced } : {}) };
-    this.onChange?.(result.task);
+    for (const listener of this.listeners) listener(result.task);
     return result;
   }
 
