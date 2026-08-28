@@ -1004,6 +1004,20 @@ to, because the obligation review changed the dependency order underneath three 
   request, not a name; the person's whole message is kept as the task's description before
   any rewrite). Answering, verbatim: "现在有各种 task,我都对应不上".
 
+### A box says what it is (2026-08-28)
+
+docs/18 v4 steps 1–3, shipped. A box carries a class in `config.boxes[name]`; absent means
+`shared`, which is the honest default because every mechanism that would make a box private
+is unbuilt. A shared box says so where the work happens — a permanent badge in the desktop
+header, the sentence above the screen, a paragraph in the agent's own prompt — and it
+labels rather than refuses, for the reasons in docs/18 §3.1. Attach mode also stopped
+falling back to the local box's token, which had been sending this machine's box key to
+whatever URL was configured.
+
+This retires the finding below: the team box never promised anything about its screens, and
+now it says so. Steps 4–8 (one session resolver, box lineage on agents, the takeover state,
+private-box provisioning, revoke-and-wipe) are what private boxes cost and are unstarted.
+
 ### The team box cannot promise anything about its screens (2026-08-29)
 
 Found while reviewing the identity-box design, but it is not about identity boxes — it is
