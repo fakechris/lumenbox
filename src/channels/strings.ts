@@ -120,6 +120,42 @@ export function fileFetchFailed(name: string, code: number | undefined): string 
   return `「${name}」我没拿下来(飞书下载接口报错${code !== undefined ? ` ${code}` : ""})。再发一次试试,或换个发法。`;
 }
 
+// ── 定时(automations)─────────────────────────────────────────────────────────
+
+export const NO_SCHEDULES =
+  "现在没有自动运行的任务。要加一个,让 agent 在 skill 的开头写上 schedule,比如每天早上 6:30 报一次。";
+
+export const SCHEDULES_DISARMED = "(定时器当前是关的,下面这些不会自动跑。)";
+
+/**
+ * One automation, as the chat shows it.
+ *
+ * Says where it reports, because the difference between "runs and tells this room" and
+ * "runs quietly" is the one thing a person cannot guess and the one that made scheduled
+ * skills look broken — they ran for weeks into a conversation no chat reads.
+ */
+export function scheduleLine(entry: {
+  name: string;
+  described: string;
+  agent?: string;
+  timezone?: string;
+  deliver?: string;
+  lastRun?: string;
+  running: boolean;
+  here: boolean;
+}): string {
+  const when = entry.timezone !== undefined ? `${entry.described}(${entry.timezone})` : entry.described;
+  const who = entry.agent !== undefined ? ` · ${entry.agent}` : "";
+  const where = entry.deliver === undefined ? " · 只写文件" : entry.here ? " · 报到本群" : " · 报到别的群";
+  const last =
+    entry.running
+      ? " · 正在跑"
+      : entry.lastRun !== undefined
+        ? ` · 上次 ${entry.lastRun.slice(5, 16).replace("T", " ")}`
+        : " · 还没跑过";
+  return `· ${entry.name} — ${when}${who}${where}${last}`;
+}
+
 // ── acceptance(验收)─────────────────────────────────────────────────────────
 
 export function accepted(taskId: string): string {

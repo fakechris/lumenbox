@@ -405,6 +405,8 @@ export interface ChannelManagerDeps {
     }) => string | undefined;
     /** The board's facts for one chat: what "看板" answers. Absent means the verb is inert. */
     show?: (chatKey: string) => BoardView;
+    /** What runs by itself: the answer to "定时". Absent means the verb is inert. */
+    schedules?: (chatKey: string) => Promise<string>;
     /** Where a person can watch this task work, when this installation is reachable. */
     urlFor?: (taskId: string) => string | undefined;
     started: (taskId: string) => void;
@@ -551,6 +553,15 @@ export function parseScopeRequest(text: string): ScopeRequest | undefined {
 export function parseBoardRequest(text: string): boolean {
   const t = text.trim().toLowerCase().replace(/[.!?。!?~]+$/, "");
   return ["看板", "任务", "任务列表", "board", "tasks"].includes(t);
+}
+
+/**
+ * A whole message asking what runs by itself. Whole-message like every verb here — a
+ * sentence *about* automation ("定时任务改成七点") is work for an agent, not a command.
+ */
+export function parseSchedulesRequest(text: string): boolean {
+  const t = text.trim().toLowerCase().replace(/[.!?。!?~]+$/, "");
+  return ["定时", "自动化", "定时任务", "schedules", "automations"].includes(t);
 }
 
 export type DigestRequest = { kind: "now" } | { kind: "schedule"; hour: number } | { kind: "off" };
@@ -919,6 +930,13 @@ ${input.options.map(option => `· ${option}`).join("\n")}`
         }
       }
       return boardText(view);
+    }
+
+    // "定时" is a look at what runs by itself. Like the board, answered on the wire and
+    // checked before the running-work routing: asking while something runs is a question,
+    // not steering.
+    if (parseSchedulesRequest(message.text) && this.deps.board?.schedules !== undefined) {
+      return await this.deps.board.schedules(message.chatKey ?? message.identity);
     }
 
     // The digest verbs are decisions about reporting, not work: answered on the wire.

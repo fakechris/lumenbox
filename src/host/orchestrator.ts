@@ -30,7 +30,7 @@ import { PolicyGate } from "./policy.ts";
 import { TaskStore, type Task } from "./tasks.ts";
 import { buildAuditPrompt, manifestDiff, MANIFEST_COMMAND, parseManifest } from "./audit.ts";
 import { ScopeStore } from "./scopes.ts";
-import { MAIN_CONVERSATION } from "../agents/registry.ts";
+import { MAIN_CONVERSATION, conversationIdFor } from "../agents/registry.ts";
 import type { HostRunner } from "./host-runner.ts";
 import type { Vault } from "./vault.ts";
 import { Rememberer, summariseExchange } from "./remember.ts";
@@ -101,6 +101,12 @@ export interface OrchestratorOptions {
   askUser?: TurnDeps["askUser"];
   /** Reads Feishu documents with the bot's workspace identity, where one is configured. */
   docReader?: TurnDeps["docReader"];
+  /**
+   * Pushes a scheduled run's report into the chat the skill named. Absent means a
+   * `deliver:` is inert, which is what a CLI run and a test want — the automation still
+   * runs, it just has nowhere to speak.
+   */
+  deliverToChat?: (chatKey: string, text: string) => Promise<void>;
 }
 
 export class Orchestrator {
@@ -242,14 +248,40 @@ export class Orchestrator {
           path: skill.path,
           schedule: skill.schedule!,
           ...(skill.runAs !== undefined ? { runAs: skill.runAs } : {}),
+          ...(skill.timezone !== undefined ? { timezone: skill.timezone } : {}),
+          ...(skill.deliver !== undefined ? { deliver: skill.deliver } : {}),
         }));
     },
     // Through the ordinary prompt path, so a scheduled turn is checked by the policy gate exactly
     // like any other: a box over its budget stops firing rather than quietly draining it.
     // Its own turn always: a scheduled kickoff absorbed as steering into whatever
     // happens to be running would bury the run's report inside an unrelated reply.
-    run: (agent, prompt) =>
-      this.prompt(agent, prompt, undefined, { steerable: false, lane: "background" }),
+    // A delivering run happens *in* the chat's conversation, so what it says is read from
+    // the same place a person's turn is read from and lands in the room's own history —
+    // rather than in the main conversation, which no chat has ever read.
+    run: async (agent, prompt, deliver) => {
+      if (deliver === undefined) {
+        await this.prompt(agent, prompt, undefined, { steerable: false, lane: "background" });
+        return;
+      }
+      const conversation = conversationIdFor(deliver);
+      const agentId = this.registry.resolve(agent).id;
+      // Taken before the turn, because "what it said" is everything past this point —
+      // the same mark the channel path uses, and the reason a reply can be recovered at
+      // all after a restart.
+      const before = this.registry.readTranscript(agentId, conversation).length;
+      await this.prompt(agent, prompt, undefined, {
+        steerable: false,
+        lane: "background",
+        conversation,
+      });
+      await this.settle();
+      const said = this.replySince(agentId, before, conversation).trim();
+      // Silence is not delivered. A skill that had nothing to report should not put an
+      // empty message in a room every morning — the absence is the report.
+      if (said === "") return;
+      await this.options.deliverToChat?.(deliver, said);
+    },
     defaultAgent: () => this.registry.list()[0]?.id,
     log: line => console.error(`[schedule] ${line}`),
   });

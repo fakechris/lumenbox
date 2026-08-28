@@ -693,6 +693,7 @@ export const APP_HTML = String.raw`<!doctype html>
       <a href="#" id="tabdesktop" class="tab on">Desktop</a>
       <a href="#" id="tabfiles" class="tab">Files</a>
       <a href="#" id="tabtasks" class="tab">Tasks</a>
+      <a href="#" id="tabauto" class="tab">Automations</a>
       <span id="desktoptitle"></span>
     </span>
     <span class="headactions">
@@ -742,6 +743,16 @@ export const APP_HTML = String.raw`<!doctype html>
       <button class="btn sm" id="taskadd">Add</button>
     </div>
     <div class="scroll" id="tasklist"></div>
+  </div>
+  <!-- What runs without anyone asking. The page a person checks when they want to know
+       whether the 06:30 brief is actually armed, when it last fired, and where it
+       reports — the three things a cron expression in a file cannot tell them. -->
+  <div id="autoview" style="display:none;flex:1;min-height:0;flex-direction:column">
+    <div class="bar" style="display:flex;gap:8px;align-items:center;border-bottom:1px solid var(--border)">
+      <span class="dim" id="autostate" style="flex:1;font-size:12px"></span>
+      <a href="#" id="autorefresh" class="dim" style="font-size:12px">refresh</a>
+    </div>
+    <div class="scroll" id="autolist"></div>
   </div>
   <div class="eyebrow-row activityhead"><span class="eyebrow">Activity &mdash; all agents</span></div>
   <div class="feed" id="feed"></div>
@@ -2759,20 +2770,94 @@ filesView.addEventListener("drop", function (event) {
   uploadFiles(event.dataTransfer && event.dataTransfer.files);
 });
 
-/** Which of the three views the right-hand pane is showing. */
+/** Which of the four views the right-hand pane is showing. */
 function showTab(which) {
   $("desktopview").style.display = which === "desktop" ? "" : "none";
   $("filesview").style.display = which === "files" ? "flex" : "none";
   $("tasksview").style.display = which === "tasks" ? "flex" : "none";
+  $("autoview").style.display = which === "auto" ? "flex" : "none";
   $("tabdesktop").className = "tab" + (which === "desktop" ? " on" : "");
   $("tabfiles").className = "tab" + (which === "files" ? " on" : "");
   $("tabtasks").className = "tab" + (which === "tasks" ? " on" : "");
+  $("tabauto").className = "tab" + (which === "auto" ? " on" : "");
   if (which === "files") refreshFiles();
   if (which === "tasks") refreshTasks();
+  if (which === "auto") refreshAutomations();
 }
 document.getElementById("tabdesktop").addEventListener("click", function (e) { e.preventDefault(); showTab("desktop"); });
 document.getElementById("tabfiles").addEventListener("click", function (e) { e.preventDefault(); showTab("files"); });
 document.getElementById("tabtasks").addEventListener("click", function (e) { e.preventDefault(); showTab("tasks"); });
+document.getElementById("tabauto").addEventListener("click", function (e) { e.preventDefault(); showTab("auto"); });
+
+// ── automations ────────────────────────────────────────────────────────────
+//
+// The three things a cron expression in a file cannot tell a person: whether the timer
+// is armed at all, when this one last actually fired, and where its report goes.
+
+function automationRow(s) {
+  var when = esc(s.described) + (s.timezone ? ' <span class="dim">(' + esc(s.timezone) + ")</span>" : "");
+  var last = s.running
+    ? '<span style="color:var(--accent)">running now</span>'
+    : s.lastRun
+      ? "last ran " + esc(new Date(s.lastRun).toLocaleString())
+      : '<span style="color:var(--warn)">never run</span>';
+  // Where it reports is the line that matters most: a skill with no deliver runs and
+  // says nothing in any chat, which is right for a tidy-up and looks broken for a brief.
+  var where = s.deliver
+    ? "reports to " + esc(s.deliver)
+    : '<span class="dim">writes files only — no chat hears it</span>';
+  return '<div style="padding:10px 16px;border-bottom:1px solid var(--border)">' +
+    '<div style="display:flex;gap:9px;align-items:baseline">' +
+      '<span style="flex:1;font-size:13px;font-weight:500">' + esc(s.name) + "</span>" +
+      '<button class="btn ghost sm" data-run="' + esc(s.slug) + '"' + (s.running ? " disabled" : "") + ">Run now</button>" +
+    "</div>" +
+    '<div class="dim" style="font-size:11px;margin-top:3px">' + when +
+      (s.agent ? " · as " + esc(s.agent) : "") + " · " + where + "</div>" +
+    '<div class="dim" style="font-size:11px">' + last + ' · <span class="mono">' + esc(s.schedule) + "</span></div>" +
+  "</div>";
+}
+
+function refreshAutomations() {
+  return fetch("/api/schedules")
+    .then(function (r) { return r.json(); })
+    .then(function (data) {
+      var list = data.schedules || [];
+      $("autostate").innerHTML = data.armed
+        ? list.length + " automation" + (list.length === 1 ? "" : "s") + " armed"
+        : '<span style="color:var(--warn)">The scheduler is off (AGENTBOX_SCHEDULER=0) — nothing below will fire.</span>';
+      $("autolist").innerHTML = list.length
+        ? list.map(automationRow).join("")
+        : '<div class="dim" style="padding:12px 16px;font-size:13px">Nothing runs by itself. A skill becomes an automation by adding <span class="mono">schedule:</span> to its frontmatter — plus <span class="mono">timezone:</span> if the time was agreed in someone else’s zone, and <span class="mono">deliver:</span> for the chat that should receive the report.</div>';
+    })
+    .catch(function () {
+      $("autolist").innerHTML = '<div class="dim" style="padding:12px 16px">Could not read the automations.</div>';
+    });
+}
+
+document.getElementById("autorefresh").addEventListener("click", function (e) {
+  e.preventDefault();
+  refreshAutomations();
+});
+
+// A manual fire is the same path as a timed one, so what it proves is what will happen
+// at 06:30 — and it deliberately does not count as the scheduled run.
+document.getElementById("autolist").addEventListener("click", function (e) {
+  var slug = e.target && e.target.getAttribute && e.target.getAttribute("data-run");
+  if (!slug) return;
+  e.preventDefault();
+  e.target.disabled = true;
+  fetch("/api/schedules/run", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ slug: slug }),
+  })
+    .then(function (r) { return r.json(); })
+    .then(function (data) {
+      if (data.error) alert(data.error);
+      setTimeout(refreshAutomations, 400);
+    })
+    .catch(function () { e.target.disabled = false; });
+});
 
 // ── the task board ─────────────────────────────────────────────────────────
 var TASK_STATUSES = ["open", "doing", "blocked", "review", "done", "dropped"];

@@ -30,7 +30,7 @@
  */
 
 import { envNumber } from "../config.ts";
-import { describeSchedule, parseSchedule, type Schedule } from "./schedule.ts";
+import { describeSchedule, knownTimezone, parseSchedule, type Schedule } from "./schedule.ts";
 
 /** Where skills live inside the box. Under the work volume for the reasons in the module comment. */
 export const SKILLS_DIR = "/home/box/work/skills";
@@ -66,12 +66,38 @@ export interface Skill {
   schedule?: Schedule;
   /** Which agent a scheduled run wakes. Defaults to the coordinator, i.e. whoever is listed first. */
   runAs?: string;
+  /**
+   * The IANA zone the schedule's times are read in — `America/New_York`, not `ET`.
+   *
+   * Absent means the host's own clock, which is what every schedule used before this
+   * existed. That default is fine for a box whose owner sits beside it and wrong the
+   * moment a time is agreed in someone else's zone: "06:30 ET" fired at 06:30 wherever
+   * the machine happened to be, and would have drifted by an hour twice a year on top.
+   */
+  timezone?: string;
+  /**
+   * The chat a run reports to. A `chatKey` — `feishu:oc_…` — or absent.
+   *
+   * Absent, the run happens and no chat hears anything, which is right for a tidy-up and
+   * wrong for a morning brief. Before this, *every* scheduled skill was the silent kind:
+   * the turn ran in the main conversation, which no chat reads.
+   */
+  deliver?: string;
 }
 
 export type SkillScope = "global" | "agent";
 
 /** Frontmatter keys that mean something. Anything else is ignored rather than rejected. */
-const KNOWN_KEYS = new Set(["name", "description", "scope", "owner", "schedule", "agent"]);
+const KNOWN_KEYS = new Set([
+  "name",
+  "description",
+  "scope",
+  "owner",
+  "schedule",
+  "agent",
+  "timezone",
+  "deliver",
+]);
 
 export interface ParsedSkill {
   meta: Record<string, string>;
@@ -167,6 +193,29 @@ export function skillFrom(
     schedule = result.schedule;
   }
 
+  // A zone is checked here rather than at fire time, because the failure it prevents is
+  // silent: an unknown name would fall back to the host clock and the schedule would run
+  // at plausible-looking wrong times forever. Refused with the name, so the fix is
+  // obvious — the common mistake is writing "ET" or "EST" where IANA wants
+  // "America/New_York".
+  const timezone = parsed.meta.timezone?.trim();
+  if (timezone !== undefined && timezone !== "" && !knownTimezone(timezone)) {
+    return {
+      problem:
+        `${slug}: unknown timezone "${timezone}". Use an IANA name such as ` +
+        `America/New_York or Asia/Shanghai, not an abbreviation.`,
+    };
+  }
+  if (timezone !== undefined && timezone !== "" && schedule === undefined) {
+    return { problem: `${slug}: timezone is set but there is no schedule for it to apply to.` };
+  }
+
+  // Likewise a delivery target with nothing to deliver: the person meant to schedule it.
+  const deliver = parsed.meta.deliver?.trim();
+  if (deliver !== undefined && deliver !== "" && schedule === undefined) {
+    return { problem: `${slug}: deliver is set but the skill has no schedule, so nothing fires.` };
+  }
+
   return {
     skill: {
       slug,
@@ -178,6 +227,8 @@ export function skillFrom(
       helpers,
       ...(schedule !== undefined ? { schedule } : {}),
       ...(parsed.meta.agent ? { runAs: parsed.meta.agent.trim() } : {}),
+      ...(timezone !== undefined && timezone !== "" ? { timezone } : {}),
+      ...(deliver !== undefined && deliver !== "" ? { deliver } : {}),
     },
   };
 }

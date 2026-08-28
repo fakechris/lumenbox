@@ -187,22 +187,88 @@ function parseField(field: string, low: number, high: number): Field {
  * **Never catches up.** A schedule whose window passed while nothing was running does not fire late —
  * see the module comment for why that is the safer default rather than an oversight.
  */
-export function isDue(schedule: Schedule, now: Date, lastRun: Date | undefined): boolean {
+/**
+ * The wall-clock fields of an instant, in a named zone.
+ *
+ * `Intl` rather than arithmetic, because the arithmetic is daylight saving and nobody
+ * gets that right by hand: "06:30 ET" is 10:30 or 11:30 UTC depending on the date, and a
+ * scheduler that silently drifts by an hour twice a year is the kind of wrong that looks
+ * right for months.
+ *
+ * An unknown zone throws at parse time, not here — see `parseTimezone`.
+ */
+export function wallClock(now: Date, timezone: string | undefined): {
+  minute: number;
+  hour: number;
+  day: number;
+  month: number;
+  weekday: number;
+} {
+  if (timezone === undefined) {
+    return {
+      minute: now.getMinutes(),
+      hour: now.getHours(),
+      day: now.getDate(),
+      month: now.getMonth() + 1,
+      weekday: now.getDay(),
+    };
+  }
+  const parts = new Intl.DateTimeFormat("en-US", {
+    timeZone: timezone,
+    hour12: false,
+    year: "numeric",
+    month: "numeric",
+    day: "numeric",
+    hour: "numeric",
+    minute: "numeric",
+    weekday: "short",
+  }).formatToParts(now);
+  const field = (type: string): string =>
+    parts.find(part => part.type === type)?.value ?? "0";
+  const WEEKDAYS = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
+  return {
+    // "24" is midnight in some locales' hourCycle; normalised so hour 0 means hour 0.
+    minute: Number(field("minute")),
+    hour: Number(field("hour")) % 24,
+    day: Number(field("day")),
+    month: Number(field("month")),
+    weekday: Math.max(0, WEEKDAYS.indexOf(field("weekday"))),
+  };
+}
+
+/** Whether a zone name is one this runtime knows. Checked at parse time so a typo is loud. */
+export function knownTimezone(name: string): boolean {
+  try {
+    new Intl.DateTimeFormat("en-US", { timeZone: name });
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+export function isDue(
+  schedule: Schedule,
+  now: Date,
+  lastRun: Date | undefined,
+  timezone?: string
+): boolean {
   if (schedule.everyMs !== undefined) {
     if (lastRun === undefined) return true;
     return now.getTime() - lastRun.getTime() >= schedule.everyMs;
   }
 
+  const at = wallClock(now, timezone);
   const matches =
-    within(schedule.minutes, now.getMinutes()) &&
-    within(schedule.hours, now.getHours()) &&
-    within(schedule.daysOfMonth, now.getDate()) &&
-    within(schedule.months, now.getMonth() + 1) &&
-    within(schedule.daysOfWeek, now.getDay());
+    within(schedule.minutes, at.minute) &&
+    within(schedule.hours, at.hour) &&
+    within(schedule.daysOfMonth, at.day) &&
+    within(schedule.months, at.month) &&
+    within(schedule.daysOfWeek, at.weekday);
   if (!matches) return false;
 
   // Already fired this minute. Without this a checker ticking every thirty seconds fires twice for
-  // one scheduled minute, which for a daily report means two reports.
+  // one scheduled minute, which for a daily report means two reports. Compared as instants rather
+  // than as wall-clock fields, so it holds across a daylight-saving jump too.
   if (lastRun !== undefined && sameMinute(lastRun, now)) return false;
   return true;
 }
@@ -212,13 +278,7 @@ function within(allowed: readonly number[] | undefined, value: number): boolean 
 }
 
 function sameMinute(a: Date, b: Date): boolean {
-  return (
-    a.getFullYear() === b.getFullYear() &&
-    a.getMonth() === b.getMonth() &&
-    a.getDate() === b.getDate() &&
-    a.getHours() === b.getHours() &&
-    a.getMinutes() === b.getMinutes()
-  );
+  return Math.floor(a.getTime() / 60_000) === Math.floor(b.getTime() / 60_000);
 }
 
 /**
@@ -284,15 +344,24 @@ export function describeSchedule(schedule: Schedule): string {
  * that believes someone is waiting behaves differently from one doing background work — it asks
  * clarifying questions nobody will answer, and it hurries.
  */
-export function triggerPrompt(skillName: string, path: string, described: string): string {
+export function triggerPrompt(
+  skillName: string,
+  path: string,
+  described: string,
+  deliver?: string
+): string {
   return [
-    `[scheduled] This turn was started by a timer, not by a person. Nobody is waiting on a reply and`,
-    `no one will answer a question, so do the work and record the result where it can be found later.`,
+    `[scheduled] This turn was started by a timer, not by a person. ${
+      deliver === undefined
+        ? "Nobody is waiting on a reply and no one will answer a question, so do the work and record the result where it can be found later."
+        : "Nobody will answer a question, so decide rather than ask — but your reply is delivered to a chat where people will read it, so write it for them."
+    }`,
     "",
     `You are running the **${skillName}** skill, scheduled ${described}. Read \`${path}\` and follow it.`,
     "",
-    "If it produces something, write it under /home/box/work and say the path — that is how anyone",
-    "sees it. If it cannot run, say why in one line rather than retrying: this will come round again.",
+    deliver === undefined
+      ? "If it produces something, write it under /home/box/work and say the path — that is how anyone sees it. If it cannot run, say why in one line rather than retrying: this will come round again."
+      : "Your final message is what the chat receives, so make it the thing itself — the brief, the summary, the numbers — not a report that a brief was written. Keep it short enough to read on a phone; put the long version under /home/box/work and name the file. If it could not run, say so in one line: this comes round again.",
   ].join("\n");
 }
 
@@ -305,6 +374,16 @@ export interface Scheduled {
   path: string;
   schedule: Schedule;
   runAs?: string;
+  /** IANA zone the times are read in. Absent means the host's own clock. */
+  timezone?: string;
+  /**
+   * Where the run reports to, as a chatKey.
+   *
+   * Absent means the work happens and the chat hears nothing — right for a tidy-up,
+   * wrong for a morning brief, and the difference was invisible before this existed: a
+   * scheduled skill wrote into the main conversation, which no chat reads.
+   */
+  deliver?: string;
 }
 
 /**
@@ -339,8 +418,14 @@ interface RunState {
 export interface SchedulerDeps {
   /** The skills with schedules, re-read each tick so an edit takes effect without a restart. */
   due: () => Promise<readonly Scheduled[]>;
-  /** Starts a turn. Rejecting is fine: the next window is the retry. */
-  run: (agent: string, prompt: string) => Promise<void>;
+  /**
+   * Starts a turn. Rejecting is fine: the next window is the retry.
+   *
+   * `deliver` is the chat this run reports to, when the skill named one — the runner
+   * hands it over rather than resolving it, because which conversation a chatKey means
+   * and how a reply reaches it are the caller's business, not the clock's.
+   */
+  run: (agent: string, prompt: string, deliver?: string) => Promise<void>;
   /** Who a schedule wakes when it names nobody. */
   defaultAgent: () => string | undefined;
   now?: () => Date;
@@ -455,7 +540,7 @@ export class Scheduler {
     }
 
     for (const skill of scheduled) {
-      if (!isDue(skill.schedule, this.now(), this.lastRun.get(skill.slug))) continue;
+      if (!isDue(skill.schedule, this.now(), this.lastRun.get(skill.slug), skill.timezone)) continue;
 
       if (this.running.has(skill.slug)) {
         // Said, not silent. An hourly job taking seventy minutes meets its own next fire, and piling
@@ -480,7 +565,11 @@ export class Scheduler {
       this.log(`${skill.name}: firing (${describeSchedule(skill.schedule)})`);
 
       void this.deps
-        .run(agent, triggerPrompt(skill.name, skill.path, describeSchedule(skill.schedule)))
+        .run(
+          agent,
+          triggerPrompt(skill.name, skill.path, describeSchedule(skill.schedule), skill.deliver),
+          skill.deliver
+        )
         .catch(error => {
           // Reported and dropped. A scheduled run that failed will come round again, and retrying
           // now would be a second unasked-for turn on top of one that just went wrong.
@@ -493,6 +582,76 @@ export class Scheduler {
           this.record(skill.slug, "finished");
         });
     }
+  }
+
+  /**
+   * Every automation and where it stands — for the web page and the chat verb.
+   *
+   * Reads the same state the runner uses rather than a second copy: a status view that
+   * can disagree with the thing it describes is worse than none, because it is believed.
+   */
+  async status(): Promise<
+    readonly {
+      slug: string;
+      name: string;
+      described: string;
+      schedule: string;
+      agent: string | undefined;
+      timezone: string | undefined;
+      deliver: string | undefined;
+      lastRun: string | undefined;
+      running: boolean;
+    }[]
+  > {
+    const skills = await this.deps.due().catch(() => []);
+    return skills.map(skill => ({
+      slug: skill.slug,
+      name: skill.name,
+      described: describeSchedule(skill.schedule),
+      schedule: skill.schedule.source,
+      agent: skill.runAs,
+      timezone: skill.timezone,
+      deliver: skill.deliver,
+      lastRun: this.lastRun.get(skill.slug)?.toISOString(),
+      running: this.running.has(skill.slug),
+    }));
+  }
+
+  /**
+   * Fires one automation now, as if its window had come round.
+   *
+   * The same path as a timed fire — same prompt, same overlap rule, same record — so
+   * "run it now" tests the thing that will run at 06:30 rather than something adjacent
+   * to it. `lastRun` is deliberately *not* advanced: a manual run is a rehearsal, and
+   * skipping tomorrow's real one because somebody tried it today would be a surprise.
+   */
+  async runNow(slug: string): Promise<{ ok: true } | { ok: false; reason: string }> {
+    const skills = await this.deps.due().catch(() => []);
+    const skill = skills.find(candidate => candidate.slug === slug);
+    if (skill === undefined) return { ok: false, reason: `No scheduled skill "${slug}".` };
+    if (this.running.has(slug)) return { ok: false, reason: `${skill.name} is already running.` };
+    const agent = skill.runAs ?? this.deps.defaultAgent();
+    if (agent === undefined) return { ok: false, reason: `No agent to run ${skill.name}.` };
+
+    this.running.add(slug);
+    this.record(slug, "started");
+    this.log(`${skill.name}: firing now, by hand`);
+    void this.deps
+      .run(
+        agent,
+        triggerPrompt(skill.name, skill.path, describeSchedule(skill.schedule), skill.deliver),
+        skill.deliver
+      )
+      .catch(error => {
+        this.log(
+          `${skill.name}: run failed — ${error instanceof Error ? error.message : String(error)}`
+        );
+      })
+      .finally(() => {
+        this.running.delete(slug);
+        this.record(slug, "finished");
+      });
+    return { ok: true };
   }
 
   start(): void {

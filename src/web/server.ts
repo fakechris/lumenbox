@@ -168,6 +168,7 @@ import { PRESET_MODELS, providerNames, resolveProvider, testProvider } from "../
 import { Principals, roleAtLeast, type Principal, type Role } from "../host/principals.ts";
 import { describeTask, isLive, isTaskStatus } from "../host/tasks.ts";
 import { blockedAnnouncement, boardView } from "../channels/board-view.ts";
+import { NO_SCHEDULES, SCHEDULES_DISARMED, scheduleLine } from "../channels/strings.ts";
 import { CardLedger } from "../channels/card-ledger.ts";
 import { FeishuDocReader } from "../channels/feishu-docs.ts";
 import { parseProgressFile, progressLine } from "../host/progress-file.ts";
@@ -358,6 +359,13 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
       // The page is always a place an answer can come from, so a question is never
       // undeliverable while somebody could be looking at it.
       return where ?? "in the app";
+    },
+    // A scheduled skill that named a chat reports into it. Without this a morning brief
+    // ran every morning into the main conversation, which no chat reads — the automation
+    // worked and nobody ever saw it.
+    deliverToChat: async (chatKey, text) => {
+      log(`scheduled report → ${chatKey}`);
+      await chats?.pushToChat(chatKey, text);
     },
     onTurnEvent: event => {
       broadcast(event);
@@ -831,6 +839,21 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
       // "看板": the room's plate right now, grouped by what a person does about each
       // state. All lookups — see board-view.ts.
       show: chatKey => boardView(tasksOfChat(chatKey), displayName, taskUrl),
+      // "定时": what runs by itself. The room's own automations first, because that is
+      // what the person asking is responsible for; the rest are named without detail so
+      // they know the machine is busy elsewhere rather than idle.
+      schedules: async chatKey => {
+        const all = await orchestrator.scheduler.status();
+        if (all.length === 0) return NO_SCHEDULES;
+        const armed = process.env.AGENTBOX_SCHEDULER !== "0";
+        const here = all.filter(entry => entry.deliver === chatKey);
+        const elsewhere = all.filter(entry => entry.deliver !== chatKey);
+        const lines = [armed ? "自动运行的任务:" : `自动运行的任务:\n${SCHEDULES_DISARMED}`];
+        for (const entry of [...here, ...elsewhere]) {
+          lines.push(scheduleLine({ ...entry, here: entry.deliver === chatKey }));
+        }
+        return lines.join("\n");
+      },
       urlFor: taskUrl,
       started: taskId => {
         orchestrator.tasks?.update(taskId, { status: "doing" }, "channel");
@@ -2095,6 +2118,29 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
         if (route === "GET /api/tasks") {
           const board = orchestrator.tasks;
           send(res, 200, { tasks: board === undefined ? [] : board.list() });
+          return;
+        }
+
+        // The automations: what runs by itself, when, as whom, and where it reports.
+        // Reading is open like the board; firing one by hand is a driver's call, because
+        // it spends money and wakes an agent.
+        if (route === "GET /api/schedules") {
+          send(res, 200, {
+            schedules: await orchestrator.scheduler.status(),
+            armed: process.env.AGENTBOX_SCHEDULER !== "0",
+          });
+          return;
+        }
+
+        if (route === "POST /api/schedules/run") {
+          if (refused()) return;
+          const body = await readJson(req);
+          const result = await orchestrator.scheduler.runNow(String(body.slug ?? ""));
+          if (!result.ok) {
+            send(res, 400, { error: result.reason });
+            return;
+          }
+          send(res, 200, { ok: true });
           return;
         }
 

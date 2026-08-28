@@ -14,6 +14,7 @@ import { join } from "node:path";
 import {
   describeSchedule,
   isDue,
+  knownTimezone,
   parseSchedule,
   Scheduler,
   triggerPrompt,
@@ -87,6 +88,38 @@ test("an interval schedule waits its interval", () => {
   assert.equal(isDue(every30, at("2026-08-20T09:00:00"), undefined), true, "first run is immediate");
   assert.equal(isDue(every30, at("2026-08-20T09:20:00"), at("2026-08-20T09:00:00")), false);
   assert.equal(isDue(every30, at("2026-08-20T09:30:00"), at("2026-08-20T09:00:00")), true);
+});
+
+test("a schedule in a named zone fires at that zone's clock, not the host's", () => {
+  // "06:30 ET" fired at 06:30 wherever the machine happened to be. The instants below are
+  // absolute, so this test says the same thing on any developer's laptop and in CI.
+  const brief = scheduleOf("30 6 * * *");
+  const NY = "America/New_York";
+  // 2026-08-20 is EDT (UTC-4), so 06:30 in New York is 10:30 UTC.
+  assert.equal(isDue(brief, new Date("2026-08-20T10:30:00Z"), undefined, NY), true);
+  assert.equal(isDue(brief, new Date("2026-08-20T06:30:00Z"), undefined, NY), false, "06:30 UTC is 02:30 in New York");
+  // And in January the same wall clock is an hour later in UTC, which is the half nobody
+  // gets right by hand — a scheduler that drifts twice a year looks correct for months.
+  assert.equal(isDue(brief, new Date("2026-01-20T11:30:00Z"), undefined, NY), true, "EST");
+  assert.equal(isDue(brief, new Date("2026-01-20T10:30:00Z"), undefined, NY), false);
+});
+
+test("a zone shifts the day and the weekday too, not only the hour", () => {
+  // 22:00 Sunday in New York is Monday 02:00 UTC: an implementation that converted the
+  // hour and kept the host's weekday would fire on the wrong day, once a week, forever.
+  const retro = scheduleOf("0 22 * * 0");
+  const NY = "America/New_York";
+  assert.equal(isDue(retro, new Date("2026-08-24T02:00:00Z"), undefined, NY), true, "Sunday 22:00 ET");
+  assert.equal(isDue(retro, new Date("2026-08-23T02:00:00Z"), undefined, NY), false, "Saturday 22:00 ET");
+});
+
+test("an unknown zone is refused where it is written, not where it fires", () => {
+  // The failure this prevents is silent: an unrecognised name would fall back to the host
+  // clock and run at plausible-looking wrong times forever. "ET" is the common mistake.
+  assert.equal(knownTimezone("America/New_York"), true);
+  assert.equal(knownTimezone("Asia/Shanghai"), true);
+  assert.equal(knownTimezone("ET"), false);
+  assert.equal(knownTimezone("Eastern"), false);
 });
 
 test("weekday and day-of-month schedules are respected", () => {
@@ -456,4 +489,79 @@ test("a torn history line turns off one record, not every automation", async () 
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }
+});
+
+test("a delivering skill hands its chat to the runner; a silent one hands nothing", async () => {
+  // The gap this closes: every scheduled skill was the silent kind. The turn ran in the
+  // main conversation, which no chat reads, so a morning brief worked perfectly and
+  // nobody ever saw one.
+  const handed: (string | undefined)[] = [];
+  const scheduler = new Scheduler({
+    due: async () => [
+      {
+        slug: "brief",
+        name: "Morning brief",
+        path: "/p",
+        schedule: scheduleOf("@every 30m"),
+        deliver: "feishu:oc_room",
+      },
+      { slug: "tidy", name: "Tidy downloads", path: "/p", schedule: scheduleOf("@every 30m") },
+    ],
+    run: async (_agent, _prompt, deliver) => {
+      handed.push(deliver);
+    },
+    defaultAgent: () => "agent-ada",
+    now: () => at("2026-08-20T09:00:00"),
+    path: null,
+  });
+  await scheduler.tick();
+  assert.deepEqual(handed, ["feishu:oc_room", undefined]);
+});
+
+test("a delivering run is told its words reach people; a silent one is told to write files", () => {
+  // Same skill, two very different jobs. Without this the delivering run would answer
+  // "the brief has been written to /home/box/work/notes/brief.md" — a report that a
+  // report exists, pushed into a chat where the person wanted the thing itself.
+  const silent = triggerPrompt("Tidy", "/p", "every day at 03:00");
+  assert.match(silent, /record the result where it can be found later/);
+  assert.match(silent, /write it under \/home\/box\/work and say the path/);
+
+  const delivering = triggerPrompt("Brief", "/p", "every day at 06:30", "feishu:oc_room");
+  assert.match(delivering, /your reply is delivered to a chat/);
+  assert.match(delivering, /make it the thing itself/);
+  assert.match(delivering, /read on a phone/);
+  // Both still say a person is not waiting to answer questions.
+  assert.match(silent, /\[scheduled\]/);
+  assert.match(delivering, /Nobody will answer a question/);
+});
+
+test("running one by hand is the same path, and does not consume the scheduled window", async () => {
+  // A rehearsal must exercise what will actually fire at 06:30 — and must not make
+  // tomorrow's real run disappear because somebody tried it today.
+  const prompts: string[] = [];
+  let clock = at("2026-08-20T09:00:00");
+  const scheduler = new Scheduler({
+    due: async () => [
+      { slug: "brief", name: "Brief", path: "/p", schedule: scheduleOf("@every 30m"), deliver: "feishu:oc_room" },
+    ],
+    run: async (_agent, prompt) => {
+      prompts.push(prompt);
+    },
+    defaultAgent: () => "agent-ada",
+    now: () => clock,
+    path: null,
+  });
+
+  const started = await scheduler.runNow("brief");
+  assert.deepEqual(started, { ok: true });
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(prompts.length, 1);
+  assert.match(prompts[0]!, /delivered to a chat/, "the same prompt the timer would send");
+
+  // The window still belongs to the timer.
+  await scheduler.tick();
+  assert.equal(prompts.length, 2, "the scheduled run happened as though nothing had");
+
+  const missing = await scheduler.runNow("nope");
+  assert.equal(missing.ok, false);
 });
