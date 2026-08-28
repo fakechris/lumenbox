@@ -863,6 +863,66 @@ test("the person's whole message rides on the board entry as its description", a
   assert.notEqual(opened?.title, opened?.description);
 });
 
+test("a card outlives its process: a fresh manager flips it through the ledger", async () => {
+  // The two lies this removes, both seen live: a restart orphaning every running
+  // card at 进行中 forever, and "可以" accepting reviewed work with no card flip —
+  // the handle lived in a closure that was gone by the time the acceptance arrived.
+  const { CardLedger } = await import("./card-ledger.ts");
+  const ledger = new CardLedger(null);
+
+  const adapter1 = cardAdapter();
+  const manager1 = new ChannelManager({
+    mayDrive: () => true,
+    // Slow enough to earn a card: the acknowledgement threshold is what separates a
+    // quick answer from carded work.
+    ask: async () => {
+      await sleep(40);
+      return "留给你验收。";
+    },
+    ackAfterMs: 10,
+    cards: ledger,
+    board: {
+      open: () => "t7",
+      started: () => {},
+      // The agent parked it for review; the card ends orange and the ledger keeps it.
+      closed: () => "review",
+    },
+    log: () => {},
+  });
+  manager1.register(adapter1, true, "test");
+  await started(manager1);
+  await adapter1.inject({
+    identity: "feishu:ou_1",
+    chatKey: "feishu:oc_room",
+    senderLabel: "chris",
+    text: "整理一下报表",
+  });
+  await manager1.idle();
+  const handle = adapter1.cards[0]!.handle;
+  assert.equal(ledger.get("t7")?.card.status, "review", "the ledger mirrors the card");
+
+  // "The restart": a new manager, a new adapter instance under the same name, and
+  // only the ledger in common.
+  const adapter2 = cardAdapter();
+  const manager2 = new ChannelManager({
+    mayDrive: () => true,
+    ask: async () => "x",
+    cards: ledger,
+    log: () => {},
+  });
+  manager2.register(adapter2, true, "test");
+  manager2.syncTaskCard("t7", "done");
+  await new Promise(resolve => setImmediate(resolve));
+
+  const flip = adapter2.cards.find(entry => entry.handle === handle);
+  assert.ok(flip !== undefined, "the old card was rewritten by its recorded handle");
+  assert.equal(flip.card.status, "done");
+  assert.equal(ledger.get("t7"), undefined, "green is final; the record can go");
+  // And a second sync is a no-op, not a second write.
+  manager2.syncTaskCard("t7", "done");
+  assert.equal(adapter2.cards.length, 1);
+});
+
 test("a dropped file is stored and acknowledged, and no turn runs", async () => {
   const adapter = cardAdapter();
   const asked: string[] = [];

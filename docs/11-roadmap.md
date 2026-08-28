@@ -421,7 +421,22 @@ What this entry adds on its own, beyond the join:
 Medium, and mostly assembly rather than invention: the ledgers are already append-only,
 replayable and on disk. What is missing is one id and one reader.
 
-### R32. The answer has to land where the person is looking
+### ~~R32. The answer has to land where the person is looking~~ — shipped 2026-08-27
+
+**Both halves are in.** The prompt half (closing-message rule) shipped earlier; the
+mechanical half now: `BOOKKEEPING_TOOLS` in tools.ts (Tasks, RememberFact, SetTodos,
+SetPlan, ClaimWork), and in turn.ts, text followed *only* by bookkeeping calls is appended
+to the transcript as prose — where `replySince` reads the reply from — with an 80-char
+floor so a genuine "记一下" stays an aside. The promoted text is stripped from the blocks
+entry so it replays once, not twice. The Tasks tool description now says a note goes to
+the board and not to the person. Tested as the pair the plan demanded: t51's shape
+delivered, the one-line acknowledgement left alone, provisional text before an
+investigative call untouched. Deferred from the plan: the on-disk count of historical
+instances — the transcripts remain if anyone wants the number.
+
+The section below is kept as the analysis that led there.
+
+### The original analysis
 Measured on t51, 2026-08-27, from the records rather than from the complaint. The person
 asked which local models fit a new Mac. The agent ran `free -h`, found 16GB, worked out the
 tier and wrote a table of what fits and what does not — **and the person's screen said

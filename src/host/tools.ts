@@ -172,6 +172,24 @@ export const FORK_PREFIX = "fork/";
  */
 export const MAX_FORKS = 12;
 
+/**
+ * Tools that file conclusions rather than gather evidence: their results tell the
+ * agent nothing it did not already know when it called them.
+ *
+ * The distinction the turn loop needs (R32, measured on t51): text followed by an
+ * *investigative* call — bash, computer, read_file — is genuinely provisional, because
+ * the agent has not seen what comes back yet. Text followed **only** by these is not
+ * narration; it is the answer, filed. A static property of the tool list, fixed here
+ * at build time, which is what keeps the classification out of the model's hands.
+ */
+export const BOOKKEEPING_TOOLS: ReadonlySet<string> = new Set([
+  "Tasks",
+  "RememberFact",
+  "SetTodos",
+  "SetPlan",
+  "ClaimWork",
+]);
+
 const MOUSE_BUTTONS = ["left", "middle", "right", "back", "forward"] as const;
 const SCROLL_DIRECTIONS = ["up", "down", "left", "right"] as const;
 
@@ -868,7 +886,8 @@ export function buildTools(
         "done, dropped. If a task names a reviewer, only the reviewer can move it to " +
         "done — your finish is `review`, and that is not a formality you can skip. " +
         "Your own live tasks are already in your instructions every turn; `list` is for " +
-        "seeing the whole board.",
+        "seeing the whole board. A note goes to the board, not to the person who asked: " +
+        "filing your conclusion here does not deliver it — say it in your reply too.",
       input_schema: {
         type: "object",
         properties: {

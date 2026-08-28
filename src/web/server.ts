@@ -168,6 +168,7 @@ import { PRESET_MODELS, providerNames, resolveProvider, testProvider } from "../
 import { Principals, roleAtLeast, type Principal, type Role } from "../host/principals.ts";
 import { describeTask, isLive, isTaskStatus } from "../host/tasks.ts";
 import { blockedAnnouncement, boardView } from "../channels/board-view.ts";
+import { CardLedger } from "../channels/card-ledger.ts";
 import { parseProgressFile, progressLine } from "../host/progress-file.ts";
 import { costOfTasks, spendByDay, summariseSpend, type Rates } from "../host/spend.ts";
 import type { UsageRecord } from "../host/usage.ts";
@@ -524,8 +525,13 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
   // where only the conversation id survives.
   const conversations = new ConversationDirectory(conversationsPath(agentboxHome()));
 
+  // Where each task's chat card lives — durably, so a restart does not orphan every
+  // running card at 进行中 and an acceptance typed later can still turn one green.
+  const cards = new CardLedger(undefined, line => log(line));
+
   const channels = new ChannelManager({
     ingress,
+    cards,
     mayDrive: identity => roleAtLeast(principals.roleOf(identity), "driver"),
     mayAdmin: identity => roleAtLeast(principals.roleOf(identity), "admin"),
     // One scope per chat: binding moves the chat, it does not accumulate. The scope
@@ -992,6 +998,26 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
       void channels.pushToChat(chatKey, line);
     });
   }
+
+  // The chat card follows the board, wherever the board was moved from — the web, an
+  // audit, an acceptance typed later, the restart settlement. Deferred one tick so a
+  // change made inside a channel request lets that request's own card write (which has
+  // the fresher in-flight state) land first, making this the no-op it should be.
+  orchestrator.tasks?.onChange(task => {
+    setImmediate(() => {
+      const status =
+        task.status === "open"
+          ? ("queued" as const)
+          : task.status === "doing"
+            ? ("working" as const)
+            : task.status === "review"
+              ? ("review" as const)
+              : task.status === "done"
+                ? ("done" as const)
+                : undefined;
+      if (status !== undefined) channels.syncTaskCard(task.id, status);
+    });
+  });
 
   {
     const telegramToken = process.env.TELEGRAM_BOT_TOKEN;

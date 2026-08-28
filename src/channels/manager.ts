@@ -28,6 +28,7 @@ import type { Ingress } from "./ingress.ts";
 import { channelHealth, type ChannelHealth } from "./liveness.ts";
 import { boxPathsNamed, undelivered } from "../host/named-files.ts";
 import { boardText, type BoardView } from "./board-view.ts";
+import type { CardRecord } from "./card-ledger.ts";
 
 import {
   APPROVAL_STAKES,
@@ -416,6 +417,17 @@ export interface ChannelManagerDeps {
     accept?: (taskId: string, identity: string) => "done" | "not_review" | "unknown";
   };
   /**
+   * Where each task's chat card lives, durably — see card-ledger.ts. With it, a card
+   * outlives the request closure that posted it: an acceptance typed later or a
+   * restart-settled task can still flip the card. Absent means cards die with their
+   * closure, which is what a test not about this wants.
+   */
+  cards?: {
+    record: (record: CardRecord) => void;
+    get: (taskId: string) => CardRecord | undefined;
+    close: (taskId: string) => void;
+  };
+  /**
    * Stores files somebody dropped in the chat, into that chat's inbox on the box.
    * Returns the saved names (as the chat should hear them), or undefined when there
    * is nowhere to store them — which the chat is told plainly.
@@ -751,6 +763,34 @@ ${input.options.map(option => `· ${option}`).join("\n")}`
   private setStatus(name: string, patch: Partial<ChannelStatus>): void {
     const current = this.statuses.get(name);
     if (current !== undefined) this.statuses.set(name, { ...current, ...patch });
+  }
+
+  /**
+   * Redraws a task's chat card to a state the board reached outside the request that
+   * posted it — an acceptance typed minutes later, work settled after a restart, an
+   * audit moving the task on. This is what the durable card ledger exists for: the
+   * two ways a card used to lie were "进行中 forever" after a restart and an accepted
+   * task whose card never turned green.
+   *
+   * No-op without a recorded card, when the card already says it, or when the
+   * adapter that posted it is not registered here.
+   */
+  syncTaskCard(taskId: string, status: TaskCardState["status"]): void {
+    const entry = this.deps.cards?.get(taskId);
+    if (entry === undefined || entry.card.status === status) return;
+    const adapter = this.adapters.find(a => a.name === entry.adapter);
+    if (adapter?.updateTaskCard === undefined) return;
+    const card: TaskCardState = { ...entry.card, status };
+    delete card.action;
+    delete card.ahead;
+    void adapter.updateTaskCard(entry.handle, card).catch((error: unknown) => {
+      this.deps.log(
+        `channel ${entry.adapter}: card sync failed for ${taskId} — ` +
+          `${error instanceof Error ? error.message : String(error)}`
+      );
+    });
+    if (status === "done") this.deps.cards?.close(taskId);
+    else this.deps.cards?.record({ ...entry, card });
   }
 
   /** Pushes a line to an identity through a named adapter. The approve-notification path. */
@@ -1197,6 +1237,16 @@ ${input.options.map(option => `· ${option}`).join("\n")}`
         try {
           cardHandle = await adapter.postTaskCard(chatKey, { ...card }, anchor);
           lastCardWrite = Date.now();
+          // Durably, so the card outlives this closure: an acceptance typed after a
+          // restart still finds the handle to flip.
+          if (cardHandle !== undefined && taskId !== undefined) {
+            this.deps.cards?.record({
+              taskId,
+              adapter: adapter.name,
+              handle: cardHandle,
+              card: { ...card },
+            });
+          }
         } catch (error) {
           const detail = error instanceof Error ? error.message : String(error);
           this.deps.log(`channel ${adapter.name}: card failed (${detail})`);
@@ -1257,6 +1307,20 @@ ${input.options.map(option => `· ${option}`).join("\n")}`
             `${error instanceof Error ? error.message : String(error)}`
         );
       });
+      // The ledger mirrors what the card now says, so a later board change that says
+      // the same thing is a no-op instead of a second write. Green is final: nothing
+      // will rewrite a done card, so its record can go.
+      if (taskId !== undefined) {
+        if (status === "done") this.deps.cards?.close(taskId);
+        else {
+          this.deps.cards?.record({
+            taskId,
+            adapter: adapter.name,
+            handle: cardHandle,
+            card: { ...card },
+          });
+        }
+      }
     };
 
     try {

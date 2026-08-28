@@ -1510,6 +1510,108 @@ test("SetPlan and SetTodos round-trip through the tools", async () => {
   }
 });
 
+test("text followed only by bookkeeping calls is the answer, filed — it lands in the transcript as prose", async () => {
+  // t51's shape, replayed. The agent wrote its whole analysis, then tidied up with
+  // Tasks.update and RememberFact — and the tidying demoted the answer to narration:
+  // the person's screen said "已记下,等你下一步" while the table sat in a folded step.
+  const { registry, cleanup } = fixture();
+  try {
+    const ada = registry.create({ name: "Ada" });
+    const bus = new AgentBus(registry, async () => {});
+    const capture: Capture = { params: [] };
+    const analysis =
+      "16GB 内存的结论:7B 量化模型可以流畅跑,13B 勉强可用,70B 完全放不下。" +
+      "推荐从 qwen2.5:7b-instruct-q4 开始,备选 llama3.1:8b。原因和数据如下表。";
+    const { client } = stubClient(
+      [
+        message(
+          [
+            textBlock(analysis),
+            toolUseBlock("Tasks", { action: "update", id: "t1", status: "review" }, "toolu_a"),
+            toolUseBlock("RememberFact", { fact: "the new mac has 16GB" }, "toolu_b"),
+          ],
+          "tool_use"
+        ),
+        message([textBlock("已记下。t1 进入 review,等你下一步。")]),
+      ],
+      capture
+    );
+
+    await runTurn(
+      ada,
+      [{ id: "m-test", fromId: "user", fromName: "user", text: "which models fit?", priority: false, receivedAt: "" }],
+      new AbortController().signal,
+      { client, registry, bus, box: undefined, resolution: undefined }
+    );
+
+    const transcript = registry.readTranscript(ada.id) as TranscriptEntry[];
+    // The reply a channel assembles is the plain assistant prose — both paragraphs.
+    const prose = transcript
+      .filter(entry => !("kind" in entry) && entry.role === "assistant")
+      .map(entry => (entry as { text: string }).text);
+    assert.equal(prose.length, 2, "the filed analysis and the closing line both land");
+    assert.match(prose[0]!, /7B 量化模型/);
+    assert.match(prose[1]!, /已记下/);
+    // And the promoted text is not also replayed from the blocks entry — one copy.
+    const blocks = transcript.find(entry => "kind" in entry && entry.kind === "blocks") as
+      | Extract<TranscriptEntry, { kind: "blocks" }>
+      | undefined;
+    assert.ok(blocks !== undefined);
+    assert.equal(
+      blocks.blocks.some(block => (block as { type?: string }).type === "text"),
+      false,
+      "the filed text lives in the prose entry, not twice"
+    );
+  } finally {
+    cleanup();
+  }
+});
+
+test("the filed-answer rule leaves asides and provisional narration alone", async () => {
+  const { registry, cleanup } = fixture();
+  try {
+    const ada = registry.create({ name: "Ada" });
+    const bus = new AgentBus(registry, async () => {});
+    const { box } = stubBox();
+    const capture: Capture = { params: [] };
+    const { client } = stubClient(
+      [
+        // A genuine one-line acknowledgement before the write-down it announces: below
+        // the floor, not promoted — the named risk in the R32 plan.
+        message([textBlock("我先把这个记下来。"), toolUseBlock("RememberFact", { fact: "x" }, "toolu_1")], "tool_use"),
+        // Long text before an *investigative* call is genuinely provisional: the agent
+        // has not seen what comes back yet.
+        message(
+          [
+            textBlock(
+              "先看一下内存有多大再下结论。如果是 16GB,后面的推荐会完全不同;如果是 32GB," +
+                "可选的模型档位会宽很多。这一步的输出决定后面的整个建议。"
+            ),
+            toolUseBlock("bash", { command: "free -h" }, "toolu_2"),
+          ],
+          "tool_use"
+        ),
+        message([textBlock("查完了:16GB。")]),
+      ],
+      capture
+    );
+
+    await runTurn(
+      ada,
+      [{ id: "m-test", fromId: "user", fromName: "user", text: "check", priority: false, receivedAt: "" }],
+      new AbortController().signal,
+      { client, registry, bus, box, resolution: undefined }
+    );
+
+    const prose = (registry.readTranscript(ada.id) as TranscriptEntry[])
+      .filter(entry => !("kind" in entry) && entry.role === "assistant")
+      .map(entry => (entry as { text: string }).text);
+    assert.deepEqual(prose, ["查完了:16GB。"], "only the final text is the reply");
+  } finally {
+    cleanup();
+  }
+});
+
 test("a looping agent is stopped early, with the repeated call named", async () => {
   const { registry, cleanup } = fixture();
   try {

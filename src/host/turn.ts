@@ -56,7 +56,7 @@ import {
 } from "./compaction.ts";
 import { DURABLE_RESULT_CHARS, type ResolutionConfig } from "../protocol/index.ts";
 import { emptySectionFaults, buildSystemPromptParts, buildTurnPrompt } from "./prompt.ts";
-import { buildTools, dispatchTool, type ToolContext, type ToolOutcome } from "./tools.ts";
+import { BOOKKEEPING_TOOLS, buildTools, dispatchTool, type ToolContext, type ToolOutcome } from "./tools.ts";
 import type { HostRunner } from "./host-runner.ts";
 import type { Vault } from "./vault.ts";
 import type { TaskStore } from "./tasks.ts";
@@ -95,6 +95,14 @@ const KEEP_IMAGES = envNumber("AGENTBOX_KEEP_IMAGES", 1);
  * strictly more than the last, so three is enough to go from "all screenshots" to "one" to "none".
  */
 const MAX_SHED_ATTEMPTS = envNumber("AGENTBOX_MAX_SHED_ATTEMPTS", 3);
+
+/**
+ * Below this many characters, text preceding bookkeeping-only tool calls is an aside
+ * ("我先把这个记下来"), not a filed answer worth promoting into the reply. The named
+ * risk in the R32 plan: without a floor, a genuine one-line acknowledgement followed
+ * by the write-down it announces would be delivered as the answer.
+ */
+const FILED_ANSWER_FLOOR = 80;
 
 /** What kind of "too big" a provider is complaining about, or undefined if it is not that. */
 type Overflow = "context-window" | "too-many-images";
@@ -1587,6 +1595,30 @@ export async function runTurn(
       return;
     }
 
+    // Text followed only by bookkeeping calls is not narration — it is the answer,
+    // filed. Measured on t51: the agent wrote its whole analysis, then tidied up
+    // (`Tasks.update`, `RememberFact`), and the tidying demoted the answer to a folded
+    // step nobody was shown; the person's screen said "已记下。等你下一步。" Whether text
+    // is "the answer" was being decided by whether a tool call happened to follow it —
+    // a fact about sequencing, not content. So: when every call in the round files a
+    // conclusion rather than gathers evidence, the text lands in the transcript now,
+    // where the reply is read from. The floor keeps a genuine one-line "记一下" from
+    // being promoted into an answer.
+    const roundText = response.content
+      .filter((block): block is Anthropic.TextBlock => block.type === "text")
+      .map(block => block.text)
+      .join("");
+    const filedAnswer =
+      roundText.trim().length >= FILED_ANSWER_FLOOR &&
+      toolUses.every(use => BOOKKEEPING_TOOLS.has(use.name));
+    if (filedAnswer) {
+      registry.appendTranscript(agent.id, {
+        role: "assistant",
+        text: roundText,
+        at: new Date().toISOString(),
+      } satisfies TranscriptEntry, conversation);
+    }
+
     // Execute every requested tool and return all results in one user message.
     // Splitting them across messages trains the model out of parallel calls.
     //
@@ -1660,13 +1692,16 @@ export async function runTurn(
 
     // Persist the exchange as blocks, in the order the API requires: the calling
     // assistant turn, then its results. Thinking blocks are not kept — they are
-    // only valid within the turn that produced them.
+    // only valid within the turn that produced them. Text promoted as a filed answer
+    // above is left out here: it already stands as a plain entry just before this
+    // one, and keeping both would replay the same paragraph twice into every later
+    // request.
     registry.appendTranscript(agent.id, {
       role: "assistant",
       kind: "blocks",
       blocks: response.content.filter(
         (block): block is Anthropic.TextBlock | Anthropic.ToolUseBlock =>
-          block.type === "text" || block.type === "tool_use"
+          (block.type === "text" && !filedAnswer) || block.type === "tool_use"
       ),
       at: requestedAt,
     } satisfies TranscriptEntry, conversation);
