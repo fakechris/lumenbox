@@ -70,6 +70,7 @@ export type ComputerAction =
    * focus — so a window cannot be operated while it is behind another one.
    */
   | { action: "activate_window"; window_id: string }
+  | { action: "close_window"; window_id: string }
   /**
    * One window's own contents, whether or not it is visible.
    *

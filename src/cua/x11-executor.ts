@@ -263,7 +263,8 @@ export function actionRequiresSettle(action: ComputerAction): boolean {
       return /[\r\n]/.test(action.text);
     case "activate_window":
     case "click_in_window":
-      // Raising and focusing repaints, and a window manager animates it.
+    case "close_window":
+      // Raising, focusing and closing repaint, and a window manager animates them.
       return true;
     case "wait":
     case "screenshot":
@@ -540,6 +541,18 @@ export class X11Executor {
         // wmctrl -a rather than a raise: EWMH activation also takes focus and switches
         // workspace, which is what "operate this window" actually needs.
         await execFileAsync("wmctrl", ["-i", "-a", assertWindowId(action.window_id)], {
+          env: this.env,
+        });
+        return;
+
+      case "close_window":
+        // The WM's polite close (EWMH ClientMessage), not a kill — the application gets
+        // to object. It exists because of a stuck login popup that held the pointer grab:
+        // every click on the display, human and synthetic alike, was swallowed by the
+        // grab while hover still rendered, so nothing on the screen could be clicked —
+        // including the popup's own close button. The one channel a grab cannot block is
+        // the window manager's, and this is that channel as an action.
+        await execFileAsync("wmctrl", ["-i", "-c", assertWindowId(action.window_id)], {
           env: this.env,
         });
         return;

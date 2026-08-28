@@ -208,6 +208,7 @@ const actionSchema = {
         "cursor_position",
         "list_windows",
         "activate_window",
+        "close_window",
         "screenshot_window",
         "click_in_window",
       ],
@@ -263,8 +264,8 @@ const actionSchema = {
     window_id: {
       type: "string" as const,
       description:
-        'For activate_window, screenshot_window and click_in_window: an id from ' +
-        'list_windows, e.g. "0x01e00003".',
+        'For activate_window, close_window, screenshot_window and click_in_window: an id ' +
+        'from list_windows, e.g. "0x01e00003".',
     },
   },
   required: ["action"],
@@ -334,7 +335,12 @@ export function buildTools(
           "for when you only need to read it. Coordinates in a window screenshot are the " +
           "window's own, measured from its top-left corner, not the screen's — so to act " +
           "on something you found there, use `click_in_window` with those coordinates " +
-          "as they are. It raises the window and translates them for you.",
+          "as they are. It raises the window and translates them for you.\n\n" +
+          "If your clicks visibly do nothing — the pointer moves, hover states render, but " +
+          "nothing responds — a dialog or menu is probably holding the input grab, and " +
+          "clicking its close button is swallowed like everything else. `close_window` on " +
+          "the offending window (find it with list_windows) closes it through the window " +
+          "manager, which a grab cannot block.",
         input_schema: {
           type: "object",
           properties: {

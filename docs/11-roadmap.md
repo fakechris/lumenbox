@@ -502,7 +502,30 @@ Small, and the measurement to check it against is on disk: every turn in the tra
 whose last text block was followed only by bookkeeping calls is a case this would have
 changed, and they can be counted before anything ships.
 
-### R33. Synthetic clicks do not reach the box's browser
+### ~~R33. Synthetic clicks do not reach the box's browser~~ — diagnosed and armed
+**Resolved 2026-08-28, by a person hitting it.** The cause was never XTEST and never
+Chromium: a stuck login popup ("X - The Everything App") held the X11 **input grab**, and a
+grab swallows every button and key event on the display — human clicks through noVNC and
+synthetic clicks through xdotool travel the same road and died the same death, while
+pointer motion and hover kept rendering. That is exactly the "able to look, unable to
+touch" symptom, and it explains the sibling observations: the unkillable "Restore pages?"
+bubble in every stuck screenshot, Escape ignored, and Bob's desktop (another display)
+working throughout.
+
+Proof by removal: closing the popup **through the window manager** (`wmctrl -ic`, an EWMH
+ClientMessage — the one channel a grab cannot block) instantly restored clicks; the next
+synthetic click opened a terminal from the dock.
+
+What shipped: a `close_window` computer action (the WM's polite close), and the tool
+description now tells the agent the symptom and the way out — clicks that visibly do
+nothing while hover still renders mean a grab, and the grabbing window's own close button
+is as dead as everything else, so close it by id. The residual honest gap: a grab-eaten
+click still *reports success* (XTEST injection succeeds by X11's rules), so detection
+remains behavioural, not mechanical.
+
+The identity-box line and the "watch it work" narrative are unblocked.
+
+
 Found while verifying the admin view, and reproducible from inside the container with no
 part of our code involved:
 
