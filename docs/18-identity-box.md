@@ -1,9 +1,13 @@
 # Identity boxes: login state as a per-person container
 
-Status: **design awaiting adversarial review** (per [13-design-review.md](13-design-review.md)).
-Not scheduled and not estimated until the review has run — the estimate comes after the
-review, not before, because the last time this area was estimated the reviewer showed the
-estimate had not counted the subject.
+Status: **rejected as a build plan by adversarial review, 2026-08-28** — nine fatal
+findings, four major, and the document's central premise about a boxd capture choke point
+refuted against the code. See [reviews/2026-08-28-identity-box.md](reviews/2026-08-28-identity-box.md);
+the direction (container-per-principal, takeover login, host-mediated transfer) survives,
+the enforcement machinery does not. **Do not build from this document.** A v2 must answer
+the review's three closing questions before anything else: execution-local revocation
+authority inside the box, a source/sink observation model that is mechanically closable,
+and a durable record joining lease/epoch/approval/usage across restarts.
 
 This document is the engineering carved out of the product plan's identity section: the
 decisions were made there, the machinery was deliberately moved here so it could be
