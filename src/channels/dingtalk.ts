@@ -87,6 +87,13 @@ const CARD_UPDATE_URL = "https://api.dingtalk.com/v1.0/card/instances";
  * The legacy media endpoint. Old host, old envelope, new token still accepted —
  * this is the documented upload-then-reference path behind `sampleFile` and
  * `sampleImageMsg`, and the reason outbound media needs no public URL.
+ *
+ * The endpoint takes the access token as a query parameter, so every upload URL
+ * carries a live credential: it will show up in any proxy or client-side request
+ * log on the path. Forced by the legacy contract (the endpoint predates header
+ * auth and does not accept it); the token is short-lived and the alternative —
+ * no outbound media — was judged worse, but the exposure is real and noted here
+ * so it is a decision, not an oversight.
  */
 const MEDIA_UPLOAD_URL = "https://oapi.dingtalk.com/media/upload";
 /**
@@ -386,6 +393,21 @@ const NUDGE_LINE =
   "(You mentioned me with no other words — I am here. Say what you need done and " +
   "I will get on it.)";
 
+/**
+ * The image's true format, from its magic bytes — not from a name. Screenshots out of
+ * X11 arrive as WebP and phone uploads as JPEG while every caller hands over bytes
+ * alone, and uploading a JPEG declared image/png is the kind of quiet lie that costs
+ * an afternoon when the receiving side's decoder gets picky.
+ */
+export function imageFormatOf(bytes: Buffer): string {
+  if (bytes.length >= 12 && bytes.subarray(0, 4).toString("latin1") === "RIFF" && bytes.subarray(8, 12).toString("latin1") === "WEBP") return "webp";
+  if (bytes.length >= 4 && bytes[0] === 0x89 && bytes.subarray(1, 4).toString("latin1") === "PNG") return "png";
+  if (bytes.length >= 3 && bytes[0] === 0xff && bytes[1] === 0xd8 && bytes[2] === 0xff) return "jpeg";
+  if (bytes.length >= 4 && bytes.subarray(0, 4).toString("latin1") === "GIF8") return "gif";
+  if (bytes.length >= 2 && bytes[0] === 0x42 && bytes[1] === 0x4d) return "bmp";
+  return "png";
+}
+
 /** Pulls the vendor's own words out of whichever envelope the error arrived in. */
 async function describeFailure(response: Response): Promise<string> {
   let detail = "";
@@ -622,17 +644,17 @@ export class DingTalkChannel implements ChannelAdapter {
     const now = Date.now();
     const fingerprint = `${chatKey}\u0000${text.replace(/\s+/g, " ").trim()}`;
     const seenAt = this.recentTexts.get(fingerprint);
-    if (seenAt !== undefined && now - seenAt < REPEAT_WINDOW_MS) return true;
-    if (seenAt === undefined) {
-      this.recentTexts.set(fingerprint, now);
-      if (this.recentTexts.size > 512) {
-        for (const [key, at] of this.recentTexts) {
-          if (now - at > 60_000 || this.recentTexts.size > 512) this.recentTexts.delete(key);
-          else break;
-        }
+    // Refreshed on every admission, not just the first sight: a timestamp pinned at
+    // first-ever sight goes blind from the second occurrence onward — a retry 30s
+    // after the first pass reads as expired, and its own retry 1s later runs free.
+    this.recentTexts.set(fingerprint, now);
+    if (this.recentTexts.size > 512) {
+      for (const [key, at] of this.recentTexts) {
+        if (now - at > 60_000 || this.recentTexts.size > 512) this.recentTexts.delete(key);
+        else break;
       }
     }
-    return false;
+    return seenAt !== undefined && now - seenAt < REPEAT_WINDOW_MS;
   }
 
   /** An access token, cached to just shy of its stated expiry, fetched in one flight. */
@@ -1150,10 +1172,11 @@ export class DingTalkChannel implements ChannelAdapter {
     msgKey: string,
     msgParam: Record<string, unknown>
   ): Promise<void> {
-    if (target.conversationId === "" && target.userId === undefined) {
-      throw new Error(
-        "nowhere to deliver: this conversation has no webhook and no user id on record"
-      );
+    // Each route is missing exactly one address: a group push without the room, or a
+    // direct push without the person, would go out with an empty identifier and fail
+    // at the vendor after looking deliverable here.
+    if (target.route === "group" && target.conversationId === "") {
+      throw new Error("nowhere to deliver: the group's conversation id is blank");
     }
     if (target.route === "direct" && !target.userId) {
       throw new Error(
@@ -1272,6 +1295,10 @@ export class DingTalkChannel implements ChannelAdapter {
     templateId: string,
     vars: Record<string, string>
   ): Promise<string | undefined> {
+    // An empty id here would POST a card the platform refuses, dressed up as one of
+    // ours — the callers' construction-time bindings make it unreachable today, but
+    // the refusal belongs at the boundary, not in whoever remembers to bind.
+    if (templateId === "") return undefined;
     const outTrackId = `lumenbox-${Date.now()}-${(this.cardCounter++).toString(36)}`;
     const token = await this.accessToken();
     const created = await fetch(CARD_CREATE_URL, {
@@ -1459,7 +1486,8 @@ export class DingTalkChannel implements ChannelAdapter {
   /** Upload the bytes, then reference them — the same bargain Feishu's adapter strikes. */
   async sendImage(chatKey: string, base64: string, options?: PushOptions): Promise<void> {
     void options; // see sendToChat: anchoring is not expressible on this wire
-    const mediaId = await this.uploadMedia("image", "image.png", Buffer.from(base64, "base64"));
+    const bytes = Buffer.from(base64, "base64");
+    const mediaId = await this.uploadMedia("image", `image.${imageFormatOf(bytes)}`, bytes);
     // Verified against production usage elsewhere: the image msgKey reads the
     // uploaded id out of `photoURL`, not `mediaId`.
     await this.restSend(this.mediaTargetFor(chatKey), "sampleImageMsg", { photoURL: mediaId });

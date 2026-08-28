@@ -18,6 +18,7 @@ import {
   approvalVarsFor,
   chunkText,
   flattenRichText,
+  imageFormatOf,
   freshWebhookOf,
   imSpaceIdFor,
   isContentRefusal,
@@ -726,4 +727,31 @@ test("a direct session's card prefers the asker's identity over the last-sender 
     "dtv1.card//IM_GROUP.cidY",
     "a wrong guess fails loudly once rather than silently always"
   );
+});
+
+test("the duplicate guard stays armed after an expired repeat", async () => {
+  // The original bug: the timestamp was pinned at first-ever sight, so the guard
+  // caught the first retry and went blind from the second occurrence onward —
+  // expiry passed, admission refreshed nothing, and the next retry ran free.
+  const state = harness();
+  await deliver(state, TEXT_FRAME({ ...GROUP_TEXT, msgId: "msg-a" }));
+  await deliver(state, TEXT_FRAME({ ...GROUP_TEXT, msgId: "msg-b" }).replace('"tr-1"', '"tr-2"'));
+  const recent = (state.adapter as unknown as { recentTexts: Map<string, number> }).recentTexts;
+  for (const [key, at] of recent) recent.set(key, at - 20_000);
+  await deliver(state, TEXT_FRAME({ ...GROUP_TEXT, msgId: "msg-c" }).replace('"tr-1"', '"tr-3"'));
+  assert.equal(state.turns.length, 2, "expired repeat is a fresh message — and refreshes");
+  await deliver(state, TEXT_FRAME({ ...GROUP_TEXT, msgId: "msg-d" }).replace('"tr-1"', '"tr-4"'));
+  assert.equal(state.turns.length, 2, "its own retry seconds later is caught again");
+});
+
+test("image uploads declare the bytes' true format, sniffed from magic", async () => {
+  assert.equal(imageFormatOf(Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a])), "png");
+  assert.equal(imageFormatOf(Buffer.from([0xff, 0xd8, 0xff, 0xe0, 0x00])), "jpeg");
+  assert.equal(
+    imageFormatOf(Buffer.concat([Buffer.from("RIFF"), Buffer.alloc(4), Buffer.from("WEBP")])),
+    "webp"
+  );
+  assert.equal(imageFormatOf(Buffer.from("GIF89a")), "gif");
+  assert.equal(imageFormatOf(Buffer.from("BM\x00\x00")), "bmp");
+  assert.equal(imageFormatOf(Buffer.from("\u{f8ff}???")), "png", "unknown falls to png, the wire's default");
 });
