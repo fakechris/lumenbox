@@ -53,6 +53,17 @@ export const BACKUP_CARRIES =
 export const DEFAULT_IMAGE = "agentbox/box:latest";
 export const DEFAULT_CONTAINER = "agentbox-box";
 
+/**
+ * The private network a box lives on. One per container, named after it.
+ *
+ * Derived rather than stored, so the name is the same from create, from teardown and
+ * from a person reading `docker network ls` — a network whose name has to be looked up
+ * somewhere is a network that gets orphaned.
+ */
+export function networkNameFor(containerName: string): string {
+  return `${containerName}-net`;
+}
+
 export interface BoxConfig {
   /**
    * Run the orchestrator inside the box, instead of on this machine.
@@ -393,6 +404,20 @@ export class BoxManager {
       // is opt-in: AGENTBOX_BOXD_PUBLISH_ADDRESS, set by someone who has read this.
       "--publish",
       publishOn(process.env.AGENTBOX_BOXD_PUBLISH_ADDRESS ?? "127.0.0.1", config.boxdPort, BOXD_PORT),
+      // Its own bridge, so a second box on this engine is not a neighbour.
+      //
+      // Docker's default bridge puts every container on one subnet: a box could reach any
+      // other box's daemon by container address, and the daemon's VNC upgrade is
+      // unauthenticated (src/boxd/main.ts) on the premise that only the host reaches it.
+      // Loopback publication closes the outside; this closes the inside. Isolation by
+      // topology rather than by filtering — there is no rule to get wrong, because there
+      // is no route. Lifted from qm's local sandbox, which mints one network per
+      // container for exactly this reason.
+      //
+      // The host still reaches the daemon through its published loopback port, and the
+      // box still reaches the internet through this network's own gateway.
+      "--network",
+      networkNameFor(config.containerName),
       "--env",
       `BOXD_TOKEN=${config.token}`,
       "--env",
@@ -508,6 +533,7 @@ export class BoxManager {
         );
       }
       onOutput?.(`starting container ${this.config.containerName}`);
+      await this.ensureNetwork();
       await docker(this.runArguments(), 120_000);
     } else if (state === "exited" || state === "created") {
       onOutput?.(`restarting container ${this.config.containerName}`);
@@ -616,6 +642,24 @@ export class BoxManager {
     );
   }
 
+  /**
+   * The box's own network, created if it is not there.
+   *
+   * Idempotent by inspect-then-create, and tolerant of the race between two `box up`
+   * runs: "already exists" is the outcome we wanted.
+   */
+  private async ensureNetwork(): Promise<void> {
+    const name = networkNameFor(this.config.containerName);
+    const existing = await docker(["network", "inspect", name], 30_000).catch(() => undefined);
+    if (existing !== undefined) return;
+    try {
+      await docker(["network", "create", name], 60_000);
+    } catch (error) {
+      const detail = error instanceof Error ? error.message : String(error);
+      if (!/already exists/i.test(detail)) throw error;
+    }
+  }
+
   async down(options: { remove?: boolean } = {}): Promise<void> {
     const state = await this.state();
     if (state === "missing") return;
@@ -624,6 +668,13 @@ export class BoxManager {
     }
     if (options.remove) {
       await docker(["rm", "--force", this.config.containerName], 60_000);
+      // The network goes with the container that owned it. Swallowed: a network still
+      // holding another endpoint refuses removal, and that refusal must not fail a
+      // teardown whose container is already gone. An orphan is visible in
+      // `docker network ls` and is reused by name on the next `up`.
+      await docker(["network", "rm", networkNameFor(this.config.containerName)], 30_000).catch(
+        () => undefined
+      );
     }
   }
 

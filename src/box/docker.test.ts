@@ -15,7 +15,7 @@
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { BACKUP_EXCLUDES, BoxManager } from "./docker.ts";
+import { BACKUP_EXCLUDES, BoxManager, networkNameFor } from "./docker.ts";
 import { SPILL_AT_BYTES, SPOOL_DIR } from "../boxd/shell-service.ts";
 import { DURABLE_RESULT_CHARS } from "../protocol/index.ts";
 import { readFileSync } from "node:fs";
@@ -50,6 +50,30 @@ test("the daemon is published to loopback, because its VNC upgrade is unauthenti
       `every published port must be bound to loopback; got "${publication}"`
     );
   }
+});
+
+test("a box runs on its own network, so a second box is not a neighbour", () => {
+  // Docker's default bridge puts every container on one subnet, and the daemon's VNC
+  // upgrade is unauthenticated on the premise that only the host reaches it. Loopback
+  // publication closes the outside; this closes the inside. Isolation by topology rather
+  // than by filtering — there is no rule to get wrong, because there is no route.
+  const args = new BoxManager({
+    containerName: "agentbox-test",
+    image: "agentbox/box:latest",
+    host: "127.0.0.1",
+    token: "t",
+    boxdPort: 0,
+    displayWidth: 1280,
+    displayHeight: 800,
+    runArgs: [],
+  }).runArguments();
+  const networkAt = args.indexOf("--network");
+  assert.ok(networkAt >= 0, "the container must be placed on a named network");
+  assert.equal(args[networkAt + 1], networkNameFor("agentbox-test"));
+  // The name is derived from the container's, so create and teardown agree without a
+  // lookup — a network whose name must be looked up somewhere is one that gets orphaned.
+  assert.match(networkNameFor("agentbox-test"), /agentbox-test/);
+  assert.notEqual(networkNameFor("agentbox-a"), networkNameFor("agentbox-b"));
 });
 
 test("the spool does not travel out of the box in a backup", () => {
