@@ -232,3 +232,8 @@ Feishu, the phone shows exactly the one change being authorized (the
 websocket the bot already holds. No restart. This is also the answer to the console
 saying 该应用不存在: an app created through the scan flow is owned by the phone account,
 not by whoever happens to be logged into the console.
+
+The document reader (`ReadFeishuDoc`) needs two read-only scopes the scan-created app
+does not start with: `docx:document:readonly` and `wiki:wiki:readonly`. Same no-console
+path: `node scripts/feishu-enable-docs.mjs`, scan, confirm the two scopes, no restart.
+Until they are granted, reads fail with the permission advice the tool relays.

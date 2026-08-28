@@ -320,6 +320,11 @@ export interface TurnDeps {
   /** Puts a question to whoever drove this agent. Absent means there is nobody to ask. */
   askUser?: ToolContext["askUser"];
   /**
+   * Reads Feishu documents with the bot's own workspace identity. Absent means the
+   * installation has no Feishu app configured and the tool is withheld entirely.
+   */
+  docReader?: ToolContext["docReader"];
+  /**
    * Which conversation this turn runs in. Absent means the main one — the team room.
    * The transcript read, every entry written, the compaction state and every event
    * emitted belong to this conversation and no other.
@@ -1117,7 +1122,8 @@ export async function runTurn(
     // the operator is watching the team room's, and a side chat driving it would fight
     // for pixels with the room. Side conversations keep shell, files and the rest and
     // do their work headless — which is what lets them run at the same time as the room.
-    conversation === MAIN_CONVERSATION
+    conversation === MAIN_CONVERSATION,
+    deps.docReader !== undefined
   ).concat(mcpTools);
 
   // One entry per completed round, for the loop and progress judgements. Held out here rather than
@@ -1663,6 +1669,7 @@ export async function runTurn(
             scopes: deps.scopes,
             mcp: deps.mcp,
             askUser: deps.askUser,
+            docReader: deps.docReader,
             turnId,
             conversation,
           }

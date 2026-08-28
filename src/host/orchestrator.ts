@@ -98,6 +98,8 @@ export interface OrchestratorOptions {
    * than pretending a question was delivered.
    */
   askUser?: TurnDeps["askUser"];
+  /** Reads Feishu documents with the bot's workspace identity, where one is configured. */
+  docReader?: TurnDeps["docReader"];
 }
 
 export class Orchestrator {
@@ -157,6 +159,13 @@ export class Orchestrator {
    */
   readonly tasks: TaskStore | undefined;
   readonly scopes: ScopeStore | undefined;
+
+  /**
+   * Reads Feishu documents with the bot's workspace identity. A field rather than an
+   * option because the server learns whether a Feishu app is configured while wiring
+   * channels, after this object exists.
+   */
+  docReader: TurnDeps["docReader"];
 
   /**
    * The tools other people wrote, if an operator configured any.
@@ -516,6 +525,7 @@ export class Orchestrator {
       scopes: this.scopes,
       mcp: this.mcp,
       askUser: this.options.askUser,
+      docReader: this.options.docReader ?? this.docReader,
       conversation,
       provider: runtime.provider,
       effort: this.options.effort,
@@ -821,6 +831,7 @@ export const ALL_TOOLS: readonly string[] = [
   "browser_upload",
   "WebFetch",
   "WebSearch",
+  "ReadFeishuDoc",
   "SendToAgent",
   "AskUser",
   "CreateAgent",

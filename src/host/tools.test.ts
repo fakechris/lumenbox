@@ -146,6 +146,15 @@ test("searching is offered only where it can work, and is a tool the team knows 
     // Reading a page needs nothing configured, so it is always there.
     assert.ok(buildTools(true, true).some(tool => tool.name === "WebFetch"));
 
+    // Reading a Feishu document needs the bot's workspace identity — offered only
+    // where one exists, same reasoning as WebSearch.
+    assert.ok(!buildTools(true, true).some(tool => tool.name === "ReadFeishuDoc"));
+    assert.ok(
+      buildTools(true, true, undefined, false, true, true).some(
+        tool => tool.name === "ReadFeishuDoc"
+      )
+    );
+
     // The "every tool is accounted for" guard in agents.test.ts runs without a key, so
     // it cannot see this one. Named here instead, or a coordinator's allowlist would
     // silently withhold search from every installation that configured it.

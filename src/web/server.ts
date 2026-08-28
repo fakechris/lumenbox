@@ -169,6 +169,7 @@ import { Principals, roleAtLeast, type Principal, type Role } from "../host/prin
 import { describeTask, isLive, isTaskStatus } from "../host/tasks.ts";
 import { blockedAnnouncement, boardView } from "../channels/board-view.ts";
 import { CardLedger } from "../channels/card-ledger.ts";
+import { FeishuDocReader } from "../channels/feishu-docs.ts";
 import { parseProgressFile, progressLine } from "../host/progress-file.ts";
 import { costOfTasks, spendByDay, summariseSpend, type Rates } from "../host/spend.ts";
 import type { UsageRecord } from "../host/usage.ts";
@@ -1035,6 +1036,11 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
         ? "starting"
         : "set FEISHU_APP_ID and FEISHU_APP_SECRET"
     );
+    // The same identity, reading documents: a pasted docx/wiki link becomes readable
+    // the moment a Feishu app exists. R34's near half — the credential never moves.
+    if (feishuId !== undefined && feishuSecret !== undefined) {
+      orchestrator.docReader = new FeishuDocReader(feishuId, feishuSecret);
+    }
     const dingId = process.env.DINGTALK_CLIENT_ID;
     const dingSecret = process.env.DINGTALK_CLIENT_SECRET;
     channels.register(

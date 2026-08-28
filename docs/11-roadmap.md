@@ -573,7 +573,18 @@ Playwright's `goto` does not — which had it photographing a build that no long
 Next step is a bisect rather than a design: a plain `xterm` on the same display, clicked the
 same way, separates "Chromium ignores XTEST" from "this box ignores XTEST".
 
-### R34. The identity the bot already has, usable as a capability
+### R34. The identity the bot already has, usable as a capability — near half shipped 2026-08-27
+
+**The near half is in**: `ReadFeishuDoc`, a host tool shaped like WebFetch
+(`feishu-docs.ts`) — docx directly, wiki resolved to the docx it wraps, sheets/bitable/
+drive answered honestly with the way that works today (export, or drop the file in the
+chat). Offered only where a Feishu app is configured, same reasoning as WebSearch. The
+app's two read-only scopes are granted by scan: `scripts/feishu-enable-docs.mjs`. The
+auto-route idea (a pasted doc link fetched like an attachment, before the turn) was
+deliberately left out for now — the tool description tells the agent to read a pasted
+link immediately, which covers the observed case through the model; if practice shows
+links still being apologised at, the route moves into the channel. The far half stays
+with R29 as written below.
 Observed 2026-08-27, in one message. A person pasted a Feishu doc link into the Feishu
 chat; the agent answered "这个飞书文档需要登录才能看到正文" and asked what to do.
 **It said this through a Feishu bot identity that was, at that moment, authenticated.**
