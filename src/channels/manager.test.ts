@@ -1264,3 +1264,46 @@ test("可以 closes the task waiting on this person; with nothing waiting it is 
   await manager.idle();
   assert.equal(accepts.length, 1);
 });
+
+test("answering the agent's question continues the work — no new task, no new card", async () => {
+  const adapter = cardAdapter();
+  const asked: string[] = [];
+  const opened: string[] = [];
+  const manager = new ChannelManager({
+    mayDrive: () => true,
+    ackAfterMs: 1,
+    ask: async (_a, text, _i, _c, onProgress) => {
+      asked.push(text);
+      onProgress?.("bash: ls");
+      await new Promise(resolve => setTimeout(resolve, 15));
+      return "看到了";
+    },
+    board: {
+      open: input => {
+        opened.push(input.title);
+        return `t${opened.length}`;
+      },
+      started: () => {},
+      closed: () => "done" as const,
+    },
+    log: () => {},
+  });
+  manager.register(adapter, true, "test");
+  await started(manager);
+  manager.remember("a1", adapter.name, "feishu:ou_1");
+
+  // The agent asks; the person's next message is the answer.
+  manager.askQuestion({ agentId: "a1", agentName: "Ada", question: "附件到了吗?" });
+  const room = { identity: "feishu:ou_1", chatKey: "feishu:oc_room", senderLabel: "chris" };
+  await adapter.inject({ ...room, messageId: "m1", text: "附件刚上传完" });
+  await manager.idle();
+
+  assert.deepEqual(asked, ["附件刚上传完"], "the answer reaches the agent");
+  assert.deepEqual(opened, [], "an answer is a continuation, not new work — observed as noise card t56");
+  assert.equal(adapter.cards.length, 0, "and no card is posted for it");
+
+  // One-shot: the message after the answer is ordinary work again.
+  await adapter.inject({ ...room, messageId: "m2", text: "再出一版周报" });
+  await manager.idle();
+  assert.deepEqual(opened, ["再出一版周报"]);
+});

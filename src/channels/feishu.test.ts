@@ -340,3 +340,14 @@ test("a question card carries each answer as a button that speaks the answer", (
   const note = card.elements.find(element => element.tag === "note");
   assert.match(note!.elements![0]!.content, /直接把答案打在下面/);
 });
+
+test("a file the bot cannot pull down is explained to the sender, by cause", async () => {
+  const { fileFetchFailed } = await import("./strings.ts");
+  // 234037 is what Feishu answered in production: size limit. Replayed by hand to get the
+  // code — the SDK surfaces only "Request failed with status code 400".
+  assert.match(fileFetchFailed("Q3报表.zip", 234037), /「Q3报表\.zip」太大/);
+  assert.match(fileFetchFailed("Q3报表.zip", 234037), /压缩|拆小/);
+  // Any other failure: named, numbered when known, with a way forward.
+  assert.match(fileFetchFailed("a.pdf", 99991663), /没拿下来.*99991663/);
+  assert.match(fileFetchFailed("a.pdf", undefined), /没拿下来/);
+});

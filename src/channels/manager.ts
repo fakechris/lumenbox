@@ -657,6 +657,11 @@ export class ChannelManager {
   }): string | undefined {
     const asker = this.lastAsker.get(input.agentId);
     if (asker === undefined) return undefined;
+    // Their next message is the answer to this, and an answer is a continuation of the
+    // work that asked — not new work. Without this, answering opened a fresh task and a
+    // fresh card titled with the answer ("附件刚上传完 · 已完成"), which is noise wearing
+    // a task's clothes. One-shot: only the immediately next message counts.
+    this.awaitingAnswer.add(asker.identity);
     // Buttons where the wire has them: the person answers a choice with one tap, and the
     // press goes through the same door as a typed reply. Words keep working either way.
     if (
@@ -886,11 +891,16 @@ ${input.options.map(option => `· ${option}`).join("\n")}`
       }
     }
 
+    // An answer to the question the agent just asked continues that work — no new board
+    // row, no new card. Consumed exactly once, so the message after the answer is
+    // ordinary again.
+    const answering = this.awaitingAnswer.delete(message.identity);
+
     // "屏幕" is a look, not a task: no turn runs, the desktop is captured as it is.
     const work =
       parseScreenRequest(text) && this.deps.screenshot !== undefined
         ? this.runScreenshot(adapter, message, agentName)
-        : this.runTask(adapter, message, agentName, text);
+        : this.runTask(adapter, message, agentName, text, undefined, { continuation: answering });
 
     // The work runs behind this return; the decisions above stay synchronous because
     // a refusal or an approval answer *is* the whole response.
@@ -934,6 +944,9 @@ ${input.options.map(option => `· ${option}`).join("\n")}`
 
   /** The conversation's most recent board task — what an acceptance word refers to. */
   private readonly lastTask = new Map<string, string>();
+
+  /** Who owes an answer to an open question. Their next message continues, not begins. */
+  private readonly awaitingAnswer = new Set<string>();
 
   /** How long a wordless drop waits for its instruction. */
   private static readonly DROP_WINDOW_MS = 10 * 60 * 1000;
@@ -1074,7 +1087,8 @@ ${input.options.map(option => `· ${option}`).join("\n")}`
     message: InboundMessage,
     agentName: string | undefined,
     text: string,
-    droppedFiles?: readonly string[]
+    droppedFiles?: readonly string[],
+    options?: { continuation?: boolean }
   ): Promise<void> {
     const chatKey = message.chatKey ?? message.identity;
     const runningKey = message.threadKey ?? chatKey;
@@ -1098,7 +1112,9 @@ ${input.options.map(option => `· ${option}`).join("\n")}`
     mark("working");
 
     const ahead = this.deps.ahead?.(agentName, chatKey) ?? 0;
-    const taskId = this.deps.board?.open({
+    const taskId = options?.continuation === true
+      ? undefined
+      : this.deps.board?.open({
       title: firstLine(text),
       identity: message.identity,
       senderLabel: message.senderLabel,
@@ -1147,9 +1163,11 @@ ${input.options.map(option => `· ${option}`).join("\n")}`
     };
 
     const ackTimer = setTimeout(() => {
-      void acknowledge();
+      // A continuation answers a question the person just asked; a card titled with
+      // their own answer is noise wearing a task's clothes. The typing mark suffices.
+      if (options?.continuation !== true) void acknowledge();
     }, this.deps.ackAfterMs ?? ACK_AFTER_MS);
-    if (ahead > 0) void acknowledge();
+    if (ahead > 0 && options?.continuation !== true) void acknowledge();
 
     // Progress rewrites the card, rate-limited; without a card it goes nowhere, on
     // purpose — a plain chat told "tool call #14" fourteen times is spam, not progress.

@@ -22,6 +22,7 @@ import {
   TEAM,
   cardFootnote,
   consentTitle,
+  fileFetchFailed,
   questionTitle,
 } from "./strings.ts";
 import type {
@@ -578,6 +579,14 @@ export class FeishuChannel implements ChannelAdapter {
             .catch((error: unknown) => {
               const detail = error instanceof Error ? error.message : String(error);
               this.log(`channel feishu: file receive failed (${detail})`);
+              // The person is told, in the thread of the file they sent. Before this, the
+              // failure was a host-side log line and the chat heard nothing — the agent
+              // then looked at an empty inbox and guessed out loud.
+              const code = (error as { response?: { data?: { code?: number } } })?.response
+                ?.data?.code;
+              void this.sendToChat(`feishu:${chatId}`, fileFetchFailed(name, code), {
+                replyTo: messageId,
+              }).catch(() => {});
             });
           return {};
         }

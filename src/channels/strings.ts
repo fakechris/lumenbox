@@ -102,6 +102,22 @@ export function steered(who: string): string {
   return `带到了,${who}接着做。`;
 }
 
+// ── file fetch failures ────────────────────────────────────────────────────────
+
+/**
+ * A file the bot could not pull down, said to the person who sent it.
+ *
+ * Observed live: a 400 with Feishu code 234037 (size limit) was logged host-side and the
+ * chat heard nothing — the agent then looked at an empty inbox and guessed out loud. The
+ * failure of a delivery must land where the delivery was attempted.
+ */
+export function fileFetchFailed(name: string, code: number | undefined): string {
+  if (code === 234037) {
+    return `「${name}」太大,飞书不让机器人下载这个尺寸的附件。压缩一下、拆小一点再发,或者换个格式。`;
+  }
+  return `「${name}」我没拿下来(飞书下载接口报错${code !== undefined ? ` ${code}` : ""})。再发一次试试,或换个发法。`;
+}
+
 // ── acceptance(验收)─────────────────────────────────────────────────────────
 
 export function accepted(taskId: string): string {
