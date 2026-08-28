@@ -257,6 +257,26 @@ export class UsageLog {
   }
 
   /**
+   * One agent's total billed tokens since a moment — for the per-agent allowance.
+   *
+   * The unit a person actually reasons about when they say "give it a daily budget and
+   * let it decide inside that": the budget belongs to the worker, not to the human who
+   * happened to ask, and not to the whole box. Without this the only ceilings were
+   * box-wide and per-person, so an agent could not be given room of its own.
+   */
+  spentSinceAgent(sinceMs: number, agentId: string): number {
+    let total = 0;
+    for (const record of this.since(0, Number.MAX_SAFE_INTEGER)) {
+      if (record.agentId !== agentId) continue;
+      const at = Date.parse(record.at ?? "");
+      if (!Number.isNaN(at) && at < sinceMs) continue;
+      total +=
+        record.inputTokens + record.outputTokens + record.cacheReadTokens + record.cacheWriteTokens;
+    }
+    return total;
+  }
+
+  /**
    * Whether anything has been dropped from the front of this file.
    *
    * Inferred rather than recorded: sequence numbers start at one and survive restarts, so a

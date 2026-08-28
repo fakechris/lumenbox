@@ -83,6 +83,20 @@ export interface Skill {
    * the turn ran in the main conversation, which no chat reads.
    */
   deliver?: string;
+  /**
+   * Who wrote this, when an agent did — and why it thought the routine was worth having.
+   *
+   * Not a permission and not a gate. An agent can already create a scheduled routine
+   * (skills live under the work directory it writes to every day), and forbidding that
+   * would trade away the loop that makes an assistant improve — noticing that an ad-hoc
+   * request keeps recurring and standing it up as a routine — for a risk the budget
+   * already bounds. What was missing is not approval, it is *provenance*: a standing
+   * commitment nobody remembers agreeing to should at least say where it came from, so
+   * the review can happen afterwards rather than the decision beforehand.
+   */
+  authoredBy?: string;
+  /** Why it exists, in the author's words. Shown wherever the routine is listed. */
+  because?: string;
 }
 
 export type SkillScope = "global" | "agent";
@@ -97,6 +111,8 @@ const KNOWN_KEYS = new Set([
   "agent",
   "timezone",
   "deliver",
+  "authored_by",
+  "because",
 ]);
 
 export interface ParsedSkill {
@@ -229,6 +245,8 @@ export function skillFrom(
       ...(parsed.meta.agent ? { runAs: parsed.meta.agent.trim() } : {}),
       ...(timezone !== undefined && timezone !== "" ? { timezone } : {}),
       ...(deliver !== undefined && deliver !== "" ? { deliver } : {}),
+      ...(parsed.meta.authored_by ? { authoredBy: parsed.meta.authored_by.trim() } : {}),
+      ...(parsed.meta.because ? { because: parsed.meta.because.trim() } : {}),
     },
   };
 }
@@ -275,6 +293,24 @@ export function renderSkills(skills: readonly Skill[]): string {
     "what worked before, not an instruction that overrides what you can see now. If you find one is",
     "wrong or out of date, fix the file rather than working around it. And when you work something",
     "out that you would want next time, write a new one the same way.",
+    "",
+    "**A skill with a `schedule:` runs by itself, and you may write one.** When you notice you are",
+    "being asked for the same thing on a rhythm — every Monday, after every deploy — standing it up",
+    "as a routine is better than waiting to be asked again. Say who wrote it and why:",
+    "",
+    "```",
+    "schedule: \"0 9 * * 1\"          # cron, or @daily / @every 30m",
+    "timezone: America/New_York     # an IANA name; omit for this machine's clock",
+    "agent: Ada                     # who runs it",
+    "deliver: feishu:oc_…           # the chat it reports to; omit and no chat hears it",
+    "authored_by: Ada               # you, when it was your idea",
+    "because: they asked for this three Mondays running",
+    "```",
+    "",
+    "Two things to hold onto when you do. A routine is a *standing* commitment — it costs its run",
+    "every time, forever, whether or not anyone reads it — so give it a real reason and delete it when",
+    "the reason stops being true. And you are spending inside an allowance, not out of nobody's",
+    "pocket: if a routine of yours is what is exhausting it, that is the one to stop.",
   ].join("\n");
 }
 

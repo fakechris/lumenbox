@@ -384,6 +384,10 @@ export interface Scheduled {
    * scheduled skill wrote into the main conversation, which no chat reads.
    */
   deliver?: string;
+  /** The agent that wrote it, when one did. Provenance, not permission — see skills.ts. */
+  authoredBy?: string;
+  /** Why it exists, in the author's words. */
+  because?: string;
 }
 
 /**
@@ -599,6 +603,8 @@ export class Scheduler {
       agent: string | undefined;
       timezone: string | undefined;
       deliver: string | undefined;
+      authoredBy: string | undefined;
+      because: string | undefined;
       lastRun: string | undefined;
       running: boolean;
     }[]
@@ -612,6 +618,8 @@ export class Scheduler {
       agent: skill.runAs,
       timezone: skill.timezone,
       deliver: skill.deliver,
+      authoredBy: skill.authoredBy,
+      because: skill.because,
       lastRun: this.lastRun.get(skill.slug)?.toISOString(),
       running: this.running.has(skill.slug),
     }));

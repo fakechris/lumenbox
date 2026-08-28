@@ -2806,14 +2806,21 @@ function automationRow(s) {
   var where = s.deliver
     ? "reports to " + esc(s.deliver)
     : '<span class="dim">writes files only — no chat hears it</span>';
+  // Provenance, not permission: an agent may stand up a routine of its own, and what
+  // makes that safe is that the standing commitment says where it came from and what it
+  // costs — reviewed afterwards rather than approved beforehand.
+  var origin = s.authoredBy
+    ? '<span style="color:var(--accent-2);font-size:10.5px;border:1px solid var(--border);border-radius:5px;padding:0 5px">by ' + esc(s.authoredBy) + "</span>"
+    : "";
   return '<div style="padding:10px 16px;border-bottom:1px solid var(--border)">' +
     '<div style="display:flex;gap:9px;align-items:baseline">' +
-      '<span style="flex:1;font-size:13px;font-weight:500">' + esc(s.name) + "</span>" +
+      '<span style="flex:1;font-size:13px;font-weight:500">' + esc(s.name) + " " + origin + "</span>" +
       '<button class="btn ghost sm" data-run="' + esc(s.slug) + '"' + (s.running ? " disabled" : "") + ">Run now</button>" +
     "</div>" +
     '<div class="dim" style="font-size:11px;margin-top:3px">' + when +
       (s.agent ? " · as " + esc(s.agent) : "") + " · " + where + "</div>" +
     '<div class="dim" style="font-size:11px">' + last + ' · <span class="mono">' + esc(s.schedule) + "</span></div>" +
+    (s.because ? '<div class="dim" style="font-size:11px;font-style:italic">' + esc(s.because) + "</div>" : "") +
   "</div>";
 }
 

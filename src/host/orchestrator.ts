@@ -155,6 +155,7 @@ export class Orchestrator {
     },
     spentSincePrincipal: (sinceMs, principalId) =>
       this.usage.spentSincePrincipal(sinceMs, principalId),
+    spentSinceAgent: (sinceMs, agentId) => this.usage.spentSinceAgent(sinceMs, agentId),
     log: line => console.error(`[policy] ${line}`),
   });
 
@@ -250,6 +251,8 @@ export class Orchestrator {
           ...(skill.runAs !== undefined ? { runAs: skill.runAs } : {}),
           ...(skill.timezone !== undefined ? { timezone: skill.timezone } : {}),
           ...(skill.deliver !== undefined ? { deliver: skill.deliver } : {}),
+          ...(skill.authoredBy !== undefined ? { authoredBy: skill.authoredBy } : {}),
+          ...(skill.because !== undefined ? { because: skill.because } : {}),
         }));
     },
     // Through the ordinary prompt path, so a scheduled turn is checked by the policy gate exactly

@@ -611,3 +611,53 @@ test("the per-principal cap refuses one person while the box budget still has ro
     rmSync(dir, { recursive: true, force: true });
   }
 });
+
+test("an agent has its own allowance, separate from the box's and the person's", () => {
+  // The unit a person means by "give it a daily budget and let it decide inside that".
+  // Without it the only ceilings were box-wide and per-person, so the only way to bound
+  // an agent acting on its own — a routine it wrote for itself — was to forbid it from
+  // acting on its own: trading a large capability for a risk that was already measurable.
+  const dir = mkdtempSync(join(tmpdir(), "agentbox-policy-"));
+  try {
+    const limits = {
+      perAgentBudgetTokens: 1_000,
+      budgetWindowHours: 24,
+      wakesPerWindow: 30,
+      wakeWindowMinutes: 10,
+      approvalRequiredTools: [],
+      approvalRequiredCommands: [],
+    };
+    const gate = new PolicyGate({
+      path: join(dir, "policy.jsonl"),
+      limits,
+      spentSinceAgent: (_since, agentId) => (agentId === "agent-1" ? 1_200 : 10),
+    });
+
+    const spent = gate.check({ kind: "model-call", agentId: "agent-1", agentName: "Ada", round: 1 });
+    assert.equal(spent.allow, false);
+    assert.match(spent.reason ?? "", /1200 tokens/);
+    assert.match(spent.reason ?? "", /1000-token allowance/);
+    // The refusal names the lever that is its own to pull: a routine it wrote is the one
+    // thing it can stop without asking anybody.
+    assert.match(spent.reason ?? "", /routine of your own/);
+
+    // An allowance is not a shared pool.
+    assert.equal(
+      gate.check({ kind: "model-call", agentId: "agent-2", agentName: "Bob", round: 1 }).allow,
+      true
+    );
+
+    // And with none configured, nothing changes for anyone.
+    const open = new PolicyGate({
+      path: join(dir, "open.jsonl"),
+      limits: { ...limits, perAgentBudgetTokens: undefined },
+      spentSinceAgent: () => 9_999,
+    });
+    assert.equal(
+      open.check({ kind: "model-call", agentId: "agent-1", agentName: "Ada", round: 1 }).allow,
+      true
+    );
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});

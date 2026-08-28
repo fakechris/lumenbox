@@ -94,6 +94,16 @@ export interface PolicyLimits {
    * everyone together; a run can be under the box budget and over one person's.
    */
   perPrincipalBudgetTokens?: number;
+  /**
+   * A ceiling on one *agent's* own spend in the window — its allowance.
+   *
+   * The unit a person means by "give it a daily budget and let it decide inside that":
+   * the budget belongs to the worker, not to the human who asked and not to the whole
+   * box. Without it the only way to bound an agent that acts on its own — a routine it
+   * wrote for itself — was to forbid it from acting on its own, which trades a large
+   * capability for a small risk that was already measurable.
+   */
+  perAgentBudgetTokens?: number;
   /** The window the budget applies over, in hours. */
   budgetWindowHours: number;
   /** How many times one agent may wake teammates in the window below. */
@@ -120,6 +130,7 @@ export interface PolicyLimits {
 export const DEFAULT_LIMITS: PolicyLimits = {
   budgetTokens: envLimit("AGENTBOX_BUDGET_TOKENS"),
   perPrincipalBudgetTokens: envLimit("AGENTBOX_PRINCIPAL_BUDGET_TOKENS"),
+  perAgentBudgetTokens: envLimit("AGENTBOX_AGENT_BUDGET_TOKENS"),
   budgetWindowHours: envLimit("AGENTBOX_BUDGET_WINDOW_HOURS") ?? 24,
   wakesPerWindow: envLimit("AGENTBOX_WAKES_PER_WINDOW") ?? 30,
   wakeWindowMinutes: envLimit("AGENTBOX_WAKE_WINDOW_MINUTES") ?? 10,
@@ -216,6 +227,8 @@ export interface PolicyGateOptions {
   spentSince?: (sinceMs: number) => number;
   /** Spend since a moment for one person, for the per-principal cap. */
   spentSincePrincipal?: (sinceMs: number, principalId: string) => number;
+  /** Spend since a moment for one agent, for its own allowance. */
+  spentSinceAgent?: (sinceMs: number, agentId: string) => number;
   /**
    * Why spend cannot be measured right now, when it cannot.
    *
@@ -243,6 +256,7 @@ export class PolicyGate {
   private readonly log: (line: string) => void;
   private readonly spentSince: (sinceMs: number) => number;
   private readonly spentSincePrincipal: (sinceMs: number, principalId: string) => number;
+  private readonly spentSinceAgent: (sinceMs: number, agentId: string) => number;
   private readonly spendUnavailable: () => string | undefined;
 
   /**
@@ -280,6 +294,7 @@ export class PolicyGate {
     this.spentSince = options.spentSince ?? (() => 0);
     this.spendUnavailable = options.spendUnavailable ?? (() => undefined);
     this.spentSincePrincipal = options.spentSincePrincipal ?? (() => 0);
+    this.spentSinceAgent = options.spentSinceAgent ?? (() => 0);
     this.replay();
   }
 
@@ -340,12 +355,31 @@ export class PolicyGate {
       };
     }
 
-    if (request.kind === "model-call") return { decision: this.decideSpend(request.principalId) };
+    if (request.kind === "model-call")
+      return { decision: this.decideSpend(request.principalId, request.agentId) };
     if (request.kind === "wake") return { decision: this.decideWake(request.agentId) };
     return this.decideTool(request);
   }
 
-  private decideSpend(principalId?: string): PolicyDecision {
+  private decideSpend(principalId?: string, agentId?: string): PolicyDecision {
+    // The agent's own allowance, checked first: it is the tightest of the three and the
+    // one an agent can reason about. The refusal names the number so it stops rather than
+    // retrying — and so a person reading the transcript can see it chose to stop.
+    const perAgent = this.limits.perAgentBudgetTokens;
+    if (perAgent !== undefined && agentId !== undefined) {
+      const windowMs = Math.max(0, this.limits.budgetWindowHours) * 3_600_000;
+      const mine = this.spentSinceAgent(this.now().getTime() - windowMs, agentId);
+      if (mine >= perAgent) {
+        return {
+          allow: false,
+          reason:
+            `You have spent ${mine} tokens in the last ${this.limits.budgetWindowHours}h, at or ` +
+            `over your ${perAgent}-token allowance. Nothing further will run for you until the ` +
+            `window rolls over or someone raises it. Stop here and say so — including stopping ` +
+            `any routine of your own that is asking for this.`,
+        };
+      }
+    }
     const perPerson = this.limits.perPrincipalBudgetTokens;
     if (perPerson !== undefined && principalId !== undefined) {
       const windowMs = Math.max(0, this.limits.budgetWindowHours) * 3_600_000;
