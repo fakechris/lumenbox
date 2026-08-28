@@ -863,6 +863,9 @@ export async function runTurn(
       usage,
       workId,
       conversation,
+      // The same principal the turn's own rows carry: summarising a person's conversation
+      // is that person's cost, and billing it to nobody made per-principal totals read low.
+      ...(deps.caller?.userId !== undefined ? { principal: deps.caller.userId } : {}),
     });
   let ended = false;
   const finish = (how: string) => {

@@ -15,10 +15,42 @@
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { BACKUP_EXCLUDES } from "./docker.ts";
+import { BACKUP_EXCLUDES, BoxManager } from "./docker.ts";
 import { SPILL_AT_BYTES, SPOOL_DIR } from "../boxd/shell-service.ts";
 import { DURABLE_RESULT_CHARS } from "../protocol/index.ts";
 import { readFileSync } from "node:fs";
+
+test("the daemon is published to loopback, because its VNC upgrade is unauthenticated", () => {
+  // Measured on a running installation, 2026-08-28, before this was fixed: from the
+  // machine's LAN address, `/health` answered and a WebSocket upgrade to
+  // `/vnc/1/websockify` returned 101 and streamed the desktop. The RFB upgrade is
+  // deliberately unauthenticated *on the premise* that only the host's loopback proxy
+  // can reach it (src/boxd/main.ts) — and the publication contradicted the premise, so
+  // anyone on the same network could watch and drive the agents.
+  //
+  // Pinned as an argument-shape assertion rather than a mock: the property is about what
+  // is handed to Docker.
+  const args = new BoxManager({
+    containerName: "agentbox-test",
+    image: "agentbox/box:latest",
+    host: "127.0.0.1",
+    token: "t",
+    boxdPort: 0,
+    displayWidth: 1280,
+    displayHeight: 800,
+    runArgs: [],
+  }).runArguments();
+  const publications = args
+    .map((argument: string, index: number) => (argument === "--publish" ? args[index + 1] : undefined))
+    .filter((value: string | undefined): value is string => value !== undefined);
+  assert.ok(publications.length > 0, "the daemon must be published somehow");
+  for (const publication of publications) {
+    assert.ok(
+      publication.startsWith("127.0.0.1:"),
+      `every published port must be bound to loopback; got "${publication}"`
+    );
+  }
+});
 
 test("the spool does not travel out of the box in a backup", () => {
   assert.ok(

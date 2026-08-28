@@ -170,6 +170,39 @@ test("spend groups by principal, and unattributed work is its own group that sti
   assert.equal(groups[0]!.principal, "sam");
 });
 
+test("an aside carries its principal, so a person's total is their work and not their turns", () => {
+  // The identity-box review found this: turn rows carried `principal` and asides could
+  // not, so summarisation, memory and selection for a person's work landed in the
+  // unattributed group. A per-principal total then read as the turn loop's cost rather
+  // than the work's, which is exactly the number a budget would be set from.
+  const log = new UsageLog(logPath());
+  const now = Date.now();
+  log.record({ ...entry("Ada"), principal: "chris", outputTokens: 100 });
+  log.recordAside({
+    kind: "summarize",
+    agentId: "a1",
+    agentName: "Ada",
+    provider: "anthropic",
+    model: "claude-haiku-4-5-20251001",
+    usage: { input_tokens: 0, output_tokens: 20 },
+    principal: "chris",
+  });
+  // A scheduled run's aside still has nobody, and that stays honest.
+  log.recordAside({
+    kind: "memory",
+    agentId: "a1",
+    agentName: "Ada",
+    provider: "anthropic",
+    model: "claude-haiku-4-5-20251001",
+    usage: { input_tokens: 0, output_tokens: 5 },
+  });
+
+  const groups = log.byPrincipalSince(now - 60_000);
+  const byId = Object.fromEntries(groups.map(g => [g.principal, g.totals.outputTokens]));
+  assert.equal(byId["chris"], 120, "the turn and its bookkeeping bill to the same person");
+  assert.equal(byId[""], 5, "work nobody drove is still its own group");
+});
+
 /** Every model call in the product, and what bills it. Adding one fails until it is listed. */
 const MODEL_CALLS: Record<string, string> = {
   "turn.ts:runRounds": "the turn loop's own usage.record, ~180 lines below the stream",

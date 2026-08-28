@@ -320,6 +320,11 @@ export class UsageLog {
    * around the edges, which know their model and their tokens and little else. It exists so
    * that "what did the model cost" stops meaning "what did the turn loop cost", which is what
    * it silently meant while these three were unmetered.
+   *
+   * `principal` was missing here while the turn rows carried it, so summarisation, memory
+   * and selection spend for a person's work landed in the unattributed group: a
+   * per-principal total was the turn's cost and not the work's. Found by the identity-box
+   * review, which had been told this attribution already worked.
    */
   recordAside(options: {
     kind: UsageKind;
@@ -330,6 +335,8 @@ export class UsageLog {
     usage: { input_tokens?: number; output_tokens?: number; cache_read_input_tokens?: number | null; cache_creation_input_tokens?: number | null };
     workId?: string;
     conversation?: string;
+    /** Who this is on behalf of. Absent when nobody drove it — a wake, a scheduled run. */
+    principal?: string;
   }): void {
     this.record({
       kind: options.kind,
@@ -341,6 +348,7 @@ export class UsageLog {
       round: 0,
       ...(options.workId !== undefined ? { workId: options.workId } : {}),
       ...(options.conversation !== undefined ? { conversation: options.conversation } : {}),
+      ...(options.principal !== undefined ? { principal: options.principal } : {}),
       inputTokens: options.usage.input_tokens ?? 0,
       outputTokens: options.usage.output_tokens ?? 0,
       cacheReadTokens: options.usage.cache_read_input_tokens ?? 0,

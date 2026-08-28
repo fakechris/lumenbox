@@ -357,10 +357,9 @@ export class BoxManager {
     onOutput?.(`built ${this.config.image}`);
   }
 
-  private runArguments(): string[] {
+  /** Exposed for the test that pins where the daemon is published. */
+  runArguments(): string[] {
     const { config } = this;
-    const publish = (hostPort: number, containerPort: number) =>
-      hostPort > 0 ? `${hostPort}:${containerPort}` : `${containerPort}`;
     /**
      * The same thing, bound to one address.
      *
@@ -378,10 +377,22 @@ export class BoxManager {
       "--detach",
       "--name",
       config.containerName,
-      // Only the daemon is published. It proxies every desktop's noVNC, so the
-      // number of desktops is not fixed by port mappings chosen at create time.
+      // Only the daemon is published, and only to loopback. It proxies every desktop's
+      // noVNC, so the number of desktops is not fixed by port mappings chosen at create
+      // time — but that also makes this one port the way into every desktop in the box.
+      //
+      // It was published on all interfaces. Measured on a running installation before
+      // the fix: from the machine's LAN address, `/health` answered and a WebSocket
+      // upgrade to `/vnc/1/websockify` returned 101 and streamed the desktop — no token,
+      // because the RFB upgrade is deliberately unauthenticated on the reasoning that
+      // only the host's loopback proxy can reach it. That reasoning was sound and the
+      // publication contradicted it: anyone on the same network could watch and drive
+      // the agents' screens. The daemon's bearer token never entered it.
+      //
+      // A remote Docker engine is the one case that needs a routable publication, and it
+      // is opt-in: AGENTBOX_BOXD_PUBLISH_ADDRESS, set by someone who has read this.
       "--publish",
-      publish(config.boxdPort, BOXD_PORT),
+      publishOn(process.env.AGENTBOX_BOXD_PUBLISH_ADDRESS ?? "127.0.0.1", config.boxdPort, BOXD_PORT),
       "--env",
       `BOXD_TOKEN=${config.token}`,
       "--env",

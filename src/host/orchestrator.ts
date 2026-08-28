@@ -662,6 +662,11 @@ export class Orchestrator {
         provider: profile.label,
         model: profile.model,
         usage: response.usage,
+        // Whoever this agent is currently working for. The same cache the turn reads its
+        // caller from, so a selection made for a person's turn bills to that person.
+        ...(this.callers.get(agent.id)?.userId !== undefined
+          ? { principal: this.callers.get(agent.id)!.userId! }
+          : {}),
       });
       return response.content
         .filter((block): block is Anthropic.TextBlock => block.type === "text")
@@ -736,7 +741,13 @@ export class Orchestrator {
     const said = this.replySince(agent.id, before, conversation);
     if (said !== "") {
       void this.rememberer
-        .record({ agentId: agent.id, text: summariseExchange(text, said) })
+        .record({
+          agentId: agent.id,
+          text: summariseExchange(text, said),
+          // Taking notes on a person's conversation is that person's cost. A batch that
+          // spans two people bills to neither — see Rememberer.payerOf.
+          ...(caller?.userId !== undefined ? { principal: caller.userId } : {}),
+        })
         .catch(() => {
           // Already logged inside; a second report here would be noise on a path nobody is watching.
         });

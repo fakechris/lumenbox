@@ -59,6 +59,8 @@ export interface Exchange {
   agentId: string;
   /** What arrived, and what the agent said back. Trimmed: the extractor needs the gist, not the log. */
   text: string;
+  /** Who the exchange was with, when a person drove it. Carried so the note-taking is billed. */
+  principal?: string;
 }
 
 export interface RememberDeps {
@@ -77,6 +79,20 @@ export interface RememberDeps {
 }
 
 /**
+ * Who a batch of exchanges belongs to, or nobody.
+ *
+ * Extraction runs over several exchanges, and in a team room those can be with different
+ * people. One principal for a mixed batch would be a guess, and an attribution that is a
+ * guess is worse than an absence — a bill nobody can check is worse than a gap everybody
+ * can see. So a batch bills to a person only when every exchange in it was theirs.
+ */
+export function payerOf(principals: readonly (string | undefined)[]): string | undefined {
+  const first = principals[0];
+  if (first === undefined) return undefined;
+  return principals.every(principal => principal === first) ? first : undefined;
+}
+
+/**
  * Accumulates exchanges and extracts from them when enough have piled up.
  *
  * One per orchestrator, keyed by agent. In memory on purpose: a pending exchange is worth nothing
@@ -85,7 +101,11 @@ export interface RememberDeps {
  */
 export class Rememberer {
   private readonly pending = new Map<string, string[]>();
+  /** Who each pending exchange was with, positionally — see payerOf. */
+  private readonly pendingPayers = new Map<string, (string | undefined)[]>();
   private readonly extractions = new Map<string, string[]>();
+  /** Who each pending extraction batch belonged to, for the episode that condenses them. */
+  private readonly extractionPayers = new Map<string, (string | undefined)[]>();
   private readonly log: (line: string) => void;
 
   constructor(private readonly deps: RememberDeps) {
@@ -103,13 +123,21 @@ export class Rememberer {
     const batch = this.pending.get(exchange.agentId) ?? [];
     batch.push(exchange.text);
     this.pending.set(exchange.agentId, batch);
+    const payers = this.pendingPayers.get(exchange.agentId) ?? [];
+    payers.push(exchange.principal);
+    this.pendingPayers.set(exchange.agentId, payers);
     if (batch.length < EXTRACT_EVERY) return;
 
     this.pending.set(exchange.agentId, []);
-    await this.extract(exchange.agentId, batch);
+    this.pendingPayers.set(exchange.agentId, []);
+    await this.extract(exchange.agentId, batch, payerOf(payers));
   }
 
-  private async extract(agentId: string, exchanges: readonly string[]): Promise<void> {
+  private async extract(
+    agentId: string,
+    exchanges: readonly string[],
+    principal?: string
+  ): Promise<void> {
     const combined = exchanges.join("\n\n---\n\n");
     const known = this.deps.registry.readMemoryRecords(agentId);
     // Only the memories this conversation could plausibly restate, so the extractor is not shown
@@ -118,7 +146,7 @@ export class Rememberer {
 
     let records: MemoryRecord[];
     try {
-      const reply = await this.ask(agentId, buildExtractionPrompt(combined, relevant));
+      const reply = await this.ask(agentId, buildExtractionPrompt(combined, relevant), principal);
       records = parseExtraction(reply, known);
     } catch (error) {
       // Swallowed on purpose, and said once. The turn already succeeded; a failure to take notes is
@@ -138,17 +166,25 @@ export class Rememberer {
     // work that produced no individual facts still happened, and that is what an episode is for.
     const seen = this.extractions.get(agentId) ?? [];
     seen.push(combined);
+    const seenPayers = this.extractionPayers.get(agentId) ?? [];
+    seenPayers.push(principal);
     if (seen.length < EPISODE_EVERY) {
       this.extractions.set(agentId, seen);
+      this.extractionPayers.set(agentId, seenPayers);
       return;
     }
     this.extractions.set(agentId, []);
-    await this.condense(agentId, seen);
+    this.extractionPayers.set(agentId, []);
+    await this.condense(agentId, seen, payerOf(seenPayers));
   }
 
-  private async condense(agentId: string, exchanges: readonly string[]): Promise<void> {
+  private async condense(
+    agentId: string,
+    exchanges: readonly string[],
+    principal?: string
+  ): Promise<void> {
     try {
-      const reply = await this.ask(agentId, buildEpisodePrompt(exchanges));
+      const reply = await this.ask(agentId, buildEpisodePrompt(exchanges), principal);
       const episode = parseEpisode(reply);
       if (episode === undefined) return;
       this.deps.registry.appendMemoryRecords(agentId, [episode]);
@@ -161,7 +197,7 @@ export class Rememberer {
   }
 
   /** One plain, tool-free call on the cheap profile. */
-  private async ask(agentId: string, prompt: string): Promise<string> {
+  private async ask(agentId: string, prompt: string, principal?: string): Promise<string> {
     const response = await this.deps.client.messages.create({
       model: this.deps.provider.model,
       // Small: three lines of memory or six sentences of episode. A cap this tight is also a guard
@@ -176,6 +212,7 @@ export class Rememberer {
       provider: this.deps.provider.label,
       model: this.deps.provider.model,
       usage: response.usage,
+      ...(principal !== undefined ? { principal } : {}),
     });
     return response.content
       .filter((block): block is Anthropic.TextBlock => block.type === "text")
