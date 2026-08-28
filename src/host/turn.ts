@@ -55,6 +55,7 @@ import {
   type SummaryEntry,
 } from "./compaction.ts";
 import { DURABLE_RESULT_CHARS, type ResolutionConfig } from "../protocol/index.ts";
+import type { BoxClass } from "../box/access.ts";
 import { emptySectionFaults, buildSystemPromptParts, buildTurnPrompt } from "./prompt.ts";
 import { BOOKKEEPING_TOOLS, buildTools, dispatchTool, type ToolContext, type ToolOutcome } from "./tools.ts";
 import type { HostRunner } from "./host-runner.ts";
@@ -338,6 +339,12 @@ export interface TurnDeps {
    */
   selectMemory?: (prompt: string) => Promise<string | undefined>;
   resolution: ResolutionConfig | undefined;
+  /**
+   * What kind of box this is (docs/18). Absent means the caller did not classify it and
+   * the prompt says nothing, which is the right silence: a wrong claim about who can see
+   * this screen is worse than no claim.
+   */
+  boxAccess?: BoxClass;
   /** Which endpoint and what it can do. Omitted in tests to mean full Claude. */
   provider?: ProviderProfile;
   effort?: Effort;
@@ -904,6 +911,7 @@ export async function runTurn(
       durable: registry.readDurableState(agent.id, conversation),
       tasks: deps.tasks?.forAgent(agent.id),
       resolution: deps.resolution,
+      ...(deps.boxAccess !== undefined ? { boxAccess: deps.boxAccess } : {}),
       agentsRoot: registry.root,
       hasBox: box !== undefined,
       vision: provider.vision,

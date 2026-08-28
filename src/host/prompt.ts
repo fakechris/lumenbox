@@ -13,6 +13,7 @@ import type { InboundMessage } from "../agents/bus.ts";
 import { AGENT_WAKE_CUE } from "../agents/bus.ts";
 import { renderDurableBlocks, type DurableState } from "./durable.ts";
 import { describeTask, type Task } from "./tasks.ts";
+import type { BoxClass } from "../box/access.ts";
 import {
   recall,
   renderMemory,
@@ -308,6 +309,14 @@ export interface PromptContext {
    */
   conversation?: string;
   /**
+   * What kind of box this is (docs/18). Present when there is a box.
+   *
+   * The agent needs it because the agent is who gets asked "can anyone else see this?"
+   * mid-task, and because it changes what it should say when a person is about to log in
+   * to something. It is a fact about the room, not a rule — see boxSection.
+   */
+  boxAccess?: BoxClass;
+  /**
    * How many other conversations this chat already has.
    *
    * Only so an empty history can be told from a misdirected one: a first message has no
@@ -371,6 +380,27 @@ function profileSection(agent: AgentRecord): string {
 }
 
 
+/**
+ * One paragraph saying who else is in this box.
+ *
+ * Told as a fact rather than a prohibition. The agent cannot enforce anything here — a
+ * person types into a real desktop through noVNC and we neither see nor gate it — so an
+ * instruction to "prevent" logins would be an order it cannot carry out, and the failure
+ * mode of that is an agent that reports success. What it *can* do is answer the question
+ * correctly when asked, and say the true thing before someone types a password.
+ */
+function boxClassParagraph(boxClass: BoxClass | undefined): string {
+  if (boxClass?.access !== "shared") return "";
+  const who = boxClass.group ? `everyone in ${boxClass.group}` : "everyone who can reach it";
+  return `
+
+This box is **shared**: ${who} can open its screen, read its files and its command
+history, and its backups carry whatever has been logged in here. Nothing stops you or
+anyone else from using it — it is a real computer — but when someone is about to sign in
+to an account here, say this first. If you are asked whether something in this box is
+private, the answer is no.`;
+}
+
 function boxSection(context: PromptContext): string {
   if (!context.hasBox) {
     return `# Your computer
@@ -396,13 +426,14 @@ than guessing at what is on it. Never describe the contents of a screen — you 
 not seen one.`;
   }
 
-  if (!context.resolution) return COMPUTER_SECTION;
+  const computer = COMPUTER_SECTION + boxClassParagraph(context.boxAccess);
+  if (!context.resolution) return computer;
 
   const { width, height } = context.resolution.api;
   // State the bounds explicitly. Without them the model has no way to know a
   // coordinate is off-screen, and an out-of-range click silently does nothing —
   // it looks to the model like the click landed and the application ignored it.
-  return `${COMPUTER_SECTION}
+  return `${computer}
 
 Screenshots come to you at ${width}x${height}, and click, move, and scroll
 coordinates are pixels in that same space with the origin at the top left. Never

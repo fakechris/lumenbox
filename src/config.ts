@@ -94,7 +94,31 @@ export interface AgentboxConfig {
    * restart, which is the whole difference between a digest and a reply.
    */
   digests?: Record<string, number>;
+  /**
+   * What each box is: who can reach it, and therefore what it promises.
+   *
+   * Keyed by container name. **Absent means `shared`**, and that default is the honest
+   * one: claiming a box is private without the machinery that would make it private is
+   * the exact lie this field exists to remove. A box only becomes private when somebody
+   * says so, having read what that means.
+   *
+   * `group` names who "shared" means, for the label. Free text: this installation has no
+   * group directory yet, and inventing one to hold a display string would be a schema
+   * ahead of its use.
+   */
+  boxes?: Record<string, { access: BoxAccess; group?: string }>;
 }
+
+/**
+ * A box's class. See docs/18.
+ *
+ * `private` — one person's. Login state belongs here; everything inside it is trusted
+ * with that person's data.
+ * `shared` — a group's, a tenant's, or everyone's. It promises nothing about privacy
+ * between the people who can reach it, and says so where they work. Nothing is forbidden
+ * there; it is simply not private and never pretends to be.
+ */
+export type BoxAccess = "private" | "shared";
 
 export const DEFAULT_CONFIG: AgentboxConfig = {
   activityLimit: 400,
@@ -165,6 +189,10 @@ export function loadConfig(onWarn: (message: string) => void = () => {}): Agentb
   }
 
   const raw = parsed as Record<string, unknown>;
+  // Read once and held: the spread idiom below calls its reader twice, which is harmless
+  // for a silent parse and not for one that warns — a single malformed box would be
+  // reported to the user twice.
+  const boxes = readBoxes(raw.boxes, onWarn);
   return {
     activityLimit: readInteger(
       raw.activityLimit,
@@ -192,6 +220,7 @@ export function loadConfig(onWarn: (message: string) => void = () => {}): Agentb
     ...(readHostExec(raw.hostExec, onWarn) !== undefined
       ? { hostExec: readHostExec(raw.hostExec, onWarn) }
       : {}),
+    ...(boxes !== undefined ? { boxes } : {}),
     ...(readDigests(raw.digests, onWarn) !== undefined
       ? { digests: readDigests(raw.digests, onWarn) }
       : {}),
@@ -245,6 +274,35 @@ function readMcpServers(
     };
   }
   return Object.keys(servers).length > 0 ? servers : undefined;
+}
+
+function readBoxes(
+  value: unknown,
+  warn: (message: string) => void
+): Record<string, { access: BoxAccess; group?: string }> | undefined {
+  if (value === undefined) return undefined;
+  if (value === null || typeof value !== "object" || Array.isArray(value)) {
+    warn("config: boxes must be an object of container name to { access }, ignoring it");
+    return undefined;
+  }
+  const boxes: Record<string, { access: BoxAccess; group?: string }> = {};
+  for (const [name, raw] of Object.entries(value as Record<string, unknown>)) {
+    const entry = raw as { access?: unknown; group?: unknown };
+    // Unreadable means shared, not ignored: dropping the entry would leave the box
+    // labelled by its default, which is the same answer, said without the warning.
+    if (entry?.access !== "private" && entry?.access !== "shared") {
+      warn(`config: boxes["${name}"].access must be "private" or "shared"; treating it as shared`);
+      boxes[name] = { access: "shared" };
+      continue;
+    }
+    boxes[name] = {
+      access: entry.access,
+      ...(typeof entry.group === "string" && entry.group.trim() !== ""
+        ? { group: entry.group.trim() }
+        : {}),
+    };
+  }
+  return Object.keys(boxes).length > 0 ? boxes : undefined;
 }
 
 function readDigests(

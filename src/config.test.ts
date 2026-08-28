@@ -216,3 +216,25 @@ test("a setting that is not a number falls back to the default, loudly", () => {
     delete process.env.AGENTBOX_TEST_NUMBER;
   }
 });
+
+test("a box whose class cannot be read is treated as shared, not dropped", () => {
+  // Dropping the entry would land the box on the same default, silently — the reader
+  // would see "shared" either way and never learn their config was wrong. The default is
+  // only honest because it is the class that promises nothing; a typo must not be able to
+  // turn that into a promise, and must not be able to hide itself either.
+  const { warnings } = withHome(
+    JSON.stringify({
+      boxes: {
+        "agentbox-box": { access: "shared", group: "\u5e73\u53f0\u7ec4" },
+        "agentbox-dana": { access: "private" },
+        "agentbox-typo": { access: "priavte" },
+      },
+    })
+  );
+  const boxes = loadConfig(line => warnings.push(line)).boxes;
+  assert.deepEqual(boxes?.["agentbox-box"], { access: "shared", group: "\u5e73\u53f0\u7ec4" });
+  assert.deepEqual(boxes?.["agentbox-dana"], { access: "private" });
+  assert.deepEqual(boxes?.["agentbox-typo"], { access: "shared" });
+  assert.equal(warnings.length, 1);
+  assert.match(warnings[0]!, /agentbox-typo/);
+});

@@ -63,14 +63,14 @@ had them mixed. Corrected, as of 2026-08-29:
 | --- | --- |
 | Volumes are per container | **Invariant** — named from the container (`src/box/docker.ts`) |
 | No `--privileged`, `--cap-add`, docker socket | **Invariant** in the managed launcher |
-| Daemon published to loopback | **Default, not invariant** — `AGENTBOX_BOXD_PUBLISH_ADDRESS` reopens it. Escape hatch I added; it needs to be a documented, logged deviation rather than a quiet one |
+| Daemon published to loopback | **Default, and the deviation is loud** — `AGENTBOX_BOXD_PUBLISH_ADDRESS` still reopens it, but publishing anywhere but loopback now warns with what it exposes. Still not an invariant: an escape hatch that warns is an escape hatch |
 | boxd desktop upgrade authenticated | **Closed** for the host hop (`src/boxd/main.ts`, test at `src/boxd/upgrade-auth.test.ts`) |
-| One token per box | **Partial** — named files and a default-only legacy fallback are real, but `AGENTBOX_TOKEN` still overrides globally and `provisioner.ts` still resolves a token with no container name |
+| One token per box | **Closed** — attach mode no longer falls back to the local box's key (it was sending this machine's box token to whatever URL was configured); `AGENTBOX_TOKEN` still overrides globally, and now says so out loud when it does |
 | Archives carry logins | **True and now said** (`BACKUP_CARRIES`); authorization and deletion of archives are undesigned |
 | Container-to-container network isolation | **Does not hold** on Docker 29/OrbStack, measured. The boundary is the daemon's authentication, not the topology |
 
-The two "partial" rows are small and are step 1 of the build order, because the private-box
-claim rests on them.
+Both "partial" rows are closed as of 2026-08-28 (step 1 below); the private-box claim
+rested on them.
 
 ## 3. The takeover state — the one fence, and only for private boxes
 
@@ -165,13 +165,19 @@ shared class ships first.
 
 ## 6. Build order
 
-1. **Close the two "partial" rows** (§2): a container name on every token resolution, and
-   the publish-address override made loud. Small, independent, today.
-2. **Give a box a class and show it.** Record it; render it in the desktop header, the box
-   list, and before any login prompt. Mark the current box `shared`. **This is the whole of
-   what makes today honest**, and it needs no new isolation machinery.
-3. **Label a shared box where the work happens** (§3.1) — desktop header, box list, box
-   page. No refusal, no modal, no acknowledgement to click through.
+1. ~~**Close the two "partial" rows** (§2)~~ — **done 2026-08-28.** Attach mode refuses
+   rather than reaching for the local box's token, and the publish-address override warns.
+2. ~~**Give a box a class and record it**~~ — **done 2026-08-28.** `config.boxes[name]`
+   holds `{ access, group? }`; `classifyBox` resolves it, defaulting to `shared`, and a
+   malformed entry is treated as shared *and* warned about rather than dropped. The
+   running boxes are marked `shared`.
+3. ~~**Label a shared box where the work happens**~~ (§3.1) — **done 2026-08-28.** A
+   permanent badge in the desktop header, the sentence above the screen itself, and a
+   paragraph in the agent's own prompt, because the agent is who gets asked "can anyone
+   else see this?" mid-task. No refusal, no modal, nothing to click through.
+
+   Not yet done, and small: the box list (there is one box, so there is no list) and the
+   settings dialog's box section.
 4. **One session resolver** across page, API and RFB, with a route that names the box.
 5. **Box lineage on agents and their state** (§5), and the refusal when it is missing.
 6. **The takeover state** (§3) plus a real recorder pause.
@@ -179,7 +185,7 @@ shared class ships first.
    with another container name; the machinery exists.
 8. **Reassignment as revoke-and-wipe** (§4).
 
-Steps 1–3 are days and make the product truthful. Steps 4–8 are what private boxes cost,
+Steps 1–3 are done and make the product truthful. Steps 4–8 are what private boxes cost,
 and they should be estimated after 1–3 rather than now.
 
 ## 7. The trust model, as a product statement

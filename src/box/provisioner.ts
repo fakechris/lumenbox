@@ -21,7 +21,6 @@ import { assertCompatible, BoxClient } from "./client.ts";
 import {
   BoxManager,
   defaultBoxConfig,
-  readBoxToken,
   type BoxConfig,
 } from "./docker.ts";
 
@@ -36,6 +35,12 @@ export interface BoxProvisioner {
   readonly kind: "docker" | "attached" | "kubernetes";
   /** One line naming the box, for logs: the reader wants to know which box failed. */
   readonly label: string;
+  /**
+   * The box's identity, as opposed to its description. `label` is prose for a log line;
+   * this is the key a box's record is stored under (its class, and later its owner), so
+   * it has to be the same string next time this process starts.
+   */
+  readonly boxName: string;
   /** Where the box is, or undefined if there is not one running. Never throws. */
   endpoint(): Promise<BoxEndpoint | undefined>;
   /** A client for the box, provisioning it first if this implementation can. */
@@ -59,22 +64,32 @@ export interface BoxProvisioner {
 export class AttachedBoxProvisioner implements BoxProvisioner {
   readonly kind = "attached" as const;
   readonly label: string;
+  readonly boxName: string;
   private readonly baseUrl: string;
   private readonly token: string;
 
   constructor(options: { baseUrl: string; token?: string }) {
     this.baseUrl = options.baseUrl.replace(/\/+$/, "");
-    // readBoxToken rather than loadBoxToken: minting one here would be worse than
-    // failing, since a token this process invented cannot match the box's.
-    const token = options.token ?? readBoxToken();
+    // The explicit token, or the environment's — and deliberately *not* a local box's.
+    //
+    // This used to fall through to `readBoxToken()`, which resolves the local default
+    // box's key. Attaching is by definition talking to a box this process does not run,
+    // so that key is both wrong for the endpoint and ours to protect: it was sent, in
+    // full, to whatever URL somebody typed. Minting is likewise refused — a token this
+    // process invented cannot match the box's — so the honest outcome when neither is
+    // configured is to fail and say which variable to set.
+    const token = options.token ?? process.env.AGENTBOX_TOKEN;
     if (!token) {
       throw new Error(
         `No box token for ${this.baseUrl}. Set AGENTBOX_TOKEN to the token the box was ` +
-          "started with — a token cannot be invented for a box someone else is running."
+          "started with — a token cannot be invented for a box someone else is running, " +
+          "and this machine's own box key is not it."
       );
     }
     this.token = token;
     this.label = `attached (${this.baseUrl})`;
+    // The URL is the only durable name we have for a box we did not start.
+    this.boxName = this.baseUrl;
   }
 
   async endpoint(): Promise<BoxEndpoint> {
@@ -94,11 +109,13 @@ export class AttachedBoxProvisioner implements BoxProvisioner {
 export class DockerBoxProvisioner implements BoxProvisioner {
   readonly kind = "docker" as const;
   readonly label: string;
+  readonly boxName: string;
   private readonly manager: BoxManager;
 
   constructor(config: BoxConfig = defaultBoxConfig()) {
     this.manager = new BoxManager(config);
     this.label = `docker (${config.containerName})`;
+    this.boxName = config.containerName;
   }
 
   async endpoint(): Promise<BoxEndpoint | undefined> {

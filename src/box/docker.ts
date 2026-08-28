@@ -132,6 +132,39 @@ export interface BoxConfig {
  * person is the whole of the identity design, and a shared key would make that boundary
  * a wish.
  */
+/**
+ * Said once per process, so an operator who reopened something learns of it — and so the
+ * log is not one line per box created.
+ */
+const warned = new Set<string>();
+function warnOnce(message: string): void {
+  if (warned.has(message)) return;
+  warned.add(message);
+  console.error(`[box] ${message}`);
+}
+
+/**
+ * Where the daemon is published. Loopback unless somebody deliberately moved it.
+ *
+ * The override exists for a remote Docker engine, where the published port lives on that
+ * engine rather than here. It is also the one way to undo the fix that closed a live
+ * exposure — the daemon was reachable from the LAN and its desktop socket was
+ * unauthenticated — so taking it says so out loud. A deviation nobody can see is
+ * indistinguishable from the default that was never applied.
+ */
+function publishAddress(): string {
+  const configured = process.env.AGENTBOX_BOXD_PUBLISH_ADDRESS;
+  if (configured === undefined || configured === "" || configured === "127.0.0.1") {
+    return "127.0.0.1";
+  }
+  warnOnce(
+    `the box daemon is published on ${configured}, not loopback. Anything that can reach ` +
+      "that address can reach the daemon; its desktop socket is authenticated by the box " +
+      "token and nothing else."
+  );
+  return configured;
+}
+
 export function boxTokenPath(containerName: string): string {
   const home = process.env.AGENTBOX_HOME ?? join(homedir(), ".agentbox");
   return join(home, "tokens", containerName);
@@ -164,8 +197,17 @@ export function loadBoxToken(containerName: string = DEFAULT_CONTAINER): string 
  */
 export function readBoxToken(containerName: string = DEFAULT_CONTAINER): string | undefined {
   // An explicit token still wins: it is how somebody attaches to a box this host did not
-  // start, and inventing one for that case would be worse than failing.
-  if (process.env.AGENTBOX_TOKEN) return process.env.AGENTBOX_TOKEN;
+  // start, and inventing one for that case would be worse than failing. But it applies to
+  // *every* box, which is the fan-out this file otherwise exists to prevent — so it says
+  // so, once, rather than quietly making every box share a key.
+  if (process.env.AGENTBOX_TOKEN) {
+    warnOnce(
+      "AGENTBOX_TOKEN is set, so every box on this host shares one key. That is right for " +
+        "attaching to a box somebody else runs and wrong for running several: a box that " +
+        "belongs to one person is not private while its key opens the others."
+    );
+    return process.env.AGENTBOX_TOKEN;
+  }
 
   const own = boxTokenPath(containerName);
   if (existsSync(own)) {
@@ -437,7 +479,7 @@ export class BoxManager {
       // A remote Docker engine is the one case that needs a routable publication, and it
       // is opt-in: AGENTBOX_BOXD_PUBLISH_ADDRESS, set by someone who has read this.
       "--publish",
-      publishOn(process.env.AGENTBOX_BOXD_PUBLISH_ADDRESS ?? "127.0.0.1", config.boxdPort, BOXD_PORT),
+      publishOn(publishAddress(), config.boxdPort, BOXD_PORT),
       // Its own bridge, so a box is not on the same subnet as every other container.
       //
       // Worth having and **not sufficient**, which is measured rather than assumed.

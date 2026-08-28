@@ -22,6 +22,7 @@ import { AgentRegistry, type AgentRecord } from "../agents/registry.ts";
 import type { BoxClient } from "../box/client.ts";
 import { DisplayLease } from "../box/display-lease.ts";
 import { resolveBoxProvisioner, type BoxProvisioner } from "../box/provisioner.ts";
+import { classifyBox, type BoxClass } from "../box/access.ts";
 import type { ResolutionConfig } from "../protocol/index.ts";
 import { runTurn, TurnAborted, type TurnDeps, type TurnEvent } from "./turn.ts";
 import { loadConfig } from "../config.ts";
@@ -115,6 +116,8 @@ export class Orchestrator {
   private readonly client: Anthropic;
   private box: BoxClient | undefined;
   private resolution: ResolutionConfig | undefined;
+  /** What kind of box the connected box is; see docs/18. */
+  private boxAccess: BoxClass | undefined;
   /**
    * One lease for the whole process, not one per conversation. The display is a
    * property of the box, so scoping this per agent or per turn would let two
@@ -493,6 +496,9 @@ export class Orchestrator {
       const health = await client.health();
       this.box = client;
       this.resolution = health.resolution;
+      // Read here rather than at construction: connecting again may be connecting to a
+      // *different* box, and the class belongs to the box, not to the process.
+      this.boxAccess = classifyBox(provisioner.boxName, loadConfig());
       // Connecting again means the box may be a different box: one that was updated,
       // recreated, or simply restarted. Nothing it had is guaranteed to still be
       // there, and a remembered desktop is the one that never appears.
@@ -608,6 +614,7 @@ export class Orchestrator {
       box: this.box,
       display: this.display,
       resolution: this.resolution,
+      ...(this.boxAccess !== undefined ? { boxAccess: this.boxAccess } : {}),
       hostRunner: this.options.hostRunner,
       vault: this.options.vault,
       tasks: this.tasks,

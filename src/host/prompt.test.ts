@@ -332,3 +332,39 @@ test("a section can be withheld to measure what it is worth", () => {
     else process.env.AGENTBOX_ABLATE = previous;
   }
 });
+
+function sharedBoxContext() {
+  return {
+    agent: { id: "a", profile: { name: "Ada", description: "", createdAt: "", updatedAt: "" } } as never,
+    teammates: [],
+    memory: [],
+    resolution: undefined,
+    agentsRoot: "/tmp",
+    hasBox: true,
+  };
+}
+
+test("a shared box tells the agent who else is in the room", () => {
+  // The agent is who gets asked "can anyone else see this?" mid-task, and who is standing
+  // there when a person is about to type a password into a browser on that desktop. It
+  // cannot prevent any of it — the desktop is real and noVNC is not something we gate — so
+  // what it is given is the fact, not an order it would have to report success on.
+  const shared = buildSystemPrompt({
+    ...sharedBoxContext(),
+    boxAccess: { access: "shared", group: "平台组", badge: "共享箱子", notice: "…" },
+  });
+  assert.match(shared, /shared/);
+  assert.match(shared, /平台组/, "who 'shared' means, where it is known");
+  assert.match(shared, /command\s+history/, "the consequences, not the category");
+
+  // A private box says nothing, and an unclassified one says nothing either: the box
+  // section is the same text it has always been. Silence is right for the second case —
+  // a wrong claim about who can see this screen is worse than no claim.
+  const unclassified = buildSystemPrompt(sharedBoxContext());
+  assert.doesNotMatch(unclassified, /This box is \*\*shared\*\*/);
+  const priv = buildSystemPrompt({
+    ...sharedBoxContext(),
+    boxAccess: { access: "private" as const, badge: "私有箱子", notice: "" },
+  });
+  assert.equal(priv, unclassified, "a private box is the ordinary case and adds nothing");
+});

@@ -29,6 +29,7 @@ function withTokenFile(token: string): void {
 
 test("a URL selects the attached provisioner, with no Docker involved", async () => {
   withTokenFile("token-from-file");
+  process.env.AGENTBOX_TOKEN = "token-for-their-box";
   process.env.AGENTBOX_BOXD_URL = "http://box.agentbox.svc:1337";
 
   const provisioner = resolveBoxProvisioner();
@@ -36,8 +37,21 @@ test("a URL selects the attached provisioner, with no Docker involved", async ()
   assert.match(provisioner.label, /box\.agentbox\.svc:1337/);
   assert.deepEqual(await provisioner.endpoint(), {
     baseUrl: "http://box.agentbox.svc:1337",
-    token: "token-from-file",
+    token: "token-for-their-box",
   });
+});
+
+test("attaching never sends this machine's own box key to somebody else's URL", async () => {
+  // This test used to assert the opposite, which is how the leak survived: attaching read
+  // the local token file and sent that key, in full, to whatever URL was typed. Attaching
+  // is by definition talking to a box this process does not run, so the local key is both
+  // wrong for the endpoint and ours to protect. Refusing is the honest outcome — a token
+  // cannot be invented for somebody else's box — and the message says which variable to set.
+  withTokenFile("this-machines-own-key");
+  delete process.env.AGENTBOX_TOKEN;
+  process.env.AGENTBOX_BOXD_URL = "http://someone-elses-box.example:1337";
+
+  assert.throws(() => resolveBoxProvisioner(), /AGENTBOX_TOKEN/);
 });
 
 test("no URL falls back to Docker", () => {

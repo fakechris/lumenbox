@@ -556,6 +556,20 @@ export const APP_HTML = String.raw`<!doctype html>
   .tab:hover { text-decoration: none; background: var(--surface-hover); }
   .tab.on { background: var(--accent-soft); color: var(--accent); }
   #desktoptitle { font-size: 12px; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  /* Always rendered, never dismissible: docs/18 §3.1. A shared box is warn-toned because
+     what it says changes what a person should be willing to type; a private one is quiet
+     because it is only stating the ordinary case. */
+  .boxclass {
+    font-size: 11px; padding: 2px 8px; border-radius: var(--radius-pill);
+    white-space: nowrap; flex: none; cursor: default;
+  }
+  .boxclass.shared { background: var(--warn-soft); color: var(--warn); border: 1px solid var(--warn-border); }
+  .boxclass.private { background: var(--surface-hover); color: var(--muted); }
+  #boxnotice {
+    font-size: 12px; line-height: 1.5; color: var(--warn);
+    background: var(--warn-soft); border: 1px solid var(--warn-border);
+    border-radius: var(--radius-md); padding: 7px 11px; margin: 0 16px 8px;
+  }
   .paneheader a { font-size: 12px; }
   a#rec.on { color: var(--danger); }
 
@@ -695,6 +709,7 @@ export const APP_HTML = String.raw`<!doctype html>
       <a href="#" id="tabtasks" class="tab">Tasks</a>
       <a href="#" id="tabauto" class="tab">Automations</a>
       <span id="desktoptitle"></span>
+      <span id="boxclass" class="boxclass" style="display:none"></span>
     </span>
     <span class="headactions">
       <a id="rec" href="#">&#9679; record</a>
@@ -702,6 +717,7 @@ export const APP_HTML = String.raw`<!doctype html>
     </span>
   </div>
   <div id="desktopview">
+    <div id="boxnotice" style="display:none"></div>
     <div class="desktopwrap"><iframe id="vnc" title="box desktop"></iframe></div>
     <div class="bar" id="recordings" style="display:none"></div>
     <div class="bar" id="clipbar">
@@ -2178,6 +2194,29 @@ function peerNote(direction, name, text, priority) {
   return row;
 }
 
+/**
+ * Says what kind of box this is, wherever the box is being used.
+ *
+ * Deliberately not a modal and not an acknowledgement: those are read once and dismissed
+ * forever, and the thing worth knowing — that somebody else can see this screen — matters
+ * every time, not the first time.
+ */
+function showBoxClass(box) {
+  var badge = $("boxclass");
+  var notice = $("boxnotice");
+  if (!box || !box.access) {
+    badge.style.display = "none";
+    notice.style.display = "none";
+    return;
+  }
+  badge.textContent = box.badge + (box.group ? " · " + box.group : "");
+  badge.className = "boxclass " + box.access;
+  badge.title = box.notice || "只有你能打开这台箱子。";
+  badge.style.display = "";
+  notice.textContent = box.notice || "";
+  notice.style.display = box.notice ? "" : "none";
+}
+
 /** Points the desktop pane at one agent's own display. */
 function showDesktop(id) {
   var agent = null;
@@ -2428,6 +2467,7 @@ function refresh() {
     boxState = { ok: !!state.box.ok, detail: String(state.box.detail || "") };
     $("boxinfo").textContent = state.box.ok ? state.box.detail : "box unavailable";
     $("boxdot").className = "dot " + (state.box.ok ? "ok" : "bad");
+    showBoxClass(state.box);
     if (!onboardChecked) {
       onboardChecked = true;
       maybeOnboard();
