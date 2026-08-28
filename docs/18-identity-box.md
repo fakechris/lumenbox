@@ -74,6 +74,7 @@ had them mixed. Corrected, as of 2026-08-29:
 | One token per box | **Closed** — attach mode no longer falls back to the local box's key (it was sending this machine's box token to whatever URL was configured); `AGENTBOX_TOKEN` still overrides globally, and now says so out loud when it does |
 | Archives carry logins | **True and now said** (`BACKUP_CARRIES`); authorization and deletion of archives are undesigned |
 | Container-to-container network isolation | **Does not hold** on Docker 29/OrbStack, measured. The boundary is the daemon's authentication, not the topology |
+| `access: "private"` | **A word with no mechanism.** Steps 4–8 are unbuilt, so a box marked private is a shared box with a hopeful label. `PRIVATE_IS_ENFORCED` in `src/box/access.ts` is `false`, and every surface keys its wording on that rather than on the config value: the badge reads 私有箱子(未生效), the notice leads with the correction, and the agent is told to treat it as shared. Flipping that constant is step 8's last act |
 
 Both "partial" rows are closed as of 2026-08-28 (step 1 below); the private-box claim
 rested on them.
@@ -229,7 +230,19 @@ who can reach them may drive them — which is another reason the shared class s
    holds `{ access, group? }`; `classifyBox` resolves it, defaulting to `shared`, and a
    malformed entry is treated as shared *and* warned about rather than dropped. The
    running boxes are marked `shared`.
-3. ~~**Label a shared box where the work happens**~~ (§3.1) — **done 2026-08-28.** A
+3. ~~**Label a shared box where the work happens**~~ (§3.1) — **done 2026-08-28**, and
+   **corrected the same day.** The first version made `private` *subtractive*: marking a
+   box private removed the shared sentence, removed the agent's paragraph, and produced a
+   tooltip reading 只有你能打开这台箱子 from an `||` fallback nobody had decided on — the
+   strongest privacy claim in the product, false for every box that exists, and against
+   this team's own rule in docs/10 S-7 ("make sure no UI ever describes it as privacy").
+   The lesson is general and belongs here: **"absent means shared" is only honest if the
+   other value cannot lie.** A default is not a safeguard while the non-default value is
+   the one that removes the warnings. `PRIVATE_IS_ENFORCED` is where that is arranged, and
+   `access.test.ts` pins the direction — no config value may produce less warning than the
+   default does.
+
+   The original entry: A
    permanent badge in the desktop header, the sentence above the screen itself, and a
    paragraph in the agent's own prompt, because the agent is who gets asked "can anyone
    else see this?" mid-task. No refusal, no modal, nothing to click through.

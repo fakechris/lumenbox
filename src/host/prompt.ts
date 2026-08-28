@@ -390,7 +390,19 @@ function profileSection(agent: AgentRecord): string {
  * correctly when asked, and say the true thing before someone types a password.
  */
 function boxClassParagraph(boxClass: BoxClass | undefined): string {
-  if (boxClass?.access !== "shared") return "";
+  // Keyed on whether anything *enforces* the class, not on its name. A box declared
+  // private while docs/18 steps 4-8 are unbuilt is a shared box with a hopeful label, and
+  // the agent that answers "is this private?" has to know which of those it is standing in.
+  if (boxClass === undefined || boxClass.enforced === false) {
+    if (boxClass === undefined) return "";
+    return `
+
+This box is **labelled private, but nothing enforces that yet** — the isolation it would
+need has not been built. Treat it exactly as a shared box: everyone who can reach it can
+open its screen, read its files and its command history, and its backups carry whatever
+has been logged in here. If somebody relies on it being private, correct them.`;
+  }
+  if (boxClass.access !== "shared") return "";
   const who = boxClass.group ? `everyone in ${boxClass.group}` : "everyone who can reach it";
   return `
 

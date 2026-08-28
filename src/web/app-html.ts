@@ -2210,8 +2210,13 @@ function showBoxClass(box) {
     return;
   }
   badge.textContent = box.badge + (box.group ? " · " + box.group : "");
-  badge.className = "boxclass " + box.access;
-  badge.title = box.notice || "只有你能打开这台箱子。";
+  // Warn-toned unless the class is actually enforced. A box labelled private with nothing
+  // behind it must not read as the calm case; it is the shared case with a wrong label.
+  badge.className = "boxclass " + (box.enforced === false ? "shared" : box.access);
+  // The notice, or nothing. This used to fall through to "只有你能打开这台箱子" — the
+  // strongest privacy claim in the product, arriving as an || fallback nobody decided on,
+  // and false for every box that exists.
+  badge.title = box.notice || "";
   badge.style.display = "";
   notice.textContent = box.notice || "";
   notice.style.display = box.notice ? "" : "none";

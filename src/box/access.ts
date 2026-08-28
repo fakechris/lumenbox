@@ -28,17 +28,44 @@ export interface BoxClass {
   access: BoxAccess;
   /** Who "shared" means, when somebody said. Free text, for the label. */
   group?: string;
+  /**
+   * Whether anything actually enforces this class.
+   *
+   * False for a box declared `private` while docs/18 steps 4-8 are unbuilt. Surfaces
+   * key their wording on this and not on `access`, because what the product may claim
+   * follows from the machinery, not from the config file.
+   */
+  enforced: boolean;
   /** Two words for a header or a list row. */
   badge: string;
-  /** The sentence, for wherever there is room for one. Empty for a private box. */
+  /** The sentence, for wherever there is room for one. Empty only when it is earned. */
   notice: string;
 }
 
+/**
+ * Whether the machinery that makes a private box private exists yet.
+ *
+ * It does not. docs/18 steps 4-8 — one session resolver, agents bound to a box, the
+ * takeover state, revoke-and-wipe — are all unbuilt, and without them `private` is a
+ * *declaration of intent*, not a property of anything: `callerOf` still treats an
+ * unauthenticated direct caller as owner, the UI token is one file for the whole
+ * installation, and every agent can reach every box the process can.
+ *
+ * This is one constant rather than a check in each surface because the failure it
+ * prevents is asymmetric and was live for a few hours: setting `private` made the
+ * product **quieter and more confident** — the shared sentence disappeared and a tooltip
+ * said "only you can open this box" — so the unsafe value was the one that removed the
+ * warnings. A default is only honest if the other value cannot lie, and this is where
+ * that is arranged. Flip it in step 8, in one place, and delete this paragraph.
+ */
+export const PRIVATE_IS_ENFORCED = false;
+
 const PRIVATE: BoxClass = {
   access: "private",
+  enforced: true,
   badge: "私有箱子",
-  // A private box makes a promise instead of a disclaimer, and the promise is not a
-  // guarantee of secrecy from the software: docs/18 §7 is the long form.
+  // An enforced private box makes a promise instead of a disclaimer, and the promise is
+  // not a guarantee of secrecy from the software: docs/18 §7 is the long form.
   notice: "",
 };
 
@@ -50,14 +77,40 @@ const PRIVATE: BoxClass = {
  */
 export function classifyBox(name: string, config: Pick<AgentboxConfig, "boxes">): BoxClass {
   const record = config.boxes?.[name];
-  if (record?.access === "private") return PRIVATE;
   const group = record?.group?.trim();
+  if (record?.access === "private") {
+    if (PRIVATE_IS_ENFORCED) return PRIVATE;
+    // Not silently downgraded to `shared`: the operator asked for something, and telling
+    // them it is not in effect is more use than pretending they never asked. The class
+    // they get is the true one — nothing here is private — said in their own words.
+    return {
+      access: "private",
+      enforced: false,
+      badge: "私有箱子(未生效)",
+      notice: unenforcedPrivateNotice(),
+    };
+  }
   return {
     access: "shared",
     ...(group ? { group } : {}),
+    enforced: true,
     badge: "共享箱子",
     notice: sharedNotice(group),
   };
+}
+
+/**
+ * What a box marked private actually is today.
+ *
+ * Deliberately at least as loud as the shared notice, and it leads with the correction
+ * rather than the intent: somebody reading this has been told elsewhere that the box is
+ * private, and the first thing they need is that it is not.
+ */
+export function unenforcedPrivateNotice(): string {
+  return (
+    "这台箱子被标成了私有,但**私有还没有生效**:能打开它的人都能看它的屏幕、读它的文件和命令历史," +
+    "备份也会带走你在这里登录过的东西。在功能补齐之前,请当成共享箱子用。"
+  );
 }
 
 /**

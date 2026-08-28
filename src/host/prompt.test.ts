@@ -351,7 +351,7 @@ test("a shared box tells the agent who else is in the room", () => {
   // what it is given is the fact, not an order it would have to report success on.
   const shared = buildSystemPrompt({
     ...sharedBoxContext(),
-    boxAccess: { access: "shared", group: "平台组", badge: "共享箱子", notice: "…" },
+    boxAccess: { access: "shared" as const, group: "平台组", enforced: true, badge: "共享箱子", notice: "…" },
   });
   assert.match(shared, /shared/);
   assert.match(shared, /平台组/, "who 'shared' means, where it is known");
@@ -364,7 +364,7 @@ test("a shared box tells the agent who else is in the room", () => {
   assert.doesNotMatch(unclassified, /This box is \*\*shared\*\*/);
   const priv = buildSystemPrompt({
     ...sharedBoxContext(),
-    boxAccess: { access: "private" as const, badge: "私有箱子", notice: "" },
+    boxAccess: { access: "private" as const, enforced: true, badge: "私有箱子", notice: "" },
   });
   assert.equal(priv, unclassified, "a private box is the ordinary case and adds nothing");
 });
@@ -377,8 +377,26 @@ test("an agent with no vision is still told the box is shared", () => {
   const prompt = buildSystemPrompt({
     ...sharedBoxContext(),
     vision: false,
-    boxAccess: { access: "shared" as const, badge: "共享箱子", notice: "…" },
+    boxAccess: { access: "shared" as const, enforced: true, badge: "共享箱子", notice: "…" },
   });
   assert.match(prompt, /This box is \*\*shared\*\*/);
   assert.doesNotMatch(prompt, /Screenshots come to you/, "and it still has no screen");
+});
+
+test("a box labelled private with nothing behind it is described to the agent as shared", () => {
+  // The agent is the one who answers "is this private?" mid-task. If the config says
+  // private and the machinery does not exist, the true answer is no, and the agent has to
+  // be holding the true answer rather than the label.
+  const prompt = buildSystemPrompt({
+    ...sharedBoxContext(),
+    boxAccess: {
+      access: "private" as const,
+      enforced: false,
+      badge: "私有箱子(未生效)",
+      notice: "…",
+    },
+  });
+  assert.match(prompt, /nothing enforces that yet/);
+  assert.match(prompt, /Treat it exactly as a shared box/);
+  assert.match(prompt, /command\s+history/, "the same consequences the shared paragraph names");
 });
