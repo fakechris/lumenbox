@@ -206,3 +206,21 @@ plain files, so there is no archive to unpack at runtime.
 The macOS menu-bar name reads "Electron" only under `npm run app` (the dev launch);
 the packaged app carries `productName` (LumenBox) in its bundle. Icons come from
 `assets/app-icon/`, regenerated from the SVG sources by `scripts/make-icons.sh`.
+
+## Feishu app configuration (console side)
+
+Two switches live in the Feishu developer console and nowhere in our config, so a fresh
+deployment can look wired while half the surface is dead:
+
+1. **Events over long connection** — the message events themselves. This one fails loudly
+   (nothing arrives), so it gets noticed.
+2. **Card callbacks over long connection** (事件与回调 → 回调配置 → 卡片回调 →
+   使用长连接接收). This one fails *quietly on our side*: a pressed card button pops
+   "该应用尚未配置卡片回调" to the person and never reaches the bot. The consent card's
+   buttons shipped in this state and nobody noticed for days, because the word path
+   ("允许" / "拒绝" typed as a reply) kept working — the question card's buttons are what
+   finally surfaced it. The console's "一键配置" deep link may claim the app does not
+   exist when the logged-in account differs from the app's owner; configure it manually.
+
+Neither switch is detectable from our side at boot, so they cannot go into `absences.ts`;
+this note is the substitute.
