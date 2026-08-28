@@ -1,156 +1,177 @@
-# Identity boxes: a box that belongs to one person (v3)
+# Boxes that say what they are (v4)
 
-Status: **design, replacing v1 and v2 — both rejected by adversarial review** (nine fatals,
-then eleven, with zero of the first nine genuinely closed: see
-[reviews/2026-08-28](reviews/2026-08-28-identity-box.md) and
-[reviews/2026-08-29](reviews/2026-08-29-identity-box-v2.md)). v3 is not a refinement of
-them. It removes the requirement that made them impossible.
+Status: **design, fourth version.** v1 and v2 were rejected (nine fatals, then eleven,
+none closed). v3 was rejected with six — but for the first time three problems were
+**genuinely closed**, one of them "closed by architecture removal", so the direction is
+right and this version continues it rather than restarting.
 
-## 0. The whole design
+Reviews: [v1](reviews/2026-08-28-identity-box.md),
+[v2](reviews/2026-08-29-identity-box-v2.md), [v3](reviews/2026-08-29-identity-box-v3.md).
 
-**An identity box is an ordinary box that belongs to one person.** Full desktop, full
-browser, the same image the team box runs. What makes it an identity box is not what has
-been taken out of it — it is who can reach it:
+## 0. The idea
 
-> **One box, one person. Nobody else, and no other person's agent, can reach it. The
-> agents working in it know whose it is.**
+Every earlier version tried to give one kind of box a privacy property it could not have.
+v4 stops doing that. Instead:
 
-That is the entire security claim, and unlike v1's and v2's it is a property of the
-container boundary, which we have, rather than of a fence inside a container, which the
-reviews proved we cannot build.
+> **A box declares what it is, and what it promises follows from that.**
+>
+> - A **private box** belongs to one person. Login state lives here. Everything inside it
+>   is trusted with that person's data — including the agents, the model provider, and any
+>   process in the container.
+> - A **shared box** belongs to a group, a tenant, or everyone. It promises **nothing**
+>   about privacy between the people who can reach it, and it says so where they can read
+>   it. Don't keep logins here.
 
-## 1. Why v1 and v2 failed, in one sentence
+The second class is not a lesser box; it is the honest name for the box we already run.
+`docs/09` reached the same conclusion one level down and said it plainly: *"a private agent
+is not a security boundary… a real boundary between two people means two tenants and two
+boxes."* v4 raises that from agents to boxes and puts it in front of the person.
 
-Both tried to protect a person **from their own agent**, inside the box, and every
-mechanism for doing that was refuted:
+**Why this unlocks the design.** v3's reviewer offered a choice for the login problem:
+build a box-wide fail-closed fence over every turn, schedule, agent, VNC path and recorder
+— *or* have the product explicitly forbid typing secrets into the box. Two classes let us
+take **one answer per class** instead of one answer for both, and each is achievable:
+the fence for private boxes, the prohibition for shared ones.
 
-- v1: "one `login_private` flag at the capture choke point." There is no choke point —
-  x11vnc reads the framebuffer in its own process, the executor screenshots after every
-  action batch, browser "snapshots" are CDP DOM reads that include input values, and a
-  clipboard *write* contains a read.
-- v2: "centralise, then prohibit the raw primitives." Refuted by a file already in this
-  repository: `docker/box/vnc-probe` opens an RFB socket and reads the whole framebuffer
-  in Python, spelling none of the prohibited strings. And the deeper reason it could never
-  work — `start-display` runs Xvfb with **access control off** and the socket directory is
-  **1777**, so any process that can speak X11 or RFB reads pixels. *The proposal enumerated
-  spellings; the threat is authority.*
+## 1. The two classes
 
-The mistake underneath both, stated plainly so it is not repeated: **each control was put
-where it was convenient to write, not where the effect happens.** And the requirement
-itself was imported, not chosen. Protecting a person from the agent that works for them is
-a multi-tenant problem, and an identity box is single-tenant by definition.
-
-The v2 attempt to escape by locking the browser down — no extensions, no devtools, no
-`file:`, kiosk — was worse than the problem: it removed the capability the box exists for.
-A browser an agent cannot really drive is not a smaller identity box, it is not one.
-
-## 2. What container isolation gives, verified
-
-Not asserted. Checked against the code and the running installation on 2026-08-29:
-
-| Property | How | Status |
+| | **Private** | **Shared** |
 | --- | --- | --- |
-| Separate storage | Volumes are named per container (`<name>-work`, `<name>-config`) | ✅ `src/box/docker.ts` |
-| No privilege escape | No `--privileged`, no `--cap-add`, no docker socket mounted | ✅ `runArguments()` |
-| Separate X, separate processes | A container per box | ✅ by construction |
-| Daemon not reachable from the LAN | Published to `127.0.0.1` only | ✅ fixed 2026-08-28, verified from the LAN address |
-| Desktop socket authenticated | boxd's WebSocket upgrade authorises before doing anything | ✅ fixed 2026-08-28, verified from a neighbour container (401) |
-| **Its own key** | One token per container, legacy file readable only by the default box | ✅ fixed 2026-08-29 |
+| Access | one principal | a group, the tenant, or everyone |
+| Login state | expected; the point of the box | **not kept** — the config volume is ephemeral unless someone opts in, and the opt-in says who will be able to see it |
+| Typing a password on its screen | supported, behind the takeover state (§3) | **refused, and the UI says why** |
+| Recording | pauses during takeover | ordinary |
+| Between the people who can reach it | not applicable — there is one | **no boundary at all**, stated: shell, filesystem, screens and archives are common |
+| Reassignment | revoke-and-wipe (§4) | membership change only |
 
-What container isolation does **not** give, and no version of this document should claim:
+A box's class is a property of the box, recorded with it, not a setting on a page nobody
+reads. It appears in the desktop header, in the box list, and in the sentence the person
+sees before they are asked to log into anything.
 
-- **The host reaches every box.** It proxies the desktops; it holds every token. The host
-  process is fully trusted and that is not a gap to close, it is where the trust lives.
-- **A network path between containers may exist.** Measured on Docker 29/OrbStack:
-  per-container networks do *not* isolate there. The boundary is the daemon's
-  authentication, not the topology — which is why the token change above is load-bearing
-  rather than tidy.
+**Today's box is shared.** Saying that is the whole of what has to change for it to be
+honest — no new mechanism, and it retires the finding that the team box "cannot promise
+anything about its screens": it never promised, and now it says so.
 
-## 3. The two requirements that remain
+## 2. What is verified, what is default, what is work
 
-The reviews' twenty findings collapse to these once the intra-container fence is dropped.
-Both were fatal in v2 and both stay fatal here — they are now the whole design.
+The v3 reviewer's most useful correction: a *default* is not an *invariant*, and the table
+had them mixed. Corrected, as of 2026-08-29:
 
-### 3.1 Only this person and their agents can reach this box
+| Property | Status |
+| --- | --- |
+| Volumes are per container | **Invariant** — named from the container (`src/box/docker.ts`) |
+| No `--privileged`, `--cap-add`, docker socket | **Invariant** in the managed launcher |
+| Daemon published to loopback | **Default, not invariant** — `AGENTBOX_BOXD_PUBLISH_ADDRESS` reopens it. Escape hatch I added; it needs to be a documented, logged deviation rather than a quiet one |
+| boxd desktop upgrade authenticated | **Closed** for the host hop (`src/boxd/main.ts`, test at `src/boxd/upgrade-auth.test.ts`) |
+| One token per box | **Partial** — named files and a default-only legacy fallback are real, but `AGENTBOX_TOKEN` still overrides globally and `provisioner.ts` still resolves a token with no container name |
+| Archives carry logins | **True and now said** (`BACKUP_CARRIES`); authorization and deletion of archives are undesigned |
+| Container-to-container network isolation | **Does not hold** on Docker 29/OrbStack, measured. The boundary is the daemon's authentication, not the topology |
 
-- **Its own token** (done). A key per box, so reaching one box is not reaching the fleet.
-- **A signed principal session, checked identically on the HTTP page and the RFB upgrade.**
-  Today `callerOf` treats an unauthenticated direct caller as owner, the role gate treats a
-  missing `userId` as admin, and the WebSocket upgrade path does not read the web-session
-  identity at all. In a single-user installation that is merely loose; the moment a second
-  person has a box it means **anyone who reaches the port is everyone**. Review's words,
-  still true: *reachability is not ownership.*
-- **A route that names the box.** The desktop URL is `/desktop/<display>/` — a display
-  index with no box in it. With two boxes there is nothing in the request that says which.
+The two "partial" rows are small and are step 1 of the build order, because the private-box
+claim rests on them.
 
-### 3.2 An agent, and its memory, belong to a box
+## 3. The takeover state — the one fence, and only for private boxes
 
-The agent working in Chris's box learns things about Chris. Our memory is per *agent*
-(`~/.agentbox/agents/<id>/memory.jsonl`), so the same agent working in two people's boxes
-would carry one person's memory into the other's prompt — the exact failure a person
-noticed in a competitor and asked about: *"a new bot already knew where I work."*
+v3 claimed password protection was nearly free because "the agent is blocked waiting". That
+was wrong and I found it before the review did: `AskUser` **ends the turn** (it returns
+"Your turn ends here"), so the agent is not blocked — the slot is *free*, and the reviewer
+enumerated what can walk into it: a scheduled routine (now agent-authorable), the audit
+reviewer, a second conversation for the same agent (the bus's exclusivity key is
+agent-plus-conversation), a display lease that is re-entrant by agent id and knows nothing
+about a human being present, and a recorder that has **no pause operation at all**.
 
-So: an agent belongs to one box, and its memory is written and read inside it. Not a
-filter over a shared store — a filter is a rule someone can get wrong, and a directory that
-is not there cannot leak.
+So: **one box-wide state, fail-closed, consulted at every admission point.**
 
-## 4. Takeover login, without the architecture
+- Turn admission (foreground, background, scheduled, audit)
+- The scheduler, before it fires
+- Display lease acquisition
+- The computer service, before executing a batch
+- The VNC upgrade, for anyone who is not the owner
+- The recorder, which needs a real pause/resume (today it can only start and stop, and an
+  ffmpeg it started can outlive the daemon)
 
-The person logs in with their own hands on their own box's screen. What protects the
-password is not a capture fence:
+**Why this one is buildable when v1's and v2's were not.** Those had to catch *every* path
+that could turn the framebuffer into bytes, and could not: X access control is off, the
+socket directory is 1777, and `docker/box/vnc-probe` reads the whole framebuffer in Python
+without touching anything we control. This fence does not try. It closes the **ordinary**
+paths for the **duration of a window**, and the residual — an agent that deliberately runs
+its own reader — is accepted, because in a private box that agent is yours. A check point,
+not an inventory.
 
-- **No turn is running.** An agent screenshots when it *calls the computer tool*. When it
-  is blocked waiting for the person, it is calling nothing. This is free and it is most of
-  the protection.
-- **The recorder pauses.** One process, ours, started and stopped by us. A single
-  controllable path, not an inventory that must be complete.
+For a shared box there is no fence, because there is nothing to fence: **the product
+refuses secret entry and says why.**
 
-**The residual risk, stated so it is chosen rather than omitted:** the agents in your box
-can see what is on your screen, including what you typed, because it is your box and they
-work in it. If a turn is running while you type, that screen can reach a model provider.
-This is the deal a person makes with a human assistant they hand their laptop to, and the
-product should say so in those words rather than implying a guarantee the machinery does
-not make.
+## 4. Ownership, and what changing it costs
 
-Two consequences worth writing down rather than discovering: **do not put an agent on a
-screen you would not show it**, and the archive of an identity box's config volume contains
-that person's logins (`BACKUP_CARRIES` already says this for the team box; it becomes
-per-person here).
+The review's first question, which no earlier version asked: *what durable authority says
+principal P owns box B now, and what revokes the old world before B is reassigned?*
 
-## 5. What is left of the team box
+A box record carries its class and its access. Changing either is a lifecycle operation,
+not an edit:
 
-Everything above is about identity boxes. The team box is a **shared** desktop and none of
-it applies: any process there that can speak X11 or RFB reads any agent's screen, because
-access control is off and the socket directory is 1777. That is true today, independent of
-this design, and it means the team box is not an environment that can promise anything
-about the content of its screens. It belongs in the security backlog on its own, and it
-should not be described to a customer as if the recordings were tamper-evident.
+- **private → private (someone else)**: revoke-and-wipe. Rotate the token, kill live
+  sessions and tunnels, drain queued turns, destroy the config volume, delete archives or
+  hand them to the departing owner. Anything less hands over a browser that is still logged
+  into somebody.
+- **private → shared**: the same wipe. What was one person's is about to be visible to a
+  group, and "we told them" is not a substitute for removing it.
+- **shared → private**: wipe as well; the incoming owner should not inherit a group's
+  leftovers, and the group should not lose their things silently.
+- **membership change inside a group**: no wipe; that is what shared means.
+
+## 5. What is still hard, named rather than buried
+
+**Agents belong to a box** — the review's third question and the largest piece. Today the
+registry is global: `STARTER_TEAM` creation, `Fork`, `Delegate`, `SendToAgent`, shared
+memory, transcripts, the inbox, schedules and usage all carry an agent id with no box in
+it. An agent that worked in two people's private boxes would carry one person's memory into
+the other's prompt — the exact failure a person noticed in a competitor product and asked
+about. This is not a memory-directory change; it is a lineage that some component has to
+refuse when it is missing or mismatched. **It is the reason private boxes are not shippable
+this week.**
+
+**One session resolver.** HTTP and the RFB upgrade resolve identity differently today
+(`callerOf` treats an unauthenticated direct caller as owner; the upgrade path does not read
+the web session at all), and the desktop route names a display index with no box in it.
+Private boxes need one revocable resolver used by all three surfaces. Shared boxes need it
+less urgently — everyone who can reach them may drive them — which is another reason the
+shared class ships first.
 
 ## 6. Build order
 
-1. **Signed principal session on both the page and the RFB upgrade**, and a desktop route
-   that names `{principal, box, display}`. This is §3.1 and it is the only real gate.
-2. **Provision a second box**, per person, with its own token and volumes. Mechanically
-   this is `BoxManager` with a different container name — the machinery exists, the control
-   plane already does it, the single-host path now mints per-box keys.
-3. **Agents and memory scoped to a box** (§3.2).
-4. **Recorder pause during login**, plus the visible red state, because a person should be
-   able to see that it stopped rather than trust that it did.
-5. **Task-scoped file transfer** between an identity box and the team box: a host-mediated
-   copy of named files, logged. Not a mount.
+1. **Close the two "partial" rows** (§2): a container name on every token resolution, and
+   the publish-address override made loud. Small, independent, today.
+2. **Give a box a class and show it.** Record it; render it in the desktop header, the box
+   list, and before any login prompt. Mark the current box `shared`. **This is the whole of
+   what makes today honest**, and it needs no new isolation machinery.
+3. **Refuse secret entry on shared boxes** — the UI statement and the takeover flow's
+   refusal.
+4. **One session resolver** across page, API and RFB, with a route that names the box.
+5. **Box lineage on agents and their state** (§5), and the refusal when it is missing.
+6. **The takeover state** (§3) plus a real recorder pause.
+7. **Private box provisioning**: a second box per person. Mechanically this is `BoxManager`
+   with another container name; the machinery exists.
+8. **Reassignment as revoke-and-wipe** (§4).
 
-No leases, no epochs, no capture inventory, no fencing protocol, no second image, no
-browser policy. Those were the machinery of protecting a person from their own agent, and
-that requirement is gone.
+Steps 1–3 are days and make the product truthful. Steps 4–8 are what private boxes cost,
+and they should be estimated after 1–3 rather than now.
 
-## 7. What this gives up, honestly
+## 7. The trust model, as a product statement
 
-- **An agent that must use a login without being able to see the credential** is not
-  possible here. Broker-shaped injection — the secret never enters the container, a
-  placeholder is swapped at an egress proxy, which five independent systems converged on —
-  remains the answer for that case, and it is a *different feature* for a different
-  threat, not a phase of this one.
-- **Revocation is coarse**: stop the box, rotate its token, or delete it. There is no
-  mid-action fence, because there is no lease.
-- **The person's own agent is trusted.** If that is wrong for a particular account, the
-  answer is not to put that account in a box.
+The reviewer's sharpest line was that v3 "makes the stronger privacy claim while adopting
+the weaker trust model". The fix is not a stronger claim; it is to state the model where
+people can read it.
+
+**In a private box**, these are trusted with everything you do there: the agents working in
+it, the model provider they call, and every process in the container. A prompt injection
+that reaches an agent reaches your box. This is the deal you make with an assistant you hand
+your laptop to, and the product should use those words rather than implying a guarantee the
+machinery does not make.
+
+**In a shared box**, add: everyone who can reach it. Your screen, your files, your shell
+history and your archives are theirs too. Don't log in to anything you would not hand them.
+
+**Not offered by either class**: an agent that can *use* a credential without being able to
+*see* it. That is broker-shaped injection — the secret never enters the container, a
+placeholder is swapped at an egress proxy, which five independent systems converged on — and
+it is a different feature for a different threat, not a later phase of this one.
