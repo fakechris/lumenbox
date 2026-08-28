@@ -8,6 +8,12 @@ right and this version continues it rather than restarting.
 Reviews: [v1](reviews/2026-08-28-identity-box.md),
 [v2](reviews/2026-08-29-identity-box-v2.md), [v3](reviews/2026-08-29-identity-box-v3.md).
 
+**Since first writing: steps 1–3 are built** (§6), and **§5 has been rewritten** — it
+claimed agent-to-box lineage was the largest piece and the blocker on private boxes, and
+that was wrong. Binding an agent to one box at creation, the way `displayIndex` is already
+bound, removes almost all of it. The correction came from the question "why would the agent
+carry anything between boxes if it cannot move?", which the document had no answer to.
+
 ## 0. The idea
 
 Every earlier version tried to give one kind of box a privacy property it could not have.
@@ -145,23 +151,75 @@ not an edit:
   leftovers, and the group should not lose their things silently.
 - **membership change inside a group**: no wipe; that is what shared means.
 
-## 5. What is still hard, named rather than buried
+## 5. Binding an agent to a box (revised 2026-08-28)
 
-**Agents belong to a box** — the review's third question and the largest piece. Today the
-registry is global: `STARTER_TEAM` creation, `Fork`, `Delegate`, `SendToAgent`, shared
-memory, transcripts, the inbox, schedules and usage all carry an agent id with no box in
-it. An agent that worked in two people's private boxes would carry one person's memory into
-the other's prompt — the exact failure a person noticed in a competitor product and asked
-about. This is not a memory-directory change; it is a lineage that some component has to
-refuse when it is missing or mismatched. **It is the reason private boxes are not shippable
-this week.**
+**What this section used to say was wrong**, and the correction is the reason the rest of
+the build order got cheaper. v4 called this "the largest piece" and "the reason private
+boxes are not shippable this week", on the grounds that `Fork`, `Delegate`, `SendToAgent`,
+shared memory, transcripts, the inbox, schedules and usage all carry an agent id with no box
+in it. That is a true list. It is also irrelevant, because **every item on it only matters
+if an agent can move between boxes** — and nothing requires that it can.
 
-**One session resolver.** HTTP and the RFB upgrade resolve identity differently today
-(`callerOf` treats an unauthenticated direct caller as owner; the upgrade path does not read
-the web session at all), and the desktop route names a display index with no box in it.
-Private boxes need one revocable resolver used by all three surfaces. Shared boxes need it
-less urgently — everyone who can reach them may drive them — which is another reason the
-shared class ships first.
+### An agent belongs to one box, from creation
+
+Bind it when the agent is made and never allow it to be changed. Then the agent id *is* the
+box scope, and the list above needs no work at all: a fork inherits its parent's box because
+it has no way to name another, a delegate runs in its caller's, and every store already
+keyed by agent id is thereby keyed by box.
+
+This is not a new pattern here — it is the one `displayIndex` already uses. That field is
+"assigned at creation and stable thereafter, so an agent returns to the desktop it left",
+and it stays stable for a structural reason worth copying deliberately: `AgentRegistry.update`
+takes an **explicit allow-list** of changeable fields (`name`, `description`, `title`,
+`avatarColor`, `hidden`, `tools`, `scopeId`), and `displayIndex` is not on it. Immutability
+is a property of the shape rather than a check somebody has to remember to write. `boxName`
+goes in beside it and gets the same guarantee for free.
+
+The work, in full:
+
+- `boxName` on the agent profile, set at creation, absent from `update`'s allow-list.
+- The orchestrator resolves the box client **per agent** instead of holding one
+  `this.box` (`orchestrator.ts:117`, ten uses). Mechanical.
+
+### The one thing binding does not fix: shared memory
+
+`turn.ts:906` calls `registry.readSharedMemory()` unconditionally, and it merges **every**
+agent's shared shard into every agent's prompt with no filter. That is deliberate — the
+shared tier exists so "a colleague thought everyone needed this" can travel — and it is
+exactly what makes it the leak that immutability cannot close.
+
+The agent does not move. **The fact moves.** Ada, permanently inside Dana's private box,
+writes something she learned there into shared memory; Rex, permanently inside the team box,
+reads it in his next prompt. So the scope belongs on the pool, not on the agent: shards are
+filtered by box before they are merged. Small, but it has to exist, or the binding is
+decorative.
+
+The compaction path (`memory.ts:710`) merges across shards too, for a reason that survives
+the filter — a retraction in one shard withdraws a fact in another — so it wants the same
+filter rather than a different mechanism.
+
+### The decision this leaves open
+
+**What does `SendToAgent` across boxes mean?** An agent permanently inside Dana's private box
+that anybody may message is an oracle over that box: someone in the team box asks Ada what is
+in Dana's downloads, and Ada looks and answers truthfully, because answering is what she is
+for. Binding does not touch this — the agent never left — and it is not lineage. It is access
+control on one tool, and it needs a decision rather than machinery:
+
+- **refuse** cross-box messages, which costs the collaboration the tenant exists for; or
+- **allow** them and state that a private box's agent will answer questions about that box to
+  anyone permitted to ask it.
+
+The second is consistent with §7's trust model and with §3.1's refusal to build enforcement
+this system cannot hold. It should be decided before private boxes exist rather than after.
+
+### One session resolver
+
+HTTP and the RFB upgrade resolve identity differently today (`callerOf` treats an
+unauthenticated direct caller as owner; the upgrade path does not read the web session at
+all), and the desktop route names a display index with no box in it. Private boxes need one
+revocable resolver used by all three surfaces. Shared boxes need it less urgently — everyone
+who can reach them may drive them — which is another reason the shared class ships first.
 
 ## 6. Build order
 
@@ -179,14 +237,22 @@ shared class ships first.
    Not yet done, and small: the box list (there is one box, so there is no list) and the
    settings dialog's box section.
 4. **One session resolver** across page, API and RFB, with a route that names the box.
-5. **Box lineage on agents and their state** (§5), and the refusal when it is missing.
+5. **Bind agents to a box** (§5): `boxName` set at creation and absent from `update`'s
+   allow-list, a per-agent box lookup in the orchestrator, and a box filter on shared
+   memory. Plus the `SendToAgent` decision, which is a decision and not code.
 6. **The takeover state** (§3) plus a real recorder pause.
 7. **Private box provisioning**: a second box per person. Mechanically this is `BoxManager`
    with another container name; the machinery exists.
 8. **Reassignment as revoke-and-wipe** (§4).
 
-Steps 1–3 are done and make the product truthful. Steps 4–8 are what private boxes cost,
-and they should be estimated after 1–3 rather than now.
+Steps 1–3 are done and make the product truthful.
+
+Steps 4–8 are what private boxes cost, and §5's revision moved that number a long way down:
+what was "the blocker" is a field, a lookup and a filter. Step 7 was always cheap — another
+container name — and with 5 no longer in front of it, the sequence 4 → 5 → 7 is the short
+path to a private box actually existing. Step 6 (the takeover state) and step 8
+(revoke-and-wipe) are the larger remainder, and they are about what happens *inside* and *at
+the end of* a private box rather than about whether one can exist.
 
 ## 7. The trust model, as a product statement
 
