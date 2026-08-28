@@ -342,6 +342,12 @@ export interface ChannelManagerDeps {
    */
   ackAfterMs?: number;
   /**
+   * How long a wordless file drop waits for more files (a folder arrives as one
+   * message per file) before the agent takes a look at what arrived. Only tests
+   * shorten it.
+   */
+  lookAfterMs?: number;
+  /**
    * The agent's desktop right now, as base64 WebP, or undefined when there is no
    * desktop to show. What "屏幕" asks for, and what a finished task that used the
    * desktop attaches — the one thing no other chat product can put in a group.
@@ -1032,11 +1038,24 @@ ${input.options.map(option => `· ${option}`).join("\n")}`
   /** How long a wordless drop waits for its instruction. */
   private static readonly DROP_WINDOW_MS = 10 * 60 * 1000;
 
+  /** How long a wordless drop waits for more files before the agent looks at it. */
+  private static readonly LOOK_AFTER_MS = 5_000;
+
+  /** The pending look per conversation, reset while a folder is still arriving. */
+  private readonly lookTimers = new Map<string, NodeJS.Timeout>();
+
   /** The files recently dropped in this conversation, handed over exactly once. */
   private takeDrops(conversationKey: string): string[] | undefined {
     const drop = this.pendingDrops.get(conversationKey);
     if (drop === undefined) return undefined;
     this.pendingDrops.delete(conversationKey);
+    // An instruction arrived; it is the look now. The timer's own check would also
+    // find the drops gone, but a cleared timer is a fact and a raced one is a maybe.
+    const timer = this.lookTimers.get(conversationKey);
+    if (timer !== undefined) {
+      clearTimeout(timer);
+      this.lookTimers.delete(conversationKey);
+    }
     if (Date.now() - drop.at > ChannelManager.DROP_WINDOW_MS) return undefined;
     return drop.files;
   }
@@ -1061,6 +1080,24 @@ ${input.options.map(option => `· ${option}`).join("\n")}`
           filesSaved(saved),
           message.messageId !== undefined ? { replyTo: message.messageId } : undefined
         );
+        // Look before being told. "收到,说一句要做什么" answered a person who had just
+        // handed something over with a form to fill in; the observed complaint was the
+        // lack of agency, verbatim. Debounced past the last file of a folder drop, and
+        // self-cancelling: an instruction consuming the drops clears the timer, and the
+        // timer itself re-checks that the drops are still unclaimed.
+        const existing = this.lookTimers.get(conversationKey);
+        if (existing !== undefined) clearTimeout(existing);
+        const timer = setTimeout(() => {
+          this.lookTimers.delete(conversationKey);
+          const pending = this.pendingDrops.get(conversationKey);
+          if (pending === undefined || pending.files.length === 0) return;
+          const look = this.runLook(adapter, message, pending.files).finally(() => {
+            this.inflight.delete(look);
+          });
+          this.inflight.add(look);
+        }, this.deps.lookAfterMs ?? ChannelManager.LOOK_AFTER_MS);
+        timer.unref?.();
+        this.lookTimers.set(conversationKey, timer);
       }
       return;
     }
@@ -1108,6 +1145,52 @@ ${input.options.map(option => `· ${option}`).join("\n")}`
         anchor
       );
       return undefined;
+    }
+  }
+
+  /**
+   * A wordless drop, looked at before anyone asks.
+   *
+   * Deliberately not `runTask`: a look opens no board row, posts no card and does not
+   * occupy the conversation's running-work slot — so the instruction that usually
+   * follows seconds later still opens a real task (which then queues behind this short
+   * turn in the same conversation, rather than being swallowed as steering into it).
+   * The look's transcript stays in the conversation, so the task that follows already
+   * knows what the files are.
+   */
+  private async runLook(
+    adapter: ChannelAdapter,
+    message: InboundMessage,
+    files: readonly string[]
+  ): Promise<void> {
+    const chatKey = message.chatKey ?? message.identity;
+    const anchor: PushOptions | undefined =
+      message.messageId !== undefined ? { replyTo: message.messageId } : undefined;
+    const named =
+      files.slice(0, 20).join(", ") + (files.length > 20 ? ` 等共 ${files.length} 个` : "");
+    const prompt =
+      `用户刚把这些文件发进聊天,没有附任何说明:${named}\n\n` +
+      "先看内容再说话:图片直接用 read_file 看;文本和表格读开头几十行;文件多就挑两三个有代表性的。" +
+      "然后回复用户:一句话说你看到了什么,再给一个具体建议或问一个具体问题(你猜测的最可能用途)。" +
+      "总共不超过三句话。不要开始任何大工作,不要改动文件。";
+    try {
+      const reply = await this.deps.ask(
+        undefined,
+        prompt,
+        message.identity,
+        chatKey,
+        undefined,
+        message.threadKey ?? chatKey,
+        undefined
+      );
+      if (reply.trim() !== "") await this.deliver(adapter, chatKey, message.identity, reply, anchor);
+    } catch (error) {
+      // A failed look must not spam the chat: the receipt already landed, and the
+      // person's instruction still works exactly as before.
+      this.deps.log(
+        `channel ${adapter.name}: look at dropped files failed — ` +
+          `${error instanceof Error ? error.message : String(error)}`
+      );
     }
   }
 

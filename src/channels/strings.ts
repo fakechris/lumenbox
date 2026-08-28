@@ -57,7 +57,7 @@ export const NO_BOX_FOR_FILES = "现在没有开着的工作机,文件存不进�
 export function filesSaved(saved: readonly string[]): string {
   const names = saved.map(path => path.split("/").pop() ?? path);
   const shown = names.length > 3 ? `${names.slice(0, 3).join("、")} 等 ${names.length} 个` : names.join("、");
-  return `收到:${shown}。说一句要做什么就开工。`;
+  return `收到:${shown}。我先看一眼——你也可以直接说要做什么。`;
 }
 
 export const SAY_WHAT_YOU_NEED = "说一句要做什么就开工;想指定谁来做,开头@它的名字。";

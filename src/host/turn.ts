@@ -1690,6 +1690,16 @@ export async function runTurn(
         screenshot: outcome.images?.[0]?.data,
       });
 
+      // A model without vision must not be handed image blocks it cannot decode — the
+      // request would be refused outright. The text keeps the fact that there was an
+      // image, so the agent can route around its own blindness (OCR, a teammate).
+      if (provider.vision === false && outcome.images !== undefined && outcome.images.length > 0) {
+        const { images: _unseen, ...rest } = outcome;
+        outcome = {
+          ...rest,
+          text: `${outcome.text}\n[an image was attached, but this model cannot see images]`,
+        };
+      }
       results.push(toolResultBlock(toolUse.id, outcome));
       // Kept beside the result rather than inside it: what the API is sent and what the
       // record keeps are two different things, and the block that goes to the model must

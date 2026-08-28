@@ -126,6 +126,10 @@ function stubBox() {
       calls.push({ kind: "exec", detail: command });
       return { stdout: "hello from the box", stderr: "", exit_code: 0, timed_out: false };
     },
+    downloadFile: async (path: string) => {
+      calls.push({ kind: "download", detail: path });
+      return { path, base64: "ZmFrZS1wbmctYnl0ZXM=" };
+    },
   } as unknown as BoxClient;
   return { box, calls };
 }
@@ -1505,6 +1509,47 @@ test("SetPlan and SetTodos round-trip through the tools", async () => {
     const echoed = JSON.stringify(results.at(-1));
     assert.match(echoed, /0\/1 done/);
     assert.match(echoed, /step one/);
+  } finally {
+    cleanup();
+  }
+});
+
+test("read_file on an image hands the model the image itself", async () => {
+  // The road to "what is in this picture" used to be the desktop viewer plus a
+  // screenshot — slow enough that agents answered "收到图片" without looking.
+  const { registry, cleanup } = fixture();
+  try {
+    const ada = registry.create({ name: "Ada" });
+    const bus = new AgentBus(registry, async () => {});
+    const { box, calls } = stubBox();
+    const capture: Capture = { params: [] };
+    const { client } = stubClient(
+      [
+        message([toolUseBlock("read_file", { path: "/home/box/work/chats/c1/inbox/qr.png" })], "tool_use"),
+        message([textBlock("一张二维码。")]),
+      ],
+      capture
+    );
+
+    await runTurn(
+      ada,
+      [{ id: "m-test", fromId: "user", fromName: "user", text: "看看这张图", priority: false, receivedAt: "" }],
+      new AbortController().signal,
+      { client, registry, bus, box, resolution: undefined }
+    );
+
+    assert.ok(calls.some(call => call.kind === "download"), "the bytes came from the box");
+    // The second request carries the tool result; the image block is in it.
+    const results = capture.params
+      .at(-1)!
+      .messages.flatMap(entry => (Array.isArray(entry.content) ? entry.content : []))
+      .filter((block): block is Anthropic.ToolResultBlockParam => block.type === "tool_result");
+    const imageBlock = results
+      .flatMap(result => (Array.isArray(result.content) ? result.content : []))
+      .find(block => block.type === "image") as { source?: { media_type?: string; data?: string } } | undefined;
+    assert.ok(imageBlock !== undefined, "an image block rides in the tool result");
+    assert.equal(imageBlock.source?.media_type, "image/png");
+    assert.equal(imageBlock.source?.data, "ZmFrZS1wbmctYnl0ZXM=");
   } finally {
     cleanup();
   }

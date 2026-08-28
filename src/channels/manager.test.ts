@@ -923,12 +923,14 @@ test("a card outlives its process: a fresh manager flips it through the ledger",
   assert.equal(adapter2.cards.length, 1);
 });
 
-test("a dropped file is stored and acknowledged, and no turn runs", async () => {
+test("a dropped file is stored and acknowledged, and no task opens", async () => {
   const adapter = cardAdapter();
   const asked: string[] = [];
   const received: { chatKey: string; names: string[] }[] = [];
   const manager = new ChannelManager({
     mayDrive: () => true,
+    // The look is scheduled but deliberately out of this test's frame.
+    lookAfterMs: 60_000,
     ask: async (_a, text) => {
       asked.push(text);
       return "x";
@@ -976,6 +978,128 @@ test("a dropped file is stored and acknowledged, and no turn runs", async () => 
   });
   await boxless.idle();
   assert.match(adapter2.chatSent[0]!.text, /没有开着的工作机/);
+});
+
+test("a wordless drop is looked at: content first, then the chat hears what it is", async () => {
+  // The observed complaint, verbatim: 「收到:image-4138d948.png。说一句要做什么就开工」
+  // — a person hands something over and gets a form to fill in. The agent should look
+  // at the thing and speak from its content.
+  const adapter = cardAdapter();
+  const asked: string[] = [];
+  const opened: string[] = [];
+  const manager = new ChannelManager({
+    mayDrive: () => true,
+    lookAfterMs: 20,
+    ask: async (_a, text) => {
+      asked.push(text);
+      return "这是一张二维码截图,指向 FoloToy 的官网。要我查一下这个项目吗?";
+    },
+    board: {
+      open: input => {
+        opened.push(input.title);
+        return "t1";
+      },
+      started: () => {},
+      closed: () => "done",
+    },
+    receiveFiles: async (_c, files) => files.map(file => `inbox/${file.name}`),
+    log: () => {},
+  });
+  manager.register(adapter, true, "test");
+  await started(manager);
+
+  await adapter.inject({
+    identity: "feishu:ou_1",
+    chatKey: "feishu:oc_room",
+    messageId: "om_drop",
+    senderLabel: "chris",
+    text: "",
+    files: [{ name: "qr.png", base64: "cG5n" }],
+  });
+  await sleep(60);
+  await manager.idle();
+
+  assert.equal(asked.length, 1, "one look ran");
+  assert.match(asked[0]!, /qr\.png/);
+  assert.match(asked[0]!, /先看内容/);
+  assert.deepEqual(opened, [], "a look is not work: no board row, no card");
+  const look = adapter.chatSent.at(-1)!;
+  assert.match(look.text, /二维码/);
+  assert.equal(look.replyTo, "om_drop", "the look's answer sits under the drop");
+});
+
+test("an instruction inside the look window becomes the task; no separate look runs", async () => {
+  const adapter = cardAdapter();
+  const asked: string[] = [];
+  const manager = new ChannelManager({
+    mayDrive: () => true,
+    lookAfterMs: 40,
+    ask: async (_a, text) => {
+      asked.push(text);
+      return "ok";
+    },
+    receiveFiles: async (_c, files) => files.map(file => `inbox/${file.name}`),
+    log: () => {},
+  });
+  manager.register(adapter, true, "test");
+  await started(manager);
+
+  await adapter.inject({
+    identity: "feishu:ou_1",
+    chatKey: "feishu:oc_room",
+    senderLabel: "chris",
+    text: "",
+    files: [{ name: "a.csv", base64: "eA==" }, { name: "b.csv", base64: "eA==" }],
+  });
+  // The drop finishes storing before the instruction arrives — which is also the real
+  // ordering: storeFiles is milliseconds, people are seconds.
+  await manager.idle();
+  await adapter.inject({
+    identity: "feishu:ou_1",
+    chatKey: "feishu:oc_room",
+    senderLabel: "chris",
+    text: "把两个表合并",
+  });
+  await sleep(90);
+  await manager.idle();
+
+  assert.equal(asked.length, 1, "the instruction is the only turn");
+  assert.match(asked[0]!, /把两个表合并/);
+  assert.match(asked[0]!, /a\.csv, inbox\/b\.csv|a\.csv/, "the files ride with the instruction");
+});
+
+test("a folder drop gets one look, not one per file", async () => {
+  const adapter = cardAdapter();
+  const asked: string[] = [];
+  const manager = new ChannelManager({
+    mayDrive: () => true,
+    lookAfterMs: 40,
+    ask: async (_a, text) => {
+      asked.push(text);
+      return "三份报表,格式一致。要我汇总吗?";
+    },
+    receiveFiles: async (_c, files) => files.map(file => `inbox/${file.name}`),
+    log: () => {},
+  });
+  manager.register(adapter, true, "test");
+  await started(manager);
+
+  for (const name of ["q1.xlsx", "q2.xlsx", "q3.xlsx"]) {
+    await adapter.inject({
+      identity: "feishu:ou_1",
+      chatKey: "feishu:oc_room",
+      senderLabel: "chris",
+      text: "",
+      files: [{ name, base64: "eA==" }],
+    });
+    await sleep(10);
+  }
+  await sleep(90);
+  await manager.idle();
+
+  assert.equal(asked.length, 1, "the debounce merged the folder into one look");
+  assert.match(asked[0]!, /q1\.xlsx/);
+  assert.match(asked[0]!, /q3\.xlsx/);
 });
 
 test("a finished task ships the outbox — images as images, files as files, delivered once", async () => {

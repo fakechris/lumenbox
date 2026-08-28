@@ -144,7 +144,7 @@ export interface ToolContext {
 export interface ToolOutcome {
   text: string;
   /** base64 image payloads to attach to the tool result. */
-  images?: { mediaType: "image/webp" | "image/png"; data: string }[];
+  images?: { mediaType: "image/webp" | "image/png" | "image/jpeg" | "image/gif"; data: string }[];
   isError?: boolean;
   /**
    * What the transcript stores instead of `text`, when the two must differ.
@@ -570,9 +570,11 @@ export function buildTools(
       {
         name: "read_file",
         description:
-          "Read a text file from your box. Use this instead of `cat` when you want the " +
+          "Read a file from your box. Use this instead of `cat` when you want the " +
           "content itself rather than shell output, and pass a line range when you only " +
-          "need part of a large file.\n\n" +
+          "need part of a large file. An image file (png/jpg/webp/gif) comes back as " +
+          "the image itself, which you can see — so to know what is in a picture " +
+          "somebody sent, read it; do not open a desktop viewer for that.\n\n" +
           "You get the file's text, or a line range of it. A `.env` answers with its " +
           "*shape* instead — which variables it defines and how long each value is — " +
           "because that is what is usually being asked and it keeps the values out of " +
@@ -1692,6 +1694,34 @@ export async function dispatchTool(
     case "read_file": {
       const box = requireBox(context);
       const path = String(input.path ?? "");
+      // An image is read by looking at it. This used to refuse images (text decode),
+      // so the agent's only road to "what is in this picture" was the desktop viewer
+      // plus a screenshot — slow enough that agents answered "收到图片" without
+      // looking at all. The bytes ride back as an image block the model sees.
+      const imageExt = /\.(png|jpe?g|webp|gif)$/i.exec(path);
+      if (imageExt !== null) {
+        const file = await box.downloadFile(path);
+        // The API refuses oversized images; advice beats a giant rejected block.
+        if (file.base64.length > 5_000_000) {
+          const megabytes = Math.round((file.base64.length * 0.75) / 1_000_000);
+          return {
+            text:
+              `${path} is too large to look at directly (~${megabytes}MB). Make a smaller copy ` +
+              `first, e.g. bash: convert '${path}' -resize '1600x1600>' /tmp/smaller.png`,
+            isError: true,
+          };
+        }
+        const ext = imageExt[1]!.toLowerCase();
+        const mediaType =
+          ext === "png"
+            ? ("image/png" as const)
+            : ext === "webp"
+              ? ("image/webp" as const)
+              : ext === "gif"
+                ? ("image/gif" as const)
+                : ("image/jpeg" as const);
+        return { text: `${path} (image, attached)`, images: [{ mediaType, data: file.base64 }] };
+      }
       // The shape answers the question people actually ask of a `.env`, and keeps its
       // values out of the transcript on the way. Not a control -- `bash` reads the same
       // file -- so it is opt-out rather than a refusal (docs/15).
