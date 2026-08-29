@@ -1130,6 +1130,13 @@ Three liftable ideas, ranked; the teardown itself stays outside the repo.
   compositor branches. X11-in-container avoids that entire class; our R33 was the cheap
   end of the trade.
 
+### Backlog note: prefix stability audit — moot while the provider is MiniMax
+
+Status check 2026-08-29: the installation runs MiniMax-M3 with **no prompt caching at
+all** (the startup line says so), so there is no cached rate to protect and the audit
+below measures nothing until the provider changes. Keep it in mind at the next
+provider switch; the instrument (the spend table's cache-read column) is ready.
+
 ### Backlog note: prefix stability audit (from the Grok Bot teardown, 2026-08-27)
 
 Two independent teams (Manus 2025-07, Cursor's Grok Bot 2026-08) converged on the same
@@ -1143,6 +1150,14 @@ not urgent, measurable before and after. The same teardown's knowledge/capabilit
 the rule we already follow by instinct — a capability expressible through bash goes in the
 prompt as a convention, not in the tools array — now adopted as an explicit test for every
 "add a tool" impulse.
+
+### ~~1. `workId` and `kind`~~ — shipped; this entry outlived its implementation
+
+Verified 2026-08-29: `UsageRecord` carries `workId` (stable across resumes, minted or
+inherited at `turn.ts:859`), `turnId`, `conversation`, `principal` and `kind`, all
+written at the turn's record site and at `recordAside`, with `byKind` reporting and
+tests in usage/spend. Found still-open by a backlog sweep whose only defect was this
+stale entry. The original text follows for the reasoning it recorded.
 
 ### 1. `workId` and `kind`, on records already being written
 
