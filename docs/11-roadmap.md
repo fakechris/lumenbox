@@ -94,12 +94,29 @@ installation's agent has what Hermes's lacks: a real Linux desktop with a browse
 on it. The instructions: open `vc.feishu.cn/j/<meeting_no>` in the box's Chromium,
 join as a guest under its own name, share the entire screen, stay until dismissed.
 
-**Bridge shipped** (event → allow-list check → knock path → agent message, dedup on
-meeting+inviter, malformed ignored). **Unproven, deliberately, until one real
-meeting**: whether the tenant permits guest browser join, whether `getDisplayMedia`
-works against Xvfb in the box's Chromium, and what the meeting shows the bot as.
-Console prerequisites per app: subscribe `vc.bot.meeting_invited_v1` in Event
-Subscriptions and enable the VC scope the console prompts for.
+**Validated end-to-end 2026-08-29, same day, in a real meeting.** The whole chain
+ran: invite → `video_chat` message (the field is `meet_number` — learned from the
+wire, pinned in a test; the VC *event* is a second entrance once subscribed) →
+agent opens the join page → joins → shares the entire screen → the inviter watched
+the box's desktop live in the call. The three unknowns, answered:
+
+1. **Guest browser join requires identity** (QR login or phone+SMS) — solved by
+   logging the box's Chromium into a **dedicated Feishu account** once; the
+   session persists in the browser profile (and dies with `box up --recreate`,
+   when it must be scanned again).
+2. **`getDisplayMedia` works against Xvfb** — picker, thumbnail and live stream
+   all real.
+3. The meeting shows the bot as the logged-in account.
+
+Two hand-learned traps are now in the agent's join instructions
+(`meetingInvitePrompt`): the identity wall means "say so, don't try phone
+numbers", and the post-share privacy toast must be left to expire — clicking it
+early killed the first share. Remaining: the official `bots/join` API path
+(scope `vc:meeting.bot.join:write`, granted via
+`feishu-enable-meetings.mjs --with-join-scope`) joins cleanly but **cannot share
+a screen** — no media API — so it complements the browser path (presence and
+in-meeting text) rather than replacing it. Console prerequisite per app:
+subscribe `vc.bot.meeting_invited_v1`.
 
 ### R36. Hot-loadable extensions: reload the edges without restarting the core
 

@@ -340,14 +340,20 @@ export function parseMeetingInvite(data: unknown): MeetingInvite | undefined {
 export function meetingInvitePrompt(invite: MeetingInvite): string {
   const title = invite.topic !== "" ? `「${invite.topic}」` : `会议 ${invite.meetingNo}`;
   const from = invite.inviterName !== "" ? `,邀请人:${invite.inviterName}` : "";
+  // The steps below are not guesses: each was walked by hand on 2026-08-29 in a
+  // real meeting, including the two mistakes worth warning about (the identity
+  // wall when the browser is logged out, and the privacy toast that must be left
+  // alone — clicking it early killed the first share).
   return [
     `你被邀请加入视频会议 ${title}(会议号 ${invite.meetingNo})${from}。直接入会,不要先问确认。`,
-    "用你的桌面完成:",
-    `1. 在浏览器打开 https://vc.feishu.cn/j/${invite.meetingNo}`,
-    "2. 选「在浏览器中加入」,游客名字填你自己的名字",
-    "3. 入会后点「共享屏幕」,选择整个屏幕,让与会的人看到这台桌面",
-    "4. 留在会议里继续手头的事;会议结束或有人叫你退出时再退出",
-    "如果进不去(要求登录、租户不允许游客入会等),用一句话说明原因即可。",
+    "用你的桌面按这个流程做(已实测):",
+    `1. 在浏览器打开 https://vc.feishu.cn/j/${invite.meetingNo} — 浏览器里已登录的飞书账号会直接进入会议页`,
+    "2. 如果出现「Verify your identity / 扫码登录」,说明浏览器登录态丢了:停下,回复邀请人「箱子的浏览器需要重新扫码登录飞书」,不要尝试填手机号",
+    "3. 入会后点底部工具栏的 Share(共享)按钮",
+    "4. 在弹出的选择器顶部切到「Entire Screen(整个屏幕)」标签,点中屏幕缩略图,再点右下角蓝色 Share 按钮",
+    "5. 会弹一个隐私提醒(Got it 带倒计时)——**不要去点它**,它会自己消失;确认页面出现「You are sharing your screen」即成功",
+    "6. 共享成功后你可以继续手头的工作,与会的人会实时看到你的桌面;会议结束或有人叫你退出时再点 Stop Sharing 和挂断",
+    "过程中如有其它弹窗(通知权限等)选拒绝或关闭。进不去或共享失败,用一句话向邀请人说明卡在哪一步。",
   ].join("\n");
 }
 
