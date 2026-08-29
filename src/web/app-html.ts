@@ -2452,6 +2452,8 @@ function conversationLabel(c) {
 
 var convLoaded = [];      // pages fetched so far, newest first, main pinned on top
 var convTotal = 0;
+var convAgent = null;     // whose threads convLoaded holds — a cache without an owner
+                          // survived agent switches, and Bob's dropdown carried Ada's rooms
 var CONV_PAGE = 50;
 
 function fetchConversations(id, offset) {
@@ -2493,7 +2495,18 @@ function renderConvList() {
 }
 
 function refreshConversations(id) {
+  // Another agent's threads are another agent's: the cache empties before the
+  // first byte of the new one arrives, so a slow fetch can never show Ada's
+  // rooms under Bob's name.
+  if (convAgent !== id) {
+    convAgent = id;
+    convLoaded = [];
+    convTotal = 0;
+    renderConvButton();
+    if ($("convpanel").style.display !== "none") renderConvList();
+  }
   return fetchConversations(id, 0).then(function (data) {
+    if (convAgent !== id) return; // the person switched again mid-flight
     var page = data.conversations || [];
     convTotal = data.total !== undefined ? data.total : page.length;
     // A refresh replaces the first page; deeper pages someone loaded stay behind it.
