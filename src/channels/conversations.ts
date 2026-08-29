@@ -32,20 +32,39 @@ export function conversationsPath(home: string): string {
 }
 
 export class ConversationDirectory {
-  private readonly byId = new Map<string, string>();
+  private readonly byId = new Map<string, { chatKey: string; incarnation: number }>();
   private lines = 0;
+  private readonly incarnationOf: (chatKey: string) => number;
+  private readonly warn: (line: string) => void;
 
-  constructor(private readonly path: string) {
+  constructor(
+    private readonly path: string,
+    options: {
+      /** Current incarnation of a chatKey's channel. Defaults to 1 for everything. */
+      incarnationOf?: (chatKey: string) => number;
+      warn?: (line: string) => void;
+    } = {}
+  ) {
+    this.incarnationOf = options.incarnationOf ?? (() => 1);
+    this.warn = options.warn ?? (line => console.error(`[conversations] ${line}`));
     mkdirSync(dirname(path), { recursive: true });
     if (!existsSync(path)) return;
     for (const line of readFileSync(path, "utf8").split("\n")) {
       if (line.trim() === "") continue;
       this.lines += 1;
       try {
-        const record = JSON.parse(line) as { conversation?: string; chatKey?: string };
+        const record = JSON.parse(line) as {
+          conversation?: string;
+          chatKey?: string;
+          incarnation?: number;
+        };
         if (typeof record.conversation === "string" && typeof record.chatKey === "string") {
-          // Last write wins, which is what replay means.
-          this.byId.set(record.conversation, record.chatKey);
+          // Last write wins, which is what replay means. Lines from before the stamp
+          // existed were written under the grandfathered incarnation, which is 1.
+          this.byId.set(record.conversation, {
+            chatKey: record.chatKey,
+            incarnation: typeof record.incarnation === "number" ? record.incarnation : 1,
+          });
         }
       } catch {
         // A torn line from a crash mid-append; everything before it already counted.
@@ -55,16 +74,33 @@ export class ConversationDirectory {
 
   /** Called wherever a chatKey and its conversation id are both in hand. Idempotent. */
   record(conversation: string, chatKey: string): void {
-    if (this.byId.get(conversation) === chatKey) return;
-    this.byId.set(conversation, chatKey);
-    appendLine(this.path, JSON.stringify({ conversation, chatKey }));
+    const incarnation = this.incarnationOf(chatKey);
+    const existing = this.byId.get(conversation);
+    if (existing?.chatKey === chatKey && existing.incarnation === incarnation) return;
+    this.byId.set(conversation, { chatKey, incarnation });
+    appendLine(this.path, JSON.stringify({ conversation, chatKey, incarnation }));
     this.lines += 1;
     if (this.lines >= COMPACT_AT) this.compact();
   }
 
-  /** The chat a conversation came from, or undefined for main and anything unrecorded. */
+  /**
+   * The chat a conversation came from, or undefined for main and anything unrecorded —
+   * and undefined, loudly, for an address recorded under a channel incarnation that
+   * has since been replaced (docs/22 §4): the same vendor chat id under the new tenant
+   * is a different room with different people, and a reply routed there by string
+   * equality would hand one tenant's conversation to another.
+   */
   chatKeyFor(conversation: string): string | undefined {
-    return this.byId.get(conversation);
+    const entry = this.byId.get(conversation);
+    if (entry === undefined) return undefined;
+    if (entry.incarnation !== this.incarnationOf(entry.chatKey)) {
+      this.warn(
+        `dead letter: conversation ${conversation} is addressed to ${entry.chatKey} ` +
+          `under a replaced channel; not routing to whoever holds that id now.`
+      );
+      return undefined;
+    }
+    return entry.chatKey;
   }
 
   private compact(): void {
@@ -72,7 +108,10 @@ export class ConversationDirectory {
     writeFileSync(
       temporary,
       [...this.byId.entries()]
-        .map(([conversation, chatKey]) => `${JSON.stringify({ conversation, chatKey })}\n`)
+        .map(
+          ([conversation, entry]) =>
+            `${JSON.stringify({ conversation, chatKey: entry.chatKey, incarnation: entry.incarnation })}\n`
+        )
         .join(""),
       { mode: 0o600 }
     );

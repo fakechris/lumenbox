@@ -303,7 +303,10 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
    * Answers owed to a chat, so one that was earned while the process died still arrives.
    * See deliveries.ts: the reply itself is never stored, only where it belongs.
    */
-  const deliveries = new Deliveries(deliveriesPath(agentboxHome()));
+  const deliveries = new Deliveries(deliveriesPath(agentboxHome()), {
+    incarnationOf,
+    warn: line => log(`deliveries: ${line}`),
+  });
 
   /**
    * The channels, once they exist — held with a written type on purpose.
@@ -545,7 +548,10 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
   // Which chat each conversation came from — written here because the channel path is
   // where both halves are last seen together, read by the console-interjection path
   // where only the conversation id survives.
-  const conversations = new ConversationDirectory(conversationsPath(agentboxHome()));
+  const conversations = new ConversationDirectory(conversationsPath(agentboxHome()), {
+    incarnationOf,
+    warn: line => log(`conversations: ${line}`),
+  });
 
   // Where each task's chat card lives — durably, so a restart does not orphan every
   // running card at 进行中 and an acceptance typed later can still turn one green.
@@ -554,6 +560,7 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
   const channels = new ChannelManager({
     ingress,
     cards,
+    incarnationOf,
     mayDrive: identity => roleAtLeast(principals.roleOf(identity), "driver"),
     mayAdmin: identity => roleAtLeast(principals.roleOf(identity), "admin"),
     // One scope per chat: binding moves the chat, it does not accumulate. The scope
@@ -716,6 +723,7 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
       deliveries.open({
         id: owed,
         chatKey,
+        incarnation: incarnationOf(chatKey),
         conversation,
         agentId: agent.id,
         before,

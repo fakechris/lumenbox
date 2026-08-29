@@ -76,3 +76,27 @@ test("many conversations stay one line each after compaction", () => {
     rmSync(home, { recursive: true, force: true });
   }
 });
+
+test("an address recorded under a replaced channel stops resolving, loudly", () => {
+  // docs/22 §4: the same vendor chat id under a new tenant is a different room with
+  // different people. String equality must not route a reply there.
+  const home = mkdtempSync(join(tmpdir(), "lumen-conv-"));
+  try {
+    const path = conversationsPath(home);
+    new ConversationDirectory(path).record("feishu-oc_room", "feishu:oc_room");
+
+    const warnings: string[] = [];
+    const after = new ConversationDirectory(path, {
+      incarnationOf: chatKey => (chatKey.startsWith("feishu:") ? 2 : 1),
+      warn: line => warnings.push(line),
+    });
+    assert.equal(after.chatKeyFor("feishu-oc_room"), undefined);
+    assert.match(warnings[0]!, /dead letter/);
+
+    // Re-recorded from a live inbound message under the new world, it resolves again.
+    after.record("feishu-oc_room", "feishu:oc_room");
+    assert.equal(after.chatKeyFor("feishu-oc_room"), "feishu:oc_room");
+  } finally {
+    rmSync(home, { recursive: true, force: true });
+  }
+});

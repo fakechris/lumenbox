@@ -282,6 +282,12 @@ export interface ChannelManagerDeps {
    */
   mayDrive: (identity: string) => boolean;
   /**
+   * Current incarnation of a chatKey's channel, by prefix (docs/22 §4). Absent means
+   * 1 for everything — true while `ensureChannelRecords` pins every incarnation.
+   * `pushToChat` fails closed on any address whose channel has moved past 1.
+   */
+  incarnationOf?: (chatKey: string) => number;
+  /**
    * Answers a pending approval by id, at a scope. Returns a line to send back, or
    * undefined when the approval is no longer waiting (answered from the web meanwhile,
    * or the turn moved on). The manager only calls this for an approval it pushed to
@@ -831,8 +837,25 @@ ${input.options.map(option => `· ${option}`).join("\n")}`
    * Pushes a line to a chat by its chatKey alone — the scheduled-digest path, where
    * no inbound message chose the adapter. The chatKey's prefix is the adapter's name,
    * which is the naming convention every adapter already follows.
+   *
+   * The backstop of docs/22 §4's fail-closed rule sits here, at the one door every
+   * durable sender leaves through: an **unstamped** chat address (a schedule's
+   * `deliver`, a digest key in the config) is a claim from the grandfathered world,
+   * valid exactly as long as its channel's incarnation is still 1. The moment a
+   * channel is ever replaced, every such claim to it dies as a reported dead letter
+   * rather than posting into whoever holds the door now. Stamped records
+   * (deliveries, conversations) check their own stamps before they get here; when
+   * namespace replacement is actually built, its migration adds the proven-current
+   * bypass this signature deliberately does not have yet.
    */
   pushToChat(chatKey: string, text: string): Promise<void> {
+    if ((this.deps.incarnationOf?.(chatKey) ?? 1) !== 1) {
+      this.deps.log(
+        `channel: dead letter for ${chatKey} — its channel was replaced, and an ` +
+          `unstamped address cannot prove it means the current tenant. Dropped.`
+      );
+      return Promise.resolve();
+    }
     const adapter = this.adapters.find(a => chatKey.startsWith(`${a.name}:`));
     if (adapter?.sendToChat === undefined) {
       // Not an error to ignore: a digest, a rescue notice or a late answer was addressed

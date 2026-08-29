@@ -89,3 +89,45 @@ test("the file is a queue, not a history, and does not grow for ever", () => {
     rmSync(home, { recursive: true, force: true });
   }
 });
+
+test("crash, then namespace replacement: recovery produces a reported dead letter", () => {
+  // The docs/22 §7 item 2 named test. An answer earned under tenant A must not be
+  // delivered through whatever now occupies the `feishu` door.
+  const home = mkdtempSync(join(tmpdir(), "lumen-deliveries-"));
+  try {
+    const path = deliveriesPath(home);
+    // The process that dies: owes one answer, stamped with the world it saw.
+    const before = new Deliveries(path);
+    before.open({ ...entry("owed"), incarnation: 1 });
+    // A legacy record from before stamps existed rides along — it reads as 1.
+    before.open(entry("legacy"));
+
+    // The next process wakes up after the feishu channel was replaced.
+    const warnings: string[] = [];
+    const after = new Deliveries(path, {
+      incarnationOf: chatKey => (chatKey.startsWith("feishu:") ? 2 : 1),
+      warn: line => warnings.push(line),
+    });
+    assert.deepEqual(after.pending(), [], "nothing is owed to the new tenant");
+    assert.equal(warnings.length, 2);
+    assert.match(warnings[0]!, /dead letter/);
+    // Reported once, not on every recovery pass: the dead letters were closed.
+    warnings.length = 0;
+    assert.deepEqual(after.pending(), []);
+    assert.deepEqual(warnings, []);
+  } finally {
+    rmSync(home, { recursive: true, force: true });
+  }
+});
+
+test("an answer owed under the current incarnation is still owed", () => {
+  const home = mkdtempSync(join(tmpdir(), "lumen-deliveries-"));
+  try {
+    const path = deliveriesPath(home);
+    new Deliveries(path).open({ ...entry("current"), incarnation: 1 });
+    const after = new Deliveries(path, { incarnationOf: () => 1 });
+    assert.equal(after.pending().length, 1);
+  } finally {
+    rmSync(home, { recursive: true, force: true });
+  }
+});

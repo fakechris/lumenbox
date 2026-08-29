@@ -32,6 +32,12 @@ export interface Delivery {
   id: string;
   /** Where the answer goes. */
   chatKey: string;
+  /**
+   * The channel incarnation the chatKey was observed under (docs/22 §4). Records
+   * from before the stamp existed were all written under the grandfathered
+   * incarnation, which is 1 by definition; `pending` reads them that way.
+   */
+  incarnation?: number;
   /** Which conversation's transcript holds it. */
   conversation: string;
   agentId: string;
@@ -56,8 +62,19 @@ export function deliveriesPath(home: string): string {
 /** Answers owed, and the record of them being paid. */
 export class Deliveries {
   private settled = 0;
+  private readonly incarnationOf: (chatKey: string) => number;
+  private readonly warn: (line: string) => void;
 
-  constructor(private readonly path: string) {
+  constructor(
+    private readonly path: string,
+    options: {
+      /** Current incarnation of a chatKey's channel. Defaults to 1 for everything. */
+      incarnationOf?: (chatKey: string) => number;
+      warn?: (line: string) => void;
+    } = {}
+  ) {
+    this.incarnationOf = options.incarnationOf ?? (() => 1);
+    this.warn = options.warn ?? (line => console.error(`[deliveries] ${line}`));
     mkdirSync(dirname(path), { recursive: true });
   }
 
@@ -101,7 +118,24 @@ export class Deliveries {
       }
     }
     this.settled = settled;
-    return [...open.values()];
+    // The fail-closed check from docs/22 §4: an answer owed to a chat whose channel
+    // has since been replaced is a **dead letter, reported** — never a delivery to
+    // whoever holds the door now. Closed so recovery does not retry it forever;
+    // the transcript still holds the answer if a person goes looking.
+    const current: Delivery[] = [];
+    for (const delivery of open.values()) {
+      if ((delivery.incarnation ?? 1) === this.incarnationOf(delivery.chatKey)) {
+        current.push(delivery);
+        continue;
+      }
+      this.warn(
+        `dead letter: the answer owed to ${delivery.chatKey} (agent ${delivery.agentId}, ` +
+          `conversation ${delivery.conversation}) was earned under a replaced channel and ` +
+          `will not be delivered. It remains in the transcript.`
+      );
+      this.close(delivery.id);
+    }
+    return current;
   }
 
   /** Rewrites the file as just what is still owed. */
