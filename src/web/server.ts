@@ -225,6 +225,17 @@ type OutboundEvent =
 export async function startWebServer(options: WebOptions): Promise<() => void> {
   const log = options.onLog ?? (() => {});
   const registry = new AgentRegistry();
+  // The doors, loaded before the people: identity links and knocks record the
+  // incarnation of the channel they were observed under (docs/22 §4), so the
+  // lookup has to exist before the principals file is read.
+  const channelRecords = ensureChannelRecords(
+    join(agentboxHome(), CHANNEL_RECORDS_FILENAME),
+    registry.box.id
+  );
+  const channelIncarnations = new Map(channelRecords.map(record => [record.id, record.incarnation]));
+  /** Web token subjects and unknown prefixes are incarnation 1 forever. */
+  const incarnationOf = (identity: string): number =>
+    channelIncarnations.get(identity.split(":")[0] ?? "") ?? 1;
   /** Read once on first request; it never changes while the server is up. */
   let vendorScript: Buffer | undefined;
   /** The woff2 faces, read once each. Seven files, ~400 KB total. */
@@ -385,7 +396,7 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
   // The people, and the one-time migration from the old flat allow list: every
   // identity that used to be a bare channel grant becomes a driver principal, so a
   // person's existing access survives the upgrade rather than being silently revoked.
-  const principals = new Principals();
+  const principals = new Principals(undefined, { incarnationOf, warn: line => log(`principals: ${line}`) });
   {
     const legacy = loadConfig().channelAllow ?? [];
     const unclaimed = legacy.filter(identity => !principals.isKnown(identity));
@@ -421,7 +432,7 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
 
   const knocks = new Map<
     string,
-    { identity: string; senderLabel: string; channel: string; at: string }
+    { identity: string; senderLabel: string; channel: string; at: string; incarnation: number }
   >();
   const invites = new Map<string, { role: Role; principalId?: string; expiresAt: number }>();
   const INVITE_TTL_MS = 15 * 60_000;
@@ -597,7 +608,14 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
       },
     },
     knock: request => {
-      knocks.set(request.identity, { ...request, at: new Date().toISOString() });
+      // The incarnation is observed *now*, at the knock, and compared again at the
+      // approval (docs/22 §4's CAS): a knock from a door that has since been
+      // replaced must not stamp the old tenant's subject into the new one.
+      knocks.set(request.identity, {
+        ...request,
+        at: new Date().toISOString(),
+        incarnation: incarnationOf(request.identity),
+      });
       log(`channel ${request.channel}: ${request.senderLabel} (${request.identity}) knocked`);
     },
     bind: (code, identity, senderLabel) => {
@@ -605,6 +623,16 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
       if (invite === undefined || invite.expiresAt < Date.now()) {
         invites.delete(code);
         return "That code is not live — codes last 15 minutes and work once. Ask for a fresh one.";
+      }
+      // An identity that already belongs to somebody is not re-linkable by code —
+      // the save layer would drop the duplicate claim silently, and this reply
+      // would then lie about what happened. Said here instead, before the code is
+      // spent. (The identity arrived on the live wire, so its incarnation is
+      // current by construction; the knock path is where observation and commit
+      // can drift apart.)
+      if (principals.isKnown(identity)) {
+        const owner = principals.resolve(identity);
+        return `This id is already linked to ${owner.name}. Nothing to do — just say what you need done.`;
       }
       // Deleted before the roster write: a code that races two senders admits one.
       invites.delete(code);
@@ -1046,17 +1074,14 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
   });
 
   {
-    // Doors come from the channel records now (docs/22 §7 item 2, first slice).
-    // The grandfathered rows — id equal to type — behave exactly like the env
+    // Doors come from the channel records (docs/22 §7 item 2), loaded once at the
+    // top of this function so identity links could be stamped from them. The
+    // grandfathered rows — id equal to type — behave exactly like the env
     // singletons they replace: same names, same prefixes, same credentials from
     // the same env pairs. A row whose id is *not* its type is a genuine second
     // instance, and starting it before the prefix parameterization of item 3
     // would run two adapters minting the same `feishu:` namespace — refused
     // loudly instead.
-    const channelRecords = ensureChannelRecords(
-      join(agentboxHome(), CHANNEL_RECORDS_FILENAME),
-      registry.box.id
-    );
     for (const record of channelRecords) {
       if (record.id !== record.type) {
         log(
@@ -2442,6 +2467,20 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
           const knock = knocks.get(identity);
           if (knock === undefined) {
             send(res, 404, { error: "Nobody with that id is waiting." });
+            return;
+          }
+          // The CAS half of the knock: commit only if the world the knock was
+          // observed in is still the world now. A replaced door or an identity that
+          // got linked some other way in the meantime makes this approval stale —
+          // stamping it through anyway is how an old tenant's subject inherits a
+          // new tenant's access.
+          if (knock.incarnation !== incarnationOf(identity) || principals.isKnown(identity)) {
+            knocks.delete(identity);
+            send(res, 409, {
+              error:
+                "That knock went stale — the channel was replaced or the id is already " +
+                "linked. Ask them to send another message.",
+            });
             return;
           }
           const role: Role = body.role === "viewer" || body.role === "admin" ? body.role : "driver";
