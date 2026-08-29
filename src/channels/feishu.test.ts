@@ -470,7 +470,7 @@ test("a meeting invite parses from both id shapes and turns into join instructio
 
   const prompt = meetingInvitePrompt(nested!);
   assert.match(prompt, /vc\.feishu\.cn\/j\/123456789/);
-  assert.match(prompt, /共享屏幕/);
+  assert.match(prompt, /整个屏幕/);
   assert.match(prompt, /不要先问确认/);
 });
 
