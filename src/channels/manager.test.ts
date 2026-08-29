@@ -1666,3 +1666,24 @@ test("a door added while running opens live; a name already live is refused", as
   assert.equal(second.sent.length, 1, "the live-started door answers");
   assert.ok(manager.list().some(s => s.name === "feishu-work" && s.running));
 });
+
+test("「团队」answers on the wire with the door's roster; work words do not trigger it", async () => {
+  const adapter = testAdapter();
+  const asked: string[] = [];
+  const manager = new ChannelManager({
+    mayDrive: () => true,
+    roster: adapterName => "roster for " + adapterName,
+    ask: async (_agent, text) => { asked.push(text); return "did"; },
+    log: () => {},
+  });
+  manager.register(adapter, true, "test");
+  await started(manager);
+
+  const reply = await adapter.inject({ identity: "telegram:7", senderLabel: "chris", text: "团队" });
+  assert.equal(reply, "roster for telegram");
+  assert.deepEqual(asked, [], "a roster look runs no turn");
+
+  await adapter.inject({ identity: "telegram:7", senderLabel: "chris", text: "让团队看看这个" });
+  await sleep(20);
+  assert.deepEqual(asked, ["让团队看看这个"], "work mentioning the team is still work");
+});

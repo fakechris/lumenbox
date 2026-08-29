@@ -175,7 +175,13 @@ import { PRESET_MODELS, providerNames, resolveProvider, testProvider } from "../
 import { Principals, roleAtLeast, type Principal, type Role } from "../host/principals.ts";
 import { describeTask, isLive, isTaskStatus } from "../host/tasks.ts";
 import { blockedAnnouncement, boardView } from "../channels/board-view.ts";
-import { NO_SCHEDULES, SCHEDULES_DISARMED, scheduleLine } from "../channels/strings.ts";
+import {
+  NO_SCHEDULES,
+  SCHEDULES_DISARMED,
+  rosterText,
+  scheduleLine,
+  unknownAgent,
+} from "../channels/strings.ts";
 import { CardLedger } from "../channels/card-ledger.ts";
 import { FeishuDocReader } from "../channels/feishu-docs.ts";
 import { parseProgressFile, progressLine } from "../host/progress-file.ts";
@@ -577,6 +583,23 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
     incarnationOf,
     defaultAgentFor: adapterName =>
       channelRecords.find(record => record.id === adapterName)?.defaultAgent,
+    // What this door shows is what it routes: the box's agents, the door's default
+    // marked (or the installation fallback, so the marker never lies by omission).
+    roster: adapterName => {
+      const doorDefault =
+        channelRecords.find(record => record.id === adapterName)?.defaultAgent ??
+        registry.list()[0]?.profile.name;
+      return rosterText(
+        registry
+          .list()
+          .filter(record => record.profile.hidden !== true)
+          .map(record => ({
+            name: record.profile.name,
+            ...(record.profile.title ? { title: record.profile.title } : {}),
+            isDefault: record.profile.name === doorDefault || record.id === doorDefault,
+          }))
+      );
+    },
     mayDrive: identity => roleAtLeast(principals.roleOf(identity), "driver"),
     mayAdmin: identity => roleAtLeast(principals.roleOf(identity), "admin"),
     // One scope per chat: binding moves the chat, it does not accumulate. The scope
@@ -696,10 +719,24 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
     },
     log: line => log(line),
     ask: async (agentName, text, identity, chatKey, onProgress, threadKey, taskId) => {
-      const agent =
-        agentName !== undefined
-          ? registry.resolve(agentName)
-          : (registry.list()[0] ?? orchestrator.ensureDefaultAgent());
+      let agent;
+      if (agentName !== undefined) {
+        try {
+          agent = registry.resolve(agentName);
+        } catch {
+          // A wrong @ is answered with the way in — the same list the roster verb
+          // shows — instead of an error that leaves the person guessing at names.
+          return unknownAgent(
+            agentName,
+            registry
+              .list()
+              .filter(record => record.profile.hidden !== true)
+              .map(record => record.profile.name)
+          );
+        }
+      } else {
+        agent = registry.list()[0] ?? orchestrator.ensureDefaultAgent();
+      }
       channels.remember(agent.id, identity.split(":")[0] ?? "", identity);
       // Each outside chat is its own conversation thread: two groups talking to the
       // same agent never read each other's context. Permission stays with the person

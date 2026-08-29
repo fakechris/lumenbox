@@ -62,6 +62,24 @@ export function filesSaved(saved: readonly string[]): string {
 
 export const SAY_WHAT_YOU_NEED = "说一句要做什么就开工;想指定谁来做,开头@它的名字。";
 
+/** The roster, for the chat that asked 「团队」. One line per worker, the door's default marked. */
+export function rosterText(
+  agents: readonly { name: string; title?: string; isDefault: boolean }[]
+): string {
+  if (agents.length === 0) return "这里还没有任何成员。";
+  const lines = agents.map(agent => {
+    const role = agent.title ? ` — ${agent.title}` : "";
+    return `${agent.name}${role}${agent.isDefault ? "(不@人时由它接手)" : ""}`;
+  });
+  return `${lines.join("\n")}\n@名字 指定谁来做;不指定就交给默认的那位。`;
+}
+
+/** A wrong @ answered with the way in, not just the way it failed. */
+export function unknownAgent(asked: string, names: readonly string[]): string {
+  const roster = names.length > 0 ? names.join("、") : "(还没有成员)";
+  return `没有叫"${asked}"的。这里能找到的是:${roster}。用 @名字 重新说一遍就行。`;
+}
+
 // ── consent(安全确认)────────────────────────────────────────────────────────
 
 export const APPROVAL_STAKES =

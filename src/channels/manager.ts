@@ -294,6 +294,11 @@ export interface ChannelManagerDeps {
    */
   defaultAgentFor?: (adapterName: string) => string | undefined;
   /**
+   * The roster, for 「团队」— what this door shows is what it routes (docs/22 §2:
+   * the box's agents, the door's default marked). One list, both uses.
+   */
+  roster?: (adapterName: string) => string;
+  /**
    * Answers a pending approval by id, at a scope. Returns a line to send back, or
    * undefined when the approval is no longer waiting (answered from the web meanwhile,
    * or the turn moved on). The manager only calls this for an approval it pushed to
@@ -511,6 +516,16 @@ const CARD_UPDATE_MS = 3_000;
 export function parseScreenRequest(text: string): boolean {
   const t = text.trim().toLowerCase().replace(/[.!?。!?]+$/, "");
   return ["screen", "screenshot", "屏幕", "看屏幕", "看看屏幕", "截图"].includes(t);
+}
+
+/**
+ * 「团队」is a look at who works here — answered on the wire like the board, and for
+ * the same reason: asking who is available while something runs must not steer it.
+ * Whole-message, because "让团队看看这个" is work for the team, not a roster request.
+ */
+export function parseRosterRequest(text: string): boolean {
+  const t = text.trim().toLowerCase().replace(/[.!?。!?]+$/, "");
+  return ["team", "roster", "团队", "成员", "谁在"].includes(t);
 }
 
 /** `@Name rest of the message` addresses a specific agent; anything else is the default. */
@@ -976,6 +991,12 @@ ${input.options.map(option => `· ${option}`).join("\n")}`
         }
       }
       return boardText(view);
+    }
+
+    // 「团队」 is a look at who works here — answered on the wire, before the
+    // running-work routing, so asking mid-task never reads as steering.
+    if (parseRosterRequest(message.text) && this.deps.roster !== undefined) {
+      return this.deps.roster(adapter.name);
     }
 
     // "定时" is a look at what runs by itself. Like the board, answered on the wire and
