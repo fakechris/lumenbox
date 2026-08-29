@@ -14,7 +14,7 @@ import assert from "node:assert/strict";
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { ensureChannelRecords, GRANDFATHERED_TYPES } from "./identity.ts";
+import { ensureChannelRecords, GRANDFATHERED_TYPES, removeChannelRecord, upsertChannelRecord } from "./identity.ts";
 
 function tempPath(): { path: string; cleanup: () => void } {
   const dir = mkdtempSync(join(tmpdir(), "agentbox-channel-identity-"));
@@ -88,6 +88,48 @@ test("a corrupt file throws instead of silently re-minting identities", () => {
   try {
     writeFileSync(path, "{not json", "utf8");
     assert.throws(() => ensureChannelRecords(path, "box_test"), /channels\.json/);
+  } finally {
+    cleanup();
+  }
+});
+
+test("upsert creates a feishu door and edits only what may change", () => {
+  const { path, cleanup } = tempPath();
+  try {
+    const created = ensureUpsert(path, { id: "feishu-work", type: "feishu", name: "工作飞书", defaultAgent: "Bob" });
+    const row = created.find(r => r.id === "feishu-work")!;
+    assert.equal(row.name, "工作飞书");
+    assert.equal(row.defaultAgent, "Bob");
+    assert.equal(row.incarnation, 1);
+
+    // name and defaultAgent change; clearing the default with "" removes it.
+    const edited = ensureUpsert(path, { id: "feishu-work", type: "feishu", defaultAgent: "" });
+    const after = edited.find(r => r.id === "feishu-work")!;
+    assert.equal(after.name, "工作飞书", "an omitted name keeps its value");
+    assert.equal(after.defaultAgent, undefined);
+
+    // type is immutable, like id; other types are refused until parameterized.
+    assert.throws(() => ensureUpsert(path, { id: "feishu-work", type: "dingtalk" }), /immutable/);
+    assert.throws(() => ensureUpsert(path, { id: "ding-2", type: "dingtalk" }), /parameterized/);
+    // An id that is another adapter's namespace is refused outright.
+    assert.throws(() => ensureUpsert(path, { id: "dingtalk", type: "feishu" }), /namespace/);
+    assert.throws(() => ensureUpsert(path, { id: "Feishu Work", type: "feishu" }), /cannot be a channel id/);
+  } finally {
+    cleanup();
+  }
+
+  function ensureUpsert(p: string, input: Parameters<typeof upsertChannelRecord>[1]) {
+    return upsertChannelRecord(p, input, "box_test");
+  }
+});
+
+test("a custom door can be removed; the grandfathered ones cannot", () => {
+  const { path, cleanup } = tempPath();
+  try {
+    upsertChannelRecord(path, { id: "feishu-work", type: "feishu" }, "box_test");
+    const after = removeChannelRecord(path, "feishu-work", "box_test");
+    assert.ok(!after.some(r => r.id === "feishu-work"));
+    assert.throws(() => removeChannelRecord(path, "feishu", "box_test"), /grandfathered/);
   } finally {
     cleanup();
   }

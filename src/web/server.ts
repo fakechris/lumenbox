@@ -155,7 +155,12 @@ type AgentboxConfigHostExec = NonNullable<AgentboxConfig["hostExec"]>;
 import { ChannelManager } from "../channels/manager.ts";
 import { DingTalkChannel } from "../channels/dingtalk.ts";
 import { FeishuChannel } from "../channels/feishu.ts";
-import { CHANNEL_RECORDS_FILENAME, ensureChannelRecords } from "../channels/identity.ts";
+import {
+  CHANNEL_RECORDS_FILENAME,
+  ensureChannelRecords,
+  removeChannelRecord,
+  upsertChannelRecord,
+} from "../channels/identity.ts";
 import { TelegramChannel } from "../channels/telegram.ts";
 import { HostRunner, hostRunnerConfig } from "../host/host-runner.ts";
 import { ALL_TOOLS } from "../host/orchestrator.ts";
@@ -228,14 +233,23 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
   // The doors, loaded before the people: identity links and knocks record the
   // incarnation of the channel they were observed under (docs/22 §4), so the
   // lookup has to exist before the principals file is read.
-  const channelRecords = ensureChannelRecords(
-    join(agentboxHome(), CHANNEL_RECORDS_FILENAME),
-    registry.box.id
-  );
+  const channelRecordsPath = join(agentboxHome(), CHANNEL_RECORDS_FILENAME);
+  const channelRecords = ensureChannelRecords(channelRecordsPath, registry.box.id);
   const channelIncarnations = new Map(channelRecords.map(record => [record.id, record.incarnation]));
   /** Web token subjects and unknown prefixes are incarnation 1 forever. */
   const incarnationOf = (identity: string): number =>
     channelIncarnations.get(identity.split(":")[0] ?? "") ?? 1;
+  /** One rule for every door's credential names: the id, uppercased. */
+  const channelEnvBase = (id: string): string => id.toUpperCase().replace(/[^A-Z0-9]+/g, "_");
+  /** Whether a door's credentials exist — in the environment or saved in the config. */
+  const channelCredentialsSet = (record: { id: string; type: string }): boolean => {
+    const saved = loadConfig().env ?? {};
+    const has = (key: string) => process.env[key] !== undefined || typeof saved[key] === "string";
+    if (record.type === "telegram") return has("TELEGRAM_BOT_TOKEN");
+    if (record.type === "dingtalk") return has("DINGTALK_CLIENT_ID") && has("DINGTALK_CLIENT_SECRET");
+    const base = channelEnvBase(record.id);
+    return has(`${base}_APP_ID`) && has(`${base}_APP_SECRET`);
+  };
   /** Read once on first request; it never changes while the server is up. */
   let vendorScript: Buffer | undefined;
   /** The woff2 faces, read once each. Seven files, ~400 KB total. */
@@ -2443,6 +2457,21 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
           }
           send(res, 200, {
             channels: channels.list(),
+            // The doors as records (docs/22 §2): what the settings dialog edits.
+            // Credentials are reported as present/absent, never as values.
+            records: channelRecords.map(record => ({
+              id: record.id,
+              type: record.type,
+              name: record.name,
+              defaultAgent: record.defaultAgent,
+              grandfathered: record.id === record.type,
+              credentialsSet: channelCredentialsSet(record),
+              envBase: channelEnvBase(record.id),
+            })),
+            agents: registry
+              .list()
+              .filter(record => record.profile.hidden !== true)
+              .map(record => ({ id: record.id, name: record.profile.name })),
             principals: principals.list(),
             knocks: [...knocks.values()],
             invites: [...invites.entries()].map(([code, invite]) => ({
@@ -2452,6 +2481,87 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
               expiresAt: invite.expiresAt,
             })),
           });
+          return;
+        }
+
+        // A door made or edited from the settings dialog. id and type are immutable
+        // (they are identity — docs/22 §4); name and defaultAgent change freely and
+        // take effect at once; a new door's adapter registers at startup, so adding
+        // one answers with restartNeeded.
+        if (route === "POST /api/channels/records") {
+          if (refusedRole("admin")) return;
+          const body = await readJson(req);
+          const id = String(body.id ?? "").trim();
+          const type = String(body.type ?? "feishu");
+          if (type !== "feishu" && type !== "dingtalk" && type !== "telegram") {
+            send(res, 400, { error: `unknown channel type ${type}` });
+            return;
+          }
+          const defaultAgent =
+            body.defaultAgent === undefined ? undefined : String(body.defaultAgent);
+          if (defaultAgent !== undefined && defaultAgent !== "") {
+            try {
+              registry.resolve(defaultAgent);
+            } catch {
+              send(res, 400, { error: `No agent named ${defaultAgent}.` });
+              return;
+            }
+          }
+          const wasKnown = channelRecords.some(record => record.id === id);
+          let updated;
+          try {
+            updated = upsertChannelRecord(
+              channelRecordsPath,
+              {
+                id,
+                type,
+                ...(typeof body.name === "string" ? { name: body.name } : {}),
+                ...(defaultAgent !== undefined ? { defaultAgent } : {}),
+              },
+              registry.box.id
+            );
+          } catch (error) {
+            send(res, 400, { error: error instanceof Error ? error.message : String(error) });
+            return;
+          }
+          // Live for routing: defaultAgentFor and incarnationOf read these directly,
+          // so a changed default applies to the next message without a restart.
+          channelRecords.splice(0, channelRecords.length, ...updated);
+          for (const record of updated) channelIncarnations.set(record.id, record.incarnation);
+          const appId = typeof body.appId === "string" ? body.appId.trim() : "";
+          const appSecret = typeof body.appSecret === "string" ? body.appSecret.trim() : "";
+          let credentialsSaved = false;
+          if (appId !== "" && appSecret !== "") {
+            const base = channelEnvBase(id);
+            // Into the config's env map, beside the other channel credentials —
+            // where they live long-term is the docs/15 decision; this follows the
+            // installation's existing convention rather than preempting it.
+            saveConfig({ env: { [`${base}_APP_ID`]: appId, [`${base}_APP_SECRET`]: appSecret } });
+            credentialsSaved = true;
+          }
+          log(
+            `channel records: ${id} ${wasKnown ? "updated" : "added"}` +
+              (credentialsSaved ? " (credentials saved)" : "")
+          );
+          send(res, 200, { restartNeeded: !wasKnown || credentialsSaved });
+          return;
+        }
+
+        if (route === "POST /api/channels/records/remove") {
+          if (refusedRole("admin")) return;
+          const body = await readJson(req);
+          const id = String(body.id ?? "").trim();
+          let updated;
+          try {
+            updated = removeChannelRecord(channelRecordsPath, id, registry.box.id);
+          } catch (error) {
+            send(res, 400, { error: error instanceof Error ? error.message : String(error) });
+            return;
+          }
+          channelRecords.splice(0, channelRecords.length, ...updated);
+          channelIncarnations.delete(id);
+          log(`channel records: ${id} removed`);
+          send(res, 200, { restartNeeded: true });
           return;
         }
 

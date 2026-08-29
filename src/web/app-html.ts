@@ -877,9 +877,21 @@ export const APP_HTML = String.raw`<!doctype html>
     <div class="field" data-tier="installation">
       <label>Channels</label>
       <div id="setchannels" style="display:flex;flex-direction:column;gap:6px"></div>
-      <div class="fieldnote">A channel turns on when its credentials are in the environment or the
-        env map of the config file (Feishu: FEISHU_APP_ID + FEISHU_APP_SECRET; Telegram:
-        TELEGRAM_BOT_TOKEN; DingTalk: DINGTALK_CLIENT_ID + DINGTALK_CLIENT_SECRET).</div>
+      <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
+        <input id="setchid" placeholder="feishu-work" spellcheck="false" style="flex:1;min-width:90px">
+        <input id="setchname" placeholder="显示名" spellcheck="false" style="flex:1;min-width:70px">
+        <select id="setchagent" style="height:38px;border-radius:var(--radius-input);border:1px solid var(--border-strong);background:var(--bg);color:var(--text);padding:0 8px"></select>
+        <input id="setchappid" placeholder="App ID (cli_…)" spellcheck="false" style="flex:1;min-width:90px">
+        <input id="setchsecret" type="password" placeholder="App Secret" spellcheck="false" autocomplete="off" style="flex:1;min-width:90px">
+        <button class="btn sm" id="setchadd">Add door</button>
+      </div>
+      <div class="fieldnote">Each row is a door: a bot on a wire, opening into this box. A channel
+        turns on when its credentials are present (in the environment, or saved here into the
+        config's env map under &lt;ID&gt;_APP_ID + _APP_SECRET). The id becomes the prefix of every
+        identity the door mints and is chosen once; the display name and the default agent — who
+        answers when a message names nobody — change freely and apply at once. A second door today
+        can only be Feishu, and it starts on the next restart of the web process.</div>
+      <div class="fieldnote" id="setchstatus"></div>
     </div>
     <div class="field" data-tier="installation" id="setmcpwrap" style="display:none">
       <label>MCP servers</label>
@@ -1324,13 +1336,38 @@ function renderChannels() {
   fetch("/api/channels")
     .then(function (r) { return r.json(); })
     .then(function (data) {
-      $("setchannels").innerHTML = (data.channels || []).map(function (ch) {
-        var cls = ch.running ? "ok" : ch.configured ? "bad" : "";
-        return '<div style="display:flex;gap:9px;align-items:center;font-size:13px">' +
+      // One row per door record; the adapter statuses decorate them. A record with
+      // no status was added after this process started and opens on the next restart.
+      var statuses = {};
+      (data.channels || []).forEach(function (ch) { statuses[ch.name] = ch; });
+      var agents = data.agents || [];
+      var agentOptions = function (selected) {
+        return '<option value=""' + (selected ? "" : " selected") + ">(installation default)</option>" +
+          agents.map(function (agent) {
+            return '<option value="' + esc(agent.name) + '"' +
+              (agent.name === selected ? " selected" : "") + ">" + esc(agent.name) + "</option>";
+          }).join("");
+      };
+      $("setchannels").innerHTML = (data.records || []).map(function (rec) {
+        var st = statuses[rec.id];
+        var cls = st && st.running ? "ok" : st && st.configured ? "bad" : "";
+        var detail = st ? st.detail : rec.credentialsSet
+          ? "opens on the next restart"
+          : "set " + rec.envBase + "_APP_ID + _APP_SECRET";
+        return '<div style="display:flex;gap:9px;align-items:center;font-size:13px;flex-wrap:wrap">' +
           '<span class="dot ' + cls + '"></span>' +
-          "<span style=\"min-width:70px\">" + esc(ch.name) + "</span>" +
-          '<span class="dim mono" style="font-size:11px">' + esc(ch.detail) + "</span></div>";
+          '<span style="min-width:70px">' + esc(rec.name) + "</span>" +
+          '<span class="dim mono" style="font-size:11px">' + esc(rec.id) + "</span>" +
+          '<select data-chagent="' + esc(rec.id) + '" data-chtype="' + esc(rec.type) + '"' +
+            ' style="height:26px;font-size:12px;border-radius:6px;border:1px solid var(--border-strong);background:var(--bg);color:var(--text)">' +
+            agentOptions(rec.defaultAgent) + "</select>" +
+          '<span class="dim mono" style="font-size:11px;flex:1;min-width:80px;overflow:hidden;text-overflow:ellipsis">' + esc(detail || "") + "</span>" +
+          (rec.grandfathered ? "" :
+            '<a href="#" data-chremove="' + esc(rec.id) + '" style="color:var(--danger);font-size:12px">Remove</a>') +
+          "</div>";
       }).join("");
+      var addSelect = document.getElementById("setchagent");
+      if (addSelect) addSelect.innerHTML = agentOptions("");
       // The door: whoever knocked, with the two answers that matter side by side.
       var knocks = data.knocks || [];
       document.getElementById("setknockswrap").style.display = knocks.length ? "" : "none";
@@ -1354,6 +1391,73 @@ function renderChannels() {
     })
     .catch(function () {});
 }
+
+// A changed default agent routes the next message; nothing to restart.
+document.getElementById("setchannels").addEventListener("change", function (event) {
+  var target = event.target;
+  if (!target.getAttribute) return;
+  var id = target.getAttribute("data-chagent");
+  if (!id) return;
+  fetch("/api/channels/records", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ id: id, type: target.getAttribute("data-chtype"), defaultAgent: target.value })
+  })
+    .then(function (r) { return r.json(); })
+    .then(function (d) {
+      $("setchstatus").textContent = d.error || "Saved — the next message routes to it.";
+    })
+    .catch(function () { $("setchstatus").textContent = "failed"; });
+});
+
+document.getElementById("setchannels").addEventListener("click", function (event) {
+  var target = event.target;
+  if (!target.getAttribute) return;
+  var id = target.getAttribute("data-chremove");
+  if (!id) return;
+  event.preventDefault();
+  fetch("/api/channels/records/remove", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ id: id })
+  })
+    .then(function (r) { return r.json(); })
+    .then(function (d) {
+      $("setchstatus").textContent = d.error || "Removed. Its adapter stops on the next restart.";
+      renderChannels();
+    })
+    .catch(function () { $("setchstatus").textContent = "failed"; });
+});
+
+$("setchadd").onclick = function () {
+  var id = $("setchid").value.trim();
+  if (!id) { $("setchstatus").textContent = "The door needs an id — it becomes the identity prefix."; return; }
+  $("setchstatus").textContent = "…";
+  fetch("/api/channels/records", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({
+      id: id,
+      type: "feishu",
+      name: $("setchname").value,
+      defaultAgent: $("setchagent").value,
+      appId: $("setchappid").value,
+      appSecret: $("setchsecret").value
+    })
+  })
+    .then(function (r) { return r.json(); })
+    .then(function (d) {
+      if (d.error) { $("setchstatus").textContent = d.error; return; }
+      $("setchstatus").textContent = d.restartNeeded
+        ? "Saved. Restart the web process to open this door — and wait a minute between " +
+          "stop and start, or Feishu keeps the dead connection and refuses the new one."
+        : "Saved.";
+      $("setchid").value = ""; $("setchname").value = "";
+      $("setchappid").value = ""; $("setchsecret").value = "";
+      renderChannels();
+    })
+    .catch(function () { $("setchstatus").textContent = "failed"; });
+};
 
 document.getElementById("setknocks").addEventListener("click", function (event) {
   var target = event.target;
