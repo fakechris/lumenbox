@@ -298,10 +298,12 @@ export const APP_HTML = String.raw`<!doctype html>
     flex: none; height: 52px; border-bottom: 1px solid var(--border);
     display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 0 18px;
   }
-  /* overflow:hidden so a crowded lead clips inside its own box instead of painting
-     under the actions on the right — the badge shrinks first (it repeats what the
-     notice banner says in full), the tabs never do. */
-  .paneheader .lead { display: flex; align-items: center; gap: 10px; min-width: 0; overflow: hidden; }
+  .paneheader .lead { display: flex; align-items: center; gap: 10px; min-width: 0; }
+  /* Right pane only: a crowded lead clips inside its own box instead of painting
+     under the actions — the badge shrinks first (it repeats what the notice banner
+     says in full), the tabs never do. NOT the left pane's lead: the conversation
+     dropdown is absolutely positioned inside it, and overflow:hidden beheads it. */
+  #rightpane .paneheader .lead { overflow: hidden; }
   #title { font-weight: 600; font-size: 1rem; }
   .roundpill {
     display: flex; align-items: center; gap: 7px; font-family: var(--font-mono); font-size: 12px;

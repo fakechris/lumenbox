@@ -9,11 +9,13 @@ Reviews: [v1](reviews/2026-08-28-identity-box.md),
 [v2](reviews/2026-08-29-identity-box-v2.md), [v3](reviews/2026-08-29-identity-box-v3.md),
 [v4](reviews/2026-08-28-identity-box-v4.md) — **v4's findings are corrected into this
 document as of 2026-08-29**; the ones still open are marked where they bite. The v4
-design review's parting question is now the standing gate on steps 4–8: nobody has
-named the user who asked for a private box, and the comparison against "credentials
-in the vault, delivered through the host" (§7's last paragraph — which is that
-feature, already shipped) has never been run. Both belong to a person, not to this
-document.
+design review's parting question — who asked for a private box, and does a better
+vault beat building one — **was answered by the owner on 2026-08-29**: the private
+box is wanted, as a special-made box one person uses and others cannot even see
+(stronger than this document's label approach), there are no department boxes, and
+**steps 4–8 are deferred until a multiuser mechanism exists** — today every box is
+shared and now says so, which is the whole of what ships. See docs/22 §7 for the
+ruling in full.
 
 **Since first writing: steps 1–3 are built** (§6), and **§5 has been rewritten** — it
 claimed agent-to-box lineage was the largest piece and the blocker on private boxes, and

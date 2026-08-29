@@ -278,5 +278,15 @@ the box's *identity* arrives first; its *membership machinery* stays late.
 entrance, `defaultAgent` of its own, on a box that already has a real id. **5–6
 deliver isolated authority** (a box whose member set is not `everyone`); they
 must not start until the §2 membership gap, the §4 incarnation semantics, and
-the §6 amendment are implemented together, in that combination — which is now
-specified on paper for the next review to test.
+the §6 amendment are implemented together, in that combination.
+
+**Decided by the owner, 2026-08-29: 5–6 are deferred until multiuser exists.**
+The ruling, in full: a private box is not the vault comparison and not a broker —
+it is a *special-made box*, usable by exactly one person and **invisible to
+everyone else** (stronger than a label: the others don't see it at all). There
+are no department boxes as a concept of their own; when multiuser arrives, other
+boxes follow department-level authority. And until there is a multiuser
+mechanism, none of it is buildable honestly — **today every box is shared, and
+says so**, which items 1–4 already made true. This answers the v4 reviewer's
+"docs/18 has no user" gate: the user is the owner, the use case is a one-person
+box, and the schedule is "with multiuser, not before".
