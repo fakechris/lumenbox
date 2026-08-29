@@ -5,7 +5,10 @@
  * reason: this app was created through the SDK's scan flow, so the console's one-click
  * links answer "该应用不存在" to whoever is logged in there.
  *
- *   node scripts/feishu-enable-docs.mjs
+ *   node scripts/feishu-enable-docs.mjs [door-id]
+ *
+ * door-id is the channel record's id (default "feishu"): "feishu-zongheng" reads
+ * FEISHU_ZONGHENG_APP_ID from the config env, the same derivation the server uses.
  *
  * Scan the printed URL's QR with the phone that owns the app and confirm; the page
  * shows exactly the two scopes being added. After confirming, the ReadFeishuDoc tool
@@ -22,16 +25,22 @@ import { readFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 
+const doorId = process.argv[2] ?? "feishu";
+const envBase = doorId.toUpperCase().replace(/[^A-Z0-9]+/g, "_");
+
 const config = JSON.parse(readFileSync(join(homedir(), ".agentbox", "config.json"), "utf8"));
-const appId = config.env?.FEISHU_APP_ID;
+const appId = config.env?.[`${envBase}_APP_ID`];
 if (!appId) {
-  console.error("No FEISHU_APP_ID in ~/.agentbox/config.json — is the Feishu channel set up?");
+  console.error(
+    `No ${envBase}_APP_ID in ~/.agentbox/config.json — is the "${doorId}" door set up?\n` +
+      `Usage: node ${process.argv[1].split("/").pop()} [door-id]`
+  );
   process.exit(1);
 }
 
 const lark = await import("@larksuiteoapi/node-sdk");
 
-console.log(`Updating ${appId}: adding docx:document:readonly and wiki:wiki:readonly.\n`);
+console.log(`Updating ${appId} (door "${doorId}"): adding docx:document:readonly and wiki:wiki:readonly.\n`);
 
 const result = await lark.registerApp({
   appId,

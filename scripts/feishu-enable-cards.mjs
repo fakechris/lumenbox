@@ -13,7 +13,10 @@
  * created: a QR code, scanned by the phone that owns the app, showing exactly the diff
  * being authorized — here, the `card.action.trigger` callback. No console, no deep link.
  *
- *   node scripts/feishu-enable-cards.mjs
+ *   node scripts/feishu-enable-cards.mjs [door-id]
+ *
+ * door-id is the channel record's id (default "feishu"): "feishu-zongheng" reads
+ * FEISHU_ZONGHENG_APP_ID from the config env, the same derivation the server uses.
  *
  * Scan the printed URL's QR with Feishu, confirm, and buttons start arriving over the
  * websocket the bot already holds. No code change and no restart needed afterwards.
@@ -23,16 +26,22 @@ import { readFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 
+const doorId = process.argv[2] ?? "feishu";
+const envBase = doorId.toUpperCase().replace(/[^A-Z0-9]+/g, "_");
+
 const config = JSON.parse(readFileSync(join(homedir(), ".agentbox", "config.json"), "utf8"));
-const appId = config.env?.FEISHU_APP_ID;
+const appId = config.env?.[`${envBase}_APP_ID`];
 if (!appId) {
-  console.error("No FEISHU_APP_ID in ~/.agentbox/config.json — is the Feishu channel set up?");
+  console.error(
+    `No ${envBase}_APP_ID in ~/.agentbox/config.json — is the "${doorId}" door set up?\n` +
+      `Usage: node ${process.argv[1].split("/").pop()} [door-id]`
+  );
   process.exit(1);
 }
 
 const lark = await import("@larksuiteoapi/node-sdk");
 
-console.log(`Updating ${appId}: enabling the card.action.trigger callback.\n`);
+console.log(`Updating ${appId} (door "${doorId}"): enabling the card.action.trigger callback.\n`);
 
 const result = await lark.registerApp({
   appId,
