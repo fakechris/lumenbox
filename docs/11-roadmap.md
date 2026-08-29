@@ -80,6 +80,27 @@ its own retry and its own log line, and stop logging `connected` for a call rath
 a connection. A restart that waits for the old process to be gone at the *vendor's* end —
 not just locally — would also help, and there is no signal for that other than time.
 
+### R37. Meeting presence: invite the bot, watch its desktop in the call
+
+Chartered 2026-08-29. The property the owner asked for: see the box's screen from
+Feishu **with no inbound connectivity at all** — the desktop arrives through the
+vendor's own encrypted RTC, connections all outbound, no URL published anywhere.
+
+The vendor offers no media API, so the shape follows the prior art (Hermes Agent's
+`feishu_meeting_invite.py`, read from source): the platform's whole contribution is
+turning `vc.bot.meeting_invited_v1` into an ordinary message to the door's default
+agent, with join instructions. The joining is the agent's job — and this
+installation's agent has what Hermes's lacks: a real Linux desktop with a browser
+on it. The instructions: open `vc.feishu.cn/j/<meeting_no>` in the box's Chromium,
+join as a guest under its own name, share the entire screen, stay until dismissed.
+
+**Bridge shipped** (event → allow-list check → knock path → agent message, dedup on
+meeting+inviter, malformed ignored). **Unproven, deliberately, until one real
+meeting**: whether the tenant permits guest browser join, whether `getDisplayMedia`
+works against Xvfb in the box's Chromium, and what the meeting shows the bot as.
+Console prerequisites per app: subscribe `vc.bot.meeting_invited_v1` in Event
+Subscriptions and enable the VC scope the console prompts for.
+
 ### R36. Hot-loadable extensions: reload the edges without restarting the core
 
 Asked for twice on 2026-08-29, with two working references. Pi's official mechanism:

@@ -6,7 +6,7 @@
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { FeishuChannel, SOCKET_RETRY_MS, classifySocketLine, looksLikeMarkdown, markdownPost, renderCard, renderQuestionCard, splitChatKey } from "./feishu.ts";
+import { FeishuChannel, SOCKET_RETRY_MS, classifySocketLine, meetingInvitePrompt, parseMeetingInvite, looksLikeMarkdown, markdownPost, renderCard, renderQuestionCard, splitChatKey } from "./feishu.ts";
 import type { TaskCardState } from "./manager.ts";
 
 interface CardShape {
@@ -442,4 +442,34 @@ test("the SDK's log lines are the socket's only witness, read correctly", () => 
   assert.equal(classifySocketLine("[ws] heartbeat"), undefined);
   // The schedule is patient enough to outlast the vendor's window.
   assert.ok(SOCKET_RETRY_MS.reduce((a, b) => a + b, 0) >= 60_000);
+});
+
+test("a meeting invite parses from both id shapes and turns into join instructions", () => {
+  // roadmap R37, shape per the vendor's vc.bot.meeting_invited_v1 (ids nested
+  // under `id`) and defensively the flat form.
+  const nested = parseMeetingInvite({
+    meeting: { id: "m1", topic: "周会", meeting_no: "123456789" },
+    operator: { id: { open_id: "ou_chris" }, user_name: "Chris" },
+  });
+  assert.deepEqual(nested, {
+    inviterOpenId: "ou_chris",
+    inviterName: "Chris",
+    meetingNo: "123456789",
+    topic: "周会",
+    meetingId: "m1",
+  });
+  const flat = parseMeetingInvite({
+    event: { meeting: { meeting_no: "42" }, operator: { open_id: "ou_x" } },
+  });
+  assert.equal(flat?.inviterOpenId, "ou_x");
+  assert.equal(flat?.meetingId, "42", "no meeting id falls back to the number");
+
+  // Malformed is ignored, not an error — no inviter or no number means no join.
+  assert.equal(parseMeetingInvite({ meeting: { meeting_no: "1" } }), undefined);
+  assert.equal(parseMeetingInvite({ operator: { open_id: "ou_x" } }), undefined);
+
+  const prompt = meetingInvitePrompt(nested!);
+  assert.match(prompt, /vc\.feishu\.cn\/j\/123456789/);
+  assert.match(prompt, /共享屏幕/);
+  assert.match(prompt, /不要先问确认/);
 });

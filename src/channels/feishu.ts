@@ -278,6 +278,79 @@ export function classifySocketLine(line: string): "ready" | "failed" | undefined
 /** Retry delays after a refused connect: patient enough for R35's window, loud always. */
 export const SOCKET_RETRY_MS = [5_000, 15_000, 30_000, 60_000] as const;
 
+/**
+ * A meeting invitation, parsed out of `vc.bot.meeting_invited_v1` (roadmap R37).
+ *
+ * The shape follows the prior art (Hermes Agent's feishu_meeting_invite): the
+ * platform's whole job is to turn the event into a message for the agent — the
+ * joining itself is the agent's, done with the desktop it already has. Malformed
+ * invitations (no inviter, no meeting number) are ignored, not errors.
+ */
+export interface MeetingInvite {
+  inviterOpenId: string;
+  inviterName: string;
+  meetingNo: string;
+  topic: string;
+  meetingId: string;
+}
+
+function inviteRecord(value: unknown): Record<string, unknown> | undefined {
+  return typeof value === "object" && value !== null
+    ? (value as Record<string, unknown>)
+    : undefined;
+}
+
+/** VC events write a user's ids nested under `id`, or flat; read both. */
+function inviteUser(value: unknown): { openId: string; name: string } | undefined {
+  const record = inviteRecord(value);
+  if (record === undefined) return undefined;
+  const ids = inviteRecord(record.id);
+  const openId =
+    typeof ids?.open_id === "string" && ids.open_id !== ""
+      ? ids.open_id
+      : typeof record.open_id === "string"
+        ? record.open_id
+        : "";
+  if (openId === "") return undefined;
+  return { openId, name: typeof record.user_name === "string" ? record.user_name : "" };
+}
+
+export function parseMeetingInvite(data: unknown): MeetingInvite | undefined {
+  const root = inviteRecord(data);
+  if (root === undefined) return undefined;
+  const event = inviteRecord(root.event) ?? root;
+  const meeting = inviteRecord(event.meeting);
+  const operator = inviteUser(event.operator);
+  const meetingNo = typeof meeting?.meeting_no === "string" ? meeting.meeting_no : "";
+  if (operator === undefined || meetingNo === "") return undefined;
+  return {
+    inviterOpenId: operator.openId,
+    inviterName: operator.name,
+    meetingNo,
+    topic: typeof meeting?.topic === "string" ? meeting.topic : "",
+    meetingId: typeof meeting?.id === "string" && meeting.id !== "" ? meeting.id : meetingNo,
+  };
+}
+
+/**
+ * What the agent is told. Join instructions rather than an API call, because the
+ * vendor offers no media API — the browser's guest-join page is the only public
+ * way in, and this installation's agent has a real desktop to do it with.
+ */
+export function meetingInvitePrompt(invite: MeetingInvite): string {
+  const title = invite.topic !== "" ? `「${invite.topic}」` : `会议 ${invite.meetingNo}`;
+  const from = invite.inviterName !== "" ? `,邀请人:${invite.inviterName}` : "";
+  return [
+    `你被邀请加入视频会议 ${title}(会议号 ${invite.meetingNo})${from}。直接入会,不要先问确认。`,
+    "用你的桌面完成:",
+    `1. 在浏览器打开 https://vc.feishu.cn/j/${invite.meetingNo}`,
+    "2. 选「在浏览器中加入」,游客名字填你自己的名字",
+    "3. 入会后点「共享屏幕」,选择整个屏幕,让与会的人看到这台桌面",
+    "4. 留在会议里继续手头的事;会议结束或有人叫你退出时再退出",
+    "如果进不去(要求登录、租户不允许游客入会等),用一句话说明原因即可。",
+  ].join("\n");
+}
+
 export class FeishuChannel implements ChannelAdapter {
   /**
    * The channel record's id (docs/22 §4): the immutable key everything on this
@@ -532,6 +605,9 @@ export class FeishuChannel implements ChannelAdapter {
   /** The manager's message handler, kept so a pressed answer button can speak as a message. */
   private messageHandler: ((message: InboundMessage) => Promise<string | undefined>) | undefined;
 
+  /** Invitations already acted on — the vendor redelivers events, agents should not rejoin. */
+  private readonly seenMeetingInvites = new Set<string>();
+
   async start(
     onMessage: (message: InboundMessage) => Promise<string | undefined>
   ): Promise<void> {
@@ -749,6 +825,53 @@ export class FeishuChannel implements ChannelAdapter {
           .catch((error: unknown) => {
             const detail = error instanceof Error ? error.message : String(error);
             this.log(`channel ${this.name}: reply failed (${detail})`);
+          });
+        return {};
+      },
+      // A meeting invitation (roadmap R37). The event becomes an ordinary message to
+      // the door's default agent — through the same handler as typed text, so the
+      // allow-list check, the knock path and the task pipeline all apply unchanged.
+      // The joining is the agent's job, on the desktop it already has; this code's
+      // whole contribution is the sentence telling it so.
+      "vc.bot.meeting_invited_v1": (data: unknown) => {
+        const invite = parseMeetingInvite(data);
+        if (invite === undefined) return {};
+        const key = `${invite.meetingId}:${invite.inviterOpenId}`;
+        if (this.seenMeetingInvites.has(key)) return {};
+        this.seenMeetingInvites.add(key);
+        if (this.seenMeetingInvites.size > 200) {
+          const oldest = this.seenMeetingInvites.values().next().value;
+          if (oldest !== undefined) this.seenMeetingInvites.delete(oldest);
+        }
+        const identity = `${this.name}:${invite.inviterOpenId}`;
+        const prompt = meetingInvitePrompt(invite);
+        this.log(
+          `channel ${this.name}: meeting invite ${invite.meetingNo} from ` +
+            `${invite.inviterName !== "" ? invite.inviterName : identity}`
+        );
+        this.ingress?.arrived({
+          id: `vc-${key}`,
+          channel: this.name,
+          identity,
+          chatKey: identity,
+          kind: "meeting_invite",
+          chars: prompt.length,
+          at: new Date().toISOString(),
+        });
+        void this.messageHandler?.({
+          identity,
+          senderLabel: invite.inviterName !== "" ? invite.inviterName : invite.inviterOpenId,
+          text: prompt,
+          messageId: `vc-${key}`,
+        })
+          .then(reply => {
+            // A synchronous reply (a refusal, a knock notice) goes back to the
+            // inviter's own chat with the bot, when one exists.
+            if (reply !== undefined && reply !== "") return this.send(identity, reply);
+          })
+          .catch((error: unknown) => {
+            const detail = error instanceof Error ? error.message : String(error);
+            this.log(`channel ${this.name}: meeting invite handling failed (${detail})`);
           });
         return {};
       },
