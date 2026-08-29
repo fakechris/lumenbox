@@ -155,6 +155,7 @@ type AgentboxConfigHostExec = NonNullable<AgentboxConfig["hostExec"]>;
 import { ChannelManager } from "../channels/manager.ts";
 import { DingTalkChannel } from "../channels/dingtalk.ts";
 import { FeishuChannel } from "../channels/feishu.ts";
+import { CHANNEL_RECORDS_FILENAME, ensureChannelRecords } from "../channels/identity.ts";
 import { TelegramChannel } from "../channels/telegram.ts";
 import { HostRunner, hostRunnerConfig } from "../host/host-runner.ts";
 import { ALL_TOOLS } from "../host/orchestrator.ts";
@@ -1045,50 +1046,76 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
   });
 
   {
-    const telegramToken = process.env.TELEGRAM_BOT_TOKEN;
-    channels.register(
-      new TelegramChannel(telegramToken ?? "", line => log(line)),
-      telegramToken !== undefined,
-      telegramToken !== undefined ? "starting" : "set TELEGRAM_BOT_TOKEN"
+    // Doors come from the channel records now (docs/22 §7 item 2, first slice).
+    // The grandfathered rows — id equal to type — behave exactly like the env
+    // singletons they replace: same names, same prefixes, same credentials from
+    // the same env pairs. A row whose id is *not* its type is a genuine second
+    // instance, and starting it before the prefix parameterization of item 3
+    // would run two adapters minting the same `feishu:` namespace — refused
+    // loudly instead.
+    const channelRecords = ensureChannelRecords(
+      join(agentboxHome(), CHANNEL_RECORDS_FILENAME),
+      registry.box.id
     );
-    const feishuId = process.env.FEISHU_APP_ID;
-    const feishuSecret = process.env.FEISHU_APP_SECRET;
-    channels.register(
-      new FeishuChannel(feishuId ?? "", feishuSecret ?? "", line => log(line), ingress),
-      feishuId !== undefined && feishuSecret !== undefined,
-      feishuId !== undefined && feishuSecret !== undefined
-        ? "starting"
-        : "set FEISHU_APP_ID and FEISHU_APP_SECRET"
-    );
-    // The same identity, reading documents: a pasted docx/wiki link becomes readable
-    // the moment a Feishu app exists. R34's near half — the credential never moves.
-    if (feishuId !== undefined && feishuSecret !== undefined) {
-      orchestrator.docReader = new FeishuDocReader(feishuId, feishuSecret);
+    for (const record of channelRecords) {
+      if (record.id !== record.type) {
+        log(
+          `channel ${record.id}: a second ${record.type} door needs prefix ` +
+            `parameterization (docs/22 §7 item 3); not started`
+        );
+        continue;
+      }
+      if (record.type === "telegram") {
+        const telegramToken = process.env.TELEGRAM_BOT_TOKEN;
+        channels.register(
+          new TelegramChannel(telegramToken ?? "", line => log(line)),
+          telegramToken !== undefined,
+          telegramToken !== undefined ? "starting" : "set TELEGRAM_BOT_TOKEN"
+        );
+      } else if (record.type === "feishu") {
+        const feishuId = process.env.FEISHU_APP_ID;
+        const feishuSecret = process.env.FEISHU_APP_SECRET;
+        channels.register(
+          new FeishuChannel(feishuId ?? "", feishuSecret ?? "", line => log(line), ingress),
+          feishuId !== undefined && feishuSecret !== undefined,
+          feishuId !== undefined && feishuSecret !== undefined
+            ? "starting"
+            : "set FEISHU_APP_ID and FEISHU_APP_SECRET"
+        );
+        // The same identity, reading documents: a pasted docx/wiki link becomes readable
+        // the moment a Feishu app exists. R34's near half — the credential never moves.
+        // (docs/22 §3 makes document reading a *box* capability in item 4; until then the
+        // grandfathered door's credential is the box's, which is the same thing today.)
+        if (feishuId !== undefined && feishuSecret !== undefined) {
+          orchestrator.docReader = new FeishuDocReader(feishuId, feishuSecret);
+        }
+      } else {
+        const dingId = process.env.DINGTALK_CLIENT_ID;
+        const dingSecret = process.env.DINGTALK_CLIENT_SECRET;
+        const dingCardTemplate = process.env.DINGTALK_CARD_TEMPLATE_ID;
+        const dingTaskCardTemplate = process.env.DINGTALK_TASK_CARD_TEMPLATE_ID;
+        channels.register(
+          new DingTalkChannel(
+            dingId ?? "",
+            dingSecret ?? "",
+            line => log(line),
+            ingress,
+            // Optional: turns button approvals on. Without it DingTalk runs the
+            // text-verb path, same as before cards existed.
+            dingCardTemplate !== undefined && dingCardTemplate !== "" ? dingCardTemplate : undefined,
+            // Optional: turns task progress cards on. Without it long tasks are
+            // acknowledged with the plain line, same as before cards existed.
+            dingTaskCardTemplate !== undefined && dingTaskCardTemplate !== ""
+              ? dingTaskCardTemplate
+              : undefined
+          ),
+          dingId !== undefined && dingSecret !== undefined,
+          dingId !== undefined && dingSecret !== undefined
+            ? "starting"
+            : "set DINGTALK_CLIENT_ID and DINGTALK_CLIENT_SECRET"
+        );
+      }
     }
-    const dingId = process.env.DINGTALK_CLIENT_ID;
-    const dingSecret = process.env.DINGTALK_CLIENT_SECRET;
-    const dingCardTemplate = process.env.DINGTALK_CARD_TEMPLATE_ID;
-    const dingTaskCardTemplate = process.env.DINGTALK_TASK_CARD_TEMPLATE_ID;
-    channels.register(
-      new DingTalkChannel(
-        dingId ?? "",
-        dingSecret ?? "",
-        line => log(line),
-        ingress,
-        // Optional: turns button approvals on. Without it DingTalk runs the
-        // text-verb path, same as before cards existed.
-        dingCardTemplate !== undefined && dingCardTemplate !== "" ? dingCardTemplate : undefined,
-        // Optional: turns task progress cards on. Without it long tasks are
-        // acknowledged with the plain line, same as before cards existed.
-        dingTaskCardTemplate !== undefined && dingTaskCardTemplate !== ""
-          ? dingTaskCardTemplate
-          : undefined
-      ),
-      dingId !== undefined && dingSecret !== undefined,
-      dingId !== undefined && dingSecret !== undefined
-        ? "starting"
-        : "set DINGTALK_CLIENT_ID and DINGTALK_CLIENT_SECRET"
-    );
   }
   chats = channels;
   channels.start();
