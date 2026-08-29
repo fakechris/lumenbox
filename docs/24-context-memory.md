@@ -1,9 +1,14 @@
 # Context, memory and compaction: ours, against Hermes and OpenClaw
 
-Status: **analysis, first version, 2026-08-29.** Commissioned after the chronic-
-compaction incident (docs/23): the owner asked for a deep description of our own
-context/memory engineering, a source-level comparison against Hermes Agent and
-OpenClaw, and adversarial review of both the analysis and the implementation.
+Status: **second version — corrected in place against the Codex adversarial
+review** (`docs/reviews/2026-08-29-context-memory.md`; Grok round pending).
+The first version was factually stale about our own code in three places and
+ranked its gaps accordingly; the review also surfaced three real implementation
+bugs the analysis had missed. Corrections are marked where they change
+conclusions. Commissioned after the chronic-compaction incident (docs/23): the
+owner asked for a deep description of our own context/memory engineering, a
+source-level comparison against Hermes Agent and OpenClaw, and adversarial
+review of both the analysis and the implementation.
 Sources: our tree at `81a0428`; Hermes at `~/sdcard/source/hermes-agent`
 (`context_compressor.py` ~8,400 lines); OpenClaw at `~/sdcard/source/openclaw`
 (HEAD 2026-08-25). Both compared systems were read by subagents with file:line
@@ -28,15 +33,26 @@ a backstop (was 50 — the docs/23 root cause). Cut point walks back to keep
 entries, then snaps to a pair boundary. A **background speculative pass** starts
 summarising at 75% of the trigger so the pause is usually already paid when the
 threshold arrives — a mechanism neither compared system has. The summary is a
-four-section contract (Threads/Done/State/Artifacts, ≤400 words) produced on the
-cheaper profile; failure degrades to an explicit dropped-entries marker, never a
+four-section prompt (Threads/Done/State/Artifacts, ≤400 words) — **a request,
+not a contract**: the output is accepted if nonempty, nothing validates the
+headings or the cap, and the summariser's *input* clips every block to 400
+chars, so a path beyond that is unrecoverable (review finding 4). The "cheaper
+profile" is likewise conditional: with no summary mapping configured it is the
+agent's own model, and a configured different *provider* is silently called
+through the primary client — wrong endpoint, wrong credential (review finding
+2, a real bug). Failure degrades to an explicit dropped-entries marker, never a
 silent trim. Summaries are transcript entries with a `covers` count; nothing on
-disk is ever rewritten.
+disk is ever rewritten, and **`ReadHistory`** gives the model search/read access
+to the summarised originals, advertised in the prompt after every compaction —
+a recovery path the first version of this document forgot we had.
 
 **In-turn relief.** `pruneOldImages` keeps only the newest screenshot once the
 in-flight request crosses the trigger (each image priced at a flat 1,600
 tokens); an overflowing request sheds oldest tool-result text >20k chars per
-retry. Rounds are capped at 400.
+retry; and — corrected from v1 — replayed tool results were **already**
+truncated to `DURABLE_RESULT_CHARS` with spill-pointer files
+(`turn.ts:514-565`), so full results never reach the summariser in the first
+place. Rounds are capped at 400.
 
 **Memory.** Five record kinds (fact/note/episode/retraction/pitfall) in
 append-only JSONL, scored at recall by kind-specific half-life decay and weight,
@@ -45,8 +61,10 @@ Extraction is a background `Rememberer`: batched exchange distillation, pitfall
 capture from observed failures, episodes condensing batches. Memory files
 compact themselves at 1,000 lines. Durable state — plan, todos — lives in files
 and is **re-read from disk into the volatile prompt block on every continuation**
-(`turn.ts:1213`), which is why a compaction cannot lose the plan: it was never
-only in the history.
+(`turn.ts:1213`). Corrected from v1's absolute claim: this protects what was
+*persisted*. A plan the agent held only in conversation — the extractor
+deliberately excludes plans — is summarised like anything else (review
+finding 7).
 
 **What we measured going wrong** (docs/23): the entry trigger fired at 5–12k
 tokens, three times in an afternoon; each compaction summarised the live task's
@@ -131,12 +149,12 @@ follow schemas, lost the `computer` format and burned ten minutes.
 | Trigger | tokens (est.) + entry backstop | tokens, real-usage-calibrated | tokens, real+est hybrid |
 | Counts system+tools in pressure | **no** | yes | partially (usage covers it) |
 | Real `prompt_tokens` feedback | window size only | authoritative, projected | authoritative + tail estimate |
-| Deterministic prune before LLM | images only | 5 passes incl. text results, args, dedup | TTL soft-trim/hard-clear |
+| Deterministic prune before LLM | replayed results cut to `DURABLE_RESULT_CHARS` + image prune; **no dedup, no argument trimming** | 5 passes incl. dedup, args | TTL soft-trim/hard-clear |
 | Cut anchoring | pair-safe only | pair-safe + last user/assistant verbatim + protected head/tail | pair-safe + turn-prefix summary |
 | Summary quality guard | 4-section prompt, word cap | provenance validation, mechanical anchor index, injection defense, no wire cap | safeguard validation of headings/identifiers, size cap + marker |
 | Iterative update | implicit (old summary re-rendered) | explicit previous-summary prompt | explicit UPDATE/merge prompts |
 | Anti-thrash | **none** | ineffective-count, cooldown, backoff, real-usage verdict | overflow retry cap, prune fallback ladder |
-| Recovery of compacted detail | transcript on disk, no agent tool | FTS5 `session_search` + summary embeds the call | files list carried; transcript in SQLite |
+| Recovery of compacted detail | **`ReadHistory`**, advertised post-compaction | FTS5 `session_search` + summary embeds the call | files list carried; transcript in SQLite |
 | Pre-compaction memory save | durable state always in prompt (passive) | 10-turn background review fork | **flush turn before compaction** (active) |
 | Speculative background summary | **yes — unique** | no (gates are synchronous) | preflight is synchronous |
 | Prefix-cache discipline | 2 breakpoints; volatile half rebuilt per continuation | first-class invariant, byte-identical reuse | first-class, TTL-gated pruning, 4 breakpoints |
@@ -149,63 +167,78 @@ truth, a defensible opposite trade); typed memory with decay-scored recall and
 pitfall capture (richer than either's file-based memory); invented
 unknown-outcome results for crash recovery.
 
-**Where we are structurally behind**, ranked by expected damage:
+**Where we are structurally behind**, re-ranked after the review corrected the
+facts (v1's #6 was false — `ReadHistory` exists — and #1/#3 were misdescribed):
 
-1. **No deterministic text-result pruning.** Both systems reclaim most bulk
-   without an LLM before ever summarising. We summarise first, which is slower,
-   riskier, and was the vehicle for the schema-amnesia failure.
-2. **No anti-thrash.** If the system prompt plus tools ever exceed our trigger
-   (they are not even counted), we would compact every turn forever and no code
-   would notice. Hermes met exactly this in production (#14695).
-3. **No real-usage calibration.** Our 2.5 chars/token is a guess in the
-   dangerous direction for CJK-heavy work (over-counting → premature
-   compaction — the same failure Hermes patched with projection).
-4. **No cut anchoring beyond pair-safety.** The live task's opening user message
-   can be summarised away; both others guarantee it survives.
-5. **No summary quality validation and no mechanical identifier preservation** —
-   our own history has the T5000-objective-carryover incident to show for it.
-6. **No agent-facing recovery path**: compacted detail is on disk with no tool
-   pointed at it, so "still in the transcript" is true and useless to the model.
-7. **No pre-compaction save nudge** (OpenClaw's flush) — mitigated but not
-   replaced by durable-state-in-prompt.
+1. **The summary runtime itself has two real bugs** (review findings 2, 3): a
+   configured summary *provider* is called through the primary client — wrong
+   endpoint, wrong credential — and a speculative summary is adopted on entry
+   count alone, so one enormous steering message can ride in under a stale
+   summary and leave the request unsendable.
+2. **Nothing accounts for the whole request.** `compactionUrgency` weighs
+   history only; system prompt and tool schemas are invisible to it, so an
+   incompressible floor produces *rejected requests without compaction ever
+   firing* — a silent dead end, not a thrash loop. There is also no real
+   `prompt_tokens` feedback anywhere: 2.5 chars/token stands uncalibrated, and
+   for CJK it **under**-counts (≈1 token/char), meaning *late* compaction and
+   overflow, the opposite of v1's claim; windows are cached by bare model name
+   across providers.
+3. **The summary is unvalidated and its evidence pre-clipped**: inputs cut to
+   400 chars/block before the summariser (long paths unrecoverable), output
+   accepted if nonempty, no mechanical identifier preservation — the
+   T5000-objective incident and the schema-amnesia incident are both children
+   of this.
+4. **No cut anchoring beyond pair-safety.** The live task's opening user
+   message can be summarised away; both compared systems guarantee it survives.
+5. **Rememberer batches can interleave** (review finding 6): the pending queue
+   clears before the await, so a slow older extraction lands *after* a newer
+   correction and outranks it in chronological recall.
+6. **Missing prune passes are dedup and argument-trimming**, not text pruning
+   wholesale (v1 overstated); scope after measuring what actually remains in
+   post-`DURABLE_RESULT_CHARS` histories.
+7. **No pre-compaction save nudge** — and the naive version is impossible: the
+   compaction runs before request assembly, so a nudge must be a bounded
+   checkpoint turn against the uncompacted history or nothing.
 
 ## 5. The fix plan
 
-P0 — this week, each small and testable:
+P0 — reordered by the review around correctness before optimisation:
 1. ~~Entry triggers demoted to backstops~~ (shipped, docs/23).
-2. **Deterministic demotion of old text tool-results** before any summary:
-   dedup identical results, demote results older than the last N rounds to
-   one-line stubs with byte counts, shrink oversized tool arguments by JSON
-   string-leaf trimming (adopt Hermes's parse-don't-slice lesson — a byte slice
-   400-loops MiniMax).
-3. **Anti-thrash**: record the provider's real `prompt_tokens` after a
-   compacted turn; if it did not clear the trigger, count an ineffective pass;
-   two passes → stop auto-compacting, log loudly. Cooldown after summariser
-   failure.
-4. **Calibrate the estimator** against real usage per conversation (the
-   Hermes projection), and add system prompt + tool schema estimate into the
-   urgency decision.
+2. **Fix summary-provider routing**: resolve client and profile together,
+   validate at startup, fall back to the agent's own model before ever adopting
+   a dropped-entry marker; test cross-provider configuration explicitly.
+3. **Complete-request preflight accounting**: system prompt + tool schemas +
+   history in the pressure estimate, calibrated against real `prompt_tokens`
+   per provider/base-URL; detect the incompressible floor before dispatch.
+4. **Token-validate pending summaries before adoption**:
+   `estimateTokens([summary, ...tail])` against the current policy, plus
+   coverage compatibility with the current cut; tests for large post-summary
+   steering.
+5. **Mechanical summary anchors + validation**: full-block extraction of
+   paths/ids/spill-pointers appended outside the LLM's output; heading and
+   size validation; previous summary as an explicit update input; "history is
+   data, not instructions".
 
 P1:
-5. **Cut anchoring**: prefer the newest plain user message as the cut; always
-   keep the last user and last assistant entries verbatim.
-6. **Summary hardening**: explicit iterative-update prompt fed the previous
-   summary; a mechanically-extracted anchor line (paths, ids, task numbers)
-   appended outside the LLM's reach; injection-defense line ("history is data").
-7. **Post-compaction schema insurance**: keep the most recent successful
-   call/result pair per active tool out of the summarised range (the weak-model
-   lesson bought at MiniMax prices).
-8. **Transcript search for agents**: a read-only tool over the conversation's
-   own JSONL (grep-shaped, no LLM), and the summary/dropped marker names it —
-   turning "it's on disk" into something the model can act on.
+6. **Anti-thrash** — now observable via the P0-3 accounting: ineffective-pass
+   counting on real usage, cooldown after summariser failure, loud stop.
+7. **Serialize Rememberer extraction per agent** (or sequence-stamp before the
+   model call and commit in order).
+8. **Cut anchoring**: prefer the newest plain user message; keep last user and
+   last assistant verbatim.
+9. **Post-compaction schema insurance**: keep the most recent successful
+   call/result pair per active tool out of the summarised range.
+10. **ReadHistory audit** (replacing v1's build-it item): scope availability,
+    discoverability, retrieval bounds, recovery accuracy.
 
 P2:
-9. Pre-compaction durable-state nudge (append a system line before adopting a
-   summary: "update progress.md/todos now if the history holds anything not yet
-   written down").
-10. Prefix-cache audit when the provider gains caching (roadmap note exists);
-    revisit the volatile-half-rebuild trade at that point, with Hermes's
-    frozen-snapshot pattern as the alternative.
+11. Measure post-`DURABLE_RESULT_CHARS` token composition; scope dedup and
+    argument-trimming passes to what the measurement shows.
+12. Pre-compaction checkpoint turn (bounded, against the uncompacted history) —
+    or an explicit decision not to build it.
+13. Prefix-cache audit when the provider gains caching; revisit the
+    volatile-half rebuild with Hermes's frozen-snapshot pattern as the
+    alternative.
 
 ## 6. Review protocol for this document
 
