@@ -27,6 +27,8 @@ import {
   statSync,
 } from "node:fs";
 import { appendLine } from "../host/jsonl.ts";
+import { BOX_RECORD_FILENAME, ensureBoxRecord, type BoxRecord } from "../box/identity.ts";
+import { DEFAULT_CONTAINER } from "../box/docker.ts";
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 import { isTodoStatus, type DurableState, type TodoItem } from "../host/durable.ts";
@@ -141,6 +143,14 @@ export interface AgentProfile {
    */
   scopeId?: string;
   /**
+   * The box this agent lives in — docs/22: bound at creation, immutable for the
+   * same structural reason as `displayIndex`: `update` takes an allow-list of
+   * changeable fields and this is not on it. Stamped from the roster's box record
+   * (`box.json` beside the agents), and backfilled onto profiles from before the
+   * field existed, so "every agent has a box" holds by shape, not by wiring.
+   */
+  boxId?: string;
+  /**
    * The provider this agent runs on, when it should differ from the installation's.
    *
    * Agent identity and runtime are separate: the reviewer can run the big model while
@@ -204,8 +214,30 @@ export class AgentNotFoundError extends Error {
 }
 
 export class AgentRegistry {
+  /**
+   * The box this roster belongs to (docs/22 §7 item 1). Minted on first contact,
+   * stable across every later construction — identity only, no authorization:
+   * `members` stays `"everyone"` until the membership machinery exists.
+   */
+  readonly box: BoxRecord;
+
   constructor(readonly root: string = defaultAgentsRoot()) {
     mkdirSync(this.root, { recursive: true });
+    this.box = ensureBoxRecord(join(this.root, BOX_RECORD_FILENAME), DEFAULT_CONTAINER);
+    this.backfillBoxIds();
+  }
+
+  /**
+   * Profiles from before `boxId` existed get this roster's box. In the
+   * constructor rather than at a call site, so "every agent has a box" is a
+   * property of holding a registry at all — the `displayIndex` lesson, applied.
+   * A migration, not an edit: `updatedAt` stays put.
+   */
+  private backfillBoxIds(): void {
+    for (const record of this.list()) {
+      if (record.profile.boxId !== undefined) continue;
+      this.writeProfile(record.id, { ...record.profile, boxId: this.box.id });
+    }
   }
 
   dirFor(agentId: string): string {
@@ -370,6 +402,9 @@ export class AgentRegistry {
       avatarColor: input.avatarColor,
       hidden: input.hidden ?? false,
       displayIndex: this.nextDisplayIndex(),
+      // Bound at creation like the display, immutable the same way: not a create
+      // input (nothing may choose a different box) and not on update's allow-list.
+      boxId: this.box.id,
       ...(input.ownerUserId !== undefined ? { ownerUserId: input.ownerUserId } : {}),
       visibility: input.visibility ?? "shared",
       ...(input.tools !== undefined ? { tools: [...input.tools] } : {}),

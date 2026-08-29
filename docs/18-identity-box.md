@@ -14,6 +14,18 @@ that was wrong. Binding an agent to one box at creation, the way `displayIndex` 
 bound, removes almost all of it. The correction came from the question "why would the agent
 carry anything between boxes if it cannot move?", which the document had no answer to.
 
+**Amended 2026-08-29, with docs/22 as the normative model for identity and naming.**
+Where this document says `boxName`, the shipped field is **`boxId`** — an opaque id
+minted once per roster (`box.json` beside the agents, `src/box/identity.ts`) and
+retired forever when the box is destroyed. A display name is a label; nothing binds
+to it. This kills two reviewed findings at once: `config.boxes[name]` letting a
+recreated box inherit a dead box's class, and `classifyBox` being keyed by a URL in
+attached deployments (the 2026-08-28 claims review, finding 1) — the class lookup
+moves to the box id with the rest of the naming. `access: private`/`shared` becomes a
+*derived* description of the box's member set (docs/22 §0), not a stored class.
+Agents are stamped at creation and old profiles are backfilled; `update`'s allow-list
+still does not contain the field.
+
 ## 0. The idea
 
 Every earlier version tried to give one kind of box a privacy property it could not have.
@@ -178,7 +190,9 @@ goes in beside it and gets the same guarantee for free.
 
 The work, in full:
 
-- `boxName` on the agent profile, set at creation, absent from `update`'s allow-list.
+- `boxId` on the agent profile, set at creation, absent from `update`'s allow-list —
+  **built 2026-08-29** (`src/box/identity.ts`, stamped and backfilled in the
+  registry; see the amendment note in the header for why it is an id, not a name).
 - The orchestrator resolves the box client **per agent** instead of holding one
   `this.box` (`orchestrator.ts:117`, ten uses). Mechanical.
 
@@ -250,9 +264,10 @@ who can reach them may drive them — which is another reason the shared class s
    Not yet done, and small: the box list (there is one box, so there is no list) and the
    settings dialog's box section.
 4. **One session resolver** across page, API and RFB, with a route that names the box.
-5. **Bind agents to a box** (§5): `boxName` set at creation and absent from `update`'s
-   allow-list, a per-agent box lookup in the orchestrator, and a box filter on shared
-   memory. Plus the `SendToAgent` decision, which is a decision and not code.
+5. **Bind agents to a box** (§5): `boxId` set at creation and absent from `update`'s
+   allow-list — **the field is built, 2026-08-29** — plus the remaining parts: a
+   per-agent box lookup in the orchestrator, and a box filter on shared memory.
+   Plus the `SendToAgent` decision, which is a decision and not code.
 6. **The takeover state** (§3) plus a real recorder pause.
 7. **Private box provisioning**: a second box per person. Mechanically this is `BoxManager`
    with another container name; the machinery exists.

@@ -8,7 +8,7 @@
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync, rmSync, readFileSync } from "node:fs";
+import { mkdtempSync, rmSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { AgentRegistry } from "./registry.ts";
@@ -69,6 +69,46 @@ test("registry update merges and never blanks a name", () => {
     // An empty name is ignored rather than destroying the profile.
     const blanked = registry.update(created.id, { name: "  " });
     assert.equal(blanked.profile.name, "Ada Lovelace");
+  } finally {
+    cleanup();
+  }
+});
+
+test("every agent is stamped with the roster's box id at creation, immutably", () => {
+  const { registry, cleanup } = tempRegistry();
+  try {
+    const created = registry.create({ name: "Ada" });
+    assert.equal(created.profile.boxId, registry.box.id);
+    assert.match(registry.box.id, /^box_/);
+
+    // A second registry on the same root sees the same box, not a new one.
+    const reopened = new AgentRegistry(registry.root);
+    assert.equal(reopened.box.id, registry.box.id);
+    assert.equal(reopened.get(created.id).profile.boxId, registry.box.id);
+
+    // update's allow-list does not include boxId — the displayIndex guarantee.
+    const updated = registry.update(created.id, { name: "Ada Lovelace" });
+    assert.equal(updated.profile.boxId, registry.box.id);
+  } finally {
+    cleanup();
+  }
+});
+
+test("profiles from before boxId existed are backfilled on the next load", () => {
+  const { registry, cleanup } = tempRegistry();
+  try {
+    const created = registry.create({ name: "Rex" });
+    // Simulate a pre-boxId profile: strip the field on disk.
+    const path = registry.profilePathFor(created.id);
+    const onDisk = JSON.parse(readFileSync(path, "utf8"));
+    delete onDisk.boxId;
+    writeFileSync(path, `${JSON.stringify(onDisk, null, 2)}\n`, "utf8");
+
+    const reopened = new AgentRegistry(registry.root);
+    const migrated = reopened.get(created.id).profile;
+    assert.equal(migrated.boxId, reopened.box.id);
+    // A migration, not an edit: updatedAt is untouched.
+    assert.equal(migrated.updatedAt, onDisk.updatedAt);
   } finally {
     cleanup();
   }
