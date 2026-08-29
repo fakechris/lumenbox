@@ -251,9 +251,9 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
   const channelCredentialsSet = (record: { id: string; type: string }): boolean => {
     const saved = loadConfig().env ?? {};
     const has = (key: string) => process.env[key] !== undefined || typeof saved[key] === "string";
-    if (record.type === "telegram") return has("TELEGRAM_BOT_TOKEN");
-    if (record.type === "dingtalk") return has("DINGTALK_CLIENT_ID") && has("DINGTALK_CLIENT_SECRET");
     const base = channelEnvBase(record.id);
+    if (record.type === "telegram") return has("TELEGRAM_BOT_TOKEN");
+    if (record.type === "dingtalk") return has(`${base}_CLIENT_ID`) && has(`${base}_CLIENT_SECRET`);
     return has(`${base}_APP_ID`) && has(`${base}_APP_SECRET`);
   };
   /** Read once on first request; it never changes while the server is up. */
@@ -1144,10 +1144,10 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
     // would run two adapters minting the same `feishu:` namespace — refused
     // loudly instead.
     for (const record of channelRecords) {
-      if (record.id !== record.type && record.type !== "feishu") {
-        // Feishu is prefix-parameterized (docs/22 §7 item 3); the other adapters
-        // still hardcode their namespace, so a second door of those types would
-        // mint colliding identities. Refused until they get the same treatment.
+      if (record.id !== record.type && record.type === "telegram") {
+        // Feishu and DingTalk are prefix-parameterized (docs/22 §7 item 3);
+        // Telegram still hardcodes its namespace, so a second door of that type
+        // would mint colliding identities. Refused until it gets the same treatment.
         log(
           `channel ${record.id}: a second ${record.type} door needs prefix ` +
             `parameterization (docs/22 §7 item 3); not started`
@@ -1186,10 +1186,14 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
           orchestrator.docReader = new FeishuDocReader(feishuId, feishuSecret);
         }
       } else {
-        const dingId = process.env.DINGTALK_CLIENT_ID;
-        const dingSecret = process.env.DINGTALK_CLIENT_SECRET;
-        const dingCardTemplate = process.env.DINGTALK_CARD_TEMPLATE_ID;
-        const dingTaskCardTemplate = process.env.DINGTALK_TASK_CARD_TEMPLATE_ID;
+        // Same one-rule env derivation as feishu: the grandfathered door's base is
+        // DINGTALK, so DINGTALK_CLIENT_ID reads exactly as it always has, and a
+        // second door named dingtalk-work reads DINGTALK_WORK_CLIENT_ID.
+        const base = channelEnvBase(record.id);
+        const dingId = process.env[`${base}_CLIENT_ID`];
+        const dingSecret = process.env[`${base}_CLIENT_SECRET`];
+        const dingCardTemplate = process.env[`${base}_CARD_TEMPLATE_ID`];
+        const dingTaskCardTemplate = process.env[`${base}_TASK_CARD_TEMPLATE_ID`];
         channels.register(
           new DingTalkChannel(
             dingId ?? "",
@@ -1203,12 +1207,13 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
             // acknowledged with the plain line, same as before cards existed.
             dingTaskCardTemplate !== undefined && dingTaskCardTemplate !== ""
               ? dingTaskCardTemplate
-              : undefined
+              : undefined,
+            record.id
           ),
           dingId !== undefined && dingSecret !== undefined,
           dingId !== undefined && dingSecret !== undefined
             ? "starting"
-            : "set DINGTALK_CLIENT_ID and DINGTALK_CLIENT_SECRET"
+            : `set ${base}_CLIENT_ID and ${base}_CLIENT_SECRET`
         );
       }
     }
@@ -2572,8 +2577,15 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
             const base = channelEnvBase(id);
             // Into the config's env map, beside the other channel credentials —
             // where they live long-term is the docs/15 decision; this follows the
-            // installation's existing convention rather than preempting it.
-            saveConfig({ env: { [`${base}_APP_ID`]: appId, [`${base}_APP_SECRET`]: appSecret } });
+            // installation's existing convention rather than preempting it. The
+            // names follow each vendor's own vocabulary, like the grandfathered
+            // pairs do: Feishu apps have app ids, DingTalk apps have client ids.
+            saveConfig({
+              env:
+                type === "dingtalk"
+                  ? { [`${base}_CLIENT_ID`]: appId, [`${base}_CLIENT_SECRET`]: appSecret }
+                  : { [`${base}_APP_ID`]: appId, [`${base}_APP_SECRET`]: appSecret },
+            });
             credentialsSaved = true;
           }
           // A door whose credentials are in hand opens *now* — registerAndStart
@@ -2581,15 +2593,14 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
           // registration, just later. Only replacing the credentials of an
           // already-running adapter still takes a restart.
           let started = false;
-          if (type === "feishu") {
+          if (type === "feishu" || type === "dingtalk") {
             const base = channelEnvBase(id);
             const savedEnv = loadConfig().env ?? {};
-            const liveAppId =
-              appId !== "" ? appId : (process.env[`${base}_APP_ID`] ?? savedEnv[`${base}_APP_ID`]);
+            const idKey = type === "feishu" ? `${base}_APP_ID` : `${base}_CLIENT_ID`;
+            const secretKey = type === "feishu" ? `${base}_APP_SECRET` : `${base}_CLIENT_SECRET`;
+            const liveAppId = appId !== "" ? appId : (process.env[idKey] ?? savedEnv[idKey]);
             const liveSecret =
-              appSecret !== ""
-                ? appSecret
-                : (process.env[`${base}_APP_SECRET`] ?? savedEnv[`${base}_APP_SECRET`]);
+              appSecret !== "" ? appSecret : (process.env[secretKey] ?? savedEnv[secretKey]);
             if (
               typeof liveAppId === "string" &&
               liveAppId !== "" &&
@@ -2597,7 +2608,17 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
               liveSecret !== ""
             ) {
               started = channels.registerAndStart(
-                new FeishuChannel(liveAppId, liveSecret, line => log(line), ingress, id),
+                type === "feishu"
+                  ? new FeishuChannel(liveAppId, liveSecret, line => log(line), ingress, id)
+                  : new DingTalkChannel(
+                      liveAppId,
+                      liveSecret,
+                      line => log(line),
+                      ingress,
+                      process.env[`${base}_CARD_TEMPLATE_ID`],
+                      process.env[`${base}_TASK_CARD_TEMPLATE_ID`],
+                      id
+                    ),
                 "starting"
               );
             }

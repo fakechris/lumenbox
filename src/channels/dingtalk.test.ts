@@ -755,3 +755,15 @@ test("image uploads declare the bytes' true format, sniffed from magic", async (
   assert.equal(imageFormatOf(Buffer.from("BM\x00\x00")), "bmp");
   assert.equal(imageFormatOf(Buffer.from("\u{f8ff}???")), "png", "unknown falls to png, the wire's default");
 });
+
+test("a second dingtalk door mints its own namespace", () => {
+  // docs/22 §7 item 3, dingtalk half: the record id is the prefix, so two apps on
+  // one installation are two namespaces. parseChatKey reads any door's keys — the
+  // first segment is the id, never the address.
+  const work = new DingTalkChannel("a", "b", () => {}, undefined, undefined, undefined, "dingtalk-work");
+  assert.equal(work.name, "dingtalk-work");
+  const legacy = new DingTalkChannel("a", "b", () => {});
+  assert.equal(legacy.name, "dingtalk");
+  assert.deepEqual(parseChatKey("dingtalk-work:cidXYZ"), { conversationId: "cidXYZ" });
+  assert.deepEqual(parseChatKey("dingtalk:cidXYZ"), { conversationId: "cidXYZ" });
+});

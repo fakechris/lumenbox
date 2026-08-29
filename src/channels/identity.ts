@@ -147,10 +147,10 @@ export function upsertChannelRecord(
           }
     );
   } else {
-    if (input.type !== "feishu") {
+    if (input.type === "telegram") {
       throw new Error(
-        `a second ${input.type} door needs that adapter prefix-parameterized first ` +
-          `(docs/22 §7 item 3); only feishu supports it today.`
+        `a second telegram door needs that adapter prefix-parameterized first ` +
+          `(docs/22 §7 item 3); feishu and dingtalk support it today.`
       );
     }
     updated = [

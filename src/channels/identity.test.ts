@@ -108,9 +108,11 @@ test("upsert creates a feishu door and edits only what may change", () => {
     assert.equal(after.name, "工作飞书", "an omitted name keeps its value");
     assert.equal(after.defaultAgent, undefined);
 
-    // type is immutable, like id; other types are refused until parameterized.
+    // type is immutable, like id; telegram stays refused until parameterized.
     assert.throws(() => ensureUpsert(path, { id: "feishu-work", type: "dingtalk" }), /immutable/);
-    assert.throws(() => ensureUpsert(path, { id: "ding-2", type: "dingtalk" }), /parameterized/);
+    assert.throws(() => ensureUpsert(path, { id: "tg-2", type: "telegram" }), /parameterized/);
+    // dingtalk is parameterized now; a second door of it is ordinary.
+    assert.ok(ensureUpsert(path, { id: "ding-2", type: "dingtalk" }).some(r => r.id === "ding-2"));
     // An id that is another adapter's namespace is refused outright.
     assert.throws(() => ensureUpsert(path, { id: "dingtalk", type: "feishu" }), /namespace/);
     assert.throws(() => ensureUpsert(path, { id: "Feishu Work", type: "feishu" }), /cannot be a channel id/);

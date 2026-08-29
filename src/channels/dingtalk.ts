@@ -265,7 +265,11 @@ export interface ChatTarget {
 
 /** Which conversation id a chatKey addresses. There is no thread half on this wire. */
 export function parseChatKey(chatKey: string): { conversationId: string } {
-  const conversationId = chatKey.replace(/^dingtalk:/, "").split(":")[0] ?? "";
+  // The first segment is the channel id — `dingtalk` for the grandfathered door, a
+  // second door's own id otherwise — and never part of the address (docs/22 §4).
+  // A key with no prefix at all is already a bare conversation id and stays one.
+  if (!chatKey.includes(":")) return { conversationId: chatKey };
+  const conversationId = chatKey.split(":")[1] ?? "";
   return { conversationId };
 }
 
@@ -454,7 +458,12 @@ function mimeOf(name: string): string {
 }
 
 export class DingTalkChannel implements ChannelAdapter {
-  readonly name = "dingtalk";
+  /**
+   * The channel record's id (docs/22 §4): the immutable key everything on this
+   * door is minted under. `"dingtalk"` for the grandfathered door; a second
+   * DingTalk app gets its own id and therefore its own namespace.
+   */
+  readonly name: string;
   private stopped = false;
   private socket: WebSocket | undefined;
   /** Held while this process is the app's stream consumer. */
@@ -532,8 +541,10 @@ export class DingTalkChannel implements ChannelAdapter {
      * the variables it must bind). Its presence is what turns task cards on; the
      * manager checks for `postTaskCard` and falls back to the plain ack line.
      */
-    private readonly taskCardTemplateId?: string
+    private readonly taskCardTemplateId?: string,
+    channelId = "dingtalk"
   ) {
+    this.name = channelId;
     if (cardTemplateId !== undefined && cardTemplateId !== "") {
       this.postApprovalCard = (identity, card) => this.deliverApprovalCard(identity, card);
     }
@@ -576,7 +587,7 @@ export class DingTalkChannel implements ChannelAdapter {
     // across every open stream connection, so a second instance would not fail — it
     // would silently take half the traffic. Refused loudly instead.
     this.releaseLock = acquireConsumerLock(this.clientId, process.pid, {
-      id: "dingtalk",
+      id: this.name,
       label: "DingTalk",
     });
     await this.connect(onMessage);
@@ -628,7 +639,7 @@ export class DingTalkChannel implements ChannelAdapter {
 
   /** Records a discard against the arrival, so no drop is silent. */
   private discard(messageId: string | undefined, reason: string): void {
-    this.log(`channel dingtalk: dropped ${messageId ?? "?"} — ${reason}`);
+    this.log(`channel ${this.name}: dropped ${messageId ?? "?"} — ${reason}`);
     if (messageId !== undefined) this.ingress?.decided(messageId, "dropped", reason);
   }
 
@@ -708,17 +719,17 @@ export class DingTalkChannel implements ChannelAdapter {
       });
     } catch (error) {
       const detail = error instanceof Error ? error.message : String(error);
-      this.log(`channel dingtalk: media fetch failed (${detail})`);
+      this.log(`channel ${this.name}: media fetch failed (${detail})`);
       return {};
     }
     if (!response.ok) {
-      this.log(`channel dingtalk: media refused (${await describeFailure(response)})`);
+      this.log(`channel ${this.name}: media refused (${await describeFailure(response)})`);
       return {};
     }
     const readBytes = async (fetched: Response): Promise<string | undefined> => {
       const buffer = Buffer.from(await fetched.arrayBuffer());
       if (buffer.byteLength > 25 * 1024 * 1024) {
-        this.log("channel dingtalk: media past the 25MB cap, dropped");
+        this.log(`channel ${this.name}: media past the 25MB cap, dropped`);
         return undefined;
       }
       return buffer.toString("base64");
@@ -728,12 +739,12 @@ export class DingTalkChannel implements ChannelAdapter {
       if ((response.headers.get("content-type") ?? "").includes("application/json")) {
         const pointed = (await response.json()) as { downloadUrl?: string };
         if (typeof pointed.downloadUrl !== "string") {
-          this.log("channel dingtalk: media answer named no download url");
+          this.log(`channel ${this.name}: media answer named no download url`);
           return {};
         }
         const second = await fetch(pointed.downloadUrl, { signal: AbortSignal.timeout(60_000) });
         if (!second.ok) {
-          this.log(`channel dingtalk: media url refused (HTTP ${second.status})`);
+          this.log(`channel ${this.name}: media url refused (HTTP ${second.status})`);
           return {};
         }
         const base64 = await readBytes(second);
@@ -743,7 +754,7 @@ export class DingTalkChannel implements ChannelAdapter {
       return base64 === undefined ? {} : { base64 };
     } catch (error) {
       const detail = error instanceof Error ? error.message : String(error);
-      this.log(`channel dingtalk: media read failed (${detail})`);
+      this.log(`channel ${this.name}: media read failed (${detail})`);
       return {};
     }
   }
@@ -789,11 +800,11 @@ export class DingTalkChannel implements ChannelAdapter {
 
     socket.addEventListener("close", () => {
       if (this.stopped) return;
-      this.log("channel dingtalk: connection closed; reconnecting in 5s");
+      this.log(`channel ${this.name}: connection closed; reconnecting in 5s`);
       setTimeout(() => {
         void this.connect(onMessage).catch((error: unknown) => {
           const detail = error instanceof Error ? error.message : String(error);
-          this.log(`channel dingtalk: reconnect failed (${detail})`);
+          this.log(`channel ${this.name}: reconnect failed (${detail})`);
         });
       }, 5000);
     });
@@ -825,7 +836,7 @@ export class DingTalkChannel implements ChannelAdapter {
       // A whole frame discarded. Silent, this is the same failure Feishu had: a message
       // that arrived and vanished looks exactly like one that never arrived, and the
       // only way to tell was to add a log line and ask somebody to send it again.
-      this.log(`channel dingtalk: frame did not parse, dropped`);
+      this.log(`channel ${this.name}: frame did not parse, dropped`);
       return;
     }
     const transportId = frame.headers?.messageId ?? "";
@@ -854,14 +865,14 @@ export class DingTalkChannel implements ChannelAdapter {
     try {
       payload = JSON.parse(frame.data ?? "{}");
     } catch {
-      this.log(`channel dingtalk: dropped ${transportId || "?"} — body did not parse`);
+      this.log(`channel ${this.name}: dropped ${transportId || "?"} — body did not parse`);
       return;
     }
 
-    const chatKey = `dingtalk:${
+    const chatKey = `${this.name}:${
       payload.conversationId ?? payload.senderStaffId ?? payload.senderId ?? "unknown"
     }`;
-    const identity = `dingtalk:${payload.senderStaffId ?? payload.conversationId ?? "unknown"}`;
+    const identity = `${this.name}:${payload.senderStaffId ?? payload.conversationId ?? "unknown"}`;
     const sender = payload.senderStaffId ?? payload.conversationId ?? "unknown";
 
     // Logged before anything can drop it, under the business id when there is one:
@@ -871,7 +882,7 @@ export class DingTalkChannel implements ChannelAdapter {
     if (inboundId !== "") {
       this.ingress?.arrived({
         id: inboundId,
-        channel: "dingtalk",
+        channel: this.name,
         identity,
         chatKey,
         kind: payload.msgtype ?? "unknown",
@@ -980,7 +991,7 @@ export class DingTalkChannel implements ChannelAdapter {
       const fetched = await this.downloadResource(code).catch(() => ({}) as { base64?: string });
       if (fetched.base64 === undefined) {
         this.log(
-          `channel dingtalk: image ${index + 1} in ${messageId ?? "?"} could not be fetched`
+          `channel ${this.name}: image ${index + 1} in ${messageId ?? "?"} could not be fetched`
         );
         continue;
       }
@@ -1024,7 +1035,7 @@ export class DingTalkChannel implements ChannelAdapter {
       if (reply !== undefined && reply !== "") await this.sendToChat(chatKey, reply);
     } catch (error) {
       const detail = error instanceof Error ? error.message : String(error);
-      this.log(`channel dingtalk: reply failed (${detail})`);
+      this.log(`channel ${this.name}: reply failed (${detail})`);
     }
   }
 
@@ -1246,15 +1257,15 @@ export class DingTalkChannel implements ChannelAdapter {
     try {
       frame = JSON.parse(raw) as CardCallbackFrame;
     } catch {
-      this.log("channel dingtalk: card callback did not parse");
+      this.log(`channel ${this.name}: card callback did not parse`);
       return;
     }
     const press = approvalPressFrom(frame);
     if (press === undefined || this.cardTemplateId === undefined) return;
     const pending = this.cardApprovals.get(press.instanceId);
-    const identity = `dingtalk:${press.userId}`;
+    const identity = `${this.name}:${press.userId}`;
     if (pending === undefined) {
-      this.log(`channel dingtalk: press on unknown card ${press.instanceId} by ${identity}`);
+      this.log(`channel ${this.name}: press on unknown card ${press.instanceId} by ${identity}`);
       await this.send(identity,
         "That consent is no longer waiting — it may have been answered from the app, " +
           "or the turn moved on.").catch(() => {});
@@ -1270,13 +1281,13 @@ export class DingTalkChannel implements ChannelAdapter {
       });
       if (line === undefined) return;
       if (press.spaceType === "IM_GROUP" && typeof press.spaceId === "string" && press.spaceId !== "") {
-        await this.sendToChat(`dingtalk:${press.spaceId}`, line);
+        await this.sendToChat(`${this.name}:${press.spaceId}`, line);
       } else {
         await this.send(identity, line);
       }
     } catch (error) {
       const detail = error instanceof Error ? error.message : String(error);
-      this.log(`channel dingtalk: card press handling failed (${detail})`);
+      this.log(`channel ${this.name}: card press handling failed (${detail})`);
     }
   }
 
@@ -1385,7 +1396,7 @@ export class DingTalkChannel implements ChannelAdapter {
     const route = outboundRoute(conversation.conversationType);
     const asker =
       route === "direct"
-        ? (identity ?? (conversation.userId !== undefined ? `dingtalk:${conversation.userId}` : undefined))
+        ? (identity ?? (conversation.userId !== undefined ? `${this.name}:${conversation.userId}` : undefined))
         : undefined;
     const target = {
       route,

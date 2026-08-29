@@ -882,11 +882,15 @@ export const APP_HTML = String.raw`<!doctype html>
       <label>Channels</label>
       <div id="setchannels" style="display:flex;flex-direction:column;gap:6px"></div>
       <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
+        <select id="setchtype" style="height:38px;border-radius:var(--radius-input);border:1px solid var(--border-strong);background:var(--bg);color:var(--text);padding:0 8px">
+          <option value="feishu" selected>feishu</option>
+          <option value="dingtalk">dingtalk</option>
+        </select>
         <input id="setchid" placeholder="feishu-work" spellcheck="false" style="flex:1;min-width:90px">
         <input id="setchname" placeholder="显示名" spellcheck="false" style="flex:1;min-width:70px">
         <select id="setchagent" style="height:38px;border-radius:var(--radius-input);border:1px solid var(--border-strong);background:var(--bg);color:var(--text);padding:0 8px"></select>
-        <input id="setchappid" placeholder="App ID (cli_…)" spellcheck="false" style="flex:1;min-width:90px">
-        <input id="setchsecret" type="password" placeholder="App Secret" spellcheck="false" autocomplete="off" style="flex:1;min-width:90px">
+        <input id="setchappid" placeholder="App/Client ID" spellcheck="false" style="flex:1;min-width:90px">
+        <input id="setchsecret" type="password" placeholder="Secret" spellcheck="false" autocomplete="off" style="flex:1;min-width:90px">
         <button class="btn sm" id="setchadd">Add door</button>
       </div>
       <div class="fieldnote">Each row is a door: a bot on a wire, opening into this box. A channel
@@ -894,8 +898,8 @@ export const APP_HTML = String.raw`<!doctype html>
         config's env map under &lt;ID&gt;_APP_ID + _APP_SECRET). The id becomes the prefix of every
         identity the door mints and is chosen once (lowercase letters, digits, hyphens); the
         display name and the default agent — who answers when a message names nobody — change
-        freely and apply at once. A second door today can only be Feishu; with credentials in
-        hand it opens immediately, no restart.</div>
+        freely and apply at once. Second doors: Feishu and DingTalk (Telegram still needs its
+        prefix work); with credentials in hand a new door opens immediately, no restart.</div>
       <div class="fieldnote" id="setchstatus"></div>
     </div>
     <div class="field" data-tier="installation" id="setmcpwrap" style="display:none">
@@ -1443,7 +1447,7 @@ $("setchadd").onclick = function () {
     headers: { "content-type": "application/json" },
     body: JSON.stringify({
       id: id,
-      type: "feishu",
+      type: $("setchtype").value,
       name: $("setchname").value,
       defaultAgent: $("setchagent").value,
       appId: $("setchappid").value,
