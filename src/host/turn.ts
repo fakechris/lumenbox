@@ -268,8 +268,16 @@ function truncateOldestResults(
   }
   return { dropped, chars };
 }
-/** Transcript entries replayed into a new turn's context. */
-const HISTORY_LIMIT = 60;
+/**
+ * Transcript entries replayed into a new turn's context. A backstop, not a budget:
+ * tokens are the scarce resource and compaction's token trigger governs. 400, up
+ * from 60 (docs/23) — at 60, one computer-use turn (two entries per round, four
+ * hundred rounds allowed *within* a turn) could exceed the cap that the *next*
+ * turn's replay was held to, which is why compaction's entry trigger had to sit at
+ * 50 and fired constantly. The cap exists only so a pathological entry flood cannot
+ * assemble an unbounded request behind the token estimator's back.
+ */
+const HISTORY_LIMIT = envNumber("AGENTBOX_HISTORY_LIMIT", 400);
 
 export interface TurnDeps {
   client: Anthropic;

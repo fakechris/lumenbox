@@ -72,7 +72,14 @@ export interface CompactionPolicy {
 export const DEFAULT_POLICY: CompactionPolicy = {
   triggerTokens: envNumber("AGENTBOX_COMPACT_AT_TOKENS", 60_000),
   keepTailTokens: envNumber("AGENTBOX_COMPACT_KEEP_TOKENS", 20_000),
-  maxEntries: envNumber("AGENTBOX_COMPACT_MAX_ENTRIES", 50),
+  // 320, up from 50 — the 2026-08-29 chronic-compaction root cause (docs/23). Entries
+  // are not the scarce resource; tokens are, and the token trigger governs. A
+  // computer-use turn writes two entries per round, so 50 fired after nearly every
+  // CUA turn at five-thousand-token histories — three compactions in one afternoon,
+  // all logged as "over the 50 entry trigger", one of which cost MiniMax the
+  // `computer` tool schema mid-task. The count stays only as a backstop against the
+  // assembler's own entry cap, and sits under it for the same reason it always did.
+  maxEntries: envNumber("AGENTBOX_COMPACT_MAX_ENTRIES", 320),
 };
 
 /**
