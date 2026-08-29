@@ -256,12 +256,21 @@ function isContentRefusal(error: unknown): boolean {
  * One parser, so there is no next one to forget.
  */
 export function splitChatKey(chatKey: string): { chatId: string; rootId?: string } {
-  const [chatId = "", rootId] = chatKey.replace(/^feishu:/, "").split(":");
+  // The first segment is the channel id — `feishu` for the grandfathered door,
+  // `feishu-work` for a second one — and never part of the address (docs/22 §4).
+  const [, chatId = "", rootId] = chatKey.split(":");
   return rootId === undefined || rootId === "" ? { chatId } : { chatId, rootId };
 }
 
 export class FeishuChannel implements ChannelAdapter {
-  readonly name = "feishu";
+  /**
+   * The channel record's id (docs/22 §4): the immutable key everything on this
+   * door is minted under — identities, chatKeys, conversation keys, log lines.
+   * `"feishu"` for the grandfathered door; a second Feishu app gets its own id
+   * and therefore its own namespace, which is what makes two doors of one type
+   * unable to collide.
+   */
+  readonly name: string;
   // Typed loosely because the SDK is a lazy import; the surface used is tiny.
   private apiClient:
     | {
@@ -372,7 +381,7 @@ export class FeishuChannel implements ChannelAdapter {
         }
       } catch (error) {
         const detail = error instanceof Error ? error.message : String(error);
-        this.log(`channel feishu: member names unavailable (${detail})`);
+        this.log(`channel ${this.name}: member names unavailable (${detail})`);
       }
     }
     return this.names.get(openId) ?? openId;
@@ -445,7 +454,7 @@ export class FeishuChannel implements ChannelAdapter {
     root_id?: string;
     chat_type?: string;
   }): string {
-    return conversationKeyFor(message);
+    return conversationKeyFor(message, this.name);
   }
 
 
@@ -492,12 +501,15 @@ export class FeishuChannel implements ChannelAdapter {
         at: string;
       }) => void;
       decided: (id: string, fate: "admitted" | "refused" | "dropped", reason?: string) => void;
-    }
-  ) {}
+    },
+    channelId = "feishu"
+  ) {
+    this.name = channelId;
+  }
 
   /** Records a discard against the arrival, so no drop is silent. */
   private discard(messageId: string | undefined, reason: string): void {
-    this.log(`channel feishu: dropped ${messageId ?? "?"} — ${reason}`);
+    this.log(`channel ${this.name}: dropped ${messageId ?? "?"} — ${reason}`);
     if (messageId !== undefined) this.ingress?.decided(messageId, "dropped", reason);
   }
 
@@ -556,9 +568,9 @@ export class FeishuChannel implements ChannelAdapter {
         if (arrivedId !== undefined) {
           this.ingress?.arrived({
             id: arrivedId,
-            channel: "feishu",
-            identity: `feishu:${openId}`,
-            chatKey: `feishu:${chatId}`,
+            channel: this.name,
+            identity: `${this.name}:${openId}`,
+            chatKey: `${this.name}:${chatId}`,
             kind: messageType ?? "unknown",
             chars: String(data.message?.content ?? "").length,
             ...(data.message?.thread_id !== undefined ? { threadId: data.message.thread_id } : {}),
@@ -587,7 +599,7 @@ export class FeishuChannel implements ChannelAdapter {
           const fileKey = parsed.file_key ?? parsed.image_key;
           if (fileKey === undefined) return {};
           const name = parsed.file_name ?? `image-${messageId.slice(-8)}.png`;
-          const identity = `feishu:${openId}`;
+          const identity = `${this.name}:${openId}`;
           this.chats.set(identity, chatId);
           void this.downloadResource(messageId, fileKey, messageType)
             .then(async base64 => {
@@ -595,7 +607,7 @@ export class FeishuChannel implements ChannelAdapter {
               const senderLabel = await this.labelFor(openId, chatId);
               const reply = await onMessage({
                 identity,
-                chatKey: `feishu:${chatId}`,
+                chatKey: `${this.name}:${chatId}`,
                 threadKey: this.conversationKeyFor(data.message ?? {}),
                 messageId,
                 senderLabel,
@@ -607,18 +619,18 @@ export class FeishuChannel implements ChannelAdapter {
               // else — the person who said "停" watched the answer land outside their
               // thread and could not tell whether the mechanism had heard them.
               if (reply !== undefined && reply !== "") {
-                await this.sendToChat(`feishu:${chatId}`, reply, { replyTo: messageId });
+                await this.sendToChat(`${this.name}:${chatId}`, reply, { replyTo: messageId });
               }
             })
             .catch((error: unknown) => {
               const detail = error instanceof Error ? error.message : String(error);
-              this.log(`channel feishu: file receive failed (${detail})`);
+              this.log(`channel ${this.name}: file receive failed (${detail})`);
               // The person is told, in the thread of the file they sent. Before this, the
               // failure was a host-side log line and the chat heard nothing — the agent
               // then looked at an empty inbox and guessed out loud.
               const code = (error as { response?: { data?: { code?: number } } })?.response
                 ?.data?.code;
-              void this.sendToChat(`feishu:${chatId}`, fileFetchFailed(name, code), {
+              void this.sendToChat(`${this.name}:${chatId}`, fileFetchFailed(name, code), {
                 replyTo: messageId,
               }).catch(() => {});
             });
@@ -680,7 +692,7 @@ export class FeishuChannel implements ChannelAdapter {
             "(They mentioned you with no other words — they are getting your attention. " +
             "Say briefly that you are here and what you are in the middle of, if anything.)";
         }
-        const identity = `feishu:${openId}`;
+        const identity = `${this.name}:${openId}`;
         this.chats.set(identity, chatId);
         void this.labelFor(openId, chatId)
           .then(async senderLabel => {
@@ -693,14 +705,14 @@ export class FeishuChannel implements ChannelAdapter {
                 () => undefined
               );
               if (base64 === undefined) {
-                this.log(`channel feishu: image ${index + 1} in ${messageId ?? "?"} could not be fetched`);
+                this.log(`channel ${this.name}: image ${index + 1} in ${messageId ?? "?"} could not be fetched`);
                 continue;
               }
               files.push({ name: `image-${index + 1}.png`, base64 });
             }
             return onMessage({
               identity,
-              chatKey: `feishu:${chatId}`,
+              chatKey: `${this.name}:${chatId}`,
               threadKey: this.conversationKeyFor(data.message ?? {}),
               ...(messageId !== undefined ? { messageId } : {}),
               senderLabel,
@@ -714,13 +726,13 @@ export class FeishuChannel implements ChannelAdapter {
             // person cannot tell their "停" was heard.
             reply
               ? messageId !== undefined
-                ? this.sendToChat(`feishu:${chatId}`, reply, { replyTo: messageId })
+                ? this.sendToChat(`${this.name}:${chatId}`, reply, { replyTo: messageId })
                 : this.send(identity, reply)
               : undefined
           )
           .catch((error: unknown) => {
             const detail = error instanceof Error ? error.message : String(error);
-            this.log(`channel feishu: reply failed (${detail})`);
+            this.log(`channel ${this.name}: reply failed (${detail})`);
           });
         return {};
       },
@@ -744,20 +756,20 @@ export class FeishuChannel implements ChannelAdapter {
           void this.labelFor(openId, chatId ?? "")
             .then(senderLabel =>
               this.messageHandler!({
-                identity: `feishu:${openId}`,
-                ...(chatId !== undefined ? { chatKey: `feishu:${chatId}` } : {}),
+                identity: `${this.name}:${openId}`,
+                ...(chatId !== undefined ? { chatKey: `${this.name}:${chatId}` } : {}),
                 senderLabel,
                 text: chosen,
               })
             )
             .then(line =>
               line !== undefined && line !== "" && chatId !== undefined
-                ? this.sendToChat(`feishu:${chatId}`, line)
+                ? this.sendToChat(`${this.name}:${chatId}`, line)
                 : undefined
             )
             .catch((error: unknown) => {
               const detail = error instanceof Error ? error.message : String(error);
-              this.log(`channel feishu: answer button failed (${detail})`);
+              this.log(`channel ${this.name}: answer button failed (${detail})`);
             });
           return {};
         }
@@ -769,15 +781,15 @@ export class FeishuChannel implements ChannelAdapter {
         ) {
           return {};
         }
-        void this.approvalHandler({ approvalId, reply, identity: `feishu:${openId}` })
+        void this.approvalHandler({ approvalId, reply, identity: `${this.name}:${openId}` })
           .then(line =>
             line !== undefined && chatId !== undefined
-              ? this.sendToChat(`feishu:${chatId}`, line)
+              ? this.sendToChat(`${this.name}:${chatId}`, line)
               : undefined
           )
           .catch((error: unknown) => {
             const detail = error instanceof Error ? error.message : String(error);
-            this.log(`channel feishu: card action failed (${detail})`);
+            this.log(`channel ${this.name}: card action failed (${detail})`);
           });
         return {};
       },
@@ -865,7 +877,7 @@ export class FeishuChannel implements ChannelAdapter {
         resource = await fetchAs("file");
       } catch (error) {
         const detail = error instanceof Error ? error.message : String(error);
-        this.log(`channel feishu: resource download failed (${detail})`);
+        this.log(`channel ${this.name}: resource download failed (${detail})`);
         return undefined;
       }
     }
@@ -882,7 +894,7 @@ export class FeishuChannel implements ChannelAdapter {
             ? (resource as NodeJS.ReadableStream)
             : undefined;
       if (stream === undefined) {
-        this.log("channel feishu: resource response has no readable shape");
+        this.log(`channel ${this.name}: resource response has no readable shape`);
         return undefined;
       }
       const chunks: Buffer[] = [];
@@ -890,7 +902,7 @@ export class FeishuChannel implements ChannelAdapter {
       for await (const chunk of stream as AsyncIterable<Buffer>) {
         total += chunk.length;
         if (total > 25 * 1024 * 1024) {
-          this.log("channel feishu: resource past the 25MB cap, dropped");
+          this.log(`channel ${this.name}: resource past the 25MB cap, dropped`);
           return undefined;
         }
         chunks.push(Buffer.from(chunk));
@@ -898,7 +910,7 @@ export class FeishuChannel implements ChannelAdapter {
       return Buffer.concat(chunks).toString("base64");
     } catch (error) {
       const detail = error instanceof Error ? error.message : String(error);
-      this.log(`channel feishu: resource read failed (${detail})`);
+      this.log(`channel ${this.name}: resource read failed (${detail})`);
       return undefined;
     }
   }
@@ -927,7 +939,7 @@ export class FeishuChannel implements ChannelAdapter {
         return response?.data?.message_id ?? response?.message_id;
       } catch (error) {
         const detail = error instanceof Error ? error.message : String(error);
-        this.log(`channel feishu: reply failed, posting to chat (${detail})`);
+        this.log(`channel ${this.name}: reply failed, posting to chat (${detail})`);
       }
     }
     // Only the plain create retries: a failed *reply* is usually a withdrawn anchor,
@@ -1137,7 +1149,7 @@ export function conversationKeyFor(message: {
   thread_id?: string;
   root_id?: string;
   chat_type?: string;
-}): string {
+}, prefix = "feishu"): string {
     const chatId = message.chat_id ?? "";
     // A direct chat is one conversation, full stop — checked FIRST, because a reply
     // inside a topic bubble carries root_id even in a 1:1, and the root branch used to
@@ -1146,7 +1158,7 @@ export function conversationKeyFor(message: {
     // replies keyed to chat:root, and the agent entered the reply's conversation with an
     // empty transcript, re-deriving work it had already delivered. In a 1:1 the
     // counterpart is one person; which bubble they typed into is not a subject boundary.
-    if (message.chat_type === "p2p") return `feishu:${chatId}`;
+    if (message.chat_type === "p2p") return `${prefix}:${chatId}`;
     // `root_id`, deliberately not `thread_id`. The root of a chain *is* the first message,
     // so `root_id` equals that message's own id and the opening message and its replies
     // agree. `thread_id` is a separate identifier Feishu mints when the first reply
@@ -1158,8 +1170,8 @@ export function conversationKeyFor(message: {
     // own id; its replies carried `root_id` equal to that id and `thread_id` equal to
     // something else entirely.
     const root = message.root_id;
-    if (root !== undefined && root !== "") return `feishu:${chatId}:${root}`;
+    if (root !== undefined && root !== "") return `${prefix}:${chatId}:${root}`;
     return message.message_id !== undefined
-      ? `feishu:${chatId}:${message.message_id}`
-      : `feishu:${chatId}`;
+      ? `${prefix}:${chatId}:${message.message_id}`
+      : `${prefix}:${chatId}`;
 }

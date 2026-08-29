@@ -1091,7 +1091,10 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
     // would run two adapters minting the same `feishu:` namespace — refused
     // loudly instead.
     for (const record of channelRecords) {
-      if (record.id !== record.type) {
+      if (record.id !== record.type && record.type !== "feishu") {
+        // Feishu is prefix-parameterized (docs/22 §7 item 3); the other adapters
+        // still hardcode their namespace, so a second door of those types would
+        // mint colliding identities. Refused until they get the same treatment.
         log(
           `channel ${record.id}: a second ${record.type} door needs prefix ` +
             `parameterization (docs/22 §7 item 3); not started`
@@ -1106,20 +1109,27 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
           telegramToken !== undefined ? "starting" : "set TELEGRAM_BOT_TOKEN"
         );
       } else if (record.type === "feishu") {
-        const feishuId = process.env.FEISHU_APP_ID;
-        const feishuSecret = process.env.FEISHU_APP_SECRET;
+        // Credentials come from env names derived from the record id — one rule
+        // for every door: `feishu` reads FEISHU_APP_ID exactly as it always has,
+        // `feishu-work` reads FEISHU_WORK_APP_ID. Where credentials ultimately
+        // live is the docs/15 decision; this only names them.
+        const envBase = record.id.toUpperCase().replace(/[^A-Z0-9]+/g, "_");
+        const feishuId = process.env[`${envBase}_APP_ID`];
+        const feishuSecret = process.env[`${envBase}_APP_SECRET`];
         channels.register(
-          new FeishuChannel(feishuId ?? "", feishuSecret ?? "", line => log(line), ingress),
+          new FeishuChannel(feishuId ?? "", feishuSecret ?? "", line => log(line), ingress, record.id),
           feishuId !== undefined && feishuSecret !== undefined,
           feishuId !== undefined && feishuSecret !== undefined
             ? "starting"
-            : "set FEISHU_APP_ID and FEISHU_APP_SECRET"
+            : `set ${envBase}_APP_ID and ${envBase}_APP_SECRET`
         );
         // The same identity, reading documents: a pasted docx/wiki link becomes readable
         // the moment a Feishu app exists. R34's near half — the credential never moves.
-        // (docs/22 §3 makes document reading a *box* capability in item 4; until then the
-        // grandfathered door's credential is the box's, which is the same thing today.)
-        if (feishuId !== undefined && feishuSecret !== undefined) {
+        // docs/22 §3 makes document reading a *box* capability, so it is the
+        // grandfathered door's credential that serves it, whichever door a link
+        // arrived through — not a per-door reader, which would be the door
+        // selecting authority.
+        if (record.id === "feishu" && feishuId !== undefined && feishuSecret !== undefined) {
           orchestrator.docReader = new FeishuDocReader(feishuId, feishuSecret);
         }
       } else {

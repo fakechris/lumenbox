@@ -408,3 +408,27 @@ test("a 1:1 chat is one conversation, whichever bubble the person typed into", a
     "a group topic's root and its replies agree on the conversation"
   );
 });
+
+test("a second door mints its own namespace: nothing it says collides with the first", () => {
+  // docs/22 §7 item 3. The channel record's id is the prefix; two Feishu apps on
+  // one installation are two namespaces, not one namespace with two writers.
+  const work = new FeishuChannel("a", "b", () => {}, undefined, "feishu-work");
+  assert.equal(work.name, "feishu-work");
+  const key = (
+    work as unknown as { conversationKeyFor: (m: Record<string, string>) => string }
+  ).conversationKeyFor.bind(work);
+  assert.equal(key({ chat_id: "oc_1", chat_type: "p2p" }), "feishu-work:oc_1");
+  assert.equal(
+    key({ chat_id: "oc_2", chat_type: "group", message_id: "om_r" }),
+    "feishu-work:oc_2:om_r"
+  );
+  // The grandfathered door is untouched by the parameter existing.
+  const legacy = new FeishuChannel("a", "b", () => {});
+  assert.equal(legacy.name, "feishu");
+
+  // splitChatKey reads any door's keys: the first segment is the id, never the address.
+  assert.deepEqual(splitChatKey("feishu-work:oc_room:om_topic"), {
+    chatId: "oc_room",
+    rootId: "om_topic",
+  });
+});
