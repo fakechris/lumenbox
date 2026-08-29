@@ -111,12 +111,26 @@ the box's desktop live in the call. The three unknowns, answered:
 Two hand-learned traps are now in the agent's join instructions
 (`meetingInvitePrompt`): the identity wall means "say so, don't try phone
 numbers", and the post-share privacy toast must be left to expire — clicking it
-early killed the first share. Remaining: the official `bots/join` API path
-(scope `vc:meeting.bot.join:write`, granted via
-`feishu-enable-meetings.mjs --with-join-scope`) joins cleanly but **cannot share
-a screen** — no media API — so it complements the browser path (presence and
-in-meeting text) rather than replacing it. Console prerequisite per app:
-subscribe `vc.bot.meeting_invited_v1`.
+early killed the first share. Console prerequisite per app: subscribe
+`vc.bot.meeting_invited_v1`. A per-door `meetingRemoteControl` option (off by
+default — control of the shared screen is control of the box) decides the
+agent's answer when a participant requests remote control; whether the vendor's
+web client offers that dialog at all is untested.
+
+**The official `bots/join` path, tested to its current end (2026-08-29):**
+`scripts/feishu-meeting-join.mjs`, request shape from larksuite/cli's Go source
+(`join_type: 1`, the number under `join_identify` — the flat form answers
+99992402 naming both fields). Against an ended meeting: `121005 meeting not
+exist` — past validation, past any gray gate (no 20017), scope accepted.
+Against a **live** meeting: **`121016 "switch for allowing agents to join
+meetings is disabled"`** — and the switch exists nowhere in this tenant's admin
+console (产品设置→视频会议 and the 智能伙伴 section were both searched by the
+admin). Conclusion: the API's server side reached general release ahead of its
+admin-console switch; this tenant cannot flip what it cannot see. Next move
+when wanted: a ticket quoting code 121016 and log_id
+`2026082922191786012D43FEF29AC760B8`. Not blocking anything — the browser path
+is the screen story and works today; the official path would only add formal
+presence and in-meeting text (it has no media face).
 
 ### R36. Hot-loadable extensions: reload the edges without restarting the core
 
