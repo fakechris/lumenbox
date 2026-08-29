@@ -45,6 +45,15 @@ than rewriting it, because the correction is the useful part.
 
 These close loops the recent work opened. Days, not weeks, each.
 
+### ~~R35~~ — shipped 2026-08-29 (`0514602`)
+
+Both defects closed by one mechanism: the SDK's own logger is the witness (it exposes no
+state and no close hook), a custom logger classifies its lines, `connect failed` schedules
+a narrated retry on a 5/15/30/60s backoff, `client ready` resets it and logs
+`socket ready` — the evidence of life the old `connected` line never had. Kill and
+relaunch immediately; the socket rides out the vendor's ~1 minute registration window on
+its own. The original entry follows.
+
 ### R35. A Feishu socket that fails on its *first* connect leaves the bot deaf and silent
 
 Observed 2026-08-28, restarting the web server to pick up the box-class work. The process
@@ -70,6 +79,36 @@ Smallest honest fix: treat "start returned but no event has ever arrived" as a f
 its own retry and its own log line, and stop logging `connected` for a call rather than for
 a connection. A restart that waits for the old process to be gone at the *vendor's* end —
 not just locally — would also help, and there is no signal for that other than time.
+
+### R36. Hot-loadable extensions: reload the edges without restarting the core
+
+Asked for twice on 2026-08-29, with two working references. Pi's official mechanism:
+extensions are TS modules default-exporting `function (api)`, loaded by jiti (runtime TS
+compilation, no build step), discovered in `~/.pi/agent/extensions/*.ts`, re-registered by
+a `/reload` command — extensions, skills, prompts, keybindings together. deepseek-harness
+goes further with cordis: a live plugin runtime the agent itself can define into and
+retract from, host halves in a `node:vm` sandbox.
+
+What both prove, and what neither does: **you hot-load a plugin layer, not the core.**
+Node cannot swap the running server's own modules; the trick is an extension seam where
+modules register against an API and a reload tears down and re-imports them (dynamic
+`import` with a cache-busting query, or jiti, or a vm sandbox). Our restart story already
+covers the core (R35's retry made restarts waitless); what a seam would buy is editing
+the *edges* without dropping the Feishu socket at all.
+
+Where the seams already almost exist here:
+
+- **Skills** are files read from disk at use — effectively hot today.
+- **MCP servers** are external processes; making their config re-readable would hot-add
+  tools without restart.
+- **Channel wire verbs** (看板/团队/定时…) and **tool definitions** are the Pi-shaped
+  candidates: a `~/.agentbox/extensions/*.ts` directory, a factory-function contract, a
+  reload verb, every registration torn down and re-made.
+
+Not started: it is a feature with a security face (an extension runs with the process's
+full authority — the loading rule and who may drop files there need docs/10 treatment),
+and the cheap majority of its value (skills hot, restarts painless) is already shipped.
+Build when a person edits extensions often enough to feel the restart.
 
 ### ~~R1. The composer respects the viewed conversation~~ — shipped, in two halves
 The composer half landed on 08-22 (`779f24e`), thirteen minutes after this entry was
