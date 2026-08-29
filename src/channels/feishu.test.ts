@@ -473,3 +473,21 @@ test("a meeting invite parses from both id shapes and turns into join instructio
   assert.match(prompt, /共享屏幕/);
   assert.match(prompt, /不要先问确认/);
 });
+
+test("the video_chat message's real schema parses: meet_number is the field", () => {
+  // Learned from the wire on 2026-08-29 — the diagnostic log captured the raw
+  // content when every guessed field name missed. Pin the actual one.
+  const content = JSON.parse(
+    '{"topic":"宋cs的视频会议","meet_number":"289762676","start_time":"1788011037000","end_time":null}'
+  );
+  assert.equal(content.meet_number, "289762676");
+  const prompt = meetingInvitePrompt({
+    inviterOpenId: "ou_x",
+    inviterName: "宋cs",
+    meetingNo: content.meet_number,
+    topic: content.topic,
+    meetingId: content.meet_number,
+  });
+  assert.match(prompt, /vc\.feishu\.cn\/j\/289762676/);
+  assert.match(prompt, /宋cs的视频会议/);
+});

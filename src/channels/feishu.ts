@@ -744,8 +744,14 @@ export class FeishuChannel implements ChannelAdapter {
             const parsed = JSON.parse(raw) as Record<string, unknown>;
             const pick = (value: unknown): string =>
               typeof value === "string" ? value : typeof value === "number" ? String(value) : "";
+            // `meet_number` is the field the vendor actually sends — learned from the
+            // diagnostic log on 2026-08-29, raw:
+            // {"topic":"宋cs的视频会议","meet_number":"289762676","start_time":…}
             meetingNo =
-              pick(parsed.meeting_no) || pick(parsed.meetingNo) || pick(parsed.number);
+              pick(parsed.meet_number) ||
+              pick(parsed.meeting_no) ||
+              pick(parsed.meetingNo) ||
+              pick(parsed.number);
             topic = pick(parsed.topic) || pick(parsed.title);
             if (meetingNo === "") {
               this.log(
