@@ -300,10 +300,11 @@ export interface ChannelManagerDeps {
   roster?: (adapterName: string) => string;
   /**
    * The live desktop as a link, for 「桌面」. Takes the addressed agent (or the
-   * door's default) and answers with a URL or with what to configure first —
-   * either way a reply, never silence.
+   * door's default) and the door it was asked through — a feishu door's link
+   * routes through that door's own sign-in, so the person lands authenticated.
+   * Answers with a URL or with what to configure first; a reply, never silence.
    */
-  desktopUrl?: (agentName: string | undefined) => string;
+  desktopUrl?: (agentName: string | undefined, adapterName: string) => string;
   /**
    * Answers a pending approval by id, at a scope. Returns a line to send back, or
    * undefined when the approval is no longer waiting (answered from the web meanwhile,
@@ -1092,7 +1093,7 @@ ${input.options.map(option => `· ${option}`).join("\n")}`
     // 「桌面」 is a link to the live screen, answered on the wire — the phone-sized
     // version of the web page's Take over.
     if (parseDesktopRequest(text) && this.deps.desktopUrl !== undefined) {
-      return this.deps.desktopUrl(addressed);
+      return this.deps.desktopUrl(addressed, adapter.name);
     }
 
     // "屏幕" is a look, not a task: no turn runs, the desktop is captured as it is.

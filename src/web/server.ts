@@ -477,6 +477,12 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
     string,
     { identity: string; senderLabel: string; channel: string; at: string; incarnation: number }
   >();
+  /**
+   * Sign-ins in flight through a Feishu door (docs: 网页应用免登). Keyed by the state
+   * nonce; in memory like the invite codes, and for the same reason — a dance that
+   * does not survive a restart costs the person one more click.
+   */
+  const oauthStates = new Map<string, { channelId: string; next: string; at: number }>();
   const invites = new Map<string, { role: Role; principalId?: string; expiresAt: number }>();
   const INVITE_TTL_MS = 15 * 60_000;
   const newInviteCode = (): string => {
@@ -608,7 +614,7 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
     // reachable from (AGENTBOX_PUBLIC_URL — guessing would put a dead link in a
     // chat). The takeover page itself carries the box-class banner, so the
     // shared-box sentence arrives with the screen.
-    desktopUrl: agentName => {
+    desktopUrl: (agentName, adapterName) => {
       let agent;
       try {
         agent = agentName !== undefined ? registry.resolve(agentName) : registry.list()[0];
@@ -627,11 +633,18 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
       }
       const base = process.env.AGENTBOX_PUBLIC_URL?.replace(/\/+$/, "");
       if (base === undefined || base === "") return DESKTOP_NOT_PUBLIC;
-      return desktopLink(
-        agent.profile.name,
-        `${base}/desktop/${index}/vnc.html?autoconnect=1&resize=scale` +
-          `&path=desktop/${index}/websockify`
-      );
+      const direct =
+        `/desktop/${index}/vnc.html?autoconnect=1&resize=scale` +
+        `&path=desktop/${index}/websockify`;
+      // Asked through a feishu door, the link routes through that door's own
+      // sign-in: the person lands on the desktop already being who the roster
+      // says they are — not whoever holds a URL.
+      const viaDoor = channelRecords.some(
+        record => record.id === adapterName && record.type === "feishu"
+      )
+        ? `${base}/auth/${adapterName}?next=${encodeURIComponent(direct)}`
+        : `${base}${direct}`;
+      return desktopLink(agent.profile.name, viaDoor);
     },
     // What this door shows is what it routes: the box's agents, the door's default
     // marked (or the installation fallback, so the marker never lies by omission).
@@ -1914,6 +1927,130 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
     },
   ];
 
+  /**
+   * The web-app sign-in for a Feishu door: `/auth/<door>` redirects to the vendor's
+   * authorize page, `/auth/<door>/callback` exchanges the code for an open_id and
+   * signs the person in **as the identity that door mints** — `<door>:ou_x`, the
+   * same string knock/bind linked to their Principal. Nothing new is trusted: an
+   * open_id whose identity nobody linked gets the knock instructions, not a session.
+   */
+  async function handleFeishuAuth(url: URL, res: ServerResponse): Promise<void> {
+    const parts = url.pathname.split("/").filter(Boolean); // ["auth", door, "callback"?]
+    const channelId = parts[1] ?? "";
+    const record = channelRecords.find(
+      entry => entry.id === channelId && entry.type === "feishu"
+    );
+    if (record === undefined || parts.length > 3) {
+      send(res, 404, { error: `No feishu door named ${channelId}.` });
+      return;
+    }
+    const base = channelEnvBase(channelId);
+    const savedEnv = loadConfig().env ?? {};
+    const appId = process.env[`${base}_APP_ID`] ?? savedEnv[`${base}_APP_ID`];
+    const appSecret = process.env[`${base}_APP_SECRET`] ?? savedEnv[`${base}_APP_SECRET`];
+    const publicBase = process.env.AGENTBOX_PUBLIC_URL?.replace(/\/+$/, "");
+    if (typeof appId !== "string" || appId === "" || typeof appSecret !== "string" || appSecret === "") {
+      send(res, 503, { error: `set ${base}_APP_ID and ${base}_APP_SECRET first.` });
+      return;
+    }
+    if (publicBase === undefined || publicBase === "") {
+      send(res, 503, { error: "set AGENTBOX_PUBLIC_URL — the redirect back has to name this installation." });
+      return;
+    }
+    const lark = process.env.FEISHU_DOMAIN === "lark";
+    const accountsHost = lark ? "accounts.larksuite.com" : "accounts.feishu.cn";
+    const apiHost = lark ? "open.larksuite.com" : "open.feishu.cn";
+    const redirectUri = `${publicBase}/auth/${channelId}/callback`;
+
+    if (parts[2] === undefined) {
+      // Entry: remember where they were going, hand them to the vendor.
+      for (const [key, pending] of oauthStates) {
+        if (Date.now() - pending.at > 10 * 60_000) oauthStates.delete(key);
+      }
+      const rawNext = url.searchParams.get("next") ?? "/";
+      // Relative paths only: an absolute `next` would make this an open redirect.
+      const next = rawNext.startsWith("/") && !rawNext.startsWith("//") ? rawNext : "/";
+      const state = randomBytes(16).toString("hex");
+      oauthStates.set(state, { channelId, next, at: Date.now() });
+      const target =
+        `https://${accountsHost}/open-apis/authen/v1/authorize?client_id=${encodeURIComponent(appId)}` +
+        `&response_type=code&redirect_uri=${encodeURIComponent(redirectUri)}&state=${state}`;
+      res.writeHead(302, { location: target });
+      res.end();
+      return;
+    }
+    if (parts[2] !== "callback") {
+      send(res, 404, { error: `Not a sign-in path: ${url.pathname}` });
+      return;
+    }
+    const code = url.searchParams.get("code");
+    const state = url.searchParams.get("state") ?? "";
+    const pending = oauthStates.get(state);
+    oauthStates.delete(state);
+    if (code === null || pending === undefined || pending.channelId !== channelId ||
+        Date.now() - pending.at > 10 * 60_000) {
+      send(res, 400, { error: "This sign-in expired or was not started here. Open the link again." });
+      return;
+    }
+    try {
+      const tokenResponse = await fetch(`https://${apiHost}/open-apis/authen/v2/oauth/token`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          grant_type: "authorization_code",
+          client_id: appId,
+          client_secret: appSecret,
+          code,
+          redirect_uri: redirectUri,
+        }),
+      });
+      const tokenBody = (await tokenResponse.json()) as {
+        access_token?: string;
+        error_description?: string;
+        error?: string;
+      };
+      if (tokenBody.access_token === undefined) {
+        throw new Error(tokenBody.error_description ?? tokenBody.error ?? `HTTP ${tokenResponse.status}`);
+      }
+      const infoResponse = await fetch(`https://${apiHost}/open-apis/authen/v1/user_info`, {
+        headers: { authorization: `Bearer ${tokenBody.access_token}` },
+      });
+      const info = (await infoResponse.json()) as { data?: { open_id?: string; name?: string } };
+      const openId = info.data?.open_id;
+      if (openId === undefined || openId === "") throw new Error("user_info returned no open_id");
+      const identity = `${channelId}:${openId}`;
+      if (!principals.isKnown(identity)) {
+        // Signed in with the vendor, unknown here: the answer is the knock path, said
+        // as a page a person can act on — not a session for whoever the vendor knows.
+        res.writeHead(403, { "content-type": "text/html; charset=utf-8" });
+        res.end(
+          `<!doctype html><meta charset="utf-8"><body style="font:15px/1.7 sans-serif;max-width:560px;margin:80px auto;padding:0 20px">` +
+            `<h3>这个飞书账号还没有链接到本安装</h3>` +
+            `<p>你的 id:<code>${identity.replace(/</g, "&lt;")}</code></p>` +
+            `<p>在飞书里给机器人发一条消息 —— 管理员会收到放行提示;或者向管理员要一个邀请码,在聊天里发送 <code>bind 邀请码</code>。链接完成后回到这里重新打开即可。</p></body>`
+        );
+        log(`web login refused: ${identity} signed in via ${channelId} but is not linked`);
+        return;
+      }
+      const admit = [
+        ...(token !== undefined && token !== ""
+          ? [
+              `${COOKIE_NAME}=${encodeURIComponent(token)}; Path=/; ` +
+                `Max-Age=${SESSION_MAX_AGE_SECONDS}; HttpOnly; SameSite=Lax`,
+            ]
+          : []),
+        sessionCookie(identity, sessionSecret),
+      ];
+      res.writeHead(302, { "set-cookie": admit, location: pending.next });
+      res.end();
+      log(`web login: ${identity} via feishu door ${channelId} (${principals.resolve(identity).name})`);
+    } catch (error) {
+      const detail = error instanceof Error ? error.message : String(error);
+      log(`feishu sign-in via ${channelId} failed: ${detail}`);
+      send(res, 502, { error: `Sign-in failed: ${detail}` });
+    }
+  }
+
   const server = createServer((req, res) => {
     void (async () => {
       const url = new URL(req.url ?? "/", "http://localhost");
@@ -1933,6 +2070,15 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
       // the code is what authenticates them.
       if (route === "GET /login") {
         send(res, 200, LOGIN_HTML, "text/html");
+        return;
+      }
+      // The Feishu doors' sign-in, also before the gate and for the same reason as
+      // /login: a person arriving from a Feishu chat holds no UI token, and the OAuth
+      // dance *is* the authentication. Per door, because open_id is per app — the
+      // same person is feishu:ou_a under one app and feishu-zongheng:ou_b under the
+      // other, which is exactly what identities already model (docs/22 §4).
+      if (req.method === "GET" && url.pathname.startsWith("/auth/")) {
+        await handleFeishuAuth(url, res);
         return;
       }
       // The side door, before the UI's gate and deliberately so: it carries its own
