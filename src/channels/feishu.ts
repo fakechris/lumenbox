@@ -337,9 +337,15 @@ export function parseMeetingInvite(data: unknown): MeetingInvite | undefined {
  * vendor offers no media API — the browser's guest-join page is the only public
  * way in, and this installation's agent has a real desktop to do it with.
  */
-export function meetingInvitePrompt(invite: MeetingInvite): string {
+export function meetingInvitePrompt(
+  invite: MeetingInvite,
+  options: { allowRemoteControl?: boolean } = {}
+): string {
   const title = invite.topic !== "" ? `「${invite.topic}」` : `会议 ${invite.meetingNo}`;
   const from = invite.inviterName !== "" ? `,邀请人:${invite.inviterName}` : "";
+  const control = options.allowRemoteControl === true
+    ? "7. 如果有参会的人请求远程控制你共享的屏幕,同意——本安装开启了会中接管;对方操作时你先不要动键鼠,结束后留意收回控制"
+    : "7. 如果有参会的人请求远程控制你共享的屏幕,不要同意,回复「这台桌面未开启会中接管」";
   // The steps below are not guesses: each was walked by hand on 2026-08-29 in a
   // real meeting, including the two mistakes worth warning about (the identity
   // wall when the browser is logged out, and the privacy toast that must be left
@@ -353,6 +359,7 @@ export function meetingInvitePrompt(invite: MeetingInvite): string {
     "4. 在弹出的选择器顶部切到「Entire Screen(整个屏幕)」标签,点中屏幕缩略图,再点右下角蓝色 Share 按钮",
     "5. 会弹一个隐私提醒(Got it 带倒计时)——**不要去点它**,它会自己消失;确认页面出现「You are sharing your screen」即成功",
     "6. 共享成功后你可以继续手头的工作,与会的人会实时看到你的桌面;会议结束或有人叫你退出时再点 Stop Sharing 和挂断",
+    control,
     "过程中如有其它弹窗(通知权限等)选拒绝或关闭。进不去或共享失败,用一句话向邀请人说明卡在哪一步。",
   ].join("\n");
 }
@@ -614,6 +621,9 @@ export class FeishuChannel implements ChannelAdapter {
   /** Invitations already acted on — the vendor redelivers events, agents should not rejoin. */
   private readonly seenMeetingInvites = new Set<string>();
 
+  /** R37 option, set from the channel record: may the agent approve remote control. */
+  meetingRemoteControl = false;
+
   async start(
     onMessage: (message: InboundMessage) => Promise<string | undefined>
   ): Promise<void> {
@@ -786,7 +796,7 @@ export class FeishuChannel implements ChannelAdapter {
             ...(chatId !== "" ? { chatKey: `${this.name}:${chatId}` } : {}),
             messageId,
             senderLabel: invite.inviterName !== "" ? invite.inviterName : inviteIdentity,
-            text: meetingInvitePrompt(invite),
+            text: meetingInvitePrompt(invite, { allowRemoteControl: this.meetingRemoteControl }),
           })
             .then(reply =>
               reply !== undefined && reply !== "" && chatId !== ""
@@ -915,7 +925,7 @@ export class FeishuChannel implements ChannelAdapter {
           if (oldest !== undefined) this.seenMeetingInvites.delete(oldest);
         }
         const identity = `${this.name}:${invite.inviterOpenId}`;
-        const prompt = meetingInvitePrompt(invite);
+        const prompt = meetingInvitePrompt(invite, { allowRemoteControl: this.meetingRemoteControl });
         this.log(
           `channel ${this.name}: meeting invite ${invite.meetingNo} from ` +
             `${invite.inviterName !== "" ? invite.inviterName : identity}`

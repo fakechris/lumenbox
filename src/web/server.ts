@@ -1232,8 +1232,17 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
         const envBase = record.id.toUpperCase().replace(/[^A-Z0-9]+/g, "_");
         const feishuId = process.env[`${envBase}_APP_ID`];
         const feishuSecret = process.env[`${envBase}_APP_SECRET`];
+        const feishuDoor = new FeishuChannel(
+          feishuId ?? "",
+          feishuSecret ?? "",
+          line => log(line),
+          ingress,
+          record.id
+        );
+        // R37 option: whether this door's agent may approve in-meeting remote control.
+        feishuDoor.meetingRemoteControl = record.meetingRemoteControl === true;
         channels.register(
-          new FeishuChannel(feishuId ?? "", feishuSecret ?? "", line => log(line), ingress, record.id),
+          feishuDoor,
           feishuId !== undefined && feishuSecret !== undefined,
           feishuId !== undefined && feishuSecret !== undefined
             ? "starting"
@@ -2826,9 +2835,14 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
               typeof liveSecret === "string" &&
               liveSecret !== ""
             ) {
-              started = channels.registerAndStart(
+              const liveDoor =
                 type === "feishu"
-                  ? new FeishuChannel(liveAppId, liveSecret, line => log(line), ingress, id)
+                  ? (() => {
+                      const door = new FeishuChannel(liveAppId, liveSecret, line => log(line), ingress, id);
+                      door.meetingRemoteControl =
+                        channelRecords.find(entry => entry.id === id)?.meetingRemoteControl === true;
+                      return door;
+                    })()
                   : new DingTalkChannel(
                       liveAppId,
                       liveSecret,
@@ -2837,9 +2851,8 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
                       process.env[`${base}_CARD_TEMPLATE_ID`],
                       process.env[`${base}_TASK_CARD_TEMPLATE_ID`],
                       id
-                    ),
-                "starting"
-              );
+                    );
+              started = channels.registerAndStart(liveDoor, "starting");
             }
           }
           log(

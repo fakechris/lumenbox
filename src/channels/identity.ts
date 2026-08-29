@@ -43,6 +43,14 @@ export interface ChannelRecord {
    * `@Name` still reaches any agent in the box.
    */
   defaultAgent?: string;
+  /**
+   * R37: when this door's agent shares its screen in a meeting, may it approve a
+   * participant's remote-control request? Off by default — control of the screen
+   * is control of the box, and the join instructions say "refuse" unless this
+   * says otherwise. (Whether the vendor's web client offers the approval dialog
+   * at all is the vendor's; the option only decides the agent's answer.)
+   */
+  meetingRemoteControl?: boolean;
   createdAt: string;
 }
 

@@ -491,3 +491,18 @@ test("the video_chat message's real schema parses: meet_number is the field", ()
   assert.match(prompt, /vc\.feishu\.cn\/j\/289762676/);
   assert.match(prompt, /宋cs的视频会议/);
 });
+
+test("the remote-control clause follows the option: refuse by default, approve when told", () => {
+  const invite = {
+    inviterOpenId: "ou_x",
+    inviterName: "Chris",
+    meetingNo: "123456789",
+    topic: "评审",
+    meetingId: "m1",
+  };
+  assert.match(meetingInvitePrompt(invite), /不要同意/);
+  assert.match(meetingInvitePrompt(invite, { allowRemoteControl: false }), /不要同意/);
+  const allowed = meetingInvitePrompt(invite, { allowRemoteControl: true });
+  assert.match(allowed, /同意——本安装开启了会中接管/);
+  assert.ok(!/不要同意/.test(allowed));
+});
