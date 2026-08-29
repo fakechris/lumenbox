@@ -306,6 +306,12 @@ export interface ChannelManagerDeps {
    */
   desktopUrl?: (agentName: string | undefined, adapterName: string) => string;
   /**
+   * The join instructions for 「入会 <会议号>」, per door. Undefined when this
+   * wire has no join story — the raw text then goes to the agent as ordinary
+   * work, which is honest: it will say it does not know how.
+   */
+  meetingJoinPrompt?: (meetingNo: string, adapterName: string) => string | undefined;
+  /**
    * Answers a pending approval by id, at a scope. Returns a line to send back, or
    * undefined when the approval is no longer waiting (answered from the web meanwhile,
    * or the turn moved on). The manager only calls this for an approval it pushed to
@@ -533,6 +539,18 @@ export function parseScreenRequest(text: string): boolean {
 export function parseRosterRequest(text: string): boolean {
   const t = text.trim().toLowerCase().replace(/[.!?。!?]+$/, "");
   return ["team", "roster", "团队", "成员", "谁在", "/team", "/roster"].includes(t);
+}
+
+/**
+ * 「入会 123456789」 asks the agent to join a meeting by number — the trigger
+ * that does not depend on the vendor's invite machinery (R37: with the VC
+ * event subscribed, an *invitation* to the bot can be treated as an official
+ * agent-invite and refused server-side, taking the meeting down with it; a
+ * chat message cannot be). Returns the meeting number, or undefined.
+ */
+export function parseMeetingJoinRequest(text: string): string | undefined {
+  const match = /^(?:\/join|入会|加入会议)\s*(\d{9})$/.exec(text.trim());
+  return match?.[1];
 }
 
 /**
@@ -1096,11 +1114,19 @@ ${input.options.map(option => `· ${option}`).join("\n")}`
       return this.deps.desktopUrl(addressed, adapter.name);
     }
 
+    // 「入会 <会议号>」 becomes the door's join instructions — the trigger that
+    // sidesteps the vendor's invite machinery (see parseMeetingJoinRequest).
+    const joinNo = parseMeetingJoinRequest(text);
+    const finalText =
+      joinNo !== undefined
+        ? (this.deps.meetingJoinPrompt?.(joinNo, adapter.name) ?? text)
+        : text;
+
     // "屏幕" is a look, not a task: no turn runs, the desktop is captured as it is.
     const work =
       parseScreenRequest(text) && this.deps.screenshot !== undefined
         ? this.runScreenshot(adapter, message, addressed)
-        : this.runTask(adapter, message, addressed, text, undefined, { continuation: answering });
+        : this.runTask(adapter, message, addressed, finalText, undefined, { continuation: answering });
 
     // The work runs behind this return; the decisions above stay synchronous because
     // a refusal or an approval answer *is* the whole response.

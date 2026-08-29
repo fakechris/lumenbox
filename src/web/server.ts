@@ -154,7 +154,7 @@ import { agentboxHome, loadConfig, saveConfig, type AgentboxConfig } from "../co
 type AgentboxConfigHostExec = NonNullable<AgentboxConfig["hostExec"]>;
 import { ChannelManager } from "../channels/manager.ts";
 import { DingTalkChannel } from "../channels/dingtalk.ts";
-import { FeishuChannel } from "../channels/feishu.ts";
+import { FeishuChannel, meetingInvitePrompt } from "../channels/feishu.ts";
 import {
   CHANNEL_RECORDS_FILENAME,
   ensureChannelRecords,
@@ -645,6 +645,19 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
         ? `${base}/auth/${adapterName}?next=${encodeURIComponent(direct)}`
         : `${base}${direct}`;
       return desktopLink(agent.profile.name, viaDoor);
+    },
+    // 「入会 <会议号>」: the same join instructions an invitation would carry,
+    // triggered by a chat message instead — a plain message cannot be reinterpreted
+    // by the vendor's agent-invite machinery the way an invitation can (R37).
+    meetingJoinPrompt: (meetingNo, adapterName) => {
+      const record = channelRecords.find(
+        entry => entry.id === adapterName && entry.type === "feishu"
+      );
+      if (record === undefined) return undefined;
+      return meetingInvitePrompt(
+        { inviterOpenId: "", inviterName: "", meetingNo, topic: "", meetingId: meetingNo },
+        { allowRemoteControl: record.meetingRemoteControl === true }
+      );
     },
     // What this door shows is what it routes: the box's agents, the door's default
     // marked (or the installation fallback, so the marker never lies by omission).

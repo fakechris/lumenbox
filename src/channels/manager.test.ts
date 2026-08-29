@@ -15,6 +15,7 @@ import {
   parseAddress,
   parseBoardRequest,
   parseDesktopRequest,
+  parseMeetingJoinRequest,
   parseRosterRequest,
   parseSchedulesRequest,
   parseScreenRequest,
@@ -1729,4 +1730,26 @@ test("slash aliases reach the same verbs; slash-nothing is ordinary text", async
   assert.ok(parseScreenRequest("/screen"));
   assert.ok(parseStopRequest("/stop"));
   assert.ok(!parseBoardRequest("/deploy the thing"), "unknown slash text is just text");
+});
+
+test("「入会 <会议号>」becomes the door's join instructions; malformed stays ordinary text", async () => {
+  assert.equal(parseMeetingJoinRequest("入会 123456789"), "123456789");
+  assert.equal(parseMeetingJoinRequest("/join 123456789"), "123456789");
+  assert.equal(parseMeetingJoinRequest("加入会议123456789"), "123456789");
+  assert.equal(parseMeetingJoinRequest("入会 123"), undefined, "not nine digits");
+  assert.equal(parseMeetingJoinRequest("入会一下明天的评审"), undefined);
+
+  const adapter = testAdapter();
+  const asked: string[] = [];
+  const manager = new ChannelManager({
+    mayDrive: () => true,
+    meetingJoinPrompt: (no, door) => `join ${no} via ${door}`,
+    ask: async (_agent, text) => { asked.push(text); return "did"; },
+    log: () => {},
+  });
+  manager.register(adapter, true, "test");
+  await started(manager);
+  await adapter.inject({ identity: "telegram:7", senderLabel: "chris", text: "入会 123456789" });
+  await sleep(20);
+  assert.deepEqual(asked, ["join 123456789 via telegram"]);
 });
