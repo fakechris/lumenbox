@@ -11,7 +11,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { NOVNC_BASE_PORT, NOVNC_VIEW_ONLY_BASE_PORT } from "../protocol/index.ts";
 import { DisplayManager } from "../boxd/displays.ts";
-import { desktopUpstreamPath } from "./server.ts";
+import { desktopUpstreamPath, injectDesktopNotice } from "./server.ts";
 
 test("someone who may only watch is joined to the view-only stack", () => {
   assert.equal(desktopUpstreamPath("/desktop/1/websockify", "", true), "/vnc/1/websockify");
@@ -41,4 +41,18 @@ test("the two stacks cannot land on the same port for any desktop", () => {
   assert.equal(watching.size, 32);
   for (const port of watching) assert.ok(!driving.has(port), `${port} is in both ranges`);
   assert.ok(NOVNC_VIEW_ONLY_BASE_PORT > NOVNC_BASE_PORT + 32);
+});
+
+test("the takeover page carries the box-class sentence; assets and sockets do not", () => {
+  // v4 claims review, finding 5: the surface a person types a password into had no
+  // badge and no notice. The banner rides inside noVNC's own HTML.
+  const page = "<html><body><div id='screen'></div></body></html>";
+  const labelled = injectDesktopNotice(page, "共享箱子 — 这是一台共享的箱子。");
+  assert.match(labelled, /共享箱子/);
+  assert.match(labelled, /pointer-events:none/, "labels without intercepting input");
+  // The notice is escaped, never markup.
+  assert.match(injectDesktopNotice(page, "<script>x</script>"), /&lt;script&gt;/);
+  // Nothing to say, nothing injected; no </body>, nothing broken.
+  assert.equal(injectDesktopNotice(page, ""), page);
+  assert.equal(injectDesktopNotice("binarysoup", "note"), "binarysoup");
 });

@@ -317,7 +317,25 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
     }
   };
 
-  const provisioner = options.boxProvisioner ?? resolveBoxProvisioner();
+  // Inside a try because construction itself can refuse — the attached provisioner
+  // throws when no token is configured (v4 claims review, finding 7), and a server
+  // that cannot reach a box is a server without a box, not no server at all. The
+  // stub keeps the interface honest: every connect answers with the reason.
+  const provisioner = (() => {
+    try {
+      return options.boxProvisioner ?? resolveBoxProvisioner();
+    } catch (error) {
+      const reason = error instanceof Error ? error.message : String(error);
+      log(`box: not configured — ${reason}`);
+      return {
+        kind: "attached",
+        label: "unconfigured",
+        boxName: "unconfigured",
+        endpoint: () => Promise.resolve(undefined),
+        connect: () => Promise.reject(new Error(reason)),
+      } satisfies BoxProvisioner;
+    }
+  })();
 
   /**
    * Answers owed to a chat, so one that was earned while the process died still arrives.
@@ -1616,8 +1634,31 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
         },
       },
       response => {
-        res.writeHead(response.statusCode ?? 502, response.headers);
-        response.pipe(res);
+        // The takeover page is the surface a person actually types a password into,
+        // and it carried no badge and no notice (v4 claims review, finding 5). The
+        // page — and only the page — is buffered so the box-class sentence rides in;
+        // sockets and assets stream as before. An encoded body passes through
+        // untouched rather than corrupted.
+        const isPage = /\/vnc\.html/.test(path);
+        if (!isPage || response.headers["content-encoding"] !== undefined) {
+          res.writeHead(response.statusCode ?? 502, response.headers);
+          response.pipe(res);
+          return;
+        }
+        const chunks: Buffer[] = [];
+        response.on("data", chunk => chunks.push(chunk as Buffer));
+        response.on("end", () => {
+          const boxClass = classifyBox(provisioner.boxName, loadConfig(), registry.box.name);
+          const body = injectDesktopNotice(
+            Buffer.concat(chunks).toString("utf8"),
+            boxClass.notice ? `${boxClass.badge} — ${boxClass.notice}` : ""
+          );
+          res.writeHead(response.statusCode ?? 502, {
+            ...response.headers,
+            "content-length": Buffer.byteLength(body),
+          });
+          res.end(body);
+        });
       }
     );
 
@@ -3630,6 +3671,26 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
  * anyone with a session, and x11vnc was not started view-only, so a viewer could type into the
  * desktop over RFB — every mutation check passed while the person did whatever they liked.
  */
+/**
+ * Rides the box-class sentence into noVNC's own page, above the screen a person is
+ * about to type into. Injected server-side because the page is the vendor's, not
+ * ours — and pointer-events pass through, so it labels without getting in the way.
+ * An empty notice injects nothing; a page with no </body> is returned untouched.
+ */
+export function injectDesktopNotice(html: string, notice: string): string {
+  if (notice === "" || !html.includes("</body>")) return html;
+  const escaped = notice
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;");
+  const banner =
+    '<div style="position:fixed;top:0;left:0;right:0;z-index:2147483647;' +
+    "background:rgba(138,90,0,.92);color:#fff;font:12px/1.6 sans-serif;" +
+    'padding:4px 12px;text-align:center;pointer-events:none">' +
+    `${escaped}</div>`;
+  return html.replace("</body>", `${banner}</body>`);
+}
+
 export function desktopUpstreamPath(
   pathname: string,
   search: string,
