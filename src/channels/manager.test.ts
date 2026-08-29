@@ -13,6 +13,12 @@ import assert from "node:assert/strict";
 import {
   ChannelManager,
   parseAddress,
+  parseBoardRequest,
+  parseDesktopRequest,
+  parseRosterRequest,
+  parseSchedulesRequest,
+  parseScreenRequest,
+  parseStopRequest,
   refusal,
   type ChannelAdapter,
   type InboundMessage,
@@ -1712,4 +1718,15 @@ test("「桌面」answers with the door's default agent's desktop link; work wor
   await adapter.inject({ identity: "telegram:7", senderLabel: "chris", text: "帮我看下桌面上的报错" });
   await sleep(20);
   assert.deepEqual(asked, ["帮我看下桌面上的报错"], "mentioning the desktop is still work");
+});
+
+test("slash aliases reach the same verbs; slash-nothing is ordinary text", async () => {
+  // CLI clothing on the existing verbs — one parser each, every door.
+  assert.ok(parseBoardRequest("/board"));
+  assert.ok(parseRosterRequest("/team"));
+  assert.ok(parseDesktopRequest("/desktop"));
+  assert.ok(parseSchedulesRequest("/auto"));
+  assert.ok(parseScreenRequest("/screen"));
+  assert.ok(parseStopRequest("/stop"));
+  assert.ok(!parseBoardRequest("/deploy the thing"), "unknown slash text is just text");
 });

@@ -239,7 +239,7 @@ export interface ChannelStatus {
  */
 export function parseStopRequest(text: string): boolean {
   const t = text.trim().toLowerCase().replace(/[.!。!~]+$/, "");
-  return ["停", "停下", "停下来", "先停", "取消", "算了", "别做了", "stop", "cancel"].includes(t);
+  return ["停", "停下", "停下来", "先停", "取消", "算了", "别做了", "stop", "cancel", "/stop"].includes(t);
 }
 
 /**
@@ -521,7 +521,7 @@ const CARD_UPDATE_MS = 3_000;
  */
 export function parseScreenRequest(text: string): boolean {
   const t = text.trim().toLowerCase().replace(/[.!?。!?]+$/, "");
-  return ["screen", "screenshot", "屏幕", "看屏幕", "看看屏幕", "截图"].includes(t);
+  return ["screen", "screenshot", "屏幕", "看屏幕", "看看屏幕", "截图", "/screen"].includes(t);
 }
 
 /**
@@ -531,7 +531,7 @@ export function parseScreenRequest(text: string): boolean {
  */
 export function parseRosterRequest(text: string): boolean {
   const t = text.trim().toLowerCase().replace(/[.!?。!?]+$/, "");
-  return ["team", "roster", "团队", "成员", "谁在"].includes(t);
+  return ["team", "roster", "团队", "成员", "谁在", "/team", "/roster"].includes(t);
 }
 
 /**
@@ -540,7 +540,7 @@ export function parseRosterRequest(text: string): boolean {
  */
 export function parseDesktopRequest(text: string): boolean {
   const t = text.trim().toLowerCase().replace(/[.!?。!?]+$/, "");
-  return ["desktop", "vnc", "桌面", "开桌面", "看桌面"].includes(t);
+  return ["desktop", "vnc", "桌面", "开桌面", "看桌面", "/desktop", "/vnc"].includes(t);
 }
 
 /** `@Name rest of the message` addresses a specific agent; anything else is the default. */
@@ -597,7 +597,7 @@ export function parseScopeRequest(text: string): ScopeRequest | undefined {
  */
 export function parseBoardRequest(text: string): boolean {
   const t = text.trim().toLowerCase().replace(/[.!?。!?~]+$/, "");
-  return ["看板", "任务", "任务列表", "board", "tasks"].includes(t);
+  return ["看板", "任务", "任务列表", "board", "tasks", "/board", "/tasks"].includes(t);
 }
 
 /**
@@ -606,7 +606,7 @@ export function parseBoardRequest(text: string): boolean {
  */
 export function parseSchedulesRequest(text: string): boolean {
   const t = text.trim().toLowerCase().replace(/[.!?。!?~]+$/, "");
-  return ["定时", "自动化", "定时任务", "schedules", "automations"].includes(t);
+  return ["定时", "自动化", "定时任务", "schedules", "automations", "/schedules", "/auto"].includes(t);
 }
 
 export type DigestRequest = { kind: "now" } | { kind: "schedule"; hour: number } | { kind: "off" };
