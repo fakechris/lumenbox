@@ -176,8 +176,10 @@ import { Principals, roleAtLeast, type Principal, type Role } from "../host/prin
 import { describeTask, isLive, isTaskStatus } from "../host/tasks.ts";
 import { blockedAnnouncement, boardView } from "../channels/board-view.ts";
 import {
+  DESKTOP_NOT_PUBLIC,
   NO_SCHEDULES,
   SCHEDULES_DISARMED,
+  desktopLink,
   rosterText,
   scheduleLine,
   unknownAgent,
@@ -601,6 +603,36 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
     incarnationOf,
     defaultAgentFor: adapterName =>
       channelRecords.find(record => record.id === adapterName)?.defaultAgent,
+    // The live desktop, phone-shaped: the same noVNC page the web's Take over
+    // opens, reachable only when the operator said where this installation is
+    // reachable from (AGENTBOX_PUBLIC_URL — guessing would put a dead link in a
+    // chat). The takeover page itself carries the box-class banner, so the
+    // shared-box sentence arrives with the screen.
+    desktopUrl: agentName => {
+      let agent;
+      try {
+        agent = agentName !== undefined ? registry.resolve(agentName) : registry.list()[0];
+      } catch {
+        agent = undefined;
+      }
+      const index = agent?.profile.displayIndex;
+      if (agent === undefined || index === undefined) {
+        return unknownAgent(
+          agentName ?? "",
+          registry
+            .list()
+            .filter(record => record.profile.hidden !== true)
+            .map(record => record.profile.name)
+        );
+      }
+      const base = process.env.AGENTBOX_PUBLIC_URL?.replace(/\/+$/, "");
+      if (base === undefined || base === "") return DESKTOP_NOT_PUBLIC;
+      return desktopLink(
+        agent.profile.name,
+        `${base}/desktop/${index}/vnc.html?autoconnect=1&resize=scale` +
+          `&path=desktop/${index}/websockify`
+      );
+    },
     // What this door shows is what it routes: the box's agents, the door's default
     // marked (or the installation fallback, so the marker never lies by omission).
     roster: adapterName => {

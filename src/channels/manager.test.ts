@@ -1687,3 +1687,29 @@ test("「团队」answers on the wire with the door's roster; work words do not 
   await sleep(20);
   assert.deepEqual(asked, ["让团队看看这个"], "work mentioning the team is still work");
 });
+
+test("「桌面」answers with the door's default agent's desktop link; work words pass through", async () => {
+  const adapter = testAdapter();
+  const asked: string[] = [];
+  const manager = new ChannelManager({
+    mayDrive: () => true,
+    defaultAgentFor: () => "Bob",
+    desktopUrl: agentName => "desktop of " + (agentName || "?"),
+    ask: async (_agent, text) => { asked.push(text); return "did"; },
+    log: () => {},
+  });
+  manager.register(adapter, true, "test");
+  await started(manager);
+
+  assert.equal(
+    await adapter.inject({ identity: "telegram:7", senderLabel: "chris", text: "桌面" }),
+    "desktop of Bob"
+  );
+  assert.equal(
+    await adapter.inject({ identity: "telegram:7", senderLabel: "chris", text: "@Ada 桌面" }),
+    "desktop of Ada"
+  );
+  await adapter.inject({ identity: "telegram:7", senderLabel: "chris", text: "帮我看下桌面上的报错" });
+  await sleep(20);
+  assert.deepEqual(asked, ["帮我看下桌面上的报错"], "mentioning the desktop is still work");
+});

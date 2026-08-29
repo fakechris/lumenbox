@@ -299,6 +299,12 @@ export interface ChannelManagerDeps {
    */
   roster?: (adapterName: string) => string;
   /**
+   * The live desktop as a link, for 「桌面」. Takes the addressed agent (or the
+   * door's default) and answers with a URL or with what to configure first —
+   * either way a reply, never silence.
+   */
+  desktopUrl?: (agentName: string | undefined) => string;
+  /**
    * Answers a pending approval by id, at a scope. Returns a line to send back, or
    * undefined when the approval is no longer waiting (answered from the web meanwhile,
    * or the turn moved on). The manager only calls this for an approval it pushed to
@@ -526,6 +532,15 @@ export function parseScreenRequest(text: string): boolean {
 export function parseRosterRequest(text: string): boolean {
   const t = text.trim().toLowerCase().replace(/[.!?。!?]+$/, "");
   return ["team", "roster", "团队", "成员", "谁在"].includes(t);
+}
+
+/**
+ * 「桌面」asks for the live screen, as a link — where 「屏幕」 asks for a still.
+ * Whole-message like both of its siblings: "帮我看下桌面上的报错" is work.
+ */
+export function parseDesktopRequest(text: string): boolean {
+  const t = text.trim().toLowerCase().replace(/[.!?。!?]+$/, "");
+  return ["desktop", "vnc", "桌面", "开桌面", "看桌面"].includes(t);
 }
 
 /** `@Name rest of the message` addresses a specific agent; anything else is the default. */
@@ -1073,6 +1088,12 @@ ${input.options.map(option => `· ${option}`).join("\n")}`
     // stop decisions above deliberately used the raw address, because a plain
     // message while something runs is a reply to that work, whoever is doing it.
     const addressed = agentName ?? this.deps.defaultAgentFor?.(adapter.name);
+
+    // 「桌面」 is a link to the live screen, answered on the wire — the phone-sized
+    // version of the web page's Take over.
+    if (parseDesktopRequest(text) && this.deps.desktopUrl !== undefined) {
+      return this.deps.desktopUrl(addressed);
+    }
 
     // "屏幕" is a look, not a task: no turn runs, the desktop is captured as it is.
     const work =

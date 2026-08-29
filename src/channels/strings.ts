@@ -74,6 +74,19 @@ export function rosterText(
   return `${lines.join("\n")}\n@名字 指定谁来做;不指定就交给默认的那位。`;
 }
 
+/** The desktop, opened from a phone: the link, plus what opening it means. */
+export function desktopLink(agentName: string, url: string): string {
+  return (
+    `${agentName} 的桌面(实时,可操作):\n${url}\n` +
+    "在飞书里点开就是网页版的那块屏幕。注意:拿到这个链接的人都能看,共享箱子的提醒在页面顶上。"
+  );
+}
+
+export const DESKTOP_NOT_PUBLIC =
+  "还没配置从手机能访问的地址。在启动 web 的环境里设置 AGENTBOX_PUBLIC_URL " +
+  "(比如 Tailscale 的地址),桌面链接、任务卡片的「在工作台打开」按钮就都能点了。" +
+  "先用「屏幕」可以拿一张当前截图。";
+
 /** A wrong @ answered with the way in, not just the way it failed. */
 export function unknownAgent(asked: string, names: readonly string[]): string {
   const roster = names.length > 0 ? names.join("、") : "(还没有成员)";
