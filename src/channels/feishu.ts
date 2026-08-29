@@ -729,6 +729,65 @@ export class FeishuChannel implements ChannelAdapter {
           return {};
         }
 
+        // A meeting invitation arriving as a *message* — observed 2026-08-29: inviting
+        // the bot to a call delivered a `video_chat` message, not (only) the VC event,
+        // and the drop path swallowed it. The content shape is the vendor's and only
+        // half-documented, so it is parsed defensively and, when a meeting number is
+        // found, fed through the same R37 bridge as the event. When it is not found,
+        // the content's keys are logged — the next occurrence teaches us the schema
+        // instead of repeating the silence.
+        if (messageType === "video_chat") {
+          const raw = data.message.content ?? "{}";
+          let meetingNo = "";
+          let topic = "";
+          try {
+            const parsed = JSON.parse(raw) as Record<string, unknown>;
+            const pick = (value: unknown): string =>
+              typeof value === "string" ? value : typeof value === "number" ? String(value) : "";
+            meetingNo =
+              pick(parsed.meeting_no) || pick(parsed.meetingNo) || pick(parsed.number);
+            topic = pick(parsed.topic) || pick(parsed.title);
+            if (meetingNo === "") {
+              this.log(
+                `channel ${this.name}: video_chat message carried no meeting number; ` +
+                  `content keys: ${Object.keys(parsed).join(", ")} — raw: ${raw.slice(0, 300)}`
+              );
+            }
+          } catch {
+            this.log(`channel ${this.name}: video_chat content did not parse: ${raw.slice(0, 200)}`);
+          }
+          if (meetingNo === "") {
+            this.discard(messageId, "video_chat message without a readable meeting number");
+            return {};
+          }
+          const invite: MeetingInvite = {
+            inviterOpenId: openId,
+            inviterName: this.names.get(openId) ?? "",
+            meetingNo,
+            topic,
+            meetingId: meetingNo,
+          };
+          const inviteIdentity = `${this.name}:${openId}`;
+          this.log(`channel ${this.name}: meeting invite ${meetingNo} via video_chat message`);
+          void onMessage({
+            identity: inviteIdentity,
+            ...(chatId !== "" ? { chatKey: `${this.name}:${chatId}` } : {}),
+            messageId,
+            senderLabel: invite.inviterName !== "" ? invite.inviterName : inviteIdentity,
+            text: meetingInvitePrompt(invite),
+          })
+            .then(reply =>
+              reply !== undefined && reply !== "" && chatId !== ""
+                ? this.sendToChat(`${this.name}:${chatId}`, reply, { replyTo: messageId })
+                : undefined
+            )
+            .catch((error: unknown) => {
+              const detail = error instanceof Error ? error.message : String(error);
+              this.log(`channel ${this.name}: video_chat invite handling failed (${detail})`);
+            });
+          return {};
+        }
+
         if (messageType !== "text" && messageType !== "post") {
           this.discard(messageId, `unhandled message type ${messageType ?? "?"}`);
           return {};
