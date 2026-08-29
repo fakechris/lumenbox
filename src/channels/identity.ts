@@ -37,6 +37,12 @@ export interface ChannelRecord {
   incarnation: number;
   /** The box this door opens into (docs/22 §2: routing, not authorization). */
   boxId: string;
+  /**
+   * Who answers a message that names nobody (docs/22 §2). An agent name or id;
+   * absent falls through to the installation default. Routing, not a permission:
+   * `@Name` still reaches any agent in the box.
+   */
+  defaultAgent?: string;
   createdAt: string;
 }
 

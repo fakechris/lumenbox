@@ -561,6 +561,8 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
     ingress,
     cards,
     incarnationOf,
+    defaultAgentFor: adapterName =>
+      channelRecords.find(record => record.id === adapterName)?.defaultAgent,
     mayDrive: identity => roleAtLeast(principals.roleOf(identity), "driver"),
     mayAdmin: identity => roleAtLeast(principals.roleOf(identity), "admin"),
     // One scope per chat: binding moves the chat, it does not accumulate. The scope

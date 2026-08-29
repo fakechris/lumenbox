@@ -1617,3 +1617,29 @@ test("answering the agent's question continues the work — no new task, no new 
   await manager.idle();
   assert.deepEqual(opened, ["再出一版周报"]);
 });
+
+test("the door's defaultAgent answers unaddressed messages; @Name still overrides", async () => {
+  // docs/22 §2: routing follows the door. A message naming nobody goes to the
+  // record's defaultAgent; an explicit @ reaches anyone in the box.
+  const adapter = testAdapter();
+  const asked: (string | undefined)[] = [];
+  const manager = new ChannelManager({
+    mayDrive: () => true,
+    defaultAgentFor: adapterName => (adapterName === "telegram" ? "Bob" : undefined),
+    ask: async (agentName, text) => {
+      asked.push(agentName);
+      return `did: ${text}`;
+    },
+    log: () => {},
+  });
+  manager.register(adapter, true, "test");
+  await started(manager);
+
+  await adapter.inject({ identity: "telegram:7", senderLabel: "chris", text: "review the plan" });
+  await sleep(20);
+  assert.deepEqual(asked, ["Bob"], "nobody named, the door's default answers");
+
+  await adapter.inject({ identity: "telegram:7", senderLabel: "chris", text: "@Ada check tests" });
+  await sleep(20);
+  assert.deepEqual(asked, ["Bob", "Ada"], "an explicit address wins over the default");
+});

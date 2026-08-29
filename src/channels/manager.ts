@@ -288,6 +288,12 @@ export interface ChannelManagerDeps {
    */
   incarnationOf?: (chatKey: string) => number;
   /**
+   * The door's own default (docs/22 §2): who answers a message that names nobody,
+   * per adapter. Absent, or undefined for an adapter, falls through to the
+   * installation default the `ask` dependency applies.
+   */
+  defaultAgentFor?: (adapterName: string) => string | undefined;
+  /**
    * Answers a pending approval by id, at a scope. Returns a line to send back, or
    * undefined when the approval is no longer waiting (answered from the web meanwhile,
    * or the turn moved on). The manager only calls this for an approval it pushed to
@@ -1027,11 +1033,17 @@ ${input.options.map(option => `· ${option}`).join("\n")}`
     // ordinary again.
     const answering = this.awaitingAnswer.delete(message.identity);
 
+    // The door's own default (docs/22 §2): a message that names nobody goes to this
+    // adapter's defaultAgent. Applied here, to *new* work only — the steering and
+    // stop decisions above deliberately used the raw address, because a plain
+    // message while something runs is a reply to that work, whoever is doing it.
+    const addressed = agentName ?? this.deps.defaultAgentFor?.(adapter.name);
+
     // "屏幕" is a look, not a task: no turn runs, the desktop is captured as it is.
     const work =
       parseScreenRequest(text) && this.deps.screenshot !== undefined
-        ? this.runScreenshot(adapter, message, agentName)
-        : this.runTask(adapter, message, agentName, text, undefined, { continuation: answering });
+        ? this.runScreenshot(adapter, message, addressed)
+        : this.runTask(adapter, message, addressed, text, undefined, { continuation: answering });
 
     // The work runs behind this return; the decisions above stay synchronous because
     // a refusal or an approval answer *is* the whole response.
