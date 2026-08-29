@@ -626,34 +626,48 @@ export class ChannelManager {
   }
 
   start(): void {
-    for (const adapter of this.adapters) {
-      // A button in a room is pressable by whoever the room trusts to drive — the
-      // same set the text verbs trust — checked at press time, not at render time,
-      // because a card outlives the moment it was posted.
-      adapter.onApprovalAction?.(async press => {
-        if (!this.deps.mayDrive(press.identity)) return undefined;
-        const result = this.deps.answerApproval?.(press.approvalId, press.reply);
-        // However it was answered, nobody's one-word reply should now hit something else.
-        for (const [identity, waiting] of this.awaitingApproval) {
-          if (waiting.approvalId === press.approvalId) this.awaitingApproval.delete(identity);
-        }
-        return (
-          result ??
-          CONSENT_GONE
-        );
+    for (const adapter of this.adapters) this.startAdapter(adapter);
+  }
+
+  /**
+   * A door added while the process runs — from the settings dialog — opens now,
+   * exactly as it would have at boot. Refused when the name is already live,
+   * because two adapters on one name would be two writers on one namespace.
+   */
+  registerAndStart(adapter: ChannelAdapter, detail: string): boolean {
+    if (this.adapters.some(existing => existing.name === adapter.name)) return false;
+    this.register(adapter, true, detail);
+    this.startAdapter(adapter);
+    return true;
+  }
+
+  private startAdapter(adapter: ChannelAdapter): void {
+    // A button in a room is pressable by whoever the room trusts to drive — the
+    // same set the text verbs trust — checked at press time, not at render time,
+    // because a card outlives the moment it was posted.
+    adapter.onApprovalAction?.(async press => {
+      if (!this.deps.mayDrive(press.identity)) return undefined;
+      const result = this.deps.answerApproval?.(press.approvalId, press.reply);
+      // However it was answered, nobody's one-word reply should now hit something else.
+      for (const [identity, waiting] of this.awaitingApproval) {
+        if (waiting.approvalId === press.approvalId) this.awaitingApproval.delete(identity);
+      }
+      return (
+        result ??
+        CONSENT_GONE
+      );
+    });
+    adapter
+      .start(message => this.handle(adapter, message))
+      .then(() => {
+        this.setStatus(adapter.name, { running: true, detail: "connected" });
+        this.deps.log(`channel ${adapter.name}: connected`);
+      })
+      .catch((error: unknown) => {
+        const detail = error instanceof Error ? error.message : String(error);
+        this.setStatus(adapter.name, { running: false, detail });
+        this.deps.log(`channel ${adapter.name}: ${detail}`);
       });
-      adapter
-        .start(message => this.handle(adapter, message))
-        .then(() => {
-          this.setStatus(adapter.name, { running: true, detail: "connected" });
-          this.deps.log(`channel ${adapter.name}: connected`);
-        })
-        .catch((error: unknown) => {
-          const detail = error instanceof Error ? error.message : String(error);
-          this.setStatus(adapter.name, { running: false, detail });
-          this.deps.log(`channel ${adapter.name}: ${detail}`);
-        });
-    }
   }
 
   stop(): void {

@@ -2539,11 +2539,38 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
             saveConfig({ env: { [`${base}_APP_ID`]: appId, [`${base}_APP_SECRET`]: appSecret } });
             credentialsSaved = true;
           }
+          // A door whose credentials are in hand opens *now* — registerAndStart
+          // refuses when the name is already live, so this is exactly the boot-time
+          // registration, just later. Only replacing the credentials of an
+          // already-running adapter still takes a restart.
+          let started = false;
+          if (type === "feishu") {
+            const base = channelEnvBase(id);
+            const savedEnv = loadConfig().env ?? {};
+            const liveAppId =
+              appId !== "" ? appId : (process.env[`${base}_APP_ID`] ?? savedEnv[`${base}_APP_ID`]);
+            const liveSecret =
+              appSecret !== ""
+                ? appSecret
+                : (process.env[`${base}_APP_SECRET`] ?? savedEnv[`${base}_APP_SECRET`]);
+            if (
+              typeof liveAppId === "string" &&
+              liveAppId !== "" &&
+              typeof liveSecret === "string" &&
+              liveSecret !== ""
+            ) {
+              started = channels.registerAndStart(
+                new FeishuChannel(liveAppId, liveSecret, line => log(line), ingress, id),
+                "starting"
+              );
+            }
+          }
           log(
             `channel records: ${id} ${wasKnown ? "updated" : "added"}` +
-              (credentialsSaved ? " (credentials saved)" : "")
+              (credentialsSaved ? " (credentials saved)" : "") +
+              (started ? " (door opened live)" : "")
           );
-          send(res, 200, { restartNeeded: !wasKnown || credentialsSaved });
+          send(res, 200, { restartNeeded: credentialsSaved && !started && wasKnown, started });
           return;
         }
 

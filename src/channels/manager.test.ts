@@ -1643,3 +1643,26 @@ test("the door's defaultAgent answers unaddressed messages; @Name still override
   await sleep(20);
   assert.deepEqual(asked, ["Bob", "Ada"], "an explicit address wins over the default");
 });
+
+test("a door added while running opens live; a name already live is refused", async () => {
+  const first = testAdapter();
+  const manager = new ChannelManager({
+    mayDrive: () => true,
+    ask: async (agentName) => "did it, " + (agentName || "default"),
+    log: () => {},
+  });
+  manager.register(first, true, "test");
+  await started(manager);
+
+  // Same name: two writers on one namespace, refused.
+  assert.equal(manager.registerAndStart(testAdapter(), "starting"), false);
+
+  // A genuinely new door starts and handles messages like a boot-time one.
+  const second = Object.assign(testAdapter(), { name: "feishu-work" });
+  assert.equal(manager.registerAndStart(second, "starting"), true);
+  await new Promise(resolve => setImmediate(resolve));
+  await second.inject({ identity: "feishu-work:ou_1", senderLabel: "chris", text: "hello" });
+  await sleep(20);
+  assert.equal(second.sent.length, 1, "the live-started door answers");
+  assert.ok(manager.list().some(s => s.name === "feishu-work" && s.running));
+});

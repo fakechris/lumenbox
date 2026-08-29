@@ -298,7 +298,10 @@ export const APP_HTML = String.raw`<!doctype html>
     flex: none; height: 52px; border-bottom: 1px solid var(--border);
     display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 0 18px;
   }
-  .paneheader .lead { display: flex; align-items: center; gap: 10px; min-width: 0; }
+  /* overflow:hidden so a crowded lead clips inside its own box instead of painting
+     under the actions on the right — the badge shrinks first (it repeats what the
+     notice banner says in full), the tabs never do. */
+  .paneheader .lead { display: flex; align-items: center; gap: 10px; min-width: 0; overflow: hidden; }
   #title { font-weight: 600; font-size: 1rem; }
   .roundpill {
     display: flex; align-items: center; gap: 7px; font-family: var(--font-mono); font-size: 12px;
@@ -561,7 +564,8 @@ export const APP_HTML = String.raw`<!doctype html>
      because it is only stating the ordinary case. */
   .boxclass {
     font-size: 11px; padding: 2px 8px; border-radius: var(--radius-pill);
-    white-space: nowrap; flex: none; cursor: default;
+    white-space: nowrap; flex: 0 1 auto; min-width: 0; overflow: hidden;
+    text-overflow: ellipsis; cursor: default;
   }
   .boxclass.shared { background: var(--warn-soft); color: var(--warn); border: 1px solid var(--warn-border); }
   .boxclass.private { background: var(--surface-hover); color: var(--muted); }
@@ -888,9 +892,10 @@ export const APP_HTML = String.raw`<!doctype html>
       <div class="fieldnote">Each row is a door: a bot on a wire, opening into this box. A channel
         turns on when its credentials are present (in the environment, or saved here into the
         config's env map under &lt;ID&gt;_APP_ID + _APP_SECRET). The id becomes the prefix of every
-        identity the door mints and is chosen once; the display name and the default agent — who
-        answers when a message names nobody — change freely and apply at once. A second door today
-        can only be Feishu, and it starts on the next restart of the web process.</div>
+        identity the door mints and is chosen once (lowercase letters, digits, hyphens); the
+        display name and the default agent — who answers when a message names nobody — change
+        freely and apply at once. A second door today can only be Feishu; with credentials in
+        hand it opens immediately, no restart.</div>
       <div class="fieldnote" id="setchstatus"></div>
     </div>
     <div class="field" data-tier="installation" id="setmcpwrap" style="display:none">
@@ -1352,7 +1357,7 @@ function renderChannels() {
         var st = statuses[rec.id];
         var cls = st && st.running ? "ok" : st && st.configured ? "bad" : "";
         var detail = st ? st.detail : rec.credentialsSet
-          ? "opens on the next restart"
+          ? "restart to open this door"
           : "set " + rec.envBase + "_APP_ID + _APP_SECRET";
         return '<div style="display:flex;gap:9px;align-items:center;font-size:13px;flex-wrap:wrap">' +
           '<span class="dot ' + cls + '"></span>' +
@@ -1448,10 +1453,12 @@ $("setchadd").onclick = function () {
     .then(function (r) { return r.json(); })
     .then(function (d) {
       if (d.error) { $("setchstatus").textContent = d.error; return; }
-      $("setchstatus").textContent = d.restartNeeded
-        ? "Saved. Restart the web process to open this door — and wait a minute between " +
-          "stop and start, or Feishu keeps the dead connection and refuses the new one."
-        : "Saved.";
+      $("setchstatus").textContent = d.started
+        ? "Saved — the door is opening now. Its dot goes green when the wire connects."
+        : d.restartNeeded
+          ? "Saved. Restart the web process to apply the new credentials — and wait a " +
+            "minute between stop and start, or Feishu keeps the dead connection."
+          : "Saved.";
       $("setchid").value = ""; $("setchname").value = "";
       $("setchappid").value = ""; $("setchsecret").value = "";
       renderChannels();
