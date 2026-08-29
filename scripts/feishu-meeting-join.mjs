@@ -69,7 +69,14 @@ const joinResponse = await fetch(`https://${host}/open-apis/vc/v1/bots/join`, {
     "content-type": "application/json",
     authorization: `Bearer ${tokenBody.tenant_access_token}`,
   },
-  body: JSON.stringify({ meeting_no: meetingNo, ...(password ? { password } : {}) }),
+  // The shape from larksuite/cli's buildMeetingJoinBody: join_type 1 and the
+  // number nested under join_identify — learned when the flat form answered
+  // 99992402 with both fields named as missing.
+  body: JSON.stringify({
+    join_type: 1,
+    join_identify: { meeting_no: meetingNo },
+    ...(password ? { password } : {}),
+  }),
 });
 const joinBody = await joinResponse.json();
 console.log(`HTTP ${joinResponse.status}`);
