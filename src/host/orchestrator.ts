@@ -497,8 +497,10 @@ export class Orchestrator {
       this.box = client;
       this.resolution = health.resolution;
       // Read here rather than at construction: connecting again may be connecting to a
-      // *different* box, and the class belongs to the box, not to the process.
-      this.boxAccess = classifyBox(provisioner.boxName, loadConfig());
+      // *different* box, and the class belongs to the box, not to the process. The
+      // roster's box record name is the fallback for attached provisioners, whose
+      // boxName is a URL — see classifyBox for why a URL never keys the lookup.
+      this.boxAccess = classifyBox(provisioner.boxName, loadConfig(), this.registry.box.name);
       // Connecting again means the box may be a different box: one that was updated,
       // recreated, or simply restarted. Nothing it had is guaranteed to still be
       // there, and a remembered desktop is the one that never appears.

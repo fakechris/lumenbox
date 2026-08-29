@@ -100,3 +100,17 @@ test("the enforced-private class is unreachable until the machinery exists", () 
     "so no box anywhere gets the silent, promise-making class"
   );
 });
+
+test("a URL never keys the class lookup — the fallback name does", () => {
+  // The 2026-08-28 claims review, finding 1: every in-box orchestrator attaches to
+  // http://127.0.0.1:1337, so a URL key made config.boxes dead config inside every
+  // box and would have classified all attached boxes with one entry.
+  const config = { boxes: { "agentbox-box": { access: "private" as const } } };
+  const viaUrl = classifyBox("http://127.0.0.1:1337", config, "agentbox-box");
+  assert.equal(viaUrl.access, "private", "the fallback name found the operator's entry");
+
+  // No fallback: a URL resolves nothing and lands on the honest default.
+  assert.equal(classifyBox("http://127.0.0.1:1337", config).access, "shared");
+  // A real container name still keys directly; the fallback is not consulted.
+  assert.equal(classifyBox("agentbox-box", config, "other").access, "private");
+});

@@ -6,7 +6,14 @@ none closed). v3 was rejected with six — but for the first time three problems
 right and this version continues it rather than restarting.
 
 Reviews: [v1](reviews/2026-08-28-identity-box.md),
-[v2](reviews/2026-08-29-identity-box-v2.md), [v3](reviews/2026-08-29-identity-box-v3.md).
+[v2](reviews/2026-08-29-identity-box-v2.md), [v3](reviews/2026-08-29-identity-box-v3.md),
+[v4](reviews/2026-08-28-identity-box-v4.md) — **v4's findings are corrected into this
+document as of 2026-08-29**; the ones still open are marked where they bite. The v4
+design review's parting question is now the standing gate on steps 4–8: nobody has
+named the user who asked for a private box, and the comparison against "credentials
+in the vault, delivered through the host" (§7's last paragraph — which is that
+feature, already shipped) has never been run. Both belong to a person, not to this
+document.
 
 **Since first writing: steps 1–3 are built** (§6), and **§5 has been rewritten** — it
 claimed agent-to-box lineage was the largest piece and the blocker on private boxes, and
@@ -79,8 +86,8 @@ had them mixed. Corrected, as of 2026-08-29:
 
 | Property | Status |
 | --- | --- |
-| Volumes are per container | **Invariant** — named from the container (`src/box/docker.ts`) |
-| No `--privileged`, `--cap-add`, docker socket | **Invariant** in the managed launcher |
+| Volumes are per container | **Default, not invariant** (v4: `runArgs` defeats it) — named from the container (`src/box/docker.ts`), and an operator's `runArgs` can still mount anything |
+| No `--privileged`, `--cap-add`, docker socket | **Default, not invariant** (v4: `runArgs` defeats it) — true of the managed launcher's own arguments |
 | Daemon published to loopback | **Default, and the deviation is loud** — `AGENTBOX_BOXD_PUBLISH_ADDRESS` still reopens it, but publishing anywhere but loopback now warns with what it exposes. Still not an invariant: an escape hatch that warns is an escape hatch |
 | boxd desktop upgrade authenticated | **Closed** for the host hop (`src/boxd/main.ts`, test at `src/boxd/upgrade-auth.test.ts`) |
 | One token per box | **Closed** — attach mode no longer falls back to the local box's key (it was sending this machine's box token to whatever URL was configured); `AGENTBOX_TOKEN` still overrides globally, and now says so out loud when it does |
@@ -164,6 +171,13 @@ not an edit:
   leftovers, and the group should not lose their things silently.
 - **membership change inside a group**: no wipe; that is what shared means.
 
+**Not implementable as written, per v4 (design #5), and the gaps are the work:** the
+host backup is one recursive copy of all of `~/.agentbox`, so one owner's archive can
+neither be handed over nor deleted without everyone else's transcripts and `vault.json`
+going with it; and `BoxManager.down({remove:true})` does not pass `-v`, so the volumes
+this section promises to destroy survive it. Step 8 is those two mechanisms, not a
+ceremony over the current ones.
+
 ## 5. Binding an agent to a box (revised 2026-08-28)
 
 **What this section used to say was wrong**, and the correction is the reason the rest of
@@ -212,6 +226,16 @@ decorative.
 The compaction path (`memory.ts:710`) merges across shards too, for a reason that survives
 the filter — a retraction in one shard withdraws a fact in another — so it wants the same
 filter rather than a different mechanism.
+
+**Where the filter goes, corrected by v4 (claims #2): on the pool, at every caller.**
+`readSharedMemory()` is also called by `Recall` with `shared: true` and by
+`RememberFact`, both model-facing — a filter at prompt assembly alone leaves an agent
+able to query across boxes directly. And two stores §5's "keyed by agent id" sentence
+does not cover (v4 claims #3, #4): **schedules are keyed by skill slug** with
+`defaultAgent()` resolving alphabetically — their box scoping is docs/22 §2's
+caller-less-initiator rule — and **the roster, task board and claims are unfiltered**
+in every prompt. All of it lands together as docs/22 §7 item 5, or the binding is
+decorative.
 
 ### The decision this leaves open
 
@@ -299,7 +323,13 @@ history and your archives are theirs too. Don't log in to anything you would not
 Nothing stops you — this is a real computer and we are not going to pretend otherwise — which
 is exactly why the label is permanent rather than a warning you dismiss.
 
-**Not offered by either class**: an agent that can *use* a credential without being able to
-*see* it. That is broker-shaped injection — the secret never enters the container, a
-placeholder is swapped at an egress proxy, which five independent systems converged on — and
-it is a different feature for a different threat, not a later phase of this one.
+**Corrected by v4 (design #4): use-without-seeing IS offered, and is already shipped.**
+An earlier version of this paragraph claimed neither class offers an agent that can *use*
+a credential without being able to *see* it. The vault plus `RunOnHost` is exactly that
+shape today: the secret is placed into one host command's environment, the agent uses it
+by name and never sees the value. What is *not* built is the egress-proxy broker (the
+secret never entering the container, a placeholder swapped at the wire — the design five
+independent systems converged on): a different mechanism for the same promise. The
+correction is load-bearing: it is why the v4 reviewer's parting question — whether a
+better vault plus the honest shared box beats building private boxes at all — must be
+answered by a person before steps 4–8 start.

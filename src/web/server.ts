@@ -3180,7 +3180,11 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
             // What kind of box this is travels with its status, because every surface that
             // shows the box has to be able to say so — a class shown only on a settings
             // page is a class nobody reads (docs/18 §3.1).
-            box: { ...box, ok: box.connected, ...classifyBox(provisioner.boxName, loadConfig()) },
+            box: {
+              ...box,
+              ok: box.connected,
+              ...classifyBox(provisioner.boxName, loadConfig(), registry.box.name),
+            },
             allTools: ALL_TOOLS,
             agents: registry.list().map(record => {
               const index = registry.displayIndexFor(record.id);

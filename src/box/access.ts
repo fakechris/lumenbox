@@ -73,10 +73,21 @@ const PRIVATE: BoxClass = {
  * The class of the box named `name`, and how to say it.
  *
  * `name` is the provisioner's `boxName` — the container name for a box we run, the URL
- * for one we attached to.
+ * for one we attached to. **A URL is not a box name** (the 2026-08-28 claims review,
+ * finding 1): every in-box orchestrator attaches to `http://127.0.0.1:1337`, so keying
+ * the class on it made the operator's `config.boxes` entries dead config inside every
+ * box, and would have let one entry under that URL classify every attached box on every
+ * host at once. A URL therefore falls back to `fallbackName` — the roster's own box
+ * record name — and never keys a lookup itself. The real fix is the docs/22 migration
+ * to box ids with a members set; this makes the label true until that lands.
  */
-export function classifyBox(name: string, config: Pick<AgentboxConfig, "boxes">): BoxClass {
-  const record = config.boxes?.[name];
+export function classifyBox(
+  name: string,
+  config: Pick<AgentboxConfig, "boxes">,
+  fallbackName?: string
+): BoxClass {
+  const key = /^https?:\/\//.test(name) ? (fallbackName ?? "") : name;
+  const record = config.boxes?.[key];
   const group = record?.group?.trim();
   if (record?.access === "private") {
     if (PRIVATE_IS_ENFORCED) return PRIVATE;
