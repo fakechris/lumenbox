@@ -262,6 +262,22 @@ export function splitChatKey(chatKey: string): { chatId: string; rootId?: string
   return rootId === undefined || rootId === "" ? { chatId } : { chatId, rootId };
 }
 
+/**
+ * What one of the SDK's own log lines means for the socket, since the SDK exposes
+ * no state and no close hook (see `stop`). Its logger is the only witness: it says
+ * `client ready` when the long connection is up, and `connect failed` when the
+ * vendor refused — which it does for ~a minute after a restart, while the dead
+ * process's registration lingers (roadmap R35). Exported for its test.
+ */
+export function classifySocketLine(line: string): "ready" | "failed" | undefined {
+  if (/client ready/i.test(line)) return "ready";
+  if (/connect failed|connection failed/i.test(line)) return "failed";
+  return undefined;
+}
+
+/** Retry delays after a refused connect: patient enough for R35's window, loud always. */
+export const SOCKET_RETRY_MS = [5_000, 15_000, 30_000, 60_000] as const;
+
 export class FeishuChannel implements ChannelAdapter {
   /**
    * The channel record's id (docs/22 §4): the immutable key everything on this
@@ -795,15 +811,65 @@ export class FeishuChannel implements ChannelAdapter {
       },
     });
 
-    const wsClient = new lark.WSClient({
-      appId: this.appId,
-      appSecret: this.appSecret,
-      domain,
-      // The SDK logs at info by default, which narrates every heartbeat.
-      loggerLevel: lark.LoggerLevel.error,
-    });
-    // The client keeps itself alive through its socket; there is nothing to hold.
-    wsClient.start({ eventDispatcher: dispatcher });
+    // The connect that retries, because the SDK's does not: after a restart the
+    // vendor can refuse the new connection for ~a minute while the dead process's
+    // registration lingers, and the SDK logs `connect failed` once and never tries
+    // again — a bot that is deaf forever, reading exactly like a quiet afternoon
+    // (roadmap R35; it cost a dropped message and four minutes to diagnose). The
+    // SDK exposes no state and no close hook, so its own logger is the witness:
+    // `client ready` ends the retrying, `connect failed` schedules the next
+    // attempt, and every attempt is said out loud — liveness.ts is right that a
+    // *silent* reconnect rebuilds blindness one layer up, so this one narrates.
+    // A retry while an earlier client somehow lives is safe on this vendor: Feishu
+    // refuses a second consumer per app, which is the very behaviour being ridden
+    // out. Backoff resets on success; `stop()` ends the loop with the process.
+    let attempts = 0;
+    let retryTimer: NodeJS.Timeout | undefined;
+    const openSocket = (): void => {
+      const logger = {
+        error: (...parts: unknown[]) => {
+          const line = parts.map(part => String(part)).join(" ");
+          if (classifySocketLine(line) === "failed") {
+            if (retryTimer !== undefined) return;
+            const delay = SOCKET_RETRY_MS[Math.min(attempts, SOCKET_RETRY_MS.length - 1)]!;
+            attempts += 1;
+            this.log(
+              `channel ${this.name}: socket connect failed; retry #${attempts} in ` +
+                `${delay / 1000}s (after a restart the vendor holds the old ` +
+                `registration for about a minute)`
+            );
+            retryTimer = setTimeout(() => {
+              retryTimer = undefined;
+              openSocket();
+            }, delay);
+            retryTimer.unref?.();
+            return;
+          }
+          this.log(`channel ${this.name}: ws ${line}`);
+        },
+        warn: () => {},
+        info: (...parts: unknown[]) => {
+          // Info narrates every heartbeat; the one line worth keeping is the
+          // evidence of life the old "connected" log never actually had.
+          if (classifySocketLine(parts.map(part => String(part)).join(" ")) === "ready") {
+            attempts = 0;
+            this.log(`channel ${this.name}: socket ready`);
+          }
+        },
+        debug: () => {},
+        trace: () => {},
+      };
+      const wsClient = new lark.WSClient({
+        appId: this.appId,
+        appSecret: this.appSecret,
+        domain,
+        loggerLevel: lark.LoggerLevel.info,
+        logger,
+      });
+      // The client keeps itself alive through its socket; there is nothing to hold.
+      wsClient.start({ eventDispatcher: dispatcher });
+    };
+    openSocket();
   }
 
   stop(): void {

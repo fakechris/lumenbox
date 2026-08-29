@@ -6,7 +6,7 @@
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { FeishuChannel, looksLikeMarkdown, markdownPost, renderCard, renderQuestionCard, splitChatKey } from "./feishu.ts";
+import { FeishuChannel, SOCKET_RETRY_MS, classifySocketLine, looksLikeMarkdown, markdownPost, renderCard, renderQuestionCard, splitChatKey } from "./feishu.ts";
 import type { TaskCardState } from "./manager.ts";
 
 interface CardShape {
@@ -431,4 +431,15 @@ test("a second door mints its own namespace: nothing it says collides with the f
     chatId: "oc_room",
     rootId: "om_topic",
   });
+});
+
+test("the SDK's log lines are the socket's only witness, read correctly", () => {
+  // Roadmap R35: after a restart the vendor refuses the connect for ~a minute and
+  // the SDK logs once and gives up. The retry loop keys on these classifications.
+  assert.equal(classifySocketLine("[ws] ws connect failed"), "failed");
+  assert.equal(classifySocketLine("connection failed: ECONNRESET"), "failed");
+  assert.equal(classifySocketLine("client ready"), "ready");
+  assert.equal(classifySocketLine("[ws] heartbeat"), undefined);
+  // The schedule is patient enough to outlast the vendor's window.
+  assert.ok(SOCKET_RETRY_MS.reduce((a, b) => a + b, 0) >= 60_000);
 });
