@@ -80,7 +80,28 @@ its own retry and its own log line, and stop logging `connected` for a call rath
 a connection. A restart that waits for the old process to be gone at the *vendor's* end —
 not just locally — would also help, and there is no signal for that other than time.
 
-### R37. Meeting presence: invite the bot, watch its desktop in the call
+### R37. Meeting presence — the browser path worked once, then the vendor said no
+
+**Final state, 2026-08-29 evening.** The browser path is dead by policy, not by
+bug: after the one fully successful join-and-share, every later join by the
+dedicated account terminated the meeting within seconds — confirmed by hand,
+without any agent involved: the account joining manually got **「由于安全原因会
+议中止」**. Risk control: a fresh account, web-only, sharing its screen seconds
+after joining, several short meetings in a row — the exact automation signature
+the vendor's model hunts, and one earlier invite-kills-meeting theory tested and
+discarded on the way (a chat-triggered join with no invitation died identically).
+This will not be engineered around: simulating a human at a meeting the vendor
+gates behind an official agents API is the wrong side of their policy, and the
+121016 admin switch is the same policy's front door. **The official `bots/join`
+path is therefore the primary route** — blocked solely on the tenant-side switch
+(ticket ammunition: code 121016, log_id in the section below). What stays
+working with zero risk surface: the 「桌面」 authenticated link, 「屏幕」
+stills, and a possible card-stream watch verb. Also logged from the same
+session: MiniMax-M3 lost the `computer` tool schema after a memory compaction
+and burned ten minutes guessing parameter shapes — a separate defect worth its
+own fix (schema examples surviving compaction).
+
+### R37 (history). Meeting presence: invite the bot, watch its desktop in the call
 
 Chartered 2026-08-29. The property the owner asked for: see the box's screen from
 Feishu **with no inbound connectivity at all** — the desktop arrives through the
