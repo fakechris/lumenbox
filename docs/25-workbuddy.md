@@ -74,6 +74,28 @@ docx/wiki read-only) — blocked on write-side Feishu tools or an in-box
 credential decision, recorded. The week-of-use measurement is the owner's;
 the settings-page "add this buddy" productization waits on the docs/13 rule.
 
+## The productization landed (PR #14, 2026-08-30)
+
+The settings-page half that E4/E5 deferred shipped the same day from the other
+side of the two-agent split: **the built-in catalog** (`src/host/catalog.ts` +
+`catalog-data/`). A crew is several experts; an expert is a standing persona
+(`catalog-data/experts/*.md`, rewritten — no identity theatre, no frozen tool
+names) plus vendored skill-hub packages (`catalog-data/skills/`, copied as-is,
+provenance in `SOURCE.md`, seeded globally into the box by starter-skills'
+marker mechanism). Seven experts (Lin 工程师, Heng 审查, Mo 产品, Jian 主笔,
+He 种草, Jing 编剧, Xi 分析师), two crews (`ship`, `media-desk`), three tool
+tiers (DESK/WEB/CODE) with `intersectTools` clamping a new agent to what its
+creator holds. Install paths: New-agent chips on the web page, `CreateAgent
+from: <slug>`, `GET /api/catalog`. Fresh installs seed a starter four
+(Ada/Rex/Ops/Vera in `orchestrator.ts`); existing rosters are untouched.
+
+How the two halves relate: E4/E5's manifests were the measured prototype
+(one-sentence golden tasks, externally verified; the live Iris/Mia/Enzo crew
+stays installed for the week-of-use verdict); the catalog is the shipped
+mechanism. New bundles should go into the catalog, and a catalog row's golden
+tasks — the acceptance face the preset charter promised — are still to be
+attached: the manifests here show the shape.
+
 ## Rules of the program
 
 - Measured over believed: every experiment ends with what actually happened,
