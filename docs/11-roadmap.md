@@ -1254,7 +1254,18 @@ Why this and not something with a bigger name:
   conversation spans tasks — but it makes fork children costable immediately, which is the
   case the estimate cares about most.
 
-### 2. R31, the admin view — now unblocked
+### ~~2. R31, the admin view~~ — shipped; found built during the 2026-08-29 sweep
+
+Another entry that outlived its implementation (workId's sibling). Verified live:
+`GET /api/spend` serves day totals, per-task costing over the board's own run ids
+(104 tasks costed on this installation), work-id and task drill-downs, a
+hash-addressable modal UI, and honest caveats — including naming the unpriced
+models. The one open half is *data*, not code: `rates` in config.json is empty,
+so MiniMax-M3 and claude-opus-5 report tokens without money. Filling it is one
+config block with real prices — a wrong rate being worse than no rate is the
+view's own stated philosophy.
+
+### 2 (original). R31, the admin view — now unblocked
 
 It waited on the obligation ledger and no longer does. With the join key in place this is
 assembly: the ledgers are append-only, replayable and on disk. A daily view, drill into one
