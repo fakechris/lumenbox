@@ -51,6 +51,7 @@ import {
   shouldPruneImages,
   chooseCutPoint,
   calibratedTokens,
+  CompactionGuard,
   choosePinnedEntries,
   droppedEntry,
   estimateRequestTokens,
@@ -607,6 +608,8 @@ export function storableResult(
  * Bounded by the number of agents, which is bounded by desktops (32).
  */
 const pendingSummaries = new Map<string, PendingSummary>();
+/** One guard per process: pauses are per conversation inside it. */
+const compactionGuard = new CompactionGuard();
 
 /**
  * Bills a model call that is not the agent thinking.
@@ -775,6 +778,18 @@ async function compactHistory(options: {
     return history;
   }
 
+  // The anti-thrash gate (docs/24 P1 #8): a paused conversation sends uncompacted —
+  // the trigger sits 35% below the window, so the request still fits, and a pause is
+  // the honest response to "summarising demonstrably does not help here".
+  if (!compactionGuard.allowed(summaryKey)) {
+    log(
+      `compaction paused for this conversation ` +
+        `(${Math.ceil(compactionGuard.pausedForMs(summaryKey) / 60_000)}m left): ` +
+        `recent passes failed or did not clear the trigger`
+    );
+    return history;
+  }
+
   log(`compacting history: ${cut.reason}`);
 
   let entry: SummaryEntry;
@@ -843,6 +858,9 @@ async function compactHistory(options: {
     onCompacted({ type: "compacted", covers: entry.covers, summarised: true, detail });
   } catch (error) {
     const reason = error instanceof Error ? error.message : String(error);
+    // A refusing summariser buys a cooldown: asking again in ten seconds costs money
+    // and delays the turn for the same answer.
+    compactionGuard.noteFailure(summaryKey);
     // Loud, and told to the model: the alternative was a request that cannot fit, and the
     // alternative to that was dropping history with no trace of it having happened.
     entry = droppedEntry(cut.index, reason);

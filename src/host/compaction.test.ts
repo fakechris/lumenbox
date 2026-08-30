@@ -27,6 +27,7 @@ DEFAULT_POLICY,
   policyForModel,
   compactionUrgency,
   calibratedTokens,
+  CompactionGuard,
   choosePinnedEntries,
   estimateRequestTokens,
   noteRealInputTokens,
@@ -797,4 +798,26 @@ test("grok round 3: heading dialects pass, shapeless drafts fail, drift is visib
   assert.equal(pendingIsUsable(pending, grown, policy), true, "still usable");
   assert.equal(pendingHasDrifted(pending, grown, policy), true, "but drifted");
   assert.equal(pendingHasDrifted({ ...pending, covers: 11 }, grown, policy), false);
+});
+
+test("the guard cools a failing summariser and pauses a thrashing conversation", () => {
+  // docs/24 P1 #8, the Hermes #14695 lesson: 'the message list shrank' is not
+  // effectiveness — clearing the trigger is.
+  const guard = new CompactionGuard();
+  const t0 = 1_000_000;
+  assert.equal(guard.allowed("c", t0), true);
+
+  guard.noteFailure("c", t0);
+  assert.equal(guard.allowed("c", t0 + 1), false, "failure buys a cooldown");
+  assert.equal(guard.allowed("c", t0 + CompactionGuard.FAILURE_COOLDOWN_MS + 1), true);
+
+  // Two ineffective passes pause; one effective pass resets everything.
+  assert.equal(guard.notePass("c", false, t0), "ineffective");
+  assert.equal(guard.notePass("c", true, t0), "ok");
+  assert.equal(guard.notePass("c", false, t0), "ineffective", "the streak reset");
+  assert.equal(guard.notePass("c", false, t0), "paused");
+  assert.equal(guard.allowed("c", t0 + 1), false);
+  assert.equal(guard.allowed("c", t0 + CompactionGuard.INEFFECTIVE_PAUSE_MS + 1), true);
+  // Conversations are independent.
+  assert.equal(guard.allowed("other", t0), true);
 });

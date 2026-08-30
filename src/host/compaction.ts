@@ -880,6 +880,65 @@ export function estimateMessageTokens(messages: readonly Anthropic.MessageParam[
   return Math.ceil(chars / CHARS_PER_TOKEN) + images * TOKENS_PER_IMAGE;
 }
 
+// ── anti-thrash (docs/24 P1 #8, the Hermes lesson) ─────────────────────────────────────
+
+/**
+ * The judgement compaction could not make about itself.
+ *
+ * Hermes met the failure in production (#14695): when the incompressible floor alone
+ * meets the threshold, every pass shrinks the messages by a healthy margin and still
+ * leaves the request over the line — so the next turn compacts again, forever, and
+ * "the message list shrank" reads as success the whole way down. The guard keeps two
+ * counters per conversation: summariser failures buy a cooldown (a model that just
+ * refused will refuse again in ten seconds; asking costs money and delays the turn),
+ * and passes that do not clear the trigger count as ineffective — two in a row pause
+ * auto-compaction outright, loudly, because at that point the problem is not the
+ * history and no amount of summarising will say so.
+ */
+export class CompactionGuard {
+  static readonly FAILURE_COOLDOWN_MS = 10 * 60_000;
+  static readonly INEFFECTIVE_LIMIT = 2;
+  static readonly INEFFECTIVE_PAUSE_MS = 30 * 60_000;
+
+  private readonly pausedUntil = new Map<string, number>();
+  private readonly ineffective = new Map<string, number>();
+
+  /** Whether compaction (and its summariser) may run for this conversation now. */
+  allowed(key: string, now = Date.now()): boolean {
+    return (this.pausedUntil.get(key) ?? 0) <= now;
+  }
+
+  /** How long until it may run again, for the log. Zero when not paused. */
+  pausedForMs(key: string, now = Date.now()): number {
+    return Math.max(0, (this.pausedUntil.get(key) ?? 0) - now);
+  }
+
+  /** A summariser failure: cool down rather than hammering a refusing model. */
+  noteFailure(key: string, now = Date.now()): void {
+    this.pausedUntil.set(key, now + CompactionGuard.FAILURE_COOLDOWN_MS);
+  }
+
+  /**
+   * The verdict on a completed pass: did the compacted window clear the trigger?
+   * Two ineffective passes in a row pause the conversation's auto-compaction.
+   */
+  notePass(key: string, cleared: boolean, now = Date.now()): "ok" | "ineffective" | "paused" {
+    if (cleared) {
+      this.ineffective.delete(key);
+      this.pausedUntil.delete(key);
+      return "ok";
+    }
+    const count = (this.ineffective.get(key) ?? 0) + 1;
+    if (count >= CompactionGuard.INEFFECTIVE_LIMIT) {
+      this.ineffective.delete(key);
+      this.pausedUntil.set(key, now + CompactionGuard.INEFFECTIVE_PAUSE_MS);
+      return "paused";
+    }
+    this.ineffective.set(key, count);
+    return "ineffective";
+  }
+}
+
 // ── complete-request accounting (docs/24 v3 P0 #5) ─────────────────────────────────────
 
 /**

@@ -8,7 +8,7 @@
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { payerOf } from "./remember.ts";
+import { Rememberer, payerOf } from "./remember.ts";
 
 test("a batch that is all one person's bills to that person", () => {
   assert.equal(payerOf(["chris", "chris", "chris"]), "chris");
@@ -28,4 +28,66 @@ test("work nobody drove stays unattributed, and one unattributed exchange taints
   // Half a batch from a person and half from a timer is not that person's cost either.
   assert.equal(payerOf(["chris", undefined]), undefined);
   assert.equal(payerOf([undefined, "chris"]), undefined);
+});
+
+test("a slow older batch cannot land after a newer correction", async () => {
+  // docs/24 review (Codex finding 6): record() cleared the queue before awaiting, so
+  // two batches ran concurrently and a slow older extraction appended after — and
+  // thereby outranked — a newer correction. The per-agent write chain serializes.
+  const appended: string[] = [];
+  const registry = {
+    readMemoryRecords: () => [],
+    appendMemoryRecords: (_id: string, records: { text: string }[]) => {
+      appended.push(...records.map(record => record.text));
+    },
+  } as never;
+
+  let call = 0;
+  let releaseFirst: (() => void) | undefined;
+  const firstHeld = new Promise<void>(resolve => {
+    releaseFirst = resolve;
+  });
+  const client = {
+    messages: {
+      create: async () => {
+        call += 1;
+        if (call === 1) await firstHeld; // the OLD batch is slow
+        return {
+          content: [{ type: "text", text: call === 1 ? "the OLD understanding" : "the NEW correction" }],
+          usage: { input_tokens: 1, output_tokens: 1 },
+        };
+      },
+    },
+  } as never;
+
+  const rememberer = new Rememberer({
+    registry,
+    client,
+    provider: { label: "stub", model: "stub", maxTokens: 1024 } as never,
+  });
+
+  const exchange = (text: string) => ({ agentId: "ada", text, principal: undefined });
+  // Two full batches (EXTRACT_EVERY = 3). Neither record() is awaited between fills,
+  // mirroring the fire-and-forget call site.
+  const first = Promise.all([
+    rememberer.record(exchange("a1")),
+    rememberer.record(exchange("a2")),
+    rememberer.record(exchange("a3")),
+  ]);
+  const second = Promise.all([
+    rememberer.record(exchange("b1")),
+    rememberer.record(exchange("b2")),
+    rememberer.record(exchange("b3")),
+  ]);
+  // Let the second batch race ahead, then release the first.
+  await new Promise(resolve => setTimeout(resolve, 20));
+  releaseFirst?.();
+  await first;
+  await second;
+
+  assert.deepEqual(
+    appended,
+    ["the OLD understanding", "the NEW correction"],
+    "appends land in conversation order, not completion order"
+  );
 });

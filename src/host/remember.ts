@@ -102,6 +102,18 @@ export function payerOf(principals: readonly (string | undefined)[]): string | u
  */
 export class Rememberer {
   private readonly pending = new Map<string, string[]>();
+  /**
+   * One write chain per agent (docs/24 review, Codex finding 6 + Grok round 2).
+   *
+   * `record` used to clear the pending queue and then await extraction, so a second
+   * batch could run concurrently with the first: each snapshots the known records at
+   * its own start and appends at its own completion, and a *slow older* batch then
+   * lands after a newer correction — later in the file, newer-looking timestamps —
+   * and replaces it through dedupe rather than merely reordering the prompt. The
+   * chain makes every memory write for one agent sequential in conversation order:
+   * batch N's append is on disk before batch N+1 reads what is known.
+   */
+  private readonly writeChains = new Map<string, Promise<void>>();
   /** Who each pending exchange was with, positionally — see payerOf. */
   private readonly pendingPayers = new Map<string, (string | undefined)[]>();
   private readonly extractions = new Map<string, string[]>();
@@ -122,6 +134,16 @@ export class Rememberer {
    * batch would mix unrelated walls.
    */
   async recordPitfall(input: {
+    agentId: string;
+    source: PitfallSource;
+    attempt: string;
+    detail: string;
+    principal?: string;
+  }): Promise<void> {
+    await this.enqueue(input.agentId, () => this.writePitfall(input));
+  }
+
+  private async writePitfall(input: {
     agentId: string;
     source: PitfallSource;
     attempt: string;
@@ -163,7 +185,19 @@ export class Rememberer {
 
     this.pending.set(exchange.agentId, []);
     this.pendingPayers.set(exchange.agentId, []);
-    await this.extract(exchange.agentId, batch, payerOf(payers));
+    await this.enqueue(exchange.agentId, () =>
+      this.extract(exchange.agentId, batch, payerOf(payers))
+    );
+  }
+
+  /** Appends work to the agent's write chain. A failed link never breaks the chain. */
+  private enqueue(agentId: string, work: () => Promise<void>): Promise<void> {
+    const previous = this.writeChains.get(agentId) ?? Promise.resolve();
+    const next = previous.then(work, work);
+    // The stored link swallows, so one failure cannot poison every later batch;
+    // the returned one does not, so a caller that awaits still sees its own error.
+    this.writeChains.set(agentId, next.catch(() => {}));
+    return next;
   }
 
   private async extract(
