@@ -330,13 +330,26 @@ test("a speculative summary is discarded if the history moved underneath it", as
     computedFrom: 20,
     promise: Promise.resolve(summaryEntry("done", 10)),
   };
+  const entry = (text: string): HistoryEntry => ({ role: "user", text, at: "2026-08-29T00:00:00Z" });
+  const window = (length: number) => Array.from({ length }, (_, i) => entry(`m${i}`));
+  const policy: CompactionPolicy = { triggerTokens: 1_000, keepTailTokens: 300, maxEntries: 50 };
+
   // Longer is fine: the summary covers a prefix and the tail is sent verbatim either way.
-  assert.equal(pendingIsUsable(pending, 25), true);
-  assert.equal(pendingIsUsable(pending, 20), true);
+  assert.equal(pendingIsUsable(pending, window(25), policy), true);
+  assert.equal(pendingIsUsable(pending, window(20), policy), true);
   // Shorter means the window was compacted underneath it, so `covers` now points at the wrong
   // entries — using it would silently summarise away work that had not been summarised.
-  assert.equal(pendingIsUsable(pending, 12), false);
-  assert.equal(pendingIsUsable(undefined, 20), false);
+  assert.equal(pendingIsUsable(pending, window(12), policy), false);
+  assert.equal(pendingIsUsable(undefined, window(20), policy), false);
+
+  // The uncovered tail over the entry cap: adoption would not bound the window.
+  assert.equal(pendingIsUsable(pending, window(70), policy), false);
+
+  // The docs/24 v3 case: entry counts fine, but one enormous steering message after the
+  // background pass leaves a tail over the token trigger — adopting the stale summary
+  // would not bound the request, so it is rejected and a fresh cut is computed.
+  const heavy = [...window(15), entry("x".repeat(5_000))];
+  assert.equal(pendingIsUsable(pending, heavy, policy), false);
 });
 
 test("the summariser is a separate, cheaper profile where one exists", () => {

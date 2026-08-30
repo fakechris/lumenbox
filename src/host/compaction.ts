@@ -671,22 +671,31 @@ export function compactionUrgency(
   return "none";
 }
 
-/** Whether a summary computed earlier still describes the history it is about to be used for. */
+/**
+ * Whether a summary computed earlier still describes the history it is about to be used for.
+ *
+ * Three rejections, and the third is the 2026-08-29 review's (docs/24 v3 P0 #4): a pending
+ * summary was validated by *entry count* alone, so one enormous steering message appended
+ * after the background pass could ride in under a stale summary and leave a request that
+ * was still over budget with nothing left to shed. The tail — everything the summary does
+ * not cover — now has to fit under the token trigger too, because bounding the request is
+ * the whole point of adopting the summary.
+ */
 export function pendingIsUsable(
   pending: PendingSummary | undefined,
-  activeLength: number,
-  maxEntries = DEFAULT_POLICY.maxEntries
+  active: readonly HistoryEntry[],
+  policy: CompactionPolicy = DEFAULT_POLICY
 ): boolean {
   if (pending === undefined) return false;
   // The history having been compacted underneath it shortens the active window and makes `covers`
-  // point at the wrong entries — reject.
-  if (activeLength < pending.computedFrom) return false;
-  // Stale in the way that matters: the summary covers a prefix, and if the tail it would leave
-  // behind (everything it does not cover) is itself larger than the entry cap, adopting it does not
-  // bound the window — the cap downstream then drops that unsummarised tail with no marker. Measured
-  // on covers, not on how much the window grew: a summary that still covers most of the history is
-  // fine however long ago it was computed.
-  if (activeLength - pending.covers > maxEntries) return false;
+  // point at the wrong entries — reject. (Growth alone is fine; the checks below decide whether
+  // the grown tail still lets this summary do its job.)
+  if (active.length < pending.computedFrom) return false;
+  // The uncovered tail must fit under the entry cap, or the cap downstream drops the
+  // unsummarised middle with no marker.
+  if (active.length - pending.covers > policy.maxEntries) return false;
+  // And it must fit under the token trigger, or adoption does not bound the request at all.
+  if (estimateTokens(active.slice(pending.covers)) > policy.triggerTokens) return false;
   return true;
 }
 

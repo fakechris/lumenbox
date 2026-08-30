@@ -691,7 +691,12 @@ async function compactHistory(options: {
   if (urgency === "background") {
     // Start it and walk away. Nothing here is awaited, and a failure is swallowed on purpose: this
     // is speculative work, and the `now` path will report properly if it ever becomes necessary.
-    if (!pendingSummaries.has(summaryKey)) {
+    //
+    // Replaced when stale, not merely absent (docs/24 v3 P0 #4): a `has` check froze the
+    // first 75%-band summary forever — the history marched on to 99% while the pending
+    // still described the world at 75%, and adoption then kept an unbounded tail.
+    const existing = pendingSummaries.get(summaryKey);
+    if (existing === undefined || !pendingIsUsable(existing, active, policy)) {
       log(
         `pre-summarising ${cut.index} entries in the background on ${summaryProvider.model}; ` +
           `this turn proceeds uncompacted`
@@ -711,7 +716,7 @@ async function compactHistory(options: {
   try {
     const pending = pendingSummaries.get(summaryKey);
     let ready: SummaryEntry | undefined;
-    if (pendingIsUsable(pending, active.length)) {
+    if (pendingIsUsable(pending, active, policy)) {
       ready = await pending!.promise;
       if (ready !== undefined) {
         log(`used the summary prepared in the background (${pending!.covers} entries)`);
