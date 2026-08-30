@@ -45,11 +45,14 @@ import {
   noteContextWindow,
   policyForModel,
   repairPairs,
+  noteRealInputTokens,
   pruneOldImages,
   shouldPruneImages,
   chooseCutPoint,
+  calibratedTokens,
   choosePinnedEntries,
   droppedEntry,
+  estimateRequestTokens,
   extractAnchors,
   missingSummaryHeadings,
   estimateTokens,
@@ -1296,6 +1299,8 @@ export async function runTurn(
   // Transient retries across the whole turn, not per round: a connection that keeps dropping should
   // not get four fresh attempts at every round of a four-hundred-round turn.
   let attempts = 0;
+  // The incompressible-floor warning fires once per turn, not once per round.
+  let floorWarned = false;
   for (let round = 0; round < MAX_ROUNDS; round++) {
     if (signal.aborted) {
       emit({ type: "aborted", agentId: agent.id });
@@ -1353,7 +1358,22 @@ export async function runTurn(
     // and a computer-use turn does exactly that — one screenshot per round, up to MAX_ROUNDS of
     // them, all still being sent on the last one. Only the newest screen matters for deciding what
     // to click; the rest is a claim about the past that the text already records.
-    const estimated = estimateMessageTokens(messages);
+    //
+    // The whole request, not the history alone (docs/24 v3 P0 #5): the system prompt and
+    // tool schemas were invisible to every earlier estimate, so an incompressible floor
+    // produced rejected requests that no compaction could have prevented — and nothing
+    // said so. The estimate is calibrated by what this wire actually billed last time.
+    const requestEstimate = estimateRequestTokens({ messages, system, tools });
+    const wire = `${provider.label}|${provider.baseUrl ?? ""}`;
+    const estimated = calibratedTokens(wire, requestEstimate.total);
+    if (!floorWarned && requestEstimate.floor > policyForModel(provider.model).triggerTokens) {
+      floorWarned = true;
+      console.error(
+        `[compaction] ${agent.profile.name}: the system prompt and tools alone are about ` +
+          `${requestEstimate.floor} tokens — over the compaction trigger. Compaction cannot ` +
+          `shrink this request; fewer tools or a shorter prompt is the fix.`
+      );
+    }
     if (shouldPruneImages(estimated, provider.model)) {
       const pruned = pruneOldImages(messages, KEEP_IMAGES);
       if (pruned.dropped > 0) {
@@ -1560,6 +1580,13 @@ export async function runTurn(
       (response.usage as { max_tokens?: number; context_window?: number }).max_tokens ??
         (response.usage as { context_window?: number }).context_window ??
         provider.contextWindow
+    );
+    // Teach the estimator what this wire actually billed for the request we just
+    // estimated — the calibration loop of docs/24 v3 P0 #5.
+    noteRealInputTokens(
+      `${provider.label}|${provider.baseUrl ?? ""}`,
+      requestEstimate.total,
+      (response.usage as { input_tokens?: number }).input_tokens
     );
     deps.usage?.record({
       agentId: agent.id,

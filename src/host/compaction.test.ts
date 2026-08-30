@@ -26,7 +26,10 @@ DEFAULT_POLICY,
   noteContextWindow,
   policyForModel,
   compactionUrgency,
+  calibratedTokens,
   choosePinnedEntries,
+  estimateRequestTokens,
+  noteRealInputTokens,
   extractAnchors,
   missingSummaryHeadings,
   pendingIsUsable,
@@ -707,4 +710,35 @@ test("a summary provider on the same wire reuses the primary client; a different
     if (previous === undefined) delete process.env.AGENTBOX_SUMMARY_PROVIDER;
     else process.env.AGENTBOX_SUMMARY_PROVIDER = previous;
   }
+});
+
+test("the whole request is estimated, and the incompressible floor is named", () => {
+  // docs/24 v3 P0 #5: the system prompt and tool schemas were invisible to every
+  // earlier estimate, so a fat floor produced rejected requests no compaction could
+  // have prevented.
+  const messages = [{ role: "user" as const, content: "hi" }];
+  const bare = estimateRequestTokens({ messages });
+  const withFloor = estimateRequestTokens({
+    messages,
+    system: [{ text: "x".repeat(2_500) }, { text: "y".repeat(2_500) }],
+    tools: [{ name: "computer", input_schema: { properties: { actions: {} } } }],
+  });
+  assert.equal(bare.floor, 0);
+  assert.ok(withFloor.floor >= 2_000, "two 2.5k-char blocks are ~2k tokens of floor");
+  assert.equal(withFloor.total - withFloor.floor, bare.total, "history half unchanged");
+});
+
+test("the estimate learns from what the wire actually billed", () => {
+  const wire = "test-wire|https://example";
+  assert.equal(calibratedTokens(wire, 1_000), 1_000, "identity until taught");
+  // CJK-shaped reality: the provider bills ~2x our character estimate.
+  noteRealInputTokens(wire, 1_000, 2_000);
+  const taught = calibratedTokens(wire, 1_000);
+  assert.ok(taught > 1_500 && taught <= 2_000, `learned upward, got ${taught}`);
+  // Smoothing: one wild sample cannot swing the factor to its own extreme.
+  noteRealInputTokens(wire, 1_000, 50_000);
+  assert.ok(calibratedTokens(wire, 1_000) < 4_000, "clamped and smoothed");
+  // Garbage in, nothing out.
+  noteRealInputTokens(wire, 0, 100);
+  noteRealInputTokens(wire, 1_000, undefined);
 });

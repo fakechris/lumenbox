@@ -798,6 +798,64 @@ export function estimateMessageTokens(messages: readonly Anthropic.MessageParam[
   return Math.ceil(chars / CHARS_PER_TOKEN) + images * TOKENS_PER_IMAGE;
 }
 
+// ── complete-request accounting (docs/24 v3 P0 #5) ─────────────────────────────────────
+
+/**
+ * What one request actually weighs: the history, plus the two things the history-only
+ * estimate never saw — the system prompt and the tool schemas. The review's finding 5:
+ * an incompressible floor (a fat prompt, fifty tools) produced *rejected requests
+ * without compaction ever firing*, because nothing accounted for the whole request.
+ * `floor` is that incompressible part, reported separately so the dispatch site can
+ * say the one true thing about it: compaction cannot shrink this — fewer tools or a
+ * shorter prompt is the fix.
+ */
+export function estimateRequestTokens(input: {
+  messages: readonly Anthropic.MessageParam[];
+  system?: string | readonly { text?: string }[];
+  tools?: readonly unknown[];
+}): { total: number; floor: number } {
+  let floorChars = 0;
+  if (typeof input.system === "string") floorChars += input.system.length;
+  else for (const block of input.system ?? []) floorChars += (block.text ?? "").length;
+  if (input.tools !== undefined && input.tools.length > 0) {
+    floorChars += JSON.stringify(input.tools).length;
+  }
+  const floor = Math.ceil(floorChars / CHARS_PER_TOKEN);
+  return { total: estimateMessageTokens(input.messages) + floor, floor };
+}
+
+/**
+ * Calibration of the character estimate against what the provider actually billed.
+ *
+ * 2.5 chars/token is one global guess, and for CJK it guesses in the dangerous
+ * direction — under-counting (≈1 token per character), which is *late* compaction and
+ * an overflow. Rather than growing a language detector, the estimate learns from every
+ * response: the provider's `input_tokens` over our estimate, smoothed, keyed by the
+ * wire (label + base URL) because the same model name can tokenize differently behind
+ * different endpoints — the same reason Hermes projects from its last real count.
+ */
+const calibrationByWire = new Map<string, number>();
+
+export function noteRealInputTokens(
+  wire: string,
+  estimated: number,
+  real: number | undefined
+): void {
+  if (real === undefined || !Number.isFinite(real) || real <= 0 || estimated <= 0) return;
+  const ratio = real / estimated;
+  // Clamped: a single wildly-off sample (a provider counting images differently, a
+  // truncated request) must not poison the factor.
+  const bounded = Math.min(4, Math.max(0.25, ratio));
+  const previous = calibrationByWire.get(wire);
+  calibrationByWire.set(wire, previous === undefined ? bounded : previous * 0.7 + bounded * 0.3);
+}
+
+/** The estimate, corrected by what this wire has actually billed. Identity until taught. */
+export function calibratedTokens(wire: string, estimated: number): number {
+  const factor = calibrationByWire.get(wire);
+  return factor === undefined ? estimated : Math.ceil(estimated * factor);
+}
+
 // ── background pre-compaction ──────────────────────────────────────────────────────────
 
 /**
