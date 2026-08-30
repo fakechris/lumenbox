@@ -712,7 +712,7 @@ test("an oversized history is summarised before the request, and the summary per
       capture,
       params => {
         summaryCalls.push(params);
-        return message([textBlock("Ran 20 shell steps; wrote /home/box/work/out.txt.")]);
+        return message([textBlock("**Threads** compaction fixture **Done** ran the steps **State** clean **Artifacts** none — wrote /home/box/work/out.txt.")]);
       }
     );
 
@@ -1027,12 +1027,12 @@ test("a summary is prepared in the background and adopted without a wait", async
     // finish — which is precisely the 30-second pause this exists to remove.
     const client = stubClientWithSummariser([message([textBlock("ok")])], capture, () => {
       summaryCalls += 1;
-      return message([textBlock("Earlier: ran twelve shell steps.")]);
+      return message([textBlock("**Threads** compaction fixture **Done** ran the steps **State** clean **Artifacts** none")]);
     });
     (client.messages as unknown as { create: unknown }).create = async () => {
       summaryCalls += 1;
       await heldBack;
-      return message([textBlock("Earlier: ran twelve shell steps.")]);
+      return message([textBlock("**Threads** compaction fixture **Done** ran the steps **State** clean **Artifacts** none")]);
     };
 
     const deps = { client, registry, bus, box: undefined, resolution: undefined };
@@ -1890,7 +1890,7 @@ test("a stop pressed while the history is being compacted is not cleared by the 
         create: async () => {
           calls++;
           policy.gate.stop(ada.id, "alice");
-          return message([textBlock("a summary of earlier work")]);
+          return message([textBlock("**Threads** compaction fixture **Done** ran the steps **State** clean **Artifacts** none")]);
         },
         stream(params: Anthropic.MessageCreateParams) {
           capture.params.push({ ...params, messages: [...params.messages] });

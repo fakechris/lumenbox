@@ -27,6 +27,8 @@ DEFAULT_POLICY,
   policyForModel,
   compactionUrgency,
   choosePinnedEntries,
+  extractAnchors,
+  missingSummaryHeadings,
   pendingIsUsable,
   SUMMARY_WORD_CAP,
   pruneOldImages,
@@ -641,4 +643,45 @@ test("pinned entries: the ask and one successful pair per undemonstrated tool", 
   const bare = summaryEntry("s", 6);
   const carrying = { ...bare, pinned };
   assert.ok(estimateTokens([carrying]) > estimateTokens([bare]));
+});
+
+test("anchors are harvested from full blocks, deduped, and bounded", () => {
+  // docs/24 v3 P0 #3: a model paraphrases; the regex does not. Harvest runs on the
+  // raw blocks, so a path past any rendering clip still survives.
+  const at = "2026-08-29T00:00:00Z";
+  const longPrefix = "x".repeat(900);
+  const entries: HistoryEntry[] = [
+    { role: "user", text: "fix t42 and push", at },
+    {
+      role: "assistant",
+      kind: "blocks",
+      blocks: [
+        { type: "tool_use", id: "a", name: "bash", input: { command: `${longPrefix} cat /work/chats/room/outbox/progress.md` } },
+      ],
+      at,
+    },
+    {
+      role: "user",
+      kind: "results",
+      blocks: [
+        {
+          type: "tool_result",
+          tool_use_id: "a",
+          content: `done. full output kept: /work/spill/abc.log see https://example.com/pr/7 commit 4611851ab too, and /work/spill/abc.log again`,
+        },
+      ],
+      at,
+    },
+  ];
+  const anchors = extractAnchors(entries);
+  assert.ok(anchors.includes("t42"));
+  assert.ok(anchors.some(anchor => anchor.includes("/work/chats/room/outbox/progress.md")), "path beyond a 400-char clip survives");
+  assert.ok(anchors.some(anchor => anchor.startsWith("full output kept:")), "spill pointers are anchors");
+  assert.ok(anchors.some(anchor => anchor.startsWith("https://example.com")));
+  assert.ok(anchors.includes("4611851ab"));
+  assert.equal(anchors.filter(anchor => anchor === "/work/spill/abc.log").length, 1, "deduped");
+
+  // Validation: the headings are a check now, not a request.
+  assert.deepEqual(missingSummaryHeadings("**Threads** a **Done** b **State** c **Artifacts** d"), []);
+  assert.deepEqual(missingSummaryHeadings("**Threads** only"), ["**Done**", "**State**", "**Artifacts**"]);
 });

@@ -50,6 +50,8 @@ import {
   chooseCutPoint,
   choosePinnedEntries,
   droppedEntry,
+  extractAnchors,
+  missingSummaryHeadings,
   estimateTokens,
   summaryEntry,
   type HistoryEntry,
@@ -623,19 +625,47 @@ async function summarise(
   summaryProvider: ProviderProfile,
   meter?: Meter
 ): Promise<SummaryEntry | undefined> {
-  const response = await client.messages.create({
-    model: summaryProvider.model,
-    // Enough for a dense summary and no more; a summary that runs to pages defeats the purpose.
-    max_tokens: Math.min(4096, summaryProvider.maxTokens),
-    messages: [{ role: "user", content: buildSummaryPrompt(entries) }],
-  });
-  meter?.("summarize", summaryProvider, response.usage);
-  const text = response.content
-    .filter((block): block is Anthropic.TextBlock => block.type === "text")
-    .map(block => block.text)
-    .join("\n")
-    .trim();
+  const ask = async (extra?: string): Promise<string> => {
+    const response = await client.messages.create({
+      model: summaryProvider.model,
+      // Enough for a dense summary and no more; a summary that runs to pages defeats the purpose.
+      max_tokens: Math.min(4096, summaryProvider.maxTokens),
+      messages: [
+        { role: "user", content: buildSummaryPrompt(entries) + (extra ?? "") },
+      ],
+    });
+    meter?.("summarize", summaryProvider, response.usage);
+    return response.content
+      .filter((block): block is Anthropic.TextBlock => block.type === "text")
+      .map(block => block.text)
+      .join("\n")
+      .trim();
+  };
+
+  let text = await ask();
+  // The four headings were a request; this is the check (docs/24 v3 P0 #3). One
+  // corrective retry — a missing section is usually a lazy pass, not an inability —
+  // and a still-malformed second answer is accepted with a loud log rather than
+  // thrown away: the mechanical anchors and pinned entries below carry the exact
+  // facts either way, and a flawed narrative beats a dropped-history marker.
+  if (text !== "" && missingSummaryHeadings(text).length > 0) {
+    const missing = missingSummaryHeadings(text).join(", ");
+    console.error(`[compaction] summary missing ${missing}; asking once more`);
+    const retry = await ask(
+      `\n\nYour previous attempt was missing the required heading(s): ${missing}. ` +
+        `Produce the summary again with all four headings present.`
+    );
+    if (retry !== "" && missingSummaryHeadings(retry).length === 0) text = retry;
+    else if (retry !== "") text = retry;
+  }
   if (!text) return undefined;
+
+  // Exact strings, harvested from the full blocks before any rendering clip and
+  // appended outside the model's output — a model paraphrases, a regex does not.
+  const anchors = extractAnchors(entries);
+  if (anchors.length > 0) {
+    text += `\n\n**Exact references (mechanically extracted — trust these over the prose above):**\n${anchors.join("\n")}`;
+  }
   return summaryEntry(text, covers);
 }
 
