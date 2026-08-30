@@ -1050,9 +1050,13 @@ test("a summary is prepared in the background and adopted without a wait", async
       "nothing was adopted yet: there was still room, so the turn was not compacted"
     );
 
-    // Now let it finish, and push the history over the trigger.
+    // Now let it finish, and push the history over the trigger — by a *moderate* amount.
+    // Four entries, not twelve: growth has to cross the trigger while leaving the
+    // uncovered tail under it, because pendingIsUsable now token-validates the tail
+    // (docs/24 v3 P0 #4) and doubling the history is precisely the case where reuse
+    // would leave an unbounded request — that rejection has its own unit test.
     released?.();
-    for (const entry of bulkyHistory(12, 400)) {
+    for (const entry of bulkyHistory(4, 400)) {
       registry.appendTranscript(ada.id, entry as never);
     }
 
