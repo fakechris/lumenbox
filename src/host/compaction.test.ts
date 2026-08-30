@@ -26,6 +26,7 @@ DEFAULT_POLICY,
   noteContextWindow,
   policyForModel,
   compactionUrgency,
+  choosePinnedEntries,
   pendingIsUsable,
   SUMMARY_WORD_CAP,
   pruneOldImages,
@@ -591,4 +592,53 @@ test("the spill pointer survives the transcript's own truncation", async () => {
     content: [{ type: "text", text: "two lines\nof output" }],
   });
   assert.equal((small.content as { text: string }[])[0]!.text, "two lines\nof output");
+});
+
+test("pinned entries: the ask and one successful pair per undemonstrated tool", () => {
+  // docs/24 v3 P0 #2 — schema insurance without moving the cut.
+  const at = "2026-08-29T00:00:00Z";
+  const call = (name: string, id: string): HistoryEntry => ({
+    role: "assistant",
+    kind: "blocks",
+    blocks: [{ type: "tool_use", id, name, input: { actions: [{ action: "screenshot" }] } }],
+    at,
+  });
+  const result = (id: string, error = false): HistoryEntry => ({
+    role: "user",
+    kind: "results",
+    blocks: [{ type: "tool_result", tool_use_id: id, content: "x".repeat(1000), ...(error ? { is_error: true } : {}) }],
+    at,
+  });
+  const older: HistoryEntry[] = [
+    { role: "user", text: "去开会并共享屏幕", at },
+    call("computer", "c1"), result("c1"),
+    call("computer", "c2"), result("c2", true), // errored pair: never an exemplar
+    call("bash", "b1"), result("b1"),
+  ];
+  const tail: HistoryEntry[] = [call("bash", "b2"), result("b2")];
+
+  const pinned = choosePinnedEntries(older, tail);
+  // The ask is pinned (no plain user message in the tail), then the newest
+  // *successful* computer pair — c1, because c2 errored — and no bash pair,
+  // because the tail already demonstrates bash.
+  assert.equal(pinned.length, 3);
+  assert.ok(!("kind" in pinned[0]!) && pinned[0]!.text.includes("开会"));
+  const pair = pinned.slice(1);
+  assert.ok("kind" in pair[0]! && pair[0]!.kind === "blocks");
+  const use = (pair[0] as { blocks: { id?: string; name?: string }[] }).blocks[0]!;
+  assert.equal(use.name, "computer");
+  assert.equal(use.id, "c1");
+  // The exemplar's result is trimmed: its value is the call's shape.
+  const trimmed = (pair[1] as { blocks: { content?: unknown }[] }).blocks[0]!;
+  assert.match(JSON.stringify(trimmed.content), /exemplar — result trimmed/);
+  assert.ok(JSON.stringify(trimmed.content).length < 500);
+
+  // A tail that already has a user message pins no ask.
+  const tailWithUser: HistoryEntry[] = [{ role: "user", text: "继续", at }, ...tail];
+  assert.ok(!choosePinnedEntries(older, tailWithUser).some(entry => !("kind" in entry)));
+
+  // Pinned entries weigh in the estimate — a summary carrying them is not free.
+  const bare = summaryEntry("s", 6);
+  const carrying = { ...bare, pinned };
+  assert.ok(estimateTokens([carrying]) > estimateTokens([bare]));
 });

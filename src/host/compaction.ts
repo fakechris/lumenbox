@@ -139,6 +139,16 @@ export interface SummaryEntry {
   /** How many entries from the start of the active window this stands in for. */
   covers: number;
   text: string;
+  /**
+   * Entries from the summarised range kept verbatim, rendered between the summary and
+   * the tail (docs/24 v3 P0 #2). Two kinds ride here: the newest plain user message
+   * when the tail has none — what was *asked*, in the asker's words — and the newest
+   * successful call/result pair per tool the tail no longer demonstrates. The second
+   * is schema insurance bought at MiniMax prices: a weak model follows a tool's
+   * parameter shape by imitating its own in-context examples, and the docs/23
+   * incident was ten minutes of guessing after a compaction took every example away.
+   */
+  pinned?: HistoryEntry[];
   at: string;
 }
 
@@ -155,6 +165,11 @@ export function estimateTokens(entries: readonly HistoryEntry[]): number {
     chars += MESSAGE_OVERHEAD_CHARS;
     if (!("kind" in entry) || entry.kind === "summary") {
       chars += (entry as { text: string }).text.length;
+      // A summary's pinned entries are sent too, so they weigh too.
+      const pinned = (entry as SummaryEntry).pinned;
+      if (pinned !== undefined && pinned.length > 0) {
+        chars += estimateTokens(pinned) * CHARS_PER_TOKEN;
+      }
       continue;
     }
     for (const block of entry.blocks) {
@@ -320,6 +335,112 @@ export function chooseCutPoint(
       `; summarising the first ${index} entr${index === 1 ? "y" : "ies"} and keeping ` +
       `about ${tail} tokens of tail`,
   };
+}
+
+/** At most this many tool pairs ride as exemplars; more is a history, not insurance. */
+export const MAX_PINNED_TOOLS = 3;
+/** An exemplar's result is trimmed to this: the value is the *call's* shape, not the output. */
+export const PINNED_RESULT_CHARS = 200;
+/** A pinned user message is clamped: the ask matters, a pasted specification does not. */
+export const PINNED_USER_CHARS = 2_000;
+
+/**
+ * What to keep verbatim from a summarised range (docs/24 v3 P0 #2).
+ *
+ * Deliberately *not* a change to the cut point: extending the cut to protect these
+ * would blow the token budget in exactly the computer-use case that needs them most —
+ * the docs/23 recreation hazard the review warned about. Copies ride on the summary
+ * entry instead, so the cut stays where the budget put it and the insurance costs a
+ * few hundred tokens, bounded here.
+ *
+ * Selection: the newest plain user message when the tail carries none (what was asked,
+ * verbatim), then the newest *successful* call/result pair for each tool the tail no
+ * longer demonstrates, newest tools first, capped. Results are trimmed hard — the
+ * schema a weak model imitates lives in the call, not in what came back.
+ */
+export function choosePinnedEntries(
+  older: readonly HistoryEntry[],
+  tail: readonly HistoryEntry[]
+): HistoryEntry[] {
+  const pinned: HistoryEntry[] = [];
+
+  const isPlainUser = (entry: HistoryEntry): boolean =>
+    !("kind" in entry) && entry.role === "user";
+  if (!tail.some(isPlainUser)) {
+    for (let index = older.length - 1; index >= 0; index--) {
+      const entry = older[index]!;
+      if (isPlainUser(entry)) {
+        const text = (entry as { text: string; at: string }).text;
+        pinned.push({
+          role: "user",
+          text: text.length > PINNED_USER_CHARS ? `${text.slice(0, PINNED_USER_CHARS)}…` : text,
+          at: (entry as { at: string }).at,
+        });
+        break;
+      }
+    }
+  }
+
+  const toolsInTail = new Set<string>();
+  for (const entry of tail) {
+    if ("kind" in entry && entry.kind === "blocks") {
+      for (const block of entry.blocks) {
+        if ((block as { type?: string }).type === "tool_use") {
+          toolsInTail.add((block as { name: string }).name);
+        }
+      }
+    }
+  }
+
+  // Newest-first scan for call entries whose every call succeeded and whose results
+  // immediately follow — the shape a model can safely imitate.
+  const chosen = new Set<string>();
+  const pairs: HistoryEntry[][] = [];
+  for (let index = older.length - 2; index >= 0 && chosen.size < MAX_PINNED_TOOLS; index--) {
+    const entry = older[index]!;
+    const next = older[index + 1]!;
+    if (!("kind" in entry) || entry.kind !== "blocks") continue;
+    if (!("kind" in next) || next.kind !== "results") continue;
+    const calls = entry.blocks.filter(
+      (block): block is Anthropic.ToolUseBlockParam => (block as { type?: string }).type === "tool_use"
+    );
+    if (calls.length === 0) continue;
+    const names = calls.map(call => call.name);
+    if (names.every(name => toolsInTail.has(name) || chosen.has(name))) continue;
+    const anyError = next.blocks.some(block => (block as { is_error?: boolean }).is_error === true);
+    if (anyError) continue;
+
+    const trimmedResults: Anthropic.ToolResultBlockParam[] = next.blocks.map(block => ({
+      ...(block as Anthropic.ToolResultBlockParam),
+      content: [
+        {
+          type: "text" as const,
+          text: `[exemplar — result trimmed] ${resultText(block).slice(0, PINNED_RESULT_CHARS)}`,
+        },
+      ],
+    }));
+    pairs.push([
+      { role: "assistant", kind: "blocks", blocks: entry.blocks, at: (entry as { at: string }).at },
+      { role: "user", kind: "results", blocks: trimmedResults, at: (next as { at: string }).at },
+    ]);
+    for (const name of names) chosen.add(name);
+  }
+  // The scan ran newest-first; the render should read oldest-first, like history does.
+  for (let index = pairs.length - 1; index >= 0; index--) pinned.push(...pairs[index]!);
+
+  return pinned;
+}
+
+function resultText(block: unknown): string {
+  const content = (block as { content?: unknown }).content;
+  if (typeof content === "string") return content;
+  if (Array.isArray(content)) {
+    return content
+      .filter(part => (part as { type?: string }).type === "text")
+      .map(part => (part as { text?: string }).text ?? "")
+      .join(" ");
+  }
+  return "";
 }
 
 /**

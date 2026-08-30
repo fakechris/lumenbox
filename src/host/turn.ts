@@ -48,6 +48,7 @@ import {
   pruneOldImages,
   shouldPruneImages,
   chooseCutPoint,
+  choosePinnedEntries,
   droppedEntry,
   estimateTokens,
   summaryEntry,
@@ -508,6 +509,8 @@ export type TranscriptEntry =
       kind: "summary";
       covers: number;
       text: string;
+      /** Verbatim survivors of the summarised range — see compaction.ts SummaryEntry. */
+      pinned?: HistoryEntry[];
       at: string;
     };
 
@@ -725,6 +728,11 @@ async function compactHistory(options: {
     const produced = ready ?? (await summarise(olderEntries, cut.index, client, summaryProvider, meter));
     if (produced === undefined) throw new Error("the summariser returned no text");
     entry = produced;
+    // Pinned verbatim survivors are chosen at adoption, against the tail that will
+    // actually be sent — a speculative summary computed earlier cannot know it
+    // (docs/24 v3 P0 #2).
+    const pinnedEntries = choosePinnedEntries(olderEntries, active.slice(cut.index));
+    if (pinnedEntries.length > 0) entry = { ...entry, pinned: pinnedEntries };
     const detail =
       `summarised ${entry.covers} entries: about ${estimateTokens(olderEntries)} tokens ` +
       `became ${estimateTokens([entry])}` +
@@ -736,6 +744,10 @@ async function compactHistory(options: {
     // Loud, and told to the model: the alternative was a request that cannot fit, and the
     // alternative to that was dropping history with no trace of it having happened.
     entry = droppedEntry(cut.index, reason);
+    // Insurance matters *more* when the summary failed: the dropped marker carries the
+    // pinned ask and tool exemplars even though it carries no narrative.
+    const pinnedEntries = choosePinnedEntries(olderEntries, active.slice(cut.index));
+    if (pinnedEntries.length > 0) entry = { ...entry, pinned: pinnedEntries };
     const detail = `could not summarise (${reason}); dropped ${cut.index} entries instead`;
     log(detail);
     onCompacted({ type: "compacted", covers: cut.index, summarised: false, detail });
@@ -785,6 +797,16 @@ function historyToMessages(
     if ("kind" in entry) {
       if (entry.kind === "summary") {
         messages.push({ role: "user", content: entry.text });
+        // The verbatim survivors ride between summary and tail: the pinned ask, and
+        // one successful call/result pair per tool the tail no longer demonstrates —
+        // the in-context examples a weak model imitates schemas from (docs/24 v3).
+        for (const kept of entry.pinned ?? []) {
+          if (!("kind" in kept)) {
+            if (kept.text.trim() !== "") messages.push({ role: kept.role, content: kept.text });
+          } else if (kept.kind === "blocks" || kept.kind === "results") {
+            if (kept.blocks.length > 0) messages.push({ role: kept.role, content: kept.blocks });
+          }
+        }
         continue;
       }
       if (entry.blocks.length === 0) continue;
