@@ -15,7 +15,8 @@ docker/box/hostd.mjs
 *.log
 *.webp
 .DS_Store
-# Local research notes. Never committed.
-research/
+# Local research notes at the repo root. Nested `research/` dirs inside
+# vendored skill packages (catalog-data) are source and must be committed.
+/research/
 /dist-app/
 /design/

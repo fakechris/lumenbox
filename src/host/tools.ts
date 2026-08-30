@@ -17,6 +17,7 @@ import type { Vault } from "./vault.ts";
 import type { ScopeStore } from "./scopes.ts";
 import type { McpManager } from "./mcp.ts";
 import { delegateEnv, delegateModel, PRESETS, presetNamed, quoteForShell } from "./presets.ts";
+import { catalogMenu, intersectTools, profilesFor } from "./catalog.ts";
 import { describeHistory, readHistory } from "./history.ts";
 import { canSearch, fetchPage, guardUrl, isSearchEngine, searchWeb, WebError } from "./web.ts";
 import { describeEnvShape, envShape, looksLikeEnvFile } from "./env-shape.ts";
@@ -692,10 +693,17 @@ export function buildTools(
         "Create a new agent — a new teammate — with a name and a persona. Returns its id so " +
         "you can message it immediately. Use this when a body of work deserves a dedicated " +
         "owner with its own memory and chat. There is no tool to delete an agent, so only " +
-        "create one that is genuinely worth keeping; the user removes agents themselves.",
+        "create one that is genuinely worth keeping; the user removes agents themselves. " +
+        catalogMenu(),
       input_schema: {
         type: "object",
         properties: {
+          from: {
+            type: "string",
+            description:
+              "A catalog slug (expert or crew). When set, the catalog supplies name, title, " +
+              "persona and tools; name may still override a single expert. Ask the user first.",
+          },
           name: {
             type: "string",
             description: "A short human-readable name for the new agent.",
@@ -711,7 +719,6 @@ export function buildTools(
             description: 'A short role label, e.g. "release manager".',
           },
         },
-        required: ["name", "description"],
       },
     },
     {
@@ -2276,20 +2283,71 @@ export async function dispatchTool(
     }
 
     case "CreateAgent": {
+      const from = String(input.from ?? "").trim();
+      const held = context.agent.profile.tools;
+      if (from !== "") {
+        const rows = profilesFor(from);
+        if (rows === undefined) {
+          return { text: `No catalog entry named ${from}.`, isError: true };
+        }
+        const existing = new Set(context.registry.list().map(agent => agent.profile.name));
+        const created: { name: string; id: string }[] = [];
+        const skipped: string[] = [];
+        for (const row of rows) {
+          const name = rows.length === 1 && String(input.name ?? "").trim() !== ""
+            ? String(input.name).trim()
+            : row.name;
+          if (existing.has(name)) {
+            skipped.push(name);
+            continue;
+          }
+          const record = context.registry.create({
+            name,
+            description: row.description,
+            title: row.title,
+            tools: [...intersectTools(row.tools, held)],
+          });
+          existing.add(name);
+          created.push({ name: record.profile.name, id: record.id });
+        }
+        if (created.length === 0) {
+          return {
+            text:
+              skipped.length === 0
+                ? `Nothing to add from ${from}.`
+                : `${from} is already on the roster (${skipped.join(", ")}).`,
+            isError: true,
+          };
+        }
+        const lines = created.map(
+          row => `Created agent "${row.name}" (id: ${row.id}). Message it with SendToAgent using that id.`
+        );
+        if (skipped.length > 0) {
+          lines.push(`Already present, left as they were: ${skipped.join(", ")}.`);
+        }
+        return { text: lines.join("\n") };
+      }
+
+      const name = String(input.name ?? "").trim();
+      const description = String(input.description ?? "");
+      if (name === "" || description.trim() === "") {
+        return {
+          text: "CreateAgent needs a catalog slug in `from`, or both a name and a description.",
+          isError: true,
+        };
+      }
       const created = context.registry.create({
-        name: String(input.name ?? ""),
-        description: String(input.description ?? ""),
+        name,
+        description,
         title: input.title ? String(input.title) : undefined,
         // A colleague cannot be given tools its creator does not have. Without this, an agent that
         // may not write files creates one that may and asks it to write — and the restriction was
         // never a restriction, only a longer path. Same rule as a teammate's message carrying no
         // authority: nothing here can grant what the granter does not hold.
-        ...(context.agent.profile.tools !== undefined
-          ? { tools: context.agent.profile.tools }
-          : {}),
+        ...(held !== undefined ? { tools: held } : {}),
       });
       const inherited =
-        context.agent.profile.tools === undefined
+        held === undefined
           ? ""
           : " It has the same tools you do — an agent cannot hand out what it does not hold.";
       return {

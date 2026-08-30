@@ -134,17 +134,29 @@ export function parseSkillFile(text: string): ParsedSkill {
   if (match === null) return { meta: {}, body: normalised.trim() };
 
   const meta: Record<string, string> = {};
-  for (const line of (match[1] ?? "").split(/\r?\n/)) {
+  const lines = (match[1] ?? "").split(/\r?\n/);
+  for (let index = 0; index < lines.length; index++) {
+    const line = lines[index]!;
     const at = line.indexOf(":");
     if (at <= 0) continue;
     const key = line.slice(0, at).trim().toLowerCase();
     if (!KNOWN_KEYS.has(key)) continue;
     // Quotes stripped because a person writing frontmatter by hand will sometimes add them, and a
     // name of `"Weekly report"` with the quotes in it looks like a bug in our code.
-    meta[key] = line
-      .slice(at + 1)
-      .trim()
-      .replace(/^["']|["']$/g, "");
+    // Hub skills (WorkBuddy / skill-hub) use YAML `|` blocks for description; fold them
+    // into one line so the prompt index still has something to match on.
+    let value = line.slice(at + 1).trim();
+    if (value === "|" || value === "|-" || value === ">" || value === ">-") {
+      const block: string[] = [];
+      while (index + 1 < lines.length && /^(?: {2}|\t)/.test(lines[index + 1]!)) {
+        index += 1;
+        block.push(lines[index]!.replace(/^(?: {2}|\t)/, "").trim());
+      }
+      value = block.join(" ").replace(/\s+/g, " ").trim();
+    } else {
+      value = value.replace(/^["']|["']$/g, "");
+    }
+    meta[key] = value;
   }
   return { meta, body: normalised.slice(match[0].length).trim() };
 }
