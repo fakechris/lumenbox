@@ -40,12 +40,15 @@ relay needs its config-file face), and headless runs need `--auto` or every
 tool call is silently rejected. New `AGENTBOX_RELAY_MODEL` names the engine's
 model. The key-in-box shortcut is live and on the pre-launch security list.
 
-**E2 — Delegate end-to-end, with interruption.** Seed a small repo with failing
-tests in the box; have Bob `Delegate` "make the tests pass"; watch via `Jobs`
-and the desktop; then the two probes that matter: 「停」 mid-run (does the job
-die cleanly, does the board say so), and a steering message mid-run (is it
-queued, dropped, or delivered — measure, don't assume). Collect artifacts and
-verify the acceptance-task idea against this run.
+**E2 — Delegate end-to-end, with interruption. DONE 2026-08-30**, four probes
+measured in `research/workbuddy/E2-delegate-interruption.md`. The happy path
+works through the real seam (Bob → Delegate → Jobs → independent re-verify,
+4/4 tests). Measured semantics: 停 stops the *turn* at the next round
+boundary and never the job; interruption granularity is min(job exit, wait
+timeout — 60s default chunks); `Jobs kill` is the explicit job-level act and
+the log survives as forensics; a steering message queues and lands between
+wait chunks, and the one-shot engine cannot be steered mid-flight — the
+supervising agent compensates post-hoc. That last gap is E3's question.
 
 **E3 — ACP probe.** Run opencode (and pi, which is on the host with its jiti
 extension system) in whatever server/ACP mode each offers; drive one edit
