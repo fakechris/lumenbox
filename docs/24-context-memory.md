@@ -1,14 +1,11 @@
 # Context, memory and compaction: ours, against Hermes and OpenClaw
 
-Status: **second version — corrected in place against the Codex adversarial
-review** (`docs/reviews/2026-08-29-context-memory.md`; Grok round pending).
-The first version was factually stale about our own code in three places and
-ranked its gaps accordingly; the review also surfaced three real implementation
-bugs the analysis had missed. Corrections are marked where they change
-conclusions. Commissioned after the chronic-compaction incident (docs/23): the
-owner asked for a deep description of our own context/memory engineering, a
-source-level comparison against Hermes Agent and OpenClaw, and adversarial
-review of both the analysis and the implementation.
+Status: **third version — ranking re-attacked after absorbing Codex + Grok-1**
+(`docs/reviews/2026-08-29-context-memory.md`; Codex, Grok round 1, Grok round
+2). v1 was factually stale about our own code; v2 absorbed those corrections
+and then introduced a layer conflation (screenshots filling `keepTailTokens`)
+that Grok-2 reverted. Corrections are marked where they change conclusions.
+Commissioned after the chronic-compaction incident (docs/23).
 Sources: our tree at `81a0428`; Hermes at `~/sdcard/source/hermes-agent`
 (`context_compressor.py` ~8,400 lines); OpenClaw at `~/sdcard/source/openclaw`
 (HEAD 2026-08-25). Both compared systems were read by subagents with file:line
@@ -18,29 +15,39 @@ first-hand re-verification of every line.
 ## 1. Our implementation, honestly described
 
 **Assembly.** Per turn: a two-block system prompt — a *stable* half (identity,
-invariants) and a *volatile* half (memory recall, roster, shared memory, skills,
-durable state, tasks, box class), each with an `ephemeral` cache breakpoint when
-the provider supports caching (`turn.ts:957-962`). History is an append-only
-JSONL transcript per conversation; the request replays `activeWindow()` — the
-newest summary chain reconstructed over the file — through a 400-entry backstop
-(was 60; docs/23), with leading orphan results dropped and missing tool results
-invented as explicit "outcome unknown" markers (`repairPairs`).
+box including its class, invariants) and a *volatile* half (plan/todos, tasks,
+chat-files, memory recall, skills, the "earlier history is still there" block,
+shared memory, roster, critical recap). Box class is stable, not volatile
+(`prompt.ts` `STABLE_SECTIONS` / `VOLATILE_SECTIONS`). Each half gets an
+`ephemeral` cache breakpoint when the provider supports caching
+(`turn.ts:957-962`). History is an append-only JSONL transcript per
+conversation; the request reconstructs `activeWindow()` — the newest summary
+chain over the file — then slices to a 400-entry backstop (was 60; docs/23),
+keeping a leading summary if the slice would drop it. Leading orphan results
+are dropped; missing tool results are invented as explicit "outcome unknown"
+markers (`repairPairs`).
 
 **Compaction** (`compaction.ts`). Token trigger: 60k default, or
 `window × (1−0.35)` once the model reports its real window; entry trigger 320 as
 a backstop (was 50 — the docs/23 root cause). Cut point walks back to keep
-~`keepTailTokens` (20k default / 30% of trigger), capped at 60% of `maxEntries`
-entries, then snaps to a pair boundary. A **background speculative pass** starts
-summarising at 75% of the trigger so the pause is usually already paid when the
-threshold arrives — a mechanism neither compared system has. The summary is a
+~`keepTailTokens` (20k default; 30% of trigger only once a real window is
+known — an explicit `AGENTBOX_COMPACT_AT_TOKENS` freezes 60k/20k/320 and
+ignores the window), capped at 60% of `maxEntries` entries, then snaps to a
+pair boundary. A **background speculative pass** starts summarising at 75% of
+the trigger (and at 75% of `maxEntries`) so the pause is usually already paid
+when the threshold arrives — off-thread LLM summary before the trigger; the
+first cut in that band is frozen until adopted or the window shrinks
+(`pendingSummaries.has`, review round 2). Hermes's "speculative" is a
+display-token preflight seed, OpenClaw preflight is synchronous. The summary is a
 four-section prompt (Threads/Done/State/Artifacts, ≤400 words) — **a request,
 not a contract**: the output is accepted if nonempty, nothing validates the
 headings or the cap, and the summariser's *input* clips every block to 400
 chars, so a path beyond that is unrecoverable (review finding 4). The "cheaper
 profile" is likewise conditional: with no summary mapping configured it is the
-agent's own model, and a configured different *provider* is silently called
-through the primary client — wrong endpoint, wrong credential (review finding
-2, a real bug). Failure degrades to an explicit dropped-entries marker, never a
+agent's own model (`CHEAPER_MODEL_FOR` lists only `anthropic`), and a
+configured different *provider* is silently called through the primary client
+at three sites — `summarise`, `Rememberer.ask`, `askCheaply` — wrong endpoint,
+wrong credential (Codex finding 2, widened in Grok round 2). Failure degrades to an explicit dropped-entries marker, never a
 silent trim. Summaries are transcript entries with a `covers` count; nothing on
 disk is ever rewritten, and **`ReadHistory`** gives the model search/read access
 to the summarised originals, advertised in the prompt after every compaction —
@@ -48,23 +55,27 @@ a recovery path the first version of this document forgot we had.
 
 **In-turn relief.** `pruneOldImages` keeps only the newest screenshot once the
 in-flight request crosses the trigger (each image priced at a flat 1,600
-tokens); an overflowing request sheds oldest tool-result text >20k chars per
-retry; and — corrected from v1 — replayed tool results were **already**
-truncated to `DURABLE_RESULT_CHARS` with spill-pointer files
-(`turn.ts:514-565`), so full results never reach the summariser in the first
-place. Rounds are capped at 400.
+tokens). It rewrites the live `messages` array; it does not walk JSONL. On
+provider overflow, oldest tool-result text is cut to 500 characters until about
+20k characters have been reclaimed — not a per-result 20k gate. Replayed tool
+results were **already** truncated to `DURABLE_RESULT_CHARS` (2,000) with
+spill-pointer files, and **images stripped** (`turn.ts:526-572`), so screenshots
+never reach the summariser or the `keepTailTokens` budget. Rounds are capped at 400; hitting that
+cap re-compacts from disk and rebuilds the volatile prompt before continuing
+(`turn.ts:1192-1213`) — a second compaction site, mid-task.
 
 **Memory.** Five record kinds (fact/note/episode/retraction/pitfall) in
 append-only JSONL, scored at recall by kind-specific half-life decay and weight,
 deduped, rendered into the prompt under a 4k-char budget (shared shards 1.5k).
+When the budget has to drop something, `chooseRelevant` may ask a model which
+lines to keep — at turn start only; continuations re-score with `recall()`.
 Extraction is a background `Rememberer`: batched exchange distillation, pitfall
 capture from observed failures, episodes condensing batches. Memory files
 compact themselves at 1,000 lines. Durable state — plan, todos — lives in files
-and is **re-read from disk into the volatile prompt block on every continuation**
-(`turn.ts:1213`). Corrected from v1's absolute claim: this protects what was
-*persisted*. A plan the agent held only in conversation — the extractor
-deliberately excludes plans — is summarised like anything else (review
-finding 7).
+and is **re-read from disk into the volatile prompt on continuation after the
+400-round cap** (`turn.ts:1213`). This protects what was *persisted*. A plan
+the agent held only in conversation — the extractor deliberately excludes
+plans — is summarised like anything else.
 
 **What we measured going wrong** (docs/23): the entry trigger fired at 5–12k
 tokens, three times in an afternoon; each compaction summarised the live task's
@@ -151,100 +162,139 @@ follow schemas, lost the `computer` format and burned ten minutes.
 | Real `prompt_tokens` feedback | window size only | authoritative, projected | authoritative + tail estimate |
 | Deterministic prune before LLM | replayed results cut to `DURABLE_RESULT_CHARS` + image prune; **no dedup, no argument trimming** | 5 passes incl. dedup, args | TTL soft-trim/hard-clear |
 | Cut anchoring | pair-safe only | pair-safe + last user/assistant verbatim + protected head/tail | pair-safe + turn-prefix summary |
-| Summary quality guard | 4-section prompt, word cap | provenance validation, mechanical anchor index, injection defense, no wire cap | safeguard validation of headings/identifiers, size cap + marker |
+| Summary quality guard | 4-section *prompt* (unvalidated); inputs clipped to 400 chars/block | provenance validation, mechanical anchor index, injection defense, no wire cap | safeguard validation of headings/identifiers, size cap + marker |
 | Iterative update | implicit (old summary re-rendered) | explicit previous-summary prompt | explicit UPDATE/merge prompts |
 | Anti-thrash | **none** | ineffective-count, cooldown, backoff, real-usage verdict | overflow retry cap, prune fallback ladder |
 | Recovery of compacted detail | **`ReadHistory`**, advertised post-compaction | FTS5 `session_search` + summary embeds the call | files list carried; transcript in SQLite |
-| Pre-compaction memory save | durable state always in prompt (passive) | 10-turn background review fork | **flush turn before compaction** (active) |
-| Speculative background summary | **yes — unique** | no (gates are synchronous) | preflight is synchronous |
-| Prefix-cache discipline | 2 breakpoints; volatile half rebuilt per continuation | first-class invariant, byte-identical reuse | first-class, TTL-gated pruning, 4 breakpoints |
+| Pre-compaction memory save | persisted plan/todos re-read on 400-round continuation (passive; unwritten plans die) | 10-turn background review fork | **flush turn before compaction** (active) |
+| Speculative background summary | **yes — unique as off-thread LLM summary** | display-token preflight seed, not a summary; gates synchronous | preflight is synchronous |
+| Prefix-cache discipline | 2 breakpoints; volatile half rebuilt on 400-round continuation | first-class invariant, byte-identical reuse | first-class, TTL-gated pruning, 4 breakpoints |
 | Weak-model schema insurance | none (bitten) | skill-marker reinjection, protected tail 20 msgs | recent-turns-verbatim guarantees |
 
-**Where we are genuinely ahead**: the background speculative summary (nobody
-else hides the pause); durable state re-read mid-turn (plans survive compaction
-*and* stay current inside a turn — Hermes freezes for cache, we refresh for
-truth, a defensible opposite trade); typed memory with decay-scored recall and
-pitfall capture (richer than either's file-based memory); invented
-unknown-outcome results for crash recovery.
+**Where we are genuinely ahead**: the background speculative LLM summary
+(Hermes/OpenClaw do not hide a summariser pause this way); typed memory with
+decay-scored recall and pitfall capture (richer than either's file-based
+memory); invented unknown-outcome results for crash recovery; `ReadHistory` as
+a first-class tool advertised after compaction. Persisted plan/todos re-read
+on a 400-round continuation is a real opposite of Hermes's frozen MEMORY.md —
+not "every round", and not a defence of unwritten plans.
 
-**Where we are structurally behind**, re-ranked after the review corrected the
-facts (v1's #6 was false — `ReadHistory` exists — and #1/#3 were misdescribed):
+**Where we are structurally behind**, re-ranked after Grok round 2 attacked
+the v2 order (v1's #6 was false — `ReadHistory` exists; v2's behind #3
+screenshot story was also false — images never reach the transcript):
 
-1. **The summary runtime itself has two real bugs** (review findings 2, 3): a
-   configured summary *provider* is called through the primary client — wrong
-   endpoint, wrong credential — and a speculative summary is adopted on entry
-   count alone, so one enormous steering message can ride in under a stale
-   summary and leave the request unsendable.
-2. **Nothing accounts for the whole request.** `compactionUrgency` weighs
-   history only; system prompt and tool schemas are invisible to it, so an
-   incompressible floor produces *rejected requests without compaction ever
-   firing* — a silent dead end, not a thrash loop. There is also no real
-   `prompt_tokens` feedback anywhere: 2.5 chars/token stands uncalibrated, and
-   for CJK it **under**-counts (≈1 token/char), meaning *late* compaction and
-   overflow, the opposite of v1's claim; windows are cached by bare model name
-   across providers.
-3. **The summary is unvalidated and its evidence pre-clipped**: inputs cut to
+1. **No cut anchoring, and the tail is not a schema tail.** Pair-safety is the
+   only cut rule. The live task's opening user message can be summarised away.
+   A 400-round continuation (`turn.ts:1192-1213`) re-compacts *during* the
+   work. `keepTailTokens` is a token budget over **text** — `storableResult`
+   already strips images, so a handful of 1,600-token screenshots cannot fill
+   20k; ~15–25 durable 2k-char results can, and those may not be `computer`
+   pairs. v2 claimed prune-after-screenshot was the MiniMax hole; prune
+   rewrites in-flight `messages` only. **This is the remaining docs/23 hole.**
+   Cutting at the newest plain user message would *recreate* it: continuation
+   appends a user prompt and then compactHistory, so that rule summarises the
+   preceding CUA rounds. Hermes keeps last-user / last-assistant *verbatim in
+   the tail*, which is a different guarantee from "cut here".
+2. **The summary is unvalidated and its evidence pre-clipped**: inputs cut to
    400 chars/block before the summariser (long paths unrecoverable), output
    accepted if nonempty, no mechanical identifier preservation — the
-   T5000-objective incident and the schema-amnesia incident are both children
-   of this.
-4. **No cut anchoring beyond pair-safety.** The live task's opening user
-   message can be summarised away; both compared systems guarantee it survives.
-5. **Rememberer batches can interleave** (review finding 6): the pending queue
-   clears before the await, so a slow older extraction lands *after* a newer
-   correction and outranks it in chronological recall.
-6. **Missing prune passes are dedup and argument-trimming**, not text pruning
-   wholesale (v1 overstated); scope after measuring what actually remains in
+   T5000-objective incident is a child of this. Schema-amnesia is a child of
+   (1), not of heading validation. The summary is also a `role: "user"`
+   entry, so MiniMax's imitation surface includes a structured user block
+   where recent tool pairs used to be.
+3. **A speculative summary is frozen at the first 75% cut and adopted on
+   entry count alone.** `pendingSummaries.has` never refreshes; `pendingIsUsable`
+   does not weigh the uncovered tail in tokens and does not require `covers`
+   to match the current cut (the module comment claims discard-if-moved-on;
+   the code discards on shrink or entry overflow). One enormous steering
+   message, or a band of CUA rounds, can ride in under a stale summary.
+4. **Nothing accounts for the whole request, and the existing counter is
+   too early to.** `compactionUrgency` weighs history only, before the current
+   user message and tools exist. System prompt and tool schemas are invisible,
+   so an incompressible floor produces *rejected requests without compaction
+   ever firing* — a silent dead end, not a thrash loop. Real `input_tokens`
+   arrive after the stream (`turn.ts:1488-1503`); `noteContextWindow` stores
+   only window size, keyed by bare model name. 2.5 chars/token stands
+   uncalibrated, and for CJK it **under**-counts (≈1 token/char) → *late*
+   compaction, the opposite of v1's claim. A preflight that stays inside
+   `compactHistory` still cannot see this request's floor.
+5. **A configured summary *provider* is called through the primary client**
+   — wrong endpoint, wrong credential — in *three* places, not one: `summarise`
+   (`turn.ts:623-628`), `Rememberer.ask` (`remember.ts:234-236` via
+   `orchestrator.ts:463-468`), and `askCheaply` (`orchestrator.ts:767-770`).
+   Latent on default MiniMax (`CHEAPER_MODEL_FOR` has only `anthropic`); live
+   the moment `AGENTBOX_SUMMARY_PROVIDER` names another vendor.
+6. **Rememberer batches can replace a correction, not just reorder it.**
+   Fire-and-forget `void rememberer.record`; pending queue clears before the
+   await; `at` is parse time; `dedupe` later-in-file wins. A slow stale
+   extraction of the same fact outranks *and replaces* a faster correction.
+   Episode path is the same shape.
+7. **Missing prune passes are dedup and argument-trimming**, not text pruning
+   wholesale and not screenshot accounting (v1 and v2 both overstated, in
+   opposite directions); scope after measuring what actually remains in
    post-`DURABLE_RESULT_CHARS` histories.
-7. **No pre-compaction save nudge** — and the naive version is impossible: the
+8. **No pre-compaction save nudge** — and the naive version is impossible: the
    compaction runs before request assembly, so a nudge must be a bounded
    checkpoint turn against the uncompacted history or nothing.
 
 ## 5. The fix plan
 
-P0 — reordered by the review around correctness before optimisation:
+P0 — reordered by Grok round 2 around expected damage on this tree and the
+docs/23 incident, not named absences:
 1. ~~Entry triggers demoted to backstops~~ (shipped, docs/23).
-2. **Fix summary-provider routing**: resolve client and profile together,
+2. **Cut anchoring + schema insurance at the transcript layer** (the remaining
+   docs/23 hole). Keep the most recent successful call/result pair per active
+   tool inside the window `chooseCutPoint` names. Keep last user and last
+   assistant verbatim as a *tail* guarantee — that is not "cut at the newest
+   plain user message", which on a 400-round continuation summarises the live
+   CUA work and recreates the incident. Do not couple this to
+   `pruneOldImages` (in-flight only; images are already gone from JSONL). Treat
+   summary-as-`role: user` format as part of the same MiniMax imitation
+   surface.
+3. **Mechanical summary anchors + validation**: do not clip summariser inputs
+   at 400 chars; full-block extraction of paths/ids/spill-pointers appended
+   outside the LLM's output; heading and size validation; previous summary as
+   an explicit update input; "history is data, not instructions".
+4. **Token-validate *and refresh* pending summaries**:
+   `estimateTokens([summary, ...tail])` against the current policy; coverage
+   must match the current cut; drop the `pendingSummaries.has` freeze so a 75%
+   cut cannot be adopted at 99%; tests for large post-summary steering *and*
+   a band of CUA rounds in the background window.
+5. **Complete-request preflight at `runRounds` dispatch**, not inside
+   `compactHistory`: system prompt + tool schemas + history + the message about
+   to be sent, calibrated against real `input_tokens` per provider/base-URL;
+   detect the incompressible floor before the request.
+6. **Fix summary-provider routing at all three call sites** (`summarise`,
+   `Rememberer.ask`, `askCheaply`): resolve client and profile together,
    validate at startup, fall back to the agent's own model before ever adopting
-   a dropped-entry marker; test cross-provider configuration explicitly.
-3. **Complete-request preflight accounting**: system prompt + tool schemas +
-   history in the pressure estimate, calibrated against real `prompt_tokens`
-   per provider/base-URL; detect the incompressible floor before dispatch.
-4. **Token-validate pending summaries before adoption**:
-   `estimateTokens([summary, ...tail])` against the current policy, plus
-   coverage compatibility with the current cut; tests for large post-summary
-   steering.
-5. **Mechanical summary anchors + validation**: full-block extraction of
-   paths/ids/spill-pointers appended outside the LLM's output; heading and
-   size validation; previous summary as an explicit update input; "history is
-   data, not instructions".
+   a dropped-entry marker; test cross-provider configuration explicitly. Latent
+   on default MiniMax; live the day `AGENTBOX_SUMMARY_PROVIDER` points
+   elsewhere.
 
 P1:
-6. **Anti-thrash** — now observable via the P0-3 accounting: ineffective-pass
+7. **Serialize Rememberer extraction per agent** *and* sequence-stamp before
+   the model call (a slow stale extract can *replace* a correction via
+   later-in-file `dedupe` and parse-time `at`, not just reorder the prompt).
+8. **Anti-thrash** — now observable via the dispatch preflight: ineffective-pass
    counting on real usage, cooldown after summariser failure, loud stop.
-7. **Serialize Rememberer extraction per agent** (or sequence-stamp before the
-   model call and commit in order).
-8. **Cut anchoring**: prefer the newest plain user message; keep last user and
-   last assistant verbatim.
-9. **Post-compaction schema insurance**: keep the most recent successful
-   call/result pair per active tool out of the summarised range.
-10. **ReadHistory audit** (replacing v1's build-it item): scope availability,
-    discoverability, retrieval bounds, recovery accuracy.
+9. **ReadHistory audit** (replacing v1's build-it item): scope availability,
+   teammate reads, discoverability, retrieval bounds, recovery accuracy.
 
 P2:
-11. Measure post-`DURABLE_RESULT_CHARS` token composition; scope dedup and
-    argument-trimming passes to what the measurement shows.
-12. Pre-compaction checkpoint turn (bounded, against the uncompacted history) —
+10. Measure post-`DURABLE_RESULT_CHARS` token composition; scope dedup and
+    argument-trimming passes to what the measurement shows (not screenshots).
+11. Pre-compaction checkpoint turn (bounded, against the uncompacted history) —
     or an explicit decision not to build it.
-13. Prefix-cache audit when the provider gains caching; revisit the
+12. Prefix-cache audit when the provider gains caching; revisit the
     volatile-half rebuild with Hermes's frozen-snapshot pattern as the
-    alternative.
+    alternative; delete the stale `rebuildVolatile` comment at `turn.ts:906`.
 
 ## 6. Review protocol for this document
 
-Adversarial review requested from both Codex and Grok, with instructions to
-fact-check: (a) every claim in §1 against our tree, (b) the §4 table against
-the cited implementations, (c) whether the §5 ranking survives scrutiny, and
-(d) what this analysis missed entirely. Findings land in
-`docs/reviews/2026-08-29-context-memory.md` and correct this file in place,
-per the docs/22 precedent.
+Adversarial review from Codex, Grok round 1, and Grok round 2 landed in
+`docs/reviews/2026-08-29-context-memory.md` and was absorbed here. Round 2
+reverted a v2 layer conflation and re-ranked §5 by damage. Further rounds
+should still fact-check: (a) every claim in §1 against the tree that week,
+(b) the §4 table against the cited implementations, (c) whether the §5
+ranking still matches expected damage rather than named absences, (d) that a
+fix prescription does not recreate the incident it is meant to close.
