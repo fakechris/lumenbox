@@ -2,10 +2,14 @@
  * The skills a fresh box starts with.
  *
  * A skill system with zero skills teaches nobody what a skill is — the same blank-page
- * problem the starter team solves for agents. Three recipes, chosen to demonstrate the
- * three shapes a skill takes: a browser procedure, a filesystem procedure, and a
- * procedure written to be scheduled. All generic on purpose: anything tied to one
- * vendor's account belongs to the person who has that account.
+ * problem the starter team solves for agents. The first four show the shapes a
+ * skill takes (browser, corpus, filesystem, scheduled). The rest are domain
+ * procedures — code review, Chinese longform / notes / scripts, data briefs —
+ * written the same way: files under /home/box/work, no invented sources. Alongside
+ * them, skill-hub packages in catalog-data/skills/ are copied as-is (humanizer,
+ * khazix-writer, diagnose, fullstack-dev, …) so experts compose standard skills
+ * rather than paraphrased stubs. Anything tied to one vendor's account still
+ * belongs to the person who has that account.
  *
  * Seeded per skill, once, with a marker recording what has been offered. The first
  * version seeded only into an *empty* directory, and that guard aged into a bug:
@@ -18,7 +22,10 @@
  * `.seeded` — so a deletion stays deleted and a new starter still arrives.
  */
 
+import { readdirSync, readFileSync, statSync } from "node:fs";
+import { dirname, join, relative } from "node:path";
 import { SKILLS_DIR } from "./skills.ts";
+import { catalogDataDir, hubSkillSlugs } from "./catalog.ts";
 
 /** Records which starters have ever been offered, so deletion and novelty stay distinct. */
 export const SEEDED_MARKER = ".seeded";
@@ -149,6 +156,134 @@ frontmatter above, for example: \`schedule: daily 08:30\`. Scheduled runs are
 announced when they finish, and a missed window is skipped, never replayed.
 `,
   },
+  {
+    slug: "weekly-retro",
+    content: `---
+name: weekly-retro
+description: Write a one-page retro of the last seven days in the work directory.
+scope: global
+---
+
+# Weekly retro
+
+Write \`/home/box/work/notes/retro-<date>.md\` covering the last seven days.
+
+1. \`find /home/box/work -newermt "7 days ago" -type f\` — what changed.
+2. Three lists: shipped (files that exist and were the point), still open (named, not guessed),
+   decided (a choice that will otherwise be re-litigated).
+3. One "would do differently" paragraph. If nothing would change, say so.
+4. Reply with the path and the still-open list.
+
+Do not pad with "great collaboration". Empty weeks get a short file, not a speech.
+`,
+  },
+  {
+    slug: "code-review",
+    content: `---
+name: code-review
+description: Review a change for correctness, security and tests; write the review to a file, do not rewrite the code.
+scope: global
+---
+
+# Code review
+
+Given a path, a diff, or a repository, write \`/home/box/work/reviews/<slug>.md\`.
+
+1. Read the change. If you cannot tell what it was supposed to do, say so and stop.
+2. Three sections, in this order:
+   - **Blockers** — will lose data, skip auth, break the contract, or ship untested on the path that matters.
+   - **Should fix** — missing validation, unclear control flow, a test that asserts the mock.
+   - **Nits** — naming, comments. Skip anything a formatter already owns.
+3. Every item names a file and a place. "Looks fine" is allowed if you actually ran or read it.
+4. Do not restyle. Do not rewrite the change in the review — that is a different job.
+
+Reply with the path and the blocker count.
+`,
+  },
+  {
+    slug: "wechat-longform",
+    content: `---
+name: wechat-longform
+description: Draft a WeChat-style long article to the work directory, sourced and readable aloud.
+scope: global
+---
+
+# WeChat longform
+
+Write \`/home/box/work/articles/<slug>.md\` as a piece someone will finish on their phone.
+
+1. Before drafting: who is the reader, and what should they believe at the end that they did not at the start. If that is missing, ask. One topic.
+2. Outline on the page first: hook, two to four sections, one close. Then write.
+3. Every non-obvious claim ends with a source URL you opened, or sits under **未核实**. Do not invent quotes or figures.
+4. Cut cadence that only a model writes: stacked slogans, "not X but Y" pairs, a three-part list that could have been one sentence.
+5. Read it aloud once. A sentence you would not say, rewrite.
+
+This is not a Xiaohongshu note and not a spoken script. Those are other skills.
+`,
+  },
+  {
+    slug: "xiaohongshu-note",
+    content: `---
+name: xiaohongshu-note
+description: Draft Xiaohongshu notes — title, cover line, body, variants — without fake first-hand claims.
+scope: global
+---
+
+# Xiaohongshu note
+
+Write \`/home/box/work/notes/xhs-<slug>.md\`.
+
+1. One note, one promise. Title under 20 Chinese characters. A cover line that can be read on a thumbnail.
+2. Body: what it is, who it is for, one concrete detail you can actually stand behind. End with one question or one next step, not a pile of hashtags pretending to be content.
+3. Offer 3–5 title/cover variants under the draft, labelled as variants.
+4. If nobody here has used the thing, do not write 亲测 / 用了三周 / 亲身. Write it as a reading of public sources, or say you have not used it.
+
+Not a long article. Not a spoken script.
+`,
+  },
+  {
+    slug: "short-video-script",
+    content: `---
+name: short-video-script
+description: Write a spoken short-video script with a timed hook, one point, and one ask.
+scope: global
+---
+
+# Short-video script
+
+Write \`/home/box/work/scripts/<slug>.md\`.
+
+1. Platform and length first (抖音 / 视频号 / other, seconds). Different platforms forgive different openings.
+2. Structure on the page:
+   - **0–3s hook** — a sentence that makes a thumb stop. Not a greeting.
+   - **Middle** — one point, spoken, with a beat the picture can match (you describe the beat; you do not shoot it).
+   - **Ask** — one action. Follow, save, or open a link. Not all three.
+3. Write it as spoken lines, not as an essay. Mark pauses.
+4. You are not promising views, and you are not delivering footage.
+
+Not a WeChat article. Not a Xiaohongshu note.
+`,
+  },
+  {
+    slug: "data-brief",
+    content: `---
+name: data-brief
+description: Turn a table into a sourced brief with a quality check first and actions at the end.
+scope: global
+---
+
+# Data brief
+
+Given a csv, xlsx, or a folder of tables, write \`/home/box/work/briefs/<slug>.md\`.
+
+1. **Quality first.** Row count, empty-rate on key columns, duplicates, date range. If the file cannot answer the question, say so before computing.
+2. Then the numbers that answer the question. Every figure names a column, a filter, or a cell. An estimate is labelled 估算 and carries the basis.
+3. Close with **所以呢**: two or three actions, or an explicit "not enough to act".
+4. Do not invent a row that was not in the file. Do not give investment advice.
+
+Python in the box is allowed for the arithmetic. The brief is the product, not a notebook.
+`,
+  },
 ];
 
 /** Uploads whichever starter skills this box has never been offered. */
@@ -175,7 +310,11 @@ export async function seedStarterSkills(
       .catch(() => undefined)) as { stdout?: unknown } | undefined;
     const markerText = typeof raw?.stdout === "string" ? raw.stdout : undefined;
 
-    const missing = unseededStarters(markerText, existing);
+    const hub = hubSkillSlugs();
+    const missing = unseededStarters(markerText, existing, [
+      ...STARTERS,
+      ...hub.map(slug => ({ slug })),
+    ]);
     if (missing.length === 0) return;
 
     // Upload refuses a parent that does not exist — the same refusal that stops a
@@ -190,11 +329,15 @@ export async function seedStarterSkills(
         Buffer.from(skill.content, "utf8").toString("base64")
       );
     }
+    for (const slug of hub) {
+      if (!missing.includes(slug)) continue;
+      await seedHubSkill(box, slug);
+    }
 
     // The marker records everything offered as of now: what the marker already said,
     // what was on disk (a pre-marker install has skills the marker never heard of, and
     // deleting one of those should also stick), and what was just seeded.
-    const starterSlugs = new Set(STARTERS.map(skill => skill.slug));
+    const starterSlugs = new Set([...STARTERS.map(skill => skill.slug), ...hub]);
     const offered = new Set<string>(missing);
     for (const line of (markerText ?? "").split("\n")) {
       if (line.trim() !== "") offered.add(line.trim());
@@ -213,4 +356,43 @@ export async function seedStarterSkills(
     const detail = error instanceof Error ? error.message : String(error);
     log(`could not seed starter skills: ${detail}`);
   }
+}
+
+/** Copies a vendored skill-hub package into the box, helpers included. */
+async function seedHubSkill(
+  box: {
+    uploadFile: (path: string, base64: string) => Promise<unknown>;
+    exec: (
+      command: string,
+      options?: { timeoutMs?: number; actor?: string }
+    ) => Promise<unknown>;
+  },
+  slug: string
+): Promise<void> {
+  const root = join(catalogDataDir(), "skills", slug);
+  const files = listFiles(root);
+  const dirs = new Set(files.map(file => dirname(`${SKILLS_DIR}/${slug}/${file.rel}`)));
+  await box.exec(`mkdir -p ${[...dirs].join(" ")}`, {
+    timeoutMs: 15_000,
+    actor: "host:starter-skills",
+  });
+  for (const file of files) {
+    await box.uploadFile(
+      `${SKILLS_DIR}/${slug}/${file.rel}`,
+      readFileSync(file.abs).toString("base64")
+    );
+  }
+}
+
+function listFiles(root: string): { rel: string; abs: string }[] {
+  const out: { rel: string; abs: string }[] = [];
+  const walk = (dir: string): void => {
+    for (const name of readdirSync(dir)) {
+      const abs = join(dir, name);
+      if (statSync(abs).isDirectory()) walk(abs);
+      else out.push({ rel: relative(root, abs).split("\\").join("/"), abs });
+    }
+  };
+  walk(root);
+  return out;
 }

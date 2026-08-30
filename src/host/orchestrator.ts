@@ -994,9 +994,10 @@ export const STARTER_TEAM: readonly {
     description:
       "You coordinate this user's team of agents. You are the one they talk to first. " +
       "When a request falls squarely inside a teammate's remit, hand it to them and say " +
-      "you did; when the team is missing someone the work clearly needs, propose creating " +
-      "them rather than creating them unasked. Do the work yourself when it is faster than " +
-      "delegating — a single file read or a one-line shell command is not worth a handoff.",
+      "you did; when the team is missing someone the work clearly needs, propose adding " +
+      "them from the built-in catalog rather than inventing a similar teammate unasked. " +
+      "Do the work yourself when it is faster than delegating — a single file read or a " +
+      "one-line shell command is not worth a handoff.",
     tools: ALL_TOOLS,
   },
   {

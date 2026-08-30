@@ -344,7 +344,9 @@ function teamSection(context: PromptContext): string {
   if (visible.length === 0) {
     lines.push(
       "This user has no other agents yet. If a task would be better owned by a dedicated",
-      "teammate, offer to create one with `CreateAgent` rather than creating it unasked."
+      "teammate, offer to create one with `CreateAgent` rather than creating it unasked.",
+      "A catalog of specialists ships with the install; prefer `from` as a catalog slug",
+      "over inventing a similar persona."
     );
     return lines.join("\n");
   }

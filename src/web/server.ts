@@ -164,6 +164,14 @@ import {
 import { TelegramChannel } from "../channels/telegram.ts";
 import { HostRunner, hostRunnerConfig } from "../host/host-runner.ts";
 import { ALL_TOOLS } from "../host/orchestrator.ts";
+import {
+  CATALOG_CONNECTORS,
+  CATALOG_CREWS,
+  CATALOG_EXPERTS,
+  expertNamed,
+  intersectTools,
+  profilesFor,
+} from "../host/catalog.ts";
 import { preflight } from "../box/preflight.ts";
 import { rescueMessage, rescueStuck } from "../host/rescue.ts";
 import { Deliveries, deliveriesPath } from "../host/deliveries.ts";
@@ -3097,6 +3105,66 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
           } catch (error) {
             send(res, 400, { error: error instanceof Error ? error.message : String(error) });
           }
+          return;
+        }
+
+        if (route === "GET /api/catalog") {
+          send(res, 200, {
+            experts: CATALOG_EXPERTS.map(entry => ({
+              slug: entry.slug,
+              domain: entry.domain,
+              name: entry.name,
+              title: entry.title,
+              summary: entry.summary,
+              description: entry.description,
+              tools: entry.tools,
+              skills: entry.skills,
+            })),
+            crews: CATALOG_CREWS.map(crew => ({
+              slug: crew.slug,
+              domain: crew.domain,
+              name: crew.name,
+              summary: crew.summary,
+              members: crew.members.map(slug => {
+                const row = expertNamed(slug);
+                return { slug, name: row?.name, title: row?.title };
+              }),
+            })),
+            connectors: CATALOG_CONNECTORS,
+          });
+          return;
+        }
+
+        if (route === "POST /api/catalog/install") {
+          if (refused()) return;
+          const body = await readJson(req);
+          const slug = String(body.slug ?? "").trim();
+          const rows = profilesFor(slug);
+          if (rows === undefined) {
+            send(res, 404, { error: `No catalog entry named ${slug}.` });
+            return;
+          }
+          const existing = new Set(registry.list().map(agent => agent.profile.name));
+          const created: { id: string; name: string }[] = [];
+          const skipped: string[] = [];
+          for (const row of rows) {
+            if (existing.has(row.name)) {
+              skipped.push(row.name);
+              continue;
+            }
+            const record = registry.create({
+              name: row.name,
+              description: row.description,
+              title: row.title,
+              tools: [...intersectTools(row.tools, undefined)],
+              ...(caller.userId !== undefined ? { ownerUserId: caller.userId } : {}),
+              visibility: "shared",
+            });
+            existing.add(row.name);
+            created.push({ id: record.id, name: record.profile.name });
+            log(`catalog ${slug}: created ${record.profile.name} (${record.id})`);
+          }
+          send(res, 200, { slug, created, skipped });
           return;
         }
 

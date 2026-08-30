@@ -41,7 +41,7 @@ import {
 } from "../host/memory.ts";
 
 export const AGENT_NAME_MAX_LENGTH = 72;
-export const AGENT_DESCRIPTION_MAX_LENGTH = 2000;
+export const AGENT_DESCRIPTION_MAX_LENGTH = 12_000;
 export const PROFILE_FILENAME = "profile.json";
 export const TRANSCRIPT_FILENAME = "conversation.jsonl";
 /**

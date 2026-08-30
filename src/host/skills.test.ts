@@ -54,6 +54,12 @@ test("frontmatter is read, and a file without it still works", () => {
   assert.deepEqual(parseSkillFile(["---", "name: x", "colour: blue", "---", "b"].join("\n")).meta, {
     name: "x",
   });
+
+  // Skill-hub packages use YAML `|` descriptions. Folded so the index still has a line to match.
+  const folded = parseSkillFile(
+    ["---", "name: fullstack-dev", "description: |", "  Build APIs.", "  Not for CSS.", "---", "body"].join("\n")
+  );
+  assert.equal(folded.meta.description, "Build APIs. Not for CSS.");
 });
 
 test("a skill with no description is reported, not silently dropped", () => {

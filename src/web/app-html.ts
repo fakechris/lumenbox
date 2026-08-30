@@ -983,6 +983,12 @@ export const APP_HTML = String.raw`<!doctype html>
 <div id="agentwrap" style="display:none">
   <div class="modal">
     <h3 id="agenttitle">New agent</h3>
+    <div class="field" id="agcatalogwrap">
+      <label>From catalog</label>
+      <div id="agcatalog" class="toolchips"></div>
+      <div class="fieldnote">Specialists and crews that ship with the install. A specialist fills
+        this form; a crew adds its members in one step. Not seeded — adding is a choice.</div>
+    </div>
     <div class="field">
       <label>Name</label>
       <input id="agname" spellcheck="false" style="font-family:var(--font-sans)">
@@ -3750,12 +3756,92 @@ $("rec").onclick = function (event) {
 // One dialog, two modes. The previous version used window.prompt, which the desktop
 // shell does not implement: the + button did nothing, silently.
 var agentModal = { mode: "new", id: null, tools: {} };
+var agentCatalog = { experts: [], crews: [] };
+
+function loadAgentCatalog() {
+  return fetch("/api/catalog")
+    .then(function (r) { return r.status === 403 ? null : r.json(); })
+    .then(function (data) {
+      if (!data) return;
+      agentCatalog.experts = data.experts || [];
+      agentCatalog.crews = data.crews || [];
+    })
+    .catch(function () { /* catalog is optional on a broken page */ });
+}
+
+function renderAgentCatalog() {
+  var html = "";
+  for (var i = 0; i < agentCatalog.experts.length; i++) {
+    var expert = agentCatalog.experts[i];
+    html += '<span class="toolchip" data-kind="expert" data-slug="' + esc(expert.slug) + '">' +
+      esc(expert.title) + " · " + esc(expert.name) + "</span>";
+  }
+  for (var j = 0; j < agentCatalog.crews.length; j++) {
+    var crew = agentCatalog.crews[j];
+    html += '<span class="toolchip" data-kind="crew" data-slug="' + esc(crew.slug) + '">' +
+      esc(crew.name) + "</span>";
+  }
+  $("agcatalog").innerHTML = html || "<span class=\"fieldnote\">No catalog loaded.</span>";
+}
+
+$("agcatalog").onclick = function (event) {
+  var chip = event.target.closest ? event.target.closest("[data-slug]") : null;
+  if (!chip) return;
+  var slug = chip.getAttribute("data-slug");
+  var kind = chip.getAttribute("data-kind");
+  if (kind === "crew") {
+    $("agstatus").textContent = "Adding " + slug + "…";
+    $("agsave").disabled = true;
+    fetch("/api/catalog/install", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ slug: slug })
+    })
+      .then(function (r) {
+        return r.json().then(function (d) {
+          if (!r.ok) throw new Error(d.error || "install failed");
+          return d;
+        });
+      })
+      .then(function (d) {
+        $("agentwrap").style.display = "none";
+        return refresh().then(function () {
+          if (d.created && d.created[0]) return select(d.created[0].id);
+        });
+      })
+      .catch(function (error) { $("agstatus").textContent = "Install failed: " + error.message; })
+      .then(function () { $("agsave").disabled = false; });
+    return;
+  }
+  var row = null;
+  for (var k = 0; k < agentCatalog.experts.length; k++) {
+    if (agentCatalog.experts[k].slug === slug) row = agentCatalog.experts[k];
+  }
+  if (!row) return;
+  $("agname").value = row.name;
+  $("agrole").value = row.title;
+  $("agpersona").value = row.description;
+  var granted = row.tools || [];
+  agentModal.tools = {};
+  var chips = document.querySelectorAll("#agtools .toolchip");
+  for (var n = 0; n < chips.length; n++) {
+    var tool = chips[n].getAttribute("data-tool");
+    var on = granted.indexOf(tool) >= 0;
+    agentModal.tools[tool] = on;
+    chips[n].className = "toolchip" + (on ? " on" : "");
+  }
+  $("agstatus").textContent = row.summary;
+};
 
 function openAgentModal(mode, agent) {
   agentModal.mode = mode;
   agentModal.id = agent ? agent.id : null;
   $("agenttitle").textContent = mode === "new" ? "New agent" : "Configure " + agent.name;
   $("agsave").textContent = mode === "new" ? "Create" : "Save";
+  $("agcatalogwrap").style.display = mode === "new" ? "" : "none";
+  if (mode === "new") {
+    loadAgentCatalog().then(renderAgentCatalog);
+  }
   $("agname").value = agent ? agent.name : "";
   $("agrole").value = agent ? String(agent.title || "") : "";
   $("agpersona").value = agent ? String(agent.description || "") : "";
