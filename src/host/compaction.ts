@@ -339,6 +339,36 @@ export function chooseCutPoint(
 
 /** At most this many tool pairs ride as exemplars; more is a history, not insurance. */
 export const MAX_PINNED_TOOLS = 3;
+/** A pinned call's string arguments are trimmed to this per leaf — shape, not payload. */
+export const PINNED_INPUT_LEAF_CHARS = 300;
+/** Everything pinned together stays under this many estimated tokens. */
+export const PINNED_TOKEN_CAP = 2_500;
+
+/**
+ * Trims a tool input's string leaves, preserving the structure a model imitates.
+ *
+ * Parse-and-trim rather than byte-slice, for Hermes's hard-won reason: a sliced JSON
+ * string is unterminated JSON, and MiniMax 400-looped a session on exactly that. A
+ * file-write call carrying 100KB of content is a fine exemplar of the *call shape* at
+ * 300 chars of content; verbatim it is 40,000 tokens of dead weight riding every
+ * request after the compaction (verification review, finding 3).
+ */
+export function trimInputLeaves(value: unknown): unknown {
+  if (typeof value === "string") {
+    return value.length > PINNED_INPUT_LEAF_CHARS
+      ? `${value.slice(0, PINNED_INPUT_LEAF_CHARS)}…[trimmed]`
+      : value;
+  }
+  if (Array.isArray(value)) return value.map(trimInputLeaves);
+  if (value !== null && typeof value === "object") {
+    const out: Record<string, unknown> = {};
+    for (const [key, entry] of Object.entries(value as Record<string, unknown>)) {
+      out[key] = trimInputLeaves(entry);
+    }
+    return out;
+  }
+  return value;
+}
 /** An exemplar's result is trimmed to this: the value is the *call's* shape, not the output. */
 export const PINNED_RESULT_CHARS = 200;
 /** A pinned user message is clamped: the ask matters, a pasted specification does not. */
@@ -419,14 +449,27 @@ export function choosePinnedEntries(
         },
       ],
     }));
+    const trimmedCalls = entry.blocks.map(block =>
+      (block as { type?: string }).type === "tool_use"
+        ? { ...(block as Anthropic.ToolUseBlockParam), input: trimInputLeaves((block as Anthropic.ToolUseBlockParam).input) }
+        : block
+    );
     pairs.push([
-      { role: "assistant", kind: "blocks", blocks: entry.blocks, at: (entry as { at: string }).at },
+      { role: "assistant", kind: "blocks", blocks: trimmedCalls as Anthropic.ContentBlockParam[], at: (entry as { at: string }).at },
       { role: "user", kind: "results", blocks: trimmedResults, at: (next as { at: string }).at },
     ]);
     for (const name of names) chosen.add(name);
   }
   // The scan ran newest-first; the render should read oldest-first, like history does.
   for (let index = pairs.length - 1; index >= 0; index--) pinned.push(...pairs[index]!);
+
+  // A hard weight cap over everything pinned: insurance that costs more than the
+  // risk it covers is not insurance. Oldest pairs go first; the ask stays.
+  while (pinned.length > 0 && estimateTokens(pinned) > PINNED_TOKEN_CAP) {
+    const firstPair = pinned.findIndex(entry => "kind" in entry);
+    if (firstPair === -1) break;
+    pinned.splice(firstPair, 2);
+  }
 
   return pinned;
 }
@@ -456,22 +499,33 @@ export const ANCHOR_CHAR_CAP = 2_000;
  */
 export function extractAnchors(entries: readonly HistoryEntry[]): string[] {
   const seen = new Set<string>();
-  const anchors: string[] = [];
-  const take = (value: string): void => {
+  // Collected per category so hex noise cannot crowd out a real artifact path — the
+  // categories are capped separately and assembled in priority order.
+  const byCategory = new Map<string, string[]>();
+  const CATEGORY_CAPS: Record<string, number> = { spill: 10, path: 25, id: 10, url: 10, hex: 8 };
+  const take = (value: string, category: string): void => {
     const trimmed = value.trim();
     if (trimmed === "" || seen.has(trimmed)) return;
+    const bucket = byCategory.get(category) ?? [];
+    if (bucket.length >= (CATEGORY_CAPS[category] ?? 8)) return;
     seen.add(trimmed);
-    anchors.push(trimmed);
+    bucket.push(trimmed);
+    byCategory.set(category, bucket);
   };
   const scan = (text: string): void => {
-    // Paths with a directory separator and an extension or known roots.
-    for (const match of text.matchAll(/(?:\/(?:[\w.@-]+\/)*[\w.@-]+\.[\w]+|~\/[\w./@-]+)/g)) take(match[0]);
-    // Spill pointers are the single most expensive thing to lose.
-    for (const match of text.matchAll(/full output kept: (\S+)/g)) take(match[0]);
-    // Task ids, commit hashes, URLs.
-    for (const match of text.matchAll(/\bt\d{1,5}\b/g)) take(match[0]);
-    for (const match of text.matchAll(/\b[0-9a-f]{7,40}\b/g)) take(match[0]);
-    for (const match of text.matchAll(/https?:\/\/\S+/g)) take(match[0]);
+    // Spill pointers first: the single most expensive thing to lose.
+    for (const match of text.matchAll(/full output kept: (\S+)/g)) take(match[0], "spill");
+    // Paths — absolute, home-relative, or relative-with-directories — anchored at a
+    // boundary so `src/host/turn.ts` is captured whole, never mangled into a
+    // false-exact `/host/turn.ts` (verification review, finding 6).
+    for (const match of text.matchAll(
+      /(?<=^|[\s"'\`(=:,[])((?:~?\/)?(?:[\w.@-]+\/)+[\w.@-]+\.[\w]+)/gm
+    ))
+      take(match[1]!, "path");
+    for (const match of text.matchAll(/\bt\d{1,5}\b/g)) take(match[0], "id");
+    for (const match of text.matchAll(/https?:\/\/\S+/g)) take(match[0], "url");
+    // Hex last and lowest-capped: 7-40 hex chars is also what random noise looks like.
+    for (const match of text.matchAll(/\b[0-9a-f]{7,40}\b/g)) take(match[0], "hex");
   };
   for (const entry of entries) {
     if (!("kind" in entry)) {
@@ -491,10 +545,12 @@ export function extractAnchors(entries: readonly HistoryEntry[]): string[] {
   }
   let used = 0;
   const bounded: string[] = [];
-  for (const anchor of anchors) {
-    if (used + anchor.length > ANCHOR_CHAR_CAP) break;
-    bounded.push(anchor);
-    used += anchor.length + 2;
+  for (const category of ["spill", "path", "id", "url", "hex"]) {
+    for (const anchor of byCategory.get(category) ?? []) {
+      if (used + anchor.length > ANCHOR_CHAR_CAP) return bounded;
+      bounded.push(anchor);
+      used += anchor.length + 2;
+    }
   }
   return bounded;
 }

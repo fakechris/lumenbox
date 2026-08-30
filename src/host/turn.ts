@@ -724,7 +724,18 @@ async function compactHistory(options: {
   const olderEntries = active.slice(0, cut.index);
   // Profile and client resolved together (docs/24 v3 P0 #6): a summary provider that
   // names another endpoint gets its own client instead of riding the primary's wire.
-  const summaryRuntime = summaryRuntimeFor(provider, client);
+  // Inside a guard (verification review): a misconfigured split must degrade to the
+  // agent's own wire, not abort the turn before compaction even starts.
+  let summaryRuntime: { client: Anthropic; profile: ProviderProfile };
+  try {
+    summaryRuntime = summaryRuntimeFor(provider, client);
+  } catch (error) {
+    log(
+      `summary provider unusable (${error instanceof Error ? error.message : String(error)}); ` +
+        `summarising on the agent's own wire`
+    );
+    summaryRuntime = { client, profile: provider };
+  }
   const summaryProvider = summaryRuntime.profile;
 
   if (urgency === "background") {
@@ -761,14 +772,54 @@ async function compactHistory(options: {
         log(`used the summary prepared in the background (${pending!.covers} entries)`);
       }
     }
-    const produced = ready ?? (await summarise(olderEntries, cut.index, summaryRuntime.client, summaryProvider, meter));
+    let produced = ready;
+    if (produced === undefined) {
+      try {
+        produced = await summarise(olderEntries, cut.index, summaryRuntime.client, summaryProvider, meter);
+      } catch (error) {
+        // The agent's own wire before a dropped-history marker (verification review):
+        // a failing split provider is a configuration problem, and losing history to
+        // it would charge the user for somebody's env var.
+        if (summaryRuntime.client === client) throw error;
+        log(
+          `summary provider failed (${error instanceof Error ? error.message : String(error)}); ` +
+            `retrying on the agent's own wire`
+        );
+        produced = await summarise(olderEntries, cut.index, client, provider, meter);
+      }
+    }
     if (produced === undefined) throw new Error("the summariser returned no text");
     entry = produced;
-    // Pinned verbatim survivors are chosen at adoption, against the tail that will
-    // actually be sent — a speculative summary computed earlier cannot know it
-    // (docs/24 v3 P0 #2).
-    const pinnedEntries = choosePinnedEntries(olderEntries, active.slice(cut.index));
+    // Pinned survivors are chosen against the *adopted* coverage, not the fresh cut
+    // (verification review, finding 1): an adopted pending may cover fewer entries
+    // than the cut just computed, and the assembled tail is active.slice(covers) —
+    // choosing pins against the fresh cut's tail let a pair between the two land in
+    // the request twice, with duplicate tool_use ids the API rejects.
+    const pinnedEntries = choosePinnedEntries(
+      active.slice(0, entry.covers),
+      active.slice(entry.covers)
+    );
     if (pinnedEntries.length > 0) entry = { ...entry, pinned: pinnedEntries };
+    // And the adopted result must actually fit: summary + pins + real tail under the
+    // trigger, or pins are shed first and a still-oversized adoption is refused in
+    // favour of the fresh cut.
+    if (estimateTokens([entry, ...active.slice(entry.covers)]) > policy.triggerTokens) {
+      const bare = { ...entry };
+      delete (bare as { pinned?: unknown }).pinned;
+      if (
+        entry.covers !== cut.index &&
+        estimateTokens([bare, ...active.slice(entry.covers)]) > policy.triggerTokens
+      ) {
+        log("the prepared summary no longer bounds the request; summarising the current cut instead");
+        const fresh = await summarise(olderEntries, cut.index, summaryRuntime.client, summaryProvider, meter);
+        if (fresh === undefined) throw new Error("the summariser returned no text");
+        entry = fresh;
+        const freshPins = choosePinnedEntries(active.slice(0, entry.covers), active.slice(entry.covers));
+        if (freshPins.length > 0) entry = { ...entry, pinned: freshPins };
+      } else {
+        entry = bare as typeof entry;
+      }
+    }
     const detail =
       `summarised ${entry.covers} entries: about ${estimateTokens(olderEntries)} tokens ` +
       `became ${estimateTokens([entry])}` +
@@ -1363,15 +1414,21 @@ export async function runTurn(
     // tool schemas were invisible to every earlier estimate, so an incompressible floor
     // produced rejected requests that no compaction could have prevented — and nothing
     // said so. The estimate is calibrated by what this wire actually billed last time.
-    const requestEstimate = estimateRequestTokens({ messages, system, tools });
+    let requestEstimate = estimateRequestTokens({ messages, system, tools });
     const wire = `${provider.label}|${provider.baseUrl ?? ""}`;
     const estimated = calibratedTokens(wire, requestEstimate.total);
-    if (!floorWarned && requestEstimate.floor > policyForModel(provider.model).triggerTokens) {
+    // The floor is compared calibrated too (verification review): an uncalibrated
+    // floor on a CJK-heavy prompt under-warns exactly where the warning matters.
+    if (
+      !floorWarned &&
+      calibratedTokens(wire, requestEstimate.floor) > policyForModel(provider.model).triggerTokens
+    ) {
       floorWarned = true;
       console.error(
         `[compaction] ${agent.profile.name}: the system prompt and tools alone are about ` +
-          `${requestEstimate.floor} tokens — over the compaction trigger. Compaction cannot ` +
-          `shrink this request; fewer tools or a shorter prompt is the fix.`
+          `${calibratedTokens(wire, requestEstimate.floor)} tokens — over the compaction ` +
+          `trigger. Compaction cannot shrink this request; fewer tools or a shorter prompt ` +
+          `is the fix.`
       );
     }
     if (shouldPruneImages(estimated, provider.model)) {
@@ -1390,6 +1447,10 @@ export async function runTurn(
           summarised: true,
           detail: note,
         });
+        // The estimate must describe the payload actually sent (verification review):
+        // calibrating the wire against a pre-prune figure taught the factor that
+        // requests are cheaper than they are, and every later estimate inherited it.
+        requestEstimate = estimateRequestTokens({ messages, system, tools });
       }
     }
 
@@ -1583,11 +1644,23 @@ export async function runTurn(
     );
     // Teach the estimator what this wire actually billed for the request we just
     // estimated — the calibration loop of docs/24 v3 P0 #5.
-    noteRealInputTokens(
-      `${provider.label}|${provider.baseUrl ?? ""}`,
-      requestEstimate.total,
-      (response.usage as { input_tokens?: number }).input_tokens
-    );
+    {
+      // Every billed input class: a cached prefix is still input the estimate predicted.
+      const usage = response.usage as {
+        input_tokens?: number;
+        cache_read_input_tokens?: number;
+        cache_creation_input_tokens?: number;
+      };
+      const realInput =
+        (usage.input_tokens ?? 0) +
+        (usage.cache_read_input_tokens ?? 0) +
+        (usage.cache_creation_input_tokens ?? 0);
+      noteRealInputTokens(
+        `${provider.label}|${provider.baseUrl ?? ""}`,
+        requestEstimate.total,
+        realInput > 0 ? realInput : undefined
+      );
+    }
     deps.usage?.record({
       agentId: agent.id,
       agentName: agent.profile.name,

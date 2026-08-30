@@ -30,6 +30,7 @@ DEFAULT_POLICY,
   choosePinnedEntries,
   estimateRequestTokens,
   noteRealInputTokens,
+  trimInputLeaves,
   extractAnchors,
   missingSummaryHeadings,
   pendingIsUsable,
@@ -741,4 +742,31 @@ test("the estimate learns from what the wire actually billed", () => {
   // Garbage in, nothing out.
   noteRealInputTokens(wire, 0, 100);
   noteRealInputTokens(wire, 1_000, undefined);
+});
+
+test("pinned inputs are leaf-trimmed and the pinned total is capped", () => {
+  // Verification review finding 3: a 100KB write_file exemplar is 40k tokens of dead
+  // weight; the shape a model imitates survives at 300 chars per string leaf.
+  const trimmed = trimInputLeaves({ path: "/a/b.txt", content: "x".repeat(50_000), nested: { note: "y".repeat(500) } }) as {
+    content: string; nested: { note: string };
+  };
+  assert.ok(trimmed.content.length < 400);
+  assert.match(trimmed.content, /\[trimmed\]$/);
+  assert.ok(trimmed.nested.note.length < 400, "nested leaves trimmed too");
+  assert.equal((trimInputLeaves({ n: 5, b: true }) as { n: number }).n, 5, "non-strings untouched");
+});
+
+test("anchors keep relative paths whole and hex noise cannot crowd out paths", () => {
+  // Verification review finding 6: the old regex matched from any slash, turning
+  // src/host/turn.ts into a false-exact /host/turn.ts.
+  const at = "2026-08-29T00:00:00Z";
+  const hexNoise = Array.from({ length: 20 }, (_, i) => `deadbeef${i}00cafe`).join(" ");
+  const entries: HistoryEntry[] = [
+    { role: "user", text: `edit src/host/turn.ts and docs/24-context-memory.md ${hexNoise}`, at },
+  ];
+  const anchors = extractAnchors(entries);
+  assert.ok(anchors.includes("src/host/turn.ts"), `whole relative path, got ${JSON.stringify(anchors)}`);
+  assert.ok(anchors.includes("docs/24-context-memory.md"));
+  assert.ok(!anchors.includes("/host/turn.ts"), "no mangled suffix");
+  assert.ok(anchors.filter(a => /^[0-9a-f]+$/.test(a)).length <= 8, "hex capped per category");
 });
