@@ -240,7 +240,8 @@ screenshot story was also false — images never reach the transcript):
 ## 5. The fix plan
 
 P0 — reordered by Grok round 2 around expected damage on this tree and the
-docs/23 incident, not named absences:
+docs/23 incident, not named absences. **All six shipped 2026-08-29**
+(`67051ec`…`b7b3741`); the descriptions below are what was built:
 1. ~~Entry triggers demoted to backstops~~ (shipped, docs/23).
 2. **Cut anchoring + schema insurance at the transcript layer** (the remaining
    docs/23 hole). Keep the most recent successful call/result pair per active
