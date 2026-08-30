@@ -25,6 +25,18 @@ test("every preset is complete, and a run carries the prompt", () => {
   assert.equal(presetNamed("nothing-like-this"), undefined);
 });
 
+test("a headless run grants its own tools and carries the relay's model", () => {
+  // Measured on opencode 1.18.25: without --auto every tool permission is silently
+  // rejected, and the model only travels as a flag. A run that loses either "works"
+  // and does nothing — the quiet kind of wrong this file exists for.
+  const opencode = presetNamed("opencode")!;
+  assert.match(opencode.run("'x'"), /--auto/, "permissions granted, or the engine is inert");
+  assert.match(opencode.run("'x'", "minimax-cn/MiniMax-M3"), /-m minimax-cn\/MiniMax-M3 'x'/);
+  assert.doesNotMatch(opencode.run("'x'"), /-m /, "no model named means no flag, not an empty one");
+  const claude = presetNamed("claude")!;
+  assert.match(claude.run("'x'", "some-model"), /--model some-model/);
+});
+
 test("without a relay a delegated engine gets nothing, and with one it gets only the relay", () => {
   const preset = presetNamed("opencode")!;
   const url = process.env.AGENTBOX_RELAY_URL;

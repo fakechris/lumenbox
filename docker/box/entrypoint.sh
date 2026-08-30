@@ -51,7 +51,7 @@ as_user() {
 # Volumes arrive owned by whoever the image left the mount point owned by, and a bind
 # mount arrives owned by the host's uid. Repairing it here is the only place that can:
 # by the time either service is running, it has already dropped root.
-for dir in /home/box/work /home/box/.config /home/box/Desktop; do
+for dir in /home/box/work /home/box/.config /home/box/Desktop /home/box/.local /home/box/.local/share /home/box/.local/state; do
   mkdir -p "${dir}"
   chown box:box "${dir}" 2>/dev/null || true
 done
@@ -68,6 +68,18 @@ if [[ -d /usr/local/share/agentbox/skel ]]; then
   log "re-seeding desktop config from the image"
   cp -rf /usr/local/share/agentbox/skel/. /home/box/
   chown -R box:box /home/box/Desktop /home/box/.config 2>/dev/null || true
+fi
+
+# Delegated engines look for skills under ~/.config, and ~/.config is a volume — so the
+# symlink the image creates is shadowed on every box that has ever booted before. The
+# projection has to be re-made here, where the volume is already mounted. Idempotent,
+# and a no-op on engine-free images.
+if command -v opencode >/dev/null 2>&1; then
+  mkdir -p /home/box/.config/opencode
+  ln -sfn /home/box/work/skills /home/box/.config/opencode/skill
+  chown -h box:box /home/box/.config/opencode/skill 2>/dev/null || true
+  chown box:box /home/box/.config/opencode 2>/dev/null || true
+  log "opencode skills projection linked"
 fi
 
 # Display 1 is the default: an agent with no assignment lands here, and it is what

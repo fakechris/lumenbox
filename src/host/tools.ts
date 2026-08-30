@@ -16,7 +16,7 @@ import type { HostRunner } from "./host-runner.ts";
 import type { Vault } from "./vault.ts";
 import type { ScopeStore } from "./scopes.ts";
 import type { McpManager } from "./mcp.ts";
-import { delegateEnv, PRESETS, presetNamed, quoteForShell } from "./presets.ts";
+import { delegateEnv, delegateModel, PRESETS, presetNamed, quoteForShell } from "./presets.ts";
 import { describeHistory, readHistory } from "./history.ts";
 import { canSearch, fetchPage, guardUrl, isSearchEngine, searchWeb, WebError } from "./web.ts";
 import { describeEnvShape, envShape, looksLikeEnvFile } from "./env-shape.ts";
@@ -1546,7 +1546,7 @@ export async function dispatchTool(
         };
       }
       const env = delegateEnv(preset);
-      const started = await box.startJob(preset.run(quoteForShell(prompt)), {
+      const started = await box.startJob(preset.run(quoteForShell(prompt), delegateModel()), {
         ...(input.cwd ? { cwd: String(input.cwd) } : {}),
         ...(Object.keys(env).length > 0 ? { env } : {}),
         ...(context.boxOwner !== undefined ? { owner: context.boxOwner } : {}),

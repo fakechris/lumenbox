@@ -43,13 +43,15 @@ export interface Preset {
   /** How to check it is installed. Non-zero means not there. */
   probe: string;
   /**
-   * The command, given the prompt already shell-quoted.
+   * The command, given the prompt already shell-quoted and, when the relay names one,
+   * the model in this engine's own format (opencode says `provider/model`, others say
+   * other things — the operator sets the variable to match the engine they operate).
    *
    * Non-interactive by construction: a delegated engine that stops to ask a question
    * would hang a job nobody is watching. v1 is deliberately one-shot; a session
    * protocol (ACP) is the upgrade, and it changes this line and nothing else.
    */
-  run: (quotedPrompt: string) => string;
+  run: (quotedPrompt: string, model?: string) => string;
   /**
    * Where this engine looks for reusable methods, if it does. The box's own skills
    * directory is linked here at install.
@@ -71,20 +73,35 @@ export const PRESETS: readonly Preset[] = [
     name: "opencode",
     summary: "A coding agent: reads a repository, edits files, runs tests, iterates.",
     probe: "command -v opencode",
-    run: quoted => `opencode run ${quoted}`,
+    // --auto, because a headless `opencode run` auto-rejects every tool permission
+    // without it — the engine "works" and does nothing. The box is the sandbox; the
+    // permission prompt has no one to ask. The model travels as a flag because this
+    // engine has no model environment variable (measured on 1.18.25).
+    run: (quoted, model) => `opencode run --auto${model ? ` -m ${model}` : ""} ${quoted}`,
     skillsMount: "~/.config/opencode/skill",
+    // Measured on 1.18.25: opencode ignores ANTHROPIC_BASE_URL/OPENAI_BASE_URL — its
+    // endpoints come from a provider catalog, overridable only in its config file. The
+    // BASE_URL pair stays for engine versions that do honor it; what actually routes
+    // traffic today is MINIMAX_API_KEY, which lights up the catalog's minimax-cn
+    // provider — the degenerate-relay case, where the relay variables name the vendor
+    // itself. A true relay with its own URL needs the config-file face (docs/25).
     relayEnv: (baseUrl, token) => ({
       OPENAI_BASE_URL: baseUrl,
       OPENAI_API_KEY: token,
       ANTHROPIC_BASE_URL: baseUrl,
       ANTHROPIC_API_KEY: token,
+      MINIMAX_API_KEY: token,
     }),
   },
   {
     name: "claude",
     summary: "Claude Code: the same shape, for repositories it already knows well.",
     probe: "command -v claude",
-    run: quoted => `claude -p ${quoted}`,
+    // The same headless truth as opencode's --auto, in this engine's dialect; inside
+    // the box the sandbox is the container, not the prompt. Untested until a claude
+    // build ships in an image — says so in docs/25.
+    run: (quoted, model) =>
+      `claude -p --dangerously-skip-permissions${model ? ` --model ${model}` : ""} ${quoted}`,
     skillsMount: "~/.claude/skills",
     relayEnv: (baseUrl, token) => ({
       ANTHROPIC_BASE_URL: baseUrl,
@@ -112,10 +129,22 @@ export function quoteForShell(value: string): string {
 /** Where a delegated engine's model traffic goes. Named here so absences.ts and this file cannot drift. */
 export const RELAY_URL_VARIABLE = "AGENTBOX_RELAY_URL";
 export const RELAY_TOKEN_VARIABLE = "AGENTBOX_RELAY_TOKEN";
+/**
+ * The model a delegated engine should use, in that engine's own format. Optional: an
+ * engine without one falls back to whatever it would pick alone, which for a fresh
+ * install is usually a refusal to pick — so a configured relay wants this set too.
+ */
+export const RELAY_MODEL_VARIABLE = "AGENTBOX_RELAY_MODEL";
 
 export function delegateEnv(preset: Preset): Record<string, string> {
   const baseUrl = process.env[RELAY_URL_VARIABLE];
   const token = process.env[RELAY_TOKEN_VARIABLE];
   if (baseUrl === undefined || baseUrl === "" || token === undefined || token === "") return {};
   return preset.relayEnv(baseUrl, token);
+}
+
+/** The relay's model choice, or undefined when the operator has not named one. */
+export function delegateModel(): string | undefined {
+  const model = process.env[RELAY_MODEL_VARIABLE];
+  return model === undefined || model === "" ? undefined : model;
 }

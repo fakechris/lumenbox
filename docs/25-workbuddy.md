@@ -29,13 +29,16 @@ the doubaowork companion crew (agents with built-in skills and personas).
 
 ## The experiments, in order
 
-**E1 — an engine actually in the box.** Pin one `opencode` version into
-`docker/box/Dockerfile` (the Dockerfile is the source of truth; never patch the
-running container), rebuild, verify `command -v opencode` passes the preset
-probe. Credential for the experiment: point `AGENTBOX_RELAY_URL/TOKEN` directly
-at the MiniMax endpoint — the relay seam accepts a provider as a degenerate
-relay; note loudly that this puts a key in the box's process env, acceptable in
-the test tenancy, not the destination (the vault/egress-relay direction stands).
+**E1 — an engine actually in the box. DONE 2026-08-30**, run log with all
+measurements in `research/workbuddy/E1-engine-in-box.md`. opencode 1.18.25 is
+pinned in the image (`OPENCODE_VERSION=1.18.25 agentbox box build`), the probe
+passes, and a delegated-shape run wrote and executed real code against
+MiniMax-M3. Three bugs stood in the way (build arg dropped, volume shadowing
+the skills symlink, root-owned `~/.local`) — all fixed at the source of truth.
+Two findings changed the preset: opencode ignores `*_BASE_URL` env (a true
+relay needs its config-file face), and headless runs need `--auto` or every
+tool call is silently rejected. New `AGENTBOX_RELAY_MODEL` names the engine's
+model. The key-in-box shortcut is live and on the pre-launch security list.
 
 **E2 — Delegate end-to-end, with interruption.** Seed a small repo with failing
 tests in the box; have Bob `Delegate` "make the tests pass"; watch via `Jobs`

@@ -222,7 +222,11 @@ RUN if [ -n "$OPENCODE_VERSION" ]; then \
       npm install -g "opencode-ai@${OPENCODE_VERSION}" \
       && mkdir -p /home/box/.config/opencode \
       && ln -sfn /home/box/work/skills /home/box/.config/opencode/skill \
-      && chown -R box:box /home/box/.config/opencode; \
+      # npm's postinstall probes the package as root and leaves root-owned litter under
+      # /home/box/.local; opencode then cannot open its own log as the box user. Measured
+      # on 1.18.25 — chown everything the install touched, not just what we created.
+      && mkdir -p /home/box/.local \
+      && chown -R box:box /home/box/.config/opencode /home/box/.local; \
     fi
 
 # The entrypoint runs as root and drops privileges per process: the desktop and the

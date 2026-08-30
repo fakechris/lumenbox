@@ -435,10 +435,19 @@ export class BoxManager {
   /** Builds the box image from the given context directory. */
   async build(contextDir: string, onOutput?: (line: string) => void): Promise<void> {
     onOutput?.(`building ${this.config.image} from ${contextDir}`);
+    // Delegated engines ride in as pinned build args (docs/25): OPENCODE_VERSION in the
+    // environment turns the Dockerfile's dormant opencode layer on at exactly that
+    // version. Unset builds stay engine-free, which is what they always were.
+    const engineArgs: string[] = [];
+    const opencode = process.env.OPENCODE_VERSION;
+    if (opencode !== undefined && opencode !== "") {
+      engineArgs.push("--build-arg", `OPENCODE_VERSION=${opencode}`);
+      onOutput?.(`opencode pinned at ${opencode}`);
+    }
     // Build output is large and streaming it needs spawn, but the CLI already
     // prints progress to stderr; we surface only the outcome.
     await docker(
-      ["build", "-t", this.config.image, contextDir],
+      ["build", ...engineArgs, "-t", this.config.image, contextDir],
       20 * 60_000
     );
     onOutput?.(`built ${this.config.image}`);

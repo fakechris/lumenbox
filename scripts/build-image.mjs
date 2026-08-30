@@ -67,7 +67,15 @@ if (outgoing) {
   console.log("no existing :latest, so there is nothing to roll back to yet");
 }
 
-docker(["build", "-t", versioned, "-t", `${REPO}:latest`, CONTEXT]);
+// Preset engines ride as pinned build args (docs/25 E1): OPENCODE_VERSION in the
+// environment turns the Dockerfile's dormant opencode layer on, at exactly that
+// version. Unset builds stay engine-free, which is what they were.
+const buildArgs = [];
+if (process.env.OPENCODE_VERSION) {
+  buildArgs.push("--build-arg", `OPENCODE_VERSION=${process.env.OPENCODE_VERSION}`);
+  console.log(`opencode pinned at ${process.env.OPENCODE_VERSION}`);
+}
+docker(["build", ...buildArgs, "-t", versioned, "-t", `${REPO}:latest`, CONTEXT]);
 console.log(`\nbuilt ${versioned}`);
 console.log(`       ${REPO}:latest -> ${tag}`);
 console.log(`\nUpgrade with: agentbox box up --recreate`);
