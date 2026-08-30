@@ -10,6 +10,12 @@ ranking. Hermes/OpenClaw cells were spot-checked, not line-reverified.
 (the ranking Codex + Grok-1 absorbed) against the same four host files plus
 `remember.ts`; fact-check, attack the corrected ranking, find what Codex
 never saw because it reviewed v1.
+**Grok round 3: complete** (in-session, 2026-08-29). Adversarial review of
+the v3 P0 implementation (`67051ec`..`ff789b9`): pending validation,
+pinned survivors, mechanical anchors, summary routing, complete-request
+preflight. Attacks the API shape of pinned entries, token accounting,
+anchor regex, EMA contamination, retry cost, and whether each item
+closes the finding it cites.
 
 The headline: the analysis was **factually stale about our own code** in three
 places, ranked its gaps on those stale facts, and the review found three real
@@ -494,3 +500,274 @@ audit; delete the `rebuildVolatile` comment.
 Accepted into docs/24 in place: §4 behind #3 (drop the screenshot
 story), the ahead/behind list, and the §5 ranking/prescriptions.
 §1 left standing. Hermes/OpenClaw §2–§3 still not re-cited.
+
+---
+
+## Grok round 3 — attacking the v3 P0 implementation
+
+Range `67051ec`..`ff789b9` (exclusive left in git; the batch itself is
+`67051ec` `eef7758` `449270c` `8010f30` `dbf9cd0` `b7b3741`, plus the
+docs commit). Tree as read: `compaction.ts`, `turn.ts`, `provider.ts`,
+`orchestrator.ts`, the two test files. Not a re-review of v1/v2 prose.
+
+Headline: **one of five is closed, three are partial, and the remaining
+docs/23 vehicle (pinned survivors) is untested at the request boundary
+and illegal on the Anthropic wire in the exact CUA case it was built
+for.** Docs/24 v3's "all six shipped" overclaims.
+
+### 1. Pinned survivors — `choosePinnedEntries` / `SummaryEntry.pinned`
+
+Commit `449270c`, docs/24 v3 P0 #2. Cut does not move; copies ride on
+the summary and are expanded in `historyToMessages` (`turn.ts:834-845`)
+before `repairPairs`.
+
+#### Adjacent roles (the shape the request actually sends)
+
+`historyToMessages` emits, in order: summary (`role: "user"`), then each
+pinned entry as its own message, then the tail. `choosePinnedEntries`
+puts a plain user first when the tail has none, then assistant/user
+pairs. Two junctions:
+
+**A. The docs/23 case, and the one the unit test asserts.** Tail is
+pure CUA (no plain user) → pin the ask. Assembly is:
+
+```
+user: [summary text]
+user: [pinned ask]          ← two user messages
+assistant: [pinned tool_use]
+user: [pinned results]
+assistant: [tail CUA]
+```
+
+That is the fixture in `compaction.test.ts:617-629`. It never goes
+through `historyToMessages`. Anthropic Messages rejects consecutive
+user roles. MiniMax rides the OpenAI wire, which emits two `role:
+"user"` chat messages and typically allows it — untested either way.
+`repairPairs` *knows* consecutive users are a problem (`compaction.ts:
+1020-1021` refuses to invent a second user when extending results) and
+then does nothing at the summary|ask junction.
+
+**B. Tail already has a user, so no ask is pinned, but a tool pair
+is.** `pinned results` is `role: "user"`; tail starts with a user
+("继续" in the same test). Assembly:
+
+```
+user: [summary]
+assistant: [pinned call]
+user: [pinned results]
+user: [tail ask]
+```
+
+Another consecutive-user join. Same test covers the *selection*, not
+the assembly.
+
+On the OpenAI wire (`openai-wire.ts:117-150`) tool_result blocks become
+`role: "tool"`, so junction B is probably legal on MiniMax (`assistant
+→ tool → user`). Junction A remains two users. Production is MiniMax;
+Anthropic is a supported provider; neither path is tested.
+
+#### Pair integrity and `repairPairs`
+
+Pinned pairs *are* a blocks entry immediately followed by a results
+entry, errors skipped, ids copied from the summarised range (unique in
+the request because the originals are behind `covers`). `repairPairs`
+will invent `UNRECORDED_RESULT` for any tool_use in the copied
+assistant blocks that the results don't answer — and that invented
+user-message *is* a schema exemplar MiniMax can imitate, teaching the
+crash-recovery sentence as a `computer` result. They do not check that
+every `tool_use_id` is present before pinning.
+
+A multi-tool assistant is pinned whole if *any* name is missing from
+the tail (`names.every(...)` at `compaction.ts:409`). A `computer`+
+`bash` turn whose tail already shows `bash` still re-injects both
+calls. Harmless extra tokens, extra imitation surface.
+
+`repairPairs` does not merge consecutive users, does not drop extra
+`tool_result` ids, and is the last function before the request.
+Pinning relies on it for completeness and gets no help on roles.
+
+#### `estimateTokens` on pinned — not a double-count of originals
+
+`activeWindow` drops the covered prefix, so the originals and the
+pinned copies are not both in the window. `estimateTokens` on a
+summary does `chars += estimateTokens(pinned) * CHARS_PER_TOKEN`
+(`compaction.ts:171`) — a token→char→token round trip with an extra
+`Math.ceil` and with pinned image tokens folded in as fake characters.
+Not a double-count. A miss, however: `pendingIsUsable` weighs
+`active.slice(pending.covers)` and never the summary or the pinned
+copies that adoption will insert (see §2).
+
+Dispatch accounting (`estimateRequestTokens` → `estimateMessageTokens`)
+sees the *expanded* messages after `historyToMessages`, so the request
+that actually goes out is counted once, correctly, at that site.
+
+#### Does this close P0 #2 / docs/23?
+
+**Partial, and the untested half is the half that matters.** They did
+not cut at the newest user (round 2's recreation hazard). Last user /
+last assistant stay in the tail by construction of `chooseCutPoint`
+walking from the end. Schema insurance is a copied successful pair,
+call shape intact, result trimmed to 200 chars, cap 3 tools — the
+right *idea* for MiniMax imitation. They did not change summary
+`role: "user"`. They never assemble the pinned list into API messages
+in a test. On Anthropic, the primary CUA fixture is an illegal
+request; on MiniMax it is two user messages and a hope.
+
+### 2. Pending token-validate and refresh — `pendingIsUsable`
+
+Commit `67051ec` (+ `eef7758` test fixture). Cited as closing Codex #3
+and Grok-2's `has` freeze.
+
+What it actually checks (`compaction.ts:935-950`): window didn't
+shrink; uncovered *entry* count ≤ `maxEntries`; `estimateTokens(tail)
+≤ triggerTokens`.
+
+What round 2 required: `estimateTokens([summary, …tail])`; coverage
+must match the current cut; drop the `has` freeze so a 75% cut cannot
+be adopted at 99%.
+
+| Requirement | Code |
+| --- | --- |
+| Tail tokens vs trigger | Yes. Codex #3's enormous-steering case is rejected. |
+| `[summary, pinned, …tail]` vs trigger | **No.** Adoption can still go out over budget by the summary (~the 400-word body plus up to 2k of anchors) plus pinned pairs. |
+| `covers` matches current `cut.index` | **No.** A usable 75% summary is adopted with `covers` from the background cut while `choosePinnedEntries` is given `olderEntries = active.slice(0, currentCut)` and `tail = active.slice(currentCut)` (`turn.ts:770`). Pinned against a tail the request will not have; the unsummarised middle (covers…currentCut) is in the window and may already demonstrate the tool they just pinned. |
+| Refresh in the background band | **Dead for tokens.** In `background`, `total < trigger`, so `estimateTokens(tail) < total < trigger`. `pendingIsUsable` therefore stays true for the whole 75→99% approach. The background branch's "replaced when stale" (`turn.ts:738`) only fires on shrink. The first 75% cut is still frozen until `now`; at `now` they recompute if the tail is over trigger. That *is* the unbounded-adoption fix. It is not a refresh. |
+
+`eef7758` shrank the integration fixture so reuse still passes under
+the new tail-token rule — it does not test rejection at the turn
+layer, covers mismatch, or summary+pinned headroom.
+
+**Closes Codex #3 (unbounded tail by entries). Does not close Grok-2's
+refresh or `[summary,…tail]` accounting.**
+
+### 3. Mechanical anchors, heading check, retry — `extractAnchors`
+
+Commit `8010f30`, P0 #3 / Codex #4 / T5000.
+
+Harvest is on full blocks, before the 1200-char render clip. That part
+is real. Then:
+
+**Regex false positives fill the 2k cap oldest-first.**
+`/\b[0-9a-f]{7,40}\b/` matches `decades`, `defaced`, `accessed`,
+`1000000`, any 7+ digit number, any 7+ hex word. `/\bt\d{1,5}\b/`
+matches `t1`…`t99999` in prose. Path regex is ASCII `\w` without `u`:
+CJK filenames (the T5000 class can be a Chinese path) never match.
+URLs take trailing punctuation. Scan order is the summarised prefix,
+oldest first; `ANCHOR_CHAR_CAP = 2_000` then drops the rest. A long
+CUA prefix of hex ids and token counts occupies the budget; the path
+that commissioned this item never appears. The unit test only asserts
+the happy harvest (`t42`, `/work/...`, spill pointer, a url, a hash).
+
+**Heading check is `text.includes("**Threads**")` etc.** Case-sensitive
+English markdown. MiniMax-M3 — the production model, the one that
+forgets `computer` — is likely to emit Chinese headings or
+`## Threads` or `Threads:`. Then *every* summarise retries. The retry
+is a second full-history call (`max_tokens` 4096, the 30-second
+path). If the retry is nonempty it is **accepted even when still
+missing headings** (`turn.ts:661-662`). Word/size cap is still only a
+prompt line; `SUMMARY_WORD_CAP` is never measured. Anchors are
+appended *after* the check, so a "valid" summary grows by up to 2k
+chars the model did not budget.
+
+**Clip was 400 → 1200, not removed.** Anchors are supposed to carry
+what the clip loses; if the cap is full of `decades`, they don't.
+
+Previous-summary-as-update-input and "history is DATA" are prompt
+text. No test.
+
+**Closes "we now append *something* outside the LLM". Does not close
+T5000 (identifier preservation) or "heading and size validation".
+Retry cost is unbounded-per-compaction on a model that does not emit
+English bold headings, which is the production model.**
+
+### 4. Routing — `summaryRuntimeFor`
+
+Commit `dbf9cd0`, P0 #6 / Codex #2 / Grok-2 three-site.
+
+Same wire (label + baseUrl + keyEnv) reuses the primary client;
+different wire mints and caches. `summarise`, Rememberer construction,
+and `askCheaply` all go through it. Cross-provider test exists.
+Missing key on an OpenAI-wire provider throws at Rememberer
+construction (`clientFor`); a *wrong* key mints and fails on first
+use — "fails at startup" is overclaimed for the bad-credential case.
+
+Rememberer still binds `this.provider` at orchestrator construction,
+not the per-agent runtime `turn.ts` uses. Fine while there is one
+provider; a later per-agent split reopens the drift.
+
+**Closes the three-site client/profile split.** Latent on default
+MiniMax, as round 2 said.
+
+### 5. Complete-request preflight and EMA — `estimateRequestTokens` / `noteRealInputTokens`
+
+Commit `b7b3741`, P0 #5 / Codex #5.
+
+`estimateRequestTokens` does count system + tool schemas + messages
+and names `floor`. Dispatch (`turn.ts:1366-1376`) warns once if
+`floor > trigger` and runs image prune on the *calibrated* total.
+`compactionUrgency` is still history-only and still the only thing
+that starts a summary. Floor + history over trigger with nothing to
+prune still sends. The incompressible-floor *detection* is there; the
+"rejected request without compaction" path is not closed unless the
+overflow happens to be images.
+
+Calibration: `noteRealInputTokens(wire, requestEstimate.total, real)`
+with wire = `label|baseUrl`, EMA 0.7/0.3, clamp 0.25–4. Two poisons:
+
+1. **Estimate is pre-prune, real is post-prune.** `shouldPruneImages`
+   mutates `messages` after `requestEstimate` is snapped
+   (`turn.ts:1366-1378`); `noteRealInputTokens` still gets the
+   unpruned total (`turn.ts:1586-1589`). Every CUA prune teaches
+   `real/estimate < 1`. Next round underestimates, prunes later,
+   overflows more. This is the production computer-use loop.
+2. **Anthropic cache (not MiniMax today).** `input_tokens` is the
+   uncached slice; `cache_read_input_tokens` is recorded for billing
+   and ignored here. A cache-hit round swings the factor down.
+
+`compactHistory` still uses uncalibrated `estimateTokens`. Dispatch is
+calibrated, compaction is not — split brain on the same request.
+`windowByModel` is still keyed by bare model name.
+
+**Closes "we now see the floor at dispatch" and "we now have a wire
+key". Does not close "preflight the complete request so compaction
+fires before send" and the EMA is biased on the path that needs it.**
+
+### Closure table (v3 P0 vs the finding it cites)
+
+| P0 | Cited finding | Closed? |
+| --- | --- | --- |
+| #2 pinned survivors / schema insurance | docs/23 MiniMax format loss; Grok-2 "transcript layer, not cut-at-last-user" | **Partial.** Cut did not move (good). Exemplars selected (good). Assembly untested; consecutive users on Anthropic in the CUA fixture; summary still `role: "user"`. |
+| #3 anchors + validation | Codex #4, T5000 paths | **Partial.** Full-block harvest exists. Cap is oldest-first and regex-noisy; headings are English `includes`; size never checked; retry accepts malformed; 400→1200 not "do not clip". |
+| #4 pending token + refresh | Codex #3; Grok-2 refresh / `[summary,…tail]` / covers match | **Partial.** Tail-token reject is real. Refresh in-band is dead. Adoption undercounts summary+pinned. Covers need not match the current cut; pinning then uses the wrong tail. |
+| #5 complete-request preflight | Codex #5 | **Partial.** Floor is named at dispatch. Compaction still history-only. EMA trained on the wrong snapshot. |
+| #6 `summaryRuntimeFor` at three sites | Codex #2, Grok-2 widening | **Yes**, for the split. Startup-fail overclaimed for a present-but-wrong key. |
+
+### What the tests do not cover (and so did not catch this)
+
+- `historyToMessages` + pinned + `repairPairs` (no role-alternation
+  assertion, no OpenAI-wire round trip)
+- `pendingIsUsable` with a heavy *summary* or pinned list
+- covers mismatch at adoption
+- `extractAnchors` on hex words / 7-digit numbers / CJK paths / cap
+  overflow
+- heading retry (stub always emits English `**Threads**`)
+- `noteRealInputTokens` after `pruneOldImages`
+- dispatch path that is over trigger with `floor` under trigger and
+  no images
+
+### Suggested next cut (not implemented here)
+
+1. Pin into a *role-safe* slot: fold the ask into the summary's user
+   text; insert tool pairs only where `assistant → (tool_result user)`
+   is legal on both wires; test through `historyToMessages` and
+   `toOpenAIRequest`.
+2. `pendingIsUsable`: estimate `[summaryEntry, …pinned, …tail]`;
+   require `covers === cut.index` or recompute; refresh the pending
+   work when the current cut moves, not only when the tail overflows.
+3. Anchors: drop the hex-word matcher or require a path/hash context;
+   newest-first under the cap; Unicode paths; actually measure the
+   word cap; do not retry-and-accept on MiniMax heading drift — skip
+   the English check or accept the first draft and trust the appendix.
+4. EMA: feed the estimate of the request that was *sent* (post-prune);
+   add cache-read tokens on Anthropic; run compaction urgency on the
+   calibrated complete request, not just warn.

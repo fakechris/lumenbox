@@ -33,6 +33,7 @@ DEFAULT_POLICY,
   trimInputLeaves,
   extractAnchors,
   missingSummaryHeadings,
+  pendingHasDrifted,
   pendingIsUsable,
   SUMMARY_WORD_CAP,
   pruneOldImages,
@@ -687,7 +688,7 @@ test("anchors are harvested from full blocks, deduped, and bounded", () => {
 
   // Validation: the headings are a check now, not a request.
   assert.deepEqual(missingSummaryHeadings("**Threads** a **Done** b **State** c **Artifacts** d"), []);
-  assert.deepEqual(missingSummaryHeadings("**Threads** only"), ["**Done**", "**State**", "**Artifacts**"]);
+  assert.deepEqual(missingSummaryHeadings("**Threads** only"), ["Done", "State", "Artifacts"]);
 });
 
 test("a summary provider on the same wire reuses the primary client; a different wire gets its own", () => {
@@ -769,4 +770,31 @@ test("anchors keep relative paths whole and hex noise cannot crowd out paths", (
   assert.ok(anchors.includes("docs/24-context-memory.md"));
   assert.ok(!anchors.includes("/host/turn.ts"), "no mangled suffix");
   assert.ok(anchors.filter(a => /^[0-9a-f]+$/.test(a)).length <= 8, "hex capped per category");
+});
+
+test("grok round 3: heading dialects pass, shapeless drafts fail, drift is visible", () => {
+  // Tolerant recognition: the production model's dialects all count.
+  assert.deepEqual(missingSummaryHeadings("## Threads\nx\n## Done\ny\n## State\nz\n## Artifacts\nnone"), []);
+  assert.deepEqual(missingSummaryHeadings("threads: a\nDONE: b\nstate: c\nartifacts: none"), []);
+  assert.equal(missingSummaryHeadings("just prose").length, 4);
+
+  // Hex must look like a hash, not a word or a number.
+  const at = "2026-08-29T00:00:00Z";
+  const noise = extractAnchors([{ role: "user", text: "defaced 1000000 accessed 4611851ab", at }]);
+  assert.ok(noise.includes("4611851ab"));
+  assert.ok(!noise.includes("defaced") && !noise.includes("1000000"), "words and numbers are not commits");
+
+  // URLs shed trailing punctuation; CJK paths match whole.
+  const cjk = extractAnchors([{ role: "user", text: "见 (https://x.cn/a), 写入 docs/纪要/会议.md", at }]);
+  assert.ok(cjk.includes("https://x.cn/a"));
+  assert.ok(cjk.includes("docs/纪要/会议.md"));
+
+  // Drift: a pending whose uncovered tail outgrew twice the tail budget is worth
+  // recomputing even while still strictly usable.
+  const policy: CompactionPolicy = { triggerTokens: 10_000, keepTailTokens: 200, maxEntries: 320 };
+  const grown = Array.from({ length: 12 }, (_, i) => ({ role: "user" as const, text: "y".repeat(200), at: `${i}${at}` }));
+  const pending = { covers: 2, computedFrom: 4, promise: Promise.resolve(undefined) };
+  assert.equal(pendingIsUsable(pending, grown, policy), true, "still usable");
+  assert.equal(pendingHasDrifted(pending, grown, policy), true, "but drifted");
+  assert.equal(pendingHasDrifted({ ...pending, covers: 11 }, grown, policy), false);
 });

@@ -39,6 +39,7 @@ import {
   activeWindow,
   buildSummaryPrompt,
   compactionUrgency,
+  pendingHasDrifted,
   pendingIsUsable,
   type PendingSummary,
   estimateMessageTokens,
@@ -56,6 +57,7 @@ import {
   extractAnchors,
   missingSummaryHeadings,
   estimateTokens,
+  SUMMARY_WORD_CAP,
   summaryEntry,
   type HistoryEntry,
   type SummaryEntry,
@@ -646,22 +648,31 @@ async function summarise(
   };
 
   let text = await ask();
-  // The four headings were a request; this is the check (docs/24 v3 P0 #3). One
-  // corrective retry — a missing section is usually a lazy pass, not an inability —
-  // and a still-malformed second answer is accepted with a loud log rather than
-  // thrown away: the mechanical anchors and pinned entries below carry the exact
-  // facts either way, and a flawed narrative beats a dropped-history marker.
-  if (text !== "" && missingSummaryHeadings(text).length > 0) {
+  // The four headings were a request; this is the check (docs/24 v3 P0 #3), tuned by
+  // Grok round 3 for the production model: MiniMax writes `## Threads` or Chinese
+  // heading dialects, and a strict English-bold check would retry — and pay a full
+  // second history pass — on *every* compaction. The check is tolerant (any casing,
+  // ## or bold or bare-colon), and the retry fires only when the draft is genuinely
+  // shapeless: fewer than two of the four sections recognisable. A still-flawed
+  // second answer is accepted with a loud log — the mechanical anchors and pinned
+  // entries carry the exact facts either way, and a flawed narrative beats a
+  // dropped-history marker.
+  if (text !== "" && missingSummaryHeadings(text).length > 2) {
     const missing = missingSummaryHeadings(text).join(", ");
-    console.error(`[compaction] summary missing ${missing}; asking once more`);
+    console.error(`[compaction] summary is shapeless (missing ${missing}); asking once more`);
     const retry = await ask(
       `\n\nYour previous attempt was missing the required heading(s): ${missing}. ` +
         `Produce the summary again with all four headings present.`
     );
-    if (retry !== "" && missingSummaryHeadings(retry).length === 0) text = retry;
-    else if (retry !== "") text = retry;
+    if (retry !== "") text = retry;
   }
   if (!text) return undefined;
+  // The word cap is measured, not merely requested: an unbounded narrative is the
+  // compounding-summary failure shape. Twice the cap allows headings and anchors room.
+  const words = text.split(/\s+/);
+  if (words.length > SUMMARY_WORD_CAP * 2) {
+    text = `${words.slice(0, SUMMARY_WORD_CAP * 2).join(" ")}\n[summary truncated at the mechanical cap]`;
+  }
 
   // Exact strings, harvested from the full blocks before any rendering clip and
   // appended outside the model's output — a model paraphrases, a regex does not.
@@ -746,7 +757,11 @@ async function compactHistory(options: {
     // first 75%-band summary forever — the history marched on to 99% while the pending
     // still described the world at 75%, and adoption then kept an unbounded tail.
     const existing = pendingSummaries.get(summaryKey);
-    if (existing === undefined || !pendingIsUsable(existing, active, policy)) {
+    if (
+      existing === undefined ||
+      !pendingIsUsable(existing, active, policy) ||
+      pendingHasDrifted(existing, active, policy)
+    ) {
       log(
         `pre-summarising ${cut.index} entries in the background on ${summaryProvider.model}; ` +
           `this turn proceeds uncompacted`
@@ -873,6 +888,30 @@ function historyToMessages(
   while (window.length > 0 && "kind" in window[0]! && window[0]!.kind === "results") {
     window.shift();
   }
+  // Declared here, used at the bottom: consecutive same-role messages are merged into
+  // one content array (Grok round 3: the summary, a pinned ask, pinned results and a
+  // tail user message can land adjacent, and the Anthropic wire rejects consecutive
+  // user roles — one message holding text and tool_result blocks together is legal on
+  // both wires, so merging is the shape-safe answer for every junction at once).
+  const mergeAdjacent = (list: Anthropic.MessageParam[]): Anthropic.MessageParam[] => {
+    const merged: Anthropic.MessageParam[] = [];
+    for (const message of list) {
+      const previous = merged[merged.length - 1];
+      if (previous === undefined || previous.role !== message.role) {
+        merged.push(message);
+        continue;
+      }
+      const blocksOf = (m: Anthropic.MessageParam): Anthropic.ContentBlockParam[] =>
+        typeof m.content === "string"
+          ? [{ type: "text", text: m.content }]
+          : (m.content as Anthropic.ContentBlockParam[]);
+      merged[merged.length - 1] = {
+        role: previous.role,
+        content: [...blocksOf(previous), ...blocksOf(message)],
+      };
+    }
+    return merged;
+  };
   // A trailing call with no results is *kept*, not dropped. It used to be popped, because a request
   // ending in an unpaired `tool_use` is rejected — but pairing is now repaired below, and popping it
   // deleted the one piece of evidence a resumed turn most needs: the action that was in flight when
@@ -905,7 +944,7 @@ function historyToMessages(
   // Last, over the assembled request rather than over the entries: an unpaired call does not
   // degrade a turn, it ends every future turn for this agent, so the guarantee belongs at the point
   // the request is actually made.
-  return repairPairs(messages);
+  return mergeAdjacent(repairPairs(messages));
 }
 
 /**

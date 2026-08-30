@@ -439,6 +439,13 @@ export function choosePinnedEntries(
     if (names.every(name => toolsInTail.has(name) || chosen.has(name))) continue;
     const anyError = next.blocks.some(block => (block as { is_error?: boolean }).is_error === true);
     if (anyError) continue;
+    // Every call answered, or this is no exemplar: repairPairs would invent an
+    // "outcome unknown" result for the orphan, and that sentence would then *be* the
+    // in-context example a weak model imitates (Grok round 3).
+    const answered = new Set(
+      next.blocks.map(block => (block as Anthropic.ToolResultBlockParam).tool_use_id)
+    );
+    if (!calls.every(call => answered.has(call.id))) continue;
 
     const trimmedResults: Anthropic.ToolResultBlockParam[] = next.blocks.map(block => ({
       ...(block as Anthropic.ToolResultBlockParam),
@@ -519,13 +526,18 @@ export function extractAnchors(entries: readonly HistoryEntry[]): string[] {
     // boundary so `src/host/turn.ts` is captured whole, never mangled into a
     // false-exact `/host/turn.ts` (verification review, finding 6).
     for (const match of text.matchAll(
-      /(?<=^|[\s"'\`(=:,[])((?:~?\/)?(?:[\w.@-]+\/)+[\w.@-]+\.[\w]+)/gm
+      /(?<=^|[\s"'`(=:,[])((?:~?\/)?(?:[\w.@\u4e00-\u9fff-]+\/)+[\w.@\u4e00-\u9fff-]+\.[\w]+)/gmu
     ))
       take(match[1]!, "path");
     for (const match of text.matchAll(/\bt\d{1,5}\b/g)) take(match[0], "id");
-    for (const match of text.matchAll(/https?:\/\/\S+/g)) take(match[0], "url");
-    // Hex last and lowest-capped: 7-40 hex chars is also what random noise looks like.
-    for (const match of text.matchAll(/\b[0-9a-f]{7,40}\b/g)) take(match[0], "hex");
+    for (const match of text.matchAll(/https?:\/\/\S+/g))
+      take(match[0].replace(/[)\]}>,.;'"]+$/, ""), "url");
+    // Hex last and lowest-capped — and it must contain both a digit and a letter:
+    // "defaced" is seven hex letters, "1000000" is seven hex digits, and neither is a
+    // commit (Grok round 3's false-positive sweep).
+    for (const match of text.matchAll(/\b[0-9a-f]{7,40}\b/g)) {
+      if (/[0-9]/.test(match[0]) && /[a-f]/.test(match[0])) take(match[0], "hex");
+    }
   };
   for (const entry of entries) {
     if (!("kind" in entry)) {
@@ -556,11 +568,25 @@ export function extractAnchors(entries: readonly HistoryEntry[]): string[] {
 }
 
 /** The headings the summary prompt demands. A prompt is a request; this is the check. */
-export const SUMMARY_HEADINGS = ["**Threads**", "**Done**", "**State**", "**Artifacts**"] as const;
+export const SUMMARY_HEADINGS = ["Threads", "Done", "State", "Artifacts"] as const;
 
-/** Which required headings a produced summary is missing. Empty means well-formed. */
+/**
+ * Which required headings a produced summary is missing. Empty means well-formed.
+ * Tolerant on purpose (Grok round 3): the production model writes `## Threads`,
+ * `**threads**` or `Threads:` as its mood takes it, and a strict check would buy a
+ * full-history retry on every compaction. Recognised: bold, ##-style, or a line
+ * starting with the word and a colon, any casing.
+ */
 export function missingSummaryHeadings(text: string): string[] {
-  return SUMMARY_HEADINGS.filter(heading => !text.includes(heading));
+  const lower = text.toLowerCase();
+  return SUMMARY_HEADINGS.filter(heading => {
+    const word = heading.toLowerCase();
+    return (
+      !lower.includes(`**${word}**`) &&
+      !new RegExp(`^#{1,4}\\s*${word}\\b`, "m").test(lower) &&
+      !new RegExp(`^\\s*${word}\\s*[:：]`, "m").test(lower)
+    );
+  });
 }
 
 /**
@@ -1004,6 +1030,22 @@ export function pendingIsUsable(
   // And it must fit under the token trigger, or adoption does not bound the request at all.
   if (estimateTokens(active.slice(pending.covers)) > policy.triggerTokens) return false;
   return true;
+}
+
+/**
+ * Whether a pending summary has drifted far enough to be worth recomputing while
+ * still *usable* (Grok round 3: the strict check stays true through the whole
+ * 75→99% approach, so the first background cut froze in practice). Drift means the
+ * uncovered tail has outgrown twice the tail budget — the adopted window would be
+ * dominated by unsummarised middle. Bounded churn: at most one recompute per
+ * doubling, not one per turn.
+ */
+export function pendingHasDrifted(
+  pending: PendingSummary,
+  active: readonly HistoryEntry[],
+  policy: CompactionPolicy
+): boolean {
+  return estimateTokens(active.slice(pending.covers)) > policy.keepTailTokens * 2;
 }
 
 /**
