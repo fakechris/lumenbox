@@ -50,12 +50,16 @@ the log survives as forensics; a steering message queues and lands between
 wait chunks, and the one-shot engine cannot be steered mid-flight — the
 supervising agent compensates post-hoc. That last gap is E3's question.
 
-**E3 — ACP probe.** Run opencode (and pi, which is on the host with its jiti
-extension system) in whatever server/ACP mode each offers; drive one edit
-session programmatically; compare against E2's CLI-run on interruption
-granularity, streaming visibility, and steering. The question: does ACP buy
-enough control to justify a second integration face, or is
-`bash background + Jobs` already the right altitude?
+**E3 — ACP probe. DONE 2026-08-30**, measurements in
+`research/workbuddy/E3-acp-probe.md`. The pinned opencode ships both `acp`
+and `serve`; probed the HTTP face. Session mode buys real control, measured:
+token-level SSE streaming, mid-flight steering that landed in the code,
+abort in 33ms (vs 60s wait chunks), and a session that survives abort with
+full context. Verdict: `bash background + Jobs` stays right for
+fire-and-forget; supervised delegation is worth the session face — one flag
+away in the same pinned binary, `run` changes and nothing else. Deferred
+behind E4/E5 and the docs/13 rule; pi was not probed (host-side, different
+game).
 
 **E4 — the first workbuddy preset.** Pick one domain the installation already
 lives in (candidate: 飞书办公 — the lark-cli skills, document/meeting/table
