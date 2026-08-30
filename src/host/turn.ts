@@ -69,7 +69,7 @@ import type { McpManager } from "./mcp.ts";
 import { TOOL_BUDGET_WARNING } from "./mcp.ts";
 import { narrowTools } from "./scopes.ts";
 import { conversationIdFor, MAIN_CONVERSATION } from "../agents/registry.ts";
-import { resolveSummaryProvider } from "./provider.ts";
+import { summaryRuntimeFor } from "./provider.ts";
 import type { Effort, ProviderProfile } from "./provider.ts";
 
 /**
@@ -719,7 +719,10 @@ async function compactHistory(options: {
   const cut = chooseCutPoint(active, policy, { force: urgency === "background" });
   if (!cut) return history;
   const olderEntries = active.slice(0, cut.index);
-  const summaryProvider = resolveSummaryProvider(provider);
+  // Profile and client resolved together (docs/24 v3 P0 #6): a summary provider that
+  // names another endpoint gets its own client instead of riding the primary's wire.
+  const summaryRuntime = summaryRuntimeFor(provider, client);
+  const summaryProvider = summaryRuntime.profile;
 
   if (urgency === "background") {
     // Start it and walk away. Nothing here is awaited, and a failure is swallowed on purpose: this
@@ -737,7 +740,7 @@ async function compactHistory(options: {
       pendingSummaries.set(summaryKey, {
         covers: cut.index,
         computedFrom: active.length,
-        promise: summarise(olderEntries, cut.index, client, summaryProvider, meter).catch(() => undefined),
+        promise: summarise(olderEntries, cut.index, summaryRuntime.client, summaryProvider, meter).catch(() => undefined),
       });
     }
     return history;
@@ -755,7 +758,7 @@ async function compactHistory(options: {
         log(`used the summary prepared in the background (${pending!.covers} entries)`);
       }
     }
-    const produced = ready ?? (await summarise(olderEntries, cut.index, client, summaryProvider, meter));
+    const produced = ready ?? (await summarise(olderEntries, cut.index, summaryRuntime.client, summaryProvider, meter));
     if (produced === undefined) throw new Error("the summariser returned no text");
     entry = produced;
     // Pinned verbatim survivors are chosen at adoption, against the tail that will

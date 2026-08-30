@@ -41,7 +41,7 @@ import { Scheduler } from "./schedule.ts";
 import { UsageLog } from "./usage.ts";
 import {
   createClient,
-  resolveSummaryProvider,
+  summaryRuntimeFor,
   resolveProvider,
   effectiveProviderFor,
   type Effort,
@@ -460,10 +460,13 @@ export class Orchestrator {
     this.registry = options.registry ?? new AgentRegistry();
     this.provider = options.provider ?? resolveProvider();
     this.client = options.client ?? createClient(this.provider);
+    // The Rememberer gets the *paired* summary runtime — the same review finding as
+    // compaction: a profile naming another provider must not ride the primary client.
+    const remembererRuntime = summaryRuntimeFor(this.provider, this.client);
     this.rememberer = new Rememberer({
       registry: this.registry,
-      client: this.client,
-      provider: resolveSummaryProvider(this.provider),
+      client: remembererRuntime.client,
+      provider: remembererRuntime.profile,
       log: line => console.error(`[memory] ${line}`),
       usage: this.usage,
     });
@@ -765,8 +768,8 @@ export class Orchestrator {
    */
   private async askCheaply(agent: AgentRecord, prompt: string): Promise<string | undefined> {
     try {
-      const profile = resolveSummaryProvider(this.provider);
-      const response = await this.client.messages.create({
+      const { client, profile } = summaryRuntimeFor(this.provider, this.client);
+      const response = await client.messages.create({
         model: profile.model,
         max_tokens: Math.min(512, profile.maxTokens),
         messages: [{ role: "user", content: prompt }],

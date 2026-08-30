@@ -484,6 +484,41 @@ export function createClient(profile: ProviderProfile): Anthropic {
 }
 
 /**
+ * The client to reach a summary profile through, resolved *with* the profile.
+ *
+ * The 2026-08-29 review's finding: summarisation resolved a profile that could name a
+ * different provider, then called it through the primary client — wrong endpoint,
+ * wrong credential the day `AGENTBOX_SUMMARY_PROVIDER` points at another company.
+ * Latent on the default MiniMax, where no cheaper mapping exists and the profile is
+ * the agent's own; live the moment anyone configures the split. The same divergence
+ * existed at all three cheap-call sites (compaction, memory extraction, selection),
+ * which is why this resolves both halves in one place and the call sites can no
+ * longer drift apart. Cached per endpoint, minted on first divergent use — which for
+ * the Rememberer is orchestrator construction, so a misconfigured split fails at
+ * startup rather than mid-compaction.
+ */
+const summaryClients = new Map<string, Anthropic>();
+
+export function summaryRuntimeFor(
+  primary: ProviderProfile,
+  primaryClient: Anthropic
+): { client: Anthropic; profile: ProviderProfile } {
+  const profile = resolveSummaryProvider(primary);
+  const sameWire =
+    profile.label === primary.label &&
+    profile.baseUrl === primary.baseUrl &&
+    profile.keyEnv === primary.keyEnv;
+  if (sameWire) return { client: primaryClient, profile };
+  const key = `${profile.label}|${profile.baseUrl ?? ""}|${profile.keyEnv}`;
+  let client = summaryClients.get(key);
+  if (client === undefined) {
+    client = createClient(profile);
+    summaryClients.set(key, client);
+  }
+  return { client, profile };
+}
+
+/**
  * One real round trip, so a key is known good before it is saved.
  *
  * A cheap actual request rather than a HEAD or a models listing, because compatible

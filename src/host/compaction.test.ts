@@ -10,7 +10,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import type Anthropic from "@anthropic-ai/sdk";
-import { resolveProvider, resolveSummaryProvider } from "./provider.ts";
+import { resolveProvider, resolveSummaryProvider, summaryRuntimeFor } from "./provider.ts";
 import {
 DEFAULT_POLICY,
   activeWindow,
@@ -684,4 +684,27 @@ test("anchors are harvested from full blocks, deduped, and bounded", () => {
   // Validation: the headings are a check now, not a request.
   assert.deepEqual(missingSummaryHeadings("**Threads** a **Done** b **State** c **Artifacts** d"), []);
   assert.deepEqual(missingSummaryHeadings("**Threads** only"), ["**Done**", "**State**", "**Artifacts**"]);
+});
+
+test("a summary provider on the same wire reuses the primary client; a different wire gets its own", () => {
+  // docs/24 v3 P0 #6 — the routing half of the review's finding 2. Same wire (the
+  // default, and every same-vendor cheaper mapping): the primary client is the
+  // client. A different wire must never be reached with the primary's credential.
+  const primary = resolveProvider("anthropic");
+  const sentinel = { marker: "primary" } as never;
+  const same = summaryRuntimeFor(primary, sentinel);
+  assert.equal(same.client, sentinel, "same wire, same client");
+
+  const previous = process.env.AGENTBOX_SUMMARY_PROVIDER;
+  try {
+    process.env.AGENTBOX_SUMMARY_PROVIDER = "minimax";
+    const split = summaryRuntimeFor(primary, sentinel);
+    assert.notEqual(split.client, sentinel, "a different wire gets its own client");
+    assert.notEqual(split.profile.label, primary.label);
+    // Cached: the second resolution reuses the minted client.
+    assert.equal(summaryRuntimeFor(primary, sentinel).client, split.client);
+  } finally {
+    if (previous === undefined) delete process.env.AGENTBOX_SUMMARY_PROVIDER;
+    else process.env.AGENTBOX_SUMMARY_PROVIDER = previous;
+  }
 });
