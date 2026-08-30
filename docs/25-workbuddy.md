@@ -61,17 +61,18 @@ away in the same pinned binary, `run` changes and nothing else. Deferred
 behind E4/E5 and the docs/13 rule; pi was not probed (host-side, different
 game).
 
-**E4 — the first workbuddy preset.** Pick one domain the installation already
-lives in (candidate: 飞书办公 — the lark-cli skills, document/meeting/table
-verbs this repo already exercises daily). Bundle: skills + the engine (if E2
-proves one) + golden acceptance tasks + a one-line install. Deliverable: a
-person says one sentence and the buddy does the domain job end to end.
-
-**E5 — the doubaowork companion crew.** Two or three persona agents as shipped
-data: name, title, persona prompt, tool allowlist, scope, built-in skills —
-e.g. 秘书 (calendar/mail/docs), 研究员 (search/read/summarise into documents),
-工程师 (E2's delegated coder). Ship as a roster preset the settings page can
-instantiate; measure a week of real use against "would the owner keep them".
+**E4 + E5 — the researcher bundle and the crew. DONE 2026-08-30** (merged:
+the bundle format is the crew's row format), run log in
+`research/workbuddy/E4-E5-crew.md`, manifests beside it. Three buddies as
+pure data — Iris 研究员, Mia 秘书, Enzo 工程师 — installed via
+`POST /api/agents` (the installer already existed), each passed its golden
+task from one sentence, in parallel, with externally verified artifacts
+(sourced ACP brief with reachable links; a morning note reflecting real
+work-dir changes; a code fix where the persona's delegate-or-DIY judgment
+showed). 飞书办公 was measured too thin for a bundle today (ReadFeishuDoc is
+docx/wiki read-only) — blocked on write-side Feishu tools or an in-box
+credential decision, recorded. The week-of-use measurement is the owner's;
+the settings-page "add this buddy" productization waits on the docs/13 rule.
 
 ## Rules of the program
 
