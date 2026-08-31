@@ -1714,7 +1714,13 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
         // page — and only the page — is buffered so the box-class sentence rides in;
         // sockets and assets stream as before. An encoded body passes through
         // untouched rather than corrupted.
-        const isPage = /\/vnc\.html/.test(path);
+        //
+        // Except when the page is the main UI's embedded iframe (embedded=1): there
+        // the same sentence already sits directly above the frame as #boxnotice, and
+        // the banner's only effect was to say it twice while covering the top of the
+        // desktop. Standalone opens — Take over, the channel's 桌面 link — keep it,
+        // because there it is the only warning on the page.
+        const isPage = wantsDesktopNotice(path);
         if (!isPage || response.headers["content-encoding"] !== undefined) {
           res.writeHead(response.statusCode ?? 502, response.headers);
           response.pipe(res);
@@ -3949,6 +3955,16 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
  * ours — and pointer-events pass through, so it labels without getting in the way.
  * An empty notice injects nothing; a page with no </body> is returned untouched.
  */
+/**
+ * Whether this desktop request is the page that should carry the box-class banner:
+ * vnc.html opened on its own. The main UI's iframe rides with embedded=1 and gets no
+ * banner — #boxnotice already says the same sentence directly above the frame, and
+ * inside it the banner only said it twice while covering the desktop's top edge.
+ */
+export function wantsDesktopNotice(path: string): boolean {
+  return /\/vnc\.html/.test(path) && !/[?&]embedded=1(?:&|$)/.test(path);
+}
+
 export function injectDesktopNotice(html: string, notice: string): string {
   if (notice === "" || !html.includes("</body>")) return html;
   const escaped = notice

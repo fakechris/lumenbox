@@ -2357,10 +2357,15 @@ function showDesktop(id) {
   $("desktoptitle").textContent = agent.name + " · d" + agent.displayIndex;
   $("full").href = agent.desktopUrl;
   $("full").style.display = "";
+  // The iframe rides with embedded=1 so the proxy skips the box-class banner:
+  // #boxnotice already says the same sentence right above this frame, and inside
+  // the frame the banner only covered the desktop's top edge. Take over keeps the
+  // plain URL — standalone, the banner is the only warning on the page.
+  var embeddedUrl = agent.desktopUrl + "&embedded=1";
   // Only reload when it is a different desktop: re-setting src restarts noVNC and
   // flashes "Connecting…", so switching back and forth must not thrash it.
-  if ($("vnc").getAttribute("src") !== agent.desktopUrl) {
-    $("vnc").setAttribute("src", agent.desktopUrl);
+  if ($("vnc").getAttribute("src") !== embeddedUrl) {
+    $("vnc").setAttribute("src", embeddedUrl);
   }
 }
 
