@@ -522,7 +522,7 @@ test("a session grant covers repeats but dies with the process; always survives 
   const { gate, restart, cleanup } = fixture({ approvalRequiredCommands: ["deploy"] });
   try {
     // Session: ask, grant for the session, and the identical action stops asking.
-    let decision = gate.check(toolRequest("deploy staging"));
+    const decision = gate.check(toolRequest("deploy staging"));
     assert.ok(!decision.allow && decision.approval !== undefined);
     assert.ok(gate.grant(decision.approval.id, "user", "session"));
     assert.ok(gate.check(toolRequest("deploy staging")).allow);

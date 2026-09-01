@@ -663,7 +663,7 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
     // chat). The takeover page itself carries the box-class banner, so the
     // shared-box sentence arrives with the screen.
     desktopUrl: (agentName, adapterName) => {
-      let agent;
+      let agent: ReturnType<typeof registry.resolve> | undefined;
       try {
         agent = agentName !== undefined ? registry.resolve(agentName) : registry.list()[0];
       } catch {
@@ -843,7 +843,7 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
     },
     log: line => log(line),
     ask: async (agentName, text, identity, chatKey, onProgress, threadKey, taskId) => {
-      let agent;
+      let agent: ReturnType<typeof registry.resolve> | undefined;
       if (agentName !== undefined) {
         try {
           agent = registry.resolve(agentName);
@@ -1259,8 +1259,6 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
       if (status !== undefined) channels.syncTaskCard(task.id, status);
     });
   });
-
-  {
     // Doors come from the channel records (docs/22 §7 item 2), loaded once at the
     // top of this function so identity links could be stamped from them. The
     // grandfathered rows — id equal to type — behave exactly like the env
@@ -1360,7 +1358,6 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
         );
       }
     }
-  }
   chats = channels;
   channels.start();
 
@@ -2864,7 +2861,7 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
             }
           }
           const wasKnown = channelRecords.some(record => record.id === id);
-          let updated;
+          let updated: ReturnType<typeof upsertChannelRecord> | undefined;
           try {
             updated = upsertChannelRecord(
               channelRecordsPath,
@@ -2967,7 +2964,7 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
           if (refusedRole("admin")) return;
           const body = await readJson(req);
           const id = String(body.id ?? "").trim();
-          let updated;
+          let updated: ReturnType<typeof upsertChannelRecord> | undefined;
           try {
             updated = removeChannelRecord(channelRecordsPath, id, registry.box.id);
           } catch (error) {

@@ -158,8 +158,8 @@ test("spend groups by principal, and unattributed work is its own group that sti
 
   const groups = log.byPrincipalSince(now - 60_000);
   const byId = Object.fromEntries(groups.map(g => [g.principal, g.totals.outputTokens]));
-  assert.equal(byId["chris"], 40, "one person's runs sum together");
-  assert.equal(byId["sam"], 50);
+  assert.equal(byId.chris, 40, "one person's runs sum together");
+  assert.equal(byId.sam, 50);
   assert.equal(byId[""], 7, "unattributed work is grouped, not dropped");
 
   // The parts sum to the whole.
@@ -199,7 +199,7 @@ test("an aside carries its principal, so a person's total is their work and not 
 
   const groups = log.byPrincipalSince(now - 60_000);
   const byId = Object.fromEntries(groups.map(g => [g.principal, g.totals.outputTokens]));
-  assert.equal(byId["chris"], 120, "the turn and its bookkeeping bill to the same person");
+  assert.equal(byId.chris, 120, "the turn and its bookkeeping bill to the same person");
   assert.equal(byId[""], 5, "work nobody drove is still its own group");
 });
 

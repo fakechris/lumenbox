@@ -765,8 +765,14 @@ test("a summary provider on the same wire reuses the primary client; a different
   assert.equal(same.client, sentinel, "same wire, same client");
 
   const previous = process.env.AGENTBOX_SUMMARY_PROVIDER;
+  const previousKey = process.env.MINIMAX_CODE_CN_API_KEY;
   try {
     process.env.AGENTBOX_SUMMARY_PROVIDER = "minimax";
+    // Minting a client for the other wire needs *a* credential; which one is not what
+    // this test is about. It used to read whatever the developer had exported, which
+    // meant the test passed here and could only fail on a machine without the key —
+    // the hermetic runner made that visible by taking the ambient environment away.
+    process.env.MINIMAX_CODE_CN_API_KEY = "test-key-not-a-real-credential";
     const split = summaryRuntimeFor(primary, sentinel);
     assert.notEqual(split.client, sentinel, "a different wire gets its own client");
     assert.notEqual(split.profile.label, primary.label);
@@ -775,6 +781,8 @@ test("a summary provider on the same wire reuses the primary client; a different
   } finally {
     if (previous === undefined) delete process.env.AGENTBOX_SUMMARY_PROVIDER;
     else process.env.AGENTBOX_SUMMARY_PROVIDER = previous;
+    if (previousKey === undefined) delete process.env.MINIMAX_CODE_CN_API_KEY;
+    else process.env.MINIMAX_CODE_CN_API_KEY = previousKey;
   }
 });
 

@@ -496,7 +496,9 @@ export function htmlToText(html: string): { title?: string; text: string } {
     .replace(/ *\n */g, "\n")
     .replace(/\n{3,}/g, "\n\n")
     .trim()
-    // Put back exactly as it was written.
+    // Put back exactly as it was written. The NUL sentinel is the point: it cannot occur
+    // in the HTML being processed, which is what makes the placeholder unambiguous.
+    // biome-ignore lint/suspicious/noControlCharactersInRegex: the control character is the sentinel
     .replace(/\u0000PRE(\d+)\u0000/g, (_match, index: string) => preserved[Number(index)] ?? "");
 
   return { ...(title !== undefined && title !== "" ? { title } : {}), text };

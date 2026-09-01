@@ -17,6 +17,12 @@ import { MAX_RESUMES, TurnLedger } from "./resume.ts";
 
 function fixture() {
   const root = mkdtempSync(join(tmpdir(), "agentbox-resume-"));
+  // The orchestrator opens several ledgers off `agentboxHome()` — the usage log first.
+  // Until the hermetic runner refused the default (2026-09-01), these tests appended to
+  // the live installation's `usage.jsonl` on every run: a passing test writing into a
+  // person's real spend record, which is the silent half of the failure resume.ts
+  // already carried a scar for.
+  process.env.AGENTBOX_HOME = root;
   const registry = new AgentRegistry(join(root, "agents"));
   const ledgerPath = join(root, "turns.jsonl");
   return {
@@ -31,7 +37,10 @@ function fixture() {
         inbox: null,
         turns: new TurnLedger(ledgerPath),
       }),
-    cleanup: () => rmSync(root, { recursive: true, force: true }),
+    cleanup: () => {
+      delete process.env.AGENTBOX_HOME;
+      rmSync(root, { recursive: true, force: true });
+    },
   };
 }
 

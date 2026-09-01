@@ -539,7 +539,7 @@ test("running one by hand is the same path, and does not consume the scheduled w
   // A rehearsal must exercise what will actually fire at 06:30 — and must not make
   // tomorrow's real run disappear because somebody tried it today.
   const prompts: string[] = [];
-  let clock = at("2026-08-20T09:00:00");
+  const clock = at("2026-08-20T09:00:00");
   const scheduler = new Scheduler({
     due: async () => [
       { slug: "brief", name: "Brief", path: "/p", schedule: scheduleOf("@every 30m"), deliver: "feishu:oc_room" },

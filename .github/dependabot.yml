@@ -1,0 +1,27 @@
+# What keeps the pins from going stale.
+#
+# The box image's base is pinned by digest (docker/box/Dockerfile) so that two builds a
+# month apart are the same base system. A pin nobody moves is a security hole that ages,
+# which is why this file exists alongside it: the pin and the thing that unfreezes it are
+# one mechanism, and shipping half of it is worse than shipping neither — the digest looks
+# deliberate while quietly getting older.
+#
+# Grouped rather than one PR per image: a base bump is reviewed and rebuilt as a unit.
+version: 2
+updates:
+  - package-ecosystem: docker
+    directory: "/docker/box"
+    schedule:
+      interval: weekly
+    groups:
+      base-images:
+        patterns: ["*"]
+
+  - package-ecosystem: npm
+    directory: "/"
+    schedule:
+      interval: weekly
+    groups:
+      # The SDKs move often and are read together when one of them breaks.
+      dependencies:
+        patterns: ["*"]

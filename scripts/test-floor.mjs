@@ -19,6 +19,7 @@
  */
 
 import { spawn } from "node:child_process";
+import { hermeticEnv } from "./test-env.mjs";
 
 /**
  * Raise this when adding tests. Lowering it needs a reason in the commit message.
@@ -39,7 +40,10 @@ const STALE_MARGIN = 40;
 const child = spawn(
   process.execPath,
   ["--experimental-transform-types", "--test", "--test-reporter=tap", "--test-timeout=30000", "src/**/*.test.ts"],
-  { stdio: ["ignore", "pipe", "inherit"] }
+  // An allowlisted environment, not this shell's: see scripts/test-env.mjs. The run
+  // must not be able to read a credential that happens to be exported here, and must
+  // not be able to reach the live installation in ~/.agentbox.
+  { stdio: ["ignore", "pipe", "inherit"], env: hermeticEnv() }
 );
 
 let output = "";

@@ -51,4 +51,11 @@ jobs:
 
       # Last, because a build failure is less informative than a type error and takes longer to read.
       - name: build
-        run: npm run build:box
+        run: npm run build
+
+      # And then: does the thing that was built actually run? `npm run build` exiting zero
+      # proved the bundler was happy, which is not the same claim — the packaged CLI died
+      # on its first import for a day because data it reads at runtime was not copied
+      # beside it, and every check above stayed green (2026-09-01, docs/27).
+      - name: release check
+        run: node scripts/release-check.mjs

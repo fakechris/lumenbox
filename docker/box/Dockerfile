@@ -2,7 +2,15 @@
 #
 # Deliberately not systemd-based: a plain entrypoint script that supervises a
 # handful of processes is easier to debug and does not need a privileged container.
-FROM debian:12-slim
+# Pinned by digest, not by tag: `debian:12-slim` moves, so two builds a month apart are
+# two different base systems and "it worked last week" stops being evidence. The tag is
+# kept in the comment because the digest says nothing to a person reading it.
+#
+# A frozen digest with nothing to unfreeze it is a slow-motion CVE, so the pairing is the
+# point: .github/dependabot.yml watches this file weekly and opens the PR that moves the
+# digest, and scripts/release-check.mjs refuses a build whose base is not pinned.
+# debian:12-slim as of 2026-09-01
+FROM debian@sha256:88200866dfff7ea7f5cbcb6ec7c8a701889efe6fe859fe64d6990e4b07ea4171
 
 ENV DEBIAN_FRONTEND=noninteractive \
     LANG=C.UTF-8 \
@@ -72,6 +80,11 @@ COPY boxd.cjs /opt/boxd/boxd.cjs
 # here, plus the browser build the web UI serves for the same reason.
 COPY hostd.mjs /opt/hostd/hostd.mjs
 COPY markdown-it.js /opt/hostd/vendor/markdown-it.js
+# Data the bundle reads at runtime, beside the bundle that reads it: the catalog resolves
+# personas and vendored skills against its own module directory, and a bundler has no way
+# to know that. Missing, the host inside the box dies on its first import — which is
+# exactly how the packaged CLI broke for a day (docs/27).
+COPY catalog-data /opt/hostd/catalog-data
 COPY entrypoint.sh /usr/local/bin/entrypoint.sh
 COPY start-display /usr/local/bin/start-display
 COPY box-chrome /usr/local/bin/box-chrome

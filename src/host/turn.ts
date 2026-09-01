@@ -42,7 +42,6 @@ import {
   pendingHasDrifted,
   pendingIsUsable,
   type PendingSummary,
-  estimateMessageTokens,
   noteContextWindow,
   policyForModel,
   repairPairs,

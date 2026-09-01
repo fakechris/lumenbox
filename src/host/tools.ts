@@ -23,7 +23,7 @@ import { canSearch, fetchPage, guardUrl, isSearchEngine, searchWeb, WebError } f
 import { describeEnvShape, envShape, looksLikeEnvFile } from "./env-shape.ts";
 import { guardShellCommand } from "./ui-automation-guard.ts";
 import { dedupeKey, validateRecord } from "./memory.ts";
-import { Claims, heldElsewhere } from "./claims.ts";
+import { type Claims, heldElsewhere } from "./claims.ts";
 import { MAIN_CONVERSATION } from "../agents/registry.ts";
 import { describeTask, isLive, isTaskStatus, TASK_STATUSES, type TaskStore } from "./tasks.ts";
 import { ABSENT, versionOf, type FileVersions } from "./files.ts";

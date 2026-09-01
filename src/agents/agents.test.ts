@@ -746,9 +746,9 @@ test("two chats to one agent are separate transcripts and separate turns", async
     for (const turn of seen) assert.equal(turn.texts.length, 1, "no cross-conversation mixing");
 
     // Each thread on disk holds only its own exchange.
-    const room = registry.readTranscript(ada.id).map((e: any) => e.text);
-    const a = registry.readTranscript(ada.id, "telegram-1").map((e: any) => e.text);
-    const b = registry.readTranscript(ada.id, "feishu-2").map((e: any) => e.text);
+    const room = registry.readTranscript(ada.id).map(entry => (entry as { text?: string }).text);
+    const a = registry.readTranscript(ada.id, "telegram-1").map(entry => (entry as { text?: string }).text);
+    const b = registry.readTranscript(ada.id, "feishu-2").map(entry => (entry as { text?: string }).text);
     assert.deepEqual(room, ["room question", "re: room question"]);
     assert.deepEqual(a, ["group A question", "re: group A question"]);
     assert.deepEqual(b, ["group B question", "re: group B question"]);
@@ -773,7 +773,7 @@ test("the main conversation keeps the original filename, so old history is the t
       join(registry.dirFor(ada.id), "conversation.jsonl"),
       "main is the original path"
     );
-    const room = registry.readTranscript(ada.id).map((e: any) => e.text);
+    const room = registry.readTranscript(ada.id).map(entry => (entry as { text?: string }).text);
     assert.deepEqual(room, ["from before conversations existed"]);
   } finally {
     cleanup();
@@ -789,12 +789,12 @@ test("two conversations of one agent run concurrently, not one after the other",
     let inFlight = 0;
     let maxInFlight = 0;
     const order: string[] = [];
-    const bus = new AgentBus(registry, async (_agent, inbound, _signal, conversation) => {
+    const bus = new AgentBus(registry, async (_agent, _inbound, _signal, conversation) => {
       inFlight += 1;
       maxInFlight = Math.max(maxInFlight, inFlight);
-      order.push(conversation + ":start");
+      order.push(`${conversation}:start`);
       await new Promise(r => setTimeout(r, 40));
-      order.push(conversation + ":end");
+      order.push(`${conversation}:end`);
       inFlight -= 1;
     });
 

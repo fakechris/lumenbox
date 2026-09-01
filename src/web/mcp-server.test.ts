@@ -18,7 +18,16 @@ import {
 async function withServer(
   tools: readonly McpServerTool[],
   tokens: ReturnType<typeof mintMcpToken>[]
-): Promise<{ call: (body: unknown, token?: string) => Promise<{ status: number; body: any }>; stop: () => Promise<void> }> {
+): Promise<{
+  // The parsed JSON body is what the assertions interrogate; naming a shape here would
+  // assert the thing under test.
+  call: (
+    body: unknown,
+    token?: string
+    // biome-ignore lint/suspicious/noExplicitAny: see above
+  ) => Promise<{ status: number; body: any }>;
+  stop: () => Promise<void>;
+}> {
   const logged: string[] = [];
   const server: Server = createServer((req, res) => {
     void handleMcpRequest(req, res, {

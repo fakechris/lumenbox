@@ -4085,7 +4085,7 @@ if (openTask) showTab("tasks");
  * Removing somebody from the roster drops them to viewer; rotating the token ends
  * every session at once. Both are said plainly here rather than discovered later.
  */
-export const LOGIN_HTML = String.raw`<!doctype html>
+export const LOGIN_HTML = `<!doctype html>
 <html lang="en">
 <head>
 <meta charset="utf-8">

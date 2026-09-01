@@ -9,13 +9,14 @@
   },
   "scripts": {
     "build": "npm run build:cli && npm run build:boxd",
-    "build:hostd": "esbuild src/cli.ts --bundle --platform=node --target=node22 --format=esm --outfile=docker/box/hostd.mjs",
-    "build:cli": "esbuild src/cli.ts --bundle --platform=node --target=node22 --format=esm --packages=external --outfile=dist/cli.js",
+    "build:hostd": "esbuild src/cli.ts --bundle --platform=node --target=node22 --format=esm --outfile=docker/box/hostd.mjs && node scripts/copy-catalog-data.mjs",
+    "build:cli": "esbuild src/cli.ts --bundle --platform=node --target=node22 --format=esm --packages=external --outfile=dist/cli.js && node scripts/copy-catalog-data.mjs",
     "build:boxd": "esbuild src/boxd/main.ts --bundle --platform=node --target=node22 --format=cjs --outfile=docker/box/boxd.cjs",
     "build:box": "npm run build:boxd && npm run build:hostd",
     "build:image": "npm run build:box && node scripts/build-image.mjs",
     "typecheck": "tsc -p tsconfig.json",
-    "test": "node --experimental-transform-types --test --test-timeout=30000 'src/**/*.test.ts'",
+    "test": "node scripts/test-floor.mjs",
+    "test:raw": "node --experimental-transform-types --test --test-timeout=30000 'src/**/*.test.ts'",
     "agentbox": "node --experimental-transform-types src/cli.ts",
     "smoke": "node --experimental-transform-types scripts/smoke.mjs",
     "lint": "biome lint src/ scripts/",
@@ -26,7 +27,8 @@
     "dist:app": "electron-builder --dir",
     "dist:mac": "electron-builder --mac",
     "dist:win": "electron-builder --win",
-    "dist:linux": "electron-builder --linux"
+    "dist:linux": "electron-builder --linux",
+    "release:check": "npm run check && npm run build && node scripts/release-check.mjs"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.117.1",

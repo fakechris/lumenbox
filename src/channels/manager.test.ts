@@ -1717,7 +1717,7 @@ test("a door added while running opens live; a name already live is refused", as
   const first = testAdapter();
   const manager = new ChannelManager({
     mayDrive: () => true,
-    ask: async (agentName) => "did it, " + (agentName || "default"),
+    ask: async (agentName) => `did it, ${agentName || "default"}`,
     log: () => {},
   });
   manager.register(first, true, "test");
@@ -1741,7 +1741,7 @@ test("「团队」answers on the wire with the door's roster; work words do not 
   const asked: string[] = [];
   const manager = new ChannelManager({
     mayDrive: () => true,
-    roster: adapterName => "roster for " + adapterName,
+    roster: adapterName => `roster for ${adapterName}`,
     ask: async (_agent, text) => { asked.push(text); return "did"; },
     log: () => {},
   });
@@ -1763,7 +1763,7 @@ test("「桌面」answers with the door's default agent's desktop link; work wor
   const manager = new ChannelManager({
     mayDrive: () => true,
     defaultAgentFor: () => "Bob",
-    desktopUrl: agentName => "desktop of " + (agentName || "?"),
+    desktopUrl: agentName => `desktop of ${agentName || "?"}`,
     ask: async (_agent, text) => { asked.push(text); return "did"; },
     log: () => {},
   });

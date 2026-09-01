@@ -782,7 +782,7 @@ export function compactSharedShardLines(
     if (live.has(record)) return true;
     if (record.kind !== "retraction") return false;
     const times = killable.get(dedupeKey(record.text));
-    return times !== undefined && times.some(at => at < record.at);
+    return times?.some(at => at < record.at) === true;
   };
 
   const out = new Map<string, string[]>();

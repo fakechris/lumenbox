@@ -128,7 +128,26 @@ export const DEFAULT_CONFIG: AgentboxConfig = {
 const MAX_ACTIVITY_LIMIT = 20_000;
 
 export function agentboxHome(): string {
-  return process.env.AGENTBOX_HOME ?? join(homedir(), ".agentbox");
+  const named = process.env.AGENTBOX_HOME;
+  if (named !== undefined && named !== "") return named;
+  // Under test, the default is refused rather than returned.
+  //
+  // This machine runs a live installation out of ~/.agentbox — agents, channel
+  // records, ledgers a person's conversations depend on — and a test that reaches the
+  // default writes into it. That has happened here before (resume.ts carries the scar:
+  // "how a sibling of this file wrote into a developer's home directory from a test
+  // that had asked for no file at all"), and the damage is silent: a passing test that
+  // appended to a real ledger. Mature harnesses treat this as fail-closed — Hermes
+  // sandboxes HERMES_HOME at import time and deny-lists writes to the real database
+  // (tests/conftest.py) — so this refuses, loudly, naming the fix.
+  if (process.env.AGENTBOX_TEST === "1") {
+    throw new Error(
+      "agentboxHome() was called under test with no AGENTBOX_HOME set. Tests must not " +
+        "touch the live installation at ~/.agentbox — pass a temp directory explicitly, " +
+        "or set AGENTBOX_HOME for this test."
+    );
+  }
+  return join(homedir(), ".agentbox");
 }
 
 export function configPath(): string {

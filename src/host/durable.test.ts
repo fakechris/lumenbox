@@ -387,7 +387,7 @@ test("a read that fails is not treated as the file being absent", async () => {
   // A transient daemon error or permission fault used to collapse to ABSENT, the one state the
   // version check always permits, so a hiccup reading an existing file let the next write overwrite
   // it silently. "Could not read" and "not there" are opposite answers.
-  const { registry, context, cleanup } = toolFixture();
+  const { context, cleanup } = toolFixture();
   try {
     const files = new FileVersions();
     const path = "/home/box/work/report.md";
