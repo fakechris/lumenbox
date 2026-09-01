@@ -30,17 +30,17 @@
     "release:check": "npm run check && npm run build && node scripts/release-check.mjs"
   },
   "dependencies": {
-    "@anthropic-ai/sdk": "^0.117.1",
+    "@anthropic-ai/sdk": "^0.122.0",
     "@larksuiteoapi/node-sdk": "^1.73.0",
-    "markdown-it": "^15.0.0"
+    "markdown-it": "^15.0.1"
   },
   "devDependencies": {
-    "@biomejs/biome": "^2.5.9",
-    "@types/node": "^22.10.0",
-    "electron": "^43.4.1",
+    "@biomejs/biome": "^2.5.11",
+    "@types/node": "^26.4.0",
+    "electron": "^44.0.0",
     "electron-builder": "^26.15.3",
-    "esbuild": "^0.25.0",
-    "typescript": "^5.7.0"
+    "esbuild": "^0.28.2",
+    "typescript": "^7.0.2"
   },
   "engines": {
     "node": ">=22.18.0"
