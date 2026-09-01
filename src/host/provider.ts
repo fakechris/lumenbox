@@ -101,17 +101,23 @@ const MINIMAX: ProviderProfile = {
   // Thinking counts against the cap, so a tight budget yields an empty response
   // with stop_reason max_tokens rather than an answer.
   maxTokens: 32_000,
-  // Deliberately unset — but no longer for lack of a number. Measured 2026-09-01 by
-  // probing the endpoint with oversized requests: 756k input tokens accepted, ~1.08M
-  // refused, so the window is almost certainly 1M. Declaring it would move the
-  // compaction trigger to ~650k, and on a provider with no prompt caching every round
-  // re-bills the whole prefix — the conservative 60k default is accidentally also the
-  // cost governor. Raising it is a spend decision, made with AGENTBOX_COMPACT_AT_TOKENS
-  // (an explicit number always wins), not a fact this profile should force.
+  // Deliberately unset — but no longer for lack of a number. Measured 2026-09-01:
+  // 756k input accepted, ~1.08M refused — the window is 1M (vendor pricing page
+  // agrees). Declared, policyForModel would trigger at ~650k, which crosses the
+  // >512k input tier where every price doubles; the operator sets the trigger with
+  // AGENTBOX_COMPACT_AT_TOKENS instead, below that boundary on purpose.
   vision: true,
   // Accepted but not implemented. Omitted so behaviour is not left to chance.
   adaptiveThinking: false,
   effort: false,
+  // False means "send no cache_control breakpoints", and that stays right — but not
+  // because the endpoint cannot cache. Measured 2026-09-01: caching is *implicit*.
+  // A repeated 88k prefix with a new tail came back input_tokens=113,
+  // cache_read_input_tokens=88064, no markers sent; explicit markers are accepted
+  // and add nothing. Cache reads bill at ~20% of input, cache writes at nothing, so
+  // prefix stability is worth real money here — the earlier belief that this
+  // provider had no caching (and that it mooted the prefix-stability audit) was
+  // wrong and is withdrawn.
   promptCaching: false,
   auth: "bearer",
   keyEnv: "MINIMAX_CODE_CN_API_KEY",
