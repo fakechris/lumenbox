@@ -487,10 +487,17 @@ export class DingTalkChannel implements ChannelAdapter {
    * Message ids already answered, id → arrival ms. DingTalk redelivers frames
    * across reconnects and slow acks, and a redelivered event is a duplicate turn.
    * Keyed on `msgId` — the id of the *message*, which is what must run once — not
-   * the transport id, which is regenerated per delivery. Same shape as the Feishu
-   * adapter's: memory-only; a restart re-answering one message is the accepted cost.
+   * the transport id, which is regenerated per delivery. Memory only, and that is
+   * enough *within* a process: across one, the durable ingress record is consulted
+   * first (`alreadyHandled`), because a restart is exactly when this wire redelivers.
    */
   private readonly seenMessages = new Map<string, number>();
+
+  /**
+   * Whether a message id is already in the durable ingress record. Supplied by the
+   * host, whose ledger is the only thing that remembers across a restart.
+   */
+  alreadyHandled: ((messageId: string) => boolean) | undefined;
 
   private tokenPromise: Promise<string> | undefined;
   private tokenExpiresAt = 0;
@@ -879,6 +886,16 @@ export class DingTalkChannel implements ChannelAdapter {
     // the transport id changes per redelivery, and the ledger follows the message.
     const inboundId =
       typeof payload.msgId === "string" && payload.msgId !== "" ? payload.msgId : transportId;
+    // Asked before the arrival is written, or the ledger would answer "yes, me". This
+    // is the redelivery this wire is documented to perform: the memory set below is
+    // empty in a process that has just started, which is precisely when DingTalk hands
+    // over what it could not deliver during the restart. The comment on `seenMessages`
+    // called a restart re-answering one message "the accepted cost"; it was accepted
+    // only because nothing durable was consulted, and something durable already exists.
+    if (inboundId !== "" && this.alreadyHandled?.(inboundId) === true) {
+      this.log(`channel ${this.name}: ${inboundId} was already handled before a restart`);
+      return;
+    }
     if (inboundId !== "") {
       this.ingress?.arrived({
         id: inboundId,

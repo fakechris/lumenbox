@@ -141,6 +141,15 @@ export interface ChannelAdapter {
    * way. See liveness.ts.
    */
   probe?(): Promise<string | undefined>;
+  /**
+   * Asks the vendor what this door missed and replays it. Present where a wire can be
+   * silently half-open — a socket that reports itself ready while the vendor delivers
+   * to a registration that no longer exists. Called on reconnect by the adapter and on
+   * a timer by the host, because the failure that needs it most is the one where no
+   * reconnect ever happens: nothing arrives, nothing errors, and the ledger records a
+   * quiet afternoon.
+   */
+  catchUp?(): Promise<void>;
   /** Pushes a line to where this identity's messages come from, if the wire allows it. */
   send(identity: string, text: string): Promise<void>;
   /**
@@ -763,6 +772,26 @@ export class ChannelManager {
         })
       );
     return Promise.all(checks);
+  }
+
+  /**
+   * Every door that can, asks the vendor what it missed. Failures are logged and
+   * swallowed: a sweep is a repair attempt, and a repair that throws must not stop the
+   * next one from running.
+   */
+  async sweep(): Promise<void> {
+    await Promise.all(
+      this.adapters
+        .filter(adapter => adapter.catchUp !== undefined)
+        .map(adapter =>
+          adapter.catchUp!().catch((error: unknown) => {
+            this.deps.log(
+              `channel ${adapter.name}: catch-up sweep failed — ` +
+                `${error instanceof Error ? error.message : String(error)}`
+            );
+          })
+        )
+    );
   }
 
   /** Resolves when every accepted task has pushed its result (or its failure). */

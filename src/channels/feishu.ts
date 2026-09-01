@@ -751,6 +751,15 @@ export class FeishuChannel implements ChannelAdapter {
         // from the log, and the only way to tell them apart was to add this and ask
         // somebody to type again.
         const arrivedId = data.message?.message_id;
+        // Asked before the arrival is written, because after it the ledger would answer
+        // "yes, me". The in-memory seen set below is empty in a process that has just
+        // started, which is exactly when the vendor redelivers what it could not hand
+        // over during the restart — so the durable record is what stops one message
+        // being answered twice across a restart, and the memory set stops it within one.
+        if (arrivedId !== undefined && this.alreadyHandled?.(arrivedId) === true) {
+          this.log(`channel ${this.name}: ${arrivedId} was already handled before a restart`);
+          return {};
+        }
         if (arrivedId !== undefined) {
           this.ingress?.arrived({
             id: arrivedId,
@@ -1198,7 +1207,7 @@ export class FeishuChannel implements ChannelAdapter {
    * Bounded on purpose — recent chats, recent messages, one sweep at a time — because
    * this runs on a reconnect, which is when the vendor is least happy to be swept.
    */
-  private async catchUp(): Promise<void> {
+  async catchUp(): Promise<void> {
     if (this.catchingUp || this.apiClient === undefined || this.receiveMessage === undefined) return;
     const handler = this.receiveMessage;
     const since = this.lastInboundAt?.();

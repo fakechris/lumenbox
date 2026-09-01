@@ -1321,8 +1321,7 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
         const dingSecret = process.env[`${base}_CLIENT_SECRET`];
         const dingCardTemplate = process.env[`${base}_CARD_TEMPLATE_ID`];
         const dingTaskCardTemplate = process.env[`${base}_TASK_CARD_TEMPLATE_ID`];
-        channels.register(
-          new DingTalkChannel(
+        const dingDoor = new DingTalkChannel(
             dingId ?? "",
             dingSecret ?? "",
             line => log(line),
@@ -1336,7 +1335,10 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
               ? dingTaskCardTemplate
               : undefined,
             record.id
-          ),
+          );
+        dingDoor.alreadyHandled = handledAlready;
+        channels.register(
+          dingDoor,
           dingId !== undefined && dingSecret !== undefined,
           dingId !== undefined && dingSecret !== undefined
             ? "starting"
@@ -1493,6 +1495,15 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
   const channelState = new Map<string, string>();
   const livenessTimer = setInterval(() => {
     void (async () => {
+      // Repair before report. The health check tells an operator that a socket looks
+      // dead; the sweep asks the vendor what that socket missed and answers it — which
+      // is the part a person waiting for a reply actually cares about, and the part
+      // that must not wait for somebody to read a log line. On the same timer because
+      // a door that is receiving normally sweeps nothing: the floor is the last
+      // arrival, and everything since it has already been handled.
+      await channels.sweep().catch(() => {
+        // Already logged per door; a second line here would be noise.
+      });
       for (const health of await channels.health().catch(() => [])) {
         const channel = health.detail.split(/[\s:]/)[0] ?? "channel";
         if (channelState.get(channel) === health.state) continue;
@@ -2913,15 +2924,19 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
                       door.alreadyHandled = handledAlready;
                       return door;
                     })()
-                  : new DingTalkChannel(
-                      liveAppId,
-                      liveSecret,
-                      line => log(line),
-                      ingress,
-                      process.env[`${base}_CARD_TEMPLATE_ID`],
-                      process.env[`${base}_TASK_CARD_TEMPLATE_ID`],
-                      id
-                    );
+                  : (() => {
+                      const door = new DingTalkChannel(
+                        liveAppId,
+                        liveSecret,
+                        line => log(line),
+                        ingress,
+                        process.env[`${base}_CARD_TEMPLATE_ID`],
+                        process.env[`${base}_TASK_CARD_TEMPLATE_ID`],
+                        id
+                      );
+                      door.alreadyHandled = handledAlready;
+                      return door;
+                    })();
               started = channels.registerAndStart(liveDoor, "starting");
             }
           }
