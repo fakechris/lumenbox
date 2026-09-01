@@ -19,6 +19,7 @@
  */
 
 import { spawn } from "node:child_process";
+import { fileURLToPath } from "node:url";
 import { hermeticEnv } from "./test-env.mjs";
 
 /**
@@ -33,13 +34,22 @@ import { hermeticEnv } from "./test-env.mjs";
  * remember to raise is a number that goes stale, so staleness is now itself reported: passing far
  * above the floor prints how to raise it, every run, until somebody does.
  */
-const FLOOR = Number(process.env.AGENTBOX_TEST_FLOOR ?? 983);
+const FLOOR = Number(process.env.AGENTBOX_TEST_FLOOR ?? 986);
 /** How far above the floor the suite may sit before the floor is called stale. */
 const STALE_MARGIN = 40;
 
 const child = spawn(
   process.execPath,
-  ["--experimental-transform-types", "--test", "--test-reporter=tap", "--test-timeout=30000", "src/**/*.test.ts"],
+  [
+    "--experimental-transform-types",
+    // In place before the first test module: a test may not reach the network.
+    "--import",
+    fileURLToPath(new URL("./test-network-guard.mjs", import.meta.url)),
+    "--test",
+    "--test-reporter=tap",
+    "--test-timeout=30000",
+    "src/**/*.test.ts",
+  ],
   // An allowlisted environment, not this shell's: see scripts/test-env.mjs. The run
   // must not be able to read a credential that happens to be exported here, and must
   // not be able to reach the live installation in ~/.agentbox.

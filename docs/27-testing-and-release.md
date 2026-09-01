@@ -39,10 +39,10 @@ A gate whose failures nobody reads is not a gate.
 | Runner | `node --test`, one flat run → **hermetic runner with an env allowlist** | vitest, 5 configs, custom parallel runner with per-file quarantine lanes | pytest via a custom runner, **`env -i` allowlist**, per-file subprocess isolation |
 | Tiers | none → still none (open) | unit / gateway / extensions / e2e / live, split by *blast radius* not by style | unit / integration (marker-excluded by default) / e2e / docker / OS-specific / live |
 | Vendor payload fixtures | a handful inlined as real captured strings (`meet_number`) | **none** — every payload is a developer's mental model | **none** meaningful (one normalized MCP `tools/list`) |
-| Model fake | hand-rolled `as unknown as Anthropic` in 13 files | one behavioural simulator swapping `fetch` (`test-helpers.openai-mock.ts`), used by one file | 72 files each redefining their own `_FakeOpenAI`; the one real fake is a **984-line OpenAI-compatible mock server** in the desktop e2e |
+| Model fake | one `stubClient` plus 12 ad-hoc variants, all in `turn.test.ts` | one behavioural simulator swapping `fetch` (`test-helpers.openai-mock.ts`), used by one file | 72 files each redefining their own `_FakeOpenAI`; the one real fake is a **984-line OpenAI-compatible mock server** in the desktop e2e |
 | Snapshots | none | **zero, deliberately** — replaced by committed-artifact diffs | **zero** — replaced by generated golden vectors with provenance stamps |
 | Credential isolation | none → **allowlist strips everything unnamed** | deletes vendor tokens in setup, inverts for live runs | deletes 16 suffix patterns + ~110 names; import-time home sandbox |
-| Network guard | none (open) | none — compensated by 46 `process.env.VITEST` branches in production code | none global; one package-scoped socket guard that asserts zero attempts at teardown |
+| Network guard | **loopback only; anything else throws where it was called** | none — compensated by 46 `process.env.VITEST` branches in production code | none global; one package-scoped socket guard that asserts zero attempts at teardown |
 | Live tier | none (open) | 13 files, gated on **flag AND credential** so a missing key skips rather than fails | 3 files + a branch-prefix Windows lane; **CI never holds a model key** |
 
 Two things both mature repos do that are worth more than their size suggests:
@@ -86,8 +86,17 @@ captured-payload corpus is the cheaper insurance for us than a live tier.
   **with dependabot watching it**, because a pin nobody moves is a CVE that ages.
 - `scripts/copy-catalog-data.mjs` — runtime data ships beside the bundle that
   reads it, for both `dist/` and the image.
-- The test floor is 975 and complains when it goes stale.
+- The test floor is 986 and complains when it goes stale.
 - CI is green again, and now runs the release check.
+- `src/channels/fixtures/feishu-messages.json` + `feishu-corpus.test.ts` — seven
+  real shapes, sanitised, with the contract every parser must satisfy against
+  them. Mutation-checked: flattening `post` content turns it red.
+- `scripts/test-network-guard.mjs` — loopback only, everything else throws where
+  it was called. The suite passes under it, which is the evidence that nothing
+  was quietly reaching a vendor.
+- `src/host/test-guards.test.ts` — the guards have their own tests, which double
+  as proof the runner was used: run the suite the wrong way and they fail. The
+  `test:raw` bypass is gone for the same reason.
 
 ## Open, ranked
 
@@ -96,12 +105,14 @@ captured-payload corpus is the cheaper insurance for us than a live tier.
    gap that keeps costing us: `meet_number`, `video_chat`, `thread_id` vs
    `root_id`, the `post` shape — each found in production, each pinned only where
    somebody happened to write a test afterwards.
-2. **One fake model, shared.** Thirteen hand-rolled `as unknown as Anthropic`
-   stubs are thirteen slightly different beliefs about the SDK. Hermes's desktop
+2. **One fake model, shared.** `turn.test.ts` holds a canonical `stubClient` and
+   twelve ad-hoc variants beside it — each re-implementing `stream()`/`on()`/
+   `finalMessage()`, so a change in what the turn loop calls updates eleven of
+   them and silently hollows out the twelfth. (Counted, after the first draft of
+   this document said "thirteen files": it is thirteen sites in one file.) Hermes's desktop
    mock server is the shape worth copying: a real HTTP server, so the client, the
    SSE parser and the retry path are exercised rather than bypassed.
 3. **A contract assertion per adapter**, in OpenClaw's shape — one function every
    channel's tests must satisfy.
-4. **A network guard** that records attempts and fails the test that made one.
 5. **Tiering and a live tier** — only once there is something a live run protects
    that the smoke suite does not.
