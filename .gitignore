@@ -20,3 +20,8 @@ docker/box/hostd.mjs
 /research/
 /dist-app/
 /design/
+
+# Build output: copied beside the bundle by scripts/copy-catalog-data.mjs.
+# The source of truth is src/host/catalog-data.
+docker/box/catalog-data/
+dist/catalog-data/
