@@ -57,6 +57,7 @@ function cardAdapter(): ReturnType<typeof testAdapter> & {
   cards: { handle: string; card: TaskCardState; replyTo?: string }[];
   images: { chatKey: string; base64: string; replyTo?: string }[];
   statuses: { id: string; status: string }[];
+  sentFiles: { name: string; replyTo?: string }[];
 } {
   const base = testAdapter();
   const chatSent: { chatKey: string; text: string; replyTo?: string }[] = [];
@@ -1208,6 +1209,38 @@ test("a pushed approval answered from the app leaves the chat reply saying so", 
   manager.notifyApproval("agent-1", "appr-1", "Ada", "do the thing");
   const reply = await adapter.inject({ identity: "telegram:7", senderLabel: "c", text: "deny" });
   assert.match(reply ?? "", /no longer waiting/);
+});
+
+test("a scheduled push delivers the files its text names, like a reply does", async () => {
+  // The measured failure (2026-09-01): the weekly report — a scheduled turn — said
+  // "长版: /home/box/work/research/weekly-retro-2026-08-31.md" into the chat, and the
+  // push door carried words only; the person read an unopenable path and asked again.
+  const adapter = cardAdapter();
+  const manager = new ChannelManager({
+    mayDrive: () => true,
+    ask: async () => "unused",
+    collectOutbox: async () => [],
+    readBoxFile: async path => ({ name: path.split("/").pop() ?? "f", base64: "aGk=" }),
+    log: () => {},
+  });
+  manager.register(adapter, true, "test");
+  await started(manager);
+
+  await manager.pushToChat(
+    "telegram:oc_room",
+    "周报写好了。长版: /home/box/work/research/weekly-retro-2026-08-31.md"
+  );
+  assert.equal(adapter.chatSent.at(-1)?.text.includes("周报写好了"), true);
+  assert.deepEqual(
+    adapter.sentFiles.map(file => file.name),
+    ["weekly-retro-2026-08-31.md"],
+    "the named file follows the pushed words"
+  );
+
+  // A push that names nothing sends nothing extra.
+  adapter.sentFiles.length = 0;
+  await manager.pushToChat("telegram:oc_room", "晨报: 一切正常。");
+  assert.deepEqual(adapter.sentFiles, []);
 });
 
 test("a chat's files follow the conversation, and its reply follows the room", async () => {

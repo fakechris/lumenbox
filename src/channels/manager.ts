@@ -932,12 +932,97 @@ ${input.options.map(option => `· ${option}`).join("\n")}`
       this.deps.log(`channel: nothing can send to ${chatKey}; message dropped`);
       return Promise.resolve();
     }
-    return adapter.sendToChat(chatKey, text).catch((error: unknown) => {
-      this.deps.log(
-        `channel ${adapter.name}: could not send to ${chatKey} — ` +
-          `${error instanceof Error ? error.message : String(error)}`
-      );
-    });
+    return adapter
+      .sendToChat(chatKey, text)
+      .then(() =>
+        // The same file duty the reply door has. A scheduled report that says "the
+        // long version is at «path»" into a chat that cannot open box paths was the
+        // measured failure (2026-09-01): this door pushed words and never files.
+        this.deliverFiles(adapter, chatKey, chatKey, text, undefined, line =>
+          adapter.sendToChat === undefined ? Promise.resolve() : adapter.sendToChat(chatKey, line)
+        )
+      )
+      .catch((error: unknown) => {
+        this.deps.log(
+          `channel ${adapter.name}: could not send to ${chatKey} — ` +
+            `${error instanceof Error ? error.message : String(error)}`
+        );
+      });
+  }
+
+  /**
+   * The files a delivered text owes its chat: whatever sits in the chat's outbox,
+   * then anything the text names under the work directory but never handed over.
+   * One implementation for both delivery doors — the inbound-reply path and the
+   * scheduled/console push — because when only the first door carried files, a
+   * scheduled weekly report named its long version by box path into a chat that
+   * could not open it, and the person had to ask again.
+   */
+  private async deliverFiles(
+    adapter: ChannelAdapter,
+    chatKey: string,
+    outboxKey: string,
+    text: string,
+    anchor: PushOptions | undefined,
+    sayInChat: (line: string) => Promise<void>
+  ): Promise<void> {
+    if (this.deps.collectOutbox === undefined) return;
+    try {
+      const files = await this.deps.collectOutbox(outboxKey);
+      const delivered: string[] = [];
+      for (const file of files) {
+        try {
+          const isImage = /\.(png|jpe?g|webp|gif|bmp)$/i.test(file.name);
+          if (isImage && adapter.sendImage !== undefined) {
+            await adapter.sendImage(chatKey, file.base64, anchor);
+          } else if (adapter.sendFile !== undefined) {
+            await adapter.sendFile(chatKey, file.name, file.base64, anchor);
+          } else {
+            await sayInChat(`(${file.name} is ready on the box; this channel cannot carry files.)`);
+            continue;
+          }
+          delivered.push(file.name);
+        } catch (error) {
+          const detail = error instanceof Error ? error.message : String(error);
+          this.deps.log(`channel ${adapter.name}: file push failed for ${file.name} (${detail})`);
+        }
+      }
+      if (delivered.length > 0) {
+        await this.deps.outboxDelivered?.(outboxKey, delivered);
+      }
+
+      // A file the text *names* but never handed over. An agent wrote its research
+      // to a path under the work directory and said "the full version is at «path»",
+      // which is a real file in the box and an unopenable string to the person
+      // reading it in a chat — they had to ask for it again. The outbox convention is
+      // in the prompt and was not followed, and whether it was is a path comparison
+      // rather than a judgement, so the harness checks rather than asks harder.
+      const named = undelivered(boxPathsNamed(text), delivered);
+      for (const path of named.slice(0, 3)) {
+        const file = await this.deps.readBoxFile?.(path).catch(() => undefined);
+        if (file === undefined) {
+          // Said out loud: the silent skip here is why a missing named file used to
+          // be indistinguishable from the mechanism not running at all.
+          this.deps.log(`channel ${adapter.name}: named file ${path} could not be read; not sent`);
+          continue;
+        }
+        try {
+          const isImage = /\.(png|jpe?g|webp|gif|bmp)$/i.test(file.name);
+          if (isImage && adapter.sendImage !== undefined) {
+            await adapter.sendImage(chatKey, file.base64, anchor);
+          } else if (adapter.sendFile !== undefined) {
+            await adapter.sendFile(chatKey, file.name, file.base64, anchor);
+          } else continue;
+          this.deps.log(`channel ${adapter.name}: sent ${file.name}, which the reply only named`);
+        } catch (error) {
+          const detail = error instanceof Error ? error.message : String(error);
+          this.deps.log(`channel ${adapter.name}: could not send named file ${path} (${detail})`);
+        }
+      }
+    } catch (error) {
+      const detail = error instanceof Error ? error.message : String(error);
+      this.deps.log(`channel ${adapter.name}: outbox failed (${detail})`);
+    }
   }
 
   private async handle(
@@ -1573,59 +1658,9 @@ ${input.options.map(option => `· ${option}`).join("\n")}`
       // Whatever the turn left in the chat's outbox follows the reply — images shown
       // as images, everything else as a file. What was pushed is marked delivered;
       // what failed stays in the outbox for the next task rather than vanishing.
-      if (this.deps.collectOutbox !== undefined) {
-        try {
-          const files = await this.deps.collectOutbox(message.threadKey ?? chatKey);
-          const delivered: string[] = [];
-          for (const file of files) {
-            try {
-              const isImage = /\.(png|jpe?g|webp|gif|bmp)$/i.test(file.name);
-              if (isImage && adapter.sendImage !== undefined) {
-                await adapter.sendImage(chatKey, file.base64, anchor);
-              } else if (adapter.sendFile !== undefined) {
-                await adapter.sendFile(chatKey, file.name, file.base64, anchor);
-              } else {
-                await deliver(`(${file.name} is ready on the box; this channel cannot carry files.)`);
-                continue;
-              }
-              delivered.push(file.name);
-            } catch (error) {
-              const detail = error instanceof Error ? error.message : String(error);
-              this.deps.log(`channel ${adapter.name}: file push failed for ${file.name} (${detail})`);
-            }
-          }
-          if (delivered.length > 0) {
-            await this.deps.outboxDelivered?.(message.threadKey ?? chatKey, delivered);
-          }
-
-          // A file the reply *names* but never handed over. An agent wrote its research
-          // to a path under the work directory and said "the full version is at «path»",
-          // which is a real file in the box and an unopenable string to the person
-          // reading it in a chat — they had to ask for it again. The outbox convention is
-          // in the prompt and was not followed, and whether it was is a path comparison
-          // rather than a judgement, so the harness checks rather than asks harder.
-          const named = undelivered(boxPathsNamed(reply), delivered);
-          for (const path of named.slice(0, 3)) {
-            const file = await this.deps.readBoxFile?.(path).catch(() => undefined);
-            if (file === undefined) continue;
-            try {
-              const isImage = /\.(png|jpe?g|webp|gif|bmp)$/i.test(file.name);
-              if (isImage && adapter.sendImage !== undefined) {
-                await adapter.sendImage(chatKey, file.base64, anchor);
-              } else if (adapter.sendFile !== undefined) {
-                await adapter.sendFile(chatKey, file.name, file.base64, anchor);
-              } else continue;
-              this.deps.log(`channel ${adapter.name}: sent ${file.name}, which the reply only named`);
-            } catch (error) {
-              const detail = error instanceof Error ? error.message : String(error);
-              this.deps.log(`channel ${adapter.name}: could not send named file ${path} (${detail})`);
-            }
-          }
-        } catch (error) {
-          const detail = error instanceof Error ? error.message : String(error);
-          this.deps.log(`channel ${adapter.name}: outbox failed (${detail})`);
-        }
-      }
+      await this.deliverFiles(adapter, chatKey, message.threadKey ?? chatKey, reply, anchor, line =>
+        deliver(line)
+      );
       // The desk as the task left it: evidence at a glance — but only when the turn
       // actually used the desktop (a poster of an untouched desk is noise), only for
       // work long enough to have been acknowledged — a quick answer does not need a
