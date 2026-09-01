@@ -80,9 +80,14 @@ export function startEgressProxy(options: ProxyOptions): Server {
 
       relay.on("connect", () => relay.write(encodeRequest(request)));
 
-      relay.on("data", chunk => {
+      // Typed wide and narrowed here: a socket's `data` carries a Buffer unless an
+      // encoding was set — it is not set — but newer @types/node describe the listener
+      // as `string | Buffer`, and a build that only typechecks against the version
+      // installed today is a dependency bump waiting to fail (it did: the first
+      // dependabot npm PR after the release gate landed).
+      relay.on("data", (chunk: string | Buffer) => {
         if (established) return;
-        response = Buffer.concat([response, chunk]);
+        response = Buffer.concat([response, Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk)]);
         let decoded: ReturnType<typeof decodeResponse>;
         try {
           decoded = decodeResponse(response);
