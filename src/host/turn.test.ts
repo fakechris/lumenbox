@@ -428,6 +428,37 @@ test("the turn records both sides in the transcript", async () => {
   }
 });
 
+test("Recall reads both tiers, so a team-scoped write is findable without naming the tier", async () => {
+  // The measured failure (2026-09-01): an agent wrote a fact with scope "team",
+  // recalled without `shared: true`, found nothing in its own tier, concluded the
+  // write was lost, and went hunting for memory files inside the box.
+  const { registry, cleanup } = fixture();
+  try {
+    const ada = registry.create({ name: "Ada" });
+    const bus = new AgentBus(registry, async () => {});
+    const { box } = stubBox();
+    registry.appendSharedMemory(ada.id, [
+      { at: "2026-09-01T00:14:00.000Z", kind: "fact", text: "全部服务迁到了 Alwyzon,不是 Hetzner" } as never,
+    ]);
+    registry.appendMemoryRecords(ada.id, [
+      { at: "2026-09-01T00:15:00.000Z", kind: "fact", text: "own-tier note about Alwyzon dns" } as never,
+    ]);
+
+    const both = await dispatchTool("Recall", { search: "Alwyzon" }, { agent: ada, registry, bus, box });
+    assert.match(both.text, /\[team\].*迁到了 Alwyzon/, "the team-tier fact surfaces by default");
+    assert.match(both.text, /\[yours\].*own-tier note/, "alongside the agent's own tier");
+
+    const teamOnly = await dispatchTool(
+      "Recall",
+      { search: "Alwyzon", shared: true },
+      { agent: ada, registry, bus, box }
+    );
+    assert.doesNotMatch(teamOnly.text, /own-tier note/, "shared: true still narrows to the team");
+  } finally {
+    cleanup();
+  }
+});
+
 test("a second agent is refused the display while another holds it", async () => {
   const { registry, cleanup } = fixture();
   try {

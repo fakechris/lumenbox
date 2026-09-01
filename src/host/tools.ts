@@ -861,7 +861,12 @@ export function buildTools(
         "Keep something across conversations. It goes into your instructions on every future " +
         "turn. Use it for what will still matter next time: a decision the user made and why, a " +
         "constraint about their setup, a correction they gave you. Not for what a tool can tell " +
-        "you again on demand, and not for details that only matter inside this conversation.",
+        "you again on demand, and not for details that only matter inside this conversation. " +
+        "Record what was actually said, not your interpretation of it: a name or product you " +
+        "do not recognise is something to look up (WebSearch/WebFetch), never to \"correct\" " +
+        "to one you do — a plausible-sounding substitution written here misleads the whole " +
+        "team on every future turn. Memory lives outside the box; there is no file in the " +
+        "work directory to check, and this tool plus Recall are the only doors to it.",
       input_schema: {
         type: "object",
         properties: {
@@ -1168,7 +1173,10 @@ export function buildTools(
       "that you never knew it.\n\n" +
       "Search when a person refers to something you agreed before, when a task sounds like one " +
       "you have done, or when you are about to say you have no record of something. Plain word " +
-      "matching, so use words that would actually have been written.",
+      "matching — every word must appear in one record, so search with one or two words that " +
+      "would actually have been written, not a whole phrase. Searches your own and the team's " +
+      "memory together; a write is visible here immediately (there is no index to wait for, " +
+      "and no memory file in the box to look for).",
     input_schema: {
       type: "object",
       properties: {
@@ -1178,7 +1186,7 @@ export function buildTools(
         },
         shared: {
           type: "boolean",
-          description: "Search what the team kept rather than your own. Defaults to your own.",
+          description: "Restrict to what the team kept. By default both tiers are searched.",
         },
       },
     },
@@ -2105,18 +2113,27 @@ export async function dispatchTool(
     }
 
     case "Recall": {
-      const shared = input.shared === true;
-      const records = shared
-        ? context.registry.readSharedMemory()
-        : context.registry.readMemoryRecords(context.agent.id);
+      // Both tiers by default. The split used to mirror RememberFact's scope, which made
+      // recalling depend on remembering *where* a fact was filed — and that is exactly
+      // what failed: an agent wrote a fact with scope "team", searched without
+      // `shared: true`, found nothing in its own tier, concluded the write had been
+      // lost, and went looking for memory files in the box (there are none — memory
+      // lives on the host, and these tools are its only door). Asking "what do I know"
+      // almost always means both; `shared: true` still narrows to the team tier alone.
+      const sharedOnly = input.shared === true;
+      const own = sharedOnly
+        ? []
+        : context.registry.readMemoryRecords(context.agent.id).map(record => ({ record, tier: "yours" }));
+      const team = context.registry.readSharedMemory().map(record => ({ record, tier: "team" }));
+      const records = [...own, ...team];
       const words = String(input.search ?? "")
         .toLowerCase()
         .split(/\s+/)
         .filter(word => word !== "");
-      const found = records.filter(record =>
+      const found = records.filter(({ record }) =>
         words.every(word => record.text.toLowerCase().includes(word))
       );
-      const whose = shared ? "the team has kept" : "you have kept";
+      const whose = sharedOnly ? "the team has kept" : "you or the team have kept";
       if (found.length === 0) {
         // Distinguished from "nothing was kept at all", because an agent that reads the
         // two the same way concludes it has no memory when it merely has no match.
@@ -2130,7 +2147,7 @@ export async function dispatchTool(
       const lines = found
         .slice(-40)
         .reverse()
-        .map(record => `- (${record.at.slice(0, 10)}) ${record.text}`);
+        .map(({ record, tier }) => `- [${tier}] (${record.at.slice(0, 10)}) ${record.text}`);
       const more = found.length > 40 ? `\n\n(${found.length - 40} older matches not shown.)` : "";
       return { text: `${found.length} of ${records.length} things ${whose}:\n\n${lines.join("\n")}${more}` };
     }
