@@ -1118,6 +1118,23 @@ Large-ish; design the boundary (what travels, what never does) first.
 
 ---
 
+## What to do next, as of 2026-09-01
+
+The 2026-08-27 ranking below still holds for the tiers; what changed since is written
+where it belongs rather than restated here:
+
+- **docs/25** — the workbuddy program (E1–E5) is run and closed; the catalog (PR #14) is
+  its shipped form.
+- **docs/26** — inbound reliability: catch-up sweeps, durable dedup, watermarks. Open:
+  the same for DingTalk, and the webhook-versus-websocket decision.
+- **docs/27** — testing and release, audited against OpenClaw and Hermes. Open: a contract
+  assertion per adapter, then tiering.
+- **docs/reviews/2026-09-01-runtime-audit.md** — four fixes, two open items (skill-index
+  budget; query-aware memory in continuations) and one design item that gates multi-user:
+  provenance for skill files, because the scheduler reads writable content as
+  configuration.
+- **docs/handoff-2026-09-01.md** — the state of the running installation.
+
 ## What to do next, as of 2026-08-27
 
 The previous version of this section ranked seven items and then, twice in the same
