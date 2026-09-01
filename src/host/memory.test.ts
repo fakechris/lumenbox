@@ -270,6 +270,25 @@ test("Chinese clauses share key material, which is what lets them collide at all
   const shared = new Set(a.split(" ").filter(word => bWords.has(word)));
   assert.ok(shared.has("密码"), "the two-character word survives as a bigram");
   assert.ok(shared.size >= 4, `rephrasings overlap (${shared.size} shared bigrams)`);
+
+  // And the boundary, stated rather than implied — an earlier commit message claimed
+  // more than this (audit 2026-09-01, #7). Overlapping bigrams make a paraphrase
+  // *findable*; they do not make it the same key, so `dedupe` keeps both. Paraphrase is
+  // suppressed at the write path instead: the extractor is shown what is already known,
+  // via selectRelevant, which is the function the bigrams fixed. Merging on similarity
+  // was considered and refused — at a threshold low enough to catch these two, "port is
+  // 8080" and "port is 9090" merge too, and losing a fact is worse than repeating one.
+  assert.notEqual(a, b, "two different phrasings are two different keys");
+  const phrasings = [
+    { at: "2026-09-01T00:00:00.000Z", kind: "fact" as const, text: "用户偏好数据库密码放在环境变量" },
+    { at: "2026-09-01T00:01:00.000Z", kind: "fact" as const, text: "数据库密码存放于环境变量中" },
+  ];
+  assert.equal(dedupe(phrasings).length, 2, "dedupe is exact-key, in every language");
+  assert.equal(
+    dedupe([phrasings[0]!, { ...phrasings[0]!, at: "2026-09-01T00:02:00.000Z" }]).length,
+    1,
+    "an exact restatement still collapses"
+  );
   // And selectRelevant can now be reached with a two-character Chinese query word.
   const records = [
     { at: "2026-09-01T00:00:00.000Z", kind: "fact" as const, text: "数据库密码在环境变量" },

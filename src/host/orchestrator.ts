@@ -289,6 +289,15 @@ export class Orchestrator {
       await this.options.deliverToChat?.(deliver, said);
     },
     defaultAgent: () => this.registry.list()[0]?.id,
+    // So the scheduler can tell "agent: Ada" from "agent: <somebody else>" — the gate
+    // it applies to a name that came out of a writable file.
+    resolveAgent: name => {
+      try {
+        return this.registry.resolve(name).id;
+      } catch {
+        return undefined;
+      }
+    },
     log: line => console.error(`[schedule] ${line}`),
   });
 
@@ -859,7 +868,15 @@ export class Orchestrator {
     // Remembered for the turn, so a memory kept during it records who it is about. Per agent because
     // two people can be driving two agents at once; overwritten on each prompt because the most
     // recent person to speak to *this* agent is the one its memories are about.
+    //
+    // Cleared — not merely overwritten — when there is no caller. A scheduled run, a
+    // teammate's wake and an audit turn all arrive with none, and the old code left the
+    // last human attached: their budget paid for it, their name went on whatever the turn
+    // remembered, and any standing `principal:*` grant they held was resolvable by an
+    // unattended task. Identity belongs to the turn, and an absent caller is a fact about
+    // this turn rather than a gap to fill from the previous one (audit 2026-09-01, #1).
     if (caller?.userId !== undefined) this.callers.set(agent.id, caller);
+    else this.callers.delete(agent.id);
     this.bus.sendFromUser(agent.id, text, {
       conversation,
       ...(options.steerable === false ? { steerable: false } : {}),

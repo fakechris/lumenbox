@@ -565,3 +565,68 @@ test("running one by hand is the same path, and does not consume the scheduled w
   const missing = await scheduler.runNow("nope");
   assert.equal(missing.ok, false);
 });
+
+test("a scheduled skill may not borrow another agent's permissions", async () => {
+  // Audit 2026-09-01, #2: a skill file is ordinary content in the box, writable by any
+  // agent holding write_file or bash. Naming `agent:` in its frontmatter was taken as
+  // authority, so a confined agent could have scheduled a minute-by-minute turn as a
+  // better-equipped colleague, in the main conversation where its own chat scope no
+  // longer applies. `owner` and `authored_by` cannot gate this — they are frontmatter
+  // too, so the writer declares whatever the rule asks for.
+  const runs: { agent: string }[] = [];
+  const lines: string[] = [];
+  let clock = at("2026-09-01T09:00:00");
+  const scheduler = new Scheduler({
+    due: async () => [
+      {
+        slug: "borrowed",
+        name: "Borrowed hands",
+        path: "/home/box/work/skills/borrowed/SKILL.md",
+        schedule: parseSchedule("@every 1m") as never,
+        runAs: "Gold",
+      } as never,
+    ],
+    run: async agent => {
+      runs.push({ agent });
+    },
+    defaultAgent: () => "agent-ada",
+    resolveAgent: name => (name === "Gold" ? "agent-gold" : undefined),
+    now: () => clock,
+    log: line => lines.push(line),
+    path: null,
+  });
+
+  clock = new Date(clock.getTime() + 120_000);
+  await scheduler.tick();
+  assert.deepEqual(runs, [], "the run is refused rather than handed to the named agent");
+  assert.ok(
+    lines.some(line => /refuses to run as "Gold"/.test(line)),
+    `the refusal is said out loud: ${lines.join(" | ")}`
+  );
+
+  // Naming the default agent is the ordinary case and still works — it is the only name
+  // whose authority the writer of the file did not choose.
+  const ordinary: { agent: string }[] = [];
+  const plain = new Scheduler({
+    due: async () => [
+      {
+        slug: "ordinary",
+        name: "Weekly retro",
+        path: "/home/box/work/skills/ordinary/SKILL.md",
+        schedule: parseSchedule("@every 1m") as never,
+        runAs: "Ada",
+      } as never,
+    ],
+    run: async agent => {
+      ordinary.push({ agent });
+    },
+    defaultAgent: () => "agent-ada",
+    resolveAgent: name => (name === "Ada" ? "agent-ada" : undefined),
+    now: () => clock,
+    log: () => {},
+    path: null,
+  });
+  clock = new Date(clock.getTime() + 120_000);
+  await plain.tick();
+  assert.deepEqual(ordinary, [{ agent: "agent-ada" }]);
+});

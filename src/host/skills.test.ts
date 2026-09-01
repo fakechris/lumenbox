@@ -255,6 +255,60 @@ test("the cache re-reads on a timer and shares concurrent reads", async () => {
   assert.equal(cache.current().skills.length, 1);
 });
 
+test("a concurrent first refresh waits for the read rather than answering empty", async () => {
+  // The regression the 2026-09-01 audit found in that day's own fix: arming the TTL at
+  // the *start* of a read let a second caller pass the freshness check and return the
+  // still-empty cache. Two callers, one refresh, two different answers — and the second
+  // was an agent told it had no skills.
+  let release: (() => void) | undefined;
+  const gate = new Promise<void>(resolve => {
+    release = resolve;
+  });
+  const clock = 1_000;
+  const source: SkillSource = {
+    async listDir(path: string) {
+      if (path === SKILLS_DIR) {
+        await gate;
+        return { entries: [{ name: "weekly", type: "directory" }] };
+      }
+      return { entries: [] };
+    },
+    async readFile() {
+      return { content: "---\nname: Weekly\ndescription: x\n---\nbody" };
+    },
+  };
+  const cache = new SkillCache(() => source, 5_000, () => clock);
+
+  const first = cache.refresh();
+  const second = cache.refresh();
+  release?.();
+  const [a, b] = await Promise.all([first, second]);
+  assert.equal(a.skills.length, 1);
+  assert.equal(b.skills.length, 1, "the second caller waited for the same read");
+});
+
+test("a failed read still arms the freshness gate, so a down box is not re-listed every turn", async () => {
+  let reads = 0;
+  let clock = 1_000;
+  const source: SkillSource = {
+    async listDir() {
+      reads += 1;
+      throw new Error("box restarting");
+    },
+    async readFile() {
+      throw new Error("box restarting");
+    },
+  };
+  const cache = new SkillCache(() => source, 5_000, () => clock);
+  await cache.refresh();
+  await cache.refresh();
+  await cache.refresh();
+  assert.equal(reads, 1, "a failure is cached for the TTL like a success");
+  clock += 6_000;
+  await cache.refresh();
+  assert.equal(reads, 2, "and re-attempted once it expires");
+});
+
 test("a transient failure keeps what was last read", async () => {
   let failing = false;
   let clock = 0;

@@ -432,6 +432,8 @@ export interface SchedulerDeps {
   run: (agent: string, prompt: string, deliver?: string) => Promise<void>;
   /** Who a schedule wakes when it names nobody. */
   defaultAgent: () => string | undefined;
+  /** Resolves a name to an agent id, so `agent:` can be compared against the default. */
+  resolveAgent?: (nameOrId: string) => string | undefined;
   now?: () => Date;
   log?: (line: string) => void;
   /**
@@ -556,7 +558,7 @@ export class Scheduler {
         continue;
       }
 
-      const agent = skill.runAs ?? this.deps.defaultAgent();
+      const agent = this.runnerFor(skill);
       if (agent === undefined) {
         this.log(`${skill.name}: no agent to run it`);
         continue;
@@ -633,12 +635,48 @@ export class Scheduler {
    * to it. `lastRun` is deliberately *not* advanced: a manual run is a rehearsal, and
    * skipping tomorrow's real one because somebody tried it today would be a surprise.
    */
+  /**
+   * Which agent a scheduled skill may run as.
+   *
+   * `agent:` in a skill's frontmatter is a *request*, not an authority. A skill file is
+   * ordinary content in the box, writable by any agent holding `write_file` or `bash` —
+   * so an agent confined to one chat could write `schedule: "@every 1m"` and
+   * `agent: <someone with more tools>`, and the scheduler would have run it, unattended,
+   * in the main conversation where the confining chat scope no longer applies. That is a
+   * privilege escalation with a one-minute clock on it (audit 2026-09-01, #2).
+   *
+   * Nothing else in the file can gate it: `owner` and `authored_by` are frontmatter too,
+   * so an attacker declares whatever the rule asks for. The only anchor a writer cannot
+   * forge is who this installation's default agent is, which is decided outside the box.
+   * So: a schedule runs as the default agent, and a request for anyone else is refused
+   * and said out loud rather than honoured or silently downgraded.
+   *
+   * This is deliberately blunter than it should be. The real fix is provenance — the
+   * host recording who wrote a skill, or scheduled skills living in host-owned state
+   * rather than in the box's filesystem — and that is a design change, not a patch
+   * (docs/13). Until then this errs towards refusing work rather than running somebody
+   * else's.
+   */
+  private runnerFor(skill: { name: string; runAs?: string }): string | undefined {
+    const fallback = this.deps.defaultAgent();
+    if (skill.runAs === undefined) return fallback;
+    const named = this.deps.resolveAgent?.(skill.runAs);
+    if (named !== undefined && named === fallback) return named;
+    if (named === undefined && skill.runAs === fallback) return fallback;
+    this.log(
+      `${skill.name}: refuses to run as "${skill.runAs}" — a scheduled skill may only run ` +
+        `as this installation's default agent, because a skill file is writable by any ` +
+        `agent and naming another one would be a way to borrow its permissions.`
+    );
+    return undefined;
+  }
+
   async runNow(slug: string): Promise<{ ok: true } | { ok: false; reason: string }> {
     const skills = await this.deps.due().catch(() => []);
     const skill = skills.find(candidate => candidate.slug === slug);
     if (skill === undefined) return { ok: false, reason: `No scheduled skill "${slug}".` };
     if (this.running.has(slug)) return { ok: false, reason: `${skill.name} is already running.` };
-    const agent = skill.runAs ?? this.deps.defaultAgent();
+    const agent = this.runnerFor(skill);
     if (agent === undefined) return { ok: false, reason: `No agent to run ${skill.name}.` };
 
     this.running.add(slug);

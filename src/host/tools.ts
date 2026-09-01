@@ -22,7 +22,7 @@ import { describeHistory, readHistory } from "./history.ts";
 import { canSearch, fetchPage, guardUrl, isSearchEngine, searchWeb, WebError } from "./web.ts";
 import { describeEnvShape, envShape, looksLikeEnvFile } from "./env-shape.ts";
 import { guardShellCommand } from "./ui-automation-guard.ts";
-import { dedupeKey, validateRecord } from "./memory.ts";
+import { dedupe, dedupeKey, validateRecord } from "./memory.ts";
 import { type Claims, heldElsewhere } from "./claims.ts";
 import { MAIN_CONVERSATION } from "../agents/registry.ts";
 import { describeTask, isLive, isTaskStatus, TASK_STATUSES, type TaskStore } from "./tasks.ts";
@@ -2120,11 +2120,24 @@ export async function dispatchTool(
       // lost, and went looking for memory files in the box (there are none — memory
       // lives on the host, and these tools are its only door). Asking "what do I know"
       // almost always means both; `shared: true` still narrows to the team tier alone.
+      //
+      // Through `dedupe`, which is the same live view the prompt is built from. Searching
+      // the raw log instead was a third semantics for memory beside those two, and it
+      // showed: a fact, its retraction and its correction all came back together, so an
+      // agent that had carefully withdrawn something found it again the next time it
+      // looked — the alwyzon correction, undone by the tool meant to check it (audit
+      // 2026-09-01, #3). A retraction is not a memory; it is the record that one ended.
       const sharedOnly = input.shared === true;
       const own = sharedOnly
         ? []
-        : context.registry.readMemoryRecords(context.agent.id).map(record => ({ record, tier: "yours" }));
-      const team = context.registry.readSharedMemory().map(record => ({ record, tier: "team" }));
+        : dedupe(context.registry.readMemoryRecords(context.agent.id)).map(record => ({
+            record,
+            tier: "yours",
+          }));
+      const team = dedupe(context.registry.readSharedMemory()).map(record => ({
+        record,
+        tier: "team",
+      }));
       const records = [...own, ...team];
       const words = String(input.search ?? "")
         .toLowerCase()
@@ -2144,9 +2157,14 @@ export async function dispatchTool(
               : `No match among the ${records.length} things ${whose}. Try fewer or different words.`,
         };
       }
+      // Newest first across both tiers, then cut. Concatenating the tiers and taking the
+      // tail cut by *position*: forty older team hits could push out a newer personal one
+      // and the answer depended on which list a fact happened to be filed in (audit
+      // 2026-09-01, #3).
       const lines = found
-        .slice(-40)
-        .reverse()
+        .slice()
+        .sort((a, b) => b.record.at.localeCompare(a.record.at))
+        .slice(0, 40)
         .map(({ record, tier }) => `- [${tier}] (${record.at.slice(0, 10)}) ${record.text}`);
       const more = found.length > 40 ? `\n\n(${found.length - 40} older matches not shown.)` : "";
       return { text: `${found.length} of ${records.length} things ${whose}:\n\n${lines.join("\n")}${more}` };

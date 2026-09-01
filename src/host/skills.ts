@@ -459,6 +459,15 @@ export class SkillCache {
    * the same directory.
    */
   async refresh(): Promise<SkillsLoad> {
+    // A read already running is joined before anything else is decided. This order is
+    // the fix for a race the TTL-on-attempt change introduced on 2026-09-01: arming the
+    // gate at the *start* of a read made a concurrent first caller pass the TTL check
+    // and return the empty pre-read cache instead of waiting — two callers, two
+    // different answers, from one refresh.
+    if (this.inFlight !== undefined) {
+      await this.inFlight;
+      return this.loaded;
+    }
     // Gated on the last *attempt*, not the last success: a box that is down (or a fresh
     // box with no skills directory yet) used to fail the read, leave the gate unarmed,
     // and every turn and scheduler tick re-issued the listing — negative results need
@@ -466,16 +475,11 @@ export class SkillCache {
     if (this.attemptAt !== undefined && this.now() - this.attemptAt < this.ttlMs) {
       return this.loaded;
     }
-    if (this.inFlight !== undefined) {
-      await this.inFlight;
-      return this.loaded;
-    }
     const source = this.source();
     if (source === undefined) return this.loaded;
 
     this.inFlight = (async () => {
       try {
-        this.attemptAt = this.now();
         const loaded = await loadSkills(source);
         // Only replaced when the directory was actually read. A box that is restarting must not make
         // an agent believe its skills were deleted — and since the list is in the prompt, an empty
@@ -486,6 +490,10 @@ export class SkillCache {
       } catch {
         // Same reasoning for anything loadSkills did not catch itself.
       } finally {
+        // Armed when the read *finishes*, however it finished. At the start it would
+        // gate the callers who arrive during it; never, and a failing box is re-listed
+        // on every turn.
+        this.attemptAt = this.now();
         this.inFlight = undefined;
       }
     })();
