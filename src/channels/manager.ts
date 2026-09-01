@@ -178,9 +178,14 @@ export interface ChannelAdapter {
    * Posts a consent request with buttons to wherever this identity's messages come
    * from. Absent means the wire has no buttons and the text-verb path is used.
    */
-  postApprovalCard?(identity: string, card: ApprovalCardState): Promise<void>;
-  /** A question with its answers as buttons. A pressed button speaks as a typed reply. */
-  postQuestionCard?(identity: string, card: QuestionCardState): Promise<void>;
+  postApprovalCard?(identity: string, card: ApprovalCardState, chatKey?: string): Promise<void>;
+  /**
+   * A question with its answers as buttons. A pressed button speaks as a typed reply.
+   * `chatKey`, when given, is the conversation that asked — thread part included — so
+   * the card lands inside the topic the work lives in, not loose at the bottom of the
+   * room where nobody can tell which task is asking.
+   */
+  postQuestionCard?(identity: string, card: QuestionCardState, chatKey?: string): Promise<void>;
   /** The board as a card, to a chat. Absent means "看板" answers as plain text. */
   postBoardCard?(chatKey: string, view: BoardView): Promise<void>;
   /**
@@ -650,8 +655,16 @@ export function parseDigestRequest(text: string): DigestRequest | undefined {
 export class ChannelManager {
   private readonly adapters: ChannelAdapter[] = [];
   private readonly statuses = new Map<string, ChannelStatus>();
-  /** Where each agent's last channel instruction came from, for routing notices back. */
-  private readonly lastAsker = new Map<string, { adapter: ChannelAdapter; identity: string }>();
+  /**
+   * Where each agent's last channel instruction came from, for routing notices back.
+   * `chatKey` carries the thread when the instruction arrived in one, so a question or
+   * an approval goes back into the topic that asked — a bare "Bob 有个问题要先问你" at
+   * the bottom of the room left the person guessing which of three tasks was asking.
+   */
+  private readonly lastAsker = new Map<
+    string,
+    { adapter: ChannelAdapter; identity: string; chatKey?: string }
+  >();
   /**
    * The approval each channel person can answer right now, keyed by their identity.
    *
@@ -763,10 +776,16 @@ export class ChannelManager {
     return [...this.statuses.values()];
   }
 
-  /** Remembers who to notify for an agent. Called by `ask` wiring with the agent id. */
-  remember(agentId: string, adapterName: string, identity: string): void {
+  /** Remembers who to notify for an agent — and, when known, the thread they spoke in. */
+  remember(agentId: string, adapterName: string, identity: string, chatKey?: string): void {
     const adapter = this.adapters.find(a => a.name === adapterName);
-    if (adapter !== undefined) this.lastAsker.set(agentId, { adapter, identity });
+    if (adapter !== undefined) {
+      this.lastAsker.set(agentId, {
+        adapter,
+        identity,
+        ...(chatKey !== undefined ? { chatKey } : {}),
+      });
+    }
   }
 
   /**
@@ -798,11 +817,15 @@ export class ChannelManager {
       input.options.length > 0
     ) {
       void asker.adapter
-        .postQuestionCard(asker.identity, {
-          agentName: input.agentName,
-          question: input.question,
-          options: input.options,
-        })
+        .postQuestionCard(
+          asker.identity,
+          {
+            agentName: input.agentName,
+            question: input.question,
+            options: input.options,
+          },
+          asker.chatKey
+        )
         .catch(() => {
           // The web page shows it too; a failed push is not a lost question.
         });
@@ -814,14 +837,16 @@ export class ChannelManager {
 
 ${input.options.map(option => `· ${option}`).join("\n")}`
         : "";
-    void asker.adapter
-      .send(
-        asker.identity,
-        questionText(input.agentName, input.question, choices)
-      )
-      .catch(() => {
-        // The web page shows it too; a failed push is not a lost question.
-      });
+    const text = questionText(input.agentName, input.question, choices);
+    // Into the thread that asked, where the adapter can address one: a question with
+    // no surrounding context is a question about everything at once.
+    const push =
+      asker.chatKey !== undefined && asker.adapter.sendToChat !== undefined
+        ? asker.adapter.sendToChat(asker.chatKey, text)
+        : asker.adapter.send(asker.identity, text);
+    void push.catch(() => {
+      // The web page shows it too; a failed push is not a lost question.
+    });
     return asker.identity;
   }
 
@@ -838,19 +863,28 @@ ${input.options.map(option => `· ${option}`).join("\n")}`
     // person answering "允许" at a card is right, not wrong.
     if (asker.adapter.postApprovalCard !== undefined) {
       void asker.adapter
-        .postApprovalCard(asker.identity, {
-          approvalId,
-          agentName,
-          description,
-          stakes: APPROVAL_STAKES,
-        })
+        .postApprovalCard(
+          asker.identity,
+          {
+            approvalId,
+            agentName,
+            description,
+            stakes: APPROVAL_STAKES,
+          },
+          asker.chatKey
+        )
         .catch(() => {
           // The web UI still shows it; a failed push is not a lost approval.
         });
       return;
     }
     const message = consentFallbackText(agentName, description);
-    void asker.adapter.send(asker.identity, message).catch(() => {
+    // Same thread-first routing as a question, for the same reason.
+    const push =
+      asker.chatKey !== undefined && asker.adapter.sendToChat !== undefined
+        ? asker.adapter.sendToChat(asker.chatKey, message)
+        : asker.adapter.send(asker.identity, message);
+    void push.catch(() => {
       // The web UI still shows it; a failed push is not a lost approval.
     });
   }

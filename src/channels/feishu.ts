@@ -1356,22 +1356,40 @@ export class FeishuChannel implements ChannelAdapter {
     });
   }
 
-  /** The question card, to wherever this identity's messages come from — like `send`. */
-  async postQuestionCard(identity: string, card: QuestionCardState): Promise<void> {
-    const chatId = this.chats.get(identity);
+  /**
+   * The question card — into the thread that asked when the manager names one, and to
+   * wherever this identity's messages come from otherwise. A question loose at the
+   * bottom of the room reads as being about everything at once.
+   */
+  async postQuestionCard(identity: string, card: QuestionCardState, chatKey?: string): Promise<void> {
+    const thread = chatKey !== undefined ? splitChatKey(chatKey) : undefined;
+    const chatId = thread?.chatId !== undefined && thread.chatId !== ""
+      ? thread.chatId
+      : this.chats.get(identity);
     if (chatId === undefined || this.apiClient === undefined) return;
-    await this.apiClient.im.message.create({
-      params: { receive_id_type: "chat_id" },
-      data: {
-        receive_id: chatId,
-        msg_type: "interactive",
-        content: JSON.stringify(renderQuestionCard(card)),
-      },
-    });
+    await this.post(
+      chatId,
+      "interactive",
+      JSON.stringify(renderQuestionCard(card)),
+      thread?.rootId,
+      chatKey
+    );
   }
 
-  /** The consent card, to wherever this identity's messages come from — like `send`. */
-  async postApprovalCard(identity: string, card: ApprovalCardState): Promise<void> {
+  /** The consent card — same thread-first routing as the question card. */
+  async postApprovalCard(identity: string, card: ApprovalCardState, chatKey?: string): Promise<void> {
+    const thread = chatKey !== undefined ? splitChatKey(chatKey) : undefined;
+    const threadChat = thread?.chatId !== undefined && thread.chatId !== "" ? thread.chatId : undefined;
+    if (threadChat !== undefined && this.apiClient !== undefined) {
+      await this.post(
+        threadChat,
+        "interactive",
+        JSON.stringify(renderApprovalCard(card)),
+        thread?.rootId,
+        chatKey
+      );
+      return;
+    }
     const chatId = this.chats.get(identity);
     if (chatId === undefined || this.apiClient === undefined) return;
     await this.apiClient.im.message.create({

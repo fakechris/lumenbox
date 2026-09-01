@@ -830,7 +830,9 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
       } else {
         agent = registry.list()[0] ?? orchestrator.ensureDefaultAgent();
       }
-      channels.remember(agent.id, identity.split(":")[0] ?? "", identity);
+      // The thread rides along, so a later question or approval from this work goes
+      // back into the topic that asked instead of loose at the bottom of the room.
+      channels.remember(agent.id, identity.split(":")[0] ?? "", identity, threadKey ?? chatKey);
       // Each outside chat is its own conversation thread: two groups talking to the
       // same agent never read each other's context. Permission stays with the person
       // (identity); context stays with the room (chatKey); spend is billed to the

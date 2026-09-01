@@ -1211,6 +1211,35 @@ test("a pushed approval answered from the app leaves the chat reply saying so", 
   assert.match(reply ?? "", /no longer waiting/);
 });
 
+test("an agent's question lands in the thread that asked, not loose in the room", async () => {
+  // Measured 2026-09-01: "Bob 有个问题要先问你" arrived at the bottom of the group
+  // while the work lived in a topic — the person could not tell which task was asking.
+  const adapter = cardAdapter();
+  const manager = new ChannelManager({
+    mayDrive: () => true,
+    ask: async () => "x",
+    log: () => {},
+  });
+  manager.register(adapter, true, "test");
+  await started(manager);
+
+  manager.remember("agent-1", "telegram", "telegram:7", "telegram:oc_room:om_topic");
+  const where = manager.askQuestion({
+    agentId: "agent-1",
+    agentName: "Bob",
+    question: "哪个长版?",
+  });
+  assert.equal(where, "telegram:7");
+  const pushed = adapter.chatSent.at(-1);
+  assert.equal(pushed?.chatKey, "telegram:oc_room:om_topic", "the thread key routes the question");
+  assert.match(pushed?.text ?? "", /Bob 有个问题要先问你/);
+
+  // Without a recorded thread, the old identity route still works.
+  manager.remember("agent-2", "telegram", "telegram:8");
+  manager.askQuestion({ agentId: "agent-2", agentName: "Ada", question: "?" });
+  assert.equal(adapter.sent.at(-1)?.identity, "telegram:8");
+});
+
 test("a scheduled push delivers the files its text names, like a reply does", async () => {
   // The measured failure (2026-09-01): the weekly report — a scheduled turn — said
   // "长版: /home/box/work/research/weekly-retro-2026-08-31.md" into the chat, and the
