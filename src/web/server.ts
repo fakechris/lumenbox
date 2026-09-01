@@ -177,6 +177,7 @@ import { rescueMessage, rescueStuck } from "../host/rescue.ts";
 import { Deliveries, deliveriesPath } from "../host/deliveries.ts";
 import { Ingress, ingressPath } from "../channels/ingress.ts";
 import { ConversationDirectory, conversationsPath } from "../channels/conversations.ts";
+import { SentRootsLedger, sentRootsPath } from "../channels/sent-roots.ts";
 import { randomUUID } from "node:crypto";
 import { adminRecipients, decideUpgrade, upgradeMessage } from "../host/upgrade.ts";
 import { PRESET_MODELS, providerNames, resolveProvider, testProvider } from "../host/provider.ts";
@@ -605,6 +606,14 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
   const conversations = new ConversationDirectory(conversationsPath(agentboxHome()), {
     incarnationOf,
     warn: line => log(`conversations: ${line}`),
+  });
+  // The other direction: which conversation authored each top-level message the bot
+  // sent, so a topic reply under a bot-sent report continues that conversation
+  // instead of opening an empty one. One ledger for every door — chatKeys carry the
+  // door name, so the entries cannot collide.
+  const sentRoots = new SentRootsLedger(sentRootsPath(agentboxHome()), {
+    incarnationOf,
+    warn: line => log(`sent-roots: ${line}`),
   });
 
   // Where each task's chat card lives — durably, so a restart does not orphan every
@@ -1258,7 +1267,8 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
           feishuSecret ?? "",
           line => log(line),
           ingress,
-          record.id
+          record.id,
+          sentRoots
         );
         // R37 option: whether this door's agent may approve in-meeting remote control.
         feishuDoor.meetingRemoteControl = record.meetingRemoteControl === true;
@@ -2865,7 +2875,14 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
               const liveDoor =
                 type === "feishu"
                   ? (() => {
-                      const door = new FeishuChannel(liveAppId, liveSecret, line => log(line), ingress, id);
+                      const door = new FeishuChannel(
+                        liveAppId,
+                        liveSecret,
+                        line => log(line),
+                        ingress,
+                        id,
+                        sentRoots
+                      );
                       door.meetingRemoteControl =
                         channelRecords.find(entry => entry.id === id)?.meetingRemoteControl === true;
                       return door;

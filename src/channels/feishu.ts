@@ -556,7 +556,7 @@ export class FeishuChannel implements ChannelAdapter {
     root_id?: string;
     chat_type?: string;
   }): string {
-    return conversationKeyFor(message, this.name);
+    return conversationKeyFor(message, this.name, id => this.sentRoots?.chatKeyFor(id));
   }
 
 
@@ -604,7 +604,16 @@ export class FeishuChannel implements ChannelAdapter {
       }) => void;
       decided: (id: string, fate: "admitted" | "refused" | "dropped", reason?: string) => void;
     },
-    channelId = "feishu"
+    channelId = "feishu",
+    /**
+     * Where the bot's own top-level sends are recorded, so a topic reply under one of
+     * them routes back to the conversation that wrote it instead of opening an empty
+     * one. Absent in tests and the reply keeps its old orphaning behaviour.
+     */
+    private readonly sentRoots?: {
+      record: (id: string, chatKey: string) => void;
+      chatKeyFor: (id: string) => string | undefined;
+    }
   ) {
     this.name = channelId;
   }
@@ -1197,7 +1206,8 @@ export class FeishuChannel implements ChannelAdapter {
     chatId: string,
     msgType: string,
     content: string,
-    replyTo?: string
+    replyTo?: string,
+    owner?: string
   ): Promise<string | undefined> {
     if (this.apiClient === undefined) return undefined;
     if (replyTo !== undefined) {
@@ -1222,7 +1232,15 @@ export class FeishuChannel implements ChannelAdapter {
           params: { receive_id_type: "chat_id" },
           data: { receive_id: chatId, msg_type: msgType, content },
         });
-        return response?.data?.message_id;
+        const sentId = response?.data?.message_id;
+        // A create is a new topic root with a vendor-minted id nothing has ever seen.
+        // Recorded against the conversation that authored it — the addressed chatKey,
+        // thread part included when a failed reply degraded here — so a person's reply
+        // under it continues that conversation instead of opening an empty one.
+        if (sentId !== undefined && owner !== undefined) {
+          this.sentRoots?.record(sentId, owner);
+        }
+        return sentId;
       } catch (error) {
         last = error;
         if (attempt < 2) await new Promise(resolve => setTimeout(resolve, 1000 * 2 ** attempt));
@@ -1258,7 +1276,7 @@ export class FeishuChannel implements ChannelAdapter {
       const chunk = text.slice(at, at + FeishuChannel.CHUNK);
       if (markdown && !degraded) {
         try {
-          await this.post(chatId, "post", markdownPost(chunk), anchor);
+          await this.post(chatId, "post", markdownPost(chunk), anchor, chatKey);
           continue;
         } catch (error) {
           // A refused post is about the formatting; the words still deserve
@@ -1267,7 +1285,7 @@ export class FeishuChannel implements ChannelAdapter {
           degraded = true;
         }
       }
-      await this.post(chatId, "text", JSON.stringify({ text: chunk }), anchor);
+      await this.post(chatId, "text", JSON.stringify({ text: chunk }), anchor, chatKey);
     }
   }
 
@@ -1283,7 +1301,8 @@ export class FeishuChannel implements ChannelAdapter {
       chatId,
       "interactive",
       JSON.stringify(renderCard(card)),
-      options?.replyTo ?? rootId
+      options?.replyTo ?? rootId,
+      chatKey
     );
   }
 
@@ -1396,7 +1415,13 @@ export class FeishuChannel implements ChannelAdapter {
     });
     const fileKey = uploaded?.file_key ?? uploaded?.data?.file_key;
     if (fileKey === undefined) throw new Error("feishu file upload returned no key");
-    await this.post(chatId, "file", JSON.stringify({ file_key: fileKey }), options?.replyTo ?? rootId);
+    await this.post(
+      chatId,
+      "file",
+      JSON.stringify({ file_key: fileKey }),
+      options?.replyTo ?? rootId,
+      chatKey
+    );
   }
 
   /** Upload, then reference: Feishu takes bytes first and a key in the message. */
@@ -1408,18 +1433,29 @@ export class FeishuChannel implements ChannelAdapter {
     });
     const imageKey = uploaded?.image_key ?? uploaded?.data?.image_key;
     if (imageKey === undefined) throw new Error("feishu image upload returned no key");
-    await this.post(chatId, "image", JSON.stringify({ image_key: imageKey }), options?.replyTo ?? rootId);
+    await this.post(
+      chatId,
+      "image",
+      JSON.stringify({ image_key: imageKey }),
+      options?.replyTo ?? rootId,
+      chatKey
+    );
   }
 }
 
 /** See the method of the same name; exported so the keying rules are testable as rules. */
-export function conversationKeyFor(message: {
-  message_id?: string;
-  chat_id?: string;
-  thread_id?: string;
-  root_id?: string;
-  chat_type?: string;
-}, prefix = "feishu"): string {
+export function conversationKeyFor(
+  message: {
+    message_id?: string;
+    chat_id?: string;
+    thread_id?: string;
+    root_id?: string;
+    chat_type?: string;
+  },
+  prefix = "feishu",
+  /** The conversation that authored a bot-sent root, when a ledger knows one. */
+  authoredBy?: (id: string) => string | undefined
+): string {
     const chatId = message.chat_id ?? "";
     // A direct chat is one conversation, full stop — checked FIRST, because a reply
     // inside a topic bubble carries root_id even in a 1:1, and the root branch used to
@@ -1440,7 +1476,15 @@ export function conversationKeyFor(message: {
     // own id; its replies carried `root_id` equal to that id and `thread_id` equal to
     // something else entirely.
     const root = message.root_id;
-    if (root !== undefined && root !== "") return `${prefix}:${chatId}:${root}`;
+    if (root !== undefined && root !== "") {
+      // A root the bot itself sent: the reply continues the conversation that authored
+      // it. Without this, every topic reply under a bot-sent report keyed to the sent
+      // message's vendor-minted id — an id nothing had ever seen — and opened an empty
+      // conversation in which the agent read its own report's follow-up cold.
+      const authored = authoredBy?.(root);
+      if (authored !== undefined) return authored;
+      return `${prefix}:${chatId}:${root}`;
+    }
     return message.message_id !== undefined
       ? `${prefix}:${chatId}:${message.message_id}`
       : `${prefix}:${chatId}`;
