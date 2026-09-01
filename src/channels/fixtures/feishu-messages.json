@@ -1,0 +1,166 @@
+{
+  "$comment": "CAPTURED from Feishu and sanitised by scripts/capture-feishu-fixtures.mjs — content replaced, structure kept. Re-capture rather than hand-editing.",
+  "capturedAt": "2026-09-01",
+  "messages": [
+    {
+      "kind": "image:user:threaded",
+      "message": {
+        "body": {
+          "content": "{\"image_key\":\"img_fixture1\"}"
+        },
+        "chat_id": "oc_fixture2",
+        "create_time": "1788000000000",
+        "deleted": false,
+        "message_id": "om_fixture3",
+        "message_position": "示例 sample",
+        "msg_type": "image",
+        "sender": {
+          "id": "ou_fixture4",
+          "id_type": "open_id",
+          "sender_type": "user",
+          "tenant_key": "示例 sample"
+        },
+        "thread_id": "omt_fixture5",
+        "thread_message_position": "示例 sample",
+        "update_time": "1788000000000",
+        "updated": true
+      }
+    },
+    {
+      "kind": "interactive:app:top-level",
+      "message": {
+        "body": {
+          "content": "{\"title\":\"示例 sample\",\"elements\":[[{\"tag\":\"text\",\"text\":\"示例文本 sample text for shape only\"}],[{\"tag\":\"button\",\"text\":\"示例文本 sample text for shape only\",\"type\":\"default\"},{\"tag\":\"button\",\"text\":\"示例文本 sample text for shape only\",\"type\":\"default\"},{\"tag\":\"button\",\"text\":\"示例文本 sample text for shape only\",\"type\":\"default\"}],[{\"tag\":\"note\",\"elements\":[{\"tag\":\"text\",\"text\":\"示例 sample\"}]}]]}"
+        },
+        "chat_id": "oc_fixture2",
+        "create_time": "1788000000000",
+        "deleted": false,
+        "message_id": "om_fixture6",
+        "message_position": "示例 sample",
+        "msg_type": "interactive",
+        "sender": {
+          "id": "cli_fixture7",
+          "id_type": "app_id",
+          "sender_type": "app",
+          "tenant_key": "示例 sample"
+        },
+        "update_time": "1788000000000",
+        "updated": false
+      }
+    },
+    {
+      "kind": "post:app:top-level",
+      "message": {
+        "body": {
+          "content": "{\"title\":\"\",\"content\":[[{\"tag\":\"text\",\"text\":\"示例 sample\",\"style\":[]}],[{\"tag\":\"text\",\"text\":\"示例文本 sample text for shape only\",\"style\":[]}],[{\"tag\":\"text\",\"text\":\"示例文本 sample text for shape only\",\"style\":[]},{\"tag\":\"text\",\"text\":\"示例 sample\",\"style\":[]},{\"tag\":\"text\",\"text\":\"示例文本 sample text for shape only\",\"style\":[\"示例 sample\"]},{\"tag\":\"text\",\"text\":\"示例文本 sample text for shape only\",\"style\":[]}],[{\"tag\":\"text\",\"text\":\"示例文本 sample text for shape only\",\"style\":[]}],[{\"tag\":\"text\",\"text\":\"示例文本 sample text for shape only\",\"style\":[]}],[{\"tag\":\"text\",\"text\":\"示例 sample\",\"style\":[]},{\"tag\":\"text\",\"text\":\"示例文本 sample text for shape only\",\"style\":[]},{\"tag\":\"text\",\"text\":\"示例文本 sample text for shape only\",\"style\":[]}],[{\"tag\":\"text\",\"text\":\"示例 sample\",\"style\":[]},{\"tag\":\"text\",\"text\":\"示例文本 sample text for shape only\",\"style\":[]}],[{\"tag\":\"text\",\"text\":\"示例 sample\",\"style\":[]},{\"tag\":\"text\",\"text\":\"示例 sample\",\"style\":[]},{\"tag\":\"text\",\"text\":\"示例 sample\",\"style\":[\"示例 sample\"]},{\"tag\":\"text\",\"text\":\"示例 sample\",\"style\":[]},{\"tag\":\"text\",\"text\":\"示例 sample\",\"style\":[\"示例 sample\"]},{\"tag\":\"text\",\"text\":\"示例 sample\",\"style\":[]},{\"tag\":\"text\",\"text\":\"示例 sample\",\"style\":[\"示例 sample\"]}],[{\"tag\":\"text\",\"text\":\"示例 sample\",\"style\":[]},{\"tag\":\"text\",\"text\":\"示例文本 sample text for shape only\",\"style\":[]}],[{\"tag\":\"text\",\"text\":\"示例 sample\",\"style\":[]},{\"tag\":\"text\",\"text\":\"示例文本 sample text for shape only\",\"style\":[]}],[{\"tag\":\"text\",\"text\":\"示例 sample\",\"style\":[]},{\"tag\":\"text\",\"text\":\"示例文本 sample text for shape only\",\"style\":[]},{\"tag\":\"text\",\"text\":\"示例 sample\",\"style\":[\"示例 sample\"]},{\"tag\":\"text\",\"text\":\"示例文本 sample text for shape only\",\"style\":[]}],[{\"tag\":\"text\",\"text\":\"示例 sample\",\"style\":[]},{\"tag\":\"text\",\"text\":\"示例 sample\",\"style\":[\"示例 sample\"]},{\"tag\":\"text\",\"text\":\"示例文本 sample text for shape only\",\"style\":[]}],[{\"tag\":\"text\",\"text\":\"示例 sample\",\"style\":[]},{\"tag\":\"text\",\"text\":\"示例文本 sample text for shape only\",\"style\":[]}],[{\"tag\":\"text\",\"text\":\"示例 sample\",\"style\":[]},{\"tag\":\"text\",\"text\":\"示例文本 sample text for shape only\",\"style\":[]}],[{\"tag\":\"text\",\"text\":\"示例 sample\",\"style\":[]},{\"tag\":\"text\",\"text\":\"示例 sample\",\"style\":[]},{\"tag\":\"text\",\"text\":\"示例 sample\",\"style\":[\"示例 sample\"]},{\"tag\":\"text\",\"text\":\"示例文本 sample text for shape only\",\"style\":[]}],[{\"tag\":\"text\",\"text\":\"示例文本 sample text for shape only\",\"style\":[]}],[{\"tag\":\"text\",\"text\":\"示例 sample\",\"style\":[\"示例 sample\"]},{\"tag\":\"text\",\"text\":\"示例 sample\",\"style\":[]}],[{\"tag\":\"text\",\"text\":\"示例 sample\",\"style\":[]},{\"tag\":\"text\",\"text\":\"示例 sample\",\"style\":[\"示例 sample\"]},{\"tag\":\"text\",\"text\":\"示例文本 sample text for shape only\",\"style\":[]}],[{\"tag\":\"text\",\"text\":\"示例 sample\",\"style\":[]},{\"tag\":\"text\",\"text\":\"示例 sample\",\"style\":[\"示例 sample\"]},{\"tag\":\"text\",\"text\":\"示例文本 sample text for shape only\",\"style\":[]}],[{\"tag\":\"text\",\"text\":\"示例 sample\",\"style\":[]},{\"tag\":\"text\",\"text\":\"示例 sample\",\"style\":[\"示例 sample\"]},{\"tag\":\"text\",\"text\":\"示例文本 sample text for shape only\",\"style\":[]}],[{\"tag\":\"text\",\"text\":\"示例 sample\",\"style\":[]},{\"tag\":\"text\",\"text\":\"示例 sample\",\"style\":[\"示例 sample\"]},{\"tag\":\"text\",\"text\":\"示例文本 sample text for shape only\",\"style\":[]}],[{\"tag\":\"text\",\"text\":\"示例 sample\",\"style\":[]},{\"tag\":\"text\",\"text\":\"示例 sample\",\"style\":[\"示例 sample\"]},{\"tag\":\"text\",\"text\":\"示例 sample\",\"style\":[]}],[{\"tag\":\"text\",\"text\":\"示例 sample\",\"style\":[]},{\"tag\":\"text\",\"text\":\"示例 sample\",\"style\":[\"示例 sample\"]},{\"tag\":\"text\",\"text\":\"示例文本 sample text for shape only\",\"style\":[]}]],\"content_v2\":[[{\"tag\":\"md\",\"text\":\"示例文本 sample text for shape only\"}]]}"
+        },
+        "chat_id": "oc_fixture2",
+        "create_time": "1788000000000",
+        "deleted": false,
+        "message_id": "om_fixture8",
+        "message_position": "示例 sample",
+        "msg_type": "post",
+        "sender": {
+          "id": "cli_fixture7",
+          "id_type": "app_id",
+          "sender_type": "app",
+          "tenant_key": "示例 sample"
+        },
+        "update_time": "1788000000000",
+        "updated": false
+      }
+    },
+    {
+      "kind": "post:user:threaded",
+      "message": {
+        "body": {
+          "content": "{\"title\":\"\",\"content\":[[{\"tag\":\"text\",\"text\":\"示例文本 sample text for shape only\",\"style\":[]}],[{\"tag\":\"text\",\"text\":\"示例 sample\",\"style\":[]}],[{\"tag\":\"text\",\"text\":\"示例文本 sample text for shape only\",\"style\":[]}],[{\"tag\":\"text\",\"text\":\"示例 sample\",\"style\":[]}],[{\"tag\":\"text\",\"text\":\"示例文本 sample text for shape only\",\"style\":[]}],[{\"tag\":\"text\",\"text\":\"示例文本 sample text for shape only\",\"style\":[]},{\"tag\":\"a\",\"href\":\"示例文本 sample text for shape only\",\"text\":\"示例 sample\",\"style\":[\"示例 sample\"]},{\"tag\":\"text\",\"text\":\"示例 sample\",\"style\":[]}],[],[],[{\"tag\":\"text\",\"text\":\"示例 sample\",\"style\":[\"示例 sample\"]}],[],[{\"tag\":\"text\",\"text\":\"示例文本 sample text for shape only\",\"style\":[]},{\"tag\":\"a\",\"href\":\"示例文本 sample text for shape only\",\"text\":\"示例 sample\",\"style\":[\"示例 sample\"]}],[{\"tag\":\"text\",\"text\":\"示例文本 sample text for shape only\",\"style\":[]}],[{\"tag\":\"text\",\"text\":\"示例文本 sample text for shape only\",\"style\":[]}],[{\"tag\":\"text\",\"text\":\"示例文本 sample text for shape only\",\"style\":[]}],[{\"tag\":\"text\",\"text\":\"示例文本 sample text for shape only\",\"style\":[]}],[{\"tag\":\"text\",\"text\":\"示例文本 sample text for shape only\",\"style\":[]}],[{\"tag\":\"text\",\"text\":\"示例文本 sample text for shape only\",\"style\":[]}],[],[],[{\"tag\":\"text\",\"text\":\"示例 sample\",\"style\":[\"示例 sample\"]}],[],[{\"tag\":\"text\",\"text\":\"示例文本 sample text for shape only\",\"style\":[]}],[{\"tag\":\"text\",\"text\":\"示例文本 sample text for shape only\",\"style\":[]}],[{\"tag\":\"text\",\"text\":\"示例文本 sample text for shape only\",\"style\":[]}],[{\"tag\":\"text\",\"text\":\"示例 sample\",\"style\":[]}],[{\"tag\":\"text\",\"text\":\"示例 sample\",\"style\":[]}],[{\"tag\":\"code_block\",\"language\":\"示例 sample\",\"text\":\"示例 sample\"}],[],[{\"tag\":\"text\",\"text\":\"示例文本 sample text for shape only\",\"style\":[]}],[{\"tag\":\"text\",\"text\":\"示例 sample\",\"style\":[]}],[],[],[{\"tag\":\"text\",\"text\":\"示例文本 sample text for shape only\",\"style\":[\"示例 sample\"]}],[],[{\"tag\":\"text\",\"text\":\"示例 sample\",\"style\":[]},{\"tag\":\"a\",\"href\":\"示例文本 sample text for shape only\",\"text\":\"示例文本 sample text for shape only\",\"style\":[\"示例 sample\"]},{\"tag\":\"text\",\"text\":\"示例文本 sample text for shape only\",\"style\":[]}],[{\"tag\":\"text\",\"text\":\"示例文本 sample text for shape only\",\"style\":[]}],[{\"tag\":\"text\",\"text\":\"示例文本 sample text for shape only\",\"style\":[]}],[],[],[{\"tag\":\"text\",\"text\":\"示例文本 sample text for shape only\",\"style\":[\"示例 sample\"]}],[],[{\"tag\":\"text\",\"text\":\"示例 sample\",\"style\":[]}],[{\"tag\":\"text\",\"text\":\"示例文本 sample text for shape only\",\"style\":[]}],[],[],[{\"tag\":\"text\",\"text\":\"示例 sample\",\"style\":[\"示例 sample\"]}],[],[{\"tag\":\"text\",\"text\":\"示例文本 sample text for shape only\",\"style\":[]}],[],[{\"tag\":\"text\",\"text\":\"示例文本 sample text for shape only\",\"style\":[]}],[],[],[{\"tag\":\"text\",\"text\":\"示例 sample\",\"style\":[\"示例 sample\"]}],[],[{\"tag\":\"text\",\"text\":\"示例文本 sample text for shape only\",\"style\":[]}],[{\"tag\":\"text\",\"text\":\"示例 sample\",\"style\":[]}],[{\"tag\":\"text\",\"text\":\"示例 sample\",\"style\":[]}],[{\"tag\":\"code_block\",\"language\":\"示例 sample\",\"text\":\"示例 sample\"}],[{\"tag\":\"text\",\"text\":\"示例 sample\",\"style\":[]}],[],[],[{\"tag\":\"text\",\"text\":\"示例 sample\",\"style\":[\"示例 sample\"]}],[],[{\"tag\":\"text\",\"text\":\"示例文本 sample text for shape only\",\"style\":[]}],[{\"tag\":\"text\",\"text\":\"示例 sample\",\"style\":[]}],[{\"tag\":\"text\",\"text\":\"示例文本 sample text for shape only\",\"style\":[]}]],\"content_v2\":[[{\"tag\":\"text\",\"text\":\"示例文本 sample text for shape only\",\"style\":[]}],[{\"tag\":\"text\",\"text\":\"示例 sample\",\"style\":[]}],[{\"tag\":\"text\",\"text\":\"示例文本 sample text for shape only\",\"style\":[]}],[{\"tag\":\"text\",\"text\":\"示例 sample\",\"style\":[]}],[{\"tag\":\"text\",\"text\":\"示例文本 sample text for shape only\",\"style\":[]}],[{\"tag\":\"text\",\"text\":\"示例文本 sample text for shape only\",\"style\":[]},{\"tag\":\"a\",\"href\":\"示例文本 sample text for shape only\",\"text\":\"示例 sample\",\"style\":[\"示例 sample\"]},{\"tag\":\"text\",\"text\":\"示例 sample\",\"style\":[]}],[],[],[{\"tag\":\"text\",\"text\":\"示例 sample\",\"style\":[\"示例 sample\"]}],[],[{\"tag\":\"text\",\"text\":\"示例文本 sample text for shape only\",\"style\":[]},{\"tag\":\"a\",\"href\":\"示例文本 sample text for shape only\",\"text\":\"示例 sample\",\"style\":[\"示例 sample\"]}],[{\"tag\":\"text\",\"text\":\"示例文本 sample text for shape only\",\"style\":[]}],[{\"tag\":\"text\",\"text\":\"示例文本 sample text for shape only\",\"style\":[]}],[{\"tag\":\"text\",\"text\":\"示例文本 sample text for shape only\",\"style\":[]}],[{\"tag\":\"text\",\"text\":\"示例文本 sample text for shape only\",\"style\":[]}],[{\"tag\":\"text\",\"text\":\"示例文本 sample text for shape only\",\"style\":[]}],[{\"tag\":\"text\",\"text\":\"示例文本 sample text for shape only\",\"style\":[]}],[],[],[{\"tag\":\"text\",\"text\":\"示例 sample\",\"style\":[\"示例 sample\"]}],[],[{\"tag\":\"text\",\"text\":\"示例文本 sample text for shape only\",\"style\":[]}],[{\"tag\":\"text\",\"text\":\"示例文本 sample text for shape only\",\"style\":[]}],[{\"tag\":\"text\",\"text\":\"示例文本 sample text for shape only\",\"style\":[]}],[{\"tag\":\"text\",\"text\":\"示例 sample\",\"style\":[]}],[{\"tag\":\"text\",\"text\":\"示例 sample\",\"style\":[]}],[{\"tag\":\"code_block\",\"language\":\"示例 sample\",\"text\":\"示例 sample\"}],[],[{\"tag\":\"text\",\"text\":\"示例文本 sample text for shape only\",\"style\":[]}],[{\"tag\":\"text\",\"text\":\"示例 sample\",\"style\":[]}],[],[],[{\"tag\":\"text\",\"text\":\"示例文本 sample text for shape only\",\"style\":[\"示例 sample\"]}],[],[{\"tag\":\"text\",\"text\":\"示例 sample\",\"style\":[]},{\"tag\":\"a\",\"href\":\"示例文本 sample text for shape only\",\"text\":\"示例文本 sample text for shape only\",\"style\":[\"示例 sample\"]},{\"tag\":\"text\",\"text\":\"示例文本 sample text for shape only\",\"style\":[]}],[{\"tag\":\"text\",\"text\":\"示例文本 sample text for shape only\",\"style\":[]}],[{\"tag\":\"text\",\"text\":\"示例文本 sample text for shape only\",\"style\":[]}],[],[],[{\"tag\":\"text\",\"text\":\"示例文本 sample text for shape only\",\"style\":[\"示例 sample\"]}],[],[{\"tag\":\"text\",\"text\":\"示例 sample\",\"style\":[]}],[{\"tag\":\"text\",\"text\":\"示例文本 sample text for shape only\",\"style\":[]}],[],[],[{\"tag\":\"text\",\"text\":\"示例 sample\",\"style\":[\"示例 sample\"]}],[],[{\"tag\":\"text\",\"text\":\"示例文本 sample text for shape only\",\"style\":[]}],[],[{\"tag\":\"text\",\"text\":\"示例文本 sample text for shape only\",\"style\":[]}],[],[],[{\"tag\":\"text\",\"text\":\"示例 sample\",\"style\":[\"示例 sample\"]}],[],[{\"tag\":\"text\",\"text\":\"示例文本 sample text for shape only\",\"style\":[]}],[{\"tag\":\"text\",\"text\":\"示例 sample\",\"style\":[]}],[{\"tag\":\"text\",\"text\":\"示例 sample\",\"style\":[]}],[{\"tag\":\"code_block\",\"language\":\"示例 sample\",\"text\":\"示例 sample\"}],[{\"tag\":\"text\",\"text\":\"示例 sample\",\"style\":[]}],[],[],[{\"tag\":\"text\",\"text\":\"示例 sample\",\"style\":[\"示例 sample\"]}],[],[{\"tag\":\"text\",\"text\":\"示例文本 sample text for shape only\",\"style\":[]}],[{\"tag\":\"text\",\"text\":\"示例 sample\",\"style\":[]}],[{\"tag\":\"text\",\"text\":\"示例文本 sample text for shape only\",\"style\":[]}]]}"
+        },
+        "chat_id": "oc_fixture2",
+        "create_time": "1788000000000",
+        "deleted": false,
+        "message_id": "om_fixture9",
+        "message_position": "示例 sample",
+        "msg_type": "post",
+        "sender": {
+          "id": "ou_fixture4",
+          "id_type": "open_id",
+          "sender_type": "user",
+          "tenant_key": "示例 sample"
+        },
+        "thread_id": "omt_fixture10",
+        "thread_message_position": "示例 sample",
+        "update_time": "1788000000000",
+        "updated": true
+      }
+    },
+    {
+      "kind": "text:app:top-level",
+      "message": {
+        "body": {
+          "content": "{\"text\":\"示例文本 sample text for shape only\"}"
+        },
+        "chat_id": "oc_fixture2",
+        "create_time": "1788000000000",
+        "deleted": false,
+        "message_id": "om_fixture11",
+        "message_position": "示例 sample",
+        "msg_type": "text",
+        "sender": {
+          "id": "cli_fixture7",
+          "id_type": "app_id",
+          "sender_type": "app",
+          "tenant_key": "示例 sample"
+        },
+        "update_time": "1788000000000",
+        "updated": false
+      }
+    },
+    {
+      "kind": "text:user:threaded",
+      "message": {
+        "body": {
+          "content": "{\"text\":\"示例文本 sample text for shape only\"}"
+        },
+        "chat_id": "oc_fixture2",
+        "create_time": "1788000000000",
+        "deleted": false,
+        "message_id": "om_fixture12",
+        "message_position": "示例 sample",
+        "msg_type": "text",
+        "sender": {
+          "id": "ou_fixture4",
+          "id_type": "open_id",
+          "sender_type": "user",
+          "tenant_key": "示例 sample"
+        },
+        "thread_id": "omt_fixture13",
+        "thread_message_position": "示例 sample",
+        "update_time": "1788000000000",
+        "updated": true
+      }
+    },
+    {
+      "kind": "text:user:top-level",
+      "message": {
+        "body": {
+          "content": "{\"text\":\"示例文本 sample text for shape only\"}"
+        },
+        "chat_id": "oc_fixture2",
+        "create_time": "1788000000000",
+        "deleted": false,
+        "message_id": "om_fixture14",
+        "message_position": "示例 sample",
+        "msg_type": "text",
+        "sender": {
+          "id": "ou_fixture4",
+          "id_type": "open_id",
+          "sender_type": "user",
+          "tenant_key": "示例 sample"
+        },
+        "update_time": "1788000000000",
+        "updated": false
+      }
+    }
+  ]
+}
