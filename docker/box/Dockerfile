@@ -10,7 +10,7 @@
 # point: .github/dependabot.yml watches this file weekly and opens the PR that moves the
 # digest, and scripts/release-check.mjs refuses a build whose base is not pinned.
 # debian:12-slim as of 2026-09-01
-FROM debian@sha256:88200866dfff7ea7f5cbcb6ec7c8a701889efe6fe859fe64d6990e4b07ea4171
+FROM debian@sha256:f324c7ff54321e8d9c588493a20244965938ce0aa50bbd1022d38010e9ffc4b1
 
 ENV DEBIAN_FRONTEND=noninteractive \
     LANG=C.UTF-8 \
