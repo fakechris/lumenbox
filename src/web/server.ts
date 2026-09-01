@@ -608,15 +608,29 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
    */
   const lastInboundFor = (channel: string): string | undefined => {
     const arrivals = ingress.list().filter(record => record.channel === channel);
+    // The watermark never passes an arrival that has not been decided.
+    //
+    // "Last thing that arrived" was the obvious floor and the wrong one: an arrival is
+    // recorded the instant the wire hands it over, so a crash between that record and
+    // the durable queue moved the floor past a message nobody ever answered, and the
+    // sweep would never look at it again. Mature harnesses persist a watermark strictly
+    // below the smallest still-pending item for exactly this reason (OpenClaw's Telegram
+    // update-offset store, src/telegram/bot.ts — the same rule, expressed in update ids).
+    // Here the ledger already distinguishes the two: an arrival with a fate reached a
+    // decision, one without it did not.
+    const pending = arrivals.find(record => record.fate === undefined);
+    if (pending !== undefined) return pending.at;
     return arrivals[arrivals.length - 1]?.at;
   };
   /**
-   * Whether the ledger already has this message. The sweep's floor is a timestamp, so
-   * it always re-offers a message or two either side of it; this is what keeps a
-   * re-offer from becoming a second answer to something already answered.
+   * Whether this message reached a decision already — admitted, refused or dropped.
+   *
+   * Not "is it in the ledger": an arrival with no fate is one we crashed underneath,
+   * and re-offering it is the entire point of the sweep. Settled ones are what must
+   * not be answered twice.
    */
   const handledAlready = (messageId: string): boolean =>
-    ingress.list().some(record => record.id === messageId);
+    ingress.list().some(record => record.id === messageId && record.fate !== undefined);
   // Which chat each conversation came from — written here because the channel path is
   // where both halves are last seen together, read by the console-interjection path
   // where only the conversation id survives.

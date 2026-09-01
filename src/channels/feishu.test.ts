@@ -572,6 +572,52 @@ test("the catch-up sweep replays what the socket missed, and only that", async (
   await internals.catchUp();
   assert.deepEqual(replayed, ["om_missed"], "only the message nothing has handled");
 
+  // An outage's backlog is caught up on, not acted on wholesale: a message older than
+  // the sweep's window is left for a person to raise again, and said out loud rather
+  // than dropped quietly. (OpenClaw takes the same line with WhatsApp history — mark it
+  // read, do not auto-reply to it.)
+  const said: string[] = [];
+  const aged = new FeishuChannel("a", "b", line => said.push(line));
+  const agedInternals = aged as unknown as {
+    apiClient: unknown;
+    receiveMessage: (data: unknown) => unknown;
+    catchUp: () => Promise<void>;
+  };
+  const answered: string[] = [];
+  agedInternals.receiveMessage = (data: unknown) => {
+    answered.push(String((data as { message?: { message_id?: string } }).message?.message_id));
+    return {};
+  };
+  const dayOld = Math.floor((Date.now() - 24 * 3_600_000) / 1000);
+  agedInternals.apiClient = {
+    im: {
+      chat: { list: async () => ({ data: { items: [{ chat_id: "oc_room" }] } }) },
+      message: {
+        list: async () => ({
+          data: {
+            items: [
+              {
+                message_id: "om_yesterday",
+                msg_type: "text",
+                create_time: String(dayOld),
+                sender: { id: "ou_1", sender_type: "user" },
+                body: { content: '{"text":"asked this yesterday"}' },
+              },
+            ],
+          },
+        }),
+      },
+    },
+  };
+  aged.lastInboundAt = () => new Date(Date.now() - 48 * 3_600_000).toISOString();
+  aged.alreadyHandled = () => false;
+  await agedInternals.catchUp();
+  assert.deepEqual(answered, [], "yesterday's question is not answered out of nowhere");
+  assert.ok(
+    said.some(line => /left unanswered/.test(line)),
+    "and the skip is stated, not silent"
+  );
+
   // Without a floor — a door that cannot say what it already saw — the sweep does
   // nothing rather than replaying a group's whole history as new work.
   replayed.length = 0;

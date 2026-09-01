@@ -279,6 +279,19 @@ export function classifySocketLine(line: string): "ready" | "failed" | undefined
 export const SOCKET_RETRY_MS = [5_000, 15_000, 30_000, 60_000] as const;
 
 /**
+ * How stale a missed message may be and still be answered by the catch-up sweep.
+ *
+ * Two hours, which is the same span liveness.ts calls "silent long enough to doubt the
+ * socket": inside it, a missing answer is a fault worth repairing; outside it, the
+ * person has moved on and an unprompted answer to a morning question at midnight is a
+ * second surprise rather than a fix. Older ones are counted and named in the log, never
+ * dropped silently.
+ */
+const REPLAY_MAX_AGE_MS = 2 * 3_600_000;
+/** A ceiling on one sweep, so a long outage cannot become a burst of turns. */
+const REPLAY_MAX_PER_SWEEP = 5;
+
+/**
  * A meeting invitation, parsed out of `vc.bot.meeting_invited_v1` (roadmap R37).
  *
  * The shape follows the prior art (Hermes Agent's feishu_meeting_invite): the
@@ -1220,6 +1233,7 @@ export class FeishuChannel implements ChannelAdapter {
     if (!Number.isFinite(from)) return;
 
     this.catchingUp = true;
+    let tooOld = 0;
     try {
       const chats = await this.apiClient.im.chat.list({ params: { page_size: 20 } });
       const items = (chats?.data?.items ?? chats?.items ?? []) as { chat_id?: string }[];
@@ -1243,6 +1257,22 @@ export class FeishuChannel implements ChannelAdapter {
           if (message.sender?.sender_type !== "user") continue;
           if (message.message_id === undefined || this.seenMessages.has(message.message_id)) continue;
           if (this.alreadyHandled?.(message.message_id) === true) continue;
+          // Old enough that answering it now is its own surprise. A door that was down
+          // for a day would otherwise wake up and fire a turn per accumulated message —
+          // and the mature handling of an offline backlog is to catch up on the record
+          // without acting on all of it (OpenClaw marks WhatsApp history read and
+          // skips auto-reply for it: src/web/inbound/monitor.ts, `type === "append"`).
+          // Counted and said out loud rather than dropped quietly, because a silent cap
+          // reads as "there was nothing".
+          const sentAt = Number(message.create_time ?? 0) * 1000;
+          if (Number.isFinite(sentAt) && sentAt > 0 && Date.now() - sentAt > REPLAY_MAX_AGE_MS) {
+            tooOld += 1;
+            continue;
+          }
+          if (replayed >= REPLAY_MAX_PER_SWEEP) {
+            tooOld += 1;
+            continue;
+          }
           replayed += 1;
           this.log(
             `channel ${this.name}: replaying ${message.message_id} — the socket never delivered it`
@@ -1265,6 +1295,13 @@ export class FeishuChannel implements ChannelAdapter {
       }
       if (replayed > 0) {
         this.log(`channel ${this.name}: caught up on ${replayed} message(s) the socket missed`);
+      }
+      if (tooOld > 0) {
+        this.log(
+          `channel ${this.name}: ${tooOld} missed message(s) left unanswered — older than ` +
+            `${Math.round(REPLAY_MAX_AGE_MS / 60_000)} minutes or past this sweep's limit. ` +
+            `They are in the chat; nobody here will act on them unasked.`
+        );
       }
     } finally {
       this.catchingUp = false;
