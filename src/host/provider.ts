@@ -101,8 +101,13 @@ const MINIMAX: ProviderProfile = {
   // Thinking counts against the cap, so a tight budget yields an empty response
   // with stop_reason max_tokens rather than an answer.
   maxTokens: 32_000,
-  // Deliberately unset: this endpoint's window is not documented anywhere I could verify, and
-  // guessing it is worse than falling back to the conservative default.
+  // Deliberately unset — but no longer for lack of a number. Measured 2026-09-01 by
+  // probing the endpoint with oversized requests: 756k input tokens accepted, ~1.08M
+  // refused, so the window is almost certainly 1M. Declaring it would move the
+  // compaction trigger to ~650k, and on a provider with no prompt caching every round
+  // re-bills the whole prefix — the conservative 60k default is accidentally also the
+  // cost governor. Raising it is a spend decision, made with AGENTBOX_COMPACT_AT_TOKENS
+  // (an explicit number always wins), not a fact this profile should force.
   vision: true,
   // Accepted but not implemented. Omitted so behaviour is not left to chance.
   adaptiveThinking: false,
