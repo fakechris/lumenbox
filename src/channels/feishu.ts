@@ -286,6 +286,26 @@ export const SOCKET_RETRY_MS = [5_000, 15_000, 30_000, 60_000] as const;
  * joining itself is the agent's, done with the desktop it already has. Malformed
  * invitations (no inviter, no meeting number) are ignored, not errors.
  */
+/**
+ * A message as the history API returns it, which is close to but not the same shape as
+ * the socket event: the body is nested, the sender carries its type, and a deleted
+ * message still appears with a flag. The catch-up sweep translates one into the other.
+ */
+export interface FeishuHistoryMessage {
+  message_id?: string;
+  msg_type?: string;
+  deleted?: boolean;
+  create_time?: string;
+  chat_id?: string;
+  chat_type?: string;
+  thread_id?: string;
+  root_id?: string;
+  parent_id?: string;
+  mentions?: unknown[];
+  body?: { content?: string };
+  sender?: { id?: string; sender_type?: string };
+}
+
 export interface MeetingInvite {
   inviterOpenId: string;
   inviterName: string;
@@ -392,6 +412,28 @@ export class FeishuChannel implements ChannelAdapter {
               path: { message_id: string };
               data: { content: string; msg_type: string; reply_in_thread?: boolean };
             }) => Promise<{ data?: { message_id?: string }; message_id?: string } | undefined>;
+            /** A chat's history, which is how the catch-up sweep sees past a dead socket. */
+            list: (options: {
+              params: {
+                container_id_type: string;
+                container_id: string;
+                start_time?: string;
+                sort_type?: string;
+                page_size?: number;
+              };
+            }) => Promise<
+              | { data?: { items?: FeishuHistoryMessage[] }; items?: FeishuHistoryMessage[] }
+              | undefined
+            >;
+          };
+          /** The chats this bot is in — the catch-up sweep's list of places to look. */
+          chat: {
+            list: (options: {
+              params: { page_size?: number };
+            }) => Promise<
+              | { data?: { items?: { chat_id?: string }[] }; items?: { chat_id?: string }[] }
+              | undefined
+            >;
           };
           messageResource: {
             /** Binary download; the SDK wraps the stream, shape probed defensively. */
@@ -627,6 +669,30 @@ export class FeishuChannel implements ChannelAdapter {
   /** The manager's message handler, kept so a pressed answer button can speak as a message. */
   private messageHandler: ((message: InboundMessage) => Promise<string | undefined>) | undefined;
 
+  /** The socket's own receive handler, kept so the catch-up sweep can replay through it. */
+  private receiveMessage: ((data: never) => unknown) | undefined;
+
+  /**
+   * When this door last had something from outside, as the ledger records it. Supplied
+   * by the host because the ledger is the host's; without it the catch-up sweep has no
+   * floor and does nothing, which is the right behaviour for a door that cannot say
+   * what it already saw.
+   */
+  lastInboundAt: (() => string | undefined) | undefined;
+
+  /**
+   * Whether a message id is already in the durable ingress record.
+   *
+   * The socket's own dedup lives in memory, and memory is empty in exactly the process
+   * that runs the catch-up sweep — so without this the sweep would re-answer whatever
+   * the *previous* process had already handled inside its floor window. The ledger is
+   * the only thing that remembers across a restart, which is why it decides.
+   */
+  alreadyHandled: ((messageId: string) => boolean) | undefined;
+
+  /** Catch-up runs one at a time; a reconnect storm must not fan out into API sweeps. */
+  private catchingUp = false;
+
   /** Invitations already acted on — the vendor redelivers events, agents should not rejoin. */
   private readonly seenMeetingInvites = new Set<string>();
 
@@ -649,8 +715,11 @@ export class FeishuChannel implements ChannelAdapter {
       domain,
     }) as unknown as FeishuChannel["apiClient"];
 
-    const dispatcher = new lark.EventDispatcher({}).register({
-      "im.message.receive_v1": (data: {
+    // Named rather than inline, because the socket is not the only way a message
+    // reaches us: the catch-up sweep replays what the socket missed through this exact
+    // function, so a recovered message is admitted, deduped, logged and answered by the
+    // same code that would have handled it live.
+    const receiveMessage = (data: {
         sender?: { sender_id?: { open_id?: string } };
         message?: {
           message_id?: string;
@@ -917,7 +986,11 @@ export class FeishuChannel implements ChannelAdapter {
             this.log(`channel ${this.name}: reply failed (${detail})`);
           });
         return {};
-      },
+    };
+    this.receiveMessage = receiveMessage;
+
+    const dispatcher = new lark.EventDispatcher({}).register({
+      "im.message.receive_v1": receiveMessage,
       // A meeting invitation (roadmap R37). The event becomes an ordinary message to
       // the door's default agent — through the same handler as typed text, so the
       // allow-list check, the knock path and the task pipeline all apply unchanged.
@@ -1067,6 +1140,20 @@ export class FeishuChannel implements ChannelAdapter {
           if (classifySocketLine(parts.map(part => String(part)).join(" ")) === "ready") {
             attempts = 0;
             this.log(`channel ${this.name}: socket ready`);
+            // "Ready" is the SDK's claim about its own socket, and the failure it
+            // cannot see is the one that happened: after three quick restarts the
+            // vendor kept dispatching to a registration that was already dead, the
+            // fresh socket reported ready, and a question sat unanswered in the group
+            // for an hour while the ledger recorded a quiet afternoon (2026-09-01).
+            // So the connection is not trusted — it is checked, against the vendor's
+            // own message history, over HTTPS rather than over the socket in doubt.
+            void this.catchUp().catch(error => {
+              this.log(
+                `channel ${this.name}: catch-up failed (${
+                  error instanceof Error ? error.message : String(error)
+                })`
+              );
+            });
           }
         },
         debug: () => {},
@@ -1089,6 +1176,90 @@ export class FeishuChannel implements ChannelAdapter {
     // The SDK offers no close; the process ending is the close. Said rather than hidden.
     // The consumer lock is released though, so a successor can start without a takeover.
     this.releaseLock?.();
+  }
+
+  /**
+   * What the socket missed, fetched over HTTPS and replayed through the live handler.
+   *
+   * The gap this closes was measured on 2026-09-01: three restarts in an hour, a fresh
+   * socket that logged `socket ready`, and a question that sat unanswered in the group
+   * because the vendor was still dispatching to a registration that no longer existed.
+   * Nothing in the process could tell that apart from nobody having written anything —
+   * the ingress ledger says what arrived, and "nothing arrived" is also what a quiet
+   * afternoon looks like (liveness.ts said exactly this and set the alarm at two hours,
+   * which is the right threshold for a report and far too long for a conversation).
+   *
+   * So: on every connect, ask the vendor which chats we are in and what was said in
+   * them since the last thing we know we received, and put anything unseen through the
+   * socket's own handler. Dedup is the handler's existing `alreadySeen`, which means a
+   * message delivered by both paths is handled exactly once, and the recovered one is
+   * admitted, logged and answered like any other.
+   *
+   * Bounded on purpose — recent chats, recent messages, one sweep at a time — because
+   * this runs on a reconnect, which is when the vendor is least happy to be swept.
+   */
+  private async catchUp(): Promise<void> {
+    if (this.catchingUp || this.apiClient === undefined || this.receiveMessage === undefined) return;
+    const handler = this.receiveMessage;
+    const since = this.lastInboundAt?.();
+    // Never on a first run: with no floor, "everything since the beginning of time"
+    // would replay a group's whole history into the agents as new work.
+    if (since === undefined) return;
+    // A little before the last thing we saw: clock skew between us and the vendor must
+    // not open a hole, and re-offering a message we already handled costs nothing.
+    const from = Math.floor(new Date(since).getTime() / 1000) - 60;
+    if (!Number.isFinite(from)) return;
+
+    this.catchingUp = true;
+    try {
+      const chats = await this.apiClient.im.chat.list({ params: { page_size: 20 } });
+      const items = (chats?.data?.items ?? chats?.items ?? []) as { chat_id?: string }[];
+      let replayed = 0;
+      for (const chat of items) {
+        const chatId = chat.chat_id;
+        if (chatId === undefined || chatId === "") continue;
+        const history = await this.apiClient.im.message.list({
+          params: {
+            container_id_type: "chat",
+            container_id: chatId,
+            start_time: String(from),
+            sort_type: "ByCreateTimeAsc",
+            page_size: 20,
+          },
+        });
+        const messages = (history?.data?.items ?? history?.items ?? []) as FeishuHistoryMessage[];
+        for (const message of messages) {
+          // Ours, deleted, or already handled: not work.
+          if (message.deleted === true) continue;
+          if (message.sender?.sender_type !== "user") continue;
+          if (message.message_id === undefined || this.seenMessages.has(message.message_id)) continue;
+          if (this.alreadyHandled?.(message.message_id) === true) continue;
+          replayed += 1;
+          this.log(
+            `channel ${this.name}: replaying ${message.message_id} — the socket never delivered it`
+          );
+          await handler({
+            sender: { sender_id: { open_id: message.sender?.id } },
+            message: {
+              message_id: message.message_id,
+              chat_id: chatId,
+              message_type: message.msg_type,
+              content: message.body?.content,
+              ...(message.mentions !== undefined ? { mentions: message.mentions } : {}),
+              ...(message.thread_id !== undefined ? { thread_id: message.thread_id } : {}),
+              ...(message.root_id !== undefined ? { root_id: message.root_id } : {}),
+              ...(message.parent_id !== undefined ? { parent_id: message.parent_id } : {}),
+              ...(message.chat_type !== undefined ? { chat_type: message.chat_type } : {}),
+            },
+          } as never);
+        }
+      }
+      if (replayed > 0) {
+        this.log(`channel ${this.name}: caught up on ${replayed} message(s) the socket missed`);
+      }
+    } finally {
+      this.catchingUp = false;
+    }
   }
 
   /**

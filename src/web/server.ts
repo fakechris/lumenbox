@@ -600,6 +600,23 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
    * arrived and went nowhere used to leave the same trace as one that never arrived.
    */
   const ingress = new Ingress(ingressPath(agentboxHome()));
+  /**
+   * When a door last had anything from outside. The catch-up sweep's floor: a socket
+   * that reconnects asks the vendor what was said since this, and replays what it
+   * never saw. Read from the ledger rather than kept in memory, because the case that
+   * matters most is the one where this process is new.
+   */
+  const lastInboundFor = (channel: string): string | undefined => {
+    const arrivals = ingress.list().filter(record => record.channel === channel);
+    return arrivals[arrivals.length - 1]?.at;
+  };
+  /**
+   * Whether the ledger already has this message. The sweep's floor is a timestamp, so
+   * it always re-offers a message or two either side of it; this is what keeps a
+   * re-offer from becoming a second answer to something already answered.
+   */
+  const handledAlready = (messageId: string): boolean =>
+    ingress.list().some(record => record.id === messageId);
   // Which chat each conversation came from — written here because the channel path is
   // where both halves are last seen together, read by the console-interjection path
   // where only the conversation id survives.
@@ -1274,6 +1291,11 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
         );
         // R37 option: whether this door's agent may approve in-meeting remote control.
         feishuDoor.meetingRemoteControl = record.meetingRemoteControl === true;
+        // The floor for the catch-up sweep: the last thing this door is recorded as
+        // having received. Read at sweep time, not captured now, so it reflects
+        // everything that arrived before this reconnect.
+        feishuDoor.lastInboundAt = () => lastInboundFor(record.id);
+        feishuDoor.alreadyHandled = handledAlready;
         channels.register(
           feishuDoor,
           feishuId !== undefined && feishuSecret !== undefined,
@@ -2887,6 +2909,8 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
                       );
                       door.meetingRemoteControl =
                         channelRecords.find(entry => entry.id === id)?.meetingRemoteControl === true;
+                      door.lastInboundAt = () => lastInboundFor(id);
+                      door.alreadyHandled = handledAlready;
                       return door;
                     })()
                   : new DingTalkChannel(

@@ -506,3 +506,76 @@ test("the remote-control clause follows the option: refuse by default, approve w
   assert.match(allowed, /同意——本安装开启了会中接管/);
   assert.ok(!/不要同意/.test(allowed));
 });
+
+test("the catch-up sweep replays what the socket missed, and only that", async () => {
+  // Measured 2026-09-01: three restarts inside an hour, the SDK logged `socket ready`,
+  // and the vendor kept dispatching to a registration that no longer existed — a
+  // question sat unanswered in the group for an hour while the ledger showed a quiet
+  // afternoon. The sweep asks the vendor what was said since the last thing we know we
+  // received, and puts anything unseen through the socket's own handler.
+  const adapter = new FeishuChannel("a", "b", () => {});
+  const replayed: string[] = [];
+  const internals = adapter as unknown as {
+    apiClient: unknown;
+    receiveMessage: (data: unknown) => unknown;
+    catchUp: () => Promise<void>;
+  };
+  internals.receiveMessage = (data: unknown) => {
+    replayed.push(String((data as { message?: { message_id?: string } }).message?.message_id));
+    return {};
+  };
+  internals.apiClient = {
+    im: {
+      chat: { list: async () => ({ data: { items: [{ chat_id: "oc_room" }] } }) },
+      message: {
+        list: async () => ({
+          data: {
+            items: [
+              // Already in the ledger: the previous process answered it.
+              {
+                message_id: "om_old",
+                msg_type: "text",
+                sender: { id: "ou_1", sender_type: "user" },
+                body: { content: '{"text":"answered already"}' },
+              },
+              // Never seen: this is the one the dead socket swallowed.
+              {
+                message_id: "om_missed",
+                msg_type: "text",
+                sender: { id: "ou_1", sender_type: "user" },
+                body: { content: '{"text":"still waiting"}' },
+                root_id: "om_topic",
+              },
+              // Ours, and a deleted one: neither is work.
+              {
+                message_id: "om_self",
+                msg_type: "text",
+                sender: { id: "cli_x", sender_type: "app" },
+                body: { content: '{"text":"our own reply"}' },
+              },
+              {
+                message_id: "om_gone",
+                msg_type: "text",
+                deleted: true,
+                sender: { id: "ou_1", sender_type: "user" },
+                body: { content: '{"text":"withdrawn"}' },
+              },
+            ],
+          },
+        }),
+      },
+    },
+  };
+  adapter.lastInboundAt = () => "2026-09-01T07:26:49.953Z";
+  adapter.alreadyHandled = (id: string) => id === "om_old";
+
+  await internals.catchUp();
+  assert.deepEqual(replayed, ["om_missed"], "only the message nothing has handled");
+
+  // Without a floor — a door that cannot say what it already saw — the sweep does
+  // nothing rather than replaying a group's whole history as new work.
+  replayed.length = 0;
+  adapter.lastInboundAt = () => undefined;
+  await internals.catchUp();
+  assert.deepEqual(replayed, []);
+});
