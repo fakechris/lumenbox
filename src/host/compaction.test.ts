@@ -468,6 +468,49 @@ test("a call whose result history lost still gets one, so the request stays send
   assert.equal(repaired.filter(message => message.role === "user").length, 3);
 });
 
+test("a result whose call is gone is dropped, not sent to be rejected", () => {
+  // The other side of the pairing invariant (audit 2026-09-01, claim 1): the entry-count
+  // backstop slices the window from the tail, the leading summary is re-prepended, and a
+  // results entry that lost its call lands right after a user-role summary. The wire
+  // rejects the whole request over it — one orphan ends the turn.
+  const sliced: Anthropic.MessageParam[] = [
+    { role: "user", content: "[Earlier in this conversation — background…] **Threads** …" },
+    {
+      role: "user",
+      content: [
+        { type: "tool_result", tool_use_id: "cut-away", content: [{ type: "text", text: "lost" }] },
+      ],
+    },
+    { role: "assistant", content: [{ type: "tool_use", id: "c1", name: "bash", input: {} }] },
+    {
+      role: "user",
+      content: [{ type: "tool_result", tool_use_id: "c1", content: [{ type: "text", text: "ok" }] }],
+    },
+  ];
+  const repaired = repairPairs(sliced);
+  const ids = repaired
+    .flatMap(message => (Array.isArray(message.content) ? message.content : []))
+    .filter(block => (block as { type?: string }).type === "tool_result")
+    .map(block => (block as Anthropic.ToolResultBlockParam).tool_use_id);
+  assert.deepEqual(ids, ["c1"], "the orphan is gone and the real pair is not duplicated");
+
+  // A message mixing text with an orphaned result keeps its words and loses the result.
+  const mixed: Anthropic.MessageParam[] = [
+    { role: "user", content: "hello" },
+    {
+      role: "user",
+      content: [
+        { type: "text", text: "keep this" },
+        { type: "tool_result", tool_use_id: "nowhere", content: [] },
+      ],
+    },
+  ];
+  const kept = repairPairs(mixed);
+  assert.equal(kept.length, 2);
+  assert.match(JSON.stringify(kept[1]), /keep this/);
+  assert.doesNotMatch(JSON.stringify(kept), /tool_result/);
+});
+
 test("real results are left alone, and a partly answered call is topped up", () => {
   const complete: Anthropic.MessageParam[] = [
     {
@@ -690,6 +733,26 @@ test("anchors are harvested from full blocks, deduped, and bounded", () => {
   // Validation: the headings are a check now, not a request.
   assert.deepEqual(missingSummaryHeadings("**Threads** a **Done** b **State** c **Artifacts** d"), []);
   assert.deepEqual(missingSummaryHeadings("**Threads** only"), ["Done", "State", "Artifacts"]);
+});
+
+test("extensionless files and absolute paths are anchors too", () => {
+  // Audit 2026-09-01, claim 6, measured before the fix: cat Makefile, edits to
+  // docker/box/Dockerfile and /etc/hosts all vanished from the anchors of the very
+  // repo that builds them — the path pattern demanded a dot-extension.
+  const entries: HistoryEntry[] = [
+    {
+      role: "user",
+      text: "ran cat Makefile, edited docker/box/Dockerfile and /etc/hosts, wrote /home/box/work/bin/run",
+      at: "2026-09-01T00:00:00.000Z",
+    },
+  ];
+  const anchors = extractAnchors(entries);
+  assert.ok(anchors.includes("Makefile"));
+  assert.ok(anchors.includes("docker/box/Dockerfile"));
+  assert.ok(anchors.includes("/etc/hosts"));
+  assert.ok(anchors.includes("/home/box/work/bin/run"));
+  // Prose words that merely look file-ish stay out.
+  assert.ok(!anchors.some(anchor => anchor === "e.g" || anchor === "etc"));
 });
 
 test("a summary provider on the same wire reuses the primary client; a different wire gets its own", () => {

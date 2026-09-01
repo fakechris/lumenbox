@@ -529,6 +529,19 @@ export function extractAnchors(entries: readonly HistoryEntry[]): string[] {
       /(?<=^|[\s"'`(=:,[])((?:~?\/)?(?:[\w.@\u4e00-\u9fff-]+\/)+[\w.@\u4e00-\u9fff-]+\.[\w]+)/gmu
     ))
       take(match[1]!, "path");
+    // Two shapes the extension-requiring pattern is blind to (audit 2026-09-01, both
+    // measured missing): absolute paths whose leaf has no extension \u2014 /etc/hosts,
+    // ~/work/bin/run \u2014 where the leading slash is signal enough; and the well-known
+    // extensionless files, with or without a directory prefix \u2014 docker/box/Dockerfile
+    // was invisible to the summariser of the very repo that builds it.
+    for (const match of text.matchAll(
+      /(?<=^|[\s"'`(=:,[])(~?\/(?:[\w.@\u4e00-\u9fff-]+\/)+[\w.@\u4e00-\u9fff-]+)/gmu
+    ))
+      take(match[1]!, "path");
+    for (const match of text.matchAll(
+      /(?<=^|[\s"'`(=:,[])((?:[\w.@\u4e00-\u9fff-]+\/)*(?:Makefile|Dockerfile|LICENSE|README|CHANGELOG|Justfile|Rakefile|Gemfile|Procfile|Vagrantfile))(?=$|[\s"'`),:.\]])/gmu
+    ))
+      take(match[1]!, "path");
     for (const match of text.matchAll(/\bt\d{1,5}\b/g)) take(match[0], "id");
     for (const match of text.matchAll(/https?:\/\/\S+/g))
       take(match[0].replace(/[)\]}>,.;'"]+$/, ""), "url");
@@ -1120,10 +1133,17 @@ export const UNRECORDED_RESULT =
   "of whatever it touched before assuming either way.";
 
 /**
- * Makes every tool call in a request have a result, inventing the ones history lost.
+ * Makes every tool call in a request have a result, inventing the ones history lost —
+ * and drops every result whose call is gone, which is the same invariant read from the
+ * other side.
  *
  * The provider rejects a request containing a `tool_use` with no matching `tool_result`, so one
  * unpaired call does not degrade a turn — it ends every future turn for that agent, permanently.
+ * It equally rejects a `tool_result` that does not follow its call's assistant message, and that
+ * orphan is reachable too: the entry-count backstop slices the window from the tail, the leading
+ * summary is re-prepended, and whatever `results` entry the cut landed in front of now follows a
+ * user-role summary instead of its call. The head-of-window scan misses it — the summary is at
+ * the head — so the enforcement belongs here, where every assembly path already passes.
  *
  * Which is reachable, because a call and its results are two separate appends: a crash between them
  * leaves an orphan. Trimming the ends was not enough, because the orphan only stays at the end until
@@ -1133,10 +1153,51 @@ export const UNRECORDED_RESULT =
 export function repairPairs(
   messages: readonly Anthropic.MessageParam[]
 ): Anthropic.MessageParam[] {
-  const repaired: Anthropic.MessageParam[] = [];
+  const anchored: Anthropic.MessageParam[] = [];
 
+  // First pass: a user message's tool_result blocks survive only when the immediately
+  // preceding assistant message made the matching calls. Anything else — a result after
+  // a summary, after another user message, at the very front — would be rejected whole
+  // by the wire, taking the turn with it. The text blocks of such a message survive;
+  // only the unanchored results go.
   for (let index = 0; index < messages.length; index++) {
     const message = messages[index]!;
+    if (message.role !== "user" || !Array.isArray(message.content)) {
+      anchored.push(message);
+      continue;
+    }
+    const hasResults = message.content.some(
+      block => (block as { type?: string }).type === "tool_result"
+    );
+    if (!hasResults) {
+      anchored.push(message);
+      continue;
+    }
+    const previous = anchored[anchored.length - 1];
+    const callIds = new Set<string>();
+    if (previous?.role === "assistant" && Array.isArray(previous.content)) {
+      for (const block of previous.content) {
+        if ((block as { type?: string }).type === "tool_use") {
+          callIds.add((block as Anthropic.ToolUseBlockParam).id);
+        }
+      }
+    }
+    const kept = message.content.filter(block => {
+      if ((block as { type?: string }).type !== "tool_result") return true;
+      return callIds.has((block as Anthropic.ToolResultBlockParam).tool_use_id);
+    });
+    if (kept.length === message.content.length) {
+      anchored.push(message);
+    } else if (kept.length > 0) {
+      anchored.push({ role: "user", content: kept });
+    }
+    // A message that was nothing but orphaned results is dropped entirely.
+  }
+
+  const repaired: Anthropic.MessageParam[] = [];
+
+  for (let index = 0; index < anchored.length; index++) {
+    const message = anchored[index]!;
     repaired.push(message);
     if (message.role !== "assistant" || !Array.isArray(message.content)) continue;
 
@@ -1147,8 +1208,10 @@ export function repairPairs(
     if (calls.length === 0) continue;
 
     // Whatever the next message already answers, and only the next one: a result that arrives later
-    // is not this call's result, whatever its id says.
-    const next = messages[index + 1];
+    // is not this call's result, whatever its id says. Read from the anchored list, not the
+    // input — the first pass may have dropped messages, and a stale index here re-invented
+    // results that the very next message already carried.
+    const next = anchored[index + 1];
     const nextIsResults =
       next?.role === "user" &&
       Array.isArray(next.content) &&

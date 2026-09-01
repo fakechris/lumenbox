@@ -138,6 +138,19 @@ export function dedupeKey(text: string): string {
     .toLowerCase()
     .replace(/[^\p{L}\p{N}\s]/gu, " ")
     .split(/\s+/)
+    // Han runs carry no spaces, so an unbroken Chinese clause used to be one giant
+    // "word": the English filler list never applied, two rephrasings of the same
+    // Chinese fact never collided, and the extractor was shown an "already known"
+    // list it could not match against — memory bloat, in the language this
+    // installation mostly speaks. Character bigrams are the standard cheap
+    // segmentation for CJK matching: 密码 and 数据库密码 now share the 密码 bigram.
+    .flatMap(word => {
+      if (!/\p{Script=Han}/u.test(word)) return [word];
+      if (word.length <= 2) return [word];
+      const grams: string[] = [];
+      for (let at = 0; at < word.length - 1; at++) grams.push(word.slice(at, at + 2));
+      return grams;
+    })
     .filter(word => word !== "" && !FILLER.has(word))
     .join(" ");
 }
@@ -259,7 +272,13 @@ export function selectRelevant(
   max: number
 ): MemoryRecord[] {
   if (max <= 0) return [];
-  const wanted = new Set(dedupeKey(query).split(" ").filter(word => word.length > 2));
+  // Two characters is a whole word in Chinese (密码, 部署, 配置) — the length gate
+  // exists to drop English "at"/"if" noise, so it exempts Han.
+  const wanted = new Set(
+    dedupeKey(query)
+      .split(" ")
+      .filter(word => word.length > 2 || /\p{Script=Han}/u.test(word))
+  );
   if (wanted.size === 0) return [];
   return records
     .map(record => {
@@ -618,11 +637,20 @@ export async function chooseRelevant(options: {
   const first = recall(options.records, budget, now);
   if (first.omitted === 0 || options.query.trim() === "") return first;
 
-  const candidates = dedupe(options.records)
+  // Top-by-score, unioned with what the query lexically touches: score alone meant a
+  // record past rank 60 could never be shown to the selector however precisely the
+  // conversation asked for it — the one job "reach past the decay" exists to do.
+  const deduped = dedupe(options.records);
+  const byScore = deduped
     .map(record => ({ record, score: scoreOf(record, now) }))
     .sort((a, b) => b.score - a.score || b.record.at.localeCompare(a.record.at))
     .slice(0, MAX_SELECTION_CANDIDATES)
     .map(entry => entry.record);
+  const lexical = selectRelevant(options.query, deduped, 20);
+  const candidates = [...byScore];
+  for (const record of lexical) {
+    if (!candidates.includes(record)) candidates.push(record);
+  }
 
   try {
     const answer = await options.ask(buildSelectionPrompt(candidates, options.query));

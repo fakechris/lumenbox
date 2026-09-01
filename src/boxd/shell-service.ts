@@ -9,6 +9,7 @@
 
 import { envNumber } from "../config.ts";
 import { spawn } from "node:child_process";
+import { createHash } from "node:crypto";
 import { closeSync, mkdirSync, openSync, readdirSync, statSync, unlinkSync, writeSync } from "node:fs";
 import { join } from "node:path";
 import { DURABLE_RESULT_CHARS, type ExecRequest, type ExecResult } from "../protocol/index.ts";
@@ -219,11 +220,21 @@ export function reapSpool(dir: string = SPOOL_DIR, olderThanMs = 24 * 3_600_000)
   return removed;
 }
 
-/** Session keys name files, so keep them to characters that cannot escape a path. */
+/**
+ * Session keys name files, so keep them to characters that cannot escape a path —
+ * and keep them injective, which the old sanitise-and-truncate was not: an agent
+ * UUID plus a Feishu topic conversation id runs 114 characters, the cut at 64 fell
+ * before the `-om_…` thread discriminator, and every topic thread of one chat
+ * (and the room itself) silently shared a `.cwd`/`.env` — a `cd` in one thread
+ * moved every other. The readable prefix stays for whoever lists /tmp; the hash of
+ * the *raw* string (separators included, before any stripping) is what guarantees
+ * different sessions different files.
+ */
 function sessionKey(raw: string | undefined): string | undefined {
   if (!raw) return undefined;
   const safe = raw.replace(/[^A-Za-z0-9_-]/g, "");
-  return safe.length > 0 ? safe.slice(0, 64) : undefined;
+  if (safe.length === 0) return undefined;
+  return `${safe.slice(0, 40)}-${createHash("sha256").update(raw).digest("hex").slice(0, 16)}`;
 }
 
 /**

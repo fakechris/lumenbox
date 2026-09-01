@@ -259,6 +259,27 @@ test("the dedupe key ignores phrasing but not meaning", () => {
   assert.equal(dedupeKey("!!!"), "", "punctuation alone is not a memory");
 });
 
+test("Chinese clauses share key material, which is what lets them collide at all", () => {
+  // Audit 2026-09-01, claim 3: an unbroken Han run used to be one giant "word", so two
+  // rephrasings of the same Chinese fact never shared a token and never deduped —
+  // memory bloat in the language this installation mostly speaks. Bigrams give
+  // overlapping phrasings overlapping keys.
+  const a = dedupeKey("用户偏好数据库密码放在环境变量");
+  const b = dedupeKey("数据库密码存放于环境变量中");
+  const bWords = new Set(b.split(" "));
+  const shared = new Set(a.split(" ").filter(word => bWords.has(word)));
+  assert.ok(shared.has("密码"), "the two-character word survives as a bigram");
+  assert.ok(shared.size >= 4, `rephrasings overlap (${shared.size} shared bigrams)`);
+  // And selectRelevant can now be reached with a two-character Chinese query word.
+  const records = [
+    { at: "2026-09-01T00:00:00.000Z", kind: "fact" as const, text: "数据库密码在环境变量" },
+    { at: "2026-09-01T00:00:00.000Z", kind: "fact" as const, text: "deploys on Fridays" },
+  ];
+  const hits = selectRelevant("密码放哪了", records, 5);
+  assert.equal(hits.length, 1);
+  assert.match(hits[0]!.text, /密码/);
+});
+
 // ── migration ─────────────────────────────────────────────────────────────────────────
 
 test("an existing markdown memory is imported, dates and all", () => {

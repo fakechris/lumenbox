@@ -34,6 +34,31 @@ function skill(name: string, scope: Skill["scope"] = "global", owner?: string): 
   };
 }
 
+test("frontmatter survives the inline comments our own prompt used to teach", () => {
+  // Audit 2026-09-01, claim 4: the prompt's example wrote `schedule: "0 9 * * 1"  # cron…`,
+  // the parser kept the comment, the schedule parser got garbage, and the whole skill was
+  // rejected — invisibly to the agent that wrote it by imitating us.
+  const parsed = parseSkillFile(
+    [
+      "---",
+      'name: "Weekly numbers"    # what the user calls it',
+      'schedule: "0 9 * * 1"     # cron, or @daily / @every 30m',
+      "timezone: America/New_York # an IANA name",
+      "---",
+      "Pull the numbers.",
+    ].join("\n")
+  );
+  assert.equal(parsed.meta.name, "Weekly numbers");
+  assert.equal(parsed.meta.schedule, "0 9 * * 1");
+  assert.equal(parsed.meta.timezone, "America/New_York");
+  // A # inside a quoted value is content, not a comment.
+  assert.equal(
+    parseSkillFile(["---", 'description: "channel #general daily"', "---", "x"].join("\n")).meta
+      .description,
+    "channel #general daily"
+  );
+});
+
 test("frontmatter is read, and a file without it still works", () => {
   const parsed = parseSkillFile(
     ["---", "name: Weekly report", 'description: "Pull the numbers"', "scope: agent", "owner: Rex", "---", "", "Step one.", ""].join("\n")

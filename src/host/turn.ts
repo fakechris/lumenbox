@@ -552,7 +552,15 @@ export function storableResult(
       ...(block.is_error === true ? { is_error: true } : {}),
     };
   }
-  const content = Array.isArray(block.content) ? block.content : [];
+  // The wire type allows plain-string content as well as a block array. Every producer
+  // in this repository builds the array form today, but a future MCP server or plugin
+  // handing back a string would have been silently stored as "(no output)" — the one
+  // wrong record that later reads as the tool having said nothing.
+  const content = Array.isArray(block.content)
+    ? block.content
+    : typeof block.content === "string"
+      ? [{ type: "text" as const, text: block.content }]
+      : [];
   const texts = content
     .filter((part): part is Anthropic.TextBlockParam => part.type === "text")
     .map(part => part.text);

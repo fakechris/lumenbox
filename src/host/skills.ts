@@ -154,7 +154,13 @@ export function parseSkillFile(text: string): ParsedSkill {
       }
       value = block.join(" ").replace(/\s+/g, " ").trim();
     } else {
-      value = value.replace(/^["']|["']$/g, "");
+      // A quoted value is exactly its quoted span, whatever follows: our own prompt's
+      // example writes `schedule: "0 9 * * 1"  # cron, or @daily`, and an agent that
+      // imitates it verbatim used to hand the schedule parser the comment too — the
+      // skill was then rejected whole, invisibly to the agent that wrote it. Unquoted
+      // values lose an inline ` # comment` the same way YAML would.
+      const quoted = /^(["'])(.*?)\1/.exec(value);
+      value = quoted ? quoted[2]! : value.replace(/\s+#.*$/, "").replace(/^["']|["']$/g, "");
     }
     meta[key] = value;
   }
@@ -311,13 +317,17 @@ export function renderSkills(skills: readonly Skill[]): string {
     "as a routine is better than waiting to be asked again. Say who wrote it and why:",
     "",
     "```",
-    "schedule: \"0 9 * * 1\"          # cron, or @daily / @every 30m",
-    "timezone: America/New_York     # an IANA name; omit for this machine's clock",
-    "agent: Ada                     # who runs it",
-    "deliver: feishu:oc_…           # the chat it reports to; omit and no chat hears it",
-    "authored_by: Ada               # you, when it was your idea",
+    "schedule: \"0 9 * * 1\"",
+    "timezone: America/New_York",
+    "agent: Ada",
+    "deliver: feishu:oc_…",
+    "authored_by: Ada",
     "because: they asked for this three Mondays running",
     "```",
+    "",
+    "schedule is cron or @daily / @every 30m; timezone an IANA name (omit for this",
+    "machine's clock); deliver the chat it reports to (omit and no chat hears it);",
+    "authored_by is you when it was your idea. No inline # comments in frontmatter.",
     "",
     "Two things to hold onto when you do. A routine is a *standing* commitment — it costs its run",
     "every time, forever, whether or not anyone reads it — so give it a real reason and delete it when",
@@ -428,7 +438,7 @@ export class SkillCache {
    * that never happens — the difference from zero is decades — so it works by accident and fails the
    * moment the clock is injected, which is exactly what the test that found this does.
    */
-  private readAt: number | undefined;
+  private attemptAt: number | undefined;
   private inFlight: Promise<void> | undefined;
 
   constructor(
@@ -449,7 +459,13 @@ export class SkillCache {
    * the same directory.
    */
   async refresh(): Promise<SkillsLoad> {
-    if (this.readAt !== undefined && this.now() - this.readAt < this.ttlMs) return this.loaded;
+    // Gated on the last *attempt*, not the last success: a box that is down (or a fresh
+    // box with no skills directory yet) used to fail the read, leave the gate unarmed,
+    // and every turn and scheduler tick re-issued the listing — negative results need
+    // the same TTL as positive ones, or the cache only works when nothing is wrong.
+    if (this.attemptAt !== undefined && this.now() - this.attemptAt < this.ttlMs) {
+      return this.loaded;
+    }
     if (this.inFlight !== undefined) {
       await this.inFlight;
       return this.loaded;
@@ -459,13 +475,13 @@ export class SkillCache {
 
     this.inFlight = (async () => {
       try {
+        this.attemptAt = this.now();
         const loaded = await loadSkills(source);
         // Only replaced when the directory was actually read. A box that is restarting must not make
         // an agent believe its skills were deleted — and since the list is in the prompt, an empty
         // one reads as "you have none" rather than "we could not check".
         if (loaded.read) {
           this.loaded = loaded;
-          this.readAt = this.now();
         }
       } catch {
         // Same reasoning for anything loadSkills did not catch itself.
