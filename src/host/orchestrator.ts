@@ -680,6 +680,17 @@ export class Orchestrator {
     return (this.turns?.interrupted() ?? []).some(turn => turn.agentId === agentId);
   }
 
+  /**
+   * Marks every open turn as interrupted on purpose. Called from the shutdown signal
+   * handler — synchronous appends only — so the next startup resumes these without
+   * spending their crash-suspicion budget.
+   */
+  noteCleanShutdown(): number {
+    const outstanding = this.turns?.interrupted() ?? [];
+    for (const turn of outstanding) this.turns?.markClean(turn.id);
+    return outstanding.length;
+  }
+
   resumeInterrupted(): { resumed: number; abandoned: number } {
     const outstanding = this.turns?.interrupted() ?? [];
     let resumed = 0;
@@ -694,10 +705,11 @@ export class Orchestrator {
         continue;
       }
 
-      if (turn.attempt >= MAX_RESUMES) {
+      if (!turn.cleanExit && turn.attempt >= MAX_RESUMES) {
         // A turn that ends the process will end it again. Reported into the conversation rather
         // than retried: a crash loop that restarts itself is worse than a task that stopped, and
-        // the person reading this is the one who can do something about it.
+        // the person reading this is the one who can do something about it. A clean exit is
+        // exempt: the operator ending the process is not the turn's doing, however many times.
         this.turns?.end(turn.id, "given-up");
         this.registry.appendTranscript(agent.id, {
           role: "assistant",
@@ -716,7 +728,9 @@ export class Orchestrator {
       // would mint a fresh one and the report would still see two pieces of work.
       this.resuming.set(agent.id, {
         id: turn.id,
-        attempt: turn.attempt + 1,
+        // A clean shutdown resumes for free: the attempt budget measures how often this
+        // turn kills the process, and an operator's restart is not that.
+        attempt: turn.cleanExit ? turn.attempt : turn.attempt + 1,
         ...(turn.workId !== undefined ? { workId: turn.workId } : {}),
       });
       this.bus.sendFromUser(agent.id, resumePrompt(turn.about, turn.at), {

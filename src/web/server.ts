@@ -3942,6 +3942,18 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
 
   options.onReady?.(`http://${host}:${port}`);
 
+  // An operator's Ctrl-C or `kill` is not evidence that an open turn crashes the
+  // process, and without this marker it was billed as exactly that: two quick
+  // restarts in one minute spent a healthy turn's whole resume budget and it was
+  // given up on. Synchronous appends, so it is safe this close to exit; `once`, so
+  // an embedded second server does not stamp the same turns twice.
+  const markCleanExit = () => {
+    const marked = orchestrator.noteCleanShutdown();
+    if (marked > 0) log(`shutting down with ${marked} turn(s) open; marked for a free resume`);
+  };
+  process.once("SIGINT", markCleanExit);
+  process.once("SIGTERM", markCleanExit);
+
   return () => {
     for (const client of clients) client.end();
     // The backup timer, or an embedding that restarts the server in one process leaves the old one
@@ -3951,6 +3963,8 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
     channels.stop();
     orchestrator.scheduler.stop();
     server.close();
+    process.removeListener("SIGINT", markCleanExit);
+    process.removeListener("SIGTERM", markCleanExit);
   };
 }
 

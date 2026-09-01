@@ -3,68 +3,71 @@
  *
  * The failure this prevents is silent — two agents' keystrokes interleaving into
  * one window, and each seeing the other's screen — so the invariant is worth
- * pinning down rather than trusting to review.
+ * pinning down rather than trusting to review. And the failure the 2026-09-01 fix
+ * removed was loud in the wrong place: a single global slot refused Ada her own
+ * screen because Bob held his, so the exclusivity is per display, never across.
  */
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { DisplayLease } from "./display-lease.ts";
 
-test("the first claimant gets the display and the second is refused", () => {
+test("the first claimant gets a display and its second claimant is refused", () => {
   const lease = new DisplayLease();
 
-  assert.equal(lease.acquire("ada"), true);
-  assert.equal(lease.acquire("bob"), false, "a second agent must not get the screen");
-  assert.equal(lease.heldBy(), "ada");
+  assert.equal(lease.acquire(1, "ada"), true);
+  assert.equal(lease.acquire(1, "bob"), false, "a second agent must not get the same screen");
+  assert.equal(lease.heldBy(1), "ada");
+});
+
+test("agents on their own displays never contend — the 周报-day failure", () => {
+  const lease = new DisplayLease();
+
+  // Bob mid-task on his desktop must not cost Ada the browser on hers.
+  assert.equal(lease.acquire(2, "bob"), true);
+  assert.equal(lease.acquire(1, "ada"), true, "her own screen, no colleague can refuse it");
+  assert.equal(lease.heldBy(1), "ada");
+  assert.equal(lease.heldBy(2), "bob");
 });
 
 test("the holder can re-acquire, so a turn may use the computer repeatedly", () => {
   const lease = new DisplayLease();
 
-  assert.equal(lease.acquire("ada"), true);
-  assert.equal(lease.acquire("ada"), true);
-  assert.equal(lease.acquire("ada"), true);
-  assert.equal(lease.heldBy(), "ada");
+  assert.equal(lease.acquire(1, "ada"), true);
+  assert.equal(lease.acquire(1, "ada"), true);
+  assert.equal(lease.heldBy(1), "ada");
 });
 
-test("release hands the display to the next claimant", () => {
+test("releaseAll hands the display to the next claimant, and only the holder's own", () => {
   const lease = new DisplayLease();
 
-  lease.acquire("ada");
-  assert.equal(lease.acquire("bob"), false);
+  lease.acquire(1, "ada");
+  assert.equal(lease.acquire(1, "bob"), false);
 
-  lease.release("ada");
-  assert.equal(lease.heldBy(), undefined);
-  assert.equal(lease.acquire("bob"), true, "bob can take it once ada is done");
-  assert.equal(lease.heldBy(), "bob");
-});
-
-test("a non-holder cannot release the display out from under the holder", () => {
-  const lease = new DisplayLease();
-
-  lease.acquire("ada");
   // Bob was refused, so his turn's cleanup must not free Ada's lease.
-  lease.release("bob");
+  lease.releaseAll("bob");
+  assert.equal(lease.heldBy(1), "ada", "ada still holds it");
 
-  assert.equal(lease.heldBy(), "ada", "ada still holds it");
-  assert.equal(lease.acquire("bob"), false);
+  lease.releaseAll("ada");
+  assert.equal(lease.heldBy(1), undefined);
+  assert.equal(lease.acquire(1, "bob"), true, "bob can take it once ada is done");
 });
 
-test("releasing an unheld display is harmless", () => {
+test("releasing when nothing is held is harmless", () => {
   const lease = new DisplayLease();
-  lease.release("nobody");
-  assert.equal(lease.heldBy(), undefined);
-  assert.equal(lease.acquire("ada"), true);
+  lease.releaseAll("nobody");
+  assert.equal(lease.heldBy(1), undefined);
+  assert.equal(lease.acquire(1, "ada"), true);
 });
 
 test("hold duration is reported for diagnostics and reset on release", async () => {
   const lease = new DisplayLease();
-  assert.equal(lease.heldForMs(), 0, "nothing held yet");
+  assert.equal(lease.heldForMs(1), 0, "nothing held yet");
 
-  lease.acquire("ada");
+  lease.acquire(1, "ada");
   await new Promise(resolve => setTimeout(resolve, 20));
-  assert.ok(lease.heldForMs() >= 15, "elapsed time is tracked while held");
+  assert.ok(lease.heldForMs(1) >= 15, "elapsed time is tracked while held");
 
-  lease.release("ada");
-  assert.equal(lease.heldForMs(), 0, "reset once free");
+  lease.releaseAll("ada");
+  assert.equal(lease.heldForMs(1), 0, "reset once free");
 });

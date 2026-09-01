@@ -93,6 +93,36 @@ test("attempts accumulate across resumptions, which is the crash-loop guard", ()
   }
 });
 
+test("a clean shutdown marks its open turns, and the marker survives replay", () => {
+  // The measured failure (2026-09-01): two operator restarts inside one minute spent a
+  // healthy turn's whole resume budget and it was given up on. The marker is what lets
+  // the resume tell "the operator ended the process" from "this turn ended the process".
+  const { path, cleanup } = ledgerPath();
+  try {
+    const ledger = new TurnLedger(path);
+    ledger.begin({ id: "t1", agentId: "ada", about: "healthy long task" });
+    ledger.markClean("t1");
+
+    const outstanding = new TurnLedger(path).interrupted();
+    assert.equal(outstanding.length, 1);
+    assert.equal(outstanding[0]?.cleanExit, true, "the interruption is known to be on purpose");
+
+    // A crash-interrupted turn carries no marker — the budget still applies to it.
+    ledger.begin({ id: "t2", agentId: "bob", about: "the thing that kills us" });
+    const both = new TurnLedger(path).interrupted();
+    assert.equal(both.find(turn => turn.id === "t2")?.cleanExit, undefined);
+
+    // The marker belongs to the interruption, not the work: once t1 resumes as a new
+    // turn and that one is crash-interrupted, the new turn is judged on its own.
+    ledger.end("t1", "resumed");
+    ledger.begin({ id: "t3", agentId: "ada", about: "healthy long task", resumeOf: "t1", attempt: 1 });
+    const after = new TurnLedger(path).interrupted();
+    assert.equal(after.find(turn => turn.id === "t3")?.cleanExit, undefined);
+  } finally {
+    cleanup();
+  }
+});
+
 test("a torn last line costs one turn, not the file", () => {
   const { path, cleanup } = ledgerPath();
   try {

@@ -81,7 +81,24 @@ interface EndRecord {
   how: string;
 }
 
-type LedgerRecord = BeginRecord | EndRecord;
+/**
+ * The process is exiting on purpose with this turn still open.
+ *
+ * Written by the shutdown handler, not by the turn: an operator's Ctrl-C or `kill` is
+ * not evidence that the turn crashes the process, and counting it against the turn's
+ * resume budget conflated the two — two quick operator restarts in one minute burned
+ * both attempts and a healthy task was given up on (measured 2026-09-01, 01:27–01:28).
+ * A turn whose interruption carries this marker resumes without spending an attempt;
+ * a turn interrupted with no marker died with the process, which is the case the
+ * budget exists for.
+ */
+interface CleanRecord {
+  id: string;
+  event: "clean";
+  at: string;
+}
+
+type LedgerRecord = BeginRecord | EndRecord | CleanRecord;
 
 /** A turn that began and never ended. */
 export interface InterruptedTurn {
@@ -93,6 +110,8 @@ export interface InterruptedTurn {
   attempt: number;
   /** The conversation the turn belonged to, absent for the main one. */
   conversation?: string;
+  /** True when the process exited on purpose under this turn — resume it for free. */
+  cleanExit?: boolean;
   /**
    * The work this turn was an attempt at, so the resumption inherits it rather than starting
    * a second one.
@@ -155,6 +174,14 @@ export class TurnLedger {
   }
 
   /**
+   * Records that the process is exiting on purpose under this still-open turn.
+   * Synchronous appends only — this runs in a signal handler.
+   */
+  markClean(id: string, now = new Date()): void {
+    this.append({ id, event: "clean", at: now.toISOString() });
+  }
+
+  /**
    * Turns that began and never ended, oldest first.
    *
    * Every process that has ever written here contributes: this is read at startup, when by
@@ -175,6 +202,9 @@ export class TurnLedger {
           ...(record.conversation !== undefined ? { conversation: record.conversation } : {}),
           ...(record.workId !== undefined ? { workId: record.workId } : {}),
         });
+      } else if (record.event === "clean") {
+        const turn = open.get(record.id);
+        if (turn !== undefined) turn.cleanExit = true;
       } else {
         open.delete(record.id);
       }

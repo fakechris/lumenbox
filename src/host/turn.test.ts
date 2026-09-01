@@ -437,8 +437,9 @@ test("a second agent is refused the display while another holds it", async () =>
     const { box, calls } = stubBox();
     const display = new DisplayLease();
 
-    // Ada is mid-task with the desktop.
-    assert.equal(display.acquire(ada.id), true);
+    // Ada is mid-task with the desktop both are pointed at (neither has a
+    // displayIndex here, so both land on the fallback screen — the shared case).
+    assert.equal(display.acquire(1, ada.id), true);
 
     const outcome = await dispatchTool(
       "computer",
@@ -447,7 +448,7 @@ test("a second agent is refused the display while another holds it", async () =>
     );
 
     assert.equal(outcome.isError, true);
-    assert.match(outcome.text, /Ada is using the box's desktop/);
+    assert.match(outcome.text, /Ada is using this desktop/);
     assert.match(outcome.text, /bash/, "it points at work that does not need the screen");
     assert.equal(calls.length, 0, "the box must not be touched at all");
   } finally {
@@ -500,9 +501,9 @@ test("a turn releases the display even when it throws", async () => {
     );
 
     assert.equal(
-      display.heldBy(),
+      display.heldBy(1),
       undefined,
-      "a leaked lease would lock every other agent out of the screen for good"
+      "a leaked lease would lock this screen's next claimant out for good"
     );
   } finally {
     cleanup();

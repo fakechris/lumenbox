@@ -1395,7 +1395,7 @@ export async function runTurn(
     // Release the desktop however the turn ends — normally, by abort, or by
     // throwing. A lease leaked here would lock every other agent out of the
     // screen for the lifetime of the process.
-    deps.display?.release(agent.id);
+    deps.display?.releaseAll(agent.id);
   }
 
   async function runRounds(

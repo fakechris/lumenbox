@@ -1354,16 +1354,20 @@ export async function dispatchTool(
       }
 
       // Two agents on one desktop would type into each other's windows. With a
-      // display each this never fires; it still guards the case where two are
-      // pointed at the same one.
-      if (context.display && !context.display.acquire(context.agent.id)) {
-        const holderId = context.display.heldBy()!;
+      // display each this never fires; it guards the case where two are pointed at
+      // the same one — keyed by display, so an agent on its own screen is never
+      // refused for a colleague's. `?? 1` matches boxd's fallback: an agent with no
+      // display of its own would land on the first screen, which is exactly the
+      // shared-screen case the lease exists for.
+      const computerDisplay = context.displayIndex ?? 1;
+      if (context.display && !context.display.acquire(computerDisplay, context.agent.id)) {
+        const holderId = context.display.heldBy(computerDisplay)!;
         const holder = context.registry.tryGet(holderId);
-        const seconds = Math.round(context.display.heldForMs() / 1000);
+        const seconds = Math.round(context.display.heldForMs(computerDisplay) / 1000);
         return {
           text:
-            `${holder?.profile.name ?? holderId} is using the box's desktop ` +
-            `(for ${seconds}s). Only one agent can drive the screen at a time, because ` +
+            `${holder?.profile.name ?? holderId} is using this desktop ` +
+            `(for ${seconds}s). Only one agent can drive a screen at a time, because ` +
             "keystrokes and screenshots would otherwise cross between you. Do something " +
             "that does not need the screen — `bash` and the file tools still work — or " +
             "wait and try again.",
@@ -1952,30 +1956,33 @@ export async function dispatchTool(
     case "browser_wait_for":
     case "browser_upload": {
       const box = requireBox(context);
-      // The same desktop guard the pixel tools use. Driving the browser on another
-      // agent's screen is driving their screen, whichever protocol it travels over.
-      if (context.display && !context.display.acquire(context.agent.id)) {
-        const holderId = context.display.heldBy()!;
-        const holder = context.registry.tryGet(holderId);
-        return {
-          text:
-            `${holder?.profile.name ?? holderId} is using the box's desktop. Do something ` +
-            "that does not need the screen, or wait and try again.",
-          isError: true,
-        };
-      }
-
       // Refused rather than left to a default. With no display named, boxd falls back to
       // the first one — which belongs to whichever agent was given it — so an agent whose
       // own desktop failed to start would silently drive somebody else's screen. Observed:
       // a desktop that would not come up produced "Desktop 1 belongs to another agent",
-      // which reads as a permissions problem and is actually this.
+      // which reads as a permissions problem and is actually this. Checked before the
+      // lease, which needs the display to know whose screen is being claimed.
       if (context.displayIndex === undefined) {
         return {
           text:
             "Your desktop is not available, so the browser cannot be driven — and it must " +
             "not fall back to another agent's screen. Try again shortly, or use WebFetch " +
             "if you only need to read a page.",
+          isError: true,
+        };
+      }
+
+      // The same desktop guard the pixel tools use, keyed by the same display. Driving
+      // the browser on another agent's screen is driving their screen, whichever
+      // protocol it travels over — and an agent on its own screen is never refused
+      // for a colleague's.
+      if (context.display && !context.display.acquire(context.displayIndex, context.agent.id)) {
+        const holderId = context.display.heldBy(context.displayIndex)!;
+        const holder = context.registry.tryGet(holderId);
+        return {
+          text:
+            `${holder?.profile.name ?? holderId} is using this desktop. Do something ` +
+            "that does not need the screen, or wait and try again.",
           isError: true,
         };
       }
