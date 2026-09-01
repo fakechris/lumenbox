@@ -25,8 +25,16 @@ import { spawn } from "node:child_process";
  *
  * Set below the current count so a legitimate refactor that merges two tests into one does not fail
  * the build, but close enough that deleting a file is caught.
+ *
+ * "Close enough" is the part that decayed: the floor sat at 200 while 984 tests ran, so four fifths
+ * of the suite could have vanished under a green tick — the exact failure this file was written to
+ * prevent, arrived at by neglect rather than by design (audit 2026-09-01). A number a person has to
+ * remember to raise is a number that goes stale, so staleness is now itself reported: passing far
+ * above the floor prints how to raise it, every run, until somebody does.
  */
-const FLOOR = Number(process.env.AGENTBOX_TEST_FLOOR ?? 200);
+const FLOOR = Number(process.env.AGENTBOX_TEST_FLOOR ?? 975);
+/** How far above the floor the suite may sit before the floor is called stale. */
+const STALE_MARGIN = 40;
 
 const child = spawn(
   process.execPath,
@@ -73,4 +81,15 @@ if (pass < FLOOR) {
   process.exit(1);
 }
 
-console.log(`\n[test-floor] ${pass} tests ran, floor ${FLOOR}. OK.`);
+if (pass > FLOOR + STALE_MARGIN) {
+  // Not a failure: a green build that has grown its suite is a good build. But a floor
+  // this far below the truth protects nothing, and the only reason it decayed to a
+  // fifth of the count is that nothing ever said so.
+  console.log(
+    `\n[test-floor] ${pass} tests ran against a floor of ${FLOOR} — the floor is stale and ` +
+      `guards little.\n[test-floor] Raise it in scripts/test-floor.mjs (FLOOR = ${pass - 5}) in ` +
+      `the commit that added the tests.`
+  );
+} else {
+  console.log(`\n[test-floor] ${pass} tests ran, floor ${FLOOR}. OK.`);
+}
