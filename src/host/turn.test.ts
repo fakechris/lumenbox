@@ -17,6 +17,7 @@ import type Anthropic from "@anthropic-ai/sdk";
 import { TurnLedger } from "./resume.ts";
 import { AgentRegistry } from "../agents/registry.ts";
 import { AgentBus } from "../agents/bus.ts";
+import { fakeModel, fakeModelReplying } from "./testing/fake-model.ts";
 import type { BoxClient } from "../box/client.ts";
 import { DisplayLease } from "../box/display-lease.ts";
 import {
@@ -49,30 +50,7 @@ function stubClient(
   replies: Anthropic.Message[],
   capture: Capture
 ): { client: Anthropic; capture: Capture } {
-  let index = 0;
-  const client = {
-    messages: {
-      stream(params: Anthropic.MessageCreateParams) {
-        // Snapshot the messages array: the turn loop keeps appending to the same
-        // array across rounds, so holding the reference would make every captured
-        // request look identical to the last one.
-        capture.params.push({ ...params, messages: [...params.messages] });
-        const reply = replies[Math.min(index++, replies.length - 1)]!;
-        return {
-          on(event: string, handler: (delta: string) => void) {
-            if (event === "text") {
-              for (const block of reply.content) {
-                if (block.type === "text") handler(block.text);
-              }
-            }
-            return this;
-          },
-          finalMessage: async () => reply,
-        };
-      },
-    },
-  } as unknown as Anthropic;
-  return { client, capture };
+  return { client: fakeModelReplying(replies, { capture, streamText: true }), capture };
 }
 
 function message(
@@ -497,29 +475,18 @@ test("a turn releases the display even when it throws", async () => {
     const capture: Capture = { params: [] };
 
     // First round takes the display, then the stream fails on the next round.
-    let call = 0;
-    const client = {
-      messages: {
-        stream(params: Anthropic.MessageCreateParams) {
-          capture.params.push({ ...params, messages: [...params.messages] });
-          call++;
-          return {
-            on() {
-              return this;
-            },
-            finalMessage: async () => {
-              if (call === 1) {
-                return message(
-                  [toolUseBlock("computer", { actions: [{ action: "screenshot" }] })],
-                  "tool_use"
-                );
-              }
-              throw new Error("stream exploded");
-            },
-          };
-        },
+    const client = fakeModel(
+      ({ index }) => {
+        if (index === 0) {
+          return message(
+            [toolUseBlock("computer", { actions: [{ action: "screenshot" }] })],
+            "tool_use"
+          );
+        }
+        throw new Error("stream exploded");
       },
-    } as unknown as Anthropic;
+      { capture }
+    );
 
     await assert.rejects(
       runTurn(
@@ -876,26 +843,17 @@ function stubClientRejectingLargeRequests(
   capture: Capture,
   rejectWhile: (params: Anthropic.MessageCreateParams) => string | undefined
 ): Anthropic {
-  let index = 0;
-  return {
-    messages: {
-      stream(params: Anthropic.MessageCreateParams) {
-        capture.params.push({ ...params, messages: [...params.messages] });
-        const refusal = rejectWhile(params);
-        const reply = replies[Math.min(index, replies.length - 1)]!;
-        return {
-          on() {
-            return this;
-          },
-          finalMessage: async () => {
-            if (refusal !== undefined) throw new Error(refusal);
-            index++;
-            return reply;
-          },
-        };
-      },
+  // `served` rather than the call index: a rejected request must not consume a reply,
+  // because the turn retries it and the retry is meant to see the same one.
+  let served = 0;
+  return fakeModel(
+    ({ params }) => {
+      const refusal = rejectWhile(params);
+      if (refusal !== undefined) throw new Error(refusal);
+      return replies[Math.min(served++, replies.length - 1)]!;
     },
-  } as unknown as Anthropic;
+    { capture }
+  );
 }
 
 /** Counts image blocks anywhere in a request, including nested in tool results. */
@@ -1143,27 +1101,18 @@ test("a stop ends a running turn at the next round, and says so in the transcrip
     const capture: Capture = { params: [] };
 
     // The model keeps asking for another tool call, so without a stop this runs to MAX_ROUNDS.
-    let rounds = 0;
-    const client = {
-      messages: {
-        stream(params: Anthropic.MessageCreateParams) {
-          capture.params.push({ ...params, messages: [...params.messages] });
-          rounds += 1;
-          // A person presses stop while the second round is in flight.
-          if (rounds === 2) policy.gate.stop(ada.id, "alice");
-          return {
-            on() {
-              return this;
-            },
-            finalMessage: async () =>
-              message(
-                [toolUseBlock("bash", { command: `echo ${rounds}` }, `toolu_${rounds}`)],
-                "tool_use"
-              ),
-          };
-        },
+    const client = fakeModel(
+      ({ index }) => {
+        const round = index + 1;
+        // A person presses stop while the second round is in flight.
+        if (round === 2) policy.gate.stop(ada.id, "alice");
+        return message(
+          [toolUseBlock("bash", { command: `echo ${round}` }, `toolu_${round}`)],
+          "tool_use"
+        );
       },
-    } as unknown as Anthropic;
+      { capture }
+    );
 
     await runTurn(
       ada,
@@ -1348,28 +1297,18 @@ test("a dropped connection mid-turn is retried, and the turn finishes", async ()
     // Two rounds fail with a wrapped ECONNRESET — the shape a real dropped connection has — then the
     // third succeeds. Before this, the first one ended the turn and the work with it.
     let attempts = 0;
-    const client = {
-      messages: {
-        stream(params: Anthropic.MessageCreateParams) {
-          capture.params.push({ ...params, messages: [...params.messages] });
-          attempts += 1;
-          const failing = attempts <= 2;
-          return {
-            on() {
-              return this;
-            },
-            finalMessage: async () => {
-              if (failing) {
-                throw new Error("fetch failed", {
-                  cause: Object.assign(new Error("read ECONNRESET"), { code: "ECONNRESET" }),
-                });
-              }
-              return message([textBlock("finished anyway")]);
-            },
-          };
-        },
+    const client = fakeModel(
+      ({ index }) => {
+        attempts += 1;
+        if (index < 2) {
+          throw new Error("fetch failed", {
+            cause: Object.assign(new Error("read ECONNRESET"), { code: "ECONNRESET" }),
+          });
+        }
+        return message([textBlock("finished anyway")]);
       },
-    } as unknown as Anthropic;
+      { capture }
+    );
 
     const events: { type: string; discardPartial?: boolean; kind?: string }[] = [];
     await runTurn(
@@ -1411,25 +1350,15 @@ test("a rejected request is not retried, and the error is not hidden behind dela
     const capture: Capture = { params: [] };
 
     let attempts = 0;
-    const client = {
-      messages: {
-        stream(params: Anthropic.MessageCreateParams) {
-          capture.params.push({ ...params, messages: [...params.messages] });
-          attempts += 1;
-          return {
-            on() {
-              return this;
-            },
-            finalMessage: async () => {
-              throw Object.assign(
-                new Error("invalid_request_error: model: unknown model"),
-                { status: 400 }
-              );
-            },
-          };
-        },
+    const client = fakeModel(
+      () => {
+        attempts += 1;
+        throw Object.assign(new Error("invalid_request_error: model: unknown model"), {
+          status: 400,
+        });
       },
-    } as unknown as Anthropic;
+      { capture }
+    );
 
     await assert.rejects(
       runTurn(
@@ -1742,27 +1671,16 @@ test("a turn that is still working continues instead of being abandoned", async 
 
     // Varied calls and a todo list that moves: progress by any reading. The stub keeps working, so
     // the only thing that ends this is the round budget.
-    let round = 0;
-    const client = {
-      messages: {
-        stream(params: Anthropic.MessageCreateParams) {
-          capture.params.push({ ...params, messages: [...params.messages] });
-          round += 1;
-          // Never finishes on its own: the only thing that may end this turn is the round budget,
-          // which is what the test is about.
-          return {
-            on() {
-              return this;
-            },
-            finalMessage: async () =>
-              message(
-                [toolUseBlock("bash", { command: `echo ${round}` }, `toolu_${round}`)],
-                "tool_use"
-              ),
-          };
-        },
-      },
-    } as unknown as Anthropic;
+    // Never finishes on its own: the only thing that may end this turn is the round
+    // budget, which is what the test is about.
+    const client = fakeModel(
+      ({ index }) =>
+        message(
+          [toolUseBlock("bash", { command: `echo ${index + 1}` }, `toolu_${index + 1}`)],
+          "tool_use"
+        ),
+      { capture }
+    );
     registry.writeTodos(ada.id, [{ text: "keep going", status: "doing" }]);
 
     await assert.rejects(
@@ -1848,35 +1766,19 @@ test("a round that streams only tool calls is not mistaken for a stalled one", a
 
     const toolRound = message([toolUseBlock("RememberFact", { text: "x" }, "t1")], "tool_use");
     const finalRound = message([textBlock("done")]);
-    let index = 0;
     let progressFromRawEvents = false;
 
-    const client = {
-      messages: {
-        stream(params: Anthropic.MessageCreateParams) {
-          capture.params.push({ ...params, messages: [...params.messages] });
-          const current = index++ === 0 ? toolRound : finalRound;
-          return {
-            on(event: string, handler: (payload: never) => void) {
-              if (event === "streamEvent" && current === toolRound) {
-                // message_start alone is what an opened-but-silent stream sends, so it must not
-                // count; the block start is real progress.
-                handler({ type: "message_start" } as never);
-                handler({ type: "content_block_start", index: 0 } as never);
-                progressFromRawEvents = true;
-              }
-              if (event === "text" && current === finalRound) {
-                for (const block of current.content) {
-                  if (block.type === "text") handler(block.text as never);
-                }
-              }
-              return this;
-            },
-            finalMessage: async () => current,
-          };
-        },
+    const client = fakeModel(({ index: at }) => (at === 0 ? toolRound : finalRound), {
+      capture,
+      streamText: true,
+      events: ({ index: at }) => {
+        if (at !== 0) return [];
+        progressFromRawEvents = true;
+        // message_start alone is what an opened-but-silent stream sends, so it must not
+        // count; the block start is real progress.
+        return [{ type: "message_start" }, { type: "content_block_start", index: 0 }];
       },
-    } as unknown as Anthropic;
+    });
 
     await runTurn(
       ada,
@@ -1915,27 +1817,26 @@ test("a stop pressed while the history is being compacted is not cleared by the 
 
     const capture: Capture = { params: [] };
     let calls = 0;
-    const client = {
-      messages: {
-        // The summariser goes through `create`, not `stream`. The person presses Stop while it is
-        // in flight — which is the window the bug lived in.
-        create: async () => {
+    const client = fakeModel(
+      () => {
+        calls++;
+        return message([textBlock("the turn ran anyway")]);
+      },
+      {
+        capture,
+        // The summariser goes through `create`, not `stream`. The person presses Stop
+        // while it is in flight — which is the window the bug lived in.
+        create: () => {
           calls++;
           policy.gate.stop(ada.id, "alice");
-          return message([textBlock("**Threads** compaction fixture **Done** ran the steps **State** clean **Artifacts** none")]);
+          return message([
+            textBlock(
+              "**Threads** compaction fixture **Done** ran the steps **State** clean **Artifacts** none"
+            ),
+          ]);
         },
-        stream(params: Anthropic.MessageCreateParams) {
-          capture.params.push({ ...params, messages: [...params.messages] });
-          calls++;
-          return {
-            on() {
-              return this;
-            },
-            finalMessage: async () => message([textBlock("the turn ran anyway")]),
-          };
-        },
-      },
-    } as unknown as Anthropic;
+      }
+    );
 
     await runTurn(
       ada,
@@ -1985,23 +1886,11 @@ test("a continuation reassembles its request instead of growing the old one", as
     const capture: Capture = { params: [] };
 
     // Always asks for another tool call, so every pass exhausts its rounds while making progress.
-    let call = 0;
-    const client = {
-      messages: {
-        create: async () => message([textBlock("a summary")]),
-        stream(params: Anthropic.MessageCreateParams) {
-          capture.params.push({ ...params, messages: [...params.messages] });
-          const id = `t${call++}`;
-          return {
-            on() {
-              return this;
-            },
-            finalMessage: async () =>
-              message([toolUseBlock("bash", { command: `echo ${id}` }, id)], "tool_use"),
-          };
-        },
-      },
-    } as unknown as Anthropic;
+    const client = fakeModel(
+      ({ index }) =>
+        message([toolUseBlock("bash", { command: `echo t${index}` }, `t${index}`)], "tool_use"),
+      { capture, create: () => message([textBlock("a summary")]) }
+    );
 
     await runTurn(
       ada,
@@ -2043,19 +1932,7 @@ test("a turn killed mid-flight leaves a record that it was interrupted", async (
     const capture: Capture = { params: [] };
 
     // A turn that never returns, standing in for a process that dies inside one.
-    const wedged = {
-      messages: {
-        stream(params: Anthropic.MessageCreateParams) {
-          capture.params.push({ ...params, messages: [...params.messages] });
-          return {
-            on() {
-              return this;
-            },
-            finalMessage: () => new Promise<never>(() => {}),
-          };
-        },
-      },
-    } as unknown as Anthropic;
+    const wedged = fakeModel(() => new Promise<never>(() => {}), { capture });
 
     void runTurn(
       ada,
@@ -2110,20 +1987,9 @@ test("a turn that throws is closed too, not left looking interrupted", async () 
     const ada = registry.create({ name: "Ada" });
     const bus = new AgentBus(registry, async () => {});
     const ledger = new TurnLedger(join(dir, "turns.jsonl"));
-    const exploding = {
-      messages: {
-        stream() {
-          return {
-            on() {
-              return this;
-            },
-            finalMessage: async () => {
-              throw new Error("400 model does not exist");
-            },
-          };
-        },
-      },
-    } as unknown as Anthropic;
+    const exploding = fakeModel(() => {
+      throw new Error("400 model does not exist");
+    });
 
     await assert.rejects(
       runTurn(
