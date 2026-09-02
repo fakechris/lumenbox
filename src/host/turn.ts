@@ -1820,6 +1820,19 @@ export async function runTurn(
       (block): block is Anthropic.ToolUseBlock => block.type === "tool_use"
     );
 
+    // Conduct rule 1 ("reply first") is prompt text, and prompt text is a request, not a
+    // guarantee. Log what actually happened on the opening round of a person-opened turn so
+    // adherence is a number in the web log rather than an impression from a chat thread.
+    if (round === 0 && inbound.some(message => message.fromId === "user")) {
+      const opened = response.content.some(
+        block => block.type === "text" && block.text.trim().length > 0
+      );
+      console.error(
+        `[conduct] ${agent.profile.name}: opened ${opened ? "with a reply" : "tool-first"} ` +
+          `(${toolUses.length} tool calls${opened ? ", text first" : ", no text"})`
+      );
+    }
+
     if (toolUses.length === 0) {
       const finalText = response.content
         .filter((block): block is Anthropic.TextBlock => block.type === "text")

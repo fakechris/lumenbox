@@ -10,7 +10,12 @@ natural questions, and proposes routines for repeatable asks — as stable promp
 **Success Criteria**: new stable section `conduct` present in `sectionsPresent`; AskUser
 description carries the phrasing rule; skills section carries the routine mandate; prompt
 floor logged once per turn; tests pass; a Feishu turn visibly opens with a one-line reply.
-**Status**: In Progress
+**Status**: Complete (2026-09-02) — with a measured caveat: on three console probes (7s, 9s,
+50s turns) MiniMax M3 opened tool-first every time despite the rule; the Feishu Typing
+reaction is the receipt a person actually sees, so presence is covered by the wire, not the
+model. Adherence is now a `[conduct]` line per person-opened turn in the web log; revisit
+the rule's wording once a week of production numbers exists. Bob's prompt floor: system +
+31 tools ≈ 25.6k tokens, whole request ≈ 55k.
 
 ## Stage 2: Memory as files the agent can read, frozen across compaction
 **Goal**: project the live memory view into the box (`~/work/memory/<agent>/profile.md` +
