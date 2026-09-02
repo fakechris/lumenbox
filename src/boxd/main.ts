@@ -657,8 +657,10 @@ if (egressRelay) {
   }
 }
 
-server.listen(BOXD_PORT, "0.0.0.0", () => {
-  log(`listening on 0.0.0.0:${BOXD_PORT}, display ${display}`);
+const listenPort = process.env.BOXD_PORT ? parseInt(process.env.BOXD_PORT, 10) : BOXD_PORT;
+
+server.listen(listenPort, "0.0.0.0", () => {
+  log(`listening on 0.0.0.0:${listenPort}, display ${display}`);
   // Encoders left running by a previous daemon. They are adopted by PID 1 when boxd dies and keep
   // writing, and this process's map is empty — so without this, starting a recording gives you two
   // ffmpegs on one screen and a file nobody will ever stop.
