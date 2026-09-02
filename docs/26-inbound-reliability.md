@@ -76,3 +76,28 @@ keys, bounded replay, watermarks) follows from taking that question seriously.
 
 Not yet done and worth doing before this is called finished: the same sweep for
 DingTalk, and a decision on webhook mode.
+
+## 2026-09-02: two misses after one restart, nine faults under them
+
+A question inside a topic (03:51 UTC) and a top-level post (04:02) both went unanswered
+after a web restart. Traced with the ledger and the vendor's own message listing:
+
+| # | Fault | Fix (commits a2c82a8, 59828e5, 7a6c882) |
+|---|---|---|
+| 1 | Socket after restart reported neither ready nor failed; retry listened only for "failed" | 45 s ready watchdog: close, reopen with backoff, log |
+| 2 | Sweep listed the chat container; a topic's replies live in the thread container | Sweep the threads the listing reveals and the ledger heard from (2 h) |
+| 3 | Ready classifier matched the HTTP client's "client ready" | Match "ws client ready" only |
+| 4 | Vendor `create_time` is ms; age cap multiplied by 1000 and never applied | ms throughout |
+| 5 | Clocks two minutes apart | Floor slack 5 min |
+| 6 | A p2p arrival from 2026-08-28 with no fate pinned every floor to that day | Floor ignores undecided arrivals older than the window, never older than it |
+| 7 | Ascending, one page of 20: with a stale floor, the same 20 handled messages every sweep | Newest-first, paginate to the floor, 50 per page |
+| 8 | An arrival that died between arrival and admission sat in the in-memory seen set; sweep skipped it as "seen" | Sweep dedupes on the durable ledger only and re-offers undecided arrivals |
+| 9 | Sender-name lookup unbounded, the one await before admission | 5 s timeout, message goes on without the name |
+| + | Replayed arrivals stamped at replay time moved the floor past what the cap left | `sentAt` from the wire and from replay; replay in global send order; cap 20 |
+| + | Bind codes returned before a fate | Settled as admitted |
+
+The rule that emerges: **arrived without a fate is the signal**, the seen set is not
+evidence of anything, and the floor is a send-time watermark below the oldest live
+undecided arrival. Every restart still costs a reconnect; the loss is now bounded by
+the watchdog (45 s) plus one sweep (≤10 min), and a message in either container inside
+two hours is answered.
