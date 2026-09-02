@@ -36,6 +36,7 @@ import {
 import type { UsageKind, UsageLog } from "./usage.ts";
 import { chooseRelevant } from "./memory.ts";
 import { needsReview, type ReviewInput, type ReviewMode, type Verdict } from "./auto-review.ts";
+import type { HookRunner } from "./hooks.ts";
 import { AGENT_WAKE_CUE } from "../agents/bus.ts";
 import {
   activeWindow,
@@ -363,6 +364,8 @@ export interface TurnDeps {
   autoReview?: { mode(): ReviewMode; review(input: ReviewInput): Promise<Verdict> };
   /** Records which agent wrote into a skill. Absent means no record is kept. */
   skillProvenance?: ToolContext["skillProvenance"];
+  /** Lifecycle hooks in Claude Code's dialect (hooks.ts). Absent means none are configured. */
+  hooks?: HookRunner;
   resolution: ResolutionConfig | undefined;
   /**
    * What kind of box this is (docs/18). Absent means the caller did not classify it and
@@ -1227,6 +1230,9 @@ export async function runTurn(
   // summary is persisted so later turns pay nothing. Measured on this system at 158KB and 40k
   // tokens after a day — the end of that road is a turn failing on a request that cannot be made
   // smaller, at the worst possible moment.
+  if (deps.hooks?.has("PreCompact")) {
+    await deps.hooks.run("PreCompact", { session_id: turnId, agent_name: agent.profile.name, trigger: "auto" });
+  }
   history = await compactHistory({
     history,
     agent,
@@ -1376,7 +1382,10 @@ export async function runTurn(
       //
       // Everything a completed round produced is on disk by now, so re-reading loses nothing; and
       // an orphaned call left by the round limit is paired up during assembly.
-      history = await compactHistory({
+      if (deps.hooks?.has("PreCompact")) {
+    await deps.hooks.run("PreCompact", { session_id: turnId, agent_name: agent.profile.name, trigger: "auto" });
+  }
+  history = await compactHistory({
         history: registry.readTranscript(agent.id, conversation) as TranscriptEntry[],
         agent,
         registry,
@@ -1428,6 +1437,8 @@ export async function runTurn(
   let attempts = 0;
   // The incompressible-floor warning fires once per turn, not once per round.
   let floorWarned = false;
+  // Set once a Stop hook has sent the model back, so it can do so at most once per turn.
+  let stopHookActive = false;
   for (let round = 0; round < MAX_ROUNDS; round++) {
     if (signal.aborted) {
       emit({ type: "aborted", agentId: agent.id });
@@ -1856,6 +1867,24 @@ export async function runTurn(
           text: finalText,
           at: new Date().toISOString(),
         } satisfies TranscriptEntry, conversation);
+        // A Stop hook may send the model back once: its reason becomes the next user message,
+        // and `stop_hook_active` tells the hook it already did so, which is how a hook avoids
+        // looping the turn forever (Claude Code's contract, kept exactly).
+        if (deps.hooks?.has("Stop")) {
+          const hook = await deps.hooks.run("Stop", {
+            session_id: turnId,
+            agent_name: agent.profile.name,
+            stop_hook_active: stopHookActive,
+            last_message: finalText.slice(0, 20_000),
+          });
+          if (hook.blocked && !stopHookActive) {
+            stopHookActive = true;
+            const note = `[Stop hook] ${hook.reason ?? "continue"}`;
+            registry.appendTranscript(agent.id, { role: "user", text: note, at: new Date().toISOString() } satisfies TranscriptEntry, conversation);
+            messages.push({ role: "user", content: note });
+            continue;
+          }
+        }
         return;
       }
 
@@ -1948,8 +1977,23 @@ export async function runTurn(
         }
       }
 
+      // PreToolUse hooks, after auto-review: a person's own script gets the same veto, with the
+      // same shape of answer to the model.
+      let hookBlock: string | undefined;
+      if (blocked === undefined && deps.hooks?.has("PreToolUse", toolUse.name)) {
+        const hook = await deps.hooks.run("PreToolUse", {
+          session_id: turnId,
+          agent_name: agent.profile.name,
+          tool_name: toolUse.name,
+          tool_input: toolInput,
+        });
+        if (hook.blocked) hookBlock = hook.reason ?? "blocked by a PreToolUse hook";
+      }
+
       let outcome: ToolOutcome;
-      if (blocked !== undefined) {
+      if (hookBlock !== undefined) {
+        outcome = { text: `Blocked by a PreToolUse hook: ${hookBlock}`, isError: true };
+      } else if (blocked !== undefined) {
         outcome = {
           text:
             `Auto-review refused this call: ${blocked.reason || "the person did not ask for it"}. ` +
@@ -2009,6 +2053,21 @@ export async function runTurn(
           ...rest,
           text: `${outcome.text}\n[an image was attached, but this model cannot see images]`,
         };
+      }
+      // PostToolUse hooks see the result; a block here is a note appended for the model, which is
+      // what Claude Code does with a hook's stderr on exit 2.
+      if (deps.hooks?.has("PostToolUse", toolUse.name)) {
+        const hook = await deps.hooks.run("PostToolUse", {
+          session_id: turnId,
+          agent_name: agent.profile.name,
+          tool_name: toolUse.name,
+          tool_input: toolInput,
+          tool_response: outcome.text.slice(0, 20_000),
+          is_error: outcome.isError === true,
+        });
+        if (hook.blocked && hook.reason !== undefined && hook.reason !== "") {
+          outcome = { ...outcome, text: `${outcome.text}\n\n[PostToolUse hook] ${hook.reason}` };
+        }
       }
       results.push(toolResultBlock(toolUse.id, outcome));
       // Kept beside the result rather than inside it: what the API is sent and what the

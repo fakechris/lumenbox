@@ -23,6 +23,7 @@ import type { BoxClient } from "../box/client.ts";
 import { MemoryMirror } from "./memory-mirror.ts";
 import { AutoReviewer } from "./auto-review.ts";
 import { SkillProvenance } from "./skill-provenance.ts";
+import { HookRunner } from "./hooks.ts";
 import { appendLine } from "./jsonl.ts";
 import { agentboxHome } from "../config.ts";
 import { join } from "node:path";
@@ -83,6 +84,8 @@ export interface OrchestratorOptions {
   turns?: TurnLedger | null;
   /** Who wrote each skill. `null` keeps no record, which is what a test wants. */
   skillProvenance?: SkillProvenance | null;
+  /** Lifecycle hooks (hooks.ts). `null` means none; omitted reads ~/.agentbox/hooks.json. */
+  hooks?: HookRunner | null;
   /** Who has taken which piece of work. `null` keeps none. */
   claims?: Claims | null;
   /**
@@ -125,6 +128,7 @@ export class Orchestrator {
   private box: BoxClient | undefined;
   private readonly memoryMirror: MemoryMirror;
   readonly skillProvenance: SkillProvenance;
+  readonly hooks: HookRunner | undefined;
   private resolution: ResolutionConfig | undefined;
   /** What kind of box the connected box is; see docs/18. */
   private boxAccess: BoxClass | undefined;
@@ -495,6 +499,22 @@ export class Orchestrator {
         ? new SkillProvenance(null)
         : (options.skillProvenance ??
           new SkillProvenance(join(agentboxHome(), "skill-provenance.jsonl")));
+    this.hooks =
+      options.hooks === null
+        ? undefined
+        : (options.hooks ??
+          new HookRunner({
+            // Under test with no home the file is simply not there; hooks are optional and a
+            // missing config must never be the reason a turn cannot run.
+            path: (() => {
+              try {
+                return join(agentboxHome(), "hooks.json");
+              } catch {
+                return null;
+              }
+            })(),
+            log: line => console.error(`[hooks] ${line}`),
+          }));
     this.registry = options.registry ?? new AgentRegistry();
     this.memoryMirror = new MemoryMirror({
       registry: this.registry,
@@ -683,6 +703,7 @@ export class Orchestrator {
       // show is the least interesting work in the system and should be billed accordingly.
       selectMemory: prompt => this.askCheaply(agent, prompt),
       skillProvenance: this.skillProvenance,
+      hooks: this.hooks,
       // Same cheap profile. Shadow by default: the verdicts land in auto-review.jsonl and the web
       // log, and a week of them is what decides whether the classifier earns a veto.
       autoReview: new AutoReviewer({

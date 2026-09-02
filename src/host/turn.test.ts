@@ -18,6 +18,7 @@ import { TurnLedger } from "./resume.ts";
 import { AgentRegistry } from "../agents/registry.ts";
 import { AgentBus } from "../agents/bus.ts";
 import { fakeModel, fakeModelReplying } from "./testing/fake-model.ts";
+import { HookRunner } from "./hooks.ts";
 import type { BoxClient } from "../box/client.ts";
 import { DisplayLease } from "../box/display-lease.ts";
 import {
@@ -2566,6 +2567,67 @@ test("auto-review in shadow mode records a verdict and changes nothing; enforce 
     const result = Array.isArray(second) ? (second[0] as { content?: string; is_error?: boolean }) : undefined;
     assert.equal(result?.is_error, true);
     assert.match(JSON.stringify(result?.content), /Auto-review refused this call: nobody asked for a push/);
+  } finally {
+    cleanup();
+  }
+});
+
+test("hooks in Claude Code's dialect: PreToolUse blocks a call, Stop sends the model back once", async () => {
+  const { registry, cleanup } = fixture();
+  try {
+    const ada = registry.create({ name: "Ada" });
+    const bus = new AgentBus(registry, async () => {});
+    const { box, calls } = stubBox();
+    const hooks = new HookRunner({
+      path: null,
+      config: {
+        PreToolUse: [
+          {
+            matcher: "bash",
+            hooks: [{ type: "command", command: `input=$(cat); case "$input" in *"rm -rf"*) echo "not on my watch" >&2; exit 2;; esac; exit 0` }],
+          },
+        ],
+        Stop: [
+          {
+            hooks: [
+              {
+                type: "command",
+                command: `input=$(cat); case "$input" in *'"stop_hook_active":true'*) exit 0;; esac; echo '{"decision":"block","reason":"also say goodbye"}'`,
+              },
+            ],
+          },
+        ],
+      },
+    });
+    const capture: Capture = { params: [] };
+    const client = fakeModel(
+      ({ index }) =>
+        index === 0
+          ? message([toolUseBlock("bash", { command: "rm -rf /tmp/scratch" }, "t1"), toolUseBlock("bash", { command: "ls" }, "t2")], "tool_use")
+          : index === 1
+            ? message([textBlock("done")])
+            : message([textBlock("goodbye")]),
+      { capture }
+    );
+    await runTurn(
+      ada,
+      [{ id: "m-hooks", fromId: "user", fromName: "user", text: "clean up", priority: false, receivedAt: "" }],
+      new AbortController().signal,
+      { client, registry, bus, box, resolution: undefined, hooks }
+    );
+
+    const ran = calls.filter(call => call.kind === "exec").map(call => String(call.detail));
+    assert.deepEqual(ran, ["ls"], "the blocked command never reached the box; the other ran");
+    const results = capture.params[1]?.messages.at(-1)?.content;
+    assert.match(JSON.stringify(results), /Blocked by a PreToolUse hook: not on my watch/);
+
+    // The Stop hook sent the model back once with its reason as the next message, then let it stop.
+    assert.equal(capture.params.length, 3);
+    assert.match(JSON.stringify(capture.params[2]?.messages.at(-1)?.content), /\[Stop hook\] also say goodbye/);
+    const said = (registry.readTranscript(ada.id) as { role: string; text?: string }[])
+      .filter(entry => entry.role === "assistant" && typeof entry.text === "string")
+      .map(entry => entry.text);
+    assert.deepEqual(said.slice(-2), ["done", "goodbye"]);
   } finally {
     cleanup();
   }

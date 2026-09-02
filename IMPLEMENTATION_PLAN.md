@@ -65,4 +65,11 @@ events (`PreToolUse`/`Stop`/`PreCompact`) as the R36 extension seam.
 **Success Criteria**: a reused display index refuses the previous owner's token; an
 approval card says "read-only" for `ls`/`cat`/`git status`; a Claude Code hook file runs
 unchanged.
-**Status**: Not Started
+**Status**: Complete (2026-09-02). Owner tokens already existed in boxd (hashed lapsing
+leases, per-agent token from the registry); the recycled-index case is now a test.
+`src/host/shell-readonly.ts` tags approvals `[read-only]` when every segment is a known
+reader (chain split + safe list, no parser yet; tree-sitter-bash earns its dependency
+once a misclassification is measured). `src/host/hooks.ts` reads `~/.agentbox/hooks.json`
+(a Claude Code settings.json or the bare hooks object) and runs PreToolUse / PostToolUse /
+Stop / PreCompact commands with Claude Code's stdin payload and exit-2 / JSON decisions;
+Stop may send the model back once (`stop_hook_active`).
