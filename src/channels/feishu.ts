@@ -308,8 +308,12 @@ export const SOCKET_RETRY_MS = [5_000, 15_000, 30_000, 60_000] as const;
  * dropped silently.
  */
 export const REPLAY_MAX_AGE_MS = 2 * 3_600_000;
-/** A ceiling on one sweep, so a long outage cannot become a burst of turns. */
-const REPLAY_MAX_PER_SWEEP = 5;
+/**
+ * A ceiling on one sweep, so a long outage cannot become a burst of turns. Applied in
+ * send order across every container, so what a sweep leaves is strictly newer than what it
+ * replayed and the next sweep's floor still reaches it.
+ */
+const REPLAY_MAX_PER_SWEEP = 20;
 /** How far below the last known arrival the sweep starts, in seconds — clock skew insurance. */
 const CATCH_UP_FLOOR_SLACK_S = 5 * 60;
 /** How many threads one sweep visits; a door with more topics than this is swept over several. */
@@ -805,6 +809,7 @@ export class FeishuChannel implements ChannelAdapter {
           root_id?: string;
           parent_id?: string;
           chat_type?: string;
+          create_time?: string;
         };
       }) => {
         const openId = data.sender?.sender_id?.open_id ?? "unknown";
@@ -837,6 +842,9 @@ export class FeishuChannel implements ChannelAdapter {
             ...(data.message?.root_id !== undefined ? { rootId: data.message.root_id } : {}),
             ...(data.message?.chat_type !== undefined ? { chatType: data.message.chat_type } : {}),
             at: new Date().toISOString(),
+            ...(Number.isFinite(Number(data.message?.create_time)) && Number(data.message?.create_time) > 0
+              ? { sentAt: new Date(Number(data.message?.create_time)).toISOString() }
+              : {}),
           });
         }
         if (chatId === "" || data.message === undefined) return {};
@@ -1365,6 +1373,7 @@ export class FeishuChannel implements ChannelAdapter {
           ...(message.root_id !== undefined ? { root_id: message.root_id } : {}),
           ...(message.parent_id !== undefined ? { parent_id: message.parent_id } : {}),
           ...(message.chat_type !== undefined ? { chat_type: message.chat_type } : {}),
+          ...(message.create_time !== undefined ? { create_time: message.create_time } : {}),
         },
       } as never);
     };
@@ -1397,24 +1406,41 @@ export class FeishuChannel implements ChannelAdapter {
       return collected.reverse();
     };
     try {
-      const chats = await this.apiClient.im.chat.list({ params: { page_size: 20 } });
-      const items = (chats?.data?.items ?? chats?.items ?? []) as { chat_id?: string }[];
+      const items: { chat_id?: string }[] = [];
+      let chatPage: string | undefined;
+      for (let page = 0; page < 5; page++) {
+        const chats = await this.apiClient.im.chat.list({
+          params: { page_size: 20, ...(chatPage !== undefined ? { page_token: chatPage } : {}) },
+        });
+        const data = (chats?.data ?? chats) as { items?: { chat_id?: string }[]; has_more?: boolean; page_token?: string } | undefined;
+        items.push(...(data?.items ?? []));
+        if (data?.has_more !== true || data.page_token === undefined) break;
+        chatPage = data.page_token;
+      }
       const chatOf = new Map<string, string>();
+      const found: { message: FeishuHistoryMessage; chatId: string }[] = [];
       for (const chat of items) {
         const chatId = chat.chat_id;
         if (chatId === undefined || chatId === "") continue;
         for (const message of await listed("chat", chatId)) {
-          if (message.thread_id) chatOf.set(message.thread_id, chatId);
-          await consider(message, chatId);
+          if (message.thread_id) {
+            chatOf.set(message.thread_id, chatId);
+            threads.add(message.thread_id);
+          }
+          found.push({ message, chatId });
         }
       }
       // The threads: those the chat listing just revealed and those the ledger remembers
       // hearing from, because a conversation that moved into a topic stays there.
       for (const threadId of [...threads].slice(0, CATCH_UP_MAX_THREADS)) {
         for (const message of await listed("thread", threadId)) {
-          await consider(message, message.chat_id ?? chatOf.get(threadId) ?? "");
+          found.push({ message, chatId: message.chat_id ?? chatOf.get(threadId) ?? "" });
         }
       }
+      // In the order they were sent, whatever container they sat in: two questions are
+      // answered in order, and a capped sweep leaves only what is newer than its last replay.
+      found.sort((a, b) => Number(a.message.create_time ?? 0) - Number(b.message.create_time ?? 0));
+      for (const { message, chatId } of found) await consider(message, chatId);
       if (replayed > 0) {
         this.log(`channel ${this.name}: caught up on ${replayed} message(s) the socket missed`);
       }

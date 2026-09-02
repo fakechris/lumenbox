@@ -1107,6 +1107,8 @@ ${input.options.map(option => `· ${option}`).join("\n")}`
     // is the whole reason codes exist. A non-code message from a stranger still knocks.
     const code = parseBind(message.text);
     if (code !== undefined && this.deps.bind !== undefined) {
+      // A fate, or the catch-up sweep re-offers the code every ten minutes for two hours.
+      if (message.messageId !== undefined) this.deps.ingress?.decided(message.messageId, "admitted");
       return this.deps.bind(code, message.identity, message.senderLabel);
     }
 

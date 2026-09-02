@@ -107,4 +107,7 @@ test("the catch-up floor never passes a live undecided arrival, and a stale one 
   assert.equal(catchUpFloor([rec("a", 3 * hour, "admitted"), rec("b", 30 * 60_000), rec("c", 10 * 60_000, "admitted")], now, 2 * hour), at(30 * 60_000), "a live undecided arrival holds the floor");
   assert.equal(catchUpFloor([rec("old", 5 * 24 * hour), rec("b", 10 * 60_000, "admitted")], now, 2 * hour), at(10 * 60_000), "a stale undecided arrival does not");
   assert.equal(catchUpFloor([rec("a", 3 * hour, "admitted")], now, 2 * hour), at(2 * hour), "never older than the window");
+  // A replayed message arrives at replay time; the floor follows when it was sent.
+  const replayed = { ...(rec("r", 0, "admitted") as object), sentAt: at(40 * 60_000) } as never;
+  assert.equal(catchUpFloor([replayed], now, 2 * hour), at(40 * 60_000), "sent time beats arrival time");
 });

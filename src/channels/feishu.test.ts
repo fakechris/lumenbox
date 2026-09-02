@@ -544,7 +544,7 @@ test("the catch-up sweep replays what the socket missed, and only that", async (
                         {
                           message_id: "om_in_thread",
                           msg_type: "text",
-                          create_time: String(Date.now() - 60_000),
+                          create_time: String(Date.now() - 120_000),
                           chat_id: "oc_room",
                           thread_id: "omt_seen",
                           sender: { id: "ou_1", sender_type: "user" },
@@ -587,6 +587,7 @@ test("the catch-up sweep replays what the socket missed, and only that", async (
               {
                 message_id: "om_missed",
                 msg_type: "text",
+                create_time: String(Date.now() - 30_000),
                 sender: { id: "ou_1", sender_type: "user" },
                 body: { content: '{"text":"still waiting"}' },
                 root_id: "om_topic",
@@ -622,8 +623,8 @@ test("the catch-up sweep replays what the socket missed, and only that", async (
   await internals.catchUp();
   assert.deepEqual(
     replayed,
-    ["om_missed", "om_in_known_thread", "om_in_thread"],
-    "the chat's missed message, then the topics: the ledger's first, then the one the chat revealed"
+    ["om_in_thread", "om_in_known_thread", "om_missed"],
+    "in the order they were sent, whichever container held them"
   );
   assert.deepEqual(listedContainers, ["chat:oc_room", "thread:omt_remembered", "thread:omt_seen"]);
 

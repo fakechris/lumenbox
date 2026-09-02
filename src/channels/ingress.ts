@@ -55,7 +55,14 @@ export interface Arrival {
   threadId?: string;
   rootId?: string;
   chatType?: string;
+  /** When it reached us. */
   at: string;
+  /**
+   * When the vendor says it was sent, when the wire says. The catch-up floor prefers this:
+   * a replayed message "arrives" at replay time, and a floor built on that would jump past
+   * everything older that the same sweep did not get to.
+   */
+  sentAt?: string;
 }
 
 export interface IngressRecord extends Arrival {
@@ -180,10 +187,11 @@ export function catchUpFloor(
 ): string | undefined {
   if (records.length === 0) return undefined;
   const edge = now - windowMs;
+  const when = (record: IngressRecord) => record.sentAt ?? record.at;
   const pending = records.find(
-    record => record.fate === undefined && new Date(record.at).getTime() >= edge
+    record => record.fate === undefined && new Date(when(record)).getTime() >= edge
   );
-  const chosen = pending?.at ?? records[records.length - 1]!.at;
+  const chosen = pending !== undefined ? when(pending) : when(records[records.length - 1]!);
   const chosenMs = new Date(chosen).getTime();
   return Number.isFinite(chosenMs) && chosenMs < edge ? new Date(edge).toISOString() : chosen;
 }
