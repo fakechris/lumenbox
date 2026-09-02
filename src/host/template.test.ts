@@ -24,7 +24,11 @@ import {
   tierOf,
   toolsOf,
   unresolvedPlaceholders,
+  catalogTemplate,
+  templatesEnabled,
+  TEMPLATE_SETUP_TOOLS,
 } from "./template.ts";
+import { CATALOG_EXPERTS } from "./catalog.ts";
 
 const SKILL = `---
 name: 音视频转写
@@ -285,3 +289,22 @@ test("packing reads the live files: a slug that is not there is dropped and name
   assert.equal(tierOf(undefined), undefined);
   assert.deepEqual(tierOf(["bash", "computer"]), ["bash", "computer"]);
 });
+
+test("a catalog expert is a template in the same format, with nothing to install and its tier named", () => {
+  const lin = CATALOG_EXPERTS.find(expert => expert.slug === "lin")!;
+  const template = catalogTemplate(lin);
+  const parsed = parseTemplate(JSON.stringify(template));
+  assert.ok("template" in parsed, JSON.stringify(parsed));
+  assert.equal(parsed.template.profile.name, "Lin");
+  assert.equal(parsed.template.profile.tools, "code");
+  assert.deepEqual(parsed.template.skills, []);
+  assert.equal(parsed.template.meta?.sourceName, "lin");
+  const cue = templateSetupCue({ template, self: "Lin", recipePath: "/x", pending: { fillIns: [], connectors: [] } });
+  assert.match(cue, /there is nothing else to install/);
+  assert.doesNotMatch(cue, /read it now/);
+
+  assert.equal(templatesEnabled({}), true);
+  assert.equal(templatesEnabled({ AGENTBOX_TEMPLATES: "0" }), false);
+  assert.ok(!TEMPLATE_SETUP_TOOLS.includes("bash") && !TEMPLATE_SETUP_TOOLS.includes("SendToAgent") && TEMPLATE_SETUP_TOOLS.includes("write_file"));
+});
+

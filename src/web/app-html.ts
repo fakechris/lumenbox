@@ -2453,6 +2453,7 @@ function select(id, conversation) {
     .then(function (entries) {
       for (var i = 0; i < entries.length; i++) replayEntry(id, entries[i]);
       $("chat").scrollTop = $("chat").scrollHeight;
+      return loadTemplateCardInChat(id);
     });
 }
 
@@ -3431,6 +3432,11 @@ stream.onmessage = function (raw) {
     return;
   }
 
+  if (e.type === "template_staged") {
+    if (inView(e)) loadTemplateCardInChat(e.agentId);
+    return;
+  }
+
   if (e.type === "text") {
     if (!inView(e)) return;
     // Prose arriving with no round open is the answer, and prose after a round has run is
@@ -3889,6 +3895,85 @@ $("agcatalog").onclick = function (event) {
 };
 
 // ── templates (docs/29) ────────────────────────────────────────────────────
+/**
+ * The share card: what a staged version carries, and the two things a person can do with
+ * it — download the file, or publish it to the control plane for a link. Nothing leaves the
+ * box until one of those is clicked; the bot cannot click either.
+ */
+function templateCardHtml(info) {
+  var share = info.share
+    ? '<div style="margin-top:6px;font-size:12px">Published (' + esc(info.share.visibility) + '): <a href="' + esc(info.share.url) + '" target="_blank">' + esc(info.share.url) + '</a> ' +
+      '<button class="btn sm ghost" data-unpublish="' + esc(info.agentId) + '">Unpublish</button></div>'
+    : info.canPublish
+      ? '<div style="margin-top:6px;display:flex;gap:8px;flex-wrap:wrap">' +
+        '<button class="btn sm" data-publish="' + esc(info.agentId) + '" data-version="' + esc(String(info.version)) + '" data-visibility="public">Publish a link</button>' +
+        '<button class="btn sm ghost" data-publish="' + esc(info.agentId) + '" data-version="' + esc(String(info.version)) + '" data-visibility="tenant">Team only</button>' +
+        "</div>"
+      : '<div class="dim" style="margin-top:6px;font-size:11px">Links need a control plane; this box has none, so the file is the way to share.</div>';
+  return '<div class="consent" data-template-card="' + esc(info.agentId) + '" style="margin:8px 0">' +
+    '<div class="chead"><span class="dot"></span>Template staged &mdash; version ' + esc(String(info.version)) + ', not shared until you say so</div>' +
+    '<div style="font-size:13px;font-weight:500;margin-top:4px">' + esc(info.name) + '</div>' +
+    '<div style="font-size:12px;margin-top:2px">' + esc(info.description) + '</div>' +
+    '<div class="dim" style="font-size:11px;margin-top:4px">' + esc(info.counts) + "</div>" +
+    '<div style="margin-top:6px"><a href="/api/templates/download?agent=' + encodeURIComponent(info.agentId) + '&version=' + esc(String(info.version)) + '" style="font-size:12px">Download the file</a></div>' +
+    share +
+    '<div class="dim" id="tplstatus-' + esc(info.agentId) + '" style="font-size:11px;margin-top:4px"></div>' +
+  "</div>";
+}
+
+function showTemplateCard(info) {
+  var old = document.querySelector('[data-template-card="' + info.agentId + '"]');
+  if (old) old.remove();
+  $("chat").insertAdjacentHTML("beforeend", templateCardHtml(info));
+  $("chat").scrollTop = $("chat").scrollHeight;
+}
+
+/** The latest staged version for the agent in view, if any, rendered after the transcript. */
+function loadTemplateCardInChat(agentId) {
+  return fetch("/api/templates/mine?agent=" + encodeURIComponent(agentId))
+    .then(function (r) { return r.json(); })
+    .then(function (data) {
+      var versions = data.versions || [];
+      if (!versions.length || current !== agentId) return;
+      var latest = versions[versions.length - 1];
+      showTemplateCard({
+        agentId: agentId,
+        version: latest.version,
+        name: latest.name,
+        description: latest.description,
+        counts: latest.counts || "",
+        share: data.share || null,
+        canPublish: !!data.canPublish
+      });
+    })
+    .catch(function () { /* no card is not an error */ });
+}
+
+$("chat").addEventListener("click", function (e) {
+  var get = function (name) { return e.target && e.target.getAttribute && e.target.getAttribute(name); };
+  var publish = get("data-publish");
+  var unpublish = get("data-unpublish");
+  if (!publish && !unpublish) return;
+  e.preventDefault();
+  e.target.disabled = true;
+  var agentId = publish || unpublish;
+  var status = $("tplstatus-" + agentId);
+  if (status) status.textContent = publish ? "Publishing…" : "Unpublishing…";
+  fetch(publish ? "/api/templates/publish" : "/api/templates/unpublish", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify(publish
+      ? { agent: agentId, version: Number(get("data-version")), visibility: get("data-visibility") }
+      : { agent: agentId })
+  })
+    .then(function (r) { return r.json().then(function (d) { if (!r.ok) throw new Error(d.error || "failed"); return d; }); })
+    .then(function () { return loadTemplateCardInChat(agentId); })
+    .catch(function (err) {
+      e.target.disabled = false;
+      if (status) status.textContent = String(err.message || err);
+    });
+});
+
 function loadTemplateCard(agentId) {
   $("agtemplate").textContent = "Loading…";
   $("agdownload").style.display = "none";
@@ -3939,6 +4024,27 @@ $("agimportfile").onchange = function () {
   file.text().then(function (text) { $("agimport").value = text; });
 };
 
+/**
+ * Landing from a share page: "/?import=<id>". The box fetches the storefront and the document
+ * from the control plane with its own token and opens the new-agent dialog with both in place,
+ * so the person reads what they are adding and clicks Import themselves.
+ */
+function landImportFromUrl() {
+  var shareId = new URLSearchParams(location.search).get("import");
+  if (!shareId) return;
+  history.replaceState(null, "", location.pathname);
+  fetch("/api/templates/preview?shareId=" + encodeURIComponent(shareId))
+    .then(function (r) { return r.json().then(function (d) { if (!r.ok) throw new Error(d.error || "could not fetch the template"); return d; }); })
+    .then(function (d) {
+      openAgentModal("new", null);
+      $("agname").value = d.name || "";
+      $("agimport").value = d.document || "";
+      $("agstatus").textContent = "Shared template “" + (d.name || "") + "” by " + (d.ownerName || "someone") + " — " + (d.description || "") + " Press Import to add your own copy.";
+      $("agimportgo").setAttribute("data-share-id", shareId);
+    })
+    .catch(function (err) { feed("could not open the shared template: " + esc(String(err.message || err)), "err"); });
+}
+
 $("agimportgo").onclick = function () {
   var text = $("agimport").value.trim();
   if (!text) { $("agstatus").textContent = "Paste a template first."; return; }
@@ -3947,7 +4053,7 @@ $("agimportgo").onclick = function () {
   fetch("/api/templates/import", {
     method: "POST",
     headers: { "content-type": "application/json" },
-    body: JSON.stringify({ template: text, name: $("agname").value.trim() || undefined })
+    body: JSON.stringify({ template: text, name: $("agname").value.trim() || undefined, shareId: $("agimportgo").getAttribute("data-share-id") || undefined })
   })
     .then(function (r) {
       return r.json().then(function (d) {
@@ -4195,7 +4301,7 @@ function applyRole() {
 }
 
 // Activity after the roster, because its lines name agents.
-refresh().then(loadActivity).then(loadRecordings);
+refresh().then(loadActivity).then(loadRecordings).then(landImportFromUrl);
 setInterval(refresh, 15000);
 
 // A chat card's "open in the workshop" link lands here: the board, with that task

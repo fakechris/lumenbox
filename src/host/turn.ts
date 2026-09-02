@@ -38,7 +38,7 @@ import { chooseRelevant } from "./memory.ts";
 import { needsReview, type ReviewInput, type ReviewMode, type Verdict } from "./auto-review.ts";
 import type { HookRunner } from "./hooks.ts";
 import { AGENT_WAKE_CUE } from "../agents/bus.ts";
-import { TEMPLATE_CUE } from "./template.ts";
+import { TEMPLATE_CUE, TEMPLATE_SETUP_TOOLS } from "./template.ts";
 import {
   activeWindow,
   buildSummaryPrompt,
@@ -1277,11 +1277,18 @@ export async function runTurn(
     conversation === MAIN_CONVERSATION
       ? undefined
       : deps.scopes?.boundTo(conversation, conversationIdFor);
-  const effectiveTools = narrowTools(scope?.tools ?? agent.profile.tools, chatScope?.tools);
+  const narrowed = narrowTools(scope?.tools ?? agent.profile.tools, chatScope?.tools);
+  // A template setup turn holds files and memory and a way to ask, nothing that reaches out
+  // (docs/29 §5.3): the recipe it is installing is third-party text, and installing yourself
+  // is not a reason to message anyone. Withheld, not refused, like every other narrowing.
+  const effectiveTools =
+    deps.templateSetup === undefined
+      ? narrowed
+      : TEMPLATE_SETUP_TOOLS.filter(tool => narrowed === undefined || narrowed.includes(tool));
   // The tools other people wrote, narrowed by the same allowlist as ours: an MCP tool
   // is an ordinary tool once it arrives, including in what an agent's profile and its
   // scope are allowed to withhold.
-  const allowedMcp = (deps.mcp?.tools() ?? []).filter(
+  const allowedMcp = (deps.templateSetup !== undefined ? [] : (deps.mcp?.tools() ?? [])).filter(
     tool => effectiveTools === undefined || effectiveTools.includes(tool.name)
   );
   // Past a certain number they stop being a list and start being a document that every

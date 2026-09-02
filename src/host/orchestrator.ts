@@ -32,6 +32,7 @@ import {
   type BotTemplate,
   type ReconcileResult,
   type TemplateFillIn,
+  describeTemplate,
   pendingOf,
   recipeDirFor,
   reconcile,
@@ -39,6 +40,7 @@ import {
   templateId,
   templateSetupCue,
   stampTemplateWrite,
+  templatesEnabled,
   toolsOf,
 } from "./template.ts";
 import { SKILLS_DIR } from "./skills.ts";
@@ -48,6 +50,7 @@ import { resolveBoxProvisioner, type BoxProvisioner } from "../box/provisioner.t
 import { classifyBox, type BoxClass } from "../box/access.ts";
 import type { ResolutionConfig } from "../protocol/index.ts";
 import { runTurn, TurnAborted, type TurnDeps, type TurnEvent } from "./turn.ts";
+import type { ToolContext } from "./tools.ts";
 import { loadConfig } from "../config.ts";
 import { McpManager } from "./mcp.ts";
 import { PolicyGate } from "./policy.ts";
@@ -671,7 +674,16 @@ export class Orchestrator {
     return join(agentboxHome(), "templates", agentId);
   }
 
-  readonly templates = {
+  /**
+   * Told when a bot stages a version, with what a card needs. Set by the web server, which
+   * has the broadcast; the orchestrator only writes the file.
+   */
+  onTemplateStaged: ((staged: { agentId: string; id: string; version: number; template: BotTemplate }) => void) | undefined;
+
+  /** Where PackTemplate stages; undefined when sharing is off, which withholds the tool. */
+  readonly templates: ToolContext["templates"] = !templatesEnabled()
+    ? undefined
+    : {
     stage: (agentId: string, template: BotTemplate): { id: string; version: number; path: string } => {
       const dir = this.templateDirFor(agentId);
       mkdirSync(dir, { recursive: true });
@@ -685,12 +697,13 @@ export class Orchestrator {
       const version = this.stagedTemplates(agentId).length + 1;
       const path = join(dir, `v${version}.json`);
       writeFileSync(path, `${JSON.stringify(template, null, 2)}\n`);
+      this.onTemplateStaged?.({ agentId, id, version, template });
       return { id, version, path };
     },
   };
 
   /** Every version this agent has staged, oldest first. */
-  stagedTemplates(agentId: string): { version: number; path: string; name: string; description: string; stagedAt: string }[] {
+  stagedTemplates(agentId: string): { version: number; path: string; name: string; description: string; counts: string; stagedAt: string }[] {
     const dir = this.templateDirFor(agentId);
     if (!existsSync(dir)) return [];
     return readdirSync(dir)
@@ -700,18 +713,37 @@ export class Orchestrator {
         const path = join(dir, match[0]);
         let name = "";
         let description = "";
+        let counts = "";
         let stagedAt = "";
         try {
           const parsed = JSON.parse(readFileSync(path, "utf8")) as BotTemplate;
           name = parsed.profile.name;
           description = parsed.profile.description;
+          counts = describeTemplate(parsed);
           stagedAt = parsed.meta?.createdAt ?? "";
         } catch {
           // A torn file is listed by its number and nothing else.
         }
-        return { version: Number(match[1]), path, name, description, stagedAt };
+        return { version: Number(match[1]), path, name, description, counts, stagedAt };
       })
       .sort((a, b) => a.version - b.version);
+  }
+
+  /** What the control plane knows about this agent's template, as last told. */
+  templateShareOf(agentId: string): { shareId: string; url?: string; visibility: string; version: number; published: boolean } | undefined {
+    const path = join(this.templateDirFor(agentId), "share.json");
+    if (!existsSync(path)) return undefined;
+    try {
+      return JSON.parse(readFileSync(path, "utf8")) as { shareId: string; url?: string; visibility: string; version: number; published: boolean };
+    } catch {
+      return undefined;
+    }
+  }
+
+  setTemplateShare(agentId: string, share: { shareId: string; url?: string; visibility: string; version: number; published: boolean } | undefined): void {
+    const dir = this.templateDirFor(agentId);
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(join(dir, "share.json"), share === undefined ? "{}\n" : `${JSON.stringify(share, null, 2)}\n`);
   }
 
   /** The stable share id of an agent's template, when it has staged one. */

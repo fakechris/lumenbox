@@ -169,7 +169,6 @@ import {
   CATALOG_CREWS,
   CATALOG_EXPERTS,
   expertNamed,
-  intersectTools,
   profilesFor,
 } from "../host/catalog.ts";
 import { preflight } from "../box/preflight.ts";
@@ -209,7 +208,8 @@ import {
 import { Vault, type Grant } from "../host/vault.ts";
 import { seedStarterSkills } from "../host/starter-skills.ts";
 import { firstRunCue } from "../host/prompt.ts";
-import { parseTemplate, rewriteFrontmatter, unresolvedPlaceholders } from "../host/template.ts";
+import { readBoxToken } from "../box/docker.ts";
+import { catalogTemplate, describeTemplate, parseTemplate, rewriteFrontmatter, templatesEnabled, unresolvedPlaceholders } from "../host/template.ts";
 import { SKILLS_DIR, SKILL_FILENAME, slugify } from "../host/skills.ts";
 import { catchUpFloor } from "../channels/ingress.ts";
 import { REPLAY_MAX_AGE_MS } from "../channels/feishu.ts";
@@ -249,11 +249,38 @@ type OutboundEvent =
   /** An approval was just created; the desktop shell turns this into a notification. */
   | { type: "approval_pending"; agentId: string; agentName: string; description: string }
   /** An imported bot's setup turn ended; `summary` says what landed (docs/29 §5.4). */
-  | { type: "template_import"; agentId: string; agentName: string; summary: string; complete: boolean };
+  | { type: "template_import"; agentId: string; agentName: string; summary: string; complete: boolean }
+  /** A bot staged a version of its template; the chat shows a card with what it carries. */
+  | { type: "template_staged"; agentId: string; agentName: string; id: string; version: number; name: string; description: string; counts: string };
 
 export async function startWebServer(options: WebOptions): Promise<() => void> {
   const log = options.onLog ?? (() => {});
   const registry = new AgentRegistry();
+  /**
+   * The control plane, when this box was given one (docs/29 §6 B): its address as the box
+   * reaches it, and the box's own token. Absent on a laptop, where templates are files.
+   */
+  const controlPlane = (): { call: (path: string, method: "GET" | "POST", body?: unknown) => Promise<{ ok: boolean; status: number; error: string; body: Record<string, unknown> }> } | undefined => {
+    const base = process.env.AGENTBOX_CONTROL_URL;
+    const token = process.env.BOXD_TOKEN ?? readBoxToken();
+    if (base === undefined || base === "" || token === undefined || token === "") return undefined;
+    return {
+      call: async (path, method, body) => {
+        const response = await fetch(`${base.replace(/\/+$/, "")}${path}`, {
+          method,
+          headers: { authorization: `Bearer ${token}`, "content-type": "application/json" },
+          ...(body === undefined ? {} : { body: JSON.stringify(body) }),
+        });
+        let parsed: Record<string, unknown> = {};
+        try {
+          parsed = (await response.json()) as Record<string, unknown>;
+        } catch {
+          // A non-JSON answer is reported by status alone.
+        }
+        return { ok: response.ok, status: response.status, error: String(parsed.error ?? `control plane answered ${response.status}`), body: parsed };
+      },
+    };
+  };
   // The doors, loaded before the people: identity links and knocks record the
   // incarnation of the channel they were observed under (docs/22 §4), so the
   // lookup has to exist before the principals file is read.
@@ -1709,6 +1736,20 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
   if (box.connected) {
     const boxClient = orchestrator.boxClient();
     if (boxClient) void seedStarterSkills(boxClient, line => log(line));
+    orchestrator.onTemplateStaged = staged => {
+      const agentName = registry.tryGet(staged.agentId)?.profile.name ?? staged.agentId;
+      log(`${agentName} staged template version ${staged.version} (${describeTemplate(staged.template)})`);
+      broadcast({
+        type: "template_staged",
+        agentId: staged.agentId,
+        agentName,
+        id: staged.id,
+        version: staged.version,
+        name: staged.template.profile.name,
+        description: staged.template.profile.description,
+        counts: describeTemplate(staged.template),
+      });
+    };
     const desktops = await orchestrator.ensureAllDesktops();
     for (const desktop of desktops) {
       log(
@@ -3259,21 +3300,18 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
               skipped.push(row.name);
               continue;
             }
-            const record = registry.create({
-              name: row.name,
-              description: row.description,
-              title: row.title,
-              tools: [...intersectTools(row.tools, undefined)],
-              ...(caller.userId !== undefined ? { ownerUserId: caller.userId } : {}),
-              visibility: "shared",
+            // The catalog is the first-party shelf of the same format (docs/29 §6): an expert
+            // is installed the way any template is, so its origin is on its profile and its
+            // first turn is the same first turn.
+            const imported = orchestrator.importTemplate(catalogTemplate(row), {
+              caller,
+              connected: ["browser", ...channelRecords.map(record => record.type)],
+              shareId: `catalog:${row.slug}`,
+              log,
             });
             existing.add(row.name);
-            created.push({ id: record.id, name: record.profile.name });
-            log(`catalog ${slug}: created ${record.profile.name} (${record.id})`);
-            // Its first turn, so the new agent speaks before anyone has to.
-            void orchestrator
-              .prompt(record.id, firstRunCue(caller.userId), caller, { steerable: false, lane: "background" })
-              .catch(error => log(`first run for ${record.profile.name} failed: ${error instanceof Error ? error.message : String(error)}`));
+            created.push({ id: imported.agent.id, name: imported.agent.profile.name });
+            log(`catalog ${slug}: created ${imported.agent.profile.name} (${imported.agent.id})`);
           }
           send(res, 200, { slug, created, skipped });
           return;
@@ -3692,12 +3730,47 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
         // Import: the agent is created from the profile, the recipe goes into the box, and
         // the new bot's first turn installs the rest. The response is immediate; what landed
         // arrives as a template_import event when the setup turn ends.
+        // A catalog expert as a file, in the same format a bot's own template takes.
+        if (route === "GET /api/catalog/template") {
+          const expert = expertNamed(url.searchParams.get("slug") ?? "");
+          if (expert === undefined) {
+            send(res, 404, { error: "No catalog expert by that slug." });
+            return;
+          }
+          res.writeHead(200, {
+            "content-type": "application/json; charset=utf-8",
+            "content-disposition": `attachment; filename="${expert.slug}.lumenbox-template.json"`,
+          });
+          res.end(`${JSON.stringify(catalogTemplate(expert), null, 2)}\n`);
+          return;
+        }
+
+        if (route.startsWith("POST /api/templates/") && !templatesEnabled()) {
+          send(res, 404, { error: "Template sharing is off here (AGENTBOX_TEMPLATES=0)." });
+          return;
+        }
+
         if (route === "POST /api/templates/import") {
           if (refused()) return;
           const body = await readJson(req);
-          const raw = typeof body.template === "string" ? body.template : body.template !== undefined ? JSON.stringify(body.template) : "";
+          let raw = typeof body.template === "string" ? body.template : body.template !== undefined ? JSON.stringify(body.template) : "";
+          let shareId: string | undefined;
+          if (raw === "" && typeof body.shareId === "string" && /^[A-Za-z0-9_-]{21}$/.test(body.shareId)) {
+            const control = controlPlane();
+            if (control === undefined) {
+              send(res, 400, { error: "This box is not attached to a control plane, so a share id cannot be fetched. Paste the file instead." });
+              return;
+            }
+            const reply = await control.call(`/api/templates/${body.shareId}/document`, "GET").catch(error => ({ ok: false as const, status: 502, error: String(error instanceof Error ? error.message : error), body: {} }));
+            if (!reply.ok) {
+              send(res, reply.status, { error: reply.error });
+              return;
+            }
+            raw = String(reply.body.document ?? "");
+            shareId = body.shareId;
+          }
           if (raw === "") {
-            send(res, 400, { error: "Pass the template as `template` (its JSON, or the parsed object)." });
+            send(res, 400, { error: "Pass the template as `template` (its JSON, or the parsed object), or a `shareId`." });
             return;
           }
           const parsed = parseTemplate(raw);
@@ -3714,6 +3787,7 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
             imported = orchestrator.importTemplate(parsed.template, {
               caller,
               ...(typeof body.name === "string" && body.name.trim() !== "" ? { name: body.name.trim() } : {}),
+              ...(shareId !== undefined ? { shareId } : {}),
               connected,
               log,
             });
@@ -3765,11 +3839,105 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
             send(res, 404, { error: "No such agent." });
             return;
           }
+          const share = orchestrator.templateShareOf(agent.id);
           send(res, 200, {
             id: orchestrator.templateIdOf(agent.id),
             versions: orchestrator.stagedTemplates(agent.id),
+            ...(share !== undefined && share.published ? { share } : {}),
+            canPublish: controlPlane() !== undefined,
             ...(agent.profile.importedFrom !== undefined ? { importedFrom: agent.profile.importedFrom } : {}),
           });
+          return;
+        }
+
+        // Publishing sends a staged version to the control plane, which hands back the link.
+        // The box speaks with its own token; the person clicked, so the audit names them here.
+        if (route === "POST /api/templates/publish" || route === "POST /api/templates/unpublish") {
+          const body = await readJson(req);
+          const agentId = String(body.agent ?? "");
+          if (refused(agentId)) return;
+          const control = controlPlane();
+          if (control === undefined) {
+            send(res, 400, { error: "This box is not attached to a control plane, so there is nowhere to publish a link. Download the file instead." });
+            return;
+          }
+          const agent = registry.tryGet(agentId);
+          if (agent === undefined) {
+            send(res, 404, { error: "No such agent." });
+            return;
+          }
+          try {
+            if (route.endsWith("/unpublish")) {
+              const share = orchestrator.templateShareOf(agent.id);
+              if (share === undefined) {
+                send(res, 404, { error: "Nothing is published for this agent." });
+                return;
+              }
+              const reply = await control.call(`/api/templates/${share.shareId}/unpublish`, "POST", {});
+              if (!reply.ok) {
+                send(res, reply.status, { error: reply.error });
+                return;
+              }
+              orchestrator.setTemplateShare(agent.id, { ...share, published: false });
+              log(`unpublished template ${share.shareId} of ${agent.profile.name}`);
+              send(res, 200, { ok: true });
+              return;
+            }
+            const wanted = Number(body.version);
+            const versions = orchestrator.stagedTemplates(agent.id);
+            const version = Number.isInteger(wanted) && wanted > 0 ? versions.find(entry => entry.version === wanted) : versions.at(-1);
+            if (version === undefined) {
+              send(res, 404, { error: "No staged version to publish. Ask the bot to draft one first." });
+              return;
+            }
+            const visibility = body.visibility === "tenant" ? "tenant" : "public";
+            const document = readFileSync(version.path, "utf8");
+            const staged = await control.call("/api/templates", "POST", {
+              document,
+              sourceAgentId: agent.id,
+              visibility,
+              ...(caller.userId !== undefined ? { ownerUserId: caller.userId, ownerName: caller.userId } : {}),
+            });
+            if (!staged.ok) {
+              send(res, staged.status, { error: staged.error });
+              return;
+            }
+            const shareId = String(staged.body.shareId);
+            const remoteVersion = Number(staged.body.version);
+            const published = await control.call(`/api/templates/${shareId}/publish`, "POST", { version: remoteVersion });
+            if (!published.ok) {
+              send(res, published.status, { error: published.error });
+              return;
+            }
+            const share = { shareId, url: typeof published.body.url === "string" ? published.body.url : undefined, visibility, version: version.version, published: true };
+            orchestrator.setTemplateShare(agent.id, share);
+            log(`published template ${shareId} of ${agent.profile.name} (${visibility})${share.url === undefined ? "" : ` at ${share.url}`}`);
+            send(res, 200, { ok: true, share });
+          } catch (error) {
+            send(res, 502, { error: `The control plane did not answer: ${error instanceof Error ? error.message : String(error)}` });
+          }
+          return;
+        }
+
+        // A shared template by id, fetched from the control plane with this box's token: the
+        // storefront for the dialog, then the document for the import.
+        if (route === "GET /api/templates/preview") {
+          const control = controlPlane();
+          const shareId = url.searchParams.get("shareId") ?? "";
+          if (control === undefined || !/^[A-Za-z0-9_-]{21}$/.test(shareId)) {
+            send(res, 400, { error: control === undefined ? "This box is not attached to a control plane." : "That is not a share id." });
+            return;
+          }
+          try {
+            const reply = await control.call(`/api/templates/${shareId}/document`, "GET");
+            if (!reply.ok) {
+              send(res, reply.status, { error: reply.error });
+              return;
+            }
+            send(res, 200, reply.body);
+          } catch (error) {
+            send(res, 502, { error: `The control plane did not answer: ${error instanceof Error ? error.message : String(error)}` });
+          }
           return;
         }
 

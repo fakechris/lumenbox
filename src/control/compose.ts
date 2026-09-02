@@ -52,6 +52,11 @@ export interface ComposeAllocatorOptions {
    */
   relayUrl?: string;
   /**
+   * The control plane, as the box will reach it — usually `http://host.docker.internal:8080`.
+   * Set, a box is told where to publish templates to (docs/29 §6 B), with its own token.
+   */
+  controlUrl?: string;
+  /**
    * Which provider's capabilities a relayed box should assume.
    *
    * The relay decides where a token's traffic actually goes; this only tells the box which model and
@@ -178,6 +183,9 @@ export class ComposeAllocator extends StoreBackedAllocator {
                 "--add-host",
                 "host.docker.internal:host-gateway",
               ]
+            : []),
+          ...(this.options.controlUrl !== undefined
+            ? ["--env", `AGENTBOX_CONTROL_URL=${this.options.controlUrl}`, "--add-host", "host.docker.internal:host-gateway"]
             : []),
           ...Object.entries(spec.env ?? {}).flatMap(([key, value]) => [
             "--env",

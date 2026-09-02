@@ -39,10 +39,29 @@ Stages 1 and 2 shipped the same day, on `feat/bot-templates`:
   sentence), `GET /api/templates/mine`, `GET /api/templates/download`; the agent dialog
   (paste/upload to import; "Ask it to draft a template" + Download latest in Configure);
   the automations row shows paused and switches it; `agentbox template import|share|download`.
-- **Not yet**: the share card as a transcript card (the staged version shows in Configure
-  and the feed instead), withholding outbound tools during the setup turn, the control-plane
-  link (§6 Stage B), the catalog as templates (§9 Stage 3), a cheaper model for the setup
-  turn. 1035 tests green; the floor moved to 1030.
+- **Later the same day, the rest of §9** — the share card is a card in the chat
+  (`template_staged` event; Download, Publish a link / Team only, Unpublish); a setup turn holds
+  only `TEMPLATE_SETUP_TOOLS` (files, memory, a way to ask — no shell, browser, teammates or
+  MCP; test asserts the offered list); the catalog installs through `importTemplate`
+  (`catalogTemplate(expert)`: profile and tier, nothing to install, `importedFrom` says
+  `catalog:<slug>`; `GET /api/catalog/template?slug=` is the file); `AGENTBOX_TEMPLATES=0`
+  turns the skill, the tool and the routes off together.
+- **Share links (§6 Stage B)** — `src/control/templates.ts` + two tables in `store.ts`
+  (`template`, `template_version`; parent keyed by (box, source agent), immutable versions,
+  `active_version` + `published`, visibility on the parent, hard delete frees the binding).
+  A box speaks with its own token (`findBoxByToken`): `POST /api/templates` stages,
+  `…/<id>/publish` activates (first publish, replace and rollback are one call),
+  `…/unpublish`, `…/visibility`, `DELETE`, `GET …/<id>/document` (published + active only;
+  `tenant` visibility only to boxes of that tenant; every other case is the same 404), `GET
+  /api/templates/mine`. `GET /t/<id>` is the storefront (escaped; never the document;
+  team-only pages need a session of that tenant) with "Add to lumenbox" → `/?import=<id>`,
+  and the login form now carries a safe `next`. Boxes get `AGENTBOX_CONTROL_URL` from the
+  compose allocator; `--public-url` / `AGENTBOX_PUBLIC_URL` is what links are built from. On
+  the box: `POST /api/templates/publish|unpublish`, `GET /api/templates/preview?shareId=`,
+  import by `shareId`, `share.json` beside the staged versions, and the UI lands `/?import=`
+  in the new-agent dialog with the storefront and the document filled in.
+- **Still not done, by choice**: a cheaper model for the setup turn (§10; measure first), a
+  gallery (§6 C). Tests green; the floor moved with them.
 
 Measured on the way: with the fake model the whole import — create, place the recipe, the
 setup turn writing two skills and one memory, reconcile — is one turn and under a second;

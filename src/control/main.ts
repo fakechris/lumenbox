@@ -52,6 +52,12 @@ export interface ControlPlaneOptions {
   /** Which provider's capabilities relayed boxes assume. The relay decides where traffic goes. */
   relayProvider?: string;
   secureCookies?: boolean;
+  /**
+   * Where a person reaches this gateway — `https://box.example.com` — for the share links it
+   * hands out. Absent, links are built from the listening address, which is only right on a
+   * laptop.
+   */
+  publicUrl?: string;
   out?: (line: string) => void;
 }
 
@@ -112,6 +118,8 @@ export async function startControlPlane(
     allocator = new ComposeAllocator(store, {
       image: options.image,
       onOutput: line => out(`  ${line}`),
+      // The same address rule as the relay: as the container reaches this process.
+      controlUrl: `http://host.docker.internal:${options.port}`,
       ...(options.relay === true
         ? {
             // As the *container* reaches it, not as this process does. The two differ, and using
@@ -195,6 +203,7 @@ export async function startControlPlane(
       ? { AGENTBOX_PROVIDER: process.env.AGENTBOX_PROVIDER }
       : undefined,
     secureCookies: options.secureCookies,
+    publicUrl: options.publicUrl ?? `http://${options.host}:${options.port}`,
     log: line => out(`  ${line}`),
   });
 

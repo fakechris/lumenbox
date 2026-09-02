@@ -39,6 +39,7 @@ import { parseCookies } from "../web/auth.ts";
 import { adminRouteOf, handleAdmin } from "./admin.ts";
 import type { BoxAllocator, BoxHandle } from "./allocator.ts";
 import { isRole, type ControlStore, type Role } from "./store.ts";
+import { handleTemplateApi, renderSharePage, sharePageIdOf, templateRouteOf } from "./templates.ts";
 
 export const SESSION_COOKIE = "agentbox_session";
 
@@ -159,6 +160,11 @@ export interface GatewayOptions {
   boxEnv?: Record<string, string>;
   /** True behind TLS: sets `Secure` on the cookie. */
   secureCookies?: boolean;
+  /**
+   * Where this gateway is reached by a person, for the share links it hands out (docs/29
+   * §6 B). Absent, templates can be staged and served but no link is built.
+   */
+  publicUrl?: string;
   log?: (line: string) => void;
 }
 
@@ -167,6 +173,10 @@ export type GatewayRoute =
   | { kind: "login-submit" }
   | { kind: "logout" }
   | { kind: "admin" }
+  /** A box's own call about its templates, authenticated by its token, not a session. */
+  | { kind: "template-api" }
+  /** The public storefront of a shared template. */
+  | { kind: "share-page"; shareId: string }
   | { kind: "proxy"; path: string };
 
 /**
@@ -184,6 +194,12 @@ export function routeOf(pathname: string, method: string): GatewayRoute {
   // The tenant's own administration, answered here rather than proxied: the box has no concept of a
   // tenant, and teaching it one would undo the separation this design rests on.
   if (pathname.startsWith("/api/admin/")) return { kind: "admin" };
+  // Templates live here because a link has to outlive any one box, and a box speaks for itself
+  // with its token. The box's own /api/templates/* routes (import, share, download) are proxied
+  // as before: this claims only the control plane's shapes.
+  if (templateRouteOf(pathname, method) !== undefined) return { kind: "template-api" };
+  const shareId = sharePageIdOf(pathname);
+  if (shareId !== undefined) return { kind: "share-page", shareId };
   return { kind: "proxy", path: pathname };
 }
 
@@ -245,8 +261,16 @@ export class Gateway {
     const url = new URL(req.url ?? "/", "http://gateway");
     const route = routeOf(url.pathname, req.method ?? "GET");
 
-    if (route.kind === "login-page") return this.sendLoginPage(res);
+    if (route.kind === "login-page") return this.sendLoginPage(res, undefined, safeNext(url.searchParams.get("next")));
     if (route.kind === "login-submit") return this.handleLogin(req, res);
+    if (route.kind === "template-api") return this.handleTemplateApi(req, res, url);
+    if (route.kind === "share-page") {
+      const session = this.sessionOf(req);
+      const page = renderSharePage(this.options.store, route.shareId, session === undefined ? undefined : { tenantId: session.tenantId });
+      res.writeHead(page.status, { "content-type": "text/html; charset=utf-8", "cache-control": "no-store" });
+      res.end(page.html);
+      return;
+    }
     if (route.kind === "logout") {
       res.writeHead(302, {
         location: "/gateway/login",
@@ -355,7 +379,29 @@ export class Gateway {
     }
   }
 
-  private sendLoginPage(res: ServerResponse, message?: string): void {
+  /**
+   * A box calling about its own templates. The token is the box's own (the one boxd holds), so
+   * the caller is a box row, and every check below is against that row — never a session.
+   */
+  private async handleTemplateApi(req: IncomingMessage, res: ServerResponse, url: URL): Promise<void> {
+    const route = templateRouteOf(url.pathname, req.method ?? "GET");
+    const header = req.headers.authorization ?? "";
+    const token = header.startsWith("Bearer ") ? header.slice(7).trim() : "";
+    const box = this.options.store.findBoxByToken("box", token);
+    const json = (status: number, body: unknown) => {
+      res.writeHead(status, { "content-type": "application/json", "cache-control": "no-store" });
+      res.end(JSON.stringify(body));
+    };
+    if (route === undefined) return json(404, { error: "No such route." });
+    if (box === undefined) return json(401, { error: "A box token is needed." });
+    const tenant = this.options.store.getTenant(box.tenantId);
+    if (tenant === undefined || tenant.state !== "active") return json(403, { error: "This account is not active." });
+    const body = req.method === "POST" ? await readJsonBody(req) : {};
+    const reply = handleTemplateApi(route, body, box, { store: this.options.store, publicUrl: this.options.publicUrl });
+    json(reply.status, reply.body);
+  }
+
+  private sendLoginPage(res: ServerResponse, message?: string, next?: string): void {
     const body =
       `<!doctype html><meta charset="utf-8"><title>Sign in</title>` +
       `<body style="font:14px system-ui;padding:3rem;max-width:22rem">` +
@@ -364,6 +410,7 @@ export class Gateway {
         ? ""
         : `<p style="color:#b00">${message.replace(/[<&]/g, character => (character === "<" ? "&lt;" : "&amp;"))}</p>`) +
       `<form method="post" action="/gateway/login">` +
+      (next === undefined ? "" : `<input type="hidden" name="next" value="${next.replace(/[<&"]/g, character => ({ "<": "&lt;", "&": "&amp;", '"': "&quot;" })[character] ?? character)}">`) +
       `<p><label>User<br><input name="username" autocomplete="username" autofocus></label></p>` +
       `<p><label>Password<br><input name="password" type="password" ` +
       `autocomplete="current-password"></label></p>` +
@@ -380,12 +427,15 @@ export class Gateway {
     const form = new URLSearchParams(body);
     const username = form.get("username") ?? "";
     const password = form.get("password") ?? "";
+    // Where to land after: a share page sends people here with the import in hand, and losing it
+    // on the way through the form would make the button on that page a dead end.
+    const next = safeNext(form.get("next"));
 
     const tenantName = await this.options.identity.authenticate(username, password);
     if (tenantName === undefined) {
       // One message for both failures: which of the two was wrong is not the visitor's business.
       this.log(`failed sign-in for ${JSON.stringify(username)}`);
-      this.sendLoginPage(res, "That user and password did not match.");
+      this.sendLoginPage(res, "That user and password did not match.", next);
       return;
     }
 
@@ -408,7 +458,7 @@ export class Gateway {
       detail: { userId: user.id, role: membership.role },
     });
     res.writeHead(302, {
-      location: "/",
+      location: next ?? "/",
       "set-cookie":
         `${SESSION_COOKIE}=${this.signer.issue({
           userId: user.id,
@@ -556,3 +606,11 @@ async function readBody(req: IncomingMessage, limit = 64 * 1024): Promise<string
   }
   return Buffer.concat(chunks).toString("utf8");
 }
+
+/** A `next` that is a path on this origin, or nothing. `//host` and absolute URLs are refused. */
+export function safeNext(value: string | null | undefined): string | undefined {
+  if (value === null || value === undefined || value === "") return undefined;
+  if (!value.startsWith("/") || value.startsWith("//") || value.startsWith("/\\")) return undefined;
+  return value.slice(0, 512);
+}
+

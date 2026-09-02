@@ -114,10 +114,12 @@ test("an imported bot installs its own recipe on its first turn, and the host re
   const { registry, files, provenance, cleanup } = fixture();
   try {
     let cue = "";
+    let offered: string[] = [];
     const client = fakeModel(({ index, params }) => {
       if (index === 0) {
         const last = params.messages[params.messages.length - 1];
         cue = typeof last?.content === "string" ? last.content : "";
+        offered = (params.tools ?? []).map(tool => (tool as { name: string }).name);
         return message(
           [
             // What the bot copies out of the recipe: the skill as given, the routine as given
@@ -170,6 +172,11 @@ test("an imported bot installs its own recipe on its first turn, and the host re
     assert.ok(cue.startsWith(TEMPLATE_CUE), cue.slice(0, 80));
     assert.match(cue, /from the template "下载专家" by kin/);
     assert.match(cue, /one at a time: Feishu chat to deliver to; Timezone; feishu is not connected here/);
+    // The setup turn held files and memory and a way to ask, and nothing that reaches out.
+    assert.ok(offered.includes("write_file") && offered.includes("RememberFact") && offered.includes("AskUser"), offered.join(","));
+    for (const tool of ["bash", "SendToAgent", "Delegate", "browser_open", "WebFetch", "computer", "CreateAgent"]) {
+      assert.ok(!offered.includes(tool), `${tool} was offered in a setup turn`);
+    }
     const review = reviewInputFor({ agentName: "下载专家", inbound: [{ fromId: "user", fromName: "you", text: cue } as never], transcript: [], messages: [], tool: "bash", input: {}, why: "" });
     assert.deepEqual(review.trusted, []);
     assert.equal(review.untrusted[0], cue);

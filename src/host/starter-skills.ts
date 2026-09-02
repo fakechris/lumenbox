@@ -26,6 +26,7 @@ import { readdirSync, readFileSync, statSync } from "node:fs";
 import { dirname, join, relative } from "node:path";
 import { SKILLS_DIR } from "./skills.ts";
 import { catalogDataDir, hubSkillSlugs } from "./catalog.ts";
+import { templatesEnabled } from "./template.ts";
 
 /** Records which starters have ever been offered, so deletion and novelty stay distinct. */
 export const SEEDED_MARKER = ".seeded";
@@ -377,8 +378,11 @@ export async function seedStarterSkills(
     const markerText = typeof raw?.stdout === "string" ? raw.stdout : undefined;
 
     const hub = hubSkillSlugs();
+    // The export skill only where sharing is on: a box with AGENTBOX_TEMPLATES=0 has no tool for
+    // the skill to end in, and a recipe that ends nowhere teaches the wrong thing.
+    const starters = STARTERS.filter(skill => skill.slug !== "export-template" || templatesEnabled());
     const missing = unseededStarters(markerText, existing, [
-      ...STARTERS,
+      ...starters,
       ...hub.map(slug => ({ slug })),
     ]);
     if (missing.length === 0) return;
@@ -388,7 +392,7 @@ export async function seedStarterSkills(
     // deliberately, through the shell.
     const dirs = missing.map(slug => `${SKILLS_DIR}/${slug}`).join(" ");
     await box.exec(`mkdir -p ${dirs}`, { timeoutMs: 15_000, actor: "host:starter-skills" });
-    for (const skill of STARTERS) {
+    for (const skill of starters) {
       if (!missing.includes(skill.slug)) continue;
       await box.uploadFile(
         `${SKILLS_DIR}/${skill.slug}/SKILL.md`,
@@ -403,7 +407,7 @@ export async function seedStarterSkills(
     // The marker records everything offered as of now: what the marker already said,
     // what was on disk (a pre-marker install has skills the marker never heard of, and
     // deleting one of those should also stick), and what was just seeded.
-    const starterSlugs = new Set([...STARTERS.map(skill => skill.slug), ...hub]);
+    const starterSlugs = new Set([...starters.map(skill => skill.slug), ...hub]);
     const offered = new Set<string>(missing);
     for (const line of (markerText ?? "").split("\n")) {
       if (line.trim() !== "") offered.add(line.trim());

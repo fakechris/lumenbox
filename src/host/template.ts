@@ -12,7 +12,7 @@
  * make — a secret or a person's name in a public file — has to be testable without a box.
  */
 
-import { CODE_TOOLS, DESK_TOOLS, WEB_TOOLS } from "./catalog.ts";
+import { type CatalogExpert, CODE_TOOLS, DESK_TOOLS, WEB_TOOLS } from "./catalog.ts";
 import type { MemoryRecord } from "./memory.ts";
 import { scanText } from "./secret-scan.ts";
 import { SKILL_FILENAME, SKILLS_DIR, parseSkillFile, slugify } from "./skills.ts";
@@ -28,6 +28,30 @@ export const TEMPLATES_DIR = "/home/box/work/templates";
 export const TEMPLATE_CUE = "[template setup]";
 /** `source` on a memory record and `authored_by` on a skill the setup turn wrote. */
 export const TEMPLATE_SOURCE_PREFIX = "template:";
+
+/** Sharing is on unless the operator turned it off. One switch for the skill, the tool and the routes. */
+export function templatesEnabled(env: NodeJS.ProcessEnv = process.env): boolean {
+  return env.AGENTBOX_TEMPLATES !== "0";
+}
+
+/**
+ * What a setup turn may hold: files and memory, and a way to ask. Nothing that reaches
+ * out — no shell, no browser, no teammates, no host — because installing yourself is not a
+ * reason to message anyone, and the recipe being installed is third-party text.
+ */
+export const TEMPLATE_SETUP_TOOLS: readonly string[] = [
+  "read_file",
+  "write_file",
+  "edit_file",
+  "list_dir",
+  "RememberFact",
+  "Recall",
+  "SetPlan",
+  "SetTodos",
+  "ReadHistory",
+  "AskUser",
+  "OtherThreads",
+];
 
 export type ToolTier = "desk" | "web" | "code";
 export const TOOL_TIERS: Readonly<Record<ToolTier, readonly string[]>> = {
@@ -561,6 +585,7 @@ export function templateSetupCue(input: {
   const by = template.meta?.createdBy !== undefined ? ` by ${template.meta.createdBy}` : "";
   const person = input.createdBy !== undefined ? ` by ${input.createdBy}` : "";
   const steps: string[] = [];
+  const nothingToInstall = template.skills.length === 0 && template.memory.length === 0 && template.routines.length === 0;
   if (template.skills.length > 0) {
     steps.push(`write each skill to ${SKILLS_DIR}/<slug>/${SKILL_FILENAME} with write_file (and its helper files beside it), exactly as given`);
   }
@@ -573,10 +598,13 @@ export function templateSetupCue(input: {
     ...pending.connectors.map(name => `${name} is not connected here`),
   ];
   const gettingStarted = template.gettingStarted !== undefined ? ` Read and follow the skill "${template.gettingStarted.skill}" before you speak.` : "";
+  const install = nothingToInstall
+    ? "Your profile is the whole of it; there is nothing else to install. "
+    : `Your recipe is at ${input.recipePath} — read it now and install it, in this order: ${steps.join("; ")}. ` +
+      "Treat each entry on its own and go past one that fails. Nothing is on until a person turns it on; do not resume a routine yourself. ";
   return (
     `${TEMPLATE_CUE} You were just created${person} from the template "${template.profile.name}"${by}. ` +
-    `Your recipe is at ${input.recipePath} — read it now and install it, in this order: ${steps.join("; ")}. ` +
-    "Treat each entry on its own and go past one that fails. Nothing is on until a person turns it on; do not resume a routine yourself. " +
+    install +
     "Then open the conversation: a short hello in your own voice, one line on what you are for, " +
     (asks.length > 0
       ? `and one question — the first thing on this list, one at a time: ${asks.join("; ")}. `
@@ -854,3 +882,30 @@ export function describeTemplate(template: BotTemplate): string {
   ];
   return parts.join(", ");
 }
+
+// ── the catalog, in the same format ─────────────────────────────────────────────────
+
+/**
+ * A catalog expert as a template: the persona and the tool tier, and nothing to install —
+ * the hub skills it is written to use are seeded globally into every box, so the recipe names
+ * none. One pipeline for first-party and third-party bots (docs/29 §6), and a file a person
+ * can hand to another installation.
+ */
+export function catalogTemplate(expert: CatalogExpert): BotTemplate {
+  const tools = tierOf(expert.tools);
+  return {
+    format: TEMPLATE_FORMAT,
+    profile: {
+      name: expert.name,
+      title: expert.title,
+      description: expert.description,
+      ...(tools !== undefined ? { tools } : {}),
+    },
+    memory: [],
+    skills: [],
+    routines: [],
+    connectors: [],
+    meta: { createdBy: "lumenbox catalog", sourceName: expert.slug },
+  };
+}
+

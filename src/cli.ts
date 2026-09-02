@@ -536,7 +536,7 @@ async function cmdTemplate(argv: string[]): Promise<number> {
         return 1;
       }
       out(`Asked ${bold(agent!)}: "${String(result.json.sent)}"`);
-      out(dim("  Watch the chat; when it has staged a version, run: agentbox template download " + agent));
+      out(dim(`  Watch the chat; when it has staged a version, run: agentbox template download ${agent}`));
       return 0;
     }
     if (sub === "download") {
@@ -847,6 +847,7 @@ async function cmdControl(argv: string[]): Promise<number> {
       relayPort: typeof relayPortFlag === "string" ? Number(relayPortFlag) : undefined,
       relayProvider: typeof flags.get("--provider") === "string" ? String(flags.get("--provider")) : undefined,
       secureCookies: process.env.AGENTBOX_SECURE_COOKIES === "1",
+      ...(typeof flags.get("--public-url") === "string" ? { publicUrl: String(flags.get("--public-url")) } : process.env.AGENTBOX_PUBLIC_URL ? { publicUrl: process.env.AGENTBOX_PUBLIC_URL } : {}),
       out: line => out(line === "" ? "" : dim(line)),
     });
     out("");
