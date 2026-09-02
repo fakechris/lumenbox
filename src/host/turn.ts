@@ -34,7 +34,7 @@ import {
   FIRST_TOKEN_DEADLINE_MS,
 } from "./transient.ts";
 import type { UsageKind, UsageLog } from "./usage.ts";
-import { chooseRelevant, recall } from "./memory.ts";
+import { chooseRelevant } from "./memory.ts";
 import {
   activeWindow,
   buildSummaryPrompt,
@@ -1386,9 +1386,12 @@ export async function runTurn(
       // whole point of surviving compaction, and an agent updates them *mid-turn*: it marks a todo
       // done in round five, and a continuation compacts that tool result away while the system block,
       // built once at turn start, still says the todo is pending. The stable half is unchanged, so
-      // only system[1] is rewritten. Memory is not re-selected here — that is a model call, and the
-      // thing that goes stale across a continuation is the durable state, not the recalled facts.
-      system[1] = { type: "text", text: buildParts(recall(registry.readMemoryRecords(agent.id))).volatile, ...cache };
+      // only system[1] is rewritten. Memory keeps the selection made at turn start: the selector
+      // chose against *this* request and the choice is still right for its continuation, while
+      // re-running a plain score-based recall here quietly threw that choice away (audit 2026-09-01
+      // #6). A fact remembered mid-turn reaches the next turn, not this one — the same freeze Grok
+      // Bot applies per compaction epoch, and the reason the memory block stays byte-stable.
+      system[1] = { type: "text", text: buildParts(memoryRecall).volatile, ...cache };
 
       rounds.length = 0; // a fresh budget means a fresh judgement about looping
     }

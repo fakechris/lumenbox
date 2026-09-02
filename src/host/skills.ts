@@ -38,6 +38,17 @@ export const SKILLS_DIR = "/home/box/work/skills";
 /** The one file that makes a directory a skill. */
 export const SKILL_FILENAME = "SKILL.md";
 
+/**
+ * The most of a description that reaches the prompt, and the most the whole index may take.
+ *
+ * Both exist because neither existed: a 300,000-character description was accepted and became a
+ * 301,610-character system prompt for every agent on every turn, and the overflow ladder could shed
+ * conversation but never skills (audit 2026-09-01 #4). A description is a sentence or two about
+ * when a skill applies — anything past a paragraph is body text in the wrong field.
+ */
+export const MAX_DESCRIPTION_CHARS = 400;
+export const SKILL_INDEX_CHARS = 12_000;
+
 export interface Skill {
   /** The directory name, which is the id. Stable, and what a path is built from. */
   slug: string;
@@ -200,12 +211,19 @@ export function skillFrom(
   slug: string,
   parsed: ParsedSkill,
   helpers: readonly string[] = []
-): { skill: Skill } | { problem: string } {
+): { skill: Skill; note?: string } | { problem: string } {
   if (parsed.body.trim() === "") {
     return { problem: `${slug}: ${SKILL_FILENAME} has no content, so there is nothing to run.` };
   }
   const name = parsed.meta.name?.trim() || slug.replace(/-/g, " ");
-  const description = parsed.meta.description?.trim() ?? "";
+  const full = parsed.meta.description?.trim() ?? "";
+  const description =
+    full.length > MAX_DESCRIPTION_CHARS ? `${full.slice(0, MAX_DESCRIPTION_CHARS).trimEnd()}…` : full;
+  const note =
+    full.length > MAX_DESCRIPTION_CHARS
+      ? `${slug}: description cut to ${MAX_DESCRIPTION_CHARS} characters in the index (it is ` +
+        `${full.length}); say when it applies in a sentence and keep the rest in the body.`
+      : undefined;
   if (description === "") {
     return {
       problem:
@@ -266,6 +284,7 @@ export function skillFrom(
       ...(parsed.meta.authored_by ? { authoredBy: parsed.meta.authored_by.trim() } : {}),
       ...(parsed.meta.because ? { because: parsed.meta.because.trim() } : {}),
     },
+    ...(note === undefined ? {} : { note }),
   };
 }
 
@@ -291,14 +310,31 @@ export function visibleTo(skills: readonly Skill[], agentName: string): Skill[] 
  */
 export function renderSkills(skills: readonly Skill[]): string {
   if (skills.length === 0) return "";
-  const lines = skills.map(skill => {
+  const lines: string[] = [];
+  const unlisted: Skill[] = [];
+  let used = 0;
+  for (const skill of skills) {
     const when = skill.schedule === undefined ? "" : ` — runs ${describeSchedule(skill.schedule)}`;
     const helpers =
       skill.helpers.length === 0
         ? ""
         : ` — with ${skill.helpers.join(", ")} in the same directory`;
-    return `- **${skill.name}** — ${skill.description}${when}\n  \`${skill.path}\`${helpers}`;
-  });
+    const line = `- **${skill.name}** — ${skill.description}${when}\n  \`${skill.path}\`${helpers}`;
+    // Past the budget the rest are named, not described: the agent still knows they exist and where,
+    // which is what the index is for, and the prompt stops growing with the directory.
+    if (used + line.length > SKILL_INDEX_CHARS) {
+      unlisted.push(skill);
+      continue;
+    }
+    used += line.length;
+    lines.push(line);
+  }
+  if (unlisted.length > 0) {
+    lines.push(
+      `- (${unlisted.length} more not described here because the index is full — ` +
+        `${unlisted.map(skill => skill.slug).join(", ")}; each is at \`${SKILLS_DIR}/<slug>/${SKILL_FILENAME}\`)`
+    );
+  }
   return [
     "## Skills you can reuse",
     "",
@@ -416,8 +452,10 @@ export async function loadSkills(source: SkillSource): Promise<SkillsLoad> {
       continue;
     }
     const result = skillFrom(entry.name, parseSkillFile(text), helpers);
-    if ("skill" in result) skills.push(result.skill);
-    else problems.push(result.problem);
+    if ("skill" in result) {
+      skills.push(result.skill);
+      if (result.note !== undefined) problems.push(result.note);
+    } else problems.push(result.problem);
   }
   return { skills, problems, read: true };
 }

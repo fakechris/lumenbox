@@ -9,6 +9,8 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import {
+  MAX_DESCRIPTION_CHARS,
+  SKILL_INDEX_CHARS,
   composeSkillFile,
   loadSkills,
   parseSkillFile,
@@ -338,4 +340,39 @@ test("a transient failure keeps what was last read", async () => {
 test("no box means no skills, and no exception", async () => {
   const cache = new SkillCache(() => undefined);
   assert.deepEqual((await cache.refresh()).skills, []);
+});
+
+test("a description past the cap is cut in the index and the author is told", () => {
+  // Audit 2026-09-01 #4: a 300,000-character description became a 301,610-character system prompt
+  // for every agent on every turn. The skill still loads — the body is fine — but the index gets a
+  // paragraph, and the loader's complaint names the cut so the author fixes the field.
+  const long = "when ".repeat(200);
+  const result = skillFrom("verbose", parseSkillFile(`---\ndescription: ${long}\n---\nbody`));
+  assert.ok("skill" in result);
+  assert.ok(result.skill.description.length <= MAX_DESCRIPTION_CHARS + 1);
+  assert.ok(result.skill.description.endsWith("…"));
+  assert.match(result.note ?? "", /cut to 400 characters/);
+  assert.match(result.note ?? "", /it is 999/);
+
+  const short = skillFrom("terse", parseSkillFile("---\ndescription: one line\n---\nbody"));
+  assert.ok("skill" in short && short.note === undefined);
+});
+
+test("the index stops at its budget and names what it left out", () => {
+  // The overflow ladder can shed conversation but never skills, so the index itself has to have a
+  // ceiling. Past it the rest are named — the agent still knows they exist and where.
+  const skills = Array.from({ length: 60 }, (_, index) => {
+    const result = skillFrom(
+      `skill-${index}`,
+      parseSkillFile(`---\ndescription: ${"applies ".repeat(45)}\n---\nbody`)
+    );
+    assert.ok("skill" in result);
+    return result.skill;
+  });
+  const rendered = renderSkills(skills);
+  assert.ok(rendered.length < SKILL_INDEX_CHARS + 2_000, `index is ${rendered.length} chars`);
+  assert.match(rendered, /\*\*skill 0\*\*/);
+  assert.match(rendered, /more not described here because the index is full/);
+  assert.match(rendered, /skill-59/);
+  assert.ok(!rendered.includes("**skill 59**"), "the last skill is named, not described");
 });

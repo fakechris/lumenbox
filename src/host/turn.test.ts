@@ -2440,3 +2440,70 @@ test("a turn that is not a resumption starts its own work", async () => {
     cleanup();
   }
 });
+
+test("a continuation keeps the memory selection made for the request", async () => {
+  // Audit 2026-09-01 #6: the initial assembly asked the selector which memories bear on the
+  // request, and a continuation rebuilt the volatile block with a plain score-based recall,
+  // discarding the answer. The selector's choice is against *this* request; it holds for the
+  // request's continuation.
+  const { registry, cleanup } = fixture();
+  const previousRounds = process.env.AGENTBOX_MAX_ROUNDS;
+  try {
+    process.env.AGENTBOX_MAX_ROUNDS = "2";
+    const ada = registry.create({ name: "Ada" });
+    // Well over the 4,000-character budget, so something must be dropped and the selector is asked.
+    // FACT-1 is the oldest, so the score-based order drops it first.
+    registry.appendMemoryRecords(
+      ada.id,
+      Array.from({ length: 12 }, (_, index) => ({
+        at: new Date(Date.UTC(2026, 0, 1 + index)).toISOString(),
+        kind: "fact" as const,
+        text: `FACT-${index + 1} ${"detail ".repeat(60)}`,
+      }))
+    );
+    const bus = new AgentBus(registry, async () => {});
+    const { box } = stubBox();
+    const capture: Capture = { params: [] };
+    const client = fakeModel(
+      ({ index }) =>
+        message([toolUseBlock("bash", { command: `echo t${index}` }, `t${index}`)], "tool_use"),
+      { capture, create: () => message([textBlock("a summary")]) }
+    );
+    let asked = 0;
+    await runTurn(
+      ada,
+      [{ id: "m-test", fromId: "user", fromName: "user", text: "keep going", priority: false, receivedAt: "" }],
+      new AbortController().signal,
+      {
+        client,
+        registry,
+        bus,
+        box,
+        resolution: undefined,
+        selectMemory: async prompt => {
+          asked += 1;
+          const line = prompt.split("\n").find(candidate => candidate.includes("FACT-1 "));
+          const number = /^(\d+)\./.exec(line ?? "")?.[1];
+          return `{"selected": [${number}]}`;
+        },
+      }
+    ).catch(() => {
+      // Ends at the continuation budget; the assertions are about the requests.
+    });
+
+    assert.equal(asked, 1, "the selector is consulted once, at turn start");
+    const sizes = capture.params.map(params => params.messages.length);
+    assert.ok(sizes.some((size, index) => index > 0 && size < sizes[index - 1]!), "a continuation ran");
+    const systemText = (params: (typeof capture.params)[number]) =>
+      (Array.isArray(params.system) ? params.system : [{ text: params.system ?? "" }])
+        .map(block => (block as { text: string }).text)
+        .join("\n");
+    for (const [index, params] of capture.params.entries()) {
+      assert.ok(systemText(params).includes("FACT-1 "), `request ${index} carries the selected memory`);
+    }
+  } finally {
+    if (previousRounds === undefined) delete process.env.AGENTBOX_MAX_ROUNDS;
+    else process.env.AGENTBOX_MAX_ROUNDS = previousRounds;
+    cleanup();
+  }
+});
