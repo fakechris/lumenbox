@@ -28,6 +28,13 @@ import { detectDisplay, type DisplayDetectionResult } from "../cua/display.ts";
 import { X11Executor } from "../cua/x11-executor.ts";
 import { ComponentHealth, type ComponentStatus } from "./component-health.ts";
 
+/**
+ * Where the desktop script lives. /usr/local/bin in our own image; as a drop-in on somebody
+ * else's machine (docs/29 is not the only thing that runs beside Grok Bot) it is wherever the
+ * archive was unpacked, and the daemon is told.
+ */
+const START_DISPLAY = process.env.BOXD_START_DISPLAY ?? "/usr/local/bin/start-display";
+
 const execFileAsync = promisify(execFile);
 
 /** Bringing up Xvfb, a WM, VNC and noVNC takes a moment on a loaded host. */
@@ -242,7 +249,7 @@ export class DisplayManager {
         // one moment: without it a crash-looping component is started again every pass.
         const blocked = desktop.health.blocked();
         const { stdout, stderr } = await execFileAsync(
-          "/usr/local/bin/start-display",
+          START_DISPLAY,
           [String(index)],
           {
             timeout: START_TIMEOUT_MS,
@@ -443,7 +450,7 @@ export class DisplayManager {
     // The script is idempotent, so this also adopts a desktop that the entrypoint
     // (or a previous boxd) already started.
     const { stdout, stderr } = await execFileAsync(
-      "/usr/local/bin/start-display",
+      START_DISPLAY,
       [String(index)],
       { timeout: START_TIMEOUT_MS }
     );

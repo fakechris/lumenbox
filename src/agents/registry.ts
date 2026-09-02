@@ -39,6 +39,7 @@ import {
   MEMORY_COMPACT_AT,
   type MemoryRecord,
 } from "../host/memory.ts";
+import { envNumber } from "../config.ts";
 
 export const AGENT_NAME_MAX_LENGTH = 72;
 export const AGENT_DESCRIPTION_MAX_LENGTH = 12_000;
@@ -356,7 +357,7 @@ export class AgentRegistry {
    * Raised by a registry that shares a box with another one, so the two do not both
    * claim desktop 1.
    */
-  displayFloor = 1;
+  displayFloor = envNumber("AGENTBOX_DISPLAY_FLOOR", 1);
 
   /**
    * The lowest display index no agent holds, so a deleted agent's slot is reused.

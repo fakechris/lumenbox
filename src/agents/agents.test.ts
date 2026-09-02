@@ -879,3 +879,23 @@ test("a conversation is labelled by what the person first said", () => {
     rmSync(root, { recursive: true, force: true });
   }
 });
+
+test("AGENTBOX_DISPLAY_FLOOR controls the starting display slot for agents", () => {
+  const root = mkdtempSync(join(tmpdir(), "agentbox-floor-"));
+  const prevEnv = process.env.AGENTBOX_DISPLAY_FLOOR;
+  try {
+    process.env.AGENTBOX_DISPLAY_FLOOR = "2";
+    const registry = new AgentRegistry(root);
+    const ada = registry.create({ name: "Ada" });
+    const rex = registry.create({ name: "Rex" });
+    assert.equal(ada.profile.displayIndex, 2, "Ada starts on Display :2 when floor is 2");
+    assert.equal(rex.profile.displayIndex, 3, "Rex receives Display :3");
+  } finally {
+    if (prevEnv !== undefined) {
+      process.env.AGENTBOX_DISPLAY_FLOOR = prevEnv;
+    } else {
+      delete process.env.AGENTBOX_DISPLAY_FLOOR;
+    }
+    rmSync(root, { recursive: true, force: true });
+  }
+});

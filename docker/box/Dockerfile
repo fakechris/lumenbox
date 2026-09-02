@@ -106,12 +106,14 @@ COPY box-init /usr/local/bin/box-init
 COPY box-healthcheck /usr/local/bin/box-healthcheck
 COPY wait-compositor /usr/local/bin/wait-compositor
 COPY vnc-probe /usr/local/bin/vnc-probe
+COPY box-keepalive /usr/local/bin/box-keepalive
 RUN chmod +x /usr/local/bin/entrypoint.sh /usr/local/bin/start-display \
       /usr/local/bin/box-chrome /usr/local/bin/box-clip \
       /usr/local/bin/box-doctor /usr/local/bin/box-init \
       /usr/local/bin/box-healthcheck \
       /usr/local/bin/wait-compositor \
-      /usr/local/bin/vnc-probe
+      /usr/local/bin/vnc-probe \
+      /usr/local/bin/box-keepalive
 
 # Chromium's managed policy. Two things it turns off, both of which are traps for an
 # agent rather than merely untidy:

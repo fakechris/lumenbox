@@ -136,12 +136,17 @@ printf '%s\n' "Xcursor.theme: Adwaita" "Xcursor.size: 24" "Xft.dpi: 96" \
 # Not optional: without one, dialogs open unmapped and keyboard focus never lands, so
 # typing silently goes nowhere. Compositing off so the desktop background is visible —
 # xfwm4's own compositor paints over the root window.
-if ! wmctrl -m > /dev/null 2>&1; then
+# wmctrl asks the WM; a machine without wmctrl (a drop-in on somebody else's image) falls back
+# to the process check, which is what keeps this from starting a new xfwm4 on every pass.
+wm_up() {
+  if command -v wmctrl > /dev/null 2>&1; then wmctrl -m > /dev/null 2>&1; else running_exact xfwm4; fi
+}
+if ! wm_up; then
   log "starting window manager"
   setsid dbus-launch --exit-with-session xfwm4 --replace --compositor=off \
     >> "/tmp/xfwm4-${N}.log" 2>&1 &
   for _ in $(seq 1 40); do
-    wmctrl -m > /dev/null 2>&1 && break
+    wm_up && break
     sleep 0.25
   done
   repaired+=("xfwm4")
@@ -228,7 +233,10 @@ fi
 # keeps them in step, in both directions, which is what makes a copy in one application
 # paste into another — and what makes the VNC clipboard carry the thing the user
 # actually copied rather than whichever selection happened to be set.
+# Components the image ships but a drop-in host may lack: started only when present, so the
+# supervisor is not told every pass that something it cannot have has crashed again.
 for selection in PRIMARY CLIPBOARD; do
+  if ! command -v autocutsel > /dev/null 2>&1; then break; fi
   if ! running_here "autocutsel -selection ${selection}"; then
     setsid autocutsel -selection "${selection}" -fork \
       >> "/tmp/autocutsel-${N}.log" 2>&1 &
@@ -237,7 +245,7 @@ for selection in PRIMARY CLIPBOARD; do
 done
 
 # ── desktop icons ────────────────────────────────────────────────────────────────
-if ! running_here "pcmanfm --desktop"; then
+if command -v pcmanfm > /dev/null 2>&1 && ! running_here "pcmanfm --desktop"; then
   log "starting desktop icons"
   setsid pcmanfm --desktop --profile default >> "/tmp/pcmanfm-${N}.log" 2>&1 &
   repaired+=("pcmanfm")

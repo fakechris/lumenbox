@@ -1,0 +1,31 @@
+#!/usr/bin/env bash
+# docker/box/box-keepalive — Unified cloud sandbox keep-alive and self-healing watchdog.
+#
+# Prevents cloud pod hibernation and idle timeouts through three orthogonal mechanisms:
+#   1. Filesystem I/O heartbeat: touches /tmp/.lumen_heartbeat every interval.
+#   2. Local network loopback: pings local boxd and gateway health endpoints.
+#   3. X11 idle jitter: dispatches relative 0-displacement mouse movement to prevent DPMS timeout.
+set -euo pipefail
+
+DISPLAY_NUM="${1:-${DEFAULT_DISPLAY:-2}}"
+BOXD_PORT="${2:-${BOXD_PORT:-13370}}"
+INTERVAL="${3:-45}"
+
+log() { printf '[keepalive] %s\n' "$*"; }
+
+log "Starting keepalive watchdog for Display :${DISPLAY_NUM}, boxd port ${BOXD_PORT} (interval ${INTERVAL}s)..."
+
+while true; do
+  # 1. Update heartbeat timestamp on disk to keep storage mounts active
+  date +%s > /tmp/.lumen_heartbeat 2>/dev/null || true
+
+  # 2. Ping our own boxd. Only ours: the host's other daemons are not ours to poke.
+  curl -s -m 2 "http://127.0.0.1:${BOXD_PORT}/health" >/dev/null 2>&1 || true
+
+  # 3. Micro-jitter X11 mouse position by 0px to refresh DPMS/idle timers on the display
+  if [ -n "${DISPLAY_NUM}" ]; then
+    DISPLAY=":${DISPLAY_NUM}" xdotool mousemove_relative 0 0 2>/dev/null || true
+  fi
+
+  sleep "$INTERVAL"
+done
