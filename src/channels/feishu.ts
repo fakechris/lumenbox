@@ -270,7 +270,9 @@ export function splitChatKey(chatKey: string): { chatId: string; rootId?: string
  * process's registration lingers (roadmap R35). Exported for its test.
  */
 export function classifySocketLine(line: string): "ready" | "failed" | undefined {
-  if (/client ready/i.test(line)) return "ready";
+  // "ws client ready" is the socket. The HTTP client logs a bare "client ready" from its
+  // constructor, which is not evidence of anything listening.
+  if (/ws client ready/i.test(line)) return "ready";
   if (/connect failed|connection failed/i.test(line)) return "failed";
   return undefined;
 }
@@ -290,6 +292,19 @@ export const SOCKET_RETRY_MS = [5_000, 15_000, 30_000, 60_000] as const;
 const REPLAY_MAX_AGE_MS = 2 * 3_600_000;
 /** A ceiling on one sweep, so a long outage cannot become a burst of turns. */
 const REPLAY_MAX_PER_SWEEP = 5;
+/** How far below the last known arrival the sweep starts, in seconds — clock skew insurance. */
+const CATCH_UP_FLOOR_SLACK_S = 5 * 60;
+/** How many threads one sweep visits; a door with more topics than this is swept over several. */
+const CATCH_UP_MAX_THREADS = 10;
+/**
+ * How long a fresh socket may stay silent before it is not believed.
+ *
+ * The SDK logs "ws client ready" when its socket is up and "connect failed" when the
+ * connect was refused — and nothing at all in the case that happened on 2026-09-02: a
+ * restart eight minutes before a question, no ready, no failure, no traffic, for an hour.
+ * A socket that has said nothing in this long is closed and opened again, out loud.
+ */
+export const SOCKET_READY_TIMEOUT_MS = 45_000;
 
 /**
  * A meeting invitation, parsed out of `vc.bot.meeting_invited_v1` (roadmap R37).
@@ -702,6 +717,15 @@ export class FeishuChannel implements ChannelAdapter {
    * the only thing that remembers across a restart, which is why it decides.
    */
   alreadyHandled: ((messageId: string) => boolean) | undefined;
+  /**
+   * Threads this door has recently heard from, for the catch-up sweep.
+   *
+   * The sweep lists a chat's messages, and the vendor keeps a topic's replies in a
+   * separate container: on 2026-09-02 a question asked inside a thread eight minutes
+   * after a restart was invisible to every sweep for an hour, while the chat listing
+   * truthfully said "nothing since 03:40". The ledger knows which threads we were in.
+   */
+  recentThreads: (() => string[]) | undefined;
 
   /** Catch-up runs one at a time; a reconnect storm must not fan out into API sweeps. */
   private catchingUp = false;
@@ -1133,6 +1157,7 @@ export class FeishuChannel implements ChannelAdapter {
     // out. Backoff resets on success; `stop()` ends the loop with the process.
     let attempts = 0;
     let retryTimer: NodeJS.Timeout | undefined;
+    let readyTimer: NodeJS.Timeout | undefined;
     const openSocket = (): void => {
       const logger = {
         error: (...parts: unknown[]) => {
@@ -1161,6 +1186,10 @@ export class FeishuChannel implements ChannelAdapter {
           // evidence of life the old "connected" log never actually had.
           if (classifySocketLine(parts.map(part => String(part)).join(" ")) === "ready") {
             attempts = 0;
+            if (readyTimer !== undefined) {
+              clearTimeout(readyTimer);
+              readyTimer = undefined;
+            }
             this.log(`channel ${this.name}: socket ready`);
             // "Ready" is the SDK's claim about its own socket, and the failure it
             // cannot see is the one that happened: after three quick restarts the
@@ -1190,6 +1219,29 @@ export class FeishuChannel implements ChannelAdapter {
       });
       // The client keeps itself alive through its socket; there is nothing to hold.
       wsClient.start({ eventDispatcher: dispatcher });
+      // The case the retry above cannot see: no ready, no failure, nothing. Close what
+      // may be half-open and go again, with the same backoff a refused connect gets.
+      readyTimer = setTimeout(() => {
+        readyTimer = undefined;
+        if (retryTimer !== undefined) return;
+        const delay = SOCKET_RETRY_MS[Math.min(attempts, SOCKET_RETRY_MS.length - 1)]!;
+        attempts += 1;
+        this.log(
+          `channel ${this.name}: socket reported neither ready nor failed within ` +
+            `${SOCKET_READY_TIMEOUT_MS / 1000}s; closing it and reconnecting (#${attempts}) in ${delay / 1000}s`
+        );
+        try {
+          wsClient.close({ force: true });
+        } catch {
+          // A client that never opened has nothing to close.
+        }
+        retryTimer = setTimeout(() => {
+          retryTimer = undefined;
+          openSocket();
+        }, delay);
+        retryTimer.unref?.();
+      }, SOCKET_READY_TIMEOUT_MS);
+      readyTimer.unref?.();
     };
     openSocket();
   }
@@ -1227,70 +1279,87 @@ export class FeishuChannel implements ChannelAdapter {
     // Never on a first run: with no floor, "everything since the beginning of time"
     // would replay a group's whole history into the agents as new work.
     if (since === undefined) return;
-    // A little before the last thing we saw: clock skew between us and the vendor must
-    // not open a hole, and re-offering a message we already handled costs nothing.
-    const from = Math.floor(new Date(since).getTime() / 1000) - 60;
+    // Well before the last thing we saw: the vendor's clock and ours were two minutes
+    // apart when measured (2026-09-02), and re-offering a handled message costs nothing.
+    const from = Math.floor(new Date(since).getTime() / 1000) - CATCH_UP_FLOOR_SLACK_S;
     if (!Number.isFinite(from)) return;
 
     this.catchingUp = true;
     let tooOld = 0;
+    let replayed = 0;
+    const threads = new Set<string>(this.recentThreads?.() ?? []);
+    const consider = async (message: FeishuHistoryMessage, chatId: string): Promise<void> => {
+      // A root that grew a topic: its replies live in the thread container, not here.
+      if (message.thread_id !== undefined && message.thread_id !== "") threads.add(message.thread_id);
+      // Ours, deleted, or already handled: not work.
+      if (message.deleted === true) return;
+      if (message.sender?.sender_type !== "user") return;
+      if (message.message_id === undefined || this.seenMessages.has(message.message_id)) return;
+      if (this.alreadyHandled?.(message.message_id) === true) return;
+      // Old enough that answering it now is its own surprise. A door that was down
+      // for a day would otherwise wake up and fire a turn per accumulated message —
+      // and the mature handling of an offline backlog is to catch up on the record
+      // without acting on all of it (OpenClaw marks WhatsApp history read and
+      // skips auto-reply for it: src/web/inbound/monitor.ts, `type === "append"`).
+      // Counted and said out loud rather than dropped quietly, because a silent cap
+      // reads as "there was nothing".
+      const sentAt = Number(message.create_time ?? 0);
+      if (Number.isFinite(sentAt) && sentAt > 0 && Date.now() - sentAt > REPLAY_MAX_AGE_MS) {
+        tooOld += 1;
+        return;
+      }
+      if (replayed >= REPLAY_MAX_PER_SWEEP) {
+        tooOld += 1;
+        return;
+      }
+      replayed += 1;
+      this.log(
+        `channel ${this.name}: replaying ${message.message_id} — the socket never delivered it`
+      );
+      await handler({
+        sender: { sender_id: { open_id: message.sender?.id } },
+        message: {
+          message_id: message.message_id,
+          chat_id: message.chat_id ?? chatId,
+          message_type: message.msg_type,
+          content: message.body?.content,
+          ...(message.mentions !== undefined ? { mentions: message.mentions } : {}),
+          ...(message.thread_id !== undefined ? { thread_id: message.thread_id } : {}),
+          ...(message.root_id !== undefined ? { root_id: message.root_id } : {}),
+          ...(message.parent_id !== undefined ? { parent_id: message.parent_id } : {}),
+          ...(message.chat_type !== undefined ? { chat_type: message.chat_type } : {}),
+        },
+      } as never);
+    };
+    const listed = async (containerType: "chat" | "thread", containerId: string) => {
+      const history = await this.apiClient!.im.message.list({
+        params: {
+          container_id_type: containerType,
+          container_id: containerId,
+          start_time: String(from),
+          sort_type: "ByCreateTimeAsc",
+          page_size: 20,
+        },
+      });
+      return (history?.data?.items ?? history?.items ?? []) as FeishuHistoryMessage[];
+    };
     try {
       const chats = await this.apiClient.im.chat.list({ params: { page_size: 20 } });
       const items = (chats?.data?.items ?? chats?.items ?? []) as { chat_id?: string }[];
-      let replayed = 0;
+      const chatOf = new Map<string, string>();
       for (const chat of items) {
         const chatId = chat.chat_id;
         if (chatId === undefined || chatId === "") continue;
-        const history = await this.apiClient.im.message.list({
-          params: {
-            container_id_type: "chat",
-            container_id: chatId,
-            start_time: String(from),
-            sort_type: "ByCreateTimeAsc",
-            page_size: 20,
-          },
-        });
-        const messages = (history?.data?.items ?? history?.items ?? []) as FeishuHistoryMessage[];
-        for (const message of messages) {
-          // Ours, deleted, or already handled: not work.
-          if (message.deleted === true) continue;
-          if (message.sender?.sender_type !== "user") continue;
-          if (message.message_id === undefined || this.seenMessages.has(message.message_id)) continue;
-          if (this.alreadyHandled?.(message.message_id) === true) continue;
-          // Old enough that answering it now is its own surprise. A door that was down
-          // for a day would otherwise wake up and fire a turn per accumulated message —
-          // and the mature handling of an offline backlog is to catch up on the record
-          // without acting on all of it (OpenClaw marks WhatsApp history read and
-          // skips auto-reply for it: src/web/inbound/monitor.ts, `type === "append"`).
-          // Counted and said out loud rather than dropped quietly, because a silent cap
-          // reads as "there was nothing".
-          const sentAt = Number(message.create_time ?? 0) * 1000;
-          if (Number.isFinite(sentAt) && sentAt > 0 && Date.now() - sentAt > REPLAY_MAX_AGE_MS) {
-            tooOld += 1;
-            continue;
-          }
-          if (replayed >= REPLAY_MAX_PER_SWEEP) {
-            tooOld += 1;
-            continue;
-          }
-          replayed += 1;
-          this.log(
-            `channel ${this.name}: replaying ${message.message_id} — the socket never delivered it`
-          );
-          await handler({
-            sender: { sender_id: { open_id: message.sender?.id } },
-            message: {
-              message_id: message.message_id,
-              chat_id: chatId,
-              message_type: message.msg_type,
-              content: message.body?.content,
-              ...(message.mentions !== undefined ? { mentions: message.mentions } : {}),
-              ...(message.thread_id !== undefined ? { thread_id: message.thread_id } : {}),
-              ...(message.root_id !== undefined ? { root_id: message.root_id } : {}),
-              ...(message.parent_id !== undefined ? { parent_id: message.parent_id } : {}),
-              ...(message.chat_type !== undefined ? { chat_type: message.chat_type } : {}),
-            },
-          } as never);
+        for (const message of await listed("chat", chatId)) {
+          if (message.thread_id) chatOf.set(message.thread_id, chatId);
+          await consider(message, chatId);
+        }
+      }
+      // The threads: those the chat listing just revealed and those the ledger remembers
+      // hearing from, because a conversation that moved into a topic stays there.
+      for (const threadId of [...threads].slice(0, CATCH_UP_MAX_THREADS)) {
+        for (const message of await listed("thread", threadId)) {
+          await consider(message, message.chat_id ?? chatOf.get(threadId) ?? "");
         }
       }
       if (replayed > 0) {

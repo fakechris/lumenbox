@@ -607,6 +607,20 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
    * never saw. Read from the ledger rather than kept in memory, because the case that
    * matters most is the one where this process is new.
    */
+  // The topics this door has heard from lately, newest first, for the catch-up sweep: a
+  // reply inside a thread is in the vendor's thread container, which a chat listing never
+  // shows (2026-09-02, a question missed for an hour). Two hours matches the sweep's own
+  // window for what is still worth answering.
+  const recentThreadsFor = (channel: string): string[] => {
+    const floor = Date.now() - 2 * 3_600_000;
+    const seen = new Set<string>();
+    for (const record of ingress.list().reverse()) {
+      if (record.channel !== channel || record.threadId === undefined) continue;
+      if (new Date(record.at).getTime() < floor) continue;
+      seen.add(record.threadId);
+    }
+    return [...seen];
+  };
   const lastInboundFor = (channel: string): string | undefined => {
     const arrivals = ingress.list().filter(record => record.channel === channel);
     // The watermark never passes an arrival that has not been decided.
@@ -1314,6 +1328,7 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
         // everything that arrived before this reconnect.
         feishuDoor.lastInboundAt = () => lastInboundFor(record.id);
         feishuDoor.alreadyHandled = handledAlready;
+        feishuDoor.recentThreads = () => recentThreadsFor(record.id);
         channels.register(
           feishuDoor,
           feishuId !== undefined && feishuSecret !== undefined,
@@ -2939,6 +2954,7 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
                         channelRecords.find(entry => entry.id === id)?.meetingRemoteControl === true;
                       door.lastInboundAt = () => lastInboundFor(id);
                       door.alreadyHandled = handledAlready;
+                      door.recentThreads = () => recentThreadsFor(id);
                       return door;
                     })()
                   : (() => {

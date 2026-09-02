@@ -438,7 +438,9 @@ test("the SDK's log lines are the socket's only witness, read correctly", () => 
   // the SDK logs once and gives up. The retry loop keys on these classifications.
   assert.equal(classifySocketLine("[ws] ws connect failed"), "failed");
   assert.equal(classifySocketLine("connection failed: ECONNRESET"), "failed");
-  assert.equal(classifySocketLine("client ready"), "ready");
+  assert.equal(classifySocketLine("[ws] ws client ready"), "ready");
+  // The HTTP client's constructor logs this; it says nothing about the socket.
+  assert.equal(classifySocketLine("client ready"), undefined);
   assert.equal(classifySocketLine("[ws] heartbeat"), undefined);
   // The schedule is patient enough to outlast the vendor's window.
   assert.ok(SOCKET_RETRY_MS.reduce((a, b) => a + b, 0) >= 60_000);
@@ -524,13 +526,56 @@ test("the catch-up sweep replays what the socket missed, and only that", async (
     replayed.push(String((data as { message?: { message_id?: string } }).message?.message_id));
     return {};
   };
+  const listedContainers: string[] = [];
   internals.apiClient = {
     im: {
       chat: { list: async () => ({ data: { items: [{ chat_id: "oc_room" }] } }) },
       message: {
-        list: async () => ({
+        list: async ({ params }: { params: { container_id_type: string; container_id: string } }) => {
+          listedContainers.push(`${params.container_id_type}:${params.container_id}`);
+          // A topic's replies live in the thread container; the chat listing shows only
+          // the root (with its thread_id) — measured 2026-09-02, a question missed for an hour.
+          if (params.container_id_type === "thread") {
+            return {
+              data: {
+                items:
+                  params.container_id === "omt_seen"
+                    ? [
+                        {
+                          message_id: "om_in_thread",
+                          msg_type: "text",
+                          create_time: String(Date.now() - 60_000),
+                          chat_id: "oc_room",
+                          thread_id: "omt_seen",
+                          sender: { id: "ou_1", sender_type: "user" },
+                          body: { content: '{"text":"asked inside the topic"}' },
+                        },
+                      ]
+                    : [
+                        {
+                          message_id: "om_in_known_thread",
+                          msg_type: "text",
+                          create_time: String(Date.now() - 60_000),
+                          chat_id: "oc_room",
+                          thread_id: params.container_id,
+                          sender: { id: "ou_1", sender_type: "user" },
+                          body: { content: '{"text":"asked in a thread the ledger remembers"}' },
+                        },
+                      ],
+              },
+            };
+          }
+          return {
           data: {
             items: [
+              // A root that grew a topic: not work itself (ours), but names the thread to sweep.
+              {
+                message_id: "om_root",
+                msg_type: "post",
+                thread_id: "omt_seen",
+                sender: { id: "cli_x", sender_type: "app" },
+                body: { content: "{}" },
+              },
               // Already in the ledger: the previous process answered it.
               {
                 message_id: "om_old",
@@ -562,15 +607,22 @@ test("the catch-up sweep replays what the socket missed, and only that", async (
               },
             ],
           },
-        }),
+        };
+        },
       },
     },
   };
   adapter.lastInboundAt = () => "2026-09-01T07:26:49.953Z";
   adapter.alreadyHandled = (id: string) => id === "om_old";
+  adapter.recentThreads = () => ["omt_remembered"];
 
   await internals.catchUp();
-  assert.deepEqual(replayed, ["om_missed"], "only the message nothing has handled");
+  assert.deepEqual(
+    replayed,
+    ["om_missed", "om_in_known_thread", "om_in_thread"],
+    "the chat's missed message, then the topics: the ledger's first, then the one the chat revealed"
+  );
+  assert.deepEqual(listedContainers, ["chat:oc_room", "thread:omt_remembered", "thread:omt_seen"]);
 
   // An outage's backlog is caught up on, not acted on wholesale: a message older than
   // the sweep's window is left for a person to raise again, and said out loud rather
@@ -588,7 +640,7 @@ test("the catch-up sweep replays what the socket missed, and only that", async (
     answered.push(String((data as { message?: { message_id?: string } }).message?.message_id));
     return {};
   };
-  const dayOld = Math.floor((Date.now() - 24 * 3_600_000) / 1000);
+  const dayOld = Date.now() - 24 * 3_600_000; // milliseconds, as the vendor sends it
   agedInternals.apiClient = {
     im: {
       chat: { list: async () => ({ data: { items: [{ chat_id: "oc_room" }] } }) },
