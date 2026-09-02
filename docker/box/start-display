@@ -214,11 +214,33 @@ if command -v dconf > /dev/null 2>&1; then
 fi
 
 # Dock preferences, which plank keeps in dconf rather than in a file.
+#
+# PLANK_DOCK names the dock. dock1 is ours in our own image; beside somebody else's desktop
+# on a shared HOME (Grok Bot's VM) it is *theirs*, and both reading and writing it would put
+# their launchers on our dock and our preferences on theirs. A drop-in runs with its own
+# name, and its launchers are made here from the applications the machine actually has —
+# google-chrome where there is no chromium, which is also what keeps a running Chrome from
+# showing beside a pinned one it cannot match.
+DOCK="${PLANK_DOCK:-dock1}"
+if [ "$DOCK" != "dock1" ] && [ ! -d "$HOME/.config/plank/$DOCK/launchers" ]; then
+  mkdir -p "$HOME/.config/plank/$DOCK/launchers"
+  for app in google-chrome chromium xfce4-terminal thunar pcmanfm; do
+    if [ -f "/usr/share/applications/$app.desktop" ]; then
+      printf '%s\n' '[PlankDockItemPreferences]' "Launcher=file:///usr/share/applications/$app.desktop" \
+        > "$HOME/.config/plank/$DOCK/launchers/$app.dockitem"
+    fi
+  done
+fi
 if command -v dconf > /dev/null 2>&1; then
-  if [ "$(dconf read /net/launchpad/plank/docks/dock1/theme 2>/dev/null)" != "'Transparent'" ]; then
+  if [ "$DOCK" = "dock1" ]; then
+    ITEMS="['chromium.dockitem', 'files.dockitem', 'terminal.dockitem']"
+  else
+    ITEMS="$(ls "$HOME/.config/plank/$DOCK/launchers" 2>/dev/null | sed "s/.*/'&'/" | paste -sd, - | sed 's/^/[/; s/$/]/')"
+  fi
+  if [ "$(dconf read /net/launchpad/plank/docks/$DOCK/theme 2>/dev/null)" != "'Transparent'" ]; then
     dbus-run-session -- sh -c "
-      p=/net/launchpad/plank/docks/dock1
-      dconf write \$p/dock-items \"['chromium.dockitem', 'files.dockitem', 'terminal.dockitem']\"
+      p=/net/launchpad/plank/docks/$DOCK
+      dconf write \$p/dock-items \"$ITEMS\"
       dconf write \$p/position \"'bottom'\"
       dconf write \$p/theme \"'Transparent'\"
       dconf write \$p/icon-size 48
@@ -259,8 +281,8 @@ if skipped plank; then
   log "dock disabled by the supervisor"
 elif ! running_exact "plank"; then
   if wait-compositor "${DISP}"; then
-    log "starting dock"
-    setsid plank >> "/tmp/plank-${N}.log" 2>&1 &
+    log "starting dock ${DOCK}"
+    setsid plank -n "${DOCK}" >> "/tmp/plank-${N}.log" 2>&1 &
     repaired+=("plank")
   else
     log "no compositor on ${DISP}; skipping the dock rather than drawing an opaque one"

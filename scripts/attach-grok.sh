@@ -106,7 +106,7 @@ if xdpyinfo -display ":$DISPLAY_NUM" >/dev/null 2>&1; then
   fi
 else
   echo "[remote] starting display :$DISPLAY_NUM ..."
-  start-display "$DISPLAY_NUM"
+  PLANK_DOCK=lumen start-display "$DISPLAY_NUM"
   date +%s > "\$MARK"
 fi
 
@@ -115,7 +115,7 @@ if ! (exec 3<>"/dev/tcp/127.0.0.1/$BOXD_PORT") 2>/dev/null; then
   # DISPLAY is what boxd's "ensure the default desktop at boot" reads; left unset it would be :1,
   # and :1 is Grok's.
   DISPLAY=":$DISPLAY_NUM" BOXD_PORT="$BOXD_PORT" BOXD_BIND=127.0.0.1 BOXD_TOKEN="$BOXD_TOKEN" DEFAULT_DISPLAY="$DISPLAY_NUM" \\
-    BOXD_START_DISPLAY="\$HOME/.lumen/bin/start-display" \\
+    BOXD_START_DISPLAY="\$HOME/.lumen/bin/start-display" PLANK_DOCK=lumen \\
     nohup "\$NODE_BIN" ~/.lumen/bin/boxd.cjs > /tmp/boxd-$BOXD_PORT.log 2>&1 &
   for _ in \$(seq 1 20); do
     (exec 3<>"/dev/tcp/127.0.0.1/$BOXD_PORT") 2>/dev/null && break

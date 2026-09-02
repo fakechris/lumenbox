@@ -1862,26 +1862,12 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
         // the banner's only effect was to say it twice while covering the top of the
         // desktop. Standalone opens — Take over, the channel's 桌面 link — keep it,
         // because there it is the only warning on the page.
-        const isPage = wantsDesktopNotice(path);
-        if (!isPage || response.headers["content-encoding"] !== undefined) {
-          res.writeHead(response.statusCode ?? 502, response.headers);
-          response.pipe(res);
-          return;
-        }
-        const chunks: Buffer[] = [];
-        response.on("data", chunk => chunks.push(chunk as Buffer));
-        response.on("end", () => {
-          const boxClass = classifyBox(provisioner.boxName, loadConfig(), registry.box.name);
-          const body = injectDesktopNotice(
-            Buffer.concat(chunks).toString("utf8"),
-            boxClass.notice ? `${boxClass.badge} — ${boxClass.notice}` : ""
-          );
-          res.writeHead(response.statusCode ?? 502, {
-            ...response.headers,
-            "content-length": Buffer.byteLength(body),
-          });
-          res.end(body);
-        });
+        // No banner on the desktop page, embedded or standalone (2026-09-02, Chris): the
+        // box-class sentence lives in the main UI as #boxnotice, and on the page it covered
+        // the desktop's top edge — and, injected into a response boxd serves without a
+        // charset, came out as mojibake. The page streams through like every asset.
+        res.writeHead(response.statusCode ?? 502, response.headers);
+        response.pipe(res);
       }
     );
 
@@ -4466,29 +4452,8 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
  * ours — and pointer-events pass through, so it labels without getting in the way.
  * An empty notice injects nothing; a page with no </body> is returned untouched.
  */
-/**
- * Whether this desktop request is the page that should carry the box-class banner:
- * vnc.html opened on its own. The main UI's iframe rides with embedded=1 and gets no
- * banner — #boxnotice already says the same sentence directly above the frame, and
- * inside it the banner only said it twice while covering the desktop's top edge.
- */
-export function wantsDesktopNotice(path: string): boolean {
-  return /\/vnc\.html/.test(path) && !/[?&]embedded=1(?:&|$)/.test(path);
-}
-
-export function injectDesktopNotice(html: string, notice: string): string {
-  if (notice === "" || !html.includes("</body>")) return html;
-  const escaped = notice
-    .replace(/&/g, "&amp;")
-    .replace(/</g, "&lt;")
-    .replace(/>/g, "&gt;");
-  const banner =
-    '<div style="position:fixed;top:0;left:0;right:0;z-index:2147483647;' +
-    "background:rgba(138,90,0,.92);color:#fff;font:12px/1.6 sans-serif;" +
-    'padding:4px 12px;text-align:center;pointer-events:none">' +
-    `${escaped}</div>`;
-  return html.replace("</body>", `${banner}</body>`);
-}
+// The desktop page carried a box-class banner until 2026-09-02; it is gone (see proxyDesktop),
+// and the sentence lives in the main UI's #boxnotice only.
 
 export function desktopUpstreamPath(
   pathname: string,
