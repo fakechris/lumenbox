@@ -842,6 +842,21 @@ export const APP_HTML = String.raw`<!doctype html>
       </div>
       <pre id="setboxlog" style="display:none;max-height:140px;overflow:auto;background:var(--code-bg);color:var(--code-text);border:1px solid var(--border);border-radius:var(--radius-md);padding:10px 12px;font-family:var(--font-mono);font-size:11px;line-height:1.6;margin:0;white-space:pre-wrap"></pre>
     </div>
+    <div class="field" data-tier="installation" id="setboxeswrap">
+      <label>Boxes</label>
+      <div id="setboxes" style="display:flex;flex-direction:column;gap:6px"></div>
+      <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-top:4px">
+        <input id="setboxname" placeholder="name, e.g. grok" spellcheck="false" style="flex:0.7;min-width:90px;font-family:var(--font-sans)">
+        <input id="setboxurl" placeholder="http://127.0.0.1:13370" spellcheck="false" style="flex:1.4;min-width:160px">
+        <input id="setboxtoken" type="password" placeholder="its BOXD_TOKEN" spellcheck="false" autocomplete="off" style="flex:1;min-width:120px">
+        <input id="setboxfloor" placeholder="first display, e.g. 10" spellcheck="false" style="flex:0.7;min-width:110px">
+        <button class="btn sm" id="setboxattach">Attach</button>
+      </div>
+      <div class="fieldnote">Every machine this installation drives. The first is this machine's
+        own; an attached one is somebody else's boxd reached over a tunnel, with its own desktops
+        from the display you name. An agent is created into a box and stays there.</div>
+      <div class="fieldnote" id="setboxesstatus"></div>
+    </div>
     <div class="field" data-tier="installation">
       <label>Host execution</label>
       <label class="radio"><input type="checkbox" id="sethostenabled">
@@ -1612,7 +1627,58 @@ document.getElementById("setpeople").addEventListener("click", function (event) 
   savePeople();
 });
 
+/** The box list in Settings, with attach and detach. */
+function renderBoxes() {
+  return fetch("/api/boxes")
+    .then(function (r) { return r.json(); })
+    .then(function (data) {
+      var boxes = data.boxes || [];
+      $("setboxes").innerHTML = boxes.map(function (b, i) {
+        var where = b.kind === "docker" ? "docker on this machine" : esc(b.endpoint || "attached");
+        return '<div style="display:flex;gap:8px;align-items:center;font-size:12.5px">' +
+          '<span class="dot" style="width:8px;height:8px;background:' + (b.connected ? "var(--ok, #3fb950)" : "var(--warn)") + '"></span>' +
+          '<b>' + esc(b.name) + "</b>" + (i === 0 ? ' <span class="dim">(own)</span>' : "") +
+          '<span class="dim" style="flex:1">' + where + " · displays from :" + esc(b.displayFloor) + " · " + esc(b.agents) + " agent" + (b.agents === 1 ? "" : "s") + (b.connected ? "" : " · not connected") + "</span>" +
+          (i === 0 ? "" : '<button class="btn sm ghost" data-detach-box="' + esc(b.name) + '"' + (b.agents > 0 ? ' disabled title="delete its agents first"' : "") + ">Detach</button>") +
+          "</div>";
+      }).join("") || '<div class="dim">No boxes.</div>';
+    })
+    .catch(function () { $("setboxes").innerHTML = '<div class="dim">Could not read the boxes.</div>'; });
+}
+
+$("setboxattach").onclick = function () {
+  var body = {
+    name: $("setboxname").value.trim(),
+    baseUrl: $("setboxurl").value.trim(),
+    token: $("setboxtoken").value.trim(),
+    displayFloor: Number($("setboxfloor").value.trim() || "1")
+  };
+  if (!body.name || !body.baseUrl || !body.token) { $("setboxesstatus").textContent = "Name, URL and token are all needed."; return; }
+  $("setboxattach").disabled = true;
+  $("setboxesstatus").textContent = "Attaching…";
+  fetch("/api/boxes/attach", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body) })
+    .then(function (r) { return r.json().then(function (d) { if (!r.ok) throw new Error(d.error || "attach failed"); return d; }); })
+    .then(function (d) {
+      $("setboxesstatus").textContent = d.detail || "attached";
+      $("setboxtoken").value = "";
+      return renderBoxes().then(refresh);
+    })
+    .catch(function (err) { $("setboxesstatus").textContent = String(err.message || err); })
+    .then(function () { $("setboxattach").disabled = false; });
+};
+
+$("setboxes").addEventListener("click", function (e) {
+  var name = e.target && e.target.getAttribute && e.target.getAttribute("data-detach-box");
+  if (!name) return;
+  e.target.disabled = true;
+  fetch("/api/boxes/detach", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ name: name }) })
+    .then(function (r) { return r.json().then(function (d) { if (!r.ok) throw new Error(d.error || "detach failed"); return d; }); })
+    .then(function () { $("setboxesstatus").textContent = "Detached " + name + "."; return renderBoxes().then(refresh); })
+    .catch(function (err) { $("setboxesstatus").textContent = String(err.message || err); e.target.disabled = false; });
+});
+
 function renderBoxSection() {
+  renderBoxes();
   $("setboxstate").textContent = boxState.ok
     ? "Running — " + boxState.detail
     : "Not running. Agents have no desktop, shell or files until it is.";
@@ -2080,10 +2146,36 @@ function feed(html, cls, at) {
   if (stick) el.scrollTop = el.scrollHeight;
 }
 
+/** The box an agent lives in, as a small label with the connection dot. */
+function boxHeaderHtml(box, index) {
+  return '<div class="eyebrow-row" style="margin-top:' + (index === 0 ? "0" : "8px") + '" title="' + esc(box.kind === "docker" ? "the box on this machine" : "attached at " + (box.endpoint || "")) + '">' +
+    '<span class="eyebrow" style="display:flex;align-items:center;gap:6px">' +
+      '<span class="dot" style="width:7px;height:7px;background:' + (box.connected ? "var(--ok, #3fb950)" : "var(--warn)") + '"></span>' +
+      esc(box.name) + (index === 0 ? ' <span class="dim" style="text-transform:none;font-weight:400">own</span>' : ' <span class="dim" style="text-transform:none;font-weight:400">attached · :' + esc(box.displayFloor) + "+</span>") +
+    "</span></div>";
+}
+
 function renderAgents() {
   var html = "";
-  for (var i = 0; i < agents.length; i++) {
-    var a = agents[i];
+  // More than one box: the list is grouped by box, own first, so where an agent lives is
+  // visible without opening it — the whole point of a second box is that they differ.
+  var grouped = boxesSeen.length > 1;
+  var order = grouped ? boxesSeen.map(function (b) { return b.id; }) : [];
+  var sorted = grouped
+    ? agents.slice().sort(function (x, y) {
+        var bx = order.indexOf(x.boxId), by = order.indexOf(y.boxId);
+        return bx !== by ? bx - by : agents.indexOf(x) - agents.indexOf(y);
+      })
+    : agents;
+  var lastBox = null;
+  for (var i = 0; i < sorted.length; i++) {
+    var a = sorted[i];
+    if (grouped && a.boxId !== lastBox) {
+      var boxIndex = order.indexOf(a.boxId);
+      var box = boxesSeen[boxIndex] || { name: a.boxName || "?", connected: true, kind: "attached", displayFloor: 1 };
+      html += boxHeaderHtml(box, boxIndex);
+      lastBox = a.boxId;
+    }
     html += '<div class="agent ' + (a.id === current ? "on" : "") + '" data-id="' + esc(a.id) + '">' +
       '<div class="dot ' + (busy.has(a.id) ? "busy" : "") +
       '" style="background:var(--c-' + ((i % 8) + 1) + ')"></div>' +
@@ -2091,7 +2183,6 @@ function renderAgents() {
       '<div class="ttl">' + esc(busy.has(a.id) ? "Running" : String(a.title || a.description || "idle").slice(0, 40)) +
       "</div></div>" +
       (a.displayIndex ? '<span class="dnum">d' + esc(a.displayIndex) + "</span>" : "") +
-      (a.boxName && boxesSeen.length > 1 ? '<span class="dnum" title="box">' + esc(a.boxName) + "</span>" : "") +
       "</div>";
   }
   $("agents").innerHTML = html;
@@ -2382,7 +2473,7 @@ function showDesktop(id) {
     $("full").style.display = "none";
     return;
   }
-  $("desktoptitle").textContent = agent.name + " · d" + agent.displayIndex;
+  $("desktoptitle").textContent = agent.name + " · d" + agent.displayIndex + (boxesSeen.length > 1 && agent.boxName ? " · " + agent.boxName : "");
   $("full").href = agent.desktopUrl;
   $("full").style.display = "";
   // The iframe rides with embedded=1 so the proxy skips the box-class banner:
@@ -2442,7 +2533,9 @@ function select(id, conversation) {
   currentConversation = conversation || (switching ? "main" : currentConversation);
   $("title").textContent = nameOf(id);
   var selected = agentById(id);
-  $("titlerole").textContent = selected ? String(selected.title || "") : "";
+  $("titlerole").textContent = selected
+    ? String(selected.title || "") + (boxesSeen.length > 1 && selected.boxName ? (selected.title ? " · " : "") + "on " + selected.boxName : "")
+    : "";
   $("round").textContent = "";
   spend = { input: 0, output: 0 };
   spendLabel = "";
@@ -2641,7 +2734,8 @@ function refresh() {
     allTools = state.allTools || allTools;
     $("model").innerHTML = "<b>" + esc(state.provider) + "</b>";
     boxState = { ok: !!state.box.ok, detail: String(state.box.detail || "") };
-    $("boxinfo").textContent = state.box.ok ? state.box.detail : "box unavailable";
+    $("boxinfo").textContent = (state.box.ok ? state.box.detail : "box unavailable") +
+      (state.boxes && state.boxes.length > 1 ? " · " + state.boxes.length + " boxes (" + state.boxes.filter(function (b) { return b.connected; }).length + " up)" : "");
     $("boxdot").className = "dot " + (state.box.ok ? "ok" : "bad");
     showBoxClass(state.box);
     if (!onboardChecked) {
