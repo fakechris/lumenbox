@@ -42,9 +42,17 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && rm -rf /var/lib/apt/lists/*
 
 # 3. Node.js for the daemon.
-RUN curl -fsSL https://deb.nodesource.com/setup_22.x | bash - \
+#    Downloaded to a file first, because `curl | bash` reports bash's exit status: on
+#    2026-09-02 a TLS hiccup made curl fail, bash ran nothing, and apt then "installed"
+#    the Node 20 that novnc had already pulled from Debian - an image whose daemon died
+#    on `WebSocket is not defined`. The version assertion makes that a build failure.
+RUN curl -fsSL https://deb.nodesource.com/setup_22.x -o /tmp/nodesource-setup.sh \
+    && bash /tmp/nodesource-setup.sh \
+    && rm -f /tmp/nodesource-setup.sh \
     && apt-get install -y --no-install-recommends nodejs \
-    && rm -rf /var/lib/apt/lists/*
+    && rm -rf /var/lib/apt/lists/* \
+    && node --version | grep -q "^v22\\." \
+    && node -e "if (typeof WebSocket !== \"function\") { throw new Error(\"no WebSocket global\") }"
 
 # 4. Chromium for browser work. Installed from Debian rather than Google's repo so
 #    the image builds on both amd64 and arm64.
