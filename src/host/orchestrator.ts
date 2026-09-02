@@ -681,6 +681,7 @@ export class Orchestrator {
     const injected = this.options.boxClientFor?.(entry);
     if (injected !== undefined) {
       this.boxClients.set(entry.id, injected);
+      this.attachedHealthy.add(entry.id);
       this.forgetDesktopsOf(entry.id);
       return { connected: true, detail: `${entry.name}: box attached directly` };
     }
@@ -698,6 +699,7 @@ export class Orchestrator {
       const client = await provisioner.connect();
       const health = await client.health();
       this.boxClients.set(entry.id, client);
+      this.attachedHealthy.add(entry.id);
       this.resolutions.set(entry.id, health.resolution);
       this.boxAccesses.set(entry.id, classifyBox(provisioner.boxName, loadConfig(), entry.name));
       this.forgetDesktopsOf(entry.id);
@@ -707,6 +709,7 @@ export class Orchestrator {
       return { connected: true, detail };
     } catch (error) {
       this.boxClients.delete(entry.id);
+      this.attachedHealthy.delete(entry.id);
       const detail = `${entry.name}: ${error instanceof Error ? error.message : String(error)}`;
       console.error(`[box] ${detail}`);
       return { connected: false, detail };
@@ -725,6 +728,45 @@ export class Orchestrator {
     this.skillCaches.delete(entry.id);
     this.forgetDesktopsOf(entry.id);
     return entry;
+  }
+
+  /** Moves an attached box to a new address and reconnects it there. */
+  async updateBox(nameOrId: string, changes: Parameters<AgentRegistry["updateBox"]>[1]): Promise<{ box: BoxEntry; connected: boolean; detail: string }> {
+    const entry = this.registry.updateBox(nameOrId, changes);
+    this.boxClients.delete(entry.id);
+    const result = await this.connectAttached(entry);
+    return { box: entry, ...result };
+  }
+
+  /** Attached boxes seen answering at the last check, for edge-triggered logging. */
+  private readonly attachedHealthy = new Set<string>();
+
+  /**
+   * One pass over the attached boxes: a connected one is asked for its health and dropped
+   * when it stops answering; a dropped one is dialled again. Returns only the transitions,
+   * so the caller can announce them once rather than every tick.
+   */
+  async checkAttachedBoxes(): Promise<{ name: string; connected: boolean; detail: string }[]> {
+    const transitions: { name: string; connected: boolean; detail: string }[] = [];
+    for (const entry of this.registry.listBoxes()) {
+      if (entry.id === this.registry.box.id) continue;
+      const client = this.boxClients.get(entry.id);
+      if (client !== undefined) {
+        try {
+          await client.health();
+          this.attachedHealthy.add(entry.id);
+          continue;
+        } catch (error) {
+          this.boxClients.delete(entry.id);
+          this.forgetDesktopsOf(entry.id);
+          const detail = error instanceof Error ? error.message : String(error);
+          if (this.attachedHealthy.delete(entry.id)) transitions.push({ name: entry.name, connected: false, detail });
+        }
+      }
+      const attempt = await this.connectAttached(entry);
+      if (attempt.connected) transitions.push({ name: entry.name, connected: true, detail: attempt.detail });
+    }
+    return transitions;
   }
 
   /** Which boxes are reachable right now, for the state panel and `box list`. */

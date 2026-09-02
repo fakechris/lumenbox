@@ -88,3 +88,24 @@ test("a box name and endpoint are checked before anything is written", () => {
   assert.throws(() => attachedBox({ name: "ok", baseUrl: "ftp://x", tokenFile: "/t" }), /http or https/);
   assert.equal(tokenOf(attachedBox({ name: "ok", baseUrl: "http://x", tokenFile: "/nonexistent/token" })), undefined);
 });
+
+test("an attached box can move to a new address and keep its id, its name and its agents", () => {
+  const { root, cleanup } = fixture();
+  try {
+    const registry = new AgentRegistry(join(root, "agents"));
+    const tokenFile = join(root, "grok.token");
+    writeFileSync(tokenFile, "t\n");
+    const grok = registry.attachBox(attachedBox({ name: "grok", baseUrl: "http://127.0.0.1:13370", tokenFile, displayFloor: 10 }));
+    const kai = registry.create({ name: "Kai", boxId: grok.id });
+    const moved = registry.updateBox("grok", { endpoint: { baseUrl: "http://100.114.30.43:13370/", tokenFile } });
+    assert.equal(moved.id, grok.id);
+    assert.equal(moved.endpoint?.baseUrl, "http://100.114.30.43:13370");
+    assert.equal(moved.displayFloor, 10, "unchanged unless asked");
+    assert.equal(registry.boxOf(kai.id).endpoint?.baseUrl, "http://100.114.30.43:13370");
+    assert.equal(new AgentRegistry(join(root, "agents")).boxByName("grok")?.endpoint?.baseUrl, "http://100.114.30.43:13370", "written through");
+    assert.throws(() => registry.updateBox(registry.box.id, { endpoint: { baseUrl: "http://x", tokenFile } }), /own box has no endpoint/);
+    assert.throws(() => registry.updateBox("nope", { displayFloor: 3 }), /No box named/);
+  } finally {
+    cleanup();
+  }
+});

@@ -279,6 +279,26 @@ export class AgentRegistry {
   }
 
   /**
+   * Changes where an attached box is reached, or where its desktops start. The id and the
+   * name stay: agents are stamped with the id, and a box that moved (a tunnel to a tailnet
+   * address, a new port) is the same box.
+   */
+  updateBox(nameOrId: string, changes: { endpoint?: { baseUrl: string; tokenFile: string }; displayFloor?: number; workDir?: string }): BoxEntry {
+    const entry = this.boxByName(nameOrId);
+    if (entry === undefined) throw new Error(`No box named ${nameOrId}.`);
+    if (entry.id === this.box.id && changes.endpoint !== undefined) throw new Error("The installation's own box has no endpoint to change.");
+    const updated: BoxEntry = {
+      ...entry,
+      ...(changes.endpoint !== undefined ? { endpoint: { baseUrl: changes.endpoint.baseUrl.replace(/\/+$/, ""), tokenFile: changes.endpoint.tokenFile } } : {}),
+      ...(changes.displayFloor !== undefined && changes.displayFloor >= 1 ? { displayFloor: Math.floor(changes.displayFloor) } : {}),
+      ...(changes.workDir !== undefined && changes.workDir !== "" ? { workDir: changes.workDir } : {}),
+    };
+    this.boxes = this.boxes.map(existing => (existing.id === entry.id ? updated : existing));
+    saveBoxes(join(this.root, BOXES_FILENAME), this.boxes);
+    return updated;
+  }
+
+  /**
    * Removes an attached box. Refused while agents live in it: their `boxId` is immutable, so
    * the only honest outcomes are "delete them first" or "keep the box".
    */

@@ -82,7 +82,7 @@ test("two boxes: files, skills, desktops and memory follow the agent's box; a sc
     const registry = new AgentRegistry(join(root, "agents"));
     const tokenFile = join(root, "grok.token");
     writeFileSync(tokenFile, "t\n");
-    const grok = registry.attachBox(attachedBox({ name: "grok", baseUrl: "http://127.0.0.1:13370", tokenFile, displayFloor: 10 }));
+    const grok = registry.attachBox(attachedBox({ name: "grok", baseUrl: "http://127.0.0.1:1", tokenFile, displayFloor: 10 }));
     const ada = registry.create({ name: "Ada" });
     const vera = registry.create({ name: "Vera", boxId: grok.id });
 
@@ -93,6 +93,7 @@ test("two boxes: files, skills, desktops and memory follow the agent's box; a sc
     ]);
     const ownDisplays: number[] = [];
     const grokDisplays: number[] = [];
+    let grokHealthy = true;
     const seenSkills: string[] = [];
     const events: string[] = [];
 
@@ -112,7 +113,20 @@ test("two boxes: files, skills, desktops and memory follow the agent's box; a sc
       client,
       useBox: true,
       boxClient: fakeBox(ownFiles, ownDisplays),
-      boxClientFor: entry => (entry.id === grok.id ? fakeBox(grokFiles, grokDisplays) : undefined),
+      boxClientFor: entry => {
+        if (entry.id !== grok.id) return undefined;
+        if (!grokHealthy) return undefined;
+        const box = fakeBox(grokFiles, grokDisplays);
+        return new Proxy(box, {
+          get: (target, property) =>
+            property === "health"
+              ? async () => {
+                  if (!grokHealthy) throw new Error("connection refused");
+                  return { ok: true, resolution: undefined };
+                }
+              : target[property as keyof typeof target],
+        }) as unknown as BoxClient;
+      },
       inbox: null,
       turns: null,
       skillProvenance: new SkillProvenance(join(root, "prov.jsonl")),
@@ -162,6 +176,18 @@ test("two boxes: files, skills, desktops and memory follow the agent's box; a sc
 
     // Detaching with a resident is refused; the box stays reachable.
     assert.throws(() => orchestrator.detachBox("grok"), /live in grok/);
+    assert.equal(orchestrator.boxClient(vera.id) !== undefined, true);
+
+    // The watchdog: a box that stops answering is dropped and announced once, dialled again
+    // each tick, and announced once more when it is back.
+    grokHealthy = false;
+    const down = await orchestrator.checkAttachedBoxes();
+    assert.deepEqual(down.map(change => [change.name, change.connected]), [["grok", false]]);
+    assert.equal(orchestrator.boxClient(vera.id), undefined, "its agents have no box while it is down");
+    assert.deepEqual(await orchestrator.checkAttachedBoxes(), [], "still down: nothing new to say");
+    grokHealthy = true;
+    const back = await orchestrator.checkAttachedBoxes();
+    assert.deepEqual(back.map(change => [change.name, change.connected]), [["grok", true]]);
     assert.equal(orchestrator.boxClient(vera.id) !== undefined, true);
   } finally {
     delete process.env.AGENTBOX_HOME;

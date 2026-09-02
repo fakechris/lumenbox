@@ -518,12 +518,19 @@ async function cmdBoxAttach(argv: string[]): Promise<number> {
       ...(typeof floor === "string" ? { displayFloor: Number(floor) } : {}),
       ...(typeof workDir === "string" ? { workDir } : {}),
     });
-    const live = await viaWeb("/api/boxes/attach", { name, baseUrl, tokenFile: resolve(tokenFile), ...(typeof floor === "string" ? { displayFloor: Number(floor) } : {}), ...(typeof workDir === "string" ? { workDir } : {}) });
+    const replace = flags.get("--replace") === true;
+    const payload = { name, baseUrl, tokenFile: resolve(tokenFile), ...(typeof floor === "string" ? { displayFloor: Number(floor) } : {}), ...(typeof workDir === "string" ? { workDir } : {}) };
+    const live = await viaWeb(replace ? "/api/boxes/update" : "/api/boxes/attach", payload);
     if (live !== undefined) {
-      out(`${bold(name)} attached${live.connected === true ? " and connected" : ""}: ${String(live.detail ?? "")}`);
+      out(`${bold(name)} ${replace ? "moved" : "attached"}${live.connected === true ? " and connected" : ""}: ${String(live.detail ?? "")}`);
       return 0;
     }
     const registry = new AgentRegistry();
+    if (replace) {
+      registry.updateBox(name, { endpoint: { baseUrl: record.endpoint!.baseUrl, tokenFile: record.endpoint!.tokenFile }, ...(typeof floor === "string" ? { displayFloor: Number(floor) } : {}) });
+      out(`${bold(name)} moved to ${baseUrl}; the web server was not running, so it reconnects on the next start.`);
+      return 0;
+    }
     registry.attachBox(record);
     out(`${bold(name)} attached (${record.id}); the web server was not running, so it connects on the next start.`);
     return 0;
@@ -1086,9 +1093,10 @@ Box:
                             --no-backup skips the copy.
              --with-host    also run the orchestrator inside it (web UI on 7777)
   box status                Show container state, ports, and health
-  box attach <name> <url> --token-file F [--display-floor N] [--work-dir D]
+  box attach <name> <url> --token-file F [--display-floor N] [--work-dir D] [--replace]
                             Drive another machine's boxd as a second box (docs/30).
-                            Agents are created into a box and stay there.
+                            Agents are created into a box and stay there; --replace
+                            moves an attached box to a new address.
   box detach <name>         Forget an attached box (refused while agents live in it)
   box list                  Every box: own first, then attached, with who lives where
   box down [--rm]           Stop the box, optionally removing the container

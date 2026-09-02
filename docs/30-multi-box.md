@@ -48,6 +48,18 @@ owner-only and audited. The URL an admin gives is as the primary's container rea
 (`host.docker.internal:13370` for a tunnel on the control host). Tests in
 `src/control/multi-box.test.ts`.
 
+**Transport, later the same night.** `ssh box@cursor` turned out to be Tailscale SSH on
+Chris's own tailnet (the VM is `cursor`, 100.114.30.43, `tailfb0218.ts.net`), not a vendor
+relay. So `attach-grok.sh --via auto` binds boxd to the VM's tailnet address and the
+installation dials it directly — WireGuard underneath, the box token on top, no forward to
+keep alive; `--via ssh` keeps the loopback bind plus an SSH local forward for a machine
+without the tailnet. Public tunnels (Cloudflare quick tunnels and the like) were considered
+and rejected: they would put boxd on the open Internet behind one bearer token to reach a
+machine already on a private network. An attached box that stops answering is dropped and
+dialled again every watch tick (`checkAttachedBoxes`), announced once each way; a box can
+move to a new address with `box attach … --replace` / `POST /api/boxes/update`, keeping its
+id and its agents.
+
 Not done: Stage C (`TransferFile`, the wake line naming the box).
 What still assumes one box: the chat inbox/outbox and file routes read the own box (a door
 is bound to a box by record but the server does not route its files by it yet), `agentbox

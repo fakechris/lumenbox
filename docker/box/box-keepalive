@@ -10,6 +10,7 @@ set -euo pipefail
 DISPLAY_NUM="${1:-${DEFAULT_DISPLAY:-2}}"
 BOXD_PORT="${2:-${BOXD_PORT:-13370}}"
 INTERVAL="${3:-45}"
+BOXD_HOST="${4:-${BOXD_BIND:-127.0.0.1}}"
 
 log() { printf '[keepalive] %s\n' "$*"; }
 
@@ -20,7 +21,7 @@ while true; do
   date +%s > /tmp/.lumen_heartbeat 2>/dev/null || true
 
   # 2. Ping our own boxd. Only ours: the host's other daemons are not ours to poke.
-  curl -s -m 2 "http://127.0.0.1:${BOXD_PORT}/health" >/dev/null 2>&1 || true
+  curl -s -m 2 "http://${BOXD_HOST}:${BOXD_PORT}/health" >/dev/null 2>&1 || true
 
   # 3. Micro-jitter X11 mouse position by 0px to refresh DPMS/idle timers on the display
   if [ -n "${DISPLAY_NUM}" ]; then

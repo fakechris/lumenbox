@@ -1,18 +1,20 @@
 #!/usr/bin/env bash
 # scripts/attach-grok.sh — put a Lumenbox box daemon beside Grok Bot on its own VM, without
-# touching anything of Grok's, and drive it from this machine over an SSH tunnel.
+# touching anything of Grok's, and register it with this installation as a second box.
 #
 # What "beside" means, checked against the VM on 2026-09-02:
 #   - Grok's host owns displays :1..:5 (one per bot), x11vnc 5900..5905, noVNC 6080/6081, its
 #     daemons on 1337..1340, and Chrome debug ports 9222+N. Ours start at display :10, so every
 #     derived port (5910, 6090, 5970, 6190, Chrome 9232) is clear of theirs by construction.
 #   - The VM's own node is 20; /exec-daemon/node is 22, which boxd needs (global WebSocket).
-#   - boxd binds loopback there; the only way in is this tunnel.
-#   - The orchestrator here runs with its own state directory (~/.agentbox-grok), never the one
-#     the main box's web server is using (docs/17: two hosts on one directory collide).
+#   - The VM is on the person's own tailnet (`ssh box@cursor` is Tailscale SSH, not a relay).
+#     So the transport is the tailnet when it is there — boxd binds the VM's tailscale address
+#     and the installation dials it directly, WireGuard underneath, the box token on top, and
+#     no tunnel process to keep alive — and an SSH local forward to loopback otherwise.
+#   - Plank runs as its own dock (PLANK_DOCK=lumen): the HOME is shared with Grok's desktop.
 #
 # Usage:
-#   ./scripts/attach-grok.sh [SSH_HOST] [--port PORT] [--display N] [--token TOKEN] [--no-ui] [--dry-run]
+#   ./scripts/attach-grok.sh [SSH_HOST] [--via auto|tailscale|ssh] [--port PORT] [--display N] [--token TOKEN] [--dry-run]
 set -euo pipefail
 
 SSH_HOST="${1:-box@cursor}"
@@ -20,9 +22,8 @@ if [[ "$SSH_HOST" == --* ]]; then SSH_HOST="box@cursor"; fi
 
 BOXD_PORT=13370
 DISPLAY_NUM=10
-AUTO_START_UI=true
+VIA=auto
 DRY_RUN=false
-UI_PORT=3000
 LOCAL_HOME="${AGENTBOX_GROK_HOME:-$HOME/.agentbox-grok}"
 
 if [[ $# -gt 0 && "$1" != --* ]]; then shift; fi
@@ -31,11 +32,10 @@ while [[ $# -gt 0 ]]; do
     --port) BOXD_PORT="$2"; shift 2 ;;
     --display) DISPLAY_NUM="$2"; shift 2 ;;
     --token) AGENTBOX_TOKEN="$2"; shift 2 ;;
-    --ui-port) UI_PORT="$2"; shift 2 ;;
-    --no-ui) AUTO_START_UI=false; shift ;;
+    --via) VIA="$2"; shift 2 ;;
     --dry-run) DRY_RUN=true; shift ;;
     -h|--help)
-      echo "Usage: $0 [SSH_HOST] [--port PORT] [--display N] [--token TOKEN] [--ui-port PORT] [--no-ui] [--dry-run]"
+      echo "Usage: $0 [SSH_HOST] [--via auto|tailscale|ssh] [--port PORT] [--display N] [--token TOKEN] [--dry-run]"
       exit 0 ;;
     *) echo "Unknown option: $1" >&2; exit 1 ;;
   esac
@@ -65,8 +65,26 @@ if [ -z "${AGENTBOX_TOKEN:-}" ]; then
 fi
 BOXD_TOKEN="$AGENTBOX_TOKEN"
 
-log "Target host: $SSH_HOST"
-log "Remote boxd port: $BOXD_PORT (display :$DISPLAY_NUM, noVNC :$VNC_PORT), local state: $LOCAL_HOME"
+# ── transport ─────────────────────────────────────────────────────────────────────────
+# tailscale: boxd binds the VM's tailnet address and is dialled directly. ssh: boxd binds
+# loopback and an SSH local forward carries it here. auto picks tailscale when the VM has an
+# address and this machine can reach it.
+TS_IP=""
+if [ "$VIA" != "ssh" ]; then
+  TS_IP="$(ssh -o ConnectTimeout=15 "$SSH_HOST" 'tailscale ip -4 2>/dev/null | head -1' 2>/dev/null || true)"
+  if [ -n "$TS_IP" ] && ! nc -z -w 3 "$TS_IP" 22 2>/dev/null; then
+    [ "$VIA" = "tailscale" ] && { echo "ERROR: the VM's tailscale address $TS_IP is not reachable from here." >&2; exit 1; }
+    TS_IP=""
+  fi
+  if [ -z "$TS_IP" ] && [ "$VIA" = "tailscale" ]; then echo "ERROR: the VM has no tailscale address." >&2; exit 1; fi
+fi
+if [ -n "$TS_IP" ]; then
+  VIA=tailscale; BIND="$TS_IP"; ENDPOINT="http://$TS_IP:$BOXD_PORT"
+else
+  VIA=ssh; BIND=127.0.0.1; ENDPOINT="http://127.0.0.1:$BOXD_PORT"
+fi
+
+log "Target host: $SSH_HOST — transport: $VIA (boxd on $BIND:$BOXD_PORT, display :$DISPLAY_NUM)"
 if [ "$DRY_RUN" = true ]; then log "Dry run; nothing executed."; exit 0; fi
 
 log "1/5. Packaging the drop-in..."
@@ -110,61 +128,76 @@ else
   date +%s > "\$MARK"
 fi
 
-if ! (exec 3<>"/dev/tcp/127.0.0.1/$BOXD_PORT") 2>/dev/null; then
-  echo "[remote] starting boxd on 127.0.0.1:$BOXD_PORT ..."
+# boxd on the transport's address. One already up on a different address (switching
+# transports) is stopped and started again where it is now wanted.
+listening() { (exec 3<>"/dev/tcp/$BIND/$BOXD_PORT") 2>/dev/null; }
+if ! listening; then
+  if pgrep -f "[l]umen/bin/boxd.cjs" >/dev/null 2>&1; then
+    echo "[remote] boxd is up on another address; restarting it on $BIND ..."
+    pkill -f "[l]umen/bin/boxd.cjs" || true
+    sleep 1
+  fi
+  echo "[remote] starting boxd on $BIND:$BOXD_PORT ..."
   # DISPLAY is what boxd's "ensure the default desktop at boot" reads; left unset it would be :1,
   # and :1 is Grok's.
-  DISPLAY=":$DISPLAY_NUM" BOXD_PORT="$BOXD_PORT" BOXD_BIND=127.0.0.1 BOXD_TOKEN="$BOXD_TOKEN" DEFAULT_DISPLAY="$DISPLAY_NUM" \\
+  DISPLAY=":$DISPLAY_NUM" BOXD_PORT="$BOXD_PORT" BOXD_BIND="$BIND" BOXD_TOKEN="$BOXD_TOKEN" DEFAULT_DISPLAY="$DISPLAY_NUM" \\
     BOXD_START_DISPLAY="\$HOME/.lumen/bin/start-display" PLANK_DOCK=lumen \\
     nohup "\$NODE_BIN" ~/.lumen/bin/boxd.cjs > /tmp/boxd-$BOXD_PORT.log 2>&1 &
   for _ in \$(seq 1 20); do
-    (exec 3<>"/dev/tcp/127.0.0.1/$BOXD_PORT") 2>/dev/null && break
+    listening && break
     sleep 0.5
   done
-  (exec 3<>"/dev/tcp/127.0.0.1/$BOXD_PORT") 2>/dev/null || { echo "[remote] ERROR: boxd did not come up:"; tail -20 /tmp/boxd-$BOXD_PORT.log; exit 1; }
+  listening || { echo "[remote] ERROR: boxd did not come up:"; tail -20 /tmp/boxd-$BOXD_PORT.log; exit 1; }
 else
-  echo "[remote] boxd already listening on $BOXD_PORT."
+  echo "[remote] boxd already listening on $BIND:$BOXD_PORT."
 fi
 
-if ! pgrep -f "box-keepalive $DISPLAY_NUM $BOXD_PORT" >/dev/null 2>&1; then
-  echo "[remote] starting the keep-alive ..."
-  nohup box-keepalive "$DISPLAY_NUM" "$BOXD_PORT" 45 > /tmp/keepalive-$BOXD_PORT.log 2>&1 &
-fi
+pkill -f "box-keepalive $DISPLAY_NUM $BOXD_PORT" 2>/dev/null || true
+echo "[remote] starting the keep-alive ..."
+nohup box-keepalive "$DISPLAY_NUM" "$BOXD_PORT" 45 "$BIND" > /tmp/keepalive-$BOXD_PORT.log 2>&1 &
 REMOTE_SCRIPT
 
-log "4/5. Opening the tunnel (boxd $BOXD_PORT, noVNC $VNC_PORT) ..."
+log "4/5. Transport ..."
+# A stale forward from the other transport is closed either way.
 pkill -f "ssh -N -f.*$BOXD_PORT:127.0.0.1:$BOXD_PORT" 2>/dev/null || true
 sleep 0.5
-ssh -N -f \
-  -o ServerAliveInterval=30 -o ServerAliveCountMax=5 -o TCPKeepAlive=yes -o ExitOnForwardFailure=yes \
-  -L "127.0.0.1:$BOXD_PORT:127.0.0.1:$BOXD_PORT" \
-  -L "127.0.0.1:$VNC_PORT:127.0.0.1:$VNC_PORT" \
-  "$SSH_HOST"
-sleep 1
-
-log "5/5. Checking boxd through the tunnel ..."
-HEALTH="$(curl -s -m 5 -H "Authorization: Bearer $BOXD_TOKEN" "http://127.0.0.1:$BOXD_PORT/health" || true)"
-if [[ "$HEALTH" == *"ok"* || "$HEALTH" == *"status"* ]]; then
-  success "boxd on the VM answers through the tunnel."
+if [ "$VIA" = "ssh" ]; then
+  log "opening the SSH forward (boxd $BOXD_PORT, noVNC $VNC_PORT) ..."
+  ssh -N -f \
+    -o ServerAliveInterval=30 -o ServerAliveCountMax=5 -o TCPKeepAlive=yes -o ExitOnForwardFailure=yes \
+    -L "127.0.0.1:$BOXD_PORT:127.0.0.1:$BOXD_PORT" \
+    -L "127.0.0.1:$VNC_PORT:127.0.0.1:$VNC_PORT" \
+    "$SSH_HOST"
+  sleep 1
 else
-  warn "no healthy answer from http://127.0.0.1:$BOXD_PORT/health: ${HEALTH:-(empty)}"
+  log "tailnet: dialling $ENDPOINT directly; no forward to keep alive."
+fi
+
+log "5/5. Checking boxd at $ENDPOINT ..."
+HEALTH="$(curl -s -m 5 -H "Authorization: Bearer $BOXD_TOKEN" "$ENDPOINT/health" || true)"
+if [[ "$HEALTH" == *"ok"* || "$HEALTH" == *"status"* ]]; then
+  success "boxd on the VM answers."
+else
+  warn "no healthy answer from $ENDPOINT/health: ${HEALTH:-(empty)}"
 fi
 
 # Registered with the installation as a second box (docs/30): agents are created *into* it
 # and stay there, with their own desktops from :$DISPLAY_NUM on that machine. No second
-# orchestrator — one host, one state directory, two boxes.
+# orchestrator — one host, one state directory, two boxes. A box already registered is
+# moved to this transport's address, keeping its id and its agents.
 log "Registering the box with this installation ..."
 cd "$ROOT_DIR"
 if npm run --silent agentbox -- box list 2>/dev/null | grep -q "^.*grok"; then
-  log "box 'grok' is already attached; leaving the record as it is"
+  npm run --silent agentbox -- box attach grok "$ENDPOINT" --token-file "$LOCAL_HOME/box-token" --display-floor "$DISPLAY_NUM" --replace
 else
-  npm run --silent agentbox -- box attach grok "http://127.0.0.1:$BOXD_PORT" --token-file "$LOCAL_HOME/box-token" --display-floor "$DISPLAY_NUM"
+  npm run --silent agentbox -- box attach grok "$ENDPOINT" --token-file "$LOCAL_HOME/box-token" --display-floor "$DISPLAY_NUM"
 fi
 
-success "Attached. Grok's displays :1..:5 and ports 1337..1340 / 9222+ untouched."
-success "  boxd:   http://127.0.0.1:$BOXD_PORT   (token in $LOCAL_HOME/box-token)"
-success "  noVNC:  http://127.0.0.1:$VNC_PORT/vnc.html   (display :$DISPLAY_NUM)"
+success "Attached over $VIA. Grok's displays :1..:5 and ports 1337..1340 / 9222+ untouched."
+success "  boxd:   $ENDPOINT   (token in $LOCAL_HOME/box-token)"
+if [ "$VIA" = "ssh" ]; then
+  success "  noVNC:  http://127.0.0.1:$VNC_PORT/vnc.html   (display :$DISPLAY_NUM; the web UI reaches it through boxd anyway)"
+fi
 echo ""
-echo "If 'agentbox web' was already running it picks the box up on its next start; then create an"
-echo "agent into it from the New agent dialog (Box: grok) or:"
-echo "  agentbox box list"
+echo "If 'agentbox web' was already running it picked the box up; otherwise it does on the next start."
+echo "Create an agent into it from the New agent dialog (Box: grok), or check with: agentbox box list"

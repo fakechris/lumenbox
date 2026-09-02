@@ -1646,6 +1646,15 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
   // down does not deserve a notification a minute.
   let boxWasHealthy = false;
   const boxWatch = setInterval(() => {
+    // The attached boxes, on their own: one that stops answering (a tunnel that died, a VM
+    // that rebooted) is dialled again every tick and announced only on the change.
+    void orchestrator.checkAttachedBoxes().then(transitions => {
+      for (const change of transitions) {
+        log(change.connected ? `box ${change.name} is back: ${change.detail}` : `box ${change.name} stopped answering: ${change.detail}`);
+        broadcast({ type: "error", message: change.connected ? `Box ${change.name} is back.` : `Box ${change.name} stopped answering: ${change.detail}` });
+        if (change.connected) void orchestrator.ensureAllDesktops().catch(() => {});
+      }
+    }).catch(() => {});
     void (async () => {
       const client = orchestrator.boxClient();
       if (client !== undefined) {
@@ -3761,6 +3770,37 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
             const result = await orchestrator.attachBox(entry);
             log(`attached box ${entry.name} (${entry.id}) at ${baseUrl}: ${result.detail}`);
             send(res, 200, { box: entry, ...result });
+          } catch (error) {
+            send(res, 409, { error: error instanceof Error ? error.message : String(error) });
+          }
+          return;
+        }
+
+        // Moving a box: a new address for the same id, so its agents stay its agents.
+        if (route === "POST /api/boxes/update") {
+          if (refused()) return;
+          const body = await readJson(req);
+          const name = String(body.name ?? "").trim();
+          const baseUrl = typeof body.baseUrl === "string" ? body.baseUrl.trim() : "";
+          let tokenFile = typeof body.tokenFile === "string" ? body.tokenFile.trim() : "";
+          if (tokenFile === "" && typeof body.token === "string" && body.token.trim() !== "") {
+            const dir = join(agentboxHome(), "boxes");
+            mkdirSync(dir, { recursive: true, mode: 0o700 });
+            tokenFile = join(dir, `${name}.token`);
+            writeFileSync(tokenFile, `${body.token.trim()}\n`, { mode: 0o600 });
+          }
+          try {
+            const existing = registry.boxByName(name);
+            if (existing === undefined) {
+              send(res, 404, { error: `No box named ${name}.` });
+              return;
+            }
+            const result = await orchestrator.updateBox(name, {
+              ...(baseUrl !== "" ? { endpoint: { baseUrl, tokenFile: tokenFile !== "" ? tokenFile : (existing.endpoint?.tokenFile ?? "") } } : {}),
+              ...(Number.isInteger(Number(body.displayFloor)) && Number(body.displayFloor) >= 1 ? { displayFloor: Number(body.displayFloor) } : {}),
+            });
+            log(`box ${name} moved to ${result.box.endpoint?.baseUrl ?? "(no endpoint)"}: ${result.detail}`);
+            send(res, 200, result);
           } catch (error) {
             send(res, 409, { error: error instanceof Error ? error.message : String(error) });
           }
