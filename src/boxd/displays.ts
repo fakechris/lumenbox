@@ -403,6 +403,15 @@ export class DisplayManager {
     }
   }
 
+  /**
+   * Whether an agent currently holds this desktop, by the record that outlives a restart.
+   * What boot consults before bringing up the default desktop: one that is an agent's is left
+   * to that agent, who presents its token on its next call.
+   */
+  isClaimed(index: number): boolean {
+    return recordedOwner(index).status === "owned";
+  }
+
   async ensure(index = DEFAULT_DISPLAY_INDEX, owner?: string): Promise<Desktop> {
     if (!Number.isInteger(index) || index < 1 || index > MAX_DISPLAY_INDEX) {
       throw new Error(

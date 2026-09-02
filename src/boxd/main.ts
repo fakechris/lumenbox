@@ -693,9 +693,17 @@ server.listen(listenPort, listenHost, () => {
   const reclaimed = recorder.reclaimOrphans();
   if (reclaimed > 0) log(`stopped ${reclaimed} recording(s) left by a previous daemon`);
   // Warm the display so the first computer call is not paying detection latency.
-  displays.ensure(defaultDisplayIndex).catch(error => {
-    log(`default desktop not ready yet: ${describe(error)}`);
-  });
+  // A default desktop that an agent already holds (the record outlives a restart) is not
+  // touched: ensuring it without that agent's token would only be refused, and the agent
+  // registers it again on its next call. Everything else about it — the components, the
+  // supervisor — resumes then.
+  if (displays.isClaimed(defaultDisplayIndex)) {
+    log(`default desktop ${defaultDisplayIndex} is an agent's; leaving it to them`);
+  } else {
+    displays.ensure(defaultDisplayIndex).catch(error => {
+      log(`default desktop not ready yet: ${describe(error)}`);
+    });
+  }
   // A component that dies takes the user's view of the box with it, silently: the
   // agent keeps working against X while the screen stays dead. Repair is on a timer.
   displays.startSupervisor();
