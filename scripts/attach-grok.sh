@@ -171,11 +171,17 @@ success "Attached. Grok's displays :1..:5 and ports 1337..1340 / 9222+ untouched
 success "  boxd:   http://127.0.0.1:$BOXD_PORT   (token in $LOCAL_HOME/box-token)"
 success "  noVNC:  http://127.0.0.1:$VNC_PORT/vnc.html   (display :$DISPLAY_NUM)"
 
-RUN_UI="AGENTBOX_HOME=\"$LOCAL_HOME\" AGENTBOX_BOXD_URL=\"http://127.0.0.1:$BOXD_PORT\" AGENTBOX_TOKEN=\"\$(cat $LOCAL_HOME/box-token)\" AGENTBOX_DISPLAY_FLOOR=$DISPLAY_NUM npm run agentbox -- web --port $UI_PORT"
+# The UI's own token, minted once: loopback or not, a page that drives agents should ask for one.
+if [ ! -s "$LOCAL_HOME/ui-token" ]; then
+  (umask 077; head -c 24 /dev/urandom | base64 | tr -d '/+=' | head -c 32 > "$LOCAL_HOME/ui-token")
+fi
+RUN_UI="AGENTBOX_HOME=\"$LOCAL_HOME\" AGENTBOX_BOXD_URL=\"http://127.0.0.1:$BOXD_PORT\" AGENTBOX_TOKEN=\"\$(cat $LOCAL_HOME/box-token)\" AGENTBOX_UI_TOKEN=\"\$(cat $LOCAL_HOME/ui-token)\" AGENTBOX_DISPLAY_FLOOR=$DISPLAY_NUM npm run agentbox -- web --port $UI_PORT"
 if [ "$AUTO_START_UI" = true ]; then
   log "Starting the orchestrator UI on http://127.0.0.1:$UI_PORT with state in $LOCAL_HOME ..."
   cd "$ROOT_DIR"
   export AGENTBOX_HOME="$LOCAL_HOME" AGENTBOX_BOXD_URL="http://127.0.0.1:$BOXD_PORT" AGENTBOX_TOKEN="$BOXD_TOKEN" AGENTBOX_DISPLAY_FLOOR="$DISPLAY_NUM"
+  export AGENTBOX_UI_TOKEN="$(cat "$LOCAL_HOME/ui-token")"
+  log "open: http://127.0.0.1:$UI_PORT/?token=$AGENTBOX_UI_TOKEN"
   exec npm run agentbox -- web --port "$UI_PORT"
 else
   echo ""
