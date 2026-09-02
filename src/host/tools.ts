@@ -37,6 +37,15 @@ import {
   type TodoStatus,
 } from "./durable.ts";
 import type { BrowserRequest, ComputerAction } from "../protocol/index.ts";
+import { skillSlugOf } from "./skill-provenance.ts";
+import { SKILL_FILENAME } from "./skills.ts";
+import {
+  type BotTemplate,
+  TEMPLATE_SOURCE_PREFIX,
+  describeTemplate,
+  packTemplate,
+  stampTemplateWrite,
+} from "./template.ts";
 
 export interface ToolContext {
   agent: AgentRecord;
@@ -143,6 +152,22 @@ export interface ToolContext {
   skillProvenance?: {
     noteWrite(input: { path: string; agentId: string; agentName: string; tool: string }): string | undefined;
     noteCommand(input: { command: string; agentId: string; agentName: string }): string[];
+  };
+  /**
+   * The template this turn is installing, when it is an imported bot's setup turn (docs/29).
+   *
+   * Set by the host for exactly that turn. While it is set, a skill file the agent writes is
+   * stamped `authored_by: template:<id>` and a routine among them `paused: true` whether or not
+   * the agent remembered, and a memory it keeps is recorded with the template as its source.
+   * The agent cannot set or clear it — that is the point.
+   */
+  templateSetup?: string;
+  /**
+   * Where a packed template is staged, when sharing is on. Absent withholds `PackTemplate`
+   * entirely, so an agent on an installation without it never learns it might have asked.
+   */
+  templates?: {
+    stage(agentId: string, template: BotTemplate): { id: string; version: number; path: string };
   };
 }
 
@@ -342,7 +367,9 @@ export function buildTools(
    */
   canUseDesktop = true,
   /** Whether this installation can read Feishu documents with the bot's identity. */
-  hasDocReader = false
+  hasDocReader = false,
+  /** Whether a packed template has somewhere to be staged (docs/29). */
+  canPackTemplate = false
 ): Anthropic.Tool[] {
   const tools: Anthropic.Tool[] = [];
 
@@ -1279,6 +1306,93 @@ export function buildTools(
     });
   }
 
+  // Sharing a template is a conversation the bot leads (docs/29 §4): it reads its own memory,
+  // skills and routines, chooses, rewrites, and calls this once. The host packs from the live
+  // files, so the bot can generalise a skill it has and cannot invent one it does not.
+  if (canPackTemplate) {
+    tools.push({
+      name: "PackTemplate",
+      description:
+        "Stage a shareable template of yourself from what you selected, after following the " +
+        "export-template skill. Pass the storefront description, the memories to carry (job or " +
+        "convention facts only, in their original words minus anything private), the skills and " +
+        "routines by slug (with a rewritten body only where a detail had to be generalised — the " +
+        "host reads the live files and uses your body text for the part below the frontmatter, " +
+        "nothing else), and the connector names the work needs. The host drops what it cannot " +
+        "pack and names it; a credential or a memory about a person refuses the whole call — " +
+        "take it out and call again. Nothing is shared until the person publishes from the " +
+        "card; never say a template is shared before they do. Call this once, after one short " +
+        "line of what you are keeping and leaving out; do not paste a draft in chat.",
+      input_schema: {
+        type: "object",
+        properties: {
+          description: {
+            type: "string",
+            description:
+              "One to three sentences telling someone who has never seen you what you do and who " +
+              "you are for. Shown on the card and the share page. Detail goes in skills and memories.",
+          },
+          name: { type: "string", description: "The template's name. Defaults to your own." },
+          title: { type: "string", description: "A short role label. Defaults to your own." },
+          memory: {
+            type: "array",
+            description:
+              "Facts worth carrying: how the work is done, where things are read from, conventions. " +
+              "Original wording except what you took out. Not episodes, not notes, nothing about a person.",
+            items: {
+              type: "object",
+              properties: {
+                text: { type: "string" },
+                kind: { type: "string", enum: ["fact", "pitfall"] },
+                at: { type: "string", description: "The original record's date, when you know it." },
+              },
+              required: ["text"],
+            },
+          },
+          skills: {
+            type: "array",
+            description: "Skills to include, by folder slug. `body` replaces the markdown below the frontmatter and nothing else.",
+            items: {
+              type: "object",
+              properties: {
+                slug: { type: "string" },
+                body: { type: "string", description: "Rewritten job text, only when something had to be generalised. Never the raw file." },
+                description: { type: "string", description: "A rewritten one-line description, only when the file's has to change." },
+              },
+              required: ["slug"],
+            },
+          },
+          routines: {
+            type: "array",
+            description:
+              "Routines to include, by folder slug — the skills with a schedule or trigger. Chat keys, " +
+              "agent names and the timezone become {placeholders} the importing person fills in; you " +
+              "do not need to remove them yourself.",
+            items: {
+              type: "object",
+              properties: {
+                slug: { type: "string" },
+                body: { type: "string" },
+                description: { type: "string" },
+              },
+              required: ["slug"],
+            },
+          },
+          connectors: {
+            type: "array",
+            description: "Connector names the kept skills and routines depend on: feishu, dingtalk, telegram, browser, mcp:<server>. Names only; nothing installs.",
+            items: { type: "string" },
+          },
+          getting_started: {
+            type: "string",
+            description: "The slug of one included skill the new bot should read before it speaks, if there is one.",
+          },
+        },
+        required: ["description"],
+      },
+    });
+  }
+
   return withheldFrom(allowed, tools);
 }
 
@@ -1330,6 +1444,17 @@ function formatExec(
   if (result.stderr.trim()) parts.push(`stderr:\n${truncate(result.stderr, 10_000)}`);
   if (!result.stdout.trim() && !result.stderr.trim()) parts.push("(no output)");
   return parts.join("\n\n");
+}
+
+/**
+ * What a setup turn's write into a skill file becomes: stamped with the template it came from,
+ * and — for a routine — paused. Outside a setup turn, or outside the skills directory, the
+ * content is untouched.
+ */
+function templateStamp(context: ToolContext, path: string, content: string): string {
+  if (context.templateSetup === undefined) return content;
+  if (skillSlugOf(path) === undefined || !path.endsWith(`/${SKILL_FILENAME}`)) return content;
+  return stampTemplateWrite(content, context.templateSetup);
 }
 
 function requireBox(context: ToolContext): BoxClient {
@@ -1884,7 +2009,7 @@ export async function dispatchTool(
         };
       }
 
-      const updated = existing.content.replace(oldText, newText);
+      const updated = templateStamp(context, path, existing.content.replace(oldText, newText));
       await box.writeFile(path, updated);
       // Recorded like any other write, so the next writer still sees a conflict rather
       // than overwriting an edit nobody else knows happened.
@@ -1953,10 +2078,11 @@ export async function dispatchTool(
         if (refusal !== undefined) return { text: refusal, isError: true };
       }
 
-      const result = await box.writeFile(path, content);
+      const written = templateStamp(context, path, content);
+      const result = await box.writeFile(path, written);
       // Its own write is the newest thing it has seen, so writing twice in a row is not a conflict
       // with itself.
-      context.files?.observed(context.agent.id, result.path, versionOf(content));
+      context.files?.observed(context.agent.id, result.path, versionOf(written));
       context.skillProvenance?.noteWrite({ path, agentId: context.agent.id, agentName: context.agent.profile.name, tool: "write_file" });
       return { text: `Wrote ${result.bytes_written} bytes to ${result.path}.` };
     }
@@ -2656,14 +2782,17 @@ export async function dispatchTool(
         return { text: "That is already remembered, here or by a teammate, so nothing was added." };
       }
 
+      // A setup turn's memories say where they came from, and are about nobody: they are the
+      // template's conventions, not something the person driving the import told this agent.
+      const fromTemplate = context.templateSetup !== undefined;
       const record = {
         at: new Date().toISOString(),
         kind: "fact" as const,
         text: fact,
-        source: "RememberFact",
+        source: fromTemplate ? `${TEMPLATE_SOURCE_PREFIX}${context.templateSetup}` : "RememberFact",
         // Who it is about, when the box was told. Without it a fact learned from one person reads as
         // being about whoever asks next, which in a team is worse than not recording it.
-        ...(context.caller?.userId !== undefined ? { about: context.caller.userId } : {}),
+        ...(context.caller?.userId !== undefined && !fromTemplate ? { about: context.caller.userId } : {}),
       };
       const withdrawn = retracted ? " The one it replaces has been withdrawn." : "";
       if (shared) {
@@ -2674,6 +2803,67 @@ export async function dispatchTool(
       }
       context.registry.appendMemoryRecords(context.agent.id, [record]);
       return { text: `Kept. It will be in your instructions on future turns.${withdrawn}` };
+    }
+
+    case "PackTemplate": {
+      const box = requireBox(context);
+      if (context.templates === undefined) {
+        return { text: "Template sharing is not available here. Tell the person it is not enabled; do not retry.", isError: true };
+      }
+      const description = String(input.description ?? "").trim();
+      if (description === "") return { text: "A template needs a description: one to three sentences on what it does and who it is for.", isError: true };
+      const list = (value: unknown): Record<string, unknown>[] =>
+        Array.isArray(value) ? value.filter((entry): entry is Record<string, unknown> => typeof entry === "object" && entry !== null) : [];
+      const refs = (value: unknown) =>
+        list(value)
+          .map(entry => ({
+            slug: String(entry.slug ?? "").trim(),
+            ...(typeof entry.body === "string" ? { body: entry.body } : {}),
+            ...(typeof entry.description === "string" ? { description: entry.description } : {}),
+          }))
+          .filter(entry => entry.slug !== "");
+      const self = context.agent.profile;
+      const teammates = context.registry.list().map(agent => agent.profile.name).filter(name => name !== self.name);
+      const packed = await packTemplate(
+        box,
+        {
+          profile: {
+            description,
+            ...(typeof input.name === "string" && input.name.trim() !== "" ? { name: input.name.trim() } : {}),
+            ...(typeof input.title === "string" && input.title.trim() !== "" ? { title: input.title.trim() } : {}),
+          },
+          memory: list(input.memory)
+            .map(entry => ({
+              text: String(entry.text ?? ""),
+              ...(entry.kind === "pitfall" ? { kind: "pitfall" as const } : {}),
+              ...(typeof entry.at === "string" ? { at: entry.at } : {}),
+            }))
+            .filter(entry => entry.text.trim() !== ""),
+          skills: refs(input.skills),
+          routines: refs(input.routines),
+          connectors: Array.isArray(input.connectors) ? input.connectors.map(String) : [],
+          ...(typeof input.getting_started === "string" && input.getting_started.trim() !== "" ? { gettingStarted: { skill: input.getting_started.trim() } } : {}),
+        },
+        {
+          self: {
+            name: self.name,
+            ...(self.title !== undefined ? { title: self.title } : {}),
+            ...(self.avatarColor !== undefined ? { avatarColor: self.avatarColor } : {}),
+            ...(self.tools !== undefined ? { tools: self.tools } : {}),
+          },
+          teammates,
+          memoryRecords: context.registry.readMemoryRecords(context.agent.id),
+          ...(context.caller?.userId !== undefined ? { createdBy: context.caller.userId } : {}),
+        }
+      );
+      if ("refused" in packed) return { text: packed.refused, isError: true };
+      const staged = context.templates.stage(context.agent.id, packed.template);
+      const dropped = packed.dropped.length === 0 ? "" : ` Left out: ${packed.dropped.join("; ")}.`;
+      return {
+        text:
+          `Staged version ${staged.version} of the template "${packed.template.profile.name}" (${describeTemplate(packed.template)}).` +
+          `${dropped} It is not shared until the person publishes or downloads it from the card; say so.`,
+      };
     }
 
     case "FindMcpTool": {

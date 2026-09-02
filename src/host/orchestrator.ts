@@ -27,6 +27,22 @@ import { HookRunner } from "./hooks.ts";
 import { appendLine } from "./jsonl.ts";
 import { agentboxHome } from "../config.ts";
 import { join } from "node:path";
+import { existsSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
+import {
+  type BotTemplate,
+  type ReconcileResult,
+  type TemplateFillIn,
+  pendingOf,
+  recipeDirFor,
+  reconcile,
+  renderRecipe,
+  templateId,
+  templateSetupCue,
+  stampTemplateWrite,
+  toolsOf,
+} from "./template.ts";
+import { SKILLS_DIR } from "./skills.ts";
+import { intersectTools } from "./catalog.ts";
 import { DisplayLease } from "../box/display-lease.ts";
 import { resolveBoxProvisioner, type BoxProvisioner } from "../box/provisioner.ts";
 import { classifyBox, type BoxClass } from "../box/access.ts";
@@ -69,6 +85,11 @@ export interface OrchestratorOptions {
    * file no longer knows what Docker is.
    */
   boxProvisioner?: BoxProvisioner;
+  /**
+   * A box client to use as-is, instead of provisioning one. For tests that need a box
+   * the agents can write into without Docker; a deployment uses `boxProvisioner`.
+   */
+  boxClient?: BoxClient;
   onTurnEvent?: (event: TurnEvent) => void;
   onBusEvent?: (event: BusEvent) => void;
   /**
@@ -129,6 +150,11 @@ export class Orchestrator {
   private readonly memoryMirror: MemoryMirror;
   readonly skillProvenance: SkillProvenance;
   readonly hooks: HookRunner | undefined;
+  /**
+   * Agents whose current turn is installing a template, by the template's id (docs/29 §5.3).
+   * Set around the setup prompt and cleared after it, never by the agent.
+   */
+  private readonly templateSetups = new Map<string, string>();
   private resolution: ResolutionConfig | undefined;
   /** What kind of box the connected box is; see docs/18. */
   private boxAccess: BoxClass | undefined;
@@ -270,6 +296,7 @@ export class Orchestrator {
           ...(skill.deliver !== undefined ? { deliver: skill.deliver } : {}),
           ...(skill.authoredBy !== undefined ? { authoredBy: skill.authoredBy } : {}),
           ...(skill.because !== undefined ? { because: skill.because } : {}),
+          ...(skill.paused === true ? { paused: true } : {}),
         }));
     },
     listeners: async () => {
@@ -283,6 +310,7 @@ export class Orchestrator {
           match: skill.listener!.match,
           ...(skill.listener!.chat !== undefined ? { chat: skill.listener!.chat } : {}),
           ...(skill.runAs !== undefined ? { runAs: skill.runAs } : {}),
+          ...(skill.paused === true ? { paused: true } : {}),
         }));
     },
     // Through the ordinary prompt path, so a scheduled turn is checked by the policy gate exactly
@@ -560,6 +588,11 @@ export class Orchestrator {
     }
 
     try {
+      if (this.options.boxClient !== undefined) {
+        this.box = this.options.boxClient;
+        this.readyDisplays.clear();
+        return { connected: true, detail: "box attached directly" };
+      }
       const provisioner = this.options.boxProvisioner ?? resolveBoxProvisioner();
       const client = await provisioner.connect();
       const health = await client.health();
@@ -625,6 +658,182 @@ export class Orchestrator {
   /** The box client, for callers that need the box directly (recording, downloads). */
   boxClient(): BoxClient | undefined {
     return this.box;
+  }
+
+  // ── templates (docs/29) ────────────────────────────────────────────────────────────
+
+  /**
+   * Where a bot's staged templates live: one directory per source agent, one file per
+   * version, and a stable id minted on the first stage so a later export keeps the same
+   * share id — the parent-row-and-immutable-versions shape, on disk.
+   */
+  private templateDirFor(agentId: string): string {
+    return join(agentboxHome(), "templates", agentId);
+  }
+
+  readonly templates = {
+    stage: (agentId: string, template: BotTemplate): { id: string; version: number; path: string } => {
+      const dir = this.templateDirFor(agentId);
+      mkdirSync(dir, { recursive: true });
+      const idPath = join(dir, "id");
+      let id: string;
+      if (existsSync(idPath)) id = readFileSync(idPath, "utf8").trim();
+      else {
+        id = templateId();
+        writeFileSync(idPath, `${id}\n`);
+      }
+      const version = this.stagedTemplates(agentId).length + 1;
+      const path = join(dir, `v${version}.json`);
+      writeFileSync(path, `${JSON.stringify(template, null, 2)}\n`);
+      return { id, version, path };
+    },
+  };
+
+  /** Every version this agent has staged, oldest first. */
+  stagedTemplates(agentId: string): { version: number; path: string; name: string; description: string; stagedAt: string }[] {
+    const dir = this.templateDirFor(agentId);
+    if (!existsSync(dir)) return [];
+    return readdirSync(dir)
+      .map(name => /^v(\d+)\.json$/.exec(name))
+      .filter((match): match is RegExpExecArray => match !== null)
+      .map(match => {
+        const path = join(dir, match[0]);
+        let name = "";
+        let description = "";
+        let stagedAt = "";
+        try {
+          const parsed = JSON.parse(readFileSync(path, "utf8")) as BotTemplate;
+          name = parsed.profile.name;
+          description = parsed.profile.description;
+          stagedAt = parsed.meta?.createdAt ?? "";
+        } catch {
+          // A torn file is listed by its number and nothing else.
+        }
+        return { version: Number(match[1]), path, name, description, stagedAt };
+      })
+      .sort((a, b) => a.version - b.version);
+  }
+
+  /** The stable share id of an agent's template, when it has staged one. */
+  templateIdOf(agentId: string): string | undefined {
+    const idPath = join(this.templateDirFor(agentId), "id");
+    return existsSync(idPath) ? readFileSync(idPath, "utf8").trim() : undefined;
+  }
+
+  /**
+   * Imports a template: the agent is created from the profile alone, the recipe is put in the
+   * box for it to read, and its first turn installs the rest (docs/29 §5). Returns as soon as
+   * the agent exists; `settled` resolves with what actually landed once the setup turn ends.
+   */
+  importTemplate(
+    template: BotTemplate,
+    options: {
+      caller?: { userId?: string };
+      /** A name to use instead of the template's, when that one is taken. */
+      name?: string;
+      /** Connector names this installation has, so the cue asks only about the missing ones. */
+      connected?: readonly string[];
+      /** The importing person's tool set, which the new agent may not exceed. */
+      creatorTools?: readonly string[];
+      /** Where the template came from, for the profile's `importedFrom`. */
+      shareId?: string;
+      log?: (line: string) => void;
+    } = {}
+  ): { agent: AgentRecord; id: string; pending: { fillIns: TemplateFillIn[]; connectors: string[] }; settled: Promise<ReconcileResult | undefined> } {
+    const log = options.log ?? ((line: string) => console.error(`[template] ${line}`));
+    const id = options.shareId ?? templateId();
+    const name = options.name?.trim() || template.profile.name;
+    if (this.registry.list().some(agent => agent.profile.name === name)) {
+      throw new Error(`An agent named ${name} already exists here; pass another name.`);
+    }
+    const wanted = toolsOf(template);
+    const tools = wanted === undefined ? options.creatorTools : intersectTools(wanted, options.creatorTools);
+    const agent = this.registry.create({
+      name,
+      description: template.profile.description,
+      ...(template.profile.title !== undefined ? { title: template.profile.title } : {}),
+      ...(template.profile.avatarColor !== undefined ? { avatarColor: template.profile.avatarColor } : {}),
+      ...(tools !== undefined ? { tools: [...tools] } : {}),
+      ...(options.caller?.userId !== undefined ? { ownerUserId: options.caller.userId } : {}),
+      visibility: "shared",
+      importedFrom: {
+        id,
+        name: template.profile.name,
+        ...(template.meta?.createdBy !== undefined ? { createdBy: template.meta.createdBy } : {}),
+        at: new Date().toISOString(),
+      },
+    });
+    const pending = pendingOf(template, options.connected ?? []);
+    log(`import ${id}: created ${agent.profile.name} (${agent.id}) from "${template.profile.name}"`);
+
+    const settled = (async (): Promise<ReconcileResult | undefined> => {
+      const box = this.box;
+      if (box === undefined) {
+        log(`import ${id}: no box, so ${agent.profile.name} cannot install its recipe; it will start blank`);
+        return undefined;
+      }
+      const dir = recipeDirFor(agent.profile.name);
+      const recipePath = `${dir}/recipe.md`;
+      try {
+        await box.exec(`mkdir -p ${dir}`, { timeoutMs: 15_000, actor: "host:template" });
+        await box.writeFile(recipePath, renderRecipe(template, { self: agent.profile.name }));
+        await box.writeFile(`${dir}/recipe.json`, `${JSON.stringify(template, null, 2)}\n`);
+      } catch (error) {
+        log(`import ${id}: could not place the recipe in the box: ${error instanceof Error ? error.message : String(error)}`);
+        return undefined;
+      }
+      const cue = templateSetupCue({
+        template,
+        self: agent.profile.name,
+        recipePath,
+        ...(options.caller?.userId !== undefined ? { createdBy: options.caller.userId } : {}),
+        pending,
+      });
+      this.templateSetups.set(agent.id, id);
+      try {
+        await this.prompt(agent.id, cue, options.caller, { steerable: false, lane: "background" });
+      } catch (error) {
+        log(`import ${id}: setup turn failed: ${error instanceof Error ? error.message : String(error)}`);
+      } finally {
+        this.templateSetups.delete(agent.id);
+      }
+      const result = await this.reconcileTemplate(template, agent.id, id, box);
+      appendLine(join(agentboxHome(), "template-imports.jsonl"), JSON.stringify({ at: new Date().toISOString(), id, agentId: agent.id, ...result }));
+      log(`import ${id}: ${result.summary}`);
+      return result;
+    })();
+    return { agent, id, pending, settled };
+  }
+
+  /** What landed, read back from the box and the memory store, with any unpaused routine corrected. */
+  private async reconcileTemplate(template: BotTemplate, agentId: string, id: string, box: BoxClient): Promise<ReconcileResult> {
+    let skillDirs: string[] = [];
+    try {
+      skillDirs = (await box.listDir(SKILLS_DIR)).entries.filter(entry => entry.type === "directory").map(entry => entry.name);
+    } catch {
+      // No skills directory is the same as none landed.
+    }
+    const skillFiles = new Map<string, string>();
+    for (const routine of template.routines) {
+      const dir = skillDirs.find(name => name === routine.slug || name.startsWith(`${routine.slug}-`));
+      if (dir === undefined) continue;
+      try {
+        const read = await box.readFile(`${SKILLS_DIR}/${dir}/SKILL.md`);
+        skillFiles.set(dir, read.content);
+      } catch {
+        // Unreadable counts as absent below.
+      }
+    }
+    const memoryTexts = this.registry.readMemoryRecords(agentId).map(record => record.text);
+    const result = reconcile(template, { skillDirs, skillFiles, memoryTexts });
+    // The stamp on write should have made this empty; a routine that still came in unpaused —
+    // written through a shell, say — is corrected here rather than left armed.
+    for (const dir of result.unpaused) {
+      const text = skillFiles.get(dir);
+      if (text === undefined) continue;
+      await box.writeFile(`${SKILLS_DIR}/${dir}/SKILL.md`, stampTemplateWrite(text, id)).catch(() => undefined);
+    }
+    return result;
   }
 
   /**
@@ -703,6 +912,8 @@ export class Orchestrator {
       // show is the least interesting work in the system and should be billed accordingly.
       selectMemory: prompt => this.askCheaply(agent, prompt),
       skillProvenance: this.skillProvenance,
+      ...(this.templateSetups.has(agent.id) ? { templateSetup: this.templateSetups.get(agent.id)! } : {}),
+      templates: this.templates,
       hooks: this.hooks,
       // Same cheap profile. Shadow by default: the verdicts land in auto-review.jsonl and the web
       // log, and a week of them is what decides whether the classifier earns a veto.
@@ -1069,6 +1280,7 @@ export const ALL_TOOLS: readonly string[] = [
   "AskUser",
   "CreateAgent",
   "UpdateAgent",
+  "PackTemplate",
   "SetPlan",
   "SetTodos",
   "ReadHistory",

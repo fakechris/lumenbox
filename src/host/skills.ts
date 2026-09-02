@@ -117,6 +117,15 @@ export interface Skill {
   authoredBy?: string;
   /** Why it exists, in the author's words. Shown wherever the routine is listed. */
   because?: string;
+  /**
+   * Off until a person turns it on.
+   *
+   * `paused: true` in the frontmatter. A routine that arrived from a template starts this way
+   * (docs/29): the host writes the line if the importing bot forgot it, the scheduler and the
+   * listener skip it, and the automations row is where it is switched on. One line, no second
+   * store — the same reason a schedule is a line and not an object.
+   */
+  paused?: boolean;
 }
 
 export type SkillScope = "global" | "agent";
@@ -136,6 +145,7 @@ const KNOWN_KEYS = new Set([
   "trigger",
   "match",
   "chat",
+  "paused",
 ]);
 
 export interface ParsedSkill {
@@ -321,6 +331,7 @@ export function skillFrom(
       ...(deliver !== undefined && deliver !== "" ? { deliver } : {}),
       ...(parsed.meta.authored_by ? { authoredBy: parsed.meta.authored_by.trim() } : {}),
       ...(parsed.meta.because ? { because: parsed.meta.because.trim() } : {}),
+      ...(parsed.meta.paused?.trim() === "true" ? { paused: true } : {}),
     },
     ...(note === undefined ? {} : { note }),
   };
@@ -354,6 +365,7 @@ export function renderSkills(skills: readonly Skill[]): string {
   for (const skill of skills) {
     const when =
       (skill.schedule === undefined ? "" : ` — runs ${describeSchedule(skill.schedule)}`) +
+      (skill.paused === true ? " (paused until a person turns it on)" : "") +
       (skill.listener === undefined
         ? ""
         : ` — fires when a message matches ${skill.listener.match}${skill.listener.chat === undefined ? "" : ` in ${skill.listener.chat}`}`);
@@ -408,6 +420,9 @@ export function renderSkills(skills: readonly Skill[]): string {
     "schedule is cron or @daily / @every 30m; timezone an IANA name (omit for this",
     "machine's clock); deliver the chat it reports to (omit and no chat hears it);",
     "authored_by is you when it was your idea. No inline # comments in frontmatter.",
+    "`paused: true` keeps a routine off until a person turns it on from the automations list;",
+    "a routine you were handed by a template starts that way, and you do not remove the line",
+    "yourself — ask, and let them switch it on.",
     "",
     "For \"let me know when someone says X\" use a listener instead of (or as well as) a schedule:",
     "`trigger: message` with `match: /deploy failed/i` (a /regex/, or a plain phrase matched",

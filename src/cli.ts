@@ -472,6 +472,99 @@ function cmdAgentNew(argv: string[]): number {
   return 0;
 }
 
+// --- templates (docs/29) ------------------------------------------------------
+
+/**
+ * Templates go through the running web server rather than a second orchestrator in this
+ * process: importing starts a turn on a box that is already someone's, and two hosts on one
+ * state directory is the collision docs/17 forbids. The token is the UI's own.
+ */
+async function cmdTemplate(argv: string[]): Promise<number> {
+  const [sub, ...args] = argv;
+  const base = process.env.AGENTBOX_WEB_URL ?? "http://127.0.0.1:7777";
+  const headers = { "content-type": "application/json", authorization: `Bearer ${uiToken()}` };
+  const call = async (path: string, body?: unknown): Promise<{ ok: boolean; status: number; json: Record<string, unknown>; text: string }> => {
+    const response = await fetch(`${base}${path}`, body === undefined ? { headers } : { method: "POST", headers, body: JSON.stringify(body) });
+    const text = await response.text();
+    let json: Record<string, unknown> = {};
+    try {
+      json = JSON.parse(text) as Record<string, unknown>;
+    } catch {
+      // A download is not JSON; the caller reads `text`.
+    }
+    return { ok: response.ok, status: response.status, json, text };
+  };
+  const agentIdOf = async (nameOrId: string): Promise<string | undefined> => {
+    const registry = new AgentRegistry();
+    try {
+      return registry.resolve(nameOrId).id;
+    } catch {
+      return undefined;
+    }
+  };
+  try {
+    if (sub === "import") {
+      const [file, ...flags] = args;
+      if (!file) {
+        err("Usage: agentbox template import <file> [--name N]");
+        return 1;
+      }
+      const nameAt = flags.indexOf("--name");
+      const name = nameAt >= 0 ? flags[nameAt + 1] : undefined;
+      const template = readFileSync(file, "utf8");
+      const result = await call("/api/templates/import", { template, ...(name !== undefined ? { name } : {}) });
+      if (!result.ok) {
+        err(String(result.json.error ?? `import failed (${result.status})`));
+        return 1;
+      }
+      out(`Created ${bold(String(result.json.name))} (id: ${String(result.json.id)}). It is installing its recipe now.`);
+      const pending = result.json.pending as { fillIns?: { label: string }[]; connectors?: string[] } | undefined;
+      const asks = [...(pending?.fillIns ?? []).map(fillIn => fillIn.label), ...(pending?.connectors ?? []).map(name => `${name} (not connected here)`)];
+      if (asks.length > 0) out(dim(`  It will ask you for: ${asks.join("; ")}`));
+      return 0;
+    }
+    if (sub === "share") {
+      const [agent] = args;
+      const id = agent === undefined ? undefined : await agentIdOf(agent);
+      if (id === undefined) {
+        err("Usage: agentbox template share <agent>");
+        return 1;
+      }
+      const result = await call("/api/templates/share", { agent: id });
+      if (!result.ok) {
+        err(String(result.json.error ?? `share failed (${result.status})`));
+        return 1;
+      }
+      out(`Asked ${bold(agent!)}: "${String(result.json.sent)}"`);
+      out(dim("  Watch the chat; when it has staged a version, run: agentbox template download " + agent));
+      return 0;
+    }
+    if (sub === "download") {
+      const [agent, ...flags] = args;
+      const id = agent === undefined ? undefined : await agentIdOf(agent);
+      if (id === undefined) {
+        err("Usage: agentbox template download <agent> [-o file]");
+        return 1;
+      }
+      const result = await call(`/api/templates/download?agent=${encodeURIComponent(id)}`);
+      if (!result.ok) {
+        err(String(result.json.error ?? `download failed (${result.status})`));
+        return 1;
+      }
+      const outAt = flags.indexOf("-o");
+      const target = outAt >= 0 && flags[outAt + 1] !== undefined ? flags[outAt + 1]! : `${agent}.lumenbox-template.json`;
+      writeFileSync(target, result.text);
+      out(`Saved ${bold(target)} (${result.text.length} bytes). Hand it to someone; they import it the same way.`);
+      return 0;
+    }
+    err(`Unknown template command: ${sub ?? "(none)"}. One of: import, share, download.`);
+    return 1;
+  } catch (error) {
+    err(`Could not reach the web server at ${base}: ${error instanceof Error ? error.message : String(error)}. Is \`agentbox web\` running?`);
+    return 1;
+  }
+}
+
 // --- chat -----------------------------------------------------------------
 
 /** Renders turn and bus events as a readable transcript. */
@@ -912,6 +1005,14 @@ Agents:
   agents                    List agents
   agent new <name> [desc]   Create an agent
 
+Templates (through the running web server; docs/29):
+  template import <file> [--name N]
+                            Create a bot from a template file; it installs the
+                            recipe on its first turn and asks for what it needs.
+  template share <agent>    Ask a bot to draft a template of itself (watch the chat).
+  template download <agent> [-o file]
+                            Save the latest staged template as a file to share.
+
 State:
   backup [dir]              Snapshot ~/.agentbox without stopping anything.
                             Transcripts, memory, plans and skills are the only
@@ -1049,6 +1150,9 @@ async function main(): Promise<number> {
       err(`Unknown agent command: ${sub ?? "(none)"}`);
       return 1;
     }
+
+    case "template":
+      return cmdTemplate(rest);
 
     case "chat":
       return cmdChat(rest);

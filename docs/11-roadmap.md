@@ -1122,6 +1122,12 @@ the seed of any future gallery. Deliberately after the delegation preset work: t
 preset's packaging face is this feature's foundation, and building the bundle format
 before a second real installation exists would be designing for an audience of zero.
 Large-ish; design the boundary (what travels, what never does) first.
+**Designed 2026-09-02 in [docs/29](29-bot-templates.md)** (v2, after v1's picker was
+rejected): the bot packs itself through a served skill and one `PackTemplate` tool; the new
+bot installs itself in its first turn from a recipe file in the box, with host rails
+(routines forced paused, template-origin stamps, untrusted cue, reconcile + retry). Curated
+memory *facts* do travel (the "never its memories" above is revised there, §3); the catalog
+becomes the first-party shelf of the same format; share links on the control plane later.
 
 ---
 

@@ -38,6 +38,7 @@ import { chooseRelevant } from "./memory.ts";
 import { needsReview, type ReviewInput, type ReviewMode, type Verdict } from "./auto-review.ts";
 import type { HookRunner } from "./hooks.ts";
 import { AGENT_WAKE_CUE } from "../agents/bus.ts";
+import { TEMPLATE_CUE } from "./template.ts";
 import {
   activeWindow,
   buildSummaryPrompt,
@@ -364,6 +365,10 @@ export interface TurnDeps {
   autoReview?: { mode(): ReviewMode; review(input: ReviewInput): Promise<Verdict> };
   /** Records which agent wrote into a skill. Absent means no record is kept. */
   skillProvenance?: ToolContext["skillProvenance"];
+  /** The template this turn installs, when it is an imported bot's setup turn (docs/29). */
+  templateSetup?: string;
+  /** Where a packed template is staged; absent withholds PackTemplate. */
+  templates?: ToolContext["templates"];
   /** Lifecycle hooks in Claude Code's dialect (hooks.ts). Absent means none are configured. */
   hooks?: HookRunner;
   resolution: ResolutionConfig | undefined;
@@ -1335,7 +1340,8 @@ export async function runTurn(
     // for pixels with the room. Side conversations keep shell, files and the rest and
     // do their work headless — which is what lets them run at the same time as the room.
     conversation === MAIN_CONVERSATION,
-    deps.docReader !== undefined
+    deps.docReader !== undefined,
+    deps.templates !== undefined
   ).concat(mcpTools);
 
   // One entry per completed round, for the loop and progress judgements. Held out here rather than
@@ -2024,6 +2030,8 @@ export async function runTurn(
             askUser: deps.askUser,
             docReader: deps.docReader,
             skillProvenance: deps.skillProvenance,
+            ...(deps.templateSetup !== undefined ? { templateSetup: deps.templateSetup } : {}),
+            ...(deps.templates !== undefined ? { templates: deps.templates } : {}),
             turnId,
             conversation,
           }
@@ -2212,14 +2220,17 @@ export function reviewInputFor(options: {
 }): ReviewInput {
   const trusted: string[] = [];
   const untrusted: string[] = [];
+  // A template setup cue is a user entry too, and its names — the template's, its creator's, its
+  // skills' — are third-party text; it goes on the untrusted side with the wakes.
+  const harnessSpeaking = (text: string): boolean => text.startsWith(AGENT_WAKE_CUE) || text.startsWith(TEMPLATE_CUE);
   for (const entry of options.transcript) {
     if (entry.role !== "user" || "kind" in entry || typeof entry.text !== "string") continue;
-    (entry.text.startsWith(AGENT_WAKE_CUE) ? untrusted : trusted).push(entry.text);
+    (harnessSpeaking(entry.text) ? untrusted : trusted).push(entry.text);
   }
   // The turn's own messages are usually already the transcript's last entries; only what is not
   // there yet is added, so nothing is shown to the classifier twice.
   for (const message of options.inbound) {
-    const side = message.fromId === "user" ? trusted : untrusted;
+    const side = message.fromId === "user" && !harnessSpeaking(message.text) ? trusted : untrusted;
     if (!trusted.includes(message.text) && !untrusted.includes(message.text)) side.push(message.text);
   }
   for (const message of options.messages) {

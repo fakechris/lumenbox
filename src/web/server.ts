@@ -209,6 +209,8 @@ import {
 import { Vault, type Grant } from "../host/vault.ts";
 import { seedStarterSkills } from "../host/starter-skills.ts";
 import { firstRunCue } from "../host/prompt.ts";
+import { parseTemplate, rewriteFrontmatter, unresolvedPlaceholders } from "../host/template.ts";
+import { SKILLS_DIR, SKILL_FILENAME, slugify } from "../host/skills.ts";
 import { catchUpFloor } from "../channels/ingress.ts";
 import { REPLAY_MAX_AGE_MS } from "../channels/feishu.ts";
 import { ActivityLog } from "./activity.ts";
@@ -245,7 +247,9 @@ type OutboundEvent =
   /** One line of docker output while the box is brought up from the page. */
   | { type: "box_setup"; line: string; done?: boolean; ok?: boolean }
   /** An approval was just created; the desktop shell turns this into a notification. */
-  | { type: "approval_pending"; agentId: string; agentName: string; description: string };
+  | { type: "approval_pending"; agentId: string; agentName: string; description: string }
+  /** An imported bot's setup turn ended; `summary` says what landed (docs/29 §5.4). */
+  | { type: "template_import"; agentId: string; agentName: string; summary: string; complete: boolean };
 
 export async function startWebServer(options: WebOptions): Promise<() => void> {
   const log = options.onLog ?? (() => {});
@@ -3681,6 +3685,144 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
             return { ...conversation, ...(firstLine !== undefined ? { firstLine } : {}) };
           });
           send(res, 200, { conversations: page, total: sorted.length });
+          return;
+        }
+
+        // ── templates (docs/29) ─────────────────────────────────────────────────────
+        // Import: the agent is created from the profile, the recipe goes into the box, and
+        // the new bot's first turn installs the rest. The response is immediate; what landed
+        // arrives as a template_import event when the setup turn ends.
+        if (route === "POST /api/templates/import") {
+          if (refused()) return;
+          const body = await readJson(req);
+          const raw = typeof body.template === "string" ? body.template : body.template !== undefined ? JSON.stringify(body.template) : "";
+          if (raw === "") {
+            send(res, 400, { error: "Pass the template as `template` (its JSON, or the parsed object)." });
+            return;
+          }
+          const parsed = parseTemplate(raw);
+          if ("problem" in parsed) {
+            send(res, 400, { error: parsed.problem });
+            return;
+          }
+          const connected = [
+            "browser",
+            ...channelRecords.map(record => record.type),
+          ];
+          let imported: ReturnType<typeof orchestrator.importTemplate>;
+          try {
+            imported = orchestrator.importTemplate(parsed.template, {
+              caller,
+              ...(typeof body.name === "string" && body.name.trim() !== "" ? { name: body.name.trim() } : {}),
+              connected,
+              log,
+            });
+          } catch (error) {
+            send(res, 409, { error: error instanceof Error ? error.message : String(error) });
+            return;
+          }
+          const { agent, pending } = imported;
+          broadcast({ type: "template_import", agentId: agent.id, agentName: agent.profile.name, summary: `Adding ${parsed.template.profile.name}…`, complete: false });
+          void imported.settled.then(result => {
+            broadcast({
+              type: "template_import",
+              agentId: agent.id,
+              agentName: agent.profile.name,
+              summary: result?.summary ?? `Added ${agent.profile.name}, but there was no box to install its recipe into.`,
+              complete: true,
+            });
+          });
+          send(res, 200, { id: agent.id, name: agent.profile.name, templateId: imported.id, pending });
+          return;
+        }
+
+        // Export is a conversation: the button sends the bot the sentence, the bot follows the
+        // export-template skill and stages a version with PackTemplate.
+        if (route === "POST /api/templates/share") {
+          const body = await readJson(req);
+          const agentId = String(body.agent ?? "");
+          if (refused(agentId)) return;
+          const agent = registry.tryGet(agentId);
+          if (agent === undefined) {
+            send(res, 404, { error: "No such agent." });
+            return;
+          }
+          const staged = orchestrator.stagedTemplates(agent.id);
+          const sentence = staged.length === 0
+            ? "Create a template of yourself that I can share with somebody else."
+            : "Update the shared template of yourself.";
+          void orchestrator
+            .prompt(agent.id, sentence, caller)
+            .catch(error => log(`template share for ${agent.profile.name} failed: ${error instanceof Error ? error.message : String(error)}`));
+          send(res, 202, { sent: sentence });
+          return;
+        }
+
+        if (route === "GET /api/templates/mine") {
+          const agentId = url.searchParams.get("agent") ?? "";
+          const agent = registry.tryGet(agentId);
+          if (agent === undefined) {
+            send(res, 404, { error: "No such agent." });
+            return;
+          }
+          send(res, 200, {
+            id: orchestrator.templateIdOf(agent.id),
+            versions: orchestrator.stagedTemplates(agent.id),
+            ...(agent.profile.importedFrom !== undefined ? { importedFrom: agent.profile.importedFrom } : {}),
+          });
+          return;
+        }
+
+        // The document itself, as a file a person hands to somebody else.
+        if (route === "GET /api/templates/download") {
+          const agentId = url.searchParams.get("agent") ?? "";
+          const wanted = Number(url.searchParams.get("version") ?? "");
+          const versions = orchestrator.stagedTemplates(agentId);
+          const version = Number.isInteger(wanted) && wanted > 0 ? versions.find(entry => entry.version === wanted) : versions.at(-1);
+          if (version === undefined) {
+            send(res, 404, { error: "No staged template." });
+            return;
+          }
+          const text = readFileSync(version.path, "utf8");
+          const filename = `${slugify(version.name || "bot")}.lumenbox-template.json`;
+          res.writeHead(200, {
+            "content-type": "application/json; charset=utf-8",
+            "content-disposition": `attachment; filename="${filename}"`,
+          });
+          res.end(text);
+          return;
+        }
+
+        // A paused routine is one frontmatter line; turning it on or off is that line.
+        if (route === "POST /api/schedules/resume" || route === "POST /api/schedules/pause") {
+          if (refused()) return;
+          const body = await readJson(req);
+          const slug = String(body.slug ?? "").trim();
+          const box = orchestrator.boxClient();
+          if (box === undefined || !/^[A-Za-z0-9._-]+$/.test(slug)) {
+            send(res, 400, { error: box === undefined ? "No box is connected." : "That is not a skill slug." });
+            return;
+          }
+          const path = `${SKILLS_DIR}/${slug}/${SKILL_FILENAME}`;
+          try {
+            const existing = await box.readFile(path);
+            const resumed = route.endsWith("/resume");
+            if (resumed) {
+              const left = unresolvedPlaceholders(existing.content);
+              if (left.length > 0) {
+                send(res, 409, { error: `${slug} still has placeholders to fill in: ${left.map(id => `{${id}}`).join(", ")}. Edit the file first.` });
+                return;
+              }
+            }
+            const updated = resumed
+              ? rewriteFrontmatter(existing.content, { drop: ["paused"] })
+              : rewriteFrontmatter(existing.content, { set: { paused: "true" } });
+            await box.writeFile(path, updated);
+            log(`${resumed ? "resumed" : "paused"} ${slug}${caller.userId === undefined ? "" : ` for ${caller.userId}`}`);
+            send(res, 200, { ok: true, paused: !resumed });
+          } catch (error) {
+            send(res, 404, { error: `Could not read ${path}: ${error instanceof Error ? error.message : String(error)}` });
+          }
           return;
         }
 

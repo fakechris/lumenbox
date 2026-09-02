@@ -160,6 +160,11 @@ export interface AgentProfile {
    */
   provider?: string;
   model?: string;
+  /**
+   * The template this agent was created from, when it was (docs/29). Bound at creation like
+   * the box: a record of origin, not a link — the copy is this installation's from then on.
+   */
+  importedFrom?: { id: string; name: string; createdBy?: string; at: string };
   createdAt: string;
   updatedAt: string;
 }
@@ -389,6 +394,8 @@ export class AgentRegistry {
     /** Provider preset and model override; absent means the installation default. */
     provider?: string;
     model?: string;
+    /** The template it is being created from, when it is. */
+    importedFrom?: { id: string; name: string; createdBy?: string; at: string };
   }): AgentRecord {
     const name = clampLine(input.name ?? "", AGENT_NAME_MAX_LENGTH);
     if (!name) throw new Error("An agent needs a non-empty name.");
@@ -411,6 +418,7 @@ export class AgentRegistry {
       ...(input.scopeId !== undefined && input.scopeId !== "" ? { scopeId: input.scopeId } : {}),
       ...(input.provider !== undefined && input.provider !== "" ? { provider: input.provider } : {}),
       ...(input.model !== undefined && input.model !== "" ? { model: input.model } : {}),
+      ...(input.importedFrom !== undefined ? { importedFrom: input.importedFrom } : {}),
       createdAt: now,
       updatedAt: now,
     };

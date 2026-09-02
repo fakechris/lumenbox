@@ -73,3 +73,22 @@ once a misclassification is measured). `src/host/hooks.ts` reads `~/.agentbox/ho
 (a Claude Code settings.json or the bare hooks object) and runs PreToolUse / PostToolUse /
 Stop / PreCompact commands with Claude Code's stdin payload and exit-2 / JSON decisions;
 Stop may send the model back once (`stop_hook_active`).
+
+## Stage 6: Bot templates — the bot packs itself, the new bot installs itself (docs/29)
+**Goal**: a template is one JSON document (profile, curated memory facts, skill directories,
+routines with `{placeholders}`, connector names); export is a conversation ending in one
+`PackTemplate` call; import creates the agent from the profile and hands the recipe to its
+first turn, with host rails (forced `paused: true`, template-origin stamps, untrusted cue,
+reconcile + ledger).
+**Success Criteria**: a fixture recipe imported through the orchestrator with the fake model
+produces the skills, memories with `source: template:<id>`, routines paused — written by the
+model's tool calls, not the host; a routine written unpaused in that turn gets the line; the
+new bot is the provenance writer; a credential or an `about` record refuses the export with
+the place named; a routine's chat key, agent and timezone come back as placeholders with a
+fill-in list; reconcile names what did not land.
+**Status**: Complete (2026-09-02) — Stages 1–2 of docs/29 (`src/host/template.ts`,
+`template.test.ts`, `template-import.test.ts`; `paused:` in skills/schedule; `PackTemplate`;
+`export-template` starter skill; four `/api/templates/*` routes, `/api/schedules/resume|pause`;
+agent-dialog import/share UI; `agentbox template`). Not started: share links on the control
+plane and the catalog served as templates (docs/29 §6 B, §9 Stage 3).
+

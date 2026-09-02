@@ -989,6 +989,17 @@ export const APP_HTML = String.raw`<!doctype html>
       <div class="fieldnote">Specialists and crews that ship with the install. A specialist fills
         this form; a crew adds its members in one step. Not seeded — adding is a choice.</div>
     </div>
+    <div class="field" id="agimportwrap">
+      <label>Or import a template</label>
+      <textarea id="agimport" rows="3" spellcheck="false" placeholder="Paste a .lumenbox-template.json here" style="font-family:var(--font-mono);font-size:11px"></textarea>
+      <div style="display:flex;gap:10px;align-items:center;margin-top:6px">
+        <button class="btn sm" id="agimportgo" type="button">Import</button>
+        <input type="file" id="agimportfile" accept=".json,application/json" style="font-size:11px">
+      </div>
+      <div class="fieldnote">A template is another bot's recipe: profile, conventions, skills and paused
+        routines. The new bot installs it on its first turn and then asks you for whatever it still needs.
+        Nothing in a template can reach your logins or connectors.</div>
+    </div>
     <div class="field">
       <label>Name</label>
       <input id="agname" spellcheck="false" style="font-family:var(--font-sans)">
@@ -1022,6 +1033,16 @@ export const APP_HTML = String.raw`<!doctype html>
       <div id="agtools" class="toolchips"></div>
       <div class="fieldnote">An unchecked tool is withheld — it does not appear in the agent's
         prompt at all. Leaving everything checked means everything, including tools added later.</div>
+    </div>
+    <div class="field" id="agtemplatewrap" style="display:none">
+      <label>Share as template</label>
+      <div id="agtemplate" class="fieldnote"></div>
+      <div style="display:flex;gap:10px;align-items:center;margin-top:6px">
+        <button class="btn sm" id="agshare" type="button">Ask it to draft a template</button>
+        <a href="#" id="agdownload" style="display:none;font-size:13px">Download latest</a>
+      </div>
+      <div class="fieldnote">The bot reads its own memory, skills and routines, leaves out what is
+        private, and stages a version. Nothing leaves this box until you download the file.</div>
     </div>
     <div class="field" id="agdanger" style="display:none">
       <label>Delete</label>
@@ -2998,10 +3019,18 @@ function automationRow(s) {
   var origin = s.authoredBy
     ? '<span style="color:var(--accent-2);font-size:10.5px;border:1px solid var(--border);border-radius:5px;padding:0 5px">by ' + esc(s.authoredBy) + "</span>"
     : "";
-  return '<div style="padding:10px 16px;border-bottom:1px solid var(--border)">' +
+  // Paused is a state a person chose (or a template arrived in): shown, and switchable here.
+  var pausedTag = s.paused
+    ? '<span style="color:var(--warn);font-size:10.5px;border:1px solid var(--border);border-radius:5px;padding:0 5px">paused</span>'
+    : "";
+  var toggle = s.paused
+    ? '<button class="btn ghost sm" data-resume="' + esc(s.slug) + '">Turn on</button>'
+    : '<button class="btn ghost sm" data-pause="' + esc(s.slug) + '">Pause</button>';
+  return '<div style="padding:10px 16px;border-bottom:1px solid var(--border)' + (s.paused ? ";opacity:.75" : "") + '">' +
     '<div style="display:flex;gap:9px;align-items:baseline">' +
-      '<span style="flex:1;font-size:13px;font-weight:500">' + esc(s.name) + " " + origin + "</span>" +
-      '<button class="btn ghost sm" data-run="' + esc(s.slug) + '"' + (s.running ? " disabled" : "") + ">Run now</button>" +
+      '<span style="flex:1;font-size:13px;font-weight:500">' + esc(s.name) + " " + origin + " " + pausedTag + "</span>" +
+      toggle +
+      '<button class="btn ghost sm" data-run="' + esc(s.slug) + '"' + (s.running || s.paused ? " disabled" : "") + ">Run now</button>" +
     "</div>" +
     '<div class="dim" style="font-size:11px;margin-top:3px">' + when +
       (s.agent ? " · as " + esc(s.agent) : "") + " · " + where + "</div>" +
@@ -3035,7 +3064,25 @@ document.getElementById("autorefresh").addEventListener("click", function (e) {
 // A manual fire is the same path as a timed one, so what it proves is what will happen
 // at 06:30 — and it deliberately does not count as the scheduled run.
 document.getElementById("autolist").addEventListener("click", function (e) {
-  var slug = e.target && e.target.getAttribute && e.target.getAttribute("data-run");
+  var get = function (name) { return e.target && e.target.getAttribute && e.target.getAttribute(name); };
+  var toggleSlug = get("data-resume") || get("data-pause");
+  if (toggleSlug) {
+    e.preventDefault();
+    e.target.disabled = true;
+    fetch(get("data-resume") ? "/api/schedules/resume" : "/api/schedules/pause", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ slug: toggleSlug }),
+    })
+      .then(function (r) { return r.json(); })
+      .then(function (data) {
+        if (data.error) alert(data.error);
+        setTimeout(refreshAutomations, 400);
+      })
+      .catch(function () { setTimeout(refreshAutomations, 400); });
+    return;
+  }
+  var slug = get("data-run");
   if (!slug) return;
   e.preventDefault();
   e.target.disabled = true;
@@ -3331,6 +3378,9 @@ function activityLine(e) {
     return { html: who(nameOf(e.agentId)) + " interrupted (" + esc(e.reason) + ")", cls: "warn" };
   }
   if (e.type === "error") return { html: esc(e.message), cls: "err" };
+  if (e.type === "template_import") {
+    return { html: who(e.agentName) + " &larr; template: " + esc(e.summary), cls: e.complete && /but not all/.test(e.summary) ? "warn" : "" };
+  }
   return null;
 }
 
@@ -3838,14 +3888,95 @@ $("agcatalog").onclick = function (event) {
   $("agstatus").textContent = row.summary;
 };
 
+// ── templates (docs/29) ────────────────────────────────────────────────────
+function loadTemplateCard(agentId) {
+  $("agtemplate").textContent = "Loading…";
+  $("agdownload").style.display = "none";
+  return fetch("/api/templates/mine?agent=" + encodeURIComponent(agentId))
+    .then(function (r) { return r.json(); })
+    .then(function (data) {
+      var versions = data.versions || [];
+      var origin = data.importedFrom
+        ? "Created from the template “" + esc(data.importedFrom.name) + "”" + (data.importedFrom.createdBy ? " by " + esc(data.importedFrom.createdBy) : "") + ". "
+        : "";
+      if (!versions.length) {
+        $("agtemplate").innerHTML = origin + "No template staged yet.";
+        $("agshare").textContent = "Ask it to draft a template";
+        return;
+      }
+      var latest = versions[versions.length - 1];
+      $("agtemplate").innerHTML = origin + "Version " + latest.version + " staged" +
+        (latest.stagedAt ? " " + esc(new Date(latest.stagedAt).toLocaleString()) : "") +
+        ": <b>" + esc(latest.name) + "</b> — " + esc(latest.description);
+      $("agshare").textContent = "Ask it to update the template";
+      $("agdownload").href = "/api/templates/download?agent=" + encodeURIComponent(agentId) + "&version=" + latest.version;
+      $("agdownload").style.display = "";
+    })
+    .catch(function () { $("agtemplate").textContent = "Could not read the template state."; });
+}
+
+$("agshare").onclick = function () {
+  if (!agentModal.id) return;
+  $("agshare").disabled = true;
+  fetch("/api/templates/share", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ agent: agentModal.id })
+  })
+    .then(function (r) { return r.json(); })
+    .then(function () {
+      $("agentwrap").style.display = "none";
+      feed("asked " + esc(nameOf(agentModal.id)) + " to draft a template — watch the chat; the card is in Configure once it is staged", "");
+      return select(agentModal.id);
+    })
+    .catch(function (err) { $("agstatus").textContent = String(err.message || err); })
+    .then(function () { $("agshare").disabled = false; });
+};
+
+$("agimportfile").onchange = function () {
+  var file = this.files && this.files[0];
+  if (!file) return;
+  file.text().then(function (text) { $("agimport").value = text; });
+};
+
+$("agimportgo").onclick = function () {
+  var text = $("agimport").value.trim();
+  if (!text) { $("agstatus").textContent = "Paste a template first."; return; }
+  $("agimportgo").disabled = true;
+  $("agstatus").textContent = "Importing…";
+  fetch("/api/templates/import", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ template: text, name: $("agname").value.trim() || undefined })
+  })
+    .then(function (r) {
+      return r.json().then(function (d) {
+        if (!r.ok) throw new Error(d.error || "import failed");
+        return d;
+      });
+    })
+    .then(function (d) {
+      $("agentwrap").style.display = "none";
+      feed("importing " + esc(d.name) + " — it installs its recipe on its first turn", "");
+      return refresh().then(function () { return select(d.id); });
+    })
+    .catch(function (err) { $("agstatus").textContent = String(err.message || err); })
+    .then(function () { $("agimportgo").disabled = false; });
+};
+
 function openAgentModal(mode, agent) {
   agentModal.mode = mode;
   agentModal.id = agent ? agent.id : null;
   $("agenttitle").textContent = mode === "new" ? "New agent" : "Configure " + agent.name;
   $("agsave").textContent = mode === "new" ? "Create" : "Save";
   $("agcatalogwrap").style.display = mode === "new" ? "" : "none";
+  $("agimportwrap").style.display = mode === "new" ? "" : "none";
+  $("agtemplatewrap").style.display = mode === "new" ? "none" : "";
+  $("agimport").value = "";
   if (mode === "new") {
     loadAgentCatalog().then(renderAgentCatalog);
+  } else {
+    loadTemplateCard(agent.id);
   }
   $("agname").value = agent ? agent.name : "";
   $("agrole").value = agent ? String(agent.title || "") : "";
