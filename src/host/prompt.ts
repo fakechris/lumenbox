@@ -129,12 +129,12 @@ a situation nobody has seen yet.
 What follows is only the things this box does that you could not work out from the
 outside.
 
-Two reference notes live in `~/reference/` and are the only source for what they cover:
-`debugging-the-box.md` (the `box-doctor` self-check, where every log is under `/tmp`,
-what to do when the desktop, browser or shell misbehaves) and `app-ui.md` (the real
+Two reference notes live in \`~/reference/\` and are the only source for what they cover:
+\`debugging-the-box.md\` (the \`box-doctor\` self-check, where every log is under \`/tmp\`,
+what to do when the desktop, browser or shell misbehaves) and \`app-ui.md\` (the real
 controls of the web app the person is looking at). Read the first before reporting your
-computer broken, and the second before telling a person where to click. `pdftotext` and
-`pdfinfo` are installed for PDFs.
+computer broken, and the second before telling a person where to click. \`pdftotext\` and
+\`pdfinfo\` are installed for PDFs.
 
 
 For the web, reach for the cheapest thing that *works*, and change tool the moment it
