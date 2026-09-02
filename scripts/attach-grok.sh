@@ -25,7 +25,7 @@ DRY_RUN=false
 UI_PORT=3000
 LOCAL_HOME="${AGENTBOX_GROK_HOME:-$HOME/.agentbox-grok}"
 
-shift $(( $# > 0 && "$1" != --* ? 1 : 0 )) || true
+if [[ $# -gt 0 && "$1" != --* ]]; then shift; fi
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --port) BOXD_PORT="$2"; shift 2 ;;
@@ -164,7 +164,7 @@ success "Attached. Grok's displays :1..:5 and ports 1337..1340 / 9222+ untouched
 success "  boxd:   http://127.0.0.1:$BOXD_PORT   (token in $LOCAL_HOME/box-token)"
 success "  noVNC:  http://127.0.0.1:$VNC_PORT/vnc.html   (display :$DISPLAY_NUM)"
 
-RUN_UI="AGENTBOX_HOME=\"$LOCAL_HOME\" AGENTBOX_BOXD_URL=\"http://127.0.0.1:$BOXD_PORT\" AGENTBOX_TOKEN=\"$BOXD_TOKEN\" AGENTBOX_DISPLAY_FLOOR=$DISPLAY_NUM npm run agentbox -- web --port $UI_PORT"
+RUN_UI="AGENTBOX_HOME=\"$LOCAL_HOME\" AGENTBOX_BOXD_URL=\"http://127.0.0.1:$BOXD_PORT\" AGENTBOX_TOKEN=\"\$(cat $LOCAL_HOME/box-token)\" AGENTBOX_DISPLAY_FLOOR=$DISPLAY_NUM npm run agentbox -- web --port $UI_PORT"
 if [ "$AUTO_START_UI" = true ]; then
   log "Starting the orchestrator UI on http://127.0.0.1:$UI_PORT with state in $LOCAL_HOME ..."
   cd "$ROOT_DIR"
