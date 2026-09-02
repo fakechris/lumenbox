@@ -80,6 +80,8 @@ its own retry and its own log line, and stop logging `connected` for a call rath
 a connection. A restart that waits for the old process to be gone at the *vendor's* end —
 not just locally — would also help, and there is no signal for that other than time.
 
+### ~~R37~~ — closed 2026-09-03 as blocked-external (vendor risk control; `bots/join` 121016)
+
 ### R37. Meeting presence — the browser path worked once, then the vendor said no
 
 **Final state, 2026-08-29 evening.** The browser path is dead by policy, not by
@@ -505,6 +507,8 @@ additions that are cheap once R23 lands:
 And the validation step that makes a suite trustworthy at all: our seventeen tasks were
 invented and have never been compared to real traffic. Both halves of that comparison are
 already on disk.
+
+### ~~R31~~ — closed 2026-09-03 (`spend.ts` + `/api/spend`; residue re-filed, see the triage)
 
 ### R31. One place to see what happened, and drill into it
 A requirement that grew out of a day of work rather than out of a comparison: **every
@@ -1115,6 +1119,8 @@ the records that already exist.** The gate comes after a dispatch record and a p
 separation of attempt outcome from obligation resolution — three steps further out than
 the last plan claimed, and the honest ordering is now in docs/16.
 
+### ~~R21~~ — shipped 2026-09-02 as docs/29 (bot templates: pack, share links, import)
+
 ### R21. Agent and skill bundles: export and import
 A team's agent (profile, skills, scope shape — never its memories or secrets) packaged
 as a file another installation can import. The sharing unit people actually want, and
@@ -1130,6 +1136,50 @@ memory *facts* do travel (the "never its memories" above is revised there, §3);
 becomes the first-party shelf of the same format; share links on the control plane later.
 
 ---
+
+## Triage, 2026-09-03 — every open entry checked against the tree at `3f94ad5`
+
+Each entry below was re-read and then grepped for, by a reviewer told not to believe a doc
+that says a thing *will* be built. Verdicts: **close** (done or superseded), **partial**
+(what exists, what is missing, the next concrete step), **open** (first step, size).
+
+| # | Entry | Verdict | Where it stands |
+| --- | --- | --- | --- |
+| R21 | Agent and skill bundles | **close** | docs/29: templates, share links, import; the catalog is the first-party shelf |
+| R31 | One place to see what happened | **close** | `spend.ts` + `/api/spend`, three cuts, honesty rules. Residue: `rates` in config is empty (data), and "artifacts as a column" moves under R28 |
+| R37 | Meeting presence | **close (blocked)** | both paths built to their end; the vendor's risk control and `bots/join` 121016 are outside the tree |
+| R35 | Feishu first-connect | **close** | shipped 2026-08-29 |
+| R3 | Win/Linux packaging | partial, S | `dist:win`/`dist:linux`, icons, `productName` all there; no artifact ever produced, no CI job. Next: a `workflow_dispatch` release job that asserts the installers exist |
+| R8 | Checkpoint and resume | partial, S first | coarse resume ships; the cheap rider is still missing: steering is appended even when the previous round made no tool call (`turn.ts` ~1465). Next: guard on `toolUses.length > 0`. Write-ahead intent stays L |
+| R24 | Which model, which code | partial, S | usage rows carry provider/model/workId/turnId; the transcript carries no version or SHA. Next: stamp `{version, commit, promptHash}` on the turn-ledger record at begin |
+| R28 | Failures → eval cases | partial, S | 21 golden cases incl. the process and style tiers; trigger evals are now unblocked by `trigger: message`. Next: `AGENTBOX_ABLATE=notes` and run the style tier; then a fires/stays-quiet suite for listeners |
+| R34 | Channel identity as capability | partial, S if needed | `ReadFeishuDoc` shipped; no auto-route at admission, no DingTalk twin. Next only if pasted links still get apologies: match the URL at admission and pre-fetch |
+| R26 | Installable skills | partial, S–M | catalog + template import are the path *in*; still one `SKILLS_DIR`, no ordered search path. Next: `loadSkills` over a list of roots, own first, collisions reported |
+| R36 | Hot-loadable extensions | partial, S then M | the hooks seam is real (`hooks.ts`, Claude Code dialect); no loader, no reload verb, MCP config still startup-only. **Security first**: `hooks.json` is arbitrary command execution from a mutable file and docs/10 has no entry for it — write that (S); then re-readable MCP config (M) |
+| R10 | Gateway hardening | partial | S-4 closed (`stripIdentityHeaders`); S-2 no TLS, S-3 password list only, S-6 key beside the db. Next when promoted: S-6 — `AGENTBOX_CONTROL_KEY` as the documented path, loud warning otherwise |
+| R25 | Conversation identity | partial, M | `ConversationDirectory` closed finding 2; p2p is still one growing history, prefix re-derivation in three places. Next: scope p2p on `root_id ?? message_id`, with an answer for the existing chat-level files |
+| R7 | Secrets in the record | partial, M | scanner + spool shipped; at-rest hygiene not built at all. Next: exact-match redaction of vault-held values at the transcript append site, labelled hygiene not containment |
+| R4 | Grant → Scope | partial, L | tools + secrets enforced, egress/filesRoot declared; memory/sandbox/schedule absent; the capability proxy unbuilt. Design first, on one privileged operation |
+| R16 | Webhook triggers | partial, M | `trigger: message` covers the chat half; no HTTP ingress at all. Next: a per-door signed URL admitting into the same path `channels/manager.ts` uses |
+| R30 | Coordination as protocol | partial, L | `workId` shipped; dispatch record, fork terminal states, submission gate all absent; `inbox.ts` warn-and-dispatch and `appendLine` without fsync still there |
+| R17 | Project tier of memory | open, M | no scope on `MemoryRecord`; the boundary exists now (`Scope.chats`, `turn.ts` resolves it). First: `scope?` on the record + a third render block |
+| R27 | Evidence attached to belief | open, M, design first | decay still by age × kind. First: `basis?: {path, hash}` rendered as "unverified" on mismatch, never "wrong" |
+| R29 | Box has no MCP face | open, L, review first | nothing in `boxd` or `presets.ts` knows MCP; the tool-proxy design needs the docs/13 review before code |
+
+Two things promoted out of residue, each its own entry now:
+
+- **R38. MiniMax-M3 loses the `computer` tool schema after compaction** (found in the R37
+  work, filed nowhere). A compaction/tool-schema defect: reproduce on a long turn, then decide
+  whether the tool list rides the stable prefix or is re-sent after a summary. S–M.
+- **R39. `hooks.json` needs its docs/10 entry.** It is arbitrary command execution from a
+  mutable file in the state directory; who may write there and how the loading rule is
+  enforced are unwritten. S.
+
+**The order I would take**, after the handoff's five (auto-review week, a live listener,
+conduct numbers, the prompt floor, the pre-launch security list): R8's rider and R24's stamp
+(both S, both make the next investigation cheaper), R39, R28's ablation, R36's MCP reload,
+R26's search path, then R25. R4, R16, R30, R29 wait for their designs; R17 and R27 wait for a
+week of memory numbers. docs/30 Stage C (`TransferFile`) is paused at Chris's call.
 
 ## What to do next, as of 2026-09-01
 
