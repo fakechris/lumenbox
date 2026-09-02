@@ -17,6 +17,7 @@ import {
   type ServerResponse,
 } from "node:http";
 import { connect as netConnect, type Socket } from "node:net";
+import { execFile } from "node:child_process";
 import { createReadStream, readFileSync, readdirSync, statSync } from "node:fs";
 import { join } from "node:path";
 import { resolveRange } from "./range.ts";
@@ -617,6 +618,14 @@ server.on("upgrade", (req, clientSocket: Socket, head: Buffer) => {
     : "";
   const port = vncPortOf(parsed);
 
+  // A viewer that arrives or leaves is the moment keys get stuck: a browser shortcut sends
+  // Alt or Meta down through noVNC, the page reloads or loses focus, and the key-up never
+  // comes — the desktop then treats every keystroke as Alt+key and every click as a window
+  // drag (2026-09-02, seen on the Grok VM). So the display's modifiers are released on both
+  // edges; a person holding a key at that instant loses nothing they wanted.
+  void releaseModifiers(parsed.index);
+  clientSocket.once("close", () => void releaseModifiers(parsed.index));
+
   const upstream = netConnect(port, "127.0.0.1", () => {
     const headers = Object.entries(req.headers)
       .map(([key, value]) =>
@@ -636,6 +645,19 @@ server.on("upgrade", (req, clientSocket: Socket, head: Buffer) => {
   upstream.on("error", drop);
   clientSocket.on("error", drop);
 });
+
+/** Every modifier X could be holding, by keysym; xdotool ignores the ones this layout lacks. */
+export const MODIFIER_KEYSYMS: readonly string[] = [
+  "Alt_L", "Alt_R", "Meta_L", "Meta_R", "Control_L", "Control_R", "Shift_L", "Shift_R",
+  "Super_L", "Super_R", "Hyper_L", "Hyper_R", "ISO_Level3_Shift",
+];
+
+/** Lifts every modifier on one display. Never throws: a display that is gone has nothing stuck. */
+function releaseModifiers(index: number): Promise<void> {
+  return new Promise(resolve => {
+    execFile("xdotool", ["keyup", ...MODIFIER_KEYSYMS], { env: { ...process.env, DISPLAY: `:${index}` }, timeout: 3000 }, () => resolve());
+  });
+}
 
 // Bind on all interfaces: Docker's port publishing reaches the container through
 // its bridge address, not loopback. The bearer token is the access control.
