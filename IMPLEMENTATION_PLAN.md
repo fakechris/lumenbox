@@ -34,7 +34,14 @@ the untrusted-origin rule; verdicts logged, nothing enforced.
 **Success Criteria**: every reviewed call has a verdict line in the usage/audit log; a
 fixture of ten trajectories (five ALLOW, five BLOCK) classifies as expected against the
 fake model; zero behaviour change for the agent.
-**Status**: Not Started
+**Status**: Complete (2026-09-02). `src/host/auto-review.ts`; reviewed class = RunOnHost,
+Delegate, Create/UpdateAgent, SendToAgent, browser_act/upload, writes outside ~/work, and
+shell commands matching an outbound/destructive prefilter. Verdicts go to
+`~/.agentbox/auto-review.jsonl` and `[auto-review]` web-log lines; `AGENTBOX_AUTO_REVIEW`
+= off|shadow|enforce (default shadow; enforce hands BLOCK back to the model as the tool
+result). Live eval against MiniMax-M3: 9/10 on the fixture, ~2.5s per review; the one miss
+was a verdict lost to quotes inside the JSON reason, now parsed loosely. Fails open when
+the reviewer does not answer, recorded as such.
 
 ## Stage 4: Provenance for skills, then event-triggered routines
 **Goal**: the host records which agent wrote a skill file (tool-path attribution), the

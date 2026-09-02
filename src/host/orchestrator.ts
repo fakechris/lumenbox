@@ -21,6 +21,10 @@ import {
 import { AgentRegistry, type AgentRecord } from "../agents/registry.ts";
 import type { BoxClient } from "../box/client.ts";
 import { MemoryMirror } from "./memory-mirror.ts";
+import { AutoReviewer } from "./auto-review.ts";
+import { appendLine } from "./jsonl.ts";
+import { agentboxHome } from "../config.ts";
+import { join } from "node:path";
 import { DisplayLease } from "../box/display-lease.ts";
 import { resolveBoxProvisioner, type BoxProvisioner } from "../box/provisioner.ts";
 import { classifyBox, type BoxClass } from "../box/access.ts";
@@ -655,6 +659,13 @@ export class Orchestrator {
       // The same cheap profile the summariser and the note-taker use. Choosing which memories to
       // show is the least interesting work in the system and should be billed accordingly.
       selectMemory: prompt => this.askCheaply(agent, prompt),
+      // Same cheap profile. Shadow by default: the verdicts land in auto-review.jsonl and the web
+      // log, and a week of them is what decides whether the classifier earns a veto.
+      autoReview: new AutoReviewer({
+        ask: prompt => this.askCheaply(agent, prompt, "review"),
+        log: line => console.error(`[auto-review] ${line}`),
+        record: entry => appendLine(join(agentboxHome(), "auto-review.jsonl"), JSON.stringify(entry)),
+      }),
       resumeOf,
       // Watched on the way past rather than subscribed to elsewhere: a turn that gave up
       // in a loop is the fourth pitfall source, and this is the one place that has the
@@ -801,7 +812,11 @@ export class Orchestrator {
    * Undefined rather than a throw: every caller of this is an improvement to something that already
    * works, so a failure here must degrade rather than propagate.
    */
-  private async askCheaply(agent: AgentRecord, prompt: string): Promise<string | undefined> {
+  private async askCheaply(
+    agent: AgentRecord,
+    prompt: string,
+    kind: "select" | "review" = "select"
+  ): Promise<string | undefined> {
     try {
       const { client, profile } = summaryRuntimeFor(this.provider, this.client);
       const response = await client.messages.create({
@@ -810,7 +825,7 @@ export class Orchestrator {
         messages: [{ role: "user", content: prompt }],
       });
       this.usage.recordAside({
-        kind: "select",
+        kind,
         agentId: agent.id,
         agentName: agent.profile.name,
         provider: profile.label,

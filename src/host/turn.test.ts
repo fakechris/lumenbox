@@ -2507,3 +2507,66 @@ test("a continuation keeps the memory selection made for the request", async () 
     cleanup();
   }
 });
+
+test("auto-review in shadow mode records a verdict and changes nothing; enforce hands BLOCK to the model", async () => {
+  const { registry, cleanup } = fixture();
+  try {
+    const ada = registry.create({ name: "Ada" });
+    const bus = new AgentBus(registry, async () => {});
+    const { box, calls } = stubBox();
+    const reviewed: { tool: string; trusted: readonly string[]; untrusted: readonly string[] }[] = [];
+    const reviewer = (mode: "shadow" | "enforce") => ({
+      mode: () => mode,
+      review: async (input: { tool: string; trusted: readonly string[]; untrusted: readonly string[] }) => {
+        reviewed.push(input);
+        return { verdict: "BLOCK" as const, reason: "nobody asked for a push" };
+      },
+    });
+    const run = (mode: "shadow" | "enforce", capture: Capture) =>
+      runTurn(
+        ada,
+        [{ id: `m-${mode}`, fromId: "user", fromName: "user", text: "tidy the repo", priority: false, receivedAt: "" }],
+        new AbortController().signal,
+        {
+          client: fakeModel(
+            ({ index }) =>
+              index === 0
+                ? message(
+                    [textBlock("Pushing now."), toolUseBlock("bash", { command: "git push origin main" }, "t1")],
+                    "tool_use"
+                  )
+                : message([textBlock("done")]),
+            { capture }
+          ),
+          registry,
+          bus,
+          box,
+          resolution: undefined,
+          autoReview: reviewer(mode),
+        }
+      );
+
+    const shadow: Capture = { params: [] };
+    await run("shadow", shadow);
+    assert.equal(reviewed.length, 1);
+    assert.deepEqual(reviewed[0]?.trusted, ["tidy the repo"]);
+    assert.deepEqual(reviewed[0]?.untrusted, ["Pushing now."], "the agent's own words are untrusted");
+    const pushed = calls.filter(call => call.kind === "exec" && String(call.detail).includes("git push"));
+    assert.equal(pushed.length, 1, "shadow mode still ran the command");
+
+    const enforce: Capture = { params: [] };
+    await run("enforce", enforce);
+    assert.equal(reviewed.length, 2);
+    assert.equal(
+      calls.filter(call => call.kind === "exec" && String(call.detail).includes("git push")).length,
+      1,
+      "enforce mode did not run it"
+    );
+    const second = enforce.params[1]?.messages.at(-1)?.content;
+    const result = Array.isArray(second) ? (second[0] as { content?: string; is_error?: boolean }) : undefined;
+    assert.equal(result?.is_error, true);
+    assert.match(JSON.stringify(result?.content), /Auto-review refused this call: nobody asked for a push/);
+  } finally {
+    cleanup();
+  }
+});

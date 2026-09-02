@@ -35,6 +35,8 @@ import {
 } from "./transient.ts";
 import type { UsageKind, UsageLog } from "./usage.ts";
 import { chooseRelevant } from "./memory.ts";
+import { needsReview, type ReviewInput, type ReviewMode, type Verdict } from "./auto-review.ts";
+import { AGENT_WAKE_CUE } from "../agents/bus.ts";
 import {
   activeWindow,
   buildSummaryPrompt,
@@ -354,6 +356,11 @@ export interface TurnDeps {
    * happened before this existed and what still happens whenever everything fits.
    */
   selectMemory?: (prompt: string) => Promise<string | undefined>;
+  /**
+   * The per-call classifier for calls that bind the world (auto-review.ts). Absent means no
+   * review, which is what every turn had before; `mode()` decides whether a BLOCK is enforced.
+   */
+  autoReview?: { mode(): ReviewMode; review(input: ReviewInput): Promise<Verdict> };
   resolution: ResolutionConfig | undefined;
   /**
    * What kind of box this is (docs/18). Absent means the caller did not classify it and
@@ -1915,8 +1922,39 @@ export async function runTurn(
         input: toolUse.input,
       });
 
+      // Auto-review, for the binding class only. Shadow mode classifies beside the call and
+      // records the verdict; enforce mode waits for it and hands a BLOCK back to the model as the
+      // tool's answer, with the reason, so the agent can ask rather than guess.
+      const toolInput = (toolUse.input ?? {}) as Record<string, unknown>;
+      const reviewWhy = deps.autoReview === undefined ? undefined : needsReview(toolUse.name, toolInput);
+      let blocked: Verdict | undefined;
+      if (reviewWhy !== undefined && deps.autoReview !== undefined && deps.autoReview.mode() !== "off") {
+        const reviewInput = reviewInputFor({
+          agentName: agent.profile.name,
+          inbound,
+          transcript: registry.readTranscript(agent.id, conversation) as TranscriptEntry[],
+          messages,
+          tool: toolUse.name,
+          input: toolInput,
+          why: reviewWhy,
+        });
+        if (deps.autoReview.mode() === "enforce") {
+          const verdict = await deps.autoReview.review(reviewInput);
+          if (verdict.verdict === "BLOCK") blocked = verdict;
+        } else {
+          void deps.autoReview.review(reviewInput);
+        }
+      }
+
       let outcome: ToolOutcome;
-      try {
+      if (blocked !== undefined) {
+        outcome = {
+          text:
+            `Auto-review refused this call: ${blocked.reason || "the person did not ask for it"}. ` +
+            "If they did ask, quote where; otherwise ask them before doing this.",
+          isError: true,
+        };
+      } else try {
         outcome = await dispatchTool(
           toolUse.name,
           (toolUse.input ?? {}) as Record<string, unknown>,
@@ -2093,4 +2131,47 @@ export async function runTurn(
   } satisfies TranscriptEntry, conversation);
   throw new TurnRoundLimitExceeded(note);
   }
+}
+
+/**
+ * What the classifier is shown for one call: the person's words in this conversation as the only
+ * trusted block, and everything else — teammates' messages, the agent's own narration this
+ * turn — as untrusted. Wake prompts are teammates speaking and go on the untrusted side even
+ * though the transcript stores them as user entries.
+ */
+export function reviewInputFor(options: {
+  agentName: string;
+  inbound: readonly InboundMessage[];
+  transcript: readonly TranscriptEntry[];
+  messages: readonly Anthropic.MessageParam[];
+  tool: string;
+  input: Record<string, unknown>;
+  why: string;
+}): ReviewInput {
+  const trusted: string[] = [];
+  const untrusted: string[] = [];
+  for (const entry of options.transcript) {
+    if (entry.role !== "user" || "kind" in entry || typeof entry.text !== "string") continue;
+    (entry.text.startsWith(AGENT_WAKE_CUE) ? untrusted : trusted).push(entry.text);
+  }
+  // The turn's own messages are usually already the transcript's last entries; only what is not
+  // there yet is added, so nothing is shown to the classifier twice.
+  for (const message of options.inbound) {
+    const side = message.fromId === "user" ? trusted : untrusted;
+    if (!trusted.includes(message.text) && !untrusted.includes(message.text)) side.push(message.text);
+  }
+  for (const message of options.messages) {
+    if (message.role !== "assistant" || typeof message.content === "string") continue;
+    for (const block of message.content) {
+      if (block.type === "text" && block.text.trim() !== "") untrusted.push(block.text);
+    }
+  }
+  return {
+    agentName: options.agentName,
+    trusted: trusted.slice(-12),
+    untrusted: untrusted.slice(-12),
+    tool: options.tool,
+    input: options.input,
+    why: options.why,
+  };
 }

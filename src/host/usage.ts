@@ -31,7 +31,7 @@ import { agentboxHome } from "../config.ts";
  *
  * `turn` is the agent thinking. The other three are the harness keeping house around it.
  */
-export type UsageKind = "turn" | "summarize" | "memory" | "select";
+export type UsageKind = "turn" | "summarize" | "memory" | "select" | "review";
 
 /** What a row with no kind is reported as. Not a kind: the absence of one. */
 export const UNATTRIBUTED = "unattributed";
