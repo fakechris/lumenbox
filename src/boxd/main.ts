@@ -58,7 +58,7 @@ import {
   type WriteFileResult,
 } from "../protocol/index.ts";
 import { DisplayManager, DisplayOwnershipError } from "./displays.ts";
-import { getDisplay, parseDisplayNum } from "../cua/display.ts";
+import { detectDisplay, getDisplay, parseDisplayNum } from "../cua/display.ts";
 import { readClipboard, writeClipboard } from "./clipboard-service.ts";
 import { startEgressProxy } from "../egress/proxy.ts";
 import { RecordService, RECORDINGS_DIR } from "./record-service.ts";
@@ -171,12 +171,23 @@ async function handleHealth(): Promise<HealthResult> {
   // container health check must not hang while Xvfb starts.
   const running = displays.list();
   const primary = running.find(entry => entry.index === defaultDisplayIndex);
+  // The default desktop's resolution, even before anyone has registered it here: after a
+  // restart the desktop is up and an agent's, and "no display" would be a claim about this
+  // process's bookkeeping presented as a fact about the screen.
+  let resolution = primary?.resolution;
+  if (resolution === undefined) {
+    try {
+      resolution = (await detectDisplay(display)).resolution;
+    } catch {
+      // Genuinely no display yet.
+    }
+  }
   return {
     ok: true,
     version: VERSION,
     protocol: BOXD_PROTOCOL,
     display,
-    resolution: primary?.resolution,
+    resolution,
     refresh_rate: undefined,
     uptime_seconds: Math.round((Date.now() - startedAt) / 1000),
     displays: running,
