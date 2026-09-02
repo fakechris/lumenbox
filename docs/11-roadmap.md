@@ -1133,6 +1133,9 @@ where it belongs rather than restated here:
   budget; query-aware memory in continuations) and one design item that gates multi-user:
   provenance for skill files, because the scheduler reads writable content as
   configuration.
+- **docs/28** — Grok Bot 0.30.0 re-analysed at source (app + the public box image);
+  twelve ranked changes for us, from an auto-review classifier in shadow mode to
+  greppable memory files. The full write-up and artifacts are archived outside the repo.
 - **docs/handoff-2026-09-01.md** — the state of the running installation.
 
 ## What to do next, as of 2026-08-27
