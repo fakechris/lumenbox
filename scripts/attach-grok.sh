@@ -156,7 +156,12 @@ if [ ! -f "$LOCAL_HOME/config.json" ] && [ -f "$HOME/.agentbox/config.json" ]; t
   python3 - "$HOME/.agentbox/config.json" "$LOCAL_HOME/config.json" <<'PY'
 import json, sys
 src = json.load(open(sys.argv[1]))
-keep = {k: src[k] for k in ("provider", "model", "env", "rates", "activityLimit", "upgradeHour") if k in src}
+keep = {k: src[k] for k in ("provider", "model", "rates", "activityLimit", "upgradeHour") if k in src}
+# The model and search keys travel; the doors do not. A chat app delivers each event to one
+# connection, so a second host holding the same app id would split the traffic (the web server
+# refuses, but it should not have to).
+door = ("FEISHU_", "DINGTALK_", "TELEGRAM_", "SLACK_", "WECOM_", "LARK_")
+keep["env"] = {k: v for k, v in src.get("env", {}).items() if not k.startswith(door)}
 json.dump(keep, open(sys.argv[2], "w"), indent=2)
 PY
   log "copied provider settings into $LOCAL_HOME/config.json (not the channels, not the agents)"
