@@ -161,3 +161,29 @@ export class Ingress {
     this.settled = 0;
   }
 }
+
+/**
+ * Where a catch-up sweep starts looking, from what the ledger knows.
+ *
+ * The rule (OpenClaw's Telegram offset store expresses the same one in update ids): never
+ * pass an arrival that has not been decided. With one amendment measured on 2026-09-02:
+ * an arrival from 2026-08-28 that never got a fate had pinned every sweep's floor to that
+ * day, and a floor five days back with an ascending page of twenty meant the sweep read
+ * the same twenty handled messages every ten minutes and never reached today. An undecided
+ * arrival older than the window is a lost cause the sweep would not replay anyway, so it
+ * does not hold the floor; and the floor is never older than the window itself.
+ */
+export function catchUpFloor(
+  records: readonly IngressRecord[],
+  now: number,
+  windowMs: number
+): string | undefined {
+  if (records.length === 0) return undefined;
+  const edge = now - windowMs;
+  const pending = records.find(
+    record => record.fate === undefined && new Date(record.at).getTime() >= edge
+  );
+  const chosen = pending?.at ?? records[records.length - 1]!.at;
+  const chosenMs = new Date(chosen).getTime();
+  return Number.isFinite(chosenMs) && chosenMs < edge ? new Date(edge).toISOString() : chosen;
+}

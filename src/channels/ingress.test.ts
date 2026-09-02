@@ -14,7 +14,7 @@ import assert from "node:assert/strict";
 import { mkdtempSync, appendFileSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { Ingress, ingressPath } from "./ingress.ts";
+import { Ingress, catchUpFloor, ingressPath } from "./ingress.ts";
 
 const arrival = (id: string, over: Partial<Parameters<Ingress["arrived"]>[0]> = {}) => ({
   id,
@@ -92,4 +92,19 @@ test("the ledger is a queue of open questions, not a history", () => {
   } finally {
     rmSync(home, { recursive: true, force: true });
   }
+});
+
+test("the catch-up floor never passes a live undecided arrival, and a stale one cannot pin it", () => {
+  // 2026-09-02: an arrival from five days earlier with no fate held every sweep's floor at
+  // that day, and an ascending page of twenty never reached the present.
+  const now = Date.parse("2026-09-02T04:10:00.000Z");
+  const hour = 3_600_000;
+  const at = (ms: number) => new Date(now - ms).toISOString();
+  const rec = (id: string, ms: number, fate?: "admitted") =>
+    ({ id, channel: "feishu", identity: "u", chatKey: "c", kind: "text", chars: 1, at: at(ms), ...(fate ? { fate } : {}) }) as never;
+  assert.equal(catchUpFloor([], now, 2 * hour), undefined, "a first run has no floor");
+  assert.equal(catchUpFloor([rec("a", 3 * hour, "admitted"), rec("b", 10 * 60_000, "admitted")], now, 2 * hour), at(10 * 60_000), "last arrival when all are decided");
+  assert.equal(catchUpFloor([rec("a", 3 * hour, "admitted"), rec("b", 30 * 60_000), rec("c", 10 * 60_000, "admitted")], now, 2 * hour), at(30 * 60_000), "a live undecided arrival holds the floor");
+  assert.equal(catchUpFloor([rec("old", 5 * 24 * hour), rec("b", 10 * 60_000, "admitted")], now, 2 * hour), at(10 * 60_000), "a stale undecided arrival does not");
+  assert.equal(catchUpFloor([rec("a", 3 * hour, "admitted")], now, 2 * hour), at(2 * hour), "never older than the window");
 });

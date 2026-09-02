@@ -615,6 +615,9 @@ test("the catch-up sweep replays what the socket missed, and only that", async (
   adapter.lastInboundAt = () => "2026-09-01T07:26:49.953Z";
   adapter.alreadyHandled = (id: string) => id === "om_old";
   adapter.recentThreads = () => ["omt_remembered"];
+  // The socket handed this one over earlier and the handling died before a fate was
+  // recorded: it is in the seen set, undecided in the ledger, and must be offered again.
+  (adapter as unknown as { seenMessages: Map<string, number> }).seenMessages.set("om_missed", Date.now());
 
   await internals.catchUp();
   assert.deepEqual(

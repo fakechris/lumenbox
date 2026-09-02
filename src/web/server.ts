@@ -209,6 +209,8 @@ import {
 import { Vault, type Grant } from "../host/vault.ts";
 import { seedStarterSkills } from "../host/starter-skills.ts";
 import { firstRunCue } from "../host/prompt.ts";
+import { catchUpFloor } from "../channels/ingress.ts";
+import { REPLAY_MAX_AGE_MS } from "../channels/feishu.ts";
 import { ActivityLog } from "./activity.ts";
 import { vendorPath } from "./markdown.ts";
 import { toDisplayEntries } from "./transcript.ts";
@@ -633,9 +635,9 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
     // update-offset store, src/telegram/bot.ts — the same rule, expressed in update ids).
     // Here the ledger already distinguishes the two: an arrival with a fate reached a
     // decision, one without it did not.
-    const pending = arrivals.find(record => record.fate === undefined);
-    if (pending !== undefined) return pending.at;
-    return arrivals[arrivals.length - 1]?.at;
+    // The window amendment is in catchUpFloor: an undecided arrival from days ago must not
+    // pin the floor there forever (it did, from 2026-08-28 to 2026-09-02).
+    return catchUpFloor(arrivals, Date.now(), REPLAY_MAX_AGE_MS);
   };
   /**
    * Whether this message reached a decision already — admitted, refused or dropped.

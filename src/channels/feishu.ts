@@ -269,6 +269,24 @@ export function splitChatKey(chatKey: string): { chatId: string; rootId?: string
  * vendor refused — which it does for ~a minute after a restart, while the dead
  * process's registration lingers (roadmap R35). Exported for its test.
  */
+/** Rejects when `promise` has not settled in `ms`. The timer never keeps the process alive. */
+export function withTimeout<T>(promise: Promise<T>, ms: number, what: string): Promise<T> {
+  return new Promise<T>((resolve, reject) => {
+    const timer = setTimeout(() => reject(new Error(`${what} timed out after ${ms}ms`)), ms);
+    timer.unref?.();
+    promise.then(
+      value => {
+        clearTimeout(timer);
+        resolve(value);
+      },
+      error => {
+        clearTimeout(timer);
+        reject(error);
+      }
+    );
+  });
+}
+
 export function classifySocketLine(line: string): "ready" | "failed" | undefined {
   // "ws client ready" is the socket. The HTTP client logs a bare "client ready" from its
   // constructor, which is not evidence of anything listening.
@@ -289,13 +307,17 @@ export const SOCKET_RETRY_MS = [5_000, 15_000, 30_000, 60_000] as const;
  * second surprise rather than a fix. Older ones are counted and named in the log, never
  * dropped silently.
  */
-const REPLAY_MAX_AGE_MS = 2 * 3_600_000;
+export const REPLAY_MAX_AGE_MS = 2 * 3_600_000;
 /** A ceiling on one sweep, so a long outage cannot become a burst of turns. */
 const REPLAY_MAX_PER_SWEEP = 5;
 /** How far below the last known arrival the sweep starts, in seconds — clock skew insurance. */
 const CATCH_UP_FLOOR_SLACK_S = 5 * 60;
 /** How many threads one sweep visits; a door with more topics than this is swept over several. */
 const CATCH_UP_MAX_THREADS = 10;
+/** Pages per container per sweep, newest first; a page is fifty messages. */
+const CATCH_UP_MAX_PAGES = 4;
+/** How long a sender's name may take to look up before the message goes on without it. */
+const LABEL_LOOKUP_TIMEOUT_MS = 5_000;
 /**
  * How long a fresh socket may stay silent before it is not believed.
  *
@@ -450,7 +472,7 @@ export class FeishuChannel implements ChannelAdapter {
                 page_size?: number;
               };
             }) => Promise<
-              | { data?: { items?: FeishuHistoryMessage[] }; items?: FeishuHistoryMessage[] }
+              | { data?: { items?: FeishuHistoryMessage[]; has_more?: boolean; page_token?: string }; items?: FeishuHistoryMessage[]; has_more?: boolean; page_token?: string }
               | undefined
             >;
           };
@@ -535,14 +557,20 @@ export class FeishuChannel implements ChannelAdapter {
       try {
         let pageToken: string | undefined;
         for (let page = 0; page < 5; page++) {
-          const response = await this.apiClient.im.chatMembers.get({
+          // Bounded: a lookup that never answers must not hold the message behind it. The
+          // name is a nicety; the message is the point.
+          const response = await withTimeout(
+            this.apiClient.im.chatMembers.get({
             path: { chat_id: chatId },
             params: {
               member_id_type: "open_id",
               page_size: 100,
               ...(pageToken !== undefined ? { page_token: pageToken } : {}),
             },
-          });
+          }),
+            LABEL_LOOKUP_TIMEOUT_MS,
+            "member lookup"
+          );
           for (const member of response?.data?.items ?? []) {
             if (member.member_id !== undefined && member.name !== undefined) {
               this.names.set(member.member_id, member.name);
@@ -1294,8 +1322,17 @@ export class FeishuChannel implements ChannelAdapter {
       // Ours, deleted, or already handled: not work.
       if (message.deleted === true) return;
       if (message.sender?.sender_type !== "user") return;
-      if (message.message_id === undefined || this.seenMessages.has(message.message_id)) return;
+      if (message.message_id === undefined) return;
+      // The durable ledger decides, not the in-memory seen set: a message the socket handed
+      // over that then died between arrival and admission (2026-09-02, one hung lookup)
+      // is in the seen set and has no fate — and "seen" must not mean "answered".
       if (this.alreadyHandled?.(message.message_id) === true) return;
+      if (this.seenMessages.has(message.message_id)) {
+        this.log(
+          `channel ${this.name}: ${message.message_id} arrived earlier but was never decided; offering it again`
+        );
+        this.seenMessages.delete(message.message_id);
+      }
       // Old enough that answering it now is its own surprise. A door that was down
       // for a day would otherwise wake up and fire a turn per accumulated message —
       // and the mature handling of an offline backlog is to catch up on the record
@@ -1331,17 +1368,33 @@ export class FeishuChannel implements ChannelAdapter {
         },
       } as never);
     };
+    // Newest first, and only as many pages as it takes to reach the floor: ascending with
+    // one page of twenty read the oldest twenty after the floor, which with a stale floor
+    // was the same twenty handled messages every sweep, and never today's.
     const listed = async (containerType: "chat" | "thread", containerId: string) => {
-      const history = await this.apiClient!.im.message.list({
-        params: {
-          container_id_type: containerType,
-          container_id: containerId,
-          start_time: String(from),
-          sort_type: "ByCreateTimeAsc",
-          page_size: 20,
-        },
-      });
-      return (history?.data?.items ?? history?.items ?? []) as FeishuHistoryMessage[];
+      const collected: FeishuHistoryMessage[] = [];
+      let pageToken: string | undefined;
+      for (let page = 0; page < CATCH_UP_MAX_PAGES; page++) {
+        const history = await this.apiClient!.im.message.list({
+          params: {
+            container_id_type: containerType,
+            container_id: containerId,
+            start_time: String(from),
+            sort_type: "ByCreateTimeDesc",
+            page_size: 50,
+            ...(pageToken !== undefined ? { page_token: pageToken } : {}),
+          },
+        });
+        const data = history?.data ?? history;
+        const items = (data?.items ?? []) as FeishuHistoryMessage[];
+        collected.push(...items);
+        const oldest = Number(items[items.length - 1]?.create_time ?? Number.NaN);
+        if (data?.has_more !== true || data.page_token === undefined) break;
+        if (Number.isFinite(oldest) && oldest < from * 1000) break;
+        pageToken = data.page_token;
+      }
+      // Oldest first for replay, so a person's two questions are answered in order.
+      return collected.reverse();
     };
     try {
       const chats = await this.apiClient.im.chat.list({ params: { page_size: 20 } });
