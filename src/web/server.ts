@@ -1851,22 +1851,16 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
         },
       },
       response => {
-        // The takeover page is the surface a person actually types a password into,
-        // and it carried no badge and no notice (v4 claims review, finding 5). The
-        // page — and only the page — is buffered so the box-class sentence rides in;
-        // sockets and assets stream as before. An encoded body passes through
-        // untouched rather than corrupted.
-        //
-        // Except when the page is the main UI's embedded iframe (embedded=1): there
-        // the same sentence already sits directly above the frame as #boxnotice, and
-        // the banner's only effect was to say it twice while covering the top of the
-        // desktop. Standalone opens — Take over, the channel's 桌面 link — keep it,
-        // because there it is the only warning on the page.
         // No banner on the desktop page, embedded or standalone (2026-09-02, Chris): the
         // box-class sentence lives in the main UI as #boxnotice, and on the page it covered
         // the desktop's top edge — and, injected into a response boxd serves without a
-        // charset, came out as mojibake. The page streams through like every asset.
-        res.writeHead(response.statusCode ?? 502, response.headers);
+        // charset, came out as mojibake. The page streams through like every asset. The
+        // page itself is marked no-store, so a browser that cached the bannered version
+        // does not keep showing it after the server stopped sending it.
+        const headers = /\/vnc\.html/.test(path)
+          ? { ...response.headers, "cache-control": "no-store" }
+          : response.headers;
+        res.writeHead(response.statusCode ?? 502, headers);
         response.pipe(res);
       }
     );

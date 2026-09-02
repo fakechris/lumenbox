@@ -90,6 +90,11 @@ fi
 # actions would be advisory.
 DEBUG_PORT=$((9222 + ${DESKTOP:-0}))
 
+# A plain WM_CLASS. With --user-data-dir Chrome names its windows
+# "google-chrome (/path/to/profile)", which no launcher matches, so the dock shows the
+# running browser beside the pinned one as if they were two programs.
+CHROME_CLASS="${CHROME_CLASS:-$(basename "$CHROME_BIN")}"
+
 PROXY_ARGS=()
 if [ -n "${AGENTBOX_EGRESS_RELAY:-}" ]; then
   PROXY_ARGS=(
@@ -99,6 +104,7 @@ if [ -n "${AGENTBOX_EGRESS_RELAY:-}" ]; then
 fi
 
 exec "$CHROME_BIN" \
+  --class="$CHROME_CLASS" \
   --user-data-dir="$PROFILE" \
   --remote-debugging-port="$DEBUG_PORT" \
   --remote-allow-origins=* \
