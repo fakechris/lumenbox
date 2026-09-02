@@ -2632,3 +2632,57 @@ test("hooks in Claude Code's dialect: PreToolUse blocks a call, Stop sends the m
     cleanup();
   }
 });
+
+test("steering is left queued while the model is finishing: a Stop hook's send-back does not absorb it (R8)", async () => {
+  const { registry, cleanup } = fixture();
+  try {
+    const ada = registry.create({ name: "Ada" });
+    const bus = new AgentBus(registry, async () => {});
+    const { box } = stubBox();
+    const hooks = new HookRunner({
+      path: null,
+      config: {
+        Stop: [
+          {
+            hooks: [
+              {
+                type: "command",
+                // Sends the model back once, and while doing so the user speaks.
+                command: `input=$(cat); case "$input" in *'"stop_hook_active":true'*) exit 0;; esac; echo '{"decision":"block","reason":"also say goodbye"}'`,
+              },
+            ],
+          },
+        ],
+      },
+    });
+    const capture: Capture = { params: [] };
+    const client = fakeModel(
+      ({ index }) => {
+        if (index === 0) {
+          // The user's follow-up lands while the model is producing its final text.
+          bus.sendFromUser(ada.id, "one more thing: rename it");
+          return message([textBlock("done")]);
+        }
+        return message([textBlock("goodbye")]);
+      },
+      { capture }
+    );
+    await runTurn(
+      ada,
+      [{ id: "m-fin", fromId: "user", fromName: "user", text: "wrap up", priority: false, receivedAt: "" }],
+      new AbortController().signal,
+      { client, registry, bus, box, resolution: undefined, hooks }
+    );
+
+    // Round 2 carried the hook's note and nothing else: the follow-up was not injected on a
+    // loop that was stopping.
+    assert.equal(capture.params.length, 2);
+    const second = JSON.stringify(capture.params[1]?.messages ?? []);
+    assert.match(second, /\[Stop hook\] also say goodbye/);
+    assert.doesNotMatch(second, /rename it/);
+    // It is still queued, and opens the next turn instead.
+    assert.equal(bus.pendingCount(ada.id), 1);
+  } finally {
+    cleanup();
+  }
+});

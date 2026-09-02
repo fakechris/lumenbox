@@ -71,6 +71,18 @@ interface BeginRecord {
   about: string;
   /** Which conversation it ran in, when not the main one — so the resume lands in the same thread. */
   conversation?: string;
+  /**
+   * Which model, which code, and which prompt produced this turn (R24).
+   *
+   * "Did the regression start the day we swapped the model or the day we deployed" was
+   * unanswerable from our own records: usage rows carry the model, nothing carried the code,
+   * and the assembled prompt was never kept. The prompt itself is not stored — it can be
+   * thousands of lines and mostly repeats — but a hash of it is enough to say "the prompt
+   * changed between these two turns", which is the question that matters.
+   */
+  model?: string;
+  build?: { version: string; commit: string };
+  promptHash?: string;
 }
 
 interface EndRecord {
@@ -150,6 +162,9 @@ export class TurnLedger {
     workId?: string;
     attempt?: number;
     conversation?: string;
+    model?: string;
+    build?: { version: string; commit: string };
+    promptHash?: string;
     now?: Date;
   }): string {
     const record: BeginRecord = {
@@ -162,6 +177,9 @@ export class TurnLedger {
       attempt: options.attempt ?? 1,
       about: options.about.replace(/\s+/g, " ").trim().slice(0, 200),
       ...(options.conversation !== undefined ? { conversation: options.conversation } : {}),
+      ...(options.model !== undefined ? { model: options.model } : {}),
+      ...(options.build !== undefined ? { build: options.build } : {}),
+      ...(options.promptHash !== undefined ? { promptHash: options.promptHash } : {}),
     };
     this.append(record);
     return record.id;

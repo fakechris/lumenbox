@@ -11,7 +11,6 @@
  * control.
  */
 
-import { execFileSync } from "node:child_process";
 import { randomBytes } from "node:crypto";
 import {
   createServer,
@@ -29,6 +28,7 @@ import { BoxManager, defaultBoxConfig } from "../box/docker.ts";
 import { resolveBoxProvisioner, type BoxProvisioner } from "../box/provisioner.ts";
 import { classifyBox } from "../box/access.ts";
 import { envNumber } from "../config.ts";
+import { buildInfo } from "../host/build-info.ts";
 import { BackupSchedule, backupRoot } from "../host/backup.ts";
 import { Orchestrator } from "../host/orchestrator.ts";
 import { describeProvider, type ProviderProfile } from "../host/provider.ts";
@@ -78,39 +78,6 @@ function readToolList(value: unknown): readonly string[] | null | undefined | Er
   return value as string[];
 }
 
-/**
- * Which code is running, for reading a bug report against the right build.
- *
- * Version from package.json; commit from git, asked once at startup — a deployment
- * without a git checkout says so via AGENTBOX_BUILD or shows "unknown", which is
- * still more honest than showing nothing and guessing later.
- */
-function buildInfo(): { version: string; commit: string } {
-  const root = fileURLToPath(new URL("../..", import.meta.url));
-  let version = "0.0.0";
-  try {
-    const pkg = JSON.parse(readFileSync(join(root, "package.json"), "utf8")) as {
-      version?: unknown;
-    };
-    if (typeof pkg.version === "string") version = pkg.version;
-  } catch {
-    // The page shows 0.0.0, which reads as "could not tell" and is exactly true.
-  }
-  let commit = process.env.AGENTBOX_BUILD ?? "";
-  if (commit === "") {
-    try {
-      commit = execFileSync("git", ["rev-parse", "--short", "HEAD"], {
-        cwd: root,
-        stdio: ["ignore", "pipe", "ignore"],
-      })
-        .toString()
-        .trim();
-    } catch {
-      commit = "unknown";
-    }
-  }
-  return { version, commit };
-}
 
 /**
  * The exit code that means "start me again with the new config".

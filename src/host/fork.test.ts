@@ -34,7 +34,7 @@ function harness() {
       peak = Math.max(peak, concurrent);
       const brief = inbound.map(message => message.text).join(" ");
       seen.push({ conversation, text: brief });
-      await new Promise(resolve => setTimeout(resolve, 30));
+      await new Promise(resolve => setTimeout(resolve, brief.includes("SLOW") ? 300 : 30));
       concurrent -= 1;
       if (brief.includes("BREAK")) throw new Error("this piece was unreadable");
       registry.appendTranscript(
@@ -122,6 +122,32 @@ test("a fork cannot fork, and a hundred at once is refused with a number", async
 
     const empty = await dispatchTool("Fork", { briefs: [] }, context);
     assert.ok(empty.isError);
+  } finally {
+    cleanup();
+  }
+});
+
+test("an instruction arriving mid-join wakes the coordinator; late forks report as messages (R8)", async () => {
+  const { context, seen, cleanup } = harness();
+  try {
+    const started = Date.now();
+    const pending = dispatchTool("Fork", { briefs: ["quick one", "SLOW SLOW SLOW"] }, context);
+    // The person speaks while fork 2 is still working.
+    setTimeout(() => context.bus.sendFromUser(context.agent.id, "actually, stop and summarise"), 60);
+    const result = await pending;
+    assert.ok(Date.now() - started < 250, `the join returned on the steer, not on the slow fork (${Date.now() - started}ms)`);
+    assert.match(result.text, /join was cut short: 1 of 2 finished/);
+    assert.match(result.text, /fork 2 is still running/);
+    assert.match(result.text, /read quick one/);
+    assert.doesNotMatch(result.text, /read SLOW/);
+    // The steering itself is untouched: the turn reads it at its next boundary.
+    assert.equal(context.bus.pendingCount(context.agent.id), 1);
+
+    // The slow fork lands later, as a system message into the conversation that forked.
+    await new Promise(resolve => setTimeout(resolve, 400));
+    const late = seen.find(entry => entry.conversation === "main" && entry.text.includes("fork 2"));
+    assert.ok(late, "the late fork's findings were delivered into the parent conversation");
+    assert.match(late.text, /has finished/);
   } finally {
     cleanup();
   }

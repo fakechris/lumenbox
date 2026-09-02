@@ -1641,40 +1641,89 @@ export async function dispatchTool(
 
       const parent = context.conversation ?? MAIN_CONVERSATION;
       const stamp = Date.now().toString(36);
-      const results = await Promise.all(
-        briefs.map(async (brief, index) => {
-          // Each fork is its own conversation of the same agent, which is what makes
-          // the context separate and the runs concurrent — the bus already serialises
-          // per agent *and* conversation, so this needs no new machinery.
-          const conversation = `${FORK_PREFIX}${parent}-${stamp}-${index + 1}`;
-          try {
-            context.bus.sendFromUser(context.agent.id, brief, {
-              conversation,
-              steerable: false,
-            });
-            await context.bus.runExclusive(context.agent.id, { conversation });
-            const said = context.registry
-              .readTranscript(context.agent.id, conversation)
-              .filter(
-                (entry): entry is { role: string; text: string; kind?: string } =>
-                  (entry as { role?: string }).role === "assistant" &&
-                  (entry as { kind?: string }).kind === undefined &&
-                  typeof (entry as { text?: string }).text === "string"
-              )
-              .map(entry => entry.text)
-              .join("\n\n");
-            return `--- fork ${index + 1} ---\n${said.trim() === "" ? "(said nothing)" : said}`;
-          } catch (error) {
-            // One fork failing is a gap in the findings, not a failure of the fan-out:
-            // reported in place so the caller can see which piece is missing.
-            return `--- fork ${index + 1} FAILED ---\n${error instanceof Error ? error.message : String(error)}`;
-          }
-        })
-      );
+      // Filled in as each fork lands, so an interrupted join can report what has finished
+      // without waiting for what has not.
+      const landed: (string | undefined)[] = briefs.map(() => undefined);
+      const runs = briefs.map(async (brief, index) => {
+        // Each fork is its own conversation of the same agent, which is what makes
+        // the context separate and the runs concurrent — the bus already serialises
+        // per agent *and* conversation, so this needs no new machinery.
+        const conversation = `${FORK_PREFIX}${parent}-${stamp}-${index + 1}`;
+        let result: string;
+        try {
+          context.bus.sendFromUser(context.agent.id, brief, {
+            conversation,
+            steerable: false,
+          });
+          await context.bus.runExclusive(context.agent.id, { conversation });
+          const said = context.registry
+            .readTranscript(context.agent.id, conversation)
+            .filter(
+              (entry): entry is { role: string; text: string; kind?: string } =>
+                (entry as { role?: string }).role === "assistant" &&
+                (entry as { kind?: string }).kind === undefined &&
+                typeof (entry as { text?: string }).text === "string"
+            )
+            .map(entry => entry.text)
+            .join("\n\n");
+          result = `--- fork ${index + 1} ---\n${said.trim() === "" ? "(said nothing)" : said}`;
+        } catch (error) {
+          // One fork failing is a gap in the findings, not a failure of the fan-out:
+          // reported in place so the caller can see which piece is missing.
+          result = `--- fork ${index + 1} FAILED ---\n${error instanceof Error ? error.message : String(error)}`;
+        }
+        landed[index] = result;
+        return result;
+      });
+
+      // The join, racing the person. A coordinator parked here for minutes could not be
+      // reached: steering is read at a round boundary, and a join is one long tool call
+      // with no boundary inside it. So an instruction arriving mid-join ends the join
+      // early (R8's second condition): what has finished is returned now, the rest keep
+      // running and report into this conversation as they land, and the steering is read
+      // at the boundary this return creates.
+      const all = Promise.all(runs).then(() => "done" as const);
+      let unsubscribe = (): void => {};
+      const woken = new Promise<"steered">(resolve => {
+        unsubscribe =
+          typeof context.bus.onSteering === "function"
+            ? context.bus.onSteering(context.agent.id, parent, () => resolve("steered"))
+            : () => {};
+      });
+      const outcome = await Promise.race([all, woken]);
+      unsubscribe();
+
+      if (outcome === "done") {
+        return {
+          text:
+            `${briefs.length} fork${briefs.length === 1 ? "" : "s"} finished. Their findings ` +
+            `are below; combining them is yours to do.\n\n${landed.join("\n\n")}`,
+        };
+      }
+
+      const finished = landed.filter((text): text is string => text !== undefined);
+      const stillRunning = briefs
+        .map((_, index) => index)
+        .filter(index => landed[index] === undefined);
+      for (const index of stillRunning) {
+        void runs[index]?.then(text =>
+          context.bus.deliverSystem(
+            context.agent.id,
+            `A fork you were waiting on when a new instruction arrived has finished. ` +
+              `Fold it into what you already reported if it still matters.\n\n${text}`,
+            parent
+          )
+        );
+      }
       return {
         text:
-          `${briefs.length} fork${briefs.length === 1 ? "" : "s"} finished. Their findings ` +
-          `are below; combining them is yours to do.\n\n${results.join("\n\n")}`,
+          `A new instruction arrived while ${briefs.length} fork${briefs.length === 1 ? "" : "s"} ` +
+          `ran, so the join was cut short: ${finished.length} of ${briefs.length} finished ` +
+          `(below), and fork${stillRunning.length === 1 ? "" : "s"} ` +
+          `${stillRunning.map(index => index + 1).join(", ")} ${stillRunning.length === 1 ? "is" : "are"} ` +
+          `still running — each will arrive here as a message when it lands. The instruction ` +
+          `is in your next round; read it before deciding what to do with these.` +
+          (finished.length > 0 ? `\n\n${finished.join("\n\n")}` : ""),
       };
     }
 

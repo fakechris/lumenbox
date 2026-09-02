@@ -6,6 +6,8 @@
  * background work, and the abort has to land between tool calls.
  */
 
+import { createHash } from "node:crypto";
+import { buildInfo } from "./build-info.ts";
 import { envNumber } from "../config.ts";
 import { randomUUID } from "node:crypto";
 import type Anthropic from "@anthropic-ai/sdk";
@@ -1369,6 +1371,12 @@ export async function runTurn(
     ...(deps.resumeOf !== undefined
       ? { resumeOf: deps.resumeOf.id, attempt: deps.resumeOf.attempt }
       : {}),
+    // Which model, which build, which prompt (R24). The hash covers the prompt as assembled
+    // for round one; the volatile half is rebuilt on continuation, and that rewrite is the
+    // same code with newer state, not a different prompt.
+    model: provider.model,
+    build: buildInfo(),
+    promptHash: promptHashOf(promptParts.stable, promptParts.volatile),
   });
 
   try {
@@ -1452,6 +1460,11 @@ export async function runTurn(
   let floorWarned = false;
   // Set once a Stop hook has sent the model back, so it can do so at most once per turn.
   let stopHookActive = false;
+  // True while the model is finishing: its last round made no tool calls and only a Stop hook
+  // kept the loop going. Steering is not taken then (R8) — a user message injected on a loop
+  // about to stop is a dangling turn the model never really answers; left queued, it opens
+  // the next turn with the whole of the model's attention instead.
+  let finishing = false;
   for (let round = 0; round < MAX_ROUNDS; round++) {
     if (signal.aborted) {
       emit({ type: "aborted", agentId: agent.id });
@@ -1466,7 +1479,7 @@ export async function runTurn(
     // deserves its own turn and its own causal record, and that behaviour is pinned
     // by the race catalog. Appended at the tail, which keeps the provider's prefix
     // cache warm — the same reason compaction is the only mid-turn rewrite.
-    const steered = deps.bus.takeSteering(agent.id, conversation);
+    const steered = finishing ? [] : deps.bus.takeSteering(agent.id, conversation);
     if (steered.length > 0) {
       const steerText = buildTurnPrompt(steered);
       registry.appendTranscript(agent.id, {
@@ -1892,6 +1905,7 @@ export async function runTurn(
           });
           if (hook.blocked && !stopHookActive) {
             stopHookActive = true;
+            finishing = true;
             const note = `[Stop hook] ${hook.reason ?? "continue"}`;
             registry.appendTranscript(agent.id, { role: "user", text: note, at: new Date().toISOString() } satisfies TranscriptEntry, conversation);
             messages.push({ role: "user", content: note });
@@ -1920,6 +1934,8 @@ export async function runTurn(
       console.error(`[turn] ${agent.profile.name}: ended with no text on round ${round}`);
       return;
     }
+    // Tool calls mean the model is working again, so steering is welcome at the next boundary.
+    finishing = false;
 
     // Text followed only by bookkeeping calls is not narration — it is the answer,
     // filed. Measured on t51: the agent wrote its whole analysis, then tidied up
@@ -2254,4 +2270,11 @@ export function reviewInputFor(options: {
     input: options.input,
     why: options.why,
   };
+}
+
+/** A short, stable digest of an assembled prompt, for the turn ledger's `promptHash`. */
+export function promptHashOf(...parts: readonly string[]): string {
+  const hash = createHash("sha256");
+  for (const part of parts) hash.update(part).update("\u0000");
+  return hash.digest("hex").slice(0, 16);
 }
