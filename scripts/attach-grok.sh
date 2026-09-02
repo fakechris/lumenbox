@@ -115,6 +115,7 @@ if ! (exec 3<>"/dev/tcp/127.0.0.1/$BOXD_PORT") 2>/dev/null; then
   # DISPLAY is what boxd's "ensure the default desktop at boot" reads; left unset it would be :1,
   # and :1 is Grok's.
   DISPLAY=":$DISPLAY_NUM" BOXD_PORT="$BOXD_PORT" BOXD_BIND=127.0.0.1 BOXD_TOKEN="$BOXD_TOKEN" DEFAULT_DISPLAY="$DISPLAY_NUM" \\
+    BOXD_START_DISPLAY="\$HOME/.lumen/bin/start-display" \\
     nohup "\$NODE_BIN" ~/.lumen/bin/boxd.cjs > /tmp/boxd-$BOXD_PORT.log 2>&1 &
   for _ in \$(seq 1 20); do
     (exec 3<>"/dev/tcp/127.0.0.1/$BOXD_PORT") 2>/dev/null && break
@@ -132,7 +133,8 @@ fi
 REMOTE_SCRIPT
 
 log "4/5. Opening the tunnel (boxd $BOXD_PORT, noVNC $VNC_PORT) ..."
-pkill -f "ssh -N -f.*-L $BOXD_PORT:127.0.0.1:$BOXD_PORT" 2>/dev/null || true
+pkill -f "ssh -N -f.*$BOXD_PORT:127.0.0.1:$BOXD_PORT" 2>/dev/null || true
+sleep 0.5
 ssh -N -f \
   -o ServerAliveInterval=30 -o ServerAliveCountMax=5 -o TCPKeepAlive=yes -o ExitOnForwardFailure=yes \
   -L "127.0.0.1:$BOXD_PORT:127.0.0.1:$BOXD_PORT" \
