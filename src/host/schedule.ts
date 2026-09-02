@@ -390,6 +390,8 @@ export interface Scheduled {
   because?: string;
   /** Off until a person turns it on. Skipped by the tick, refused by runNow, shown in status. */
   paused?: boolean;
+  /** Which box the file lives in (docs/30); the run goes to an agent of that box. */
+  boxId?: string;
 }
 
 /** A skill that fires on a matching message. Same runner rules as a schedule. */
@@ -401,6 +403,7 @@ export interface Listening {
   chat?: string;
   runAs?: string;
   paused?: boolean;
+  boxId?: string;
 }
 
 /** Whether a message matches a listener's `match:` — a /regex/flags, or a phrase, case-insensitively. */
@@ -479,7 +482,8 @@ export interface SchedulerDeps {
    */
   run: (agent: string, prompt: string, deliver?: string) => Promise<void>;
   /** Who a schedule wakes when it names nobody. */
-  defaultAgent: () => string | undefined;
+  /** The agent a skill runs as when its file names none: the box's first, or the installation's. */
+  defaultAgent: (boxId?: string) => string | undefined;
   /** Resolves a name to an agent id, so `agent:` can be compared against the default. */
   resolveAgent?: (nameOrId: string) => string | undefined;
   /**
@@ -784,8 +788,8 @@ export class Scheduler {
    * (docs/13). Until then this errs towards refusing work rather than running somebody
    * else's.
    */
-  private runnerFor(skill: { slug: string; name: string; runAs?: string }): string | undefined {
-    const fallback = this.deps.defaultAgent();
+  private runnerFor(skill: { slug: string; name: string; runAs?: string; boxId?: string }): string | undefined {
+    const fallback = this.deps.defaultAgent(skill.boxId);
     if (skill.runAs === undefined) return fallback;
     const named = this.deps.resolveAgent?.(skill.runAs);
     if (named !== undefined && named === fallback) return named;

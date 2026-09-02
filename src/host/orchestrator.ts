@@ -46,7 +46,8 @@ import {
 import { SKILLS_DIR } from "./skills.ts";
 import { intersectTools } from "./catalog.ts";
 import { DisplayLease } from "../box/display-lease.ts";
-import { resolveBoxProvisioner, type BoxProvisioner } from "../box/provisioner.ts";
+import { AttachedBoxProvisioner, resolveBoxProvisioner, type BoxProvisioner } from "../box/provisioner.ts";
+import { type BoxEntry, tokenOf } from "../box/boxes.ts";
 import { classifyBox, type BoxClass } from "../box/access.ts";
 import type { ResolutionConfig } from "../protocol/index.ts";
 import { runTurn, TurnAborted, type TurnDeps, type TurnEvent } from "./turn.ts";
@@ -93,6 +94,8 @@ export interface OrchestratorOptions {
    * the agents can write into without Docker; a deployment uses `boxProvisioner`.
    */
   boxClient?: BoxClient;
+  /** A client for an attached box, instead of dialling its endpoint. For tests with two fake boxes. */
+  boxClientFor?: (entry: BoxEntry) => BoxClient | undefined;
   onTurnEvent?: (event: TurnEvent) => void;
   onBusEvent?: (event: BusEvent) => void;
   /**
@@ -149,7 +152,17 @@ export class Orchestrator {
   readonly registry: AgentRegistry;
   readonly bus: AgentBus;
   private readonly client: Anthropic;
+  /** The installation's own box, once connected. Kept as the default so one-box callers read as before. */
   private box: BoxClient | undefined;
+  /**
+   * Every connected box by id (docs/30). The own box is in here too, under `registry.box.id`;
+   * an agent reaches exactly one of these, the one its profile names.
+   */
+  private readonly boxClients = new Map<string, BoxClient>();
+  private readonly resolutions = new Map<string, ResolutionConfig | undefined>();
+  private readonly boxAccesses = new Map<string, BoxClass>();
+  /** One skills directory per box; the prompt shows an agent its own box's. */
+  private readonly skillCaches = new Map<string, SkillCache>();
   private readonly memoryMirror: MemoryMirror;
   readonly skillProvenance: SkillProvenance;
   readonly hooks: HookRunner | undefined;
@@ -168,7 +181,8 @@ export class Orchestrator {
    */
   private readonly display = new DisplayLease();
   /** Desktops already brought up, so each is started once per process. */
-  private readonly readyDisplays = new Set<number>();
+  /** `boxId:index` — two boxes each have a desktop 1. */
+  private readonly readyDisplays = new Set<string>();
   /**
    * What every turn cost, appended as it happens.
    *
@@ -278,6 +292,28 @@ export class Orchestrator {
    */
   readonly skills = new SkillCache(() => this.box);
 
+  /** The skills directory of one box, read at most every few seconds like the own box's. */
+  skillsFor(boxId: string): SkillCache {
+    if (boxId === this.registry.box.id) return this.skills;
+    let cache = this.skillCaches.get(boxId);
+    if (cache === undefined) {
+      cache = new SkillCache(() => this.boxClients.get(boxId));
+      this.skillCaches.set(boxId, cache);
+    }
+    return cache;
+  }
+
+  /** Every box's skills, each tagged with where it lives — what the scheduler unions over. */
+  private async skillsEverywhere(): Promise<{ boxId: string; skills: import("./skills.ts").Skill[] }[]> {
+    const out: { boxId: string; skills: import("./skills.ts").Skill[] }[] = [];
+    for (const entry of this.registry.listBoxes()) {
+      if (!this.boxClients.has(entry.id)) continue;
+      const { skills } = await this.skillsFor(entry.id).refresh();
+      out.push({ boxId: entry.id, skills });
+    }
+    return out;
+  }
+
   /**
    * Fires skills that carry a schedule.
    *
@@ -286,10 +322,11 @@ export class Orchestrator {
    */
   readonly scheduler = new Scheduler({
     due: async () => {
-      const { skills } = await this.skills.refresh();
-      return skills
+      const everywhere = await this.skillsEverywhere();
+      return everywhere.flatMap(({ boxId, skills }) => skills
         .filter(skill => skill.schedule !== undefined)
         .map(skill => ({
+          boxId,
           slug: skill.slug,
           name: skill.name,
           path: skill.path,
@@ -300,13 +337,14 @@ export class Orchestrator {
           ...(skill.authoredBy !== undefined ? { authoredBy: skill.authoredBy } : {}),
           ...(skill.because !== undefined ? { because: skill.because } : {}),
           ...(skill.paused === true ? { paused: true } : {}),
-        }));
+        })));
     },
     listeners: async () => {
-      const { skills } = await this.skills.refresh();
-      return skills
+      const everywhere = await this.skillsEverywhere();
+      return everywhere.flatMap(({ boxId, skills }) => skills
         .filter(skill => skill.listener !== undefined)
         .map(skill => ({
+          boxId,
           slug: skill.slug,
           name: skill.name,
           path: skill.path,
@@ -314,7 +352,7 @@ export class Orchestrator {
           ...(skill.listener!.chat !== undefined ? { chat: skill.listener!.chat } : {}),
           ...(skill.runAs !== undefined ? { runAs: skill.runAs } : {}),
           ...(skill.paused === true ? { paused: true } : {}),
-        }));
+        })));
     },
     // Through the ordinary prompt path, so a scheduled turn is checked by the policy gate exactly
     // like any other: a box over its budget stops firing rather than quietly draining it.
@@ -346,7 +384,10 @@ export class Orchestrator {
       if (said === "") return;
       await this.options.deliverToChat?.(deliver, said);
     },
-    defaultAgent: () => this.registry.list()[0]?.id,
+    // A skill runs on the box its file is in, as that box's first agent; the installation's
+    // first agent only when the box has none (or the skill did not say).
+    defaultAgent: boxId =>
+      (boxId !== undefined ? this.registry.agentsIn(boxId)[0]?.id : undefined) ?? this.registry.list()[0]?.id,
     writerOf: slug => this.skillProvenance.writerOf(slug),
     // So the scheduler can tell "agent: Ada" from "agent: <somebody else>" — the gate
     // it applies to a name that came out of a writable file.
@@ -549,7 +590,7 @@ export class Orchestrator {
     this.registry = options.registry ?? new AgentRegistry();
     this.memoryMirror = new MemoryMirror({
       registry: this.registry,
-      box: () => this.box,
+      box: agentId => this.boxFor(agentId),
       log: line => console.error(`[memory-mirror] ${line}`),
     });
     this.registry.onMemoryChanged = agentId => {
@@ -590,38 +631,130 @@ export class Orchestrator {
       return { connected: false, detail: "box disabled by --no-box" };
     }
 
+    const own = this.registry.box.id;
+    let result: { connected: boolean; detail: string };
     try {
       if (this.options.boxClient !== undefined) {
         this.box = this.options.boxClient;
-        this.readyDisplays.clear();
-        return { connected: true, detail: "box attached directly" };
+        this.boxClients.set(own, this.box);
+        this.forgetDesktopsOf(own);
+        result = { connected: true, detail: "box attached directly" };
+      } else {
+        const provisioner = this.options.boxProvisioner ?? resolveBoxProvisioner();
+        const client = await provisioner.connect();
+        const health = await client.health();
+        this.box = client;
+        this.boxClients.set(own, client);
+        this.resolution = health.resolution;
+        this.resolutions.set(own, health.resolution);
+        // Read here rather than at construction: connecting again may be connecting to a
+        // *different* box, and the class belongs to the box, not to the process. The
+        // roster's box record name is the fallback for attached provisioners, whose
+        // boxName is a URL — see classifyBox for why a URL never keys the lookup.
+        this.boxAccess = classifyBox(provisioner.boxName, loadConfig(), this.registry.box.name);
+        this.boxAccesses.set(own, this.boxAccess);
+        // Connecting again means the box may be a different box: one that was updated,
+        // recreated, or simply restarted. Nothing it had is guaranteed to still be
+        // there, and a remembered desktop is the one that never appears.
+        this.forgetDesktopsOf(own);
+        const size = health.resolution
+          ? `${health.resolution.display.width}x${health.resolution.display.height}`
+          : "no display";
+        result = { connected: true, detail: `box ready (${size}) via ${provisioner.label}` };
       }
-      const provisioner = this.options.boxProvisioner ?? resolveBoxProvisioner();
+    } catch (error) {
+      result = { connected: false, detail: error instanceof Error ? error.message : String(error) };
+    }
+    // The attached boxes, each on its own: one that is down costs its own agents their
+    // computer, not everyone theirs.
+    for (const entry of this.registry.listBoxes()) {
+      if (entry.id === own) continue;
+      await this.connectAttached(entry);
+    }
+    // A box that just appeared has none of the mirror files; a reconnect may be a different box.
+    void this.memoryMirror.syncAll();
+    return result;
+  }
+
+  /** Connects (or reconnects) one attached box from its record. Never throws; the outcome is returned and logged. */
+  async connectAttached(entry: BoxEntry): Promise<{ connected: boolean; detail: string }> {
+    const injected = this.options.boxClientFor?.(entry);
+    if (injected !== undefined) {
+      this.boxClients.set(entry.id, injected);
+      this.forgetDesktopsOf(entry.id);
+      return { connected: true, detail: `${entry.name}: box attached directly` };
+    }
+    if (entry.kind !== "attached" || entry.endpoint === undefined) {
+      return { connected: false, detail: `${entry.name}: not an attached box` };
+    }
+    const token = tokenOf(entry);
+    if (token === undefined) {
+      const detail = `${entry.name}: no token readable at ${entry.endpoint.tokenFile}`;
+      console.error(`[box] ${detail}`);
+      return { connected: false, detail };
+    }
+    try {
+      const provisioner = new AttachedBoxProvisioner({ baseUrl: entry.endpoint.baseUrl, token });
       const client = await provisioner.connect();
       const health = await client.health();
-      this.box = client;
-      this.resolution = health.resolution;
-      // A box that just appeared has none of the mirror files; a reconnect may be a different box.
-      void this.memoryMirror.syncAll();
-      // Read here rather than at construction: connecting again may be connecting to a
-      // *different* box, and the class belongs to the box, not to the process. The
-      // roster's box record name is the fallback for attached provisioners, whose
-      // boxName is a URL — see classifyBox for why a URL never keys the lookup.
-      this.boxAccess = classifyBox(provisioner.boxName, loadConfig(), this.registry.box.name);
-      // Connecting again means the box may be a different box: one that was updated,
-      // recreated, or simply restarted. Nothing it had is guaranteed to still be
-      // there, and a remembered desktop is the one that never appears.
-      this.readyDisplays.clear();
-      const size = health.resolution
-        ? `${health.resolution.display.width}x${health.resolution.display.height}`
-        : "no display";
-      return { connected: true, detail: `box ready (${size}) via ${provisioner.label}` };
+      this.boxClients.set(entry.id, client);
+      this.resolutions.set(entry.id, health.resolution);
+      this.boxAccesses.set(entry.id, classifyBox(provisioner.boxName, loadConfig(), entry.name));
+      this.forgetDesktopsOf(entry.id);
+      const size = health.resolution ? `${health.resolution.display.width}x${health.resolution.display.height}` : "no display";
+      const detail = `${entry.name}: box ready (${size}) via ${provisioner.label}`;
+      console.error(`[box] ${detail}`);
+      return { connected: true, detail };
     } catch (error) {
-      return {
-        connected: false,
-        detail: error instanceof Error ? error.message : String(error),
-      };
+      this.boxClients.delete(entry.id);
+      const detail = `${entry.name}: ${error instanceof Error ? error.message : String(error)}`;
+      console.error(`[box] ${detail}`);
+      return { connected: false, detail };
     }
+  }
+
+  /** Attaches a box now: the record is written, the connection tried, the outcome returned. */
+  async attachBox(entry: BoxEntry): Promise<{ connected: boolean; detail: string }> {
+    this.registry.attachBox(entry);
+    return this.connectAttached(entry);
+  }
+
+  detachBox(nameOrId: string): BoxEntry {
+    const entry = this.registry.detachBox(nameOrId);
+    this.boxClients.delete(entry.id);
+    this.skillCaches.delete(entry.id);
+    this.forgetDesktopsOf(entry.id);
+    return entry;
+  }
+
+  /** Which boxes are reachable right now, for the state panel and `box list`. */
+  boxStatus(): { id: string; name: string; kind: string; connected: boolean; displayFloor: number; agents: number; endpoint?: string }[] {
+    return this.registry.listBoxes().map(entry => ({
+      id: entry.id,
+      name: entry.name,
+      kind: entry.kind,
+      connected: this.boxClients.has(entry.id),
+      displayFloor: entry.displayFloor,
+      agents: this.registry.agentsIn(entry.id).length,
+      ...(entry.endpoint !== undefined ? { endpoint: entry.endpoint.baseUrl } : {}),
+    }));
+  }
+
+  private forgetDesktopsOf(boxId: string): void {
+    for (const key of [...this.readyDisplays]) {
+      if (key.startsWith(`${boxId}:`)) this.readyDisplays.delete(key);
+    }
+  }
+
+  /** The box an agent lives in, when it is connected. */
+  boxFor(agentId: string): BoxClient | undefined {
+    let boxId: string;
+    try {
+      boxId = this.registry.boxOf(agentId).id;
+    } catch {
+      return this.box;
+    }
+    return this.boxClients.get(boxId);
   }
 
   /**
@@ -633,16 +766,19 @@ export class Orchestrator {
    * back to a shared display is how agents end up typing into each other's windows.
    */
   private async ensureDesktop(agent: AgentRecord): Promise<number | undefined> {
-    if (!this.box) return undefined;
+    const box = this.boxFor(agent.id);
+    if (!box) return undefined;
 
+    const boxId = this.registry.boxOf(agent.id).id;
     const index = this.registry.displayIndexFor(agent.id);
-    if (this.readyDisplays.has(index)) return index;
+    const key = `${boxId}:${index}`;
+    if (this.readyDisplays.has(key)) return index;
 
     try {
       // Claims the desktop as this agent's while creating it: from here on the box
       // refuses input for it that does not carry the same token.
-      await this.box.ensureDisplay(index, this.registry.boxOwnerTokenFor(agent.id));
-      this.readyDisplays.add(index);
+      await box.ensureDisplay(index, this.registry.boxOwnerTokenFor(agent.id));
+      this.readyDisplays.add(key);
       return index;
     } catch (error) {
       this.options.onBusEvent?.({
@@ -658,9 +794,23 @@ export class Orchestrator {
     }
   }
 
-  /** The box client, for callers that need the box directly (recording, downloads). */
-  boxClient(): BoxClient | undefined {
-    return this.box;
+  /**
+   * The box client, for callers that need a box directly (recording, downloads): the agent's
+   * when one is named, else the installation's own.
+   */
+  boxClient(agentId?: string): BoxClient | undefined {
+    if (agentId === undefined) return this.box;
+    return this.boxFor(agentId) ?? undefined;
+  }
+
+  /** The record of an agent's box, for paths and labels. */
+  boxEntryOf(agentId: string): BoxEntry {
+    return this.registry.boxOf(agentId);
+  }
+
+  /** A connected box by id, for per-box housekeeping (seeding, files). */
+  boxClientById(boxId: string): BoxClient | undefined {
+    return this.boxClients.get(boxId);
   }
 
   // ── templates (docs/29) ────────────────────────────────────────────────────────────
@@ -769,6 +919,8 @@ export class Orchestrator {
       creatorTools?: readonly string[];
       /** Where the template came from, for the profile's `importedFrom`. */
       shareId?: string;
+      /** Which box the new agent lives in (docs/30). Absent means the installation's own. */
+      boxId?: string;
       log?: (line: string) => void;
     } = {}
   ): { agent: AgentRecord; id: string; pending: { fillIns: TemplateFillIn[]; connectors: string[] }; settled: Promise<ReconcileResult | undefined> } {
@@ -787,6 +939,7 @@ export class Orchestrator {
       ...(template.profile.avatarColor !== undefined ? { avatarColor: template.profile.avatarColor } : {}),
       ...(tools !== undefined ? { tools: [...tools] } : {}),
       ...(options.caller?.userId !== undefined ? { ownerUserId: options.caller.userId } : {}),
+      ...(options.boxId !== undefined ? { boxId: options.boxId } : {}),
       visibility: "shared",
       importedFrom: {
         id,
@@ -799,7 +952,7 @@ export class Orchestrator {
     log(`import ${id}: created ${agent.profile.name} (${agent.id}) from "${template.profile.name}"`);
 
     const settled = (async (): Promise<ReconcileResult | undefined> => {
-      const box = this.box;
+      const box = this.boxFor(agent.id);
       if (box === undefined) {
         log(`import ${id}: no box, so ${agent.profile.name} cannot install its recipe; it will start blank`);
         return undefined;
@@ -907,7 +1060,8 @@ export class Orchestrator {
     if (this.mcp.configured) this.mcp.warm();
     // Refreshed before the prompt is built, and never allowed to fail the turn — a box with no
     // skills directory is the normal state of a fresh install.
-    const { skills } = await this.skills.refresh();
+    const agentBoxId = this.registry.boxOf(agent.id).id;
+    const { skills } = await this.skillsFor(agentBoxId).refresh();
 
     // Agent identity and runtime are separate: an agent may name its own provider or
     // model, and gets its own client for it. Absent, it runs on the installation's.
@@ -925,10 +1079,10 @@ export class Orchestrator {
       files: this.files,
       claims: this.claims,
       bus: this.bus,
-      box: this.box,
+      box: this.boxFor(agent.id),
       display: this.display,
-      resolution: this.resolution,
-      ...(this.boxAccess !== undefined ? { boxAccess: this.boxAccess } : {}),
+      resolution: this.resolutions.get(agentBoxId) ?? this.resolution,
+      ...(this.boxAccesses.get(agentBoxId) !== undefined ? { boxAccess: this.boxAccesses.get(agentBoxId)! } : {}),
       hostRunner: this.options.hostRunner,
       vault: this.options.vault,
       tasks: this.tasks,

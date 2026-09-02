@@ -1008,6 +1008,12 @@ export const APP_HTML = String.raw`<!doctype html>
       <label>Role label</label>
       <input id="agrole" placeholder="e.g. release manager" spellcheck="false" style="font-family:var(--font-sans)">
     </div>
+    <div class="field" id="agboxwrap">
+      <label>Box</label>
+      <select id="agbox" style="font-family:var(--font-sans)"></select>
+      <div class="fieldnote">Which machine it lives on. Chosen once: an agent's memory, files and
+        logins are its box's, and it never moves &mdash; make another one on the other box instead.</div>
+    </div>
     <div class="field">
       <label>Persona</label>
       <textarea id="agpersona" placeholder="What is this agent for? This becomes its system prompt."></textarea>
@@ -2085,6 +2091,7 @@ function renderAgents() {
       '<div class="ttl">' + esc(busy.has(a.id) ? "Running" : String(a.title || a.description || "idle").slice(0, 40)) +
       "</div></div>" +
       (a.displayIndex ? '<span class="dnum">d' + esc(a.displayIndex) + "</span>" : "") +
+      (a.boxName && boxesSeen.length > 1 ? '<span class="dnum" title="box">' + esc(a.boxName) + "</span>" : "") +
       "</div>";
   }
   $("agents").innerHTML = html;
@@ -2629,6 +2636,7 @@ function updateComposerTarget() {
 
 function refresh() {
   return fetch("/api/state").then(function (r) { return r.json(); }).then(function (state) {
+    boxesSeen = state.boxes || [];
     agents = state.agents;
     allTools = state.allTools || allTools;
     $("model").innerHTML = "<b>" + esc(state.provider) + "</b>";
@@ -3817,6 +3825,21 @@ $("rec").onclick = function (event) {
 // One dialog, two modes. The previous version used window.prompt, which the desktop
 // shell does not implement: the + button did nothing, silently.
 var agentModal = { mode: "new", id: null, tools: {} };
+/** The boxes the last /api/state reported, own first. More than one shows the box column. */
+var boxesSeen = [];
+
+function renderBoxSelect(agent) {
+  var select = $("agbox");
+  var html = "";
+  for (var i = 0; i < boxesSeen.length; i++) {
+    var b = boxesSeen[i];
+    html += '<option value="' + esc(b.id) + '"' + (agent && agent.boxId === b.id ? " selected" : "") + (b.connected ? "" : " disabled") + ">" +
+      esc(b.name) + (i === 0 ? " (own)" : "") + (b.connected ? "" : " — not connected") + "</option>";
+  }
+  select.innerHTML = html || '<option value="">(no box)</option>';
+  // Chosen once: in Configure the field shows where the agent is and cannot change it.
+  select.disabled = !!agent;
+}
 var agentCatalog = { experts: [], crews: [] };
 
 function loadAgentCatalog() {
@@ -4078,6 +4101,7 @@ function openAgentModal(mode, agent) {
   $("agcatalogwrap").style.display = mode === "new" ? "" : "none";
   $("agimportwrap").style.display = mode === "new" ? "" : "none";
   $("agtemplatewrap").style.display = mode === "new" ? "none" : "";
+  renderBoxSelect(agent);
   $("agimport").value = "";
   if (mode === "new") {
     loadAgentCatalog().then(renderAgentCatalog);
@@ -4221,6 +4245,7 @@ function saveAgentModal() {
     model: $("agmodel").value.trim()
   };
   if (!isNew) body.id = agentModal.id;
+  if (isNew && $("agbox").value) body.boxId = $("agbox").value;
   $("agstatus").textContent = "Saving…";
   $("agsave").disabled = true;
   fetch(isNew ? "/api/agents" : "/api/agents/update", {

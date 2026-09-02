@@ -93,3 +93,15 @@ fill-in list; reconcile names what did not land.
 `template`/`template_version` tables, `GET /t/<id>`, box-token routes, `--public-url`). Left by
 choice: a cheaper model for the setup turn, a gallery.
 
+## Stage 7: Many boxes, one host (docs/30 A+B)
+**Goal**: one installation drives several boxes; an agent is created into a box and never
+moves; its desktop, skills, memory mirror and scheduled runs are that box's; the Grok VM is
+box `grok` beside the Docker box, not a second installation.
+**Success Criteria**: `boxes.json` migrates from `box.json` keeping the id; per-box desktop
+floors; a two-box orchestrator test where writes, skills, desktops and memory follow the
+agent's box and a routine on the attached box runs as its agent; detach refused with residents;
+`/desktop/b/<boxId>/<index>` reaches the attached box; the dialog chooses a box once.
+**Status**: Complete (2026-09-02) on `feat/multi-box` — `src/box/boxes.ts`, registry and
+orchestrator per-box wiring, `/api/boxes`, CLI `box attach|detach|list`, UI box field,
+`attach-grok.sh` registering the VM. Open: docs/30 Stage C (cross-box file transfer) and D.
+

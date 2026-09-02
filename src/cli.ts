@@ -26,6 +26,7 @@ import { describePreflight, isQuiet, preflight, verifyBox } from "./box/prefligh
 import { DockerBoxProvisioner } from "./box/provisioner.ts";
 import { decideUpgrade } from "./host/upgrade.ts";
 import { AgentRegistry, defaultAgentsRoot } from "./agents/registry.ts";
+import { attachedBox } from "./box/boxes.ts";
 import { startEgressRelay } from "./egress/relay.ts";
 import { DEFAULT_DISPLAY_INDEX } from "./protocol/index.ts";
 import { Orchestrator } from "./host/orchestrator.ts";
@@ -472,6 +473,94 @@ function cmdAgentNew(argv: string[]): number {
   return 0;
 }
 
+// --- boxes (docs/30) ----------------------------------------------------------
+
+/**
+ * Through the running web server when there is one, so the box is connected at once and the
+ * page shows it; straight into the registry otherwise, where the next start picks it up.
+ */
+async function viaWeb(path: string, body: unknown): Promise<Record<string, unknown> | undefined> {
+  const base = process.env.AGENTBOX_WEB_URL ?? "http://127.0.0.1:7777";
+  try {
+    const response = await fetch(`${base}${path}`, {
+      method: "POST",
+      headers: { "content-type": "application/json", authorization: `Bearer ${uiToken()}` },
+      body: JSON.stringify(body),
+      signal: AbortSignal.timeout(20_000),
+    });
+    const json = (await response.json().catch(() => ({}))) as Record<string, unknown>;
+    // A running server from before boxes were plural answers 404; the record is written for
+    // its next start, the same as no server at all.
+    if (response.status === 404) return undefined;
+    if (!response.ok) throw new Error(String(json.error ?? `web server answered ${response.status}`));
+    return json;
+  } catch (error) {
+    if (error instanceof Error && /ECONNREFUSED|fetch failed|timeout/i.test(error.message)) return undefined;
+    throw error;
+  }
+}
+
+async function cmdBoxAttach(argv: string[]): Promise<number> {
+  const [name, baseUrl, ...flagList] = argv;
+  const { flags } = parseArgs(flagList);
+  const tokenFile = flags.get("--token-file");
+  if (!name || !baseUrl || typeof tokenFile !== "string") {
+    err("Usage: agentbox box attach <name> <url> --token-file F [--display-floor N] [--work-dir D]");
+    return 1;
+  }
+  const floor = flags.get("--display-floor");
+  const workDir = flags.get("--work-dir");
+  try {
+    const record = attachedBox({
+      name,
+      baseUrl,
+      tokenFile: resolve(tokenFile),
+      ...(typeof floor === "string" ? { displayFloor: Number(floor) } : {}),
+      ...(typeof workDir === "string" ? { workDir } : {}),
+    });
+    const live = await viaWeb("/api/boxes/attach", { name, baseUrl, tokenFile: resolve(tokenFile), ...(typeof floor === "string" ? { displayFloor: Number(floor) } : {}), ...(typeof workDir === "string" ? { workDir } : {}) });
+    if (live !== undefined) {
+      out(`${bold(name)} attached${live.connected === true ? " and connected" : ""}: ${String(live.detail ?? "")}`);
+      return 0;
+    }
+    const registry = new AgentRegistry();
+    registry.attachBox(record);
+    out(`${bold(name)} attached (${record.id}); the web server was not running, so it connects on the next start.`);
+    return 0;
+  } catch (error) {
+    err(error instanceof Error ? error.message : String(error));
+    return 1;
+  }
+}
+
+async function cmdBoxDetach(argv: string[]): Promise<number> {
+  const [name] = argv;
+  if (!name) {
+    err("Usage: agentbox box detach <name>");
+    return 1;
+  }
+  try {
+    const live = await viaWeb("/api/boxes/detach", { name });
+    if (live === undefined) new AgentRegistry().detachBox(name);
+    out(`${bold(name)} detached.`);
+    return 0;
+  } catch (error) {
+    err(error instanceof Error ? error.message : String(error));
+    return 1;
+  }
+}
+
+function cmdBoxList(): number {
+  const registry = new AgentRegistry();
+  for (const entry of registry.listBoxes()) {
+    const residents = registry.agentsIn(entry.id).map(record => record.profile.name);
+    const where = entry.kind === "docker" ? "docker (this machine)" : `attached ${entry.endpoint?.baseUrl ?? ""}`;
+    out(`${bold(entry.name)}${entry.id === registry.box.id ? dim("  (own)") : ""}  ${dim(where)}  displays from :${entry.displayFloor}`);
+    out(dim(`  ${residents.length === 0 ? "no agents" : residents.join(", ")}`));
+  }
+  return 0;
+}
+
 // --- templates (docs/29) ------------------------------------------------------
 
 /**
@@ -639,7 +728,7 @@ function makeRenderer() {
  * when `web --host` was ignored and the published port reached nothing, and once when
  * `control up --sweep-seconds 5` printed "every 15s". Adding a value flag means adding it here.
  */
-const VALUE_FLAGS = new Set([
+const VALUE_FLAGS = new Set(["--token-file", "--display-floor", "--work-dir", 
   "--provider",
   "--model",
   "--effort",
@@ -997,6 +1086,11 @@ Box:
                             --no-backup skips the copy.
              --with-host    also run the orchestrator inside it (web UI on 7777)
   box status                Show container state, ports, and health
+  box attach <name> <url> --token-file F [--display-floor N] [--work-dir D]
+                            Drive another machine's boxd as a second box (docs/30).
+                            Agents are created into a box and stay there.
+  box detach <name>         Forget an attached box (refused while agents live in it)
+  box list                  Every box: own first, then attached, with who lives where
   box down [--rm]           Stop the box, optionally removing the container
   box logs [--tail N]       Container logs
   box shot [file.webp]      Save a screenshot of the box desktop
@@ -1114,6 +1208,12 @@ async function main(): Promise<number> {
     case "box": {
       const [sub, ...boxArgs] = rest;
       switch (sub) {
+        case "attach":
+          return cmdBoxAttach(boxArgs);
+        case "detach":
+          return cmdBoxDetach(boxArgs);
+        case "list":
+          return cmdBoxList();
         case "build":
           return cmdBoxBuild();
         case "up":

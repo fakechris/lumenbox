@@ -8,6 +8,40 @@ docs in that script's header) — reached by a second orchestrator with its own 
 one installation with two boxes. This document is what "one with two" should be, built on
 what docs/22 already decided and what today's attach taught.
 
+## Status, 2026-09-02 (evening)
+
+Stages A and B shipped on `feat/multi-box` (built on `feat/bot-templates` + `feat/grok-takeover`):
+
+- **The list** — `src/box/boxes.ts` (`boxes.json` beside the agents, migrated from `box.json`
+  keeping the own id; a list without this installation's box is refused, never adopted).
+  `AgentRegistry`: `listBoxes/defaultBox/boxById/boxOf/agentsIn/attachBox/detachBox`; `create`
+  takes `boxId` (absent = the own box) and `update` still has no such field; desktops are
+  allocated per box from that box's floor. Detach is refused while agents live there.
+- **The orchestrator** — `boxClients` by id, `boxFor(agent)`, `boxClient(agentId?)`,
+  `skillsFor(boxId)`, desktops keyed `boxId:index`, the memory mirror written to the agent's
+  box, the scheduler's `due()`/`listeners()` a union over boxes with `boxId` on each entry and
+  `defaultAgent(boxId)` = that box's first agent; `connectBox()` connects the own box then
+  every attached one on its own (one down costs only its agents). `attachBox`/`detachBox`
+  live, `boxStatus()` for the panel.
+- **The surface** — `/desktop/b/<boxId>/<index>/…` proxied to that box with its token
+  (`desktopRouteOf`); `/api/state` carries `boxes` and each agent's `boxId`/`boxName`/desktop
+  path; `POST /api/agents` and template import take `boxId`; `GET /api/boxes`,
+  `POST /api/boxes/attach|detach`; screenshot/record/clipboard routes use the agent's box;
+  starter skills are seeded per box. CLI `box attach <name> <url> --token-file F
+  [--display-floor N]`, `box detach`, `box list` (through the running server when it has the
+  route, else straight into the record). The new-agent dialog has a Box field, chosen once
+  and read-only afterwards; agent rows show the box when there is more than one.
+- **`attach-grok.sh`** registers the VM as box `grok` (floor 10) with this installation and no
+  longer starts a second orchestrator.
+- Tests: `src/box/boxes.test.ts`, `src/host/multi-box.test.ts` (two fake boxes: files, skills,
+  desktops and memory follow the agent's box; a schedule on the attached box runs as its
+  agent; detach with residents refused). 1045 green.
+
+Not done: Stage C (`TransferFile`, the wake line naming the box) and Stage D (control plane).
+What still assumes one box: the chat inbox/outbox and file routes read the own box (a door
+is bound to a box by record but the server does not route its files by it yet), `agentbox
+box up/down/status` are the Docker box's, and skill provenance is keyed by slug alone.
+
 ## 0. What today taught, as constraints
 
 - **A box is somebody's.** Grok's VM had displays :1..:5, noVNC 6080/6081, daemons on

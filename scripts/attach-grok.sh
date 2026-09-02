@@ -150,41 +150,21 @@ else
   warn "no healthy answer from http://127.0.0.1:$BOXD_PORT/health: ${HEALTH:-(empty)}"
 fi
 
-# The orchestrator's own state. The provider config is copied from the main installation once;
-# the doors (channels.json), agents, transcripts and ledgers are not — they belong to that box.
-if [ ! -f "$LOCAL_HOME/config.json" ] && [ -f "$HOME/.agentbox/config.json" ]; then
-  python3 - "$HOME/.agentbox/config.json" "$LOCAL_HOME/config.json" <<'PY'
-import json, sys
-src = json.load(open(sys.argv[1]))
-keep = {k: src[k] for k in ("provider", "model", "rates", "activityLimit", "upgradeHour") if k in src}
-# The model and search keys travel; the doors do not. A chat app delivers each event to one
-# connection, so a second host holding the same app id would split the traffic (the web server
-# refuses, but it should not have to).
-door = ("FEISHU_", "DINGTALK_", "TELEGRAM_", "SLACK_", "WECOM_", "LARK_")
-keep["env"] = {k: v for k, v in src.get("env", {}).items() if not k.startswith(door)}
-json.dump(keep, open(sys.argv[2], "w"), indent=2)
-PY
-  log "copied provider settings into $LOCAL_HOME/config.json (not the channels, not the agents)"
+# Registered with the installation as a second box (docs/30): agents are created *into* it
+# and stay there, with their own desktops from :$DISPLAY_NUM on that machine. No second
+# orchestrator — one host, one state directory, two boxes.
+log "Registering the box with this installation ..."
+cd "$ROOT_DIR"
+if npm run --silent agentbox -- box list 2>/dev/null | grep -q "^.*grok"; then
+  log "box 'grok' is already attached; leaving the record as it is"
+else
+  npm run --silent agentbox -- box attach grok "http://127.0.0.1:$BOXD_PORT" --token-file "$LOCAL_HOME/box-token" --display-floor "$DISPLAY_NUM"
 fi
 
 success "Attached. Grok's displays :1..:5 and ports 1337..1340 / 9222+ untouched."
 success "  boxd:   http://127.0.0.1:$BOXD_PORT   (token in $LOCAL_HOME/box-token)"
 success "  noVNC:  http://127.0.0.1:$VNC_PORT/vnc.html   (display :$DISPLAY_NUM)"
-
-# The UI's own token, minted once: loopback or not, a page that drives agents should ask for one.
-if [ ! -s "$LOCAL_HOME/ui-token" ]; then
-  (umask 077; head -c 24 /dev/urandom | base64 | tr -d '/+=' | head -c 32 > "$LOCAL_HOME/ui-token")
-fi
-RUN_UI="AGENTBOX_HOME=\"$LOCAL_HOME\" AGENTBOX_BOXD_URL=\"http://127.0.0.1:$BOXD_PORT\" AGENTBOX_TOKEN=\"\$(cat $LOCAL_HOME/box-token)\" AGENTBOX_UI_TOKEN=\"\$(cat $LOCAL_HOME/ui-token)\" AGENTBOX_DISPLAY_FLOOR=$DISPLAY_NUM npm run agentbox -- web --port $UI_PORT"
-if [ "$AUTO_START_UI" = true ]; then
-  log "Starting the orchestrator UI on http://127.0.0.1:$UI_PORT with state in $LOCAL_HOME ..."
-  cd "$ROOT_DIR"
-  export AGENTBOX_HOME="$LOCAL_HOME" AGENTBOX_BOXD_URL="http://127.0.0.1:$BOXD_PORT" AGENTBOX_TOKEN="$BOXD_TOKEN" AGENTBOX_DISPLAY_FLOOR="$DISPLAY_NUM"
-  export AGENTBOX_UI_TOKEN="$(cat "$LOCAL_HOME/ui-token")"
-  log "open: http://127.0.0.1:$UI_PORT/?token=$AGENTBOX_UI_TOKEN"
-  exec npm run agentbox -- web --port "$UI_PORT"
-else
-  echo ""
-  echo "To drive it from here:"
-  echo "  cd $ROOT_DIR && $RUN_UI"
-fi
+echo ""
+echo "If 'agentbox web' was already running it picks the box up on its next start; then create an"
+echo "agent into it from the New agent dialog (Box: grok) or:"
+echo "  agentbox box list"

@@ -19,7 +19,7 @@ import {
   type IncomingMessage,
   type ServerResponse,
 } from "node:http";
-import { readFileSync } from "node:fs";
+import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { connect as netConnect, type Socket } from "node:net";
 import { join, posix } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -209,6 +209,7 @@ import { Vault, type Grant } from "../host/vault.ts";
 import { seedStarterSkills } from "../host/starter-skills.ts";
 import { firstRunCue } from "../host/prompt.ts";
 import { readBoxToken } from "../box/docker.ts";
+import { attachedBox, tokenOf } from "../box/boxes.ts";
 import { catalogTemplate, describeTemplate, parseTemplate, rewriteFrontmatter, templatesEnabled, unresolvedPlaceholders } from "../host/template.ts";
 import { SKILLS_DIR, SKILL_FILENAME, slugify } from "../host/skills.ts";
 import { catchUpFloor } from "../channels/ingress.ts";
@@ -1247,11 +1248,11 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
     // Captured with the agent's own owner token, the same proof a turn presents; an
     // agent whose desktop never started answers undefined and the chat is told so.
     screenshot: async agentName => {
-      const client = orchestrator.boxClient();
-      if (client === undefined) return undefined;
       const agent =
         agentName !== undefined ? registry.resolve(agentName) : registry.list()[0];
       if (agent === undefined) return undefined;
+      const client = orchestrator.boxClient(agent.id);
+      if (client === undefined) return undefined;
       const result = await client.computer([{ action: "screenshot" }], {
         display: registry.displayIndexFor(agent.id),
         owner: registry.boxOwnerTokenFor(agent.id),
@@ -1734,8 +1735,12 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
   // take over any of them at any moment, which cannot wait on that agent's first
   // turn. Costs a few seconds at startup and nothing after.
   if (box.connected) {
-    const boxClient = orchestrator.boxClient();
-    if (boxClient) void seedStarterSkills(boxClient, line => log(line));
+    // Each box gets the starters once; a box somebody else runs is seeded the same way,
+    // under its own `.seeded` marker.
+    for (const status of orchestrator.boxStatus()) {
+      const client = orchestrator.boxClientById(status.id);
+      if (client) void seedStarterSkills(client, line => log(`${status.name}: ${line}`));
+    }
     orchestrator.onTemplateStaged = staged => {
       const agentName = registry.tryGet(staged.agentId)?.profile.name ?? staged.agentId;
       log(`${agentName} staged template version ${staged.version} (${describeTemplate(staged.template)})`);
@@ -1787,7 +1792,15 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
   let cachedOrigin: { value: Origin | undefined; at: number } | undefined;
   const ORIGIN_TTL_MS = 5000;
 
-  async function resolveBoxdOrigin(force = false): Promise<Origin | undefined> {
+  async function resolveBoxdOrigin(force = false, boxId?: string): Promise<Origin | undefined> {
+    // An attached box is reached where its record says, with the token its file holds.
+    if (boxId !== undefined && boxId !== registry.box.id) {
+      const entry = registry.boxById(boxId);
+      const token = entry === undefined ? undefined : tokenOf(entry);
+      if (entry?.endpoint === undefined || token === undefined) return undefined;
+      const url = new URL(entry.endpoint.baseUrl);
+      return { host: url.hostname, port: Number(url.port || (url.protocol === "https:" ? 443 : 80)), token };
+    }
     if (!force && cachedOrigin && Date.now() - cachedOrigin.at < ORIGIN_TTL_MS) {
       return cachedOrigin.value;
     }
@@ -1814,9 +1827,10 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
     req: IncomingMessage,
     res: ServerResponse,
     path: string,
-    retried = false
+    retried = false,
+    boxId?: string
   ): Promise<void> {
-    const origin = await resolveBoxdOrigin(retried);
+    const origin = await resolveBoxdOrigin(retried, boxId);
     if (!origin) {
       res.writeHead(503, { "content-type": "text/plain" });
       res.end("The box is not available. Start it with `agentbox box up`.");
@@ -2072,11 +2086,11 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
       },
       readOnly: true,
       run: async input => {
-        const client = orchestrator.boxClient();
-        if (client === undefined) throw new Error("No box is running on this installation.");
         const agent =
           typeof input.agent === "string" ? registry.resolve(input.agent) : registry.list()[0];
         if (agent === undefined) throw new Error("No agents on this installation.");
+        const client = orchestrator.boxClient(agent.id);
+        if (client === undefined) throw new Error("No box is running for that agent.");
         const shot = await client.computer([{ action: "screenshot" }], {
           display: registry.displayIndexFor(agent.id),
           owner: registry.boxOwnerTokenFor(agent.id),
@@ -2363,16 +2377,12 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
         if (url.pathname.startsWith("/desktop/")) {
           // Same choice as the upgrade: the page and the socket it opens must come from the same
           // stack, or a viewer would be served a page pointing at a stream they are refused.
-          const upstream = desktopUpstreamPath(
-            url.pathname,
-            url.search,
-            mayDrive(caller)
-          );
-          if (!upstream) {
+          const desktop = desktopRouteOf(url.pathname, url.search, mayDrive(caller));
+          if (!desktop) {
             send(res, 404, { error: `Not a desktop path: ${url.pathname}` });
             return;
           }
-          await proxyDesktop(req, res, upstream);
+          await proxyDesktop(req, res, desktop.upstream, false, desktop.boxId);
           return;
         }
 
@@ -2448,14 +2458,14 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
           if (refused()) return;
           const body = await readJson(req);
           const agentId = String(body.agent ?? "");
-          const client = orchestrator.boxClient();
+          if (!registry.has(agentId)) {
+            send(res, 404, { error: `No agent ${agentId}` });
+            return;
+          }
+          const client = orchestrator.boxClient(agentId);
 
           if (!client) {
             send(res, 503, { error: "The box is not available." });
-            return;
-          }
-          if (!registry.has(agentId)) {
-            send(res, 404, { error: `No agent ${agentId}` });
             return;
           }
 
@@ -3588,14 +3598,14 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
           const body = await readJson(req);
           const agentId = String(body.agent ?? "");
           const action = String(body.action ?? "");
-          const client = orchestrator.boxClient();
+          if (!registry.has(agentId)) {
+            send(res, 404, { error: `No agent ${agentId}` });
+            return;
+          }
+          const client = orchestrator.boxClient(agentId);
 
           if (!client) {
             send(res, 503, { error: "The box is not available." });
-            return;
-          }
-          if (!registry.has(agentId)) {
-            send(res, 404, { error: `No agent ${agentId}` });
             return;
           }
 
@@ -3648,13 +3658,21 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
               ...classifyBox(provisioner.boxName, loadConfig(), registry.box.name),
             },
             allTools: ALL_TOOLS,
+            // Every box this installation drives, own first (docs/30). An agent's row names its
+            // box and its desktop path is on that box.
+            boxes: orchestrator.boxStatus(),
             agents: registry.list().map(record => {
               const index = registry.displayIndexFor(record.id);
+              const boxEntry = registry.boxOf(record.id);
+              const own = boxEntry.id === registry.box.id;
+              const desktopPrefix = own ? `desktop/${index}` : `desktop/b/${boxEntry.id}/${index}`;
               return {
                 id: record.id,
                 name: record.profile.name,
                 title: record.profile.title ?? "",
                 description: record.profile.description,
+                boxId: boxEntry.id,
+                boxName: boxEntry.name,
                 // null means unrestricted — every tool, including ones added later.
                 tools: record.profile.tools ?? null,
                 ...(record.profile.scopeId !== undefined ? { scopeId: record.profile.scopeId } : {}),
@@ -3664,8 +3682,8 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
                 // belongs to the agent you are looking at.
                 displayIndex: index,
                 desktopUrl:
-                  `/desktop/${index}/vnc.html?autoconnect=1&resize=scale` +
-                  `&path=desktop/${index}/websockify`,
+                  `/${desktopPrefix}/vnc.html?autoconnect=1&resize=scale` +
+                  `&path=${desktopPrefix}/websockify`,
               };
             }),
           });
@@ -3723,6 +3741,62 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
             return { ...conversation, ...(firstLine !== undefined ? { firstLine } : {}) };
           });
           send(res, 200, { conversations: page, total: sorted.length });
+          return;
+        }
+
+        // ── boxes (docs/30) ─────────────────────────────────────────────────────────
+        if (route === "GET /api/boxes") {
+          send(res, 200, { boxes: orchestrator.boxStatus(), own: registry.box.id });
+          return;
+        }
+
+        // Attaching is an owner's act: it puts another machine's authority in the roster.
+        if (route === "POST /api/boxes/attach") {
+          if (refused()) return;
+          const body = await readJson(req);
+          const name = String(body.name ?? "").trim();
+          const baseUrl = String(body.baseUrl ?? "").trim();
+          let tokenFile = typeof body.tokenFile === "string" ? body.tokenFile.trim() : "";
+          if (tokenFile === "" && typeof body.token === "string" && body.token.trim() !== "") {
+            // A token pasted in is kept in a file of its own, mode 0600, never in the record.
+            const dir = join(agentboxHome(), "boxes");
+            mkdirSync(dir, { recursive: true, mode: 0o700 });
+            tokenFile = join(dir, `${name}.token`);
+            writeFileSync(tokenFile, `${body.token.trim()}\n`, { mode: 0o600 });
+          }
+          let entry: ReturnType<typeof attachedBox>;
+          try {
+            entry = attachedBox({
+              name,
+              baseUrl,
+              tokenFile,
+              ...(Number.isInteger(Number(body.displayFloor)) && Number(body.displayFloor) >= 1 ? { displayFloor: Number(body.displayFloor) } : {}),
+              ...(typeof body.workDir === "string" && body.workDir.trim() !== "" ? { workDir: body.workDir.trim() } : {}),
+            });
+          } catch (error) {
+            send(res, 400, { error: error instanceof Error ? error.message : String(error) });
+            return;
+          }
+          try {
+            const result = await orchestrator.attachBox(entry);
+            log(`attached box ${entry.name} (${entry.id}) at ${baseUrl}: ${result.detail}`);
+            send(res, 200, { box: entry, ...result });
+          } catch (error) {
+            send(res, 409, { error: error instanceof Error ? error.message : String(error) });
+          }
+          return;
+        }
+
+        if (route === "POST /api/boxes/detach") {
+          if (refused()) return;
+          const body = await readJson(req);
+          try {
+            const entry = orchestrator.detachBox(String(body.name ?? ""));
+            log(`detached box ${entry.name} (${entry.id})`);
+            send(res, 200, { ok: true, box: entry });
+          } catch (error) {
+            send(res, 409, { error: error instanceof Error ? error.message : String(error) });
+          }
           return;
         }
 
@@ -3788,6 +3862,7 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
               caller,
               ...(typeof body.name === "string" && body.name.trim() !== "" ? { name: body.name.trim() } : {}),
               ...(shareId !== undefined ? { shareId } : {}),
+              ...(typeof body.boxId === "string" && registry.boxById(body.boxId) !== undefined ? { boxId: body.boxId } : {}),
               connected,
               log,
             });
@@ -3843,7 +3918,7 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
           send(res, 200, {
             id: orchestrator.templateIdOf(agent.id),
             versions: orchestrator.stagedTemplates(agent.id),
-            ...(share !== undefined && share.published ? { share } : {}),
+            ...(share?.published ? { share } : {}),
             canPublish: controlPlane() !== undefined,
             ...(agent.profile.importedFrom !== undefined ? { importedFrom: agent.profile.importedFrom } : {}),
           });
@@ -4007,9 +4082,15 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
             send(res, 400, { error: tools.message });
             return;
           }
+          const boxId = typeof body.boxId === "string" && body.boxId.trim() !== "" ? body.boxId.trim() : undefined;
+          if (boxId !== undefined && registry.boxById(boxId) === undefined) {
+            send(res, 400, { error: `No box with id ${boxId}.` });
+            return;
+          }
           const created = registry.create({
             name,
             description: String(body.description ?? ""),
+            ...(boxId !== undefined ? { boxId } : {}),
             ...(typeof body.title === "string" && body.title.trim() !== ""
               ? { title: body.title.trim() }
               : {}),
@@ -4245,18 +4326,18 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
 
     // And the role, not only the token: this socket is bidirectional, so authorising it as though
     // it only carried pixels is what let someone who may only watch drive the desktop instead.
-    const upstreamPath = desktopUpstreamPath(
+    const desktop = desktopRouteOf(
       pathname ?? "",
       query ? `?${query}` : "",
       mayDrive(callerOf(req.headers, upgradeDecision.allow))
     );
 
-    if (!upstreamPath) {
+    if (!desktop) {
       clientSocket.destroy();
       return;
     }
 
-    void openUpgrade(req, clientSocket, head, upstreamPath);
+    void openUpgrade(req, clientSocket, head, desktop.upstream, desktop.boxId);
   });
 
   /** The RFB socket, joined to whichever host port boxd is published on right now. */
@@ -4264,9 +4345,10 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
     req: IncomingMessage,
     clientSocket: Socket,
     head: Buffer,
-    upstreamPath: string
+    upstreamPath: string,
+    boxId?: string
   ): Promise<void> {
-    const origin = await resolveBoxdOrigin();
+    const origin = await resolveBoxdOrigin(false, boxId);
     if (!origin) {
       clientSocket.destroy();
       return;
@@ -4413,9 +4495,21 @@ export function desktopUpstreamPath(
   search: string,
   canDrive: boolean
 ): string | undefined {
-  const match = /^\/desktop\/(\d+)(\/.*)?$/.exec(pathname);
+  return desktopRouteOf(pathname, search, canDrive)?.upstream;
+}
+
+/**
+ * `/desktop/<index>/…` is the installation's own box; `/desktop/b/<boxId>/<index>/…` is an
+ * attached one (docs/30). Both map to boxd's `/vnc/<index>/…` on the box named.
+ */
+export function desktopRouteOf(
+  pathname: string,
+  search: string,
+  canDrive: boolean
+): { boxId: string | undefined; upstream: string } | undefined {
+  const match = /^\/desktop\/(?:b\/([A-Za-z0-9_-]+)\/)?(\d+)(\/.*)?$/.exec(pathname);
   if (!match) return undefined;
-  const rest = match[2] ?? "/";
-  return `/${canDrive ? "vnc" : "vnc-ro"}/${match[1]}${rest}${search}`;
+  const rest = match[3] ?? "/";
+  return { boxId: match[1], upstream: `/${canDrive ? "vnc" : "vnc-ro"}/${match[2]}${rest}${search}` };
 }
 
