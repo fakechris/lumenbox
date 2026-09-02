@@ -139,6 +139,11 @@ export interface ToolContext {
    * installation without one never learns it might have asked.
    */
   docReader?: { read: (url: string) => Promise<{ text: string; isError?: boolean }> };
+  /** Records which agent wrote into a skill, for the scheduler (skill-provenance.ts). */
+  skillProvenance?: {
+    noteWrite(input: { path: string; agentId: string; agentName: string; tool: string }): string | undefined;
+    noteCommand(input: { command: string; agentId: string; agentName: string }): string[];
+  };
 }
 
 /** A tool result: text for the model, plus optional images. */
@@ -1439,6 +1444,13 @@ export async function dispatchTool(
     }
 
     case "bash": {
+      // Attributed before it runs: a write attempt into a skill is the fact that matters, whether
+      // or not the command then succeeded.
+      context.skillProvenance?.noteCommand({
+        command: String(input.command ?? ""),
+        agentId: context.agent.id,
+        agentName: context.agent.profile.name,
+      });
       const command = String(input.command ?? "");
       // Before the box is even required: a shell that drives the browser or the screen
       // directly reaches the same outcome as the tools while passing none of the checks
@@ -1877,6 +1889,7 @@ export async function dispatchTool(
       // Recorded like any other write, so the next writer still sees a conflict rather
       // than overwriting an edit nobody else knows happened.
       context.files?.observed(context.agent.id, path, versionOf(updated));
+      context.skillProvenance?.noteWrite({ path, agentId: context.agent.id, agentName: context.agent.profile.name, tool: "edit_file" });
       const delta = updated.split("\n").length - existing.content.split("\n").length;
       return {
         text:
@@ -1944,6 +1957,7 @@ export async function dispatchTool(
       // Its own write is the newest thing it has seen, so writing twice in a row is not a conflict
       // with itself.
       context.files?.observed(context.agent.id, result.path, versionOf(content));
+      context.skillProvenance?.noteWrite({ path, agentId: context.agent.id, agentName: context.agent.profile.name, tool: "write_file" });
       return { text: `Wrote ${result.bytes_written} bytes to ${result.path}.` };
     }
 

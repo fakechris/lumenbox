@@ -630,3 +630,46 @@ test("a scheduled skill may not borrow another agent's permissions", async () =>
   await plain.tick();
   assert.deepEqual(ordinary, [{ agent: "agent-ada" }]);
 });
+
+test("a skill runs as the agent the host saw write it, and as nobody else", async () => {
+  // Audit 2026-09-01 #2 was a skill file naming another agent and being run as them. With
+  // provenance the rule becomes: your own skill may run as you; a skill Bob wrote that names Ada
+  // is refused with Bob named, so a person reading the log knows who to ask.
+  const clock = new Date("2026-09-02T09:00:00Z");
+  const runs: string[] = [];
+  const lines: string[] = [];
+  const skill = (slug: string, runAs: string) =>
+    ({
+      slug,
+      name: slug,
+      path: `/home/box/work/skills/${slug}/SKILL.md`,
+      schedule: parseSchedule("@every 1m") as never,
+      runAs,
+    }) as never;
+  const scheduler = new Scheduler({
+    due: async () => [skill("bobs-retro", "Ada"), skill("adas-brief", "Ada"), skill("orphan", "Ada")],
+    run: async agent => {
+      runs.push(agent);
+    },
+    defaultAgent: () => "agent-ops",
+    resolveAgent: name => ({ Ada: "agent-ada", Bob: "agent-bob", Ops: "agent-ops" })[name],
+    writerOf: slug =>
+      ({
+        "bobs-retro": { agentId: "agent-bob", agentName: "Bob" },
+        "adas-brief": { agentId: "agent-ada", agentName: "Ada" },
+      })[slug],
+    now: () => clock,
+    log: line => lines.push(line),
+    path: null,
+  });
+  await scheduler.tick();
+  assert.deepEqual(runs, ["agent-ada"], "only Ada's own skill ran, as Ada");
+  assert.ok(
+    lines.some(line => /bobs-retro: refuses to run as "Ada" — the host saw Bob write it/.test(line)),
+    `the writer is named: ${lines.join(" | ")}`
+  );
+  assert.ok(
+    lines.some(line => /orphan: refuses to run as "Ada" — the host has no record of who wrote it/.test(line)),
+    "an unattributed skill is refused and says so"
+  );
+});

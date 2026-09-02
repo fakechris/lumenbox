@@ -434,6 +434,11 @@ export interface SchedulerDeps {
   defaultAgent: () => string | undefined;
   /** Resolves a name to an agent id, so `agent:` can be compared against the default. */
   resolveAgent?: (nameOrId: string) => string | undefined;
+  /**
+   * Who the host saw write this skill, when it saw anyone (skill-provenance.ts). What lets a skill
+   * run as the agent that wrote it, and nobody else.
+   */
+  writerOf?: (slug: string) => { agentId: string; agentName: string } | undefined;
   now?: () => Date;
   log?: (line: string) => void;
   /**
@@ -657,16 +662,24 @@ export class Scheduler {
    * (docs/13). Until then this errs towards refusing work rather than running somebody
    * else's.
    */
-  private runnerFor(skill: { name: string; runAs?: string }): string | undefined {
+  private runnerFor(skill: { slug: string; name: string; runAs?: string }): string | undefined {
     const fallback = this.deps.defaultAgent();
     if (skill.runAs === undefined) return fallback;
     const named = this.deps.resolveAgent?.(skill.runAs);
     if (named !== undefined && named === fallback) return named;
     if (named === undefined && skill.runAs === fallback) return fallback;
+    // An agent may schedule its own skill to run as itself: the host saw it write the file, so the
+    // permissions the run carries are its own. Any other name is still borrowing.
+    const writer = this.deps.writerOf?.(skill.slug);
+    if (named !== undefined && writer !== undefined && writer.agentId === named) return named;
+    const seen =
+      writer === undefined
+        ? "the host has no record of who wrote it"
+        : `the host saw ${writer.agentName} write it`;
     this.log(
-      `${skill.name}: refuses to run as "${skill.runAs}" — a scheduled skill may only run ` +
-        `as this installation's default agent, because a skill file is writable by any ` +
-        `agent and naming another one would be a way to borrow its permissions.`
+      `${skill.name}: refuses to run as "${skill.runAs}" — ${seen}, and a skill runs as the ` +
+        `agent that wrote it or as this installation's default agent, never as someone else, ` +
+        `because naming another agent in a file you can write is a way to borrow its permissions.`
     );
     return undefined;
   }

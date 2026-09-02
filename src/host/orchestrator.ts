@@ -22,6 +22,7 @@ import { AgentRegistry, type AgentRecord } from "../agents/registry.ts";
 import type { BoxClient } from "../box/client.ts";
 import { MemoryMirror } from "./memory-mirror.ts";
 import { AutoReviewer } from "./auto-review.ts";
+import { SkillProvenance } from "./skill-provenance.ts";
 import { appendLine } from "./jsonl.ts";
 import { agentboxHome } from "../config.ts";
 import { join } from "node:path";
@@ -80,6 +81,8 @@ export interface OrchestratorOptions {
    * `null` keeps none.
    */
   turns?: TurnLedger | null;
+  /** Who wrote each skill. `null` keeps no record, which is what a test wants. */
+  skillProvenance?: SkillProvenance | null;
   /** Who has taken which piece of work. `null` keeps none. */
   claims?: Claims | null;
   /**
@@ -121,6 +124,7 @@ export class Orchestrator {
   private readonly client: Anthropic;
   private box: BoxClient | undefined;
   private readonly memoryMirror: MemoryMirror;
+  readonly skillProvenance: SkillProvenance;
   private resolution: ResolutionConfig | undefined;
   /** What kind of box the connected box is; see docs/18. */
   private boxAccess: BoxClass | undefined;
@@ -295,6 +299,7 @@ export class Orchestrator {
       await this.options.deliverToChat?.(deliver, said);
     },
     defaultAgent: () => this.registry.list()[0]?.id,
+    writerOf: slug => this.skillProvenance.writerOf(slug),
     // So the scheduler can tell "agent: Ada" from "agent: <somebody else>" — the gate
     // it applies to a name that came out of a writable file.
     resolveAgent: name => {
@@ -472,6 +477,11 @@ export class Orchestrator {
         ? undefined
         : (options.turns ??
           new TurnLedger(turnLedgerPath(), line => console.error(`[turns] ${line}`)));
+    this.skillProvenance =
+      options.skillProvenance === null
+        ? new SkillProvenance(null)
+        : (options.skillProvenance ??
+          new SkillProvenance(join(agentboxHome(), "skill-provenance.jsonl")));
     this.registry = options.registry ?? new AgentRegistry();
     this.memoryMirror = new MemoryMirror({
       registry: this.registry,
@@ -659,6 +669,7 @@ export class Orchestrator {
       // The same cheap profile the summariser and the note-taker use. Choosing which memories to
       // show is the least interesting work in the system and should be billed accordingly.
       selectMemory: prompt => this.askCheaply(agent, prompt),
+      skillProvenance: this.skillProvenance,
       // Same cheap profile. Shadow by default: the verdicts land in auto-review.jsonl and the web
       // log, and a week of them is what decides whether the classifier earns a veto.
       autoReview: new AutoReviewer({

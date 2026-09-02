@@ -361,6 +361,8 @@ export interface TurnDeps {
    * review, which is what every turn had before; `mode()` decides whether a BLOCK is enforced.
    */
   autoReview?: { mode(): ReviewMode; review(input: ReviewInput): Promise<Verdict> };
+  /** Records which agent wrote into a skill. Absent means no record is kept. */
+  skillProvenance?: ToolContext["skillProvenance"];
   resolution: ResolutionConfig | undefined;
   /**
    * What kind of box this is (docs/18). Absent means the caller did not classify it and
@@ -1977,6 +1979,7 @@ export async function runTurn(
             mcp: deps.mcp,
             askUser: deps.askUser,
             docReader: deps.docReader,
+            skillProvenance: deps.skillProvenance,
             turnId,
             conversation,
           }
