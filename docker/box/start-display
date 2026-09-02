@@ -222,7 +222,9 @@ fi
 # google-chrome where there is no chromium, which is also what keeps a running Chrome from
 # showing beside a pinned one it cannot match.
 DOCK="${PLANK_DOCK:-dock1}"
+FRESH_DOCK=0
 if [ "$DOCK" != "dock1" ] && [ ! -d "$HOME/.config/plank/$DOCK/launchers" ]; then
+  FRESH_DOCK=1
   mkdir -p "$HOME/.config/plank/$DOCK/launchers" "$HOME/.local/share/applications"
   # The browser on our dock is box-chrome — our profile, our debug port, no first-run and no
   # default-browser nag — never the stock desktop file, which opens the machine's default
@@ -246,7 +248,9 @@ if command -v dconf > /dev/null 2>&1; then
   else
     ITEMS="$(ls "$HOME/.config/plank/$DOCK/launchers" 2>/dev/null | sed "s/.*/'&'/" | paste -sd, - | sed 's/^/[/; s/$/]/')"
   fi
-  if [ "$(dconf read /net/launchpad/plank/docks/$DOCK/theme 2>/dev/null)" != "'Transparent'" ]; then
+  # Written when the dock is new here or its launchers were just (re)made: dconf holds the
+  # item list, and a stale one would keep showing launchers that no longer exist.
+  if [ "$FRESH_DOCK" = 1 ] || [ "$(dconf read /net/launchpad/plank/docks/$DOCK/theme 2>/dev/null)" != "'Transparent'" ]; then
     dbus-run-session -- sh -c "
       p=/net/launchpad/plank/docks/$DOCK
       dconf write \$p/dock-items \"$ITEMS\"
