@@ -29,6 +29,7 @@
  * architecture exists to avoid. Limits arrive as configuration; enforcement is local.
  */
 
+import { classifyShell } from "./shell-readonly.ts";
 import { envNumber } from "../config.ts";
 import { appendFileSync, existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import { createHash, randomUUID } from "node:crypto";
@@ -796,7 +797,13 @@ export function describeRequest(request: PolicyRequest): string {
     case "tool": {
       const command = typeof request.input.command === "string" ? request.input.command : undefined;
       const detail = command ?? JSON.stringify(request.input);
-      return `${request.agentName}: ${request.tool} — ${detail}`;
+      // Said on the card when it is certain, so a person approving `git status && ls` is told the
+      // one thing that decides it. Silence otherwise: "not known to be read-only" is not a warning.
+      const readOnly =
+        command !== undefined && (request.tool === "RunOnHost" || request.tool === "bash") && classifyShell(command).readOnly
+          ? " [read-only]"
+          : "";
+      return `${request.agentName}: ${request.tool} — ${detail}${readOnly}`;
     }
   }
 }

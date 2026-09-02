@@ -155,3 +155,23 @@ test("the lease is written atomically, leaving no partial file", async () => {
     rmSync(OWNER_FILE, { force: true });
   }
 });
+
+test("a reused desktop refuses its previous owner's token", async () => {
+  // The index is recycled; the token is not. Once a successor holds the desktop, the previous
+  // owner presenting its old token is just another stranger — otherwise a lapsed claim would be
+  // a way back into a screen that now shows someone else's session.
+  rmSync(OWNER_FILE, { force: true });
+  try {
+    await withDesktop().ensure(INDEX, "token-for-ada");
+    const stale = JSON.parse(readFileSync(OWNER_FILE, "utf8")) as { hash: string; at: number };
+    writeFileSync(OWNER_FILE, JSON.stringify({ ...stale, at: Date.now() - 31 * 60_000 }));
+
+    const successor = new DisplayManager(() => {});
+    successor.assertOwner(INDEX, "token-for-rex");
+    assert.throws(() => successor.assertOwner(INDEX, "token-for-ada"), DisplayOwnershipError);
+    assert.throws(() => new DisplayManager(() => {}).assertOwner(INDEX, "token-for-ada"), DisplayOwnershipError);
+    successor.assertOwner(INDEX, "token-for-rex");
+  } finally {
+    rmSync(OWNER_FILE, { force: true });
+  }
+});
