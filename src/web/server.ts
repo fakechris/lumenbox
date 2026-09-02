@@ -923,7 +923,11 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
       const owed = randomUUID();
       deliveries.open({
         id: owed,
-        chatKey,
+        // The thread when there is one. The room key here sent a recovered answer to the
+        // bottom of the group while the question sat inside a topic (2026-09-02, "接
+        // ipad/android"): the sweep pushes to whatever this says, and a thread key rides
+        // as a reply to the topic root - which is where the person who asked is reading.
+        chatKey: threadKey ?? chatKey,
         incarnation: incarnationOf(chatKey),
         conversation,
         agentId: agent.id,

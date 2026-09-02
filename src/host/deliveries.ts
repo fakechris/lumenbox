@@ -31,6 +31,7 @@ const COMPACT_AT = 200;
 export interface Delivery {
   id: string;
   /** Where the answer goes. */
+  /** The chat *or thread* the answer belongs to: a thread key when the request came from a topic. */
   chatKey: string;
   /**
    * The channel incarnation the chatKey was observed under (docs/22 §4). Records
