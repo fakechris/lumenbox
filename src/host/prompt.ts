@@ -717,13 +717,20 @@ export const VOLATILE_SECTIONS: readonly PromptSection[] = [
     // memory layer is theatre" — the ablation half of docs/14's experiment designs, and
     // the honest test of a component we keep proposing to extend while it holds two facts
     // somebody chose to keep and fifteen nobody vouched for.
-    render: context =>
-      ablated("memory")
-        ? ""
-        : renderMemory(
-            context.memoryRecall ?? recall(context.memory),
-            context.hasBox === false ? undefined : memoryMirrorDir(context.agent.profile.name)
-          ),
+    //
+    // `notes` is the finer knife (R28): keep the facts somebody chose to keep and drop only
+    // the notes nobody vouched for, so the auto-extracted layer is measured on its own.
+    render: context => {
+      if (ablated("memory")) return "";
+      const recalled = context.memoryRecall ?? recall(context.memory);
+      const shown = ablated("notes")
+        ? { ...recalled, records: recalled.records.filter(record => record.kind !== "note") }
+        : recalled;
+      return renderMemory(
+        shown,
+        context.hasBox === false ? undefined : memoryMirrorDir(context.agent.profile.name)
+      );
+    },
   },
   {
     name: "skills",

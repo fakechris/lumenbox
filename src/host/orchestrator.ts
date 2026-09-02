@@ -242,6 +242,26 @@ export class Orchestrator {
    * managers would mean two of every bridge for no gain.
    */
   readonly mcp: McpManager;
+  /** Whether `mcp` was built from config.json, and so can be rebuilt from it. */
+  private readonly mcpFromConfig: boolean;
+
+  /**
+   * Re-reads `mcpServers` from config.json and applies the difference (R36). Undefined when
+   * the manager was injected rather than read from config — a test's, or nobody's.
+   */
+  reloadMcp(): { started: string[]; stopped: string[]; kept: string[] } | undefined {
+    if (!this.mcpFromConfig) return undefined;
+    return this.mcp.reload(mcpServersFrom(loadConfig(line => console.error(`[config] ${line}`))));
+  }
+
+  /**
+   * Skill directories beyond the box's own, in the order config lists them (R26). Read per
+   * refresh — at most every few seconds per box — so an edit to config.json applies without
+   * a restart, like the skills themselves.
+   */
+  private skillRoots(): readonly string[] {
+    return loadConfig(() => {}).skillRoots ?? [];
+  }
 
   /** Begin/end per turn. A begin with no end is a turn the process died underneath. */
   private readonly turns: TurnLedger | undefined;
@@ -290,14 +310,14 @@ export class Orchestrator {
    * Cached because a prompt is built once per turn and reading them is a listing plus a read per
    * skill; four agents waking at once should not produce four scans of the same directory.
    */
-  readonly skills = new SkillCache(() => this.box);
+  readonly skills = new SkillCache(() => this.box, () => this.skillRoots());
 
   /** The skills directory of one box, read at most every few seconds like the own box's. */
   skillsFor(boxId: string): SkillCache {
     if (boxId === this.registry.box.id) return this.skills;
     let cache = this.skillCaches.get(boxId);
     if (cache === undefined) {
-      cache = new SkillCache(() => this.boxClients.get(boxId));
+      cache = new SkillCache(() => this.boxClients.get(boxId), () => this.skillRoots());
       this.skillCaches.set(boxId, cache);
     }
     return cache;
@@ -545,15 +565,11 @@ export class Orchestrator {
     if (this.tasks !== undefined) this.tasks.onChange(task => this.maybeAudit(task));
     if (this.tasks !== undefined) this.tasks.onChange(task => this.maybeLearnFrom(task));
     this.scopes = options.scopes === null ? undefined : (options.scopes ?? new ScopeStore());
+    this.mcpFromConfig = options.mcp === undefined;
     this.mcp =
       options.mcp === null || options.mcp === undefined
         ? new McpManager(
-            options.mcp === null
-              ? []
-              : Object.entries(loadConfig().mcpServers ?? {}).map(([name, server]) => ({
-                  name,
-                  ...server,
-                })),
+            options.mcp === null ? [] : mcpServersFrom(loadConfig()),
             line => console.error(`[mcp] ${line}`)
           )
         : options.mcp;
@@ -1582,3 +1598,8 @@ export const STARTER_TEAM: readonly {
     tools: NO_TEAM_BUILDING.filter(tool => tool !== "write_file"),
   },
 ];
+
+/** The MCP server list as config.json spells it, in the manager's shape. */
+function mcpServersFrom(config: { mcpServers?: Record<string, { command: string; args?: string[]; env?: Record<string, string> }> }) {
+  return Object.entries(config.mcpServers ?? {}).map(([name, server]) => ({ name, ...server }));
+}

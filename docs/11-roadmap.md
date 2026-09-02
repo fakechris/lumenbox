@@ -185,6 +185,16 @@ full authority — the loading rule and who may drop files there need docs/10 tr
 and the cheap majority of its value (skills hot, restarts painless) is already shipped.
 Build when a person edits extensions often enough to feel the restart.
 
+**R36, second seam shipped 2026-09-02.** `McpManager.reload` applies a fresh `mcpServers`
+list without a restart — unchanged entries keep their process and tools, changed or removed
+ones stop, new ones start in the background as at boot. Reachable as `POST /api/mcp/reload`,
+`agentbox mcp reload`, and a "Reload from config" button in Settings (shown to admins even
+with none configured, because "add one, then reload" is the way in). The security face got
+its entry the same day: docs/10 S-9, and `hooks.ts` refuses a hooks file that is group- or
+world-writable or owned by another uid. What remains is the loader proper — a
+`~/.agentbox/extensions/*.ts` directory with a factory contract — and it still waits for a
+person who edits extensions often enough to feel the restart.
+
 **R36, first seam shipped 2026-09-02 (`b02ecb4`).** Lifecycle hooks in Claude Code's dialect:
 `~/.agentbox/hooks.json` runs PreToolUse / PostToolUse / Stop / PreCompact commands with the
 same stdin payload and answers Claude Code uses, re-read on mtime. Not a plugin system — the
@@ -303,7 +313,15 @@ and the dead records become a latency surface. Smallest item on this page and th
 prerequisite for R24.
 </details>
 
-### R24. A run has to say which model and which code produced it
+### ~~R24. A run has to say which model and which code produced it~~ — shipped 2026-09-02 (`78fdc49`)
+The turn ledger's begin record now carries `model`, `build {version, commit}` and a 16-hex
+`promptHash` over the round-one prompt. The prompt itself is not stored — it is thousands
+of lines and mostly repeats — but "the prompt changed between these two turns" is the
+question, and a hash answers it. The context length at the moment of confusion is the
+compaction log's business (docs/23) and stays there.
+
+<details><summary>original entry</summary>
+
 Every transcript entry carries `at, blocks, causedBy, covers, kind, role, text`. `causedBy`
 and `covers` are more than the reference asks for — but nothing records the model, the
 harness version, or the code SHA, and the assembled prompt is never stored. So "did this
@@ -311,6 +329,7 @@ regression start the day we swapped the model" and "how long was the context whe
 confused" are both unanswerable from our own records, while "how often did this tool return
 an empty result" is answerable and was answered. Small; needs a decision about where the
 prompt hash lives, not a subsystem.
+</details>
 
 ### ~~R19. Host-initiated exec, marked as such~~ — shipped (`0d4fcba`)
 `ExecRequest.actor` labels who asked, and boxd logs every command with it. The gap
@@ -411,7 +430,26 @@ boxd. Medium. Rider, nearly free: enrich the box toolchain (`ripgrep`, `gh`, `tm
 fall back to.
 </details>
 
-### R25. What identifies a conversation, finished
+### ~~R25. What identifies a conversation, finished~~ — closed 2026-09-02, two thirds by facts
+Re-read against the tree and the live state directory before acting, which is what saved it
+from being implemented a fourth time:
+
+- **P2P on one key is deliberate, not a leftover.** `conversationKeyFor` checks `p2p` *first*
+  and says why: keyed on the thread, a person who talked to the bot "in the same topic the
+  whole time" watched it forget everything, because their top-level messages and their
+  in-topic replies landed in different conversations. In a 1:1 the counterpart is one person
+  and a bubble is not a subject boundary. What bounds the history is compaction (docs/23),
+  which is the mechanism for "a chat running for weeks", not re-keying.
+- **The "317 unreachable records" are the live 1:1.** `feishu-oc_…5ec315f91c2e4a19.jsonl` was
+  written on 2026-08-31 — it is that chat's conversation under the key the system produces
+  today. Nothing to migrate.
+- **The derived-key finding was closed by `ConversationDirectory`** (id → chatKey, appended
+  where the key is last seen). What is left of it is one theoretical collision in
+  `scopes.boundTo`'s prefix match — a chat id that is another's prefix plus `-` — which no
+  vendor id format we carry can produce. Noted here; not worth a record until one can.
+
+<details><summary>original entry</summary>
+
 The adversarial review of 2026-08-25 raised six findings; the top one was fixed and the
 rest were recorded and not acted on. They are still true:
 
@@ -428,8 +466,19 @@ rest were recorded and not acted on. They are still true:
 
 Medium. This is the decision that was implemented three times, so per docs/13 it goes to
 review before the fourth.
+</details>
 
-### R26. Skills you can install, not only write
+### ~~R26. Skills you can install, not only write~~ — shipped 2026-09-02
+`skillRoots` in config.json is an ordered list of further directories inside the box;
+`loadSkills` reads the box's own `/home/box/work/skills` first and then each root in order,
+the earlier root wins a slug collision and the index says so ("`deploy`: also in /srv/more,
+shadowed by the one in /opt/skills"), and a root that is configured but not on this box is a
+line in the index rather than a silent nothing. Re-read at each refresh like the skills
+themselves, so an edit needs no restart. A skill's `path` points where its file really is.
+The rider below still holds: install the general-method kind, expect to delete it.
+
+<details><summary>original entry</summary>
+
 Four unrelated projects ship the same artifact — a directory with `SKILL.md`, `scripts/`,
 `references/`, installed by copying into the host's skills folder — and **our format is
 already that**, which makes the ecosystem directly consumable. Nothing in the repository
@@ -440,6 +489,7 @@ your own directory wins. Small-medium, and it is the honest version of R21's imp
 Rider, and the reason not to over-invest: a skill that encodes *how this installation
 works* cannot be baked into anyone's weights, and one that teaches a general method can.
 Build the first kind; borrow the second and expect to delete it.
+</details>
 
 ### R27. Evidence attached to the belief
 Two unrelated sources arrive at the same mechanism: OpenWiki stores each claim with the
@@ -455,7 +505,28 @@ false in an hour. **Start with the subset whose evidence is a file in the box**,
 that is the only kind we can version cleanly; a claims runtime over unversionable evidence
 is bookkeeping. Medium; design first.
 
-### R28. Turn the observed failures into eval cases — first third landed
+### R28. Turn the observed failures into eval cases — two thirds landed
+**The memory ablation was run 2026-09-02**, and for the first time against a memory worth
+ablating: `golden --memory-from=Ada` seeds the golden agent with a live agent's records (35
+here: 32 extracted notes, 3 kept facts), and `AGENTBOX_ABLATE=notes` withholds only the
+notes. Style tier, six tasks (`uses-what-it-has` needs a box and was skipped), MiniMax-M3,
+three runs per condition:
+
+| condition | passes | tokens per run |
+| --- | --- | --- |
+| notes + facts | 4, 4, 6 of 6 (14/18) | 119k, 318k, 264k |
+| facts only (`ABLATE=notes`) | 5, 4, 6 of 6 (15/18) | 119k, 100k, 159k |
+
+Read plainly: the notes layer moves nothing the style tier can see — the spread *within* a
+condition (4 to 6) is larger than the gap between them — and the runs that carried the
+notes cost about 1.9× the tokens, every pair, with the excess in longer search excursions
+on `not-verified`. Three runs is not a proof, and the judge was visibly noisy once
+(`asked-again` passed while the judge said "reads as a restatement"). It is enough to stop
+extending the notes layer on the assumption that it carries the how-to-answer behaviour;
+whether to shrink its budget, gate it on query relevance, or leave it is decided with R17
+and R27, on the same week of data. Still to write: a listener fires/stays-quiet suite (now
+possible: `trigger: message` shipped), and the golden-tasks-versus-traffic comparison.
+
 `4bf2a77`: the memory sentinel is now matched by letters rather than exactly (the stored
 `(NOTHING)` removed, the next one impossible), and the Seltz failure is a golden task —
 `empty-is-not-an-answer`, an empty directory the prompt insists holds notes, graded on
@@ -858,6 +929,15 @@ Both are small and neither depends on the write-ahead design, so they need not w
 Recorded here rather than in a new entry because they are the same subject: what a turn is
 allowed to do at a boundary it did not choose.
 
+**Both riders shipped 2026-09-02 (`78fdc49`).** Steering is not taken while the model is
+finishing — a Stop hook's send-back was the one path that kept the loop going after a round
+with no tool calls, and the user's message queued there now opens the next turn instead of
+dangling on this one. And a `Fork` join races the person: `bus.onSteering` wakes the join
+when an instruction arrives, what has finished is returned at once, the forks still running
+land later as system messages in the parent conversation (`bus.deliverSystem`), and the
+instruction is read at the boundary the early return creates. What remains under R8 is the
+write-ahead intent record, still L, still an upgrade rather than a fix.
+
 ### ~~R9. Auto-review as a state machine~~ — shipped
 <details><summary>original entry</summary>
 
@@ -1150,14 +1230,14 @@ that says a thing *will* be built. Verdicts: **close** (done or superseded), **p
 | R37 | Meeting presence | **close (blocked)** | both paths built to their end; the vendor's risk control and `bots/join` 121016 are outside the tree |
 | R35 | Feishu first-connect | **close** | shipped 2026-08-29 |
 | R3 | Win/Linux packaging | partial, S | `dist:win`/`dist:linux`, icons, `productName` all there; no artifact ever produced, no CI job. Next: a `workflow_dispatch` release job that asserts the installers exist |
-| R8 | Checkpoint and resume | partial, S first | coarse resume ships; the cheap rider is still missing: steering is appended even when the previous round made no tool call (`turn.ts` ~1465). Next: guard on `toolUses.length > 0`. Write-ahead intent stays L |
-| R24 | Which model, which code | partial, S | usage rows carry provider/model/workId/turnId; the transcript carries no version or SHA. Next: stamp `{version, commit, promptHash}` on the turn-ledger record at begin |
-| R28 | Failures → eval cases | partial, S | 21 golden cases incl. the process and style tiers; trigger evals are now unblocked by `trigger: message`. Next: `AGENTBOX_ABLATE=notes` and run the style tier; then a fires/stays-quiet suite for listeners |
+| R8 | Checkpoint and resume | riders **done** 2026-09-02; write-ahead open, L | steering waits while the model is finishing; a fork join wakes on an instruction. What is left is the write-ahead intent record |
+| R24 | Which model, which code | **close** 2026-09-02 | turn ledger begin record: `model`, `build`, `promptHash` |
+| R28 | Failures → eval cases | ablation **run** 2026-09-02; two thirds open | `AGENTBOX_ABLATE=notes` + `golden --memory-from`; result in the entry. Still open: a fires/stays-quiet suite for listeners, and the tasks-versus-traffic comparison |
 | R34 | Channel identity as capability | partial, S if needed | `ReadFeishuDoc` shipped; no auto-route at admission, no DingTalk twin. Next only if pasted links still get apologies: match the URL at admission and pre-fetch |
-| R26 | Installable skills | partial, S–M | catalog + template import are the path *in*; still one `SKILLS_DIR`, no ordered search path. Next: `loadSkills` over a list of roots, own first, collisions reported |
-| R36 | Hot-loadable extensions | partial, S then M | the hooks seam is real (`hooks.ts`, Claude Code dialect); no loader, no reload verb, MCP config still startup-only. **Security first**: `hooks.json` is arbitrary command execution from a mutable file and docs/10 has no entry for it — write that (S); then re-readable MCP config (M) |
+| R26 | Installable skills | **close** 2026-09-02 | `skillRoots`: ordered roots after the box's own, collisions and missing roots reported in the index |
+| R36 | Hot-loadable extensions | MCP reload **done** 2026-09-02; loader open, M | `mcp reload` (API, CLI, Settings); S-9 written and enforced. Left: the `extensions/*.ts` loader, when someone feels the restart |
 | R10 | Gateway hardening | partial | S-4 closed (`stripIdentityHeaders`); S-2 no TLS, S-3 password list only, S-6 key beside the db. Next when promoted: S-6 — `AGENTBOX_CONTROL_KEY` as the documented path, loud warning otherwise |
-| R25 | Conversation identity | partial, M | `ConversationDirectory` closed finding 2; p2p is still one growing history, prefix re-derivation in three places. Next: scope p2p on `root_id ?? message_id`, with an answer for the existing chat-level files |
+| R25 | Conversation identity | **close** 2026-09-02, by facts | p2p on one key is a recorded decision (the thread-keyed version was the bug); the "unreachable" file is the live 1:1; the record exists. Not re-implemented |
 | R7 | Secrets in the record | partial, M | scanner + spool shipped; at-rest hygiene not built at all. Next: exact-match redaction of vault-held values at the transcript append site, labelled hygiene not containment |
 | R4 | Grant → Scope | partial, L | tools + secrets enforced, egress/filesRoot declared; memory/sandbox/schedule absent; the capability proxy unbuilt. Design first, on one privileged operation |
 | R16 | Webhook triggers | partial, M | `trigger: message` covers the chat half; no HTTP ingress at all. Next: a per-door signed URL admitting into the same path `channels/manager.ts` uses |
@@ -1171,15 +1251,75 @@ Two things promoted out of residue, each its own entry now:
 - **R38. MiniMax-M3 loses the `computer` tool schema after compaction** (found in the R37
   work, filed nowhere). A compaction/tool-schema defect: reproduce on a long turn, then decide
   whether the tool list rides the stable prefix or is re-sent after a summary. S–M.
-- **R39. `hooks.json` needs its docs/10 entry.** It is arbitrary command execution from a
-  mutable file in the state directory; who may write there and how the loading rule is
-  enforced are unwritten. S.
+- ~~**R39. `hooks.json` needs its docs/10 entry.**~~ Done 2026-09-02: docs/10 S-9, and the
+  runner refuses a hooks file that is group/world-writable or owned by another uid.
 
 **The order I would take**, after the handoff's five (auto-review week, a live listener,
 conduct numbers, the prompt floor, the pre-launch security list): R8's rider and R24's stamp
 (both S, both make the next investigation cheaper), R39, R28's ablation, R36's MCP reload,
 R26's search path, then R25. R4, R16, R30, R29 wait for their designs; R17 and R27 wait for a
 week of memory numbers. docs/30 Stage C (`TransferFile`) is paused at Chris's call.
+
+## What to do next, as of 2026-09-02 — the list, after the seven
+
+The seven small items from the triage above are done (Stage 8 in IMPLEMENTATION_PLAN.md).
+This list supersedes the ordering paragraphs above it; everything here is either a design
+that has to be written before code, or a measurement that has to be taken before a decision.
+Nothing on it is a morning's work, which is the point of having done the seven first.
+
+**Running, not planned** (from docs/handoff-2026-09-02): a week of auto-review in shadow mode,
+the live listener skill, conduct numbers from the `[conduct]` log line, the prompt floor,
+and the pre-launch security pass over docs/10.
+
+**Design first, then code** — each goes through docs/13 before anything is built:
+
+1. **R4 — Grant grows into Scope.** Pick *one* privileged operation and make it a
+   scope-granted capability the host performs, so the model never holds the value. That
+   is the capability proxy R7 needs; if the shape works once it generalises, and if it
+   does not the design is wrong at the cheapest possible point. L.
+2. **R16 — Webhook ingress.** One signed URL per door, admitted through the same path
+   `channels/manager.ts` uses, arriving as a message with a principal. The identity story
+   is the design; the route is an afternoon. M.
+3. **R30 — Coordination as protocol.** The dispatch record first (an id minted before any
+   side effect, shared by inbox admission, delivery and billing), then fork terminal states,
+   then the submission gate. Also carries `inbox.ts`'s warn-and-dispatch and `appendLine`
+   without fsync. L, reviewed item by item.
+4. **R29 — An MCP face for the box.** Tool calls travelling the relay the way model traffic
+   already does. Hostile review before code, per docs/13. L.
+5. **R36 — the extension loader.** `~/.agentbox/extensions/*.ts`, a factory contract, tear
+   down and re-import on reload. Only when somebody edits extensions often enough to feel
+   the restart; the hooks and MCP seams cover what is edited today. M.
+6. **R8 — the write-ahead intent record.** The upgrade behind the two riders that shipped.
+   L; still an upgrade, not a fix.
+
+**Measure first, then decide** — a week of memory data is the input:
+
+7. **R17 — project tier of memory.** `scope?` on the record, written when a conversation is
+   bound to a scope, a third render block; and the rule for what happens to scope memory
+   when the scope ends. M, after seeing what self/team actually hold in a week.
+8. **R27 — evidence attached to the belief.** `basis?: {path, hash}` for records whose
+   evidence is a file in the box; a mismatch renders "unverified", never "wrong". M, after
+   the same week shows which records actually go stale.
+9. **R28 — the rest of the eval work.** The notes ablation is run (see the entry); what it
+   says about the notes layer is decided together with R17/R27. Still to write: a listener
+   fires/stays-quiet suite, and the golden-tasks-versus-traffic comparison.
+
+**Small and waiting on a trigger:**
+
+- **R3** — a `workflow_dispatch` release job that produces and asserts the Win/Linux
+  installers. S, when a Windows or Linux user exists.
+- **R34** — URL-at-admission pre-fetch, only if pasted links still get apologies. S.
+- **R10 / S-6** — `AGENTBOX_CONTROL_KEY` as the documented path with a loud warning
+  otherwise; the rest of the gateway batch when multi-tenant is the goal.
+- **R38** — MiniMax-M3 losing the `computer` schema after compaction: reproduce on a long
+  desktop turn first. S–M.
+- **R7** — at-rest hygiene: exact-match redaction of vault-held values at the transcript
+  append site. M, labelled hygiene, not containment.
+- **docs/30 Stage C** — `TransferFile` across boxes. Paused at Chris's call.
+- **Image rebuild** — the Docker box image is one rebuild behind main (boxd boot skips a
+  claimed default desktop; health falls back to `detectDisplay`). Blocked on apt reaching
+  `deb.debian.org` through the local proxy's fake-ip; rebuild, `box up --recreate --yes`,
+  restart web when it does.
 
 ## What to do next, as of 2026-09-01
 

@@ -922,10 +922,15 @@ export const APP_HTML = String.raw`<!doctype html>
     <div class="field" data-tier="installation" id="setmcpwrap" style="display:none">
       <label>MCP servers</label>
       <div id="setmcp" style="display:flex;flex-direction:column;gap:6px"></div>
+      <div style="display:flex;gap:8px;align-items:center;margin-top:6px">
+        <button type="button" class="ghost" id="setmcpreload">Reload from config</button>
+        <span class="dim" id="setmcpreloaded" style="font-size:12px"></span>
+      </div>
       <div class="fieldnote">Tools other people wrote. Configured in mcpServers in
         ~/.agentbox/config.json — a stdio server is a process on this machine, so an operator
         adds one, never an agent. Their tools obey the same agent tool lists, scopes and
-        approvals as the built-in ones.</div>
+        approvals as the built-in ones. Edit the file, then reload: servers whose entry is
+        unchanged keep running, changed or removed ones stop, new ones start.</div>
     </div>
     <div class="field" data-tier="organisation" id="setknockswrap" style="display:none">
       <label>Waiting at the door</label>
@@ -1366,16 +1371,35 @@ document.getElementById("setmcptokens").addEventListener("click", function (even
   }).then(renderMcp);
 });
 
+document.getElementById("setmcpreload").addEventListener("click", function () {
+  var note = $("setmcpreloaded");
+  note.textContent = "reloading…";
+  fetch("/api/mcp/reload", { method: "POST", headers: { "content-type": "application/json" }, body: "{}" })
+    .then(function (r) { return r.json().then(function (j) { return { ok: r.ok, j: j }; }); })
+    .then(function (x) {
+      if (!x.ok) { note.textContent = x.j.error || "reload failed"; return; }
+      note.textContent = "started " + (x.j.started || []).length + ", stopped " + (x.j.stopped || []).length +
+        ", kept " + (x.j.kept || []).length;
+      // Servers come up in the background; look again once they have had a moment.
+      setTimeout(renderMcp, 1500);
+      renderMcp();
+    })
+    .catch(function () { note.textContent = "reload failed"; });
+});
+
 function renderMcp() {
   fetch("/api/mcp")
     .then(function (r) { return r.json(); })
     .then(function (data) {
       var servers = data.servers || [];
       renderMcpTokens(data.tokens);
-      // The server list is an installation matter; an admin who has none still sees
-      // nothing, because there is nothing to say.
-      document.getElementById("setmcpwrap").style.display =
-        servers.length && myRole === "admin" ? "" : "none";
+      // An installation matter, so admins only — and admins with none see the empty state
+      // and the reload, because "add one to config.json, then reload" is the way in.
+      document.getElementById("setmcpwrap").style.display = myRole === "admin" ? "" : "none";
+      if (!servers.length) {
+        $("setmcp").innerHTML = '<div class="dim" style="font-size:13px">none configured</div>';
+        return;
+      }
       $("setmcp").innerHTML = servers.map(function (s) {
         // A tool count worth noticing is said where the count is, not in a log nobody reads.
         var heavy = s.toolCount > (data.budget || 30);

@@ -289,6 +289,15 @@ class McpServer {
   }
 }
 
+/** Same command, arguments and environment: the process would come up identical. */
+function sameServer(a: McpServerConfig, b: McpServerConfig): boolean {
+  return (
+    a.command === b.command &&
+    JSON.stringify(a.args ?? []) === JSON.stringify(b.args ?? []) &&
+    JSON.stringify(a.env ?? {}) === JSON.stringify(b.env ?? {})
+  );
+}
+
 /**
  * Every configured MCP server, and the tools they add up to.
  *
@@ -296,13 +305,53 @@ class McpServer {
  * start somebody's ticket-system bridge as a side effect.
  */
 export class McpManager {
-  private readonly servers: McpServer[];
+  private servers: McpServer[];
 
   constructor(
     configs: readonly McpServerConfig[],
-    log: (line: string) => void = () => {}
+    private readonly log: (line: string) => void = () => {}
   ) {
     this.servers = configs.map(config => new McpServer(config, log));
+  }
+
+  /**
+   * Applies a fresh server list without a restart (R36).
+   *
+   * The plugin layer is what hot-loads, never the core: a server whose config is unchanged
+   * keeps its process and its tool list, one that changed or vanished is stopped, one that
+   * is new is started in the background exactly as at boot. Editing `mcpServers` used to
+   * mean restarting the web server and dropping the Feishu socket with it; now it means
+   * this. Returns what it did, by name, for the log and the caller.
+   */
+  reload(configs: readonly McpServerConfig[]): { started: string[]; stopped: string[]; kept: string[] } {
+    const fresh = new Map(configs.map(config => [config.name, config]));
+    const kept: string[] = [];
+    const stopped: string[] = [];
+    const started: string[] = [];
+    const remaining: McpServer[] = [];
+    for (const server of this.servers) {
+      const next = fresh.get(server.config.name);
+      if (next !== undefined && sameServer(next, server.config)) {
+        kept.push(server.config.name);
+        remaining.push(server);
+        continue;
+      }
+      server.stop();
+      stopped.push(server.config.name);
+    }
+    for (const config of configs) {
+      if (kept.includes(config.name)) continue;
+      const server = new McpServer(config, this.log);
+      remaining.push(server);
+      void server.ensureStarted();
+      started.push(config.name);
+    }
+    this.servers = remaining;
+    this.log(
+      `reloaded: ${started.length} started (${started.join(", ") || "-"}), ` +
+        `${stopped.length} stopped (${stopped.join(", ") || "-"}), ${kept.length} kept`
+    );
+    return { started, stopped, kept };
   }
 
   get configured(): boolean {

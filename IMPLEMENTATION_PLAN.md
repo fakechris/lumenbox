@@ -109,3 +109,16 @@ night: `agentbox-box` (6 agents) + `grok` (Kai, desktop :10 on Grok Bot's VM). S
 the same night (control-plane `box.role`, collector mirror, `/api/admin/boxes*`). Open: docs/30
 Stage C (cross-box file transfer).
 
+## Stage 8: The seven small ones from the 2026-09-03 triage (docs/11)
+**Goal**: close the entries whose next step was a morning's work each, so the list that
+remains is only designs and data: R8's two riders, R24's stamp, R39's security entry, R28's
+notes ablation, R36's MCP reload, R26's skill roots, and R25 settled by facts.
+**Success Criteria**: steering waits while a Stop hook's send-back runs and a fork join wakes
+on an instruction (tests); the turn ledger says model/build/promptHash; `hooks.json` with loose
+permissions is refused and docs/10 S-9 exists; `AGENTBOX_ABLATE=notes` and `golden
+--memory-from` give the style tier a real ablation run; `mcp reload` applies a config edit
+without a restart; `skillRoots` is an ordered search path with collisions reported.
+**Status**: Complete (2026-09-02) on `feat/triage-seven`. R25 closed without code: p2p on one
+key is a recorded decision, the "unreachable" file is the live 1:1, the record exists. Suite
+1056, floor 1056.
+

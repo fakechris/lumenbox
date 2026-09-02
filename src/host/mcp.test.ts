@@ -238,3 +238,40 @@ test("past the budget the tools go behind a lookup pair, and the pair still obey
     cleanup();
   }
 });
+
+test("reload keeps an unchanged server, stops a removed one, and starts a new one — no restart (R36)", async () => {
+  const { path, cleanup } = withStub();
+  const log: string[] = [];
+  const manager = new McpManager(
+    [
+      { name: "keep", command: process.execPath, args: [path] },
+      { name: "drop", command: process.execPath, args: [path] },
+    ],
+    line => log.push(line)
+  );
+  try {
+    await manager.ready();
+    assert.deepEqual(manager.statuses().map(s => [s.name, s.running]), [["keep", true], ["drop", true]]);
+
+    const applied = manager.reload([
+      { name: "keep", command: process.execPath, args: [path] },
+      { name: "fresh", command: process.execPath, args: [path] },
+    ]);
+    assert.deepEqual(applied, { started: ["fresh"], stopped: ["drop"], kept: ["keep"] });
+    await manager.ready();
+    assert.deepEqual(manager.statuses().map(s => [s.name, s.running]), [["keep", true], ["fresh", true]]);
+    assert.ok(manager.tools().some(tool => tool.name.startsWith(`fresh${MCP_SEPARATOR}`)), "the new server's tools are in");
+    assert.ok(!manager.tools().some(tool => tool.name.startsWith(`drop${MCP_SEPARATOR}`)), "the removed server's tools are gone");
+
+    // A changed argument list is a different process: stopped and started under the same name.
+    const changed = manager.reload([
+      { name: "keep", command: process.execPath, args: [path, "--flag"] },
+      { name: "fresh", command: process.execPath, args: [path] },
+    ]);
+    assert.deepEqual(changed, { started: ["keep"], stopped: ["keep"], kept: ["fresh"] });
+    assert.match(log.join("\n"), /reloaded: 1 started \(fresh\), 1 stopped \(drop\), 1 kept/);
+  } finally {
+    manager.stop();
+    cleanup();
+  }
+});

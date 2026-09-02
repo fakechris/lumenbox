@@ -76,6 +76,23 @@ The egress relay's allow-list is global to the relay process. Two tenants sharin
 list. Per-tenant policy needs the token to name it, the same way the model relay's token names its
 upstream.
 
+## S-9 — `hooks.json` is arbitrary command execution from the state directory
+
+Since 0.30 (docs/28 item 9) `~/.agentbox/hooks.json` runs shell commands at PreToolUse,
+PostToolUse, Stop and PreCompact, with the orchestrator's privileges, re-read on every mtime
+change. That is the design — Claude Code's, kept exactly — and it means *whoever can write
+that file runs commands as the operator*. What is exposed today: the file is not signed, and
+until R39 nothing checked who could write it.
+
+**Held since R39 (2026-09-02):** the runner refuses a hooks file that is group- or
+world-writable, or owned by another uid, logs the refusal, and treats the file as empty
+until it is fixed. The state directory itself is the operator's (0700 by `agentbox`'s own
+mkdir), so the remaining path in is an agent with `RunOnHost` writing the file — which is
+the S-1 class of problem (a host command is the operator), not a new one. **Not done, on
+purpose:** a signed or hashed allow-list of hook commands. It would let an operator pin
+*which* commands may run, at the price of a second file to keep in step; worth it only for
+a shared host, where S-2/S-3 are the bigger holes.
+
 ## Not on this list, and why
 
 - **Container escape.** The box runs a browser and arbitrary agent commands, and the isolation is

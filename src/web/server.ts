@@ -2827,6 +2827,19 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
           return;
         }
 
+        if (route === "POST /api/mcp/reload") {
+          if (refused()) return;
+          // The edges reload; the core does not (R36). An operator edited mcpServers in
+          // config.json and wants it applied without dropping the Feishu socket.
+          const applied = orchestrator.reloadMcp();
+          if (applied === undefined) {
+            send(res, 409, { error: "MCP servers were not read from config.json here, so there is nothing to re-read." });
+            return;
+          }
+          send(res, 200, { ok: true, ...applied, servers: orchestrator.mcp.statuses() });
+          return;
+        }
+
         if (route === "GET /api/mcp") {
           send(res, 200, {
             servers: orchestrator.mcp.statuses(),

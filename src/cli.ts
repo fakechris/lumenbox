@@ -1144,12 +1144,14 @@ The box runs wherever your Docker engine points: set DOCKER_HOST or use
                            streaming, vision, long output, caching. Run before
                            trusting a new provider, and after a vendor update.
   mcp                      Bridge this installation to an MCP client over stdio.
+  mcp reload               Apply an edit to mcpServers in config.json without a restart.
                            Needs AGENTBOX_MCP_TOKEN from Settings; the client
                            gets a box, a desktop and a team, billed to whoever
                            the token belongs to.
 
 Quality:
   golden [provider...]     End-to-end golden tasks through a real orchestrator
+                           (--only=id,id; --box; --memory-from=<agent> seeds a live memory)
                            in a throwaway state directory, graded against the
                            harness's own records. --box includes the box tasks.
                            Nightly per model is the intended cadence.
@@ -1346,6 +1348,16 @@ async function main(): Promise<number> {
         // deliberately unauthenticated, for container health checks) still said the box
         // was ready. The run looked fine and could not touch the box at all.
         const boxProvisioner = withBox ? new DockerBoxProvisioner(defaultBoxConfig()) : undefined;
+        // `--memory-from=<agent>` seeds the golden agent with a live agent's memory, read
+        // from the real home before it moves. The style tier exists because of what memory
+        // holds; against an empty memory an ablation of it is flat by construction, which
+        // is the run R28 warned would be misread as "memory is theatre".
+        const memoryFrom = rest.find(argument => argument.startsWith("--memory-from="))?.slice(14);
+        let seededMemory: string | undefined;
+        if (memoryFrom !== undefined && memoryFrom !== "") {
+          const live = new AgentRegistry(join(agentboxHome(), "agents"));
+          seededMemory = live.readMemory(live.resolve(memoryFrom).id);
+        }
 
         const home = mkdtempSync(join(tmpdir(), "agentbox-golden-"));
         process.env.AGENTBOX_HOME = home;
@@ -1370,6 +1382,11 @@ async function main(): Promise<number> {
           name: "Silver",
           description: "You acknowledge messages briefly.",
         });
+        if (seededMemory !== undefined) {
+          writeFileSync(registry.memoryPathFor(gold.id), seededMemory);
+          const count = seededMemory.split("\n").filter(line => line.trim() !== "").length;
+          out(dim(`memory seeded from ${memoryFrom}: ${count} records` + (process.env.AGENTBOX_ABLATE ? `, ablating ${process.env.AGENTBOX_ABLATE}` : "")));
+        }
         out(`${bold(profile.label)}  ${dim(profile.model)}  ${dim(home)}`);
         const boxReady = orchestrator.boxClient() !== undefined;
 
@@ -1481,6 +1498,17 @@ async function main(): Promise<number> {
     // writes the replies back — no protocol of its own, so nothing here can disagree
     // with the server about what MCP means.
     case "mcp": {
+      if (rest[0] === "reload") {
+        // Applies an edit to mcpServers in config.json to the running web server (R36).
+        const result = await viaWeb("/api/mcp/reload", {});
+        if (result === undefined) {
+          err("No web server is running here; the next `agentbox web` reads config.json anyway.");
+          return 1;
+        }
+        const list = (key: string) => ((result[key] as string[] | undefined) ?? []).join(", ") || "-";
+        out(`started: ${list("started")}\nstopped: ${list("stopped")}\nkept: ${list("kept")}`);
+        return 0;
+      }
       const url = process.env.AGENTBOX_MCP_URL ?? "http://127.0.0.1:7777/mcp";
       const token = process.env.AGENTBOX_MCP_TOKEN;
       if (token === undefined || token === "") {

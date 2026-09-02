@@ -241,7 +241,7 @@ test("the cache re-reads on a timer and shares concurrent reads", async () => {
       return { content: "---\nname: Weekly\ndescription: x\n---\nbody" };
     },
   };
-  const cache = new SkillCache(() => source, 5_000, () => clock);
+  const cache = new SkillCache(() => source, () => [], 5_000, () => clock);
 
   assert.equal((await cache.refresh()).skills.length, 1);
   assert.equal(reads, 1);
@@ -279,7 +279,7 @@ test("a concurrent first refresh waits for the read rather than answering empty"
       return { content: "---\nname: Weekly\ndescription: x\n---\nbody" };
     },
   };
-  const cache = new SkillCache(() => source, 5_000, () => clock);
+  const cache = new SkillCache(() => source, () => [], 5_000, () => clock);
 
   const first = cache.refresh();
   const second = cache.refresh();
@@ -301,7 +301,7 @@ test("a failed read still arms the freshness gate, so a down box is not re-liste
       throw new Error("box restarting");
     },
   };
-  const cache = new SkillCache(() => source, 5_000, () => clock);
+  const cache = new SkillCache(() => source, () => [], 5_000, () => clock);
   await cache.refresh();
   await cache.refresh();
   await cache.refresh();
@@ -325,7 +325,7 @@ test("a transient failure keeps what was last read", async () => {
       return { content: "---\nname: Weekly\ndescription: x\n---\nbody" };
     },
   };
-  const cache = new SkillCache(() => source, 1, () => clock);
+  const cache = new SkillCache(() => source, () => [], 1, () => clock);
   await cache.refresh();
   assert.equal(cache.current().skills.length, 1);
 
@@ -395,4 +395,79 @@ test("a listener is both halves or a problem, and shows in the index", () => {
   assert.ok("problem" in badKind && /the only kind/.test(badKind.problem));
   const badRegex = skillFrom("x", parseSkillFile("---\ndescription: d\ntrigger: message\nmatch: /(unclosed/\n---\nbody"));
   assert.ok("problem" in badRegex && /not a valid regex/.test(badRegex.problem));
+});
+
+// ── installed skills: an ordered list of roots (R26) ─────────────────────────────────
+
+/** A box with several skill roots, keyed by absolute root path. */
+function multiRootBox(roots: Record<string, Record<string, string>>): SkillSource {
+  const rootOf = (path: string) => Object.keys(roots).find(root => path === root || path.startsWith(`${root}/`));
+  return {
+    async listDir(path: string) {
+      const root = rootOf(path);
+      if (root === undefined) throw new Error("no such directory");
+      const tree = roots[root]!;
+      if (path === root) {
+        return { entries: [...new Set(Object.keys(tree).map(key => key.split("/")[0]!))].map(name => ({ name, type: "directory" })) };
+      }
+      const slug = path.slice(root.length + 1);
+      return { entries: Object.keys(tree).filter(key => key.startsWith(`${slug}/`)).map(key => ({ name: key.slice(slug.length + 1), type: "file" })) };
+    },
+    async readFile(path: string) {
+      const root = rootOf(path);
+      const content = root === undefined ? undefined : roots[root]![path.slice(root.length + 1)];
+      if (content === undefined) throw new Error("no such file");
+      return { content };
+    },
+  };
+}
+
+test("extra roots are searched after the box's own, in order; the own directory wins a collision, and says so", async () => {
+  const box = multiRootBox({
+    [SKILLS_DIR]: { "weekly/SKILL.md": "---\nname: Weekly (mine)\ndescription: ours\n---\nbody" },
+    "/opt/skills": {
+      "weekly/SKILL.md": "---\nname: Weekly (theirs)\ndescription: installed\n---\nbody",
+      "deploy/SKILL.md": "---\nname: Deploy\ndescription: installed\n---\nbody",
+      "deploy/run.sh": "#!/bin/sh",
+    },
+    "/srv/more": { "deploy/SKILL.md": "---\nname: Deploy (again)\ndescription: later\n---\nbody" },
+  });
+  const loaded = await loadSkills(box, ["/opt/skills", "/srv/more"]);
+  assert.deepEqual(
+    loaded.skills.map(skill => [skill.slug, skill.name, skill.path]),
+    [
+      ["weekly", "Weekly (mine)", `${SKILLS_DIR}/weekly/SKILL.md`],
+      ["deploy", "Deploy", "/opt/skills/deploy/SKILL.md"],
+    ],
+    "own first, then the roots in order; a path points where the file really is"
+  );
+  assert.deepEqual(loaded.skills[1]?.helpers, ["run.sh"], "helpers are read from the root the skill lives in");
+  assert.deepEqual(loaded.problems, [
+    "weekly: also in /opt/skills, shadowed by the one in /home/box/work/skills.",
+    "deploy: also in /srv/more, shadowed by the one in /opt/skills.",
+  ]);
+  assert.equal(loaded.read, true);
+});
+
+test("a configured root that is not on this box is a line in the index, not a failure", async () => {
+  const box = multiRootBox({ [SKILLS_DIR]: { "weekly/SKILL.md": "---\nname: Weekly\ndescription: ours\n---\nbody" } });
+  const loaded = await loadSkills(box, ["/nowhere"]);
+  assert.equal(loaded.skills.length, 1);
+  assert.deepEqual(loaded.problems, ["skill root /nowhere could not be listed on this box."]);
+  // And the own directory alone, with no extras, reads exactly as before.
+  assert.deepEqual((await loadSkills(box)).problems, []);
+});
+
+test("the cache hands its roots to every read, so a config edit applies at the next refresh", async () => {
+  const box = multiRootBox({
+    [SKILLS_DIR]: {},
+    "/opt/skills": { "deploy/SKILL.md": "---\nname: Deploy\ndescription: installed\n---\nbody" },
+  });
+  let roots: string[] = [];
+  let clock = 0;
+  const cache = new SkillCache(() => box, () => roots, 1, () => clock);
+  assert.equal((await cache.refresh()).skills.length, 0);
+  roots = ["/opt/skills"];
+  clock += 10;
+  assert.deepEqual((await cache.refresh()).skills.map(skill => skill.slug), ["deploy"]);
 });

@@ -456,3 +456,30 @@ test("the box section names the reference notes, and the first-run cue is marked
   assert.match(firstRunCue("chris"), /created by chris/);
   assert.match(firstRunCue(), /not a message to reply to/);
 });
+
+test("AGENTBOX_ABLATE=notes withholds only the notes nobody vouched for, and keeps the facts (R28)", () => {
+  const previous = process.env.AGENTBOX_ABLATE;
+  const memorySection = VOLATILE_SECTIONS.find(section => section.name === "memory")!;
+  const context = {
+    ...sharedBoxContext(),
+    memory: [
+      { at: "2026-08-20T00:00:00Z", kind: "fact" as const, text: "Chris signs off with a wave" },
+      { at: "2026-08-30T00:00:00Z", kind: "note" as const, text: "seemed to prefer tables", source: "extracted" },
+    ],
+  } as Parameters<typeof memorySection.render>[0];
+  try {
+    delete process.env.AGENTBOX_ABLATE;
+    const whole = memorySection.render(context);
+    assert.match(whole, /signs off with a wave/);
+    assert.match(whole, /prefer tables/);
+    process.env.AGENTBOX_ABLATE = "notes";
+    const withoutNotes = memorySection.render(context);
+    assert.match(withoutNotes, /signs off with a wave/);
+    assert.doesNotMatch(withoutNotes, /prefer tables/);
+    process.env.AGENTBOX_ABLATE = "memory";
+    assert.equal(memorySection.render(context), "", "the coarse knife still takes everything");
+  } finally {
+    if (previous === undefined) delete process.env.AGENTBOX_ABLATE;
+    else process.env.AGENTBOX_ABLATE = previous;
+  }
+});
