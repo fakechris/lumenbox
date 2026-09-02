@@ -26,6 +26,9 @@ token                       box API bearer, 0600
 ui-token                    web UI shared secret, 0600
 config.json                 settings decided once
 activity.jsonl              recent activity for the feed
+auto-review.jsonl           one verdict per reviewed tool call (auto-review.ts; shadow or enforce)
+skill-provenance.jsonl      which agent the host saw write each skill (skill-provenance.ts)
+hooks.json                  lifecycle hooks in Claude Code's dialect (hooks.ts); read on mtime
 agents/<agentId>/
   profile.json              identity and persona
   conversation.jsonl        the transcript
@@ -451,3 +454,13 @@ Honestly, since these are the findings a review should raise:
   nothing does it.
 - **Concurrent orchestrators are undefined.** Two writing one agent's transcript interleave
   entries. Nothing prevents it and nothing detects it.
+
+## 8. The mirror in the box (2026-09-02)
+
+`memory.jsonl` stays the record of truth on the host. Since 2026-09-02 every change to it, and
+every box connect, also writes a read-only projection into the box at
+`/home/box/work/memory/<agent-slug>/profile.md` (facts and pitfalls, live view, retractions
+applied, newest first) and `log/YYYY-MM.md` (notes and episodes by month). The header of every
+file says it is a mirror; `RememberFact` is the only way memory changes. A write the box refuses
+is a `[memory-mirror]` log line and nothing else — the host record is unaffected, and the file
+is rewritten on the next change or connect. Unchanged files are not rewritten.

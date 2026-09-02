@@ -183,6 +183,13 @@ full authority — the loading rule and who may drop files there need docs/10 tr
 and the cheap majority of its value (skills hot, restarts painless) is already shipped.
 Build when a person edits extensions often enough to feel the restart.
 
+**R36, first seam shipped 2026-09-02 (`b02ecb4`).** Lifecycle hooks in Claude Code's dialect:
+`~/.agentbox/hooks.json` runs PreToolUse / PostToolUse / Stop / PreCompact commands with the
+same stdin payload and answers Claude Code uses, re-read on mtime. Not a plugin system — the
+edges that can be scripted today are the tool call, the turn end and compaction — but every
+existing hook script is portable to us unchanged, which is the vocabulary decision R36 needed
+before any loader.
+
 ### ~~R1. The composer respects the viewed conversation~~ — shipped, in two halves
 The composer half landed on 08-22 (`779f24e`), thirteen minutes after this entry was
 written, and the entry survived unstruck. The second half landed on 08-26 (`6c74e1b`)

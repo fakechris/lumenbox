@@ -299,3 +299,20 @@ should still fact-check: (a) every claim in §1 against the tree that week,
 (b) the §4 table against the cited implementations, (c) whether the §5
 ranking still matches expected damage rather than named absences, (d) that a
 fix prescription does not recreate the incident it is meant to close.
+
+## 7. Update, 2026-09-02
+
+Three of the fixes above shipped, and one measured fact changed the plan:
+
+- **Memory as files** (§5 item on grep-ability): the live view is mirrored into the box at
+  `~/work/memory/<name>/profile.md` + `log/` on every change (docs/05 §8). The prompt's memory
+  section names the path. Ada's "no persistent memory files" answer is now wrong in the right
+  direction.
+- **Selection survives continuation** (audit 2026-09-01 #6): a turn's model-chosen memory
+  selection is carried into every continuation instead of being replaced by a plain score-based
+  recall. The memory block is therefore byte-stable within a turn, which is what MiniMax's
+  implicit prefix cache needs. The test proves the old code lost it.
+- **Bounded index** (audit #4): descriptions are cut at 400 characters with the author told, and
+  the skills index stops at 12k characters naming what it left out.
+- **Measured**: Bob's system prompt plus 31 tool descriptions is ≈25.6k tokens; a whole request
+  ≈55k. The next cut is the tool descriptions, not memory.

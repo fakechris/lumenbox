@@ -129,6 +129,26 @@ Every optional capability defaults **off**, because a wrong "yes" fails silently
 while a wrong "no" only costs a feature and says so. Opt in once you have checked:
 `AGENTBOX_VISION=1`, `AGENTBOX_CACHING=1`, `AGENTBOX_THINKING=1`, `AGENTBOX_EFFORT=1`.
 
+### Guardrails, routines and hooks
+
+- **Auto-review.** Calls that bind the world — a host command, a delegation, a message to
+  another agent, a write outside `~/work`, a browser action, an outbound-looking shell command —
+  are classified by a cheap model against what *you* said in the conversation; nothing the agent
+  read or told itself can authorise them. `AGENTBOX_AUTO_REVIEW=shadow` (default) records the
+  verdict in `~/.agentbox/auto-review.jsonl` and enforces nothing; `enforce` hands a BLOCK
+  back to the model with the reason; `off` skips it.
+- **Routines.** A skill with `schedule:` runs on a timer; one with `trigger: message` and
+  `match: /regex/i` (or a phrase) runs when someone says something matching, replying in that
+  thread; `chat: feishu:oc_…` narrows it to one chat. A skill runs as the agent the host saw
+  write it or as the default agent, never as someone else.
+- **Memory files.** Each agent's memory is mirrored read-only into the box at
+  `~/work/memory/<name>/profile.md` and `log/YYYY-MM.md`, so `grep` works on it.
+- **Hooks.** `~/.agentbox/hooks.json` in Claude Code's format (a `settings.json` or its bare
+  `hooks` object) runs `PreToolUse`, `PostToolUse`, `Stop` and `PreCompact` commands with the
+  same stdin payload and the same answers: exit 2 with stderr as the reason, or a decision JSON.
+- **Approvals say when a command only reads.** `[read-only]` appears on an approval for a shell
+  command whose every segment is a known reader with no way to write.
+
 ## Where the orchestrator runs
 
 Two topologies, one image.

@@ -15,6 +15,43 @@ with an explicit-intent rule. Routines gained event listeners and a "be aggressi
 routines" mandate. The box grew a browser-identity stack. Details in the analysis; here is
 only what changes our backlog.
 
+## Status, 2026-09-02
+
+Everything ranked 1–9 and 12 shipped on 2026-09-02 as five stages (`IMPLEMENTATION_PLAN.md`
+has the per-stage record; commits 140414b…b02ecb4). What was measured on the way:
+
+- **1 auto-review** — `src/host/auto-review.ts`, shadow by default, verdicts in
+  `~/.agentbox/auto-review.jsonl`. Live eval on the ten-trajectory fixture against MiniMax-M3:
+  9/10, ~2.5 s per review; the miss was a verdict lost to quotes inside the JSON reason, now
+  parsed loosely. First production verdict: Bob's `curl -X POST` probe, ALLOW with the right
+  reason. `AGENTBOX_AUTO_REVIEW=enforce` is a decision for after a week of records.
+- **2 / 12 conduct** — the stable `conduct` section (reply first, work out loud, close the
+  loop, tone, never fabricate, ask as a question). Three console probes (7 s, 9 s, 50 s turns):
+  M3 opened tool-first every time. The Feishu Typing reaction is the receipt a person sees;
+  adherence is a `[conduct]` line per person-opened turn in the web log, to revisit with a week
+  of numbers rather than a wording argument.
+- **3 routines** — the prompt mandate, then `trigger: message` + `match:` (+ `chat:`)
+  listeners fired from the channel manager after admission, once per message id, delivered to
+  the thread. Unit-tested; a real message from a person is still needed to see one fire live.
+- **4 memory files** — `~/work/memory/<name>/profile.md` + `log/YYYY-MM.md`, written on every
+  memory change and on box connect; verified live for all six agents. Audit #6 closed by carrying
+  the turn's memory selection into its continuation (**5**). Audit #4 closed with a 400-char
+  description cap and a 12k-char index cap that names what it left out.
+- **6 prompt size** — one `[prompt]` line per turn. Bob's floor: system + 31 tools ≈ 25.6k
+  tokens, whole request ≈ 55k. That is the number the next cut is measured against.
+- **7 owner tokens** — already in boxd (hashed lapsing leases, per-agent token from the
+  registry); the recycled-index case is now a test.
+- **8 read-only shell** — `src/host/shell-readonly.ts`, chain split + safe list, tags approvals
+  `[read-only]` only when certain. No parser: tree-sitter-bash earns its dependency once a
+  misclassification is measured.
+- **9 hooks** — `~/.agentbox/hooks.json` in Claude Code's dialect (PreToolUse / PostToolUse /
+  Stop / PreCompact; exit 2 or decision JSON; `stop_hook_active`), re-read on mtime.
+- **Provenance** (the gate for 3, audit #2) — `~/.agentbox/skill-provenance.jsonl`; a skill runs
+  as the agent the host saw write it or as the default agent, never as someone else, and the
+  refusal names the writer.
+
+Not done: 10 (cross-tool skill discovery) and 11 (persisted browser identity), by choice.
+
 ## Ranked
 
 **1. Auto-review as a classifier, shadow first.** Their per-tool-call LLM review decides
