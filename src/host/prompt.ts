@@ -15,6 +15,7 @@ import { renderDurableBlocks, type DurableState } from "./durable.ts";
 import { describeTask, type Task } from "./tasks.ts";
 import type { BoxClass } from "../box/access.ts";
 import {
+  memoryMirrorDir,
   recall,
   renderMemory,
   renderSharedMemory,
@@ -710,7 +711,12 @@ export const VOLATILE_SECTIONS: readonly PromptSection[] = [
     // the honest test of a component we keep proposing to extend while it holds two facts
     // somebody chose to keep and fifteen nobody vouched for.
     render: context =>
-      ablated("memory") ? "" : renderMemory(context.memoryRecall ?? recall(context.memory)),
+      ablated("memory")
+        ? ""
+        : renderMemory(
+            context.memoryRecall ?? recall(context.memory),
+            context.hasBox === false ? undefined : memoryMirrorDir(context.agent.profile.name)
+          ),
   },
   {
     name: "skills",

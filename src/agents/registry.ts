@@ -689,6 +689,12 @@ export class AgentRegistry {
     }
   }
 
+  /**
+   * Told after an agent's memory changes, with the agent. Set by whoever keeps a view of it
+   * elsewhere (the mirror in the box); the registry itself only writes the record.
+   */
+  onMemoryChanged: ((agentId: string) => void) | undefined;
+
   appendMemoryRecords(agentId: string, records: readonly MemoryRecord[]): void {
     if (records.length === 0) return;
     mkdirSync(this.dirFor(agentId), { recursive: true });
@@ -696,6 +702,7 @@ export class AgentRegistry {
       appendLine(this.memoryRecordsPathFor(agentId), JSON.stringify(record));
     }
     this.maybeCompactOwnMemory(agentId);
+    this.onMemoryChanged?.(agentId);
   }
 
   /**

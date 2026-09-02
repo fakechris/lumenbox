@@ -20,6 +20,7 @@ import {
 } from "./resume.ts";
 import { AgentRegistry, type AgentRecord } from "../agents/registry.ts";
 import type { BoxClient } from "../box/client.ts";
+import { MemoryMirror } from "./memory-mirror.ts";
 import { DisplayLease } from "../box/display-lease.ts";
 import { resolveBoxProvisioner, type BoxProvisioner } from "../box/provisioner.ts";
 import { classifyBox, type BoxClass } from "../box/access.ts";
@@ -115,6 +116,7 @@ export class Orchestrator {
   readonly bus: AgentBus;
   private readonly client: Anthropic;
   private box: BoxClient | undefined;
+  private readonly memoryMirror: MemoryMirror;
   private resolution: ResolutionConfig | undefined;
   /** What kind of box the connected box is; see docs/18. */
   private boxAccess: BoxClass | undefined;
@@ -467,6 +469,14 @@ export class Orchestrator {
         : (options.turns ??
           new TurnLedger(turnLedgerPath(), line => console.error(`[turns] ${line}`)));
     this.registry = options.registry ?? new AgentRegistry();
+    this.memoryMirror = new MemoryMirror({
+      registry: this.registry,
+      box: () => this.box,
+      log: line => console.error(`[memory-mirror] ${line}`),
+    });
+    this.registry.onMemoryChanged = agentId => {
+      void this.memoryMirror.sync(agentId);
+    };
     this.provider = options.provider ?? resolveProvider();
     this.client = options.client ?? createClient(this.provider);
     // The Rememberer gets the *paired* summary runtime — the same review finding as
@@ -508,6 +518,8 @@ export class Orchestrator {
       const health = await client.health();
       this.box = client;
       this.resolution = health.resolution;
+      // A box that just appeared has none of the mirror files; a reconnect may be a different box.
+      void this.memoryMirror.syncAll();
       // Read here rather than at construction: connecting again may be connecting to a
       // *different* box, and the class belongs to the box, not to the process. The
       // roster's box record name is the fallback for attached provisioners, whose

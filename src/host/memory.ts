@@ -335,7 +335,18 @@ export function renderSharedMemory(
 }
 
 /** How memory appears in the system prompt. */
-export function renderMemory(recalled: MemoryRecall): string {
+export function renderMemory(recalled: MemoryRecall, mirrorDir?: string): string {
+  // Where the whole of it can be read, when there is a box to read it in. Named so "where are my
+  // memory files" has an answer, and so grep works on memory the prompt budget left out.
+  const mirror =
+    mirrorDir === undefined
+      ? []
+      : [
+          "",
+          `Everything you have kept — not only what is shown here — is mirrored read-only in the box at`,
+          `\`${mirrorDir}/profile.md\` (facts, pitfalls) and \`${mirrorDir}/log/\` (notes and episodes by`,
+          "month), for reading and grep. Edits there are overwritten; `RememberFact` is how memory changes.",
+        ];
   if (recalled.records.length === 0) {
     return [
       "# Your memory",
@@ -343,6 +354,7 @@ export function renderMemory(recalled: MemoryRecall): string {
       "You have not kept anything yet. As you learn things worth keeping across conversations — a",
       "decision the user made and why, a constraint about their setup, a correction they gave you —",
       "keep them with `RememberFact`. Do not record what a tool can tell you again on demand.",
+      ...mirror,
     ].join("\n");
   }
 
@@ -364,9 +376,15 @@ export function renderMemory(recalled: MemoryRecall): string {
         ]
       : [];
 
-  return ["# Your memory", "", "What you have kept from earlier conversations:", "", ...lines, ...tail].join(
-    "\n"
-  );
+  return [
+    "# Your memory",
+    "",
+    "What you have kept from earlier conversations:",
+    "",
+    ...lines,
+    ...tail,
+    ...mirror,
+  ].join("\n");
 }
 
 // ── extraction ────────────────────────────────────────────────────────────────────────
@@ -797,4 +815,89 @@ export function compactSharedShardLines(
     lineTotal += parsed.length;
   }
   return keptTotal < lineTotal ? out : undefined;
+}
+
+// ── the mirror in the box ─────────────────────────────────────────────────────────────
+
+/**
+ * Where an agent's memory is projected as files it can read with ordinary tools.
+ *
+ * The record of truth stays on the host (`memory.jsonl`, budgeted into the prompt above); this
+ * is a read-only view of *all* of it in the box, because an agent asked "where are my memory
+ * files" and the honest answer was "nowhere you can look". Grok Bot keeps `profile.md` and a
+ * dated `log/` for the same reason; the shapes are borrowed so a person who knows one knows both.
+ */
+export const MEMORY_MIRROR_DIR = "/home/box/work/memory";
+
+export function memoryMirrorDir(agentName: string): string {
+  const slug = agentName
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-+|-+$/g, "");
+  return `${MEMORY_MIRROR_DIR}/${slug === "" ? "agent" : slug}`;
+}
+
+export interface MemoryFile {
+  path: string;
+  content: string;
+}
+
+/**
+ * The files that mirror one agent's memory: `profile.md` for what is standing (facts and
+ * pitfalls, newest first) and `log/YYYY-MM.md` for what happened (notes and episodes, by month).
+ *
+ * Retractions are applied, not shown: the live view is what the agent knows now. The header on
+ * every file says it is a mirror, because a file that looks editable and is not is a trap.
+ */
+export function renderMemoryFiles(agentName: string, records: readonly MemoryRecord[]): MemoryFile[] {
+  const dir = memoryMirrorDir(agentName);
+  const live = dedupe(records);
+  const header = (what: string) =>
+    [
+      `<!-- ${what} A read-only mirror of ${agentName}'s memory, written by the host.`,
+      "Edits here are overwritten; use RememberFact to change what is kept. -->",
+      "",
+    ].join("\n");
+  const line = (record: MemoryRecord) => {
+    const about = record.about === undefined ? "" : ` (about ${record.about})`;
+    return `- ${record.at.slice(0, 10)}${about}: ${record.text.replace(/\s+/g, " ")}`;
+  };
+
+  const standing = live.filter(record => record.kind === "fact" || record.kind === "pitfall");
+  const facts = standing.filter(record => record.kind === "fact").reverse();
+  const pitfalls = standing.filter(record => record.kind === "pitfall").reverse();
+  const profile = [
+    header(`${agentName}'s profile.`),
+    `# ${agentName} — what I know`,
+    "",
+    "## Facts",
+    "",
+    ...(facts.length === 0 ? ["(none yet)"] : facts.map(line)),
+    "",
+    "## Pitfalls",
+    "",
+    ...(pitfalls.length === 0 ? ["(none yet)"] : pitfalls.map(line)),
+    "",
+  ].join("\n");
+  const files: MemoryFile[] = [{ path: `${dir}/profile.md`, content: profile }];
+
+  const byMonth = new Map<string, MemoryRecord[]>();
+  for (const record of live) {
+    if (record.kind !== "note" && record.kind !== "episode") continue;
+    const month = record.at.slice(0, 7);
+    byMonth.set(month, [...(byMonth.get(month) ?? []), record]);
+  }
+  for (const [month, entries] of [...byMonth.entries()].sort()) {
+    files.push({
+      path: `${dir}/log/${month}.md`,
+      content: [
+        header(`${agentName}'s log for ${month}.`),
+        `# ${month}`,
+        "",
+        ...entries.map(record => `- ${record.at.slice(0, 10)} [${record.kind}] ${record.text.replace(/\s+/g, " ")}`),
+        "",
+      ].join("\n"),
+    });
+  }
+  return files;
 }
