@@ -37,6 +37,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
       ca-certificates curl wget gnupg \
       git jq ripgrep less vim-tiny procps psmisc \
       python3 python3-venv \
+      poppler-utils \
       sudo tini \
     && rm -rf /var/lib/apt/lists/*
 
@@ -85,6 +86,9 @@ COPY markdown-it.js /opt/hostd/vendor/markdown-it.js
 # to know that. Missing, the host inside the box dies on its first import — which is
 # exactly how the packaged CLI broke for a day (docs/27).
 COPY catalog-data /opt/hostd/catalog-data
+# Reference notes the agent reads when its computer misbehaves or when guiding a person
+# through the web app: real paths only. Projected into ~/reference at every start.
+COPY reference /opt/box-reference
 COPY entrypoint.sh /usr/local/bin/entrypoint.sh
 COPY start-display /usr/local/bin/start-display
 COPY box-chrome /usr/local/bin/box-chrome

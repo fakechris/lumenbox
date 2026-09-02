@@ -208,6 +208,7 @@ import {
 } from "./mcp-server.ts";
 import { Vault, type Grant } from "../host/vault.ts";
 import { seedStarterSkills } from "../host/starter-skills.ts";
+import { firstRunCue } from "../host/prompt.ts";
 import { ActivityLog } from "./activity.ts";
 import { vendorPath } from "./markdown.ts";
 import { toDisplayEntries } from "./transcript.ts";
@@ -3243,6 +3244,10 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
             existing.add(row.name);
             created.push({ id: record.id, name: record.profile.name });
             log(`catalog ${slug}: created ${record.profile.name} (${record.id})`);
+            // Its first turn, so the new agent speaks before anyone has to.
+            void orchestrator
+              .prompt(record.id, firstRunCue(caller.userId), caller, { steerable: false, lane: "background" })
+              .catch(error => log(`first run for ${record.profile.name} failed: ${error instanceof Error ? error.message : String(error)}`));
           }
           send(res, 200, { slug, created, skipped });
           return;
@@ -3693,6 +3698,10 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
             `created agent ${created.profile.name} (${created.id})` +
               (caller.userId === undefined ? "" : ` for ${caller.userId}`)
           );
+          // Its first turn, so the new agent speaks before anyone has to.
+          void orchestrator
+            .prompt(created.id, firstRunCue(caller.userId), caller, { steerable: false, lane: "background" })
+            .catch(error => log(`first run for ${created.profile.name} failed: ${error instanceof Error ? error.message : String(error)}`));
           send(res, 200, { id: created.id, name: created.profile.name });
           return;
         }

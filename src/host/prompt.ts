@@ -129,6 +129,13 @@ a situation nobody has seen yet.
 What follows is only the things this box does that you could not work out from the
 outside.
 
+Two reference notes live in `~/reference/` and are the only source for what they cover:
+`debugging-the-box.md` (the `box-doctor` self-check, where every log is under `/tmp`,
+what to do when the desktop, browser or shell misbehaves) and `app-ui.md` (the real
+controls of the web app the person is looking at). Read the first before reporting your
+computer broken, and the second before telling a person where to click. `pdftotext` and
+`pdfinfo` are installed for PDFs.
+
 
 For the web, reach for the cheapest thing that *works*, and change tool the moment it
 stops working. \`WebFetch\` reads a page as text without a browser and is the cheapest, so
@@ -856,6 +863,27 @@ export function buildWakePrompt(inbound: readonly InboundMessage[]): string {
   }
 
   return lines.join("\n");
+}
+
+/**
+ * The hidden cue for an agent's first turn, sent the moment a person creates it.
+ *
+ * A created agent used to sit silent until someone typed, which reads as "it does not
+ * work" to a person who just filled in a form. The cue asks for one short opening in the
+ * agent's own voice — hello, what it is for, one question — and nothing else. It is a user
+ * entry in the transcript because that is what a turn is started by; the prefix marks it
+ * as the harness speaking, not the person.
+ */
+export const FIRST_RUN_CUE = "[first run]";
+
+export function firstRunCue(createdBy?: string): string {
+  return (
+    `${FIRST_RUN_CUE} You were just created${createdBy ? ` by ${createdBy}` : ""} and nobody has ` +
+    "said anything yet; this is your cue to open the conversation, not a message to reply to or " +
+    "mention. Say a short, warm hello in your own voice, one line on what you are for and how you " +
+    "will work, and one question that gets them going. No tool calls unless one is needed to " +
+    "answer that question; no list of capabilities."
+  );
 }
 
 export interface WakeMessage {

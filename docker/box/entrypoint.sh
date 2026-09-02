@@ -74,6 +74,15 @@ fi
 # symlink the image creates is shadowed on every box that has ever booted before. The
 # projection has to be re-made here, where the volume is already mounted. Idempotent,
 # and a no-op on engine-free images.
+# The reference notes, refreshed from the image every start so they describe *this* image:
+# a stale copy in a persisted home would describe a box that no longer exists.
+if [ -d /opt/box-reference ]; then
+  mkdir -p /home/box/reference
+  cp -f /opt/box-reference/*.md /home/box/reference/ 2>/dev/null || true
+  chown -R box:box /home/box/reference 2>/dev/null || true
+  log "reference notes projected"
+fi
+
 if command -v opencode >/dev/null 2>&1; then
   mkdir -p /home/box/.config/opencode
   ln -sfn /home/box/work/skills /home/box/.config/opencode/skill

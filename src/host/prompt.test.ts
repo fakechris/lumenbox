@@ -15,6 +15,8 @@ import {
   ablated,
   buildSystemPrompt,
   buildSystemPromptParts,
+  FIRST_RUN_CUE,
+  firstRunCue,
   buildWakePrompt,
   sectionsPresent,
   VOLATILE_SECTIONS,
@@ -427,4 +429,30 @@ test("the conduct section is stable, ablatable, and carries the four rules that 
     if (previous === undefined) delete process.env.AGENTBOX_ABLATE;
     else process.env.AGENTBOX_ABLATE = previous;
   }
+});
+
+test("the box section names the reference notes, and the first-run cue is marked as the harness speaking", () => {
+  const withBox = buildSystemPrompt({
+    agent: { id: "a1", profile: { name: "Ada", description: "" } } as never,
+    teammates: [],
+    memory: [],
+    resolution: undefined,
+    agentsRoot: "/tmp",
+    hasBox: true,
+  });
+  assert.match(withBox, /~\/reference\//);
+  assert.match(withBox, /debugging-the-box\.md/);
+  assert.match(withBox, /app-ui\.md/);
+  const withoutBox = buildSystemPrompt({
+    agent: { id: "a1", profile: { name: "Ada", description: "" } } as never,
+    teammates: [],
+    memory: [],
+    resolution: undefined,
+    agentsRoot: "/tmp",
+    hasBox: false,
+  });
+  assert.ok(!withoutBox.includes("~/reference/"), "no box, no notes to read");
+  assert.ok(firstRunCue("chris").startsWith(FIRST_RUN_CUE));
+  assert.match(firstRunCue("chris"), /created by chris/);
+  assert.match(firstRunCue(), /not a message to reply to/);
 });
