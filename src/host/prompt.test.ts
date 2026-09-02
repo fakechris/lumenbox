@@ -400,3 +400,31 @@ test("a box labelled private with nothing behind it is described to the agent as
   assert.match(prompt, /Treat it exactly as a shared box/);
   assert.match(prompt, /command\s+history/, "the same consequences the shared paragraph names");
 });
+
+test("the conduct section is stable, ablatable, and carries the four rules that were incidents", () => {
+  // docs/28 item 2 and 12: reply first / ack ≠ delivery, tone and length, never
+  // fabricate data, ask decisions as questions. Stable so a cached prefix keeps it free.
+  const context = {
+    agent: { id: "a1", profile: { name: "Ada", description: "" } } as never,
+    teammates: [],
+    memory: [],
+    resolution: undefined,
+    agentsRoot: "/tmp",
+    hasBox: true,
+  } as never;
+  const { stable } = buildSystemPromptParts(context);
+  for (const rule of ["Reply first", "Close the loop", "Never fabricate data", "Asking for decisions", "Tone and length"]) {
+    assert.ok(stable.includes(rule), `stable prompt carries "${rule}"`);
+  }
+  assert.match(stable, /Record what was said, not your interpretation/);
+  assert.match(stable, /never as a menu instruction/);
+
+  const previous = process.env.AGENTBOX_ABLATE;
+  try {
+    process.env.AGENTBOX_ABLATE = "conduct";
+    assert.ok(!buildSystemPromptParts(context).stable.includes("Reply first"), "ablatable by name");
+  } finally {
+    if (previous === undefined) delete process.env.AGENTBOX_ABLATE;
+    else process.env.AGENTBOX_ABLATE = previous;
+  }
+});

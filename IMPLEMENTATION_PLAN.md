@@ -1,148 +1,48 @@
-# workId and the admin view
+# Implementation plan — after the Grok Bot 0.30 delta and the 2026-09-01 audits
 
-The join key first, then the thing that needed it. Four stages, each shippable alone.
+Source of items: docs/28 (twelve ranked), docs/reviews/2026-09-01-runtime-audit.md (#4,
+#6 open; #2's real fix), docs/26 (DingTalk sweep), docs/27 (adapter contract). Ordered by
+measured pain × dependency; each stage ships green on its own.
 
-Background: [docs/16](docs/16-long-work.md) section 1, and R31 in
-[docs/11-roadmap.md](docs/11-roadmap.md). The short version is that every question worth
-asking about long work is a join, and there is nothing to join on — `turnId` is minted
-fresh per attempt (`turn.ts:818`), so a turn that resumed twice looks like three unrelated
-short ones.
+## Stage 1: Prompt-layer conduct (cheap, high impact, no architecture risk)
+**Goal**: the agent replies first, delivers last, never invents data, asks decisions as
+natural questions, and proposes routines for repeatable asks — as stable prompt text.
+**Success Criteria**: new stable section `conduct` present in `sectionsPresent`; AskUser
+description carries the phrasing rule; skills section carries the routine mandate; prompt
+floor logged once per turn; tests pass; a Feishu turn visibly opens with a one-line reply.
+**Status**: In Progress
 
----
+## Stage 2: Memory as files the agent can read, frozen across compaction
+**Goal**: project the live memory view into the box (`~/work/memory/<agent>/profile.md` +
+`log/YYYY-MM.md`, read-only), snapshot the rendered memory block per compaction epoch so
+the prefix stays byte-stable (also closes audit #6), cap the skill index (audit #4).
+**Success Criteria**: files appear after a RememberFact; continuation reuses the frozen
+block (test); a 300k-char skill description is truncated with the cut named in the log.
+**Status**: Not Started
 
-## Stage 1: `workId`, stable across resumes
+## Stage 3: Auto-review classifier, shadow mode
+**Goal**: a per-call LLM review for outbound/binding actions (RunOnHost, SendToChat-class
+pushes, file writes outside the work dir, Delegate) with the explicit-intent primitive and
+the untrusted-origin rule; verdicts logged, nothing enforced.
+**Success Criteria**: every reviewed call has a verdict line in the usage/audit log; a
+fixture of ten trajectories (five ALLOW, five BLOCK) classifies as expected against the
+fake model; zero behaviour change for the agent.
+**Status**: Not Started
 
-**Goal**: one id, allocated when work begins, unchanged across every resume, written on
-turn ledger records and usage rows.
+## Stage 4: Provenance for skills, then event-triggered routines
+**Goal**: the host records which agent wrote a skill file (tool-path attribution), the
+scheduler honours `agent:` only when provenance permits; then a Feishu/DingTalk
+message-match listener as a routine trigger.
+**Success Criteria**: a skill written by Bob naming Ada is refused with the writer named;
+the live weekly-retro still runs; a "when someone says X in this chat" routine fires once
+per matching message and never on its own output.
+**Status**: Not Started
 
-**Design.** A turn that is not a resumption mints a `workId`. A resumption inherits the one
-belonging to the turn it picked up, which means the ledger has to carry it and
-`interrupted()` has to return it — the review found that `interrupted()` already discards
-`resumeOf` from its returned shape, and repeating that mistake with `workId` would make the
-whole stage a no-op.
-
-Path: `BeginRecord.workId` → `InterruptedTurn.workId` → `Orchestrator.resuming` →
-`TurnDeps.resumeOf` → `runTurn` → `turns.begin` and `usage.record`.
-
-**Success criteria**
-- A turn resumed twice writes three begin records with three `id`s and **one** `workId`.
-- A usage row carries the `workId` of the turn that produced it.
-- A ledger written by an older build (no `workId` on its records) still replays, and a turn
-  resumed from one of those gets a fresh id rather than crashing.
-
-**Status**: Complete. Four ledger tests and two that drive `runTurn` end to end — the
-second of those exists because the first one only proves the id is *stable*, and an id so
-stable it groups everything reports as one enormous piece of work that never ends.
-
----
-
-## Stage 2: `kind` and `conversation` on usage, and the calls nobody was counting
-
-**Goal**: make the sentence "usage records every model call" true, since docs/16 asserted
-it and it was false.
-
-**Measured**: there is exactly one `usage.record` call site (`turn.ts:1433`). Three model
-calls go through no ledger at all — `summarise` (`turn.ts:580`), `Remember.ask`
-(`remember.ts:157`) and `Orchestrator.askCheaply` (`orchestrator.ts:625`). All three run on
-the cheap profile, which is the argument for why nobody noticed and not an argument that
-they are free.
-
-`kind` is what makes the estimate possible later: `turn | summarize | memory | select`. It
-is also what makes those three visible now.
-
-`conversation` is already in scope at the write site and costs one line. It does not solve
-task attribution — a task spans conversations and a conversation spans tasks — but it makes
-a fork child costable immediately, which is the case an estimate cares about most.
-
-**Success criteria**
-- Every `messages.create` outside `conformance.ts` and the CLI judge writes a usage row.
-  Enforced by a test that greps the source, in the manner of the app-html id check — a new
-  unrecorded call site fails the suite.
-- `byKindSince` returns four kinds on a day with memory extraction in it.
-- The cheap-profile total is separable from the turn-loop total.
-
-**Status**: Complete. The guard needed two attempts and the first one is the interesting
-part: it looked for a ledger write within N lines of the call, and a deliberately unmetered
-call added next to a metered one passed, because the neighbour's write was inside the
-window. It now enumerates every call site by its enclosing declaration, and a site that is
-not on the list fails whatever sits near it — verified by adding an unmetered call and
-watching it fail.
-
----
-
-## Stage 3: the reader
-
-**Goal**: the questions from 2026-08-26 answerable by a command instead of a throwaway
-script. Fifteen or so one-offs were written that day, none re-runnable, several wrong on
-the first attempt precisely because they were improvised.
-
-- a day: total, by agent, by kind, by principal, in tokens and in money
-- one `workId`: its turns, its rounds, its conversations, its cost
-- a task: the same, via the work that touched it
-
-**Design note.** A rate table is what turns tokens into a number a person can act on;
-`usage` already carries `provider` and `model`, so this is a lookup and a multiplication,
-with the rate recorded alongside the total so an old report does not silently change when a
-price does.
-
-**Success criteria**
-- `agentbox usage --day 2026-08-27` and `agentbox usage --work <id>` both work against real
-  records.
-- Every number the report prints can be re-derived from `usage.jsonl` by hand.
-- 48-hour retention is stated in the output, not discovered later — a total over a
-  compacted file is a lower bound and has to say so.
-
-**Status**: Complete, as `agentbox usage [--day D] [--work ID] [--task tNN]`.
-
-Two things the first real run taught, both now tested. `--task t51` answered "no records",
-because every row on this installation predates `turnId` by a few hours — and a person
-reads that as "the task was free", which is the failure the whole report exists to avoid;
-it now says which field the rows are missing and when it was added. And costing a task
-needed `turnId` on the usage row after all: `workId` is the right thing to *group* by and
-the wrong thing to join on, because the board records the turn each change was made in.
-Both ids, answering different questions.
-
-Money is withheld rather than partial when any model in the window has no rate. Rates come
-from `config.json`; a table in source is a number that goes quietly wrong while still
-looking authoritative.
-
----
-
-## Stage 4: the admin view
-
-**Goal**: the daily dashboard with drill-down, as a surface rather than a command.
-
-Deliberately last. The reader is where the definitions get settled, and building a page on
-top of definitions that are still moving is how the throwaway scripts happened in the first
-place.
-
-**Success criteria**
-- A day, drillable to a task, showing execution, artifacts, rounds and cost.
-- Verified against the running page with `scripts/ui-shot.mjs` before it is committed, per
-  [docs/17](docs/17-two-agents.md).
-
-**Status**: Complete. Reached from the header number that had been showing today's tokens
-and opening nothing since the honesty pass.
-
-Four defects the screenshots caught that no test would have: "1 turns"; a "not on file"
-cell wrapping every task row to three lines; a day view that filtered out every uncostable
-task *silently*, so a day with 51 unjoinable tasks read as a day with no tasks; and a
-confident **$0.00** on a window with nothing in it — in a module whose other tests are
-entirely about that distinction.
-
-Two accessibility defects found the same way, both because the thing had to be driven: the
-header number was a `<span>` with a click handler, and the task drill-down was a clickable
-`<tr>`. Neither was reachable by keyboard or announced as a control. The drill-down is now
-a link, and the whole view is addressable — `#spend?task=t51` — which is useful on its own
-and is the only reason the drill-down could be verified at all, because
-[R33](docs/11-roadmap.md) means synthetic clicks do not reach that browser.
-
----
-
-## What this plan does not do
-
-It does not build the completion gate, the obligation ledger, or anything that decides when
-an agent may finish. Those need a dispatch record and a separation of attempt outcome from
-obligation resolution, both of which go to hostile review first — see the ordering in
-docs/16. This plan builds the field all of them turned out to need, and the reporting that
-was waiting on it and no longer is.
+## Stage 5: Desktop owner tokens, read-only shell classifier, hooks
+**Goal**: forked desktops bound to an unguessable owner token checked in boxd routing;
+tree-sitter-bash read-only classification surfaced in approvals; Claude Code-dialect hook
+events (`PreToolUse`/`Stop`/`PreCompact`) as the R36 extension seam.
+**Success Criteria**: a reused display index refuses the previous owner's token; an
+approval card says "read-only" for `ls`/`cat`/`git status`; a Claude Code hook file runs
+unchanged.
+**Status**: Not Started

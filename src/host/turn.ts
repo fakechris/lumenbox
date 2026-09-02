@@ -1481,6 +1481,16 @@ export async function runTurn(
     let requestEstimate = estimateRequestTokens({ messages, system, tools });
     const wire = `${provider.label}|${provider.baseUrl ?? ""}`;
     const estimated = calibratedTokens(wire, requestEstimate.total);
+    // Said once per turn whether or not it is a problem: the prompt's size was invisible
+    // until it was fatal, and a number nobody sees is a number nobody budgets. Grok Bot
+    // treats prompt bytes as a product decision (a slim-prompt A/B, a flag that removes
+    // 3.3K duplicated tokens); the first step towards that here is being able to read it.
+    if (round === 0) {
+      console.error(
+        `[prompt] ${agent.profile.name}: system+tools ≈ ${calibratedTokens(wire, requestEstimate.floor)} ` +
+          `tokens, whole request ≈ ${estimated} (${tools.length} tools)`
+      );
+    }
     // The floor is compared calibrated too (verification review): an uncalibrated
     // floor on a CJK-heavy prompt under-warns exactly where the warning matters.
     if (

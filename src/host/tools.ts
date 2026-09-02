@@ -530,7 +530,10 @@ export function buildTools(
           "Do not use this to check in, to report progress, or to ask permission for an " +
           "action: permission is asked for you when it is needed. Guessing well is " +
           "better than asking often; asking beats guessing when being wrong is expensive " +
-          "to undo.",
+          "to undo.\n\n" +
+          "Phrase it as the question you would ask out loud (\"Which account — work or " +
+          "personal?\"), never as a menu instruction (\"Pick one of the following\"), and " +
+          "make each option read like a reply they would actually send.",
         input_schema: {
           type: "object",
           properties: {
