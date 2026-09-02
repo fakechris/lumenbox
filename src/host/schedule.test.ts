@@ -673,3 +673,41 @@ test("a skill runs as the agent the host saw write it, and as nobody else", asyn
     "an unattributed skill is refused and says so"
   );
 });
+
+test("a listener fires once per matching message, in the thread it was said in, under the runner rules", async () => {
+  const runs: { agent: string; prompt: string; deliver?: string }[] = [];
+  const lines: string[] = [];
+  const scheduler = new Scheduler({
+    due: async () => [],
+    listeners: async () => [
+      { slug: "deploy-watch", name: "Deploy watch", path: "/home/box/work/skills/deploy-watch/SKILL.md", match: "/deploy (failed|broke)/i" },
+      { slug: "only-ops", name: "Ops room", path: "/p", match: "on call", chat: "feishu:oc_ops" },
+      { slug: "bobs", name: "Bob's", path: "/p", match: "deploy", runAs: "Ada" },
+    ],
+    run: async (agent, prompt, deliver) => {
+      runs.push({ agent, prompt, deliver });
+    },
+    defaultAgent: () => "agent-ops",
+    resolveAgent: name => ({ Ada: "agent-ada" })[name],
+    writerOf: slug => (slug === "bobs" ? { agentId: "agent-bob", agentName: "Bob" } : undefined),
+    log: line => lines.push(line),
+    path: null,
+  });
+
+  assert.deepEqual(
+    await scheduler.heard({ text: "heads up, the Deploy FAILED again", chatKey: "feishu:oc_dev", threadKey: "feishu:oc_dev/om_t1", messageId: "m1", senderLabel: "Chris" }),
+    ["deploy-watch"],
+    "the regex listener fired; the chat-bound one did not; Bob's naming Ada was refused"
+  );
+  assert.equal(runs[0]?.agent, "agent-ops");
+  assert.equal(runs[0]?.deliver, "feishu:oc_dev/om_t1", "delivered to the thread");
+  assert.match(runs[0]?.prompt ?? "", /\[listener\]/);
+  assert.match(runs[0]?.prompt ?? "", /from Chris in feishu:oc_dev\/om_t1/);
+  assert.match(runs[0]?.prompt ?? "", /Deploy FAILED again/);
+  assert.ok(lines.some(line => /Bob's: refuses to run as "Ada" — the host saw Bob write it/.test(line)));
+
+  assert.deepEqual(await scheduler.heard({ text: "deploy failed", chatKey: "feishu:oc_dev", messageId: "m1" }), [], "same message id: nothing fires twice");
+  assert.deepEqual(await scheduler.heard({ text: "who is on call?", chatKey: "feishu:oc_ops/om_9", messageId: "m2" }), ["only-ops"], "a thread of the bound chat counts");
+  assert.deepEqual(await scheduler.heard({ text: "who is on call?", chatKey: "feishu:oc_other", messageId: "m3" }), [], "another chat does not");
+  assert.equal(runs.length, 2);
+});

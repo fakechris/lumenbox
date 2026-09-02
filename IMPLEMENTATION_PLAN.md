@@ -50,7 +50,13 @@ message-match listener as a routine trigger.
 **Success Criteria**: a skill written by Bob naming Ada is refused with the writer named;
 the live weekly-retro still runs; a "when someone says X in this chat" routine fires once
 per matching message and never on its own output.
-**Status**: Not Started
+**Status**: Complete (2026-09-02). Provenance: `src/host/skill-provenance.ts`, ledger
+`~/.agentbox/skill-provenance.jsonl`, attributed from write_file/edit_file and from bash
+commands naming a skill path with a write-shaped operator; scheduler rule = writer or
+default agent. Listeners: `trigger: message` + `match:` (+ `chat:`) in frontmatter,
+`Scheduler.heard()` fired from the channel manager after admission, delivered to the
+thread the message was in, once per message id. Live-verified: unit tests only — a real
+Feishu message from a person is needed to see one fire end to end.
 
 ## Stage 5: Desktop owner tokens, read-only shell classifier, hooks
 **Goal**: forked desktops bound to an unguessable owner token checked in boxd routing;

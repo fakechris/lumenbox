@@ -653,6 +653,11 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
 
   const channels = new ChannelManager({
     ingress,
+    listeners: message => {
+      void orchestrator.scheduler.heard(message).catch(error => {
+        console.error(`[schedule] listeners: ${error instanceof Error ? error.message : String(error)}`);
+      });
+    },
     cards,
     incarnationOf,
     defaultAgentFor: adapterName =>

@@ -370,9 +370,29 @@ test("the index stops at its budget and names what it left out", () => {
     return result.skill;
   });
   const rendered = renderSkills(skills);
-  assert.ok(rendered.length < SKILL_INDEX_CHARS + 2_000, `index is ${rendered.length} chars`);
+  // The slack is the framing paragraphs and the one line that names the unlisted skills.
+  assert.ok(rendered.length < SKILL_INDEX_CHARS + 3_000, `index is ${rendered.length} chars`);
   assert.match(rendered, /\*\*skill 0\*\*/);
   assert.match(rendered, /more not described here because the index is full/);
   assert.match(rendered, /skill-59/);
   assert.ok(!rendered.includes("**skill 59**"), "the last skill is named, not described");
+});
+
+test("a listener is both halves or a problem, and shows in the index", () => {
+  const listening = skillFrom(
+    "deploy-watch",
+    parseSkillFile("---\ndescription: when a deploy fails\ntrigger: message\nmatch: /deploy (failed|broke)/i\nchat: feishu:oc_1\n---\nbody")
+  );
+  assert.ok("skill" in listening);
+  assert.deepEqual(listening.skill.listener, { match: "/deploy (failed|broke)/i", chat: "feishu:oc_1" });
+  assert.match(renderSkills([listening.skill]), /fires when a message matches \/deploy \(failed\|broke\)\/i in feishu:oc_1/);
+
+  const noMatch = skillFrom("x", parseSkillFile("---\ndescription: d\ntrigger: message\n---\nbody"));
+  assert.ok("problem" in noMatch && /needs a match/.test(noMatch.problem));
+  const noTrigger = skillFrom("x", parseSkillFile("---\ndescription: d\nmatch: hello\n---\nbody"));
+  assert.ok("problem" in noTrigger && /no trigger: message/.test(noTrigger.problem));
+  const badKind = skillFrom("x", parseSkillFile("---\ndescription: d\ntrigger: webhook\nmatch: x\n---\nbody"));
+  assert.ok("problem" in badKind && /the only kind/.test(badKind.problem));
+  const badRegex = skillFrom("x", parseSkillFile("---\ndescription: d\ntrigger: message\nmatch: /(unclosed/\n---\nbody"));
+  assert.ok("problem" in badRegex && /not a valid regex/.test(badRegex.problem));
 });

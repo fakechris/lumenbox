@@ -268,6 +268,19 @@ export class Orchestrator {
           ...(skill.because !== undefined ? { because: skill.because } : {}),
         }));
     },
+    listeners: async () => {
+      const { skills } = await this.skills.refresh();
+      return skills
+        .filter(skill => skill.listener !== undefined)
+        .map(skill => ({
+          slug: skill.slug,
+          name: skill.name,
+          path: skill.path,
+          match: skill.listener!.match,
+          ...(skill.listener!.chat !== undefined ? { chat: skill.listener!.chat } : {}),
+          ...(skill.runAs !== undefined ? { runAs: skill.runAs } : {}),
+        }));
+    },
     // Through the ordinary prompt path, so a scheduled turn is checked by the policy gate exactly
     // like any other: a box over its budget stops firing rather than quietly draining it.
     // Its own turn always: a scheduled kickoff absorbed as steering into whatever

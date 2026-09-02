@@ -95,6 +95,15 @@ export interface Skill {
    */
   deliver?: string;
   /**
+   * When it runs because someone said something, if it does.
+   *
+   * `trigger: message` with a `match:` — a /regex/ or a case-insensitive phrase — fires the skill
+   * once per matching message from a person, replying in the chat (and thread) it was said in.
+   * `chat:` narrows it to one chatKey. The "let me know when" half of routines; the schedule
+   * is the "every Monday" half.
+   */
+  listener?: { match: string; chat?: string };
+  /**
    * Who wrote this, when an agent did — and why it thought the routine was worth having.
    *
    * Not a permission and not a gate. An agent can already create a scheduled routine
@@ -124,6 +133,9 @@ const KNOWN_KEYS = new Set([
   "deliver",
   "authored_by",
   "because",
+  "trigger",
+  "match",
+  "chat",
 ]);
 
 export interface ParsedSkill {
@@ -262,6 +274,31 @@ export function skillFrom(
     return { problem: `${slug}: timezone is set but there is no schedule for it to apply to.` };
   }
 
+  // A listener needs both halves: what to listen for, and that it is listening at all.
+  const trigger = parsed.meta.trigger?.trim();
+  const match = parsed.meta.match?.trim();
+  if (trigger !== undefined && trigger !== "" && trigger !== "message") {
+    return { problem: `${slug}: trigger must be "message" (the only kind); "${trigger}" is not one.` };
+  }
+  if (trigger === "message" && (match === undefined || match === "")) {
+    return { problem: `${slug}: trigger: message needs a match: — a /regex/ or a phrase to listen for.` };
+  }
+  if ((trigger === undefined || trigger === "") && match !== undefined && match !== "") {
+    return { problem: `${slug}: match is set but there is no trigger: message, so nothing listens.` };
+  }
+  if (trigger === "message" && match !== undefined && /^\/.*\/[a-z]*$/s.test(match)) {
+    try {
+      new RegExp(match.slice(1, match.lastIndexOf("/")), match.slice(match.lastIndexOf("/") + 1));
+    } catch (error) {
+      return { problem: `${slug}: match ${match} is not a valid regex (${error instanceof Error ? error.message : String(error)}).` };
+    }
+  }
+  const chat = parsed.meta.chat?.trim();
+  const listener =
+    trigger === "message" && match !== undefined
+      ? { match, ...(chat !== undefined && chat !== "" ? { chat } : {}) }
+      : undefined;
+
   // Likewise a delivery target with nothing to deliver: the person meant to schedule it.
   const deliver = parsed.meta.deliver?.trim();
   if (deliver !== undefined && deliver !== "" && schedule === undefined) {
@@ -278,6 +315,7 @@ export function skillFrom(
       path: `${SKILLS_DIR}/${slug}/${SKILL_FILENAME}`,
       helpers,
       ...(schedule !== undefined ? { schedule } : {}),
+      ...(listener !== undefined ? { listener } : {}),
       ...(parsed.meta.agent ? { runAs: parsed.meta.agent.trim() } : {}),
       ...(timezone !== undefined && timezone !== "" ? { timezone } : {}),
       ...(deliver !== undefined && deliver !== "" ? { deliver } : {}),
@@ -314,7 +352,11 @@ export function renderSkills(skills: readonly Skill[]): string {
   const unlisted: Skill[] = [];
   let used = 0;
   for (const skill of skills) {
-    const when = skill.schedule === undefined ? "" : ` — runs ${describeSchedule(skill.schedule)}`;
+    const when =
+      (skill.schedule === undefined ? "" : ` — runs ${describeSchedule(skill.schedule)}`) +
+      (skill.listener === undefined
+        ? ""
+        : ` — fires when a message matches ${skill.listener.match}${skill.listener.chat === undefined ? "" : ` in ${skill.listener.chat}`}`);
     const helpers =
       skill.helpers.length === 0
         ? ""
@@ -366,6 +408,11 @@ export function renderSkills(skills: readonly Skill[]): string {
     "schedule is cron or @daily / @every 30m; timezone an IANA name (omit for this",
     "machine's clock); deliver the chat it reports to (omit and no chat hears it);",
     "authored_by is you when it was your idea. No inline # comments in frontmatter.",
+    "",
+    "For \"let me know when someone says X\" use a listener instead of (or as well as) a schedule:",
+    "`trigger: message` with `match: /deploy failed/i` (a /regex/, or a plain phrase matched",
+    "case-insensitively) and optionally `chat: feishu:oc_…` to listen in one chat only. It fires",
+    "once per matching message from a person and replies where it was said.",
     "",
     "Two things to hold onto when you do. A routine is a *standing* commitment — it costs its run",
     "every time, forever, whether or not anyone reads it — so give it a real reason and delete it when",

@@ -390,6 +390,49 @@ export interface Scheduled {
   because?: string;
 }
 
+/** A skill that fires on a matching message. Same runner rules as a schedule. */
+export interface Listening {
+  slug: string;
+  name: string;
+  path: string;
+  match: string;
+  chat?: string;
+  runAs?: string;
+}
+
+/** Whether a message matches a listener's `match:` — a /regex/flags, or a phrase, case-insensitively. */
+export function listenerMatches(match: string, text: string): boolean {
+  const regex = /^\/(.*)\/([a-z]*)$/s.exec(match);
+  if (regex !== null) {
+    try {
+      return new RegExp(regex[1]!, regex[2]).test(text);
+    } catch {
+      return false;
+    }
+  }
+  return match.trim() !== "" && text.toLowerCase().includes(match.trim().toLowerCase());
+}
+
+/** What the run is told when a message, not a timer, started it. */
+export function listenerPrompt(
+  skillName: string,
+  path: string,
+  said: { text: string; sender: string; chatKey: string }
+): string {
+  return [
+    `[listener] This turn was started because a message matched the **${skillName}** routine, not because ` +
+      "someone addressed you. Your reply is delivered to the chat it was said in, where people will read it; " +
+      "nobody will answer a question, so decide rather than ask.",
+    "",
+    `Read \`${path}\` and follow it for this message from ${said.sender} in ${said.chatKey}:`,
+    "",
+    said.text.slice(0, 4_000),
+    "",
+    "Make your final message the thing itself, short enough to read on a phone. If the routine does not " +
+      "actually apply to this message, say nothing: reply with an empty message.",
+  ].join("\n");
+}
+
 /**
  * Where a schedule's run history lives.
  *
@@ -422,6 +465,8 @@ interface RunState {
 export interface SchedulerDeps {
   /** The skills with schedules, re-read each tick so an edit takes effect without a restart. */
   due: () => Promise<readonly Scheduled[]>;
+  /** The skills with listeners, re-read on each message so an edit takes effect at once. */
+  listeners?: () => Promise<readonly Listening[]>;
   /**
    * Starts a turn. Rejecting is fine: the next window is the retry.
    *
@@ -537,6 +582,74 @@ export class Scheduler {
       // after a restart, which is the behaviour this whole file used to have.
       this.log(`${slug}: could not write the run history (${error instanceof Error ? error.message : String(error)})`);
     }
+  }
+
+  /** Message ids already answered by a listener, so a redelivered message fires nothing twice. */
+  private readonly heardIds = new Set<string>();
+
+  /**
+   * A message from a person arrived; fires every listener it matches. Returns the slugs fired.
+   *
+   * Only inbound messages reach here — the bot's own output never comes back through ingress —
+   * so a routine cannot trigger itself; and one message fires each routine at most once, whatever
+   * the channel redelivers. The runner rules are the schedule's: an agent's own skill runs as it,
+   * anything else runs as the default agent or not at all.
+   */
+  async heard(message: {
+    text: string;
+    chatKey: string;
+    threadKey?: string;
+    messageId?: string;
+    senderLabel?: string;
+  }): Promise<string[]> {
+    if (this.deps.listeners === undefined) return [];
+    if (message.messageId !== undefined) {
+      if (this.heardIds.has(message.messageId)) return [];
+      this.heardIds.add(message.messageId);
+      if (this.heardIds.size > 1_000) this.heardIds.delete(this.heardIds.values().next().value!);
+    }
+    let listening: readonly Listening[];
+    try {
+      listening = await this.deps.listeners();
+    } catch (error) {
+      this.log(`could not read listeners: ${error instanceof Error ? error.message : String(error)}`);
+      return [];
+    }
+    const fired: string[] = [];
+    for (const skill of listening) {
+      if (skill.chat !== undefined && skill.chat !== message.chatKey && !message.chatKey.startsWith(`${skill.chat}/`)) continue;
+      if (!listenerMatches(skill.match, message.text)) continue;
+      if (this.running.has(skill.slug)) {
+        this.log(`${skill.name}: skipped a matching message, the previous run has not finished`);
+        this.record(skill.slug, "skipped");
+        continue;
+      }
+      const agent = this.runnerFor(skill);
+      if (agent === undefined) continue;
+      const deliver = message.threadKey ?? message.chatKey;
+      this.running.add(skill.slug);
+      this.record(skill.slug, "started");
+      this.log(`${skill.name}: fired by a message in ${deliver}`);
+      fired.push(skill.slug);
+      void this.deps
+        .run(
+          agent,
+          listenerPrompt(skill.name, skill.path, {
+            text: message.text,
+            sender: message.senderLabel ?? "someone",
+            chatKey: deliver,
+          }),
+          deliver
+        )
+        .catch(error => {
+          this.log(`${skill.name}: run failed — ${error instanceof Error ? error.message : String(error)}`);
+        })
+        .finally(() => {
+          this.running.delete(skill.slug);
+          this.record(skill.slug, "finished");
+        });
+    }
+    return fired;
   }
 
   /** Runs whatever is due. Exposed so a test drives it directly instead of waiting on a clock. */

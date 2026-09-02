@@ -289,6 +289,17 @@ export function parseApprovalReply(text: string): ApprovalReply | undefined {
 
 export interface ChannelManagerDeps {
   /**
+   * Told of every admitted message from a person, for routines that listen for a phrase. Fired
+   * beside the ordinary handling, never instead of it; the callee decides what, if anything, runs.
+   */
+  listeners?: (message: {
+    text: string;
+    chatKey: string;
+    threadKey?: string;
+    messageId?: string;
+    senderLabel: string;
+  }) => void;
+  /**
    * Whether this identity may command the agents from a channel, read fresh each
    * message so a role change needs no restart. A viewer (or an unknown sender) is
    * refused and told their id; a driver or admin is let through. Permission is a
@@ -1123,6 +1134,13 @@ ${input.options.map(option => `· ${option}`).join("\n")}`
     if (message.messageId !== undefined) {
       this.deps.ingress?.decided(message.messageId, "admitted");
     }
+    this.deps.listeners?.({
+      text: message.text,
+      chatKey: message.chatKey ?? message.identity,
+      ...(message.threadKey !== undefined ? { threadKey: message.threadKey } : {}),
+      ...(message.messageId !== undefined ? { messageId: message.messageId } : {}),
+      senderLabel: message.senderLabel,
+    });
 
     // A one-word answer to a consent this person was asked for is a decision, not a
     // new instruction: answer the approval and do not start a turn. Checked before
