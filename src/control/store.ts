@@ -99,6 +99,13 @@ export interface BoxRow {
   lastSeenAt: string | undefined;
   /** The last usage sequence number collected from this box. */
   usageCursor: number;
+  /**
+   * `primary` is the tenant's own box, the one the gateway proxies to and the allocator made.
+   * `attached` is a machine that box drives beside it (docs/30 Stage D): recorded here for the
+   * fleet view and health, reached only through the primary. One primary per tenant; any
+   * number attached.
+   */
+  role: "primary" | "attached";
 }
 
 export interface UsageRow {
@@ -256,11 +263,16 @@ export interface ControlStore {
    * makes the slot single meant it could never be replaced.
    */
   createBox(
-    row: Omit<BoxRow, "lastSeenAt" | "usageCursor">,
+    row: Omit<BoxRow, "lastSeenAt" | "usageCursor" | "role"> & { role?: BoxRow["role"] },
     tokens: Readonly<Partial<Record<TokenKind, string>>>
   ): BoxRow;
   getBox(id: string): BoxRow | undefined;
+  /** The tenant's primary box, the one the gateway proxies to. */
   boxForTenant(tenantId: string): BoxRow | undefined;
+  /** The boxes the primary drives beside it (docs/30 Stage D), mirrored here. */
+  attachedBoxesOf(tenantId: string): BoxRow[];
+  upsertAttachedBox(input: { tenantId: string; name: string; boxdUrl: string; state?: BoxState }): BoxRow;
+  retireAttachedBox(tenantId: string, name: string): boolean;
   listBoxes(states?: readonly BoxState[]): BoxRow[];
   setBoxState(id: string, state: BoxState): void;
   /** Corrects where a box is reachable, after a restart moved its published ports. */
@@ -385,13 +397,14 @@ create table if not exists box (
   image          text not null,
   created_at     text not null,
   last_seen_at   text,
-  usage_cursor   integer not null default 0
+  usage_cursor   integer not null default 0,
+  role           text not null default 'primary'
 );
 
--- One live box per tenant, enforced here rather than trusted to the allocator: a retried
--- allocate after a timeout is the normal case, and two boxes for one tenant is two bills.
-create unique index if not exists box_one_live_per_tenant
-  on box(tenant_id) where state <> 'gone';
+-- One live *primary* box per tenant, enforced here rather than trusted to the allocator: a
+-- retried allocate after a timeout is the normal case, and two boxes for one tenant is two
+-- bills. Attached boxes (docs/30 Stage D) are as many as the tenant drives; the index is
+-- created after the role column exists, in the constructor.
 
 create table if not exists box_token (
   box_id     text not null references box(id),
@@ -510,6 +523,18 @@ export class SqliteControlStore implements ControlStore {
     if (options.path !== ":memory:") this.db.exec("pragma journal_mode = wal");
     this.db.exec("pragma foreign_keys = on");
     this.db.exec(SCHEMA);
+    // The one column added after the table shipped. Guarded, because there is no migration
+    // table: a database from before has the table without it, and `create table if not exists`
+    // does not add columns.
+    const columns = this.db.prepare("pragma table_info(box)").all() as { name: string }[];
+    if (!columns.some(column => column.name === "role")) {
+      this.db.exec("alter table box add column role text not null default 'primary'");
+    }
+    this.db.exec(
+      `drop index if exists box_one_live_per_tenant;
+       create unique index if not exists box_one_primary_per_tenant
+         on box(tenant_id) where state <> 'gone' and role = 'primary';`
+    );
     this.key = loadEncryptionKey(
       options.keyPath ??
         (options.path === ":memory:" ? join(process.cwd(), ".control-key") : `${options.path}.key`)
@@ -645,7 +670,7 @@ export class SqliteControlStore implements ControlStore {
   // ── boxes ─────────────────────────────────────────────────────────────────────────
 
   createBox(
-    row: Omit<BoxRow, "lastSeenAt" | "usageCursor">,
+    row: Omit<BoxRow, "lastSeenAt" | "usageCursor" | "role"> & { role?: BoxRow["role"] },
     tokens: Readonly<Partial<Record<TokenKind, string>>> = {}
   ): BoxRow {
     // One transaction, because a box the store calls ready and cannot authenticate is worse than no
@@ -656,8 +681,8 @@ export class SqliteControlStore implements ControlStore {
       this.db
         .prepare(
           `insert into box (id, tenant_id, allocator_kind, external_id, boxd_url, ui_url, state,
-                            image, created_at, usage_cursor)
-           values (?, ?, ?, ?, ?, ?, ?, ?, ?, 0)`
+                            image, created_at, usage_cursor, role)
+           values (?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?)`
         )
         .run(
           row.id,
@@ -668,7 +693,8 @@ export class SqliteControlStore implements ControlStore {
           row.uiUrl,
           row.state,
           row.image,
-          row.createdAt
+          row.createdAt,
+          row.role ?? "primary"
         );
       for (const [kind, value] of Object.entries(tokens)) {
         if (value !== undefined) this.putToken(row.id, kind as TokenKind, value);
@@ -690,9 +716,48 @@ export class SqliteControlStore implements ControlStore {
 
   boxForTenant(tenantId: string): BoxRow | undefined {
     const row = this.db
-      .prepare("select * from box where tenant_id = ? and state <> 'gone'")
+      .prepare("select * from box where tenant_id = ? and state <> 'gone' and role = 'primary'")
       .get(tenantId) as Record<string, string | number | null> | undefined;
     return row === undefined ? undefined : toBox(row);
+  }
+
+  attachedBoxesOf(tenantId: string): BoxRow[] {
+    const rows = this.db
+      .prepare("select * from box where tenant_id = ? and state <> 'gone' and role = 'attached' order by created_at")
+      .all(tenantId) as Record<string, string | number | null>[];
+    return rows.map(toBox);
+  }
+
+  upsertAttachedBox(input: { tenantId: string; name: string; boxdUrl: string; state?: BoxState }): BoxRow {
+    const existing = this.db
+      .prepare("select * from box where tenant_id = ? and external_id = ? and role = 'attached' and state <> 'gone'")
+      .get(input.tenantId, input.name) as Record<string, string | number | null> | undefined;
+    const now = new Date().toISOString();
+    if (existing !== undefined) {
+      this.db
+        .prepare("update box set boxd_url = ?, state = ?, last_seen_at = ? where id = ?")
+        .run(input.boxdUrl, input.state ?? "ready", now, String(existing.id));
+      return this.getBox(String(existing.id))!;
+    }
+    return this.createBox({
+      id: `box_${randomUUID()}`,
+      tenantId: input.tenantId,
+      allocatorKind: "attached",
+      externalId: input.name,
+      boxdUrl: input.boxdUrl,
+      uiUrl: "",
+      state: input.state ?? "ready",
+      image: "",
+      createdAt: now,
+      role: "attached",
+    });
+  }
+
+  retireAttachedBox(tenantId: string, name: string): boolean {
+    const result = this.db
+      .prepare("update box set state = 'gone' where tenant_id = ? and external_id = ? and role = 'attached' and state <> 'gone'")
+      .run(tenantId, name);
+    return Number(result.changes) > 0;
   }
 
   listBoxes(states?: readonly BoxState[]): BoxRow[] {
@@ -1097,6 +1162,7 @@ function toBox(row: Record<string, string | number | null>): BoxRow {
     createdAt: String(row.created_at),
     lastSeenAt: row.last_seen_at === null ? undefined : String(row.last_seen_at),
     usageCursor: Number(row.usage_cursor ?? 0),
+    role: row.role === "attached" ? "attached" : "primary",
   };
 }
 

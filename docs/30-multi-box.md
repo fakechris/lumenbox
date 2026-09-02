@@ -37,7 +37,18 @@ Stages A and B shipped on `feat/multi-box` (built on `feat/bot-templates` + `fea
   desktops and memory follow the agent's box; a schedule on the attached box runs as its
   agent; detach with residents refused). 1045 green.
 
-Not done: Stage C (`TransferFile`, the wake line naming the box) and Stage D (control plane).
+**Stage D (control plane), same night, ahead of C at Chris's call.** `box.role` (`primary` |
+`attached`; guarded `alter table` for databases from before, and the one-live-box index became
+one-live-*primary*-box); `upsertAttachedBox/attachedBoxesOf/retireAttachedBox`; the collector
+probes primaries only and mirrors what each reports at `GET /api/boxes` — an attached row per
+entry with the primary's `connected` as its health, retired when no longer listed; the admin
+surface gained `GET /api/admin/boxes`, `POST /api/admin/boxes/attach|detach`, which go
+*through* the tenant's primary (`/api/boxes/attach` with its UI token) and leave the row,
+owner-only and audited. The URL an admin gives is as the primary's container reaches the box
+(`host.docker.internal:13370` for a tunnel on the control host). Tests in
+`src/control/multi-box.test.ts`.
+
+Not done: Stage C (`TransferFile`, the wake line naming the box).
 What still assumes one box: the chat inbox/outbox and file routes read the own box (a door
 is bound to a box by record but the server does not route its files by it yet), `agentbox
 box up/down/status` are the Docker box's, and skill provenance is keyed by slug alone.

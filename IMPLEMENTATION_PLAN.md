@@ -103,5 +103,9 @@ agent's box and a routine on the attached box runs as its agent; detach refused 
 `/desktop/b/<boxId>/<index>` reaches the attached box; the dialog chooses a box once.
 **Status**: Complete (2026-09-02) on `feat/multi-box` — `src/box/boxes.ts`, registry and
 orchestrator per-box wiring, `/api/boxes`, CLI `box attach|detach|list`, UI box field,
-`attach-grok.sh` registering the VM. Open: docs/30 Stage C (cross-box file transfer) and D.
+`attach-grok.sh` registering the VM; the UI groups agents by box, labels the chat and desktop
+with the box, and Settings has a Boxes block (attach/detach). Live on main since 2026-09-02
+night: `agentbox-box` (6 agents) + `grok` (Kai, desktop :10 on Grok Bot's VM). Stage D shipped
+the same night (control-plane `box.role`, collector mirror, `/api/admin/boxes*`). Open: docs/30
+Stage C (cross-box file transfer).
 

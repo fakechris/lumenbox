@@ -29,6 +29,7 @@ function fixture() {
       createdAt: "2026-09-02T00:00:00Z",
       lastSeenAt: undefined,
       usageCursor: 0,
+      role: "primary",
     };
     store.createBox(row, { box: `box-token-${id}`, ui: `ui-${id}` });
     return row;
