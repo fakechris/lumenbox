@@ -19,9 +19,8 @@ while true; do
   # 1. Update heartbeat timestamp on disk to keep storage mounts active
   date +%s > /tmp/.lumen_heartbeat 2>/dev/null || true
 
-  # 2. Ping local boxd and standard gateway health endpoints
+  # 2. Ping our own boxd. Only ours: the host's other daemons are not ours to poke.
   curl -s -m 2 "http://127.0.0.1:${BOXD_PORT}/health" >/dev/null 2>&1 || true
-  curl -s -m 2 "http://127.0.0.1:1337/health" >/dev/null 2>&1 || true
 
   # 3. Micro-jitter X11 mouse position by 0px to refresh DPMS/idle timers on the display
   if [ -n "${DISPLAY_NUM}" ]; then

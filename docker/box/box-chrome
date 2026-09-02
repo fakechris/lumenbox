@@ -52,12 +52,24 @@ if ! pgrep -f -- "--user-data-dir=$PROFILE" >/dev/null 2>&1; then
   rm -f "$PROFILE"/Singleton{Lock,Cookie,Socket} 2>/dev/null || true
 fi
 
-# Seed initial cookies/preferences if this is a fresh profile and a host profile exists
-if [ ! -f "$PROFILE/Default/Network/Cookies" ] && [ -d "$HOME/.config/google-chrome/Default" ]; then
+# Seed a fresh profile from an existing one, once, so the browser starts with the logins the
+# person already made on this machine. Best effort and explicit: CHROME_SEED_PROFILE names the
+# source (on Grok Bot's VM that is ~/chrome-profile; on a desktop, ~/.config/google-chrome);
+# CHROME_SEED_PROFILE=none skips it. A live Chrome may be mid-write, so a torn copy is possible
+# and harmless — the worst case is a login that has to be repeated.
+SEED="${CHROME_SEED_PROFILE:-}"
+if [ -z "$SEED" ]; then
+  for candidate in "$HOME/chrome-profile" "$HOME/.config/google-chrome" "$HOME/.config/chromium"; do
+    if [ -f "$candidate/Default/Network/Cookies" ]; then SEED="$candidate"; break; fi
+  done
+fi
+if [ "$SEED" != "none" ] && [ -n "$SEED" ] && [ ! -f "$PROFILE/Default/Network/Cookies" ] && [ -f "$SEED/Default/Network/Cookies" ]; then
+  echo "[box-chrome] seeding $PROFILE from $SEED (cookies, preferences, local storage)"
   mkdir -p "$PROFILE/Default/Network"
-  cp "$HOME/.config/google-chrome/Default/Network/Cookies" "$PROFILE/Default/Network/" 2>/dev/null || true
-  cp "$HOME/.config/google-chrome/Default/Preferences" "$PROFILE/Default/" 2>/dev/null || true
-  cp -r "$HOME/.config/google-chrome/Default/Local Storage" "$PROFILE/Default/" 2>/dev/null || true
+  cp "$SEED/Default/Network/Cookies" "$PROFILE/Default/Network/" 2>/dev/null || true
+  cp "$SEED/Default/Preferences" "$PROFILE/Default/" 2>/dev/null || true
+  cp -r "$SEED/Default/Local Storage" "$PROFILE/Default/" 2>/dev/null || true
+  [ -f "$SEED/Local State" ] && cp "$SEED/Local State" "$PROFILE/" 2>/dev/null || true
 fi
 
 # Through the egress proxy when the box has one, so the browser's traffic leaves from the

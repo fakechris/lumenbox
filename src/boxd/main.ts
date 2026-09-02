@@ -658,9 +658,13 @@ if (egressRelay) {
 }
 
 const listenPort = process.env.BOXD_PORT ? parseInt(process.env.BOXD_PORT, 10) : BOXD_PORT;
+// 0.0.0.0 in a container, where Docker is the only way in. As a drop-in on somebody else's
+// machine — Grok Bot's VM, reached over an SSH tunnel — loopback, so the daemon is not one
+// token away from that machine's network.
+const listenHost = process.env.BOXD_BIND ?? "0.0.0.0";
 
-server.listen(listenPort, "0.0.0.0", () => {
-  log(`listening on 0.0.0.0:${listenPort}, display ${display}`);
+server.listen(listenPort, listenHost, () => {
+  log(`listening on ${listenHost}:${listenPort}, display ${display}`);
   // Encoders left running by a previous daemon. They are adopted by PID 1 when boxd dies and keep
   // writing, and this process's map is empty — so without this, starting a recording gives you two
   // ffmpegs on one screen and a file nobody will ever stop.

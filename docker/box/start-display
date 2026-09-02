@@ -136,12 +136,17 @@ printf '%s\n' "Xcursor.theme: Adwaita" "Xcursor.size: 24" "Xft.dpi: 96" \
 # Not optional: without one, dialogs open unmapped and keyboard focus never lands, so
 # typing silently goes nowhere. Compositing off so the desktop background is visible —
 # xfwm4's own compositor paints over the root window.
-if ! wmctrl -m > /dev/null 2>&1; then
+# wmctrl asks the WM; a machine without wmctrl (a drop-in on somebody else's image) falls back
+# to the process check, which is what keeps this from starting a new xfwm4 on every pass.
+wm_up() {
+  if command -v wmctrl > /dev/null 2>&1; then wmctrl -m > /dev/null 2>&1; else running_exact xfwm4; fi
+}
+if ! wm_up; then
   log "starting window manager"
   setsid dbus-launch --exit-with-session xfwm4 --replace --compositor=off \
     >> "/tmp/xfwm4-${N}.log" 2>&1 &
   for _ in $(seq 1 40); do
-    wmctrl -m > /dev/null 2>&1 && break
+    wm_up && break
     sleep 0.25
   done
   repaired+=("xfwm4")

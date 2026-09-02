@@ -20,7 +20,7 @@ const outputFile = join(dist, "lumen-dropin.tar.gz");
 
 mkdirSync(dist, { recursive: true });
 
-const requiredFiles = ["boxd.cjs", "start-display", "box-chrome", "box-keepalive"];
+const requiredFiles = ["boxd.cjs", "start-display", "box-chrome", "box-keepalive", "wait-compositor", "vnc-probe", "box-clip"];
 
 for (const file of requiredFiles) {
   const fullPath = join(dockerBox, file);
