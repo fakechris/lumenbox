@@ -23,7 +23,9 @@ the rule's wording once a week of production numbers exists. Bob's prompt floor:
 the prefix stays byte-stable (also closes audit #6), cap the skill index (audit #4).
 **Success Criteria**: files appear after a RememberFact; continuation reuses the frozen
 block (test); a 300k-char skill description is truncated with the cut named in the log.
-**Status**: Not Started
+**Status**: Complete (2026-09-02). Mirror verified live for all six agents on box connect;
+selection carried across continuation (test proves the old code lost it); description cap
+400 chars + index cap 12k chars with the unlisted named.
 
 ## Stage 3: Auto-review classifier, shadow mode
 **Goal**: a per-call LLM review for outbound/binding actions (RunOnHost, SendToChat-class
