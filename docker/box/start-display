@@ -223,8 +223,17 @@ fi
 # showing beside a pinned one it cannot match.
 DOCK="${PLANK_DOCK:-dock1}"
 if [ "$DOCK" != "dock1" ] && [ ! -d "$HOME/.config/plank/$DOCK/launchers" ]; then
-  mkdir -p "$HOME/.config/plank/$DOCK/launchers"
-  for app in google-chrome chromium xfce4-terminal thunar pcmanfm; do
+  mkdir -p "$HOME/.config/plank/$DOCK/launchers" "$HOME/.local/share/applications"
+  # The browser on our dock is box-chrome — our profile, our debug port, no first-run and no
+  # default-browser nag — never the stock desktop file, which opens the machine's default
+  # profile with none of that (and, on a HOME where another product registered itself as the
+  # default browser, asks to become the default on every launch).
+  BROWSER_ICON="$(command -v chromium > /dev/null 2>&1 && echo chromium || echo google-chrome)"
+  printf '%s\n' '[Desktop Entry]' 'Type=Application' 'Name=Browser' 'Exec=box-chrome' "Icon=$BROWSER_ICON" \
+    "StartupWMClass=$BROWSER_ICON" 'Terminal=false' > "$HOME/.local/share/applications/lumen-chrome.desktop"
+  printf '%s\n' '[PlankDockItemPreferences]' "Launcher=file://$HOME/.local/share/applications/lumen-chrome.desktop" \
+    > "$HOME/.config/plank/$DOCK/launchers/lumen-chrome.dockitem"
+  for app in xfce4-terminal thunar pcmanfm; do
     if [ -f "/usr/share/applications/$app.desktop" ]; then
       printf '%s\n' '[PlankDockItemPreferences]' "Launcher=file:///usr/share/applications/$app.desktop" \
         > "$HOME/.config/plank/$DOCK/launchers/$app.dockitem"
