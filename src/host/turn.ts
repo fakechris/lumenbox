@@ -2166,11 +2166,13 @@ export async function runTurn(
             display: deps.display,
             displayIndex: deps.displayIndex,
             boxOwner: deps.boxOwner,
-            hostRunner: deps.hostRunner,
+            // A fork gets no host runner and no MCP client (docs/32 §2): a forged call for
+            // either lands on "unknown tool" rather than on a person or a credential.
+            hostRunner: isForkConversation(conversation) ? undefined : deps.hostRunner,
             vault: deps.vault,
             tasks: deps.tasks,
             scopes: deps.scopes,
-            mcp: deps.mcp,
+            mcp: isForkConversation(conversation) ? undefined : deps.mcp,
             askUser: deps.askUser,
             docReader: deps.docReader,
             skillProvenance: deps.skillProvenance,

@@ -5,7 +5,27 @@
 `bus.sendFromUser`/`deliverSystem` returning the admission seq, `TurnLedger.endIn` and the
 `fork/*` skip, `ToolContext.workId`, `outcome.commit` committed by the engine after the results
 entry, `FORK_WITHHELD_TOOLS` + `buildTools(…, fork)` + the dispatch refusal + `FORK_PROMPT_LINE`,
-no MCP for forks; `server.ts` sweeps before recovery. Suite 1078, floor 1078. §3's deferrals stand. v1 (a `begin`/`settle` ledger for forks
+no MCP for forks; `server.ts` sweeps before recovery. §3's deferrals stand.
+
+**Second review, on the implementation (Codex, same day): seven P1s, all fixed.** The sweep no
+longer trusts the ledger for *what* to cancel — every unstarted admission in `fork/*` is dropped
+and every interrupted `fork/*` turn ended, ledger or no ledger (`bus.dropAdmissionsWhere`,
+`TurnLedger.endWhere`), which closes the crash between inbox admission and the `admitted` line;
+a late result no longer rewrites `admitted`, and both the late note and the dropped note carry
+`[fork <id>]` so a restart sees one already queued and commits `late` instead of telling the
+parent twice; the parent is told *before* the record is settled, and a note that cannot be
+admitted leaves the record open; `inbox.drop` counts only sequences that were pending, so a
+sweep cannot trip a compaction that deletes live work; an unreadable ledger is logged loudly
+(the cancellation does not depend on it); `RunOnHost` and `computer` joined the withheld set and
+a fork's tool context carries no host runner and no MCP client, so a forged call for either is
+"unknown tool".
+
+**Stated limits, by the same review:** `committed` after the results entry is call ordering,
+not fsync ordering — only `prepared` is fsync'd; transcript and inbox appends are not, and a
+crash between them can leave `committed` on disk with the results entry lost. That is R30's
+"`appendLine` fsync everywhere" item, unchanged. And there is no single-writer lock: two hosts
+over one home would sweep each other's forks, the same unsupported configuration `TurnLedger`
+already names. v1 (a `begin`/`settle` ledger for forks
 and delegates, fenced children, fail-closed leases) went to Codex for the docs/13 review and was
 rejected on twelve findings, all verified against the tree. What survived is narrower and
 honest about what it does not fence. The evidence behind the choices is

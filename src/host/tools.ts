@@ -24,7 +24,7 @@ import { describeEnvShape, envShape, looksLikeEnvFile } from "./env-shape.ts";
 import { guardShellCommand } from "./ui-automation-guard.ts";
 import { dedupe, dedupeKey, validateRecord } from "./memory.ts";
 import { type Claims, heldElsewhere } from "./claims.ts";
-import type { CommitHow, PendingWork } from "./pending-work.ts";
+import { forkTag, type CommitHow, type PendingWork } from "./pending-work.ts";
 import { MAIN_CONVERSATION } from "../agents/registry.ts";
 import { describeTask, isLive, isTaskStatus, TASK_STATUSES, type TaskStore } from "./tasks.ts";
 import { ABSENT, versionOf, type FileVersions } from "./files.ts";
@@ -242,10 +242,16 @@ export const PARALLEL_TOOL_LIMIT = 6;
  * it is the only mechanical form of "communication is not coordination" anyone has built.
  * `OtherThreads` goes too: fork siblings share a prefix and would otherwise read each other.
  *
- * Stated, not solved: `bash` reaches the network. The fence is over *our* channels; egress is
- * a scope's policy (R4), not a tool list's.
+ * `RunOnHost` goes because it asks the person for approval, `computer` because it was never
+ * offered outside the main conversation and a forged call must not run it; MCP tools are not
+ * offered and the fork's context carries no MCP client, so a forged one is "unknown tool".
+ *
+ * Stated, not solved: `bash` and the browser reach the network. The fence is over *our*
+ * channels; egress is a scope's policy (R4), not a tool list's.
  */
 export const FORK_WITHHELD_TOOLS: ReadonlySet<string> = new Set([
+  "RunOnHost",
+  "computer",
   "SendToAgent",
   "CreateAgent",
   "UpdateAgent",
@@ -1836,14 +1842,16 @@ export async function dispatchTool(
         void runs[index]?.then(text => {
           // Admitted to the durable inbox is delivered, by the inbox's own contract: the
           // note survives a restart and opens a turn of its own (docs/32 §1, "late").
+          const tag = ids[index] !== undefined ? `${forkTag(ids[index]!)} ` : "";
           const seq = context.bus.deliverSystem(
             context.agent.id,
-            `A fork you were waiting on when a new instruction arrived has finished. ` +
+            `${tag}A fork you were waiting on when a new instruction arrived has finished. ` +
               `Fold it into what you already reported if it still matters.\n\n${text}`,
             parent
           );
-          if (ids[index] !== undefined) {
-            context.pendingWork?.admitted(ids[index]!, seq);
+          // Admitted durably is delivered. The tag lets a restart's sweep see the note is
+          // already queued if this commit line never lands.
+          if (ids[index] !== undefined && (seq !== undefined || context.bus.inboxless)) {
             context.pendingWork?.commit([{ id: ids[index]!, how: "late" }]);
           }
         });

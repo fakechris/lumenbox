@@ -62,11 +62,26 @@ export interface OpenFork {
 
 /** What the startup sweep needs from the rest of the host, narrowed so it can be faked. */
 export interface SweepDeps {
-  dropAdmission: (seq: number | undefined) => void;
-  endTurnsIn: (conversation: string, how: string) => number;
+  /** Cancels every unstarted admission in fork conversations; returns how many. */
+  dropForkAdmissions: () => number;
+  /** Ends every interrupted turn record in fork conversations; returns how many. */
+  endForkTurns: (how: string) => number;
   lastWordsOf: (agentId: string, conversation: string) => string | undefined;
-  deliver: (agentId: string, text: string, conversation: string) => void;
+  /** Queues a system note durably; returns whether it was admitted. */
+  deliver: (agentId: string, text: string, conversation: string) => boolean;
+  /** Whether a note carrying this tag already waits in the parent's inbox. */
+  noteQueued: (agentId: string, conversation: string, tag: string) => boolean;
   agentExists: (agentId: string) => boolean;
+}
+
+/** The tag every note about a fork carries, so a restart can see one is already queued. */
+export function forkTag(id: string): string {
+  return `[fork ${id}]`;
+}
+
+/** Whether a conversation name is a fork child's (the `FORK_PREFIX` of tools.ts). */
+export function isForkChild(conversation: string): boolean {
+  return conversation.startsWith("fork/");
 }
 
 export class PendingWork {
@@ -158,33 +173,64 @@ export class PendingWork {
   }
 
   /**
-   * Settles every open fork after a restart (docs/32 §1). Runs before the inbox replays and
-   * before interrupted turns are resumed, and is the authority for both in `fork/*`: the
-   * child's admission is cancelled, its turn record ended, and the parent told once — with
-   * the child's last words, not a path, and no automatic re-run. Returns what it dropped.
+   * Settles every open fork after a restart (docs/32 §1).
+   *
+   * Runs before the inbox replays and before interrupted turns are resumed. Two rules from the
+   * implementation review, both fail-closed: what is cancelled does not depend on this file —
+   * *every* unstarted admission in a `fork/*` conversation is dropped and *every* interrupted
+   * `fork/*` turn is ended, ledger or no ledger, because a fork never resumes across a
+   * restart; and the parent is told *before* the record is settled, so a crash in between
+   * costs a repeated note (deduplicated by tag) rather than a lost one.
    */
   sweep(deps: SweepDeps, now = new Date()): OpenFork[] {
+    deps.dropForkAdmissions();
+    deps.endForkTurns("dropped-fork");
     const dropped: OpenFork[] = [];
     for (const fork of this.open()) {
-      if (fork.admitted) deps.dropAdmission(fork.inboxSeq);
-      deps.endTurnsIn(fork.child, "dropped-fork");
+      const tag = forkTag(fork.id);
+      const exists = deps.agentExists(fork.agentId);
+      // A late result that reached the parent's inbox before the process died is delivered
+      // work, not dropped work: the note is already queued, and it says so.
+      if (exists && deps.noteQueued(fork.agentId, fork.parent, tag)) {
+        this.commit([{ id: fork.id, how: "late" }], now);
+        continue;
+      }
+      if (exists) {
+        const last = fork.admitted ? deps.lastWordsOf(fork.agentId, fork.child) : undefined;
+        const admitted = deps.deliver(
+          fork.agentId,
+          `${tag} A fork you started was dropped by a restart before its findings reached you` +
+            (fork.admitted ? "" : " (it may never have been admitted)") +
+            `. Its brief began: "${fork.brief}". ` +
+            (last !== undefined && last.trim() !== ""
+              ? `Its last words: "${last.replace(/\s+/g, " ").trim().slice(0, 300)}". `
+              : "It had said nothing yet. ") +
+            `Anything it did is an attempt, not a result; nothing was re-run. Decide whether the piece still needs doing.`,
+          fork.parent
+        );
+        // A note that could not be admitted leaves the record open, so the next start tries
+        // again — the one case where staying open is right.
+        if (!admitted) continue;
+      }
       this.dropped(fork.id, fork.admitted ? "restart" : "unrecorded", now);
       dropped.push(fork);
-      if (!deps.agentExists(fork.agentId)) continue;
-      const last = fork.admitted ? deps.lastWordsOf(fork.agentId, fork.child) : undefined;
-      deps.deliver(
-        fork.agentId,
-        `A fork you started was dropped by a restart before its findings reached you` +
-          (fork.admitted ? "" : " (it had not even been admitted)") +
-          `. Its brief began: "${fork.brief}". ` +
-          (last !== undefined && last.trim() !== ""
-            ? `Its last words: "${last.replace(/\s+/g, " ").trim().slice(0, 300)}". `
-            : "It had said nothing yet. ") +
-          `Anything it did is an attempt, not a result; nothing was re-run. Decide whether the piece still needs doing.`,
-        fork.parent
-      );
     }
     return dropped;
+  }
+
+  /**
+   * Whether the ledger file exists but cannot be read. The sweep is fail-closed without it —
+   * it cancels every fork admission regardless — but the operator should know the record of
+   * *which* forks those were is gone.
+   */
+  unreadable(): string | undefined {
+    if (this.path === undefined || !existsSync(this.path)) return undefined;
+    try {
+      readFileSync(this.path, "utf8");
+      return undefined;
+    } catch (error) {
+      return error instanceof Error ? error.message : String(error);
+    }
   }
 
   private append(record: AdmittedRecord | CommittedRecord | DroppedRecord): void {

@@ -215,6 +215,12 @@ test("a fork child is fenced: the withheld tools are not offered, and a forged c
     assert.equal(refused.isError, true);
     assert.match(refused.text, /not available in a fork/);
     assert.equal(context.bus.pendingCount(teammate.id), 0, "nothing was sent");
+    // The person-facing and desktop channels too, whatever was offered.
+    for (const name of ["RunOnHost", "computer", "AskUser", "RememberFact"]) {
+      const blocked = await dispatchTool(name, {}, inFork);
+      assert.equal(blocked.isError, true, name);
+      assert.match(blocked.text, /not available in a fork/, name);
+    }
   } finally {
     cleanup();
   }

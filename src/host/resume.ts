@@ -216,9 +216,14 @@ export class TurnLedger {
    * not read as an interrupted turn. Returns how many were ended.
    */
   endIn(conversation: string, how: string, now = new Date()): number {
+    return this.endWhere(candidate => candidate === conversation, how, now);
+  }
+
+  /** Ends every open record whose conversation the predicate selects. */
+  endWhere(select: (conversation: string) => boolean, how: string, now = new Date()): number {
     let ended = 0;
     for (const turn of this.interrupted({ includeForks: true })) {
-      if (turn.conversation !== conversation) continue;
+      if (!select(turn.conversation ?? "")) continue;
       this.end(turn.id, how, now);
       ended += 1;
     }

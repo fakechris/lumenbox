@@ -10,7 +10,7 @@ import type Anthropic from "@anthropic-ai/sdk";
 import { AgentBus, type BusEvent, type InboundMessage, type Lane } from "../agents/bus.ts";
 import { Inbox, inboxPath } from "../agents/inbox.ts";
 import { Claims, claimsPath } from "./claims.ts";
-import { PendingWork, pendingWorkPath } from "./pending-work.ts";
+import { PendingWork, isForkChild, pendingWorkPath } from "./pending-work.ts";
 import { FileVersions } from "./files.ts";
 import {
   giveUpNote,
@@ -1460,16 +1460,20 @@ export class Orchestrator {
    */
   sweepPendingWork(): number {
     if (this.pendingWork === undefined) return 0;
+    const unreadable = this.pendingWork.unreadable();
+    if (unreadable !== undefined) {
+      console.error(`[pending-work] ledger unreadable (${unreadable}); fork admissions are still cancelled, but their parents cannot be told which`);
+    }
     const dropped = this.pendingWork.sweep({
-      dropAdmission: seq => this.bus.dropAdmission(seq),
-      endTurnsIn: (conversation, how) => this.turns?.endIn(conversation, how) ?? 0,
+      dropForkAdmissions: () => this.bus.dropAdmissionsWhere(isForkChild),
+      endForkTurns: how => this.turns?.endWhere(isForkChild, how) ?? 0,
       lastWordsOf: (agentId, conversation) =>
         (this.registry.readTranscript(agentId, conversation) as { role?: string; kind?: string; text?: string }[])
           .filter(entry => entry.role === "assistant" && entry.kind === undefined && typeof entry.text === "string")
           .at(-1)?.text,
-      deliver: (agentId, text, conversation) => {
-        this.bus.deliverSystem(agentId, text, conversation);
-      },
+      deliver: (agentId, text, conversation) =>
+        this.bus.deliverSystem(agentId, text, conversation) !== undefined || this.bus.inboxless,
+      noteQueued: (agentId, conversation, tag) => this.bus.hasQueuedText(agentId, conversation, tag),
       agentExists: agentId => this.registry.tryGet(agentId) !== undefined,
     });
     for (const fork of dropped) {
