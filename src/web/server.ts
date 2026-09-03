@@ -863,7 +863,7 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
           : "Allowed once. Send the agent a message to have it retry.";
     },
     log: line => log(line),
-    ask: async (agentName, text, identity, chatKey, onProgress, threadKey, taskId) => {
+    ask: async (agentName, text, identity, chatKey, onProgress, threadKey, taskId, onInterim) => {
       let agent: ReturnType<typeof registry.resolve> | undefined;
       if (agentName !== undefined) {
         try {
@@ -964,6 +964,8 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
         if (event.type === "tool_start" && batchLine === undefined) {
           onProgress?.(actionLine(event.tool, event.input), event.tool);
         }
+        // The opening line, handed to the chat while the tools run (docs/31 layer 1a).
+        if (event.type === "interim") onInterim?.(event.text);
       };
       channelTurnListeners.add(listener);
       const progressPath = `${WORK_DIR}/chats/${conversation}/progress.json`;

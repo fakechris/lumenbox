@@ -199,6 +199,30 @@ export interface ToolOutcome {
  * by the tool that refuses to nest them, and by anyone reading the directory.
  */
 export const FORK_PREFIX = "fork/";
+
+/**
+ * Tools a round may run side by side (docs/31 layer 1c).
+ *
+ * Reads with no ordering between them: a search does not change what a file read returns,
+ * and three searches the model asked for together were meant together. Everything else —
+ * the shell, the desktop, the browser, every write, every MCP tool — runs alone, in the
+ * model's order, because "independent" is not something a name can promise for them.
+ * Hermes keeps the same split (`read_file, search_files, web_search, web_extract,
+ * session_search…` parallel; `terminal` never).
+ */
+export const PARALLEL_SAFE_TOOLS: ReadonlySet<string> = new Set([
+  "WebSearch",
+  "WebFetch",
+  "read_file",
+  "list_dir",
+  "Recall",
+  "ReadHistory",
+  "OtherThreads",
+  "ReadFeishuDoc",
+]);
+
+/** How many parallel-safe calls run at once; the rest of a run waits its turn. */
+export const PARALLEL_TOOL_LIMIT = 6;
 /**
  * How many forks one call may open.
  *

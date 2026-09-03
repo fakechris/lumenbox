@@ -2686,3 +2686,122 @@ test("steering is left queued while the model is finishing: a Stop hook's send-b
     cleanup();
   }
 });
+
+// ── docs/31 layer 1: the engine minds the person ───────────────────────────────────────
+
+test("reads asked for together run together; a shell call between them runs alone; results keep the model's order (docs/31 1c)", async () => {
+  const { registry, cleanup } = fixture();
+  try {
+    const ada = registry.create({ name: "Ada" });
+    const bus = new AgentBus(registry, async () => {});
+    const timeline: { name: string; at: number }[] = [];
+    const t0 = Date.now();
+    const box = {
+      readFile: async (path: string) => {
+        timeline.push({ name: `read ${path}`, at: Date.now() - t0 });
+        await new Promise(resolve => setTimeout(resolve, 80));
+        return { content: `contents of ${path}` };
+      },
+      exec: async (command: string) => {
+        timeline.push({ name: `exec ${command}`, at: Date.now() - t0 });
+        await new Promise(resolve => setTimeout(resolve, 20));
+        return { stdout: "ran", stderr: "", exit_code: 0, timed_out: false };
+      },
+    } as unknown as BoxClient;
+    const capture: Capture = { params: [] };
+    const client = fakeModel(
+      ({ index }) =>
+        index === 0
+          ? message(
+              [
+                toolUseBlock("read_file", { path: "/a" }, "r1"),
+                toolUseBlock("read_file", { path: "/b" }, "r2"),
+                toolUseBlock("read_file", { path: "/c" }, "r3"),
+                toolUseBlock("bash", { command: "touch x" }, "s1"),
+                toolUseBlock("read_file", { path: "/d" }, "r4"),
+              ],
+              "tool_use"
+            )
+          : message([textBlock("read them all")]),
+      { capture }
+    );
+    const started = Date.now();
+    await runTurn(
+      ada,
+      [{ id: "m-par", fromId: "user", fromName: "user", text: "read a, b, c, then d", priority: false, receivedAt: "" }],
+      new AbortController().signal,
+      { client, registry, bus, box, resolution: undefined }
+    );
+    const elapsed = Date.now() - started;
+    // Three reads in parallel (~80ms), then the shell (~20ms), then one read (~80ms): well
+    // under the ~340ms a serial loop would take.
+    assert.ok(elapsed < 300, `took ${elapsed}ms; a serial loop would take ~340ms`);
+    // The shell ran only after the first three reads had all *started*, and /d only after
+    // the shell finished.
+    const startOf = (name: string) => timeline.find(entry => entry.name === name)!.at;
+    assert.ok(startOf("exec touch x") >= Math.max(startOf("read /a"), startOf("read /b"), startOf("read /c")));
+    assert.ok(startOf("read /d") >= startOf("exec touch x") + 20);
+    // Results come back in the order the model asked, regardless of finish order.
+    const results = capture.params[1]?.messages.at(-1)?.content as { tool_use_id: string }[];
+    assert.deepEqual(results.map(block => block.tool_use_id), ["r1", "r2", "r3", "s1", "r4"]);
+  } finally {
+    cleanup();
+  }
+});
+
+test("the opening line beside the first tool calls is handed to the chat once, and stays out of the reply (docs/31 1a)", async () => {
+  const { registry, cleanup } = fixture();
+  try {
+    const ada = registry.create({ name: "Ada" });
+    const bus = new AgentBus(registry, async () => {});
+    const { box } = stubBox();
+    const events: { type: string; text?: string }[] = [];
+    const client = fakeModel(({ index }) =>
+      index === 0
+        ? message([textBlock("你说得对，我先查一下。"), toolUseBlock("bash", { command: "ls" }, "t1")], "tool_use")
+        : index === 1
+          ? message([textBlock("还在查。"), toolUseBlock("bash", { command: "ls -a" }, "t2")], "tool_use")
+          : message([textBlock("查到了：两个都在 8 月 14 日发布。")])
+    );
+    await runTurn(
+      ada,
+      [{ id: "m-int", fromId: "user", fromName: "user", text: "GLM-5.3 和 Qwen3.8-27B 是新发布的吧", priority: false, receivedAt: "" }],
+      new AbortController().signal,
+      { client, registry, bus, box, resolution: undefined, onEvent: event => events.push(event as { type: string; text?: string }) }
+    );
+    const interim = events.filter(event => event.type === "interim");
+    assert.deepEqual(interim.map(event => event.text), ["你说得对，我先查一下。"], "once, and only the opening line");
+    // The final reply is the last plain entry only; the opening line is not repeated in it.
+    const said = (registry.readTranscript(ada.id) as { role: string; kind?: string; text?: string }[])
+      .filter(entry => entry.role === "assistant" && entry.kind === undefined)
+      .map(entry => entry.text);
+    assert.deepEqual(said, ["查到了：两个都在 8 月 14 日发布。"]);
+  } finally {
+    cleanup();
+  }
+});
+
+test("a hidden wake gets no interim line: nobody is waiting on a scheduled run (docs/31 1a)", async () => {
+  const { registry, cleanup } = fixture();
+  try {
+    const ada = registry.create({ name: "Ada" });
+    const bob = registry.create({ name: "Bob" });
+    const bus = new AgentBus(registry, async () => {});
+    const { box } = stubBox();
+    const events: { type: string }[] = [];
+    const client = fakeModel(({ index }) =>
+      index === 0
+        ? message([textBlock("looking"), toolUseBlock("bash", { command: "ls" }, "t1")], "tool_use")
+        : message([textBlock("done")])
+    );
+    await runTurn(
+      ada,
+      [{ id: "m-peer", fromId: bob.id, fromName: "Bob", text: "please check the build", priority: false, receivedAt: "" }],
+      new AbortController().signal,
+      { client, registry, bus, box, resolution: undefined, onEvent: event => events.push(event) }
+    );
+    assert.equal(events.filter(event => event.type === "interim").length, 0);
+  } finally {
+    cleanup();
+  }
+});

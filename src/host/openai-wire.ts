@@ -47,6 +47,7 @@ interface OpenAIRequest {
   max_tokens: number;
   messages: OpenAIMessage[];
   tools?: { type: "function"; function: object }[];
+  tool_choice?: "auto" | "none" | "required" | { type: "function"; function: { name: string } };
   stream?: boolean;
   stream_options?: { include_usage: boolean };
 }
@@ -78,6 +79,25 @@ function imagePartsOf(content: unknown): OpenAIContentPart[] {
     }
   }
   return parts;
+}
+
+/**
+ * Anthropic's `tool_choice` in chat-completions words. `any` is "required", a named tool is a
+ * function reference; `auto` and `none` are the same word on both wires. Dropped silently
+ * before docs/31 — which is why nothing could force a tool call on this wire.
+ */
+function toolChoiceOf(choice: CreateParams["tool_choice"]): Pick<OpenAIRequest, "tool_choice"> {
+  if (choice === undefined) return {};
+  switch (choice.type) {
+    case "any":
+      return { tool_choice: "required" };
+    case "tool":
+      return { tool_choice: { type: "function", function: { name: choice.name } } };
+    case "none":
+      return { tool_choice: "none" };
+    default:
+      return { tool_choice: "auto" };
+  }
 }
 
 /** Anthropic-shaped request → chat completions body. Exported for its tests. */
@@ -154,6 +174,7 @@ export function toOpenAIRequest(params: CreateParams): OpenAIRequest {
     model: params.model,
     max_tokens: params.max_tokens,
     messages: out,
+    ...toolChoiceOf(params.tool_choice),
     ...(params.tools !== undefined && params.tools.length > 0
       ? {
           tools: params.tools.map(tool => ({

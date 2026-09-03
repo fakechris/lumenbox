@@ -71,7 +71,15 @@ import {
 import { DURABLE_RESULT_CHARS, type ResolutionConfig } from "../protocol/index.ts";
 import type { BoxClass } from "../box/access.ts";
 import { emptySectionFaults, buildSystemPromptParts, buildTurnPrompt } from "./prompt.ts";
-import { BOOKKEEPING_TOOLS, buildTools, dispatchTool, type ToolContext, type ToolOutcome } from "./tools.ts";
+import {
+  BOOKKEEPING_TOOLS,
+  PARALLEL_SAFE_TOOLS,
+  PARALLEL_TOOL_LIMIT,
+  buildTools,
+  dispatchTool,
+  type ToolContext,
+  type ToolOutcome,
+} from "./tools.ts";
 import type { HostRunner } from "./host-runner.ts";
 import type { Vault } from "./vault.ts";
 import type { TaskStore } from "./tasks.ts";
@@ -422,6 +430,13 @@ export type TurnEvent = TurnEventBody & { conversation?: string };
 
 type TurnEventBody =
   | { type: "text"; agentId: string; agentName: string; delta: string }
+  /**
+   * The model's opening line on a person-opened turn, said alongside its first tool calls
+   * (docs/31 layer 1a). Delivered to the chat at once so the person sees the acknowledgement
+   * while the tools run; not part of the final reply, which `replySince` still assembles
+   * from plain entries only. Once per turn.
+   */
+  | { type: "interim"; agentId: string; agentName: string; text: string }
   | { type: "tool_start"; agentId: string; agentName: string; tool: string; input: unknown }
   | {
       type: "tool_end";
@@ -1356,6 +1371,11 @@ export async function runTurn(
   // One entry per completed round, for the loop and progress judgements. Held out here rather than
   // inside runRounds so a continuation can reset it: a fresh budget deserves a fresh judgement.
   const rounds: RoundRecord[] = [];
+  // Whether the person has already been handed the model's opening line this turn (docs/31
+  // layer 1a). Turn-scoped, not round-scoped: a continuation restarts the round count and
+  // must not greet them twice.
+  let interimDelivered = false;
+  const personOpened = inbound.some(message => message.fromId === "user");
 
   // The ledger opens here, not during setup. Its job is to record that a turn was *executing* — a
   // model call, a tool — when the process died, so the next startup resumes it. Everything above is
@@ -1465,6 +1485,9 @@ export async function runTurn(
   // about to stop is a dangling turn the model never really answers; left queued, it opens
   // the next turn with the whole of the model's attention instead.
   let finishing = false;
+  // A one-round demand that the next response contain a tool call (docs/31 layer 1d/1e):
+  // set by a guard, spent by the next request, never carried further.
+  let forceTools: Anthropic.MessageCreateParams["tool_choice"] | undefined;
   for (let round = 0; round < MAX_ROUNDS; round++) {
     if (signal.aborted) {
       emit({ type: "aborted", agentId: agent.id });
@@ -1605,9 +1628,11 @@ export async function runTurn(
         system,
         tools,
         messages,
+        ...(forceTools !== undefined ? { tool_choice: forceTools } : {}),
       },
       { signal: attemptControl.signal }
     );
+    forceTools = undefined;
 
     // A stream can open and then deliver nothing. That is not a slow answer — a slow answer produces
     // tokens — and waiting on it forever is indistinguishable from a hang.
@@ -1961,6 +1986,17 @@ export async function runTurn(
       } satisfies TranscriptEntry, conversation);
     }
 
+    // The opening line reaches the person while the tools run (docs/31 layer 1a). Grok Bot
+    // needs a SendToUser tool for this because its plain text is never shown; ours is, so
+    // the same effect is one event: the text the model said beside its first calls goes to
+    // the chat now, once, and stays out of the final reply. Measured on Bob's thread: the
+    // line "你说得对，我先查一下" had been filed as blocks and shown to nobody.
+    if (personOpened && !interimDelivered && toolUses.length > 0 && !filedAnswer && roundText.trim() !== "") {
+      interimDelivered = true;
+      emit({ type: "interim", agentId: agent.id, agentName: agent.profile.name, text: roundText.trim() });
+      console.error(`[conduct] ${agent.profile.name}: interim line delivered (${roundText.trim().length} chars)`);
+    }
+
     // Execute every requested tool and return all results in one user message.
     // Splitting them across messages trains the model out of parallel calls.
     //
@@ -1973,7 +2009,9 @@ export async function runTurn(
     const results: Anthropic.ToolResultBlockParam[] = [];
     /** Tool-use ids whose stored text differs from what the model was shown. */
     const withheld = new Map<string, string>();
-    for (const toolUse of toolUses) {
+    const runOne = async (
+      toolUse: Anthropic.ToolUseBlock
+    ): Promise<{ block: Anthropic.ToolResultBlockParam; recordAs?: string }> => {
       emit({
         type: "tool_start",
         agentId: agent.id,
@@ -2100,11 +2138,47 @@ export async function runTurn(
           outcome = { ...outcome, text: `${outcome.text}\n\n[PostToolUse hook] ${hook.reason}` };
         }
       }
-      results.push(toolResultBlock(toolUse.id, outcome));
-      // Kept beside the result rather than inside it: what the API is sent and what the
-      // record keeps are two different things, and the block that goes to the model must
-      // not carry the substitute anywhere it could be mistaken for the answer.
-      if (outcome.recordAs !== undefined) withheld.set(toolUse.id, outcome.recordAs);
+      // `recordAs` kept beside the result rather than inside it: what the API is sent and
+      // what the record keeps are two different things, and the block that goes to the
+      // model must not carry the substitute anywhere it could be mistaken for the answer.
+      return {
+        block: toolResultBlock(toolUse.id, outcome),
+        ...(outcome.recordAs !== undefined ? { recordAs: outcome.recordAs } : {}),
+      };
+    };
+
+    // Reads run side by side, everything else alone, all in the model's order (docs/31
+    // layer 1c). Three searches asked for together used to cost three round-trips of wall
+    // time; the results still land in the order the calls were made, so nothing downstream
+    // can tell the difference except the clock.
+    const done: ({ block: Anthropic.ToolResultBlockParam; recordAs?: string } | undefined)[] =
+      toolUses.map(() => undefined);
+    let at = 0;
+    while (at < toolUses.length) {
+      const first = toolUses[at]!;
+      if (!PARALLEL_SAFE_TOOLS.has(first.name)) {
+        done[at] = await runOne(first);
+        at += 1;
+        continue;
+      }
+      let until = at;
+      while (
+        until < toolUses.length &&
+        until - at < PARALLEL_TOOL_LIMIT &&
+        PARALLEL_SAFE_TOOLS.has(toolUses[until]!.name)
+      ) {
+        until += 1;
+      }
+      const batch = await Promise.all(toolUses.slice(at, until).map(use => runOne(use)));
+      batch.forEach((entry, offset) => {
+        done[at + offset] = entry;
+      });
+      at = until;
+    }
+    for (const entry of done) {
+      if (entry === undefined) continue;
+      results.push(entry.block);
+      if (entry.recordAs !== undefined) withheld.set(entry.block.tool_use_id, entry.recordAs);
     }
 
     // Persist the exchange as blocks, in the order the API requires: the calling

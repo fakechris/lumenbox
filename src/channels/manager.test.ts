@@ -1815,3 +1815,41 @@ test("「入会 <会议号>」becomes the door's join instructions; malformed st
   await sleep(20);
   assert.deepEqual(asked, ["join 123456789 via telegram"]);
 });
+
+test("the model's opening line reaches the chat before the reply, and is not sent twice (docs/31 1a)", async () => {
+  const adapter = testAdapter();
+  const manager = new ChannelManager({
+    mayDrive: () => true,
+    ask: async (_agent, _text, _identity, _chatKey, _progress, _thread, _task, onInterim) => {
+      onInterim?.("你说得对，我先查一下。");
+      onInterim?.("a second line that must not go out");
+      await sleep(10);
+      return "查到了：两个都在 8 月 14 日发布。";
+    },
+    log: () => {},
+  });
+  manager.register(adapter, true, "test");
+  await started(manager);
+  await adapter.inject({ identity: "telegram:7", senderLabel: "chris", text: "GLM-5.3 是新的吧" });
+  await manager.idle();
+  assert.deepEqual(
+    adapter.sent.map(entry => entry.text),
+    ["你说得对，我先查一下。", "查到了：两个都在 8 月 14 日发布。"]
+  );
+
+  // A model that repeats its opening line as its whole reply does not say it twice.
+  const adapter2 = testAdapter();
+  const repeats = new ChannelManager({
+    mayDrive: () => true,
+    ask: async (_a, _t, _i, _c, _p, _th, _task, onInterim) => {
+      onInterim?.("收到，马上看。");
+      return "收到，马上看。";
+    },
+    log: () => {},
+  });
+  repeats.register(adapter2, true, "test");
+  await started(repeats);
+  await adapter2.inject({ identity: "telegram:7", senderLabel: "chris", text: "看一下" });
+  await repeats.idle();
+  assert.deepEqual(adapter2.sent.map(entry => entry.text), ["收到，马上看。"]);
+});
