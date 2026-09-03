@@ -396,6 +396,7 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
   const hostRunner = new HostRunner(hostRunnerConfig(loadConfig().hostExec ?? {}));
   if (hostRunner.enabled) log("host execution is on; every host command still asks for approval");
 
+
   // The credential vault. Read fresh on each edit through the routes; the orchestrator
   // holds this one instance, so a granted secret is usable on the next host command.
   const vault = new Vault();
@@ -3387,6 +3388,7 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
               provider: config.provider ?? null,
               model: config.model ?? null,
               baseUrl: config.baseUrl ?? null,
+              startupItem: config.startupItem ?? false,
             },
             // The host door, and why it is or is not usable right now.
             hostExec: {
@@ -3456,11 +3458,16 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
             hostExecChange =
               enabled || cwd !== "" ? { enabled, ...(cwd !== "" ? { cwd } : {}) } : null;
           }
+          let startupItemChange: boolean | null | undefined;
+          if (body.startupItem !== undefined) {
+            startupItemChange = typeof body.startupItem === "boolean" ? body.startupItem : null;
+          }
           const path = saveConfig({
             provider: providerValue === null ? null : field(providerValue)?.toLowerCase(),
             model: body.model === null ? null : field(body.model),
             baseUrl: body.baseUrl === null ? null : field(body.baseUrl),
             ...(hostExecChange !== undefined ? { hostExec: hostExecChange } : {}),
+            ...(startupItemChange !== undefined ? { startupItem: startupItemChange } : {}),
             ...(key !== undefined && key !== null
               ? { env: { [resolveProvider(chosenName).keyEnv]: key } }
               : {}),

@@ -27,7 +27,9 @@ const {
   nativeTheme,
 } = require("electron");
 const { spawn } = require("node:child_process");
+const fs = require("node:fs");
 const http = require("node:http");
+const os = require("node:os");
 const path = require("node:path");
 
 const PORT = Number(process.env.LUMENBOX_PORT || 7777);
@@ -46,6 +48,31 @@ let recentLog = [];
 
 function log(line) {
   console.log(`[shell] ${line}`);
+}
+
+function configFilePath() {
+  const home = process.env.AGENTBOX_HOME || path.join(os.homedir(), ".agentbox");
+  return process.env.AGENTBOX_CONFIG || path.join(home, "config.json");
+}
+
+function applyStartupItemSettings() {
+  if (process.platform !== "darwin" && process.platform !== "win32") return;
+  try {
+    const file = configFilePath();
+    if (!fs.existsSync(file)) return;
+    const cfg = JSON.parse(fs.readFileSync(file, "utf8"));
+    if (typeof cfg.startupItem === "boolean") {
+      app.setLoginItemSettings({
+        openAtLogin: cfg.startupItem,
+        path: process.execPath.includes("/Applications/LumenBox.app")
+          ? "/Applications/LumenBox.app"
+          : process.execPath,
+      });
+      log(`applied startup item setting: openAtLogin = ${cfg.startupItem}`);
+    }
+  } catch (err) {
+    log(`could not apply startup item: ${err.message}`);
+  }
 }
 
 /**
@@ -83,6 +110,8 @@ function startServer() {
     if (code === RESTART_EXIT_CODE) {
       // The settings dialog asked for this. Not a crash; the counter resets.
       log("server asked to be restarted (new config)");
+      applyStartupItemSettings();
+      updateTrayMenu();
       crashRestarts = 0;
       startServer();
       whenServerReady(() => mainWindow?.reload());
@@ -213,6 +242,35 @@ function createWindow() {
   whenServerReady(() => mainWindow?.loadURL(PAGE));
 }
 
+function buildTrayMenu() {
+  const loginSettings = app.getLoginItemSettings();
+  return Menu.buildFromTemplate([
+    { label: "Open LumenBox", click: () => createWindow() },
+    // Launch-at-login is set in Settings and applied here from config.json: one writer for
+    // the file (the server), one applier for the OS (this process).
+    {
+      label: `Launch at login: ${loginSettings.openAtLogin ? "on" : "off"} (change in Settings)`,
+      enabled: false,
+    },
+    {
+      label: "Restart server",
+      click: () => {
+        // Kill and let the exit handler bring it back; the reload rides on ready.
+        crashRestarts = -1; // the deliberate kill is not a crash
+        serverChild?.kill();
+      },
+    },
+    { type: "separator" },
+    { label: "Quit — keeps the box running", click: () => app.quit() },
+  ]);
+}
+
+function updateTrayMenu() {
+  if (tray) {
+    tray.setContextMenu(buildTrayMenu());
+  }
+}
+
 function createTray() {
   const image = nativeImage.createFromPath(
     path.join(REPO, "assets", "app-icon", "tray", "trayTemplate.png")
@@ -220,21 +278,7 @@ function createTray() {
   if (process.platform === "darwin") image.setTemplateImage(true);
   tray = new Tray(image);
   tray.setToolTip("LumenBox");
-  tray.setContextMenu(
-    Menu.buildFromTemplate([
-      { label: "Open LumenBox", click: () => createWindow() },
-      {
-        label: "Restart server",
-        click: () => {
-          // Kill and let the exit handler bring it back; the reload rides on ready.
-          crashRestarts = -1; // the deliberate kill is not a crash
-          serverChild?.kill();
-        },
-      },
-      { type: "separator" },
-      { label: "Quit — keeps the box running", click: () => app.quit() },
-    ])
-  );
+  tray.setContextMenu(buildTrayMenu());
   tray.on("click", () => createWindow());
 }
 
@@ -263,6 +307,7 @@ if (!app.requestSingleInstanceLock()) {
         )
       );
     }
+    applyStartupItemSettings();
     startServer();
     createTray();
     createWindow();

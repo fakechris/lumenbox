@@ -116,6 +116,11 @@ export interface AgentboxConfig {
    * ahead of its use.
    */
   boxes?: Record<string, { access: BoxAccess; group?: string }>;
+  /**
+   * Whether LumenBox should be registered as a system startup/login item to
+   * launch automatically at boot/login.
+   */
+  startupItem?: boolean;
 }
 
 /**
@@ -258,6 +263,7 @@ export function loadConfig(onWarn: (message: string) => void = () => {}): Agentb
     ...(readStringList(raw.skillRoots, "skillRoots", onWarn) !== undefined
       ? { skillRoots: readStringList(raw.skillRoots, "skillRoots", onWarn) }
       : {}),
+    ...(typeof raw.startupItem === "boolean" ? { startupItem: raw.startupItem } : {}),
   };
 }
 
@@ -462,6 +468,7 @@ export function saveConfig(
     hostExec?: AgentboxConfig["hostExec"] | null;
     /** Per-chat patch: a null hour removes that chat's digest, others are left alone. */
     digests?: Record<string, number | null>;
+    startupItem?: boolean | null;
   }
 ): string {
   const path = configPath();
@@ -506,6 +513,13 @@ export function saveConfig(
     }
     if (Object.keys(current).length > 0) raw.digests = current;
     else delete raw.digests;
+  }
+  if (changes.startupItem !== undefined) {
+    if (changes.startupItem === null || changes.startupItem === false) {
+      delete raw.startupItem;
+    } else {
+      raw.startupItem = true;
+    }
   }
   if (changes.env !== undefined) {
     const current =

@@ -868,6 +868,12 @@ export const APP_HTML = String.raw`<!doctype html>
         before it runs. Takes effect after a restart.</div>
       <div class="fieldnote" id="sethoststatus"></div>
     </div>
+    <div class="field" data-tier="installation">
+      <label>Startup item</label>
+      <label class="radio"><input type="checkbox" id="setstartupitem">
+        Launch LumenBox automatically on system login (Startup Item)</label>
+      <div class="fieldnote">Registers LumenBox as a login item so agents, desktop services, and chat channels are running after a computer restart. Applied by the app when it restarts the server.</div>
+    </div>
     <div class="field" data-tier="organisation">
       <label>Scopes</label>
       <div id="setscopes" style="display:flex;flex-direction:column;gap:6px"></div>
@@ -1182,6 +1188,7 @@ function openSettings() {
       $("sethoststatus").textContent = host.enabled
         ? (host.unavailableReason ? "Enabled, but: " + host.unavailableReason : "Enabled and ready.")
         : "";
+      $("setstartupitem").checked = !!(data.config && data.config.startupItem);
       $("setstatus").textContent = "Now running: " + (data.current || "");
       settingsProviderChanged();
       renderStandingGrants();
@@ -1806,6 +1813,7 @@ function saveSettings(thenRestart) {
   var key = $("setkey").value.trim();
   if (key !== "") body.key = key;
   body.hostExec = { enabled: $("sethostenabled").checked, cwd: $("sethostcwd").value.trim() };
+  body.startupItem = $("setstartupitem").checked;
   $("setstatus").textContent = "Saving…";
   fetch("/api/config", {
     method: "POST",
