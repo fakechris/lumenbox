@@ -559,8 +559,9 @@ const CRITICAL_RECAP = `# Before you answer
   and may have been about something else entirely.
 - Answer the whole of what was asked, not the easiest part of it.
 - Say which parts you verified and which you did not. Never present a memory as a check.
-- If you showed a claim to be false, give the right figure or say what getting it would take.
-- Do not ask permission for a tool you already hold; ask only for what only they know.`;
+- Do not ask permission for a tool you already hold; ask only for what only they know.
+- A doubt about a fact is a search, not a verdict. Only after a tool has checked it may you
+  call a claim false — then give the right figure.`;
 
 
 /**
@@ -603,6 +604,14 @@ path. Record what was said, not your interpretation: a name or product you do no
 recognise is something to look up, never to "correct" to one you know — and never attach
 a real-sounding source to invented figures. Placeholder data in a mockup is marked as
 example data, tied to no source.
+
+# Your knowledge is the past
+
+Your weights and your memory are the past. Memory describes the person, not the world. A
+model name, version, product or event you do not recognise is by default something released
+after your knowledge — look it up before you doubt it; never call it fictional, inflated or a
+typo on the strength of not having seen it. "Qwen 没有 27B" and "GLM 只到 4.x" were both said
+here from memory about models released two weeks earlier; the person had to ask for a search.
 
 # Asking for decisions
 
@@ -977,6 +986,45 @@ export function parseWakePrompt(
 }
 
 /** Combines user messages and peer wakes into the text for one turn. */
+/**
+ * Model families that get the per-turn discipline reminder (docs/31 layer 2b).
+ *
+ * Hermes's list, less codex: the families whose evals show the same three failures — a
+ * verdict from memory, an offer instead of an action, a promise with no call. Claude is not
+ * on it, for Hermes's stated reason: it does not exhibit these failure modes, and eighty
+ * tokens a turn buy it nothing.
+ */
+const REMINDED_MODEL_FAMILIES = ["minimax", "qwen", "glm", "deepseek", "kimi", "moonshot", "gpt", "grok", "mimo", "mistral"];
+
+export function remindsModel(model: string): boolean {
+  const lower = model.toLowerCase();
+  return REMINDED_MODEL_FAMILIES.some(family => lower.includes(family));
+}
+
+/**
+ * Three lines appended to a person's message, in the person's language, for the models
+ * that need them. In the user turn rather than the system tail because on a long thread
+ * the whole history sits between the system prompt and the message the model is answering
+ * — Claude Code's `system-reminder` placement, not a longer recap.
+ *
+ * Absent for hidden wakes: nobody is waiting, and the lines are about a person.
+ */
+export function turnReminderFor(model: string, personText: string): string | undefined {
+  if (!remindsModel(model)) return undefined;
+  const chinese = (personText.match(/[一-鿿]/g) ?? []).length >= 4;
+  return chinese
+    ? "<system_reminder>\n" +
+        "- 你不认识的版本号、型号、产品或事件，先当它是真的、是你知识之后发布的：先查再说，不得凭没见过断定它不存在或有水分。\n" +
+        "- 你持有的工具不用问要不要用：直接用，然后报告结果。\n" +
+        "- 如果你说要去查、去看、去跑，对应的调用必须在这一条回复里。\n" +
+        "</system_reminder>"
+    : "<system_reminder>\n" +
+        "- A version, model, product or event you do not recognise is real and newer than your knowledge until a tool says otherwise: search first; never rule it out for not having seen it.\n" +
+        "- Do not ask whether to use a tool you hold: use it, then report.\n" +
+        "- If you say you will check, look or run, the call is in this response.\n" +
+        "</system_reminder>";
+}
+
 export function buildTurnPrompt(inbound: readonly InboundMessage[]): string {
   const fromUser = inbound.filter(message => message.fromId === "user");
   const fromPeers = inbound.filter(message => message.fromId !== "user");

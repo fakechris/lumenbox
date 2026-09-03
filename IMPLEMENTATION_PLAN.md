@@ -130,5 +130,8 @@ model's opening line reaches the chat while its tools run; read-only tools run i
 carried on both wires (test); the guards fire once per turn, are logged, and `AGENTBOX_GUARDS=0`
 silences them (tests); golden `newer-than-you` passes; recap and epistemic paragraph shipped;
 per-turn reminder gated by model family; `[conduct]` counters visible in the web log.
-**Status**: Not Started (plan approved for writing 2026-09-02; order docs/31 §5).
+**Status**: Complete (2026-09-02, `feat/turn-engine`) except 2c the prompt floor, which stays its
+own item. `src/host/guards.ts` + tests; turn engine: interim event, parallel runs, forceTools,
+guards, closing nudge, reminder; channel manager delivers the interim line; golden
+`newer-than-you` + invariant; suite 1070, floor 1070. Live: docs/31 §6.
 

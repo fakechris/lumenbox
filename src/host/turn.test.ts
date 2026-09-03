@@ -2805,3 +2805,147 @@ test("a hidden wake gets no interim line: nobody is waiting on a scheduled run (
     cleanup();
   }
 });
+
+const MINIMAX_PROFILE = {
+  label: "test-minimax",
+  model: "MiniMax-M3",
+  maxTokens: 32_000,
+  vision: true,
+  adaptiveThinking: false,
+  effort: false,
+  promptCaching: false,
+  auth: "bearer" as const,
+  keyEnv: "TEST_KEY",
+};
+
+test("a verdict from memory on a turn with no tool call is sent back once with a forced tool call; the verdict is not the reply (docs/31 1e)", async () => {
+  const { registry, cleanup } = fixture();
+  try {
+    const ada = registry.create({ name: "Ada" });
+    const bus = new AgentBus(registry, async () => {});
+    const { box } = stubBox();
+    const capture: Capture = { params: [] };
+    const client = fakeModel(
+      ({ index }) =>
+        index === 0
+          ? message([textBlock("Qwen 没有 27B，GLM 目前公开到 4.x，没有 5.3-flash。")])
+          : index === 1
+            ? message([textBlock("我先查一下。"), toolUseBlock("bash", { command: "curl example" }, "t1")], "tool_use")
+            : message([textBlock("查到了：两个都在 2026 年 8 月 14 日发布。")]),
+      { capture }
+    );
+    await runTurn(
+      ada,
+      [{ id: "m-guard", fromId: "user", fromName: "user", text: "qwen-27B 或 glm-5.3-flash 为基座，详细介绍一下", priority: false, receivedAt: "" }],
+      new AbortController().signal,
+      { client, registry, bus, box, resolution: undefined, provider: MINIMAX_PROFILE }
+    );
+    // Round 1 carried the nudge and demanded a tool call; the nudge itself is not on the record.
+    const second = capture.params[1]!;
+    assert.deepEqual(second.tool_choice, { type: "any" });
+    assert.match(JSON.stringify(second.messages.at(-1)?.content), /\[harness\].*先用工具/);
+    assert.equal(capture.params[2]?.tool_choice, undefined, "the demand is spent after one round");
+    const transcript = registry.readTranscript(ada.id) as { role: string; kind?: string; text?: string }[];
+    assert.ok(!JSON.stringify(transcript).includes("[harness]"), "the nudge is not in the durable record");
+    // The verdict is on the record as blocks, not as a reply; the reply is the checked answer only.
+    const replies = transcript.filter(entry => entry.role === "assistant" && entry.kind === undefined).map(entry => entry.text);
+    assert.deepEqual(replies, ["查到了：两个都在 2026 年 8 月 14 日发布。"]);
+    assert.ok(transcript.some(entry => entry.role === "assistant" && entry.kind === "blocks" && JSON.stringify(entry).includes("没有 27B")));
+    // And the person's message carried the reminder for this model family, in Chinese.
+    const opening = JSON.stringify(capture.params[0]?.messages.at(-1)?.content);
+    assert.match(opening, /<system_reminder>/);
+    assert.match(opening, /先查再说/);
+  } finally {
+    cleanup();
+  }
+});
+
+test("a ruling after a tool ran is the model's to make; the guards are bounded and switchable (docs/31 1e)", async () => {
+  const { registry, cleanup } = fixture();
+  const previous = process.env.AGENTBOX_GUARDS;
+  try {
+    const ada = registry.create({ name: "Ada" });
+    const bus = new AgentBus(registry, async () => {});
+    const { box } = stubBox();
+    // After a search, "does not exist" is a finding, not a guess.
+    const capture: Capture = { params: [] };
+    const client = fakeModel(
+      ({ index }) =>
+        index === 0
+          ? message([toolUseBlock("bash", { command: "search" }, "t1")], "tool_use")
+          : message([textBlock("查过了：这个型号不存在，官方页面没有。")]),
+      { capture }
+    );
+    await runTurn(
+      ada,
+      [{ id: "m-after", fromId: "user", fromName: "user", text: "Zephyrus QX-880 是真的吗", priority: false, receivedAt: "" }],
+      new AbortController().signal,
+      { client, registry, bus, box, resolution: undefined, provider: MINIMAX_PROFILE }
+    );
+    assert.equal(capture.params.length, 2, "no send-back after evidence");
+
+    // A model that keeps offering is sent back twice and then let go.
+    const bob = registry.create({ name: "Bob" });
+    const stubborn: Capture = { params: [] };
+    const offers = fakeModel(() => message([textBlock("要不要我现在去查一下？")]), { capture: stubborn });
+    await runTurn(
+      bob,
+      [{ id: "m-stub", fromId: "user", fromName: "user", text: "GLM-5.3 发布了吗", priority: false, receivedAt: "" }],
+      new AbortController().signal,
+      { client: offers, registry, bus, box, resolution: undefined, provider: MINIMAX_PROFILE }
+    );
+    assert.equal(stubborn.params.length, 3, "two nudges, then the answer goes out as is");
+    const bobSaid = (registry.readTranscript(bob.id) as { role: string; kind?: string; text?: string }[])
+      .filter(entry => entry.role === "assistant" && entry.kind === undefined);
+    assert.equal(bobSaid.length, 1, "the third answer is delivered, flagged in the log");
+
+    // Switched off, the same model ends on round 0.
+    process.env.AGENTBOX_GUARDS = "0";
+    const vic = registry.create({ name: "Vic" });
+    const off: Capture = { params: [] };
+    await runTurn(
+      vic,
+      [{ id: "m-off", fromId: "user", fromName: "user", text: "GLM-5.3 发布了吗", priority: false, receivedAt: "" }],
+      new AbortController().signal,
+      { client: fakeModel(() => message([textBlock("要不要我现在去查一下？")]), { capture: off }), registry, bus, box, resolution: undefined, provider: MINIMAX_PROFILE }
+    );
+    assert.equal(off.params.length, 1);
+  } finally {
+    if (previous === undefined) delete process.env.AGENTBOX_GUARDS;
+    else process.env.AGENTBOX_GUARDS = previous;
+    cleanup();
+  }
+});
+
+test("acknowledged, ran tools, ended silent: one closing nudge, then the result (docs/31 1b)", async () => {
+  const { registry, cleanup } = fixture();
+  try {
+    const ada = registry.create({ name: "Ada" });
+    const bus = new AgentBus(registry, async () => {});
+    const { box } = stubBox();
+    const capture: Capture = { params: [] };
+    const client = fakeModel(
+      ({ index }) =>
+        index === 0
+          ? message([textBlock("收到，我看一下。"), toolUseBlock("bash", { command: "ls" }, "t1")], "tool_use")
+          : index === 1
+            ? message([])
+            : message([textBlock("看完了：三个文件，没有问题。")]),
+      { capture }
+    );
+    await runTurn(
+      ada,
+      [{ id: "m-close", fromId: "user", fromName: "user", text: "看一下目录", priority: false, receivedAt: "" }],
+      new AbortController().signal,
+      { client, registry, bus, box, resolution: undefined, provider: MINIMAX_PROFILE }
+    );
+    assert.equal(capture.params.length, 3);
+    assert.match(JSON.stringify(capture.params[2]?.messages.at(-1)?.content), /\[harness\].*把结果告诉他们/);
+    const said = (registry.readTranscript(ada.id) as { role: string; kind?: string; text?: string }[])
+      .filter(entry => entry.role === "assistant" && entry.kind === undefined)
+      .map(entry => entry.text);
+    assert.deepEqual(said, ["看完了：三个文件，没有问题。"]);
+  } finally {
+    cleanup();
+  }
+});

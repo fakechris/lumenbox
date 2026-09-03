@@ -1283,6 +1283,8 @@ and the pre-launch security pass over docs/10.
    model-gated per-turn reminder in the user turn); the epistemic line (an unknown newer
    thing is real until a tool says otherwise). Evidence gate: a golden task built from the
    incident and `[conduct]` counters over a week. M+S+S+M, in the order docs/31 §5 gives.
+   **Built the same evening** (docs/31 status block); what is left of R40 is the week of
+   counters that decides whether the textual guard and the reminder stay on by default.
 1. **R30 — coordination as protocol.** What every mature system does that we do not: a
    record minted *before* the side effect, a completion that is a row with a delivery state
    rather than a promise, and leases that fail closed. Concretely, one mechanism serves both

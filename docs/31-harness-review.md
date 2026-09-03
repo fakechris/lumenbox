@@ -1,6 +1,18 @@
 # 31 — The turn engine, reviewed against the incident and three references
 
-**Status: plan, 2026-09-02. Nothing here is built yet.** Written after an outside review of
+**Status: built 2026-09-02 (`feat/turn-engine`), the same evening the plan was approved.** What
+shipped, against §5's order: 1a the interim line (`interim` event, delivered by the channel
+manager once per turn, excluded from the reply); 1c parallel reads (`PARALLEL_SAFE_TOOLS`, six at
+once, results in call order); 1d `tool_choice` on both wires; 2a the recap reword; 3 the "Your
+knowledge is the past" section; 2b the model-gated `<system_reminder>` on the person's message
+(`turnReminderFor`, Hermes's families, never Claude); 1b the closing nudge; 1e the three guards in
+`src/host/guards.ts` (structural condition first; `tool_choice: any` for a verdict or an offer;
+max 2 per turn; the send-back kept out of the durable record; `AGENTBOX_GUARDS=0`). §4's evidence:
+golden `newer-than-you` from the incident verbatim, the `verdictFromMemory` invariant on every
+golden task, and `[conduct]` lines for `interim`, `guard … fired/complied/ignored`, `closing nudge`.
+Live result on the first run: see §6. Not built: 2c (the prompt floor), unchanged as its own item.
+
+Original text follows. Written after an outside review of
 the "reply first" rule, verified claim by claim against the tree at `584927c`, one live
 incident in our own transcripts, and three harnesses read at source (Grok Bot 0.30.0's
 in-box host, Hermes Agent, Claude Code's documented behaviour). Where the review was right
@@ -189,3 +201,19 @@ Decided here rather than left open: the guards are not a patch — both referenc
 bounded, and the incident is the case they exist for. What is *not* decided until the
 counters exist: whether the textual guard's regexes earn their keep, and whether the
 per-turn reminder is needed once the guards are on.
+
+## 6. First live run, 2026-09-02
+
+Recorded after the build, MiniMax-M3, one run each, before merging:
+
+| task | result | what the log showed |
+| --- | --- | --- |
+| `newer-than-you` (the incident, verbatim) | **pass** — searched before asserting (WebSearch ×3) | opened with a reply + 4 tool calls; interim line delivered (52 chars); no guard fired |
+| `not-verified` | pass — recorded blocked | opened with a reply + 3 tool calls; interim line delivered |
+| `asked-again` | pass | — |
+| `answers-in-kind` | fail — buried the definition (pre-existing, same as every run in R28's series) | 0 tool calls, text first |
+
+Read plainly: on the message that produced the incident, the same model now searches three
+times on round 0 and greets the person while doing it, with the reminder and the epistemic
+paragraph alone — the guards did not need to fire. Whether they fire on real traffic, and how
+often the model complies, is what the `[conduct]` lines are for over the coming week.

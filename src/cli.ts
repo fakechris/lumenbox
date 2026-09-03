@@ -1323,7 +1323,7 @@ async function main(): Promise<number> {
     // Each provider runs in a throwaway state directory — a golden run must neither
     // write memories into the real installation nor read them.
     case "golden": {
-      const { GOLDEN_TASKS } = await import("./host/golden.ts");
+      const { GOLDEN_TASKS, toolNamesSince, verdictFromMemory } = await import("./host/golden.ts");
       const withBox = rest.includes("--box");
       const names = rest.filter(argument => !argument.startsWith("--"));
       const targets = names.length > 0 ? names : [undefined];
@@ -1385,7 +1385,8 @@ async function main(): Promise<number> {
         if (seededMemory !== undefined) {
           writeFileSync(registry.memoryPathFor(gold.id), seededMemory);
           const count = seededMemory.split("\n").filter(line => line.trim() !== "").length;
-          out(dim(`memory seeded from ${memoryFrom}: ${count} records` + (process.env.AGENTBOX_ABLATE ? `, ablating ${process.env.AGENTBOX_ABLATE}` : "")));
+          const ablating = process.env.AGENTBOX_ABLATE ? `, ablating ${process.env.AGENTBOX_ABLATE}` : "";
+          out(dim(`memory seeded from ${memoryFrom}: ${count} records${ablating}`));
         }
         out(`${bold(profile.label)}  ${dim(profile.model)}  ${dim(home)}`);
         const boxReady = orchestrator.boxClient() !== undefined;
@@ -1448,7 +1449,7 @@ async function main(): Promise<number> {
             await orchestrator.prompt(gold.id, task.prompt({ teammateName: "Silver", token }));
             await orchestrator.settle();
             const reply = orchestrator.replySince(gold.id, before);
-            const verdict = await task.check({
+            let verdict = await task.check({
               reply,
               agentId: gold.id,
               teammateId: silver.id,
@@ -1456,7 +1457,14 @@ async function main(): Promise<number> {
               orchestrator,
               judge,
               token,
+              before,
             });
+            // The process invariant (docs/31 §4), on every task: a pass that ruled a named
+            // thing out of the world with no tool call is not a pass.
+            const fromMemory = verdictFromMemory(reply, toolNamesSince(registry, gold.id, before));
+            if (verdict.pass && fromMemory !== undefined) {
+              verdict = { pass: false, detail: `${verdict.detail}; invariant: ${fromMemory}` };
+            }
             const seconds = Math.round((Date.now() - started) / 1000);
             // An infrastructure failure is marked apart from a wrong answer: a red row
             // that means "the box was busy" and a red row that means "the model

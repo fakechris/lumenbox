@@ -70,7 +70,18 @@ import {
 } from "./compaction.ts";
 import { DURABLE_RESULT_CHARS, type ResolutionConfig } from "../protocol/index.ts";
 import type { BoxClass } from "../box/access.ts";
-import { emptySectionFaults, buildSystemPromptParts, buildTurnPrompt } from "./prompt.ts";
+import { emptySectionFaults, buildSystemPromptParts, buildTurnPrompt,
+  turnReminderFor,
+} from "./prompt.ts";
+import {
+  closingNudge,
+  guardFor,
+  guardsEnabled,
+  MAX_GUARD_NUDGES,
+  nudgeFor,
+  readsAsChinese,
+  type GuardReason,
+} from "./guards.ts";
 import {
   BOOKKEEPING_TOOLS,
   PARALLEL_SAFE_TOOLS,
@@ -1267,9 +1278,14 @@ export async function runTurn(
     meter,
   });
 
+  // The per-turn reminder rides the API copy of the person's message only (docs/31 layer
+  // 2b): the transcript keeps what the person said, and a later replay re-appends nothing.
+  const opener = inbound.some(message => message.fromId === "user")
+    ? turnReminderFor(provider.model, turnText)
+    : undefined;
   const messages: Anthropic.MessageParam[] = [
     ...historyToMessages(history),
-    { role: "user", content: turnText },
+    { role: "user", content: opener === undefined ? turnText : `${turnText}\n\n${opener}` },
   ];
 
   registry.appendTranscript(agent.id, {
@@ -1376,6 +1392,16 @@ export async function runTurn(
   // must not greet them twice.
   let interimDelivered = false;
   const personOpened = inbound.some(message => message.fromId === "user");
+  // How many tool calls this turn has made, across continuations: the structural signal the
+  // guards read (docs/31 layer 1e). A ruling reached with this at zero is a ruling from memory.
+  let toolCallsInTurn = 0;
+  // Guard bookkeeping: how many times the model was sent back, whether a send-back is
+  // awaiting its answer (so the answer can be logged as complied or not), and whether the
+  // closing nudge has been spent.
+  let guardNudges = 0;
+  let guardPending: GuardReason | undefined;
+  let closingNudged = false;
+  const chinese = readsAsChinese(inbound.map(message => message.text).join("\n"));
 
   // The ledger opens here, not during setup. Its job is to record that a turn was *executing* — a
   // model call, a tool — when the process died, so the next startup resumes it. Everything above is
@@ -1907,11 +1933,59 @@ export async function runTurn(
       );
     }
 
+    if (guardPending !== undefined) {
+      console.error(
+        `[conduct] ${agent.profile.name}: guard ${guardPending} ${toolUses.length > 0 ? "complied (tool calls followed)" : "ignored (answered again without a tool)"}`
+      );
+      guardPending = undefined;
+    }
+
     if (toolUses.length === 0) {
       const finalText = response.content
         .filter((block): block is Anthropic.TextBlock => block.type === "text")
         .map(block => block.text)
         .join("");
+
+      // The guards (docs/31 layer 1e): a person-opened turn may not end on a verdict reached
+      // with no tool, an offer to check instead of a check, or a promise with no call. Bounded
+      // — twice per turn at most — logged, and the send-back kept out of the durable record:
+      // the model's text is filed as blocks so the record has it, but it is not a reply
+      // (`replySince` would have delivered the wrong verdict beside the corrected one).
+      const reason =
+        personOpened && guardsEnabled() && guardNudges < MAX_GUARD_NUDGES && finalText.trim() !== ""
+          ? guardFor(finalText, toolCallsInTurn)
+          : undefined;
+      if (reason !== undefined) {
+        guardNudges += 1;
+        guardPending = reason;
+        console.error(
+          `[conduct] ${agent.profile.name}: guard ${reason} fired (${guardNudges}/${MAX_GUARD_NUDGES}, ${toolCallsInTurn} tool calls so far): "${finalText.trim().slice(0, 80)}"`
+        );
+        registry.appendTranscript(agent.id, {
+          role: "assistant",
+          kind: "blocks",
+          blocks: response.content.filter((block): block is Anthropic.TextBlock => block.type === "text"),
+          at: new Date().toISOString(),
+        } satisfies TranscriptEntry, conversation);
+        messages.push({ role: "user", content: nudgeFor(reason, chinese) });
+        // A verdict or an offer is answered with a demand for a tool call, which is what the
+        // wires can now carry; a trailing intent is left to the model, which already named
+        // the action.
+        if (reason !== "trailing-intent") forceTools = { type: "any" };
+        finishing = false;
+        continue;
+      }
+
+      // The closing send (Grok Bot's `turnEndedOnSilentToolCalls`, docs/31 layer 1b): the
+      // person saw the opening line, then tools ran, then nothing. Once.
+      if (!finalText.trim() && personOpened && interimDelivered && !closingNudged && guardsEnabled()) {
+        closingNudged = true;
+        console.error(`[conduct] ${agent.profile.name}: closing nudge (acknowledged, ran tools, ended silent)`);
+        messages.push({ role: "user", content: closingNudge(chinese) });
+        finishing = false;
+        continue;
+      }
+
       if (finalText.trim()) {
         registry.appendTranscript(agent.id, {
           role: "assistant",
@@ -1961,6 +2035,7 @@ export async function runTurn(
     }
     // Tool calls mean the model is working again, so steering is welcome at the next boundary.
     finishing = false;
+    toolCallsInTurn += toolUses.length;
 
     // Text followed only by bookkeeping calls is not narration — it is the answer,
     // filed. Measured on t51: the agent wrote its whole analysis, then tidied up

@@ -13,6 +13,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import {
   ablated,
+  turnReminderFor,
   buildSystemPrompt,
   buildSystemPromptParts,
   FIRST_RUN_CUE,
@@ -415,7 +416,7 @@ test("the conduct section is stable, ablatable, and carries the four rules that 
     hasBox: true,
   } as never;
   const { stable } = buildSystemPromptParts(context);
-  for (const rule of ["Reply first", "Close the loop", "Never fabricate data", "Asking for decisions", "Tone and length"]) {
+  for (const rule of ["Reply first", "Close the loop", "Never fabricate data", "Your knowledge is the past", "Asking for decisions", "Tone and length"]) {
     assert.ok(stable.includes(rule), `stable prompt carries "${rule}"`);
   }
   assert.match(stable, /Record what was said, not your interpretation/);
@@ -482,4 +483,20 @@ test("AGENTBOX_ABLATE=notes withholds only the notes nobody vouched for, and kee
     if (previous === undefined) delete process.env.AGENTBOX_ABLATE;
     else process.env.AGENTBOX_ABLATE = previous;
   }
+});
+
+test("the per-turn reminder goes to the model families that need it, in the person's language (docs/31 2b)", () => {
+  assert.equal(turnReminderFor("claude-opus-5", "GLM-5.3 是新的吧"), undefined, "Claude gets none");
+  const zh = turnReminderFor("MiniMax-M3", "GLM-5.3 和 Qwen3.8-27B 都是新发布的！");
+  assert.ok(zh?.startsWith("<system_reminder>") && zh.includes("先查再说"));
+  const en = turnReminderFor("glm-4.6", "Is the Zephyrus QX-880 real?");
+  assert.ok(en?.includes("search first"));
+  for (const model of ["deepseek-chat", "kimi-k2-turbo-preview", "gpt-5.1", "qwen3-max"]) {
+    assert.ok(turnReminderFor(model, "hi") !== undefined, model);
+  }
+  // The recap no longer licenses a verdict before a check.
+  const context = sharedBoxContext();
+  const { volatile } = buildSystemPromptParts(context as never);
+  assert.match(volatile, /A doubt about a fact is a search, not a verdict/);
+  assert.doesNotMatch(volatile, /If you showed a claim to be false/);
 });
