@@ -144,8 +144,9 @@ cancels its inbox item, ends its turn record and tells the parent with the child
 `committed` only after the parent's results entry exists; the withheld set absent from a fork's
 offer and refused at dispatch; no MCP tools in a fork.
 **Status**: Complete (2026-09-03) on `feat/r30-ledger` after Codex's hostile review of v1 (12
-findings, all verified). Deferred with preconditions: Delegate in the ledger (boxd job ids and
-exit files, an image rebuild), leases (a resource model first).
+findings, all verified). Slice two (2026-09-03): boxd caller-minted job ids + exit files +
+recovery; Delegate in the ledger; settled by Jobs, the MCP face's renewal, or the sweep. Still
+deferred: leases (a resource model first).
 
 ## Stage 11: The box gets an MCP face (docs/33)
 **Goal**: a delegated engine inside the box can call the host's MCP tools without a credential

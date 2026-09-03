@@ -26,6 +26,7 @@ import { dedupe, dedupeKey, validateRecord } from "./memory.ts";
 import { type Claims, heldElsewhere } from "./claims.ts";
 import { forkTag, type CommitHow, type PendingWork } from "./pending-work.ts";
 import { MCP_FACE_DIR, MCP_FACE_TOKEN_VARIABLE, type McpFace } from "./mcp-face.ts";
+import { randomBytes } from "node:crypto";
 import { MAIN_CONVERSATION } from "../agents/registry.ts";
 import { describeTask, isLive, isTaskStatus, TASK_STATUSES, type TaskStore } from "./tasks.ts";
 import { ABSENT, versionOf, type FileVersions } from "./files.ts";
@@ -1912,6 +1913,29 @@ export async function dispatchTool(
       }
       const env = delegateEnv(preset);
 
+      // The job id is ours (docs/32 slice two): minted here, recorded in the ledger before the
+      // box hears of it, and handed to boxd, which makes a repeated start idempotent.
+      const jobId = `job-${randomBytes(8).toString("hex")}`;
+      let pendingId: string | undefined;
+      if (context.pendingWork !== undefined) {
+        try {
+          pendingId = context.pendingWork.prepare({
+            agentId: context.agent.id,
+            kind: "delegate",
+            parent: context.conversation ?? MAIN_CONVERSATION,
+            child: jobId,
+            brief: `${preset.name}: ${prompt}`,
+            ...(context.workId !== undefined ? { workId: context.workId } : {}),
+            ...(context.turnId !== undefined ? { turnId: context.turnId } : {}),
+          });
+        } catch (error) {
+          return {
+            text: `Could not record the delegation before starting it (${error instanceof Error ? error.message : String(error)}), so nothing was started.`,
+            isError: true,
+          };
+        }
+      }
+
       // The MCP face (docs/33): mint a route, write the engine's config file, then start; the
       // job id is bound afterwards and a failed start revokes the route. No face for an attached
       // box, which cannot reach this host's loopback; said, not silently skipped.
@@ -1937,8 +1961,12 @@ export async function dispatchTool(
             requested,
             allowedMcp: context.allowedMcpTools ?? [],
           });
-          if ("error" in minted) return { text: minted.error, isError: true };
+          if ("error" in minted) {
+            if (pendingId !== undefined) context.pendingWork?.dropped(pendingId, "unrecorded");
+            return { text: minted.error, isError: true };
+          }
           routeKey = minted.route.key;
+          context.mcpFace.bindJob(routeKey, jobId);
           const file = `${MCP_FACE_DIR}/${minted.route.key}.json`;
           const face = preset.mcpFace(minted.url, MCP_FACE_TOKEN_VARIABLE, file);
           try {
@@ -1962,12 +1990,22 @@ export async function dispatchTool(
           ...(input.cwd ? { cwd: String(input.cwd) } : {}),
           ...(Object.keys(jobEnv).length > 0 ? { env: jobEnv } : {}),
           ...(context.boxOwner !== undefined ? { owner: context.boxOwner } : {}),
+          jobId,
         });
       } catch (error) {
         if (routeKey !== undefined) context.mcpFace?.revoke(routeKey, "job failed to start");
+        if (pendingId !== undefined) context.pendingWork?.dropped(pendingId, "unrecorded");
         throw error;
       }
-      if (routeKey !== undefined) context.mcpFace?.bindJob(routeKey, started.job_id);
+      // A box from before slice two mints its own id; the ledger then follows the box's.
+      if (started.job_id !== jobId) {
+        if (routeKey !== undefined) context.mcpFace?.bindJob(routeKey, started.job_id);
+        if (pendingId !== undefined) {
+          context.pendingWork?.dropped(pendingId, "unrecorded");
+          pendingId = undefined;
+        }
+      }
+      if (pendingId !== undefined) context.pendingWork?.admitted(pendingId, undefined);
       return {
         text:
           `Delegated to ${preset.name} as ${started.job_id}.\n` +
@@ -1985,14 +2023,20 @@ export async function dispatchTool(
     case "Jobs": {
       const box = requireBox(context);
       const action = String(input.action ?? "list");
+      // Wherever the host sees a delegated job end, the ledger is settled (docs/32 slice two).
+      const observe = (job: { job_id: string; running: boolean; exit_code?: number; interrupted?: boolean }) => {
+        if (job.running) return;
+        context.pendingWork?.commitDelegate(job.job_id, job.exit_code === 0 && job.interrupted !== true ? "done" : "failed");
+      };
       if (action === "list") {
         const { jobs } = await box.jobs();
+        for (const job of jobs) observe(job);
         if (jobs.length === 0) return { text: "No background jobs." };
         return {
           text: jobs
             .map(
               job =>
-                `${job.job_id} ${job.running ? "running" : `exited ${job.exit_code}`} — ` +
+                `${job.job_id} ${job.running ? "running" : job.interrupted === true ? "interrupted (the box daemon restarted under it; exit unknown)" : `exited ${job.exit_code}`} — ` +
                 `${job.command.slice(0, 80)} (${job.log_bytes} bytes at ${job.log_path})`
             )
             .join("\n"),
@@ -2002,6 +2046,7 @@ export async function dispatchTool(
       if (jobId === "") return { text: "Which job? Pass job_id.", isError: true };
       if (action === "kill") {
         const killed = await box.killJob(jobId);
+        observe(killed);
         return { text: `${killed.job_id} stopped. Its output is at ${killed.log_path}.` };
       }
       if (action !== "wait") {
@@ -2012,6 +2057,7 @@ export async function dispatchTool(
         ...(input.until !== undefined ? { until: String(input.until) } : {}),
         ...(input.timeout_ms !== undefined ? { timeout_ms: Number(input.timeout_ms) } : {}),
       });
+      observe(waited);
       // The reason is said first and plainly: "still running" and "finished" call for
       // different next moves, and a tail alone does not distinguish them.
       const headline =

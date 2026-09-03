@@ -61,7 +61,9 @@ export interface McpFaceDeps {
   policy?: PolicyGate;
   hooks?: HookRunner;
   /** The box a job runs in, for the lease's liveness check. */
-  jobsOf: (agentId: string) => Promise<{ job_id: string; running?: boolean; status?: string }[]> | undefined;
+  jobsOf: (agentId: string) => Promise<{ job_id: string; running?: boolean; status?: string; exit_code?: number }[]> | undefined;
+  /** Told when the lease renewal sees a route's job end, so the fork ledger can settle it. */
+  onJobEnded?: (jobId: string, status: { exit_code?: number; running?: boolean } | undefined) => void;
   /** `null` keeps no audit file. */
   auditPath?: string | null;
   log?: (line: string) => void;
@@ -214,7 +216,10 @@ export class McpFace {
       const mine = jobs.find(job => job.job_id === route.jobId);
       const running = mine !== undefined && (mine.running === true || mine.status === "running");
       if (running) route.leaseUntil = Math.min(now + LEASE_MS, route.ceiling);
-      else this.revoke(route.key, mine === undefined ? "job gone" : `job ${mine.status ?? "ended"}`);
+      else {
+        this.revoke(route.key, mine === undefined ? "job gone" : `job ${mine.status ?? "ended"}`);
+        this.deps.onJobEnded?.(route.jobId, mine as { exit_code?: number; running?: boolean } | undefined);
+      }
     }
   }
 

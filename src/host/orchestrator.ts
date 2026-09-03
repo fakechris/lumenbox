@@ -647,6 +647,9 @@ export class Orchestrator {
       policy: this.policy,
       ...(this.hooks !== undefined ? { hooks: this.hooks } : {}),
       jobsOf: agentId => this.boxFor(agentId)?.jobs().then(result => result.jobs),
+      onJobEnded: (jobId, status) => {
+        this.pendingWork?.commitDelegate(jobId, status?.exit_code === 0 ? "done" : "failed");
+      },
       ...(options.pendingWork === null ? { auditPath: null } : {}),
       log: line => console.error(`[mcp-face] ${line}`),
       onEvent: event => options.onTurnEvent?.(event),
@@ -1477,13 +1480,13 @@ export class Orchestrator {
    * replayed and before interrupted turns are resumed: it is the authority for `fork/*`.
    * Returns how many were dropped.
    */
-  sweepPendingWork(): number {
+  async sweepPendingWork(): Promise<number> {
     if (this.pendingWork === undefined) return 0;
     const unreadable = this.pendingWork.unreadable();
     if (unreadable !== undefined) {
       console.error(`[pending-work] ledger unreadable (${unreadable}); fork admissions are still cancelled, but their parents cannot be told which`);
     }
-    const dropped = this.pendingWork.sweep({
+    const dropped = await this.pendingWork.sweep({
       dropForkAdmissions: () => this.bus.dropAdmissionsWhere(isForkChild),
       endForkTurns: how => this.turns?.endWhere(isForkChild, how) ?? 0,
       lastWordsOf: (agentId, conversation) =>
@@ -1494,6 +1497,17 @@ export class Orchestrator {
         this.bus.deliverSystem(agentId, text, conversation) !== undefined || this.bus.inboxless,
       noteQueued: (agentId, conversation, tag) => this.bus.hasQueuedText(agentId, conversation, tag),
       agentExists: agentId => this.registry.tryGet(agentId) !== undefined,
+      jobStatus: async (agentId, jobId) => {
+        const box = this.boxFor(agentId);
+        if (box === undefined) return undefined;
+        try {
+          const { jobs } = await box.jobs();
+          const job = jobs.find(entry => entry.job_id === jobId);
+          return job === undefined ? { running: false } : job;
+        } catch {
+          return undefined;
+        }
+      },
     });
     for (const fork of dropped) {
       console.error(`[pending-work] dropped fork ${fork.id} of ${fork.parent} (${fork.admitted ? "admitted" : "never admitted"}): ${fork.brief}`);

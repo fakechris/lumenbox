@@ -30,9 +30,13 @@ const COMPACT_AT = 500;
 export type CommitHow = "done" | "failed" | "late";
 export type DropWhy = "restart" | "unrecorded";
 
+export type WorkKind = "fork" | "delegate";
+
 interface PreparedRecord {
   event: "prepared";
   id: string;
+  /** Absent in records from before slice two, which were all forks. */
+  kind?: WorkKind;
   agentId: string;
   workId?: string;
   turnId?: string;
@@ -47,9 +51,10 @@ interface CommittedRecord { event: "committed"; id: string; how: CommitHow; at: 
 interface DroppedRecord { event: "dropped"; id: string; why: DropWhy; at: string }
 type Record_ = PreparedRecord | AdmittedRecord | CommittedRecord | DroppedRecord;
 
-/** A fork that was prepared and neither committed nor dropped. */
+/** A fork or a delegated job that was prepared and neither committed nor dropped. */
 export interface OpenFork {
   id: string;
+  kind: WorkKind;
   agentId: string;
   parent: string;
   child: string;
@@ -72,6 +77,15 @@ export interface SweepDeps {
   /** Whether a note carrying this tag already waits in the parent's inbox. */
   noteQueued: (agentId: string, conversation: string, tag: string) => boolean;
   agentExists: (agentId: string) => boolean;
+  /**
+   * What the box says about a delegated job (docs/32 slice two): running, exited with a
+   * code, interrupted (the daemon restarted under it), or gone. Undefined when the box
+   * cannot be asked, in which case the record stays open for the next start.
+   */
+  jobStatus: (
+    agentId: string,
+    jobId: string
+  ) => Promise<{ running: boolean; exit_code?: number; interrupted?: boolean; log_path?: string } | undefined>;
 }
 
 /** The tag every note about a fork carries, so a restart can see one is already queued. */
@@ -101,6 +115,7 @@ export class PendingWork {
    */
   prepare(input: {
     agentId: string;
+    kind?: WorkKind;
     parent: string;
     child: string;
     brief: string;
@@ -114,6 +129,7 @@ export class PendingWork {
     const record: PreparedRecord = {
       event: "prepared",
       id,
+      kind: input.kind ?? "fork",
       agentId: input.agentId,
       ...(input.workId !== undefined ? { workId: input.workId } : {}),
       ...(input.turnId !== undefined ? { turnId: input.turnId } : {}),
@@ -145,6 +161,18 @@ export class PendingWork {
     this.maybeCompact();
   }
 
+  /**
+   * Settles the delegated job with this id, if one is open. Called wherever the host observes
+   * the job's end — the `Jobs` tool, the MCP face's lease renewal, the startup sweep — so the
+   * first observer commits and the rest find nothing open. Returns whether one was.
+   */
+  commitDelegate(jobId: string, how: CommitHow, now = new Date()): boolean {
+    const open = this.open().find(work => work.kind === "delegate" && work.child === jobId);
+    if (open === undefined) return false;
+    this.commit([{ id: open.id, how }], now);
+    return true;
+  }
+
   /** Forks prepared and never settled, oldest first. */
   open(): OpenFork[] {
     const open = new Map<string, OpenFork>();
@@ -152,6 +180,7 @@ export class PendingWork {
       if (record.event === "prepared") {
         open.set(record.id, {
           id: record.id,
+          kind: record.kind ?? "fork",
           agentId: record.agentId,
           parent: record.parent,
           child: record.child,
@@ -182,13 +211,42 @@ export class PendingWork {
    * restart; and the parent is told *before* the record is settled, so a crash in between
    * costs a repeated note (deduplicated by tag) rather than a lost one.
    */
-  sweep(deps: SweepDeps, now = new Date()): OpenFork[] {
+  async sweep(deps: SweepDeps, now = new Date()): Promise<OpenFork[]> {
     deps.dropForkAdmissions();
     deps.endForkTurns("dropped-fork");
     const dropped: OpenFork[] = [];
     for (const fork of this.open()) {
       const tag = forkTag(fork.id);
       const exists = deps.agentExists(fork.agentId);
+      if (fork.kind === "delegate") {
+        // A delegated job outlives the host: boxd runs it, and boxd now says what became
+        // of it (docs/32 slice two). Running stays open; exited is committed; interrupted or
+        // gone is dropped, with the log's path so the parent can read what it left.
+        const status = await deps.jobStatus(fork.agentId, fork.child);
+        if (status === undefined) continue;
+        if (status.running) continue;
+        if (status.interrupted !== true && status.exit_code !== undefined) {
+          this.commit([{ id: fork.id, how: status.exit_code === 0 ? "done" : "failed" }], now);
+          continue;
+        }
+        if (exists) {
+          const admitted = deps.deliver(
+            fork.agentId,
+            `${tag} A job you delegated (${fork.child}, brief: "${fork.brief}") ` +
+              (status.interrupted === true
+                ? `was interrupted by a restart of the box daemon; its exit was never seen`
+                : `is gone from the box`) +
+              `. ` +
+              (status.log_path !== undefined ? `Its log is at ${status.log_path} — read_file it. ` : "") +
+              `Anything it did is an attempt, not a result; nothing was re-run.`,
+            fork.parent
+          );
+          if (!admitted) continue;
+        }
+        this.dropped(fork.id, "restart", now);
+        dropped.push(fork);
+        continue;
+      }
       // A late result that reached the parent's inbox before the process died is delivered
       // work, not dropped work: the note is already queued, and it says so.
       if (exists && deps.noteQueued(fork.agentId, fork.parent, tag)) {

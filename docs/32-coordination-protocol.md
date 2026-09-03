@@ -112,10 +112,15 @@ nobody reads "fenced" as "sandboxed".
 
 ## 3. Out of this slice, with the precondition each is waiting on
 
-- **Delegate in the ledger** — needs boxd to accept a client-supplied job id (an idempotency key,
-  so `prepared` can name the job before it exists) and to write `<log_path>.exit` on process end,
-  so a host restart settles from evidence rather than from a map that died with boxd. Both are
-  image changes; the rebuild is blocked on the local proxy today.
+- **Delegate in the ledger — done in slice two (2026-09-03).** boxd accepts a caller-minted
+  `job_id` (`job-` + 8–32 hex; the same id twice returns the running job), writes `<id>.exit`
+  beside the log atomically on process end, and at start reads the jobs directory back: an exit
+  file lists as exited with its code, a log with no exit file lists `interrupted`. The host mints
+  the id, writes `prepared {kind: "delegate", child: <jobId>}` before the box hears of it,
+  `admitted` after the start, and settles wherever it sees the job end — the `Jobs` tool, the MCP
+  face's lease renewal, or the startup sweep, which asks `box.jobs()`: running stays open, exited
+  commits done/failed, interrupted or gone is dropped with a note carrying the log's path.
+  Leases remain deferred.
 - **Leases that fail closed** — needs a resource model first. Proposed: task ids (the board already
   has them), a lease bound to `(turnId, taskId)` and checked on every `Tasks` write; file paths
   later, with the honest note that `bash` and MCP writes cannot be fenced by a claim. `claims.ts`

@@ -248,3 +248,45 @@ test("Delegate with tools: the file is written before the job starts, the token 
     rmSync(root, { recursive: true, force: true });
   }
 });
+
+test("Delegate records the job before the box hears of it, under an id the host minted; Jobs settles it (docs/32 slice two)", async () => {
+  const { dispatchTool } = await import("./tools.ts");
+  const { AgentRegistry } = await import("../agents/registry.ts");
+  const { AgentBus } = await import("../agents/bus.ts");
+  const { PendingWork } = await import("./pending-work.ts");
+  const root = mkdtempSync(join(tmpdir(), "agentbox-delegate-ledger-"));
+  try {
+    const registry = new AgentRegistry(root);
+    const agent = registry.create({ name: "Ada" });
+    const bus = new AgentBus(registry, async () => {});
+    const ledger = new PendingWork(join(root, "pending-work.jsonl"));
+    const order: string[] = [];
+    let started: { command: string; jobId?: string } | undefined;
+    const box = {
+      exec: async () => ({ stdout: "/usr/bin/claude", stderr: "", exit_code: 0, timed_out: false }),
+      writeFile: async () => ({}),
+      startJob: async (command: string, options: { jobId?: string }) => {
+        order.push(`start:${ledger.open().length}`);
+        started = { command, jobId: options.jobId };
+        return { job_id: options.jobId ?? "job-boxmade", log_path: `/tmp/${options.jobId}.log` };
+      },
+      jobs: async () => ({ jobs: [{ job_id: started!.jobId!, command: "", running: false, exit_code: 0, started_at: "", log_path: "", log_bytes: 0 }] }),
+    };
+    const context = { agent, registry, bus, box, pendingWork: ledger, boxKind: "docker", workId: "w1", conversation: "main" } as never;
+    const result = await dispatchTool("Delegate", { preset: "claude", prompt: "fix it" }, context);
+    assert.match(result.text, /Delegated to claude as job-[0-9a-f]{16}/);
+    assert.deepEqual(order, ["start:1"], "one record open before the box was asked");
+    assert.match(started!.jobId!, /^job-[0-9a-f]{16}$/);
+    const open = ledger.open();
+    assert.equal(open.length, 1);
+    assert.equal(open[0]?.kind, "delegate");
+    assert.equal(open[0]?.child, started!.jobId);
+    assert.equal(open[0]?.admitted, true);
+
+    // The next Jobs list sees it exited and settles the record.
+    await dispatchTool("Jobs", { action: "list" }, context);
+    assert.deepEqual(ledger.open(), []);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});

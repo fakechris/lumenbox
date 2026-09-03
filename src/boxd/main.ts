@@ -366,6 +366,7 @@ const routes: Record<string, Handler> = {
         ...(body.cwd !== undefined ? { cwd: body.cwd } : {}),
         ...(body.env !== undefined ? { env: body.env } : {}),
         ...(body.display !== undefined ? { display: body.display } : {}),
+        ...(body.job_id !== undefined ? { jobId: body.job_id } : {}),
         nice: AGENT_NICE,
         scrubbedEnv: withoutBoxToken(process.env),
       });
