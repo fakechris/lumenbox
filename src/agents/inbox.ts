@@ -52,7 +52,17 @@ interface StartRecord {
   event: "started";
 }
 
-type InboxRecord<T> = AdmitRecord<T> | StartRecord;
+/**
+ * An admitted message that must not be replayed: its work was cancelled by something that
+ * knows better than the inbox — the fork ledger's startup sweep (docs/32 §1), which is the
+ * authority for `fork/*` conversations. Read exactly like `started`.
+ */
+interface DropRecord {
+  seq: number;
+  event: "dropped";
+}
+
+type InboxRecord<T> = AdmitRecord<T> | StartRecord | DropRecord;
 
 /** One admitted-but-unstarted item, as it comes back after a restart. */
 export interface Admitted<T> {
@@ -118,6 +128,12 @@ export class Inbox<T> {
   }
 
   /** Everything accepted that no turn ever took. In admission order. */
+  /** Cancels an admitted message so a replay never runs it. Idempotent; unknown seqs are ignored. */
+  drop(seq: number | undefined): void {
+    if (seq === undefined) return;
+    if (this.append({ seq, event: "dropped" })) this.outstanding = Math.max(0, this.outstanding - 1);
+  }
+
   pending(): Admitted<T>[] {
     return this.read();
   }
@@ -164,7 +180,7 @@ export class Inbox<T> {
             at: record.at,
             message: record.message,
           });
-        } else if (record.event === "started") {
+        } else if (record.event === "started" || record.event === "dropped") {
           admitted.delete(record.seq);
         }
       }

@@ -10,7 +10,7 @@
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type Anthropic from "@anthropic-ai/sdk";
@@ -2946,6 +2946,42 @@ test("acknowledged, ran tools, ended silent: one closing nudge, then the result 
       .map(entry => entry.text);
     assert.deepEqual(said, ["看完了：三个文件，没有问题。"]);
   } finally {
+    cleanup();
+  }
+});
+
+test("the engine commits a fork only after the results entry is on disk (docs/32 §1)", async () => {
+  const { registry, cleanup } = fixture();
+  const root = mkdtempSync(join(tmpdir(), "agentbox-turn-ledger-"));
+  try {
+    const { PendingWork } = await import("./pending-work.ts");
+    const ledgerPath = join(root, "pending-work.jsonl");
+    const ledger = new PendingWork(ledgerPath);
+    const ada = registry.create({ name: "Ada" });
+    // A bus whose child turns say one line each, so the join has findings to return.
+    const bus = new AgentBus(registry, async (record, inbound, _signal, conversation) => {
+      registry.appendTranscript(record.id, { role: "assistant", text: `read ${inbound.map(m => m.text).join(" ")}`, at: new Date().toISOString() }, conversation);
+    });
+    const { box } = stubBox();
+    const client = fakeModel(({ index }) =>
+      index === 0
+        ? message([toolUseBlock("Fork", { briefs: ["one", "two"] }, "f1")], "tool_use")
+        : message([textBlock("combined")])
+    );
+    await runTurn(
+      ada,
+      [{ id: "m-fork", fromId: "user", fromName: "user", text: "fan out", priority: false, receivedAt: "" }],
+      new AbortController().signal,
+      { client, registry, bus, box, resolution: undefined, pendingWork: ledger }
+    );
+    assert.deepEqual(ledger.open(), [], "committed by the engine");
+    const events = readFileSync(ledgerPath, "utf8").trim().split("\n").map(line => (JSON.parse(line) as { event: string }).event);
+    assert.deepEqual(events, ["prepared", "prepared", "admitted", "admitted", "committed", "committed"]);
+    // And the results entry the commit waited for is in the parent's transcript.
+    const transcript = registry.readTranscript(ada.id) as { role: string; kind?: string }[];
+    assert.ok(transcript.some(entry => entry.role === "user" && entry.kind === "results"));
+  } finally {
+    rmSync(root, { recursive: true, force: true });
     cleanup();
   }
 });

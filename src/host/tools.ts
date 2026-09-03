@@ -24,6 +24,7 @@ import { describeEnvShape, envShape, looksLikeEnvFile } from "./env-shape.ts";
 import { guardShellCommand } from "./ui-automation-guard.ts";
 import { dedupe, dedupeKey, validateRecord } from "./memory.ts";
 import { type Claims, heldElsewhere } from "./claims.ts";
+import type { CommitHow, PendingWork } from "./pending-work.ts";
 import { MAIN_CONVERSATION } from "../agents/registry.ts";
 import { describeTask, isLive, isTaskStatus, TASK_STATUSES, type TaskStore } from "./tasks.ts";
 import { ABSENT, versionOf, type FileVersions } from "./files.ts";
@@ -142,6 +143,10 @@ export interface ToolContext {
    * transcript that is its evidence.
    */
   turnId?: string;
+  /** The piece of work this turn is an attempt at (docs/11 R30), for the fork ledger's record. */
+  workId?: string;
+  /** The fork ledger (docs/32). Absent means forks are not recorded — tests, or nobody. */
+  pendingWork?: PendingWork;
   /**
    * Reads Feishu documents with the bot's own workspace identity. Present only where
    * a Feishu app is configured; absent withholds the tool entirely, so an agent on an
@@ -174,6 +179,12 @@ export interface ToolContext {
 /** A tool result: text for the model, plus optional images. */
 export interface ToolOutcome {
   text: string;
+  /**
+   * Fork ledger ids to commit once this result is durably in the parent's transcript
+   * (docs/32 §1). Written by the turn engine after the results entry is appended — the tool
+   * cannot know that moment, and committing before it is the review's finding #5.
+   */
+  commit?: { id: string; how: CommitHow }[];
   /** base64 image payloads to attach to the tool result. */
   images?: { mediaType: "image/webp" | "image/png" | "image/jpeg" | "image/gif"; data: string }[];
   isError?: boolean;
@@ -223,6 +234,43 @@ export const PARALLEL_SAFE_TOOLS: ReadonlySet<string> = new Set([
 
 /** How many parallel-safe calls run at once; the rest of a run waits its turn. */
 export const PARALLEL_TOOL_LIMIT = 6;
+
+/**
+ * What a fork child may not do (docs/32 §2): reach a person or a teammate, change the board,
+ * remember for the team, or fan out again. Its one outward channel is its final message,
+ * which the turn that forked it reads. Hermes strips the same set from delegated children;
+ * it is the only mechanical form of "communication is not coordination" anyone has built.
+ * `OtherThreads` goes too: fork siblings share a prefix and would otherwise read each other.
+ *
+ * Stated, not solved: `bash` reaches the network. The fence is over *our* channels; egress is
+ * a scope's policy (R4), not a tool list's.
+ */
+export const FORK_WITHHELD_TOOLS: ReadonlySet<string> = new Set([
+  "SendToAgent",
+  "CreateAgent",
+  "UpdateAgent",
+  "Tasks",
+  "ClaimWork",
+  "RememberFact",
+  "PackTemplate",
+  "Delegate",
+  "Fork",
+  "AskUser",
+  "OtherThreads",
+]);
+
+/** Whether a conversation name is a fork child's. */
+export function isForkConversation(conversation: string | undefined): boolean {
+  return (conversation ?? "").startsWith(FORK_PREFIX);
+}
+
+/** The line a fork child's system prompt carries, so it knows what it is and is not. */
+export const FORK_PROMPT_LINE =
+  "# You are a fork\n\n" +
+  "You were forked by your own main conversation to work one slice of a larger job. Your findings " +
+  "go back to it as your final message — say them plainly and completely. You cannot message " +
+  "anyone, change the task board, remember for the team, ask a person, or fork again; if a slice " +
+  "needs one of those, say so in your findings and the turn that forked you will decide.";
 /**
  * How many forks one call may open.
  *
@@ -393,7 +441,9 @@ export function buildTools(
   /** Whether this installation can read Feishu documents with the bot's identity. */
   hasDocReader = false,
   /** Whether a packed template has somewhere to be staged (docs/29). */
-  canPackTemplate = false
+  canPackTemplate = false,
+  /** Whether this is a fork child's tool list (docs/32 §2): the withheld set is removed. */
+  fork = false
 ): Anthropic.Tool[] {
   const tools: Anthropic.Tool[] = [];
 
@@ -1417,7 +1467,8 @@ export function buildTools(
     });
   }
 
-  return withheldFrom(allowed, tools);
+  const offered = withheldFrom(allowed, tools);
+  return fork ? offered.filter(tool => !FORK_WITHHELD_TOOLS.has(tool.name)) : offered;
 }
 
 /**
@@ -1508,6 +1559,17 @@ export async function dispatchTool(
   });
   if (decision !== undefined && !decision.allow) {
     return { text: decision.reason, isError: true };
+  }
+  // The fence (docs/32 §2), at dispatch and not only in the offer: a forged or replayed call
+  // for a withheld tool is refused here whatever list the model was shown. `Fork` keeps its
+  // own refusal below, which says why a fork cannot fork.
+  if (isForkConversation(context.conversation) && FORK_WITHHELD_TOOLS.has(name) && name !== "Fork") {
+    return {
+      text:
+        `${name} is not available in a fork. Your findings go back to the turn that forked you ` +
+        `as your final message; say what you would have needed it for and let that turn decide.`,
+      isError: true,
+    };
   }
 
   switch (name) {
@@ -1665,20 +1727,57 @@ export async function dispatchTool(
 
       const parent = context.conversation ?? MAIN_CONVERSATION;
       const stamp = Date.now().toString(36);
+      const children = briefs.map((_, index) => `${FORK_PREFIX}${parent}-${stamp}-${index + 1}`);
+
+      // The ledger first (docs/32 §1): every fork is recorded, durably, before any message is
+      // queued. A record that cannot be written means no fork starts — this is the one place
+      // bookkeeping may stop work, because a fork nobody can find after a restart is the
+      // failure the ledger exists to end.
+      const ids: string[] = [];
+      if (context.pendingWork !== undefined) {
+        try {
+          for (const [index, brief] of briefs.entries()) {
+            ids.push(
+              context.pendingWork.prepare({
+                agentId: context.agent.id,
+                parent,
+                child: children[index]!,
+                brief,
+                ...(context.workId !== undefined ? { workId: context.workId } : {}),
+                ...(context.turnId !== undefined ? { turnId: context.turnId } : {}),
+              })
+            );
+          }
+        } catch (error) {
+          // Records already written for earlier briefs are settled as never-admitted, so the
+          // next sweep does not report forks that were never started.
+          for (const id of ids) context.pendingWork.dropped(id, "unrecorded");
+          return {
+            text:
+              `Could not record the fork${briefs.length === 1 ? "" : "s"} before starting ` +
+              `(${error instanceof Error ? error.message : String(error)}), so nothing was started. ` +
+              `Do the work in this conversation instead, or try again.`,
+            isError: true,
+          };
+        }
+      }
+
       // Filled in as each fork lands, so an interrupted join can report what has finished
       // without waiting for what has not.
       const landed: (string | undefined)[] = briefs.map(() => undefined);
+      const hows: CommitHow[] = briefs.map(() => "done");
       const runs = briefs.map(async (brief, index) => {
         // Each fork is its own conversation of the same agent, which is what makes
         // the context separate and the runs concurrent — the bus already serialises
         // per agent *and* conversation, so this needs no new machinery.
-        const conversation = `${FORK_PREFIX}${parent}-${stamp}-${index + 1}`;
+        const conversation = children[index]!;
         let result: string;
         try {
-          context.bus.sendFromUser(context.agent.id, brief, {
+          const seq = context.bus.sendFromUser(context.agent.id, brief, {
             conversation,
             steerable: false,
           });
+          if (ids[index] !== undefined) context.pendingWork?.admitted(ids[index]!, seq);
           await context.bus.runExclusive(context.agent.id, { conversation });
           const said = context.registry
             .readTranscript(context.agent.id, conversation)
@@ -1694,6 +1793,7 @@ export async function dispatchTool(
         } catch (error) {
           // One fork failing is a gap in the findings, not a failure of the fan-out:
           // reported in place so the caller can see which piece is missing.
+          hows[index] = "failed";
           result = `--- fork ${index + 1} FAILED ---\n${error instanceof Error ? error.message : String(error)}`;
         }
         landed[index] = result;
@@ -1717,27 +1817,36 @@ export async function dispatchTool(
       const outcome = await Promise.race([all, woken]);
       unsubscribe();
 
+      // What the engine commits once this result is on disk in the parent's transcript.
+      const commitFor = (indices: readonly number[]) =>
+        indices.filter(index => ids[index] !== undefined).map(index => ({ id: ids[index]!, how: hows[index]! }));
+
       if (outcome === "done") {
         return {
           text:
             `${briefs.length} fork${briefs.length === 1 ? "" : "s"} finished. Their findings ` +
             `are below; combining them is yours to do.\n\n${landed.join("\n\n")}`,
+          commit: commitFor(briefs.map((_, index) => index)),
         };
       }
 
-      const finished = landed.filter((text): text is string => text !== undefined);
-      const stillRunning = briefs
-        .map((_, index) => index)
-        .filter(index => landed[index] === undefined);
+      const finished = briefs.map((_, index) => index).filter(index => landed[index] !== undefined);
+      const stillRunning = briefs.map((_, index) => index).filter(index => landed[index] === undefined);
       for (const index of stillRunning) {
-        void runs[index]?.then(text =>
-          context.bus.deliverSystem(
+        void runs[index]?.then(text => {
+          // Admitted to the durable inbox is delivered, by the inbox's own contract: the
+          // note survives a restart and opens a turn of its own (docs/32 §1, "late").
+          const seq = context.bus.deliverSystem(
             context.agent.id,
             `A fork you were waiting on when a new instruction arrived has finished. ` +
               `Fold it into what you already reported if it still matters.\n\n${text}`,
             parent
-          )
-        );
+          );
+          if (ids[index] !== undefined) {
+            context.pendingWork?.admitted(ids[index]!, seq);
+            context.pendingWork?.commit([{ id: ids[index]!, how: "late" }]);
+          }
+        });
       }
       return {
         text:
@@ -1747,7 +1856,8 @@ export async function dispatchTool(
           `${stillRunning.map(index => index + 1).join(", ")} ${stillRunning.length === 1 ? "is" : "are"} ` +
           `still running — each will arrive here as a message when it lands. The instruction ` +
           `is in your next round; read it before deciding what to do with these.` +
-          (finished.length > 0 ? `\n\n${finished.join("\n\n")}` : ""),
+          (finished.length > 0 ? `\n\n${finished.map(index => landed[index]!).join("\n\n")}` : ""),
+        commit: commitFor(finished),
       };
     }
 

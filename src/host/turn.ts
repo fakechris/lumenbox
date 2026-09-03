@@ -19,6 +19,7 @@ import type { PolicyGate } from "./policy.ts";
 import type { Claims } from "./claims.ts";
 import type { FileVersions } from "./files.ts";
 import type { TurnLedger } from "./resume.ts";
+import type { PendingWork } from "./pending-work.ts";
 import type { Skill } from "./skills.ts";
 import {
   classifyLimit,
@@ -84,6 +85,8 @@ import {
 } from "./guards.ts";
 import {
   BOOKKEEPING_TOOLS,
+  FORK_PROMPT_LINE,
+  isForkConversation,
   PARALLEL_SAFE_TOOLS,
   PARALLEL_TOOL_LIMIT,
   buildTools,
@@ -410,6 +413,8 @@ export interface TurnDeps {
    * that should not touch the state directory wants.
    */
   turns?: TurnLedger;
+  /** The fork ledger (docs/32): forks are recorded before they start and committed here. */
+  pendingWork?: PendingWork;
   /**
    * The ledger handle for this turn, when it is a resumption of an earlier one.
    *
@@ -1180,9 +1185,10 @@ export async function runTurn(
   const cache = provider.promptCaching
     ? ({ cache_control: { type: "ephemeral" } } as const)
     : {};
+  const forkLine = isForkConversation(conversation) ? `\n\n${FORK_PROMPT_LINE}` : "";
   const system: Anthropic.TextBlockParam[] = [
     { type: "text", text: promptParts.stable, ...cache },
-    { type: "text", text: promptParts.volatile, ...cache },
+    { type: "text", text: promptParts.volatile + forkLine, ...cache },
   ];
 
   // A stop belongs to the turn that was running. Clearing it as the next turn starts means a
@@ -1381,8 +1387,10 @@ export async function runTurn(
     // do their work headless — which is what lets them run at the same time as the room.
     conversation === MAIN_CONVERSATION,
     deps.docReader !== undefined,
-    deps.templates !== undefined
-  ).concat(mcpTools);
+    deps.templates !== undefined,
+    isForkConversation(conversation)
+    // MCP tools are outward channels too — a fork gets none (docs/32 §2).
+  ).concat(isForkConversation(conversation) ? [] : mcpTools);
 
   // One entry per completed round, for the loop and progress judgements. Held out here rather than
   // inside runRounds so a continuation can reset it: a fresh budget deserves a fresh judgement.
@@ -1476,7 +1484,7 @@ export async function runTurn(
       // re-running a plain score-based recall here quietly threw that choice away (audit 2026-09-01
       // #6). A fact remembered mid-turn reaches the next turn, not this one — the same freeze Grok
       // Bot applies per compaction epoch, and the reason the memory block stays byte-stable.
-      system[1] = { type: "text", text: buildParts(memoryRecall).volatile, ...cache };
+      system[1] = { type: "text", text: buildParts(memoryRecall).volatile + forkLine, ...cache };
 
       rounds.length = 0; // a fresh budget means a fresh judgement about looping
     }
@@ -2086,7 +2094,7 @@ export async function runTurn(
     const withheld = new Map<string, string>();
     const runOne = async (
       toolUse: Anthropic.ToolUseBlock
-    ): Promise<{ block: Anthropic.ToolResultBlockParam; recordAs?: string }> => {
+    ): Promise<{ block: Anthropic.ToolResultBlockParam; recordAs?: string; commit?: { id: string; how: import("./pending-work.ts").CommitHow }[] }> => {
       emit({
         type: "tool_start",
         agentId: agent.id,
@@ -2166,6 +2174,8 @@ export async function runTurn(
             askUser: deps.askUser,
             docReader: deps.docReader,
             skillProvenance: deps.skillProvenance,
+            workId,
+            ...(deps.pendingWork !== undefined ? { pendingWork: deps.pendingWork } : {}),
             ...(deps.templateSetup !== undefined ? { templateSetup: deps.templateSetup } : {}),
             ...(deps.templates !== undefined ? { templates: deps.templates } : {}),
             turnId,
@@ -2219,6 +2229,7 @@ export async function runTurn(
       return {
         block: toolResultBlock(toolUse.id, outcome),
         ...(outcome.recordAs !== undefined ? { recordAs: outcome.recordAs } : {}),
+        ...(outcome.commit !== undefined ? { commit: outcome.commit } : {}),
       };
     };
 
@@ -2226,8 +2237,7 @@ export async function runTurn(
     // layer 1c). Three searches asked for together used to cost three round-trips of wall
     // time; the results still land in the order the calls were made, so nothing downstream
     // can tell the difference except the clock.
-    const done: ({ block: Anthropic.ToolResultBlockParam; recordAs?: string } | undefined)[] =
-      toolUses.map(() => undefined);
+    const done: (Awaited<ReturnType<typeof runOne>> | undefined)[] = toolUses.map(() => undefined);
     let at = 0;
     while (at < toolUses.length) {
       const first = toolUses[at]!;
@@ -2277,6 +2287,11 @@ export async function runTurn(
       blocks: results.map(block => storableResult(block, withheld.get(block.tool_use_id))),
       at: new Date().toISOString(),
     } satisfies TranscriptEntry, conversation);
+    // Only now are a fork's findings durably the parent's (docs/32 §1): the results entry is
+    // on disk. Committing inside the tool would record `done` for findings a crash could
+    // still lose between the join and this line.
+    const toCommit = done.flatMap(entry => entry?.commit ?? []);
+    if (toCommit.length > 0) deps.pendingWork?.commit(toCommit);
 
     messages.push({ role: "user", content: results });
 

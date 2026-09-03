@@ -135,6 +135,9 @@ export interface InterruptedTurn {
   workId?: string;
 }
 
+/** `FORK_PREFIX` from tools.ts, repeated here to keep this file free of the tool module. */
+const FORK_CONVERSATION_PREFIX = "fork/";
+
 export class TurnLedger {
   private readonly path: string | undefined;
   private lines = 0;
@@ -207,7 +210,22 @@ export class TurnLedger {
    * turn in flight. A second orchestrator against the same state directory would break that
    * assumption, which is the same assumption the single-box design makes everywhere else.
    */
-  interrupted(): InterruptedTurn[] {
+  /**
+   * Ends every open record in one conversation, for the fork ledger's startup sweep
+   * (docs/32 §1): a fork child interrupted by a restart is never resumed, so its record must
+   * not read as an interrupted turn. Returns how many were ended.
+   */
+  endIn(conversation: string, how: string, now = new Date()): number {
+    let ended = 0;
+    for (const turn of this.interrupted({ includeForks: true })) {
+      if (turn.conversation !== conversation) continue;
+      this.end(turn.id, how, now);
+      ended += 1;
+    }
+    return ended;
+  }
+
+  interrupted(options: { includeForks?: boolean } = {}): InterruptedTurn[] {
     const open = new Map<string, InterruptedTurn>();
     for (const record of this.read()) {
       if (record.event === "begin") {
@@ -227,7 +245,12 @@ export class TurnLedger {
         open.delete(record.id);
       }
     }
-    return [...open.values()];
+    // A fork child's turn is never resumed across a restart: the fork ledger (docs/32) owns
+    // that conversation and settles it `dropped` before this is read. Skipped here as well,
+    // so a ledger that could not write is not a reason to resume a child nobody is joining.
+    return [...open.values()].filter(
+      turn => options.includeForks === true || !(turn.conversation ?? "").startsWith(FORK_CONVERSATION_PREFIX)
+    );
   }
 
   private append(record: LedgerRecord): void {

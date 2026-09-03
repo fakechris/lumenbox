@@ -1,6 +1,11 @@
 # 32 — Coordination as protocol, slice one: a fork ledger that survives restarts, and fenced children
 
-**Status: v2 after hostile review, 2026-09-03. Building.** v1 (a `begin`/`settle` ledger for forks
+**Status: v2 after hostile review, 2026-09-03 — built the same day (`feat/r30-ledger`).**
+`src/host/pending-work.ts` (four events, fsync'd `prepared`, the startup sweep), `inbox.drop`,
+`bus.sendFromUser`/`deliverSystem` returning the admission seq, `TurnLedger.endIn` and the
+`fork/*` skip, `ToolContext.workId`, `outcome.commit` committed by the engine after the results
+entry, `FORK_WITHHELD_TOOLS` + `buildTools(…, fork)` + the dispatch refusal + `FORK_PROMPT_LINE`,
+no MCP for forks; `server.ts` sweeps before recovery. Suite 1078, floor 1078. §3's deferrals stand. v1 (a `begin`/`settle` ledger for forks
 and delegates, fenced children, fail-closed leases) went to Codex for the docs/13 review and was
 rejected on twelve findings, all verified against the tree. What survived is narrower and
 honest about what it does not fence. The evidence behind the choices is

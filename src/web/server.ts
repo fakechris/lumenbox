@@ -1691,6 +1691,10 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
   // without shell, files, or a desktop and could finish or fail before the box ever arrived. The
   // inbox first, then interrupted turns: a turn already running is further along than a message only
   // accepted, and they run in the order queued.
+  // The fork ledger first (docs/32 §1): it cancels what the inbox would otherwise replay and
+  // ends what the turn ledger would otherwise resume, for every fork the last process left open.
+  const sweptForks = orchestrator.sweepPendingWork();
+  if (sweptForks > 0) log(`dropped ${sweptForks} fork${sweptForks === 1 ? "" : "s"} left open by the last restart; their parents were told`);
   const restored = orchestrator.bus.recover();
   if (restored > 0) {
     log(

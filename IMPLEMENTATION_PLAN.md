@@ -135,3 +135,15 @@ own item. `src/host/guards.ts` + tests; turn engine: interim event, parallel run
 guards, closing nudge, reminder; channel manager delivers the interim line; golden
 `newer-than-you` + invariant; suite 1070, floor 1070. Live: docs/31 §6.
 
+## Stage 10: Coordination as protocol, slice one (docs/32)
+**Goal**: a fork survives a host restart as a record rather than a promise, and a fork child cannot
+reach a person, the board, the memory or a teammate.
+**Success Criteria**: `prepared` on disk before the child's message is admitted; a ledger that
+cannot be written stops the fork; a second process over the same home drops the open fork,
+cancels its inbox item, ends its turn record and tells the parent with the child's last words;
+`committed` only after the parent's results entry exists; the withheld set absent from a fork's
+offer and refused at dispatch; no MCP tools in a fork.
+**Status**: Complete (2026-09-03) on `feat/r30-ledger` after Codex's hostile review of v1 (12
+findings, all verified). Deferred with preconditions: Delegate in the ledger (boxd job ids and
+exit files, an image rebuild), leases (a resource model first).
+

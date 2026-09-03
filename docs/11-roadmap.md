@@ -1287,7 +1287,7 @@ and the pre-launch security pass over docs/10.
    counters that decides whether the textual guard and the reminder stay on by default.
 1. **R30 — coordination as protocol.** Slice one designed in docs/32 (v2 after Codex's
    hostile review, 2026-09-03): a fork ledger that survives restarts, fenced children;
-   Delegate and leases deferred with their preconditions named. What every mature system does that we do not: a
+   Delegate and leases deferred with their preconditions named. **Built 2026-09-03** (Stage 10). What every mature system does that we do not: a
    record minted *before* the side effect, a completion that is a row with a delivery state
    rather than a promise, and leases that fail closed. Concretely, one mechanism serves both
    this and R8's write-ahead: a **pending-work file** written when a Fork or a delegated task

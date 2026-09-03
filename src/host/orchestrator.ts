@@ -10,6 +10,7 @@ import type Anthropic from "@anthropic-ai/sdk";
 import { AgentBus, type BusEvent, type InboundMessage, type Lane } from "../agents/bus.ts";
 import { Inbox, inboxPath } from "../agents/inbox.ts";
 import { Claims, claimsPath } from "./claims.ts";
+import { PendingWork, pendingWorkPath } from "./pending-work.ts";
 import { FileVersions } from "./files.ts";
 import {
   giveUpNote,
@@ -109,6 +110,8 @@ export interface OrchestratorOptions {
    * `null` keeps none.
    */
   turns?: TurnLedger | null;
+  /** The fork ledger (docs/32). `null` keeps none; omitted uses the default path. */
+  pendingWork?: PendingWork | null;
   /** Who wrote each skill. `null` keeps no record, which is what a test wants. */
   skillProvenance?: SkillProvenance | null;
   /** Lifecycle hooks (hooks.ts). `null` means none; omitted reads ~/.agentbox/hooks.json. */
@@ -265,6 +268,7 @@ export class Orchestrator {
 
   /** Begin/end per turn. A begin with no end is a turn the process died underneath. */
   private readonly turns: TurnLedger | undefined;
+  readonly pendingWork: PendingWork | undefined;
 
   /**
    * Which turn each agent is currently resuming, so the ledger entry it writes is linked to the one
@@ -582,6 +586,11 @@ export class Orchestrator {
         ? undefined
         : (options.turns ??
           new TurnLedger(turnLedgerPath(), line => console.error(`[turns] ${line}`)));
+    this.pendingWork =
+      options.pendingWork === null
+        ? undefined
+        : (options.pendingWork ??
+          new PendingWork(pendingWorkPath(), line => console.error(`[pending-work] ${line}`)));
     this.skillProvenance =
       options.skillProvenance === null
         ? new SkillProvenance(null)
@@ -1152,6 +1161,7 @@ export class Orchestrator {
       provider: runtime.provider,
       effort: this.options.effort,
       turns: this.turns,
+      ...(this.pendingWork !== undefined ? { pendingWork: this.pendingWork } : {}),
       // The same cheap profile the summariser and the note-taker use. Choosing which memories to
       // show is the least interesting work in the system and should be billed accordingly.
       selectMemory: prompt => this.askCheaply(agent, prompt),
@@ -1441,6 +1451,31 @@ export class Orchestrator {
       .filter(entry => entry.role === "assistant" && entry.kind === undefined && entry.text)
       .map(entry => entry.text as string)
       .join("\n\n");
+  }
+
+  /**
+   * Settles forks left open by the last process (docs/32 §1). Must run before the inbox is
+   * replayed and before interrupted turns are resumed: it is the authority for `fork/*`.
+   * Returns how many were dropped.
+   */
+  sweepPendingWork(): number {
+    if (this.pendingWork === undefined) return 0;
+    const dropped = this.pendingWork.sweep({
+      dropAdmission: seq => this.bus.dropAdmission(seq),
+      endTurnsIn: (conversation, how) => this.turns?.endIn(conversation, how) ?? 0,
+      lastWordsOf: (agentId, conversation) =>
+        (this.registry.readTranscript(agentId, conversation) as { role?: string; kind?: string; text?: string }[])
+          .filter(entry => entry.role === "assistant" && entry.kind === undefined && typeof entry.text === "string")
+          .at(-1)?.text,
+      deliver: (agentId, text, conversation) => {
+        this.bus.deliverSystem(agentId, text, conversation);
+      },
+      agentExists: agentId => this.registry.tryGet(agentId) !== undefined,
+    });
+    for (const fork of dropped) {
+      console.error(`[pending-work] dropped fork ${fork.id} of ${fork.parent} (${fork.admitted ? "admitted" : "never admitted"}): ${fork.brief}`);
+    }
+    return dropped.length;
   }
 
   /** Waits for every agent woken as a side effect of the last prompt. */

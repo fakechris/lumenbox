@@ -152,3 +152,70 @@ test("an instruction arriving mid-join wakes the coordinator; late forks report 
     cleanup();
   }
 });
+
+// ── docs/32: the fork ledger ─────────────────────────────────────────────────────────────
+
+test("every fork is recorded before its message is queued, admitted with its inbox seq, and committed only by the engine", async () => {
+  const { context, cleanup } = harness();
+  const root = mkdtempSync(join(tmpdir(), "agentbox-fork-ledger-"));
+  try {
+    const { PendingWork } = await import("./pending-work.ts");
+    const ledger = new PendingWork(join(root, "pending-work.jsonl"));
+    const withLedger = { ...context, pendingWork: ledger, workId: "w-1", turnId: "t-1" } as typeof context;
+    const result = await dispatchTool("Fork", { briefs: ["chapter one", "chapter two"] }, withLedger);
+    assert.match(result.text, /2 forks finished/);
+    // The tool hands the engine what to commit; it does not commit itself.
+    assert.deepEqual(result.commit?.map(entry => entry.how), ["done", "done"]);
+    const open = ledger.open();
+    assert.equal(open.length, 2, "open until the engine commits after the results entry is on disk");
+    assert.ok(open.every(fork => fork.admitted), "admitted after sendFromUser");
+    assert.ok(open.every(fork => fork.child.startsWith("fork/main-")));
+    // A failing fork commits as failed, not done.
+    const mixed = await dispatchTool("Fork", { briefs: ["fine", "BREAK"] }, withLedger);
+    assert.deepEqual(mixed.commit?.map(entry => entry.how), ["done", "failed"]);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+    cleanup();
+  }
+});
+
+test("a ledger that cannot be written stops the fork before any message is queued", async () => {
+  const { context, seen, cleanup } = harness();
+  const root = mkdtempSync(join(tmpdir(), "agentbox-fork-noledger-"));
+  try {
+    const { PendingWork } = await import("./pending-work.ts");
+    // The path is a directory: no record can be appended.
+    const broken = { ...context, pendingWork: new PendingWork(root) } as typeof context;
+    const result = await dispatchTool("Fork", { briefs: ["chapter one"] }, broken);
+    assert.equal(result.isError, true);
+    assert.match(result.text, /nothing was started/);
+    await new Promise(resolve => setTimeout(resolve, 60));
+    assert.equal(seen.length, 0, "no child ran");
+    assert.equal(context.bus.pendingCount(context.agent.id), 0);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+    cleanup();
+  }
+});
+
+test("a fork child is fenced: the withheld tools are not offered, and a forged call is refused at dispatch (docs/32 §2)", async () => {
+  const { context, cleanup } = harness();
+  try {
+    const { buildTools, FORK_WITHHELD_TOOLS } = await import("./tools.ts");
+    const main = buildTools(true, true, undefined, false, true, true, true).map(tool => tool.name);
+    const fork = buildTools(true, true, undefined, false, false, true, true, true).map(tool => tool.name);
+    for (const name of FORK_WITHHELD_TOOLS) assert.ok(!fork.includes(name), `${name} withheld`);
+    for (const name of ["SendToAgent", "Tasks", "RememberFact", "Fork", "OtherThreads"]) assert.ok(main.includes(name), `${name} offered to the main conversation`);
+    for (const name of ["bash", "read_file", "list_dir", "SetTodos", "Recall", "ReadHistory"]) assert.ok(fork.includes(name), `${name} kept for a fork`);
+
+    // Offered or not, the dispatcher refuses it in a fork conversation.
+    const teammate = context.registry.create({ name: "Bob" });
+    const inFork = { ...context, conversation: "fork/main-abc-1" } as typeof context;
+    const refused = await dispatchTool("SendToAgent", { agent_id: teammate.id, text: "help" }, inFork);
+    assert.equal(refused.isError, true);
+    assert.match(refused.text, /not available in a fork/);
+    assert.equal(context.bus.pendingCount(teammate.id), 0, "nothing was sent");
+  } finally {
+    cleanup();
+  }
+});
