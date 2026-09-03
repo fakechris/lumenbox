@@ -117,6 +117,15 @@ export interface Skill {
   authoredBy?: string;
   /** Why it exists, in the author's words. Shown wherever the routine is listed. */
   because?: string;
+  /**
+   * Off until a person turns it on.
+   *
+   * `paused: true` in the frontmatter. A routine that arrived from a template starts this way
+   * (docs/29): the host writes the line if the importing bot forgot it, the scheduler and the
+   * listener skip it, and the automations row is where it is switched on. One line, no second
+   * store — the same reason a schedule is a line and not an object.
+   */
+  paused?: boolean;
 }
 
 export type SkillScope = "global" | "agent";
@@ -136,6 +145,7 @@ const KNOWN_KEYS = new Set([
   "trigger",
   "match",
   "chat",
+  "paused",
 ]);
 
 export interface ParsedSkill {
@@ -222,7 +232,8 @@ function simpleHash(text: string): string {
 export function skillFrom(
   slug: string,
   parsed: ParsedSkill,
-  helpers: readonly string[] = []
+  helpers: readonly string[] = [],
+  root: string = SKILLS_DIR
 ): { skill: Skill; note?: string } | { problem: string } {
   if (parsed.body.trim() === "") {
     return { problem: `${slug}: ${SKILL_FILENAME} has no content, so there is nothing to run.` };
@@ -312,7 +323,7 @@ export function skillFrom(
       description,
       scope,
       ...(scope === "agent" && parsed.meta.owner ? { owner: parsed.meta.owner.trim() } : {}),
-      path: `${SKILLS_DIR}/${slug}/${SKILL_FILENAME}`,
+      path: `${root}/${slug}/${SKILL_FILENAME}`,
       helpers,
       ...(schedule !== undefined ? { schedule } : {}),
       ...(listener !== undefined ? { listener } : {}),
@@ -321,6 +332,7 @@ export function skillFrom(
       ...(deliver !== undefined && deliver !== "" ? { deliver } : {}),
       ...(parsed.meta.authored_by ? { authoredBy: parsed.meta.authored_by.trim() } : {}),
       ...(parsed.meta.because ? { because: parsed.meta.because.trim() } : {}),
+      ...(parsed.meta.paused?.trim() === "true" ? { paused: true } : {}),
     },
     ...(note === undefined ? {} : { note }),
   };
@@ -354,6 +366,7 @@ export function renderSkills(skills: readonly Skill[]): string {
   for (const skill of skills) {
     const when =
       (skill.schedule === undefined ? "" : ` — runs ${describeSchedule(skill.schedule)}`) +
+      (skill.paused === true ? " (paused until a person turns it on)" : "") +
       (skill.listener === undefined
         ? ""
         : ` — fires when a message matches ${skill.listener.match}${skill.listener.chat === undefined ? "" : ` in ${skill.listener.chat}`}`);
@@ -408,6 +421,9 @@ export function renderSkills(skills: readonly Skill[]): string {
     "schedule is cron or @daily / @every 30m; timezone an IANA name (omit for this",
     "machine's clock); deliver the chat it reports to (omit and no chat hears it);",
     "authored_by is you when it was your idea. No inline # comments in frontmatter.",
+    "`paused: true` keeps a routine off until a person turns it on from the automations list;",
+    "a routine you were handed by a template starts that way, and you do not remove the line",
+    "yourself — ask, and let them switch it on.",
     "",
     "For \"let me know when someone says X\" use a listener instead of (or as well as) a schedule:",
     "`trigger: message` with `match: /deploy failed/i` (a /regex/, or a plain phrase matched",
@@ -471,7 +487,11 @@ export interface SkillsLoad {
  * does not exist, or an unreadable file all mean "no skills", because a turn must not fail over
  * whether an optional directory could be listed.
  */
-export async function loadSkills(source: SkillSource): Promise<SkillsLoad> {
+export async function loadSkills(
+  source: SkillSource,
+  /** Further directories to search after the box's own, in order (R26). */
+  extraRoots: readonly string[] = []
+): Promise<SkillsLoad> {
   let entries: { name: string; type: string }[];
   try {
     entries = (await source.listDir(SKILLS_DIR)).entries;
@@ -483,26 +503,52 @@ export async function loadSkills(source: SkillSource): Promise<SkillsLoad> {
 
   const skills: Skill[] = [];
   const problems: string[] = [];
-  for (const entry of entries) {
-    if (entry.type !== "directory") continue;
-    let text: string;
-    let helpers: string[] = [];
+  const seen = new Map<string, string>();
+  const readRoot = async (root: string, list: { name: string; type: string }[]) => {
+    for (const entry of list) {
+      if (entry.type !== "directory") continue;
+      let text: string;
+      let helpers: string[] = [];
+      try {
+        const read = await source.readFile(`${root}/${entry.name}/${SKILL_FILENAME}`);
+        text = read.content ?? read.text ?? "";
+        const inside = await source.listDir(`${root}/${entry.name}`);
+        helpers = inside.entries
+          .filter(file => file.type === "file" && file.name !== SKILL_FILENAME)
+          .map(file => file.name);
+      } catch {
+        // A directory under skills/ with no readable SKILL.md is a directory, not a broken skill.
+        continue;
+      }
+      // Earlier roots win, and the box's own is first: a skill you wrote beats one you
+      // installed, and the shadowing is said rather than silently resolved (openkitty's
+      // `external_skills` rule, which settles the question an ordered list creates).
+      const earlier = seen.get(entry.name);
+      if (earlier !== undefined) {
+        problems.push(`${entry.name}: also in ${root}, shadowed by the one in ${earlier}.`);
+        continue;
+      }
+      const result = skillFrom(entry.name, parseSkillFile(text), helpers, root);
+      if ("skill" in result) {
+        skills.push(result.skill);
+        seen.set(entry.name, root);
+        if (result.note !== undefined) problems.push(result.note);
+      } else problems.push(result.problem);
+    }
+  };
+  await readRoot(SKILLS_DIR, entries);
+  for (const root of extraRoots) {
+    if (root === SKILLS_DIR) continue;
+    let list: { name: string; type: string }[];
     try {
-      const read = await source.readFile(`${SKILLS_DIR}/${entry.name}/${SKILL_FILENAME}`);
-      text = read.content ?? read.text ?? "";
-      const inside = await source.listDir(`${SKILLS_DIR}/${entry.name}`);
-      helpers = inside.entries
-        .filter(file => file.type === "file" && file.name !== SKILL_FILENAME)
-        .map(file => file.name);
+      list = (await source.listDir(root)).entries;
     } catch {
-      // A directory under skills/ with no readable SKILL.md is a directory, not a broken skill.
+      // Configured and not there is worth a line — it is the operator's list, and a root
+      // that exists on one box and not another says so here rather than nowhere.
+      problems.push(`skill root ${root} could not be listed on this box.`);
       continue;
     }
-    const result = skillFrom(entry.name, parseSkillFile(text), helpers);
-    if ("skill" in result) {
-      skills.push(result.skill);
-      if (result.note !== undefined) problems.push(result.note);
-    } else problems.push(result.problem);
+    await readRoot(root, list);
   }
   return { skills, problems, read: true };
 }
@@ -530,6 +576,8 @@ export class SkillCache {
 
   constructor(
     private readonly source: () => SkillSource | undefined,
+    /** Further roots to search after the box's own, read at each refresh (R26). */
+    private readonly roots: () => readonly string[] = () => [],
     private readonly ttlMs = envNumber("AGENTBOX_SKILL_TTL_MS", 5_000),
     private readonly now: () => number = Date.now
   ) {}
@@ -567,7 +615,7 @@ export class SkillCache {
 
     this.inFlight = (async () => {
       try {
-        const loaded = await loadSkills(source);
+        const loaded = await loadSkills(source, this.roots());
         // Only replaced when the directory was actually read. A box that is restarting must not make
         // an agent believe its skills were deleted — and since the list is in the prompt, an empty
         // one reads as "you have none" rather than "we could not check".

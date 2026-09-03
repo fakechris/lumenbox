@@ -212,3 +212,149 @@ test("ReadHistory reads the conversation the agent is in, not the team room", as
   await dispatchTool("ReadHistory", { search: "anything" }, context);
   assert.deepEqual(asked, ["feishu-oc_room-om_topic"]);
 });
+
+// ── template setup turn (docs/29 §5.3) ─────────────────────────────────────────
+
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { AgentRegistry } from "../agents/registry.ts";
+import { parseSkillFile } from "./skills.ts";
+
+test("during a template setup turn a routine the bot writes starts paused and says where it came from; outside one nothing is touched", async () => {
+  const files = new Map<string, string>();
+  const box = {
+    readFile: async () => {
+      throw new Error("no such file");
+    },
+    writeFile: async (path: string, content: string) => {
+      files.set(path, content);
+      return { path, bytes_written: content.length };
+    },
+  };
+  const base = { agent: { id: "a1", profile: { name: "Vera" } }, registry: {} as never, bus: {} as never, box };
+  const routine = "---\nname: Digest\ndescription: d\nschedule: \"@daily\"\n---\nbody\n";
+
+  const setup = { ...base, templateSetup: "tpl1" } as unknown as Parameters<typeof dispatchTool>[2];
+  await dispatchTool("write_file", { path: "/home/box/work/skills/digest/SKILL.md", content: routine }, setup);
+  const written = parseSkillFile(files.get("/home/box/work/skills/digest/SKILL.md")!).meta;
+  assert.equal(written.paused, "true");
+  assert.equal(written.authored_by, "template:tpl1");
+
+  // A plain skill is stamped but has nothing to pause; a file elsewhere is left alone.
+  await dispatchTool("write_file", { path: "/home/box/work/skills/plain/SKILL.md", content: "---\nname: p\ndescription: d\n---\nbody\n" }, setup);
+  assert.equal(parseSkillFile(files.get("/home/box/work/skills/plain/SKILL.md")!).meta.paused, undefined);
+  await dispatchTool("write_file", { path: "/home/box/work/notes.md", content: routine }, setup);
+  assert.equal(files.get("/home/box/work/notes.md"), routine);
+
+  const ordinary = base as unknown as Parameters<typeof dispatchTool>[2];
+  await dispatchTool("write_file", { path: "/home/box/work/skills/digest/SKILL.md", content: routine }, ordinary);
+  assert.equal(files.get("/home/box/work/skills/digest/SKILL.md"), routine, "an ordinary turn writes what it wrote");
+});
+
+test("a memory kept during a template setup turn is sourced to the template and is about nobody", async () => {
+  const root = mkdtempSync(join(tmpdir(), "agentbox-tpl-mem-"));
+  try {
+    const registry = new AgentRegistry(join(root, "agents"));
+    const vera = registry.create({ name: "Vera" });
+    const context = {
+      agent: vera,
+      registry,
+      bus: {} as never,
+      box: undefined,
+      caller: { userId: "chris" },
+      templateSetup: "tpl1",
+    } as unknown as Parameters<typeof dispatchTool>[2];
+    const kept = await dispatchTool("RememberFact", { fact: "Transcripts go to ~/work/out as markdown." }, context);
+    assert.ok(!kept.isError, kept.text);
+    const [record] = registry.readMemoryRecords(vera.id);
+    assert.equal(record?.source, "template:tpl1");
+    assert.equal(record?.about, undefined, "the person importing did not say it");
+
+    const later = { ...context, templateSetup: undefined } as unknown as Parameters<typeof dispatchTool>[2];
+    await dispatchTool("RememberFact", { fact: "Chris wants the digest on Mondays." }, later);
+    const [, own] = registry.readMemoryRecords(vera.id);
+    assert.equal(own?.source, "RememberFact");
+    assert.equal(own?.about, "chris");
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("PackTemplate packs from the live files and stages a version the bot cannot publish", async () => {
+  const root = mkdtempSync(join(tmpdir(), "agentbox-tpl-pack-"));
+  try {
+    const registry = new AgentRegistry(join(root, "agents"));
+    const ada = registry.create({ name: "Ada", title: "转写", avatarColor: "brown" });
+    registry.create({ name: "Bob" });
+    registry.appendMemoryRecords(ada.id, [
+      { at: "2026-09-01T00:00:00Z", kind: "fact", text: "Chris likes the digest terse.", about: "chris" },
+    ]);
+    const tree: Record<string, string> = {
+      "/home/box/work/skills/transcribe/SKILL.md": "---\nname: 音视频转写\ndescription: Transcribe a video.\n---\nFetch, transcribe, write to ~/work/out.\n",
+      "/home/box/work/skills/digest/SKILL.md": "---\nname: Digest\ndescription: Monday digest.\nschedule: \"0 9 * * 1\"\ndeliver: feishu:oc_abcdef123456\nagent: Ada\n---\nPost the week to feishu:oc_abcdef123456.\n",
+    };
+    const box = {
+      listDir: async (path: string) => {
+        const names = new Map<string, string>();
+        for (const key of Object.keys(tree)) {
+          if (!key.startsWith(`${path}/`)) continue;
+          const rest = key.slice(path.length + 1);
+          names.set(rest.split("/")[0]!, rest.includes("/") ? "directory" : "file");
+        }
+        if (names.size === 0) throw new Error("no such directory");
+        return { entries: [...names].map(([name, type]) => ({ name, type })) };
+      },
+      readFile: async (path: string) => {
+        if (tree[path] === undefined) throw new Error("no such file");
+        return { content: tree[path] };
+      },
+    };
+    const staged: { agentId: string; name: string }[] = [];
+    const context = {
+      agent: ada,
+      registry,
+      bus: {} as never,
+      box,
+      caller: { userId: "chris" },
+      templates: {
+        stage: (agentId: string, template: { profile: { name: string } }) => {
+          staged.push({ agentId, name: template.profile.name });
+          return { id: "share1", version: staged.length, path: "/tmp/v1.json" };
+        },
+      },
+    } as unknown as Parameters<typeof dispatchTool>[2];
+
+    const outcome = await dispatchTool(
+      "PackTemplate",
+      {
+        description: "Turns videos into Chinese transcripts and posts a Monday digest.",
+        memory: [{ text: "Transcripts are written to ~/work/out as markdown." }],
+        skills: [{ slug: "transcribe" }, { slug: "nope" }],
+        routines: [{ slug: "digest" }],
+        connectors: ["feishu"],
+      },
+      context
+    );
+    assert.ok(!outcome.isError, outcome.text);
+    assert.match(outcome.text, /Staged version 1 of the template "Ada" \(1 skill, 1 routine, 1 memory, needs feishu\)/);
+    assert.match(outcome.text, /Left out: nope: no such skill here/);
+    assert.match(outcome.text, /not shared until the person publishes/);
+    assert.deepEqual(staged, [{ agentId: ada.id, name: "Ada" }]);
+
+    // A memory about a person refuses the call, and nothing is staged.
+    const personal = await dispatchTool(
+      "PackTemplate",
+      { description: "d", memory: [{ text: "Chris likes the digest terse, so keep it short." }], skills: [], routines: [], connectors: [] },
+      context
+    );
+    assert.ok(personal.isError && /about a person here/.test(personal.text));
+    assert.equal(staged.length, 1);
+
+    // Without somewhere to stage, the tool says so rather than pretending.
+    const nowhere = await dispatchTool("PackTemplate", { description: "d" }, { ...context, templates: undefined } as never);
+    assert.ok(nowhere.isError && /not available here/.test(nowhere.text));
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});

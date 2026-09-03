@@ -52,7 +52,17 @@ interface StartRecord {
   event: "started";
 }
 
-type InboxRecord<T> = AdmitRecord<T> | StartRecord;
+/**
+ * An admitted message that must not be replayed: its work was cancelled by something that
+ * knows better than the inbox — the fork ledger's startup sweep (docs/32 §1), which is the
+ * authority for `fork/*` conversations. Read exactly like `started`.
+ */
+interface DropRecord {
+  seq: number;
+  event: "dropped";
+}
+
+type InboxRecord<T> = AdmitRecord<T> | StartRecord | DropRecord;
 
 /** One admitted-but-unstarted item, as it comes back after a restart. */
 export interface Admitted<T> {
@@ -67,6 +77,8 @@ export class Inbox<T> {
   private lines = 0;
   /** Admitted and not yet started, so compaction can tell whether anything depends on the file. */
   private outstanding = 0;
+  /** Sequences admitted and neither started nor dropped, so `drop` cannot miscount. */
+  private readonly pendingSeqs = new Set<number>();
 
   private readonly path: string | undefined;
 
@@ -85,6 +97,7 @@ export class Inbox<T> {
     this.path = path ?? undefined;
     const pending = this.read();
     this.outstanding = pending.length;
+    for (const item of pending) this.pendingSeqs.add(item.seq);
   }
 
   /**
@@ -105,6 +118,7 @@ export class Inbox<T> {
     };
     if (!this.append(record)) return undefined;
     this.outstanding += 1;
+    this.pendingSeqs.add(seq);
     return seq;
   }
 
@@ -112,12 +126,36 @@ export class Inbox<T> {
   start(seqs: readonly (number | undefined)[]): void {
     for (const seq of seqs) {
       if (seq === undefined) continue;
-      if (this.append({ seq, event: "started" })) this.outstanding = Math.max(0, this.outstanding - 1);
+      if (this.append({ seq, event: "started" }) && this.pendingSeqs.delete(seq)) {
+        this.outstanding = Math.max(0, this.outstanding - 1);
+      }
     }
     if (this.outstanding === 0 && this.lines > COMPACT_AT) this.compact();
   }
 
   /** Everything accepted that no turn ever took. In admission order. */
+  /**
+   * Cancels an admitted message so a replay never runs it. Only a sequence that is actually
+   * pending counts against `outstanding` — a started or unknown one is ignored, so a sweep
+   * cannot make unrelated pending work look absent and trigger a compaction that deletes it.
+   */
+  drop(seq: number | undefined): boolean {
+    if (seq === undefined || !this.pendingSeqs.has(seq)) return false;
+    if (!this.append({ seq, event: "dropped" })) return false;
+    this.pendingSeqs.delete(seq);
+    this.outstanding = Math.max(0, this.outstanding - 1);
+    return true;
+  }
+
+  /** Drops every pending message the predicate selects; returns how many. */
+  dropWhere(select: (item: Admitted<T>) => boolean): number {
+    let dropped = 0;
+    for (const item of this.read()) {
+      if (select(item) && this.drop(item.seq)) dropped += 1;
+    }
+    return dropped;
+  }
+
   pending(): Admitted<T>[] {
     return this.read();
   }
@@ -164,7 +202,7 @@ export class Inbox<T> {
             at: record.at,
             message: record.message,
           });
-        } else if (record.event === "started") {
+        } else if (record.event === "started" || record.event === "dropped") {
           admitted.delete(record.seq);
         }
       }

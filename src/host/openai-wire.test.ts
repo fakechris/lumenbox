@@ -229,3 +229,22 @@ test("a vendor error arrives with the status and the vendor's own words", async 
     server.close();
   }
 });
+
+test("tool_choice crosses the wire: any is required, a named tool is a function reference (docs/31 1d)", () => {
+  const base = {
+    model: "MiniMax-M3",
+    max_tokens: 100,
+    messages: [{ role: "user" as const, content: "check it" }],
+    tools: [
+      { name: "WebSearch", description: "Search.", input_schema: { type: "object", properties: {} } },
+    ] as Anthropic.Tool[],
+  };
+  assert.equal(toOpenAIRequest(base).tool_choice, undefined, "absent stays absent");
+  assert.equal(toOpenAIRequest({ ...base, tool_choice: { type: "any" } }).tool_choice, "required");
+  assert.deepEqual(toOpenAIRequest({ ...base, tool_choice: { type: "tool", name: "WebSearch" } }).tool_choice, {
+    type: "function",
+    function: { name: "WebSearch" },
+  });
+  assert.equal(toOpenAIRequest({ ...base, tool_choice: { type: "auto" } }).tool_choice, "auto");
+  assert.equal(toOpenAIRequest({ ...base, tool_choice: { type: "none" } }).tool_choice, "none");
+});

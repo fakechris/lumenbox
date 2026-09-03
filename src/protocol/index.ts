@@ -199,6 +199,12 @@ export interface ExecRequest {
    * it is evidence about *our* callers and not proof about a stranger's.
    */
   actor?: string;
+  /**
+   * A job id the caller minted (docs/32 slice two): `job-` plus 8–32 hex characters. Lets
+   * the host record the job before it exists and makes a repeated start idempotent — the
+   * same id twice returns the job already running rather than spawning it again.
+   */
+  job_id?: string;
 }
 
 /** What starting a background job answers with, instead of its output. */
@@ -213,6 +219,12 @@ export interface JobStatus {
   job_id: string;
   command: string;
   running: boolean;
+  /**
+   * True for a job that was running when the daemon last stopped: its process is gone or
+   * orphaned and its exit was never observed, so `exit_code` is absent and the log is all
+   * there is. Read back from the jobs directory at start (docs/32 slice two).
+   */
+  interrupted?: boolean;
   /** Absent while it runs. */
   exit_code?: number;
   started_at: string;

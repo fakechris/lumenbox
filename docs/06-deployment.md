@@ -64,6 +64,13 @@ No Docker needed on this machine.
 ```bash
 node dist/cli.js egress --allow example.com,*.internal.example.com
 AGENTBOX_EGRESS_RELAY=host.docker.internal:8790 node dist/cli.js box up --recreate
+
+The MCP face (docs/33) reaches the web server by the same name: `host.docker.internal:7777`
+resolves to the host's loopback on Docker Desktop, which is what the web server binds. On a
+Linux engine that name is the host's gateway address, and a loopback listener is not on it —
+bind the web server to the bridge address (`--host 172.17.0.1`, or whatever `docker network
+inspect bridge` says) and set `AGENTBOX_MCP_FACE_URL=http://172.17.0.1:7777`. A self-contained
+box (the orchestrator inside the container) needs nothing: the face uses loopback there.
 ```
 
 ## 4. Configuration

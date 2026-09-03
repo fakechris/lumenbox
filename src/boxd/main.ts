@@ -17,6 +17,7 @@ import {
   type ServerResponse,
 } from "node:http";
 import { connect as netConnect, type Socket } from "node:net";
+import { execFile } from "node:child_process";
 import { createReadStream, readFileSync, readdirSync, statSync } from "node:fs";
 import { join } from "node:path";
 import { resolveRange } from "./range.ts";
@@ -57,7 +58,7 @@ import {
   type WriteFileResult,
 } from "../protocol/index.ts";
 import { DisplayManager, DisplayOwnershipError } from "./displays.ts";
-import { getDisplay, parseDisplayNum } from "../cua/display.ts";
+import { detectDisplay, getDisplay, parseDisplayNum } from "../cua/display.ts";
 import { readClipboard, writeClipboard } from "./clipboard-service.ts";
 import { startEgressProxy } from "../egress/proxy.ts";
 import { RecordService, RECORDINGS_DIR } from "./record-service.ts";
@@ -170,12 +171,23 @@ async function handleHealth(): Promise<HealthResult> {
   // container health check must not hang while Xvfb starts.
   const running = displays.list();
   const primary = running.find(entry => entry.index === defaultDisplayIndex);
+  // The default desktop's resolution, even before anyone has registered it here: after a
+  // restart the desktop is up and an agent's, and "no display" would be a claim about this
+  // process's bookkeeping presented as a fact about the screen.
+  let resolution = primary?.resolution;
+  if (resolution === undefined) {
+    try {
+      resolution = (await detectDisplay(display)).resolution;
+    } catch {
+      // Genuinely no display yet.
+    }
+  }
   return {
     ok: true,
     version: VERSION,
     protocol: BOXD_PROTOCOL,
     display,
-    resolution: primary?.resolution,
+    resolution,
     refresh_rate: undefined,
     uptime_seconds: Math.round((Date.now() - startedAt) / 1000),
     displays: running,
@@ -354,6 +366,7 @@ const routes: Record<string, Handler> = {
         ...(body.cwd !== undefined ? { cwd: body.cwd } : {}),
         ...(body.env !== undefined ? { env: body.env } : {}),
         ...(body.display !== undefined ? { display: body.display } : {}),
+        ...(body.job_id !== undefined ? { jobId: body.job_id } : {}),
         nice: AGENT_NICE,
         scrubbedEnv: withoutBoxToken(process.env),
       });
@@ -617,6 +630,14 @@ server.on("upgrade", (req, clientSocket: Socket, head: Buffer) => {
     : "";
   const port = vncPortOf(parsed);
 
+  // A viewer that arrives or leaves is the moment keys get stuck: a browser shortcut sends
+  // Alt or Meta down through noVNC, the page reloads or loses focus, and the key-up never
+  // comes — the desktop then treats every keystroke as Alt+key and every click as a window
+  // drag (2026-09-02, seen on the Grok VM). So the display's modifiers are released on both
+  // edges; a person holding a key at that instant loses nothing they wanted.
+  void releaseModifiers(parsed.index);
+  clientSocket.once("close", () => void releaseModifiers(parsed.index));
+
   const upstream = netConnect(port, "127.0.0.1", () => {
     const headers = Object.entries(req.headers)
       .map(([key, value]) =>
@@ -636,6 +657,19 @@ server.on("upgrade", (req, clientSocket: Socket, head: Buffer) => {
   upstream.on("error", drop);
   clientSocket.on("error", drop);
 });
+
+/** Every modifier X could be holding, by keysym; xdotool ignores the ones this layout lacks. */
+export const MODIFIER_KEYSYMS: readonly string[] = [
+  "Alt_L", "Alt_R", "Meta_L", "Meta_R", "Control_L", "Control_R", "Shift_L", "Shift_R",
+  "Super_L", "Super_R", "Hyper_L", "Hyper_R", "ISO_Level3_Shift",
+];
+
+/** Lifts every modifier on one display. Never throws: a display that is gone has nothing stuck. */
+function releaseModifiers(index: number): Promise<void> {
+  return new Promise(resolve => {
+    execFile("xdotool", ["keyup", ...MODIFIER_KEYSYMS], { env: { ...process.env, DISPLAY: `:${index}` }, timeout: 3000 }, () => resolve());
+  });
+}
 
 // Bind on all interfaces: Docker's port publishing reaches the container through
 // its bridge address, not loopback. The bearer token is the access control.
@@ -657,17 +691,31 @@ if (egressRelay) {
   }
 }
 
-server.listen(BOXD_PORT, "0.0.0.0", () => {
-  log(`listening on 0.0.0.0:${BOXD_PORT}, display ${display}`);
+const listenPort = process.env.BOXD_PORT ? parseInt(process.env.BOXD_PORT, 10) : BOXD_PORT;
+// 0.0.0.0 in a container, where Docker is the only way in. As a drop-in on somebody else's
+// machine — Grok Bot's VM, reached over an SSH tunnel — loopback, so the daemon is not one
+// token away from that machine's network.
+const listenHost = process.env.BOXD_BIND ?? "0.0.0.0";
+
+server.listen(listenPort, listenHost, () => {
+  log(`listening on ${listenHost}:${listenPort}, display ${display}`);
   // Encoders left running by a previous daemon. They are adopted by PID 1 when boxd dies and keep
   // writing, and this process's map is empty — so without this, starting a recording gives you two
   // ffmpegs on one screen and a file nobody will ever stop.
   const reclaimed = recorder.reclaimOrphans();
   if (reclaimed > 0) log(`stopped ${reclaimed} recording(s) left by a previous daemon`);
   // Warm the display so the first computer call is not paying detection latency.
-  displays.ensure(defaultDisplayIndex).catch(error => {
-    log(`default desktop not ready yet: ${describe(error)}`);
-  });
+  // A default desktop that an agent already holds (the record outlives a restart) is not
+  // touched: ensuring it without that agent's token would only be refused, and the agent
+  // registers it again on its next call. Everything else about it — the components, the
+  // supervisor — resumes then.
+  if (displays.isClaimed(defaultDisplayIndex)) {
+    log(`default desktop ${defaultDisplayIndex} is an agent's; leaving it to them`);
+  } else {
+    displays.ensure(defaultDisplayIndex).catch(error => {
+      log(`default desktop not ready yet: ${describe(error)}`);
+    });
+  }
   // A component that dies takes the user's view of the box with it, silently: the
   // agent keeps working against X while the screen stays dead. Repair is on a timer.
   displays.startSupervisor();

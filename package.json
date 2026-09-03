@@ -13,6 +13,7 @@
     "build:cli": "esbuild src/cli.ts --bundle --platform=node --target=node22 --format=esm --packages=external --outfile=dist/cli.js && node scripts/copy-catalog-data.mjs",
     "build:boxd": "esbuild src/boxd/main.ts --bundle --platform=node --target=node22 --format=cjs --outfile=docker/box/boxd.cjs",
     "build:box": "npm run build:boxd && npm run build:hostd",
+    "pack:dropin": "npm run build:boxd && node scripts/pack-dropin.mjs",
     "build:image": "npm run build:box && node scripts/build-image.mjs",
     "typecheck": "tsc -p tsconfig.json",
     "test": "node scripts/test-floor.mjs",

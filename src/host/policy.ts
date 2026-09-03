@@ -50,6 +50,15 @@ export type PolicyRequest =
       agentName: string;
       tool: string;
       input: Record<string, unknown>;
+      /**
+       * Set when a delegated engine, not the agent, is calling through an MCP route (docs/33).
+       * Two consequences, both fail-closed: the log records the tool and the input's size and
+       * never the input (the engine's arguments may carry what a tool returned last time), and
+       * no standing or session approval is consulted — a call that would need a person's
+       * consent is refused, because the person consented to the agent's own action, not to an
+       * engine's under the agent's name.
+       */
+      delegated?: { jobId?: string };
     };
 
 export type PolicyDecision =
@@ -446,6 +455,17 @@ export class PolicyGate {
 
   private decideTool(request: Extract<PolicyRequest, { kind: "tool" }>): Outcome {
     if (!this.needsApproval(request)) return { decision: { allow: true } };
+    if (request.delegated !== undefined) {
+      return {
+        decision: {
+          allow: false,
+          reason:
+            `${request.tool} would need a person's approval, and a delegated engine cannot ask for one ` +
+            `— nor use an approval given to ${request.agentName} for its own actions. Leave this ` +
+            `call to the agent that delegated you, and say so in your result.`,
+        },
+      };
+    }
 
     const description = describeRequest(request);
     // Refused outright, not truncated: see `tooLargeToApprove`.
@@ -795,6 +815,10 @@ export function describeRequest(request: PolicyRequest): string {
     case "wake":
       return `${request.agentName}: wake ${request.targetName}`;
     case "tool": {
+      if (request.delegated !== undefined) {
+        const bytes = Buffer.byteLength(JSON.stringify(request.input));
+        return `${request.agentName}: ${request.tool} via delegated job ${request.delegated.jobId ?? "(starting)"} (${bytes} bytes of input, not recorded)`;
+      }
       const command = typeof request.input.command === "string" ? request.input.command : undefined;
       const detail = command ?? JSON.stringify(request.input);
       // Said on the card when it is certain, so a person approving `git status && ls` is told the

@@ -99,7 +99,9 @@ export class Collector {
   async sweep(): Promise<SweepResult> {
     // `gone` boxes do not exist and `stopped` ones are not expected to answer; polling either would
     // manufacture failures and then act on them.
-    const boxes = this.options.store.listBoxes(["starting", "ready", "unreachable"]);
+    // Attached boxes are not probed: they are reached through their primary, and their state is
+    // what the primary reports (mirrored below, after the primary answers).
+    const boxes = this.options.store.listBoxes(["starting", "ready", "unreachable"]).filter(box => box.role !== "attached");
     const result: SweepResult = {
       boxes: boxes.length,
       healthy: 0,
@@ -136,6 +138,50 @@ export class Collector {
       })
     );
     return result;
+  }
+
+  /**
+   * The boxes a primary drives beside it (docs/30 Stage D), as it reports them at
+   * `GET /api/boxes`: each becomes an attached row with the primary's view of it as its health,
+   * and one it no longer lists is retired. The primary is the source of truth; this is the
+   * fleet's copy.
+   */
+  private async mirrorAttached(box: BoxRow): Promise<void> {
+    if (box.uiUrl === "") return;
+    let payload: { boxes?: { id: string; name: string; kind: string; connected: boolean; endpoint?: string; displayFloor?: number }[]; own?: string };
+    try {
+      const response = await this.fetchImpl(`${box.uiUrl}/api/boxes`, {
+        headers: { authorization: `Bearer ${this.uiTokenFor(box)}` },
+        signal: AbortSignal.timeout(this.options.timeoutMs ?? 5000),
+      });
+      // A box from before boxes were plural answers 404; nothing to mirror.
+      if (!response.ok) return;
+      payload = (await response.json()) as typeof payload;
+    } catch {
+      return;
+    }
+    const listed = (payload.boxes ?? []).filter(entry => entry.kind !== "docker" && entry.id !== payload.own);
+    const seen = new Set<string>();
+    for (const entry of listed) {
+      seen.add(entry.name);
+      const row = this.options.store.upsertAttachedBox({
+        tenantId: box.tenantId,
+        name: entry.name,
+        boxdUrl: entry.endpoint ?? "",
+        state: entry.connected ? "ready" : "unreachable",
+      });
+      this.options.store.recordHealth({
+        boxId: row.id,
+        at: new Date().toISOString(),
+        ok: entry.connected,
+        degraded: false,
+        components: null,
+        crashes: null,
+      });
+    }
+    for (const stale of this.options.store.attachedBoxesOf(box.tenantId)) {
+      if (!seen.has(stale.externalId)) this.options.store.retireAttachedBox(box.tenantId, stale.externalId);
+    }
   }
 
   private async collectOne(
@@ -181,6 +227,8 @@ export class Collector {
       this.log(`${box.externalId} is answering again`);
     }
 
+    // What it drives beside it, before its usage: the fleet's copy of the attached boxes.
+    await this.mirrorAttached(box);
     const usageRowsStored = await this.collectUsage(box);
     return { reachable: true, degraded, usageRowsStored };
   }

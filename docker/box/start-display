@@ -136,12 +136,17 @@ printf '%s\n' "Xcursor.theme: Adwaita" "Xcursor.size: 24" "Xft.dpi: 96" \
 # Not optional: without one, dialogs open unmapped and keyboard focus never lands, so
 # typing silently goes nowhere. Compositing off so the desktop background is visible —
 # xfwm4's own compositor paints over the root window.
-if ! wmctrl -m > /dev/null 2>&1; then
+# wmctrl asks the WM; a machine without wmctrl (a drop-in on somebody else's image) falls back
+# to the process check, which is what keeps this from starting a new xfwm4 on every pass.
+wm_up() {
+  if command -v wmctrl > /dev/null 2>&1; then wmctrl -m > /dev/null 2>&1; else running_exact xfwm4; fi
+}
+if ! wm_up; then
   log "starting window manager"
   setsid dbus-launch --exit-with-session xfwm4 --replace --compositor=off \
     >> "/tmp/xfwm4-${N}.log" 2>&1 &
   for _ in $(seq 1 40); do
-    wmctrl -m > /dev/null 2>&1 && break
+    wm_up && break
     sleep 0.25
   done
   repaired+=("xfwm4")
@@ -209,11 +214,46 @@ if command -v dconf > /dev/null 2>&1; then
 fi
 
 # Dock preferences, which plank keeps in dconf rather than in a file.
+#
+# PLANK_DOCK names the dock. dock1 is ours in our own image; beside somebody else's desktop
+# on a shared HOME (Grok Bot's VM) it is *theirs*, and both reading and writing it would put
+# their launchers on our dock and our preferences on theirs. A drop-in runs with its own
+# name, and its launchers are made here from the applications the machine actually has —
+# google-chrome where there is no chromium, which is also what keeps a running Chrome from
+# showing beside a pinned one it cannot match.
+DOCK="${PLANK_DOCK:-dock1}"
+FRESH_DOCK=0
+if [ "$DOCK" != "dock1" ] && [ ! -d "$HOME/.config/plank/$DOCK/launchers" ]; then
+  FRESH_DOCK=1
+  mkdir -p "$HOME/.config/plank/$DOCK/launchers" "$HOME/.local/share/applications"
+  # The browser on our dock is box-chrome — our profile, our debug port, no first-run and no
+  # default-browser nag — never the stock desktop file, which opens the machine's default
+  # profile with none of that (and, on a HOME where another product registered itself as the
+  # default browser, asks to become the default on every launch).
+  BROWSER_ICON="$(command -v chromium > /dev/null 2>&1 && echo chromium || echo google-chrome)"
+  printf '%s\n' '[Desktop Entry]' 'Type=Application' 'Name=Browser' 'Exec=box-chrome' "Icon=$BROWSER_ICON" \
+    "StartupWMClass=$BROWSER_ICON" 'Terminal=false' > "$HOME/.local/share/applications/lumen-chrome.desktop"
+  printf '%s\n' '[PlankDockItemPreferences]' "Launcher=file://$HOME/.local/share/applications/lumen-chrome.desktop" \
+    > "$HOME/.config/plank/$DOCK/launchers/lumen-chrome.dockitem"
+  for app in xfce4-terminal thunar pcmanfm; do
+    if [ -f "/usr/share/applications/$app.desktop" ]; then
+      printf '%s\n' '[PlankDockItemPreferences]' "Launcher=file:///usr/share/applications/$app.desktop" \
+        > "$HOME/.config/plank/$DOCK/launchers/$app.dockitem"
+    fi
+  done
+fi
 if command -v dconf > /dev/null 2>&1; then
-  if [ "$(dconf read /net/launchpad/plank/docks/dock1/theme 2>/dev/null)" != "'Transparent'" ]; then
+  if [ "$DOCK" = "dock1" ]; then
+    ITEMS="['chromium.dockitem', 'files.dockitem', 'terminal.dockitem']"
+  else
+    ITEMS="$(ls "$HOME/.config/plank/$DOCK/launchers" 2>/dev/null | sed "s/.*/'&'/" | paste -sd, - | sed 's/^/[/; s/$/]/')"
+  fi
+  # Written when the dock is new here or its launchers were just (re)made: dconf holds the
+  # item list, and a stale one would keep showing launchers that no longer exist.
+  if [ "$FRESH_DOCK" = 1 ] || [ "$(dconf read /net/launchpad/plank/docks/$DOCK/theme 2>/dev/null)" != "'Transparent'" ]; then
     dbus-run-session -- sh -c "
-      p=/net/launchpad/plank/docks/dock1
-      dconf write \$p/dock-items \"['chromium.dockitem', 'files.dockitem', 'terminal.dockitem']\"
+      p=/net/launchpad/plank/docks/$DOCK
+      dconf write \$p/dock-items \"$ITEMS\"
       dconf write \$p/position \"'bottom'\"
       dconf write \$p/theme \"'Transparent'\"
       dconf write \$p/icon-size 48
@@ -228,7 +268,10 @@ fi
 # keeps them in step, in both directions, which is what makes a copy in one application
 # paste into another — and what makes the VNC clipboard carry the thing the user
 # actually copied rather than whichever selection happened to be set.
+# Components the image ships but a drop-in host may lack: started only when present, so the
+# supervisor is not told every pass that something it cannot have has crashed again.
 for selection in PRIMARY CLIPBOARD; do
+  if ! command -v autocutsel > /dev/null 2>&1; then break; fi
   if ! running_here "autocutsel -selection ${selection}"; then
     setsid autocutsel -selection "${selection}" -fork \
       >> "/tmp/autocutsel-${N}.log" 2>&1 &
@@ -237,7 +280,7 @@ for selection in PRIMARY CLIPBOARD; do
 done
 
 # ── desktop icons ────────────────────────────────────────────────────────────────
-if ! running_here "pcmanfm --desktop"; then
+if command -v pcmanfm > /dev/null 2>&1 && ! running_here "pcmanfm --desktop"; then
   log "starting desktop icons"
   setsid pcmanfm --desktop --profile default >> "/tmp/pcmanfm-${N}.log" 2>&1 &
   repaired+=("pcmanfm")
@@ -251,8 +294,8 @@ if skipped plank; then
   log "dock disabled by the supervisor"
 elif ! running_exact "plank"; then
   if wait-compositor "${DISP}"; then
-    log "starting dock"
-    setsid plank >> "/tmp/plank-${N}.log" 2>&1 &
+    log "starting dock ${DOCK}"
+    setsid plank -n "${DOCK}" >> "/tmp/plank-${N}.log" 2>&1 &
     repaired+=("plank")
   else
     log "no compositor on ${DISP}; skipping the dock rather than drawing an opaque one"

@@ -11,7 +11,6 @@
  * control.
  */
 
-import { execFileSync } from "node:child_process";
 import { randomBytes } from "node:crypto";
 import {
   createServer,
@@ -19,7 +18,7 @@ import {
   type IncomingMessage,
   type ServerResponse,
 } from "node:http";
-import { readFileSync } from "node:fs";
+import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { connect as netConnect, type Socket } from "node:net";
 import { join, posix } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -29,6 +28,8 @@ import { BoxManager, defaultBoxConfig } from "../box/docker.ts";
 import { resolveBoxProvisioner, type BoxProvisioner } from "../box/provisioner.ts";
 import { classifyBox } from "../box/access.ts";
 import { envNumber } from "../config.ts";
+import { buildInfo } from "../host/build-info.ts";
+import { faceBaseUrl, RENEW_EVERY_MS, ROUTE_PATH } from "../host/mcp-face.ts";
 import { BackupSchedule, backupRoot } from "../host/backup.ts";
 import { Orchestrator } from "../host/orchestrator.ts";
 import { describeProvider, type ProviderProfile } from "../host/provider.ts";
@@ -78,39 +79,6 @@ function readToolList(value: unknown): readonly string[] | null | undefined | Er
   return value as string[];
 }
 
-/**
- * Which code is running, for reading a bug report against the right build.
- *
- * Version from package.json; commit from git, asked once at startup — a deployment
- * without a git checkout says so via AGENTBOX_BUILD or shows "unknown", which is
- * still more honest than showing nothing and guessing later.
- */
-function buildInfo(): { version: string; commit: string } {
-  const root = fileURLToPath(new URL("../..", import.meta.url));
-  let version = "0.0.0";
-  try {
-    const pkg = JSON.parse(readFileSync(join(root, "package.json"), "utf8")) as {
-      version?: unknown;
-    };
-    if (typeof pkg.version === "string") version = pkg.version;
-  } catch {
-    // The page shows 0.0.0, which reads as "could not tell" and is exactly true.
-  }
-  let commit = process.env.AGENTBOX_BUILD ?? "";
-  if (commit === "") {
-    try {
-      commit = execFileSync("git", ["rev-parse", "--short", "HEAD"], {
-        cwd: root,
-        stdio: ["ignore", "pipe", "ignore"],
-      })
-        .toString()
-        .trim();
-    } catch {
-      commit = "unknown";
-    }
-  }
-  return { version, commit };
-}
 
 /**
  * The exit code that means "start me again with the new config".
@@ -169,7 +137,6 @@ import {
   CATALOG_CREWS,
   CATALOG_EXPERTS,
   expertNamed,
-  intersectTools,
   profilesFor,
 } from "../host/catalog.ts";
 import { preflight } from "../box/preflight.ts";
@@ -209,6 +176,10 @@ import {
 import { Vault, type Grant } from "../host/vault.ts";
 import { seedStarterSkills } from "../host/starter-skills.ts";
 import { firstRunCue } from "../host/prompt.ts";
+import { readBoxToken } from "../box/docker.ts";
+import { attachedBox, tokenOf } from "../box/boxes.ts";
+import { catalogTemplate, describeTemplate, parseTemplate, rewriteFrontmatter, templatesEnabled, unresolvedPlaceholders } from "../host/template.ts";
+import { SKILLS_DIR, SKILL_FILENAME, slugify } from "../host/skills.ts";
 import { catchUpFloor } from "../channels/ingress.ts";
 import { REPLAY_MAX_AGE_MS } from "../channels/feishu.ts";
 import { ActivityLog } from "./activity.ts";
@@ -245,11 +216,40 @@ type OutboundEvent =
   /** One line of docker output while the box is brought up from the page. */
   | { type: "box_setup"; line: string; done?: boolean; ok?: boolean }
   /** An approval was just created; the desktop shell turns this into a notification. */
-  | { type: "approval_pending"; agentId: string; agentName: string; description: string };
+  | { type: "approval_pending"; agentId: string; agentName: string; description: string }
+  /** An imported bot's setup turn ended; `summary` says what landed (docs/29 §5.4). */
+  | { type: "template_import"; agentId: string; agentName: string; summary: string; complete: boolean }
+  /** A bot staged a version of its template; the chat shows a card with what it carries. */
+  | { type: "template_staged"; agentId: string; agentName: string; id: string; version: number; name: string; description: string; counts: string };
 
 export async function startWebServer(options: WebOptions): Promise<() => void> {
   const log = options.onLog ?? (() => {});
   const registry = new AgentRegistry();
+  /**
+   * The control plane, when this box was given one (docs/29 §6 B): its address as the box
+   * reaches it, and the box's own token. Absent on a laptop, where templates are files.
+   */
+  const controlPlane = (): { call: (path: string, method: "GET" | "POST", body?: unknown) => Promise<{ ok: boolean; status: number; error: string; body: Record<string, unknown> }> } | undefined => {
+    const base = process.env.AGENTBOX_CONTROL_URL;
+    const token = process.env.BOXD_TOKEN ?? readBoxToken();
+    if (base === undefined || base === "" || token === undefined || token === "") return undefined;
+    return {
+      call: async (path, method, body) => {
+        const response = await fetch(`${base.replace(/\/+$/, "")}${path}`, {
+          method,
+          headers: { authorization: `Bearer ${token}`, "content-type": "application/json" },
+          ...(body === undefined ? {} : { body: JSON.stringify(body) }),
+        });
+        let parsed: Record<string, unknown> = {};
+        try {
+          parsed = (await response.json()) as Record<string, unknown>;
+        } catch {
+          // A non-JSON answer is reported by status alone.
+        }
+        return { ok: response.ok, status: response.status, error: String(parsed.error ?? `control plane answered ${response.status}`), body: parsed };
+      },
+    };
+  };
   // The doors, loaded before the people: identity links and knocks record the
   // incarnation of the channel they were observed under (docs/22 §4), so the
   // lookup has to exist before the principals file is read.
@@ -396,6 +396,7 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
   // same as the provider, because it decides what tools an agent is even offered.
   const hostRunner = new HostRunner(hostRunnerConfig(loadConfig().hostExec ?? {}));
   if (hostRunner.enabled) log("host execution is on; every host command still asks for approval");
+
 
   // The credential vault. Read fresh on each edit through the routes; the orchestrator
   // holds this one instance, so a granted secret is usable on the next host command.
@@ -864,7 +865,7 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
           : "Allowed once. Send the agent a message to have it retry.";
     },
     log: line => log(line),
-    ask: async (agentName, text, identity, chatKey, onProgress, threadKey, taskId) => {
+    ask: async (agentName, text, identity, chatKey, onProgress, threadKey, taskId, onInterim) => {
       let agent: ReturnType<typeof registry.resolve> | undefined;
       if (agentName !== undefined) {
         try {
@@ -965,6 +966,8 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
         if (event.type === "tool_start" && batchLine === undefined) {
           onProgress?.(actionLine(event.tool, event.input), event.tool);
         }
+        // The opening line, handed to the chat while the tools run (docs/31 layer 1a).
+        if (event.type === "interim") onInterim?.(event.text);
       };
       channelTurnListeners.add(listener);
       const progressPath = `${WORK_DIR}/chats/${conversation}/progress.json`;
@@ -1216,11 +1219,11 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
     // Captured with the agent's own owner token, the same proof a turn presents; an
     // agent whose desktop never started answers undefined and the chat is told so.
     screenshot: async agentName => {
-      const client = orchestrator.boxClient();
-      if (client === undefined) return undefined;
       const agent =
         agentName !== undefined ? registry.resolve(agentName) : registry.list()[0];
       if (agent === undefined) return undefined;
+      const client = orchestrator.boxClient(agent.id);
+      if (client === undefined) return undefined;
       const result = await client.computer([{ action: "screenshot" }], {
         display: registry.displayIndexFor(agent.id),
         owner: registry.boxOwnerTokenFor(agent.id),
@@ -1614,6 +1617,15 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
   // down does not deserve a notification a minute.
   let boxWasHealthy = false;
   const boxWatch = setInterval(() => {
+    // The attached boxes, on their own: one that stops answering (a tunnel that died, a VM
+    // that rebooted) is dialled again every tick and announced only on the change.
+    void orchestrator.checkAttachedBoxes().then(transitions => {
+      for (const change of transitions) {
+        log(change.connected ? `box ${change.name} is back: ${change.detail}` : `box ${change.name} stopped answering: ${change.detail}`);
+        broadcast({ type: "error", message: change.connected ? `Box ${change.name} is back.` : `Box ${change.name} stopped answering: ${change.detail}` });
+        if (change.connected) void orchestrator.ensureAllDesktops().catch(() => {});
+      }
+    }).catch(() => {});
     void (async () => {
       const client = orchestrator.boxClient();
       if (client !== undefined) {
@@ -1681,6 +1693,16 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
   // without shell, files, or a desktop and could finish or fail before the box ever arrived. The
   // inbox first, then interrupted turns: a turn already running is further along than a message only
   // accepted, and they run in the order queued.
+  // Extensions before anything runs a turn, so their tools are in the first prompt (docs/34).
+  const extensions = await orchestrator.reloadExtensions();
+  if (extensions !== undefined && (extensions.loaded.length > 0 || extensions.problems.length > 0)) {
+    const problems = extensions.problems.length > 0 ? `; ${extensions.problems.join("; ")}` : "";
+    log(`extensions: ${extensions.loaded.length} loaded, ${extensions.tools.length} tool(s)${problems}`);
+  }
+  // The fork ledger first (docs/32 §1): it cancels what the inbox would otherwise replay and
+  // ends what the turn ledger would otherwise resume, for every fork the last process left open.
+  const sweptForks = await orchestrator.sweepPendingWork();
+  if (sweptForks > 0) log(`dropped ${sweptForks} fork${sweptForks === 1 ? "" : "s"} left open by the last restart; their parents were told`);
   const restored = orchestrator.bus.recover();
   if (restored > 0) {
     log(
@@ -1703,8 +1725,26 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
   // take over any of them at any moment, which cannot wait on that agent's first
   // turn. Costs a few seconds at startup and nothing after.
   if (box.connected) {
-    const boxClient = orchestrator.boxClient();
-    if (boxClient) void seedStarterSkills(boxClient, line => log(line));
+    // Each box gets the starters once; a box somebody else runs is seeded the same way,
+    // under its own `.seeded` marker.
+    for (const status of orchestrator.boxStatus()) {
+      const client = orchestrator.boxClientById(status.id);
+      if (client) void seedStarterSkills(client, line => log(`${status.name}: ${line}`));
+    }
+    orchestrator.onTemplateStaged = staged => {
+      const agentName = registry.tryGet(staged.agentId)?.profile.name ?? staged.agentId;
+      log(`${agentName} staged template version ${staged.version} (${describeTemplate(staged.template)})`);
+      broadcast({
+        type: "template_staged",
+        agentId: staged.agentId,
+        agentName,
+        id: staged.id,
+        version: staged.version,
+        name: staged.template.profile.name,
+        description: staged.template.profile.description,
+        counts: describeTemplate(staged.template),
+      });
+    };
     const desktops = await orchestrator.ensureAllDesktops();
     for (const desktop of desktops) {
       log(
@@ -1742,7 +1782,15 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
   let cachedOrigin: { value: Origin | undefined; at: number } | undefined;
   const ORIGIN_TTL_MS = 5000;
 
-  async function resolveBoxdOrigin(force = false): Promise<Origin | undefined> {
+  async function resolveBoxdOrigin(force = false, boxId?: string): Promise<Origin | undefined> {
+    // An attached box is reached where its record says, with the token its file holds.
+    if (boxId !== undefined && boxId !== registry.box.id) {
+      const entry = registry.boxById(boxId);
+      const token = entry === undefined ? undefined : tokenOf(entry);
+      if (entry?.endpoint === undefined || token === undefined) return undefined;
+      const url = new URL(entry.endpoint.baseUrl);
+      return { host: url.hostname, port: Number(url.port || (url.protocol === "https:" ? 443 : 80)), token };
+    }
     if (!force && cachedOrigin && Date.now() - cachedOrigin.at < ORIGIN_TTL_MS) {
       return cachedOrigin.value;
     }
@@ -1769,9 +1817,10 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
     req: IncomingMessage,
     res: ServerResponse,
     path: string,
-    retried = false
+    retried = false,
+    boxId?: string
   ): Promise<void> {
-    const origin = await resolveBoxdOrigin(retried);
+    const origin = await resolveBoxdOrigin(retried, boxId);
     if (!origin) {
       res.writeHead(503, { "content-type": "text/plain" });
       res.end("The box is not available. Start it with `agentbox box up`.");
@@ -1792,37 +1841,17 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
         },
       },
       response => {
-        // The takeover page is the surface a person actually types a password into,
-        // and it carried no badge and no notice (v4 claims review, finding 5). The
-        // page — and only the page — is buffered so the box-class sentence rides in;
-        // sockets and assets stream as before. An encoded body passes through
-        // untouched rather than corrupted.
-        //
-        // Except when the page is the main UI's embedded iframe (embedded=1): there
-        // the same sentence already sits directly above the frame as #boxnotice, and
-        // the banner's only effect was to say it twice while covering the top of the
-        // desktop. Standalone opens — Take over, the channel's 桌面 link — keep it,
-        // because there it is the only warning on the page.
-        const isPage = wantsDesktopNotice(path);
-        if (!isPage || response.headers["content-encoding"] !== undefined) {
-          res.writeHead(response.statusCode ?? 502, response.headers);
-          response.pipe(res);
-          return;
-        }
-        const chunks: Buffer[] = [];
-        response.on("data", chunk => chunks.push(chunk as Buffer));
-        response.on("end", () => {
-          const boxClass = classifyBox(provisioner.boxName, loadConfig(), registry.box.name);
-          const body = injectDesktopNotice(
-            Buffer.concat(chunks).toString("utf8"),
-            boxClass.notice ? `${boxClass.badge} — ${boxClass.notice}` : ""
-          );
-          res.writeHead(response.statusCode ?? 502, {
-            ...response.headers,
-            "content-length": Buffer.byteLength(body),
-          });
-          res.end(body);
-        });
+        // No banner on the desktop page, embedded or standalone (2026-09-02, Chris): the
+        // box-class sentence lives in the main UI as #boxnotice, and on the page it covered
+        // the desktop's top edge — and, injected into a response boxd serves without a
+        // charset, came out as mojibake. The page streams through like every asset. The
+        // page itself is marked no-store, so a browser that cached the bannered version
+        // does not keep showing it after the server stopped sending it.
+        const headers = /\/vnc\.html/.test(path)
+          ? { ...response.headers, "cache-control": "no-store" }
+          : response.headers;
+        res.writeHead(response.statusCode ?? 502, headers);
+        response.pipe(res);
       }
     );
 
@@ -2027,11 +2056,11 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
       },
       readOnly: true,
       run: async input => {
-        const client = orchestrator.boxClient();
-        if (client === undefined) throw new Error("No box is running on this installation.");
         const agent =
           typeof input.agent === "string" ? registry.resolve(input.agent) : registry.list()[0];
         if (agent === undefined) throw new Error("No agents on this installation.");
+        const client = orchestrator.boxClient(agent.id);
+        if (client === undefined) throw new Error("No box is running for that agent.");
         const shot = await client.computer([{ action: "screenshot" }], {
           display: registry.displayIndexFor(agent.id),
           owner: registry.boxOwnerTokenFor(agent.id),
@@ -2211,6 +2240,23 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
       ) {
         return;
       }
+      // The MCP face (docs/33): a delegated engine in the box calling the host's MCP tools
+      // through its per-job route. Before the UI gate, like the side door, and with one 401 for
+      // every way to be wrong — unknown key, lapsed lease, wrong bearer.
+      const routeMatch = ROUTE_PATH.exec(url.pathname);
+      if (routeMatch !== null) {
+        const key = routeMatch[1]!;
+        const bearer = /^Bearer\s+(.+)$/i.exec(req.headers.authorization ?? "")?.[1]?.trim();
+        const route = orchestrator.mcpFace.authenticate(key, bearer);
+        await handleMcpRequest(req, res, {
+          path: url.pathname,
+          serverName: "lumenbox-face",
+          tools: route === undefined ? [] : orchestrator.mcpFace.toolsFor(route),
+          principalFor: () => route?.agentId,
+          log: line => log(`mcp-face: ${line}`),
+        });
+        return;
+      }
       if (!decision.allow && route !== "POST /api/login") {
         // No WWW-Authenticate: a browser prompt would be the wrong shape for this, and the
         // token belongs in the URL once rather than typed into a dialog.
@@ -2318,16 +2364,12 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
         if (url.pathname.startsWith("/desktop/")) {
           // Same choice as the upgrade: the page and the socket it opens must come from the same
           // stack, or a viewer would be served a page pointing at a stream they are refused.
-          const upstream = desktopUpstreamPath(
-            url.pathname,
-            url.search,
-            mayDrive(caller)
-          );
-          if (!upstream) {
+          const desktop = desktopRouteOf(url.pathname, url.search, mayDrive(caller));
+          if (!desktop) {
             send(res, 404, { error: `Not a desktop path: ${url.pathname}` });
             return;
           }
-          await proxyDesktop(req, res, upstream);
+          await proxyDesktop(req, res, desktop.upstream, false, desktop.boxId);
           return;
         }
 
@@ -2403,14 +2445,14 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
           if (refused()) return;
           const body = await readJson(req);
           const agentId = String(body.agent ?? "");
-          const client = orchestrator.boxClient();
+          if (!registry.has(agentId)) {
+            send(res, 404, { error: `No agent ${agentId}` });
+            return;
+          }
+          const client = orchestrator.boxClient(agentId);
 
           if (!client) {
             send(res, 503, { error: "The box is not available." });
-            return;
-          }
-          if (!registry.has(agentId)) {
-            send(res, 404, { error: `No agent ${agentId}` });
             return;
           }
 
@@ -2816,10 +2858,35 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
           return;
         }
 
+        if (route === "POST /api/extensions/reload") {
+          if (refused()) return;
+          const applied = await orchestrator.reloadExtensions();
+          if (applied === undefined) {
+            send(res, 409, { error: "No extension layer here." });
+            return;
+          }
+          send(res, 200, { ok: true, ...applied });
+          return;
+        }
+
+        if (route === "POST /api/mcp/reload") {
+          if (refused()) return;
+          // The edges reload; the core does not (R36). An operator edited mcpServers in
+          // config.json and wants it applied without dropping the Feishu socket.
+          const applied = orchestrator.reloadMcp();
+          if (applied === undefined) {
+            send(res, 409, { error: "MCP servers were not read from config.json here, so there is nothing to re-read." });
+            return;
+          }
+          send(res, 200, { ok: true, ...applied, servers: orchestrator.mcp.statuses() });
+          return;
+        }
+
         if (route === "GET /api/mcp") {
           send(res, 200, {
             servers: orchestrator.mcp.statuses(),
             budget: TOOL_BUDGET_WARNING,
+            extensions: orchestrator.extensions?.current() ?? null,
             // Never the secrets — only that they exist, whose they are, and when.
             tokens: mcpTokens.map(entry => ({
               label: entry.label,
@@ -3255,21 +3322,18 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
               skipped.push(row.name);
               continue;
             }
-            const record = registry.create({
-              name: row.name,
-              description: row.description,
-              title: row.title,
-              tools: [...intersectTools(row.tools, undefined)],
-              ...(caller.userId !== undefined ? { ownerUserId: caller.userId } : {}),
-              visibility: "shared",
+            // The catalog is the first-party shelf of the same format (docs/29 §6): an expert
+            // is installed the way any template is, so its origin is on its profile and its
+            // first turn is the same first turn.
+            const imported = orchestrator.importTemplate(catalogTemplate(row), {
+              caller,
+              connected: ["browser", ...channelRecords.map(record => record.type)],
+              shareId: `catalog:${row.slug}`,
+              log,
             });
             existing.add(row.name);
-            created.push({ id: record.id, name: record.profile.name });
-            log(`catalog ${slug}: created ${record.profile.name} (${record.id})`);
-            // Its first turn, so the new agent speaks before anyone has to.
-            void orchestrator
-              .prompt(record.id, firstRunCue(caller.userId), caller, { steerable: false, lane: "background" })
-              .catch(error => log(`first run for ${record.profile.name} failed: ${error instanceof Error ? error.message : String(error)}`));
+            created.push({ id: imported.agent.id, name: imported.agent.profile.name });
+            log(`catalog ${slug}: created ${imported.agent.profile.name} (${imported.agent.id})`);
           }
           send(res, 200, { slug, created, skipped });
           return;
@@ -3360,6 +3424,7 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
               provider: config.provider ?? null,
               model: config.model ?? null,
               baseUrl: config.baseUrl ?? null,
+              startupItem: config.startupItem ?? false,
             },
             // The host door, and why it is or is not usable right now.
             hostExec: {
@@ -3429,11 +3494,16 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
             hostExecChange =
               enabled || cwd !== "" ? { enabled, ...(cwd !== "" ? { cwd } : {}) } : null;
           }
+          let startupItemChange: boolean | null | undefined;
+          if (body.startupItem !== undefined) {
+            startupItemChange = typeof body.startupItem === "boolean" ? body.startupItem : null;
+          }
           const path = saveConfig({
             provider: providerValue === null ? null : field(providerValue)?.toLowerCase(),
             model: body.model === null ? null : field(body.model),
             baseUrl: body.baseUrl === null ? null : field(body.baseUrl),
             ...(hostExecChange !== undefined ? { hostExec: hostExecChange } : {}),
+            ...(startupItemChange !== undefined ? { startupItem: startupItemChange } : {}),
             ...(key !== undefined && key !== null
               ? { env: { [resolveProvider(chosenName).keyEnv]: key } }
               : {}),
@@ -3546,14 +3616,14 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
           const body = await readJson(req);
           const agentId = String(body.agent ?? "");
           const action = String(body.action ?? "");
-          const client = orchestrator.boxClient();
+          if (!registry.has(agentId)) {
+            send(res, 404, { error: `No agent ${agentId}` });
+            return;
+          }
+          const client = orchestrator.boxClient(agentId);
 
           if (!client) {
             send(res, 503, { error: "The box is not available." });
-            return;
-          }
-          if (!registry.has(agentId)) {
-            send(res, 404, { error: `No agent ${agentId}` });
             return;
           }
 
@@ -3606,13 +3676,21 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
               ...classifyBox(provisioner.boxName, loadConfig(), registry.box.name),
             },
             allTools: ALL_TOOLS,
+            // Every box this installation drives, own first (docs/30). An agent's row names its
+            // box and its desktop path is on that box.
+            boxes: orchestrator.boxStatus(),
             agents: registry.list().map(record => {
               const index = registry.displayIndexFor(record.id);
+              const boxEntry = registry.boxOf(record.id);
+              const own = boxEntry.id === registry.box.id;
+              const desktopPrefix = own ? `desktop/${index}` : `desktop/b/${boxEntry.id}/${index}`;
               return {
                 id: record.id,
                 name: record.profile.name,
                 title: record.profile.title ?? "",
                 description: record.profile.description,
+                boxId: boxEntry.id,
+                boxName: boxEntry.name,
                 // null means unrestricted — every tool, including ones added later.
                 tools: record.profile.tools ?? null,
                 ...(record.profile.scopeId !== undefined ? { scopeId: record.profile.scopeId } : {}),
@@ -3622,8 +3700,8 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
                 // belongs to the agent you are looking at.
                 displayIndex: index,
                 desktopUrl:
-                  `/desktop/${index}/vnc.html?autoconnect=1&resize=scale` +
-                  `&path=desktop/${index}/websockify`,
+                  `/${desktopPrefix}/vnc.html?autoconnect=1&resize=scale` +
+                  `&path=${desktopPrefix}/websockify`,
               };
             }),
           });
@@ -3684,6 +3762,362 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
           return;
         }
 
+        // ── boxes (docs/30) ─────────────────────────────────────────────────────────
+        if (route === "GET /api/boxes") {
+          send(res, 200, { boxes: orchestrator.boxStatus(), own: registry.box.id });
+          return;
+        }
+
+        // Attaching is an owner's act: it puts another machine's authority in the roster.
+        if (route === "POST /api/boxes/attach") {
+          if (refused()) return;
+          const body = await readJson(req);
+          const name = String(body.name ?? "").trim();
+          const baseUrl = String(body.baseUrl ?? "").trim();
+          let tokenFile = typeof body.tokenFile === "string" ? body.tokenFile.trim() : "";
+          if (tokenFile === "" && typeof body.token === "string" && body.token.trim() !== "") {
+            // A token pasted in is kept in a file of its own, mode 0600, never in the record.
+            const dir = join(agentboxHome(), "boxes");
+            mkdirSync(dir, { recursive: true, mode: 0o700 });
+            tokenFile = join(dir, `${name}.token`);
+            writeFileSync(tokenFile, `${body.token.trim()}\n`, { mode: 0o600 });
+          }
+          let entry: ReturnType<typeof attachedBox>;
+          try {
+            entry = attachedBox({
+              name,
+              baseUrl,
+              tokenFile,
+              ...(Number.isInteger(Number(body.displayFloor)) && Number(body.displayFloor) >= 1 ? { displayFloor: Number(body.displayFloor) } : {}),
+              ...(typeof body.workDir === "string" && body.workDir.trim() !== "" ? { workDir: body.workDir.trim() } : {}),
+            });
+          } catch (error) {
+            send(res, 400, { error: error instanceof Error ? error.message : String(error) });
+            return;
+          }
+          try {
+            const result = await orchestrator.attachBox(entry);
+            log(`attached box ${entry.name} (${entry.id}) at ${baseUrl}: ${result.detail}`);
+            send(res, 200, { box: entry, ...result });
+          } catch (error) {
+            send(res, 409, { error: error instanceof Error ? error.message : String(error) });
+          }
+          return;
+        }
+
+        // Moving a box: a new address for the same id, so its agents stay its agents.
+        if (route === "POST /api/boxes/update") {
+          if (refused()) return;
+          const body = await readJson(req);
+          const name = String(body.name ?? "").trim();
+          const baseUrl = typeof body.baseUrl === "string" ? body.baseUrl.trim() : "";
+          let tokenFile = typeof body.tokenFile === "string" ? body.tokenFile.trim() : "";
+          if (tokenFile === "" && typeof body.token === "string" && body.token.trim() !== "") {
+            const dir = join(agentboxHome(), "boxes");
+            mkdirSync(dir, { recursive: true, mode: 0o700 });
+            tokenFile = join(dir, `${name}.token`);
+            writeFileSync(tokenFile, `${body.token.trim()}\n`, { mode: 0o600 });
+          }
+          try {
+            const existing = registry.boxByName(name);
+            if (existing === undefined) {
+              send(res, 404, { error: `No box named ${name}.` });
+              return;
+            }
+            const result = await orchestrator.updateBox(name, {
+              ...(baseUrl !== "" ? { endpoint: { baseUrl, tokenFile: tokenFile !== "" ? tokenFile : (existing.endpoint?.tokenFile ?? "") } } : {}),
+              ...(Number.isInteger(Number(body.displayFloor)) && Number(body.displayFloor) >= 1 ? { displayFloor: Number(body.displayFloor) } : {}),
+            });
+            log(`box ${name} moved to ${result.box.endpoint?.baseUrl ?? "(no endpoint)"}: ${result.detail}`);
+            send(res, 200, result);
+          } catch (error) {
+            send(res, 409, { error: error instanceof Error ? error.message : String(error) });
+          }
+          return;
+        }
+
+        if (route === "POST /api/boxes/detach") {
+          if (refused()) return;
+          const body = await readJson(req);
+          try {
+            const entry = orchestrator.detachBox(String(body.name ?? ""));
+            log(`detached box ${entry.name} (${entry.id})`);
+            send(res, 200, { ok: true, box: entry });
+          } catch (error) {
+            send(res, 409, { error: error instanceof Error ? error.message : String(error) });
+          }
+          return;
+        }
+
+        // ── templates (docs/29) ─────────────────────────────────────────────────────
+        // Import: the agent is created from the profile, the recipe goes into the box, and
+        // the new bot's first turn installs the rest. The response is immediate; what landed
+        // arrives as a template_import event when the setup turn ends.
+        // A catalog expert as a file, in the same format a bot's own template takes.
+        if (route === "GET /api/catalog/template") {
+          const expert = expertNamed(url.searchParams.get("slug") ?? "");
+          if (expert === undefined) {
+            send(res, 404, { error: "No catalog expert by that slug." });
+            return;
+          }
+          res.writeHead(200, {
+            "content-type": "application/json; charset=utf-8",
+            "content-disposition": `attachment; filename="${expert.slug}.lumenbox-template.json"`,
+          });
+          res.end(`${JSON.stringify(catalogTemplate(expert), null, 2)}\n`);
+          return;
+        }
+
+        if (route.startsWith("POST /api/templates/") && !templatesEnabled()) {
+          send(res, 404, { error: "Template sharing is off here (AGENTBOX_TEMPLATES=0)." });
+          return;
+        }
+
+        if (route === "POST /api/templates/import") {
+          if (refused()) return;
+          const body = await readJson(req);
+          let raw = typeof body.template === "string" ? body.template : body.template !== undefined ? JSON.stringify(body.template) : "";
+          let shareId: string | undefined;
+          if (raw === "" && typeof body.shareId === "string" && /^[A-Za-z0-9_-]{21}$/.test(body.shareId)) {
+            const control = controlPlane();
+            if (control === undefined) {
+              send(res, 400, { error: "This box is not attached to a control plane, so a share id cannot be fetched. Paste the file instead." });
+              return;
+            }
+            const reply = await control.call(`/api/templates/${body.shareId}/document`, "GET").catch(error => ({ ok: false as const, status: 502, error: String(error instanceof Error ? error.message : error), body: {} }));
+            if (!reply.ok) {
+              send(res, reply.status, { error: reply.error });
+              return;
+            }
+            raw = String(reply.body.document ?? "");
+            shareId = body.shareId;
+          }
+          if (raw === "") {
+            send(res, 400, { error: "Pass the template as `template` (its JSON, or the parsed object), or a `shareId`." });
+            return;
+          }
+          const parsed = parseTemplate(raw);
+          if ("problem" in parsed) {
+            send(res, 400, { error: parsed.problem });
+            return;
+          }
+          const connected = [
+            "browser",
+            ...channelRecords.map(record => record.type),
+          ];
+          let imported: ReturnType<typeof orchestrator.importTemplate>;
+          try {
+            imported = orchestrator.importTemplate(parsed.template, {
+              caller,
+              ...(typeof body.name === "string" && body.name.trim() !== "" ? { name: body.name.trim() } : {}),
+              ...(shareId !== undefined ? { shareId } : {}),
+              ...(typeof body.boxId === "string" && registry.boxById(body.boxId) !== undefined ? { boxId: body.boxId } : {}),
+              connected,
+              log,
+            });
+          } catch (error) {
+            send(res, 409, { error: error instanceof Error ? error.message : String(error) });
+            return;
+          }
+          const { agent, pending } = imported;
+          broadcast({ type: "template_import", agentId: agent.id, agentName: agent.profile.name, summary: `Adding ${parsed.template.profile.name}…`, complete: false });
+          void imported.settled.then(result => {
+            broadcast({
+              type: "template_import",
+              agentId: agent.id,
+              agentName: agent.profile.name,
+              summary: result?.summary ?? `Added ${agent.profile.name}, but there was no box to install its recipe into.`,
+              complete: true,
+            });
+          });
+          send(res, 200, { id: agent.id, name: agent.profile.name, templateId: imported.id, pending });
+          return;
+        }
+
+        // Export is a conversation: the button sends the bot the sentence, the bot follows the
+        // export-template skill and stages a version with PackTemplate.
+        if (route === "POST /api/templates/share") {
+          const body = await readJson(req);
+          const agentId = String(body.agent ?? "");
+          if (refused(agentId)) return;
+          const agent = registry.tryGet(agentId);
+          if (agent === undefined) {
+            send(res, 404, { error: "No such agent." });
+            return;
+          }
+          const staged = orchestrator.stagedTemplates(agent.id);
+          const sentence = staged.length === 0
+            ? "Create a template of yourself that I can share with somebody else."
+            : "Update the shared template of yourself.";
+          void orchestrator
+            .prompt(agent.id, sentence, caller)
+            .catch(error => log(`template share for ${agent.profile.name} failed: ${error instanceof Error ? error.message : String(error)}`));
+          send(res, 202, { sent: sentence });
+          return;
+        }
+
+        if (route === "GET /api/templates/mine") {
+          const agentId = url.searchParams.get("agent") ?? "";
+          const agent = registry.tryGet(agentId);
+          if (agent === undefined) {
+            send(res, 404, { error: "No such agent." });
+            return;
+          }
+          const share = orchestrator.templateShareOf(agent.id);
+          send(res, 200, {
+            id: orchestrator.templateIdOf(agent.id),
+            versions: orchestrator.stagedTemplates(agent.id),
+            ...(share?.published ? { share } : {}),
+            canPublish: controlPlane() !== undefined,
+            ...(agent.profile.importedFrom !== undefined ? { importedFrom: agent.profile.importedFrom } : {}),
+          });
+          return;
+        }
+
+        // Publishing sends a staged version to the control plane, which hands back the link.
+        // The box speaks with its own token; the person clicked, so the audit names them here.
+        if (route === "POST /api/templates/publish" || route === "POST /api/templates/unpublish") {
+          const body = await readJson(req);
+          const agentId = String(body.agent ?? "");
+          if (refused(agentId)) return;
+          const control = controlPlane();
+          if (control === undefined) {
+            send(res, 400, { error: "This box is not attached to a control plane, so there is nowhere to publish a link. Download the file instead." });
+            return;
+          }
+          const agent = registry.tryGet(agentId);
+          if (agent === undefined) {
+            send(res, 404, { error: "No such agent." });
+            return;
+          }
+          try {
+            if (route.endsWith("/unpublish")) {
+              const share = orchestrator.templateShareOf(agent.id);
+              if (share === undefined) {
+                send(res, 404, { error: "Nothing is published for this agent." });
+                return;
+              }
+              const reply = await control.call(`/api/templates/${share.shareId}/unpublish`, "POST", {});
+              if (!reply.ok) {
+                send(res, reply.status, { error: reply.error });
+                return;
+              }
+              orchestrator.setTemplateShare(agent.id, { ...share, published: false });
+              log(`unpublished template ${share.shareId} of ${agent.profile.name}`);
+              send(res, 200, { ok: true });
+              return;
+            }
+            const wanted = Number(body.version);
+            const versions = orchestrator.stagedTemplates(agent.id);
+            const version = Number.isInteger(wanted) && wanted > 0 ? versions.find(entry => entry.version === wanted) : versions.at(-1);
+            if (version === undefined) {
+              send(res, 404, { error: "No staged version to publish. Ask the bot to draft one first." });
+              return;
+            }
+            const visibility = body.visibility === "tenant" ? "tenant" : "public";
+            const document = readFileSync(version.path, "utf8");
+            const staged = await control.call("/api/templates", "POST", {
+              document,
+              sourceAgentId: agent.id,
+              visibility,
+              ...(caller.userId !== undefined ? { ownerUserId: caller.userId, ownerName: caller.userId } : {}),
+            });
+            if (!staged.ok) {
+              send(res, staged.status, { error: staged.error });
+              return;
+            }
+            const shareId = String(staged.body.shareId);
+            const remoteVersion = Number(staged.body.version);
+            const published = await control.call(`/api/templates/${shareId}/publish`, "POST", { version: remoteVersion });
+            if (!published.ok) {
+              send(res, published.status, { error: published.error });
+              return;
+            }
+            const share = { shareId, url: typeof published.body.url === "string" ? published.body.url : undefined, visibility, version: version.version, published: true };
+            orchestrator.setTemplateShare(agent.id, share);
+            log(`published template ${shareId} of ${agent.profile.name} (${visibility})${share.url === undefined ? "" : ` at ${share.url}`}`);
+            send(res, 200, { ok: true, share });
+          } catch (error) {
+            send(res, 502, { error: `The control plane did not answer: ${error instanceof Error ? error.message : String(error)}` });
+          }
+          return;
+        }
+
+        // A shared template by id, fetched from the control plane with this box's token: the
+        // storefront for the dialog, then the document for the import.
+        if (route === "GET /api/templates/preview") {
+          const control = controlPlane();
+          const shareId = url.searchParams.get("shareId") ?? "";
+          if (control === undefined || !/^[A-Za-z0-9_-]{21}$/.test(shareId)) {
+            send(res, 400, { error: control === undefined ? "This box is not attached to a control plane." : "That is not a share id." });
+            return;
+          }
+          try {
+            const reply = await control.call(`/api/templates/${shareId}/document`, "GET");
+            if (!reply.ok) {
+              send(res, reply.status, { error: reply.error });
+              return;
+            }
+            send(res, 200, reply.body);
+          } catch (error) {
+            send(res, 502, { error: `The control plane did not answer: ${error instanceof Error ? error.message : String(error)}` });
+          }
+          return;
+        }
+
+        // The document itself, as a file a person hands to somebody else.
+        if (route === "GET /api/templates/download") {
+          const agentId = url.searchParams.get("agent") ?? "";
+          const wanted = Number(url.searchParams.get("version") ?? "");
+          const versions = orchestrator.stagedTemplates(agentId);
+          const version = Number.isInteger(wanted) && wanted > 0 ? versions.find(entry => entry.version === wanted) : versions.at(-1);
+          if (version === undefined) {
+            send(res, 404, { error: "No staged template." });
+            return;
+          }
+          const text = readFileSync(version.path, "utf8");
+          const filename = `${slugify(version.name || "bot")}.lumenbox-template.json`;
+          res.writeHead(200, {
+            "content-type": "application/json; charset=utf-8",
+            "content-disposition": `attachment; filename="${filename}"`,
+          });
+          res.end(text);
+          return;
+        }
+
+        // A paused routine is one frontmatter line; turning it on or off is that line.
+        if (route === "POST /api/schedules/resume" || route === "POST /api/schedules/pause") {
+          if (refused()) return;
+          const body = await readJson(req);
+          const slug = String(body.slug ?? "").trim();
+          const box = orchestrator.boxClient();
+          if (box === undefined || !/^[A-Za-z0-9._-]+$/.test(slug)) {
+            send(res, 400, { error: box === undefined ? "No box is connected." : "That is not a skill slug." });
+            return;
+          }
+          const path = `${SKILLS_DIR}/${slug}/${SKILL_FILENAME}`;
+          try {
+            const existing = await box.readFile(path);
+            const resumed = route.endsWith("/resume");
+            if (resumed) {
+              const left = unresolvedPlaceholders(existing.content);
+              if (left.length > 0) {
+                send(res, 409, { error: `${slug} still has placeholders to fill in: ${left.map(id => `{${id}}`).join(", ")}. Edit the file first.` });
+                return;
+              }
+            }
+            const updated = resumed
+              ? rewriteFrontmatter(existing.content, { drop: ["paused"] })
+              : rewriteFrontmatter(existing.content, { set: { paused: "true" } });
+            await box.writeFile(path, updated);
+            log(`${resumed ? "resumed" : "paused"} ${slug}${caller.userId === undefined ? "" : ` for ${caller.userId}`}`);
+            send(res, 200, { ok: true, paused: !resumed });
+          } catch (error) {
+            send(res, 404, { error: `Could not read ${path}: ${error instanceof Error ? error.message : String(error)}` });
+          }
+          return;
+        }
+
         if (route === "POST /api/agents") {
           if (refused()) return;
           const body = await readJson(req);
@@ -3697,9 +4131,15 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
             send(res, 400, { error: tools.message });
             return;
           }
+          const boxId = typeof body.boxId === "string" && body.boxId.trim() !== "" ? body.boxId.trim() : undefined;
+          if (boxId !== undefined && registry.boxById(boxId) === undefined) {
+            send(res, 400, { error: `No box with id ${boxId}.` });
+            return;
+          }
           const created = registry.create({
             name,
             description: String(body.description ?? ""),
+            ...(boxId !== undefined ? { boxId } : {}),
             ...(typeof body.title === "string" && body.title.trim() !== ""
               ? { title: body.title.trim() }
               : {}),
@@ -3935,18 +4375,18 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
 
     // And the role, not only the token: this socket is bidirectional, so authorising it as though
     // it only carried pixels is what let someone who may only watch drive the desktop instead.
-    const upstreamPath = desktopUpstreamPath(
+    const desktop = desktopRouteOf(
       pathname ?? "",
       query ? `?${query}` : "",
       mayDrive(callerOf(req.headers, upgradeDecision.allow))
     );
 
-    if (!upstreamPath) {
+    if (!desktop) {
       clientSocket.destroy();
       return;
     }
 
-    void openUpgrade(req, clientSocket, head, upstreamPath);
+    void openUpgrade(req, clientSocket, head, desktop.upstream, desktop.boxId);
   });
 
   /** The RFB socket, joined to whichever host port boxd is published on right now. */
@@ -3954,9 +4394,10 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
     req: IncomingMessage,
     clientSocket: Socket,
     head: Buffer,
-    upstreamPath: string
+    upstreamPath: string,
+    boxId?: string
   ): Promise<void> {
-    const origin = await resolveBoxdOrigin();
+    const origin = await resolveBoxdOrigin(false, boxId);
     if (!origin) {
       clientSocket.destroy();
       return;
@@ -4017,6 +4458,11 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
   // second secret to store. Assigned before anything can serve a request.
   sessionSecret = sessionKey(token);
   await new Promise<void>(resolve => server.listen(options.port, host, resolve));
+  // Where a job in the box reaches this server (docs/33 §1), and the lease renewal that ends a
+  // route when its job is gone.
+  orchestrator.mcpFace.baseUrl = faceBaseUrl(options.port);
+  const renewRoutes = setInterval(() => void orchestrator.mcpFace.renew(), RENEW_EVERY_MS);
+  renewRoutes.unref();
 
   const address = server.address();
   const port = typeof address === "object" && address ? address.port : options.port;
@@ -4074,38 +4520,29 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
  * ours — and pointer-events pass through, so it labels without getting in the way.
  * An empty notice injects nothing; a page with no </body> is returned untouched.
  */
-/**
- * Whether this desktop request is the page that should carry the box-class banner:
- * vnc.html opened on its own. The main UI's iframe rides with embedded=1 and gets no
- * banner — #boxnotice already says the same sentence directly above the frame, and
- * inside it the banner only said it twice while covering the desktop's top edge.
- */
-export function wantsDesktopNotice(path: string): boolean {
-  return /\/vnc\.html/.test(path) && !/[?&]embedded=1(?:&|$)/.test(path);
-}
-
-export function injectDesktopNotice(html: string, notice: string): string {
-  if (notice === "" || !html.includes("</body>")) return html;
-  const escaped = notice
-    .replace(/&/g, "&amp;")
-    .replace(/</g, "&lt;")
-    .replace(/>/g, "&gt;");
-  const banner =
-    '<div style="position:fixed;top:0;left:0;right:0;z-index:2147483647;' +
-    "background:rgba(138,90,0,.92);color:#fff;font:12px/1.6 sans-serif;" +
-    'padding:4px 12px;text-align:center;pointer-events:none">' +
-    `${escaped}</div>`;
-  return html.replace("</body>", `${banner}</body>`);
-}
+// The desktop page carried a box-class banner until 2026-09-02; it is gone (see proxyDesktop),
+// and the sentence lives in the main UI's #boxnotice only.
 
 export function desktopUpstreamPath(
   pathname: string,
   search: string,
   canDrive: boolean
 ): string | undefined {
-  const match = /^\/desktop\/(\d+)(\/.*)?$/.exec(pathname);
+  return desktopRouteOf(pathname, search, canDrive)?.upstream;
+}
+
+/**
+ * `/desktop/<index>/…` is the installation's own box; `/desktop/b/<boxId>/<index>/…` is an
+ * attached one (docs/30). Both map to boxd's `/vnc/<index>/…` on the box named.
+ */
+export function desktopRouteOf(
+  pathname: string,
+  search: string,
+  canDrive: boolean
+): { boxId: string | undefined; upstream: string } | undefined {
+  const match = /^\/desktop\/(?:b\/([A-Za-z0-9_-]+)\/)?(\d+)(\/.*)?$/.exec(pathname);
   if (!match) return undefined;
-  const rest = match[2] ?? "/";
-  return `/${canDrive ? "vnc" : "vnc-ro"}/${match[1]}${rest}${search}`;
+  const rest = match[3] ?? "/";
+  return { boxId: match[1], upstream: `/${canDrive ? "vnc" : "vnc-ro"}/${match[2]}${rest}${search}` };
 }
 

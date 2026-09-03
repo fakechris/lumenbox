@@ -9,7 +9,7 @@
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
@@ -230,5 +230,28 @@ test("a ledger written before workId existed still replays", () => {
     assert.equal(turn?.workId, undefined);
   } finally {
     cleanup();
+  }
+});
+
+test("a begin record says which model, which build and which prompt produced the turn (R24)", () => {
+  const root = mkdtempSync(join(tmpdir(), "agentbox-resume-stamp-"));
+  try {
+    const path = join(root, "turns.jsonl");
+    new TurnLedger(path).begin({
+      id: "t-stamp",
+      agentId: "a1",
+      about: "stamped",
+      model: "MiniMax-M3",
+      build: { version: "0.31.0", commit: "abc1234" },
+      promptHash: "0123456789abcdef",
+    });
+    const record = JSON.parse(readFileSync(path, "utf8").trim()) as Record<string, unknown>;
+    assert.equal(record.model, "MiniMax-M3");
+    assert.deepEqual(record.build, { version: "0.31.0", commit: "abc1234" });
+    assert.equal(record.promptHash, "0123456789abcdef");
+    // Still an open turn to the resumer, which ignores the stamp.
+    assert.equal(new TurnLedger(path).interrupted().length, 1);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
   }
 });

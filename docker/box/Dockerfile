@@ -106,12 +106,14 @@ COPY box-init /usr/local/bin/box-init
 COPY box-healthcheck /usr/local/bin/box-healthcheck
 COPY wait-compositor /usr/local/bin/wait-compositor
 COPY vnc-probe /usr/local/bin/vnc-probe
+COPY box-keepalive /usr/local/bin/box-keepalive
 RUN chmod +x /usr/local/bin/entrypoint.sh /usr/local/bin/start-display \
       /usr/local/bin/box-chrome /usr/local/bin/box-clip \
       /usr/local/bin/box-doctor /usr/local/bin/box-init \
       /usr/local/bin/box-healthcheck \
       /usr/local/bin/wait-compositor \
-      /usr/local/bin/vnc-probe
+      /usr/local/bin/vnc-probe \
+      /usr/local/bin/box-keepalive
 
 # Chromium's managed policy. Two things it turns off, both of which are traps for an
 # agent rather than merely untidy:
@@ -149,7 +151,12 @@ EXPOSE 1337 7777
 #    checks. It also gives a vision model landmarks to orient by.
 #
 #    wmctrl for window and workspace management, which xdotool cannot do.
-#    adwaita-icon-theme so the launchers render as icons rather than blanks.
+#    adwaita-icon-theme for the GTK stock, and tango-icon-theme for the application
+#    icons the launchers name (utilities-terminal, system-file-manager, web-browser):
+#    Debian 13's adwaita-icon-theme 48 dropped every fullcolor application icon, so
+#    the desktop and the dock went blank on the trixie bump (2026-09-02) — seen as blue
+#    "missing" diamonds on the desktop and an empty dock. Tango carries them all, is
+#    11 MB, and is what GTK is pointed at in settings.ini below.
 #
 #    fonts-noto-cjk because without it every Chinese, Japanese and Korean character
 #    renders as a tofu box. It fails in the worst way for an agent: the page loads, the
@@ -173,7 +180,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
       xterm xfce4-terminal thunar pcmanfm wmctrl dconf-cli \
       picom plank \
       autocutsel xclip \
-      adwaita-icon-theme fonts-noto-cjk \
+      adwaita-icon-theme tango-icon-theme fonts-noto-cjk \
     && rm -rf /var/lib/apt/lists/*
 
 # A wallpaper, generated rather than shipped: ffmpeg is already here, and a real
@@ -223,6 +230,9 @@ RUN mkdir -p /home/box/Desktop /home/box/.config/pcmanfm/default \
       'Launcher=file:///home/box/Desktop/terminal.desktop' \
       > /home/box/.config/plank/dock1/launchers/terminal.dockitem \
     && chmod +x /home/box/Desktop/*.desktop \
+    && mkdir -p /home/box/.config/gtk-3.0 \
+    && printf '%s\n' '[Settings]' 'gtk-icon-theme-name=Tango' 'gtk-theme-name=Adwaita' \
+      > /home/box/.config/gtk-3.0/settings.ini \
     && chown -R box:box /home/box/Desktop /home/box/.config \
     # A copy the image owns. /home/box/.config is a volume at runtime, so it outlives
     # the image: without re-seeding from here on every start, an old volume would keep

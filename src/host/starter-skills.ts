@@ -26,6 +26,7 @@ import { readdirSync, readFileSync, statSync } from "node:fs";
 import { dirname, join, relative } from "node:path";
 import { SKILLS_DIR } from "./skills.ts";
 import { catalogDataDir, hubSkillSlugs } from "./catalog.ts";
+import { templatesEnabled } from "./template.ts";
 
 /** Records which starters have ever been offered, so deletion and novelty stay distinct. */
 export const SEEDED_MARKER = ".seeded";
@@ -284,6 +285,72 @@ Given a csv, xlsx, or a folder of tables, write \`/home/box/work/briefs/<slug>.m
 Python in the box is allowed for the arithmetic. The brief is the product, not a notebook.
 `,
   },
+  {
+    // The conversation that packs a template (docs/29 §4). Served from the host like Grok
+    // Bot serves its export skill from the server, so the wording can change without a
+    // client release; the tool it ends in is PackTemplate.
+    slug: "export-template",
+    content: `---
+name: export-template
+description: Create a shareable template of yourself. Use when the person wants to share, export, or make a template of this bot; ends in one PackTemplate call.
+---
+A template is a shareable copy of you: the profile, the memories that are conventions,
+the skills, the routines, and the names of the connectors the work needs. You choose what
+goes in, rewrite what has to be generalised, and call PackTemplate once. The person then
+publishes or downloads it from the card; nothing is shared until they do.
+
+## 1. Read, and say so as you go
+
+Read in this order, and after each one send one short conversational line with counts and
+names — "Just read through my routines: weekly-digest and pr-babysitter." Never paste file
+contents or a draft.
+
+- **Memories.** Recall, or ~/work/memory/<your name>/profile.md. Facts and pitfalls only;
+  episodes and notes are one installation's history and never travel. Do not read another
+  agent's memory.
+- **Skills.** List ~/work/skills and read the job text of each of yours. Note the folder
+  slug. A skill with scope: agent and someone else's owner is theirs, not yours.
+- **Routines.** The skills with a schedule: or trigger:. Note the folder slug.
+- **Connectors.** What this conversation and the kept routines actually used: feishu,
+  dingtalk, telegram, browser, mcp:<server>. Names only.
+
+## 2. Choose
+
+Two separate decisions. What to include is workflow versus this person's private life:
+leave out anything that is only theirs. Judge each memory, skill and routine on its own —
+a convention sitting next to a secret is still a convention.
+
+Whatever the audience, leave out secrets, credentials, people's names, private links and
+trade secrets. When a sensitive bit is one part of a useful item, take the bit out and keep
+the rest: "send Meg the Monday staffing plan" becomes "send your staffing lead the Monday
+staffing plan". Omit an item only when the sensitive part is the whole of it. Phrases like
+"the watched repo" or "the team channel" are already general — keep those.
+
+Chat keys, agent names and the timezone inside a routine become {placeholders} on their
+own; you do not have to strip them. Do say who has to fill what in, in your own words,
+when you present the card.
+
+Do not say "scrub" to the person. Do not edit a live skill or memory to generalise it —
+pass the rewritten text to PackTemplate instead.
+
+## 3. Call
+
+Send one line of what you are keeping versus leaving out — "Keeping 3 memories, 2 skills
+and the weekly digest; leaving out the personal notes." — then call PackTemplate once
+with: a short storefront description (a sentence or three: what it does, who it is for),
+the memories in their original words minus what you took out, the skills and routines by
+slug with a body only where you rewrote it, the connector names, and the getting-started
+skill if one of them is the one a new copy should read first.
+
+If PackTemplate refuses — a credential, a memory about a person — take that item out and
+call again. If it left something out, tell the person in a sentence. The person cannot edit
+the card; if they want a change they tell you, and you call again.
+
+If anything was a gray area — might be a trade secret, too specific to this company, a
+connector you are not sure the routine needs — say so in one short note after the card,
+without quoting the sensitive part. If nothing was, add nothing.
+`,
+  },
 ];
 
 /** Uploads whichever starter skills this box has never been offered. */
@@ -311,8 +378,11 @@ export async function seedStarterSkills(
     const markerText = typeof raw?.stdout === "string" ? raw.stdout : undefined;
 
     const hub = hubSkillSlugs();
+    // The export skill only where sharing is on: a box with AGENTBOX_TEMPLATES=0 has no tool for
+    // the skill to end in, and a recipe that ends nowhere teaches the wrong thing.
+    const starters = STARTERS.filter(skill => skill.slug !== "export-template" || templatesEnabled());
     const missing = unseededStarters(markerText, existing, [
-      ...STARTERS,
+      ...starters,
       ...hub.map(slug => ({ slug })),
     ]);
     if (missing.length === 0) return;
@@ -322,7 +392,7 @@ export async function seedStarterSkills(
     // deliberately, through the shell.
     const dirs = missing.map(slug => `${SKILLS_DIR}/${slug}`).join(" ");
     await box.exec(`mkdir -p ${dirs}`, { timeoutMs: 15_000, actor: "host:starter-skills" });
-    for (const skill of STARTERS) {
+    for (const skill of starters) {
       if (!missing.includes(skill.slug)) continue;
       await box.uploadFile(
         `${SKILLS_DIR}/${skill.slug}/SKILL.md`,
@@ -337,7 +407,7 @@ export async function seedStarterSkills(
     // The marker records everything offered as of now: what the marker already said,
     // what was on disk (a pre-marker install has skills the marker never heard of, and
     // deleting one of those should also stick), and what was just seeded.
-    const starterSlugs = new Set([...STARTERS.map(skill => skill.slug), ...hub]);
+    const starterSlugs = new Set([...starters.map(skill => skill.slug), ...hub]);
     const offered = new Set<string>(missing);
     for (const line of (markerText ?? "").split("\n")) {
       if (line.trim() !== "") offered.add(line.trim());

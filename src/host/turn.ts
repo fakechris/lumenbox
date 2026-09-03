@@ -6,6 +6,8 @@
  * background work, and the abort has to land between tool calls.
  */
 
+import { createHash } from "node:crypto";
+import { buildInfo } from "./build-info.ts";
 import { envNumber } from "../config.ts";
 import { randomUUID } from "node:crypto";
 import type Anthropic from "@anthropic-ai/sdk";
@@ -17,6 +19,8 @@ import type { PolicyGate } from "./policy.ts";
 import type { Claims } from "./claims.ts";
 import type { FileVersions } from "./files.ts";
 import type { TurnLedger } from "./resume.ts";
+import type { PendingWork } from "./pending-work.ts";
+import type { McpFace } from "./mcp-face.ts";
 import type { Skill } from "./skills.ts";
 import {
   classifyLimit,
@@ -38,6 +42,7 @@ import { chooseRelevant } from "./memory.ts";
 import { needsReview, type ReviewInput, type ReviewMode, type Verdict } from "./auto-review.ts";
 import type { HookRunner } from "./hooks.ts";
 import { AGENT_WAKE_CUE } from "../agents/bus.ts";
+import { TEMPLATE_CUE, TEMPLATE_SETUP_TOOLS } from "./template.ts";
 import {
   activeWindow,
   buildSummaryPrompt,
@@ -67,8 +72,29 @@ import {
 } from "./compaction.ts";
 import { DURABLE_RESULT_CHARS, type ResolutionConfig } from "../protocol/index.ts";
 import type { BoxClass } from "../box/access.ts";
-import { emptySectionFaults, buildSystemPromptParts, buildTurnPrompt } from "./prompt.ts";
-import { BOOKKEEPING_TOOLS, buildTools, dispatchTool, type ToolContext, type ToolOutcome } from "./tools.ts";
+import { emptySectionFaults, buildSystemPromptParts, buildTurnPrompt,
+  turnReminderFor,
+} from "./prompt.ts";
+import {
+  closingNudge,
+  guardFor,
+  guardsEnabled,
+  MAX_GUARD_NUDGES,
+  nudgeFor,
+  readsAsChinese,
+  type GuardReason,
+} from "./guards.ts";
+import {
+  BOOKKEEPING_TOOLS,
+  FORK_PROMPT_LINE,
+  isForkConversation,
+  PARALLEL_SAFE_TOOLS,
+  PARALLEL_TOOL_LIMIT,
+  buildTools,
+  dispatchTool,
+  type ToolContext,
+  type ToolOutcome,
+} from "./tools.ts";
 import type { HostRunner } from "./host-runner.ts";
 import type { Vault } from "./vault.ts";
 import type { TaskStore } from "./tasks.ts";
@@ -364,6 +390,10 @@ export interface TurnDeps {
   autoReview?: { mode(): ReviewMode; review(input: ReviewInput): Promise<Verdict> };
   /** Records which agent wrote into a skill. Absent means no record is kept. */
   skillProvenance?: ToolContext["skillProvenance"];
+  /** The template this turn installs, when it is an imported bot's setup turn (docs/29). */
+  templateSetup?: string;
+  /** Where a packed template is staged; absent withholds PackTemplate. */
+  templates?: ToolContext["templates"];
   /** Lifecycle hooks in Claude Code's dialect (hooks.ts). Absent means none are configured. */
   hooks?: HookRunner;
   resolution: ResolutionConfig | undefined;
@@ -384,6 +414,12 @@ export interface TurnDeps {
    * that should not touch the state directory wants.
    */
   turns?: TurnLedger;
+  /** The fork ledger (docs/32): forks are recorded before they start and committed here. */
+  pendingWork?: PendingWork;
+  /** The MCP face (docs/33), for Delegate. */
+  mcpFace?: McpFace;
+  /** What kind of box this agent's is, for Delegate's face decision. */
+  boxKind?: "docker" | "attached";
   /**
    * The ledger handle for this turn, when it is a resumption of an earlier one.
    *
@@ -415,6 +451,15 @@ export type TurnEvent = TurnEventBody & { conversation?: string };
 
 type TurnEventBody =
   | { type: "text"; agentId: string; agentName: string; delta: string }
+  /**
+   * The model's opening line on a person-opened turn, said alongside its first tool calls
+   * (docs/31 layer 1a). Delivered to the chat at once so the person sees the acknowledgement
+   * while the tools run; not part of the final reply, which `replySince` still assembles
+   * from plain entries only. Once per turn.
+   */
+  | { type: "interim"; agentId: string; agentName: string; text: string }
+  /** A delegated engine called one of the host's MCP tools through its route (docs/33). */
+  | { type: "delegate_call"; agentId: string; agentName: string; tool: string; ok: boolean; ms: number }
   | { type: "tool_start"; agentId: string; agentName: string; tool: string; input: unknown }
   | {
       type: "tool_end";
@@ -1147,9 +1192,10 @@ export async function runTurn(
   const cache = provider.promptCaching
     ? ({ cache_control: { type: "ephemeral" } } as const)
     : {};
+  const forkLine = isForkConversation(conversation) ? `\n\n${FORK_PROMPT_LINE}` : "";
   const system: Anthropic.TextBlockParam[] = [
     { type: "text", text: promptParts.stable, ...cache },
-    { type: "text", text: promptParts.volatile, ...cache },
+    { type: "text", text: promptParts.volatile + forkLine, ...cache },
   ];
 
   // A stop belongs to the turn that was running. Clearing it as the next turn starts means a
@@ -1245,9 +1291,14 @@ export async function runTurn(
     meter,
   });
 
+  // The per-turn reminder rides the API copy of the person's message only (docs/31 layer
+  // 2b): the transcript keeps what the person said, and a later replay re-appends nothing.
+  const opener = inbound.some(message => message.fromId === "user")
+    ? turnReminderFor(provider.model, turnText)
+    : undefined;
   const messages: Anthropic.MessageParam[] = [
     ...historyToMessages(history),
-    { role: "user", content: turnText },
+    { role: "user", content: opener === undefined ? turnText : `${turnText}\n\n${opener}` },
   ];
 
   registry.appendTranscript(agent.id, {
@@ -1272,11 +1323,18 @@ export async function runTurn(
     conversation === MAIN_CONVERSATION
       ? undefined
       : deps.scopes?.boundTo(conversation, conversationIdFor);
-  const effectiveTools = narrowTools(scope?.tools ?? agent.profile.tools, chatScope?.tools);
+  const narrowed = narrowTools(scope?.tools ?? agent.profile.tools, chatScope?.tools);
+  // A template setup turn holds files and memory and a way to ask, nothing that reaches out
+  // (docs/29 §5.3): the recipe it is installing is third-party text, and installing yourself
+  // is not a reason to message anyone. Withheld, not refused, like every other narrowing.
+  const effectiveTools =
+    deps.templateSetup === undefined
+      ? narrowed
+      : TEMPLATE_SETUP_TOOLS.filter(tool => narrowed === undefined || narrowed.includes(tool));
   // The tools other people wrote, narrowed by the same allowlist as ours: an MCP tool
   // is an ordinary tool once it arrives, including in what an agent's profile and its
   // scope are allowed to withhold.
-  const allowedMcp = (deps.mcp?.tools() ?? []).filter(
+  const allowedMcp = (deps.templateSetup !== undefined ? [] : (deps.mcp?.tools() ?? [])).filter(
     tool => effectiveTools === undefined || effectiveTools.includes(tool.name)
   );
   // Past a certain number they stop being a list and start being a document that every
@@ -1335,12 +1393,30 @@ export async function runTurn(
     // for pixels with the room. Side conversations keep shell, files and the rest and
     // do their work headless — which is what lets them run at the same time as the room.
     conversation === MAIN_CONVERSATION,
-    deps.docReader !== undefined
-  ).concat(mcpTools);
+    deps.docReader !== undefined,
+    deps.templates !== undefined,
+    isForkConversation(conversation)
+    // MCP tools are outward channels too — a fork gets none (docs/32 §2).
+  ).concat(isForkConversation(conversation) ? [] : mcpTools);
 
   // One entry per completed round, for the loop and progress judgements. Held out here rather than
   // inside runRounds so a continuation can reset it: a fresh budget deserves a fresh judgement.
   const rounds: RoundRecord[] = [];
+  // Whether the person has already been handed the model's opening line this turn (docs/31
+  // layer 1a). Turn-scoped, not round-scoped: a continuation restarts the round count and
+  // must not greet them twice.
+  let interimDelivered = false;
+  const personOpened = inbound.some(message => message.fromId === "user");
+  // How many tool calls this turn has made, across continuations: the structural signal the
+  // guards read (docs/31 layer 1e). A ruling reached with this at zero is a ruling from memory.
+  let toolCallsInTurn = 0;
+  // Guard bookkeeping: how many times the model was sent back, whether a send-back is
+  // awaiting its answer (so the answer can be logged as complied or not), and whether the
+  // closing nudge has been spent.
+  let guardNudges = 0;
+  let guardPending: GuardReason | undefined;
+  let closingNudged = false;
+  const chinese = readsAsChinese(inbound.map(message => message.text).join("\n"));
 
   // The ledger opens here, not during setup. Its job is to record that a turn was *executing* — a
   // model call, a tool — when the process died, so the next startup resumes it. Everything above is
@@ -1356,6 +1432,12 @@ export async function runTurn(
     ...(deps.resumeOf !== undefined
       ? { resumeOf: deps.resumeOf.id, attempt: deps.resumeOf.attempt }
       : {}),
+    // Which model, which build, which prompt (R24). The hash covers the prompt as assembled
+    // for round one; the volatile half is rebuilt on continuation, and that rewrite is the
+    // same code with newer state, not a different prompt.
+    model: provider.model,
+    build: buildInfo(),
+    promptHash: promptHashOf(promptParts.stable, promptParts.volatile),
   });
 
   try {
@@ -1409,7 +1491,7 @@ export async function runTurn(
       // re-running a plain score-based recall here quietly threw that choice away (audit 2026-09-01
       // #6). A fact remembered mid-turn reaches the next turn, not this one — the same freeze Grok
       // Bot applies per compaction epoch, and the reason the memory block stays byte-stable.
-      system[1] = { type: "text", text: buildParts(memoryRecall).volatile, ...cache };
+      system[1] = { type: "text", text: buildParts(memoryRecall).volatile + forkLine, ...cache };
 
       rounds.length = 0; // a fresh budget means a fresh judgement about looping
     }
@@ -1439,6 +1521,14 @@ export async function runTurn(
   let floorWarned = false;
   // Set once a Stop hook has sent the model back, so it can do so at most once per turn.
   let stopHookActive = false;
+  // True while the model is finishing: its last round made no tool calls and only a Stop hook
+  // kept the loop going. Steering is not taken then (R8) — a user message injected on a loop
+  // about to stop is a dangling turn the model never really answers; left queued, it opens
+  // the next turn with the whole of the model's attention instead.
+  let finishing = false;
+  // A one-round demand that the next response contain a tool call (docs/31 layer 1d/1e):
+  // set by a guard, spent by the next request, never carried further.
+  let forceTools: Anthropic.MessageCreateParams["tool_choice"] | undefined;
   for (let round = 0; round < MAX_ROUNDS; round++) {
     if (signal.aborted) {
       emit({ type: "aborted", agentId: agent.id });
@@ -1453,7 +1543,7 @@ export async function runTurn(
     // deserves its own turn and its own causal record, and that behaviour is pinned
     // by the race catalog. Appended at the tail, which keeps the provider's prefix
     // cache warm — the same reason compaction is the only mid-turn rewrite.
-    const steered = deps.bus.takeSteering(agent.id, conversation);
+    const steered = finishing ? [] : deps.bus.takeSteering(agent.id, conversation);
     if (steered.length > 0) {
       const steerText = buildTurnPrompt(steered);
       registry.appendTranscript(agent.id, {
@@ -1579,9 +1669,11 @@ export async function runTurn(
         system,
         tools,
         messages,
+        ...(forceTools !== undefined ? { tool_choice: forceTools } : {}),
       },
       { signal: attemptControl.signal }
     );
+    forceTools = undefined;
 
     // A stream can open and then deliver nothing. That is not a slow answer — a slow answer produces
     // tokens — and waiting on it forever is indistinguishable from a hang.
@@ -1856,11 +1948,59 @@ export async function runTurn(
       );
     }
 
+    if (guardPending !== undefined) {
+      console.error(
+        `[conduct] ${agent.profile.name}: guard ${guardPending} ${toolUses.length > 0 ? "complied (tool calls followed)" : "ignored (answered again without a tool)"}`
+      );
+      guardPending = undefined;
+    }
+
     if (toolUses.length === 0) {
       const finalText = response.content
         .filter((block): block is Anthropic.TextBlock => block.type === "text")
         .map(block => block.text)
         .join("");
+
+      // The guards (docs/31 layer 1e): a person-opened turn may not end on a verdict reached
+      // with no tool, an offer to check instead of a check, or a promise with no call. Bounded
+      // — twice per turn at most — logged, and the send-back kept out of the durable record:
+      // the model's text is filed as blocks so the record has it, but it is not a reply
+      // (`replySince` would have delivered the wrong verdict beside the corrected one).
+      const reason =
+        personOpened && guardsEnabled() && guardNudges < MAX_GUARD_NUDGES && finalText.trim() !== ""
+          ? guardFor(finalText, toolCallsInTurn)
+          : undefined;
+      if (reason !== undefined) {
+        guardNudges += 1;
+        guardPending = reason;
+        console.error(
+          `[conduct] ${agent.profile.name}: guard ${reason} fired (${guardNudges}/${MAX_GUARD_NUDGES}, ${toolCallsInTurn} tool calls so far): "${finalText.trim().slice(0, 80)}"`
+        );
+        registry.appendTranscript(agent.id, {
+          role: "assistant",
+          kind: "blocks",
+          blocks: response.content.filter((block): block is Anthropic.TextBlock => block.type === "text"),
+          at: new Date().toISOString(),
+        } satisfies TranscriptEntry, conversation);
+        messages.push({ role: "user", content: nudgeFor(reason, chinese) });
+        // A verdict or an offer is answered with a demand for a tool call, which is what the
+        // wires can now carry; a trailing intent is left to the model, which already named
+        // the action.
+        if (reason !== "trailing-intent") forceTools = { type: "any" };
+        finishing = false;
+        continue;
+      }
+
+      // The closing send (Grok Bot's `turnEndedOnSilentToolCalls`, docs/31 layer 1b): the
+      // person saw the opening line, then tools ran, then nothing. Once.
+      if (!finalText.trim() && personOpened && interimDelivered && !closingNudged && guardsEnabled()) {
+        closingNudged = true;
+        console.error(`[conduct] ${agent.profile.name}: closing nudge (acknowledged, ran tools, ended silent)`);
+        messages.push({ role: "user", content: closingNudge(chinese) });
+        finishing = false;
+        continue;
+      }
+
       if (finalText.trim()) {
         registry.appendTranscript(agent.id, {
           role: "assistant",
@@ -1879,6 +2019,7 @@ export async function runTurn(
           });
           if (hook.blocked && !stopHookActive) {
             stopHookActive = true;
+            finishing = true;
             const note = `[Stop hook] ${hook.reason ?? "continue"}`;
             registry.appendTranscript(agent.id, { role: "user", text: note, at: new Date().toISOString() } satisfies TranscriptEntry, conversation);
             messages.push({ role: "user", content: note });
@@ -1907,6 +2048,9 @@ export async function runTurn(
       console.error(`[turn] ${agent.profile.name}: ended with no text on round ${round}`);
       return;
     }
+    // Tool calls mean the model is working again, so steering is welcome at the next boundary.
+    finishing = false;
+    toolCallsInTurn += toolUses.length;
 
     // Text followed only by bookkeeping calls is not narration — it is the answer,
     // filed. Measured on t51: the agent wrote its whole analysis, then tidied up
@@ -1932,6 +2076,17 @@ export async function runTurn(
       } satisfies TranscriptEntry, conversation);
     }
 
+    // The opening line reaches the person while the tools run (docs/31 layer 1a). Grok Bot
+    // needs a SendToUser tool for this because its plain text is never shown; ours is, so
+    // the same effect is one event: the text the model said beside its first calls goes to
+    // the chat now, once, and stays out of the final reply. Measured on Bob's thread: the
+    // line "你说得对，我先查一下" had been filed as blocks and shown to nobody.
+    if (personOpened && !interimDelivered && toolUses.length > 0 && !filedAnswer && roundText.trim() !== "") {
+      interimDelivered = true;
+      emit({ type: "interim", agentId: agent.id, agentName: agent.profile.name, text: roundText.trim() });
+      console.error(`[conduct] ${agent.profile.name}: interim line delivered (${roundText.trim().length} chars)`);
+    }
+
     // Execute every requested tool and return all results in one user message.
     // Splitting them across messages trains the model out of parallel calls.
     //
@@ -1944,7 +2099,9 @@ export async function runTurn(
     const results: Anthropic.ToolResultBlockParam[] = [];
     /** Tool-use ids whose stored text differs from what the model was shown. */
     const withheld = new Map<string, string>();
-    for (const toolUse of toolUses) {
+    const runOne = async (
+      toolUse: Anthropic.ToolUseBlock
+    ): Promise<{ block: Anthropic.ToolResultBlockParam; recordAs?: string; commit?: { id: string; how: import("./pending-work.ts").CommitHow }[] }> => {
       emit({
         type: "tool_start",
         agentId: agent.id,
@@ -2016,14 +2173,23 @@ export async function runTurn(
             display: deps.display,
             displayIndex: deps.displayIndex,
             boxOwner: deps.boxOwner,
-            hostRunner: deps.hostRunner,
+            // A fork gets no host runner and no MCP client (docs/32 §2): a forged call for
+            // either lands on "unknown tool" rather than on a person or a credential.
+            hostRunner: isForkConversation(conversation) ? undefined : deps.hostRunner,
             vault: deps.vault,
             tasks: deps.tasks,
             scopes: deps.scopes,
-            mcp: deps.mcp,
+            mcp: isForkConversation(conversation) ? undefined : deps.mcp,
             askUser: deps.askUser,
             docReader: deps.docReader,
             skillProvenance: deps.skillProvenance,
+            workId,
+            ...(deps.pendingWork !== undefined ? { pendingWork: deps.pendingWork } : {}),
+            ...(deps.mcpFace !== undefined ? { mcpFace: deps.mcpFace } : {}),
+            ...(deps.boxKind !== undefined ? { boxKind: deps.boxKind } : {}),
+            allowedMcpTools: allowedMcp.map(tool => tool.name),
+            ...(deps.templateSetup !== undefined ? { templateSetup: deps.templateSetup } : {}),
+            ...(deps.templates !== undefined ? { templates: deps.templates } : {}),
             turnId,
             conversation,
           }
@@ -2069,11 +2235,47 @@ export async function runTurn(
           outcome = { ...outcome, text: `${outcome.text}\n\n[PostToolUse hook] ${hook.reason}` };
         }
       }
-      results.push(toolResultBlock(toolUse.id, outcome));
-      // Kept beside the result rather than inside it: what the API is sent and what the
-      // record keeps are two different things, and the block that goes to the model must
-      // not carry the substitute anywhere it could be mistaken for the answer.
-      if (outcome.recordAs !== undefined) withheld.set(toolUse.id, outcome.recordAs);
+      // `recordAs` kept beside the result rather than inside it: what the API is sent and
+      // what the record keeps are two different things, and the block that goes to the
+      // model must not carry the substitute anywhere it could be mistaken for the answer.
+      return {
+        block: toolResultBlock(toolUse.id, outcome),
+        ...(outcome.recordAs !== undefined ? { recordAs: outcome.recordAs } : {}),
+        ...(outcome.commit !== undefined ? { commit: outcome.commit } : {}),
+      };
+    };
+
+    // Reads run side by side, everything else alone, all in the model's order (docs/31
+    // layer 1c). Three searches asked for together used to cost three round-trips of wall
+    // time; the results still land in the order the calls were made, so nothing downstream
+    // can tell the difference except the clock.
+    const done: (Awaited<ReturnType<typeof runOne>> | undefined)[] = toolUses.map(() => undefined);
+    let at = 0;
+    while (at < toolUses.length) {
+      const first = toolUses[at]!;
+      if (!PARALLEL_SAFE_TOOLS.has(first.name)) {
+        done[at] = await runOne(first);
+        at += 1;
+        continue;
+      }
+      let until = at;
+      while (
+        until < toolUses.length &&
+        until - at < PARALLEL_TOOL_LIMIT &&
+        PARALLEL_SAFE_TOOLS.has(toolUses[until]!.name)
+      ) {
+        until += 1;
+      }
+      const batch = await Promise.all(toolUses.slice(at, until).map(use => runOne(use)));
+      batch.forEach((entry, offset) => {
+        done[at + offset] = entry;
+      });
+      at = until;
+    }
+    for (const entry of done) {
+      if (entry === undefined) continue;
+      results.push(entry.block);
+      if (entry.recordAs !== undefined) withheld.set(entry.block.tool_use_id, entry.recordAs);
     }
 
     // Persist the exchange as blocks, in the order the API requires: the calling
@@ -2097,6 +2299,11 @@ export async function runTurn(
       blocks: results.map(block => storableResult(block, withheld.get(block.tool_use_id))),
       at: new Date().toISOString(),
     } satisfies TranscriptEntry, conversation);
+    // Only now are a fork's findings durably the parent's (docs/32 §1): the results entry is
+    // on disk. Committing inside the tool would record `done` for findings a crash could
+    // still lose between the join and this line.
+    const toCommit = done.flatMap(entry => entry?.commit ?? []);
+    if (toCommit.length > 0) deps.pendingWork?.commit(toCommit);
 
     messages.push({ role: "user", content: results });
 
@@ -2212,14 +2419,17 @@ export function reviewInputFor(options: {
 }): ReviewInput {
   const trusted: string[] = [];
   const untrusted: string[] = [];
+  // A template setup cue is a user entry too, and its names — the template's, its creator's, its
+  // skills' — are third-party text; it goes on the untrusted side with the wakes.
+  const harnessSpeaking = (text: string): boolean => text.startsWith(AGENT_WAKE_CUE) || text.startsWith(TEMPLATE_CUE);
   for (const entry of options.transcript) {
     if (entry.role !== "user" || "kind" in entry || typeof entry.text !== "string") continue;
-    (entry.text.startsWith(AGENT_WAKE_CUE) ? untrusted : trusted).push(entry.text);
+    (harnessSpeaking(entry.text) ? untrusted : trusted).push(entry.text);
   }
   // The turn's own messages are usually already the transcript's last entries; only what is not
   // there yet is added, so nothing is shown to the classifier twice.
   for (const message of options.inbound) {
-    const side = message.fromId === "user" ? trusted : untrusted;
+    const side = message.fromId === "user" && !harnessSpeaking(message.text) ? trusted : untrusted;
     if (!trusted.includes(message.text) && !untrusted.includes(message.text)) side.push(message.text);
   }
   for (const message of options.messages) {
@@ -2236,4 +2446,11 @@ export function reviewInputFor(options: {
     input: options.input,
     why: options.why,
   };
+}
+
+/** A short, stable digest of an assembled prompt, for the turn ledger's `promptHash`. */
+export function promptHashOf(...parts: readonly string[]): string {
+  const hash = createHash("sha256");
+  for (const part of parts) hash.update(part).update("\u0000");
+  return hash.digest("hex").slice(0, 16);
 }

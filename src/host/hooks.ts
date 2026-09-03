@@ -121,6 +121,21 @@ export interface HookRunnerDeps {
   log?: (line: string) => void;
 }
 
+/**
+ * Why a hooks file must not be loaded, or undefined when it may be.
+ *
+ * Group- or world-writable, or owned by another user: either means someone who is not the
+ * operator could put a command here and have it run with the orchestrator's privileges. On
+ * platforms with no uid (Windows) only the mode bits are consulted, which is what exists.
+ */
+export function refuseHooksFile(stat: { mode: number; uid: number }, uid = process.getuid?.()): string | undefined {
+  if ((stat.mode & 0o022) !== 0) {
+    return `writable by group or others (mode ${(stat.mode & 0o777).toString(8)}); chmod 600 it`;
+  }
+  if (uid !== undefined && stat.uid !== uid) return `owned by uid ${stat.uid}, not by this process (uid ${uid})`;
+  return undefined;
+}
+
 export class HookRunner {
   private config: HooksConfig;
   private loadedAt = 0;
@@ -174,8 +189,20 @@ export class HookRunner {
         this.loadedAt = 0;
         return;
       }
-      const mtime = statSync(this.deps.path).mtimeMs;
+      const stat = statSync(this.deps.path);
+      const mtime = stat.mtimeMs;
       if (mtime === this.loadedAt) return;
+      // A hooks file is arbitrary command execution from the state directory (docs/10 S-9), so
+      // the one check that keeps it the operator's: it must be ours and only we may write it.
+      // A file somebody else could edit is not loaded at all — logged, and treated as empty
+      // until it is fixed, rather than trusted on the strength of its path.
+      const refusal = refuseHooksFile(stat);
+      if (refusal !== undefined) {
+        this.config = {};
+        this.loadedAt = mtime;
+        this.deps.log?.(`refusing ${this.deps.path}: ${refusal}`);
+        return;
+      }
       this.config = parseHooksConfig(JSON.parse(readFileSync(this.deps.path, "utf8")));
       this.loadedAt = mtime;
       const count = Object.values(this.config).reduce((sum, entries) => sum + entries.length, 0);

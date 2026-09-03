@@ -238,3 +238,21 @@ test("a box whose class cannot be read is treated as shared, not dropped", () =>
   assert.equal(warnings.length, 1);
   assert.match(warnings[0]!, /agentbox-typo/);
 });
+
+test("startupItem can be loaded and saved", () => {
+  withHome();
+  assert.equal(loadConfig().startupItem, undefined);
+
+  saveConfig({ startupItem: true });
+  assert.equal(loadConfig().startupItem, true);
+
+  saveConfig({ startupItem: false });
+  assert.equal(loadConfig().startupItem, undefined);
+
+  saveConfig({ startupItem: true });
+  assert.equal(loadConfig().startupItem, true);
+
+  saveConfig({ startupItem: null });
+  assert.equal(loadConfig().startupItem, undefined);
+});
+

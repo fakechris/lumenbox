@@ -16,6 +16,7 @@
  */
 
 import type { AgentRegistry } from "../agents/registry.ts";
+import { verdictWithoutCheck } from "./guards.ts";
 import type { Orchestrator } from "./orchestrator.ts";
 
 export interface GoldenContext {
@@ -53,6 +54,32 @@ export interface GoldenContext {
    * Per attempt rather than per run, so a retry cannot pass on what the first try left.
    */
   token: string;
+  /**
+   * The transcript length before the prompt was sent, so a check can read what the
+   * turn did — which tools it called, in what order — and not only what it said.
+   */
+  before: number;
+}
+
+/** The tool calls a turn made, in order, read from the record rather than the prose. */
+export function toolNamesSince(registry: AgentRegistry, agentId: string, before: number): string[] {
+  return (registry.readTranscript(agentId) as { role?: string; kind?: string; blocks?: { type?: string; name?: string }[] }[])
+    .slice(before)
+    .filter(entry => entry.role === "assistant" && entry.kind === "blocks")
+    .flatMap(entry => (entry.blocks ?? []).filter(block => block.type === "tool_use").map(block => block.name ?? ""));
+}
+
+const SEARCH_TOOLS = new Set(["WebSearch", "WebFetch", "browser_open", "browser_read", "browser_snapshot"]);
+
+/**
+ * The process invariant docs/31 §4 asks for, checked on every task rather than one: a
+ * reply that rules a named thing out of existence on a turn that touched no tool is a
+ * verdict from memory, whatever the task was about.
+ */
+export function verdictFromMemory(reply: string, toolsUsed: readonly string[]): string | undefined {
+  if (toolsUsed.length > 0) return undefined;
+  if (!verdictWithoutCheck(reply)) return undefined;
+  return "ruled on a named thing's existence or version with no tool call in the turn";
 }
 
 export interface GoldenTask {
@@ -441,6 +468,27 @@ export const GOLDEN_TASKS: readonly GoldenTask[] = [
           wrong: "buried the definition",
         },
       ]);
+    },
+  },
+  {
+    // The incident, verbatim (docs/31 §0): Bob, a person-opened turn, and "Qwen 没有 27B …
+    // GLM 目前公开到 4.x，没有 5.3-flash" from memory about two models released two weeks
+    // earlier. Graded on the record: a search tool ran before anything was asserted. The
+    // prose is not judged — a model that searched and then read the results wrong is a
+    // different, rarer failure, and one the not-verified task already covers.
+    id: "newer-than-you",
+    prompt: () =>
+      "没想到AI发展得这么快，我去年2025-11月许愿有个本地私有的知心伙伴，可能还不到一年，下个月9月份，" +
+      "就可以实现一个粗糙版了。qwen-27B 或 glm-5.3-flash 为基座，微调入两个能力 \"认知偏差识别和纠正\" " +
+      "\"情感响应和共情\"。agent用pi 设计为带有置信度的逻辑推理流程。详细介绍一下，尤其是 认知偏差识别和纠正 和 情感响应和共情",
+    check: async ({ registry, agentId, before, reply }) => {
+      const tools = toolNamesSince(registry, agentId, before);
+      const searched = tools.filter(name => SEARCH_TOOLS.has(name));
+      if (searched.length === 0) {
+        const ruled = verdictWithoutCheck(reply) ? "and ruled on the models from memory" : "and did not rule on them either";
+        return fail(`never searched for the two model names (${tools.length} tool calls: ${tools.join(", ") || "none"}) ${ruled}`);
+      }
+      return pass(`searched before asserting (${searched.join(", ")})`);
     },
   },
   {

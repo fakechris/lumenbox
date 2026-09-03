@@ -71,6 +71,18 @@ interface BeginRecord {
   about: string;
   /** Which conversation it ran in, when not the main one — so the resume lands in the same thread. */
   conversation?: string;
+  /**
+   * Which model, which code, and which prompt produced this turn (R24).
+   *
+   * "Did the regression start the day we swapped the model or the day we deployed" was
+   * unanswerable from our own records: usage rows carry the model, nothing carried the code,
+   * and the assembled prompt was never kept. The prompt itself is not stored — it can be
+   * thousands of lines and mostly repeats — but a hash of it is enough to say "the prompt
+   * changed between these two turns", which is the question that matters.
+   */
+  model?: string;
+  build?: { version: string; commit: string };
+  promptHash?: string;
 }
 
 interface EndRecord {
@@ -123,6 +135,9 @@ export interface InterruptedTurn {
   workId?: string;
 }
 
+/** `FORK_PREFIX` from tools.ts, repeated here to keep this file free of the tool module. */
+const FORK_CONVERSATION_PREFIX = "fork/";
+
 export class TurnLedger {
   private readonly path: string | undefined;
   private lines = 0;
@@ -150,6 +165,9 @@ export class TurnLedger {
     workId?: string;
     attempt?: number;
     conversation?: string;
+    model?: string;
+    build?: { version: string; commit: string };
+    promptHash?: string;
     now?: Date;
   }): string {
     const record: BeginRecord = {
@@ -162,6 +180,9 @@ export class TurnLedger {
       attempt: options.attempt ?? 1,
       about: options.about.replace(/\s+/g, " ").trim().slice(0, 200),
       ...(options.conversation !== undefined ? { conversation: options.conversation } : {}),
+      ...(options.model !== undefined ? { model: options.model } : {}),
+      ...(options.build !== undefined ? { build: options.build } : {}),
+      ...(options.promptHash !== undefined ? { promptHash: options.promptHash } : {}),
     };
     this.append(record);
     return record.id;
@@ -189,7 +210,27 @@ export class TurnLedger {
    * turn in flight. A second orchestrator against the same state directory would break that
    * assumption, which is the same assumption the single-box design makes everywhere else.
    */
-  interrupted(): InterruptedTurn[] {
+  /**
+   * Ends every open record in one conversation, for the fork ledger's startup sweep
+   * (docs/32 §1): a fork child interrupted by a restart is never resumed, so its record must
+   * not read as an interrupted turn. Returns how many were ended.
+   */
+  endIn(conversation: string, how: string, now = new Date()): number {
+    return this.endWhere(candidate => candidate === conversation, how, now);
+  }
+
+  /** Ends every open record whose conversation the predicate selects. */
+  endWhere(select: (conversation: string) => boolean, how: string, now = new Date()): number {
+    let ended = 0;
+    for (const turn of this.interrupted({ includeForks: true })) {
+      if (!select(turn.conversation ?? "")) continue;
+      this.end(turn.id, how, now);
+      ended += 1;
+    }
+    return ended;
+  }
+
+  interrupted(options: { includeForks?: boolean } = {}): InterruptedTurn[] {
     const open = new Map<string, InterruptedTurn>();
     for (const record of this.read()) {
       if (record.event === "begin") {
@@ -209,7 +250,12 @@ export class TurnLedger {
         open.delete(record.id);
       }
     }
-    return [...open.values()];
+    // A fork child's turn is never resumed across a restart: the fork ledger (docs/32) owns
+    // that conversation and settles it `dropped` before this is read. Skipped here as well,
+    // so a ledger that could not write is not a reason to resume a child nobody is joining.
+    return [...open.values()].filter(
+      turn => options.includeForks === true || !(turn.conversation ?? "").startsWith(FORK_CONVERSATION_PREFIX)
+    );
   }
 
   private append(record: LedgerRecord): void {

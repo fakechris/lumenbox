@@ -21,7 +21,19 @@
  */
 
 import { spawn } from "node:child_process";
-import { createWriteStream, existsSync, mkdirSync, openSync, readSync, statSync, closeSync } from "node:fs";
+import {
+  closeSync,
+  createWriteStream,
+  existsSync,
+  mkdirSync,
+  openSync,
+  readdirSync,
+  readFileSync,
+  readSync,
+  renameSync,
+  statSync,
+  writeFileSync,
+} from "node:fs";
 import { join } from "node:path";
 import { randomUUID } from "node:crypto";
 import type { JobStartedResult, JobStatus, JobWaitRequest, JobWaitResult } from "../protocol/index.ts";
@@ -39,10 +51,88 @@ interface Job {
   finished: Promise<void>;
 }
 
+/** The shape a caller-minted id must have. */
+export const JOB_ID = /^job-[0-9a-f]{8,32}$/;
+
 export class JobService {
   private readonly jobs = new Map<string, Job>();
 
-  constructor(private readonly dir: string = JOBS_DIR) {}
+  /**
+   * Reads the jobs directory at start (docs/32 slice two): a `<id>.exit` file is a job that
+   * ended while nobody was asking, listed with its exit code; a `<id>.log` with no exit
+   * file was running when the daemon last stopped and is listed `interrupted` — its
+   * process may be orphaned or gone, and only the log survives. Without this, a boxd
+   * restart made every job vanish from `/jobs`, and the host could not tell "finished" from
+   * "never existed".
+   */
+  constructor(private readonly dir: string = JOBS_DIR) {
+    this.recover();
+  }
+
+  private recover(): void {
+    let names: string[];
+    try {
+      names = readdirSync(this.dir);
+    } catch {
+      return;
+    }
+    const done = new Set(names.filter(name => name.endsWith(".exit")).map(name => name.slice(0, -".exit".length)));
+    for (const name of names) {
+      if (!name.endsWith(".log")) continue;
+      const jobId = name.slice(0, -".log".length);
+      if (!JOB_ID.test(jobId)) continue;
+      const logPath = join(this.dir, name);
+      let status: JobStatus;
+      if (done.has(jobId)) {
+        try {
+          const exit = JSON.parse(readFileSync(join(this.dir, `${jobId}.exit`), "utf8")) as Partial<JobStatus>;
+          status = {
+            job_id: jobId,
+            command: exit.command ?? "",
+            running: false,
+            exit_code: exit.exit_code ?? 1,
+            started_at: exit.started_at ?? "",
+            ...(exit.ended_at !== undefined ? { ended_at: exit.ended_at } : {}),
+            log_path: logPath,
+            log_bytes: 0,
+          };
+        } catch {
+          continue;
+        }
+      } else {
+        let startedAt = "";
+        try {
+          startedAt = statSync(logPath).birthtime.toISOString();
+        } catch {
+          // Unknown start is still a job.
+        }
+        status = { job_id: jobId, command: "", running: false, interrupted: true, started_at: startedAt, log_path: logPath, log_bytes: 0 };
+      }
+      this.jobs.set(jobId, { status, pid: -1, finished: Promise.resolve() });
+    }
+  }
+
+  /** Writes `<id>.exit` beside the log, atomically, so a later daemon can settle the job. */
+  private writeExit(status: JobStatus): void {
+    const path = join(this.dir, `${status.job_id}.exit`);
+    try {
+      const temp = `${path}.${process.pid}.tmp`;
+      writeFileSync(
+        temp,
+        JSON.stringify({
+          job_id: status.job_id,
+          command: status.command,
+          exit_code: status.exit_code,
+          started_at: status.started_at,
+          ended_at: status.ended_at,
+        })
+      );
+      renameSync(temp, path);
+    } catch {
+      // The log still says what happened; a missing exit file reads as interrupted, which is
+      // honest about what the daemon could not record.
+    }
+  }
 
   /**
    * Starts a command detached and answers immediately.
@@ -58,9 +148,18 @@ export class JobService {
     display?: number;
     nice: number;
     scrubbedEnv: NodeJS.ProcessEnv;
+    /** A caller-minted id; the same id twice returns the running job instead of a second one. */
+    jobId?: string;
   }): JobStartedResult {
     mkdirSync(this.dir, { recursive: true });
-    const jobId = `job-${randomUUID().slice(0, 8)}`;
+    if (input.jobId !== undefined) {
+      if (!JOB_ID.test(input.jobId)) throw new Error(`job_id must match ${JOB_ID}`);
+      const existing = this.jobs.get(input.jobId);
+      if (existing !== undefined) {
+        return { job_id: input.jobId, pid: existing.pid, log_path: existing.status.log_path };
+      }
+    }
+    const jobId = input.jobId ?? `job-${randomUUID().slice(0, 8)}`;
     const logPath = join(this.dir, `${jobId}.log`);
     const log = createWriteStream(logPath, { flags: "a" });
 
@@ -105,6 +204,7 @@ export class JobService {
         status.running = false;
         status.exit_code = code;
         status.ended_at = new Date().toISOString();
+        this.writeExit(status);
         if (note !== undefined) log.write(note);
         log.end();
         log.on("finish", () => resolve());

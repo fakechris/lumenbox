@@ -89,6 +89,15 @@ export interface AgentboxConfig {
    */
   mcpServers?: Record<string, { command: string; args?: string[]; env?: Record<string, string> }>;
   /**
+   * Skill directories beyond the box's own `/home/box/work/skills`, as paths inside the
+   * box, searched in this order after it (R26). The box's own directory always wins a
+   * slug collision — a skill you wrote beats one you installed — and a collision is
+   * reported in the skills index rather than silently resolved. What this makes
+   * consumable: the four-project skill format (a directory with SKILL.md, scripts/,
+   * references/) cloned anywhere in the box, without copying it into the working set.
+   */
+  skillRoots?: string[];
+  /**
    * Chats that asked for a daily digest, chatKey → local hour (0–23). Written by the
    * chat itself ("早报 8点" / "digest at 8"); in the file so the schedule survives a
    * restart, which is the whole difference between a digest and a reply.
@@ -107,6 +116,11 @@ export interface AgentboxConfig {
    * ahead of its use.
    */
   boxes?: Record<string, { access: BoxAccess; group?: string }>;
+  /**
+   * Whether LumenBox should be registered as a system startup/login item to
+   * launch automatically at boot/login.
+   */
+  startupItem?: boolean;
 }
 
 /**
@@ -246,6 +260,10 @@ export function loadConfig(onWarn: (message: string) => void = () => {}): Agentb
     ...(readMcpServers(raw.mcpServers, onWarn) !== undefined
       ? { mcpServers: readMcpServers(raw.mcpServers, onWarn) }
       : {}),
+    ...(readStringList(raw.skillRoots, "skillRoots", onWarn) !== undefined
+      ? { skillRoots: readStringList(raw.skillRoots, "skillRoots", onWarn) }
+      : {}),
+    ...(typeof raw.startupItem === "boolean" ? { startupItem: raw.startupItem } : {}),
   };
 }
 
@@ -450,6 +468,7 @@ export function saveConfig(
     hostExec?: AgentboxConfig["hostExec"] | null;
     /** Per-chat patch: a null hour removes that chat's digest, others are left alone. */
     digests?: Record<string, number | null>;
+    startupItem?: boolean | null;
   }
 ): string {
   const path = configPath();
@@ -494,6 +513,13 @@ export function saveConfig(
     }
     if (Object.keys(current).length > 0) raw.digests = current;
     else delete raw.digests;
+  }
+  if (changes.startupItem !== undefined) {
+    if (changes.startupItem === null || changes.startupItem === false) {
+      delete raw.startupItem;
+    } else {
+      raw.startupItem = true;
+    }
   }
   if (changes.env !== undefined) {
     const current =

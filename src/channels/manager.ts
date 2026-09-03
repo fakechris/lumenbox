@@ -385,7 +385,12 @@ export interface ChannelManagerDeps {
      * exact link is already to hand, and it closes the wrong task the moment a
      * conversation has two of them open.
      */
-    taskId?: string
+    taskId?: string,
+    /**
+     * The model's opening line, said beside its first tool calls, to hand to the chat at
+     * once (docs/31 layer 1a). Called at most once per turn, before the reply.
+     */
+    onInterim?: (text: string) => void
   ) => Promise<string>;
   /**
    * How many requests are ahead of a new one for this agent and chat. Zero means it
@@ -1717,6 +1722,10 @@ ${input.options.map(option => `· ${option}`).join("\n")}`
     };
 
     try {
+      // The opening line goes out the moment the model says it, so the person reads "我先查
+      // 一下" while the search runs instead of silence until it ends. Remembered so the
+      // final reply is not the same sentence twice when a model repeats itself.
+      let interim: string | undefined;
       const reply = await this.deps.ask(
         agentName,
         handedFiles.length > 0
@@ -1726,7 +1735,17 @@ ${input.options.map(option => `· ${option}`).join("\n")}`
         chatKey,
         onProgress,
         message.threadKey ?? chatKey,
-        taskId
+        taskId,
+        line => {
+          if (interim !== undefined || line.trim() === "") return;
+          interim = line.trim();
+          void deliver(interim).catch((error: unknown) => {
+            this.deps.log(
+              `channel ${adapter.name}: interim line failed — ` +
+                `${error instanceof Error ? error.message : String(error)}`
+            );
+          });
+        }
       );
       clearTimeout(ackTimer);
       // Asked first, then shown. The board owns what a finished turn means for the work —
@@ -1735,9 +1754,9 @@ ${input.options.map(option => `· ${option}`).join("\n")}`
       finishCard(settled === "review" ? "review" : "done");
       // The reaction is about the *message*, which has been answered either way.
       mark("done");
-      await deliver(
-        reply.trim() === "" ? EMPTY_REPLY_NOTE : reply
-      );
+      if (reply.trim() !== interim) {
+        await deliver(reply.trim() === "" ? EMPTY_REPLY_NOTE : reply);
+      }
       // Whatever the turn left in the chat's outbox follows the reply — images shown
       // as images, everything else as a file. What was pushed is marked delivered;
       // what failed stays in the outbox for the next task rather than vanishing.

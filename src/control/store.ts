@@ -31,12 +31,7 @@
  */
 
 import { DatabaseSync } from "node:sqlite";
-import {
-  createCipheriv,
-  createDecipheriv,
-  randomBytes,
-  randomUUID,
-} from "node:crypto";
+import { createCipheriv, createDecipheriv, randomBytes, randomUUID, timingSafeEqual } from "node:crypto";
 import { chmodSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 
@@ -104,6 +99,13 @@ export interface BoxRow {
   lastSeenAt: string | undefined;
   /** The last usage sequence number collected from this box. */
   usageCursor: number;
+  /**
+   * `primary` is the tenant's own box, the one the gateway proxies to and the allocator made.
+   * `attached` is a machine that box drives beside it (docs/30 Stage D): recorded here for the
+   * fleet view and health, reached only through the primary. One primary per tenant; any
+   * number attached.
+   */
+  role: "primary" | "attached";
 }
 
 export interface UsageRow {
@@ -171,7 +173,64 @@ export interface AuditRow extends AuditEntry {
  * Written as one interface rather than several because the alternative — a repository per table —
  * spreads the transactional boundary across objects that then have to agree about it.
  */
+export type TemplateVisibility = "public" | "tenant";
+
+/** A shared bot template: the parent row (docs/29 §6 B). Versions are immutable; this points at one. */
+export interface TemplateRow {
+  shareId: string;
+  tenantId: string;
+  ownerUserId: string;
+  /** Who published it, as a name a page can show. */
+  ownerName: string;
+  boxId: string;
+  sourceAgentId: string;
+  name: string;
+  description: string;
+  avatarColor: string | undefined;
+  visibility: TemplateVisibility;
+  published: boolean;
+  activeVersion: number | undefined;
+  /** How many versions exist, so a box can tell "stage" from "update". */
+  versions: number;
+  createdAt: string;
+  updatedAt: string;
+}
+
 export interface ControlStore {
+  // ── templates ───────────────────────────────────────────────────────────────────
+  /**
+   * Create-or-replace: the parent row is keyed by (box, source agent) so a later export keeps
+   * its share id and URL; a new INACTIVE version is appended. `published` and the active
+   * version are never touched here — that is `activateTemplateVersion`.
+   */
+  stageTemplate(input: {
+    tenantId: string;
+    ownerUserId: string;
+    ownerName: string;
+    boxId: string;
+    sourceAgentId: string;
+    name: string;
+    description: string;
+    avatarColor?: string;
+    visibility: TemplateVisibility;
+    /** The JSON document, already validated by the box. */
+    document: string;
+  }): { shareId: string; version: number };
+  /** Owner-only (by box): make this version the live one and the parent published. Rollback allowed. */
+  activateTemplateVersion(shareId: string, version: number, boxId: string): boolean;
+  unpublishTemplate(shareId: string, boxId: string): boolean;
+  setTemplateVisibility(shareId: string, visibility: TemplateVisibility, boxId: string): boolean;
+  /** Hard delete: parent, versions, and the (box, agent) binding, so the next export mints a new id. */
+  deleteTemplate(shareId: string, boxId: string): boolean;
+  getTemplate(shareId: string): TemplateRow | undefined;
+  /** The live document: only when published and an active version exists. */
+  templateDocument(shareId: string): { document: string; version: number } | undefined;
+  /** Any version, for the owning box only — how a card reloads a draft. */
+  templateVersion(shareId: string, version: number, boxId: string): { document: string } | undefined;
+  templatesOfBox(boxId: string): TemplateRow[];
+  /** The box a token belongs to, or undefined. A scan, like the relay's; boxes are few. */
+  findBoxByToken(kind: TokenKind, value: string): BoxRow | undefined;
+
   upsertTenant(input: { id?: string; name: string; quota?: Record<string, unknown> }): Tenant;
 
   upsertUser(input: { id?: string; username: string }): AppUser;
@@ -204,11 +263,16 @@ export interface ControlStore {
    * makes the slot single meant it could never be replaced.
    */
   createBox(
-    row: Omit<BoxRow, "lastSeenAt" | "usageCursor">,
+    row: Omit<BoxRow, "lastSeenAt" | "usageCursor" | "role"> & { role?: BoxRow["role"] },
     tokens: Readonly<Partial<Record<TokenKind, string>>>
   ): BoxRow;
   getBox(id: string): BoxRow | undefined;
+  /** The tenant's primary box, the one the gateway proxies to. */
   boxForTenant(tenantId: string): BoxRow | undefined;
+  /** The boxes the primary drives beside it (docs/30 Stage D), mirrored here. */
+  attachedBoxesOf(tenantId: string): BoxRow[];
+  upsertAttachedBox(input: { tenantId: string; name: string; boxdUrl: string; state?: BoxState }): BoxRow;
+  retireAttachedBox(tenantId: string, name: string): boolean;
   listBoxes(states?: readonly BoxState[]): BoxRow[];
   setBoxState(id: string, state: BoxState): void;
   /** Corrects where a box is reachable, after a restart moved its published ports. */
@@ -333,13 +397,14 @@ create table if not exists box (
   image          text not null,
   created_at     text not null,
   last_seen_at   text,
-  usage_cursor   integer not null default 0
+  usage_cursor   integer not null default 0,
+  role           text not null default 'primary'
 );
 
--- One live box per tenant, enforced here rather than trusted to the allocator: a retried
--- allocate after a timeout is the normal case, and two boxes for one tenant is two bills.
-create unique index if not exists box_one_live_per_tenant
-  on box(tenant_id) where state <> 'gone';
+-- One live *primary* box per tenant, enforced here rather than trusted to the allocator: a
+-- retried allocate after a timeout is the normal case, and two boxes for one tenant is two
+-- bills. Attached boxes (docs/30 Stage D) are as many as the tenant drives; the index is
+-- created after the role column exists, in the constructor.
 
 create table if not exists box_token (
   box_id     text not null references box(id),
@@ -410,6 +475,34 @@ create table if not exists audit (
 );
 
 create index if not exists audit_by_time on audit(at);
+
+create table if not exists template (
+  share_id        text primary key,
+  tenant_id       text not null references tenant(id),
+  owner_user_id   text not null,
+  owner_name      text not null,
+  box_id          text not null references box(id),
+  source_agent_id text not null,
+  name            text not null,
+  description     text not null,
+  avatar_color    text,
+  visibility      text not null,
+  published       integer not null default 0,
+  active_version  integer,
+  created_at      text not null,
+  updated_at      text not null,
+  unique (box_id, source_agent_id)
+);
+
+create table if not exists template_version (
+  share_id    text not null references template(share_id) on delete cascade,
+  version     integer not null,
+  document    text not null,
+  name        text not null,
+  description text not null,
+  created_at  text not null,
+  primary key (share_id, version)
+);
 `;
 
 export interface SqliteStoreOptions {
@@ -430,6 +523,18 @@ export class SqliteControlStore implements ControlStore {
     if (options.path !== ":memory:") this.db.exec("pragma journal_mode = wal");
     this.db.exec("pragma foreign_keys = on");
     this.db.exec(SCHEMA);
+    // The one column added after the table shipped. Guarded, because there is no migration
+    // table: a database from before has the table without it, and `create table if not exists`
+    // does not add columns.
+    const columns = this.db.prepare("pragma table_info(box)").all() as { name: string }[];
+    if (!columns.some(column => column.name === "role")) {
+      this.db.exec("alter table box add column role text not null default 'primary'");
+    }
+    this.db.exec(
+      `drop index if exists box_one_live_per_tenant;
+       create unique index if not exists box_one_primary_per_tenant
+         on box(tenant_id) where state <> 'gone' and role = 'primary';`
+    );
     this.key = loadEncryptionKey(
       options.keyPath ??
         (options.path === ":memory:" ? join(process.cwd(), ".control-key") : `${options.path}.key`)
@@ -565,7 +670,7 @@ export class SqliteControlStore implements ControlStore {
   // ── boxes ─────────────────────────────────────────────────────────────────────────
 
   createBox(
-    row: Omit<BoxRow, "lastSeenAt" | "usageCursor">,
+    row: Omit<BoxRow, "lastSeenAt" | "usageCursor" | "role"> & { role?: BoxRow["role"] },
     tokens: Readonly<Partial<Record<TokenKind, string>>> = {}
   ): BoxRow {
     // One transaction, because a box the store calls ready and cannot authenticate is worse than no
@@ -576,8 +681,8 @@ export class SqliteControlStore implements ControlStore {
       this.db
         .prepare(
           `insert into box (id, tenant_id, allocator_kind, external_id, boxd_url, ui_url, state,
-                            image, created_at, usage_cursor)
-           values (?, ?, ?, ?, ?, ?, ?, ?, ?, 0)`
+                            image, created_at, usage_cursor, role)
+           values (?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?)`
         )
         .run(
           row.id,
@@ -588,7 +693,8 @@ export class SqliteControlStore implements ControlStore {
           row.uiUrl,
           row.state,
           row.image,
-          row.createdAt
+          row.createdAt,
+          row.role ?? "primary"
         );
       for (const [kind, value] of Object.entries(tokens)) {
         if (value !== undefined) this.putToken(row.id, kind as TokenKind, value);
@@ -610,9 +716,48 @@ export class SqliteControlStore implements ControlStore {
 
   boxForTenant(tenantId: string): BoxRow | undefined {
     const row = this.db
-      .prepare("select * from box where tenant_id = ? and state <> 'gone'")
+      .prepare("select * from box where tenant_id = ? and state <> 'gone' and role = 'primary'")
       .get(tenantId) as Record<string, string | number | null> | undefined;
     return row === undefined ? undefined : toBox(row);
+  }
+
+  attachedBoxesOf(tenantId: string): BoxRow[] {
+    const rows = this.db
+      .prepare("select * from box where tenant_id = ? and state <> 'gone' and role = 'attached' order by created_at")
+      .all(tenantId) as Record<string, string | number | null>[];
+    return rows.map(toBox);
+  }
+
+  upsertAttachedBox(input: { tenantId: string; name: string; boxdUrl: string; state?: BoxState }): BoxRow {
+    const existing = this.db
+      .prepare("select * from box where tenant_id = ? and external_id = ? and role = 'attached' and state <> 'gone'")
+      .get(input.tenantId, input.name) as Record<string, string | number | null> | undefined;
+    const now = new Date().toISOString();
+    if (existing !== undefined) {
+      this.db
+        .prepare("update box set boxd_url = ?, state = ?, last_seen_at = ? where id = ?")
+        .run(input.boxdUrl, input.state ?? "ready", now, String(existing.id));
+      return this.getBox(String(existing.id))!;
+    }
+    return this.createBox({
+      id: `box_${randomUUID()}`,
+      tenantId: input.tenantId,
+      allocatorKind: "attached",
+      externalId: input.name,
+      boxdUrl: input.boxdUrl,
+      uiUrl: "",
+      state: input.state ?? "ready",
+      image: "",
+      createdAt: now,
+      role: "attached",
+    });
+  }
+
+  retireAttachedBox(tenantId: string, name: string): boolean {
+    const result = this.db
+      .prepare("update box set state = 'gone' where tenant_id = ? and external_id = ? and role = 'attached' and state <> 'gone'")
+      .run(tenantId, name);
+    return Number(result.changes) > 0;
   }
 
   listBoxes(states?: readonly BoxState[]): BoxRow[] {
@@ -661,6 +806,132 @@ export class SqliteControlStore implements ControlStore {
       .prepare("select value_enc from box_token where box_id = ? and kind = ?")
       .get(boxId, kind) as { value_enc: string } | undefined;
     return row === undefined ? undefined : decrypt(this.key, row.value_enc);
+  }
+
+  findBoxByToken(kind: TokenKind, value: string): BoxRow | undefined {
+    if (value === "") return undefined;
+    for (const row of this.listBoxes(["starting", "ready", "unreachable"])) {
+      const held = this.readToken(row.id, kind);
+      if (held !== undefined && held.length === value.length && timingSafeEqual(Buffer.from(held), Buffer.from(value))) return row;
+    }
+    return undefined;
+  }
+
+  // ── templates ─────────────────────────────────────────────────────────────────────
+
+  stageTemplate(input: {
+    tenantId: string;
+    ownerUserId: string;
+    ownerName: string;
+    boxId: string;
+    sourceAgentId: string;
+    name: string;
+    description: string;
+    avatarColor?: string;
+    visibility: TemplateVisibility;
+    document: string;
+  }): { shareId: string; version: number } {
+    const now = new Date().toISOString();
+    const existing = this.db
+      .prepare("select share_id from template where box_id = ? and source_agent_id = ?")
+      .get(input.boxId, input.sourceAgentId) as { share_id: string } | undefined;
+    let shareId: string;
+    if (existing === undefined) {
+      shareId = mintShareId();
+      this.db
+        .prepare(
+          `insert into template (share_id, tenant_id, owner_user_id, owner_name, box_id, source_agent_id, name,
+             description, avatar_color, visibility, published, active_version, created_at, updated_at)
+           values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, null, ?, ?)`
+        )
+        .run(shareId, input.tenantId, input.ownerUserId, input.ownerName, input.boxId, input.sourceAgentId, input.name, input.description, input.avatarColor ?? null, input.visibility, now, now);
+    } else {
+      shareId = existing.share_id;
+      // The card's name and description follow the newest export; visibility does not — changing
+      // who can see a live template is a separate, deliberate call.
+      this.db
+        .prepare("update template set name = ?, description = ?, avatar_color = ?, owner_name = ?, updated_at = ? where share_id = ?")
+        .run(input.name, input.description, input.avatarColor ?? null, input.ownerName, now, shareId);
+    }
+    const last = this.db
+      .prepare("select coalesce(max(version), 0) as version from template_version where share_id = ?")
+      .get(shareId) as { version: number };
+    const version = last.version + 1;
+    this.db
+      .prepare("insert into template_version (share_id, version, document, name, description, created_at) values (?, ?, ?, ?, ?, ?)")
+      .run(shareId, version, input.document, input.name, input.description, now);
+    return { shareId, version };
+  }
+
+  activateTemplateVersion(shareId: string, version: number, boxId: string): boolean {
+    const has = this.db
+      .prepare("select 1 from template_version v join template t on t.share_id = v.share_id where v.share_id = ? and v.version = ? and t.box_id = ?")
+      .get(shareId, version, boxId);
+    if (has === undefined) return false;
+    const row = this.db.prepare("select name, description from template_version where share_id = ? and version = ?").get(shareId, version) as { name: string; description: string };
+    this.db
+      .prepare("update template set published = 1, active_version = ?, name = ?, description = ?, updated_at = ? where share_id = ?")
+      .run(version, row.name, row.description, new Date().toISOString(), shareId);
+    return true;
+  }
+
+  unpublishTemplate(shareId: string, boxId: string): boolean {
+    const result = this.db
+      .prepare("update template set published = 0, updated_at = ? where share_id = ? and box_id = ?")
+      .run(new Date().toISOString(), shareId, boxId);
+    return Number(result.changes) > 0;
+  }
+
+  setTemplateVisibility(shareId: string, visibility: TemplateVisibility, boxId: string): boolean {
+    const result = this.db
+      .prepare("update template set visibility = ?, updated_at = ? where share_id = ? and box_id = ?")
+      .run(visibility, new Date().toISOString(), shareId, boxId);
+    return Number(result.changes) > 0;
+  }
+
+  deleteTemplate(shareId: string, boxId: string): boolean {
+    const result = this.db.prepare("delete from template where share_id = ? and box_id = ?").run(shareId, boxId);
+    return Number(result.changes) > 0;
+  }
+
+  getTemplate(shareId: string): TemplateRow | undefined {
+    const row = this.db
+      .prepare(
+        `select t.*, (select count(*) from template_version v where v.share_id = t.share_id) as versions
+         from template t where t.share_id = ?`
+      )
+      .get(shareId) as RawTemplate | undefined;
+    return row === undefined ? undefined : toTemplateRow(row);
+  }
+
+  templateDocument(shareId: string): { document: string; version: number } | undefined {
+    const row = this.db
+      .prepare(
+        `select v.document as document, v.version as version from template t
+         join template_version v on v.share_id = t.share_id and v.version = t.active_version
+         where t.share_id = ? and t.published = 1`
+      )
+      .get(shareId) as { document: string; version: number } | undefined;
+    return row;
+  }
+
+  templateVersion(shareId: string, version: number, boxId: string): { document: string } | undefined {
+    return this.db
+      .prepare(
+        `select v.document as document from template_version v join template t on t.share_id = v.share_id
+         where v.share_id = ? and v.version = ? and t.box_id = ?`
+      )
+      .get(shareId, version, boxId) as { document: string } | undefined;
+  }
+
+  templatesOfBox(boxId: string): TemplateRow[] {
+    const rows = this.db
+      .prepare(
+        `select t.*, (select count(*) from template_version v where v.share_id = t.share_id) as versions
+         from template t where t.box_id = ? order by t.updated_at desc`
+      )
+      .all(boxId) as unknown as RawTemplate[];
+    return rows.map(toTemplateRow);
   }
 
   // ── usage ─────────────────────────────────────────────────────────────────────────
@@ -891,6 +1162,7 @@ function toBox(row: Record<string, string | number | null>): BoxRow {
     createdAt: String(row.created_at),
     lastSeenAt: row.last_seen_at === null ? undefined : String(row.last_seen_at),
     usageCursor: Number(row.usage_cursor ?? 0),
+    role: row.role === "attached" ? "attached" : "primary",
   };
 }
 
@@ -903,3 +1175,53 @@ function parseJson(text: string | null | undefined, fallback: unknown): unknown 
     return fallback;
   }
 }
+
+// ── templates: rows and ids ───────────────────────────────────────────────────────
+
+interface RawTemplate {
+  share_id: string;
+  tenant_id: string;
+  owner_user_id: string;
+  owner_name: string;
+  box_id: string;
+  source_agent_id: string;
+  name: string;
+  description: string;
+  avatar_color: string | null;
+  visibility: string;
+  published: number;
+  active_version: number | null;
+  versions: number;
+  created_at: string;
+  updated_at: string;
+}
+
+function toTemplateRow(row: RawTemplate): TemplateRow {
+  return {
+    shareId: row.share_id,
+    tenantId: row.tenant_id,
+    ownerUserId: row.owner_user_id,
+    ownerName: row.owner_name,
+    boxId: row.box_id,
+    sourceAgentId: row.source_agent_id,
+    name: row.name,
+    description: row.description,
+    avatarColor: row.avatar_color ?? undefined,
+    visibility: row.visibility === "tenant" ? "tenant" : "public",
+    published: row.published === 1,
+    activeVersion: row.active_version ?? undefined,
+    versions: Number(row.versions),
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
+  };
+}
+
+/** 21 URL-safe characters, the same shape as the box's own staged ids. Unguessable, not secret. */
+export function mintShareId(): string {
+  const alphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789_-";
+  const bytes = randomBytes(21);
+  let id = "";
+  for (const byte of bytes) id += alphabet[byte % alphabet.length];
+  return id;
+}
+

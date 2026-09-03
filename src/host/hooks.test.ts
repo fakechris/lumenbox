@@ -1,9 +1,9 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { HookRunner, parseHooksConfig } from "./hooks.ts";
+import { HookRunner, parseHooksConfig, refuseHooksFile } from "./hooks.ts";
 
 test("a Claude Code settings file and a bare hooks object read the same", () => {
   const bare = parseHooksConfig({
@@ -95,4 +95,31 @@ test("a hook that cannot run or times out is a log line, never a block", async (
   assert.deepEqual(outcome, { blocked: false, ran: 2 });
   assert.ok(lines.some(line => /exited 7/.test(line)));
   assert.ok(lines.some(line => /timed out after 1s/.test(line)));
+});
+
+test("a hooks file somebody else could write is refused, not loaded (docs/10 S-9)", async () => {
+  const root = mkdtempSync(join(tmpdir(), "agentbox-hooks-perm-"));
+  try {
+    const path = join(root, "hooks.json");
+    const marker = join(root, "ran");
+    writeFileSync(path, JSON.stringify({ Stop: [{ hooks: [{ type: "command", command: `touch ${marker}` }] }] }));
+    const log: string[] = [];
+
+    chmodSync(path, 0o666);
+    const loose = new HookRunner({ path, log: line => log.push(line) });
+    assert.equal(loose.has("Stop"), false, "a world-writable file contributes no hooks");
+    assert.match(log.join("\n"), /refusing .*hooks\.json: writable by group or others \(mode 666\)/);
+
+    // Fixed in place: the next look loads it, as the mtime rule already promises.
+    chmodSync(path, 0o600);
+    writeFileSync(path, JSON.stringify({ Stop: [{ hooks: [{ type: "command", command: `touch ${marker}` }] }] }));
+    assert.equal(loose.has("Stop"), true);
+
+    // The rule as a rule: ownership is checked too, where the platform has a uid.
+    assert.equal(refuseHooksFile({ mode: 0o100644, uid: 1 }, 1), undefined);
+    assert.match(refuseHooksFile({ mode: 0o100644, uid: 2 }, 1) ?? "", /owned by uid 2/);
+    assert.match(refuseHooksFile({ mode: 0o100664, uid: 1 }, 1) ?? "", /mode 664/);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
 });

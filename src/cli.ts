@@ -26,6 +26,7 @@ import { describePreflight, isQuiet, preflight, verifyBox } from "./box/prefligh
 import { DockerBoxProvisioner } from "./box/provisioner.ts";
 import { decideUpgrade } from "./host/upgrade.ts";
 import { AgentRegistry, defaultAgentsRoot } from "./agents/registry.ts";
+import { attachedBox } from "./box/boxes.ts";
 import { startEgressRelay } from "./egress/relay.ts";
 import { DEFAULT_DISPLAY_INDEX } from "./protocol/index.ts";
 import { Orchestrator } from "./host/orchestrator.ts";
@@ -472,6 +473,194 @@ function cmdAgentNew(argv: string[]): number {
   return 0;
 }
 
+// --- boxes (docs/30) ----------------------------------------------------------
+
+/**
+ * Through the running web server when there is one, so the box is connected at once and the
+ * page shows it; straight into the registry otherwise, where the next start picks it up.
+ */
+async function viaWeb(path: string, body: unknown): Promise<Record<string, unknown> | undefined> {
+  const base = process.env.AGENTBOX_WEB_URL ?? "http://127.0.0.1:7777";
+  try {
+    const response = await fetch(`${base}${path}`, {
+      method: "POST",
+      headers: { "content-type": "application/json", authorization: `Bearer ${uiToken()}` },
+      body: JSON.stringify(body),
+      signal: AbortSignal.timeout(20_000),
+    });
+    const json = (await response.json().catch(() => ({}))) as Record<string, unknown>;
+    // A running server from before boxes were plural answers 404; the record is written for
+    // its next start, the same as no server at all.
+    if (response.status === 404) return undefined;
+    if (!response.ok) throw new Error(String(json.error ?? `web server answered ${response.status}`));
+    return json;
+  } catch (error) {
+    if (error instanceof Error && /ECONNREFUSED|fetch failed|timeout/i.test(error.message)) return undefined;
+    throw error;
+  }
+}
+
+async function cmdBoxAttach(argv: string[]): Promise<number> {
+  const [name, baseUrl, ...flagList] = argv;
+  const { flags } = parseArgs(flagList);
+  const tokenFile = flags.get("--token-file");
+  if (!name || !baseUrl || typeof tokenFile !== "string") {
+    err("Usage: agentbox box attach <name> <url> --token-file F [--display-floor N] [--work-dir D]");
+    return 1;
+  }
+  const floor = flags.get("--display-floor");
+  const workDir = flags.get("--work-dir");
+  try {
+    const record = attachedBox({
+      name,
+      baseUrl,
+      tokenFile: resolve(tokenFile),
+      ...(typeof floor === "string" ? { displayFloor: Number(floor) } : {}),
+      ...(typeof workDir === "string" ? { workDir } : {}),
+    });
+    const replace = flags.get("--replace") === true;
+    const payload = { name, baseUrl, tokenFile: resolve(tokenFile), ...(typeof floor === "string" ? { displayFloor: Number(floor) } : {}), ...(typeof workDir === "string" ? { workDir } : {}) };
+    const live = await viaWeb(replace ? "/api/boxes/update" : "/api/boxes/attach", payload);
+    if (live !== undefined) {
+      out(`${bold(name)} ${replace ? "moved" : "attached"}${live.connected === true ? " and connected" : ""}: ${String(live.detail ?? "")}`);
+      return 0;
+    }
+    const registry = new AgentRegistry();
+    if (replace) {
+      registry.updateBox(name, { endpoint: { baseUrl: record.endpoint!.baseUrl, tokenFile: record.endpoint!.tokenFile }, ...(typeof floor === "string" ? { displayFloor: Number(floor) } : {}) });
+      out(`${bold(name)} moved to ${baseUrl}; the web server was not running, so it reconnects on the next start.`);
+      return 0;
+    }
+    registry.attachBox(record);
+    out(`${bold(name)} attached (${record.id}); the web server was not running, so it connects on the next start.`);
+    return 0;
+  } catch (error) {
+    err(error instanceof Error ? error.message : String(error));
+    return 1;
+  }
+}
+
+async function cmdBoxDetach(argv: string[]): Promise<number> {
+  const [name] = argv;
+  if (!name) {
+    err("Usage: agentbox box detach <name>");
+    return 1;
+  }
+  try {
+    const live = await viaWeb("/api/boxes/detach", { name });
+    if (live === undefined) new AgentRegistry().detachBox(name);
+    out(`${bold(name)} detached.`);
+    return 0;
+  } catch (error) {
+    err(error instanceof Error ? error.message : String(error));
+    return 1;
+  }
+}
+
+function cmdBoxList(): number {
+  const registry = new AgentRegistry();
+  for (const entry of registry.listBoxes()) {
+    const residents = registry.agentsIn(entry.id).map(record => record.profile.name);
+    const where = entry.kind === "docker" ? "docker (this machine)" : `attached ${entry.endpoint?.baseUrl ?? ""}`;
+    out(`${bold(entry.name)}${entry.id === registry.box.id ? dim("  (own)") : ""}  ${dim(where)}  displays from :${entry.displayFloor}`);
+    out(dim(`  ${residents.length === 0 ? "no agents" : residents.join(", ")}`));
+  }
+  return 0;
+}
+
+// --- templates (docs/29) ------------------------------------------------------
+
+/**
+ * Templates go through the running web server rather than a second orchestrator in this
+ * process: importing starts a turn on a box that is already someone's, and two hosts on one
+ * state directory is the collision docs/17 forbids. The token is the UI's own.
+ */
+async function cmdTemplate(argv: string[]): Promise<number> {
+  const [sub, ...args] = argv;
+  const base = process.env.AGENTBOX_WEB_URL ?? "http://127.0.0.1:7777";
+  const headers = { "content-type": "application/json", authorization: `Bearer ${uiToken()}` };
+  const call = async (path: string, body?: unknown): Promise<{ ok: boolean; status: number; json: Record<string, unknown>; text: string }> => {
+    const response = await fetch(`${base}${path}`, body === undefined ? { headers } : { method: "POST", headers, body: JSON.stringify(body) });
+    const text = await response.text();
+    let json: Record<string, unknown> = {};
+    try {
+      json = JSON.parse(text) as Record<string, unknown>;
+    } catch {
+      // A download is not JSON; the caller reads `text`.
+    }
+    return { ok: response.ok, status: response.status, json, text };
+  };
+  const agentIdOf = async (nameOrId: string): Promise<string | undefined> => {
+    const registry = new AgentRegistry();
+    try {
+      return registry.resolve(nameOrId).id;
+    } catch {
+      return undefined;
+    }
+  };
+  try {
+    if (sub === "import") {
+      const [file, ...flags] = args;
+      if (!file) {
+        err("Usage: agentbox template import <file> [--name N]");
+        return 1;
+      }
+      const nameAt = flags.indexOf("--name");
+      const name = nameAt >= 0 ? flags[nameAt + 1] : undefined;
+      const template = readFileSync(file, "utf8");
+      const result = await call("/api/templates/import", { template, ...(name !== undefined ? { name } : {}) });
+      if (!result.ok) {
+        err(String(result.json.error ?? `import failed (${result.status})`));
+        return 1;
+      }
+      out(`Created ${bold(String(result.json.name))} (id: ${String(result.json.id)}). It is installing its recipe now.`);
+      const pending = result.json.pending as { fillIns?: { label: string }[]; connectors?: string[] } | undefined;
+      const asks = [...(pending?.fillIns ?? []).map(fillIn => fillIn.label), ...(pending?.connectors ?? []).map(name => `${name} (not connected here)`)];
+      if (asks.length > 0) out(dim(`  It will ask you for: ${asks.join("; ")}`));
+      return 0;
+    }
+    if (sub === "share") {
+      const [agent] = args;
+      const id = agent === undefined ? undefined : await agentIdOf(agent);
+      if (id === undefined) {
+        err("Usage: agentbox template share <agent>");
+        return 1;
+      }
+      const result = await call("/api/templates/share", { agent: id });
+      if (!result.ok) {
+        err(String(result.json.error ?? `share failed (${result.status})`));
+        return 1;
+      }
+      out(`Asked ${bold(agent!)}: "${String(result.json.sent)}"`);
+      out(dim(`  Watch the chat; when it has staged a version, run: agentbox template download ${agent}`));
+      return 0;
+    }
+    if (sub === "download") {
+      const [agent, ...flags] = args;
+      const id = agent === undefined ? undefined : await agentIdOf(agent);
+      if (id === undefined) {
+        err("Usage: agentbox template download <agent> [-o file]");
+        return 1;
+      }
+      const result = await call(`/api/templates/download?agent=${encodeURIComponent(id)}`);
+      if (!result.ok) {
+        err(String(result.json.error ?? `download failed (${result.status})`));
+        return 1;
+      }
+      const outAt = flags.indexOf("-o");
+      const target = outAt >= 0 && flags[outAt + 1] !== undefined ? flags[outAt + 1]! : `${agent}.lumenbox-template.json`;
+      writeFileSync(target, result.text);
+      out(`Saved ${bold(target)} (${result.text.length} bytes). Hand it to someone; they import it the same way.`);
+      return 0;
+    }
+    err(`Unknown template command: ${sub ?? "(none)"}. One of: import, share, download.`);
+    return 1;
+  } catch (error) {
+    err(`Could not reach the web server at ${base}: ${error instanceof Error ? error.message : String(error)}. Is \`agentbox web\` running?`);
+    return 1;
+  }
+}
+
 // --- chat -----------------------------------------------------------------
 
 /** Renders turn and bus events as a readable transcript. */
@@ -546,7 +735,7 @@ function makeRenderer() {
  * when `web --host` was ignored and the published port reached nothing, and once when
  * `control up --sweep-seconds 5` printed "every 15s". Adding a value flag means adding it here.
  */
-const VALUE_FLAGS = new Set([
+const VALUE_FLAGS = new Set(["--token-file", "--display-floor", "--work-dir", 
   "--provider",
   "--model",
   "--effort",
@@ -754,6 +943,7 @@ async function cmdControl(argv: string[]): Promise<number> {
       relayPort: typeof relayPortFlag === "string" ? Number(relayPortFlag) : undefined,
       relayProvider: typeof flags.get("--provider") === "string" ? String(flags.get("--provider")) : undefined,
       secureCookies: process.env.AGENTBOX_SECURE_COOKIES === "1",
+      ...(typeof flags.get("--public-url") === "string" ? { publicUrl: String(flags.get("--public-url")) } : process.env.AGENTBOX_PUBLIC_URL ? { publicUrl: process.env.AGENTBOX_PUBLIC_URL } : {}),
       out: line => out(line === "" ? "" : dim(line)),
     });
     out("");
@@ -903,6 +1093,12 @@ Box:
                             --no-backup skips the copy.
              --with-host    also run the orchestrator inside it (web UI on 7777)
   box status                Show container state, ports, and health
+  box attach <name> <url> --token-file F [--display-floor N] [--work-dir D] [--replace]
+                            Drive another machine's boxd as a second box (docs/30).
+                            Agents are created into a box and stay there; --replace
+                            moves an attached box to a new address.
+  box detach <name>         Forget an attached box (refused while agents live in it)
+  box list                  Every box: own first, then attached, with who lives where
   box down [--rm]           Stop the box, optionally removing the container
   box logs [--tail N]       Container logs
   box shot [file.webp]      Save a screenshot of the box desktop
@@ -911,6 +1107,14 @@ Box:
 Agents:
   agents                    List agents
   agent new <name> [desc]   Create an agent
+
+Templates (through the running web server; docs/29):
+  template import <file> [--name N]
+                            Create a bot from a template file; it installs the
+                            recipe on its first turn and asks for what it needs.
+  template share <agent>    Ask a bot to draft a template of itself (watch the chat).
+  template download <agent> [-o file]
+                            Save the latest staged template as a file to share.
 
 State:
   backup [dir]              Snapshot ~/.agentbox without stopping anything.
@@ -940,12 +1144,15 @@ The box runs wherever your Docker engine points: set DOCKER_HOST or use
                            streaming, vision, long output, caching. Run before
                            trusting a new provider, and after a vendor update.
   mcp                      Bridge this installation to an MCP client over stdio.
+  mcp reload               Apply an edit to mcpServers in config.json without a restart.
+  extensions reload        Re-import ~/.agentbox/extensions/*.{mjs,js,ts} without a restart.
                            Needs AGENTBOX_MCP_TOKEN from Settings; the client
                            gets a box, a desktop and a team, billed to whoever
                            the token belongs to.
 
 Quality:
   golden [provider...]     End-to-end golden tasks through a real orchestrator
+                           (--only=id,id; --box; --memory-from=<agent> seeds a live memory)
                            in a throwaway state directory, graded against the
                            harness's own records. --box includes the box tasks.
                            Nightly per model is the intended cadence.
@@ -1012,6 +1219,12 @@ async function main(): Promise<number> {
     case "box": {
       const [sub, ...boxArgs] = rest;
       switch (sub) {
+        case "attach":
+          return cmdBoxAttach(boxArgs);
+        case "detach":
+          return cmdBoxDetach(boxArgs);
+        case "list":
+          return cmdBoxList();
         case "build":
           return cmdBoxBuild();
         case "up":
@@ -1049,6 +1262,9 @@ async function main(): Promise<number> {
       err(`Unknown agent command: ${sub ?? "(none)"}`);
       return 1;
     }
+
+    case "template":
+      return cmdTemplate(rest);
 
     case "chat":
       return cmdChat(rest);
@@ -1108,7 +1324,7 @@ async function main(): Promise<number> {
     // Each provider runs in a throwaway state directory — a golden run must neither
     // write memories into the real installation nor read them.
     case "golden": {
-      const { GOLDEN_TASKS } = await import("./host/golden.ts");
+      const { GOLDEN_TASKS, toolNamesSince, verdictFromMemory } = await import("./host/golden.ts");
       const withBox = rest.includes("--box");
       const names = rest.filter(argument => !argument.startsWith("--"));
       const targets = names.length > 0 ? names : [undefined];
@@ -1133,6 +1349,16 @@ async function main(): Promise<number> {
         // deliberately unauthenticated, for container health checks) still said the box
         // was ready. The run looked fine and could not touch the box at all.
         const boxProvisioner = withBox ? new DockerBoxProvisioner(defaultBoxConfig()) : undefined;
+        // `--memory-from=<agent>` seeds the golden agent with a live agent's memory, read
+        // from the real home before it moves. The style tier exists because of what memory
+        // holds; against an empty memory an ablation of it is flat by construction, which
+        // is the run R28 warned would be misread as "memory is theatre".
+        const memoryFrom = rest.find(argument => argument.startsWith("--memory-from="))?.slice(14);
+        let seededMemory: string | undefined;
+        if (memoryFrom !== undefined && memoryFrom !== "") {
+          const live = new AgentRegistry(join(agentboxHome(), "agents"));
+          seededMemory = live.readMemory(live.resolve(memoryFrom).id);
+        }
 
         const home = mkdtempSync(join(tmpdir(), "agentbox-golden-"));
         process.env.AGENTBOX_HOME = home;
@@ -1157,6 +1383,12 @@ async function main(): Promise<number> {
           name: "Silver",
           description: "You acknowledge messages briefly.",
         });
+        if (seededMemory !== undefined) {
+          writeFileSync(registry.memoryPathFor(gold.id), seededMemory);
+          const count = seededMemory.split("\n").filter(line => line.trim() !== "").length;
+          const ablating = process.env.AGENTBOX_ABLATE ? `, ablating ${process.env.AGENTBOX_ABLATE}` : "";
+          out(dim(`memory seeded from ${memoryFrom}: ${count} records${ablating}`));
+        }
         out(`${bold(profile.label)}  ${dim(profile.model)}  ${dim(home)}`);
         const boxReady = orchestrator.boxClient() !== undefined;
 
@@ -1218,7 +1450,7 @@ async function main(): Promise<number> {
             await orchestrator.prompt(gold.id, task.prompt({ teammateName: "Silver", token }));
             await orchestrator.settle();
             const reply = orchestrator.replySince(gold.id, before);
-            const verdict = await task.check({
+            let verdict = await task.check({
               reply,
               agentId: gold.id,
               teammateId: silver.id,
@@ -1226,7 +1458,14 @@ async function main(): Promise<number> {
               orchestrator,
               judge,
               token,
+              before,
             });
+            // The process invariant (docs/31 §4), on every task: a pass that ruled a named
+            // thing out of the world with no tool call is not a pass.
+            const fromMemory = verdictFromMemory(reply, toolNamesSince(registry, gold.id, before));
+            if (verdict.pass && fromMemory !== undefined) {
+              verdict = { pass: false, detail: `${verdict.detail}; invariant: ${fromMemory}` };
+            }
             const seconds = Math.round((Date.now() - started) / 1000);
             // An infrastructure failure is marked apart from a wrong answer: a red row
             // that means "the box was busy" and a red row that means "the model
@@ -1267,7 +1506,32 @@ async function main(): Promise<number> {
     // client already knows how to configure. It forwards JSON-RPC lines to /mcp and
     // writes the replies back — no protocol of its own, so nothing here can disagree
     // with the server about what MCP means.
+    case "extensions": {
+      if (rest[0] !== "reload") {
+        err("Usage: agentbox extensions reload");
+        return 1;
+      }
+      const result = await viaWeb("/api/extensions/reload", {});
+      if (result === undefined) {
+        err("No web server is running here; the next `agentbox web` loads the extensions anyway.");
+        return 1;
+      }
+      const list = (key: string) => ((result[key] as string[] | undefined) ?? []).join(", ") || "-";
+      out(`loaded: ${list("loaded")}\ntools: ${list("tools")}\nproblems: ${list("problems")}`);
+      return 0;
+    }
     case "mcp": {
+      if (rest[0] === "reload") {
+        // Applies an edit to mcpServers in config.json to the running web server (R36).
+        const result = await viaWeb("/api/mcp/reload", {});
+        if (result === undefined) {
+          err("No web server is running here; the next `agentbox web` reads config.json anyway.");
+          return 1;
+        }
+        const list = (key: string) => ((result[key] as string[] | undefined) ?? []).join(", ") || "-";
+        out(`started: ${list("started")}\nstopped: ${list("stopped")}\nkept: ${list("kept")}`);
+        return 0;
+      }
       const url = process.env.AGENTBOX_MCP_URL ?? "http://127.0.0.1:7777/mcp";
       const token = process.env.AGENTBOX_MCP_TOKEN;
       if (token === undefined || token === "") {

@@ -15,15 +15,7 @@ import { join } from "node:path";
 import { randomBytes } from "node:crypto";
 import { SqliteControlStore } from "./store.ts";
 import { StaticAllocator, type BoxAllocator, type BoxHandle, type BoxSpec } from "./allocator.ts";
-import {
-  forwardableCookies,
-  Gateway,
-  PasswordListIdentity,
-  routeOf,
-  SESSION_COOKIE,
-  SessionSigner,
-  stripIdentityHeaders,
-} from "./gateway.ts";
+import { forwardableCookies, Gateway, PasswordListIdentity, routeOf, SESSION_COOKIE, SessionSigner, stripIdentityHeaders, safeNext } from "./gateway.ts";
 
 /** A stand-in box UI: reports back exactly what it was sent, so leaks are visible. */
 async function fakeBoxUi(expectedToken: string): Promise<{ url: string; close: () => void }> {
@@ -131,6 +123,17 @@ test("only the box's own paths are forwarded; the gateway keeps three", () => {
   assert.deepEqual(routeOf("/", "GET"), { kind: "proxy", path: "/" });
   assert.deepEqual(routeOf("/api/agents", "GET"), { kind: "proxy", path: "/api/agents" });
   assert.deepEqual(routeOf("/desktop/1/", "GET"), { kind: "proxy", path: "/desktop/1/" });
+  // Templates: the control plane's own shapes are answered here; the box's import/share/download
+  // stay the box's (docs/29 §6 B).
+  assert.deepEqual(routeOf("/api/templates", "POST"), { kind: "template-api" });
+  assert.deepEqual(routeOf("/api/templates/z7xup0Ax1SBl2K84PELqF/document", "GET"), { kind: "template-api" });
+  assert.deepEqual(routeOf("/api/templates/import", "POST"), { kind: "proxy", path: "/api/templates/import" });
+  assert.deepEqual(routeOf("/api/templates/download", "GET"), { kind: "proxy", path: "/api/templates/download" });
+  assert.deepEqual(routeOf("/t/z7xup0Ax1SBl2K84PELqF", "GET"), { kind: "share-page", shareId: "z7xup0Ax1SBl2K84PELqF" });
+  assert.deepEqual(routeOf("/t/short", "GET"), { kind: "proxy", path: "/t/short" });
+  assert.equal(safeNext("/?import=z7xup0Ax1SBl2K84PELqF"), "/?import=z7xup0Ax1SBl2K84PELqF");
+  assert.equal(safeNext("//evil.example/"), undefined);
+  assert.equal(safeNext("https://evil.example/"), undefined);
 });
 
 test("a client cannot smuggle a box credential through the cookie header", () => {

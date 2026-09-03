@@ -16,8 +16,8 @@ export interface MemoryMirrorBox {
 
 export interface MemoryMirrorDeps {
   registry: Pick<AgentRegistry, "readMemoryRecords" | "get" | "list">;
-  /** The box now, or none: the mirror is written when there is somewhere to write it. */
-  box: () => MemoryMirrorBox | undefined;
+  /** The agent's box now, or none: the mirror is written when there is somewhere to write it. */
+  box: (agentId: string) => MemoryMirrorBox | undefined;
   log?: (line: string) => void;
 }
 
@@ -29,7 +29,7 @@ export class MemoryMirror {
 
   /** Writes what changed for one agent. Resolves either way; failures are a log line. */
   async sync(agentId: string): Promise<{ written: number }> {
-    const box = this.deps.box();
+    const box = this.deps.box(agentId);
     const agent = this.deps.registry.get(agentId);
     if (box === undefined || agent === undefined) return { written: 0 };
     const files = renderMemoryFiles(agent.profile.name, this.deps.registry.readMemoryRecords(agentId));

@@ -711,3 +711,33 @@ test("a listener fires once per matching message, in the thread it was said in, 
   assert.deepEqual(await scheduler.heard({ text: "who is on call?", chatKey: "feishu:oc_other", messageId: "m3" }), [], "another chat does not");
   assert.equal(runs.length, 2);
 });
+
+test("a paused routine is not due, does not hear, and refuses to be fired by hand", async () => {
+  const runs: string[] = [];
+  const lines: string[] = [];
+  const paused: Scheduled = {
+    slug: "digest",
+    name: "Digest",
+    path: "/home/box/work/skills/digest/SKILL.md",
+    schedule: scheduleOf("@every 30m"),
+    paused: true,
+  };
+  const scheduler = new Scheduler({
+    due: async () => [paused],
+    listeners: async () => [{ slug: "digest", name: "Digest", path: paused.path, match: "hello", paused: true }],
+    run: async agent => {
+      runs.push(agent);
+    },
+    defaultAgent: () => "agent-ada",
+    now: () => at("2026-08-20T09:00:00"),
+    log: line => lines.push(line),
+    path: null,
+  });
+  await scheduler.tick();
+  assert.deepEqual(runs, [], "paused is not due");
+  assert.deepEqual(await scheduler.heard({ text: "hello there", chatKey: "feishu:oc_1" }), [], "paused does not hear");
+  const byHand = await scheduler.runNow("digest");
+  assert.ok(!byHand.ok && /paused; turn it on first/.test(byHand.reason));
+  assert.equal((await scheduler.status())[0]?.paused, true, "and the status says so");
+  assert.deepEqual(lines, [], "not logged per tick");
+});

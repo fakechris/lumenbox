@@ -73,3 +73,96 @@ once a misclassification is measured). `src/host/hooks.ts` reads `~/.agentbox/ho
 (a Claude Code settings.json or the bare hooks object) and runs PreToolUse / PostToolUse /
 Stop / PreCompact commands with Claude Code's stdin payload and exit-2 / JSON decisions;
 Stop may send the model back once (`stop_hook_active`).
+
+## Stage 6: Bot templates — the bot packs itself, the new bot installs itself (docs/29)
+**Goal**: a template is one JSON document (profile, curated memory facts, skill directories,
+routines with `{placeholders}`, connector names); export is a conversation ending in one
+`PackTemplate` call; import creates the agent from the profile and hands the recipe to its
+first turn, with host rails (forced `paused: true`, template-origin stamps, untrusted cue,
+reconcile + ledger).
+**Success Criteria**: a fixture recipe imported through the orchestrator with the fake model
+produces the skills, memories with `source: template:<id>`, routines paused — written by the
+model's tool calls, not the host; a routine written unpaused in that turn gets the line; the
+new bot is the provenance writer; a credential or an `about` record refuses the export with
+the place named; a routine's chat key, agent and timezone come back as placeholders with a
+fill-in list; reconcile names what did not land.
+**Status**: Complete (2026-09-02) — all four stages of docs/29: the format and rails
+(`src/host/template.ts`), the setup turn with its tool allowlist, `PackTemplate` and the served
+`export-template` skill, the chat share card, the catalog through the same import, the
+`AGENTBOX_TEMPLATES` switch, and share links on the control plane (`src/control/templates.ts`,
+`template`/`template_version` tables, `GET /t/<id>`, box-token routes, `--public-url`). Left by
+choice: a cheaper model for the setup turn, a gallery.
+
+## Stage 7: Many boxes, one host (docs/30 A+B)
+**Goal**: one installation drives several boxes; an agent is created into a box and never
+moves; its desktop, skills, memory mirror and scheduled runs are that box's; the Grok VM is
+box `grok` beside the Docker box, not a second installation.
+**Success Criteria**: `boxes.json` migrates from `box.json` keeping the id; per-box desktop
+floors; a two-box orchestrator test where writes, skills, desktops and memory follow the
+agent's box and a routine on the attached box runs as its agent; detach refused with residents;
+`/desktop/b/<boxId>/<index>` reaches the attached box; the dialog chooses a box once.
+**Status**: Complete (2026-09-02) on `feat/multi-box` — `src/box/boxes.ts`, registry and
+orchestrator per-box wiring, `/api/boxes`, CLI `box attach|detach|list`, UI box field,
+`attach-grok.sh` registering the VM; the UI groups agents by box, labels the chat and desktop
+with the box, and Settings has a Boxes block (attach/detach). Live on main since 2026-09-02
+night: `agentbox-box` (6 agents) + `grok` (Kai, desktop :10 on Grok Bot's VM). Stage D shipped
+the same night (control-plane `box.role`, collector mirror, `/api/admin/boxes*`). Open: docs/30
+Stage C (cross-box file transfer).
+
+## Stage 8: The seven small ones from the 2026-09-03 triage (docs/11)
+**Goal**: close the entries whose next step was a morning's work each, so the list that
+remains is only designs and data: R8's two riders, R24's stamp, R39's security entry, R28's
+notes ablation, R36's MCP reload, R26's skill roots, and R25 settled by facts.
+**Success Criteria**: steering waits while a Stop hook's send-back runs and a fork join wakes
+on an instruction (tests); the turn ledger says model/build/promptHash; `hooks.json` with loose
+permissions is refused and docs/10 S-9 exists; `AGENTBOX_ABLATE=notes` and `golden
+--memory-from` give the style tier a real ablation run; `mcp reload` applies a config edit
+without a restart; `skillRoots` is an ordered search path with collisions reported.
+**Status**: Complete (2026-09-02) on `feat/triage-seven`. R25 closed without code: p2p on one
+key is a recorded decision, the "unreachable" file is the live 1:1, the record exists. Suite
+1056, floor 1056.
+
+## Stage 9: The turn engine minds the person (docs/31)
+**Goal**: a person-opened turn cannot end with an unverified verdict about the world, and the
+model's opening line reaches the chat while its tools run; read-only tools run in parallel.
+**Success Criteria**: interim line delivered once per turn and excluded from the final reply
+(test); three parallel reads finish in one read's time, order preserved (test); `tool_choice`
+carried on both wires (test); the guards fire once per turn, are logged, and `AGENTBOX_GUARDS=0`
+silences them (tests); golden `newer-than-you` passes; recap and epistemic paragraph shipped;
+per-turn reminder gated by model family; `[conduct]` counters visible in the web log.
+**Status**: Complete (2026-09-02, `feat/turn-engine`) except 2c the prompt floor, which stays its
+own item. `src/host/guards.ts` + tests; turn engine: interim event, parallel runs, forceTools,
+guards, closing nudge, reminder; channel manager delivers the interim line; golden
+`newer-than-you` + invariant; suite 1070, floor 1070. Live: docs/31 §6.
+
+## Stage 10: Coordination as protocol, slice one (docs/32)
+**Goal**: a fork survives a host restart as a record rather than a promise, and a fork child cannot
+reach a person, the board, the memory or a teammate.
+**Success Criteria**: `prepared` on disk before the child's message is admitted; a ledger that
+cannot be written stops the fork; a second process over the same home drops the open fork,
+cancels its inbox item, ends its turn record and tells the parent with the child's last words;
+`committed` only after the parent's results entry exists; the withheld set absent from a fork's
+offer and refused at dispatch; no MCP tools in a fork.
+**Status**: Complete (2026-09-03) on `feat/r30-ledger` after Codex's hostile review of v1 (12
+findings, all verified). Slice two (2026-09-03): boxd caller-minted job ids + exit files +
+recovery; Delegate in the ledger; settled by Jobs, the MCP face's renewal, or the sweep. Still
+deferred: leases (a resource model first).
+
+## Stage 11: The box gets an MCP face (docs/33)
+**Goal**: a delegated engine inside the box can call the host's MCP tools without a credential
+ever entering the box, under exactly the tools the delegating turn named and may itself call.
+**Success Criteria**: a route answers `tools/list` with the snapshotted allow-list and one 401 for
+every wrong way in; a delegated call that would need approval is refused and logged without its
+input; the lease follows `box.jobs()`; `mcp reload` revokes; presets write one config file per
+route with the token only in the environment; an attached box gets no face and says so.
+**Status**: Complete (2026-09-03) on `feat/mcp-face` after Codex's review of v1 (14 findings,
+all verified). Open: a live delegate against a configured MCP server; the VM shim (slice two).
+
+## Stage 12: Extensions (docs/34, R36)
+**Goal**: an operator can add a tool or a turn-event listener by dropping a file in
+`~/.agentbox/extensions/` and reloading, without restarting the web server.
+**Success Criteria**: a file's tools appear as `ext__<name>` in the MCP manager and run in-process;
+listeners receive turn events; reload picks up an edit and refuses a duplicate name; a loose or
+broken file is a problem line, not a failed start; a config reload keeps the in-process server.
+**Status**: Complete (2026-09-03) on `feat/extensions`. Suite 1095, floor 1095.
+

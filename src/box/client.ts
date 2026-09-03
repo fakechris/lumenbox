@@ -265,7 +265,7 @@ export class BoxClient {
    */
   startJob(
     command: string,
-    options: { cwd?: string; env?: Record<string, string>; display?: number; owner?: string } = {}
+    options: { cwd?: string; env?: Record<string, string>; display?: number; owner?: string; jobId?: string } = {}
   ): Promise<JobStartedResult> {
     return this.post<JobStartedResult>("/exec", {
       command,
@@ -274,6 +274,7 @@ export class BoxClient {
       env: options.env,
       display: options.display,
       owner: options.owner,
+      job_id: options.jobId,
     });
   }
 

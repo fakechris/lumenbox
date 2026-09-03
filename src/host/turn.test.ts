@@ -10,7 +10,7 @@
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type Anthropic from "@anthropic-ai/sdk";
@@ -2629,6 +2629,359 @@ test("hooks in Claude Code's dialect: PreToolUse blocks a call, Stop sends the m
       .map(entry => entry.text);
     assert.deepEqual(said.slice(-2), ["done", "goodbye"]);
   } finally {
+    cleanup();
+  }
+});
+
+test("steering is left queued while the model is finishing: a Stop hook's send-back does not absorb it (R8)", async () => {
+  const { registry, cleanup } = fixture();
+  try {
+    const ada = registry.create({ name: "Ada" });
+    const bus = new AgentBus(registry, async () => {});
+    const { box } = stubBox();
+    const hooks = new HookRunner({
+      path: null,
+      config: {
+        Stop: [
+          {
+            hooks: [
+              {
+                type: "command",
+                // Sends the model back once, and while doing so the user speaks.
+                command: `input=$(cat); case "$input" in *'"stop_hook_active":true'*) exit 0;; esac; echo '{"decision":"block","reason":"also say goodbye"}'`,
+              },
+            ],
+          },
+        ],
+      },
+    });
+    const capture: Capture = { params: [] };
+    const client = fakeModel(
+      ({ index }) => {
+        if (index === 0) {
+          // The user's follow-up lands while the model is producing its final text.
+          bus.sendFromUser(ada.id, "one more thing: rename it");
+          return message([textBlock("done")]);
+        }
+        return message([textBlock("goodbye")]);
+      },
+      { capture }
+    );
+    await runTurn(
+      ada,
+      [{ id: "m-fin", fromId: "user", fromName: "user", text: "wrap up", priority: false, receivedAt: "" }],
+      new AbortController().signal,
+      { client, registry, bus, box, resolution: undefined, hooks }
+    );
+
+    // Round 2 carried the hook's note and nothing else: the follow-up was not injected on a
+    // loop that was stopping.
+    assert.equal(capture.params.length, 2);
+    const second = JSON.stringify(capture.params[1]?.messages ?? []);
+    assert.match(second, /\[Stop hook\] also say goodbye/);
+    assert.doesNotMatch(second, /rename it/);
+    // It is still queued, and opens the next turn instead.
+    assert.equal(bus.pendingCount(ada.id), 1);
+  } finally {
+    cleanup();
+  }
+});
+
+// ── docs/31 layer 1: the engine minds the person ───────────────────────────────────────
+
+test("reads asked for together run together; a shell call between them runs alone; results keep the model's order (docs/31 1c)", async () => {
+  const { registry, cleanup } = fixture();
+  try {
+    const ada = registry.create({ name: "Ada" });
+    const bus = new AgentBus(registry, async () => {});
+    const timeline: { name: string; at: number }[] = [];
+    const t0 = Date.now();
+    const box = {
+      readFile: async (path: string) => {
+        timeline.push({ name: `read ${path}`, at: Date.now() - t0 });
+        await new Promise(resolve => setTimeout(resolve, 80));
+        return { content: `contents of ${path}` };
+      },
+      exec: async (command: string) => {
+        timeline.push({ name: `exec ${command}`, at: Date.now() - t0 });
+        await new Promise(resolve => setTimeout(resolve, 20));
+        return { stdout: "ran", stderr: "", exit_code: 0, timed_out: false };
+      },
+    } as unknown as BoxClient;
+    const capture: Capture = { params: [] };
+    const client = fakeModel(
+      ({ index }) =>
+        index === 0
+          ? message(
+              [
+                toolUseBlock("read_file", { path: "/a" }, "r1"),
+                toolUseBlock("read_file", { path: "/b" }, "r2"),
+                toolUseBlock("read_file", { path: "/c" }, "r3"),
+                toolUseBlock("bash", { command: "touch x" }, "s1"),
+                toolUseBlock("read_file", { path: "/d" }, "r4"),
+              ],
+              "tool_use"
+            )
+          : message([textBlock("read them all")]),
+      { capture }
+    );
+    const started = Date.now();
+    await runTurn(
+      ada,
+      [{ id: "m-par", fromId: "user", fromName: "user", text: "read a, b, c, then d", priority: false, receivedAt: "" }],
+      new AbortController().signal,
+      { client, registry, bus, box, resolution: undefined }
+    );
+    const elapsed = Date.now() - started;
+    // Three reads in parallel (~80ms), then the shell (~20ms), then one read (~80ms): well
+    // under the ~340ms a serial loop would take.
+    assert.ok(elapsed < 300, `took ${elapsed}ms; a serial loop would take ~340ms`);
+    // The shell ran only after the first three reads had all *started*, and /d only after
+    // the shell finished.
+    const startOf = (name: string) => timeline.find(entry => entry.name === name)!.at;
+    assert.ok(startOf("exec touch x") >= Math.max(startOf("read /a"), startOf("read /b"), startOf("read /c")));
+    assert.ok(startOf("read /d") >= startOf("exec touch x") + 20);
+    // Results come back in the order the model asked, regardless of finish order.
+    const results = capture.params[1]?.messages.at(-1)?.content as { tool_use_id: string }[];
+    assert.deepEqual(results.map(block => block.tool_use_id), ["r1", "r2", "r3", "s1", "r4"]);
+  } finally {
+    cleanup();
+  }
+});
+
+test("the opening line beside the first tool calls is handed to the chat once, and stays out of the reply (docs/31 1a)", async () => {
+  const { registry, cleanup } = fixture();
+  try {
+    const ada = registry.create({ name: "Ada" });
+    const bus = new AgentBus(registry, async () => {});
+    const { box } = stubBox();
+    const events: { type: string; text?: string }[] = [];
+    const client = fakeModel(({ index }) =>
+      index === 0
+        ? message([textBlock("你说得对，我先查一下。"), toolUseBlock("bash", { command: "ls" }, "t1")], "tool_use")
+        : index === 1
+          ? message([textBlock("还在查。"), toolUseBlock("bash", { command: "ls -a" }, "t2")], "tool_use")
+          : message([textBlock("查到了：两个都在 8 月 14 日发布。")])
+    );
+    await runTurn(
+      ada,
+      [{ id: "m-int", fromId: "user", fromName: "user", text: "GLM-5.3 和 Qwen3.8-27B 是新发布的吧", priority: false, receivedAt: "" }],
+      new AbortController().signal,
+      { client, registry, bus, box, resolution: undefined, onEvent: event => events.push(event as { type: string; text?: string }) }
+    );
+    const interim = events.filter(event => event.type === "interim");
+    assert.deepEqual(interim.map(event => event.text), ["你说得对，我先查一下。"], "once, and only the opening line");
+    // The final reply is the last plain entry only; the opening line is not repeated in it.
+    const said = (registry.readTranscript(ada.id) as { role: string; kind?: string; text?: string }[])
+      .filter(entry => entry.role === "assistant" && entry.kind === undefined)
+      .map(entry => entry.text);
+    assert.deepEqual(said, ["查到了：两个都在 8 月 14 日发布。"]);
+  } finally {
+    cleanup();
+  }
+});
+
+test("a hidden wake gets no interim line: nobody is waiting on a scheduled run (docs/31 1a)", async () => {
+  const { registry, cleanup } = fixture();
+  try {
+    const ada = registry.create({ name: "Ada" });
+    const bob = registry.create({ name: "Bob" });
+    const bus = new AgentBus(registry, async () => {});
+    const { box } = stubBox();
+    const events: { type: string }[] = [];
+    const client = fakeModel(({ index }) =>
+      index === 0
+        ? message([textBlock("looking"), toolUseBlock("bash", { command: "ls" }, "t1")], "tool_use")
+        : message([textBlock("done")])
+    );
+    await runTurn(
+      ada,
+      [{ id: "m-peer", fromId: bob.id, fromName: "Bob", text: "please check the build", priority: false, receivedAt: "" }],
+      new AbortController().signal,
+      { client, registry, bus, box, resolution: undefined, onEvent: event => events.push(event) }
+    );
+    assert.equal(events.filter(event => event.type === "interim").length, 0);
+  } finally {
+    cleanup();
+  }
+});
+
+const MINIMAX_PROFILE = {
+  label: "test-minimax",
+  model: "MiniMax-M3",
+  maxTokens: 32_000,
+  vision: true,
+  adaptiveThinking: false,
+  effort: false,
+  promptCaching: false,
+  auth: "bearer" as const,
+  keyEnv: "TEST_KEY",
+};
+
+test("a verdict from memory on a turn with no tool call is sent back once with a forced tool call; the verdict is not the reply (docs/31 1e)", async () => {
+  const { registry, cleanup } = fixture();
+  try {
+    const ada = registry.create({ name: "Ada" });
+    const bus = new AgentBus(registry, async () => {});
+    const { box } = stubBox();
+    const capture: Capture = { params: [] };
+    const client = fakeModel(
+      ({ index }) =>
+        index === 0
+          ? message([textBlock("Qwen 没有 27B，GLM 目前公开到 4.x，没有 5.3-flash。")])
+          : index === 1
+            ? message([textBlock("我先查一下。"), toolUseBlock("bash", { command: "curl example" }, "t1")], "tool_use")
+            : message([textBlock("查到了：两个都在 2026 年 8 月 14 日发布。")]),
+      { capture }
+    );
+    await runTurn(
+      ada,
+      [{ id: "m-guard", fromId: "user", fromName: "user", text: "qwen-27B 或 glm-5.3-flash 为基座，详细介绍一下", priority: false, receivedAt: "" }],
+      new AbortController().signal,
+      { client, registry, bus, box, resolution: undefined, provider: MINIMAX_PROFILE }
+    );
+    // Round 1 carried the nudge and demanded a tool call; the nudge itself is not on the record.
+    const second = capture.params[1]!;
+    assert.deepEqual(second.tool_choice, { type: "any" });
+    assert.match(JSON.stringify(second.messages.at(-1)?.content), /\[harness\].*先用工具/);
+    assert.equal(capture.params[2]?.tool_choice, undefined, "the demand is spent after one round");
+    const transcript = registry.readTranscript(ada.id) as { role: string; kind?: string; text?: string }[];
+    assert.ok(!JSON.stringify(transcript).includes("[harness]"), "the nudge is not in the durable record");
+    // The verdict is on the record as blocks, not as a reply; the reply is the checked answer only.
+    const replies = transcript.filter(entry => entry.role === "assistant" && entry.kind === undefined).map(entry => entry.text);
+    assert.deepEqual(replies, ["查到了：两个都在 2026 年 8 月 14 日发布。"]);
+    assert.ok(transcript.some(entry => entry.role === "assistant" && entry.kind === "blocks" && JSON.stringify(entry).includes("没有 27B")));
+    // And the person's message carried the reminder for this model family, in Chinese.
+    const opening = JSON.stringify(capture.params[0]?.messages.at(-1)?.content);
+    assert.match(opening, /<system_reminder>/);
+    assert.match(opening, /先查再说/);
+  } finally {
+    cleanup();
+  }
+});
+
+test("a ruling after a tool ran is the model's to make; the guards are bounded and switchable (docs/31 1e)", async () => {
+  const { registry, cleanup } = fixture();
+  const previous = process.env.AGENTBOX_GUARDS;
+  try {
+    const ada = registry.create({ name: "Ada" });
+    const bus = new AgentBus(registry, async () => {});
+    const { box } = stubBox();
+    // After a search, "does not exist" is a finding, not a guess.
+    const capture: Capture = { params: [] };
+    const client = fakeModel(
+      ({ index }) =>
+        index === 0
+          ? message([toolUseBlock("bash", { command: "search" }, "t1")], "tool_use")
+          : message([textBlock("查过了：这个型号不存在，官方页面没有。")]),
+      { capture }
+    );
+    await runTurn(
+      ada,
+      [{ id: "m-after", fromId: "user", fromName: "user", text: "Zephyrus QX-880 是真的吗", priority: false, receivedAt: "" }],
+      new AbortController().signal,
+      { client, registry, bus, box, resolution: undefined, provider: MINIMAX_PROFILE }
+    );
+    assert.equal(capture.params.length, 2, "no send-back after evidence");
+
+    // A model that keeps offering is sent back twice and then let go.
+    const bob = registry.create({ name: "Bob" });
+    const stubborn: Capture = { params: [] };
+    const offers = fakeModel(() => message([textBlock("要不要我现在去查一下？")]), { capture: stubborn });
+    await runTurn(
+      bob,
+      [{ id: "m-stub", fromId: "user", fromName: "user", text: "GLM-5.3 发布了吗", priority: false, receivedAt: "" }],
+      new AbortController().signal,
+      { client: offers, registry, bus, box, resolution: undefined, provider: MINIMAX_PROFILE }
+    );
+    assert.equal(stubborn.params.length, 3, "two nudges, then the answer goes out as is");
+    const bobSaid = (registry.readTranscript(bob.id) as { role: string; kind?: string; text?: string }[])
+      .filter(entry => entry.role === "assistant" && entry.kind === undefined);
+    assert.equal(bobSaid.length, 1, "the third answer is delivered, flagged in the log");
+
+    // Switched off, the same model ends on round 0.
+    process.env.AGENTBOX_GUARDS = "0";
+    const vic = registry.create({ name: "Vic" });
+    const off: Capture = { params: [] };
+    await runTurn(
+      vic,
+      [{ id: "m-off", fromId: "user", fromName: "user", text: "GLM-5.3 发布了吗", priority: false, receivedAt: "" }],
+      new AbortController().signal,
+      { client: fakeModel(() => message([textBlock("要不要我现在去查一下？")]), { capture: off }), registry, bus, box, resolution: undefined, provider: MINIMAX_PROFILE }
+    );
+    assert.equal(off.params.length, 1);
+  } finally {
+    if (previous === undefined) delete process.env.AGENTBOX_GUARDS;
+    else process.env.AGENTBOX_GUARDS = previous;
+    cleanup();
+  }
+});
+
+test("acknowledged, ran tools, ended silent: one closing nudge, then the result (docs/31 1b)", async () => {
+  const { registry, cleanup } = fixture();
+  try {
+    const ada = registry.create({ name: "Ada" });
+    const bus = new AgentBus(registry, async () => {});
+    const { box } = stubBox();
+    const capture: Capture = { params: [] };
+    const client = fakeModel(
+      ({ index }) =>
+        index === 0
+          ? message([textBlock("收到，我看一下。"), toolUseBlock("bash", { command: "ls" }, "t1")], "tool_use")
+          : index === 1
+            ? message([])
+            : message([textBlock("看完了：三个文件，没有问题。")]),
+      { capture }
+    );
+    await runTurn(
+      ada,
+      [{ id: "m-close", fromId: "user", fromName: "user", text: "看一下目录", priority: false, receivedAt: "" }],
+      new AbortController().signal,
+      { client, registry, bus, box, resolution: undefined, provider: MINIMAX_PROFILE }
+    );
+    assert.equal(capture.params.length, 3);
+    assert.match(JSON.stringify(capture.params[2]?.messages.at(-1)?.content), /\[harness\].*把结果告诉他们/);
+    const said = (registry.readTranscript(ada.id) as { role: string; kind?: string; text?: string }[])
+      .filter(entry => entry.role === "assistant" && entry.kind === undefined)
+      .map(entry => entry.text);
+    assert.deepEqual(said, ["看完了：三个文件，没有问题。"]);
+  } finally {
+    cleanup();
+  }
+});
+
+test("the engine commits a fork only after the results entry is on disk (docs/32 §1)", async () => {
+  const { registry, cleanup } = fixture();
+  const root = mkdtempSync(join(tmpdir(), "agentbox-turn-ledger-"));
+  try {
+    const { PendingWork } = await import("./pending-work.ts");
+    const ledgerPath = join(root, "pending-work.jsonl");
+    const ledger = new PendingWork(ledgerPath);
+    const ada = registry.create({ name: "Ada" });
+    // A bus whose child turns say one line each, so the join has findings to return.
+    const bus = new AgentBus(registry, async (record, inbound, _signal, conversation) => {
+      registry.appendTranscript(record.id, { role: "assistant", text: `read ${inbound.map(m => m.text).join(" ")}`, at: new Date().toISOString() }, conversation);
+    });
+    const { box } = stubBox();
+    const client = fakeModel(({ index }) =>
+      index === 0
+        ? message([toolUseBlock("Fork", { briefs: ["one", "two"] }, "f1")], "tool_use")
+        : message([textBlock("combined")])
+    );
+    await runTurn(
+      ada,
+      [{ id: "m-fork", fromId: "user", fromName: "user", text: "fan out", priority: false, receivedAt: "" }],
+      new AbortController().signal,
+      { client, registry, bus, box, resolution: undefined, pendingWork: ledger }
+    );
+    assert.deepEqual(ledger.open(), [], "committed by the engine");
+    const events = readFileSync(ledgerPath, "utf8").trim().split("\n").map(line => (JSON.parse(line) as { event: string }).event);
+    assert.deepEqual(events, ["prepared", "prepared", "admitted", "admitted", "committed", "committed"]);
+    // And the results entry the commit waited for is in the parent's transcript.
+    const transcript = registry.readTranscript(ada.id) as { role: string; kind?: string }[];
+    assert.ok(transcript.some(entry => entry.role === "user" && entry.kind === "results"));
+  } finally {
+    rmSync(root, { recursive: true, force: true });
     cleanup();
   }
 });

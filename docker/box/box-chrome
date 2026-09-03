@@ -27,6 +27,20 @@ DESKTOP="$(printf '%s' "${DISPLAY:-:0}" | tr -cd '0-9')"
 # real-time scheduling, which a runaway process could use to starve the host — a bad trade
 # for a browser that is a little slower while the agent is compiling.
 
+CHROME_BIN="${CHROME_BIN:-$(which google-chrome 2>/dev/null || which chromium 2>/dev/null || which chromium-browser 2>/dev/null || echo "")}"
+if [ -z "$CHROME_BIN" ]; then
+  if [ -x "/opt/google/chrome/google-chrome" ]; then
+    CHROME_BIN="/opt/google/chrome/google-chrome"
+  elif [ -x "/usr/bin/google-chrome" ]; then
+    CHROME_BIN="/usr/bin/google-chrome"
+  elif [ -x "/usr/bin/chromium" ]; then
+    CHROME_BIN="/usr/bin/chromium"
+  else
+    echo "[box-chrome] ERROR: neither google-chrome nor chromium found in PATH" >&2
+    exit 1
+  fi
+fi
+
 PROFILE="${CHROME_PROFILE:-$HOME/.config/box-chrome-${DESKTOP:-0}}"
 mkdir -p "$PROFILE"
 
@@ -36,6 +50,26 @@ mkdir -p "$PROFILE"
 # URL to the window already open there.
 if ! pgrep -f -- "--user-data-dir=$PROFILE" >/dev/null 2>&1; then
   rm -f "$PROFILE"/Singleton{Lock,Cookie,Socket} 2>/dev/null || true
+fi
+
+# Seed a fresh profile from an existing one, once, so the browser starts with the logins the
+# person already made on this machine. Best effort and explicit: CHROME_SEED_PROFILE names the
+# source (on Grok Bot's VM that is ~/chrome-profile; on a desktop, ~/.config/google-chrome);
+# CHROME_SEED_PROFILE=none skips it. A live Chrome may be mid-write, so a torn copy is possible
+# and harmless — the worst case is a login that has to be repeated.
+SEED="${CHROME_SEED_PROFILE:-}"
+if [ -z "$SEED" ]; then
+  for candidate in "$HOME/chrome-profile" "$HOME/.config/google-chrome" "$HOME/.config/chromium"; do
+    if [ -f "$candidate/Default/Network/Cookies" ]; then SEED="$candidate"; break; fi
+  done
+fi
+if [ "$SEED" != "none" ] && [ -n "$SEED" ] && [ ! -f "$PROFILE/Default/Network/Cookies" ] && [ -f "$SEED/Default/Network/Cookies" ]; then
+  echo "[box-chrome] seeding $PROFILE from $SEED (cookies, preferences, local storage)"
+  mkdir -p "$PROFILE/Default/Network"
+  cp "$SEED/Default/Network/Cookies" "$PROFILE/Default/Network/" 2>/dev/null || true
+  cp "$SEED/Default/Preferences" "$PROFILE/Default/" 2>/dev/null || true
+  cp -r "$SEED/Default/Local Storage" "$PROFILE/Default/" 2>/dev/null || true
+  [ -f "$SEED/Local State" ] && cp "$SEED/Local State" "$PROFILE/" 2>/dev/null || true
 fi
 
 # Through the egress proxy when the box has one, so the browser's traffic leaves from the
@@ -56,6 +90,11 @@ fi
 # actions would be advisory.
 DEBUG_PORT=$((9222 + ${DESKTOP:-0}))
 
+# A plain WM_CLASS. With --user-data-dir Chrome names its windows
+# "google-chrome (/path/to/profile)", which no launcher matches, so the dock shows the
+# running browser beside the pinned one as if they were two programs.
+CHROME_CLASS="${CHROME_CLASS:-$(basename "$CHROME_BIN")}"
+
 PROXY_ARGS=()
 if [ -n "${AGENTBOX_EGRESS_RELAY:-}" ]; then
   PROXY_ARGS=(
@@ -64,7 +103,8 @@ if [ -n "${AGENTBOX_EGRESS_RELAY:-}" ]; then
   )
 fi
 
-exec chromium \
+exec "$CHROME_BIN" \
+  --class="$CHROME_CLASS" \
   --user-data-dir="$PROFILE" \
   --remote-debugging-port="$DEBUG_PORT" \
   --remote-allow-origins=* \

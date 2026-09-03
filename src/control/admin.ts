@@ -34,6 +34,8 @@ export interface AdminDeps {
   allocator: BoxAllocator;
   /** Who is asking, already verified by the gateway's signed cookie. */
   session: Session;
+  /** Reaches the tenant's primary box for the attach/detach it forwards. Injectable for tests. */
+  fetchImpl?: typeof fetch;
   log?: (line: string) => void;
 }
 
@@ -46,6 +48,10 @@ export type AdminRoute =
   | { kind: "audit" }
   | { kind: "restart-box" }
   | { kind: "destroy-box" }
+  /** The tenant's boxes: the primary and what it drives beside it (docs/30 Stage D). */
+  | { kind: "boxes" }
+  | { kind: "attach-box" }
+  | { kind: "detach-box" }
   | undefined;
 
 /**
@@ -65,6 +71,9 @@ export function adminRouteOf(method: string, pathname: string): AdminRoute {
   if (method === "GET" && rest === "audit") return { kind: "audit" };
   if (method === "POST" && rest === "box/restart") return { kind: "restart-box" };
   if (method === "POST" && rest === "box/destroy") return { kind: "destroy-box" };
+  if (method === "GET" && rest === "boxes") return { kind: "boxes" };
+  if (method === "POST" && rest === "boxes/attach") return { kind: "attach-box" };
+  if (method === "POST" && rest === "boxes/detach") return { kind: "detach-box" };
 
   const member = /^users\/([A-Za-z0-9-]+)$/.exec(rest);
   if (member !== null) {
@@ -247,6 +256,88 @@ export async function handleAdmin(
         .filter(row => row.tenantId === tenant.id)
         .slice(0, limit);
       return { status: 200, body: { rows } };
+    }
+
+    case "boxes": {
+      const primary = store.boxForTenant(tenant.id);
+      const attached = store.attachedBoxesOf(tenant.id).map(row => ({
+        id: row.id,
+        name: row.externalId,
+        role: row.role,
+        boxdUrl: row.boxdUrl,
+        state: row.state,
+        lastSeenAt: row.lastSeenAt,
+        health: store.latestHealth(row.id) ?? null,
+      }));
+      return {
+        status: 200,
+        body: {
+          boxes: [
+            ...(primary === undefined
+              ? []
+              : [{ id: primary.id, name: primary.externalId, role: primary.role, boxdUrl: primary.boxdUrl, state: primary.state, lastSeenAt: primary.lastSeenAt, health: store.latestHealth(primary.id) ?? null }]),
+            ...attached,
+          ],
+        },
+      };
+    }
+
+    // Attaching goes *through* the primary: the installation is what drives the box (docs/30),
+    // and the control plane keeps a row for the fleet view. The URL is as the primary's
+    // container reaches it — host.docker.internal:13370 for a tunnel on this host, not 127.0.0.1.
+    case "attach-box": {
+      const name = String(body.name ?? "").trim();
+      const baseUrl = String(body.baseUrl ?? "").trim();
+      const token = String(body.token ?? "").trim();
+      const displayFloor = Number(body.displayFloor ?? 1);
+      if (!/^[A-Za-z0-9][A-Za-z0-9._-]{0,47}$/.test(name) || baseUrl === "" || token === "") {
+        return { status: 400, body: { error: "name, baseUrl and token are all needed." } };
+      }
+      const primary = await allocator.find(tenant.id);
+      if (primary === undefined) return { status: 404, body: { error: "This tenant has no box to attach to." } };
+      audit("admin.box.attach", name, { baseUrl, displayFloor });
+      const fetchImpl = deps.fetchImpl ?? fetch;
+      let reply: { ok: boolean; status: number; body: Record<string, unknown> };
+      try {
+        const response = await fetchImpl(`${primary.uiUrl}/api/boxes/attach`, {
+          method: "POST",
+          headers: { "content-type": "application/json", authorization: `Bearer ${primary.tokens.ui}` },
+          body: JSON.stringify({ name, baseUrl, token, displayFloor: Number.isInteger(displayFloor) && displayFloor >= 1 ? displayFloor : 1 }),
+          signal: AbortSignal.timeout(20_000),
+        });
+        reply = { ok: response.ok, status: response.status, body: (await response.json().catch(() => ({}))) as Record<string, unknown> };
+      } catch (error) {
+        return { status: 502, body: { error: `The tenant's box did not answer: ${error instanceof Error ? error.message : String(error)}` } };
+      }
+      if (!reply.ok) return { status: reply.status === 404 ? 501 : reply.status, body: { error: String(reply.body.error ?? (reply.status === 404 ? "The tenant's box predates attached boxes; upgrade it." : `attach failed (${reply.status})`)) } };
+      const row = store.upsertAttachedBox({ tenantId: tenant.id, name, boxdUrl: baseUrl, state: reply.body.connected === true ? "ready" : "unreachable" });
+      log(`${tenant.name}: attached box ${name} at ${baseUrl}`);
+      return { status: 200, body: { attached: name, id: row.id, connected: reply.body.connected === true, detail: reply.body.detail ?? "" } };
+    }
+
+    case "detach-box": {
+      const name = String(body.name ?? "").trim();
+      if (name === "") return { status: 400, body: { error: "name is needed." } };
+      const primary = await allocator.find(tenant.id);
+      if (primary === undefined) return { status: 404, body: { error: "This tenant has no box." } };
+      audit("admin.box.detach", name);
+      const fetchImpl = deps.fetchImpl ?? fetch;
+      try {
+        const response = await fetchImpl(`${primary.uiUrl}/api/boxes/detach`, {
+          method: "POST",
+          headers: { "content-type": "application/json", authorization: `Bearer ${primary.tokens.ui}` },
+          body: JSON.stringify({ name }),
+          signal: AbortSignal.timeout(20_000),
+        });
+        if (!response.ok) {
+          const detail = (await response.json().catch(() => ({}))) as { error?: string };
+          return { status: response.status, body: { error: detail.error ?? `detach failed (${response.status})` } };
+        }
+      } catch (error) {
+        return { status: 502, body: { error: `The tenant's box did not answer: ${error instanceof Error ? error.message : String(error)}` } };
+      }
+      store.retireAttachedBox(tenant.id, name);
+      return { status: 200, body: { detached: name } };
     }
 
     case "restart-box": {

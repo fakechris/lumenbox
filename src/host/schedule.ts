@@ -388,6 +388,10 @@ export interface Scheduled {
   authoredBy?: string;
   /** Why it exists, in the author's words. */
   because?: string;
+  /** Off until a person turns it on. Skipped by the tick, refused by runNow, shown in status. */
+  paused?: boolean;
+  /** Which box the file lives in (docs/30); the run goes to an agent of that box. */
+  boxId?: string;
 }
 
 /** A skill that fires on a matching message. Same runner rules as a schedule. */
@@ -398,6 +402,8 @@ export interface Listening {
   match: string;
   chat?: string;
   runAs?: string;
+  paused?: boolean;
+  boxId?: string;
 }
 
 /** Whether a message matches a listener's `match:` — a /regex/flags, or a phrase, case-insensitively. */
@@ -476,7 +482,8 @@ export interface SchedulerDeps {
    */
   run: (agent: string, prompt: string, deliver?: string) => Promise<void>;
   /** Who a schedule wakes when it names nobody. */
-  defaultAgent: () => string | undefined;
+  /** The agent a skill runs as when its file names none: the box's first, or the installation's. */
+  defaultAgent: (boxId?: string) => string | undefined;
   /** Resolves a name to an agent id, so `agent:` can be compared against the default. */
   resolveAgent?: (nameOrId: string) => string | undefined;
   /**
@@ -617,6 +624,7 @@ export class Scheduler {
     }
     const fired: string[] = [];
     for (const skill of listening) {
+      if (skill.paused === true) continue;
       if (skill.chat !== undefined && skill.chat !== message.chatKey && !message.chatKey.startsWith(`${skill.chat}/`)) continue;
       if (!listenerMatches(skill.match, message.text)) continue;
       if (this.running.has(skill.slug)) {
@@ -664,6 +672,9 @@ export class Scheduler {
     }
 
     for (const skill of scheduled) {
+      // Paused is not due. Not logged per tick: a routine somebody switched off would fill the
+      // log with the fact every thirty seconds.
+      if (skill.paused === true) continue;
       if (!isDue(skill.schedule, this.now(), this.lastRun.get(skill.slug), skill.timezone)) continue;
 
       if (this.running.has(skill.slug)) {
@@ -727,6 +738,7 @@ export class Scheduler {
       because: string | undefined;
       lastRun: string | undefined;
       running: boolean;
+      paused: boolean;
     }[]
   > {
     const skills = await this.deps.due().catch(() => []);
@@ -742,6 +754,7 @@ export class Scheduler {
       because: skill.because,
       lastRun: this.lastRun.get(skill.slug)?.toISOString(),
       running: this.running.has(skill.slug),
+      paused: skill.paused === true,
     }));
   }
 
@@ -775,8 +788,8 @@ export class Scheduler {
    * (docs/13). Until then this errs towards refusing work rather than running somebody
    * else's.
    */
-  private runnerFor(skill: { slug: string; name: string; runAs?: string }): string | undefined {
-    const fallback = this.deps.defaultAgent();
+  private runnerFor(skill: { slug: string; name: string; runAs?: string; boxId?: string }): string | undefined {
+    const fallback = this.deps.defaultAgent(skill.boxId);
     if (skill.runAs === undefined) return fallback;
     const named = this.deps.resolveAgent?.(skill.runAs);
     if (named !== undefined && named === fallback) return named;
@@ -801,6 +814,7 @@ export class Scheduler {
     const skills = await this.deps.due().catch(() => []);
     const skill = skills.find(candidate => candidate.slug === slug);
     if (skill === undefined) return { ok: false, reason: `No scheduled skill "${slug}".` };
+    if (skill.paused === true) return { ok: false, reason: `${skill.name} is paused; turn it on first.` };
     if (this.running.has(slug)) return { ok: false, reason: `${skill.name} is already running.` };
     const agent = this.runnerFor(skill);
     if (agent === undefined) return { ok: false, reason: `No agent to run ${skill.name}.` };

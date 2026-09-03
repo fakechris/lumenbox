@@ -24,6 +24,9 @@ import { describeEnvShape, envShape, looksLikeEnvFile } from "./env-shape.ts";
 import { guardShellCommand } from "./ui-automation-guard.ts";
 import { dedupe, dedupeKey, validateRecord } from "./memory.ts";
 import { type Claims, heldElsewhere } from "./claims.ts";
+import { forkTag, type CommitHow, type PendingWork } from "./pending-work.ts";
+import { MCP_FACE_DIR, MCP_FACE_TOKEN_VARIABLE, type McpFace } from "./mcp-face.ts";
+import { randomBytes } from "node:crypto";
 import { MAIN_CONVERSATION } from "../agents/registry.ts";
 import { describeTask, isLive, isTaskStatus, TASK_STATUSES, type TaskStore } from "./tasks.ts";
 import { ABSENT, versionOf, type FileVersions } from "./files.ts";
@@ -37,6 +40,15 @@ import {
   type TodoStatus,
 } from "./durable.ts";
 import type { BrowserRequest, ComputerAction } from "../protocol/index.ts";
+import { skillSlugOf } from "./skill-provenance.ts";
+import { SKILL_FILENAME } from "./skills.ts";
+import {
+  type BotTemplate,
+  TEMPLATE_SOURCE_PREFIX,
+  describeTemplate,
+  packTemplate,
+  stampTemplateWrite,
+} from "./template.ts";
 
 export interface ToolContext {
   agent: AgentRecord;
@@ -133,6 +145,16 @@ export interface ToolContext {
    * transcript that is its evidence.
    */
   turnId?: string;
+  /** The piece of work this turn is an attempt at (docs/11 R30), for the fork ledger's record. */
+  workId?: string;
+  /** The fork ledger (docs/32). Absent means forks are not recorded — tests, or nobody. */
+  pendingWork?: PendingWork;
+  /** The MCP face (docs/33): routes a delegated engine may call the host's MCP tools through. */
+  mcpFace?: McpFace;
+  /** The MCP tool names this turn itself may call — profile ∩ scope ∩ chat scope, as the turn computed them. */
+  allowedMcpTools?: readonly string[];
+  /** What kind of box the agent's is: an attached one cannot reach the host's loopback. */
+  boxKind?: "docker" | "attached";
   /**
    * Reads Feishu documents with the bot's own workspace identity. Present only where
    * a Feishu app is configured; absent withholds the tool entirely, so an agent on an
@@ -144,11 +166,33 @@ export interface ToolContext {
     noteWrite(input: { path: string; agentId: string; agentName: string; tool: string }): string | undefined;
     noteCommand(input: { command: string; agentId: string; agentName: string }): string[];
   };
+  /**
+   * The template this turn is installing, when it is an imported bot's setup turn (docs/29).
+   *
+   * Set by the host for exactly that turn. While it is set, a skill file the agent writes is
+   * stamped `authored_by: template:<id>` and a routine among them `paused: true` whether or not
+   * the agent remembered, and a memory it keeps is recorded with the template as its source.
+   * The agent cannot set or clear it — that is the point.
+   */
+  templateSetup?: string;
+  /**
+   * Where a packed template is staged, when sharing is on. Absent withholds `PackTemplate`
+   * entirely, so an agent on an installation without it never learns it might have asked.
+   */
+  templates?: {
+    stage(agentId: string, template: BotTemplate): { id: string; version: number; path: string };
+  };
 }
 
 /** A tool result: text for the model, plus optional images. */
 export interface ToolOutcome {
   text: string;
+  /**
+   * Fork ledger ids to commit once this result is durably in the parent's transcript
+   * (docs/32 §1). Written by the turn engine after the results entry is appended — the tool
+   * cannot know that moment, and committing before it is the review's finding #5.
+   */
+  commit?: { id: string; how: CommitHow }[];
   /** base64 image payloads to attach to the tool result. */
   images?: { mediaType: "image/webp" | "image/png" | "image/jpeg" | "image/gif"; data: string }[];
   isError?: boolean;
@@ -174,6 +218,73 @@ export interface ToolOutcome {
  * by the tool that refuses to nest them, and by anyone reading the directory.
  */
 export const FORK_PREFIX = "fork/";
+
+/**
+ * Tools a round may run side by side (docs/31 layer 1c).
+ *
+ * Reads with no ordering between them: a search does not change what a file read returns,
+ * and three searches the model asked for together were meant together. Everything else —
+ * the shell, the desktop, the browser, every write, every MCP tool — runs alone, in the
+ * model's order, because "independent" is not something a name can promise for them.
+ * Hermes keeps the same split (`read_file, search_files, web_search, web_extract,
+ * session_search…` parallel; `terminal` never).
+ */
+export const PARALLEL_SAFE_TOOLS: ReadonlySet<string> = new Set([
+  "WebSearch",
+  "WebFetch",
+  "read_file",
+  "list_dir",
+  "Recall",
+  "ReadHistory",
+  "OtherThreads",
+  "ReadFeishuDoc",
+]);
+
+/** How many parallel-safe calls run at once; the rest of a run waits its turn. */
+export const PARALLEL_TOOL_LIMIT = 6;
+
+/**
+ * What a fork child may not do (docs/32 §2): reach a person or a teammate, change the board,
+ * remember for the team, or fan out again. Its one outward channel is its final message,
+ * which the turn that forked it reads. Hermes strips the same set from delegated children;
+ * it is the only mechanical form of "communication is not coordination" anyone has built.
+ * `OtherThreads` goes too: fork siblings share a prefix and would otherwise read each other.
+ *
+ * `RunOnHost` goes because it asks the person for approval, `computer` because it was never
+ * offered outside the main conversation and a forged call must not run it; MCP tools are not
+ * offered and the fork's context carries no MCP client, so a forged one is "unknown tool".
+ *
+ * Stated, not solved: `bash` and the browser reach the network. The fence is over *our*
+ * channels; egress is a scope's policy (R4), not a tool list's.
+ */
+export const FORK_WITHHELD_TOOLS: ReadonlySet<string> = new Set([
+  "RunOnHost",
+  "computer",
+  "SendToAgent",
+  "CreateAgent",
+  "UpdateAgent",
+  "Tasks",
+  "ClaimWork",
+  "RememberFact",
+  "PackTemplate",
+  "Delegate",
+  "Fork",
+  "AskUser",
+  "OtherThreads",
+]);
+
+/** Whether a conversation name is a fork child's. */
+export function isForkConversation(conversation: string | undefined): boolean {
+  return (conversation ?? "").startsWith(FORK_PREFIX);
+}
+
+/** The line a fork child's system prompt carries, so it knows what it is and is not. */
+export const FORK_PROMPT_LINE =
+  "# You are a fork\n\n" +
+  "You were forked by your own main conversation to work one slice of a larger job. Your findings " +
+  "go back to it as your final message — say them plainly and completely. You cannot message " +
+  "anyone, change the task board, remember for the team, ask a person, or fork again; if a slice " +
+  "needs one of those, say so in your findings and the turn that forked you will decide.";
 /**
  * How many forks one call may open.
  *
@@ -342,7 +453,11 @@ export function buildTools(
    */
   canUseDesktop = true,
   /** Whether this installation can read Feishu documents with the bot's identity. */
-  hasDocReader = false
+  hasDocReader = false,
+  /** Whether a packed template has somewhere to be staged (docs/29). */
+  canPackTemplate = false,
+  /** Whether this is a fork child's tool list (docs/32 §2): the withheld set is removed. */
+  fork = false
 ): Anthropic.Tool[] {
   const tools: Anthropic.Tool[] = [];
 
@@ -486,6 +601,14 @@ export function buildTools(
             cwd: {
               type: "string",
               description: "Directory to work in — usually a repository checkout.",
+            },
+            tools: {
+              type: "array",
+              items: { type: "string" },
+              description:
+                "MCP tools the engine may call through this host, by name (`server__tool`) or a " +
+                "whole server (`server__*`) — only ones you can call yourself. Name what the brief " +
+                "needs and nothing more: the engine sees exactly this list. Omit for none.",
             },
           },
           required: ["preset", "prompt"],
@@ -1279,7 +1402,95 @@ export function buildTools(
     });
   }
 
-  return withheldFrom(allowed, tools);
+  // Sharing a template is a conversation the bot leads (docs/29 §4): it reads its own memory,
+  // skills and routines, chooses, rewrites, and calls this once. The host packs from the live
+  // files, so the bot can generalise a skill it has and cannot invent one it does not.
+  if (canPackTemplate) {
+    tools.push({
+      name: "PackTemplate",
+      description:
+        "Stage a shareable template of yourself from what you selected, after following the " +
+        "export-template skill. Pass the storefront description, the memories to carry (job or " +
+        "convention facts only, in their original words minus anything private), the skills and " +
+        "routines by slug (with a rewritten body only where a detail had to be generalised — the " +
+        "host reads the live files and uses your body text for the part below the frontmatter, " +
+        "nothing else), and the connector names the work needs. The host drops what it cannot " +
+        "pack and names it; a credential or a memory about a person refuses the whole call — " +
+        "take it out and call again. Nothing is shared until the person publishes from the " +
+        "card; never say a template is shared before they do. Call this once, after one short " +
+        "line of what you are keeping and leaving out; do not paste a draft in chat.",
+      input_schema: {
+        type: "object",
+        properties: {
+          description: {
+            type: "string",
+            description:
+              "One to three sentences telling someone who has never seen you what you do and who " +
+              "you are for. Shown on the card and the share page. Detail goes in skills and memories.",
+          },
+          name: { type: "string", description: "The template's name. Defaults to your own." },
+          title: { type: "string", description: "A short role label. Defaults to your own." },
+          memory: {
+            type: "array",
+            description:
+              "Facts worth carrying: how the work is done, where things are read from, conventions. " +
+              "Original wording except what you took out. Not episodes, not notes, nothing about a person.",
+            items: {
+              type: "object",
+              properties: {
+                text: { type: "string" },
+                kind: { type: "string", enum: ["fact", "pitfall"] },
+                at: { type: "string", description: "The original record's date, when you know it." },
+              },
+              required: ["text"],
+            },
+          },
+          skills: {
+            type: "array",
+            description: "Skills to include, by folder slug. `body` replaces the markdown below the frontmatter and nothing else.",
+            items: {
+              type: "object",
+              properties: {
+                slug: { type: "string" },
+                body: { type: "string", description: "Rewritten job text, only when something had to be generalised. Never the raw file." },
+                description: { type: "string", description: "A rewritten one-line description, only when the file's has to change." },
+              },
+              required: ["slug"],
+            },
+          },
+          routines: {
+            type: "array",
+            description:
+              "Routines to include, by folder slug — the skills with a schedule or trigger. Chat keys, " +
+              "agent names and the timezone become {placeholders} the importing person fills in; you " +
+              "do not need to remove them yourself.",
+            items: {
+              type: "object",
+              properties: {
+                slug: { type: "string" },
+                body: { type: "string" },
+                description: { type: "string" },
+              },
+              required: ["slug"],
+            },
+          },
+          connectors: {
+            type: "array",
+            description: "Connector names the kept skills and routines depend on: feishu, dingtalk, telegram, browser, mcp:<server>. Names only; nothing installs.",
+            items: { type: "string" },
+          },
+          getting_started: {
+            type: "string",
+            description: "The slug of one included skill the new bot should read before it speaks, if there is one.",
+          },
+        },
+        required: ["description"],
+      },
+    });
+  }
+
+  const offered = withheldFrom(allowed, tools);
+  return fork ? offered.filter(tool => !FORK_WITHHELD_TOOLS.has(tool.name)) : offered;
 }
 
 /**
@@ -1332,6 +1543,17 @@ function formatExec(
   return parts.join("\n\n");
 }
 
+/**
+ * What a setup turn's write into a skill file becomes: stamped with the template it came from,
+ * and — for a routine — paused. Outside a setup turn, or outside the skills directory, the
+ * content is untouched.
+ */
+function templateStamp(context: ToolContext, path: string, content: string): string {
+  if (context.templateSetup === undefined) return content;
+  if (skillSlugOf(path) === undefined || !path.endsWith(`/${SKILL_FILENAME}`)) return content;
+  return stampTemplateWrite(content, context.templateSetup);
+}
+
 function requireBox(context: ToolContext): BoxClient {
   if (!context.box) {
     throw new Error(
@@ -1359,6 +1581,17 @@ export async function dispatchTool(
   });
   if (decision !== undefined && !decision.allow) {
     return { text: decision.reason, isError: true };
+  }
+  // The fence (docs/32 §2), at dispatch and not only in the offer: a forged or replayed call
+  // for a withheld tool is refused here whatever list the model was shown. `Fork` keeps its
+  // own refusal below, which says why a fork cannot fork.
+  if (isForkConversation(context.conversation) && FORK_WITHHELD_TOOLS.has(name) && name !== "Fork") {
+    return {
+      text:
+        `${name} is not available in a fork. Your findings go back to the turn that forked you ` +
+        `as your final message; say what you would have needed it for and let that turn decide.`,
+      isError: true,
+    };
   }
 
   switch (name) {
@@ -1516,40 +1749,139 @@ export async function dispatchTool(
 
       const parent = context.conversation ?? MAIN_CONVERSATION;
       const stamp = Date.now().toString(36);
-      const results = await Promise.all(
-        briefs.map(async (brief, index) => {
-          // Each fork is its own conversation of the same agent, which is what makes
-          // the context separate and the runs concurrent — the bus already serialises
-          // per agent *and* conversation, so this needs no new machinery.
-          const conversation = `${FORK_PREFIX}${parent}-${stamp}-${index + 1}`;
-          try {
-            context.bus.sendFromUser(context.agent.id, brief, {
-              conversation,
-              steerable: false,
-            });
-            await context.bus.runExclusive(context.agent.id, { conversation });
-            const said = context.registry
-              .readTranscript(context.agent.id, conversation)
-              .filter(
-                (entry): entry is { role: string; text: string; kind?: string } =>
-                  (entry as { role?: string }).role === "assistant" &&
-                  (entry as { kind?: string }).kind === undefined &&
-                  typeof (entry as { text?: string }).text === "string"
-              )
-              .map(entry => entry.text)
-              .join("\n\n");
-            return `--- fork ${index + 1} ---\n${said.trim() === "" ? "(said nothing)" : said}`;
-          } catch (error) {
-            // One fork failing is a gap in the findings, not a failure of the fan-out:
-            // reported in place so the caller can see which piece is missing.
-            return `--- fork ${index + 1} FAILED ---\n${error instanceof Error ? error.message : String(error)}`;
+      const children = briefs.map((_, index) => `${FORK_PREFIX}${parent}-${stamp}-${index + 1}`);
+
+      // The ledger first (docs/32 §1): every fork is recorded, durably, before any message is
+      // queued. A record that cannot be written means no fork starts — this is the one place
+      // bookkeeping may stop work, because a fork nobody can find after a restart is the
+      // failure the ledger exists to end.
+      const ids: string[] = [];
+      if (context.pendingWork !== undefined) {
+        try {
+          for (const [index, brief] of briefs.entries()) {
+            ids.push(
+              context.pendingWork.prepare({
+                agentId: context.agent.id,
+                parent,
+                child: children[index]!,
+                brief,
+                ...(context.workId !== undefined ? { workId: context.workId } : {}),
+                ...(context.turnId !== undefined ? { turnId: context.turnId } : {}),
+              })
+            );
           }
-        })
-      );
+        } catch (error) {
+          // Records already written for earlier briefs are settled as never-admitted, so the
+          // next sweep does not report forks that were never started.
+          for (const id of ids) context.pendingWork.dropped(id, "unrecorded");
+          return {
+            text:
+              `Could not record the fork${briefs.length === 1 ? "" : "s"} before starting ` +
+              `(${error instanceof Error ? error.message : String(error)}), so nothing was started. ` +
+              `Do the work in this conversation instead, or try again.`,
+            isError: true,
+          };
+        }
+      }
+
+      // Filled in as each fork lands, so an interrupted join can report what has finished
+      // without waiting for what has not.
+      const landed: (string | undefined)[] = briefs.map(() => undefined);
+      const hows: CommitHow[] = briefs.map(() => "done");
+      const runs = briefs.map(async (brief, index) => {
+        // Each fork is its own conversation of the same agent, which is what makes
+        // the context separate and the runs concurrent — the bus already serialises
+        // per agent *and* conversation, so this needs no new machinery.
+        const conversation = children[index]!;
+        let result: string;
+        try {
+          const seq = context.bus.sendFromUser(context.agent.id, brief, {
+            conversation,
+            steerable: false,
+          });
+          if (ids[index] !== undefined) context.pendingWork?.admitted(ids[index]!, seq);
+          await context.bus.runExclusive(context.agent.id, { conversation });
+          const said = context.registry
+            .readTranscript(context.agent.id, conversation)
+            .filter(
+              (entry): entry is { role: string; text: string; kind?: string } =>
+                (entry as { role?: string }).role === "assistant" &&
+                (entry as { kind?: string }).kind === undefined &&
+                typeof (entry as { text?: string }).text === "string"
+            )
+            .map(entry => entry.text)
+            .join("\n\n");
+          result = `--- fork ${index + 1} ---\n${said.trim() === "" ? "(said nothing)" : said}`;
+        } catch (error) {
+          // One fork failing is a gap in the findings, not a failure of the fan-out:
+          // reported in place so the caller can see which piece is missing.
+          hows[index] = "failed";
+          result = `--- fork ${index + 1} FAILED ---\n${error instanceof Error ? error.message : String(error)}`;
+        }
+        landed[index] = result;
+        return result;
+      });
+
+      // The join, racing the person. A coordinator parked here for minutes could not be
+      // reached: steering is read at a round boundary, and a join is one long tool call
+      // with no boundary inside it. So an instruction arriving mid-join ends the join
+      // early (R8's second condition): what has finished is returned now, the rest keep
+      // running and report into this conversation as they land, and the steering is read
+      // at the boundary this return creates.
+      const all = Promise.all(runs).then(() => "done" as const);
+      let unsubscribe = (): void => {};
+      const woken = new Promise<"steered">(resolve => {
+        unsubscribe =
+          typeof context.bus.onSteering === "function"
+            ? context.bus.onSteering(context.agent.id, parent, () => resolve("steered"))
+            : () => {};
+      });
+      const outcome = await Promise.race([all, woken]);
+      unsubscribe();
+
+      // What the engine commits once this result is on disk in the parent's transcript.
+      const commitFor = (indices: readonly number[]) =>
+        indices.filter(index => ids[index] !== undefined).map(index => ({ id: ids[index]!, how: hows[index]! }));
+
+      if (outcome === "done") {
+        return {
+          text:
+            `${briefs.length} fork${briefs.length === 1 ? "" : "s"} finished. Their findings ` +
+            `are below; combining them is yours to do.\n\n${landed.join("\n\n")}`,
+          commit: commitFor(briefs.map((_, index) => index)),
+        };
+      }
+
+      const finished = briefs.map((_, index) => index).filter(index => landed[index] !== undefined);
+      const stillRunning = briefs.map((_, index) => index).filter(index => landed[index] === undefined);
+      for (const index of stillRunning) {
+        void runs[index]?.then(text => {
+          // Admitted to the durable inbox is delivered, by the inbox's own contract: the
+          // note survives a restart and opens a turn of its own (docs/32 §1, "late").
+          const tag = ids[index] !== undefined ? `${forkTag(ids[index]!)} ` : "";
+          const seq = context.bus.deliverSystem(
+            context.agent.id,
+            `${tag}A fork you were waiting on when a new instruction arrived has finished. ` +
+              `Fold it into what you already reported if it still matters.\n\n${text}`,
+            parent
+          );
+          // Admitted durably is delivered. The tag lets a restart's sweep see the note is
+          // already queued if this commit line never lands.
+          if (ids[index] !== undefined && (seq !== undefined || context.bus.inboxless)) {
+            context.pendingWork?.commit([{ id: ids[index]!, how: "late" }]);
+          }
+        });
+      }
       return {
         text:
-          `${briefs.length} fork${briefs.length === 1 ? "" : "s"} finished. Their findings ` +
-          `are below; combining them is yours to do.\n\n${results.join("\n\n")}`,
+          `A new instruction arrived while ${briefs.length} fork${briefs.length === 1 ? "" : "s"} ` +
+          `ran, so the join was cut short: ${finished.length} of ${briefs.length} finished ` +
+          `(below), and fork${stillRunning.length === 1 ? "" : "s"} ` +
+          `${stillRunning.map(index => index + 1).join(", ")} ${stillRunning.length === 1 ? "is" : "are"} ` +
+          `still running — each will arrive here as a message when it lands. The instruction ` +
+          `is in your next round; read it before deciding what to do with these.` +
+          (finished.length > 0 ? `\n\n${finished.map(index => landed[index]!).join("\n\n")}` : ""),
+        commit: commitFor(finished),
       };
     }
 
@@ -1580,15 +1912,105 @@ export async function dispatchTool(
         };
       }
       const env = delegateEnv(preset);
-      const started = await box.startJob(preset.run(quoteForShell(prompt), delegateModel()), {
-        ...(input.cwd ? { cwd: String(input.cwd) } : {}),
-        ...(Object.keys(env).length > 0 ? { env } : {}),
-        ...(context.boxOwner !== undefined ? { owner: context.boxOwner } : {}),
-      });
+
+      // The job id is ours (docs/32 slice two): minted here, recorded in the ledger before the
+      // box hears of it, and handed to boxd, which makes a repeated start idempotent.
+      const jobId = `job-${randomBytes(8).toString("hex")}`;
+      let pendingId: string | undefined;
+      if (context.pendingWork !== undefined) {
+        try {
+          pendingId = context.pendingWork.prepare({
+            agentId: context.agent.id,
+            kind: "delegate",
+            parent: context.conversation ?? MAIN_CONVERSATION,
+            child: jobId,
+            brief: `${preset.name}: ${prompt}`,
+            ...(context.workId !== undefined ? { workId: context.workId } : {}),
+            ...(context.turnId !== undefined ? { turnId: context.turnId } : {}),
+          });
+        } catch (error) {
+          return {
+            text: `Could not record the delegation before starting it (${error instanceof Error ? error.message : String(error)}), so nothing was started.`,
+            isError: true,
+          };
+        }
+      }
+
+      // The MCP face (docs/33): mint a route, write the engine's config file, then start; the
+      // job id is bound afterwards and a failed start revokes the route. No face for an attached
+      // box, which cannot reach this host's loopback; said, not silently skipped.
+      const requested = Array.isArray(input.tools)
+        ? (input.tools as unknown[]).filter((name): name is string => typeof name === "string")
+        : [];
+      let faceNote = "";
+      let routeKey: string | undefined;
+      let extraArgs: string | undefined;
+      const jobEnv: Record<string, string> = { ...env };
+      if (requested.length > 0) {
+        if (context.mcpFace === undefined) {
+          return { text: "This installation has no MCP face, so an engine cannot be lent tools.", isError: true };
+        }
+        if (context.boxKind === "attached") {
+          faceNote = "MCP tools are not reachable from this box (it is attached over the network), so the engine has none.\n";
+        } else {
+          const minted = context.mcpFace.mint({
+            agentId: context.agent.id,
+            agentName: context.agent.profile.name,
+            conversation: context.conversation ?? MAIN_CONVERSATION,
+            ...(context.workId !== undefined ? { workId: context.workId } : {}),
+            requested,
+            allowedMcp: context.allowedMcpTools ?? [],
+          });
+          if ("error" in minted) {
+            if (pendingId !== undefined) context.pendingWork?.dropped(pendingId, "unrecorded");
+            return { text: minted.error, isError: true };
+          }
+          routeKey = minted.route.key;
+          context.mcpFace.bindJob(routeKey, jobId);
+          const file = `${MCP_FACE_DIR}/${minted.route.key}.json`;
+          const face = preset.mcpFace(minted.url, MCP_FACE_TOKEN_VARIABLE, file);
+          try {
+            await box.writeFile(file, face.content);
+          } catch (error) {
+            context.mcpFace.revoke(minted.route.key, "config file could not be written");
+            return { text: `Could not write the engine's MCP config in the box: ${error instanceof Error ? error.message : String(error)}`, isError: true };
+          }
+          Object.assign(jobEnv, face.env, { [MCP_FACE_TOKEN_VARIABLE]: minted.route.token });
+          extraArgs = face.args || undefined;
+          faceNote =
+            `It may call ${minted.route.allowed.length} MCP tool${minted.route.allowed.length === 1 ? "" : "s"} through this host ` +
+            `(${minted.route.allowed.join(", ")}); every call is checked and recorded here.\n` +
+            (face.note !== undefined ? `Note: ${face.note}.\n` : "");
+        }
+      }
+
+      let started: Awaited<ReturnType<typeof box.startJob>>;
+      try {
+        started = await box.startJob(preset.run(quoteForShell(prompt), delegateModel(), extraArgs), {
+          ...(input.cwd ? { cwd: String(input.cwd) } : {}),
+          ...(Object.keys(jobEnv).length > 0 ? { env: jobEnv } : {}),
+          ...(context.boxOwner !== undefined ? { owner: context.boxOwner } : {}),
+          jobId,
+        });
+      } catch (error) {
+        if (routeKey !== undefined) context.mcpFace?.revoke(routeKey, "job failed to start");
+        if (pendingId !== undefined) context.pendingWork?.dropped(pendingId, "unrecorded");
+        throw error;
+      }
+      // A box from before slice two mints its own id; the ledger then follows the box's.
+      if (started.job_id !== jobId) {
+        if (routeKey !== undefined) context.mcpFace?.bindJob(routeKey, started.job_id);
+        if (pendingId !== undefined) {
+          context.pendingWork?.dropped(pendingId, "unrecorded");
+          pendingId = undefined;
+        }
+      }
+      if (pendingId !== undefined) context.pendingWork?.admitted(pendingId, undefined);
       return {
         text:
           `Delegated to ${preset.name} as ${started.job_id}.\n` +
           `Its work is going to ${started.log_path}.\n` +
+          faceNote +
           (Object.keys(env).length > 0
             ? "It is billed through this installation, so its spend is on the same budget as yours.\n"
             : "No model relay is configured here, so it is using whatever credential the box " +
@@ -1601,14 +2023,20 @@ export async function dispatchTool(
     case "Jobs": {
       const box = requireBox(context);
       const action = String(input.action ?? "list");
+      // Wherever the host sees a delegated job end, the ledger is settled (docs/32 slice two).
+      const observe = (job: { job_id: string; running: boolean; exit_code?: number; interrupted?: boolean }) => {
+        if (job.running) return;
+        context.pendingWork?.commitDelegate(job.job_id, job.exit_code === 0 && job.interrupted !== true ? "done" : "failed");
+      };
       if (action === "list") {
         const { jobs } = await box.jobs();
+        for (const job of jobs) observe(job);
         if (jobs.length === 0) return { text: "No background jobs." };
         return {
           text: jobs
             .map(
               job =>
-                `${job.job_id} ${job.running ? "running" : `exited ${job.exit_code}`} — ` +
+                `${job.job_id} ${job.running ? "running" : job.interrupted === true ? "interrupted (the box daemon restarted under it; exit unknown)" : `exited ${job.exit_code}`} — ` +
                 `${job.command.slice(0, 80)} (${job.log_bytes} bytes at ${job.log_path})`
             )
             .join("\n"),
@@ -1618,6 +2046,7 @@ export async function dispatchTool(
       if (jobId === "") return { text: "Which job? Pass job_id.", isError: true };
       if (action === "kill") {
         const killed = await box.killJob(jobId);
+        observe(killed);
         return { text: `${killed.job_id} stopped. Its output is at ${killed.log_path}.` };
       }
       if (action !== "wait") {
@@ -1628,6 +2057,7 @@ export async function dispatchTool(
         ...(input.until !== undefined ? { until: String(input.until) } : {}),
         ...(input.timeout_ms !== undefined ? { timeout_ms: Number(input.timeout_ms) } : {}),
       });
+      observe(waited);
       // The reason is said first and plainly: "still running" and "finished" call for
       // different next moves, and a tail alone does not distinguish them.
       const headline =
@@ -1884,7 +2314,7 @@ export async function dispatchTool(
         };
       }
 
-      const updated = existing.content.replace(oldText, newText);
+      const updated = templateStamp(context, path, existing.content.replace(oldText, newText));
       await box.writeFile(path, updated);
       // Recorded like any other write, so the next writer still sees a conflict rather
       // than overwriting an edit nobody else knows happened.
@@ -1953,10 +2383,11 @@ export async function dispatchTool(
         if (refusal !== undefined) return { text: refusal, isError: true };
       }
 
-      const result = await box.writeFile(path, content);
+      const written = templateStamp(context, path, content);
+      const result = await box.writeFile(path, written);
       // Its own write is the newest thing it has seen, so writing twice in a row is not a conflict
       // with itself.
-      context.files?.observed(context.agent.id, result.path, versionOf(content));
+      context.files?.observed(context.agent.id, result.path, versionOf(written));
       context.skillProvenance?.noteWrite({ path, agentId: context.agent.id, agentName: context.agent.profile.name, tool: "write_file" });
       return { text: `Wrote ${result.bytes_written} bytes to ${result.path}.` };
     }
@@ -2656,14 +3087,17 @@ export async function dispatchTool(
         return { text: "That is already remembered, here or by a teammate, so nothing was added." };
       }
 
+      // A setup turn's memories say where they came from, and are about nobody: they are the
+      // template's conventions, not something the person driving the import told this agent.
+      const fromTemplate = context.templateSetup !== undefined;
       const record = {
         at: new Date().toISOString(),
         kind: "fact" as const,
         text: fact,
-        source: "RememberFact",
+        source: fromTemplate ? `${TEMPLATE_SOURCE_PREFIX}${context.templateSetup}` : "RememberFact",
         // Who it is about, when the box was told. Without it a fact learned from one person reads as
         // being about whoever asks next, which in a team is worse than not recording it.
-        ...(context.caller?.userId !== undefined ? { about: context.caller.userId } : {}),
+        ...(context.caller?.userId !== undefined && !fromTemplate ? { about: context.caller.userId } : {}),
       };
       const withdrawn = retracted ? " The one it replaces has been withdrawn." : "";
       if (shared) {
@@ -2674,6 +3108,67 @@ export async function dispatchTool(
       }
       context.registry.appendMemoryRecords(context.agent.id, [record]);
       return { text: `Kept. It will be in your instructions on future turns.${withdrawn}` };
+    }
+
+    case "PackTemplate": {
+      const box = requireBox(context);
+      if (context.templates === undefined) {
+        return { text: "Template sharing is not available here. Tell the person it is not enabled; do not retry.", isError: true };
+      }
+      const description = String(input.description ?? "").trim();
+      if (description === "") return { text: "A template needs a description: one to three sentences on what it does and who it is for.", isError: true };
+      const list = (value: unknown): Record<string, unknown>[] =>
+        Array.isArray(value) ? value.filter((entry): entry is Record<string, unknown> => typeof entry === "object" && entry !== null) : [];
+      const refs = (value: unknown) =>
+        list(value)
+          .map(entry => ({
+            slug: String(entry.slug ?? "").trim(),
+            ...(typeof entry.body === "string" ? { body: entry.body } : {}),
+            ...(typeof entry.description === "string" ? { description: entry.description } : {}),
+          }))
+          .filter(entry => entry.slug !== "");
+      const self = context.agent.profile;
+      const teammates = context.registry.list().map(agent => agent.profile.name).filter(name => name !== self.name);
+      const packed = await packTemplate(
+        box,
+        {
+          profile: {
+            description,
+            ...(typeof input.name === "string" && input.name.trim() !== "" ? { name: input.name.trim() } : {}),
+            ...(typeof input.title === "string" && input.title.trim() !== "" ? { title: input.title.trim() } : {}),
+          },
+          memory: list(input.memory)
+            .map(entry => ({
+              text: String(entry.text ?? ""),
+              ...(entry.kind === "pitfall" ? { kind: "pitfall" as const } : {}),
+              ...(typeof entry.at === "string" ? { at: entry.at } : {}),
+            }))
+            .filter(entry => entry.text.trim() !== ""),
+          skills: refs(input.skills),
+          routines: refs(input.routines),
+          connectors: Array.isArray(input.connectors) ? input.connectors.map(String) : [],
+          ...(typeof input.getting_started === "string" && input.getting_started.trim() !== "" ? { gettingStarted: { skill: input.getting_started.trim() } } : {}),
+        },
+        {
+          self: {
+            name: self.name,
+            ...(self.title !== undefined ? { title: self.title } : {}),
+            ...(self.avatarColor !== undefined ? { avatarColor: self.avatarColor } : {}),
+            ...(self.tools !== undefined ? { tools: self.tools } : {}),
+          },
+          teammates,
+          memoryRecords: context.registry.readMemoryRecords(context.agent.id),
+          ...(context.caller?.userId !== undefined ? { createdBy: context.caller.userId } : {}),
+        }
+      );
+      if ("refused" in packed) return { text: packed.refused, isError: true };
+      const staged = context.templates.stage(context.agent.id, packed.template);
+      const dropped = packed.dropped.length === 0 ? "" : ` Left out: ${packed.dropped.join("; ")}.`;
+      return {
+        text:
+          `Staged version ${staged.version} of the template "${packed.template.profile.name}" (${describeTemplate(packed.template)}).` +
+          `${dropped} It is not shared until the person publishes or downloads it from the card; say so.`,
+      };
     }
 
     case "FindMcpTool": {

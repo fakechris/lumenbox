@@ -34,7 +34,7 @@ function harness() {
       peak = Math.max(peak, concurrent);
       const brief = inbound.map(message => message.text).join(" ");
       seen.push({ conversation, text: brief });
-      await new Promise(resolve => setTimeout(resolve, 30));
+      await new Promise(resolve => setTimeout(resolve, brief.includes("SLOW") ? 300 : 30));
       concurrent -= 1;
       if (brief.includes("BREAK")) throw new Error("this piece was unreadable");
       registry.appendTranscript(
@@ -122,6 +122,105 @@ test("a fork cannot fork, and a hundred at once is refused with a number", async
 
     const empty = await dispatchTool("Fork", { briefs: [] }, context);
     assert.ok(empty.isError);
+  } finally {
+    cleanup();
+  }
+});
+
+test("an instruction arriving mid-join wakes the coordinator; late forks report as messages (R8)", async () => {
+  const { context, seen, cleanup } = harness();
+  try {
+    const started = Date.now();
+    const pending = dispatchTool("Fork", { briefs: ["quick one", "SLOW SLOW SLOW"] }, context);
+    // The person speaks while fork 2 is still working.
+    setTimeout(() => context.bus.sendFromUser(context.agent.id, "actually, stop and summarise"), 60);
+    const result = await pending;
+    assert.ok(Date.now() - started < 250, `the join returned on the steer, not on the slow fork (${Date.now() - started}ms)`);
+    assert.match(result.text, /join was cut short: 1 of 2 finished/);
+    assert.match(result.text, /fork 2 is still running/);
+    assert.match(result.text, /read quick one/);
+    assert.doesNotMatch(result.text, /read SLOW/);
+    // The steering itself is untouched: the turn reads it at its next boundary.
+    assert.equal(context.bus.pendingCount(context.agent.id), 1);
+
+    // The slow fork lands later, as a system message into the conversation that forked.
+    await new Promise(resolve => setTimeout(resolve, 400));
+    const late = seen.find(entry => entry.conversation === "main" && entry.text.includes("fork 2"));
+    assert.ok(late, "the late fork's findings were delivered into the parent conversation");
+    assert.match(late.text, /has finished/);
+  } finally {
+    cleanup();
+  }
+});
+
+// ── docs/32: the fork ledger ─────────────────────────────────────────────────────────────
+
+test("every fork is recorded before its message is queued, admitted with its inbox seq, and committed only by the engine", async () => {
+  const { context, cleanup } = harness();
+  const root = mkdtempSync(join(tmpdir(), "agentbox-fork-ledger-"));
+  try {
+    const { PendingWork } = await import("./pending-work.ts");
+    const ledger = new PendingWork(join(root, "pending-work.jsonl"));
+    const withLedger = { ...context, pendingWork: ledger, workId: "w-1", turnId: "t-1" } as typeof context;
+    const result = await dispatchTool("Fork", { briefs: ["chapter one", "chapter two"] }, withLedger);
+    assert.match(result.text, /2 forks finished/);
+    // The tool hands the engine what to commit; it does not commit itself.
+    assert.deepEqual(result.commit?.map(entry => entry.how), ["done", "done"]);
+    const open = ledger.open();
+    assert.equal(open.length, 2, "open until the engine commits after the results entry is on disk");
+    assert.ok(open.every(fork => fork.admitted), "admitted after sendFromUser");
+    assert.ok(open.every(fork => fork.child.startsWith("fork/main-")));
+    // A failing fork commits as failed, not done.
+    const mixed = await dispatchTool("Fork", { briefs: ["fine", "BREAK"] }, withLedger);
+    assert.deepEqual(mixed.commit?.map(entry => entry.how), ["done", "failed"]);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+    cleanup();
+  }
+});
+
+test("a ledger that cannot be written stops the fork before any message is queued", async () => {
+  const { context, seen, cleanup } = harness();
+  const root = mkdtempSync(join(tmpdir(), "agentbox-fork-noledger-"));
+  try {
+    const { PendingWork } = await import("./pending-work.ts");
+    // The path is a directory: no record can be appended.
+    const broken = { ...context, pendingWork: new PendingWork(root) } as typeof context;
+    const result = await dispatchTool("Fork", { briefs: ["chapter one"] }, broken);
+    assert.equal(result.isError, true);
+    assert.match(result.text, /nothing was started/);
+    await new Promise(resolve => setTimeout(resolve, 60));
+    assert.equal(seen.length, 0, "no child ran");
+    assert.equal(context.bus.pendingCount(context.agent.id), 0);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+    cleanup();
+  }
+});
+
+test("a fork child is fenced: the withheld tools are not offered, and a forged call is refused at dispatch (docs/32 §2)", async () => {
+  const { context, cleanup } = harness();
+  try {
+    const { buildTools, FORK_WITHHELD_TOOLS } = await import("./tools.ts");
+    const main = buildTools(true, true, undefined, false, true, true, true).map(tool => tool.name);
+    const fork = buildTools(true, true, undefined, false, false, true, true, true).map(tool => tool.name);
+    for (const name of FORK_WITHHELD_TOOLS) assert.ok(!fork.includes(name), `${name} withheld`);
+    for (const name of ["SendToAgent", "Tasks", "RememberFact", "Fork", "OtherThreads"]) assert.ok(main.includes(name), `${name} offered to the main conversation`);
+    for (const name of ["bash", "read_file", "list_dir", "SetTodos", "Recall", "ReadHistory"]) assert.ok(fork.includes(name), `${name} kept for a fork`);
+
+    // Offered or not, the dispatcher refuses it in a fork conversation.
+    const teammate = context.registry.create({ name: "Bob" });
+    const inFork = { ...context, conversation: "fork/main-abc-1" } as typeof context;
+    const refused = await dispatchTool("SendToAgent", { agent_id: teammate.id, text: "help" }, inFork);
+    assert.equal(refused.isError, true);
+    assert.match(refused.text, /not available in a fork/);
+    assert.equal(context.bus.pendingCount(teammate.id), 0, "nothing was sent");
+    // The person-facing and desktop channels too, whatever was offered.
+    for (const name of ["RunOnHost", "computer", "AskUser", "RememberFact"]) {
+      const blocked = await dispatchTool(name, {}, inFork);
+      assert.equal(blocked.isError, true, name);
+      assert.match(blocked.text, /not available in a fork/, name);
+    }
   } finally {
     cleanup();
   }

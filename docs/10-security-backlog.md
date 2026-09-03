@@ -22,6 +22,15 @@ stores the model's *own* content blocks, unedited, which is what makes an agent'
 The shape that probably works is detection plus a marker — store the result, note that it matched a
 credential pattern, and let a reader decide — rather than silent removal.
 
+**And the MCP face keeps it so (docs/33, 2026-09-03):** a delegated engine in the box reaches the
+host's MCP tools through a per-job route on the web server — a key in the path, a bearer in the
+job's environment, exact tool names snapshotted at mint, a lease the host renews from the box's
+job list. No MCP credential enters the box; the policy gate runs with `delegated` set (no approval
+reuse, no input in the log); every call lands in `delegate-calls.jsonl` with a result digest.
+What it does not do: any process in the box runs as the same uid and can read the job's
+environment, so a stolen token buys one route's tools for one lease — the box is one trust
+boundary, as docs/03 says.
+
 ## S-2 — The gateway has no TLS, and the session cookie is the whole session
 
 Said on startup and in [08-control-plane.md](08-control-plane.md) §10, and still true. Anyone on the
@@ -75,6 +84,25 @@ boxes — but to make sure no UI ever describes it as privacy.
 The egress relay's allow-list is global to the relay process. Two tenants sharing one get the same
 list. Per-tenant policy needs the token to name it, the same way the model relay's token names its
 upstream.
+
+## S-9 — `hooks.json` is arbitrary command execution from the state directory
+
+Since 0.30 (docs/28 item 9) `~/.agentbox/hooks.json` runs shell commands at PreToolUse,
+PostToolUse, Stop and PreCompact, with the orchestrator's privileges, re-read on every mtime
+change. That is the design — Claude Code's, kept exactly — and it means *whoever can write
+that file runs commands as the operator*. What is exposed today: the file is not signed, and
+until R39 nothing checked who could write it.
+
+**Held since R39 (2026-09-02):** the runner refuses a hooks file that is group- or
+world-writable, or owned by another uid, logs the refusal, and treats the file as empty
+until it is fixed. The same rule covers `~/.agentbox/extensions/*` (docs/34, 2026-09-03),
+which is the same thing with a wider api: each file is checked before import and a loose
+one is skipped, not loaded. The state directory itself is the operator's (0700 by `agentbox`'s own
+mkdir), so the remaining path in is an agent with `RunOnHost` writing the file — which is
+the S-1 class of problem (a host command is the operator), not a new one. **Not done, on
+purpose:** a signed or hashed allow-list of hook commands. It would let an operator pin
+*which* commands may run, at the price of a second file to keep in step; worth it only for
+a shared host, where S-2/S-3 are the bigger holes.
 
 ## Not on this list, and why
 

@@ -28,6 +28,7 @@ import {
 } from "node:fs";
 import { appendLine } from "../host/jsonl.ts";
 import { BOX_RECORD_FILENAME, ensureBoxRecord, type BoxRecord } from "../box/identity.ts";
+import { BOXES_FILENAME, type BoxEntry, ensureBoxes, saveBoxes } from "../box/boxes.ts";
 import { DEFAULT_CONTAINER } from "../box/docker.ts";
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
@@ -39,6 +40,7 @@ import {
   MEMORY_COMPACT_AT,
   type MemoryRecord,
 } from "../host/memory.ts";
+import { envNumber } from "../config.ts";
 
 export const AGENT_NAME_MAX_LENGTH = 72;
 export const AGENT_DESCRIPTION_MAX_LENGTH = 12_000;
@@ -160,6 +162,11 @@ export interface AgentProfile {
    */
   provider?: string;
   model?: string;
+  /**
+   * The template this agent was created from, when it was (docs/29). Bound at creation like
+   * the box: a record of origin, not a link — the copy is this installation's from then on.
+   */
+  importedFrom?: { id: string; name: string; createdBy?: string; at: string };
   createdAt: string;
   updatedAt: string;
 }
@@ -220,11 +227,92 @@ export class AgentRegistry {
    * `members` stays `"everyone"` until the membership machinery exists.
    */
   readonly box: BoxRecord;
+  /**
+   * Every box this installation drives (docs/30): the own box first, keeping `box.json`'s
+   * id, then whatever was attached. Read once; `attachBox`/`detachBox` write through.
+   */
+  private boxes: BoxEntry[];
 
   constructor(readonly root: string = defaultAgentsRoot()) {
     mkdirSync(this.root, { recursive: true });
     this.box = ensureBoxRecord(join(this.root, BOX_RECORD_FILENAME), DEFAULT_CONTAINER);
+    this.boxes = ensureBoxes(join(this.root, BOXES_FILENAME), this.box, { displayFloor: envNumber("AGENTBOX_DISPLAY_FLOOR", 1) });
     this.backfillBoxIds();
+  }
+
+  // ── boxes ────────────────────────────────────────────────────────────────────────
+
+  listBoxes(): readonly BoxEntry[] {
+    return this.boxes;
+  }
+
+  /** The installation's own box: the first entry, the one `box.json` names. */
+  defaultBox(): BoxEntry {
+    return this.boxes.find(entry => entry.id === this.box.id) ?? this.boxes[0]!;
+  }
+
+  boxById(id: string): BoxEntry | undefined {
+    return this.boxes.find(entry => entry.id === id);
+  }
+
+  boxByName(name: string): BoxEntry | undefined {
+    return this.boxes.find(entry => entry.name === name || entry.id === name);
+  }
+
+  /** The box an agent lives in. A profile from before boxes were plural is the own box's. */
+  boxOf(agentId: string): BoxEntry {
+    const record = this.get(agentId);
+    return (record.profile.boxId !== undefined ? this.boxById(record.profile.boxId) : undefined) ?? this.defaultBox();
+  }
+
+  /** Agents of one box, in roster order. */
+  agentsIn(boxId: string): AgentRecord[] {
+    return this.list().filter(record => (record.profile.boxId ?? this.box.id) === boxId);
+  }
+
+  attachBox(entry: BoxEntry): BoxEntry {
+    if (this.boxes.some(existing => existing.name === entry.name)) throw new Error(`A box named ${entry.name} is already attached.`);
+    if (this.boxes.some(existing => existing.id === entry.id)) throw new Error(`A box with id ${entry.id} already exists.`);
+    this.boxes = [...this.boxes, entry];
+    saveBoxes(join(this.root, BOXES_FILENAME), this.boxes);
+    return entry;
+  }
+
+  /**
+   * Changes where an attached box is reached, or where its desktops start. The id and the
+   * name stay: agents are stamped with the id, and a box that moved (a tunnel to a tailnet
+   * address, a new port) is the same box.
+   */
+  updateBox(nameOrId: string, changes: { endpoint?: { baseUrl: string; tokenFile: string }; displayFloor?: number; workDir?: string }): BoxEntry {
+    const entry = this.boxByName(nameOrId);
+    if (entry === undefined) throw new Error(`No box named ${nameOrId}.`);
+    if (entry.id === this.box.id && changes.endpoint !== undefined) throw new Error("The installation's own box has no endpoint to change.");
+    const updated: BoxEntry = {
+      ...entry,
+      ...(changes.endpoint !== undefined ? { endpoint: { baseUrl: changes.endpoint.baseUrl.replace(/\/+$/, ""), tokenFile: changes.endpoint.tokenFile } } : {}),
+      ...(changes.displayFloor !== undefined && changes.displayFloor >= 1 ? { displayFloor: Math.floor(changes.displayFloor) } : {}),
+      ...(changes.workDir !== undefined && changes.workDir !== "" ? { workDir: changes.workDir } : {}),
+    };
+    this.boxes = this.boxes.map(existing => (existing.id === entry.id ? updated : existing));
+    saveBoxes(join(this.root, BOXES_FILENAME), this.boxes);
+    return updated;
+  }
+
+  /**
+   * Removes an attached box. Refused while agents live in it: their `boxId` is immutable, so
+   * the only honest outcomes are "delete them first" or "keep the box".
+   */
+  detachBox(nameOrId: string): BoxEntry {
+    const entry = this.boxByName(nameOrId);
+    if (entry === undefined) throw new Error(`No box named ${nameOrId}.`);
+    if (entry.id === this.box.id) throw new Error("The installation's own box cannot be detached.");
+    const residents = this.agentsIn(entry.id);
+    if (residents.length > 0) {
+      throw new Error(`${residents.length} agent(s) live in ${entry.name} (${residents.map(record => record.profile.name).join(", ")}); delete them first.`);
+    }
+    this.boxes = this.boxes.filter(existing => existing.id !== entry.id);
+    saveBoxes(join(this.root, BOXES_FILENAME), this.boxes);
+    return entry;
   }
 
   /**
@@ -351,7 +439,7 @@ export class AgentRegistry {
    * Raised by a registry that shares a box with another one, so the two do not both
    * claim desktop 1.
    */
-  displayFloor = 1;
+  displayFloor = envNumber("AGENTBOX_DISPLAY_FLOOR", 1);
 
   /**
    * The lowest display index no agent holds, so a deleted agent's slot is reused.
@@ -361,16 +449,20 @@ export class AgentRegistry {
    * the box refuses the second because it belongs to another agent. Two of the suite's
    * tasks failed that way while testing nothing about themselves.
    */
-  private nextDisplayIndex(from = this.displayFloor): number {
+  private nextDisplayIndex(from = this.displayFloor, boxId = this.box.id): number {
+    // Only the agents of this box hold slots on it: two boxes each have a desktop 1 (or 10,
+    // where a floor says so), and counting the other box's agents would leave holes for nothing.
+    const box = this.boxById(boxId);
+    const floor = Math.max(from, box?.displayFloor ?? 1);
     const taken = new Set(
-      this.list()
+      this.agentsIn(boxId)
         .map(record => record.profile.displayIndex)
         .filter((index): index is number => typeof index === "number")
     );
-    for (let index = from; index <= 32; index++) {
+    for (let index = floor; index <= floor + 31; index++) {
       if (!taken.has(index)) return index;
     }
-    throw new Error("No free desktop: all 32 display slots are assigned.");
+    throw new Error(`No free desktop in ${box?.name ?? boxId}: all 32 display slots are assigned.`);
   }
 
   create(input: {
@@ -389,9 +481,18 @@ export class AgentRegistry {
     /** Provider preset and model override; absent means the installation default. */
     provider?: string;
     model?: string;
+    /** The template it is being created from, when it is. */
+    importedFrom?: { id: string; name: string; createdBy?: string; at: string };
+    /**
+     * Which box it lives in (docs/30). Absent means the installation's own. Chosen here and
+     * never changed: a worker's authority is its box's, and `update` has no such field.
+     */
+    boxId?: string;
   }): AgentRecord {
     const name = clampLine(input.name ?? "", AGENT_NAME_MAX_LENGTH);
     if (!name) throw new Error("An agent needs a non-empty name.");
+    const box = input.boxId === undefined || input.boxId === "" ? this.defaultBox() : this.boxById(input.boxId);
+    if (box === undefined) throw new Error(`No box with id ${input.boxId}; attach it first.`);
 
     const now = new Date().toISOString();
     const id = randomUUID();
@@ -401,16 +502,17 @@ export class AgentRegistry {
       title: input.title ? clampLine(input.title, 64) : undefined,
       avatarColor: input.avatarColor,
       hidden: input.hidden ?? false,
-      displayIndex: this.nextDisplayIndex(),
-      // Bound at creation like the display, immutable the same way: not a create
-      // input (nothing may choose a different box) and not on update's allow-list.
-      boxId: this.box.id,
+      displayIndex: this.nextDisplayIndex(this.displayFloor, box.id),
+      // Bound at creation like the display, immutable the same way: chosen once above and
+      // not on update's allow-list.
+      boxId: box.id,
       ...(input.ownerUserId !== undefined ? { ownerUserId: input.ownerUserId } : {}),
       visibility: input.visibility ?? "shared",
       ...(input.tools !== undefined ? { tools: [...input.tools] } : {}),
       ...(input.scopeId !== undefined && input.scopeId !== "" ? { scopeId: input.scopeId } : {}),
       ...(input.provider !== undefined && input.provider !== "" ? { provider: input.provider } : {}),
       ...(input.model !== undefined && input.model !== "" ? { model: input.model } : {}),
+      ...(input.importedFrom !== undefined ? { importedFrom: input.importedFrom } : {}),
       createdAt: now,
       updatedAt: now,
     };
@@ -529,7 +631,7 @@ export class AgentRegistry {
       return record.profile.displayIndex;
     }
 
-    const assigned = this.nextDisplayIndex();
+    const assigned = this.nextDisplayIndex(this.displayFloor, record.profile.boxId ?? this.box.id);
     this.writeProfile(agentId, {
       ...record.profile,
       displayIndex: assigned,

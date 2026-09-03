@@ -102,3 +102,35 @@ test("asking about a job nobody started answers nothing, rather than inventing o
     cleanup();
   }
 });
+
+test("a caller-minted id is honoured and idempotent; an exit file is written; a new daemon reads jobs back (docs/32 slice two)", async () => {
+  const { jobs, dir, cleanup } = service();
+  try {
+    const first = jobs.start({ command: "echo hi; exit 4", nice: 0, scrubbedEnv: process.env, jobId: "job-0123456789ab" });
+    assert.equal(first.job_id, "job-0123456789ab");
+    const again = jobs.start({ command: "echo NOT RUN", nice: 0, scrubbedEnv: process.env, jobId: "job-0123456789ab" });
+    assert.equal(again.log_path, first.log_path, "the same id returns the same job, no second spawn");
+    assert.throws(() => jobs.start({ command: "x", nice: 0, scrubbedEnv: process.env, jobId: "job-nope" }), /job_id must match/);
+    await jobs.wait({ job_id: first.job_id, timeout_ms: 10_000 });
+    const { readFileSync, existsSync, writeFileSync } = await import("node:fs");
+    const { join } = await import("node:path");
+    assert.ok(existsSync(join(dir, "job-0123456789ab.exit")), "exit file beside the log");
+    const exit = JSON.parse(readFileSync(join(dir, "job-0123456789ab.exit"), "utf8")) as { exit_code: number };
+    assert.equal(exit.exit_code, 4);
+    // A job whose daemon died under it: a log and no exit file.
+    writeFileSync(join(dir, "job-feedfeedfeed.log"), "half done\n");
+
+    const { JobService } = await import("./job-service.ts");
+    const later = new JobService(dir);
+    const listed = later.list();
+    const done = listed.find(job => job.job_id === "job-0123456789ab");
+    assert.equal(done?.running, false);
+    assert.equal(done?.exit_code, 4);
+    const orphan = listed.find(job => job.job_id === "job-feedfeedfeed");
+    assert.equal(orphan?.running, false);
+    assert.equal(orphan?.interrupted, true);
+    assert.equal(orphan?.exit_code, undefined);
+  } finally {
+    cleanup();
+  }
+});

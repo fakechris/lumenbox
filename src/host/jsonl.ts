@@ -13,7 +13,7 @@
  * the torn one (still skipped on read) and the new one (intact).
  */
 
-import { appendFileSync, closeSync, openSync, readSync, statSync } from "node:fs";
+import { appendFileSync, closeSync, fsyncSync, openSync, readSync, statSync, writeSync } from "node:fs";
 
 /** Whether the file's last byte is a newline. A missing or empty file counts as "yes" — nothing to tear. */
 function endsWithNewline(path: string): boolean {
@@ -44,4 +44,20 @@ function endsWithNewline(path: string): boolean {
 export function appendLine(path: string, record: string): void {
   const prefix = endsWithNewline(path) ? "" : "\n";
   appendFileSync(path, `${prefix}${record}\n`, "utf8");
+}
+
+/**
+ * `appendLine`, then `fsync` before returning — for the one record whose whole point is to
+ * exist before the effect it describes (docs/32 §1). Throws on any failure; the caller
+ * decides whether the effect may proceed without it, and for the fork ledger it may not.
+ */
+export function appendLineDurably(path: string, record: string): void {
+  const prefix = endsWithNewline(path) ? "" : "\n";
+  const fd = openSync(path, "a");
+  try {
+    writeSync(fd, `${prefix}${record}\n`, null, "utf8");
+    fsyncSync(fd);
+  } finally {
+    closeSync(fd);
+  }
 }

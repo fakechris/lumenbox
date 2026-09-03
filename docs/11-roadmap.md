@@ -80,6 +80,8 @@ its own retry and its own log line, and stop logging `connected` for a call rath
 a connection. A restart that waits for the old process to be gone at the *vendor's* end —
 not just locally — would also help, and there is no signal for that other than time.
 
+### ~~R37~~ — closed 2026-09-03 as blocked-external (vendor risk control; `bots/join` 121016)
+
 ### R37. Meeting presence — the browser path worked once, then the vendor said no
 
 **Final state, 2026-08-29 evening.** The browser path is dead by policy, not by
@@ -182,6 +184,16 @@ Not started: it is a feature with a security face (an extension runs with the pr
 full authority — the loading rule and who may drop files there need docs/10 treatment),
 and the cheap majority of its value (skills hot, restarts painless) is already shipped.
 Build when a person edits extensions often enough to feel the restart.
+
+**R36, second seam shipped 2026-09-02.** `McpManager.reload` applies a fresh `mcpServers`
+list without a restart — unchanged entries keep their process and tools, changed or removed
+ones stop, new ones start in the background as at boot. Reachable as `POST /api/mcp/reload`,
+`agentbox mcp reload`, and a "Reload from config" button in Settings (shown to admins even
+with none configured, because "add one, then reload" is the way in). The security face got
+its entry the same day: docs/10 S-9, and `hooks.ts` refuses a hooks file that is group- or
+world-writable or owned by another uid. What remains is the loader proper — a
+`~/.agentbox/extensions/*.ts` directory with a factory contract — and it still waits for a
+person who edits extensions often enough to feel the restart.
 
 **R36, first seam shipped 2026-09-02 (`b02ecb4`).** Lifecycle hooks in Claude Code's dialect:
 `~/.agentbox/hooks.json` runs PreToolUse / PostToolUse / Stop / PreCompact commands with the
@@ -301,7 +313,15 @@ and the dead records become a latency surface. Smallest item on this page and th
 prerequisite for R24.
 </details>
 
-### R24. A run has to say which model and which code produced it
+### ~~R24. A run has to say which model and which code produced it~~ — shipped 2026-09-02 (`78fdc49`)
+The turn ledger's begin record now carries `model`, `build {version, commit}` and a 16-hex
+`promptHash` over the round-one prompt. The prompt itself is not stored — it is thousands
+of lines and mostly repeats — but "the prompt changed between these two turns" is the
+question, and a hash answers it. The context length at the moment of confusion is the
+compaction log's business (docs/23) and stays there.
+
+<details><summary>original entry</summary>
+
 Every transcript entry carries `at, blocks, causedBy, covers, kind, role, text`. `causedBy`
 and `covers` are more than the reference asks for — but nothing records the model, the
 harness version, or the code SHA, and the assembled prompt is never stored. So "did this
@@ -309,6 +329,7 @@ regression start the day we swapped the model" and "how long was the context whe
 confused" are both unanswerable from our own records, while "how often did this tool return
 an empty result" is answerable and was answered. Small; needs a decision about where the
 prompt hash lives, not a subsystem.
+</details>
 
 ### ~~R19. Host-initiated exec, marked as such~~ — shipped (`0d4fcba`)
 `ExecRequest.actor` labels who asked, and boxd logs every command with it. The gap
@@ -409,7 +430,26 @@ boxd. Medium. Rider, nearly free: enrich the box toolchain (`ripgrep`, `gh`, `tm
 fall back to.
 </details>
 
-### R25. What identifies a conversation, finished
+### ~~R25. What identifies a conversation, finished~~ — closed 2026-09-02, two thirds by facts
+Re-read against the tree and the live state directory before acting, which is what saved it
+from being implemented a fourth time:
+
+- **P2P on one key is deliberate, not a leftover.** `conversationKeyFor` checks `p2p` *first*
+  and says why: keyed on the thread, a person who talked to the bot "in the same topic the
+  whole time" watched it forget everything, because their top-level messages and their
+  in-topic replies landed in different conversations. In a 1:1 the counterpart is one person
+  and a bubble is not a subject boundary. What bounds the history is compaction (docs/23),
+  which is the mechanism for "a chat running for weeks", not re-keying.
+- **The "317 unreachable records" are the live 1:1.** `feishu-oc_…5ec315f91c2e4a19.jsonl` was
+  written on 2026-08-31 — it is that chat's conversation under the key the system produces
+  today. Nothing to migrate.
+- **The derived-key finding was closed by `ConversationDirectory`** (id → chatKey, appended
+  where the key is last seen). What is left of it is one theoretical collision in
+  `scopes.boundTo`'s prefix match — a chat id that is another's prefix plus `-` — which no
+  vendor id format we carry can produce. Noted here; not worth a record until one can.
+
+<details><summary>original entry</summary>
+
 The adversarial review of 2026-08-25 raised six findings; the top one was fixed and the
 rest were recorded and not acted on. They are still true:
 
@@ -426,8 +466,19 @@ rest were recorded and not acted on. They are still true:
 
 Medium. This is the decision that was implemented three times, so per docs/13 it goes to
 review before the fourth.
+</details>
 
-### R26. Skills you can install, not only write
+### ~~R26. Skills you can install, not only write~~ — shipped 2026-09-02
+`skillRoots` in config.json is an ordered list of further directories inside the box;
+`loadSkills` reads the box's own `/home/box/work/skills` first and then each root in order,
+the earlier root wins a slug collision and the index says so ("`deploy`: also in /srv/more,
+shadowed by the one in /opt/skills"), and a root that is configured but not on this box is a
+line in the index rather than a silent nothing. Re-read at each refresh like the skills
+themselves, so an edit needs no restart. A skill's `path` points where its file really is.
+The rider below still holds: install the general-method kind, expect to delete it.
+
+<details><summary>original entry</summary>
+
 Four unrelated projects ship the same artifact — a directory with `SKILL.md`, `scripts/`,
 `references/`, installed by copying into the host's skills folder — and **our format is
 already that**, which makes the ecosystem directly consumable. Nothing in the repository
@@ -438,6 +489,7 @@ your own directory wins. Small-medium, and it is the honest version of R21's imp
 Rider, and the reason not to over-invest: a skill that encodes *how this installation
 works* cannot be baked into anyone's weights, and one that teaches a general method can.
 Build the first kind; borrow the second and expect to delete it.
+</details>
 
 ### R27. Evidence attached to the belief
 Two unrelated sources arrive at the same mechanism: OpenWiki stores each claim with the
@@ -453,7 +505,28 @@ false in an hour. **Start with the subset whose evidence is a file in the box**,
 that is the only kind we can version cleanly; a claims runtime over unversionable evidence
 is bookkeeping. Medium; design first.
 
-### R28. Turn the observed failures into eval cases — first third landed
+### R28. Turn the observed failures into eval cases — two thirds landed
+**The memory ablation was run 2026-09-02**, and for the first time against a memory worth
+ablating: `golden --memory-from=Ada` seeds the golden agent with a live agent's records (35
+here: 32 extracted notes, 3 kept facts), and `AGENTBOX_ABLATE=notes` withholds only the
+notes. Style tier, six tasks (`uses-what-it-has` needs a box and was skipped), MiniMax-M3,
+three runs per condition:
+
+| condition | passes | tokens per run |
+| --- | --- | --- |
+| notes + facts | 4, 4, 6 of 6 (14/18) | 119k, 318k, 264k |
+| facts only (`ABLATE=notes`) | 5, 4, 6 of 6 (15/18) | 119k, 100k, 159k |
+
+Read plainly: the notes layer moves nothing the style tier can see — the spread *within* a
+condition (4 to 6) is larger than the gap between them — and the runs that carried the
+notes cost about 1.9× the tokens, every pair, with the excess in longer search excursions
+on `not-verified`. Three runs is not a proof, and the judge was visibly noisy once
+(`asked-again` passed while the judge said "reads as a restatement"). It is enough to stop
+extending the notes layer on the assumption that it carries the how-to-answer behaviour;
+whether to shrink its budget, gate it on query relevance, or leave it is decided with R17
+and R27, on the same week of data. Still to write: a listener fires/stays-quiet suite (now
+possible: `trigger: message` shipped), and the golden-tasks-versus-traffic comparison.
+
 `4bf2a77`: the memory sentinel is now matched by letters rather than exactly (the stored
 `(NOTHING)` removed, the next one impossible), and the Seltz failure is a golden task —
 `empty-is-not-an-answer`, an empty directory the prompt insists holds notes, graded on
@@ -505,6 +578,8 @@ additions that are cheap once R23 lands:
 And the validation step that makes a suite trustworthy at all: our seventeen tasks were
 invented and have never been compared to real traffic. Both halves of that comparison are
 already on disk.
+
+### ~~R31~~ — closed 2026-09-03 (`spend.ts` + `/api/spend`; residue re-filed, see the triage)
 
 ### R31. One place to see what happened, and drill into it
 A requirement that grew out of a day of work rather than out of a comparison: **every
@@ -854,6 +929,15 @@ Both are small and neither depends on the write-ahead design, so they need not w
 Recorded here rather than in a new entry because they are the same subject: what a turn is
 allowed to do at a boundary it did not choose.
 
+**Both riders shipped 2026-09-02 (`78fdc49`).** Steering is not taken while the model is
+finishing — a Stop hook's send-back was the one path that kept the loop going after a round
+with no tool calls, and the user's message queued there now opens the next turn instead of
+dangling on this one. And a `Fork` join races the person: `bus.onSteering` wakes the join
+when an instruction arrives, what has finished is returned at once, the forks still running
+land later as system messages in the parent conversation (`bus.deliverSystem`), and the
+instruction is read at the boundary the early return creates. What remains under R8 is the
+write-ahead intent record, still L, still an upgrade rather than a fix.
+
 ### ~~R9. Auto-review as a state machine~~ — shipped
 <details><summary>original entry</summary>
 
@@ -1115,6 +1199,8 @@ the records that already exist.** The gate comes after a dispatch record and a p
 separation of attempt outcome from obligation resolution — three steps further out than
 the last plan claimed, and the honest ordering is now in docs/16.
 
+### ~~R21~~ — shipped 2026-09-02 as docs/29 (bot templates: pack, share links, import)
+
 ### R21. Agent and skill bundles: export and import
 A team's agent (profile, skills, scope shape — never its memories or secrets) packaged
 as a file another installation can import. The sharing unit people actually want, and
@@ -1122,8 +1208,154 @@ the seed of any future gallery. Deliberately after the delegation preset work: t
 preset's packaging face is this feature's foundation, and building the bundle format
 before a second real installation exists would be designing for an audience of zero.
 Large-ish; design the boundary (what travels, what never does) first.
+**Designed 2026-09-02 in [docs/29](29-bot-templates.md)** (v2, after v1's picker was
+rejected): the bot packs itself through a served skill and one `PackTemplate` tool; the new
+bot installs itself in its first turn from a recipe file in the box, with host rails
+(routines forced paused, template-origin stamps, untrusted cue, reconcile + retry). Curated
+memory *facts* do travel (the "never its memories" above is revised there, §3); the catalog
+becomes the first-party shelf of the same format; share links on the control plane later.
 
 ---
+
+## Triage, 2026-09-03 — every open entry checked against the tree at `3f94ad5`
+
+Each entry below was re-read and then grepped for, by a reviewer told not to believe a doc
+that says a thing *will* be built. Verdicts: **close** (done or superseded), **partial**
+(what exists, what is missing, the next concrete step), **open** (first step, size).
+
+| # | Entry | Verdict | Where it stands |
+| --- | --- | --- | --- |
+| R21 | Agent and skill bundles | **close** | docs/29: templates, share links, import; the catalog is the first-party shelf |
+| R31 | One place to see what happened | **close** | `spend.ts` + `/api/spend`, three cuts, honesty rules. Residue: `rates` in config is empty (data), and "artifacts as a column" moves under R28 |
+| R37 | Meeting presence | **close (blocked)** | both paths built to their end; the vendor's risk control and `bots/join` 121016 are outside the tree |
+| R35 | Feishu first-connect | **close** | shipped 2026-08-29 |
+| R3 | Win/Linux packaging | partial, S | `dist:win`/`dist:linux`, icons, `productName` all there; no artifact ever produced, no CI job. Next: a `workflow_dispatch` release job that asserts the installers exist |
+| R8 | Checkpoint and resume | riders **done** 2026-09-02; write-ahead open, L | steering waits while the model is finishing; a fork join wakes on an instruction. What is left is the write-ahead intent record |
+| R24 | Which model, which code | **close** 2026-09-02 | turn ledger begin record: `model`, `build`, `promptHash` |
+| R28 | Failures → eval cases | ablation **run** 2026-09-02; two thirds open | `AGENTBOX_ABLATE=notes` + `golden --memory-from`; result in the entry. Still open: a fires/stays-quiet suite for listeners, and the tasks-versus-traffic comparison |
+| R34 | Channel identity as capability | partial, S if needed | `ReadFeishuDoc` shipped; no auto-route at admission, no DingTalk twin. Next only if pasted links still get apologies: match the URL at admission and pre-fetch |
+| R26 | Installable skills | **close** 2026-09-02 | `skillRoots`: ordered roots after the box's own, collisions and missing roots reported in the index |
+| R36 | Hot-loadable extensions | MCP reload **done** 2026-09-02; loader open, M | `mcp reload` (API, CLI, Settings); S-9 written and enforced. Left: the `extensions/*.ts` loader, when someone feels the restart |
+| R10 | Gateway hardening | partial | S-4 closed (`stripIdentityHeaders`); S-2 no TLS, S-3 password list only, S-6 key beside the db. Next when promoted: S-6 — `AGENTBOX_CONTROL_KEY` as the documented path, loud warning otherwise |
+| R25 | Conversation identity | **close** 2026-09-02, by facts | p2p on one key is a recorded decision (the thread-keyed version was the bug); the "unreachable" file is the live 1:1; the record exists. Not re-implemented |
+| R7 | Secrets in the record | partial, M | scanner + spool shipped; at-rest hygiene not built at all. Next: exact-match redaction of vault-held values at the transcript append site, labelled hygiene not containment |
+| R4 | Grant → Scope | partial, L | tools + secrets enforced, egress/filesRoot declared; memory/sandbox/schedule absent; the capability proxy unbuilt. Design first, on one privileged operation |
+| R16 | Webhook triggers | partial, M | `trigger: message` covers the chat half; no HTTP ingress at all. Next: a per-door signed URL admitting into the same path `channels/manager.ts` uses |
+| R30 | Coordination as protocol | partial, L | `workId` shipped; dispatch record, fork terminal states, submission gate all absent; `inbox.ts` warn-and-dispatch and `appendLine` without fsync still there |
+| R17 | Project tier of memory | open, M | no scope on `MemoryRecord`; the boundary exists now (`Scope.chats`, `turn.ts` resolves it). First: `scope?` on the record + a third render block |
+| R27 | Evidence attached to belief | open, M, design first | decay still by age × kind. First: `basis?: {path, hash}` rendered as "unverified" on mismatch, never "wrong" |
+| R29 | Box has no MCP face | open, L, review first | nothing in `boxd` or `presets.ts` knows MCP; the tool-proxy design needs the docs/13 review before code |
+
+Two things promoted out of residue, each its own entry now:
+
+- **R38. MiniMax-M3 loses the `computer` tool schema after compaction** (found in the R37
+  work, filed nowhere). A compaction/tool-schema defect: reproduce on a long turn, then decide
+  whether the tool list rides the stable prefix or is re-sent after a summary. S–M.
+- ~~**R39. `hooks.json` needs its docs/10 entry.**~~ Done 2026-09-02: docs/10 S-9, and the
+  runner refuses a hooks file that is group/world-writable or owned by another uid.
+
+**The order I would take**, after the handoff's five (auto-review week, a live listener,
+conduct numbers, the prompt floor, the pre-launch security list): R8's rider and R24's stamp
+(both S, both make the next investigation cheaper), R39, R28's ablation, R36's MCP reload,
+R26's search path, then R25. R4, R16, R30, R29 wait for their designs; R17 and R27 wait for a
+week of memory numbers. docs/30 Stage C (`TransferFile`) is paused at Chris's call.
+
+## What to do next, as of 2026-09-02 — the list, after the seven
+
+The seven small items from the triage above are done (Stage 8 in IMPLEMENTATION_PLAN.md).
+This list supersedes the ordering paragraphs above it. **Ordered by Chris's ruling of
+2026-09-02 evening**, after three reads of how others do it (the evidence, product by
+product, is `research/2026-09-02-coordination-mcp-memory.md`; only the product-independent
+conclusions are here).
+
+**Running, not planned** (from docs/handoff-2026-09-02): a week of auto-review in shadow mode,
+the live listener skill, conduct numbers from the `[conduct]` log line, the prompt floor,
+and the pre-launch security pass over docs/10.
+
+**Needed, in this order:**
+
+0. **R40 — the turn engine minds what the person sees and whether an action followed a
+   promise** (docs/31, added 2026-09-02 evening at Chris's call, ahead of everything below).
+   The Bob incident — "Qwen 没有 27B … 没有 5.3-flash", from weights, no search, turn over —
+   and the fact that a model's opening line never reaches Feishu when tools follow it.
+   Three layers: the engine (interim line to the chat, parallel read-only tools,
+   `tool_choice` on both wires, bounded structural guards); the words (recap reword,
+   model-gated per-turn reminder in the user turn); the epistemic line (an unknown newer
+   thing is real until a tool says otherwise). Evidence gate: a golden task built from the
+   incident and `[conduct]` counters over a week. M+S+S+M, in the order docs/31 §5 gives.
+   **Built the same evening** (docs/31 status block); what is left of R40 is the week of
+   counters that decides whether the textual guard and the reminder stay on by default.
+1. **R30 — coordination as protocol.** Slice one designed in docs/32 (v2 after Codex's
+   hostile review, 2026-09-03): a fork ledger that survives restarts, fenced children;
+   Delegate and leases deferred with their preconditions named. **Built 2026-09-03** (Stage 10);
+   slice two the same day put Delegate in the ledger on boxd's new job ids and exit files.
+   Slice three (leases on task ids, held per agent-and-conversation, fail-closed, fencing
+   `Tasks` writes only) is designed in docs/32 §7 and not built. Left after it: the submission
+   gate, fsync everywhere. What every mature system does that we do not: a
+   record minted *before* the side effect, a completion that is a row with a delivery state
+   rather than a promise, and leases that fail closed. Concretely, one mechanism serves both
+   this and R8's write-ahead: a **pending-work file** written when a Fork or a delegated task
+   starts (`{agentId, kind, workId, at}`), cleared on settle, and on restart either
+   re-delivered or force-settled as `dropped`. Then completions as records with a delivery
+   claim and an attempt cap that converges to `dropped`; `claims.ts` leases identity-checked
+   on release and refusing to run unserialised on timeout; typed block reasons on the review
+   gate with a loop breaker. The one mechanical form of "communication is not coordination"
+   anyone has built is stripping `SendToAgent` and the task board from delegated children —
+   copy that. Prompt rules ("a send is not a completion signal", "assignment is the trigger,
+   never also mention") are worth their line but are not enforcement. L, item by item.
+2. **R29 — an MCP face for the box.** **Built 2026-09-03** (docs/33, after a hostile review that
+   rejected v1 on fourteen findings; Stage 11). Left: the VM shim and a live run against a
+   configured server. Confirmed by two products that solved exactly our
+   problem: the host runs a loopback MCP endpoint per server, the box reaches it with a
+   short-lived per-route token and a fingerprint passed in by env, the host alone holds the
+   vendor credential and does OAuth refresh, and every `tools/call` lands in the host's
+   transcript and policy gate. For a VM box where loopback is unreachable, a tiny stdio shim
+   forwards JSON-RPC out (over the tunnel, tagged with the conversation so the host can
+   attribute and approve). Add per-tool toggles and a per-task allow-list; confirm before
+   call by default. Same relay as model traffic, one more route family. L; docs/13 review
+   first, as before — but the design is no longer open, it is a port.
+3. **R8 — the write-ahead intent record.** Now the cheap half of item 1: the pending-work
+   file *is* the intent record for forks and delegations; extending it to every
+   side-effecting tool call (id before the call, result after, "unknown" only when the
+   process died between) is the remaining step. M once item 1 exists.
+4. **R36 — the extension loader.** **Built 2026-09-03** (docs/34): `~/.agentbox/extensions/*`
+   default-export `(api) => …`; `api.tool` lands as `ext__<name>` through the MCP manager's
+   in-process server, `api.on` for turn events; reload via CLI, API and Settings; the hooks
+   file's permission rule. Channel wire verbs stay out, as a design rather than a seam.
+5. **R17 — project memory, with "project" finally defined.** A project is what our own
+   multiplayer design (research/MULTIPLAYER-PRODUCT-DESIGN.md §L6) already called a *Room
+   Scope*: the Scope object we have (name, bound chats, tools, secrets, files root) plus
+   members and memory. The one system that made project a real object partitions memory by
+   `project` *above* both the user track and the agent track, and never lets a search cross
+   it; everyone else reduces project to a namespace string. So: `scope` on the memory record,
+   written when the conversation is bound to a scope; recall never crosses scopes except the
+   self tier; a scope owns a directory in the box (`filesRoot`), its task-board rows, and its
+   schedules; a group chat bound to a scope *is* the project's front door, and binding is
+   how one is created. M, after the week of memory data says what self/team actually hold.
+6. **R27 and the memory rewrite — long-term.** What the two memory systems agree on and we
+   do differently: **no age decay anywhere** — contradiction is handled by a supersede link
+   (`replaced_by` / `deprecated_by`), temporary states carry a validity interval, and stable
+   traits are separated from transient facts; **provenance on every record** — source
+   message ids, sender, session — which is R27's `basis` under another name; and a write path
+   that decides ADD / UPDATE / DELETE / NONE against the nearest existing records rather than
+   appending. Today's ablation (R28) says our extracted notes carry no style behaviour and
+   cost tokens, which is consistent with both systems' choice to extract atomic facts from
+   *episodes* rather than free notes. Direction, not a ticket: replace age decay with
+   supersede links and validity intervals, add message-id provenance, and try boundary-cut
+   episodes as the extraction unit. M each, in that order, on the same week of data.
+
+**Low priority, by ruling:**
+
+- **R4 — the capability proxy / Scope growth.** Get the rest running first. The requirement
+  stays recorded (a credential the model never holds); no date.
+- **R16 — webhook ingress.** No scenario yet; chat triggers plus scheduled skills cover
+  what is needed. Revisit when a real "when X happens" request arrives.
+
+**Small and waiting on a trigger** (unchanged): R3 installers when a Win/Linux user exists;
+R34 URL pre-fetch if pasted links still get apologies; R10/S-6 `AGENTBOX_CONTROL_KEY`; R38
+MiniMax-M3 losing the `computer` schema after compaction (reproduce first); R7 at-rest
+redaction; docs/30 Stage C paused; the Docker image rebuild once apt can reach
+`deb.debian.org` through the local proxy.
 
 ## What to do next, as of 2026-09-01
 

@@ -10,7 +10,9 @@ the doubaowork companion crew (agents with built-in skills and personas).
 
 - **The Delegate/Preset architecture is built and empty.** `src/host/presets.ts`
   defines the five-faced preset unit (packaging, one-tool interface, skills
-  projection, relay metering seam, acceptance tasks) with `opencode` and
+  projection, relay metering seam, acceptance tasks — and since 2026-09-03 the MCP face,
+  docs/33: `Delegate` with `tools` lends the engine named host MCP tools through a
+  per-job route) with `opencode` and
   `claude` rows; the `Delegate` tool exists; runs travel as
   `bash background: true` + `Jobs`, which makes a delegated engine visible,
   interruptible and loggable like any other job. **Neither engine is installed

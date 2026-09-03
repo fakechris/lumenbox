@@ -289,20 +289,128 @@ class McpServer {
   }
 }
 
+/** Same command, arguments and environment: the process would come up identical. */
+function sameServer(a: McpServerConfig, b: McpServerConfig): boolean {
+  return (
+    a.command === b.command &&
+    JSON.stringify(a.args ?? []) === JSON.stringify(b.args ?? []) &&
+    JSON.stringify(a.env ?? {}) === JSON.stringify(b.env ?? {})
+  );
+}
+
 /**
  * Every configured MCP server, and the tools they add up to.
  *
  * Lazy: nothing is spawned until a turn is actually built, so a CLI question does not
  * start somebody's ticket-system bridge as a side effect.
  */
+/**
+ * What the manager asks of a server. `McpServer` is the stdio child; a `VirtualServer` is
+ * in-process — the extension layer (docs/34) registers its tools as one, so they flow through
+ * the same list, the same lookup pair, the same allowlists, the same fork fence and the same
+ * MCP face as a real server's, and nothing downstream has to know the difference.
+ */
+export interface ToolServer {
+  readonly config: { name: string };
+  status(): McpServerStatus;
+  listTools(): McpTool[];
+  ensureStarted(): Promise<void>;
+  call(bareName: string, input: unknown): Promise<string>;
+  stop(): void;
+}
+
+/** An in-process server: tools with a `run` each, no child, nothing to start or stop. */
+export class VirtualServer implements ToolServer {
+  readonly config: { name: string };
+  private readonly runs = new Map<string, (input: Record<string, unknown>) => Promise<string>>();
+  private readonly tools: McpTool[] = [];
+
+  constructor(
+    name: string,
+    entries: readonly { name: string; description: string; inputSchema: Record<string, unknown>; run: (input: Record<string, unknown>) => Promise<string> }[],
+    private readonly detail = "in-process"
+  ) {
+    this.config = { name };
+    for (const entry of entries) {
+      this.tools.push({ name: `${name}${MCP_SEPARATOR}${entry.name}`, description: entry.description, inputSchema: entry.inputSchema });
+      this.runs.set(entry.name, entry.run);
+    }
+  }
+
+  status(): McpServerStatus {
+    return { name: this.config.name, running: true, toolCount: this.tools.length, detail: this.detail };
+  }
+
+  listTools(): McpTool[] {
+    return this.tools;
+  }
+
+  ensureStarted(): Promise<void> {
+    return Promise.resolve();
+  }
+
+  async call(bareName: string, input: unknown): Promise<string> {
+    const run = this.runs.get(bareName);
+    if (run === undefined) throw new Error(`${this.config.name} has no tool named ${bareName}.`);
+    return run((input ?? {}) as Record<string, unknown>);
+  }
+
+  stop(): void {}
+}
+
 export class McpManager {
-  private readonly servers: McpServer[];
+  private servers: ToolServer[];
 
   constructor(
     configs: readonly McpServerConfig[],
-    log: (line: string) => void = () => {}
+    private readonly log: (line: string) => void = () => {}
   ) {
     this.servers = configs.map(config => new McpServer(config, log));
+  }
+
+  /**
+   * Applies a fresh server list without a restart (R36).
+   *
+   * The plugin layer is what hot-loads, never the core: a server whose config is unchanged
+   * keeps its process and its tool list, one that changed or vanished is stopped, one that
+   * is new is started in the background exactly as at boot. Editing `mcpServers` used to
+   * mean restarting the web server and dropping the Feishu socket with it; now it means
+   * this. Returns what it did, by name, for the log and the caller.
+   */
+  reload(configs: readonly McpServerConfig[]): { started: string[]; stopped: string[]; kept: string[] } {
+    const fresh = new Map(configs.map(config => [config.name, config]));
+    const kept: string[] = [];
+    const stopped: string[] = [];
+    const started: string[] = [];
+    const remaining: ToolServer[] = [];
+    for (const server of this.servers) {
+      // Virtual servers are not config: they stay across a config reload.
+      if (!(server instanceof McpServer)) {
+        remaining.push(server);
+        continue;
+      }
+      const next = fresh.get(server.config.name);
+      if (next !== undefined && sameServer(next, server.config)) {
+        kept.push(server.config.name);
+        remaining.push(server);
+        continue;
+      }
+      server.stop();
+      stopped.push(server.config.name);
+    }
+    for (const config of configs) {
+      if (kept.includes(config.name)) continue;
+      const server = new McpServer(config, this.log);
+      remaining.push(server);
+      void server.ensureStarted();
+      started.push(config.name);
+    }
+    this.servers = remaining;
+    this.log(
+      `reloaded: ${started.length} started (${started.join(", ") || "-"}), ` +
+        `${stopped.length} stopped (${stopped.join(", ") || "-"}), ${kept.length} kept`
+    );
+    return { started, stopped, kept };
   }
 
   get configured(): boolean {
@@ -326,6 +434,22 @@ export class McpManager {
    */
   warm(): void {
     for (const server of this.servers) void server.ensureStarted();
+  }
+
+  /**
+   * Installs or replaces an in-process server by name (the extension layer, docs/34). A real
+   * server of the same name is not displaced: the virtual one is refused with a log line,
+   * because "ext" colliding with somebody's configured server should be visible, not silent.
+   */
+  setVirtual(server: VirtualServer): boolean {
+    const at = this.servers.findIndex(entry => entry.config.name === server.config.name);
+    if (at >= 0 && this.servers[at] instanceof McpServer) {
+      this.log(`a configured MCP server is already named ${server.config.name}; the in-process one is not installed`);
+      return false;
+    }
+    if (at >= 0) this.servers[at] = server;
+    else this.servers.push(server);
+    return true;
   }
 
   /** Every tool from every started server, prefixed by server name. */
@@ -394,7 +518,7 @@ export class McpManager {
     return this.serverFor(name) !== undefined;
   }
 
-  private serverFor(name: string): McpServer | undefined {
+  private serverFor(name: string): ToolServer | undefined {
     const at = name.indexOf(MCP_SEPARATOR);
     if (at <= 0) return undefined;
     const serverName = name.slice(0, at);

@@ -842,6 +842,21 @@ export const APP_HTML = String.raw`<!doctype html>
       </div>
       <pre id="setboxlog" style="display:none;max-height:140px;overflow:auto;background:var(--code-bg);color:var(--code-text);border:1px solid var(--border);border-radius:var(--radius-md);padding:10px 12px;font-family:var(--font-mono);font-size:11px;line-height:1.6;margin:0;white-space:pre-wrap"></pre>
     </div>
+    <div class="field" data-tier="installation" id="setboxeswrap">
+      <label>Boxes</label>
+      <div id="setboxes" style="display:flex;flex-direction:column;gap:6px"></div>
+      <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-top:4px">
+        <input id="setboxname" placeholder="name, e.g. grok" spellcheck="false" style="flex:0.7;min-width:90px;font-family:var(--font-sans)">
+        <input id="setboxurl" placeholder="http://127.0.0.1:13370" spellcheck="false" style="flex:1.4;min-width:160px">
+        <input id="setboxtoken" type="password" placeholder="its BOXD_TOKEN" spellcheck="false" autocomplete="off" style="flex:1;min-width:120px">
+        <input id="setboxfloor" placeholder="first display, e.g. 10" spellcheck="false" style="flex:0.7;min-width:110px">
+        <button class="btn sm" id="setboxattach">Attach</button>
+      </div>
+      <div class="fieldnote">Every machine this installation drives. The first is this machine's
+        own; an attached one is somebody else's boxd reached over a tunnel, with its own desktops
+        from the display you name. An agent is created into a box and stays there.</div>
+      <div class="fieldnote" id="setboxesstatus"></div>
+    </div>
     <div class="field" data-tier="installation">
       <label>Host execution</label>
       <label class="radio"><input type="checkbox" id="sethostenabled">
@@ -852,6 +867,12 @@ export const APP_HTML = String.raw`<!doctype html>
         <code>claude</code> or <code>git</code>. Every host command still stops for your approval
         before it runs. Takes effect after a restart.</div>
       <div class="fieldnote" id="sethoststatus"></div>
+    </div>
+    <div class="field" data-tier="installation">
+      <label>Startup item</label>
+      <label class="radio"><input type="checkbox" id="setstartupitem">
+        Launch LumenBox automatically on system login (Startup Item)</label>
+      <div class="fieldnote">Registers LumenBox as a login item so agents, desktop services, and chat channels are running after a computer restart. Applied by the app when it restarts the server.</div>
     </div>
     <div class="field" data-tier="organisation">
       <label>Scopes</label>
@@ -907,10 +928,20 @@ export const APP_HTML = String.raw`<!doctype html>
     <div class="field" data-tier="installation" id="setmcpwrap" style="display:none">
       <label>MCP servers</label>
       <div id="setmcp" style="display:flex;flex-direction:column;gap:6px"></div>
+      <div style="display:flex;gap:8px;align-items:center;margin-top:6px">
+        <button type="button" class="ghost" id="setmcpreload">Reload from config</button>
+        <span class="dim" id="setmcpreloaded" style="font-size:12px"></span>
+      </div>
+      <div id="setext" class="dim" style="font-size:12px;margin-top:8px"></div>
+      <div style="display:flex;gap:8px;align-items:center;margin-top:4px">
+        <button type="button" class="ghost" id="setextreload">Reload extensions</button>
+        <span class="dim" id="setextreloaded" style="font-size:12px"></span>
+      </div>
       <div class="fieldnote">Tools other people wrote. Configured in mcpServers in
         ~/.agentbox/config.json — a stdio server is a process on this machine, so an operator
         adds one, never an agent. Their tools obey the same agent tool lists, scopes and
-        approvals as the built-in ones.</div>
+        approvals as the built-in ones. Edit the file, then reload: servers whose entry is
+        unchanged keep running, changed or removed ones stop, new ones start.</div>
     </div>
     <div class="field" data-tier="organisation" id="setknockswrap" style="display:none">
       <label>Waiting at the door</label>
@@ -989,6 +1020,17 @@ export const APP_HTML = String.raw`<!doctype html>
       <div class="fieldnote">Specialists and crews that ship with the install. A specialist fills
         this form; a crew adds its members in one step. Not seeded — adding is a choice.</div>
     </div>
+    <div class="field" id="agimportwrap">
+      <label>Or import a template</label>
+      <textarea id="agimport" rows="3" spellcheck="false" placeholder="Paste a .lumenbox-template.json here" style="font-family:var(--font-mono);font-size:11px"></textarea>
+      <div style="display:flex;gap:10px;align-items:center;margin-top:6px">
+        <button class="btn sm" id="agimportgo" type="button">Import</button>
+        <input type="file" id="agimportfile" accept=".json,application/json" style="font-size:11px">
+      </div>
+      <div class="fieldnote">A template is another bot's recipe: profile, conventions, skills and paused
+        routines. The new bot installs it on its first turn and then asks you for whatever it still needs.
+        Nothing in a template can reach your logins or connectors.</div>
+    </div>
     <div class="field">
       <label>Name</label>
       <input id="agname" spellcheck="false" style="font-family:var(--font-sans)">
@@ -996,6 +1038,12 @@ export const APP_HTML = String.raw`<!doctype html>
     <div class="field">
       <label>Role label</label>
       <input id="agrole" placeholder="e.g. release manager" spellcheck="false" style="font-family:var(--font-sans)">
+    </div>
+    <div class="field" id="agboxwrap">
+      <label>Box</label>
+      <select id="agbox" style="font-family:var(--font-sans)"></select>
+      <div class="fieldnote">Which machine it lives on. Chosen once: an agent's memory, files and
+        logins are its box's, and it never moves &mdash; make another one on the other box instead.</div>
     </div>
     <div class="field">
       <label>Persona</label>
@@ -1022,6 +1070,16 @@ export const APP_HTML = String.raw`<!doctype html>
       <div id="agtools" class="toolchips"></div>
       <div class="fieldnote">An unchecked tool is withheld — it does not appear in the agent's
         prompt at all. Leaving everything checked means everything, including tools added later.</div>
+    </div>
+    <div class="field" id="agtemplatewrap" style="display:none">
+      <label>Share as template</label>
+      <div id="agtemplate" class="fieldnote"></div>
+      <div style="display:flex;gap:10px;align-items:center;margin-top:6px">
+        <button class="btn sm" id="agshare" type="button">Ask it to draft a template</button>
+        <a href="#" id="agdownload" style="display:none;font-size:13px">Download latest</a>
+      </div>
+      <div class="fieldnote">The bot reads its own memory, skills and routines, leaves out what is
+        private, and stages a version. Nothing leaves this box until you download the file.</div>
     </div>
     <div class="field" id="agdanger" style="display:none">
       <label>Delete</label>
@@ -1135,6 +1193,7 @@ function openSettings() {
       $("sethoststatus").textContent = host.enabled
         ? (host.unavailableReason ? "Enabled, but: " + host.unavailableReason : "Enabled and ready.")
         : "";
+      $("setstartupitem").checked = !!(data.config && data.config.startupItem);
       $("setstatus").textContent = "Now running: " + (data.current || "");
       settingsProviderChanged();
       renderStandingGrants();
@@ -1324,16 +1383,55 @@ document.getElementById("setmcptokens").addEventListener("click", function (even
   }).then(renderMcp);
 });
 
+document.getElementById("setextreload").addEventListener("click", function () {
+  var note = $("setextreloaded");
+  note.textContent = "reloading…";
+  fetch("/api/extensions/reload", { method: "POST", headers: { "content-type": "application/json" }, body: "{}" })
+    .then(function (r) { return r.json().then(function (j) { return { ok: r.ok, j: j }; }); })
+    .then(function (x) {
+      if (!x.ok) { note.textContent = x.j.error || "reload failed"; return; }
+      note.textContent = "loaded " + (x.j.loaded || []).length + " file(s), " + (x.j.tools || []).length + " tool(s)" +
+        ((x.j.problems || []).length ? "; " + x.j.problems.join("; ") : "");
+      renderMcp();
+    })
+    .catch(function () { note.textContent = "reload failed"; });
+});
+
+document.getElementById("setmcpreload").addEventListener("click", function () {
+  var note = $("setmcpreloaded");
+  note.textContent = "reloading…";
+  fetch("/api/mcp/reload", { method: "POST", headers: { "content-type": "application/json" }, body: "{}" })
+    .then(function (r) { return r.json().then(function (j) { return { ok: r.ok, j: j }; }); })
+    .then(function (x) {
+      if (!x.ok) { note.textContent = x.j.error || "reload failed"; return; }
+      note.textContent = "started " + (x.j.started || []).length + ", stopped " + (x.j.stopped || []).length +
+        ", kept " + (x.j.kept || []).length;
+      // Servers come up in the background; look again once they have had a moment.
+      setTimeout(renderMcp, 1500);
+      renderMcp();
+    })
+    .catch(function () { note.textContent = "reload failed"; });
+});
+
 function renderMcp() {
   fetch("/api/mcp")
     .then(function (r) { return r.json(); })
     .then(function (data) {
       var servers = data.servers || [];
       renderMcpTokens(data.tokens);
-      // The server list is an installation matter; an admin who has none still sees
-      // nothing, because there is nothing to say.
-      document.getElementById("setmcpwrap").style.display =
-        servers.length && myRole === "admin" ? "" : "none";
+      // An installation matter, so admins only — and admins with none see the empty state
+      // and the reload, because "add one to config.json, then reload" is the way in.
+      document.getElementById("setmcpwrap").style.display = myRole === "admin" ? "" : "none";
+      var ext = data.extensions;
+      $("setext").textContent = ext
+        ? "Extensions (~/.agentbox/extensions): " + (ext.loaded.length ? ext.loaded.join(", ") : "none") +
+          (ext.tools.length ? " — tools: " + ext.tools.join(", ") : "") +
+          (ext.problems.length ? " — problems: " + ext.problems.join("; ") : "")
+        : "";
+      if (!servers.length) {
+        $("setmcp").innerHTML = '<div class="dim" style="font-size:13px">none configured</div>';
+        return;
+      }
       $("setmcp").innerHTML = servers.map(function (s) {
         // A tool count worth noticing is said where the count is, not in a log nobody reads.
         var heavy = s.toolCount > (data.budget || 30);
@@ -1585,7 +1683,58 @@ document.getElementById("setpeople").addEventListener("click", function (event) 
   savePeople();
 });
 
+/** The box list in Settings, with attach and detach. */
+function renderBoxes() {
+  return fetch("/api/boxes")
+    .then(function (r) { return r.json(); })
+    .then(function (data) {
+      var boxes = data.boxes || [];
+      $("setboxes").innerHTML = boxes.map(function (b, i) {
+        var where = b.kind === "docker" ? "docker on this machine" : esc(b.endpoint || "attached");
+        return '<div style="display:flex;gap:8px;align-items:center;font-size:12.5px">' +
+          '<span class="dot" style="width:8px;height:8px;background:' + (b.connected ? "var(--ok, #3fb950)" : "var(--warn)") + '"></span>' +
+          '<b>' + esc(b.name) + "</b>" + (i === 0 ? ' <span class="dim">(own)</span>' : "") +
+          '<span class="dim" style="flex:1">' + where + " · displays from :" + esc(b.displayFloor) + " · " + esc(b.agents) + " agent" + (b.agents === 1 ? "" : "s") + (b.connected ? "" : " · not connected") + "</span>" +
+          (i === 0 ? "" : '<button class="btn sm ghost" data-detach-box="' + esc(b.name) + '"' + (b.agents > 0 ? ' disabled title="delete its agents first"' : "") + ">Detach</button>") +
+          "</div>";
+      }).join("") || '<div class="dim">No boxes.</div>';
+    })
+    .catch(function () { $("setboxes").innerHTML = '<div class="dim">Could not read the boxes.</div>'; });
+}
+
+$("setboxattach").onclick = function () {
+  var body = {
+    name: $("setboxname").value.trim(),
+    baseUrl: $("setboxurl").value.trim(),
+    token: $("setboxtoken").value.trim(),
+    displayFloor: Number($("setboxfloor").value.trim() || "1")
+  };
+  if (!body.name || !body.baseUrl || !body.token) { $("setboxesstatus").textContent = "Name, URL and token are all needed."; return; }
+  $("setboxattach").disabled = true;
+  $("setboxesstatus").textContent = "Attaching…";
+  fetch("/api/boxes/attach", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body) })
+    .then(function (r) { return r.json().then(function (d) { if (!r.ok) throw new Error(d.error || "attach failed"); return d; }); })
+    .then(function (d) {
+      $("setboxesstatus").textContent = d.detail || "attached";
+      $("setboxtoken").value = "";
+      return renderBoxes().then(refresh);
+    })
+    .catch(function (err) { $("setboxesstatus").textContent = String(err.message || err); })
+    .then(function () { $("setboxattach").disabled = false; });
+};
+
+$("setboxes").addEventListener("click", function (e) {
+  var name = e.target && e.target.getAttribute && e.target.getAttribute("data-detach-box");
+  if (!name) return;
+  e.target.disabled = true;
+  fetch("/api/boxes/detach", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ name: name }) })
+    .then(function (r) { return r.json().then(function (d) { if (!r.ok) throw new Error(d.error || "detach failed"); return d; }); })
+    .then(function () { $("setboxesstatus").textContent = "Detached " + name + "."; return renderBoxes().then(refresh); })
+    .catch(function (err) { $("setboxesstatus").textContent = String(err.message || err); e.target.disabled = false; });
+});
+
 function renderBoxSection() {
+  renderBoxes();
   $("setboxstate").textContent = boxState.ok
     ? "Running — " + boxState.detail
     : "Not running. Agents have no desktop, shell or files until it is.";
@@ -1689,6 +1838,7 @@ function saveSettings(thenRestart) {
   var key = $("setkey").value.trim();
   if (key !== "") body.key = key;
   body.hostExec = { enabled: $("sethostenabled").checked, cwd: $("sethostcwd").value.trim() };
+  body.startupItem = $("setstartupitem").checked;
   $("setstatus").textContent = "Saving…";
   fetch("/api/config", {
     method: "POST",
@@ -2053,10 +2203,36 @@ function feed(html, cls, at) {
   if (stick) el.scrollTop = el.scrollHeight;
 }
 
+/** The box an agent lives in, as a small label with the connection dot. */
+function boxHeaderHtml(box, index) {
+  return '<div class="eyebrow-row" style="margin-top:' + (index === 0 ? "0" : "8px") + '" title="' + esc(box.kind === "docker" ? "the box on this machine" : "attached at " + (box.endpoint || "")) + '">' +
+    '<span class="eyebrow" style="display:flex;align-items:center;gap:6px">' +
+      '<span class="dot" style="width:7px;height:7px;background:' + (box.connected ? "var(--ok, #3fb950)" : "var(--warn)") + '"></span>' +
+      esc(box.name) + (index === 0 ? ' <span class="dim" style="text-transform:none;font-weight:400">own</span>' : ' <span class="dim" style="text-transform:none;font-weight:400">attached · :' + esc(box.displayFloor) + "+</span>") +
+    "</span></div>";
+}
+
 function renderAgents() {
   var html = "";
-  for (var i = 0; i < agents.length; i++) {
-    var a = agents[i];
+  // More than one box: the list is grouped by box, own first, so where an agent lives is
+  // visible without opening it — the whole point of a second box is that they differ.
+  var grouped = boxesSeen.length > 1;
+  var order = grouped ? boxesSeen.map(function (b) { return b.id; }) : [];
+  var sorted = grouped
+    ? agents.slice().sort(function (x, y) {
+        var bx = order.indexOf(x.boxId), by = order.indexOf(y.boxId);
+        return bx !== by ? bx - by : agents.indexOf(x) - agents.indexOf(y);
+      })
+    : agents;
+  var lastBox = null;
+  for (var i = 0; i < sorted.length; i++) {
+    var a = sorted[i];
+    if (grouped && a.boxId !== lastBox) {
+      var boxIndex = order.indexOf(a.boxId);
+      var box = boxesSeen[boxIndex] || { name: a.boxName || "?", connected: true, kind: "attached", displayFloor: 1 };
+      html += boxHeaderHtml(box, boxIndex);
+      lastBox = a.boxId;
+    }
     html += '<div class="agent ' + (a.id === current ? "on" : "") + '" data-id="' + esc(a.id) + '">' +
       '<div class="dot ' + (busy.has(a.id) ? "busy" : "") +
       '" style="background:var(--c-' + ((i % 8) + 1) + ')"></div>' +
@@ -2354,7 +2530,7 @@ function showDesktop(id) {
     $("full").style.display = "none";
     return;
   }
-  $("desktoptitle").textContent = agent.name + " · d" + agent.displayIndex;
+  $("desktoptitle").textContent = agent.name + " · d" + agent.displayIndex + (boxesSeen.length > 1 && agent.boxName ? " · " + agent.boxName : "");
   $("full").href = agent.desktopUrl;
   $("full").style.display = "";
   // The iframe rides with embedded=1 so the proxy skips the box-class banner:
@@ -2414,7 +2590,9 @@ function select(id, conversation) {
   currentConversation = conversation || (switching ? "main" : currentConversation);
   $("title").textContent = nameOf(id);
   var selected = agentById(id);
-  $("titlerole").textContent = selected ? String(selected.title || "") : "";
+  $("titlerole").textContent = selected
+    ? String(selected.title || "") + (boxesSeen.length > 1 && selected.boxName ? (selected.title ? " · " : "") + "on " + selected.boxName : "")
+    : "";
   $("round").textContent = "";
   spend = { input: 0, output: 0 };
   spendLabel = "";
@@ -2432,6 +2610,7 @@ function select(id, conversation) {
     .then(function (entries) {
       for (var i = 0; i < entries.length; i++) replayEntry(id, entries[i]);
       $("chat").scrollTop = $("chat").scrollHeight;
+      return loadTemplateCardInChat(id);
     });
 }
 
@@ -2607,11 +2786,13 @@ function updateComposerTarget() {
 
 function refresh() {
   return fetch("/api/state").then(function (r) { return r.json(); }).then(function (state) {
+    boxesSeen = state.boxes || [];
     agents = state.agents;
     allTools = state.allTools || allTools;
     $("model").innerHTML = "<b>" + esc(state.provider) + "</b>";
     boxState = { ok: !!state.box.ok, detail: String(state.box.detail || "") };
-    $("boxinfo").textContent = state.box.ok ? state.box.detail : "box unavailable";
+    $("boxinfo").textContent = (state.box.ok ? state.box.detail : "box unavailable") +
+      (state.boxes && state.boxes.length > 1 ? " · " + state.boxes.length + " boxes (" + state.boxes.filter(function (b) { return b.connected; }).length + " up)" : "");
     $("boxdot").className = "dot " + (state.box.ok ? "ok" : "bad");
     showBoxClass(state.box);
     if (!onboardChecked) {
@@ -2998,10 +3179,18 @@ function automationRow(s) {
   var origin = s.authoredBy
     ? '<span style="color:var(--accent-2);font-size:10.5px;border:1px solid var(--border);border-radius:5px;padding:0 5px">by ' + esc(s.authoredBy) + "</span>"
     : "";
-  return '<div style="padding:10px 16px;border-bottom:1px solid var(--border)">' +
+  // Paused is a state a person chose (or a template arrived in): shown, and switchable here.
+  var pausedTag = s.paused
+    ? '<span style="color:var(--warn);font-size:10.5px;border:1px solid var(--border);border-radius:5px;padding:0 5px">paused</span>'
+    : "";
+  var toggle = s.paused
+    ? '<button class="btn ghost sm" data-resume="' + esc(s.slug) + '">Turn on</button>'
+    : '<button class="btn ghost sm" data-pause="' + esc(s.slug) + '">Pause</button>';
+  return '<div style="padding:10px 16px;border-bottom:1px solid var(--border)' + (s.paused ? ";opacity:.75" : "") + '">' +
     '<div style="display:flex;gap:9px;align-items:baseline">' +
-      '<span style="flex:1;font-size:13px;font-weight:500">' + esc(s.name) + " " + origin + "</span>" +
-      '<button class="btn ghost sm" data-run="' + esc(s.slug) + '"' + (s.running ? " disabled" : "") + ">Run now</button>" +
+      '<span style="flex:1;font-size:13px;font-weight:500">' + esc(s.name) + " " + origin + " " + pausedTag + "</span>" +
+      toggle +
+      '<button class="btn ghost sm" data-run="' + esc(s.slug) + '"' + (s.running || s.paused ? " disabled" : "") + ">Run now</button>" +
     "</div>" +
     '<div class="dim" style="font-size:11px;margin-top:3px">' + when +
       (s.agent ? " · as " + esc(s.agent) : "") + " · " + where + "</div>" +
@@ -3035,7 +3224,25 @@ document.getElementById("autorefresh").addEventListener("click", function (e) {
 // A manual fire is the same path as a timed one, so what it proves is what will happen
 // at 06:30 — and it deliberately does not count as the scheduled run.
 document.getElementById("autolist").addEventListener("click", function (e) {
-  var slug = e.target && e.target.getAttribute && e.target.getAttribute("data-run");
+  var get = function (name) { return e.target && e.target.getAttribute && e.target.getAttribute(name); };
+  var toggleSlug = get("data-resume") || get("data-pause");
+  if (toggleSlug) {
+    e.preventDefault();
+    e.target.disabled = true;
+    fetch(get("data-resume") ? "/api/schedules/resume" : "/api/schedules/pause", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ slug: toggleSlug }),
+    })
+      .then(function (r) { return r.json(); })
+      .then(function (data) {
+        if (data.error) alert(data.error);
+        setTimeout(refreshAutomations, 400);
+      })
+      .catch(function () { setTimeout(refreshAutomations, 400); });
+    return;
+  }
+  var slug = get("data-run");
   if (!slug) return;
   e.preventDefault();
   e.target.disabled = true;
@@ -3331,6 +3538,9 @@ function activityLine(e) {
     return { html: who(nameOf(e.agentId)) + " interrupted (" + esc(e.reason) + ")", cls: "warn" };
   }
   if (e.type === "error") return { html: esc(e.message), cls: "err" };
+  if (e.type === "template_import") {
+    return { html: who(e.agentName) + " &larr; template: " + esc(e.summary), cls: e.complete && /but not all/.test(e.summary) ? "warn" : "" };
+  }
   return null;
 }
 
@@ -3378,6 +3588,11 @@ stream.onmessage = function (raw) {
   if (e.type === "prompt") {
     endStep();
     if (inView(e)) bubble("user", "you", e.text);
+    return;
+  }
+
+  if (e.type === "template_staged") {
+    if (inView(e)) loadTemplateCardInChat(e.agentId);
     return;
   }
 
@@ -3761,6 +3976,21 @@ $("rec").onclick = function (event) {
 // One dialog, two modes. The previous version used window.prompt, which the desktop
 // shell does not implement: the + button did nothing, silently.
 var agentModal = { mode: "new", id: null, tools: {} };
+/** The boxes the last /api/state reported, own first. More than one shows the box column. */
+var boxesSeen = [];
+
+function renderBoxSelect(agent) {
+  var select = $("agbox");
+  var html = "";
+  for (var i = 0; i < boxesSeen.length; i++) {
+    var b = boxesSeen[i];
+    html += '<option value="' + esc(b.id) + '"' + (agent && agent.boxId === b.id ? " selected" : "") + (b.connected ? "" : " disabled") + ">" +
+      esc(b.name) + (i === 0 ? " (own)" : "") + (b.connected ? "" : " — not connected") + "</option>";
+  }
+  select.innerHTML = html || '<option value="">(no box)</option>';
+  // Chosen once: in Configure the field shows where the agent is and cannot change it.
+  select.disabled = !!agent;
+}
 var agentCatalog = { experts: [], crews: [] };
 
 function loadAgentCatalog() {
@@ -3838,14 +4068,196 @@ $("agcatalog").onclick = function (event) {
   $("agstatus").textContent = row.summary;
 };
 
+// ── templates (docs/29) ────────────────────────────────────────────────────
+/**
+ * The share card: what a staged version carries, and the two things a person can do with
+ * it — download the file, or publish it to the control plane for a link. Nothing leaves the
+ * box until one of those is clicked; the bot cannot click either.
+ */
+function templateCardHtml(info) {
+  var share = info.share
+    ? '<div style="margin-top:6px;font-size:12px">Published (' + esc(info.share.visibility) + '): <a href="' + esc(info.share.url) + '" target="_blank">' + esc(info.share.url) + '</a> ' +
+      '<button class="btn sm ghost" data-unpublish="' + esc(info.agentId) + '">Unpublish</button></div>'
+    : info.canPublish
+      ? '<div style="margin-top:6px;display:flex;gap:8px;flex-wrap:wrap">' +
+        '<button class="btn sm" data-publish="' + esc(info.agentId) + '" data-version="' + esc(String(info.version)) + '" data-visibility="public">Publish a link</button>' +
+        '<button class="btn sm ghost" data-publish="' + esc(info.agentId) + '" data-version="' + esc(String(info.version)) + '" data-visibility="tenant">Team only</button>' +
+        "</div>"
+      : '<div class="dim" style="margin-top:6px;font-size:11px">Links need a control plane; this box has none, so the file is the way to share.</div>';
+  return '<div class="consent" data-template-card="' + esc(info.agentId) + '" style="margin:8px 0">' +
+    '<div class="chead"><span class="dot"></span>Template staged &mdash; version ' + esc(String(info.version)) + ', not shared until you say so</div>' +
+    '<div style="font-size:13px;font-weight:500;margin-top:4px">' + esc(info.name) + '</div>' +
+    '<div style="font-size:12px;margin-top:2px">' + esc(info.description) + '</div>' +
+    '<div class="dim" style="font-size:11px;margin-top:4px">' + esc(info.counts) + "</div>" +
+    '<div style="margin-top:6px"><a href="/api/templates/download?agent=' + encodeURIComponent(info.agentId) + '&version=' + esc(String(info.version)) + '" style="font-size:12px">Download the file</a></div>' +
+    share +
+    '<div class="dim" id="tplstatus-' + esc(info.agentId) + '" style="font-size:11px;margin-top:4px"></div>' +
+  "</div>";
+}
+
+function showTemplateCard(info) {
+  var old = document.querySelector('[data-template-card="' + info.agentId + '"]');
+  if (old) old.remove();
+  $("chat").insertAdjacentHTML("beforeend", templateCardHtml(info));
+  $("chat").scrollTop = $("chat").scrollHeight;
+}
+
+/** The latest staged version for the agent in view, if any, rendered after the transcript. */
+function loadTemplateCardInChat(agentId) {
+  return fetch("/api/templates/mine?agent=" + encodeURIComponent(agentId))
+    .then(function (r) { return r.json(); })
+    .then(function (data) {
+      var versions = data.versions || [];
+      if (!versions.length || current !== agentId) return;
+      var latest = versions[versions.length - 1];
+      showTemplateCard({
+        agentId: agentId,
+        version: latest.version,
+        name: latest.name,
+        description: latest.description,
+        counts: latest.counts || "",
+        share: data.share || null,
+        canPublish: !!data.canPublish
+      });
+    })
+    .catch(function () { /* no card is not an error */ });
+}
+
+$("chat").addEventListener("click", function (e) {
+  var get = function (name) { return e.target && e.target.getAttribute && e.target.getAttribute(name); };
+  var publish = get("data-publish");
+  var unpublish = get("data-unpublish");
+  if (!publish && !unpublish) return;
+  e.preventDefault();
+  e.target.disabled = true;
+  var agentId = publish || unpublish;
+  var status = $("tplstatus-" + agentId);
+  if (status) status.textContent = publish ? "Publishing…" : "Unpublishing…";
+  fetch(publish ? "/api/templates/publish" : "/api/templates/unpublish", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify(publish
+      ? { agent: agentId, version: Number(get("data-version")), visibility: get("data-visibility") }
+      : { agent: agentId })
+  })
+    .then(function (r) { return r.json().then(function (d) { if (!r.ok) throw new Error(d.error || "failed"); return d; }); })
+    .then(function () { return loadTemplateCardInChat(agentId); })
+    .catch(function (err) {
+      e.target.disabled = false;
+      if (status) status.textContent = String(err.message || err);
+    });
+});
+
+function loadTemplateCard(agentId) {
+  $("agtemplate").textContent = "Loading…";
+  $("agdownload").style.display = "none";
+  return fetch("/api/templates/mine?agent=" + encodeURIComponent(agentId))
+    .then(function (r) { return r.json(); })
+    .then(function (data) {
+      var versions = data.versions || [];
+      var origin = data.importedFrom
+        ? "Created from the template “" + esc(data.importedFrom.name) + "”" + (data.importedFrom.createdBy ? " by " + esc(data.importedFrom.createdBy) : "") + ". "
+        : "";
+      if (!versions.length) {
+        $("agtemplate").innerHTML = origin + "No template staged yet.";
+        $("agshare").textContent = "Ask it to draft a template";
+        return;
+      }
+      var latest = versions[versions.length - 1];
+      $("agtemplate").innerHTML = origin + "Version " + latest.version + " staged" +
+        (latest.stagedAt ? " " + esc(new Date(latest.stagedAt).toLocaleString()) : "") +
+        ": <b>" + esc(latest.name) + "</b> — " + esc(latest.description);
+      $("agshare").textContent = "Ask it to update the template";
+      $("agdownload").href = "/api/templates/download?agent=" + encodeURIComponent(agentId) + "&version=" + latest.version;
+      $("agdownload").style.display = "";
+    })
+    .catch(function () { $("agtemplate").textContent = "Could not read the template state."; });
+}
+
+$("agshare").onclick = function () {
+  if (!agentModal.id) return;
+  $("agshare").disabled = true;
+  fetch("/api/templates/share", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ agent: agentModal.id })
+  })
+    .then(function (r) { return r.json(); })
+    .then(function () {
+      $("agentwrap").style.display = "none";
+      feed("asked " + esc(nameOf(agentModal.id)) + " to draft a template — watch the chat; the card is in Configure once it is staged", "");
+      return select(agentModal.id);
+    })
+    .catch(function (err) { $("agstatus").textContent = String(err.message || err); })
+    .then(function () { $("agshare").disabled = false; });
+};
+
+$("agimportfile").onchange = function () {
+  var file = this.files && this.files[0];
+  if (!file) return;
+  file.text().then(function (text) { $("agimport").value = text; });
+};
+
+/**
+ * Landing from a share page: "/?import=<id>". The box fetches the storefront and the document
+ * from the control plane with its own token and opens the new-agent dialog with both in place,
+ * so the person reads what they are adding and clicks Import themselves.
+ */
+function landImportFromUrl() {
+  var shareId = new URLSearchParams(location.search).get("import");
+  if (!shareId) return;
+  history.replaceState(null, "", location.pathname);
+  fetch("/api/templates/preview?shareId=" + encodeURIComponent(shareId))
+    .then(function (r) { return r.json().then(function (d) { if (!r.ok) throw new Error(d.error || "could not fetch the template"); return d; }); })
+    .then(function (d) {
+      openAgentModal("new", null);
+      $("agname").value = d.name || "";
+      $("agimport").value = d.document || "";
+      $("agstatus").textContent = "Shared template “" + (d.name || "") + "” by " + (d.ownerName || "someone") + " — " + (d.description || "") + " Press Import to add your own copy.";
+      $("agimportgo").setAttribute("data-share-id", shareId);
+    })
+    .catch(function (err) { feed("could not open the shared template: " + esc(String(err.message || err)), "err"); });
+}
+
+$("agimportgo").onclick = function () {
+  var text = $("agimport").value.trim();
+  if (!text) { $("agstatus").textContent = "Paste a template first."; return; }
+  $("agimportgo").disabled = true;
+  $("agstatus").textContent = "Importing…";
+  fetch("/api/templates/import", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ template: text, name: $("agname").value.trim() || undefined, shareId: $("agimportgo").getAttribute("data-share-id") || undefined })
+  })
+    .then(function (r) {
+      return r.json().then(function (d) {
+        if (!r.ok) throw new Error(d.error || "import failed");
+        return d;
+      });
+    })
+    .then(function (d) {
+      $("agentwrap").style.display = "none";
+      feed("importing " + esc(d.name) + " — it installs its recipe on its first turn", "");
+      return refresh().then(function () { return select(d.id); });
+    })
+    .catch(function (err) { $("agstatus").textContent = String(err.message || err); })
+    .then(function () { $("agimportgo").disabled = false; });
+};
+
 function openAgentModal(mode, agent) {
   agentModal.mode = mode;
   agentModal.id = agent ? agent.id : null;
   $("agenttitle").textContent = mode === "new" ? "New agent" : "Configure " + agent.name;
   $("agsave").textContent = mode === "new" ? "Create" : "Save";
   $("agcatalogwrap").style.display = mode === "new" ? "" : "none";
+  $("agimportwrap").style.display = mode === "new" ? "" : "none";
+  $("agtemplatewrap").style.display = mode === "new" ? "none" : "";
+  renderBoxSelect(agent);
+  $("agimport").value = "";
   if (mode === "new") {
     loadAgentCatalog().then(renderAgentCatalog);
+  } else {
+    loadTemplateCard(agent.id);
   }
   $("agname").value = agent ? agent.name : "";
   $("agrole").value = agent ? String(agent.title || "") : "";
@@ -3984,6 +4396,7 @@ function saveAgentModal() {
     model: $("agmodel").value.trim()
   };
   if (!isNew) body.id = agentModal.id;
+  if (isNew && $("agbox").value) body.boxId = $("agbox").value;
   $("agstatus").textContent = "Saving…";
   $("agsave").disabled = true;
   fetch(isNew ? "/api/agents" : "/api/agents/update", {
@@ -4064,7 +4477,7 @@ function applyRole() {
 }
 
 // Activity after the roster, because its lines name agents.
-refresh().then(loadActivity).then(loadRecordings);
+refresh().then(loadActivity).then(loadRecordings).then(landImportFromUrl);
 setInterval(refresh, 15000);
 
 // A chat card's "open in the workshop" link lands here: the board, with that task

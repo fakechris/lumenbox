@@ -34,7 +34,7 @@ import { hermeticEnv } from "./test-env.mjs";
  * remember to raise is a number that goes stale, so staleness is now itself reported: passing far
  * above the floor prints how to raise it, every run, until somebody does.
  */
-const FLOOR = Number(process.env.AGENTBOX_TEST_FLOOR ?? 990);
+const FLOOR = Number(process.env.AGENTBOX_TEST_FLOOR ?? 1095);
 /** How far above the floor the suite may sit before the floor is called stale. */
 const STALE_MARGIN = 40;
 
