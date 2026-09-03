@@ -150,3 +150,50 @@ Both land on `main` alone.
 - *`RememberFact` in a fork:* stripped. A slice's conclusion is the parent's to reconcile.
 - *Lease identity:* bound to `turnId` and a resource key, never `(agent, about)` — deferred with
   the leases themselves.
+
+## 7. Slice three, designed 2026-09-03: leases on task ids
+
+**What the review rejected in v1:** a lease keyed by `(agent, about)` with `about` free text.
+The bus runs one agent in several conversations at once, so two of its turns share that key; and
+free text is not a resource — nothing says what `"fix the tests"` covers, and `bash` writes files
+without ever naming it. This slice keeps `ClaimWork` as it is (advisory, free text, a way for two
+agents to *see* they are on the same thing) and adds a lease that means something because it is on
+a thing the host owns.
+
+**The resource is a task on the board.** `Tasks` rows have ids (`t12`), a status machine, an
+assignee and a reviewer, and every change goes through `TaskStore.update`. That is the one shared
+mutable object the host fully mediates, so it is the one a lease can fence.
+
+**The lease.** `{ resource: "task:t12", agentId, conversation, turnId, at, expiresAt }`, in
+`claims.jsonl` beside the advisory claims, written with `appendLineDurably` — a claim that could
+not be written is refused, not granted. Held for 30 minutes; every write by the holder renews.
+The holder is the *agent in a conversation*: another conversation of the same agent waits like
+anyone else, which is the case v1's key got wrong. `turnId` is recorded for the log, not for
+identity — a resumed turn of the same conversation is the same holder.
+
+**What it fences.** `Tasks update` (status, assignee, reviewer, note) and `Tasks close` on a task
+with a live lease held by someone else are refused with the holder's name and the minutes left,
+as a tool error the model reads. A person's change from the UI is not fenced — people outrank
+leases — but is logged against the lease so the holder's next write sees "changed by Chris while
+you held it". Board reads are never fenced.
+
+**How a lease is taken.** `Tasks claim <id>` (and `release <id>`); `Tasks update` by an agent
+that holds no lease on the task takes one implicitly if nobody else does, so the common case
+— one agent working one task — costs nothing and the fence only shows up when there is a
+second party. A claim on a task whose status is `done` is refused: nothing left to hold.
+
+**What it does not fence, said plainly.** Files, the shell, the desktop, MCP writes. A lease on
+`task:t12` says nothing about `/home/box/work/repo`; the honest version of file leases needs a
+path model (which directory, symlinks, renames) and still cannot see a `bash` write, so it is not
+in this slice and may never be. The board is the coordination object; the box is the workshop.
+
+**Startup.** Leases are read back like claims; an expired one is gone. No sweep needed: a lease
+held by a turn that died expires on its own, which is what a lease is for.
+
+**Tests.** Two agents on one task: the second's update is refused with the first's name; the
+first's release frees it; expiry frees it; the same agent in two conversations is two holders;
+an update by the holder renews; a person's UI change is logged against the lease; a claim whose
+record cannot be written is refused; a `done` task cannot be claimed.
+
+S–M. After it: the submission gate (a task moves to `review` only through a `Tasks submit` that
+names the evidence) and `appendLine` fsync everywhere, as their own notes.

@@ -1288,8 +1288,10 @@ and the pre-launch security pass over docs/10.
 1. **R30 — coordination as protocol.** Slice one designed in docs/32 (v2 after Codex's
    hostile review, 2026-09-03): a fork ledger that survives restarts, fenced children;
    Delegate and leases deferred with their preconditions named. **Built 2026-09-03** (Stage 10);
-   slice two the same day put Delegate in the ledger on boxd's new job ids and exit files. Left:
-   leases with a resource model, the submission gate, fsync everywhere. What every mature system does that we do not: a
+   slice two the same day put Delegate in the ledger on boxd's new job ids and exit files.
+   Slice three (leases on task ids, held per agent-and-conversation, fail-closed, fencing
+   `Tasks` writes only) is designed in docs/32 §7 and not built. Left after it: the submission
+   gate, fsync everywhere. What every mature system does that we do not: a
    record minted *before* the side effect, a completion that is a row with a delivery state
    rather than a promise, and leases that fail closed. Concretely, one mechanism serves both
    this and R8's write-ahead: a **pending-work file** written when a Fork or a delegated task
