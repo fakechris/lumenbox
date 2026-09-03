@@ -29,6 +29,7 @@ import { resolveBoxProvisioner, type BoxProvisioner } from "../box/provisioner.t
 import { classifyBox } from "../box/access.ts";
 import { envNumber } from "../config.ts";
 import { buildInfo } from "../host/build-info.ts";
+import { faceBaseUrl, RENEW_EVERY_MS, ROUTE_PATH } from "../host/mcp-face.ts";
 import { BackupSchedule, backupRoot } from "../host/backup.ts";
 import { Orchestrator } from "../host/orchestrator.ts";
 import { describeProvider, type ProviderProfile } from "../host/provider.ts";
@@ -2233,6 +2234,23 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
       ) {
         return;
       }
+      // The MCP face (docs/33): a delegated engine in the box calling the host's MCP tools
+      // through its per-job route. Before the UI gate, like the side door, and with one 401 for
+      // every way to be wrong — unknown key, lapsed lease, wrong bearer.
+      const routeMatch = ROUTE_PATH.exec(url.pathname);
+      if (routeMatch !== null) {
+        const key = routeMatch[1]!;
+        const bearer = /^Bearer\s+(.+)$/i.exec(req.headers.authorization ?? "")?.[1]?.trim();
+        const route = orchestrator.mcpFace.authenticate(key, bearer);
+        await handleMcpRequest(req, res, {
+          path: url.pathname,
+          serverName: "lumenbox-face",
+          tools: route === undefined ? [] : orchestrator.mcpFace.toolsFor(route),
+          principalFor: () => route?.agentId,
+          log: line => log(`mcp-face: ${line}`),
+        });
+        return;
+      }
       if (!decision.allow && route !== "POST /api/login") {
         // No WWW-Authenticate: a browser prompt would be the wrong shape for this, and the
         // token belongs in the URL once rather than typed into a dialog.
@@ -4422,6 +4440,11 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
   // second secret to store. Assigned before anything can serve a request.
   sessionSecret = sessionKey(token);
   await new Promise<void>(resolve => server.listen(options.port, host, resolve));
+  // Where a job in the box reaches this server (docs/33 §1), and the lease renewal that ends a
+  // route when its job is gone.
+  orchestrator.mcpFace.baseUrl = faceBaseUrl(options.port);
+  const renewRoutes = setInterval(() => void orchestrator.mcpFace.renew(), RENEW_EVERY_MS);
+  renewRoutes.unref();
 
   const address = server.address();
   const port = typeof address === "object" && address ? address.port : options.port;

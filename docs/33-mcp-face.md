@@ -1,6 +1,11 @@
 # 33 — The box gets an MCP face: a per-job route on the host, never a credential in the box
 
-**Status: v2 after hostile review, 2026-09-03 (R29, docs/11 "needed" #2). Building.** v1 went to
+**Status: v2 after hostile review, 2026-09-03 (R29, docs/11 "needed" #2) — built the same day
+(`feat/mcp-face`).** `src/host/mcp-face.ts` (routes, lease, audit, `expandRequested`,
+`faceBaseUrl`), `policy.ts` `delegated`, `mcp-server.ts` `path`/`serverName`, `/mcp/r/<key>` in
+`server.ts` with the five-minute renewal, presets' `mcpFace`, `Delegate.tools`, `docker.ts`
+always maps `host.docker.internal`, `reloadMcp` revokes every route. §7 item 3 (a live delegate
+against a real MCP server) is the remaining step. v1 went to
 Codex and was rejected on fourteen findings, all verified against the tree and the two engines'
 current documentation. §0a records what changed. The research behind the shape is
 `research/2026-09-02-coordination-mcp-memory.md` §二.

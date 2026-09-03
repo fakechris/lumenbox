@@ -22,6 +22,15 @@ stores the model's *own* content blocks, unedited, which is what makes an agent'
 The shape that probably works is detection plus a marker — store the result, note that it matched a
 credential pattern, and let a reader decide — rather than silent removal.
 
+**And the MCP face keeps it so (docs/33, 2026-09-03):** a delegated engine in the box reaches the
+host's MCP tools through a per-job route on the web server — a key in the path, a bearer in the
+job's environment, exact tool names snapshotted at mint, a lease the host renews from the box's
+job list. No MCP credential enters the box; the policy gate runs with `delegated` set (no approval
+reuse, no input in the log); every call lands in `delegate-calls.jsonl` with a result digest.
+What it does not do: any process in the box runs as the same uid and can read the job's
+environment, so a stolen token buys one route's tools for one lease — the box is one trust
+boundary, as docs/03 says.
+
 ## S-2 — The gateway has no TLS, and the session cookie is the whole session
 
 Said on startup and in [08-control-plane.md](08-control-plane.md) §10, and still true. Anyone on the

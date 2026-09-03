@@ -51,7 +51,7 @@ export interface Preset {
    * would hang a job nobody is watching. v1 is deliberately one-shot; a session
    * protocol (ACP) is the upgrade, and it changes this line and nothing else.
    */
-  run: (quotedPrompt: string, model?: string) => string;
+  run: (quotedPrompt: string, model?: string, extraArgs?: string) => string;
   /**
    * Where this engine looks for reusable methods, if it does. The box's own skills
    * directory is linked here at install.
@@ -59,6 +59,19 @@ export interface Preset {
   skillsMount?: string;
   /** Environment that points the engine's model traffic at our relay. */
   relayEnv: (baseUrl: string, token: string) => Record<string, string>;
+  /**
+   * The sixth face (docs/33): the file, environment and command-line fragment that make this
+   * engine talk to one remote MCP server — ours, on the host — and no other of ours. The token
+   * travels in the environment under `tokenVar`, never in the file and never on the command
+   * line; the file is written to `file` before the job starts.
+   */
+  mcpFace: (url: string, tokenVar: string, file: string) => {
+    content: string;
+    env: Record<string, string>;
+    args: string;
+    /** What the review found and the operator should know. */
+    note?: string;
+  };
 }
 
 /**
@@ -77,7 +90,8 @@ export const PRESETS: readonly Preset[] = [
     // without it — the engine "works" and does nothing. The box is the sandbox; the
     // permission prompt has no one to ask. The model travels as a flag because this
     // engine has no model environment variable (measured on 1.18.25).
-    run: (quoted, model) => `opencode run --auto${model ? ` -m ${model}` : ""} ${quoted}`,
+    run: (quoted, model, extraArgs) =>
+      `opencode run --auto${model ? ` -m ${model}` : ""}${extraArgs ? ` ${extraArgs}` : ""} ${quoted}`,
     skillsMount: "~/.config/opencode/skill",
     // Measured on 1.18.25: opencode ignores ANTHROPIC_BASE_URL/OPENAI_BASE_URL — its
     // endpoints come from a provider catalog, overridable only in its config file. The
@@ -92,6 +106,30 @@ export const PRESETS: readonly Preset[] = [
       ANTHROPIC_API_KEY: token,
       MINIMAX_API_KEY: token,
     }),
+    // opencode reads a config file named by OPENCODE_CONFIG and expands `{env:VAR}` in it; it
+    // still merges its global config, so an operator's own MCP entries in the box would load
+    // beside ours (our image ships none). `oauth: false` keeps it from trying a browser flow
+    // against a route that answers 401 to anything but its bearer.
+    mcpFace: (url, tokenVar, file) => ({
+      content: `${JSON.stringify(
+        {
+          $schema: "https://opencode.ai/config.json",
+          mcp: {
+            lumenbox: {
+              type: "remote",
+              url,
+              headers: { Authorization: `Bearer {env:${tokenVar}}` },
+              oauth: false,
+            },
+          },
+        },
+        null,
+        2
+      )}\n`,
+      env: { OPENCODE_CONFIG: file },
+      args: "",
+      note: "opencode merges its global config too; only ours ships in the image",
+    }),
   },
   {
     name: "claude",
@@ -100,12 +138,28 @@ export const PRESETS: readonly Preset[] = [
     // The same headless truth as opencode's --auto, in this engine's dialect; inside
     // the box the sandbox is the container, not the prompt. Untested until a claude
     // build ships in an image — says so in docs/25.
-    run: (quoted, model) =>
-      `claude -p --dangerously-skip-permissions${model ? ` --model ${model}` : ""} ${quoted}`,
+    run: (quoted, model, extraArgs) =>
+      `claude -p --dangerously-skip-permissions${model ? ` --model ${model}` : ""}${extraArgs ? ` ${extraArgs}` : ""} ${quoted}`,
     skillsMount: "~/.claude/skills",
     relayEnv: (baseUrl, token) => ({
       ANTHROPIC_BASE_URL: baseUrl,
       ANTHROPIC_API_KEY: token,
+    }),
+    // Claude Code expands `${VAR}` in MCP config, and `--strict-mcp-config` restricts it to the
+    // servers given by `--mcp-config` — so the file must be *passed*, not merely present in the
+    // working directory (the review's finding; the CLI reference agrees).
+    mcpFace: (url, tokenVar, file) => ({
+      content: `${JSON.stringify(
+        {
+          mcpServers: {
+            lumenbox: { type: "http", url, headers: { Authorization: `Bearer \${${tokenVar}}` } },
+          },
+        },
+        null,
+        2
+      )}\n`,
+      env: {},
+      args: `--mcp-config ${quoteForShell(file)} --strict-mcp-config`,
     }),
   },
 ];

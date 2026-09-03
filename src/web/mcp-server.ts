@@ -115,9 +115,13 @@ export async function handleMcpRequest(
     tools: readonly McpServerTool[];
     principalFor: (presented: string | undefined) => string | undefined;
     log: (line: string) => void;
+    /** Which path this serves. `/mcp` is the person's side door; `/mcp/r/<key>` a route (docs/33). */
+    path?: string;
+    /** Who answers `initialize` as. */
+    serverName?: string;
   }
 ): Promise<boolean> {
-  if (req.url?.split("?")[0] !== "/mcp") return false;
+  if (req.url?.split("?")[0] !== (deps.path ?? "/mcp")) return false;
 
   const send = (status: number, body: unknown): void => {
     const payload = JSON.stringify(body);
@@ -160,7 +164,7 @@ export async function handleMcpRequest(
       reply({
         protocolVersion: "2025-06-18",
         capabilities: { tools: { listChanged: false } },
-        serverInfo: { name: "lumenbox", version: "1" },
+        serverInfo: { name: deps.serverName ?? "lumenbox", version: "1" },
       });
       return true;
 

@@ -25,6 +25,7 @@ import { guardShellCommand } from "./ui-automation-guard.ts";
 import { dedupe, dedupeKey, validateRecord } from "./memory.ts";
 import { type Claims, heldElsewhere } from "./claims.ts";
 import { forkTag, type CommitHow, type PendingWork } from "./pending-work.ts";
+import { MCP_FACE_DIR, MCP_FACE_TOKEN_VARIABLE, type McpFace } from "./mcp-face.ts";
 import { MAIN_CONVERSATION } from "../agents/registry.ts";
 import { describeTask, isLive, isTaskStatus, TASK_STATUSES, type TaskStore } from "./tasks.ts";
 import { ABSENT, versionOf, type FileVersions } from "./files.ts";
@@ -147,6 +148,12 @@ export interface ToolContext {
   workId?: string;
   /** The fork ledger (docs/32). Absent means forks are not recorded — tests, or nobody. */
   pendingWork?: PendingWork;
+  /** The MCP face (docs/33): routes a delegated engine may call the host's MCP tools through. */
+  mcpFace?: McpFace;
+  /** The MCP tool names this turn itself may call — profile ∩ scope ∩ chat scope, as the turn computed them. */
+  allowedMcpTools?: readonly string[];
+  /** What kind of box the agent's is: an attached one cannot reach the host's loopback. */
+  boxKind?: "docker" | "attached";
   /**
    * Reads Feishu documents with the bot's own workspace identity. Present only where
    * a Feishu app is configured; absent withholds the tool entirely, so an agent on an
@@ -593,6 +600,14 @@ export function buildTools(
             cwd: {
               type: "string",
               description: "Directory to work in — usually a repository checkout.",
+            },
+            tools: {
+              type: "array",
+              items: { type: "string" },
+              description:
+                "MCP tools the engine may call through this host, by name (`server__tool`) or a " +
+                "whole server (`server__*`) — only ones you can call yourself. Name what the brief " +
+                "needs and nothing more: the engine sees exactly this list. Omit for none.",
             },
           },
           required: ["preset", "prompt"],
@@ -1896,15 +1911,68 @@ export async function dispatchTool(
         };
       }
       const env = delegateEnv(preset);
-      const started = await box.startJob(preset.run(quoteForShell(prompt), delegateModel()), {
-        ...(input.cwd ? { cwd: String(input.cwd) } : {}),
-        ...(Object.keys(env).length > 0 ? { env } : {}),
-        ...(context.boxOwner !== undefined ? { owner: context.boxOwner } : {}),
-      });
+
+      // The MCP face (docs/33): mint a route, write the engine's config file, then start; the
+      // job id is bound afterwards and a failed start revokes the route. No face for an attached
+      // box, which cannot reach this host's loopback; said, not silently skipped.
+      const requested = Array.isArray(input.tools)
+        ? (input.tools as unknown[]).filter((name): name is string => typeof name === "string")
+        : [];
+      let faceNote = "";
+      let routeKey: string | undefined;
+      let extraArgs: string | undefined;
+      const jobEnv: Record<string, string> = { ...env };
+      if (requested.length > 0) {
+        if (context.mcpFace === undefined) {
+          return { text: "This installation has no MCP face, so an engine cannot be lent tools.", isError: true };
+        }
+        if (context.boxKind === "attached") {
+          faceNote = "MCP tools are not reachable from this box (it is attached over the network), so the engine has none.\n";
+        } else {
+          const minted = context.mcpFace.mint({
+            agentId: context.agent.id,
+            agentName: context.agent.profile.name,
+            conversation: context.conversation ?? MAIN_CONVERSATION,
+            ...(context.workId !== undefined ? { workId: context.workId } : {}),
+            requested,
+            allowedMcp: context.allowedMcpTools ?? [],
+          });
+          if ("error" in minted) return { text: minted.error, isError: true };
+          routeKey = minted.route.key;
+          const file = `${MCP_FACE_DIR}/${minted.route.key}.json`;
+          const face = preset.mcpFace(minted.url, MCP_FACE_TOKEN_VARIABLE, file);
+          try {
+            await box.writeFile(file, face.content);
+          } catch (error) {
+            context.mcpFace.revoke(minted.route.key, "config file could not be written");
+            return { text: `Could not write the engine's MCP config in the box: ${error instanceof Error ? error.message : String(error)}`, isError: true };
+          }
+          Object.assign(jobEnv, face.env, { [MCP_FACE_TOKEN_VARIABLE]: minted.route.token });
+          extraArgs = face.args || undefined;
+          faceNote =
+            `It may call ${minted.route.allowed.length} MCP tool${minted.route.allowed.length === 1 ? "" : "s"} through this host ` +
+            `(${minted.route.allowed.join(", ")}); every call is checked and recorded here.\n` +
+            (face.note !== undefined ? `Note: ${face.note}.\n` : "");
+        }
+      }
+
+      let started: Awaited<ReturnType<typeof box.startJob>>;
+      try {
+        started = await box.startJob(preset.run(quoteForShell(prompt), delegateModel(), extraArgs), {
+          ...(input.cwd ? { cwd: String(input.cwd) } : {}),
+          ...(Object.keys(jobEnv).length > 0 ? { env: jobEnv } : {}),
+          ...(context.boxOwner !== undefined ? { owner: context.boxOwner } : {}),
+        });
+      } catch (error) {
+        if (routeKey !== undefined) context.mcpFace?.revoke(routeKey, "job failed to start");
+        throw error;
+      }
+      if (routeKey !== undefined) context.mcpFace?.bindJob(routeKey, started.job_id);
       return {
         text:
           `Delegated to ${preset.name} as ${started.job_id}.\n` +
           `Its work is going to ${started.log_path}.\n` +
+          faceNote +
           (Object.keys(env).length > 0
             ? "It is billed through this installation, so its spend is on the same budget as yours.\n"
             : "No model relay is configured here, so it is using whatever credential the box " +

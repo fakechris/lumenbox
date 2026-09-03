@@ -147,3 +147,13 @@ offer and refused at dispatch; no MCP tools in a fork.
 findings, all verified). Deferred with preconditions: Delegate in the ledger (boxd job ids and
 exit files, an image rebuild), leases (a resource model first).
 
+## Stage 11: The box gets an MCP face (docs/33)
+**Goal**: a delegated engine inside the box can call the host's MCP tools without a credential
+ever entering the box, under exactly the tools the delegating turn named and may itself call.
+**Success Criteria**: a route answers `tools/list` with the snapshotted allow-list and one 401 for
+every wrong way in; a delegated call that would need approval is refused and logged without its
+input; the lease follows `box.jobs()`; `mcp reload` revokes; presets write one config file per
+route with the token only in the environment; an attached box gets no face and says so.
+**Status**: Complete (2026-09-03) on `feat/mcp-face` after Codex's review of v1 (14 findings,
+all verified). Open: a live delegate against a configured MCP server; the VM shim (slice two).
+

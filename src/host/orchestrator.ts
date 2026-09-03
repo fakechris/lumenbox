@@ -11,6 +11,7 @@ import { AgentBus, type BusEvent, type InboundMessage, type Lane } from "../agen
 import { Inbox, inboxPath } from "../agents/inbox.ts";
 import { Claims, claimsPath } from "./claims.ts";
 import { PendingWork, isForkChild, pendingWorkPath } from "./pending-work.ts";
+import { McpFace } from "./mcp-face.ts";
 import { FileVersions } from "./files.ts";
 import {
   giveUpNote,
@@ -254,6 +255,10 @@ export class Orchestrator {
    */
   reloadMcp(): { started: string[]; stopped: string[]; kept: string[] } | undefined {
     if (!this.mcpFromConfig) return undefined;
+    // Every route dies with the list it was minted against (docs/33 §0a): a hot-swapped server
+    // must not hand a running engine tools nobody named.
+    const revoked = this.mcpFace.revokeAll("MCP servers reloaded");
+    if (revoked > 0) console.error(`[mcp-face] ${revoked} route(s) revoked by the reload`);
     return this.mcp.reload(mcpServersFrom(loadConfig(line => console.error(`[config] ${line}`))));
   }
 
@@ -269,6 +274,8 @@ export class Orchestrator {
   /** Begin/end per turn. A begin with no end is a turn the process died underneath. */
   private readonly turns: TurnLedger | undefined;
   readonly pendingWork: PendingWork | undefined;
+  /** The MCP face (docs/33): per-job routes a delegated engine calls the host's MCP tools through. */
+  readonly mcpFace: McpFace;
 
   /**
    * Which turn each agent is currently resuming, so the ledger entry it writes is linked to the one
@@ -634,6 +641,16 @@ export class Orchestrator {
       usage: this.usage,
     });
 
+    // After the hooks: the face runs them around every delegated call.
+    this.mcpFace = new McpFace({
+      mcp: () => this.mcp,
+      policy: this.policy,
+      ...(this.hooks !== undefined ? { hooks: this.hooks } : {}),
+      jobsOf: agentId => this.boxFor(agentId)?.jobs().then(result => result.jobs),
+      ...(options.pendingWork === null ? { auditPath: null } : {}),
+      log: line => console.error(`[mcp-face] ${line}`),
+      onEvent: event => options.onTurnEvent?.(event),
+    });
     this.bus = new AgentBus(
       this.registry,
       (agent, inbound, signal, conversation) => this.executeTurn(agent, inbound, signal, conversation),
@@ -1162,6 +1179,8 @@ export class Orchestrator {
       effort: this.options.effort,
       turns: this.turns,
       ...(this.pendingWork !== undefined ? { pendingWork: this.pendingWork } : {}),
+      mcpFace: this.mcpFace,
+      boxKind: this.boxEntryOf(agent.id).kind,
       // The same cheap profile the summariser and the note-taker use. Choosing which memories to
       // show is the least interesting work in the system and should be billed accordingly.
       selectMemory: prompt => this.askCheaply(agent, prompt),

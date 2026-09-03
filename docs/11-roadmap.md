@@ -1299,7 +1299,9 @@ and the pre-launch security pass over docs/10.
    anyone has built is stripping `SendToAgent` and the task board from delegated children —
    copy that. Prompt rules ("a send is not a completion signal", "assignment is the trigger,
    never also mention") are worth their line but are not enforcement. L, item by item.
-2. **R29 — an MCP face for the box.** Confirmed by two products that solved exactly our
+2. **R29 — an MCP face for the box.** **Built 2026-09-03** (docs/33, after a hostile review that
+   rejected v1 on fourteen findings; Stage 11). Left: the VM shim and a live run against a
+   configured server. Confirmed by two products that solved exactly our
    problem: the host runs a loopback MCP endpoint per server, the box reaches it with a
    short-lived per-route token and a fingerprint passed in by env, the host alone holds the
    vendor credential and does OAuth refresh, and every `tools/call` lands in the host's

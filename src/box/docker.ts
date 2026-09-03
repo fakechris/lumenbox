@@ -534,10 +534,12 @@ export class BoxManager {
       // Egress, when a relay was named. host.docker.internal resolves on Docker Desktop
       // already; the mapping is what makes the same name work on a Linux engine, so the
       // relay address does not have to change per platform.
+      // Always, not only with the egress relay: the MCP face (docs/33) reaches this host by
+      // the same name, and on a Linux engine the name exists only through this mapping.
+      "--add-host",
+      "host.docker.internal:host-gateway",
       ...(process.env.AGENTBOX_EGRESS_RELAY
         ? [
-            "--add-host",
-            "host.docker.internal:host-gateway",
             "--env",
             `AGENTBOX_EGRESS_RELAY=${process.env.AGENTBOX_EGRESS_RELAY}`,
             ...(process.env.AGENTBOX_EGRESS_TOKEN

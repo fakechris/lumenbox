@@ -20,6 +20,7 @@ import type { Claims } from "./claims.ts";
 import type { FileVersions } from "./files.ts";
 import type { TurnLedger } from "./resume.ts";
 import type { PendingWork } from "./pending-work.ts";
+import type { McpFace } from "./mcp-face.ts";
 import type { Skill } from "./skills.ts";
 import {
   classifyLimit,
@@ -415,6 +416,10 @@ export interface TurnDeps {
   turns?: TurnLedger;
   /** The fork ledger (docs/32): forks are recorded before they start and committed here. */
   pendingWork?: PendingWork;
+  /** The MCP face (docs/33), for Delegate. */
+  mcpFace?: McpFace;
+  /** What kind of box this agent's is, for Delegate's face decision. */
+  boxKind?: "docker" | "attached";
   /**
    * The ledger handle for this turn, when it is a resumption of an earlier one.
    *
@@ -453,6 +458,8 @@ type TurnEventBody =
    * from plain entries only. Once per turn.
    */
   | { type: "interim"; agentId: string; agentName: string; text: string }
+  /** A delegated engine called one of the host's MCP tools through its route (docs/33). */
+  | { type: "delegate_call"; agentId: string; agentName: string; tool: string; ok: boolean; ms: number }
   | { type: "tool_start"; agentId: string; agentName: string; tool: string; input: unknown }
   | {
       type: "tool_end";
@@ -2178,6 +2185,9 @@ export async function runTurn(
             skillProvenance: deps.skillProvenance,
             workId,
             ...(deps.pendingWork !== undefined ? { pendingWork: deps.pendingWork } : {}),
+            ...(deps.mcpFace !== undefined ? { mcpFace: deps.mcpFace } : {}),
+            ...(deps.boxKind !== undefined ? { boxKind: deps.boxKind } : {}),
+            allowedMcpTools: allowedMcp.map(tool => tool.name),
             ...(deps.templateSetup !== undefined ? { templateSetup: deps.templateSetup } : {}),
             ...(deps.templates !== undefined ? { templates: deps.templates } : {}),
             turnId,
