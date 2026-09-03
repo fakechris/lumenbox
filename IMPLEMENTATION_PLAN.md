@@ -122,3 +122,13 @@ without a restart; `skillRoots` is an ordered search path with collisions report
 key is a recorded decision, the "unreachable" file is the live 1:1, the record exists. Suite
 1056, floor 1056.
 
+## Stage 9: The turn engine minds the person (docs/31)
+**Goal**: a person-opened turn cannot end with an unverified verdict about the world, and the
+model's opening line reaches the chat while its tools run; read-only tools run in parallel.
+**Success Criteria**: interim line delivered once per turn and excluded from the final reply
+(test); three parallel reads finish in one read's time, order preserved (test); `tool_choice`
+carried on both wires (test); the guards fire once per turn, are logged, and `AGENTBOX_GUARDS=0`
+silences them (tests); golden `newer-than-you` passes; recap and epistemic paragraph shipped;
+per-turn reminder gated by model family; `[conduct]` counters visible in the web log.
+**Status**: Not Started (plan approved for writing 2026-09-02; order docs/31 §5).
+

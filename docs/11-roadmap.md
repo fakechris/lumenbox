@@ -1274,6 +1274,15 @@ and the pre-launch security pass over docs/10.
 
 **Needed, in this order:**
 
+0. **R40 — the turn engine minds what the person sees and whether an action followed a
+   promise** (docs/31, added 2026-09-02 evening at Chris's call, ahead of everything below).
+   The Bob incident — "Qwen 没有 27B … 没有 5.3-flash", from weights, no search, turn over —
+   and the fact that a model's opening line never reaches Feishu when tools follow it.
+   Three layers: the engine (interim line to the chat, parallel read-only tools,
+   `tool_choice` on both wires, bounded structural guards); the words (recap reword,
+   model-gated per-turn reminder in the user turn); the epistemic line (an unknown newer
+   thing is real until a tool says otherwise). Evidence gate: a golden task built from the
+   incident and `[conduct]` counters over a week. M+S+S+M, in the order docs/31 §5 gives.
 1. **R30 — coordination as protocol.** What every mature system does that we do not: a
    record minted *before* the side effect, a completion that is a row with a delivery state
    rather than a promise, and leases that fail closed. Concretely, one mechanism serves both
