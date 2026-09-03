@@ -1263,63 +1263,78 @@ week of memory numbers. docs/30 Stage C (`TransferFile`) is paused at Chris's ca
 ## What to do next, as of 2026-09-02 — the list, after the seven
 
 The seven small items from the triage above are done (Stage 8 in IMPLEMENTATION_PLAN.md).
-This list supersedes the ordering paragraphs above it; everything here is either a design
-that has to be written before code, or a measurement that has to be taken before a decision.
-Nothing on it is a morning's work, which is the point of having done the seven first.
+This list supersedes the ordering paragraphs above it. **Ordered by Chris's ruling of
+2026-09-02 evening**, after three reads of how others do it (the evidence, product by
+product, is `research/2026-09-02-coordination-mcp-memory.md`; only the product-independent
+conclusions are here).
 
 **Running, not planned** (from docs/handoff-2026-09-02): a week of auto-review in shadow mode,
 the live listener skill, conduct numbers from the `[conduct]` log line, the prompt floor,
 and the pre-launch security pass over docs/10.
 
-**Design first, then code** — each goes through docs/13 before anything is built:
+**Needed, in this order:**
 
-1. **R4 — Grant grows into Scope.** Pick *one* privileged operation and make it a
-   scope-granted capability the host performs, so the model never holds the value. That
-   is the capability proxy R7 needs; if the shape works once it generalises, and if it
-   does not the design is wrong at the cheapest possible point. L.
-2. **R16 — Webhook ingress.** One signed URL per door, admitted through the same path
-   `channels/manager.ts` uses, arriving as a message with a principal. The identity story
-   is the design; the route is an afternoon. M.
-3. **R30 — Coordination as protocol.** The dispatch record first (an id minted before any
-   side effect, shared by inbox admission, delivery and billing), then fork terminal states,
-   then the submission gate. Also carries `inbox.ts`'s warn-and-dispatch and `appendLine`
-   without fsync. L, reviewed item by item.
-4. **R29 — An MCP face for the box.** Tool calls travelling the relay the way model traffic
-   already does. Hostile review before code, per docs/13. L.
-5. **R36 — the extension loader.** `~/.agentbox/extensions/*.ts`, a factory contract, tear
-   down and re-import on reload. Only when somebody edits extensions often enough to feel
-   the restart; the hooks and MCP seams cover what is edited today. M.
-6. **R8 — the write-ahead intent record.** The upgrade behind the two riders that shipped.
-   L; still an upgrade, not a fix.
+1. **R30 — coordination as protocol.** What every mature system does that we do not: a
+   record minted *before* the side effect, a completion that is a row with a delivery state
+   rather than a promise, and leases that fail closed. Concretely, one mechanism serves both
+   this and R8's write-ahead: a **pending-work file** written when a Fork or a delegated task
+   starts (`{agentId, kind, workId, at}`), cleared on settle, and on restart either
+   re-delivered or force-settled as `dropped`. Then completions as records with a delivery
+   claim and an attempt cap that converges to `dropped`; `claims.ts` leases identity-checked
+   on release and refusing to run unserialised on timeout; typed block reasons on the review
+   gate with a loop breaker. The one mechanical form of "communication is not coordination"
+   anyone has built is stripping `SendToAgent` and the task board from delegated children —
+   copy that. Prompt rules ("a send is not a completion signal", "assignment is the trigger,
+   never also mention") are worth their line but are not enforcement. L, item by item.
+2. **R29 — an MCP face for the box.** Confirmed by two products that solved exactly our
+   problem: the host runs a loopback MCP endpoint per server, the box reaches it with a
+   short-lived per-route token and a fingerprint passed in by env, the host alone holds the
+   vendor credential and does OAuth refresh, and every `tools/call` lands in the host's
+   transcript and policy gate. For a VM box where loopback is unreachable, a tiny stdio shim
+   forwards JSON-RPC out (over the tunnel, tagged with the conversation so the host can
+   attribute and approve). Add per-tool toggles and a per-task allow-list; confirm before
+   call by default. Same relay as model traffic, one more route family. L; docs/13 review
+   first, as before — but the design is no longer open, it is a port.
+3. **R8 — the write-ahead intent record.** Now the cheap half of item 1: the pending-work
+   file *is* the intent record for forks and delegations; extending it to every
+   side-effecting tool call (id before the call, result after, "unknown" only when the
+   process died between) is the remaining step. M once item 1 exists.
+4. **R36 — the extension loader.** `~/.agentbox/extensions/*.ts`, a factory contract, tear
+   down and re-import on reload, docs/10 treatment for the loading rule. M.
+5. **R17 — project memory, with "project" finally defined.** A project is what our own
+   multiplayer design (research/MULTIPLAYER-PRODUCT-DESIGN.md §L6) already called a *Room
+   Scope*: the Scope object we have (name, bound chats, tools, secrets, files root) plus
+   members and memory. The one system that made project a real object partitions memory by
+   `project` *above* both the user track and the agent track, and never lets a search cross
+   it; everyone else reduces project to a namespace string. So: `scope` on the memory record,
+   written when the conversation is bound to a scope; recall never crosses scopes except the
+   self tier; a scope owns a directory in the box (`filesRoot`), its task-board rows, and its
+   schedules; a group chat bound to a scope *is* the project's front door, and binding is
+   how one is created. M, after the week of memory data says what self/team actually hold.
+6. **R27 and the memory rewrite — long-term.** What the two memory systems agree on and we
+   do differently: **no age decay anywhere** — contradiction is handled by a supersede link
+   (`replaced_by` / `deprecated_by`), temporary states carry a validity interval, and stable
+   traits are separated from transient facts; **provenance on every record** — source
+   message ids, sender, session — which is R27's `basis` under another name; and a write path
+   that decides ADD / UPDATE / DELETE / NONE against the nearest existing records rather than
+   appending. Today's ablation (R28) says our extracted notes carry no style behaviour and
+   cost tokens, which is consistent with both systems' choice to extract atomic facts from
+   *episodes* rather than free notes. Direction, not a ticket: replace age decay with
+   supersede links and validity intervals, add message-id provenance, and try boundary-cut
+   episodes as the extraction unit. M each, in that order, on the same week of data.
 
-**Measure first, then decide** — a week of memory data is the input:
+**Low priority, by ruling:**
 
-7. **R17 — project tier of memory.** `scope?` on the record, written when a conversation is
-   bound to a scope, a third render block; and the rule for what happens to scope memory
-   when the scope ends. M, after seeing what self/team actually hold in a week.
-8. **R27 — evidence attached to the belief.** `basis?: {path, hash}` for records whose
-   evidence is a file in the box; a mismatch renders "unverified", never "wrong". M, after
-   the same week shows which records actually go stale.
-9. **R28 — the rest of the eval work.** The notes ablation is run (see the entry); what it
-   says about the notes layer is decided together with R17/R27. Still to write: a listener
-   fires/stays-quiet suite, and the golden-tasks-versus-traffic comparison.
+- **R4 — the capability proxy / Scope growth.** Get the rest running first. The requirement
+  stays recorded (a credential the model never holds); no date.
+- **R16 — webhook ingress.** No scenario yet; chat triggers plus scheduled skills cover
+  what is needed. Revisit when a real "when X happens" request arrives.
 
-**Small and waiting on a trigger:**
-
-- **R3** — a `workflow_dispatch` release job that produces and asserts the Win/Linux
-  installers. S, when a Windows or Linux user exists.
-- **R34** — URL-at-admission pre-fetch, only if pasted links still get apologies. S.
-- **R10 / S-6** — `AGENTBOX_CONTROL_KEY` as the documented path with a loud warning
-  otherwise; the rest of the gateway batch when multi-tenant is the goal.
-- **R38** — MiniMax-M3 losing the `computer` schema after compaction: reproduce on a long
-  desktop turn first. S–M.
-- **R7** — at-rest hygiene: exact-match redaction of vault-held values at the transcript
-  append site. M, labelled hygiene, not containment.
-- **docs/30 Stage C** — `TransferFile` across boxes. Paused at Chris's call.
-- **Image rebuild** — the Docker box image is one rebuild behind main (boxd boot skips a
-  claimed default desktop; health falls back to `detectDisplay`). Blocked on apt reaching
-  `deb.debian.org` through the local proxy's fake-ip; rebuild, `box up --recreate --yes`,
-  restart web when it does.
+**Small and waiting on a trigger** (unchanged): R3 installers when a Win/Linux user exists;
+R34 URL pre-fetch if pasted links still get apologies; R10/S-6 `AGENTBOX_CONTROL_KEY`; R38
+MiniMax-M3 losing the `computer` schema after compaction (reproduce first); R7 at-rest
+redaction; docs/30 Stage C paused; the Docker image rebuild once apt can reach
+`deb.debian.org` through the local proxy.
 
 ## What to do next, as of 2026-09-01
 
