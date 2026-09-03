@@ -1316,8 +1316,10 @@ and the pre-launch security pass over docs/10.
    file *is* the intent record for forks and delegations; extending it to every
    side-effecting tool call (id before the call, result after, "unknown" only when the
    process died between) is the remaining step. M once item 1 exists.
-4. **R36 — the extension loader.** `~/.agentbox/extensions/*.ts`, a factory contract, tear
-   down and re-import on reload, docs/10 treatment for the loading rule. M.
+4. **R36 — the extension loader.** **Built 2026-09-03** (docs/34): `~/.agentbox/extensions/*`
+   default-export `(api) => …`; `api.tool` lands as `ext__<name>` through the MCP manager's
+   in-process server, `api.on` for turn events; reload via CLI, API and Settings; the hooks
+   file's permission rule. Channel wire verbs stay out, as a design rather than a seam.
 5. **R17 — project memory, with "project" finally defined.** A project is what our own
    multiplayer design (research/MULTIPLAYER-PRODUCT-DESIGN.md §L6) already called a *Room
    Scope*: the Scope object we have (name, bound chats, tools, secrets, files root) plus

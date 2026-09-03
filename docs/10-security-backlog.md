@@ -95,7 +95,9 @@ until R39 nothing checked who could write it.
 
 **Held since R39 (2026-09-02):** the runner refuses a hooks file that is group- or
 world-writable, or owned by another uid, logs the refusal, and treats the file as empty
-until it is fixed. The state directory itself is the operator's (0700 by `agentbox`'s own
+until it is fixed. The same rule covers `~/.agentbox/extensions/*` (docs/34, 2026-09-03),
+which is the same thing with a wider api: each file is checked before import and a loose
+one is skipped, not loaded. The state directory itself is the operator's (0700 by `agentbox`'s own
 mkdir), so the remaining path in is an agent with `RunOnHost` writing the file — which is
 the S-1 class of problem (a host command is the operator), not a new one. **Not done, on
 purpose:** a signed or hashed allow-list of hook commands. It would let an operator pin

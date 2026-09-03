@@ -1693,6 +1693,12 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
   // without shell, files, or a desktop and could finish or fail before the box ever arrived. The
   // inbox first, then interrupted turns: a turn already running is further along than a message only
   // accepted, and they run in the order queued.
+  // Extensions before anything runs a turn, so their tools are in the first prompt (docs/34).
+  const extensions = await orchestrator.reloadExtensions();
+  if (extensions !== undefined && (extensions.loaded.length > 0 || extensions.problems.length > 0)) {
+    const problems = extensions.problems.length > 0 ? `; ${extensions.problems.join("; ")}` : "";
+    log(`extensions: ${extensions.loaded.length} loaded, ${extensions.tools.length} tool(s)${problems}`);
+  }
   // The fork ledger first (docs/32 §1): it cancels what the inbox would otherwise replay and
   // ends what the turn ledger would otherwise resume, for every fork the last process left open.
   const sweptForks = await orchestrator.sweepPendingWork();
@@ -2852,6 +2858,17 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
           return;
         }
 
+        if (route === "POST /api/extensions/reload") {
+          if (refused()) return;
+          const applied = await orchestrator.reloadExtensions();
+          if (applied === undefined) {
+            send(res, 409, { error: "No extension layer here." });
+            return;
+          }
+          send(res, 200, { ok: true, ...applied });
+          return;
+        }
+
         if (route === "POST /api/mcp/reload") {
           if (refused()) return;
           // The edges reload; the core does not (R36). An operator edited mcpServers in
@@ -2869,6 +2886,7 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
           send(res, 200, {
             servers: orchestrator.mcp.statuses(),
             budget: TOOL_BUDGET_WARNING,
+            extensions: orchestrator.extensions?.current() ?? null,
             // Never the secrets — only that they exist, whose they are, and when.
             tokens: mcpTokens.map(entry => ({
               label: entry.label,

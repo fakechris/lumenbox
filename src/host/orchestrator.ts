@@ -12,6 +12,7 @@ import { Inbox, inboxPath } from "../agents/inbox.ts";
 import { Claims, claimsPath } from "./claims.ts";
 import { PendingWork, isForkChild, pendingWorkPath } from "./pending-work.ts";
 import { McpFace } from "./mcp-face.ts";
+import { Extensions, extensionsDir } from "./extensions.ts";
 import { FileVersions } from "./files.ts";
 import {
   giveUpNote,
@@ -113,6 +114,8 @@ export interface OrchestratorOptions {
   turns?: TurnLedger | null;
   /** The fork ledger (docs/32). `null` keeps none; omitted uses the default path. */
   pendingWork?: PendingWork | null;
+  /** The extension layer (docs/34). `null` loads none; omitted reads ~/.agentbox/extensions. */
+  extensions?: Extensions | null;
   /** Who wrote each skill. `null` keeps no record, which is what a test wants. */
   skillProvenance?: SkillProvenance | null;
   /** Lifecycle hooks (hooks.ts). `null` means none; omitted reads ~/.agentbox/hooks.json. */
@@ -263,6 +266,19 @@ export class Orchestrator {
   }
 
   /**
+   * Loads (or reloads) every extension file and installs their tools as the in-process `ext`
+   * server (docs/34). Routes minted against the old tool list die with it, as on an MCP reload.
+   */
+  async reloadExtensions(): Promise<import("./extensions.ts").ExtensionsLoad | undefined> {
+    if (this.extensions === undefined) return undefined;
+    const revoked = this.mcpFace.revokeAll("extensions reloaded");
+    if (revoked > 0) console.error(`[mcp-face] ${revoked} route(s) revoked by the extensions reload`);
+    const result = await this.extensions.load();
+    this.mcp.setVirtual(this.extensions.server());
+    return result;
+  }
+
+  /**
    * Skill directories beyond the box's own, in the order config lists them (R26). Read per
    * refresh — at most every few seconds per box — so an edit to config.json applies without
    * a restart, like the skills themselves.
@@ -276,6 +292,8 @@ export class Orchestrator {
   readonly pendingWork: PendingWork | undefined;
   /** The MCP face (docs/33): per-job routes a delegated engine calls the host's MCP tools through. */
   readonly mcpFace: McpFace;
+  /** The extension layer (docs/34): tools and listeners from ~/.agentbox/extensions, hot-reloadable. */
+  readonly extensions: Extensions | undefined;
 
   /**
    * Which turn each agent is currently resuming, so the ledger entry it writes is linked to the one
@@ -641,6 +659,10 @@ export class Orchestrator {
       usage: this.usage,
     });
 
+    this.extensions =
+      options.extensions === null
+        ? undefined
+        : (options.extensions ?? new Extensions(extensionsDir(), line => console.error(`[extensions] ${line}`)));
     // After the hooks: the face runs them around every delegated call.
     this.mcpFace = new McpFace({
       mcp: () => this.mcp,
@@ -1217,6 +1239,7 @@ export class Orchestrator {
             .catch(() => {});
         }
         this.options.onTurnEvent?.(event);
+        this.extensions?.emit(event);
       },
     }).catch(error => {
       // An aborted turn is a normal outcome — a priority message superseded it,

@@ -932,6 +932,11 @@ export const APP_HTML = String.raw`<!doctype html>
         <button type="button" class="ghost" id="setmcpreload">Reload from config</button>
         <span class="dim" id="setmcpreloaded" style="font-size:12px"></span>
       </div>
+      <div id="setext" class="dim" style="font-size:12px;margin-top:8px"></div>
+      <div style="display:flex;gap:8px;align-items:center;margin-top:4px">
+        <button type="button" class="ghost" id="setextreload">Reload extensions</button>
+        <span class="dim" id="setextreloaded" style="font-size:12px"></span>
+      </div>
       <div class="fieldnote">Tools other people wrote. Configured in mcpServers in
         ~/.agentbox/config.json — a stdio server is a process on this machine, so an operator
         adds one, never an agent. Their tools obey the same agent tool lists, scopes and
@@ -1378,6 +1383,20 @@ document.getElementById("setmcptokens").addEventListener("click", function (even
   }).then(renderMcp);
 });
 
+document.getElementById("setextreload").addEventListener("click", function () {
+  var note = $("setextreloaded");
+  note.textContent = "reloading…";
+  fetch("/api/extensions/reload", { method: "POST", headers: { "content-type": "application/json" }, body: "{}" })
+    .then(function (r) { return r.json().then(function (j) { return { ok: r.ok, j: j }; }); })
+    .then(function (x) {
+      if (!x.ok) { note.textContent = x.j.error || "reload failed"; return; }
+      note.textContent = "loaded " + (x.j.loaded || []).length + " file(s), " + (x.j.tools || []).length + " tool(s)" +
+        ((x.j.problems || []).length ? "; " + x.j.problems.join("; ") : "");
+      renderMcp();
+    })
+    .catch(function () { note.textContent = "reload failed"; });
+});
+
 document.getElementById("setmcpreload").addEventListener("click", function () {
   var note = $("setmcpreloaded");
   note.textContent = "reloading…";
@@ -1403,6 +1422,12 @@ function renderMcp() {
       // An installation matter, so admins only — and admins with none see the empty state
       // and the reload, because "add one to config.json, then reload" is the way in.
       document.getElementById("setmcpwrap").style.display = myRole === "admin" ? "" : "none";
+      var ext = data.extensions;
+      $("setext").textContent = ext
+        ? "Extensions (~/.agentbox/extensions): " + (ext.loaded.length ? ext.loaded.join(", ") : "none") +
+          (ext.tools.length ? " — tools: " + ext.tools.join(", ") : "") +
+          (ext.problems.length ? " — problems: " + ext.problems.join("; ") : "")
+        : "";
       if (!servers.length) {
         $("setmcp").innerHTML = '<div class="dim" style="font-size:13px">none configured</div>';
         return;

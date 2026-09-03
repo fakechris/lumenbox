@@ -1145,6 +1145,7 @@ The box runs wherever your Docker engine points: set DOCKER_HOST or use
                            trusting a new provider, and after a vendor update.
   mcp                      Bridge this installation to an MCP client over stdio.
   mcp reload               Apply an edit to mcpServers in config.json without a restart.
+  extensions reload        Re-import ~/.agentbox/extensions/*.{mjs,js,ts} without a restart.
                            Needs AGENTBOX_MCP_TOKEN from Settings; the client
                            gets a box, a desktop and a team, billed to whoever
                            the token belongs to.
@@ -1505,6 +1506,20 @@ async function main(): Promise<number> {
     // client already knows how to configure. It forwards JSON-RPC lines to /mcp and
     // writes the replies back — no protocol of its own, so nothing here can disagree
     // with the server about what MCP means.
+    case "extensions": {
+      if (rest[0] !== "reload") {
+        err("Usage: agentbox extensions reload");
+        return 1;
+      }
+      const result = await viaWeb("/api/extensions/reload", {});
+      if (result === undefined) {
+        err("No web server is running here; the next `agentbox web` loads the extensions anyway.");
+        return 1;
+      }
+      const list = (key: string) => ((result[key] as string[] | undefined) ?? []).join(", ") || "-";
+      out(`loaded: ${list("loaded")}\ntools: ${list("tools")}\nproblems: ${list("problems")}`);
+      return 0;
+    }
     case "mcp": {
       if (rest[0] === "reload") {
         // Applies an edit to mcpServers in config.json to the running web server (R36).

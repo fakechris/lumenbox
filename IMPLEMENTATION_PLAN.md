@@ -158,3 +158,11 @@ route with the token only in the environment; an attached box gets no face and s
 **Status**: Complete (2026-09-03) on `feat/mcp-face` after Codex's review of v1 (14 findings,
 all verified). Open: a live delegate against a configured MCP server; the VM shim (slice two).
 
+## Stage 12: Extensions (docs/34, R36)
+**Goal**: an operator can add a tool or a turn-event listener by dropping a file in
+`~/.agentbox/extensions/` and reloading, without restarting the web server.
+**Success Criteria**: a file's tools appear as `ext__<name>` in the MCP manager and run in-process;
+listeners receive turn events; reload picks up an edit and refuses a duplicate name; a loose or
+broken file is a problem line, not a failed start; a config reload keeps the in-process server.
+**Status**: Complete (2026-09-03) on `feat/extensions`. Suite 1095, floor 1095.
+
