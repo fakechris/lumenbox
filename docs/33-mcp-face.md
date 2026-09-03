@@ -4,8 +4,13 @@
 (`feat/mcp-face`).** `src/host/mcp-face.ts` (routes, lease, audit, `expandRequested`,
 `faceBaseUrl`), `policy.ts` `delegated`, `mcp-server.ts` `path`/`serverName`, `/mcp/r/<key>` in
 `server.ts` with the five-minute renewal, presets' `mcpFace`, `Delegate.tools`, `docker.ts`
-always maps `host.docker.internal`, `reloadMcp` revokes every route. §7 item 3 (a live delegate
-against a real MCP server) is the remaining step. v1 went to
+always maps `host.docker.internal`, `reloadMcp` revokes every route. §7 item 3 ran the same day: Ada delegated to a stand-in engine in the Docker box with
+`tools: ["stub__echo"]` against a stub stdio server on the host; the engine read the config
+file, reached `http://host.docker.internal:7777/mcp/r/<key>` with the token from its
+environment, got `tools/list` = exactly `stub__echo` (annotated destructive), a successful
+`tools/call`, "No tool named stub__boom" for a tool not lent, and 401 for a wrong bearer; the
+audit line carried the job id, the work id and the result digest. Remaining: the VM shim (slice
+two) and a real engine in the image (opencode/claude are not in the current image). v1 went to
 Codex and was rejected on fourteen findings, all verified against the tree and the two engines'
 current documentation. §0a records what changed. The research behind the shape is
 `research/2026-09-02-coordination-mcp-memory.md` §二.
