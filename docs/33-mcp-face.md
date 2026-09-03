@@ -1,9 +1,26 @@
 # 33 — The box gets an MCP face: a per-job route on the host, never a credential in the box
 
-**Status: design for hostile review, 2026-09-03 (R29, docs/11 "needed" #2).** Written after reading
-how WorkBuddy and QwenWork solved the same problem (`research/2026-09-02-coordination-mcp-memory.md`
-§二) and what this tree already has. Not built. Per docs/13 it goes to review with its rejected
-alternatives, its blast radius and a standing instruction to break it.
+**Status: v2 after hostile review, 2026-09-03 (R29, docs/11 "needed" #2). Building.** v1 went to
+Codex and was rejected on fourteen findings, all verified against the tree and the two engines'
+current documentation. §0a records what changed. The research behind the shape is
+`research/2026-09-02-coordination-mcp-memory.md` §二.
+
+## 0a. What the review changed
+
+| v1 said | What is true | v2 |
+|---|---|---|
+| the route carries the job id | boxd mints the id while spawning (`job-service.ts:63`) | mint → write files → `startJob` → bind the id; a route with no job yet is valid (its agent, conversation and work are bound); `startJob` failing revokes it |
+| `host.docker.internal:<port>` reaches the web server | true on Docker Desktop (the egress relay proves it); false on a Linux engine for a `127.0.0.1` listener; wrong in self-contained mode, where the orchestrator is *inside* the container on `0.0.0.0:7777` (`entrypoint.sh:197`) | the face URL is topology-aware: self-contained (`AGENTBOX_BOXD_URL` is loopback) → `http://127.0.0.1:7777`; otherwise `AGENTBOX_MCP_FACE_URL`, default `http://host.docker.internal:<port>`; a Linux engine needs the operator to bind the web server to the bridge address, said in docs/06 |
+| a `.mcp.json` / `opencode.json` in the working directory | two jobs in one repository overwrite each other's; a tracked project config is clobbered; Claude's `--strict-mcp-config` only restricts to servers given by `--mcp-config` | one file per route under `~/.lumenbox/mcp/<key>.json`; Claude: `--mcp-config <file> --strict-mcp-config`; opencode: `OPENCODE_CONFIG=<file>` (its global config still merges — stated) |
+| "the same gate every tool call passes" | a direct call also runs auto-review and PreToolUse/PostToolUse hooks; PolicyGate is default-allow and only asks for configured tools | route calls run the PreToolUse/PostToolUse hooks too; auto-review's binding class does not name MCP tools for direct calls either, so parity holds; what the gate cannot see (a generic HTTP tool pointed at `127.0.0.1`) is stated as the delegating agent's choice of `tools`, not the route's |
+| intersect with "the agent's own list" | a turn's MCP set is the profile ∩ scope ∩ the chat's bound scope (`turn.ts:1311-1330`) | `Delegate` receives the turn's already-computed `allowedMcp` names and intersects with those, never a recomputation |
+| wildcards resolve against the live list | `mcp reload` hot-swaps a server; a route minted for `github__*` would gain `delete_repo` the moment the operator adds it; a failed server keeps its stale tool list | wildcards expand to exact names at mint (a wildcard matching nothing fails the mint); every route is revoked on `McpManager.reload` |
+| the ledger never records arguments | `PolicyGate.check` persists `describeRequest`, which includes the input | route calls present `delegated: {jobId}` on the request: the policy log records the tool and byte count, not the input, and **no standing or session approval is consulted** — a call that would need one is refused |
+| 12 h ceiling, revoke on the next `Jobs` check | a model action nobody guarantees | a 30-minute lease renewed by the host itself while `box.jobs()` still lists the job as running; an absolute ceiling of 12 h; gone with the job |
+| `McpManager.call` has no timeout; results are clamped | it has 120 s; a direct result is not clamped in-round | route results clamped at 200 000 characters; the engine's client timeout must exceed 120 s (documented per face) |
+| 404 for an unknown route, 401 for a bad token | a route-state oracle | one 401 for unknown, expired and wrong-token alike; exact path regex; body cap; four calls in flight per route |
+| annotations | `McpTool` carries none | every route tool is annotated destructive/open-world: unknown external tools are not read-only by assumption |
+| "two routes; nothing shared" | every job runs as the `box` uid; another process in the box can read a job's environment | stated as a limit (§4): the box is one trust boundary (docs/03); a token's blast radius is one route's tools for one lease |
 
 ## 0. The problem, and what already exists
 
@@ -39,31 +56,42 @@ Neither lets the sandbox hold a vendor credential; both scope what a session may
 ## 1. The design
 
 **One route per delegated job.** When `Delegate` starts an engine with `tools` named, the host
-mints a *route*: `{ key, token, agentId, conversation, workId, jobId, allowed, createdAt,
-expiresAt }`. `key` is 16 random bytes (hex, in the path), `token` 32 random bytes (bearer,
-compared in constant time). The route lives in the web-server process, in memory, and expires
-after 12 hours or when the delegating agent's `Jobs` check sees the job finished, whichever comes
-first. A host restart forgets every route: the engine's next call gets 401 and its run fails
-loudly, which is what a restart already does to a job's parent turn.
+mints a *route*: `{ key, token, agentId, agentName, conversation, workId, jobId?, allowed,
+createdAt, leaseUntil, ceiling }`. `key` is 16 random bytes (hex, in the path), `token` 32 random
+bytes (bearer, constant-time compare). Order: mint → write the face's file → `startJob` → bind
+`jobId`; a failed start revokes the route. Routes live in the web-server process, in memory. A
+route holds a **30-minute lease** the host renews every five minutes while `box.jobs()` lists its
+job as running, under a 12-hour ceiling; a job that is gone, or a host restart, ends it. The
+engine's next call then gets 401 and its run fails loudly, which is what a restart already does to
+a job's parent turn. `McpManager.reload` revokes every route.
 
-**The endpoint.** `POST /mcp/r/<key>` on the web server — `handleMcpRequest` generalised to take
-its path and its tool list from the route: `tools/list` returns exactly `allowed` (resolved
-against `McpManager.tools()` at call time, so a server that came up late is visible and one that
-died is not); `tools/call` runs, in order, the route check (key found, token matches, not
-expired), the allow-list check, `policy.check({kind: "tool", agentId, tool})` with the
-*delegating agent's* identity, then `McpManager.call`. The result is the tool's text, clamped to
-the same limit a direct call gets. Body cap 1 MiB, as the side door has.
+**The endpoint.** `POST /mcp/r/<key>`, matched by `^/mcp/r/[0-9a-f]{32}$` and nothing looser, on
+the web server — `handleMcpRequest` generalised to take its path and its tool list from the route.
+Unknown, expired and wrong-token routes all answer the same 401. `tools/list` returns exactly the
+route's `allowed` names (expanded at mint; a name whose server is no longer up is listed and fails
+on call, as it would for the agent). `tools/call` runs, in order: the route check; the allow-list;
+`policy.check({kind: "tool", agentId, tool, input, delegated: {jobId}})` — the delegating agent's
+identity, no approval reuse, input logged as a byte count; the `PreToolUse` hook; `McpManager.call`
+(its own 120 s timeout); the `PostToolUse` hook. The result is the tool's text clamped at 200 000
+characters. Body cap 1 MiB; at most four calls in flight per route.
 
-**What the engine is given.** A preset gains its sixth face, `mcpFace(url, tokenVar)`: the files
-and environment that make *this* engine talk to a remote MCP server. Claude Code: a
-`.mcp.json` in the job's working directory with `{"mcpServers": {"lumenbox": {"type": "http",
-"url": …, "headers": {"Authorization": "Bearer ${LUMENBOX_MCP_TOKEN}"}}}}` — Claude Code expands
-`${VAR}` in `.mcp.json` — and `--strict-mcp-config` on the command line so only ours is loaded.
-opencode: an `opencode.json` in the working directory with `{"mcp": {"lumenbox": {"type":
-"remote", "url": …, "headers": {"Authorization": "Bearer {env:LUMENBOX_MCP_TOKEN}"}}}}` — opencode
-expands `{env:VAR}`. The token travels as `LUMENBOX_MCP_TOKEN` in the job's environment, never on
-the command line (where `ps` shows it) and never in the file. The URL is
-`${AGENTBOX_MCP_FACE_URL ?? "http://host.docker.internal:<web port>"}/mcp/r/<key>`.
+**What the engine is given.** A preset gains its sixth face, `mcpFace(url, tokenVar, path)`: the
+file, the environment and the command-line fragment that make *this* engine talk to one remote
+MCP server and no other of ours. The file is `~/.lumenbox/mcp/<key>.json` in the box, one per
+route, never in a repository. Claude Code: `{"mcpServers": {"lumenbox": {"type": "http", "url": …,
+"headers": {"Authorization": "Bearer ${LUMENBOX_MCP_TOKEN}"}}}}` — it expands `${VAR}` in MCP
+config — and `--mcp-config <file> --strict-mcp-config` on the command line, which is what makes
+the file the only source (verified against the current CLI reference). opencode: `{"mcp":
+{"lumenbox": {"type": "remote", "url": …, "headers": {"Authorization": "Bearer
+{env:LUMENBOX_MCP_TOKEN}"}, "oauth": false}}}` with `OPENCODE_CONFIG=<file>` — it expands
+`{env:VAR}`; its global config still merges, so an operator's own MCP entries in the box would
+load beside ours (our image ships none; stated). The token travels as `LUMENBOX_MCP_TOKEN` in the
+job's environment, never on the command line and never in the file. The URL: self-contained boxes
+(the orchestrator inside the container, `AGENTBOX_BOXD_URL` on loopback) use
+`http://127.0.0.1:<port>`; otherwise `AGENTBOX_MCP_FACE_URL`, default
+`http://host.docker.internal:<port>` — right on Docker Desktop, where the name reaches the host's
+loopback (the egress relay depends on the same fact); a Linux engine needs the web server bound to
+the bridge address and the variable set, said in docs/06.
 
 **What the delegating agent says.** `Delegate` takes `tools?: string[]` — MCP tool names
 (`server__tool`) or a server wildcard (`server__*`). Absent or empty: no face, today's behaviour.
@@ -72,17 +100,21 @@ name only what the brief needs. There is no "all MCP tools" option: the context-
 from WorkBuddy's `Defer` + `ToolSearch` and Kimi's confirm-before-call is that an unscoped list
 is the failure, and the scoping decision belongs to the turn that can read the brief.
 
-**Who may see what.** The route's `allowed` is intersected with what the *delegating agent*
-itself may call: an agent whose own tool list withholds `jira__create` cannot lend it to an
-engine. Same rule as fork children (docs/32 §2): a child never has more than its parent.
+**Who may see what.** The route's `allowed` is the request intersected with the turn's own
+effective MCP set — the profile ∩ its scope ∩ the chat's bound scope, exactly the list the turn
+computed for itself — passed into `Delegate` as names, never recomputed. An agent whose turn
+withholds `jira__create` cannot lend it. A fork conversation cannot mint a route at all
+(`Delegate` is withheld from forks and the minting code refuses `fork/*` again). Same rule as
+docs/32 §2: a child never has more than its parent.
 
 **Record.** Every `tools/call` through a route appends one line to
 `~/.agentbox/delegate-calls.jsonl`: `{at, routeKey, agentId, workId, jobId, tool, inputBytes,
-ok, ms}` (never the arguments — they may carry what the tool returned last time), writes a
-`[mcp-face]` web-log line, and emits a `delegate_call` turn event for the UI feed. **Deliberately
-not a transcript entry**: the delegating agent did not make the call, and a `blocks` entry would
-replay into its next request as if it had. The audit ledger is the record; the transcript stays
-the agent's own account. (Question for the review, §5.)
+resultBytes, resultSha256, ok, ms}` — never the arguments or the result (either may carry what a
+tool returned last time), but a digest of the result so a later dispute can be settled against
+what the engine saw. The policy log records the same call as `delegated`, tool and byte count. A
+`[mcp-face]` web-log line and a `delegate_call` turn event feed the UI. **Not a transcript entry**:
+the delegating agent did not make the call, and a `blocks` entry would replay into its next
+request as if it had. The review agreed, and asked for the digest.
 
 **Boxes this covers.** The Docker box, via `host.docker.internal`. An attached box (the Grok VM
 over the tailnet) cannot reach the host's loopback; `Delegate` on such a box answers that MCP
@@ -121,7 +153,21 @@ tools are not reachable from it and starts without the face. The reverse tunnel 
 Nothing is written to disk that a later change cannot ignore: routes are in memory, the audit
 ledger is append-only and read by nothing yet.
 
-## 4. Break it — the standing instruction
+## 4. Limits stated, not solved
+
+- **The token is readable by any process in the box.** Every job runs as the `box` uid; `/proc`
+  shows a sibling's environment. The box is one trust boundary (docs/03) and several agents
+  share it; a stolen token buys one route's `allowed` tools for one lease. Per-agent uids in the
+  box would be the fix and are a separate item.
+- **Argument-level authority is not the route's.** A generic HTTP MCP tool pointed at
+  `127.0.0.1` or a metadata address reaches from the host, for the engine as for the agent. The
+  route offers what the delegating agent chose to name; naming such a tool is the choice, and
+  egress policy (R4) is the answer, not a route rule.
+- **opencode's face is not exclusive**; Claude's is.
+- **Routes do not survive a host restart** and are not shared between hosts — the same
+  single-writer assumption every ledger here makes.
+
+## 5. Break it — the standing instruction
 
 Enumerate and answer, with the concrete input:
 
@@ -154,29 +200,29 @@ Enumerate and answer, with the concrete input:
   nothing yet.
 - An attached box. — No face; said in the Delegate answer.
 
-## 5. Questions for the review
+## 6. The review's answers, adopted
 
-1. Audit ledger versus transcript entry for a route's calls — the design says ledger; argue the
-   other side.
-2. Wildcards resolving against the live list — a server that comes up later becomes visible.
-   Snapshot at mint instead?
-3. Route lifetime: 12 h ceiling + revoke on the next `Jobs` check. Shorter default? Tie to the
-   job's exit once docs/32's boxd exit files exist?
-4. Standing approvals: honoured for route calls (engine acts as the agent) or ignored (route
-   calls must never need one)?
-5. Should the fork fence's rule "a child never has more than its parent" also mean a route
-   cannot be minted from a fork conversation? (Proposed: yes — `Delegate` is already withheld
-   from forks.)
+1. Ledger, plus a result digest, and not a transcript entry.
+2. Snapshot at mint; revoke every route on `McpManager.reload`.
+3. A short lease the host renews from `box.jobs()`, under a ceiling; tied to the job's exit
+   file once docs/32's boxd change exists.
+4. No approval reuse: a route call that would need one is refused.
+5. Yes: no route from a fork conversation, checked again at minting.
 
-## 6. Order, size, tests
+## 7. Order, size, tests
 
-1. `mcp-face.ts` + `handleMcpRequest` path/tools generalisation + `/mcp/r/<key>` + audit. Tests:
-   a route answers `tools/list` with exactly `allowed`; a wrong token is 401 and a missing route
-   404; a call outside `allowed` is refused before the policy gate; a refused policy is a tool
-   error with the reason; expiry; the audit line shape; the intersection with the agent's own
-   list. S–M.
-2. Presets' `mcpFace` + `Delegate.tools` + files written before `startJob` + env; `docker.ts`
-   add-host. Tests: the files' contents per preset; the command line carries no token; a box of
-   kind `attached` gets no face and the answer says so. S.
-3. Live: delegate to `opencode` in the Docker box with `tools: ["<server>__<tool>"]` and watch the
-   audit line appear. Then docs/25 and docs/10.
+1. `mcp-face.ts` (routes, lease, audit, the intersection, wildcard expansion) +
+   `handleMcpRequest` path/tools generalisation + `/mcp/r/<key>` + `policy` `delegated` +
+   hooks around the call + revoke on reload. Tests: `tools/list` is exactly `allowed`; unknown,
+   expired and wrong-token routes answer one 401; a call outside `allowed` is refused before the
+   gate; a `delegated` request that would need approval is refused and logged without input; a
+   wildcard expands at mint and a wildcard matching nothing fails the mint; a fork conversation
+   cannot mint; reload revokes; the lease lapses when `jobs()` stops listing the job; the audit
+   line shape with the digest; the result clamp; four in flight. M.
+2. Presets' `mcpFace` + `Delegate.tools` + the file written before `startJob` + env + the
+   command-line fragment + `jobId` bound after start + revoke on a failed start; `docker.ts`
+   add-host unconditionally. Tests: the file and fragment per preset; the command line carries
+   no token; a self-contained box gets the loopback URL; an attached box gets no face and the
+   answer says so. S.
+3. Live: delegate to `opencode` in the Docker box with one named tool and watch the audit line
+   and the lease renew. Then docs/25, docs/06 (the Linux bind note) and docs/10.
