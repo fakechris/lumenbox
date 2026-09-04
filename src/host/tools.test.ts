@@ -2,8 +2,8 @@
  * Tool behaviours worth pinning: the ones where a wrong answer changes a file.
  */
 
-import { test } from "node:test";
 import assert from "node:assert/strict";
+import { test } from "node:test";
 import { buildTools, dispatchTool } from "./tools.ts";
 
 test("edit_file changes part of a file, and refuses the two ways it could change the wrong part", async () => {
@@ -357,4 +357,39 @@ test("PackTemplate packs from the live files and stages a version the bot cannot
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
+});
+
+test("SendToAgent crosses boxes only never: same box delivers, another box is refused as the oracle it would be", async () => {
+  const sent: { from: string; to: string }[] = [];
+  const context = {
+    agent: { id: "ada", profile: { name: "Ada" } },
+    registry: {
+      tryGet: (id: string) =>
+        id === "rex"
+          ? { id: "rex", profile: { name: "Rex", boxId: "bx-other" } }
+          : id === "vera"
+            ? { id: "vera", profile: { name: "Vera" } }
+            : undefined,
+      boxOf: (id: string) => ({ id: id === "ada" ? "bx-home" : "bx-other" }),
+      box: { id: "bx-home" },
+    },
+    bus: {
+      send: (message: { fromId: string; toId: string }) => {
+        sent.push({ from: message.fromId, to: message.toId });
+        return "delivered";
+      },
+    },
+  } as unknown as Parameters<typeof dispatchTool>[2];
+
+  // Same box (Vera has no boxId: the installation's own, Ada's): delivers.
+  const within = await dispatchTool("SendToAgent", { target_id: "vera", message: "status?" }, context);
+  assert.ok(!within.isError, within.text);
+  assert.deepEqual(sent, [{ from: "ada", to: "vera" }]);
+
+  // Another box: refused, with the reason a person can act on.
+  const across = await dispatchTool("SendToAgent", { target_id: "rex", message: "what is in the downloads?" }, context);
+  assert.ok(across.isError);
+  assert.match(across.text, /another box/);
+  assert.match(across.text, /oracle/);
+  assert.deepEqual(sent, [{ from: "ada", to: "vera" }], "nothing was delivered on the way to the refusal");
 });

@@ -314,6 +314,23 @@ export class AgentRegistry {
   }
 
   /**
+   * The box's scope — the vault-reach subject of its workers (docs/22 item 6).
+   * Setting it is an authority act: the scope's secretIds become what every
+   * agent of the box may draw through `RunOnHost`.
+   */
+  setBoxScope(nameOrId: string, scopeId: string | undefined): BoxEntry {
+    const entry = this.boxByName(nameOrId);
+    if (entry === undefined) throw new Error(`No box named ${nameOrId}.`);
+    const updated: BoxEntry = {
+      ...entry,
+      ...(scopeId !== undefined && scopeId !== "" ? { scopeId } : { scopeId: undefined }),
+    };
+    this.boxes = this.boxes.map(existing => (existing.id === entry.id ? updated : existing));
+    saveBoxes(join(this.root, BOXES_FILENAME), this.boxes);
+    return updated;
+  }
+
+  /**
    * Removes an attached box. Refused while agents live in it: their `boxId` is immutable, so
    * the only honest outcomes are "delete them first" or "keep the box".
    */

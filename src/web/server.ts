@@ -412,7 +412,16 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
 
   // The credential vault. Read fresh on each edit through the routes; the orchestrator
   // holds this one instance, so a granted secret is usable on the next host command.
-  const vault = new Vault();
+  // The vault's grant subject is the box (docs/22 item 6): a legacy `agent:<id>`
+  // holder is read as that agent's box, so two workers of one box can never
+  // differ in secret reach. Agents are immutable to boxes — the resolution is
+  // as stable as the row that named it.
+  const vault = new Vault(undefined, undefined, {
+    boxOfAgent: agentId => {
+      const agent = registry.tryGet(agentId);
+      return agent === undefined ? undefined : (agent.profile.boxId ?? registry.box.id);
+    },
+  });
 
   // Channel task cards listen here while their ask is in flight: each listener is a
   // narrow filter on (agent, conversation), added before the prompt and removed after

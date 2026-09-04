@@ -160,3 +160,21 @@ test("members read in any shape the file has held: the three bindings, and the h
     cleanup();
   }
 });
+
+test("a box names one scope: setBoxScope persists, and it is the box's workers' vault reach", () => {
+  const { root, cleanup } = fixture();
+  try {
+    const registry = new AgentRegistry(join(root, "agents"));
+    const own = registry.defaultBox();
+    assert.equal(own.scopeId, undefined, "a box without a scope grants no scope secrets — fail closed");
+
+    registry.setBoxScope(own.id, "team");
+    assert.equal(new AgentRegistry(join(root, "agents")).defaultBox().scopeId, "team", "the scope survives a reload");
+
+    // And it can be taken away again — removing reach is an operator act like granting it.
+    registry.setBoxScope(own.id, undefined);
+    assert.equal(new AgentRegistry(join(root, "agents")).defaultBox().scopeId, undefined);
+  } finally {
+    cleanup();
+  }
+});

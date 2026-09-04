@@ -2087,10 +2087,14 @@ export async function dispatchTool(
       const command = String(input.command ?? "").trim();
       if (command === "") return { text: "`command` is required.", isError: true };
 
-      // Named secrets, resolved through the vault against this agent's grants. Every
-      // resolution is audited inside the vault; a refused one is left out of the
-      // environment and named back, so the model learns it lacks the grant rather
-      // than the command failing opaquely.
+      // Named secrets, resolved through the vault against the agent's *box* —
+      // the grant subject (docs/22 item 6). Every resolution is audited inside
+      // the vault; a refused one is left out of the environment and named back,
+      // so the model learns it lacks the grant rather than the command failing
+      // opaquely. The scope consulted is the box's, never the agent's own: a
+      // per-agent scopeId shapes labour (which tools, which egress), and two
+      // workers of one box may never differ in what they may reach.
+      const box = context.registry.boxOf(context.agent.id);
       const secretEnv: Record<string, string> = {};
       const refusedSecrets: string[] = [];
       const asked = Array.isArray(input.secrets) ? (input.secrets as unknown[]) : [];
@@ -2098,10 +2102,11 @@ export async function dispatchTool(
         const secretId = String(raw);
         const value = context.vault?.resolve(secretId, {
           agentId: context.agent.id,
+          boxId: box.id,
           agentName: context.agent.profile.name,
           ...(context.caller?.userId !== undefined ? { principalId: context.caller.userId } : {}),
-          // A scope the agent is in can grant the secret without a direct vault grant.
-          scopeGrants: context.scopes?.grantsSecret(context.agent.profile.scopeId, secretId) === true,
+          // The box's scope can grant the secret without a direct vault grant.
+          scopeGrants: context.scopes?.grantsSecret(box.scopeId, secretId) === true,
         });
         if (value === undefined) refusedSecrets.push(secretId);
         else secretEnv[secretId] = value;
@@ -2697,6 +2702,26 @@ export async function dispatchTool(
       // Checked as a wake rather than as a tool call, because the limit that matters here is on how
       // often agents set each other going — the shape that produces a loop nothing else stops.
       const target = context.registry.tryGet(targetId);
+      // Cross-box is refused by default (docs/18 §5's decision, taken in
+      // docs/35 §4): an agent permanently inside a box that anybody may message
+      // is an oracle over that box — someone asks it what is in somebody's
+      // downloads, and it answers truthfully, because answering is what it is
+      // for. Same-box messaging is the collaboration this installation exists
+      // for; crossing boxes is a person's decision, not a tool call's.
+      if (target !== undefined) {
+        const here = context.registry.boxOf(context.agent.id).id;
+        const there = target.profile.boxId ?? context.registry.box.id;
+        if (there !== here) {
+          return {
+            text:
+              `${target.profile.name} lives in another box, and messaging across boxes is refused ` +
+              `by default: an agent that answers questions about its box to anyone permitted to ` +
+              `ask is an oracle over everything inside it. If this work genuinely crosses boxes, ` +
+              `an admin decides that — not a tool call.`,
+            isError: true,
+          };
+        }
+      }
       const wake = context.policy?.check({
         kind: "wake",
         agentId: context.agent.id,

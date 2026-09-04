@@ -29,7 +29,12 @@ import { agentboxHome } from "../config.ts";
 /**
  * Who may use a secret.
  *
- * - `agent:<id>` — one agent, whichever person is driving it.
+ * - `box:<id>` — every agent of a box, whichever person is driving them. The
+ *   subject docs/22 §3 makes normative: two agents of one box may never differ
+ *   in secret reach, so grants live on the box, not the worker.
+ * - `agent:<id>` — legacy, still honored by resolution: the holder's agent
+ *   names its box (agents are immutable to boxes), and the grant covers that
+ *   whole box. A holder whose agent nobody remembers covers nothing.
  * - `principal:<id>` — any agent a given person is driving.
  * - `*` — any agent. The broadest, and the one to reach for last.
  */
@@ -67,10 +72,17 @@ export function vaultAuditPath(): string {
   return process.env.AGENTBOX_VAULT_AUDIT ?? join(agentboxHome(), "vault-audit.jsonl");
 }
 
-/** Whether a grant covers this caller right now. */
+/**
+ * Whether a grant covers this caller right now.
+ *
+ * The `agent:<id>` holder is read as its agent's box — the migration docs/22
+ * item 6 prescribes, done at the read so the operator's file keeps its history:
+ * the rows say what they said, what they *mean* is the box that agent lives in.
+ */
 function grantCovers(
   grant: Grant,
-  caller: { agentId: string; principalId?: string },
+  caller: { agentId: string; boxId?: string; principalId?: string },
+  boxOfAgent: ((agentId: string) => string | undefined) | undefined,
   now: number
 ): boolean {
   if (grant.expiresAt !== undefined) {
@@ -80,7 +92,12 @@ function grantCovers(
     if (Number.isNaN(expiry) || now >= expiry) return false;
   }
   if (grant.holder === "*") return true;
-  if (grant.holder === `agent:${caller.agentId}`) return true;
+  if (caller.boxId !== undefined && grant.holder === `box:${caller.boxId}`) return true;
+  if (grant.holder.startsWith("agent:")) {
+    if (caller.boxId === undefined) return false; // nobody to resolve the holder against
+    const holderBox = boxOfAgent?.(grant.holder.slice("agent:".length));
+    return holderBox !== undefined && holderBox === caller.boxId;
+  }
   if (caller.principalId !== undefined && grant.holder === `principal:${caller.principalId}`) {
     return true;
   }
@@ -90,10 +107,15 @@ function grantCovers(
 export class Vault {
   private secrets: Secret[] = [];
 
+  /** Resolves a legacy `agent:<id>` holder to the box that agent lives in (docs/22 item 6). */
+  private readonly boxOfAgent: ((agentId: string) => string | undefined) | undefined;
+
   constructor(
     private readonly path: string = vaultPath(),
-    private readonly auditPath: string = vaultAuditPath()
+    private readonly auditPath: string = vaultAuditPath(),
+    options: { boxOfAgent?: (agentId: string) => string | undefined } = {}
   ) {
+    this.boxOfAgent = options.boxOfAgent;
     this.reload();
   }
 
@@ -170,6 +192,8 @@ export class Vault {
     id: string,
     caller: {
       agentId: string;
+      /** The agent's box — the grant subject (docs/22 item 6). Absent covers only `*`. */
+      boxId?: string;
       agentName?: string;
       principalId?: string;
       /** True when the caller's scope grants this secret — decided by the ScopeStore. */
@@ -181,11 +205,12 @@ export class Vault {
     const allowed =
       secret !== undefined &&
       (caller.scopeGrants === true ||
-        secret.grants.some(grant => grantCovers(grant, caller, now.getTime())));
+        secret.grants.some(grant => grantCovers(grant, caller, this.boxOfAgent, now.getTime())));
     this.audit({
       at: now.toISOString(),
       secretId: id,
       agentId: caller.agentId,
+      ...(caller.boxId !== undefined ? { boxId: caller.boxId } : {}),
       ...(caller.agentName !== undefined ? { agentName: caller.agentName } : {}),
       ...(caller.principalId !== undefined ? { principalId: caller.principalId } : {}),
       ...(caller.scopeGrants === true ? { via: "scope" } : {}),

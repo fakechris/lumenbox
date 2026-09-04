@@ -81,6 +81,13 @@ export interface BoxEntry {
   /** The directory agents work in there. */
   workDir: string;
   members: BoxMembers;
+  /**
+   * The box's scope (docs/22 item 6): what its workers' `RunOnHost` may draw
+   * from the vault. A box names one scope or none — per-agent `scopeId` shapes
+   * labour (which tools an agent is offered) and never secret reach, because
+   * two workers of one box may never differ in what they are allowed to reach.
+   */
+  scopeId?: string;
   createdAt: string;
 }
 
@@ -119,6 +126,7 @@ function readEntries(path: string): BoxEntry[] | undefined {
       displayFloor: typeof entry.displayFloor === "number" && entry.displayFloor >= 1 ? Math.floor(entry.displayFloor) : 1,
       workDir: typeof entry.workDir === "string" && entry.workDir !== "" ? entry.workDir : DEFAULT_WORK_DIR,
       members: normalizeMembers(entry.members),
+      ...(typeof entry.scopeId === "string" && entry.scopeId !== "" ? { scopeId: entry.scopeId } : {}),
       createdAt: typeof entry.createdAt === "string" ? entry.createdAt : new Date().toISOString(),
     };
   });

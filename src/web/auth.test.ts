@@ -6,12 +6,12 @@
  * mistake that cannot be walked back, so these check the closed direction hardest.
  */
 
-import { test } from "node:test";
 import assert from "node:assert/strict";
-import {
-COOKIE_NAME, authorize, isLoopback, parseCookies,
-  callerOf,
-  mayDrive,
+import { test } from "node:test";
+import {authorize, 
+COOKIE_NAME, 
+  callerOf,isLoopback, 
+  mayDrive,parseCookies,
   refusalToDrive,
 } from "./auth.ts";
 
@@ -117,24 +117,23 @@ test("a viewer may watch but not drive, and is told which role would", () => {
   assert.equal(mayDrive(member), true);
 });
 
-test("a private agent belongs to the person who made it", () => {
-  const alice = callerOf({ "x-agentbox-user": "u-alice", "x-agentbox-role": "member" }, true);
+test("per-agent visibility is not a gate: the box is the boundary (docs/22 §3)", () => {
   const bob = callerOf({ "x-agentbox-user": "u-bob", "x-agentbox-role": "member" }, true);
-  const owner = callerOf({ "x-agentbox-user": "u-boss", "x-agentbox-role": "owner" }, true);
 
-  const shared = { visibility: "shared" as const, ownerUserId: "u-alice" };
-  const secret = { visibility: "private" as const, ownerUserId: "u-alice" };
-
-  // Shared is the default, because the reason a tenant is a team is that agents work together.
-  assert.equal(refusalToDrive(bob, shared), undefined);
-  assert.equal(refusalToDrive(alice, secret), undefined);
-  assert.ok(refusalToDrive(bob, secret), "not Bob's to drive");
-
-  // An owner is not exempt: the point is "whose agent is this", and an owner reaching into someone's
-  // private agent by accident is the same accident. Deliberate access is a shell away, and visible.
-  assert.ok(refusalToDrive(owner, secret), "not even an owner, by accident");
-
-  // An agent from before this existed has no owner and no visibility, and stays drivable.
+  // A driver the box admits may drive any agent in it — including one still
+  // carrying the retired `private` label from before the box boundary existed.
+  // Whose agent it is stays an attribution fact (`ownerUserId`), never an
+  // authority; two workers of one box may never differ in what they may reach.
+  assert.equal(
+    refusalToDrive(bob, { visibility: "private" as const, ownerUserId: "u-alice" }),
+    undefined,
+    "the box decides, not the agent's label"
+  );
+  assert.equal(refusalToDrive(bob, { visibility: "shared" as const }), undefined);
   assert.equal(refusalToDrive(bob, {}), undefined);
   assert.equal(refusalToDrive(bob, undefined), undefined);
+
+  // And a viewer still cannot drive anything — that half was never about agents.
+  const viewer = callerOf({ "x-agentbox-user": "u-bob", "x-agentbox-role": "viewer" }, true);
+  assert.ok(refusalToDrive(viewer, undefined), "watch but not drive stands");
 });

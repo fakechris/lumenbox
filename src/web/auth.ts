@@ -104,18 +104,18 @@ export function mayDrive(caller: Caller): boolean {
  */
 export function refusalToDrive(
   caller: Caller,
-  agent: { ownerUserId?: string; visibility?: "shared" | "private" } | undefined
+  _agent: { ownerUserId?: string; visibility?: "shared" | "private" } | undefined
 ): string | undefined {
   if (!mayDrive(caller)) {
     return "This account can watch but not drive. A member or an owner can act on this.";
   }
-  if (agent === undefined) return undefined;
-  const isPrivate = agent.visibility === "private";
-  if (!isPrivate) return undefined;
-  // An owner is not exempt: the point is "whose agent is this", and an owner reaching into a private
-  // agent by accident is the same accident. Deliberate access is a shell away, and visible.
-  if (agent.ownerUserId !== undefined && agent.ownerUserId === caller.userId) return undefined;
-  return "That agent is private to the person who created it.";
+  // Per-agent `visibility` is retired as a gate (docs/22 §3): the box is the
+  // boundary — a caller the box admits may drive any agent in it, and the
+  // box-membership check beside this one asks that question. `ownerUserId`
+  // survives as attribution, never as authority. The agent parameter stays so
+  // every call site keeps one shape; the day something gates on it again, the
+  // uniformity test will fail first.
+  return undefined;
 }
 
 export interface AuthConfig {

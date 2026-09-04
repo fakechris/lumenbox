@@ -29,12 +29,11 @@
  * architecture exists to avoid. Limits arrive as configuration; enforcement is local.
  */
 
-import { classifyShell } from "./shell-readonly.ts";
-import { envNumber } from "../config.ts";
-import { appendFileSync, existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import { createHash, randomUUID } from "node:crypto";
+import { appendFileSync, existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
-import { agentboxHome } from "../config.ts";
+import { agentboxHome, envNumber } from "../config.ts";
+import { classifyShell } from "./shell-readonly.ts";
 
 // ── what can be asked ─────────────────────────────────────────────────────────────────
 
@@ -226,6 +225,12 @@ export interface PolicyGateOptions {
   path?: string;
   limits?: PolicyLimits;
   /**
+   * The box an agent lives in (docs/22 §3): the subject of reusable approvals.
+   * Absent in tests and before the registry exists — the agent is then its own
+   * subject, exactly as it always was.
+   */
+  boxOfAgent?: (agentId: string) => string | undefined;
+  /**
    * Tokens spent since a moment. Injected because the usage log owns that number, and takes the
    * moment as an argument so the *window* stays defined here, next to the limit it belongs to.
    *
@@ -296,7 +301,23 @@ export class PolicyGate {
   /** Wake timestamps per agent, for the rate limit. Rebuilt from the log on start. */
   private readonly wakes = new Map<string, number[]>();
 
+  /**
+   * The box an agent lives in (docs/22 §3): the *subject* of reusable
+   * approvals. Agents are immutable to a box, so the resolution is stable —
+   * and a session or standing grant given while driving one agent of a box
+   * holds for every agent of that box, which is the uniformity the domain
+   * model promises. A `once` grant stays what it always was: consent to one
+   * occurrence, consumed by it.
+   *
+   * Standing grants replayed from before this resolver existed are keyed by
+   * agent fingerprints that no longer match; they stop applying and the
+   * person is asked again — fail closed, one re-ask, the honest cost of the
+   * migration.
+   */
+  private readonly boxOfAgent: ((agentId: string) => string | undefined) | undefined;
+
   constructor(options: PolicyGateOptions = {}) {
+    this.boxOfAgent = options.boxOfAgent;
     this.path = options.path ?? join(agentboxHome(), "policy.jsonl");
     this.limits = options.limits ?? DEFAULT_LIMITS;
     this.now = options.now ?? (() => new Date());
@@ -453,6 +474,11 @@ export class PolicyGate {
     };
   }
 
+  /** The approval subject: the agent's box when the world knows one, else the agent. */
+  private subjectOf(agentId: string): string {
+    return this.boxOfAgent?.(agentId) ?? agentId;
+  }
+
   private decideTool(request: Extract<PolicyRequest, { kind: "tool" }>): Outcome {
     if (!this.needsApproval(request)) return { decision: { allow: true } };
     if (request.delegated !== undefined) {
@@ -472,7 +498,7 @@ export class PolicyGate {
     const tooLarge = tooLargeToApprove(description);
     if (tooLarge !== undefined) return { decision: { allow: false, reason: tooLarge } };
 
-    const fingerprint = fingerprintOf(request.agentId, description);
+    const fingerprint = fingerprintOf(this.subjectOf(request.agentId), actionOf(request));
 
     // A standing or session grant covers this exact action without being consumed.
     // Each use still writes an approval-used row, so the audit trail says every time
@@ -808,6 +834,19 @@ const KEEP_ON_COMPACT = envNumber("AGENTBOX_POLICY_KEEP", 5_000);
  * One function on purpose. If the text shown to a person and the text that was hashed could differ,
  * the binding would be decorative — someone could be shown one command and consent to another.
  */
+/**
+ * The action as the fingerprint sees it: the request, with no agent name in
+ * it (docs/22 §3). The name is for the person reading the card; the grant
+ * binds to what was *done*, and the same deed by two workers of one box is
+ * the same deed — which is what makes a session or standing grant box-wide
+ * rather than per-worker.
+ */
+export function actionOf(request: PolicyRequest): string {
+  const described = describeRequest(request);
+  const at = described.indexOf(": ");
+  return at === -1 ? described : described.slice(at + 2);
+}
+
 export function describeRequest(request: PolicyRequest): string {
   switch (request.kind) {
     case "model-call":

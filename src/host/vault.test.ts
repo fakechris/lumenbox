@@ -6,18 +6,23 @@
  * is dead, and every resolution — allowed or refused — leaves an audit line.
  */
 
-import { test } from "node:test";
 import assert from "node:assert/strict";
 import { mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { test } from "node:test";
 import { Vault } from "./vault.ts";
 
 function tempVault(): { vault: Vault; path: string; audit: string; cleanup: () => void } {
   const dir = mkdtempSync(join(tmpdir(), "agentbox-vault-"));
   const path = join(dir, "vault.json");
   const audit = join(dir, "audit.jsonl");
-  return { vault: new Vault(path, audit), path, audit, cleanup: () => rmSync(dir, { recursive: true, force: true }) };
+  // The box resolver every installation passes (docs/22 item 6): agents name
+  // their boxes, and a legacy `agent:` holder is read as that box.
+  const vault = new Vault(path, audit, {
+    boxOfAgent: agentId => (agentId === "ada" || agentId === "same" ? "bx-1" : agentId === "bob" ? "bx-2" : undefined),
+  });
+  return { vault, path, audit, cleanup: () => rmSync(dir, { recursive: true, force: true }) };
 }
 
 test("a value never leaves through list; the file is private", () => {
@@ -41,10 +46,13 @@ test("resolve honours grants by agent, principal and wildcard; refuses otherwise
     vault.setSecret({
       id: "S1",
       value: "v1",
+      // A legacy holder, read as Ada's box: every worker of bx-1, nobody else.
       grants: [{ holder: "agent:ada" }],
     });
-    assert.equal(vault.resolve("S1", { agentId: "ada" }), "v1", "granted to this agent");
-    assert.equal(vault.resolve("S1", { agentId: "bob" }), undefined, "not this one");
+    assert.equal(vault.resolve("S1", { agentId: "ada", boxId: "bx-1" }), "v1", "granted to this agent");
+    assert.equal(vault.resolve("S1", { agentId: "same", boxId: "bx-1" }), "v1", "and to her box-mate: the subject is the box");
+    assert.equal(vault.resolve("S1", { agentId: "bob", boxId: "bx-2" }), undefined, "not another box's");
+    assert.equal(vault.resolve("S1", { agentId: "ada" }), undefined, "a caller naming no box is covered by nothing subject-y");
 
     vault.setSecret({ id: "S2", value: "v2", grants: [{ holder: "principal:chris" }] });
     assert.equal(
@@ -57,7 +65,7 @@ test("resolve honours grants by agent, principal and wildcard; refuses otherwise
     vault.setSecret({ id: "S3", value: "v3", grants: [{ holder: "*" }] });
     assert.equal(vault.resolve("S3", { agentId: "whoever" }), "v3", "everyone");
 
-    assert.equal(vault.resolve("S1", { agentId: "ada" }, new Date()), "v1");
+    assert.equal(vault.resolve("S1", { agentId: "ada", boxId: "bx-1" }, new Date()), "v1");
     // An unknown secret and a refused one are the same answer.
     assert.equal(vault.resolve("nope", { agentId: "ada" }), undefined);
   } finally {
@@ -98,9 +106,9 @@ test("editing a description keeps the value without re-pasting it", () => {
 test("every resolution — allowed or refused — leaves an audit line", () => {
   const { vault, audit, cleanup } = tempVault();
   try {
-    vault.setSecret({ id: "S", value: "v", grants: [{ holder: "agent:ada" }] });
-    vault.resolve("S", { agentId: "ada", agentName: "Ada", principalId: "chris" });
-    vault.resolve("S", { agentId: "bob", agentName: "Bob" });
+    vault.setSecret({ id: "S", value: "v", grants: [{ holder: "box:bx-1" }] });
+    vault.resolve("S", { agentId: "ada", boxId: "bx-1", agentName: "Ada", principalId: "chris" });
+    vault.resolve("S", { agentId: "bob", boxId: "bx-2", agentName: "Bob" });
 
     const lines = readFileSync(audit, "utf8").trim().split("\n").map(l => JSON.parse(l));
     assert.equal(lines.length, 2);
