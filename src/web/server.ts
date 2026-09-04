@@ -12,46 +12,46 @@
  */
 
 import { randomBytes } from "node:crypto";
+import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import {
   createServer,
   request as httpRequest,
   type IncomingMessage,
   type ServerResponse,
 } from "node:http";
-import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { connect as netConnect, type Socket } from "node:net";
 import { join, posix } from "node:path";
 import { fileURLToPath } from "node:url";
-import { AgentRegistry, MAIN_CONVERSATION, conversationIdFor } from "../agents/registry.ts";
 import type { BusEvent } from "../agents/bus.ts";
-import { BoxManager, defaultBoxConfig } from "../box/docker.ts";
-import { resolveBoxProvisioner, type BoxProvisioner } from "../box/provisioner.ts";
+import { AgentRegistry, conversationIdFor, MAIN_CONVERSATION } from "../agents/registry.ts";
 import { classifyBox } from "../box/access.ts";
+import { BoxManager, defaultBoxConfig } from "../box/docker.ts";
+import { type BoxProvisioner, resolveBoxProvisioner } from "../box/provisioner.ts";
 import { envNumber } from "../config.ts";
+import { BackupSchedule, backupRoot } from "../host/backup.ts";
 import { buildInfo } from "../host/build-info.ts";
 import { faceBaseUrl, RENEW_EVERY_MS, ROUTE_PATH } from "../host/mcp-face.ts";
-import { BackupSchedule, backupRoot } from "../host/backup.ts";
 import { Orchestrator } from "../host/orchestrator.ts";
 import { describeProvider, type ProviderProfile } from "../host/provider.ts";
 import type { TurnEvent } from "../host/turn.ts";
 import { APP_HTML, LOGIN_HTML } from "./app-html.ts";
 import {
   authorize,
-  callerOf,
+  type Caller,
   COOKIE_NAME,
+  callerOf,
   isLoopback,
   mayDrive,
   parseCookies,
   refusalToDrive,
-  type Caller,
 } from "./auth.ts";
 import {
   newWebIdentity,
   readSession,
   SESSION_COOKIE,
+  SESSION_MAX_AGE_SECONDS,
   sessionCookie,
   sessionKey,
-  SESSION_MAX_AGE_SECONDS,
 } from "./session.ts";
 
 /**
@@ -117,21 +117,41 @@ function actionLine(tool: string, input: unknown): string {
   const line = detail === undefined ? tool : `${tool}: ${detail}`;
   return line.length > 64 ? `${line.slice(0, 63)}…` : line;
 }
-import { agentboxHome, loadConfig, saveConfig, type AgentboxConfig } from "../config.ts";
+
+import { type AgentboxConfig, agentboxHome, loadConfig, saveConfig } from "../config.ts";
 
 type AgentboxConfigHostExec = NonNullable<AgentboxConfig["hostExec"]>;
-import { ChannelManager } from "../channels/manager.ts";
+
+import { randomUUID } from "node:crypto";
+import { attachedBox, tokenOf } from "../box/boxes.ts";
+import { readBoxToken } from "../box/docker.ts";
+import { preflight } from "../box/preflight.ts";
+import { blockedAnnouncement, boardView } from "../channels/board-view.ts";
+import { CardLedger } from "../channels/card-ledger.ts";
+import { ConversationDirectory, conversationsPath } from "../channels/conversations.ts";
 import { DingTalkChannel } from "../channels/dingtalk.ts";
-import { FeishuChannel, meetingInvitePrompt } from "../channels/feishu.ts";
+import { FeishuChannel, meetingInvitePrompt, REPLAY_MAX_AGE_MS } from "../channels/feishu.ts";
+import { FeishuDocReader } from "../channels/feishu-docs.ts";
 import {
   CHANNEL_RECORDS_FILENAME,
   ensureChannelRecords,
   removeChannelRecord,
   upsertChannelRecord,
 } from "../channels/identity.ts";
+import { catchUpFloor, Ingress, ingressPath } from "../channels/ingress.ts";
+import { vendorAuth } from "../channels/login.ts";
+import { ChannelManager } from "../channels/manager.ts";
+import { SentRootsLedger, sentRootsPath } from "../channels/sent-roots.ts";
+import {
+  DESKTOP_NOT_PUBLIC,
+  desktopLink,
+  NO_SCHEDULES,
+  rosterText,
+  SCHEDULES_DISARMED,
+  scheduleLine,
+  unknownAgent,
+} from "../channels/strings.ts";
 import { TelegramChannel } from "../channels/telegram.ts";
-import { HostRunner, hostRunnerConfig } from "../host/host-runner.ts";
-import { ALL_TOOLS } from "../host/orchestrator.ts";
 import {
   CATALOG_CONNECTORS,
   CATALOG_CREWS,
@@ -139,51 +159,32 @@ import {
   expertNamed,
   profilesFor,
 } from "../host/catalog.ts";
-import { preflight } from "../box/preflight.ts";
-import { rescueMessage, rescueStuck } from "../host/rescue.ts";
 import { Deliveries, deliveriesPath } from "../host/deliveries.ts";
-import { Ingress, ingressPath } from "../channels/ingress.ts";
-import { ConversationDirectory, conversationsPath } from "../channels/conversations.ts";
-import { SentRootsLedger, sentRootsPath } from "../channels/sent-roots.ts";
-import { randomUUID } from "node:crypto";
-import { adminRecipients, decideUpgrade, upgradeMessage } from "../host/upgrade.ts";
-import { PRESET_MODELS, providerNames, resolveProvider, testProvider } from "../host/provider.ts";
-import { Principals, roleAtLeast, type Principal, type Role } from "../host/principals.ts";
-import { describeTask, isLive, isTaskStatus } from "../host/tasks.ts";
-import { blockedAnnouncement, boardView } from "../channels/board-view.ts";
-import {
-  DESKTOP_NOT_PUBLIC,
-  NO_SCHEDULES,
-  SCHEDULES_DISARMED,
-  desktopLink,
-  rosterText,
-  scheduleLine,
-  unknownAgent,
-} from "../channels/strings.ts";
-import { CardLedger } from "../channels/card-ledger.ts";
-import { FeishuDocReader } from "../channels/feishu-docs.ts";
-import { parseProgressFile, progressLine } from "../host/progress-file.ts";
-import { costOfTasks, spendByDay, summariseSpend, type Rates } from "../host/spend.ts";
-import type { UsageRecord } from "../host/usage.ts";
+import { HostRunner, hostRunnerConfig } from "../host/host-runner.ts";
 import { TOOL_BUDGET_WARNING } from "../host/mcp.ts";
-import {
-  handleMcpRequest,
-  mintMcpToken,
-  principalForToken,
-  type McpAccessToken,
-  type McpServerTool,
-} from "./mcp-server.ts";
-import { Vault, type Grant } from "../host/vault.ts";
-import { seedStarterSkills } from "../host/starter-skills.ts";
+import { ALL_TOOLS } from "../host/orchestrator.ts";
+import { type Principal, Principals, type Role, roleAtLeast } from "../host/principals.ts";
+import { parseProgressFile, progressLine } from "../host/progress-file.ts";
 import { firstRunCue } from "../host/prompt.ts";
-import { readBoxToken } from "../box/docker.ts";
-import { attachedBox, tokenOf } from "../box/boxes.ts";
+import { PRESET_MODELS, providerNames, resolveProvider, testProvider } from "../host/provider.ts";
+import { rescueMessage, rescueStuck } from "../host/rescue.ts";
+import { SKILL_FILENAME, SKILLS_DIR, slugify } from "../host/skills.ts";
+import { costOfTasks, type Rates, spendByDay, summariseSpend } from "../host/spend.ts";
+import { seedStarterSkills } from "../host/starter-skills.ts";
+import { describeTask, isLive, isTaskStatus } from "../host/tasks.ts";
 import { catalogTemplate, describeTemplate, parseTemplate, rewriteFrontmatter, templatesEnabled, unresolvedPlaceholders } from "../host/template.ts";
-import { SKILLS_DIR, SKILL_FILENAME, slugify } from "../host/skills.ts";
-import { catchUpFloor } from "../channels/ingress.ts";
-import { REPLAY_MAX_AGE_MS } from "../channels/feishu.ts";
+import { adminRecipients, decideUpgrade, upgradeMessage } from "../host/upgrade.ts";
+import type { UsageRecord } from "../host/usage.ts";
+import { type Grant, Vault } from "../host/vault.ts";
 import { ActivityLog } from "./activity.ts";
 import { vendorPath } from "./markdown.ts";
+import {
+  handleMcpRequest,
+  type McpAccessToken,
+  type McpServerTool,
+  mintMcpToken,
+  principalForToken,
+} from "./mcp-server.ts";
 import { toDisplayEntries } from "./transcript.ts";
 
 export interface WebOptions {
@@ -491,11 +492,10 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
     { identity: string; senderLabel: string; channel: string; at: string; incarnation: number }
   >();
   /**
-   * Sign-ins in flight through a Feishu door (docs: 网页应用免登). Keyed by the state
-   * nonce; in memory like the invite codes, and for the same reason — a dance that
-   * does not survive a restart costs the person one more click.
+   * Sign-ins in flight through a door (docs: 网页应用免登 / 扫码登录). The state
+   * map lives inside `vendorAuth`, not here: the dance is provider-agnostic and
+   * so is everything it keeps.
    */
-  const oauthStates = new Map<string, { channelId: string; next: string; at: number }>();
   const invites = new Map<string, { role: Role; principalId?: string; expiresAt: number }>();
   const INVITE_TTL_MS = 15 * 60_000;
   const newInviteCode = (): string => {
@@ -2076,128 +2076,40 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
   ];
 
   /**
-   * The web-app sign-in for a Feishu door: `/auth/<door>` redirects to the vendor's
-   * authorize page, `/auth/<door>/callback` exchanges the code for an open_id and
-   * signs the person in **as the identity that door mints** — `<door>:ou_x`, the
-   * same string knock/bind linked to their Principal. Nothing new is trusted: an
-   * open_id whose identity nobody linked gets the knock instructions, not a session.
+   * The web-app sign-in for a door, whatever its vendor: `/auth/<door>` redirects
+   * to the vendor's authorize page and `/auth/<door>/callback` exchanges the code
+   * for the subject that door mints, signing the person in **as that identity** —
+   * the same string knock/bind linked to their Principal. Everything vendor-shaped
+   * lives behind `loginProviders` in src/channels/login.ts; this wiring is the
+   * one-liner per dep, and nothing here says Feishu or DingTalk.
    */
-  async function handleFeishuAuth(url: URL, res: ServerResponse): Promise<void> {
-    const parts = url.pathname.split("/").filter(Boolean); // ["auth", door, "callback"?]
-    const channelId = parts[1] ?? "";
-    const record = channelRecords.find(
-      entry => entry.id === channelId && entry.type === "feishu"
-    );
-    if (record === undefined || parts.length > 3) {
-      send(res, 404, { error: `No feishu door named ${channelId}.` });
-      return;
-    }
-    const base = channelEnvBase(channelId);
-    const savedEnv = loadConfig().env ?? {};
-    const appId = process.env[`${base}_APP_ID`] ?? savedEnv[`${base}_APP_ID`];
-    const appSecret = process.env[`${base}_APP_SECRET`] ?? savedEnv[`${base}_APP_SECRET`];
-    const publicBase = process.env.AGENTBOX_PUBLIC_URL?.replace(/\/+$/, "");
-    if (typeof appId !== "string" || appId === "" || typeof appSecret !== "string" || appSecret === "") {
-      send(res, 503, { error: `set ${base}_APP_ID and ${base}_APP_SECRET first.` });
-      return;
-    }
-    if (publicBase === undefined || publicBase === "") {
-      send(res, 503, { error: "set AGENTBOX_PUBLIC_URL — the redirect back has to name this installation." });
-      return;
-    }
-    const lark = process.env.FEISHU_DOMAIN === "lark";
-    const accountsHost = lark ? "accounts.larksuite.com" : "accounts.feishu.cn";
-    const apiHost = lark ? "open.larksuite.com" : "open.feishu.cn";
-    const redirectUri = `${publicBase}/auth/${channelId}/callback`;
-
-    if (parts[2] === undefined) {
-      // Entry: remember where they were going, hand them to the vendor.
-      for (const [key, pending] of oauthStates) {
-        if (Date.now() - pending.at > 10 * 60_000) oauthStates.delete(key);
-      }
-      const rawNext = url.searchParams.get("next") ?? "/";
-      // Relative paths only: an absolute `next` would make this an open redirect.
-      const next = rawNext.startsWith("/") && !rawNext.startsWith("//") ? rawNext : "/";
-      const state = randomBytes(16).toString("hex");
-      oauthStates.set(state, { channelId, next, at: Date.now() });
-      const target =
-        `https://${accountsHost}/open-apis/authen/v1/authorize?client_id=${encodeURIComponent(appId)}` +
-        `&response_type=code&redirect_uri=${encodeURIComponent(redirectUri)}&state=${state}`;
-      res.writeHead(302, { location: target });
-      res.end();
-      return;
-    }
-    if (parts[2] !== "callback") {
-      send(res, 404, { error: `Not a sign-in path: ${url.pathname}` });
-      return;
-    }
-    const code = url.searchParams.get("code");
-    const state = url.searchParams.get("state") ?? "";
-    const pending = oauthStates.get(state);
-    oauthStates.delete(state);
-    if (code === null || pending === undefined || pending.channelId !== channelId ||
-        Date.now() - pending.at > 10 * 60_000) {
-      send(res, 400, { error: "This sign-in expired or was not started here. Open the link again." });
-      return;
-    }
-    try {
-      const tokenResponse = await fetch(`https://${apiHost}/open-apis/authen/v2/oauth/token`, {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({
-          grant_type: "authorization_code",
-          client_id: appId,
-          client_secret: appSecret,
-          code,
-          redirect_uri: redirectUri,
-        }),
-      });
-      const tokenBody = (await tokenResponse.json()) as {
-        access_token?: string;
-        error_description?: string;
-        error?: string;
-      };
-      if (tokenBody.access_token === undefined) {
-        throw new Error(tokenBody.error_description ?? tokenBody.error ?? `HTTP ${tokenResponse.status}`);
-      }
-      const infoResponse = await fetch(`https://${apiHost}/open-apis/authen/v1/user_info`, {
-        headers: { authorization: `Bearer ${tokenBody.access_token}` },
-      });
-      const info = (await infoResponse.json()) as { data?: { open_id?: string; name?: string } };
-      const openId = info.data?.open_id;
-      if (openId === undefined || openId === "") throw new Error("user_info returned no open_id");
-      const identity = `${channelId}:${openId}`;
-      if (!principals.isKnown(identity)) {
-        // Signed in with the vendor, unknown here: the answer is the knock path, said
-        // as a page a person can act on — not a session for whoever the vendor knows.
-        res.writeHead(403, { "content-type": "text/html; charset=utf-8" });
-        res.end(
-          `<!doctype html><meta charset="utf-8"><body style="font:15px/1.7 sans-serif;max-width:560px;margin:80px auto;padding:0 20px">` +
-            `<h3>这个飞书账号还没有链接到本安装</h3>` +
-            `<p>你的 id:<code>${identity.replace(/</g, "&lt;")}</code></p>` +
-            `<p>在飞书里给机器人发一条消息 —— 管理员会收到放行提示;或者向管理员要一个邀请码,在聊天里发送 <code>bind 邀请码</code>。链接完成后回到这里重新打开即可。</p></body>`
-        );
-        log(`web login refused: ${identity} signed in via ${channelId} but is not linked`);
-        return;
-      }
-      const admit = [
-        ...(token !== undefined && token !== ""
-          ? [
-              `${COOKIE_NAME}=${encodeURIComponent(token)}; Path=/; ` +
-                `Max-Age=${SESSION_MAX_AGE_SECONDS}; HttpOnly; SameSite=Lax`,
-            ]
-          : []),
-        sessionCookie(identity, sessionSecret),
-      ];
-      res.writeHead(302, { "set-cookie": admit, location: pending.next });
-      res.end();
-      log(`web login: ${identity} via feishu door ${channelId} (${principals.resolve(identity).name})`);
-    } catch (error) {
-      const detail = error instanceof Error ? error.message : String(error);
-      log(`feishu sign-in via ${channelId} failed: ${detail}`);
-      send(res, 502, { error: `Sign-in failed: ${detail}` });
-    }
-  }
+  const handleVendorAuth = vendorAuth({
+    doors: () => channelRecords.map(({ id, type }) => ({ id, type })),
+    credentials: (channelId, provider) => {
+      // The door's own message credentials, under its env base — one app
+      // authenticates a person on both paths, which is the whole design.
+      const base = channelEnvBase(channelId);
+      const savedEnv = loadConfig().env ?? {};
+      const clientId = process.env[`${base}_${provider.clientIdEnv}`] ?? savedEnv[`${base}_${provider.clientIdEnv}`];
+      const clientSecret =
+        process.env[`${base}_${provider.clientSecretEnv}`] ?? savedEnv[`${base}_${provider.clientSecretEnv}`];
+      return typeof clientId === "string" && clientId !== "" && typeof clientSecret === "string" && clientSecret !== ""
+        ? { clientId, clientSecret }
+        : undefined;
+    },
+    publicBase: () => process.env.AGENTBOX_PUBLIC_URL,
+    isKnown: identity => principals.isKnown(identity),
+    nameOf: identity => principals.resolve(identity).name,
+    sessionCookie: identity => sessionCookie(identity, sessionSecret),
+    uiTokenCookie: () =>
+      token !== undefined && token !== ""
+        ? `${COOKIE_NAME}=${encodeURIComponent(token)}; Path=/; ` +
+          `Max-Age=${SESSION_MAX_AGE_SECONDS}; HttpOnly; SameSite=Lax`
+        : undefined,
+    log: line => log(line),
+    now: () => Date.now(),
+    fetchFn: fetch,
+  });
 
   const server = createServer((req, res) => {
     void (async () => {
@@ -2220,13 +2132,16 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
         send(res, 200, LOGIN_HTML, "text/html");
         return;
       }
-      // The Feishu doors' sign-in, also before the gate and for the same reason as
-      // /login: a person arriving from a Feishu chat holds no UI token, and the OAuth
-      // dance *is* the authentication. Per door, because open_id is per app — the
-      // same person is feishu:ou_a under one app and feishu-zongheng:ou_b under the
-      // other, which is exactly what identities already model (docs/22 §4).
+      // The doors' sign-in, also before the gate and for the same reason as
+      // /login: a person arriving from a chat holds no UI token, and the OAuth
+      // dance *is* the authentication. Per door, because the vendor subject is
+      // per app — the same person is feishu:ou_a under one app and
+      // feishu-zongheng:ou_b under the other, which is exactly what identities
+      // already model (docs/22 §4). Feishu and DingTalk today; whichever
+      // vendor is next arrives as one more provider in loginProviders, not as
+      // a change here.
       if (req.method === "GET" && url.pathname.startsWith("/auth/")) {
-        await handleFeishuAuth(url, res);
+        await handleVendorAuth(url, res);
         return;
       }
       // The side door, before the UI's gate and deliberately so: it carries its own
