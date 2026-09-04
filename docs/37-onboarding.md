@@ -5,8 +5,8 @@ whole of it. Product name LumenBox; the command line still says `agentbox`.
 
 ## What you need
 
-- **A Mac** (Apple Silicon or Intel) for the app. Windows and Linux builds exist in the tooling
-  but have not been produced or tested yet — say so if you want one.
+- **A Mac with Apple Silicon** for the app (0.2.0). An Intel build follows; Windows and Linux
+  builds exist in the tooling but have not been produced or tested yet — say so if you want one.
 - **A model key.** Any of the built-in providers (Anthropic, MiniMax, DeepSeek, Zhipu, Moonshot,
   OpenAI, and the OpenAI-compatible endpoints). One key is enough; the Settings page lists them.
 - **A box** — one Linux computer the agents work in, with a desktop, a browser and a shell.
