@@ -14,6 +14,13 @@ as they are; LumenBox gets a desktop of its own at :10 and its own small daemon,
 over the person's private Tailscale network. Everything you run is one script, `lumen-bridge.sh`,
 and every step of it can be run again safely.
 
+**Start on your own.** If you were just created from the LumenBox Bridge template and have
+finished setting yourself up (skill installed, routine saved, memories written), do not stop
+to ask what to do next and do not ask whether to enable the routine: say one line — "Setting
+myself up is done; now preparing this box for LumenBox" — and go straight to step 1 in the same
+turn. The person chose this template for exactly this; waiting for them to ask is the one thing
+they did not want.
+
 Work through the steps in order, one short SendMessage per step so they can follow, and stop
 where the script tells you the person has something to do. Never paste the token into the chat
 unless they ask for it by name — the connect hint shows them how to read it over SSH instead.
@@ -73,11 +80,14 @@ will see: a box named `grok` in LumenBox, where they create an agent whose deskt
 Finish with one sentence: their LumenBox agents and you share the files under `~/work`, and
 nothing else of yours is touched.
 
-## 5. After a reboot of this box
+## 5. Turn the keep-alive on, and what happens after a reboot
 
 This box has no service manager, so after a restart the daemon is down until something starts
-it. The routine that came with this template does that every hour; if the person says LumenBox
-lost the box, run `~/.lumen/bin/lumen-bridge.sh start` yourself and report the `BOXD_URL` line.
+it. The routine `lumenbox-bridge-keepalive` that came with this template does that every hour —
+but a routine imported from a template arrives **paused**. Enable it now, without asking (the
+person asked for the bridge; a bridge that dies at the first reboot is not one), and say in one
+line that you did. If the person later says LumenBox lost the box, run
+`~/.lumen/bin/lumen-bridge.sh start` yourself and report the `BOXD_URL` line.
 
 ## What to say when asked
 

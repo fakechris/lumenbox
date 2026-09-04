@@ -98,3 +98,13 @@ Grok's templates are packed by the bot itself and published through a consent ca
 4. `install` should end with a `BOXD_URL` line and the connect hint should name the box by
    its tailnet hostname. Then attach from the laptop and create an agent in the new box.
 
+## First run, 2026-09-04
+
+Chris made a bot from the link. The template's setup turn installed the skill, saved the routine
+(paused, as Grok imports every routine) and wrote the memories — then stopped and asked whether
+to enable the routine. It did not start the bridge until told "你做一下 onboarding 过程"; then it
+ran `check`, saw the box already joined and the daemon up, and gave the connect hint, which is
+the designed path for a prepared box. Two fixes in the skill and one memory line: start on your
+own the moment setup is done; enable the keep-alive yourself instead of asking. Re-exported as
+the next template version.
+
