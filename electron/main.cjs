@@ -83,6 +83,28 @@ function applyStartupItemSettings() {
  * and key come from ~/.agentbox/config.json — the settings dialog writes it, the CLI
  * reads it — so the shell passes no flags of its own.
  */
+/**
+ * The PATH a Finder-launched app gets is `/usr/bin:/bin:/usr/sbin:/sbin` — no Docker, no
+ * Homebrew, no OrbStack — so the server child could not run `docker inspect` and reported
+ * the box unavailable while it was up. Found on the first launch by double-click rather
+ * than from a terminal; the one launch a new person makes.
+ */
+function withToolPath(env) {
+  const home = os.homedir();
+  const extra = [
+    "/usr/local/bin",
+    "/opt/homebrew/bin",
+    path.join(home, ".docker", "bin"),
+    path.join(home, ".orbstack", "bin"),
+    "/Applications/Docker.app/Contents/Resources/bin",
+    "/Applications/OrbStack.app/Contents/MacOS/xbin",
+  ];
+  const current = (env.PATH || "").split(":").filter(Boolean);
+  const merged = [...current];
+  for (const dir of extra) if (!merged.includes(dir) && fs.existsSync(dir)) merged.push(dir);
+  return { ...env, PATH: merged.join(":") };
+}
+
 function startServer() {
   const cli = path.join(REPO, "src", "cli.ts");
   serverChild = spawn(
@@ -90,7 +112,7 @@ function startServer() {
     ["--experimental-transform-types", cli, "web", "--port", String(PORT)],
     {
       cwd: REPO,
-      env: { ...process.env, ELECTRON_RUN_AS_NODE: "1" },
+      env: withToolPath({ ...process.env, ELECTRON_RUN_AS_NODE: "1" }),
       stdio: ["ignore", "pipe", "pipe"],
     }
   );
