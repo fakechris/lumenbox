@@ -20,7 +20,7 @@ const outputFile = join(dist, "lumen-dropin.tar.gz");
 
 mkdirSync(dist, { recursive: true });
 
-const requiredFiles = ["boxd.cjs", "start-display", "box-chrome", "box-keepalive", "wait-compositor", "vnc-probe", "box-clip"];
+const requiredFiles = ["boxd.cjs", "start-display", "box-chrome", "box-keepalive", "wait-compositor", "vnc-probe", "box-clip", "lumen-bridge.sh"];
 
 for (const file of requiredFiles) {
   const fullPath = join(dockerBox, file);
@@ -32,8 +32,11 @@ for (const file of requiredFiles) {
 }
 
 console.log("[pack-dropin] Packaging drop-in sidecar archive...");
-execFileSync("tar", ["-czf", outputFile, "-C", dockerBox, ...requiredFiles], {
+// No macOS resource forks or xattrs in the archive: a Linux tar prints a warning per file
+// for `com.apple.provenance`, and the person reading the installer's output takes it for an error.
+execFileSync("tar", ["--no-xattrs", "-czf", outputFile, "-C", dockerBox, ...requiredFiles], {
   stdio: "inherit",
+  env: { ...process.env, COPYFILE_DISABLE: "1" },
 });
 
 const sizeBytes = statSync(outputFile).size;

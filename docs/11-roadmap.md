@@ -1351,6 +1351,10 @@ and the pre-launch security pass over docs/10.
 - **R16 — webhook ingress.** No scenario yet; chat triggers plus scheduled skills cover
   what is needed. Revisit when a real "when X happens" request arrives.
 
+**Shipped outside the list, 2026-09-03:** the Grok Bot onboarding (docs/35) — a template whose
+bot prepares its own box (Tailscale with SSH, the LumenBox daemon on a desktop of its own) and
+tells the person how to connect; `lumen-bridge.sh` and the drop-in are on GitHub releases.
+
 **Small and waiting on a trigger** (unchanged): R3 installers when a Win/Linux user exists;
 R34 URL pre-fetch if pasted links still get apologies; R10/S-6 `AGENTBOX_CONTROL_KEY`; R38
 MiniMax-M3 losing the `computer` schema after compaction (reproduce first); R7 at-rest
