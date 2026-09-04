@@ -1,6 +1,9 @@
 # 35 — Onboarding a Grok Bot box: the bot prepares its own box, the person connects from the laptop
 
-**Status: built 2026-09-03.** `docker/box/lumen-bridge.sh` (in the drop-in and published on its
+**Status: built 2026-09-03; published 2026-09-04 as https://x.ai/bot/U8xEPyVxQHL_JznVhVotB
+("LumenBox Bridge by Chris").** The public page shows only the name and description — the
+recipe's contents are visible once signed in — so the end-to-end test is a fresh bot made from
+the link (§"Verifying" below). `docker/box/lumen-bridge.sh` (in the drop-in and published on its
 own), the Grok-side skill, routine and template recipe in `share/grok-bridge/`, the release
 `dropin-2026-09-03`. Tested on the Grok VM this installation already drives, end to end minus the
 Tailscale login (that box was already joined).
@@ -79,3 +82,19 @@ Grok's templates are packed by the bot itself and published through a consent ca
   any fails at `install` with that sentence.
 - **Two installs on one box** would collide at `:10` and 13370; `--display`/`--port` exist, and
   the check names the clash. Not a scenario the story needs.
+
+## Verifying the published template (signed in, on a fresh bot)
+
+1. Open the link in the Grok Bot app and press *Add to Grok Bot*. Before confirming, the
+   preview should list one skill (`lumenbox-bridge`), one routine
+   (`lumenbox-bridge-keepalive`, paused) and two memory lines; nothing else. If other skills or
+   memories are listed, the export kept too much: tell the exporting bot which to drop and
+   re-export.
+2. The new bot's first turn should run the skill by itself: a short hello, then the `check`
+   lines. If it only greets, say "接入 LumenBox".
+3. Watch for the question widget before the Tailscale step, the login URL, and — after
+   signing in — the `TAILSCALE_IP` line. On a box that is already on a tailnet (this
+   installation's VM) the step reports "already joined" instead.
+4. `install` should end with a `BOXD_URL` line and the connect hint should name the box by
+   its tailnet hostname. Then attach from the laptop and create an agent in the new box.
+
