@@ -24,29 +24,29 @@
  * config file's env map — never as constructor literals.
  */
 
-import type { Ingress } from "./ingress.ts";
-import { channelHealth, type ChannelHealth } from "./liveness.ts";
 import { boxPathsNamed, undelivered } from "../host/named-files.ts";
-import { boardText, type BoardView } from "./board-view.ts";
+import { type BoardView, boardText } from "./board-view.ts";
 import type { CardRecord } from "./card-ledger.ts";
+import type { Ingress } from "./ingress.ts";
+import { type ChannelHealth, channelHealth } from "./liveness.ts";
 
 import {
   APPROVAL_STAKES,
-  CONSENT_GONE,
-  EMPTY_REPLY_NOTE,
-  NO_BOX_FOR_FILES,
-  SAY_WHAT_YOU_NEED,
-  SCOPE_IS_ADMIN_CALL,
-  TEAM,
-  NOTHING_RUNNING,
-  STOPPING,
+  accepted,
   ackQueued,
   ackWorking,
+  CONSENT_GONE,
   consentFallbackText,
-  accepted,
+  EMPTY_REPLY_NOTE,
   filesSaved,
+  NO_BOX_FOR_FILES,
+  NOTHING_RUNNING,
   questionText,
+  SAY_WHAT_YOU_NEED,
+  SCOPE_IS_ADMIN_CALL,
+  STOPPING,
   steered,
+  TEAM,
 } from "./strings.ts";
 
 export interface InboundMessage {
@@ -306,6 +306,15 @@ export interface ChannelManagerDeps {
    * property of the person, which is why this takes an identity and not a chat.
    */
   mayDrive: (identity: string) => boolean;
+  /**
+   * The directory's offer (docs/35 §6): called only when `mayDrive` just said
+   * no, and only so a *known directory person* can be linked as a driver on
+   * the spot — the vendor authenticated them, the synced org knows them, and
+   * the knock ceremony was for a world without either. Returning true means
+   * "linked"; the admission then re-checks `mayDrive` rather than trusting
+   * the linker, so a viewer-role directory stays a refusal.
+   */
+  autoLink?: (identity: string, senderLabel: string) => boolean;
   /**
    * Current incarnation of a chatKey's channel, by prefix (docs/22 §4). Absent means
    * 1 for everything — true while `ensureChannelRecords` pins every incarnation.
@@ -1118,21 +1127,29 @@ ${input.options.map(option => `· ${option}`).join("\n")}`
     }
 
     if (!this.deps.mayDrive(message.identity)) {
-      if (message.messageId !== undefined) {
-        this.deps.ingress?.decided(message.messageId, "refused", message.identity);
+      // The directory's one chance: a synced org member whose first message
+      // this is. Linked here, the ordinary check below runs again — the link
+      // proposes, `mayDrive` disposes.
+      const linked =
+        this.deps.autoLink?.(message.identity, message.senderLabel) &&
+        this.deps.mayDrive(message.identity);
+      if (!linked) {
+        if (message.messageId !== undefined) {
+          this.deps.ingress?.decided(message.messageId, "refused", message.identity);
+        }
+        this.deps.log(
+          `channel ${adapter.name}: refused ${message.identity} (${message.senderLabel})`
+        );
+        if (this.deps.knock !== undefined) {
+          this.deps.knock({
+            identity: message.identity,
+            senderLabel: message.senderLabel,
+            channel: adapter.name,
+          });
+          return knockRefusal(message.identity);
+        }
+        return refusal(message.identity);
       }
-      this.deps.log(
-        `channel ${adapter.name}: refused ${message.identity} (${message.senderLabel})`
-      );
-      if (this.deps.knock !== undefined) {
-        this.deps.knock({
-          identity: message.identity,
-          senderLabel: message.senderLabel,
-          channel: adapter.name,
-        });
-        return knockRefusal(message.identity);
-      }
-      return refusal(message.identity);
     }
 
     // Past the door. Recorded here rather than at the end, because everything below can

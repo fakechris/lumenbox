@@ -51,6 +51,14 @@ export interface ChannelRecord {
    * at all is the vendor's; the option only decides the agent's answer.)
    */
   meetingRemoteControl?: boolean;
+  /**
+   * What the operator granted this app in the vendor's contact console
+   * (docs/35 §3): `full` — the whole tenant, so a person absent from a sync
+   * may be deactivated — or `partial` (the default and the safe claim), where
+   * absence means nothing. A claim, not a measurement: the vendor offers no
+   * provable answer, and a wrong `full` takes away people's access.
+   */
+  directoryVisibility?: "full" | "partial";
   createdAt: string;
 }
 
@@ -120,7 +128,13 @@ export function ensureChannelRecords(path: string, boxId: string): ChannelRecord
  */
 export function upsertChannelRecord(
   path: string,
-  input: { id: string; type: ChannelType; name?: string; defaultAgent?: string | null },
+  input: {
+    id: string;
+    type: ChannelType;
+    name?: string;
+    defaultAgent?: string | null;
+    directoryVisibility?: "full" | "partial";
+  },
   boxId: string
 ): ChannelRecord[] {
   const id = input.id.trim();
@@ -152,6 +166,9 @@ export function upsertChannelRecord(
               : input.defaultAgent !== undefined
                 ? { defaultAgent: input.defaultAgent }
                 : { defaultAgent: record.defaultAgent }),
+            ...(input.directoryVisibility !== undefined
+              ? { directoryVisibility: input.directoryVisibility }
+              : {}),
           }
     );
   } else {
@@ -170,6 +187,7 @@ export function upsertChannelRecord(
         incarnation: 1,
         boxId,
         ...(input.defaultAgent ? { defaultAgent: input.defaultAgent } : {}),
+        ...(input.directoryVisibility ? { directoryVisibility: input.directoryVisibility } : {}),
         createdAt: new Date().toISOString(),
       },
     ];

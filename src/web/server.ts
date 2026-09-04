@@ -130,6 +130,7 @@ import { blockedAnnouncement, boardView } from "../channels/board-view.ts";
 import { CardLedger } from "../channels/card-ledger.ts";
 import { ConversationDirectory, conversationsPath } from "../channels/conversations.ts";
 import { DingTalkChannel } from "../channels/dingtalk.ts";
+import { directoryProviders } from "../channels/directory.ts";
 import { FeishuChannel, meetingInvitePrompt, REPLAY_MAX_AGE_MS } from "../channels/feishu.ts";
 import { FeishuDocReader } from "../channels/feishu-docs.ts";
 import {
@@ -167,6 +168,7 @@ import {
   profilesFor,
 } from "../host/catalog.ts";
 import { Deliveries, deliveriesPath } from "../host/deliveries.ts";
+import { Directories } from "../host/directory.ts";
 import { HostRunner, hostRunnerConfig } from "../host/host-runner.ts";
 import { TOOL_BUDGET_WARNING } from "../host/mcp.ts";
 import { ALL_TOOLS } from "../host/orchestrator.ts";
@@ -483,6 +485,10 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
   // a 0600 file beside the roster for retrieval. A roster with anyone in it mints
   // nothing: a second way to become admin that nobody decided on is not a feature.
   ensureBootstrapAdmin({ rosterEmpty: principals.list().length === 0, log: line => log(line) });
+  // The synced orgs, one per door that has a directory provider. Read on demand
+  // like the roster: a sync rewrites the file and the next lookups see it, no
+  // restart, no cache to invalidate.
+  const directories = new Directories();
 
   // Letting somebody in is one click, not an id copied around. A stranger's message
   // records a knock; the settings dialog approves it with one button, or the owner
@@ -761,9 +767,31 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
     },
     mayDrive: identity => roleAtLeast(principals.roleOf(identity), "driver"),
     mayAdmin: identity => roleAtLeast(principals.roleOf(identity), "admin"),
-    // One scope per chat: binding moves the chat, it does not accumulate. The scope
-    // itself is created and given tools in Settings; the chat only chooses which one
-    // bounds it.
+    // The directory's offer (docs/35 §6): an active person in a door's synced org
+    // links as a driver on their first message, because the vendor authenticated
+    // them and the org knows them — the knock ceremony was for a world without
+    // either. Only that: no role the directory doesn't carry, and an unknown or
+    // departed person is a stranger and knocks like one.
+    autoLink: (identity, senderLabel) => {
+      const at = identity.indexOf(":");
+      if (at <= 0) return false;
+      const channelId = identity.slice(0, at);
+      const record = channelRecords.find(entry => entry.id === channelId);
+      if (record === undefined || directoryProviders[record.type] === undefined) return false;
+      const person = directories.personOf(channelId, identity.slice(at + 1));
+      if (person === undefined) return false;
+      principals.save([
+        ...principals.list(),
+        {
+          id: identity,
+          name: person.name.trim() !== "" ? person.name : senderLabel,
+          role: "driver" as const,
+          identities: [identity],
+        },
+      ]);
+      log(`directory auto-link: ${identity} (${person.name}) joined as driver via ${channelId}'s synced org`);
+      return true;
+    },
     chatScope: {
       show: chatKey => {
         const bound = orchestrator.scopes?.boundTo(conversationIdFor(chatKey), conversationIdFor);
@@ -2907,6 +2935,11 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
               return;
             }
           }
+          const rawVisibility = String(body.directoryVisibility ?? "");
+          if (rawVisibility !== "" && rawVisibility !== "full" && rawVisibility !== "partial") {
+            send(res, 400, { error: `directoryVisibility is "full" or "partial", not ${rawVisibility}` });
+            return;
+          }
           const wasKnown = channelRecords.some(record => record.id === id);
           let updated: ReturnType<typeof upsertChannelRecord> | undefined;
           try {
@@ -2917,6 +2950,9 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
                 type,
                 ...(typeof body.name === "string" ? { name: body.name } : {}),
                 ...(defaultAgent !== undefined ? { defaultAgent } : {}),
+                ...(rawVisibility !== ""
+                  ? { directoryVisibility: rawVisibility as "full" | "partial" }
+                  : {}),
               },
               registry.box.id
             );
@@ -3094,6 +3130,76 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
           const body = await readJson(req);
           knocks.delete(String(body.identity ?? ""));
           send(res, 200, { knocks: [...knocks.values()] });
+          return;
+        }
+
+        // The synced orgs (docs/35 §3): the admin's tree, per door, with the
+        // staleness line and the visibility the operator claimed. The org's own
+        // data — admin eyes only, like the roster beside it.
+        if (route === "GET /api/directory") {
+          if (refusedRole("admin")) return;
+          directories.reload();
+          send(res, 200, {
+            channels: channelRecords
+              .filter(record => directoryProviders[record.type] !== undefined)
+              .map(record => {
+                const directory = directories.of(record.id);
+                return {
+                  channelId: record.id,
+                  canSync: channelCredentialsSet(record),
+                  visibility: directory?.visibility ?? record.directoryVisibility ?? "partial",
+                  claimed: record.directoryVisibility ?? "partial",
+                  syncedAt: directory?.syncedAt,
+                  departments: directory?.departments ?? [],
+                  people: directory?.people ?? [],
+                };
+              }),
+          });
+          return;
+        }
+        if (route === "POST /api/directory/sync") {
+          if (refusedRole("admin")) return;
+          const body = await readJson(req);
+          const channelId = String(body.channelId ?? "").trim();
+          const record = channelRecords.find(entry => entry.id === channelId);
+          const provider = record === undefined ? undefined : directoryProviders[record.type];
+          if (record === undefined || provider === undefined) {
+            send(res, 404, {
+              error:
+                record === undefined
+                  ? `No door named ${channelId}.`
+                  : `A ${record.type} door has no directory to sync.`,
+            });
+            return;
+          }
+          // The door's own credentials, read the same way the login dance reads them.
+          const base = channelEnvBase(channelId);
+          const savedEnv = loadConfig().env ?? {};
+          const envSuffixes =
+            record.type === "dingtalk"
+              ? { id: `${base}_CLIENT_ID`, secret: `${base}_CLIENT_SECRET` }
+              : { id: `${base}_APP_ID`, secret: `${base}_APP_SECRET` };
+          const clientId = process.env[envSuffixes.id] ?? savedEnv[envSuffixes.id];
+          const clientSecret = process.env[envSuffixes.secret] ?? savedEnv[envSuffixes.secret];
+          if (typeof clientId !== "string" || clientId === "" || typeof clientSecret !== "string" || clientSecret === "") {
+            send(res, 503, { error: `set ${envSuffixes.id} and ${envSuffixes.secret} first.` });
+            return;
+          }
+          try {
+            const snapshot = await provider.fetchDirectory({ clientId, clientSecret, fetchFn: fetch });
+            const visibility = record.directoryVisibility ?? "partial";
+            const changes = directories.merge(channelId, snapshot, visibility, new Date().toISOString());
+            log(
+              `directory sync ${channelId}: ${changes.departments} departments, ` +
+                `+${changes.added} people, ${changes.deactivated} deactivated ` +
+                `(visibility ${visibility}, ${snapshot.people.length} seen)`
+            );
+            send(res, 200, { channelId, visibility, changes, syncedAt: directories.of(channelId)?.syncedAt });
+          } catch (error) {
+            const detail = error instanceof Error ? error.message : String(error);
+            log(`directory sync ${channelId} failed: ${detail}`);
+            send(res, 502, { error: `Sync failed: ${detail}` });
+          }
           return;
         }
 

@@ -8,10 +8,12 @@
  * gets pushed when is a contract these tests pin.
  */
 
-import { test } from "node:test";
 import assert from "node:assert/strict";
+import { test } from "node:test";
 import {
+  type ChannelAdapter,
   ChannelManager,
+  type InboundMessage,
   parseAddress,
   parseBoardRequest,
   parseDesktopRequest,
@@ -21,8 +23,6 @@ import {
   parseScreenRequest,
   parseStopRequest,
   refusal,
-  type ChannelAdapter,
-  type InboundMessage,
   type TaskCardState,
 } from "./manager.ts";
 
@@ -1852,4 +1852,50 @@ test("the model's opening line reaches the chat before the reply, and is not sen
   await adapter2.inject({ identity: "telegram:7", senderLabel: "chris", text: "看一下" });
   await repeats.idle();
   assert.deepEqual(adapter2.sent.map(entry => entry.text), ["收到，马上看。"]);
+});
+
+test("a directory member's first message links on the spot and is admitted; a stranger still knocks", async () => {
+  const adapter = testAdapter();
+  const knocks: { identity: string; senderLabel: string; channel: string }[] = [];
+  const linked: { identity: string; senderLabel: string }[] = [];
+  // The roster the auto-link writes into: a Set the mayDrive check reads, the
+  // same coupling the server's principals provide, in miniature.
+  const directory = new Set(["dingtalk:staff_7"]);
+  const drivers = new Set<string>();
+  const manager = new ChannelManager({
+    mayDrive: identity => drivers.has(identity),
+    autoLink: (identity, senderLabel) => {
+      if (!directory.has(identity)) return false;
+      linked.push({ identity, senderLabel });
+      drivers.add(identity);
+      return true;
+    },
+    ask: async () => "x",
+    knock: request => knocks.push(request),
+    log: () => {},
+  });
+  manager.register(adapter, true, "test");
+  await started(manager);
+
+  // A directory person: linked, then re-checked — and through, no knock.
+  const admitted = await adapter.inject({
+    identity: "dingtalk:staff_7",
+    senderLabel: "Seven",
+    text: "hello?",
+  });
+  assert.deepEqual(linked, [{ identity: "dingtalk:staff_7", senderLabel: "Seven" }]);
+  assert.deepEqual(knocks, [], "a known org member is not a stranger");
+  assert.ok(!/Not authorised|notified/.test(admitted ?? ""), "the message went through");
+
+  // A stranger: the linker is asked, declines, the knock happens as before.
+  const refused = await adapter.inject({
+    identity: "feishu:ou_stranger",
+    senderLabel: "Nobody",
+    text: "hi",
+  });
+  assert.deepEqual(linked, [{ identity: "dingtalk:staff_7", senderLabel: "Seven" }], "the stranger was not linked");
+  assert.deepEqual(knocks, [
+    { identity: "feishu:ou_stranger", senderLabel: "Nobody", channel: "telegram" },
+  ]);
+  assert.match(refused ?? "", /owner has been notified/, "no directory row, no link, the ordinary refusal");
 });
