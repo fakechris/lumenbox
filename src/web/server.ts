@@ -153,6 +153,13 @@ import {
 } from "../channels/strings.ts";
 import { TelegramChannel } from "../channels/telegram.ts";
 import {
+  bootstrapPath,
+  ensureBootstrapAdmin,
+  loadBootstrap,
+  markRedeemed,
+  pendingBootstrap,
+} from "../host/bootstrap.ts";
+import {
   CATALOG_CONNECTORS,
   CATALOG_CREWS,
   CATALOG_EXPERTS,
@@ -471,6 +478,11 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
       log(`migrated ${unclaimed.length} channel grant(s) to driver principals`);
     }
   }
+  // The first admin, on an empty roster only (docs/36 §2): one live invite, printed
+  // to the log on mint — the operator's channel, by the owner's ruling — and held in
+  // a 0600 file beside the roster for retrieval. A roster with anyone in it mints
+  // nothing: a second way to become admin that nobody decided on is not a feature.
+  ensureBootstrapAdmin({ rosterEmpty: principals.list().length === 0, log: line => log(line) });
 
   // Letting somebody in is one click, not an id copied around. A stranger's message
   // records a knock; the settings dialog approves it with one button, or the owner
@@ -2106,6 +2118,32 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
         ? `${COOKIE_NAME}=${encodeURIComponent(token)}; Path=/; ` +
           `Max-Age=${SESSION_MAX_AGE_SECONDS}; HttpOnly; SameSite=Lax`
         : undefined,
+    pendingBootstrap: () => {
+      const live = pendingBootstrap(loadBootstrap(), Date.now());
+      return live === undefined ? undefined : { code: live.code };
+    },
+    redeemBootstrap: (code, identity, name) => {
+      const live = pendingBootstrap(loadBootstrap(), Date.now());
+      if (live === undefined || live.code !== code) return false;
+      if (principals.isKnown(identity)) {
+        // The code is for the first *unlinked* admin. An already-linked person
+        // arriving with it is either a mistake or a probe; either way the answer
+        // is no, and the ordinary sign-in decides what they get.
+        log(`bootstrap refused: ${identity} is already linked; the invite is for a first admin`);
+        return false;
+      }
+      principals.save([
+        ...principals.list(),
+        {
+          id: identity,
+          name: name !== undefined && name.trim() !== "" ? name.trim() : identity,
+          role: "admin" as const,
+          identities: [identity],
+        },
+      ]);
+      markRedeemed(bootstrapPath(), live, { identity, now: Date.now() });
+      return true;
+    },
     log: line => log(line),
     now: () => Date.now(),
     fetchFn: fetch,
@@ -4368,6 +4406,18 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
   }
   if (!token) {
     log("no UI token: anything that can reach this port can drive the agents");
+  }
+  // Sign-in through a door needs the installation to be reachable from the vendor's
+  // browser redirect; without a public URL every /auth/<door> link refuses with the
+  // same fact. Said once at start rather than discovered per attempt.
+  if (
+    (process.env.AGENTBOX_PUBLIC_URL ?? "") === "" &&
+    channelRecords.some(record => channelCredentialsSet(record))
+  ) {
+    log(
+      `${channelRecords.filter(record => channelCredentialsSet(record)).map(record => record.id).join(", ")} ` +
+        `could sign people in, but AGENTBOX_PUBLIC_URL is unset — /auth/<door> will refuse until it names this installation`,
+    );
   }
   // Derived, so rotating the token ends every web session with it — and so there is no
   // second secret to store. Assigned before anything can serve a request.

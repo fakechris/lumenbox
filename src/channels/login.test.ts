@@ -69,6 +69,8 @@ function danceDeps(overrides: Partial<LoginDeps> = {}): LoginDeps {
     nameOf: () => "Known Person",
     sessionCookie: identity => `session=${identity}`,
     uiTokenCookie: () => "token=abc",
+    pendingBootstrap: () => undefined,
+    redeemBootstrap: () => false,
     log: () => {},
     now: () => 1_000_000,
     fetchFn: async () => new Response("{}", { status: 200 }),
@@ -390,4 +392,101 @@ test("dingtalk: a missing unionId never reaches the admin walk", async () => {
     /no unionId/,
   );
   assert.equal(calls.length, 2, "no credential was spent hunting for a subject that never arrived");
+});
+
+// ---------------------------------------------------------------- The bootstrap
+
+test("the dance: the knock page offers the first-admin field only while an invite is live", async () => {
+  const fetchFn = (async (url: string | URL) => {
+    if (String(url).includes("oauth/token")) return new Response(JSON.stringify({ access_token: "t" }));
+    return new Response(JSON.stringify({ data: { open_id: "ou_stranger" } }));
+  }) as typeof fetch;
+  const withInvite = vendorAuth(danceDeps({ fetchFn, pendingBootstrap: () => ({ code: "ABC23456" }) }));
+  const entryA = recorder();
+  await withInvite(new URL("https://box.example.com/auth/feishu"), entryA.asServerResponse);
+  const stateA = /state=([0-9a-f]+)/.exec(entryA.res.headers.location as string)?.[1];
+  const knockA = recorder();
+  await withInvite(new URL(`https://box.example.com/auth/feishu/callback?code=c&state=${stateA}`), knockA.asServerResponse);
+  assert.match(knockA.res.body, /成为管理员/);
+  assert.match(knockA.res.body, /引导码/);
+
+  const without = vendorAuth(danceDeps({ fetchFn }));
+  const entryB = recorder();
+  await without(new URL("https://box.example.com/auth/feishu"), entryB.asServerResponse);
+  const stateB = /state=([0-9a-f]+)/.exec(entryB.res.headers.location as string)?.[1];
+  const knockB = recorder();
+  await without(new URL(`https://box.example.com/auth/feishu/callback?code=c&state=${stateB}`), knockB.asServerResponse);
+  assert.ok(!knockB.res.body.includes("引导码"), "no live invite, no field to type into");
+});
+
+test("the dance: a correct code turns the vendor-authenticated stranger into the first admin", async () => {
+  const redeemed: Array<{ code: string; identity: string; name: string | undefined }> = [];
+  const logs: string[] = [];
+  const deps = danceDeps({
+    fetchFn: (async (url: string | URL) => {
+      if (String(url).includes("oauth/token")) return new Response(JSON.stringify({ access_token: "t" }));
+      return new Response(JSON.stringify({ data: { open_id: "ou_first", name: "创始人" } }));
+    }) as typeof fetch,
+    pendingBootstrap: () => ({ code: "ABC23456" }),
+    redeemBootstrap: (code, identity, name) => {
+      redeemed.push({ code, identity, name });
+      return true;
+    },
+    log: line => logs.push(line),
+  });
+  const handle = vendorAuth(deps);
+  const entry = recorder();
+  await handle(new URL("https://box.example.com/auth/feishu?bootstrap=ABC23456&next=/settings"), entry.asServerResponse);
+  const state = /state=([0-9a-f]+)/.exec(entry.res.headers.location as string)?.[1];
+  const back = recorder();
+  await handle(new URL(`https://box.example.com/auth/feishu/callback?code=c&state=${state}`), back.asServerResponse);
+  assert.deepEqual(redeemed, [{ code: "ABC23456", identity: "feishu:ou_first", name: "创始人" }]);
+  assert.equal(back.res.status, 302);
+  assert.equal(back.res.headers.location, "/settings");
+  assert.deepEqual(back.res.headers["set-cookie"], ["token=abc", "session=feishu:ou_first"]);
+  assert.ok(logs.some(line => line.includes("bootstrap admin: feishu:ou_first")));
+});
+
+test("the dance: a wrong code is a normal sign-in, and the knock page offers the field again", async () => {
+  const redeemed: string[] = [];
+  const deps = danceDeps({
+    fetchFn: (async (url: string | URL) => {
+      if (String(url).includes("oauth/token")) return new Response(JSON.stringify({ access_token: "t" }));
+      return new Response(JSON.stringify({ data: { open_id: "ou_stranger" } }));
+    }) as typeof fetch,
+    pendingBootstrap: () => ({ code: "ABC23456" }),
+    redeemBootstrap: code => {
+      redeemed.push(code);
+      return true;
+    },
+  });
+  const handle = vendorAuth(deps);
+  const entry = recorder();
+  await handle(new URL("https://box.example.com/auth/feishu?bootstrap=WRONG9"), entry.asServerResponse);
+  const state = /state=([0-9a-f]+)/.exec(entry.res.headers.location as string)?.[1];
+  const back = recorder();
+  await handle(new URL(`https://box.example.com/auth/feishu/callback?code=c&state=${state}`), back.asServerResponse);
+  assert.deepEqual(redeemed, [], "a wrong code never reached redemption");
+  assert.equal(back.res.status, 403);
+  assert.match(back.res.body, /成为管理员/, "the field is still offered");
+});
+
+test("the dance: a refused redemption (stale invite, or identity already linked) falls to the knock check", async () => {
+  const deps = danceDeps({
+    fetchFn: (async (url: string | URL) => {
+      if (String(url).includes("oauth/token")) return new Response(JSON.stringify({ access_token: "t" }));
+      return new Response(JSON.stringify({ data: { open_id: "ou_known" } }));
+    }) as typeof fetch,
+    pendingBootstrap: () => ({ code: "ABC23456" }),
+    redeemBootstrap: () => false,
+  });
+  const handle = vendorAuth(deps);
+  const entry = recorder();
+  await handle(new URL("https://box.example.com/auth/feishu?bootstrap=ABC23456"), entry.asServerResponse);
+  const state = /state=([0-9a-f]+)/.exec(entry.res.headers.location as string)?.[1];
+  const back = recorder();
+  await handle(new URL(`https://box.example.com/auth/feishu/callback?code=c&state=${state}`), back.asServerResponse);
+  // Redemption refused, but the identity is linked: the ordinary sign-in decides.
+  assert.equal(back.res.status, 302);
+  assert.deepEqual(back.res.headers["set-cookie"], ["token=abc", "session=feishu:ou_known"]);
 });

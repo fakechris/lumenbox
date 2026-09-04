@@ -218,6 +218,19 @@ export interface LoginDeps {
   sessionCookie(identity: string): string;
   /** The UI token cookie, when there is a token — sign-in admits to the UI too. */
   uiTokenCookie(): string | undefined;
+  /**
+   * The first-admin code a fresh installation is holding out (docs/36 §2).
+   * Present only while the roster is empty and an invite is live; its
+   * presence on the knock page is the one difference between "knock" and
+   * "you may be the first admin".
+   */
+  pendingBootstrap(): { code: string } | undefined;
+  /**
+   * Spend that code on this identity: link them as the first admin. False
+   * when the code is stale or the identity is already a person — the
+   * ordinary knock check then decides, exactly as if no code was offered.
+   */
+  redeemBootstrap(code: string, identity: string, name: string | undefined): boolean;
   log(line: string): void;
   now(): number;
   /** Injectable so tests never reach a vendor; the server passes the global. */
@@ -229,7 +242,7 @@ export interface LoginDeps {
  * global, so each host — the server, each test — gets its own state map.
  */
 export function vendorAuth(deps: LoginDeps) {
-  const states = new Map<string, { channelId: string; next: string; at: number }>();
+  const states = new Map<string, { channelId: string; next: string; at: number; bootstrap?: string }>();
 
   const sendJson = (res: ServerResponse, status: number, body: unknown): void => {
     res.writeHead(status, { "content-type": "application/json; charset=utf-8" });
@@ -273,8 +286,15 @@ export function vendorAuth(deps: LoginDeps) {
       const rawNext = url.searchParams.get("next") ?? "/";
       // Relative paths only: an absolute `next` would make this an open redirect.
       const next = rawNext.startsWith("/") && !rawNext.startsWith("//") ? rawNext : "/";
+      // A first-admin code, remembered server-side in the state entry — never in
+      // the vendor's redirect, which is the vendor's URL, not ours. A wrong code
+      // is ignored here (the dance proceeds; the knock page offers the field
+      // again), so probing costs a vendor round-trip and learns nothing.
+      const rawBootstrap = url.searchParams.get("bootstrap");
+      const bootstrap =
+        rawBootstrap !== null && deps.pendingBootstrap()?.code === rawBootstrap ? rawBootstrap : undefined;
       const state = randomBytes(16).toString("hex");
-      states.set(state, { channelId, next, at: deps.now() });
+      states.set(state, { channelId, next, at: deps.now(), ...(bootstrap !== undefined ? { bootstrap } : {}) });
       res.writeHead(302, { location: provider.authorizeUrl({ clientId: client.clientId, redirectUri, state }) });
       res.end();
       return;
@@ -293,7 +313,7 @@ export function vendorAuth(deps: LoginDeps) {
       return;
     }
     try {
-      const { vendorSubject } = await provider.exchange({
+      const { vendorSubject, name } = await provider.exchange({
         clientId: client.clientId,
         clientSecret: client.clientSecret,
         code,
@@ -301,17 +321,43 @@ export function vendorAuth(deps: LoginDeps) {
         fetchFn: deps.fetchFn,
       });
       const identity = `${channelId}:${vendorSubject}`;
+      if (pending.bootstrap !== undefined && deps.redeemBootstrap(pending.bootstrap, identity, name)) {
+        // The first admin: the code was spent turning this vendor-authenticated
+        // identity into the roster's first Principal. Same cookies, same landing.
+        const admit = [deps.uiTokenCookie(), deps.sessionCookie(identity)].filter(
+          (cookie): cookie is string => cookie !== undefined,
+        );
+        res.writeHead(302, { "set-cookie": admit, location: pending.next });
+        res.end();
+        deps.log(`bootstrap admin: ${identity} via ${channelId} (${name ?? "?"})`);
+        return;
+      }
       if (!deps.isKnown(identity)) {
         // Signed in with the vendor, unknown here: the answer is the knock path, said
         // as a page a person can act on — not a session for whoever the vendor knows.
+        // While a first-admin invite is live, the same page holds the code field —
+        // the one difference between "knock" and "you may be the first admin".
         const label = provider.label;
         const shown = identity.replace(/</g, "&lt;");
+        const bootstrapField = (() => {
+          if (deps.pendingBootstrap() === undefined) return "";
+          const door = encodeURIComponent(channelId);
+          return (
+            `<hr style="border:0;border-top:1px solid #ddd;margin:22px 0">` +
+            `<p>如果你是本安装的第一位管理员,输入引导码:</p>` +
+            `<input id="bc" autocomplete="off" spellcheck="false" placeholder="引导码" ` +
+            `style="width:60%;padding:8px 10px;font:inherit;letter-spacing:2px">` +
+            `<button onclick="location.href='/auth/${door}?bootstrap='+encodeURIComponent(document.getElementById('bc').value)" ` +
+            `style="margin-left:8px;padding:8px 14px;font:inherit">成为管理员</button>`
+          );
+        })();
         res.writeHead(403, { "content-type": "text/html; charset=utf-8" });
         res.end(
           `<!doctype html><meta charset="utf-8"><body style="font:15px/1.7 sans-serif;max-width:560px;margin:80px auto;padding:0 20px">` +
             `<h3>这个${label}账号还没有链接到本安装</h3>` +
             `<p>你的 id:<code>${shown}</code></p>` +
-            `<p>给机器人发一条消息 —— 管理员会收到放行提示;或者向管理员要一个邀请码,在聊天里发送 <code>bind 邀请码</code>。链接完成后回到这里重新打开即可。</p></body>`,
+            `<p>给机器人发一条消息 —— 管理员会收到放行提示;或者向管理员要一个邀请码,在聊天里发送 <code>bind 邀请码</code>。链接完成后回到这里重新打开即可。</p>` +
+            `${bootstrapField}</body>`,
         );
         deps.log(`web login refused: ${identity} signed in via ${channelId} but is not linked`);
         return;
