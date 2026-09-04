@@ -4,13 +4,13 @@
  * its floor, and a box with residents cannot be forgotten.
  */
 
-import { test } from "node:test";
 import assert from "node:assert/strict";
 import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { test } from "node:test";
 import { AgentRegistry } from "../agents/registry.ts";
-import { BOXES_FILENAME, attachedBox, ensureBoxes, tokenOf } from "./boxes.ts";
+import { attachedBox, BOXES_FILENAME, ensureBoxes, tokenOf } from "./boxes.ts";
 
 function fixture() {
   const root = mkdtempSync(join(tmpdir(), "agentbox-boxes-"));
@@ -105,6 +105,57 @@ test("an attached box can move to a new address and keep its id, its name and it
     assert.equal(new AgentRegistry(join(root, "agents")).boxByName("grok")?.endpoint?.baseUrl, "http://100.114.30.43:13370", "written through");
     assert.throws(() => registry.updateBox(registry.box.id, { endpoint: { baseUrl: "http://x", tokenFile } }), /own box has no endpoint/);
     assert.throws(() => registry.updateBox("nope", { displayFloor: 3 }), /No box named/);
+  } finally {
+    cleanup();
+  }
+});
+
+test("members read in any shape the file has held: the three bindings, and the honest default", () => {
+  const { root, cleanup } = fixture();
+  try {
+    const agents = join(root, "agents");
+    new AgentRegistry(agents); // writes boxes.json
+    const path = join(agents, BOXES_FILENAME);
+    const ownId = JSON.parse(readFileSync(join(agents, "box.json"), "utf8")).id;
+
+    // Legacy shapes still load: "everyone" and the bare id list.
+    writeFileSync(path, JSON.stringify([{ id: ownId, name: "own", members: "everyone" }]), "utf8");
+    assert.deepEqual(new AgentRegistry(agents).listBoxes()[0]!.members, { kind: "everyone" });
+    writeFileSync(path, JSON.stringify([{ id: ownId, name: "own", members: ["p-ada", "p-bob"] }]), "utf8");
+    assert.deepEqual(new AgentRegistry(agents).listBoxes()[0]!.members, {
+      kind: "listed",
+      principalIds: ["p-ada", "p-bob"],
+    });
+
+    // The three bindings round-trip, and garbage degrades to the honest default.
+    const shapes: Array<unknown> = [
+      { kind: "everyone" },
+      { kind: "listed", principalIds: ["p-ada"] },
+      { kind: "department", channelId: "feishu", departmentVendorId: "od_1" },
+      { nonsense: true }, // not a members shape anyone wrote on purpose
+    ];
+    const expected = [
+      { kind: "everyone" },
+      { kind: "listed", principalIds: ["p-ada"] },
+      { kind: "department", channelId: "feishu", departmentVendorId: "od_1" },
+      { kind: "everyone" },
+    ];
+    for (let i = 0; i < shapes.length; i++) {
+      writeFileSync(path, JSON.stringify([{ id: ownId, name: "own", members: shapes[i] }]), "utf8");
+      assert.deepEqual(
+        new AgentRegistry(agents).listBoxes()[0]!.members,
+        expected[i],
+        `shape ${i} normalized`,
+      );
+    }
+
+    // setBoxMembers changes only that, and it survives a reload.
+    const registry = new AgentRegistry(agents);
+    registry.setBoxMembers(ownId, { kind: "listed", principalIds: ["p-ada"] });
+    assert.deepEqual(new AgentRegistry(agents).listBoxes()[0]!.members, {
+      kind: "listed",
+      principalIds: ["p-ada"],
+    });
   } finally {
     cleanup();
   }

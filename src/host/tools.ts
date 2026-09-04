@@ -6,49 +6,49 @@
  * measurably under-triggers.
  */
 
+import { randomBytes } from "node:crypto";
 import type Anthropic from "@anthropic-ai/sdk";
-import type { BoxClient } from "../box/client.ts";
-import type { DisplayLease } from "../box/display-lease.ts";
 import type { AgentBus } from "../agents/bus.ts";
 import type { AgentRecord, AgentRegistry } from "../agents/registry.ts";
-import type { PolicyGate } from "./policy.ts";
-import type { HostRunner } from "./host-runner.ts";
-import type { Vault } from "./vault.ts";
-import type { ScopeStore } from "./scopes.ts";
-import type { McpManager } from "./mcp.ts";
-import { delegateEnv, delegateModel, PRESETS, presetNamed, quoteForShell } from "./presets.ts";
-import { catalogMenu, intersectTools, profilesFor } from "./catalog.ts";
-import { describeHistory, readHistory } from "./history.ts";
-import { canSearch, fetchPage, guardUrl, isSearchEngine, searchWeb, WebError } from "./web.ts";
-import { describeEnvShape, envShape, looksLikeEnvFile } from "./env-shape.ts";
-import { guardShellCommand } from "./ui-automation-guard.ts";
-import { dedupe, dedupeKey, validateRecord } from "./memory.ts";
-import { type Claims, heldElsewhere } from "./claims.ts";
-import { forkTag, type CommitHow, type PendingWork } from "./pending-work.ts";
-import { MCP_FACE_DIR, MCP_FACE_TOKEN_VARIABLE, type McpFace } from "./mcp-face.ts";
-import { randomBytes } from "node:crypto";
 import { MAIN_CONVERSATION } from "../agents/registry.ts";
-import { describeTask, isLive, isTaskStatus, TASK_STATUSES, type TaskStore } from "./tasks.ts";
-import { ABSENT, versionOf, type FileVersions } from "./files.ts";
+import type { BoxClient } from "../box/client.ts";
+import type { DisplayLease } from "../box/display-lease.ts";
+import type { BrowserRequest, ComputerAction } from "../protocol/index.ts";
+import { catalogMenu, intersectTools, profilesFor } from "./catalog.ts";
+import { type Claims, heldElsewhere } from "./claims.ts";
 import {
   describeTodos,
   isTodoStatus,
   TODO_STATUSES,
-  validatePlan,
-  validateTodos,
   type TodoItem,
   type TodoStatus,
+  validatePlan,
+  validateTodos,
 } from "./durable.ts";
-import type { BrowserRequest, ComputerAction } from "../protocol/index.ts";
+import { describeEnvShape, envShape, looksLikeEnvFile } from "./env-shape.ts";
+import { ABSENT, type FileVersions, versionOf } from "./files.ts";
+import { describeHistory, readHistory } from "./history.ts";
+import type { HostRunner } from "./host-runner.ts";
+import type { McpManager } from "./mcp.ts";
+import { MCP_FACE_DIR, MCP_FACE_TOKEN_VARIABLE, type McpFace } from "./mcp-face.ts";
+import { dedupe, dedupeKey, validateRecord } from "./memory.ts";
+import { type CommitHow, forkTag, type PendingWork } from "./pending-work.ts";
+import type { PolicyGate } from "./policy.ts";
+import { delegateEnv, delegateModel, PRESETS, presetNamed, quoteForShell } from "./presets.ts";
+import type { ScopeStore } from "./scopes.ts";
 import { skillSlugOf } from "./skill-provenance.ts";
 import { SKILL_FILENAME } from "./skills.ts";
+import { describeTask, isLive, isTaskStatus, TASK_STATUSES, type TaskStore } from "./tasks.ts";
 import {
   type BotTemplate,
-  TEMPLATE_SOURCE_PREFIX,
   describeTemplate,
   packTemplate,
   stampTemplateWrite,
+  TEMPLATE_SOURCE_PREFIX,
 } from "./template.ts";
+import { guardShellCommand } from "./ui-automation-guard.ts";
+import type { Vault } from "./vault.ts";
+import { canSearch, fetchPage, guardUrl, isSearchEngine, searchWeb, WebError } from "./web.ts";
 
 export interface ToolContext {
   agent: AgentRecord;
@@ -2582,7 +2582,7 @@ export async function dispatchTool(
             record,
             tier: "yours",
           }));
-      const team = dedupe(context.registry.readSharedMemory()).map(record => ({
+      const team = dedupe(context.registry.readSharedMemory(context.registry.boxOf(context.agent.id).id)).map(record => ({
         record,
         tier: "team",
       }));
@@ -3043,7 +3043,7 @@ export async function dispatchTool(
       // something a colleague already shared, and should not share what it already knows privately
       // without that being visible.
       const own = context.registry.readMemoryRecords(context.agent.id);
-      const team = context.registry.readSharedMemory();
+      const team = context.registry.readSharedMemory(context.registry.boxOf(context.agent.id).id);
 
       // What this fact withdraws, if anything. Written as its own record rather than by editing the
       // file: memory is an append-only log of what was believed when, and that is what makes a

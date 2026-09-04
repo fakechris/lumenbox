@@ -13,12 +13,57 @@
  * moving one is creating another (docs/22 §0, docs/30 §1).
  */
 
+import { randomUUID } from "node:crypto";
 import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import { dirname } from "node:path";
-import { randomUUID } from "node:crypto";
 import type { BoxRecord } from "./identity.ts";
 
 export type BoxKind = "docker" | "attached";
+
+/**
+ * Who may reach the box (docs/22 §0: cardinalities, not classes; docs/35 §3:
+ * the department binding resolves live at admission). `everyone` is today's
+ * box and stays the default; `listed` is a hand-picked set of principal ids;
+ * `department` is a synced org's subtree under the door named by `channelId`.
+ * Legacy records — `"everyone"` or a bare id list — normalize into the same
+ * three shapes on read.
+ */
+export type BoxMembers =
+  | { kind: "everyone" }
+  | { kind: "listed"; principalIds: string[] }
+  | { kind: "department"; channelId: string; departmentVendorId: string };
+
+/** Reads members in any shape the file has ever held. Absent means `everyone` — the honest default. */
+export function normalizeMembers(raw: unknown): BoxMembers {
+  if (raw === "everyone" || raw === undefined || raw === null) return { kind: "everyone" };
+  if (Array.isArray(raw)) {
+    return { kind: "listed", principalIds: raw.filter((id): id is string => typeof id === "string") };
+  }
+  if (typeof raw === "object") {
+    const value = raw as {
+      kind?: unknown;
+      principalIds?: unknown;
+      channelId?: unknown;
+      departmentVendorId?: unknown;
+    };
+    if (value.kind === "listed" && Array.isArray(value.principalIds)) {
+      return {
+        kind: "listed",
+        principalIds: value.principalIds.filter((id): id is string => typeof id === "string"),
+      };
+    }
+    if (
+      value.kind === "department" &&
+      typeof value.channelId === "string" &&
+      value.channelId !== "" &&
+      typeof value.departmentVendorId === "string" &&
+      value.departmentVendorId !== ""
+    ) {
+      return { kind: "department", channelId: value.channelId, departmentVendorId: value.departmentVendorId };
+    }
+  }
+  return { kind: "everyone" };
+}
 
 export interface BoxEntry {
   /** Opaque, minted once. The default box's is `box.json`'s. */
@@ -35,7 +80,7 @@ export interface BoxEntry {
   displayFloor: number;
   /** The directory agents work in there. */
   workDir: string;
-  members: "everyone" | string[];
+  members: BoxMembers;
   createdAt: string;
 }
 
@@ -73,7 +118,7 @@ function readEntries(path: string): BoxEntry[] | undefined {
         : {}),
       displayFloor: typeof entry.displayFloor === "number" && entry.displayFloor >= 1 ? Math.floor(entry.displayFloor) : 1,
       workDir: typeof entry.workDir === "string" && entry.workDir !== "" ? entry.workDir : DEFAULT_WORK_DIR,
-      members: Array.isArray(entry.members) ? entry.members : "everyone",
+      members: normalizeMembers(entry.members),
       createdAt: typeof entry.createdAt === "string" ? entry.createdAt : new Date().toISOString(),
     };
   });
@@ -99,7 +144,7 @@ export function ensureBoxes(path: string, own: BoxRecord, options: { displayFloo
     kind: "docker",
     displayFloor: options.displayFloor ?? 1,
     workDir: DEFAULT_WORK_DIR,
-    members: own.members,
+    members: normalizeMembers(own.members),
     createdAt: own.createdAt,
   };
   writeAtomically(path, [first]);
@@ -127,7 +172,7 @@ export function attachedBox(input: { name: string; baseUrl: string; tokenFile: s
     endpoint: { baseUrl: input.baseUrl.replace(/\/+$/, ""), tokenFile: input.tokenFile },
     displayFloor: input.displayFloor ?? 1,
     workDir: input.workDir ?? DEFAULT_WORK_DIR,
-    members: "everyone",
+    members: { kind: "everyone" },
     createdAt: new Date().toISOString(),
   };
 }

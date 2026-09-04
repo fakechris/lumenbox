@@ -123,6 +123,7 @@ import { type AgentboxConfig, agentboxHome, loadConfig, saveConfig } from "../co
 type AgentboxConfigHostExec = NonNullable<AgentboxConfig["hostExec"]>;
 
 import { randomUUID } from "node:crypto";
+import type { BoxMembers } from "../box/boxes.ts";
 import { attachedBox, tokenOf } from "../box/boxes.ts";
 import { readBoxToken } from "../box/docker.ts";
 import { preflight } from "../box/preflight.ts";
@@ -160,6 +161,7 @@ import {
   markRedeemed,
   pendingBootstrap,
 } from "../host/bootstrap.ts";
+import { audienceOf, type MembershipWorld, mayReach } from "../host/box-membership.ts";
 import {
   CATALOG_CONNECTORS,
   CATALOG_CREWS,
@@ -489,6 +491,26 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
   // like the roster: a sync rewrites the file and the next lookups see it, no
   // restart, no cache to invalidate.
   const directories = new Directories();
+  // The box's inner gate (docs/22 §2, item 5): one world, one check, asked by
+  // the doors, the driving routes, the desktop routes and the listings alike.
+  // The direct operator has no identity and needs no membership — the person
+  // running the machine must never be locked out of it by data they did not write.
+  const membershipWorld: MembershipWorld = {
+    principalIdOf: identity =>
+      principals.isKnown(identity) ? principals.resolve(identity).id : undefined,
+    identitiesOf: principalId => principals.list().find(p => p.id === principalId)?.identities ?? [],
+    directoryPerson: (channelId, vendorSubject) => directories.personOf(channelId, vendorSubject),
+    departmentsOf: channelId => directories.of(channelId)?.departments,
+  };
+  const membersOfBox = (boxId: string): BoxMembers | undefined => registry.boxById(boxId)?.members;
+  const mayReachBox = (identity: string | undefined, boxId: string): boolean => {
+    const members = membersOfBox(boxId);
+    return members === undefined ? false : mayReach(members, identity, membershipWorld);
+  };
+  const boxAudience = (boxId: string): string => {
+    const members = membersOfBox(boxId);
+    return members === undefined ? "?" : audienceOf(members, membershipWorld);
+  };
 
   // Letting somebody in is one click, not an id copied around. A stranger's message
   // records a knock; the settings dialog approves it with one button, or the owner
@@ -792,6 +814,11 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
       log(`directory auto-link: ${identity} (${person.name}) joined as driver via ${channelId}'s synced org`);
       return true;
     },
+    // The door's box (docs/22 §2) and its inner gate: routing already knows the
+    // door's box; admission now asks it too.
+    boxOf: adapterName => channelRecords.find(record => record.id === adapterName)?.boxId,
+    mayReachBox: (identity, boxId) => mayReachBox(identity, boxId),
+    boxAudience: boxId => boxAudience(boxId),
     chatScope: {
       show: chatKey => {
         const bound = orchestrator.scopes?.boundTo(conversationIdFor(chatKey), conversationIdFor);
@@ -2287,9 +2314,21 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
             : caller;
         const agent = agentId === undefined ? undefined : registry.tryGet(agentId);
         const reason = refusalToDrive(known, agent?.profile);
-        if (reason === undefined) return false;
-        send(res, 403, { error: reason });
-        return true;
+        if (reason !== undefined) {
+          send(res, 403, { error: reason });
+          return true;
+        }
+        // The box's inner gate (docs/22 item 5): driving an agent is reaching
+        // its box, and a box the caller is not a member of refuses with its
+        // audience named — a blank 403 generates a support conversation.
+        if (known.userId !== undefined && agent !== undefined) {
+          const boxId = agent.profile.boxId ?? registry.box.id;
+          if (!mayReachBox(known.userId, boxId)) {
+            send(res, 403, { error: `That box is not yours to reach — it is for ${boxAudience(boxId)}.` });
+            return true;
+          }
+        }
+        return false;
       };
 
       /**
@@ -2348,6 +2387,11 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
           const desktop = desktopRouteOf(url.pathname, url.search, mayDrive(caller));
           if (!desktop) {
             send(res, 404, { error: `Not a desktop path: ${url.pathname}` });
+            return;
+          }
+          if (caller.userId !== undefined && !mayReachBox(caller.userId, desktop.boxId ?? registry.box.id)) {
+            const boxId = desktop.boxId ?? registry.box.id;
+            send(res, 403, { error: `That box is not yours to reach — it is for ${boxAudience(boxId)}.` });
             return;
           }
           await proxyDesktop(req, res, desktop.upstream, false, desktop.boxId);
@@ -3737,8 +3781,20 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
             allTools: ALL_TOOLS,
             // Every box this installation drives, own first (docs/30). An agent's row names its
             // box and its desktop path is on that box.
-            boxes: orchestrator.boxStatus(),
-            agents: registry.list().map(record => {
+            boxes:
+              caller.userId === undefined
+                ? orchestrator.boxStatus()
+                : orchestrator
+                    .boxStatus()
+                    .filter(box => mayReachBox(caller.userId, box.id)),
+            agents: registry
+              .list()
+              .filter(
+                record =>
+                  caller.userId === undefined ||
+                  mayReachBox(caller.userId, record.profile.boxId ?? registry.box.id)
+              )
+              .map(record => {
               const index = registry.displayIndexFor(record.id);
               const boxEntry = registry.boxOf(record.id);
               const own = boxEntry.id === registry.box.id;
@@ -3823,7 +3879,13 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
 
         // ── boxes (docs/30) ─────────────────────────────────────────────────────────
         if (route === "GET /api/boxes") {
-          send(res, 200, { boxes: orchestrator.boxStatus(), own: registry.box.id });
+          // No-leak (docs/18's ruling): a box a caller may not reach is not
+          // listed for them at all — stronger than a refusal, and the same
+          // rule the state API applies to its boxes and agents.
+          const visible = orchestrator
+            .boxStatus()
+            .filter(box => caller.userId === undefined || mayReachBox(caller.userId, box.id));
+          send(res, 200, { boxes: visible, own: registry.box.id });
           return;
         }
 
@@ -3892,6 +3954,70 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
           } catch (error) {
             send(res, 409, { error: error instanceof Error ? error.message : String(error) });
           }
+          return;
+        }
+
+        // Who may reach a box (docs/22 item 5, docs/35 §3). Admin-only: this is
+        // the inner gate's data. Validated fail-closed — a listed id nobody
+        // holds, or a department the door's directory never synced, is refused
+        // with its words, because both would otherwise read as members who
+        // are not and a box that says one thing and admits another.
+        if (route === "POST /api/boxes/members") {
+          if (refusedRole("admin")) return;
+          const body = await readJson(req);
+          const box = String(body.boxId ?? body.box ?? "").trim();
+          const entry = registry.listBoxes().find(candidate => candidate.id === box || candidate.name === box);
+          if (entry === undefined) {
+            send(res, 404, { error: `No box named ${box}.` });
+            return;
+          }
+          const raw: unknown = body.members;
+          const shape = (raw ?? {}) as Record<string, unknown>;
+          let members: BoxMembers;
+          if (raw === "everyone" || shape.kind === "everyone") {
+            members = { kind: "everyone" };
+          } else if (shape.kind === "listed") {
+            const ids = Array.isArray(shape.principalIds)
+              ? shape.principalIds.filter((id): id is string => typeof id === "string" && id.trim() !== "")
+              : [];
+            if (ids.length === 0) {
+              send(res, 400, { error: "A listed box names at least one member; use everyone for no boundary." });
+              return;
+            }
+            const roster = new Set(principals.list().map(principal => principal.id));
+            const unknown = ids.filter((id: string) => !roster.has(id));
+            if (unknown.length > 0) {
+              send(res, 400, { error: `Not principals here: ${unknown.join(", ")}.` });
+              return;
+            }
+            members = { kind: "listed", principalIds: ids };
+          } else if (
+            shape.kind === "department" &&
+            typeof shape.channelId === "string" &&
+            typeof shape.departmentVendorId === "string"
+          ) {
+            const channelId = shape.channelId;
+            const departmentVendorId = shape.departmentVendorId;
+            if (channelRecords.find(record => record.id === channelId) === undefined) {
+              send(res, 400, { error: `No door named ${channelId}.` });
+              return;
+            }
+            directories.reload();
+            const departments = directories.of(channelId)?.departments ?? [];
+            if (!departments.some(department => department.vendorId === departmentVendorId)) {
+              send(res, 400, {
+                error: `${channelId}'s synced directory has no department ${departmentVendorId}. Sync first.`,
+              });
+              return;
+            }
+            members = { kind: "department", channelId, departmentVendorId };
+          } else {
+            send(res, 400, { error: 'members is "everyone", {kind:"listed", principalIds}, or {kind:"department", channelId, departmentVendorId}.' });
+            return;
+          }
+          const updated = registry.setBoxMembers(entry.id, members);
+          log(`box ${updated.name}: members set — ${audienceOf(members, membershipWorld)}`);
+          send(res, 200, { boxId: updated.id, members: updated.members, audience: audienceOf(members, membershipWorld) });
           return;
         }
 
@@ -4442,6 +4568,14 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
 
     if (!desktop) {
       clientSocket.destroy();
+      return;
+    }
+    const upgradeCaller = callerOf(req.headers, upgradeDecision.allow);
+    if (
+      upgradeCaller.userId !== undefined &&
+      !mayReachBox(upgradeCaller.userId, desktop.boxId ?? registry.box.id)
+    ) {
+      clientSocket.end("HTTP/1.1 403 Forbidden\r\n\r\n");
       return;
     }
 

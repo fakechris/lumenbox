@@ -15,24 +15,25 @@
 import { randomBytes, randomUUID } from "node:crypto";
 import {
   closeSync,
+  existsSync,
   mkdirSync,
   openSync,
+  readdirSync,
   readFileSync,
   readSync,
-  readdirSync,
   renameSync,
   rmSync,
-  writeFileSync,
-  existsSync,
   statSync,
+  writeFileSync,
 } from "node:fs";
-import { appendLine } from "../host/jsonl.ts";
-import { BOX_RECORD_FILENAME, ensureBoxRecord, type BoxRecord } from "../box/identity.ts";
-import { BOXES_FILENAME, type BoxEntry, ensureBoxes, saveBoxes } from "../box/boxes.ts";
-import { DEFAULT_CONTAINER } from "../box/docker.ts";
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
-import { isTodoStatus, type DurableState, type TodoItem } from "../host/durable.ts";
+import { BOXES_FILENAME, type BoxEntry, type BoxMembers, ensureBoxes, saveBoxes } from "../box/boxes.ts";
+import { DEFAULT_CONTAINER } from "../box/docker.ts";
+import { BOX_RECORD_FILENAME, type BoxRecord, ensureBoxRecord } from "../box/identity.ts";
+import { envNumber } from "../config.ts";
+import { type DurableState, isTodoStatus, type TodoItem } from "../host/durable.ts";
+import { appendLine } from "../host/jsonl.ts";
 import {
   compactMemoryLines,
   compactSharedShardLines,
@@ -40,7 +41,6 @@ import {
   MEMORY_COMPACT_AT,
   type MemoryRecord,
 } from "../host/memory.ts";
-import { envNumber } from "../config.ts";
 
 export const AGENT_NAME_MAX_LENGTH = 72;
 export const AGENT_DESCRIPTION_MAX_LENGTH = 12_000;
@@ -293,6 +293,21 @@ export class AgentRegistry {
       ...(changes.displayFloor !== undefined && changes.displayFloor >= 1 ? { displayFloor: Math.floor(changes.displayFloor) } : {}),
       ...(changes.workDir !== undefined && changes.workDir !== "" ? { workDir: changes.workDir } : {}),
     };
+    this.boxes = this.boxes.map(existing => (existing.id === entry.id ? updated : existing));
+    saveBoxes(join(this.root, BOXES_FILENAME), this.boxes);
+    return updated;
+  }
+
+  /**
+   * Who may reach a box (docs/22 §7 item 5). Only this changes — the audience
+   * statement derives from it everywhere, and nothing about reaching the box
+   * does. A members shape the box did not hold before is a lifecycle change,
+   * not an edit, and the box console says so when it narrows.
+   */
+  setBoxMembers(nameOrId: string, members: BoxMembers): BoxEntry {
+    const entry = this.boxByName(nameOrId);
+    if (entry === undefined) throw new Error(`No box named ${nameOrId}.`);
+    const updated: BoxEntry = { ...entry, members };
     this.boxes = this.boxes.map(existing => (existing.id === entry.id ? updated : existing));
     saveBoxes(join(this.root, BOXES_FILENAME), this.boxes);
     return updated;
@@ -868,8 +883,16 @@ export class AgentRegistry {
    *
    * `via` is stamped on read from the filename rather than trusted from the record, so a shard cannot
    * claim to have been written by a different agent.
+   *
+   * `boxId`, when given, filters to shards written by agents of that box
+   * (docs/18 §5): the shared tier exists so a colleague's fact travels — but
+   * a colleague is a colleague *inside a box*, and an agent permanently in a
+   * private box that writes what it learned there into the shared tier must
+   * not be readable from another box. A shard whose author no longer exists
+   * is dropped under filtering rather than guessed at: fail closed on
+   * confidentiality, exactly as everywhere else.
    */
-  readSharedMemory(): MemoryRecord[] {
+  readSharedMemory(boxId?: string): MemoryRecord[] {
     const dir = this.sharedMemoryDir();
     if (!existsSync(dir)) return [];
     const out: MemoryRecord[] = [];
@@ -881,6 +904,11 @@ export class AgentRegistry {
     }
     for (const name of names) {
       const agentId = name.slice(0, -".jsonl".length);
+      if (boxId !== undefined) {
+        const author = this.tryGet(agentId);
+        if (author === undefined) continue;
+        if ((author.profile.boxId ?? this.box.id) !== boxId) continue;
+      }
       try {
         for (const line of readFileSync(join(dir, name), "utf8").split("\n")) {
           if (line.trim() === "") continue;

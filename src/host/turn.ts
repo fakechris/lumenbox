@@ -6,105 +6,104 @@
  * background work, and the abort has to land between tool calls.
  */
 
-import { createHash } from "node:crypto";
-import { buildInfo } from "./build-info.ts";
-import { envNumber } from "../config.ts";
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import type Anthropic from "@anthropic-ai/sdk";
-import type { AgentRecord, AgentRegistry } from "../agents/registry.ts";
 import type { AgentBus, InboundMessage } from "../agents/bus.ts";
+import { AGENT_WAKE_CUE } from "../agents/bus.ts";
+import type { AgentRecord, AgentRegistry } from "../agents/registry.ts";
+import { conversationIdFor, MAIN_CONVERSATION } from "../agents/registry.ts";
+import type { BoxClass } from "../box/access.ts";
 import type { BoxClient } from "../box/client.ts";
 import type { DisplayLease } from "../box/display-lease.ts";
-import type { PolicyGate } from "./policy.ts";
+import { envNumber } from "../config.ts";
+import { DURABLE_RESULT_CHARS, type ResolutionConfig } from "../protocol/index.ts";
+import { needsReview, type ReviewInput, type ReviewMode, type Verdict } from "./auto-review.ts";
+import { buildInfo } from "./build-info.ts";
 import type { Claims } from "./claims.ts";
+import {
+  activeWindow,
+  buildSummaryPrompt,
+  CompactionGuard,
+  calibratedTokens,
+  chooseCutPoint,
+  choosePinnedEntries,
+  compactionUrgency,
+  droppedEntry,
+  estimateRequestTokens,
+  estimateTokens,
+  extractAnchors,
+  type HistoryEntry,
+  missingSummaryHeadings,
+  noteContextWindow,
+  noteRealInputTokens,
+  type PendingSummary,
+  pendingHasDrifted,
+  pendingIsUsable,
+  policyForModel,
+  pruneOldImages,
+  repairPairs,
+  SUMMARY_WORD_CAP,
+  type SummaryEntry,
+  shouldPruneImages,
+  summaryEntry,
+} from "./compaction.ts";
 import type { FileVersions } from "./files.ts";
-import type { TurnLedger } from "./resume.ts";
-import type { PendingWork } from "./pending-work.ts";
+import {
+  closingNudge,
+  type GuardReason,
+  guardFor,
+  guardsEnabled,
+  MAX_GUARD_NUDGES,
+  nudgeFor,
+  readsAsChinese,
+} from "./guards.ts";
+import type { HookRunner } from "./hooks.ts";
+import type { HostRunner } from "./host-runner.ts";
+import type { McpManager } from "./mcp.ts";
+import { TOOL_BUDGET_WARNING } from "./mcp.ts";
 import type { McpFace } from "./mcp-face.ts";
-import type { Skill } from "./skills.ts";
+import { chooseRelevant } from "./memory.ts";
+import type { PendingWork } from "./pending-work.ts";
+import type { PolicyGate } from "./policy.ts";
 import {
   classifyLimit,
   continuationPrompt,
   detectLoop,
   loopReport,
   MAX_CONTINUATIONS,
+  type RoundRecord,
   signatureOf,
   stateHashOf,
-  type RoundRecord,
 } from "./progress.ts";
-import {
-  decideRetry,
-  FirstTokenStallError,
-  FIRST_TOKEN_DEADLINE_MS,
-} from "./transient.ts";
-import type { UsageKind, UsageLog } from "./usage.ts";
-import { chooseRelevant } from "./memory.ts";
-import { needsReview, type ReviewInput, type ReviewMode, type Verdict } from "./auto-review.ts";
-import type { HookRunner } from "./hooks.ts";
-import { AGENT_WAKE_CUE } from "../agents/bus.ts";
-import { TEMPLATE_CUE, TEMPLATE_SETUP_TOOLS } from "./template.ts";
-import {
-  activeWindow,
-  buildSummaryPrompt,
-  compactionUrgency,
-  pendingHasDrifted,
-  pendingIsUsable,
-  type PendingSummary,
-  noteContextWindow,
-  policyForModel,
-  repairPairs,
-  noteRealInputTokens,
-  pruneOldImages,
-  shouldPruneImages,
-  chooseCutPoint,
-  calibratedTokens,
-  CompactionGuard,
-  choosePinnedEntries,
-  droppedEntry,
-  estimateRequestTokens,
-  extractAnchors,
-  missingSummaryHeadings,
-  estimateTokens,
-  SUMMARY_WORD_CAP,
-  summaryEntry,
-  type HistoryEntry,
-  type SummaryEntry,
-} from "./compaction.ts";
-import { DURABLE_RESULT_CHARS, type ResolutionConfig } from "../protocol/index.ts";
-import type { BoxClass } from "../box/access.ts";
-import { emptySectionFaults, buildSystemPromptParts, buildTurnPrompt,
+import { buildSystemPromptParts, buildTurnPrompt,emptySectionFaults, 
   turnReminderFor,
 } from "./prompt.ts";
-import {
-  closingNudge,
-  guardFor,
-  guardsEnabled,
-  MAX_GUARD_NUDGES,
-  nudgeFor,
-  readsAsChinese,
-  type GuardReason,
-} from "./guards.ts";
+import type { Effort, ProviderProfile } from "./provider.ts";
+import { summaryRuntimeFor } from "./provider.ts";
+import type { TurnLedger } from "./resume.ts";
+import type { ScopeStore } from "./scopes.ts";
+import { narrowTools } from "./scopes.ts";
+import type { Skill } from "./skills.ts";
+import type { TaskStore } from "./tasks.ts";
+import { TEMPLATE_CUE, TEMPLATE_SETUP_TOOLS } from "./template.ts";
 import {
   BOOKKEEPING_TOOLS,
+  buildTools,
+  dispatchTool,
   FORK_PROMPT_LINE,
   isForkConversation,
   PARALLEL_SAFE_TOOLS,
   PARALLEL_TOOL_LIMIT,
-  buildTools,
-  dispatchTool,
   type ToolContext,
   type ToolOutcome,
 } from "./tools.ts";
-import type { HostRunner } from "./host-runner.ts";
+import {
+  decideRetry,
+  FIRST_TOKEN_DEADLINE_MS,
+  FirstTokenStallError,
+} from "./transient.ts";
+import type { UsageKind, UsageLog } from "./usage.ts";
 import type { Vault } from "./vault.ts";
-import type { TaskStore } from "./tasks.ts";
-import type { ScopeStore } from "./scopes.ts";
-import type { McpManager } from "./mcp.ts";
-import { TOOL_BUDGET_WARNING } from "./mcp.ts";
-import { narrowTools } from "./scopes.ts";
-import { conversationIdFor, MAIN_CONVERSATION } from "../agents/registry.ts";
-import { summaryRuntimeFor } from "./provider.ts";
-import type { Effort, ProviderProfile } from "./provider.ts";
 
 /**
  * Round cap.
@@ -1146,7 +1145,7 @@ export async function runTurn(
       teammates: registry.list(),
       memory: registry.readMemoryRecords(agent.id),
       memoryRecall: recallToUse,
-      sharedMemory: registry.readSharedMemory(),
+      sharedMemory: registry.readSharedMemory(registry.boxOf(agent.id).id),
       skills: deps.skills,
       transcript: registry.readTranscript(agent.id, conversation),
       // Read fresh, which is what makes the plan and the todo list survive a compaction: they are in

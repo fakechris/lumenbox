@@ -1899,3 +1899,36 @@ test("a directory member's first message links on the spot and is admitted; a st
   ]);
   assert.match(refused ?? "", /owner has been notified/, "no directory row, no link, the ordinary refusal");
 });
+
+test("a member of the installation who is not a member of the door's box is refused, audience named", async () => {
+  const adapter = testAdapter();
+  const refused: string[] = [];
+  const manager = new ChannelManager({
+    mayDrive: () => true, // past the installation's gate…
+    boxOf: name => (name === "telegram" ? "box_rnd" : undefined),
+    mayReachBox: (identity, boxId) => identity === "feishu:ou_rnd" && boxId === "box_rnd",
+    boxAudience: () => "研发部 (feishu)",
+    ask: async () => "x",
+    knock: () => {},
+    log: line => refused.push(line),
+  });
+  manager.register(adapter, true, "test");
+  await started(manager);
+
+  const outside = await adapter.inject({
+    identity: "feishu:ou_marketing",
+    senderLabel: "市场同学",
+    text: "帮我跑一下",
+  });
+  assert.match(outside ?? "", /not yours to reach/);
+  assert.match(outside ?? "", /研发部 \(feishu\)/, "the refusal names the audience");
+  assert.ok(refused.some(line => line.includes("at the box")), "the refusal is logged as a box refusal");
+
+  // A member of the box sails through the same door.
+  const inside = await adapter.inject({
+    identity: "feishu:ou_rnd",
+    senderLabel: "研发同学",
+    text: "帮我跑一下",
+  });
+  assert.ok(!/not yours to reach/.test(inside ?? ""), "a box member is not refused");
+});

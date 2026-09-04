@@ -6,15 +6,16 @@
  * user's own turn, and a burst of messages collapsing into a single turn.
  */
 
-import { test } from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync, rmSync, readFileSync, writeFileSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { AgentRegistry } from "./registry.ts";
+import { test } from "node:test";
+import { attachedBox } from "../box/boxes.ts";
 import { STARTER_TEAM } from "../host/orchestrator.ts";
 import { buildTools, dispatchTool } from "../host/tools.ts";
 import { AGENT_MESSAGE_MAX_LENGTH, AgentBus, type BusEvent, type InboundMessage } from "./bus.ts";
+import { AgentRegistry } from "./registry.ts";
 
 function tempRegistry(): { registry: AgentRegistry; cleanup: () => void } {
   const root = mkdtempSync(join(tmpdir(), "agentbox-test-"));
@@ -897,5 +898,41 @@ test("AGENTBOX_DISPLAY_FLOOR controls the starting display slot for agents", () 
       delete process.env.AGENTBOX_DISPLAY_FLOOR;
     }
     rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("the shared tier is box-scoped: a colleague is a colleague inside a box (docs/18 §5)", () => {
+  const dir = mkdtempSync(join(tmpdir(), "agentbox-shared-box-"));
+  try {
+    const registry = new AgentRegistry(dir);
+    const second = registry.attachBox(
+      attachedBox({ name: "second", baseUrl: "http://127.0.0.1:13370", tokenFile: "/dev/null" }),
+    );
+    const here = registry.create({ name: "Here" });
+    const there = registry.create({ name: "There", boxId: second.id });
+
+    registry.appendSharedMemory(here.id, [
+      { at: "2026-09-01T00:00:00.000Z", kind: "fact", text: "this box deploys on Friday" },
+    ]);
+    registry.appendSharedMemory(there.id, [
+      { at: "2026-09-02T00:00:00.000Z", kind: "fact", text: "the other box's secret seasoning" },
+    ]);
+
+    // Unfiltered: every shard, as it always was.
+    assert.equal(registry.readSharedMemory().length, 2);
+
+    // Box-scoped: each box reads only its own — the fact moves with the box
+    // boundary, not with the filesystem they happen to share.
+    const fromHere = registry.readSharedMemory(registry.boxOf(here.id).id);
+    assert.deepEqual(fromHere.map(entry => entry.text), ["this box deploys on Friday"]);
+    const fromThere = registry.readSharedMemory(second.id);
+    assert.deepEqual(fromThere.map(entry => entry.text), ["the other box's secret seasoning"]);
+
+    // A departed author's shard is dropped under filtering, not guessed at.
+    registry.remove(there.id, { archive: false });
+    assert.equal(registry.readSharedMemory(second.id).length, 0, "fail closed on an unplaceable author");
+    assert.equal(registry.readSharedMemory().length, 2, "the unfiltered tier keeps the record");
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
   }
 });

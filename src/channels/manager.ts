@@ -307,6 +307,15 @@ export interface ChannelManagerDeps {
    */
   mayDrive: (identity: string) => boolean;
   /**
+   * The door's own box (docs/22 §2: a door opens into exactly one). With
+   * `mayReachBox`, admission past the outer gate still asks the box's inner
+   * gate — a member of the installation who is not a member of *this box*
+   * is told so, naming the box's audience rather than a blank refusal.
+   */
+  boxOf?: (adapterName: string) => string | undefined;
+  mayReachBox?: (identity: string, boxId: string) => boolean;
+  boxAudience?: (boxId: string) => string;
+  /**
    * The directory's offer (docs/35 §6): called only when `mayDrive` just said
    * no, and only so a *known directory person* can be linked as a driver on
    * the spot — the vendor authenticated them, the synced org knows them, and
@@ -1150,6 +1159,25 @@ ${input.options.map(option => `· ${option}`).join("\n")}`
         }
         return refusal(message.identity);
       }
+    }
+
+    // The box's inner gate (docs/22 §2): past the installation's gate is not
+    // past this door's box. Refused here with the audience named — a blank
+    // refusal from a door a person can see generates a support conversation.
+    const doorBox = this.deps.boxOf?.(adapter.name);
+    if (
+      doorBox !== undefined &&
+      this.deps.mayReachBox !== undefined &&
+      !this.deps.mayReachBox(message.identity, doorBox)
+    ) {
+      if (message.messageId !== undefined) {
+        this.deps.ingress?.decided(message.messageId, "refused", message.identity);
+      }
+      const audience = this.deps.boxAudience?.(doorBox) ?? "a limited audience";
+      this.deps.log(
+        `channel ${adapter.name}: refused ${message.identity} (${message.senderLabel}) at the box — for ${audience}`
+      );
+      return `This door opens into a box that is not yours to reach — it is for ${audience}. An admin decides its members.`;
     }
 
     // Past the door. Recorded here rather than at the end, because everything below can
