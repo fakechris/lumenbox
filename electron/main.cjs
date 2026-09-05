@@ -25,6 +25,7 @@ const {
   dialog,
   nativeImage,
   nativeTheme,
+  powerMonitor,
 } = require("electron");
 const { spawn } = require("node:child_process");
 const fs = require("node:fs");
@@ -352,6 +353,17 @@ if (!app.requestSingleInstanceLock()) {
     startServer();
     createTray();
     createWindow();
+    // A laptop that slept comes back with chat sockets that still claim to be connected and
+    // a Docker engine that is still waking. Ask the server to sweep the vendors now rather
+    // than at the next ten-minute tick — the box watch recovers on its own within a minute.
+    powerMonitor.on("resume", () => {
+      log("system resumed; asking the server to sweep the chat channels");
+      setTimeout(() => {
+        fetch(`http://127.0.0.1:${PORT}/api/channels/sweep`, { method: "POST" }).catch(error => {
+          log(`sweep after resume failed: ${error.message}`);
+        });
+      }, 8_000);
+    });
     whenServerReady(() => watchEvents());
   });
 

@@ -1553,7 +1553,10 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
         else log(`channel health: ${channel} is answering again`);
       }
     })();
-  }, 10 * 60_000);
+    // Five minutes, not ten: measured on 2026-09-05, a message sat unanswered fourteen minutes
+    // after the laptop woke because the socket that died overnight still said "connected";
+    // one sweep is one chat listing per door, which is nothing.
+  }, 5 * 60_000);
   livenessTimer.unref();
 
   // An upgrade nobody knows about is an upgrade that does not happen. This tells the
@@ -3593,6 +3596,17 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
 
         // Exits with the code the desktop shell treats as "start me again". Under a bare
         // CLI the process simply ends, which the page says out loud before asking.
+        if (route === "POST /api/channels/sweep") {
+          // The shell calls this when the machine wakes from sleep (docs/26): a socket that
+          // died overnight still says "connected", and the ten-minute sweep is the only thing
+          // that notices. Asking the vendor now turns "no reaction for a quarter of an hour"
+          // into a reply within seconds of the lid opening.
+          if (refused()) return;
+          await channels.sweep().catch(() => {});
+          send(res, 200, { ok: true });
+          return;
+        }
+
         if (route === "POST /api/restart") {
           if (refused()) return;
           log("restart requested from the UI");
