@@ -289,9 +289,14 @@ async function docker(
     });
     return stdout.trim();
   } catch (error) {
-    const stderr = String((error as { stderr?: string }).stderr ?? "").trim();
-    const message = stderr || (error as Error).message;
-    throw new DockerError(`docker ${args[0]} failed: ${message}`, stderr);
+    const failure = error as { stderr?: string; code?: number | string; signal?: string; message: string };
+    const stderr = String(failure.stderr ?? "").trim();
+    // With no stderr the generic "Command failed" said nothing; the exit code, the signal and
+    // which `docker` ran are what a person needs when the CLI is a shim or a context is wrong.
+    const how =
+      stderr ||
+      `${failure.message.replace(/\n[\s\S]*$/, "")} (exit ${String(failure.code ?? "?")}${failure.signal ? `, signal ${failure.signal}` : ""}; docker resolved on PATH=${(process.env.PATH ?? "").split(":").slice(0, 3).join(":")}…)`;
+    throw new DockerError(`docker ${args[0]} failed: ${how}`, stderr);
   }
 }
 
