@@ -1309,12 +1309,22 @@ export class FeishuChannel implements ChannelAdapter {
    * this runs on a reconnect, which is when the vendor is least happy to be swept.
    */
   async catchUp(): Promise<void> {
-    if (this.catchingUp || this.apiClient === undefined || this.receiveMessage === undefined) return;
+    // Every early return says so: a sweep that silently does nothing looked exactly like
+    // one that found nothing (2026-09-05, a message sat in the group for an hour after a
+    // restart and the log had one word to say about it: "ready").
+    if (this.catchingUp) return;
+    if (this.apiClient === undefined || this.receiveMessage === undefined) {
+      this.log(`channel ${this.name}: catch-up skipped — ${this.apiClient === undefined ? "no API client yet" : "no message handler yet"}`);
+      return;
+    }
     const handler = this.receiveMessage;
     const since = this.lastInboundAt?.();
     // Never on a first run: with no floor, "everything since the beginning of time"
     // would replay a group's whole history into the agents as new work.
-    if (since === undefined) return;
+    if (since === undefined) {
+      this.log(`channel ${this.name}: catch-up skipped — nothing has ever arrived here, so there is no floor to sweep from`);
+      return;
+    }
     // Well before the last thing we saw: the vendor's clock and ours were two minutes
     // apart when measured (2026-09-02), and re-offering a handled message costs nothing.
     const from = Math.floor(new Date(since).getTime() / 1000) - CATCH_UP_FLOOR_SLACK_S;
@@ -1440,6 +1450,10 @@ export class FeishuChannel implements ChannelAdapter {
       // In the order they were sent, whatever container they sat in: two questions are
       // answered in order, and a capped sweep leaves only what is newer than its last replay.
       found.sort((a, b) => Number(a.message.create_time ?? 0) - Number(b.message.create_time ?? 0));
+      this.log(
+        `channel ${this.name}: catch-up looked at ${items.length} chat(s) and ${threads.size} thread(s) since ` +
+          `${new Date(from * 1000).toISOString()}: ${found.length} message(s) to consider`
+      );
       for (const { message, chatId } of found) await consider(message, chatId);
       if (replayed > 0) {
         this.log(`channel ${this.name}: caught up on ${replayed} message(s) the socket missed`);

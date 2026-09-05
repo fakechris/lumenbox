@@ -25,6 +25,7 @@ const {
   dialog,
   nativeImage,
   nativeTheme,
+  powerMonitor,
 } = require("electron");
 const { spawn } = require("node:child_process");
 const fs = require("node:fs");
@@ -105,6 +106,24 @@ function withToolPath(env) {
   return { ...env, PATH: merged.join(":") };
 }
 
+/**
+ * The server's output, on disk. A Finder-launched app has no terminal, so until this existed
+ * the server's log went nowhere — and the first real incident ("the box is unavailable", "my
+ * message got no reply") had nothing to read. ~/Library/Logs/LumenBox/server.log, rotated at
+ * 5 MB to one .1 copy; Console.app finds it, and so does `tail -f`.
+ */
+const LOG_DIR = path.join(os.homedir(), "Library", "Logs", "LumenBox");
+const LOG_FILE = path.join(LOG_DIR, "server.log");
+function appendServerLog(text) {
+  try {
+    fs.mkdirSync(LOG_DIR, { recursive: true });
+    try {
+      if (fs.statSync(LOG_FILE).size > 5 * 1024 * 1024) fs.renameSync(LOG_FILE, `${LOG_FILE}.1`);
+    } catch {}
+    fs.appendFileSync(LOG_FILE, text);
+  } catch {}
+}
+
 function startServer() {
   const cli = path.join(REPO, "src", "cli.ts");
   serverChild = spawn(
@@ -120,6 +139,7 @@ function startServer() {
   const remember = chunk => {
     const text = String(chunk);
     process.stdout.write(text);
+    appendServerLog(text);
     recentLog = recentLog.concat(text.split("\n").filter(l => l.trim() !== "")).slice(-30);
   };
   serverChild.stdout.on("data", remember);
@@ -333,6 +353,17 @@ if (!app.requestSingleInstanceLock()) {
     startServer();
     createTray();
     createWindow();
+    // A laptop that slept comes back with chat sockets that still claim to be connected and
+    // a Docker engine that is still waking. Ask the server to sweep the vendors now rather
+    // than at the next ten-minute tick — the box watch recovers on its own within a minute.
+    powerMonitor.on("resume", () => {
+      log("system resumed; asking the server to sweep the chat channels");
+      setTimeout(() => {
+        fetch(`http://127.0.0.1:${PORT}/api/channels/sweep`, { method: "POST" }).catch(error => {
+          log(`sweep after resume failed: ${error.message}`);
+        });
+      }, 8_000);
+    });
     whenServerReady(() => watchEvents());
   });
 

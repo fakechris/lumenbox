@@ -104,6 +104,11 @@ in the thread, files go both ways, and long jobs show a card that updates while 
 
 ## 6. When something is wrong
 
+- **"It did not react to my message."** In a Feishu group, the reply is a thread under your
+  message — collapsed until you open it. Look there first. If there is truly nothing, read
+  `~/Library/Logs/LumenBox/server.log`: a `catch-up looked at …` line every five minutes means
+  the channel is being checked; `replaying …` means a message the socket missed was picked up.
+
 - **The page says the box is unavailable.** Settings → Box → Start; or `agentbox box up` in
   a terminal (the CLI is `dist/cli.js` inside the app bundle, or `npm run agentbox --` from a
   checkout).
