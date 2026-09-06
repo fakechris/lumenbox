@@ -1289,12 +1289,14 @@ engine in the image) keep their place and are folded into the rounds where they 
 5. **The renderer memory guard lives in the repo**, not only in the installed app (ported from
    the 2026-09-06 17 GB incident patch, so the next build keeps it).
 
-**Round two — memory provenance and the group-chat model (next).**
+**Round two — memory provenance and the group-chat model (in progress).**
 
-6. **Memory records point at their source** (closes R27). Every kept record carries the
-   transcript entries it came from; the extractor must cite or leave uncited, never guess;
-   `Recall` shows the source so a claim can be checked against what was actually said.
-   Compaction keeps lineage (what a summary replaced). M.
+6. **Memory records point at their source** (closes R27). **Built 2026-09-06**: a record's
+   `from` is `<conversation>@<time>`; RememberFact cites the turn it is in, the extractor is
+   shown numbered exchanges and cites by number or leaves the line uncited (never guessed),
+   an episode cites the batches it condensed; `Recall` and the mirror files show "from main
+   at 2026-09-06 10:12" so a belief can be checked in `History`. Not done: lineage on
+   memory compaction (what a summary replaced) — S, when compaction next changes.
 7. **Passive group timeline and directed commands.** Group messages that do not trigger the
    bot are still recorded for context; a slash command in a group must be addressed to this
    bot; two bots in one room never answer the same command. Ground for the multiuser end

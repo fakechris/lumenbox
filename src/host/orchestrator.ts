@@ -65,6 +65,7 @@ import { MAIN_CONVERSATION, conversationIdFor } from "../agents/registry.ts";
 import type { HostRunner } from "./host-runner.ts";
 import type { Vault } from "./vault.ts";
 import { Rememberer, summariseExchange } from "./remember.ts";
+import { memoryRef } from "./memory.ts";
 import type { PitfallSource } from "./pitfalls.ts";
 import { SkillCache } from "./skills.ts";
 import { Scheduler } from "./schedule.ts";
@@ -1472,10 +1473,15 @@ export class Orchestrator {
     // the turn loop, which keeps the loop unaware that any of this exists.
     const said = this.replySince(agent.id, before, conversation);
     if (said !== "") {
+      // Where this exchange sits, for anything remembered from it to cite: the conversation
+      // and the time the reply was read back, which is how a person finds it again in the
+      // transcript (the `History` tool searches by conversation and shows times).
+      const ref = memoryRef(conversation, new Date());
       void this.rememberer
         .record({
           agentId: agent.id,
           text: summariseExchange(text, said),
+          ref,
           // Taking notes on a person's conversation is that person's cost. A batch that
           // spans two people bills to neither — see Rememberer.payerOf.
           ...(caller?.userId !== undefined ? { principal: caller.userId } : {}),

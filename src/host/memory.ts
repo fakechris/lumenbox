@@ -51,6 +51,13 @@ export interface MemoryRecord {
   via?: string;
   /** The person it is about, when the box was told who was driving. Absent means "the team". */
   about?: string;
+  /**
+   * Where it came from: `<conversation>@<time>` of the exchange(s) it was taken from, so a
+   * belief can be checked against what was actually said (R27). Absent when nobody could say
+   * — an extractor that did not cite, an import — and absence is kept honest: nothing here
+   * guesses a source, because a wrong citation is worse than none.
+   */
+  from?: string[];
 }
 
 /**
@@ -411,11 +418,41 @@ export function renderMemory(recalled: MemoryRecall, mirrorDir?: string): string
  */
 export const NOTHING_TO_KEEP = "NOTHING";
 
-export function buildExtractionPrompt(exchange: string, known: readonly MemoryRecord[]): string {
+/** The form a record's `from` entry takes: a conversation and a moment in it. */
+export function memoryRef(conversation: string, at: Date): string {
+  return `${conversation}@${at.toISOString().slice(0, 16)}`;
+}
+
+/** `from` as a person reads it: "main at 2026-09-06 10:12". */
+export function describeFrom(from: readonly string[] | undefined): string {
+  if (from === undefined || from.length === 0) return "";
+  const places = from.slice(0, 3).map(ref => {
+    const at = ref.lastIndexOf("@");
+    return at < 0 ? ref : `${ref.slice(0, at)} at ${ref.slice(at + 1).replace("T", " ")}`;
+  });
+  const more = from.length > 3 ? ` and ${from.length - 3} more` : "";
+  return ` — from ${places.join(", ")}${more}`;
+}
+
+export function buildExtractionPrompt(
+  exchange: string,
+  known: readonly MemoryRecord[],
+  exchangeCount = 1
+): string {
   const existing =
     known.length === 0
       ? "(nothing yet)"
       : known.map(record => `- ${record.text}`).join("\n");
+  // Citations are asked for only when there is something to cite by number. One exchange
+  // needs no numbering; the caller attributes the whole reply to it.
+  const cite =
+    exchangeCount > 1
+      ? [
+          "",
+          `The conversation below is ${exchangeCount} exchanges, each headed [n]. End each line with`,
+          "the exchange(s) it came from, like `[2]` or `[1,3]`. If you cannot say, leave it off.",
+        ]
+      : [];
 
   return [
     "Below is part of a conversation you had, and what you already remember.",
@@ -433,6 +470,7 @@ export function buildExtractionPrompt(exchange: string, known: readonly MemoryRe
     "",
     "One line each, at most three lines, no numbering, no preamble. Each line must make sense with",
     "none of this conversation around it — write \"they\" rather than \"the user above\".",
+    ...cite,
     "",
     "--- already remembered ---",
     existing,
@@ -481,10 +519,31 @@ function isNothing(text: string): boolean {
   return text.replace(/[^a-z]/gi, "").toUpperCase() === NOTHING_TO_KEEP;
 }
 
+/**
+ * Splits a trailing citation like `[2]` or `[1, 3]` off a line and resolves it against the
+ * numbered sources. Numbers that point at nothing are dropped, not guessed; a line with no
+ * citation, or with none that resolve, comes back uncited — and when there is exactly one
+ * source it is cited without being asked, since there is nothing else it could be from.
+ */
+export function splitCitation(
+  line: string,
+  refs: readonly string[]
+): { text: string; from?: string[] } {
+  const match = /\s*\[(\d+(?:\s*,\s*\d+)*)\]\s*$/.exec(line);
+  const text = match === null ? line : line.slice(0, match.index).trimEnd();
+  if (refs.length === 1) return { text, from: [refs[0]!] };
+  if (match === null) return { text };
+  const from = [...new Set(
+    match[1]!.split(",").map(n => refs[Number(n.trim()) - 1]).filter((ref): ref is string => ref !== undefined)
+  )];
+  return from.length === 0 ? { text } : { text, from };
+}
+
 export function parseExtraction(
   reply: string,
   known: readonly MemoryRecord[],
-  now = new Date()
+  now = new Date(),
+  refs: readonly string[] = []
 ): MemoryRecord[] {
   const trimmed = reply.trim();
   if (trimmed === "" || trimmed.toUpperCase().startsWith(NOTHING_TO_KEEP) || isNothing(trimmed))
@@ -495,13 +554,19 @@ export function parseExtraction(
   const seen = new Set<string>();
 
   for (const raw of trimmed.split("\n")) {
-    const text = stripMarkers(raw);
+    const { text, from } = splitCitation(stripMarkers(raw), refs);
     if (text === "" || validateRecord(text) !== undefined) continue;
     if (isNothing(text)) continue;
     const key = dedupeKey(text);
     if (key === "" || knownKeys.has(key) || seen.has(key)) continue;
     seen.add(key);
-    out.push({ at: now.toISOString(), kind: "note", text, source: "extracted" });
+    out.push({
+      at: now.toISOString(),
+      kind: "note",
+      text,
+      source: "extracted",
+      ...(from !== undefined ? { from } : {}),
+    });
     if (out.length >= 3) break; // the instruction says three; enforce it rather than trust it
   }
   return out;
@@ -523,15 +588,23 @@ export function buildEpisodePrompt(exchanges: readonly string[]): string {
   ].join("\n");
 }
 
-export function parseEpisode(reply: string, now = new Date()): MemoryRecord | undefined {
+export function parseEpisode(
+  reply: string,
+  now = new Date(),
+  refs: readonly string[] = []
+): MemoryRecord | undefined {
   const text = reply.trim().replace(/\s+/g, " ");
   if (text === "" || text.toUpperCase().startsWith(NOTHING_TO_KEEP) || isNothing(text))
     return undefined;
+  // An episode condenses several batches; it cites all of them, capped so the record stays a
+  // line. The newest are kept because that is where "where it got to" lives.
+  const from = [...new Set(refs)].slice(-8);
   return {
     at: now.toISOString(),
     kind: "episode",
     text: text.slice(0, MAX_RECORD_CHARS),
     source: "episode",
+    ...(from.length > 0 ? { from } : {}),
   };
 }
 
@@ -872,7 +945,7 @@ export function renderMemoryFiles(agentName: string, records: readonly MemoryRec
     ].join("\n");
   const line = (record: MemoryRecord) => {
     const about = record.about === undefined ? "" : ` (about ${record.about})`;
-    return `- ${record.at.slice(0, 10)}${about}: ${record.text.replace(/\s+/g, " ")}`;
+    return `- ${record.at.slice(0, 10)}${about}: ${record.text.replace(/\s+/g, " ")}${describeFrom(record.from)}`;
   };
 
   const standing = live.filter(record => record.kind === "fact" || record.kind === "pitfall");
