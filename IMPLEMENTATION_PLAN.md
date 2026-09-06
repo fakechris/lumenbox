@@ -184,7 +184,8 @@ approval continuation output logged before send; Feishu streaming cards; routine
 invents one; a group message that did not trigger the bot is visible in the next turn's
 context; a restart between a card press and the reply loses no output and repeats none;
 a long reply streams as card patches; `schedule`-style runs record usage.
-**Status**: Not Started
+**Status**: In Progress — provenance built 2026-09-06 on `feat/memoh-round-2` (suite 1100,
+floor 1100); passive timeline, approval continuation log, streaming cards, run cost remain.
 
 ## Stage 15: Memoh round three — the real engine in the box and the box contract
 **Goal**: Claude Code (and codex) as pinned, first-class delegate engines behind one

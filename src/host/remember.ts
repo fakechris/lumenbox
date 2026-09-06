@@ -62,6 +62,8 @@ export interface Exchange {
   text: string;
   /** Who the exchange was with, when a person drove it. Carried so the note-taking is billed. */
   principal?: string;
+  /** Where in the transcript this was: `<conversation>@<time>`. What a kept note cites. */
+  ref?: string;
 }
 
 export interface RememberDeps {
@@ -116,9 +118,13 @@ export class Rememberer {
   private readonly writeChains = new Map<string, Promise<void>>();
   /** Who each pending exchange was with, positionally — see payerOf. */
   private readonly pendingPayers = new Map<string, (string | undefined)[]>();
+  /** Where each pending exchange was, positionally; the numbers the extractor cites. */
+  private readonly pendingRefs = new Map<string, (string | undefined)[]>();
   private readonly extractions = new Map<string, string[]>();
   /** Who each pending extraction batch belonged to, for the episode that condenses them. */
   private readonly extractionPayers = new Map<string, (string | undefined)[]>();
+  /** Where each condensed batch's exchanges were, for the episode to cite. */
+  private readonly extractionRefs = new Map<string, string[]>();
   private readonly log: (line: string) => void;
 
   constructor(private readonly deps: RememberDeps) {
@@ -181,12 +187,16 @@ export class Rememberer {
     const payers = this.pendingPayers.get(exchange.agentId) ?? [];
     payers.push(exchange.principal);
     this.pendingPayers.set(exchange.agentId, payers);
+    const refs = this.pendingRefs.get(exchange.agentId) ?? [];
+    refs.push(exchange.ref);
+    this.pendingRefs.set(exchange.agentId, refs);
     if (batch.length < EXTRACT_EVERY) return;
 
     this.pending.set(exchange.agentId, []);
     this.pendingPayers.set(exchange.agentId, []);
+    this.pendingRefs.set(exchange.agentId, []);
     await this.enqueue(exchange.agentId, () =>
-      this.extract(exchange.agentId, batch, payerOf(payers))
+      this.extract(exchange.agentId, batch, payerOf(payers), refs)
     );
   }
 
@@ -203,9 +213,18 @@ export class Rememberer {
   private async extract(
     agentId: string,
     exchanges: readonly string[],
-    principal?: string
+    principal?: string,
+    refs: readonly (string | undefined)[] = []
   ): Promise<void> {
-    const combined = exchanges.join("\n\n---\n\n");
+    // Citable only when every exchange has a place: a numbering with holes would let the
+    // extractor cite a number that means nothing, and a wrong source is worse than none.
+    const citable = refs.length === exchanges.length && refs.every(ref => ref !== undefined)
+      ? (refs as string[])
+      : [];
+    const combined =
+      citable.length > 1
+        ? exchanges.map((exchange, index) => `[${index + 1}]\n${exchange}`).join("\n\n---\n\n")
+        : exchanges.join("\n\n---\n\n");
     const known = this.deps.registry.readMemoryRecords(agentId);
     // Only the memories this conversation could plausibly restate, so the extractor is not shown
     // hundreds of lines to check against — and so the prompt stays a sensible size.
@@ -213,8 +232,12 @@ export class Rememberer {
 
     let records: MemoryRecord[];
     try {
-      const reply = await this.ask(agentId, buildExtractionPrompt(combined, relevant), principal);
-      records = parseExtraction(reply, known);
+      const reply = await this.ask(
+        agentId,
+        buildExtractionPrompt(combined, relevant, citable.length > 1 ? citable.length : 1),
+        principal
+      );
+      records = parseExtraction(reply, known, new Date(), citable);
     } catch (error) {
       // Swallowed on purpose, and said once. The turn already succeeded; a failure to take notes is
       // not a failure the person needs to see, and retrying would spend money on the same guess.
@@ -235,24 +258,29 @@ export class Rememberer {
     seen.push(combined);
     const seenPayers = this.extractionPayers.get(agentId) ?? [];
     seenPayers.push(principal);
+    const seenRefs = this.extractionRefs.get(agentId) ?? [];
+    seenRefs.push(...citable);
     if (seen.length < EPISODE_EVERY) {
       this.extractions.set(agentId, seen);
       this.extractionPayers.set(agentId, seenPayers);
+      this.extractionRefs.set(agentId, seenRefs);
       return;
     }
     this.extractions.set(agentId, []);
     this.extractionPayers.set(agentId, []);
-    await this.condense(agentId, seen, payerOf(seenPayers));
+    this.extractionRefs.set(agentId, []);
+    await this.condense(agentId, seen, payerOf(seenPayers), seenRefs);
   }
 
   private async condense(
     agentId: string,
     exchanges: readonly string[],
-    principal?: string
+    principal?: string,
+    refs: readonly string[] = []
   ): Promise<void> {
     try {
       const reply = await this.ask(agentId, buildEpisodePrompt(exchanges), principal);
-      const episode = parseEpisode(reply);
+      const episode = parseEpisode(reply, new Date(), refs);
       if (episode === undefined) return;
       this.deps.registry.appendMemoryRecords(agentId, [episode]);
       this.log(`condensed ${exchanges.length} batches into an episode`);

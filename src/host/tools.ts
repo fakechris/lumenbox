@@ -22,7 +22,7 @@ import { describeHistory, readHistory } from "./history.ts";
 import { canSearch, fetchPage, guardUrl, isSearchEngine, searchWeb, WebError } from "./web.ts";
 import { describeEnvShape, envShape, looksLikeEnvFile } from "./env-shape.ts";
 import { guardShellCommand } from "./ui-automation-guard.ts";
-import { dedupe, dedupeKey, validateRecord } from "./memory.ts";
+import { dedupe, dedupeKey, describeFrom, memoryRef, validateRecord } from "./memory.ts";
 import { type Claims, heldElsewhere } from "./claims.ts";
 import { forkTag, type CommitHow, type PendingWork } from "./pending-work.ts";
 import { MCP_FACE_DIR, MCP_FACE_TOKEN_VARIABLE, type McpFace } from "./mcp-face.ts";
@@ -2613,7 +2613,12 @@ export async function dispatchTool(
         .slice()
         .sort((a, b) => b.record.at.localeCompare(a.record.at))
         .slice(0, 40)
-        .map(({ record, tier }) => `- [${tier}] (${record.at.slice(0, 10)}) ${record.text}`);
+        // With where each came from, so a belief can be checked against the transcript
+        // (`History` in that conversation around that time) instead of trusted on its date.
+        .map(
+          ({ record, tier }) =>
+            `- [${tier}] (${record.at.slice(0, 10)}) ${record.text}${describeFrom(record.from)}`
+        );
       const more = found.length > 40 ? `\n\n(${found.length - 40} older matches not shown.)` : "";
       return { text: `${found.length} of ${records.length} things ${whose}:\n\n${lines.join("\n")}${more}` };
     }
@@ -3098,6 +3103,9 @@ export async function dispatchTool(
         // Who it is about, when the box was told. Without it a fact learned from one person reads as
         // being about whoever asks next, which in a team is worse than not recording it.
         ...(context.caller?.userId !== undefined && !fromTemplate ? { about: context.caller.userId } : {}),
+        // Where it was decided: the conversation this turn is in, now. A template's facts come
+        // from the template, which `source` already says.
+        ...(fromTemplate ? {} : { from: [memoryRef(context.conversation ?? MAIN_CONVERSATION, new Date())] }),
       };
       const withdrawn = retracted ? " The one it replaces has been withdrawn." : "";
       if (shared) {
