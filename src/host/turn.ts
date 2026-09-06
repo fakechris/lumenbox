@@ -294,8 +294,13 @@ function truncateOldestResults(
         if (typed.type !== "text" || typeof typed.text !== "string") continue;
         if (typed.text.length <= SHED_RESULT_LIMIT) continue;
         chars += typed.text.length - SHED_RESULT_LIMIT;
+        // Both ends, not the head: a build log is thousands of lines of progress and then
+        // the error, an exec result ends with its exit code. Head-only kept the noise and
+        // dropped the answer, and a later turn re-ran the command to find out how it ended.
+        const half = Math.floor(SHED_RESULT_LIMIT / 2);
         typed.text =
-          `${typed.text.slice(0, SHED_RESULT_LIMIT)}\n[truncated to fit the context window]`;
+          `${typed.text.slice(0, half)}\n[... truncated to fit the context window ...]\n` +
+          typed.text.slice(typed.text.length - half);
         dropped += 1;
         // One pass, and only until something was actually freed: shedding the minimum keeps the
         // most evidence, and the retry will come back if it was not enough.
@@ -305,6 +310,9 @@ function truncateOldestResults(
   }
   return { dropped, chars };
 }
+/** The shedding cut, exposed for its test; not part of the turn's interface. */
+export const truncateOldestResultsForTest = truncateOldestResults;
+
 /**
  * Transcript entries replayed into a new turn's context. A backstop, not a budget:
  * tokens are the scarce resource and compaction's token trigger governs. 400, up

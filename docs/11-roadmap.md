@@ -1260,6 +1260,81 @@ conduct numbers, the prompt floor, the pre-launch security list): R8's rider and
 R26's search path, then R25. R4, R16, R30, R29 wait for their designs; R17 and R27 wait for a
 week of memory numbers. docs/30 Stage C (`TransferFile`) is paused at Chris's call.
 
+## What to do next, as of 2026-09-06 — three rounds from the Memoh read
+
+Two source-level reads of Memoh (`research/MEMOH-COMPARISON.md` in this repo and
+`RESEARCH_MEMOH_COMPARISON.md` one directory up) were merged into one list on 2026-09-06 and
+Chris ruled it into three rounds. Memoh is AGPL: designs are learned, code is not copied.
+Two items are parked by his call: the accessibility-tree executor and the personal-WeChat
+door. Both stay in the "later" list below with their reasons.
+
+This section supersedes the 2026-09-02 ordering below for what is built next; the items
+there that are not here (leases, submission gate, fsync, R17/R27's week of data, the real
+engine in the image) keep their place and are folded into the rounds where they fit.
+
+**Round one — the small reliability and hygiene items (built 2026-09-06, Stage 13).**
+
+1. **The Feishu socket watches its own pings.** The SDK has a pong watchdog that is off unless
+   asked; with it on, a socket that a sleep killed underneath is terminated within about a
+   ping interval and rebuilt by the SDK, and the rebuild sweeps the vendor's history like a
+   first connect. This is the root of the 2026-09-05 silence that the resume sweep and the
+   five-minute timer were treating from above. Memoh had to fork its Go SDK for the same
+   hole; ours only needed the option set.
+2. **A redelivered message id with different content is a conflict, not a duplicate.** Same
+   drop, its own reason in the ledger.
+3. **Recalled memory says it describes, not instructs.** Two lines under the memory block, so
+   a pasted "ignore your instructions" kept as a note is read as a quote later.
+4. **Shedding an old tool result keeps both ends.** The exit code and the error are at the
+   tail; head-only shedding kept the noise.
+5. **The renderer memory guard lives in the repo**, not only in the installed app (ported from
+   the 2026-09-06 17 GB incident patch, so the next build keeps it).
+
+**Round two — memory provenance and the group-chat model (next).**
+
+6. **Memory records point at their source** (closes R27). Every kept record carries the
+   transcript entries it came from; the extractor must cite or leave uncited, never guess;
+   `Recall` shows the source so a claim can be checked against what was actually said.
+   Compaction keeps lineage (what a summary replaced). M.
+7. **Passive group timeline and directed commands.** Group messages that do not trigger the
+   bot are still recorded for context; a slash command in a group must be addressed to this
+   bot; two bots in one room never answer the same command. Ground for the multiuser end
+   state. M.
+8. **Approval continuation keeps its output.** The reply an agent produces after a person
+   presses a card button is written to a log before it is sent, claimed by one sender, and
+   never replayed twice — so a restart between the press and the reply loses nothing.
+   Memoh fixed this class the week before the read (#1159). M.
+9. **Feishu streaming cards.** Patch every 700 ms or on a newline, tail-capped, one card per
+   tool call. M.
+10. **Routines record what each run cost** and may name their model and effort. S.
+
+**Round three — the real engine in the box and the box contract.**
+
+11. **Claude Code as a first-class delegate engine.** stream-json both ways,
+    `--permission-prompt-tool stdio` routed to PolicyGate, `--resume` for continuity, the
+    transcript checkpointed; claude and codex pinned in the image with a contract file
+    smoke-tested at build. Behind one external-runtime interface so a second engine is a
+    row, not a special case. L.
+12. **The MCP face is served into the box over a reverse stream** rather than reached through
+    `host.docker.internal`, which is the wrong name on Linux and on attached boxes. boxd
+    already owns a socket. M.
+13. **Skills are disclosed progressively**: a catalogue of names in the prompt, the body
+    fetched on demand with a reason, hard byte caps, none of it in a fork's prompt. S.
+14. **Box image contract and version pin**: a contract file in the image, checked at boxd
+    start, the image tag pinned to the app version. S.
+
+**Feeding the multiuser branch, not this line:** the three-layer identity model (observed
+identity, revocable binding, per-box allow/deny), fail-closed row-level security for a
+future control-plane database, and the personal-box contract (data in the snapshot layer,
+bridge injected read-only, no published ports).
+
+**Later, by Chris's call (2026-09-06):** the accessibility-tree executor (docs/03 §7 names
+the seam; Memoh's Rust `a11y-cli` proves the route) and the personal-WeChat door via iLink.
+Both L; both wait for a product reason.
+
+**Explicitly not copied:** the two-process server/channel split over plaintext RPC without
+reconnect or resume; an LLM memory-extraction call after every turn; WebRTC desktop
+streaming.
+
 ## What to do next, as of 2026-09-02 — the list, after the seven
 
 The seven small items from the triage above are done (Stage 8 in IMPLEMENTATION_PLAN.md).

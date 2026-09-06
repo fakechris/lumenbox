@@ -166,3 +166,33 @@ listeners receive turn events; reload picks up an edit and refuses a duplicate n
 broken file is a problem line, not a failed start; a config reload keeps the in-process server.
 **Status**: Complete (2026-09-03) on `feat/extensions`. Suite 1095, floor 1095.
 
+
+## Stage 13: Memoh round one — reliability and hygiene (docs/11 "as of 2026-09-06")
+**Goal**: the four small findings from the Memoh read plus the memory-guard port, each a
+one-file change with a test.
+**Success Criteria**: the Feishu client is constructed with the SDK's pong watchdog and
+reconnect hooks, and a reconnect triggers a catch-up sweep; a same-id/different-content
+redelivery is dropped under its own reason; the memory block carries the describes-not-instructs
+lines; shedding keeps head and tail; `electron/main.cjs` in the repo equals the patched
+installed app.
+**Status**: Complete (2026-09-06) on `feat/memoh-round-1`. Suite 1098, floor 1098.
+
+## Stage 14: Memoh round two — memory provenance and the group-chat model
+**Goal**: records cite their sources (R27); passive group timeline and directed commands;
+approval continuation output logged before send; Feishu streaming cards; routine run cost.
+**Success Criteria**: `Recall` shows a source for every cited record and the extractor never
+invents one; a group message that did not trigger the bot is visible in the next turn's
+context; a restart between a card press and the reply loses no output and repeats none;
+a long reply streams as card patches; `schedule`-style runs record usage.
+**Status**: Not Started
+
+## Stage 15: Memoh round three — the real engine in the box and the box contract
+**Goal**: Claude Code (and codex) as pinned, first-class delegate engines behind one
+external-runtime interface; the MCP face served into the box over a reverse stream; skills
+disclosed progressively; a box image contract checked at boxd start and pinned to the app
+version.
+**Success Criteria**: a Delegate to claude runs in the box with permission prompts routed
+through PolicyGate and resumes after a restart; no `host.docker.internal` in the face
+path; a fork's prompt carries no skill bodies; a mismatched image refuses to start with a
+named reason.
+**Status**: Not Started

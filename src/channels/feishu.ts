@@ -34,6 +34,7 @@ import type {
   QuestionCardState,
   TaskCardState,
 } from "./manager.ts";
+import { createHash } from "node:crypto";
 import { acquireConsumerLock } from "./single-consumer.ts";
 import { BOARD_EMPTY, boardHeadline, type BoardView } from "./board-view.ts";
 import { looksLikeMarkdown as sharedLooksLikeMarkdown } from "./markdown.ts";
@@ -331,6 +332,8 @@ const LABEL_LOOKUP_TIMEOUT_MS = 5_000;
  * A socket that has said nothing in this long is closed and opened again, out loud.
  */
 export const SOCKET_READY_TIMEOUT_MS = 45_000;
+/** Seconds a ping may go unanswered before the socket is declared dead and rebuilt. */
+export const SOCKET_PONG_TIMEOUT_S = 30;
 
 /**
  * A meeting invitation, parsed out of `vc.bot.meeting_invited_v1` (roadmap R37).
@@ -597,7 +600,8 @@ export class FeishuChannel implements ChannelAdapter {
    * In memory only for now: a restart re-answering one message is the cost accepted;
    * the mature reference persists this map, which is the upgrade path if it bites.
    */
-  private readonly seenMessages = new Map<string, number>();
+  /** Message id → when first seen and a fingerprint of what it carried. */
+  private readonly seenMessages = new Map<string, { at: number; fingerprint: string }>();
 
   /** Records an id and says whether it was already seen. Prunes by TTL and size. */
   /**
@@ -662,18 +666,31 @@ export class FeishuChannel implements ChannelAdapter {
   }
 
 
-  private alreadySeen(messageId: string): boolean {
+  /**
+   * Whether this message id was handled already, and if so whether the vendor sent the
+   * same bytes under it.
+   *
+   * The id alone is the dedupe key, as before. The fingerprint is a second witness: a
+   * redelivery with the same id and different content is not a duplicate but a conflict,
+   * and a conflict silently dropped as "seen" would hide a vendor edit, a decoding bug or
+   * a spoofed id behind the most boring line in the log. It is still dropped — one id, one
+   * turn — but it is dropped under its own name. (Memoh claims the same key durably with an
+   * input fingerprint for the same reason; here the ledger is the durable part.)
+   */
+  private alreadySeen(messageId: string, content = ""): "no" | "same" | "different" {
     const now = Date.now();
     const ttlMs = 24 * 60 * 60_000;
-    if (this.seenMessages.has(messageId)) return true;
-    this.seenMessages.set(messageId, now);
+    const fingerprint = createHash("sha256").update(content).digest("hex").slice(0, 16);
+    const seen = this.seenMessages.get(messageId);
+    if (seen !== undefined) return seen.fingerprint === fingerprint ? "same" : "different";
+    this.seenMessages.set(messageId, { at: now, fingerprint });
     if (this.seenMessages.size > 2048) {
-      for (const [id, at] of this.seenMessages) {
-        if (now - at > ttlMs || this.seenMessages.size > 2048) this.seenMessages.delete(id);
+      for (const [id, entry] of this.seenMessages) {
+        if (now - entry.at > ttlMs || this.seenMessages.size > 2048) this.seenMessages.delete(id);
         else break;
       }
     }
-    return false;
+    return "no";
   }
 
   /** Set by the manager before start; a press with no handler is acknowledged and dropped. */
@@ -849,9 +866,16 @@ export class FeishuChannel implements ChannelAdapter {
         }
         if (chatId === "" || data.message === undefined) return {};
         const messageId = data.message.message_id;
-        if (messageId !== undefined && this.alreadySeen(messageId)) {
-          this.discard(messageId, "delivered more than once");
-          return {};
+        if (messageId !== undefined) {
+          const seen = this.alreadySeen(messageId, data.message.content ?? "");
+          if (seen === "different") {
+            this.discard(messageId, "delivered again with different content — same id, so not a second turn");
+            return {};
+          }
+          if (seen === "same") {
+            this.discard(messageId, "delivered more than once");
+            return {};
+          }
         }
 
         // A file or an image is bytes to fetch, then an ordinary inbound message that
@@ -1252,6 +1276,32 @@ export class FeishuChannel implements ChannelAdapter {
         domain,
         loggerLevel: lark.LoggerLevel.info,
         logger,
+        // The failure the SDK cannot see by default: a laptop sleeps, the TCP session
+        // underneath the socket is gone, and the socket object still reports connected —
+        // no error, no close, and the vendor's pings stop being answered into a void.
+        // The SDK has a watchdog for exactly this, off unless asked (2026-09-05: a message
+        // sat unanswered for hours behind a socket that said it was fine). With it on, a
+        // ping that gets no answer within this many seconds terminates the socket and the
+        // SDK's own reconnect loop takes over. Pings are on the vendor's cadence (about
+        // two minutes), so a dead socket is found within about that plus the window.
+        wsConfig: { pingTimeout: SOCKET_PONG_TIMEOUT_S },
+        // A handshake that hangs on a stuck proxy or DNS otherwise hangs forever.
+        handshakeTimeoutMs: SOCKET_READY_TIMEOUT_MS,
+        onReconnecting: () => {
+          this.log(`channel ${this.name}: socket lost; the SDK is reconnecting`);
+        },
+        // A reconnect is a connect: whatever was said while the socket was dead is in the
+        // vendor's history and nowhere else, so it is swept exactly like a first connect.
+        onReconnected: () => {
+          this.log(`channel ${this.name}: socket reconnected; sweeping what it missed`);
+          void this.catchUp().catch(error => {
+            this.log(
+              `channel ${this.name}: catch-up after reconnect failed (${
+                error instanceof Error ? error.message : String(error)
+              })`
+            );
+          });
+        },
       });
       // The client keeps itself alive through its socket; there is nothing to hold.
       wsClient.start({ eventDispatcher: dispatcher });
