@@ -27,6 +27,7 @@ import {
   storableResult,
   TurnAborted,
   type TranscriptEntry,
+  truncateOldestResultsForTest,
 } from "./turn.ts";
 import {
   compactionUrgency,
@@ -2984,4 +2985,24 @@ test("the engine commits a fork only after the results entry is on disk (docs/32
     rmSync(root, { recursive: true, force: true });
     cleanup();
   }
+});
+
+test("shedding an old tool result keeps its tail, where the exit code and the error live", () => {
+  const messages = [
+    {
+      role: "user",
+      content: [
+        {
+          type: "tool_result",
+          tool_use_id: "t1",
+          content: [{ type: "text", text: `${"progress line\n".repeat(200)}exit code 2 at the very end` }],
+        },
+      ],
+    },
+  ];
+  truncateOldestResultsForTest(messages as never);
+  const text = (messages[0]!.content[0]!.content[0] as { text: string }).text;
+  assert.match(text, /^progress line/);
+  assert.match(text, /exit code 2 at the very end$/);
+  assert.match(text, /truncated to fit the context window/);
 });

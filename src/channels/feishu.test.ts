@@ -618,7 +618,10 @@ test("the catch-up sweep replays what the socket missed, and only that", async (
   adapter.recentThreads = () => ["omt_remembered"];
   // The socket handed this one over earlier and the handling died before a fate was
   // recorded: it is in the seen set, undecided in the ledger, and must be offered again.
-  (adapter as unknown as { seenMessages: Map<string, number> }).seenMessages.set("om_missed", Date.now());
+  (adapter as unknown as { seenMessages: Map<string, { at: number; fingerprint: string }> }).seenMessages.set(
+    "om_missed",
+    { at: Date.now(), fingerprint: "" }
+  );
 
   await internals.catchUp();
   assert.deepEqual(
@@ -680,4 +683,18 @@ test("the catch-up sweep replays what the socket missed, and only that", async (
   adapter.lastInboundAt = () => undefined;
   await internals.catchUp();
   assert.deepEqual(replayed, []);
+});
+
+test("a redelivery with the same id and different content is a conflict, not a duplicate", () => {
+  // Same id twice is the vendor retrying and is dropped as seen. Same id with different
+  // bytes is something else — an edit, a decoding bug, a spoofed id — and it is dropped
+  // under its own name so the ledger shows it instead of the most boring line in the log.
+  const adapter = new FeishuChannel("a", "b", () => {});
+  const seen = (adapter as unknown as {
+    alreadySeen: (id: string, content: string) => "no" | "same" | "different";
+  }).alreadySeen.bind(adapter);
+  assert.equal(seen("om_1", '{"text":"hi"}'), "no");
+  assert.equal(seen("om_1", '{"text":"hi"}'), "same");
+  assert.equal(seen("om_1", '{"text":"bye"}'), "different");
+  assert.equal(seen("om_2", '{"text":"bye"}'), "no", "a new id is new whatever it carries");
 });

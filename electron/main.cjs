@@ -27,7 +27,7 @@ const {
   nativeTheme,
   powerMonitor,
 } = require("electron");
-const { spawn } = require("node:child_process");
+const { execFile, spawn } = require("node:child_process");
 const fs = require("node:fs");
 const http = require("node:http");
 const os = require("node:os");
@@ -187,6 +187,9 @@ function startServer() {
  * that carries everything carries nothing.
  */
 let eventsRequest = null;
+/** Agents with a turn in flight, from the server's event stream: the memory guard
+ *  waits out a live turn before reloading the page under it. */
+const busyAgents = new Set();
 
 function windowIsVisible() {
   return mainWindow !== null && mainWindow.isVisible() && mainWindow.isFocused();
@@ -227,6 +230,12 @@ function watchEvents() {
 }
 
 function handleServerEvent(event) {
+  if (event.type === "turn_started") {
+    busyAgents.add(event.agentId);
+  }
+  if (event.type === "turn_finished" || event.type === "turn_failed" || event.type === "turn_interrupted") {
+    busyAgents.delete(event.agentId);
+  }
   if (event.type === "approval_pending") {
     notify(`${event.agentName || "An agent"} needs your consent`, `${event.description} — the turn is paused until you answer`);
     return;
@@ -240,9 +249,79 @@ function handleServerEvent(event) {
   }
 }
 
+// ── renderer memory guard ─────────────────────────────────────────────────────
+// A window left open for days watched its renderer's physical footprint climb past
+// 16 GB — nearly all of it parked in the macOS compressor — while RSS stayed under
+// 300 MB, so anything looking at working set saw nothing. The accumulation traced to
+// Chromium's own pools over long runs, not to the page, and the honest fix at this
+// layer is a recycle: the page holds nothing of record (transcripts, the activity
+// feed and settings all live in the server), so a reload is invisible to the work.
+// The reload waits out a live turn, and forces through if the wait runs too long.
+
+const MEMGUARD_LIMIT_MB = Number(process.env.LUMENBOX_MEMGUARD_MB || 2048);
+/** Past twice the limit, a live turn no longer buys more waiting. */
+const MEMGUARD_FORCE_AFTER_MS = 30 * 60_000;
+const MEMGUARD_FILE = path.join(LOG_DIR, "memguard.log");
+let memguardOverSince = 0;
+let memguardReloading = false;
+
+function appendGuardLog(text) {
+  try {
+    fs.mkdirSync(LOG_DIR, { recursive: true });
+    fs.appendFileSync(MEMGUARD_FILE, `${new Date().toISOString()} ${text}\n`);
+  } catch {}
+}
+
+function parseFootprintMb(text) {
+  const match = text.match(/Physical footprint:\s+([\d.]+)\s*(B|K|M|G)\b/);
+  if (!match) return null;
+  const scale = { B: 1 / 1048576, K: 1 / 1024, M: 1, G: 1024 }[match[2]];
+  return Math.round(Number(match[1]) * scale);
+}
+
+function checkRendererMemory() {
+  const pid = mainWindow?.webContents.getOSProcessId?.();
+  if (!pid) {
+    memguardOverSince = 0;
+    return;
+  }
+  execFile("/usr/bin/vmmap", ["--summary", String(pid)], { timeout: 30_000 }, (error, stdout) => {
+    if (error) return; // the renderer went away mid-read; the next tick retries
+    const mb = parseFootprintMb(String(stdout));
+    if (mb === null) return;
+    appendGuardLog(`check pid=${pid} footprint=${mb}MB limit=${MEMGUARD_LIMIT_MB}MB`);
+    if (mb < MEMGUARD_LIMIT_MB) {
+      memguardOverSince = 0;
+      return;
+    }
+    if (memguardReloading) return;
+    const overForMs = memguardOverSince ? Date.now() - memguardOverSince : 0;
+    if (busyAgents.size > 0 && overForMs < MEMGUARD_FORCE_AFTER_MS) {
+      if (!memguardOverSince) {
+        memguardOverSince = Date.now();
+        appendGuardLog(`over limit but a turn is live; deferring the reload`);
+      }
+      return;
+    }
+    memguardReloading = true;
+    appendGuardLog(`reloading renderer (footprint ${mb}MB, over for ${Math.round(overForMs / 60000)}min)`);
+    log(`renderer footprint ${mb}MB over ${MEMGUARD_LIMIT_MB}MB; reloading the page`);
+    mainWindow?.reload();
+    setTimeout(() => {
+      memguardReloading = false;
+      memguardOverSince = 0;
+    }, 60_000);
+  });
+}
+
+function startMemoryGuard() {
+  // vmmap walks the whole region table, so a check costs seconds — fine at this cadence.
+  setTimeout(checkRendererMemory, 2 * 60_000);
+  setInterval(checkRendererMemory, 10 * 60_000);
+}
+
 /** Polls the page until the server answers, then calls back. */
-function whenServerReady(callback, deadline = Date.now() + 60_000) {
-  const request = http.get(PAGE, response => {
+function whenServerReady(callback, deadline = Date.now() + 60_000) {  const request = http.get(PAGE, response => {
     response.resume();
     if (response.statusCode && response.statusCode < 500) {
       callback();
@@ -353,6 +432,7 @@ if (!app.requestSingleInstanceLock()) {
     startServer();
     createTray();
     createWindow();
+    startMemoryGuard();
     // A laptop that slept comes back with chat sockets that still claim to be connected and
     // a Docker engine that is still waking. Ask the server to sweep the vendors now rather
     // than at the next ten-minute tick — the box watch recovers on its own within a minute.
