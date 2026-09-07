@@ -1297,6 +1297,20 @@ engine in the image) keep their place and are folded into the rounds where they 
    an episode cites the batches it condensed; `Recall` and the mirror files show "from main
    at 2026-09-06 10:12" so a belief can be checked in `History`. Not done: lineage on
    memory compaction (what a summary replaced) — S, when compaction next changes.
+6b. **Forks end with a handoff line** (built 2026-09-07): `HANDOFF: {"status":"done|partial|blocked","reason":…}`
+   read fail-closed by the Fork tool; the parent's join header tallies outcomes and a
+   missing line is `unstated`, never done. The stall rule (`forward_progress` twice absent →
+   blocked) waits for multi-round delegates in round three, where there are rounds to count.
+6c. **Approval continuation keeps its output** — found already covered: the turn ledger
+   resumes an interrupted turn and the deliveries ledger keeps the note of where the answer
+   is owed, so a restart between a card press and the reply loses nothing (docs/26). Residual:
+   a card pressed after a restart answers "no longer waiting"; the person is told, not ignored.
+6d. **Routines record agent, duration and tokens** per run; `scripts/autonomy-metrics.mjs`
+   prints duty cycle (both denominators), turn outcomes, tokens by kind, routine cost,
+   interruptions and the `[conduct]` counters (built 2026-09-07). First run over seven days:
+   turns spend 2.4% of the hours that had work; every turn opened with a reply and the
+   interim line landed each time; the guard never fired. Also found and fixed: turn-loop
+   usage rows carried no kind.
 7. **Passive group timeline and directed commands.** Group messages that do not trigger the
    bot are still recorded for context; a slash command in a group must be addressed to this
    bot; two bots in one room never answer the same command. Ground for the multiuser end
