@@ -59,6 +59,7 @@ import { runTurn, TurnAborted, type TurnDeps, type TurnEvent } from "./turn.ts";
 import type { ToolContext } from "./tools.ts";
 import { loadConfig } from "../config.ts";
 import { McpManager } from "./mcp.ts";
+import { mergeServers } from "./mcp-connectors.ts";
 import { PolicyGate } from "./policy.ts";
 import { TaskStore, type Task } from "./tasks.ts";
 import { buildAuditPrompt, manifestDiff, MANIFEST_COMMAND, parseManifest } from "./audit.ts";
@@ -1719,6 +1720,9 @@ export const STARTER_TEAM: readonly {
 ];
 
 /** The MCP server list as config.json spells it, in the manager's shape. */
-function mcpServersFrom(config: { mcpServers?: Record<string, { command: string; args?: string[]; env?: Record<string, string> }> }) {
-  return Object.entries(config.mcpServers ?? {}).map(([name, server]) => ({ name, ...server }));
+function mcpServersFrom(config: { mcpServers?: Record<string, { command?: string; args?: string[]; env?: Record<string, string>; url?: string; headers?: Record<string, string> }> }) {
+  // The connector doors (mcp-connectors.ts) sit under the operator's entries: a config.json
+  // line with the same name overrides a door's default, an env credential turns a door on,
+  // and either may exist without the other.
+  return mergeServers(Object.entries(config.mcpServers ?? {}).map(([name, server]) => ({ name, ...server })));
 }

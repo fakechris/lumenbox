@@ -147,10 +147,11 @@ import { Ingress, ingressPath } from "../channels/ingress.ts";
 import { ConversationDirectory, conversationsPath } from "../channels/conversations.ts";
 import { SentRootsLedger, sentRootsPath } from "../channels/sent-roots.ts";
 import { randomUUID } from "node:crypto";
+import { describeTask, isLive, isTaskStatus } from "../host/tasks.ts";
+import { connectorSatisfied } from "../host/mcp-connectors.ts";
 import { adminRecipients, decideUpgrade, upgradeMessage } from "../host/upgrade.ts";
 import { PRESET_MODELS, providerNames, resolveProvider, testProvider } from "../host/provider.ts";
 import { Principals, roleAtLeast, type Principal, type Role } from "../host/principals.ts";
-import { describeTask, isLive, isTaskStatus } from "../host/tasks.ts";
 import { blockedAnnouncement, boardView } from "../channels/board-view.ts";
 import {
   DESKTOP_NOT_PUBLIC,
@@ -3986,6 +3987,9 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
           const connected = [
             "browser",
             ...channelRecords.map(record => record.type),
+            // every connector the template names that a configured MCP server or a live
+            // connector door satisfies; the rest stay pending and the setup turn asks (mcp-connectors.ts)
+            ...parsed.template.connectors.filter(connector => connectorSatisfied(connector, orchestrator.mcp.statuses().map(status => status.name))),
           ];
           let imported: ReturnType<typeof orchestrator.importTemplate>;
           try {
