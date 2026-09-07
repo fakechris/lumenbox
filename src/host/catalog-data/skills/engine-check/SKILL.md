@@ -57,13 +57,25 @@ did the test pass when *you* ran it, and what the reply said about the relay.
 
 ## 3. A permission prompt that reaches the person (Claude Code only)
 
-Tell the person that the next step will make the engine attempt a command on the approval
-list, and that they should expect a consent card or a line in the app saying
-`[delegated engine job-…]` — ask them to answer it, allow or refuse, and to tell you which.
-Then `Delegate` (same `cwd`) with:
+Two things decide whether a card appears, and neither is up to the engine:
 
-> Create a directory named scratch, then remove it with `rm -rf scratch`. Say whether the
-> removal was allowed.
+- Claude Code only asks the host about actions it does not allow on its own. Reading a
+  file is allowed on its own and never asks. A shell command asks. So the probe must be a
+  **shell command**, not a Read — a brief that makes the engine read something proves
+  nothing here.
+- The host asks the person only for what is on its approval list
+  (`AGENTBOX_APPROVAL_COMMANDS` in the operator's config, e.g. `rm -rf`). If that list is
+  empty the host allows the command without a card, and that is the correct behaviour of
+  an empty list, not a fault. Tell the person which command you will use and ask them to
+  confirm it is on the list before you run it.
+
+Tell the person that the next step will make the engine run `rm -rf scratch`, and that
+they should expect a consent card or a line in the app saying `[delegated engine job-…]`
+— ask them to answer it, allow or refuse, and to tell you which. Then `Delegate` (same
+`cwd`) with exactly:
+
+> Using your Bash tool, run `mkdir -p scratch` and then `rm -rf scratch`. Do not read any
+> files. Say whether the removal was allowed, and quote any refusal message you got.
 
 Wait for the job and read its log. Report three things: whether the person saw the request,
 what they answered, and whether the engine's own log agrees (a refusal should show the
