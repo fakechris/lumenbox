@@ -13,6 +13,16 @@ You are proving that this box can hand work to a coding engine and that the four
 design promises actually happen. Do the steps in order, report what you saw at each one,
 and never claim a step worked because the tool said it would — read the job's output.
 
+## Before anything: where the credentials are, so you never ask for them
+
+You do not set any `ANTHROPIC_*` variable, export any key, or ask the person for one. The
+host injects the engine's environment per run — `ANTHROPIC_BASE_URL` pointing at the host's
+relay, a one-job token as `ANTHROPIC_AUTH_TOKEN`, and `ANTHROPIC_MODEL` — and the host
+attaches the real provider key on its side. If the person says "use my env" or "use
+MiniMax-M3", that is already what happens: say so in one line and carry on with the steps.
+If the tool's reply ever says the host has no credential for the provider, report that
+line verbatim and stop; it is the operator's fix, not yours.
+
 ## 0. Ask which engine
 
 Ask the person which engine to check: `claude` (Claude Code), `pi`, or `opencode`. Tell them
