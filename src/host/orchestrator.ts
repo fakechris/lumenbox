@@ -371,6 +371,7 @@ export class Orchestrator {
    * asks one question should not begin running someone's automations as a side effect.
    */
   readonly scheduler = new Scheduler({
+    spentSinceAgent: (sinceMs, agentId) => this.usage.spentSinceAgent(sinceMs, agentId),
     due: async () => {
       const everywhere = await this.skillsEverywhere();
       return everywhere.flatMap(({ boxId, skills }) => skills
