@@ -119,6 +119,9 @@ test("a caller-minted id is honoured and idempotent; an exit file is written; a 
     assert.equal(exit.exit_code, 4);
     // A job whose daemon died under it: a log and no exit file.
     writeFileSync(join(dir, "job-feedfeedfeed.log"), "half done\n");
+    // A job whose daemon died under it but whose shell finished and left its own exit code.
+    writeFileSync(join(dir, "job-cafecafecafe.log"), "all done\n");
+    writeFileSync(join(dir, "job-cafecafecafe.rc"), "3");
 
     const { JobService } = await import("./job-service.ts");
     const later = new JobService(dir);
@@ -130,6 +133,9 @@ test("a caller-minted id is honoured and idempotent; an exit file is written; a 
     assert.equal(orphan?.running, false);
     assert.equal(orphan?.interrupted, true);
     assert.equal(orphan?.exit_code, undefined);
+    const finished = listed.find(job => job.job_id === "job-cafecafecafe");
+    assert.equal(finished?.interrupted, undefined, "the child's sidecar says how it ended");
+    assert.equal(finished?.exit_code, 3);
   } finally {
     cleanup();
   }

@@ -1104,6 +1104,9 @@ export async function runTurn(
   // Recorded before anything else, so a process that dies at any point after this leaves a begin
   // with no end — a fact, rather than a turn that simply stopped existing.
   const turnId = randomUUID();
+  /** Every tool this turn has called so far. The Tasks tool reads it: a reviewer that has
+   *  looked at nothing may not accept (Argus's harness makes the same check). */
+  const toolsUsedThisTurn = new Set<string>();
   // The turn is the attempt; the work is what the attempts are attempts at. A resumption
   // inherits rather than mints, which is the whole point of the field: without it a turn that
   // resumed twice appears in every report as three unrelated short turns.
@@ -2117,6 +2120,7 @@ export async function runTurn(
         tool: toolUse.name,
         input: toolUse.input,
       });
+      toolsUsedThisTurn.add(toolUse.name);
 
       // Auto-review, for the binding class only. Shadow mode classifies beside the call and
       // records the verdict; enforce mode waits for it and hands a BLOCK back to the model as the
@@ -2200,6 +2204,7 @@ export async function runTurn(
             ...(deps.templates !== undefined ? { templates: deps.templates } : {}),
             turnId,
             conversation,
+            toolsUsedThisTurn,
           }
         );
       } catch (error) {

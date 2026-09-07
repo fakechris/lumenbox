@@ -358,3 +358,42 @@ test("PackTemplate packs from the live files and stages a version the bot cannot
     rmSync(root, { recursive: true, force: true });
   }
 });
+
+test("a reviewer that has checked nothing this turn cannot accept a task", async () => {
+  const { TaskStore } = await import("./tasks.ts");
+  const { mkdtempSync, rmSync } = await import("node:fs");
+  const { tmpdir } = await import("node:os");
+  const { join } = await import("node:path");
+  const dir = mkdtempSync(join(tmpdir(), "agentbox-review-gate-"));
+  try {
+    const tasks = new TaskStore(join(dir, "tasks.jsonl"));
+    tasks.create({ title: "Ship it", requester: "web", assigneeId: "ada", reviewerId: "bob" });
+    tasks.update("t1", { status: "review" }, "ada");
+    const contextFor = (used: string[]) =>
+      ({
+        agent: { id: "bob", profile: { name: "Bob" } },
+        registry: { tryGet: () => undefined, list: () => [] } as never,
+        bus: {} as never,
+        tasks,
+        toolsUsedThisTurn: new Set(used),
+      }) as unknown as Parameters<typeof dispatchTool>[2];
+
+    // Only the board has been touched: the reviewer read a summary and looked at nothing.
+    const refused = await dispatchTool("Tasks", { action: "update", id: "t1", status: "done" }, contextFor(["Tasks"]));
+    assert.ok(refused.isError, refused.text);
+    assert.match(refused.text, /checked nothing yet/);
+    assert.equal(tasks.get("t1")?.status, "review", "nothing moved");
+
+    // Sending it back needs no inspection to be allowed — a note is not a verdict.
+    const back = await dispatchTool("Tasks", { action: "update", id: "t1", status: "doing", note: "tests?" }, contextFor(["Tasks"]));
+    assert.ok(!back.isError, back.text);
+    tasks.update("t1", { status: "review" }, "ada");
+
+    // After a real look, acceptance stands.
+    const accepted = await dispatchTool("Tasks", { action: "update", id: "t1", status: "done" }, contextFor(["read_file", "Tasks"]));
+    assert.ok(!accepted.isError, accepted.text);
+    assert.equal(tasks.get("t1")?.status, "done");
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});

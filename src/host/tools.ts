@@ -145,6 +145,11 @@ export interface ToolContext {
    * transcript that is its evidence.
    */
   turnId?: string;
+  /**
+   * The tools this turn has called so far, this one included. A reviewer accepting a task
+   * with nothing here but `Tasks` has read the assignee's summary and checked nothing.
+   */
+  toolsUsedThisTurn?: ReadonlySet<string>;
   /** The piece of work this turn is an attempt at (docs/11 R30), for the fork ledger's record. */
   workId?: string;
   /** The fork ledger (docs/32). Absent means forks are not recorded — tests, or nobody. */
@@ -2974,6 +2979,29 @@ export async function dispatchTool(
 
       if (action === "update") {
         const status = String(input.status ?? "");
+        // A reviewer's acceptance is worth something only if the reviewer looked. Not an
+        // opinion about the quality of the look — the one mechanical fact available: did
+        // this turn call any tool besides the board before saying done? A verdict from
+        // the assignee's summary alone is the assignee grading itself with a second name
+        // on it (docs/20's objection; Argus rewrites such a "done" to "continue").
+        const target = board.get(String(input.id ?? ""));
+        if (
+          status === "done" &&
+          target !== undefined &&
+          target.reviewerId === context.agent.id &&
+          target.assigneeId !== context.agent.id &&
+          context.toolsUsedThisTurn !== undefined &&
+          [...context.toolsUsedThisTurn].every(tool => tool === "Tasks")
+        ) {
+          return {
+            text:
+              `Not accepted: you are the reviewer of ${target.id} and this turn has checked ` +
+              `nothing yet — no file read, no command run, no page opened. Inspect the work ` +
+              `first (read the artifact, run the check, look at the screen), then accept or ` +
+              `send it back with a note saying what is wrong.`,
+            isError: true,
+          };
+        }
         const assigneeRaw = String(input.assignee ?? "").trim();
         const assigneeId = assigneeRaw === "" ? undefined : resolveAgent(assigneeRaw);
         if (assigneeRaw !== "" && assigneeId === undefined) {
