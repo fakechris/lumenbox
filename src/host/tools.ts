@@ -1112,6 +1112,15 @@ export function buildTools(
             type: "string",
             description: "For update: what happened — a blocker, a finding, a handoff note.",
           },
+          options: {
+            type: "array",
+            items: { type: "string" },
+            description:
+              "For update to blocked, when the note is a question a person can answer by " +
+              "choosing: the answers, two to six, each short. They become buttons under the " +
+              "question in the chat the task came from; the pressed one comes back as a message. " +
+              "Leave out when the blocker is not a choice.",
+          },
           assignee: {
             type: "string",
             description:
@@ -3074,6 +3083,9 @@ export async function dispatchTool(
             ...(isTaskStatus(status) ? { status } : {}),
             ...(typeof input.note === "string" && input.note.trim() !== ""
               ? { note: input.note }
+              : {}),
+            ...(Array.isArray(input.options)
+              ? { options: input.options.filter((o): o is string => typeof o === "string") }
               : {}),
             ...(assigneeId !== undefined ? { assigneeId } : {}),
           },

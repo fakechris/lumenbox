@@ -144,6 +144,11 @@ export function renderCard(card: TaskCardState): object {
     header: { title: { tag: "plain_text", content: card.title }, template },
     elements: [
       { tag: "div", text: { tag: "lark_md", content: lines.join("\n") } },
+      // The reply streaming in, while there is one: the card is the only message on this
+      // wire that can be rewritten, so it is where a person watches the answer form.
+      ...(card.text !== undefined && card.text !== ""
+        ? [{ tag: "hr" }, { tag: "div", text: { tag: "lark_md", content: card.text } }]
+        : []),
       // The way into the workshop: the desktop it is working on, the evidence behind
       // each step, the history of who moved it. A chat can carry the conclusion; only
       // the workshop can carry the proof.

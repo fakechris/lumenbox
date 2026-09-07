@@ -710,3 +710,13 @@ test("a group message is addressed by a mention of the bot or a reply to it, and
   assert.equal(isAddressed({ chat_type: "group", root_id: "om_bot" }, "ou_bot", ours), true, "inside a topic we opened");
   assert.equal(isAddressed({ chat_type: "group" }, undefined, ours), undefined, "unknown, and the manager fails open");
 });
+
+test("the task card streams the reply while it is written, and drops it when settled", async () => {
+  const { renderCard } = await import("./feishu.ts");
+  const base = { title: "Summarise the thread", agentName: "Ada", requesterLabel: "Chris", status: "working" as const };
+  const streaming = renderCard({ ...base, text: "So far: **three** points…" }) as { elements: { tag: string; text?: { content: string } }[] };
+  assert.ok(streaming.elements.some(element => element.text?.content === "So far: **three** points…"), "the reply so far is on the card");
+  assert.ok(streaming.elements.some(element => element.tag === "hr"), "set off from the status line");
+  const settled = renderCard({ ...base, status: "done" }) as { elements: { tag: string }[] };
+  assert.ok(!settled.elements.some(element => element.tag === "hr"), "nothing streams on a settled card");
+});
