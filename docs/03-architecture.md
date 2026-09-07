@@ -96,7 +96,7 @@ the box's lifecycle:
 | --- | --- | --- |
 | `docker` | default | creates, starts, stops a container |
 | `attached` | `AGENTBOX_BOXD_URL` | none — someone else runs the box |
-| `kubernetes` | not implemented | a pod from a control plane, reached through a Service |
+| `kubernetes` | the control plane's allocator, not this seam | a pod per tenant, reached through a Service ([08-control-plane.md](08-control-plane.md) §4.2) |
 
 `attached` is what proves the seam: the whole test suite and the entire UI run in a process
 with no `docker` on its `PATH`.
@@ -153,9 +153,9 @@ document that quietly loses its own open questions cannot be checked against.
 
 **Still open:**
 
-- **Box provisioning beyond one host.** The allocator interface exists and `compose` is proven
-  against real containers; the Kubernetes implementation does not exist and cannot be verified
-  here.
+- **Box provisioning beyond one host.** The `kubernetes` allocator exists and is covered against a
+  fake API server; what it has never seen is a real cluster, so scheduling, storage classes and
+  RBAC are unproven in anger.
 - **Retrieval.** Memory recall and history search are lexical. The seam is one function
   (`selectRelevant`), and the falsifiable trigger for replacing it is written down
   ([05-data.md](05-data.md) §7).
