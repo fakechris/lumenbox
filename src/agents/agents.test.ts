@@ -899,3 +899,20 @@ test("AGENTBOX_DISPLAY_FLOOR controls the starting display slot for agents", () 
     rmSync(root, { recursive: true, force: true });
   }
 });
+
+test("what a room said is kept beside the conversation, bounded, and read back oldest first", () => {
+  const root = mkdtempSync(join(tmpdir(), "agentbox-heard-"));
+  try {
+    const registry = new AgentRegistry(root);
+    const agent = registry.create({ name: "Ada" });
+    for (let index = 0; index < 205; index += 1) {
+      registry.appendHeard(agent.id, "feishu:oc_1", { at: `2026-09-07T00:00:${String(index % 60).padStart(2, "0")}.000Z`, sender: "A", text: `line ${index}` });
+    }
+    const heard = registry.readHeard(agent.id, "feishu:oc_1");
+    assert.equal(heard.length, 40, "the tail, not the whole room");
+    assert.equal(heard[heard.length - 1]?.text, "line 204");
+    assert.deepEqual(registry.readHeard(agent.id, "feishu:oc_other"), []);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});

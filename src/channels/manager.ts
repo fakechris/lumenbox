@@ -86,6 +86,13 @@ export interface InboundMessage {
   text: string;
   /** Files carried by the message, bytes already fetched off the wire by the adapter. */
   files?: { name: string; base64: string }[];
+  /**
+   * Whether the message was for the bot: a direct message, a mention, or a reply to
+   * something it said. `false` is a group message that names nobody. Absent means the
+   * adapter cannot tell, which is read as addressed — the old behaviour, fail-open on
+   * purpose: a bot that stays silent when spoken to is the worse failure.
+   */
+  addressed?: boolean;
 }
 
 /** Where a push should sit: anchored under a message, or loose in the chat. */
@@ -318,6 +325,19 @@ export interface ChannelManagerDeps {
    * installation default the `ask` dependency applies.
    */
   defaultAgentFor?: (adapterName: string) => string | undefined;
+  /** The door's group-message rule (identity.ts `groupMessages`). Absent means `all`. */
+  groupMessagesFor?: (adapterName: string) => "all" | "addressed" | undefined;
+  /**
+   * Keeps a message the room said around the agent without addressing it, for the
+   * agent that would have answered it, in the conversation it would have run in.
+   */
+  heard?: (input: {
+    agentName: string | undefined;
+    conversation: string;
+    senderLabel: string;
+    text: string;
+    messageId?: string;
+  }) => void;
   /**
    * The roster, for 「团队」— what this door shows is what it routes (docs/22 §2:
    * the box's agents, the door's default marked). One list, both uses.
@@ -1148,6 +1168,25 @@ ${input.options.map(option => `· ${option}`).join("\n")}`
       ...(message.messageId !== undefined ? { messageId: message.messageId } : {}),
       senderLabel: message.senderLabel,
     });
+
+    // A group message that names nobody, on a door that only answers when addressed:
+    // heard, not run. After the listeners (a routine may still be watching the room)
+    // and before every verb below, because a verb said to the room is not said to us.
+    if (
+      message.addressed === false &&
+      this.deps.groupMessagesFor?.(adapter.name) === "addressed"
+    ) {
+      const chatKey = message.chatKey ?? message.identity;
+      this.deps.heard?.({
+        agentName: this.deps.defaultAgentFor?.(adapter.name),
+        conversation: message.threadKey ?? chatKey,
+        senderLabel: message.senderLabel,
+        text: message.text,
+        ...(message.messageId !== undefined ? { messageId: message.messageId } : {}),
+      });
+      if (message.messageId !== undefined) this.deps.ingress?.decided(message.messageId, "heard");
+      return undefined;
+    }
 
     // A one-word answer to a consent this person was asked for is a decision, not a
     // new instruction: answer the approval and do not start a turn. Checked before

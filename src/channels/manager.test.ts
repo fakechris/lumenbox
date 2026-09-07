@@ -1853,3 +1853,63 @@ test("the model's opening line reaches the chat before the reply, and is not sen
   await repeats.idle();
   assert.deepEqual(adapter2.sent.map(entry => entry.text), ["收到，马上看。"]);
 });
+
+test("on a door that answers only when addressed, a group message that names nobody is heard, not run", async () => {
+  const adapter = testAdapter();
+  const asked = [] as string[];
+  const heard = [] as { conversation: string; text: string; agentName?: string }[];
+  const decided = [] as string[];
+  const manager = new ChannelManager({
+    mayDrive: () => true,
+    ask: async (_agent, text) => {
+      asked.push(text);
+      return "done";
+    },
+    defaultAgentFor: () => "Bob",
+    groupMessagesFor: () => "addressed",
+    heard: input =>
+      heard.push({ conversation: input.conversation, text: input.text, ...(input.agentName !== undefined ? { agentName: input.agentName } : {}) }),
+    ingress: { decided: (id: string, fate: string) => decided.push(`${id}:${fate}`) } as never,
+    log: () => {},
+  });
+  manager.register(adapter, true, "test");
+  await started(manager);
+
+  // Said to the room: kept for the agent that would have answered, in the room's conversation.
+  const reply = await adapter.inject({
+    identity: "telegram:7",
+    chatKey: "telegram:room",
+    messageId: "m1",
+    senderLabel: "Alice",
+    text: "lunch at noon?",
+    addressed: false,
+  });
+  assert.equal(reply, undefined);
+  assert.equal(asked.length, 0, "no turn");
+  assert.equal(JSON.stringify(heard), JSON.stringify([{ conversation: "telegram:room", text: "lunch at noon?", agentName: "Bob" }]));
+  assert.equal(decided.join(","), "m1:admitted,m1:heard");
+
+  // Said to us: runs as before.
+  await adapter.inject({ identity: "telegram:7", chatKey: "telegram:room", messageId: "m2", senderLabel: "Alice", text: "@Bob status?", addressed: true });
+  await new Promise(resolve => setTimeout(resolve, 20));
+  assert.equal(asked.length, 1);
+
+  // A door on the default rule runs everything, addressed or not.
+  const open = new ChannelManager({
+    mayDrive: () => true,
+    ask: async (_agent, text) => {
+      asked.push(text);
+      return "done";
+    },
+    heard: input =>
+      heard.push({ conversation: input.conversation, text: input.text, ...(input.agentName !== undefined ? { agentName: input.agentName } : {}) }),
+    log: () => {},
+  });
+  const second = testAdapter();
+  open.register(second, true, "test");
+  await started(open);
+  await second.inject({ identity: "telegram:7", chatKey: "telegram:room", senderLabel: "Alice", text: "anyone?", addressed: false });
+  await new Promise(resolve => setTimeout(resolve, 20));
+  assert.equal(asked.length, 2, "ran, because the door's rule is all");
+  assert.equal(heard.length, 1);
+});

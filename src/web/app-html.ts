@@ -1476,6 +1476,11 @@ function renderChannels() {
           '<select data-chagent="' + esc(rec.id) + '" data-chtype="' + esc(rec.type) + '"' +
             ' style="height:26px;font-size:12px;border-radius:6px;border:1px solid var(--border-strong);background:var(--bg);color:var(--text)">' +
             agentOptions(rec.defaultAgent) + "</select>" +
+          '<select data-chgroup="' + esc(rec.id) + '" data-chtype="' + esc(rec.type) + '" title="What a group message that names nobody does"' +
+            ' style="height:26px;font-size:12px;border-radius:6px;border:1px solid var(--border-strong);background:var(--bg);color:var(--text)">' +
+            '<option value="all"' + (rec.groupMessages === "addressed" ? "" : " selected") + '>groups: answer all</option>' +
+            '<option value="addressed"' + (rec.groupMessages === "addressed" ? " selected" : "") + '>groups: only when addressed</option>' +
+          "</select>" +
           '<span class="dim mono" style="font-size:11px;flex:1;min-width:80px;overflow:hidden;text-overflow:ellipsis">' + esc(detail || "") + "</span>" +
           (rec.grandfathered ? "" :
             '<a href="#" data-chremove="' + esc(rec.id) + '" style="color:var(--danger);font-size:12px">Remove</a>') +
@@ -1511,6 +1516,21 @@ function renderChannels() {
 document.getElementById("setchannels").addEventListener("change", function (event) {
   var target = event.target;
   if (!target.getAttribute) return;
+  var groupId = target.getAttribute("data-chgroup");
+  if (groupId) {
+    fetch("/api/channels/records", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ id: groupId, type: target.getAttribute("data-chtype"), groupMessages: target.value })
+    })
+      .then(function (r) { return r.json(); })
+      .then(function (d) {
+        $("setchstatus").textContent = d.error || (target.value === "addressed"
+          ? "Saved — group messages that name nobody are kept as room context, not answered."
+          : "Saved — every group message runs a turn.");
+      });
+    return;
+  }
   var id = target.getAttribute("data-chagent");
   if (!id) return;
   fetch("/api/channels/records", {

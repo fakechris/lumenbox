@@ -698,3 +698,15 @@ test("a redelivery with the same id and different content is a conflict, not a d
   assert.equal(seen("om_1", '{"text":"bye"}'), "different");
   assert.equal(seen("om_2", '{"text":"bye"}'), "no", "a new id is new whatever it carries");
 });
+
+test("a group message is addressed by a mention of the bot or a reply to it, and unknown until the bot knows itself", async () => {
+  const { isAddressed } = await import("./feishu.ts");
+  const ours = (id: string) => id === "om_bot";
+  assert.equal(isAddressed({ chat_type: "p2p" }, undefined, ours), true, "a direct chat is always to us");
+  assert.equal(isAddressed({ chat_type: "group", mentions: [{ id: { open_id: "ou_bot" } }] }, "ou_bot", ours), true);
+  assert.equal(isAddressed({ chat_type: "group", mentions: [{ id: { open_id: "ou_someone" } }] }, "ou_bot", ours), false);
+  assert.equal(isAddressed({ chat_type: "group" }, "ou_bot", ours), false, "names nobody");
+  assert.equal(isAddressed({ chat_type: "group", parent_id: "om_bot" }, "ou_bot", ours), true, "a reply to what we said");
+  assert.equal(isAddressed({ chat_type: "group", root_id: "om_bot" }, "ou_bot", ours), true, "inside a topic we opened");
+  assert.equal(isAddressed({ chat_type: "group" }, undefined, ours), undefined, "unknown, and the manager fails open");
+});

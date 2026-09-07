@@ -46,6 +46,9 @@ export const AGENT_NAME_MAX_LENGTH = 72;
 export const AGENT_DESCRIPTION_MAX_LENGTH = 12_000;
 export const PROFILE_FILENAME = "profile.json";
 export const TRANSCRIPT_FILENAME = "conversation.jsonl";
+/** How many heard lines a room keeps, and how often the file is trimmed back to them. */
+const HEARD_KEEP = 40;
+const HEARD_COMPACT_EVERY = 200;
 /**
  * The conversation every agent always has: the one the web page, teammates and the
  * scheduler share. Outside chats get their own — context belongs to the room it
@@ -349,6 +352,53 @@ export class AgentRegistry {
     }
     return join(this.dirFor(agentId), CONVERSATIONS_DIRNAME, `${conversation}.jsonl`);
   }
+
+  /** Where what a room said around the agent, unaddressed, is kept — beside the transcript. */
+  heardPathFor(agentId: string, conversation = MAIN_CONVERSATION): string {
+    return `${this.transcriptPathFor(agentId, conversation)}.heard.jsonl`;
+  }
+
+  /** A message in the room that was not for this agent. Kept, bounded, never a turn. */
+  appendHeard(
+    agentId: string,
+    conversation: string,
+    entry: { at: string; sender: string; text: string; messageId?: string }
+  ): void {
+    const path = this.heardPathFor(agentId, conversation);
+    mkdirSync(dirname(path), { recursive: true });
+    appendLine(path, JSON.stringify(entry));
+    // A room's chatter is context, not history: past this many lines the file is
+    // rewritten as its tail, so it never becomes a second transcript.
+    if (this.heardAppends.get(path) === undefined) this.heardAppends.set(path, 0);
+    const count = (this.heardAppends.get(path) ?? 0) + 1;
+    this.heardAppends.set(path, count);
+    if (count % HEARD_COMPACT_EVERY === 0) {
+      const tail = this.readHeard(agentId, conversation, HEARD_KEEP);
+      const temp = `${path}.${process.pid}.tmp`;
+      writeFileSync(temp, tail.map(line => JSON.stringify(line)).join("\n") + "\n", "utf8");
+      renameSync(temp, path);
+    }
+  }
+
+  /** The last `limit` things heard in the room, oldest first. */
+  readHeard(
+    agentId: string,
+    conversation = MAIN_CONVERSATION,
+    limit = HEARD_KEEP
+  ): { at: string; sender: string; text: string; messageId?: string }[] {
+    const path = this.heardPathFor(agentId, conversation);
+    if (!existsSync(path)) return [];
+    const lines = readFileSync(path, "utf8").split("\n").filter(line => line.trim() !== "");
+    return lines.slice(-limit).flatMap(line => {
+      try {
+        return [JSON.parse(line) as { at: string; sender: string; text: string; messageId?: string }];
+      } catch {
+        return [];
+      }
+    });
+  }
+
+  private readonly heardAppends = new Map<string, number>();
 
   memoryPathFor(agentId: string): string {
     return join(this.dirFor(agentId), MEMORY_FILENAME);

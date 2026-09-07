@@ -51,6 +51,15 @@ export interface ChannelRecord {
    * at all is the vendor's; the option only decides the agent's answer.)
    */
   meetingRemoteControl?: boolean;
+  /**
+   * What a group message that names nobody does. `all` (the default, and what every
+   * door did before this existed): it runs a turn like any other message. `addressed`:
+   * only a mention, a direct message or a reply to something the bot said runs a turn;
+   * the rest is heard — kept as the room's recent context for the next turn, no reply.
+   * Memoh persists un-triggering group messages the same way; a bot that answers every
+   * line in a busy room is a bot people mute.
+   */
+  groupMessages?: "all" | "addressed";
   createdAt: string;
 }
 
@@ -120,7 +129,13 @@ export function ensureChannelRecords(path: string, boxId: string): ChannelRecord
  */
 export function upsertChannelRecord(
   path: string,
-  input: { id: string; type: ChannelType; name?: string; defaultAgent?: string | null },
+  input: {
+    id: string;
+    type: ChannelType;
+    name?: string;
+    defaultAgent?: string | null;
+    groupMessages?: "all" | "addressed";
+  },
   boxId: string
 ): ChannelRecord[] {
   const id = input.id.trim();
@@ -152,6 +167,7 @@ export function upsertChannelRecord(
               : input.defaultAgent !== undefined
                 ? { defaultAgent: input.defaultAgent }
                 : { defaultAgent: record.defaultAgent }),
+            ...(input.groupMessages !== undefined ? { groupMessages: input.groupMessages } : {}),
           }
     );
   } else {

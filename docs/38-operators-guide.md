@@ -217,6 +217,17 @@ fallback: with the proxy configured and the relay down, the browser gets
 with a fresh profile, because the first attempt at that check was reading Chromium's disk
 cache.
 
+### Groups: answer everything, or only when addressed
+
+Each door has a group rule, set in Settings → channels (or `POST /api/channels/records` with
+`groupMessages`). `all`, the default, runs a turn for every group message the vendor
+delivers. `addressed` runs a turn only for a direct message, a mention of the bot, or a reply
+to (or inside a topic opened by) something the bot said; everything else the room says is
+kept as the last forty lines of context beside the conversation and shown to the agent's
+next turn as background it must not act on. The ingress ledger records those as `heard`.
+Use `addressed` for a busy room where the bot is one participant among many; keep `all`
+for a room that exists to talk to the bot.
+
 ## Who may drive the agents
 
 The UI used to have no authentication, justified by binding loopback: anything able to reach
