@@ -199,7 +199,10 @@ version.
 through PolicyGate and resumes after a restart; no `host.docker.internal` in the face
 path; a fork's prompt carries no skill bodies; a mismatched image refuses to start with a
 named reason.
-**Status**: Not Started
+**Status**: In Progress — model relay + Claude Code/pi presets and image pins built
+2026-09-07 (`feat/round-three-a`). Left: session capsule, permission routing to PolicyGate,
+face over a reverse stream, progressive skills, image contract, evidence-fingerprint
+completion record, anti-Goodhart deny-list.
 
 ## Stage 16: Argus round — reviewer must look, exit sidecar
 **Goal**: the two mechanical checks from the Argus read (docs/11, 2026-09-06 evening).

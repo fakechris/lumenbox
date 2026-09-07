@@ -1342,7 +1342,26 @@ engine in the image) keep their place and are folded into the rounds where they 
 
 **Round three — the real engine in the box and the box contract.**
 
-11. **Claude Code as a first-class delegate engine.** stream-json both ways,
+11a. **The model relay** (built 2026-09-07, the precondition for everything below). A
+    delegated engine's model traffic goes to `<host>/relay/<key>` with a per-job token; the
+    host attaches the provider's real key and forwards bytes as sent, streaming included,
+    and counts tokens off the reply into usage.jsonl as kind `delegate` with the agent, work
+    and model on the row. Routes lapse after 30 idle minutes, are kept alive by use, end at
+    12 hours, and answer one 401 to every way of being wrong. Only the model paths are
+    forwarded. An attached box cannot reach it and is told so. The operator's own relay
+    (`AGENTBOX_RELAY_URL`/`_TOKEN`) still wins when both are set; half a configuration is
+    now the only absence reported. Claude Code's runtime is its environment and is set per
+    run: base URL, key, model, `CLAUDE_CONFIG_DIR`, no auto-update, no telemetry.
+11b. **Three engines**: opencode (was there), Claude Code and pi, each dormant in the image
+    until a version is named (`CLAUDE_CODE_VERSION`, `PI_VERSION`, `OPENCODE_VERSION` build
+    args; pinned, never latest). pi is driven through a models.json entry naming the relay
+    (`lumenbox/<model>`), one-shot, no session store; it has no MCP client, which the face
+    note says. Each preset declares the wires it speaks and Delegate refuses a mismatch with
+    the provider before starting.
+11. **Claude Code as a first-class delegate engine.** Left after 11a/11b: the session capsule
+    (`--resume`/`--session` keyed on agent, conversation, engine, workdir, model with a named
+    rotation), permission prompts routed to PolicyGate (`--permission-prompt-tool` on a face
+    tool), the transcript checkpoint, and the contract file at boxd start. The original text: stream-json both ways,
     `--permission-prompt-tool stdio` routed to PolicyGate, `--resume` for continuity, the
     transcript checkpointed; claude and codex pinned in the image with a contract file
     smoke-tested at build. Behind one external-runtime interface so a second engine is a

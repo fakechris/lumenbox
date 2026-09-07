@@ -43,15 +43,22 @@ export function absences(env: NodeJS.ProcessEnv = process.env): Absence[] {
     });
   }
 
+  // Neither variable set is the ordinary case now: the host's own relay (model-relay.ts)
+  // carries a delegated engine's traffic on the provider key the host already has. Half a
+  // configuration is the absence worth naming — an operator meant to route elsewhere and
+  // the engine will go to the built-in relay instead, or nowhere.
   const url = env[RELAY_URL_VARIABLE];
   const token = env[RELAY_TOKEN_VARIABLE];
-  if (url === undefined || url === "" || token === undefined || token === "") {
+  const urlSet = url !== undefined && url !== "";
+  const tokenSet = token !== undefined && token !== "";
+  if (urlSet !== tokenSet) {
     found.push({
       capability: "delegated engines",
       detail:
-        "Delegate starts a preset engine with no model credential — the vault is right " +
-        "not to hand it ours — so every delegated run fails at its first request.",
-      remedy: `set ${RELAY_URL_VARIABLE} and ${RELAY_TOKEN_VARIABLE}, or avoid Delegate`,
+        `Only one of ${RELAY_URL_VARIABLE} and ${RELAY_TOKEN_VARIABLE} is set, so the operator's ` +
+        "relay is not used and delegated engines fall back to the host's built-in relay — " +
+        "which may not be what was meant.",
+      remedy: `set both ${RELAY_URL_VARIABLE} and ${RELAY_TOKEN_VARIABLE}, or neither`,
     });
   }
 

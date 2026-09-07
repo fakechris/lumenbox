@@ -264,6 +264,26 @@ RUN if [ -n "$OPENCODE_VERSION" ]; then \
       && chown -R box:box /home/box/.config/opencode /home/box/.local; \
     fi
 
+# Claude Code and pi, the same way: dormant until a version is named, pinned when it is.
+# Skills are linked where each engine looks for them. The credential each needs arrives
+# per run from the host's relay (src/host/model-relay.ts); nothing here holds one.
+ARG CLAUDE_CODE_VERSION=""
+RUN if [ -n "$CLAUDE_CODE_VERSION" ]; then \
+      npm install -g "@anthropic-ai/claude-code@${CLAUDE_CODE_VERSION}" \
+      && mkdir -p /home/box/.claude \
+      && ln -sfn /home/box/work/skills /home/box/.claude/skills \
+      && mkdir -p /home/box/.local \
+      && chown -R box:box /home/box/.claude /home/box/.local; \
+    fi
+ARG PI_VERSION=""
+RUN if [ -n "$PI_VERSION" ]; then \
+      npm install -g --ignore-scripts "@earendil-works/pi-coding-agent@${PI_VERSION}" \
+      && mkdir -p /home/box/.pi/agent \
+      && ln -sfn /home/box/work/skills /home/box/.pi/agent/skills \
+      && mkdir -p /home/box/.local \
+      && chown -R box:box /home/box/.pi /home/box/.local; \
+    fi
+
 # The entrypoint runs as root and drops privileges per process: the desktop and the
 # daemon to `box`, the orchestrator to `hostd`. Nothing stays root.
 #

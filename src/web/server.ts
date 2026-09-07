@@ -30,6 +30,7 @@ import { classifyBox } from "../box/access.ts";
 import { envNumber } from "../config.ts";
 import { buildInfo } from "../host/build-info.ts";
 import { faceBaseUrl, RENEW_EVERY_MS, ROUTE_PATH } from "../host/mcp-face.ts";
+import { RELAY_PATH } from "../host/model-relay.ts";
 import { BackupSchedule, backupRoot } from "../host/backup.ts";
 import { Orchestrator } from "../host/orchestrator.ts";
 import { describeProvider, type ProviderProfile } from "../host/provider.ts";
@@ -2291,6 +2292,18 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
       // The MCP face (docs/33): a delegated engine in the box calling the host's MCP tools
       // through its per-job route. Before the UI gate, like the side door, and with one 401 for
       // every way to be wrong — unknown key, lapsed lease, wrong bearer.
+      // The model relay (docs/11 round three): an engine in the box talking to its model
+      // through this host. Same place in the order as the face, same one 401.
+      const relayMatch = RELAY_PATH.exec(url.pathname);
+      if (relayMatch !== null) {
+        const relayRoute = orchestrator.modelRelay.authenticate(relayMatch[1]!, req.headers);
+        if (relayRoute === undefined) {
+          send(res, 401, { error: "This relay route is unknown, lapsed, or the credential is wrong." });
+          return;
+        }
+        await orchestrator.modelRelay.proxy(req, res, relayRoute, relayMatch[2] ?? "/");
+        return;
+      }
       const routeMatch = ROUTE_PATH.exec(url.pathname);
       if (routeMatch !== null) {
         const key = routeMatch[1]!;
@@ -4530,7 +4543,11 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
   // Where a job in the box reaches this server (docs/33 §1), and the lease renewal that ends a
   // route when its job is gone.
   orchestrator.mcpFace.baseUrl = faceBaseUrl(options.port);
-  const renewRoutes = setInterval(() => void orchestrator.mcpFace.renew(), RENEW_EVERY_MS);
+  orchestrator.modelRelay.baseUrl = faceBaseUrl(options.port);
+  const renewRoutes = setInterval(() => {
+    void orchestrator.mcpFace.renew();
+    orchestrator.modelRelay.sweep();
+  }, RENEW_EVERY_MS);
   renewRoutes.unref();
 
   const address = server.address();

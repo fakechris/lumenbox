@@ -71,9 +71,15 @@ if (outgoing) {
 // environment turns the Dockerfile's dormant opencode layer on, at exactly that
 // version. Unset builds stay engine-free, which is what they were.
 const buildArgs = [];
-if (process.env.OPENCODE_VERSION) {
-  buildArgs.push("--build-arg", `OPENCODE_VERSION=${process.env.OPENCODE_VERSION}`);
-  console.log(`opencode pinned at ${process.env.OPENCODE_VERSION}`);
+for (const [variable, engine] of [
+  ["OPENCODE_VERSION", "opencode"],
+  ["CLAUDE_CODE_VERSION", "claude"],
+  ["PI_VERSION", "pi"],
+]) {
+  if (process.env[variable]) {
+    buildArgs.push("--build-arg", `${variable}=${process.env[variable]}`);
+    console.log(`${engine} pinned at ${process.env[variable]}`);
+  }
 }
 docker(["build", ...buildArgs, "-t", versioned, "-t", `${REPO}:latest`, CONTEXT]);
 console.log(`\nbuilt ${versioned}`);

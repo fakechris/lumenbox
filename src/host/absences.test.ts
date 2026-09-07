@@ -25,18 +25,17 @@ test("a fully provisioned environment has nothing to say", () => {
 });
 
 test("the environment this installation actually ran with is named, twice", () => {
-  // No search key, no relay: the state every finding in docs/14 was discovered in.
+  // No search key: the state every finding in docs/14 was discovered in. No relay variables
+  // is no longer an absence — the host's own relay carries delegated traffic (round three).
   const found = absences({});
   assert.deepEqual(
     found.map(absence => absence.capability),
-    ["web search", "delegated engines"]
+    ["web search"]
   );
   // The detail carries the degradation, not just "unset" — the silent half is the bug.
   assert.match(found[0]!.detail, /degrade/);
-  assert.match(found[1]!.detail, /no model credential/);
   // And each names its one-line fix.
   assert.match(found[0]!.remedy, new RegExp(SEARCH_KEY_VARIABLE));
-  assert.match(found[1]!.remedy, new RegExp(RELAY_URL_VARIABLE));
 });
 
 test("an empty string is absent, not present", () => {
@@ -48,10 +47,11 @@ test("an empty string is absent, not present", () => {
   );
 });
 
-test("half a relay is no relay", () => {
+test("half a relay is a misconfiguration worth naming", () => {
   const found = absences({ ...fully, [RELAY_TOKEN_VARIABLE]: "" });
   assert.deepEqual(
     found.map(absence => absence.capability),
     ["delegated engines"]
   );
+  assert.match(found[0]!.remedy, new RegExp(RELAY_URL_VARIABLE));
 });
