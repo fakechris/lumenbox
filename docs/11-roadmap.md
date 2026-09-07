@@ -1461,6 +1461,23 @@ Not copied from Argus: the self-maintenance loop that edits its own source; a mo
 classify every incoming message; the 24-vertical stage machines; yolo permissions
 everywhere (its "ask before sudo" is README prose, ours is PolicyGate).
 
+**From the TurnkeyAI read (2026-09-07, `research/TURNKEYAI-CLAIMS-CHECK.md`; the repository is
+archived).** Of the four "assets" an outside review named, two do not exist in its code, one
+is spec-only and violated by its own gate, one is an enum. What was worth taking is small and
+is built:
+- `Idempotency-Key` on `POST /api/prompt`: same key replays the first answer (waiting for it
+  if still running), a different body under the same key is 409, keys live five minutes.
+- A declared side-effect scope per tool (`read | mutate | publish | credential`, unknown is
+  `mutate`) shown to the auto-reviewer; declaration, not TurnkeyAI's regex over instructions.
+- A pre-compaction flush: the entries a summary is about to replace go through the memory
+  extractor first, so a decision in them is a record before the summary can lose it.
+- A failure taxonomy (nine classes, each with a recommended action); a failed turn's end
+  record carries its class and the autonomy metrics partition failures by it.
+- An architecture guard test: raw appends outside jsonl.ts, policy checks outside the five
+  callers, `--dangerously-skip-permissions` outside presets.ts, approval variables read at
+  import — each fails the build. Found on its first run: the policy log appended raw, without
+  the torn-line guard and without a sync on consent rows. Fixed.
+
 **Feeding the multiuser branch, not this line:** the three-layer identity model (observed
 identity, revocable binding, per-box allow/deny), fail-closed row-level security for a
 future control-plane database, and the personal-box contract (data in the snapshot layer,

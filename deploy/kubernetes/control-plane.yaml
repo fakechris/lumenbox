@@ -1,0 +1,135 @@
+# The control plane itself, in-cluster.
+#
+# Two objects: a Deployment running `agentbox control up --allocator kubernetes --relay`, and a
+# Service named `agentbox-control` — that name matters, because it is what the allocator hands to
+# boxes as AGENTBOX_CONTROL_URL / AGENTBOX_BASE_URL when the AGENTBOX_K8S_*_URL overrides are
+# unset (see src/control/main.ts). Rename the Service and you must set those.
+#
+# The image is the box image: one build carries the CLI, and this container simply invokes it the
+# other way. It must be pushed to a registry the cluster can pull from — see README.md.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: agentbox-control
+  namespace: agentbox
+  labels:
+    app.kubernetes.io/managed-by: agentbox
+data:
+  AGENTBOX_K8S_NAMESPACE: "agentbox"
+  # Where the control plane keeps its SQLite store — the mounted PVC below, stated as a path
+  # rather than relying on which user the image happens to run as.
+  AGENTBOX_HOME: "/state"
+  # AGENTBOX_K8S_STORAGE_CLASS: "standard"
+  # AGENTBOX_K8S_MEMORY: "4g"
+  # AGENTBOX_K8S_STORAGE: "10Gi"
+  #
+  # AGENTBOX_CONTROL_USERS is deliberately not here: a default password in a git-tracked manifest
+  # is a password someone will deploy. Create the agentbox-control-users Secret before applying —
+  # see README.md.
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: agentbox-control
+  namespace: agentbox
+  labels:
+    app.kubernetes.io/managed-by: agentbox
+type: Opaque
+stringData:
+  # The relay's upstream credential — the one key that must never enter a box. The relay holds it
+  # here and hands each box a token of its own instead.
+  ANTHROPIC_API_KEY: "replace-me"
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: agentbox-control
+  namespace: agentbox
+  labels:
+    app.kubernetes.io/managed-by: agentbox
+spec:
+  replicas: 1
+  # Recreate, not rolling: the store is a SQLite file on disk, and two control planes writing it
+  # at once is corruption, not availability. One replica down for seconds beats two writers.
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: agentbox-control
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: agentbox-control
+        app.kubernetes.io/managed-by: agentbox
+    spec:
+      serviceAccountName: agentbox-control
+      containers:
+        - name: control
+          image: agentbox/box:latest
+          imagePullPolicy: IfNotPresent
+          args: ["control", "up", "--allocator", "kubernetes", "--relay", "--host", "0.0.0.0", "--port", "8080"]
+          ports:
+            - name: gateway
+              containerPort: 8080
+            - name: relay
+              containerPort: 8788
+          envFrom:
+            - configMapRef:
+                name: agentbox-control
+            - secretRef:
+                name: agentbox-control
+            # Tenants and passwords, created by the deployer (see README.md) rather than shipped
+            # in this file. Optional so a forgotten Secret degrades to a generated password in the
+            # pod's log, not a CrashLoopBackOff.
+            - secretRef:
+                name: agentbox-control-users
+                optional: true
+          volumeMounts:
+            - name: state
+              mountPath: /state
+          readinessProbe:
+            httpGet:
+              path: /gateway/login
+              port: 8080
+            periodSeconds: 5
+      volumes:
+        # The control plane's store: tenants, boxes, audit. A PVC rather than emptyDir because a
+        # rescheduled control plane that forgot every tenant's box is a control plane that
+        # allocates each tenant a second one.
+        - name: state
+          persistentVolumeClaim:
+            claimName: agentbox-control-state
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: agentbox-control-state
+  namespace: agentbox
+  labels:
+    app.kubernetes.io/managed-by: agentbox
+spec:
+  accessModes: ["ReadWriteOnce"]
+  resources:
+    requests:
+      storage: 1Gi
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: agentbox-control
+  namespace: agentbox
+  labels:
+    app.kubernetes.io/managed-by: agentbox
+spec:
+  type: ClusterIP
+  selector:
+    app.kubernetes.io/name: agentbox-control
+  ports:
+    # Both ports, and under these names: boxes reach the relay through this Service, and people
+    # reach the gateway through it (usually via an Ingress in front, since there is no TLS here).
+    - name: gateway
+      port: 8080
+      targetPort: 8080
+    - name: relay
+      port: 8788
+      targetPort: 8788

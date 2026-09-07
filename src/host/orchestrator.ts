@@ -1225,6 +1225,22 @@ export class Orchestrator {
       mcpFace: this.mcpFace,
       modelRelay: this.modelRelay,
       delegateSessions: this.delegateSessions,
+      onSummarised: (agentId, conversationId, entries) => {
+        // The prose of what the summary replaces, bounded: enough for the extractor to
+        // find a decision in, not the whole history it is standing in for.
+        const prose = entries
+          .flatMap(entry => {
+            const shaped = entry as { role?: string; text?: unknown };
+            return typeof shaped.text === "string" && (shaped.role === "user" || shaped.role === "assistant")
+              ? [`${shaped.role}: ${shaped.text}`]
+              : [];
+          })
+          .join("\n\n");
+        const bounded = prose.length > 12_000 ? `${prose.slice(0, 6_000)}\n…\n${prose.slice(-6_000)}` : prose;
+        void this.rememberer
+          .flush(agentId, bounded, memoryRef(conversationId, new Date()))
+          .catch(() => {});
+      },
       boxKind: this.boxEntryOf(agent.id).kind,
       // The same cheap profile the summariser and the note-taker use. Choosing which memories to
       // show is the least interesting work in the system and should be billed accordingly.

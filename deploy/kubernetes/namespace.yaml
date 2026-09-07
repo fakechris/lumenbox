@@ -1,0 +1,8 @@
+# The namespace every agentbox object lives in: the control plane, and every tenant box it
+# creates. One namespace is what keeps the RBAC in rbac.yaml a Role rather than a ClusterRole.
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: agentbox
+  labels:
+    app.kubernetes.io/managed-by: agentbox

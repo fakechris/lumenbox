@@ -88,6 +88,10 @@ box (the orchestrator inside the container) needs nothing: the face uses loopbac
 | `AGENTBOX_WIDTH` / `_HEIGHT` | 1280×800 | Desktop size |
 | `AGENTBOX_MEMORY` / `_CPUS` | 4g / unset | Container limits |
 | `AGENTBOX_EGRESS_RELAY` / `_TOKEN` | — | Egress |
+| `AGENTBOX_K8S_NAMESPACE` | `agentbox` | Namespace the kubernetes allocator creates boxes in |
+| `AGENTBOX_K8S_STORAGE_CLASS` | cluster default | StorageClass for box PVCs |
+| `AGENTBOX_K8S_MEMORY` / `_STORAGE` | 4g / 10Gi | Per-box memory limit and per-PVC size (kubernetes allocator) |
+| `AGENTBOX_K8S_RELAY_URL` / `_CONTROL_URL` | the `agentbox-control` Service | How boxes reach the relay/control plane in-cluster |
 | `AGENTBOX_SETTLE_MS` | 2000 | Capture settle |
 | `AGENTBOX_MAX_ROUNDS` | 400 | Turn round limit |
 | `BOXD_AGENT_NICE` | 19 | How far behind the desktop the agent runs |

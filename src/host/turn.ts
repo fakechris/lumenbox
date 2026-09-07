@@ -23,6 +23,7 @@ import type { PendingWork } from "./pending-work.ts";
 import type { McpFace } from "./mcp-face.ts";
 import type { ModelRelay } from "./model-relay.ts";
 import type { DelegateSessions } from "./delegate-sessions.ts";
+import { classifyFailure, type FailureCategory } from "./failure-taxonomy.ts";
 import type { Skill } from "./skills.ts";
 import {
   classifyLimit,
@@ -431,6 +432,8 @@ export interface TurnDeps {
   mcpFace?: McpFace;
   modelRelay?: ModelRelay;
   delegateSessions?: DelegateSessions;
+  /** Told what a compaction summary is about to replace, so memory can keep what matters. */
+  onSummarised?: (agentId: string, conversation: string, entries: readonly TranscriptEntry[]) => void;
   /** What kind of box this agent's is, for Delegate's face decision. */
   boxKind?: "docker" | "attached";
   /**
@@ -791,10 +794,12 @@ async function compactHistory(options: {
   provider: ProviderProfile;
   log: (line: string) => void;
   onCompacted: (event: { type: "compacted"; covers: number; summarised: boolean; detail: string }) => void;
+  /** The entries a summary is replacing, before it does. */
+  onSummarised?: (entries: readonly TranscriptEntry[]) => void;
   conversation: string;
   meter?: Meter;
 }): Promise<TranscriptEntry[]> {
-  const { history, agent, registry, client, provider, log, onCompacted, conversation, meter } = options;
+  const { history, agent, registry, client, provider, log, onCompacted, onSummarised, conversation, meter } = options;
   // Speculative summaries are per conversation: each thread compacts its own history,
   // and a summary prepared for the team room must never be adopted by a Telegram chat.
   const summaryKey = `${agent.id}/${conversation}`;
@@ -932,6 +937,10 @@ async function compactHistory(options: {
       `became ${estimateTokens([entry])}` +
       (ready === undefined ? "" : " (prepared in the background)");
     log(detail);
+    // What the summary is about to stand in for goes to the memory extractor first: a
+    // decision or a constraint in those entries survives as a record even if the summary
+    // loses it (TurnkeyAI's pre-compaction flush; ours reuses the ordinary extractor).
+    onSummarised?.(active.slice(0, entry.covers));
     onCompacted({ type: "compacted", covers: entry.covers, summarised: true, detail });
   } catch (error) {
     const reason = error instanceof Error ? error.message : String(error);
@@ -1135,10 +1144,10 @@ export async function runTurn(
       ...(deps.caller?.userId !== undefined ? { principal: deps.caller.userId } : {}),
     });
   let ended = false;
-  const finish = (how: string) => {
+  const finish = (how: string, category?: FailureCategory) => {
     if (ended) return;
     ended = true;
-    deps.turns?.end(turnId, how);
+    deps.turns?.end(turnId, how, new Date(), category);
   };
 
   // Which memories survive the budget, decided by a model only when the budget forces a choice.
@@ -1305,6 +1314,9 @@ export async function runTurn(
     provider,
     log: line => console.error(`[compaction] ${agent.profile.name}: ${line}`),
     onCompacted: event => emit({ ...event, agentId: agent.id }),
+    ...(deps.onSummarised !== undefined
+      ? { onSummarised: (entries: readonly TranscriptEntry[]) => deps.onSummarised?.(agent.id, conversation, entries) }
+      : {}),
     conversation,
     meter,
   });
@@ -1517,7 +1529,10 @@ export async function runTurn(
   } catch (error) {
     // An end either way. A turn that failed or was aborted is over, and leaving it open would have
     // the next startup try to resume something that already reported itself.
-    finish(error instanceof TurnAborted ? "aborted" : "failed");
+    finish(
+      error instanceof TurnAborted ? "aborted" : "failed",
+      error instanceof TurnAborted ? undefined : classifyFailure(error instanceof Error ? error.message : String(error))
+    );
     throw error;
   } finally {
     // Release the desktop however the turn ends — normally, by abort, or by

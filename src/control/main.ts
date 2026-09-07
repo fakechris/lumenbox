@@ -14,28 +14,37 @@
  */
 
 import { randomBytes } from "node:crypto";
-import { createServer, type Server } from "node:http";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
+import { createServer, type Server } from "node:http";
 import type { Socket } from "node:net";
-import { agentboxHome } from "../config.ts";
+import { join } from "node:path";
 import { defaultBoxConfig, readBoxToken } from "../box/docker.ts";
-import { StaticAllocator, type BoxAllocator } from "./allocator.ts";
-import { ComposeAllocator } from "./compose.ts";
-import { Collector, meterTenants } from "./collector.ts";
-import { HealthNotifier, webhookDelivery } from "./notify.ts";
+import { agentboxHome } from "../config.ts";
 import { startRelay } from "../relay/server.ts";
 import { availableUpstreams } from "../relay/upstreams.ts";
-import { Gateway, PasswordListIdentity, type IdentityProvider } from "./gateway.ts";
-import { SqliteControlStore, type ControlStore } from "./store.ts";
+import { type BoxAllocator, DEFAULT_RELAY_PROVIDER, StaticAllocator } from "./allocator.ts";
+import { Collector, meterTenants } from "./collector.ts";
+import { ComposeAllocator } from "./compose.ts";
+import { Gateway, type IdentityProvider, PasswordListIdentity } from "./gateway.ts";
+import { type KubeApi, kubeApiFromEnvironment } from "./kube-client.ts";
+import { DEFAULT_NAMESPACE, KubernetesAllocator } from "./kubernetes.ts";
+import { HealthNotifier, webhookDelivery } from "./notify.ts";
+import { staticPolicy } from "./policy.ts";
+import { type ControlStore, SqliteControlStore } from "./store.ts";
 
 export interface ControlPlaneOptions {
   /** Where the gateway listens. */
   port: number;
   host: string;
-  /** `compose` for real multi-tenancy, `static` for one already-running box. */
-  allocator: "compose" | "static";
+  /** `compose` for one host, `kubernetes` for a cluster, `static` for one already-running box. */
+  allocator: "compose" | "kubernetes" | "static";
   image: string;
+  /**
+   * The cluster client, when `allocator` is `kubernetes`. Injected so a test can run the whole
+   * control plane against the in-memory fake; absent, credentials come from the environment
+   * (in-cluster ServiceAccount, else kubeconfig — see `kubeApiFromEnvironment`).
+   */
+  kubeApi?: KubeApi;
   /** `user:password:tenant,...`. Absent means one is generated and printed. */
   users?: string;
   statePath?: string;
@@ -114,6 +123,32 @@ export async function startControlPlane(
       uiUrl: process.env.AGENTBOX_UI_URL ?? "http://127.0.0.1:7777",
       tokens: { box: token, ui: process.env.AGENTBOX_UI_TOKEN ?? "" },
     });
+  } else if (options.allocator === "kubernetes") {
+    const namespace = process.env.AGENTBOX_K8S_NAMESPACE ?? DEFAULT_NAMESPACE;
+    // Relay and control addresses as the *box* reaches them. In-cluster that is Service DNS, and
+    // the default is the name deploy/kubernetes/control-plane.yaml gives this Deployment's
+    // Service; a deployer who named it differently overrides with the env vars. The one thing
+    // that must never appear here is host.docker.internal — that name means nothing in a pod.
+    const controlService = `http://agentbox-control.${namespace}.svc`;
+    allocator = new KubernetesAllocator(store, {
+      api: options.kubeApi ?? kubeApiFromEnvironment(namespace),
+      namespace,
+      image: options.image,
+      storageClassName: process.env.AGENTBOX_K8S_STORAGE_CLASS,
+      policy: staticPolicy({
+        memory: process.env.AGENTBOX_K8S_MEMORY,
+        storage: process.env.AGENTBOX_K8S_STORAGE,
+      }),
+      controlUrl: process.env.AGENTBOX_K8S_CONTROL_URL ?? `${controlService}:${options.port}`,
+      ...(options.relay === true
+        ? {
+            relayUrl:
+              process.env.AGENTBOX_K8S_RELAY_URL ?? `${controlService}:${options.relayPort ?? 8788}`,
+            relayProvider: options.relayProvider ?? process.env.AGENTBOX_PROVIDER ?? DEFAULT_RELAY_PROVIDER,
+          }
+        : {}),
+      onOutput: line => out(`  ${line}`),
+    });
   } else {
     allocator = new ComposeAllocator(store, {
       image: options.image,
@@ -126,7 +161,7 @@ export async function startControlPlane(
             // this process's own address is the mistake that produces a box which cannot call a
             // model at all.
             relayUrl: `http://host.docker.internal:${options.relayPort ?? 8788}`,
-            relayProvider: options.relayProvider ?? process.env.AGENTBOX_PROVIDER ?? "anthropic",
+            relayProvider: options.relayProvider ?? process.env.AGENTBOX_PROVIDER ?? DEFAULT_RELAY_PROVIDER,
           }
         : {}),
     });
@@ -142,7 +177,7 @@ export async function startControlPlane(
           "and then have nothing to forward to."
       );
     }
-    const wanted = (options.relayProvider ?? process.env.AGENTBOX_PROVIDER ?? "anthropic").toLowerCase();
+    const wanted = (options.relayProvider ?? process.env.AGENTBOX_PROVIDER ?? DEFAULT_RELAY_PROVIDER).toLowerCase();
     const upstream = upstreams.get(wanted);
     if (upstream === undefined) {
       throw new Error(
@@ -257,7 +292,7 @@ export async function startControlPlane(
   const url = `http://${options.host}:${address.port}`;
 
   out(`control plane on ${url}`);
-  out(`  allocator  ${allocator.kind}${options.allocator === "compose" ? ` (${options.image})` : ""}`);
+  out(`  allocator  ${allocator.kind}${options.allocator === "static" ? "" : ` (${options.image})`}`);
   out(`  store      ${join(home, "control.db")}`);
   out(
     `  health     ${webhook === undefined || webhook.trim() === "" ? "console only (set AGENTBOX_HEALTH_WEBHOOK to send changes somewhere)" : `console and ${webhook}`}`
@@ -270,7 +305,7 @@ export async function startControlPlane(
     `  relay      ${
       relay === undefined
         ? "off — boxes carry a provider key, which an agent with a shell can read"
-        : `on :${options.relayPort ?? 8788} (${options.relayProvider ?? process.env.AGENTBOX_PROVIDER ?? "anthropic"}); no provider key enters a box`
+        : `on :${options.relayPort ?? 8788} (${options.relayProvider ?? process.env.AGENTBOX_PROVIDER ?? DEFAULT_RELAY_PROVIDER}); no provider key enters a box`
     }`
   );
   if (options.secureCookies !== true) {

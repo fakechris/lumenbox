@@ -116,9 +116,19 @@ rather than being refused. Refusing would mean a system that only serves people 
 spelt in ASCII; the readable name still lives in the store, and this string only has to identify a
 container.
 
-**`kubernetes` — later.** A box becomes a Pod plus a Service; `boxdUrl` is
-`http://box-<tenant>.<ns>.svc:1337`, so the published-port problem disappears. Volumes become
-PVCs. Node placement, quotas and admission become the cluster's job. **Unverified here.**
+**`kubernetes` — built; verified against a fake API server, not yet a real cluster.** A tenant is a
+Pod plus a same-named ClusterIP Service, three PVCs (`-work`/`-config`/`-hostd`, mounted at the same
+paths Docker uses), and a Secret. `boxdUrl` is `http://<name>.<ns>.svc:1337` — Service DNS never
+drifts, so the published-port problem of §4.2a does not exist here and `locate` only ever re-reads
+whether the pod is Running. Two tightenings over compose, both forced by the platform: tokens never
+appear in the Pod spec (`kubectl describe` shows a pod's env to anyone with read access, so the
+box/UI/relay tokens travel in the Secret and arrive via `envFrom`), and every placement decision —
+resources, storage, nodeSelector, tolerations, priorityClassName, extra labels — goes through an
+injectable `AllocationPolicy` (`src/control/policy.ts`), whose decision lands in the manifest and
+the audit log. The default policy is `staticPolicy()`: 4g memory, 10Gi per PVC, no scheduling
+constraints. The client is a zero-dependency REST wrapper (`src/control/kube-client.ts`):
+in-cluster ServiceAccount auth, or a minimally-parsed kubeconfig (token or client-cert; exec
+plugins are refused loudly). Deployment manifests live in `deploy/kubernetes/`.
 
 **`static` — for development.** One box, named by URL, the `attached` provisioner promoted to the
 fleet interface. This is what lets the control plane run against a box on a laptop.
@@ -400,7 +410,8 @@ and proxying. Tens of tenants. Everything in this document except cluster schedu
 here, which is why it comes first.
 
 **Cluster.** `kubernetes` allocator; boxes are pods with PVCs; the gateway is an ingress; the store
-is Postgres. Unverified here.
+is Postgres. The allocator and the in-cluster deployment exist (`deploy/kubernetes/`), verified
+against a fake API server; Postgres and the ingress do not.
 
 ## 11. What changes in the box
 
@@ -424,4 +435,5 @@ should change before the control plane does.
 4. ~~Collector and metering~~ — done; enforcement is still open (R-03's remaining half).
 5. ~~Relay, and metering moves behind it~~ — done.
 6. Reaper, quotas.
-7. `kubernetes` allocator, when there is a cluster to verify it against.
+7. ~~`kubernetes` allocator~~ — done (§4.2), verified against a fake API server; a run against a real
+   cluster is still owed.

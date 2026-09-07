@@ -1,47 +1,47 @@
 #!/usr/bin/env node
+
 /**
  * agentbox CLI.
  */
 
-import { createInterface } from "node:readline/promises";
+import { randomUUID } from "node:crypto";
 import { existsSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
-import { dirname, join, resolve } from "node:path";
-import { fileURLToPath } from "node:url";
 import { homedir, tmpdir } from "node:os";
+import { dirname, join, resolve } from "node:path";
+import { createInterface } from "node:readline/promises";
+import { fileURLToPath } from "node:url";
+import type { BusEvent } from "./agents/bus.ts";
+import { AgentRegistry, defaultAgentsRoot } from "./agents/registry.ts";
+import { attachedBox } from "./box/boxes.ts";
 import {
   BACKUP_CARRIES,
+  type BoxConfig,
   BoxManager,
+  type BoxStatus,
   defaultBoxConfig,
   loadBoxToken,
   resolveDockerHostAddress,
   uiToken,
-  type BoxConfig,
-  type BoxStatus,
 } from "./box/docker.ts";
-import { describeControlPlane, startControlPlane } from "./control/main.ts";
-import { STARTER_TEAM } from "./host/orchestrator.ts";
-import { randomUUID } from "node:crypto";
-import { backupNow, backupRoot } from "./host/backup.ts";
 import { describePreflight, isQuiet, preflight, verifyBox } from "./box/preflight.ts";
 import { DockerBoxProvisioner } from "./box/provisioner.ts";
-import { decideUpgrade } from "./host/upgrade.ts";
-import { AgentRegistry, defaultAgentsRoot } from "./agents/registry.ts";
-import { attachedBox } from "./box/boxes.ts";
+import { applyConfigEnv, ensureConfigFile, loadConfig } from "./config.ts";
+import { describeControlPlane, startControlPlane } from "./control/main.ts";
 import { startEgressRelay } from "./egress/relay.ts";
-import { DEFAULT_DISPLAY_INDEX } from "./protocol/index.ts";
-import { Orchestrator } from "./host/orchestrator.ts";
-import type { TurnEvent } from "./host/turn.ts";
-import type { BusEvent } from "./agents/bus.ts";
+import { describeAbsences } from "./host/absences.ts";
+import { backupNow, backupRoot } from "./host/backup.ts";
+import { Orchestrator, STARTER_TEAM } from "./host/orchestrator.ts";
 import {
+  createClient,
   describeProvider,
+  type ProviderProfile,
   providerNames,
   resolveProvider,
   resolveSummaryProvider,
-  createClient,
-  type ProviderProfile,
 } from "./host/provider.ts";
-import { applyConfigEnv, ensureConfigFile, loadConfig } from "./config.ts";
-import { describeAbsences } from "./host/absences.ts";
+import type { TurnEvent } from "./host/turn.ts";
+import { decideUpgrade } from "./host/upgrade.ts";
+import { DEFAULT_DISPLAY_INDEX } from "./protocol/index.ts";
 import { startWebServer } from "./web/server.ts";
 
 const here = dirname(fileURLToPath(import.meta.url));
@@ -918,9 +918,15 @@ async function cmdControl(argv: string[]): Promise<number> {
 
   const { flags } = parseArgs(rest);
   const allocatorFlag = flags.get("--allocator");
-  const allocator = allocatorFlag === "static" ? "static" : "compose";
-  if (allocatorFlag !== undefined && allocatorFlag !== "static" && allocatorFlag !== "compose") {
-    err(`Unknown allocator: ${String(allocatorFlag)}. Use compose or static.`);
+  const allocator =
+    allocatorFlag === "static" || allocatorFlag === "kubernetes" ? allocatorFlag : "compose";
+  if (
+    allocatorFlag !== undefined &&
+    allocatorFlag !== "static" &&
+    allocatorFlag !== "compose" &&
+    allocatorFlag !== "kubernetes"
+  ) {
+    err(`Unknown allocator: ${String(allocatorFlag)}. Use compose, kubernetes or static.`);
     return 1;
   }
   const portFlag = flags.get("--port");
@@ -1169,8 +1175,10 @@ Providers:
 
 Control plane (many people, one box each):
   control up                Authenticate people and give each their own box
-                            --allocator compose|static   one container per tenant,
-                                                         or one existing box (dev)
+                            --allocator compose|kubernetes|static
+                                             one container per tenant, one pod
+                                             per tenant in a cluster, or one
+                                             existing box (dev)
                             --port <n>       default 8080, loopback only
                             --image <tag>    box image for new boxes
                             --sweep-seconds  collector interval; 0 disables it
@@ -1202,7 +1210,12 @@ Environment:
                             beside the database when unset — which means a
                             backup of that directory holds both.
   AGENTBOX_SESSION_SECRET   Shared by two gateways so sessions survive either
-  AGENTBOX_SECURE_COOKIES   1 when TLS terminates in front of the gateway`;
+  AGENTBOX_SECURE_COOKIES   1 when TLS terminates in front of the gateway
+  AGENTBOX_K8S_NAMESPACE    Namespace for kubernetes allocator boxes (default agentbox)
+  AGENTBOX_K8S_STORAGE_CLASS  StorageClass for box PVCs (cluster default when unset)
+  AGENTBOX_K8S_MEMORY/_STORAGE  Per-box memory and per-PVC size (default 4g / 10Gi)
+  AGENTBOX_K8S_RELAY_URL/_CONTROL_URL  As boxes reach the relay/control plane in-cluster
+                            (default: the agentbox-control Service in the box namespace)`;
 
 async function main(): Promise<number> {
   const argv = process.argv.slice(2);

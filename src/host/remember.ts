@@ -200,6 +200,18 @@ export class Rememberer {
     );
   }
 
+  /**
+   * Extracts from text that is about to be summarised away, now, ahead of the batch.
+   *
+   * The batch waits for three exchanges; a compaction does not wait for anything. What the
+   * summary is replacing goes through the same extractor as one exchange, so a decision
+   * made in a long conversation is a record before the summary can lose it.
+   */
+  async flush(agentId: string, text: string, ref?: string): Promise<void> {
+    if (EXTRACT_EVERY <= 0 || text.trim() === "") return;
+    await this.enqueue(agentId, () => this.extract(agentId, [text], undefined, ref !== undefined ? [ref] : []));
+  }
+
   /** Appends work to the agent's write chain. A failed link never breaks the chain. */
   private enqueue(agentId: string, work: () => Promise<void>): Promise<void> {
     const previous = this.writeChains.get(agentId) ?? Promise.resolve();
