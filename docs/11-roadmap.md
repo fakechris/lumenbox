@@ -1381,6 +1381,30 @@ Folded into round three:
   surfaces (tasks, claims, policy, pending-work) is quarantined, not promoted. S.
 - **Skill directories passed to the delegate engine natively** rather than pasted. S.
 
+From the second Argus read (`../RESEARCH_ARGUS_COMPARISON.md`, 2026-09-06), folded in the same
+way:
+- **Who decides**: a person is asked only for what only a person can decide — credentials,
+  money, irreversible or outward actions, acceptance — and technical blocks are rewritten as
+  a replan instruction and kept moving. Our PolicyGate already draws the first three lines;
+  the fourth is the review gate. Round two's question cards carry the "ask" half. S.
+- **Stop reasons that route**: a stop is typed (no output twice, no progress, ceiling,
+  reviewer engine failed) and its reason is written as an instruction to whoever plans next,
+  not just a halt. Goes with the stall rule in round three. S.
+- **Locks beside the state file, never on it**, and a file that does not end in a newline has
+  a torn last line — two incident notes worth carrying into every ledger we write. Audit
+  once. S.
+- **Evidence has tiers and the agent writes only the lowest**: a check's tier is written by
+  the program that ran the check; a model's judgement never adds up to a mechanical pass;
+  "done" is a query over bound evidence, not a stored field. This is the shape of round
+  three's completion record. M.
+- **Reachability test for every cross-role channel**: a well-formed challenge must be shown to
+  change one task's fate, end to end (Argus's replan channel existed and was unreachable).
+  The fork handoff test is the first of these; SendToAgent and the review gate need theirs. S.
+- **`lumenbox doctor`** on the Argus skeleton: deterministic read-only checks first, a typed
+  repair registry with no free command field, an agent advisor whose fix counts only after
+  the deterministic recheck passes and tool activity was observed. Our smoke script is the
+  first layer already. M, when onboarding incidents ask for it.
+
 Not copied from Argus: the self-maintenance loop that edits its own source; a model turn to
 classify every incoming message; the 24-vertical stage machines; yolo permissions
 everywhere (its "ask before sudo" is README prose, ours is PolicyGate).
