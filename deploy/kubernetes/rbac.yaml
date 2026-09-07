@@ -2,9 +2,10 @@
 #
 # A Role, not a ClusterRole: the allocator only ever touches its own namespace, so it must not be
 # *able* to touch anyone else's. The four kinds are the four it manages — pods, services, PVCs and
-# per-box token secrets — and the verbs are create/get/delete plus list (for label queries) and
-# update (apply is create-or-replace). No watch, no exec, no port-forward: the control plane polls
-# readiness with get, and it never needs a shell inside a tenant's box from this identity.
+# per-box token secrets — and the verbs are exactly the calls the client makes: create, get (by
+# name), update (apply is create-or-replace), delete. No list, no watch, no exec, no port-forward:
+# readiness is polled with get, nothing enumerates the namespace, and this identity never needs a
+# shell inside a tenant's box.
 apiVersion: v1
 kind: ServiceAccount
 metadata:
@@ -23,19 +24,19 @@ metadata:
 rules:
   - apiGroups: [""]
     resources: ["pods"]
-    verbs: ["get", "list", "create", "update", "delete"]
+    verbs: ["get", "create", "update", "delete"]
   - apiGroups: [""]
     resources: ["services"]
-    verbs: ["get", "list", "create", "update", "delete"]
+    verbs: ["get", "create", "update", "delete"]
   - apiGroups: [""]
     resources: ["persistentvolumeclaims"]
-    verbs: ["get", "list", "create", "update", "delete"]
-  # Secrets hold every tenant's box tokens, which is exactly why this identity may create and
-  # delete them but the verbs stop there in spirit — get/list are present because apply's
-  # create-or-replace needs them, and anyone operating this namespace can already read them.
+    verbs: ["get", "create", "update", "delete"]
+  # Secrets hold every tenant's box tokens, which is exactly why the verbs stop at what apply
+  # needs — `get` is by name, and without `list` this identity cannot enumerate every tenant's
+  # credentials in one call.
   - apiGroups: [""]
     resources: ["secrets"]
-    verbs: ["get", "list", "create", "update", "delete"]
+    verbs: ["get", "create", "update", "delete"]
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: RoleBinding

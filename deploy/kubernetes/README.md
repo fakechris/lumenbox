@@ -42,7 +42,7 @@ longer. There is no TLS on the gateway — put an Ingress with a terminator in f
 - Boxes reach the relay and the control plane through the `agentbox-control` Service
   (`http://agentbox-control.agentbox.svc:8788` / `:8080`). Rename that Service and set
   `AGENTBOX_K8S_RELAY_URL` / `AGENTBOX_K8S_CONTROL_URL` to match.
-- Per-box resources come from the allocation policy: 4g memory and 10Gi per PVC by default,
+- Per-box resources come from the allocation policy: 4Gi memory and 10Gi per PVC by default,
   tunable with `AGENTBOX_K8S_MEMORY` / `AGENTBOX_K8S_STORAGE`; `AGENTBOX_K8S_STORAGE_CLASS` pins a
   StorageClass when the cluster default is not what boxes should get.
 

@@ -17,6 +17,7 @@ import { containerNameFor } from "./compose.ts";
 import type { KubeApi, KubePod, KubePvc, KubeSecret, KubeService } from "./kube-client.ts";
 import { KubernetesAllocator } from "./kubernetes.ts";
 import type { AllocationPolicy } from "./policy.ts";
+import { staticPolicy } from "./policy.ts";
 import { SqliteControlStore } from "./store.ts";
 
 interface Call {
@@ -422,6 +423,27 @@ test("locate tells a stopped box from a gone one by its volumes", async () => {
   }
 });
 
+test("a ready box whose pod loses Ready is demoted, not routed to", async () => {
+  const { store, allocator, fake, cleanup } = fixture();
+  try {
+    const acme = store.upsertTenant({ name: "acme" });
+    const handle = await allocator.allocate(acme.id, { image: "agentbox/box:test" });
+    assert.equal(handle.state, "ready");
+
+    // The desktop died: the pod still runs, but its Ready condition flipped. The address cannot
+    // move under Service DNS, so the base class's reconcile sees nothing to correct — the
+    // demotion is the kubernetes override's whole job.
+    const pod = fake.pods.get(handle.externalId)!;
+    pod.status = { phase: "Running", conditions: [{ type: "Ready", status: "False" }] };
+
+    const corrected = await allocator.reconcile(handle);
+    assert.equal(corrected?.state, "starting");
+    assert.equal(store.getBox(handle.id)?.state, "starting");
+  } finally {
+    cleanup();
+  }
+});
+
 test("a pod that never becomes ready fails loudly, with its phase", async () => {
   const dir = mkdtempSync(join(tmpdir(), "agentbox-kubernetes-"));
   const store = new SqliteControlStore({ path: join(dir, "control.db") });
@@ -521,7 +543,7 @@ test("policy labels can add, but never overwrite the ownership labels the Servic
   // A hostile or merely careless policy: every ownership label set to something wrong.
   const policy: AllocationPolicy = {
     decide: () => ({
-      resources: { memoryRequest: "4g", memoryLimit: "4g" },
+      resources: { memoryRequest: "4Gi", memoryLimit: "4Gi" },
       storageSize: "10Gi",
       labels: {
         "app.kubernetes.io/instance": "someone-else",
@@ -693,4 +715,19 @@ test("prefix and namespace are validated as DNS-1123 before anything talks to a 
   } finally {
     cleanup();
   }
+});
+
+test("staticPolicy refuses a quantity the apiserver would reject", () => {
+  // "4g" is Docker spelling; Kubernetes quantities are case-sensitive and lowercase g does not
+  // exist, so the default would have failed every pod create with a 422 naming spec.containers.
+  assert.throws(() => staticPolicy({ memory: "4g" }), /not a Kubernetes quantity/);
+  assert.throws(() => staticPolicy({ storage: "ten gigs" }), /not a Kubernetes quantity/);
+  const decision = staticPolicy().decide({
+    tenantId: "t",
+    tenant: { id: "t", name: "acme", state: "active", createdAt: "", quota: {} },
+    spec: { image: "box:test" },
+  });
+  assert.ok(!(decision instanceof Promise));
+  assert.equal(decision.resources.memoryLimit, "4Gi");
+  assert.equal(decision.storageSize, "10Gi");
 });

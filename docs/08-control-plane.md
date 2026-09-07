@@ -125,7 +125,7 @@ appear in the Pod spec (`kubectl describe` shows a pod's env to anyone with read
 box/UI/relay tokens travel in the Secret and arrive via `envFrom`), and every placement decision —
 resources, storage, nodeSelector, tolerations, priorityClassName, extra labels — goes through an
 injectable `AllocationPolicy` (`src/control/policy.ts`), whose decision lands in the manifest and
-the audit log. The default policy is `staticPolicy()`: 4g memory, 10Gi per PVC, no scheduling
+the audit log. The default policy is `staticPolicy()`: 4Gi memory, 10Gi per PVC, no scheduling
 constraints. The client is a zero-dependency REST wrapper (`src/control/kube-client.ts`):
 in-cluster ServiceAccount auth, or a minimally-parsed kubeconfig (token or client-cert; exec
 plugins are refused loudly). Deployment manifests live in `deploy/kubernetes/`.

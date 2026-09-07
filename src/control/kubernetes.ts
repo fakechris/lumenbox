@@ -643,11 +643,34 @@ export class KubernetesAllocator extends StoreBackedAllocator {
       return { boxdUrl: handle.boxdUrl, uiUrl: handle.uiUrl, running: false };
     }
     // The address is computed, never read back: Service DNS does not drift, which is the whole
-    // point of running under a scheduler. `running` is all that can change.
+    // point of running under a scheduler. `running` is all that can change — and it means Ready,
+    // not phase Running: a container whose desktop has not come up answers TCP and nothing else.
     return {
       boxdUrl: this.boxdUrlFor(name),
       uiUrl: this.uiUrlFor(name),
-      running: pod?.status?.phase === "Running",
+      running:
+        pod?.status?.conditions?.some(c => c.type === "Ready" && c.status === "True") === true,
     };
+  }
+
+  /**
+   * `reconcile`, plus the one correction the base class's contract cannot express.
+   *
+   * The base class looks at `running` only nowhere — it exists to correct addresses, and these
+   * addresses cannot move, so without this override a pod that lost its Ready condition keeps its
+   * `ready` row forever and the gateway routes to a box that cannot answer. A not-ready box is
+   * demoted to `starting`, the state the gateway already renders as "your box is coming". The
+   * collector's own /health probe would catch the same thing; this keeps the row honest between
+   * probes.
+   */
+  override async reconcile(handle: BoxHandle): Promise<BoxHandle | undefined> {
+    const corrected = await super.reconcile(handle);
+    if (corrected === undefined || corrected.state !== "ready") return corrected;
+    const found = await this.locate(corrected).catch(() => undefined);
+    if (found !== undefined && !found.running) {
+      this.store.setBoxState(corrected.id, "starting");
+      return { ...corrected, state: "starting" };
+    }
+    return corrected;
   }
 }

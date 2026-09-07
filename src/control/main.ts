@@ -130,6 +130,12 @@ export async function startControlPlane(
     // Service; a deployer who named it differently overrides with the env vars. The one thing
     // that must never appear here is host.docker.internal — that name means nothing in a pod.
     const controlService = `http://agentbox-control.${namespace}.svc`;
+    // The ports in these URLs are the *Service*'s ports, fixed by
+    // deploy/kubernetes/control-plane.yaml — not this process's listener ports. A box reaches the
+    // Service, so `--port 9000` must not leak into the URL (the Service still answers on 8080). A
+    // deployer who changed the Service overrides with the env vars.
+    const CONTROL_SERVICE_PORT = 8080;
+    const RELAY_SERVICE_PORT = 8788;
     allocator = new KubernetesAllocator(store, {
       api: options.kubeApi ?? kubeApiFromEnvironment(namespace),
       namespace,
@@ -139,11 +145,11 @@ export async function startControlPlane(
         memory: process.env.AGENTBOX_K8S_MEMORY,
         storage: process.env.AGENTBOX_K8S_STORAGE,
       }),
-      controlUrl: process.env.AGENTBOX_K8S_CONTROL_URL ?? `${controlService}:${options.port}`,
+      controlUrl: process.env.AGENTBOX_K8S_CONTROL_URL ?? `${controlService}:${CONTROL_SERVICE_PORT}`,
       ...(options.relay === true
         ? {
             relayUrl:
-              process.env.AGENTBOX_K8S_RELAY_URL ?? `${controlService}:${options.relayPort ?? 8788}`,
+              process.env.AGENTBOX_K8S_RELAY_URL ?? `${controlService}:${RELAY_SERVICE_PORT}`,
             relayProvider: options.relayProvider ?? process.env.AGENTBOX_PROVIDER ?? DEFAULT_RELAY_PROVIDER,
           }
         : {}),

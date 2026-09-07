@@ -1213,7 +1213,7 @@ Environment:
   AGENTBOX_SECURE_COOKIES   1 when TLS terminates in front of the gateway
   AGENTBOX_K8S_NAMESPACE    Namespace for kubernetes allocator boxes (default agentbox)
   AGENTBOX_K8S_STORAGE_CLASS  StorageClass for box PVCs (cluster default when unset)
-  AGENTBOX_K8S_MEMORY/_STORAGE  Per-box memory and per-PVC size (default 4g / 10Gi)
+  AGENTBOX_K8S_MEMORY/_STORAGE  Per-box memory and per-PVC size (default 4Gi / 10Gi)
   AGENTBOX_K8S_RELAY_URL/_CONTROL_URL  As boxes reach the relay/control plane in-cluster
                             (default: the agentbox-control Service in the box namespace)`;
 
