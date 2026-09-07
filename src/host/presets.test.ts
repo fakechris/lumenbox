@@ -78,9 +78,10 @@ test("pi is driven through a models.json entry that names the relay, and Claude 
 
   const claude = presetNamed("claude")!;
   assert.deepEqual(claude.wires, ["anthropic"]);
-  const env = claude.relayEnv("http://host/relay/abc", "tok");
+  const env = claude.relayEnv("http://host/relay/abc", "tok", "MiniMax-M3");
   assert.equal(env.ANTHROPIC_BASE_URL, "http://host/relay/abc");
-  assert.equal(env.ANTHROPIC_API_KEY, "tok");
+  assert.equal(env.ANTHROPIC_AUTH_TOKEN, "tok");
+  assert.equal(env.ANTHROPIC_MODEL, "MiniMax-M3");
   assert.equal(env.CLAUDE_CONFIG_DIR, "/home/box/.claude");
   assert.equal(env.DISABLE_AUTOUPDATER, "1");
   assert.match(claude.run("'x'", "claude-sonnet-5"), /--model claude-sonnet-5/);
