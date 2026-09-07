@@ -268,3 +268,19 @@ test("a finished turn goes through the review gate like everyone else", () => {
     cleanup();
   }
 });
+
+test("a blocked move keeps its answer options; any other move drops them", () => {
+  const { store, cleanup } = tempStore();
+  try {
+    store.create({ title: "Pick a region", requester: "web", assigneeId: "ada" });
+    store.update("t1", { status: "blocked", note: "which region?", options: [" us-east ", "eu-west", "", "x".repeat(200)] }, "ada");
+    const blocked = store.get("t1")!;
+    assert.deepEqual(blocked.history.at(-1)?.options, ["us-east", "eu-west", "x".repeat(80)]);
+    store.update("t1", { status: "doing", note: "going with eu-west", options: ["a", "b"] }, "ada");
+    assert.equal(store.get("t1")!.history.at(-1)?.options, undefined, "options belong to a question");
+    store.update("t1", { status: "blocked", options: ["a"] }, "ada");
+    assert.equal(store.get("t1")!.history.at(-1)?.options, undefined, "no note, nothing to answer");
+  } finally {
+    cleanup();
+  }
+});

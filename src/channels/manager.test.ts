@@ -1913,3 +1913,47 @@ test("on a door that answers only when addressed, a group message that names nob
   assert.equal(asked.length, 2, "ran, because the door's rule is all");
   assert.equal(heard.length, 1);
 });
+
+test("the reply streams into the task card on its own clock, and a blocked question goes out as a card", async () => {
+  const adapter = cardAdapter();
+  let streamer: ((soFar: string) => void) | undefined;
+  const manager = new ChannelManager({
+    mayDrive: () => true,
+    ask: async (_agent, _text, _identity, _chatKey, _onProgress, _threadKey, _taskId, _onInterim, onText) => {
+      streamer = onText;
+      // The card is posted on the ack clock; a reply that starts before it exists has
+      // nowhere to stream, and that is fine — most replies take longer than the ack.
+      await new Promise(resolve => setTimeout(resolve, 30));
+      onText?.("Hello");
+      onText?.("Hello world\n");
+      await new Promise(resolve => setTimeout(resolve, 5));
+      return "Hello world";
+    },
+    ackAfterMs: 0,
+    log: () => {},
+  });
+  manager.register(adapter, true, "test");
+  await started(manager);
+  await adapter.inject({ identity: "feishu:ou_1", chatKey: "feishu:oc_1", messageId: "m1", senderLabel: "Chris", text: "say hello" });
+  for (let waited = 0; waited < 2_000 && !adapter.cards.some(entry => entry.card.status === "done"); waited += 20) {
+    await new Promise(resolve => setTimeout(resolve, 20));
+  }
+  assert.ok(streamer !== undefined, "the manager asked to be streamed to");
+  const withText = adapter.cards.filter(entry => entry.card.text !== undefined).map(entry => entry.card.text);
+  assert.ok(withText.includes("Hello world"), `the card carried the reply as it grew: ${JSON.stringify(withText)}`);
+  const last = adapter.cards.at(-1)!.card;
+  assert.equal(last.status, "done");
+  assert.equal(last.text, undefined, "a settled card does not repeat the message under it");
+
+  const questions: { chatKey?: string; options: string[] }[] = [];
+  const asking = cardAdapter();
+  (asking as unknown as { postQuestionCard: (identity: string, card: { options: string[] }, chatKey?: string) => Promise<void> }).postQuestionCard =
+    async (_identity, card, chatKey) => {
+      questions.push({ ...(chatKey !== undefined ? { chatKey } : {}), options: card.options });
+    };
+  const second = new ChannelManager({ mayDrive: () => true, ask: async () => "ok", log: () => {} });
+  second.register(asking, true, "test");
+  await started(second);
+  await second.pushQuestionToChat("telegram:oc_9", { agentName: "Ada", question: "t3 stuck: which region?", options: ["us", "eu"] });
+  assert.equal(JSON.stringify(questions), JSON.stringify([{ chatKey: "telegram:oc_9", options: ["us", "eu"] }]));
+});

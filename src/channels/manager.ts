@@ -131,6 +131,13 @@ export interface TaskCardState {
   taskId?: string;
   /** Where to watch this task in the workshop: the desktop, the evidence, the history. */
   taskUrl?: string;
+  /**
+   * The reply so far, tail-capped, while the turn is still writing it. The card is the
+   * one thing on the wire that can be rewritten in place, so it is where a long answer
+   * streams; the finished reply still arrives as a message of its own. Cleared when the
+   * card settles, so the card does not repeat the message under it.
+   */
+  text?: string;
 }
 
 export interface ChannelAdapter {
@@ -410,7 +417,9 @@ export interface ChannelManagerDeps {
      * The model's opening line, said beside its first tool calls, to hand to the chat at
      * once (docs/31 layer 1a). Called at most once per turn, before the reply.
      */
-    onInterim?: (text: string) => void
+    onInterim?: (text: string) => void,
+    /** The reply as it is being written — everything so far, each time it grows. */
+    onText?: (soFar: string) => void
   ) => Promise<string>;
   /**
    * How many requests are ahead of a new one for this agent and chat. Zero means it
@@ -569,6 +578,14 @@ const ACK_AFTER_MS = 8_000;
 
 /** Card rewrites are rate-limited to this; the final state is always written. */
 const CARD_UPDATE_MS = 3_000;
+/**
+ * How often the streaming reply may rewrite the card, and how much of it the card holds.
+ * 700 ms, or sooner at a line break, is where a card reads as typing rather than as
+ * flicker or as stalled (Memoh's Feishu adapter settled on the same numbers); the tail
+ * cap keeps a long answer inside what a card may carry.
+ */
+const STREAM_UPDATE_MS = 700;
+const STREAM_TAIL_CHARS = 4_000;
 
 /**
  * Whether a whole message is a request to see the desktop.
@@ -1016,6 +1033,29 @@ ${input.options.map(option => `· ${option}`).join("\n")}`
    * namespace replacement is actually built, its migration adds the proven-current
    * bypass this signature deliberately does not have yet.
    */
+  /**
+   * A question with buttons into a chat, by address — for a task that landed on blocked
+   * with answers to choose from. Falls back to the text form where the wire has no cards.
+   * A pressed button speaks as a message in that chat, which is how the answer reaches
+   * whoever picks the task back up.
+   */
+  pushQuestionToChat(chatKey: string, card: QuestionCardState): Promise<void> {
+    if ((this.deps.incarnationOf?.(chatKey) ?? 1) !== 1) {
+      this.deps.log(`channel: dead letter for ${chatKey} — its channel was replaced. Dropped.`);
+      return Promise.resolve();
+    }
+    const adapter = this.adapters.find(a => chatKey.startsWith(`${a.name}:`));
+    if (adapter?.postQuestionCard !== undefined) {
+      return adapter.postQuestionCard("", card, chatKey);
+    }
+    const text = questionText(
+      card.agentName,
+      card.question,
+      `\n\n${card.options.map(option => `· ${option}`).join("\n")}`
+    );
+    return this.pushToChat(chatKey, text);
+  }
+
   pushToChat(chatKey: string, text: string): Promise<void> {
     if ((this.deps.incarnationOf?.(chatKey) ?? 1) !== 1) {
       this.deps.log(
@@ -1731,11 +1771,32 @@ ${input.options.map(option => `· ${option}`).join("\n")}`
       });
     };
 
+    // The reply streaming into the card as it is written. Rate-limited on its own clock,
+    // separate from tool progress: a reply grows many times a second.
+    let lastStreamWrite = 0;
+    const onText = (soFar: string) => {
+      if (cardHandle === undefined || adapter.updateTaskCard === undefined) return;
+      const trimmed = soFar.trimEnd();
+      if (trimmed === "") return;
+      card.text =
+        trimmed.length > STREAM_TAIL_CHARS ? `…${trimmed.slice(-STREAM_TAIL_CHARS)}` : trimmed;
+      const now = Date.now();
+      if (now - lastStreamWrite < STREAM_UPDATE_MS && !soFar.endsWith("\n")) return;
+      lastStreamWrite = now;
+      void adapter.updateTaskCard(cardHandle, { ...card }).catch((error: unknown) => {
+        this.deps.log(
+          `channel ${adapter.name}: streaming card update failed — ` +
+            `${error instanceof Error ? error.message : String(error)}`
+        );
+      });
+    };
+
     const finishCard = (status: TaskCardState["status"]) => {
       if (cardHandle === undefined || adapter.updateTaskCard === undefined) return;
       card.status = status;
       delete card.action;
       delete card.ahead;
+      delete card.text;
       void adapter.updateTaskCard(cardHandle, { ...card }).catch((error: unknown) => {
         // A card that stops updating is the "Working forever" symptom from the other
         // direction, so the reason belongs somewhere findable.
@@ -1784,7 +1845,8 @@ ${input.options.map(option => `· ${option}`).join("\n")}`
                 `${error instanceof Error ? error.message : String(error)}`
             );
           });
-        }
+        },
+        onText
       );
       clearTimeout(ackTimer);
       // Asked first, then shown. The board owns what a finished turn means for the work —

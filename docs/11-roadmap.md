@@ -1289,7 +1289,7 @@ engine in the image) keep their place and are folded into the rounds where they 
 5. **The renderer memory guard lives in the repo**, not only in the installed app (ported from
    the 2026-09-06 17 GB incident patch, so the next build keeps it).
 
-**Round two — memory provenance and the group-chat model (in progress).**
+**Round two — memory provenance and the group-chat model (complete 2026-09-07).**
 
 6. **Memory records point at their source** (closes R27). **Built 2026-09-06**: a record's
    `from` is `<conversation>@<time>`; RememberFact cites the turn it is in, the extractor is
@@ -1327,8 +1327,17 @@ engine in the image) keep their place and are folded into the rounds where they 
    presses a card button is written to a log before it is sent, claimed by one sender, and
    never replayed twice — so a restart between the press and the reply loses nothing.
    Memoh fixed this class the week before the read (#1159). M.
-9. **Feishu streaming cards.** Patch every 700 ms or on a newline, tail-capped, one card per
-   tool call. M.
+9. **Feishu streaming cards.** **Built 2026-09-07.** The task card carries the reply as it is
+   written (the turn's text deltas, joined across tool calls), patched every 700 ms or at a
+   line break, tail-capped at 4,000 characters, cleared when the card settles so the card
+   does not repeat the message under it. Not done: one card per tool call — the action line
+   on the card already says which tool is running, and a card per call was judged noise.
+9b. **Question cards on blocked tasks.** **Built 2026-09-07.** `Tasks update` to blocked takes
+   `options` (two to six short answers) beside the note; the board keeps them on the change;
+   the blocked announcement in the task's chat becomes a question card with buttons where
+   the wire has them, a bulleted line elsewhere. A pressed button speaks as a message in
+   that chat. Not done: binding the answer to the task id by machine — the question names
+   the id and the next message in that chat is the answer, which is how AskUser works today.
 10. **Routines record what each run cost** and may name their model and effort. S.
 
 **Round three — the real engine in the box and the box contract.**

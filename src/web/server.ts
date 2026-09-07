@@ -882,7 +882,7 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
           : "Allowed once. Send the agent a message to have it retry.";
     },
     log: line => log(line),
-    ask: async (agentName, text, identity, chatKey, onProgress, threadKey, taskId, onInterim) => {
+    ask: async (agentName, text, identity, chatKey, onProgress, threadKey, taskId, onInterim, onText) => {
       let agent: ReturnType<typeof registry.resolve> | undefined;
       if (agentName !== undefined) {
         try {
@@ -974,11 +974,21 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
       // "bash: python batch.py" is noise and the number is the card. The file convention
       // is in the prompt; reading it is a poll, because the box cannot push.
       let batchLine: string | undefined;
+      // The reply as it is written, for the card to stream. Rounds are joined with a blank
+      // line where a tool call fell between them, which is how the final reply reads too.
+      let streamed = "";
       const listener = (event: TurnEvent) => {
         if (event.agentId !== agent.id || event.conversation !== conversation) return;
         if (event.type === "stuck") {
           stuck = event.reason;
           return;
+        }
+        if (event.type === "text" && onText !== undefined) {
+          streamed += event.delta;
+          onText(streamed);
+        }
+        if (event.type === "tool_start" && streamed !== "" && !streamed.endsWith("\n\n")) {
+          streamed = `${streamed.trimEnd()}\n\n`;
         }
         if (event.type === "tool_start" && batchLine === undefined) {
           onProgress?.(actionLine(event.tool, event.input), event.tool);
@@ -1282,6 +1292,24 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
       if (line === undefined || task.conversation === undefined) return;
       const chatKey = conversations.chatKeyFor(task.conversation);
       if (chatKey === undefined) return;
+      // A blocker with answers to choose from is a question card, not a line: the person
+      // taps one and the answer lands back in the room the task came from.
+      const last = task.history.at(-1);
+      if (last?.options !== undefined && last.options.length > 0 && last.note !== undefined) {
+        const asker = last.by;
+        let agentName = asker;
+        try {
+          agentName = registry.resolve(asker).profile.name;
+        } catch {
+          // Not an agent: the name is whatever moved it.
+        }
+        void channels.pushQuestionToChat(chatKey, {
+          agentName,
+          question: `${task.id}「${task.title}」卡住了：${last.note}`,
+          options: last.options,
+        });
+        return;
+      }
       void channels.pushToChat(chatKey, line);
     });
   }

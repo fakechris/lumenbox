@@ -58,6 +58,12 @@ export interface TaskChange {
   /** Who moved it: an agent id, a principal id, or "web". */
   by: string;
   status?: TaskStatus;
+  /**
+   * The answers a blocked task can be unblocked with, when the note is a question. A
+   * chat renders them as buttons under the question; a pressed one speaks as a reply.
+   * Kept on the change, not the task: the next move is a different question or none.
+   */
+  options?: string[];
   assigneeId?: string;
   note?: string;
   /** The turn (run) an agent made this change in, when it was an agent. */
@@ -255,6 +261,7 @@ export class TaskStore {
       note?: string;
       title?: string;
       description?: string;
+      options?: string[];
     },
     by: string,
     run?: string,
@@ -320,6 +327,15 @@ export class TaskStore {
         ? { note: changes.note.trim().slice(0, 500) }
         : {}),
       ...(coerced !== undefined ? { note: coerced, coerced: true as const } : {}),
+      // Options ride only on a blocked move with a note to answer: anywhere else they
+      // would be buttons under nothing.
+      ...(status === "blocked" &&
+      changes.options !== undefined &&
+      changes.options.length > 0 &&
+      changes.note !== undefined &&
+      changes.note.trim() !== ""
+        ? { options: changes.options.map(option => option.trim().slice(0, 80)).filter(o => o !== "").slice(0, 6) }
+        : {}),
       ...(run !== undefined ? { run } : {}),
     };
 
