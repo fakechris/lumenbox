@@ -91,6 +91,8 @@ interface EndRecord {
   at: string;
   /** How it ended, for the log. Not consulted: any end at all means this turn is not outstanding. */
   how: string;
+  /** The failure class, when `how` is failed (failure-taxonomy.ts). */
+  category?: string;
 }
 
 /**
@@ -189,8 +191,8 @@ export class TurnLedger {
   }
 
   /** Records that a turn is over, however it ended. */
-  end(id: string, how: string, now = new Date()): void {
-    this.append({ id, event: "end", at: now.toISOString(), how });
+  end(id: string, how: string, now = new Date(), category?: string): void {
+    this.append({ id, event: "end", at: now.toISOString(), how, ...(category !== undefined ? { category } : {}) });
     if (this.lines > COMPACT_AT && this.interrupted().length === 0) this.compact();
   }
 

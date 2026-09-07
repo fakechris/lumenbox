@@ -31,6 +31,7 @@ import { envNumber } from "../config.ts";
 import { buildInfo } from "../host/build-info.ts";
 import { faceBaseUrl, RENEW_EVERY_MS, ROUTE_PATH } from "../host/mcp-face.ts";
 import { RELAY_PATH } from "../host/model-relay.ts";
+import { IdempotencyStore } from "./idempotency.ts";
 import { BackupSchedule, backupRoot } from "../host/backup.ts";
 import { Orchestrator } from "../host/orchestrator.ts";
 import { describeProvider, type ProviderProfile } from "../host/provider.ts";
@@ -409,6 +410,7 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
   // it settles. A set rather than a rewiring of onTurnEvent per ask, because two chats
   // can be driving two agents at once.
   const channelTurnListeners = new Set<(event: TurnEvent) => void>();
+  const idempotency = new IdempotencyStore();
 
   const orchestrator = new Orchestrator({
     registry,

@@ -31,7 +31,8 @@
 
 import { classifyShell } from "./shell-readonly.ts";
 import { envNumber } from "../config.ts";
-import { appendFileSync, existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
+import { appendLine, appendLineDurably } from "./jsonl.ts";
 import { createHash, randomUUID } from "node:crypto";
 import { dirname, join } from "node:path";
 import { agentboxHome } from "../config.ts";
@@ -690,7 +691,14 @@ export class PolicyGate {
   private append(event: PolicyEvent): boolean {
     try {
       mkdirSync(dirname(this.path), { recursive: true });
-      appendFileSync(this.path, `${JSON.stringify(event)}\n`, "utf8");
+      // Through jsonl.ts, which starts a fresh line after a torn one; consent rows are
+      // synced before the action they permit, since a lost approval-used row lets the same
+      // grant run twice after a restart (the reason `check` refuses when this returns false).
+      if (event.kind === "approval-used" || event.kind === "approval-requested") {
+        appendLineDurably(this.path, JSON.stringify(event));
+      } else {
+        appendLine(this.path, JSON.stringify(event));
+      }
       return true;
     } catch (error) {
       // A policy decision must not fail because its log could not be written — the alternative is a

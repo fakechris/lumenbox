@@ -52,3 +52,17 @@ test("duty cycle is the union of turn intervals, with both denominators", () => 
   assert.match(text, /Duty cycle: 54\.2% of the wall clock/);
   assert.match(text, /Interruptions: 1 blocked, 1 waiting for review/);
 });
+
+test("failed turns are partitioned by failure class", () => {
+  const metrics = computeMetrics({
+    turns: [
+      JSON.stringify({ id: "a", event: "begin", at: at(0) }),
+      JSON.stringify({ id: "a", event: "end", at: at(1), how: "failed", category: "rate_limit" }),
+      JSON.stringify({ id: "b", event: "begin", at: at(2) }),
+      JSON.stringify({ id: "b", event: "end", at: at(3), how: "failed" }),
+    ],
+    usage: [], schedules: [], tasks: [], log: [], fromMs: T0, toMs: T0 + 60 * 60_000,
+  });
+  assert.deepEqual(metrics.turns.failedBy, { rate_limit: 1, unknown: 1 });
+  assert.match(renderMetrics(metrics), /failed by class: rate_limit 1, unknown 1/);
+});

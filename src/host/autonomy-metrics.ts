@@ -30,7 +30,7 @@ export interface MetricsInput {
 
 export interface Metrics {
   windowHours: number;
-  turns: { total: number; byHow: Record<string, number>; medianSeconds: number; p90Seconds: number };
+  turns: { total: number; byHow: Record<string, number>; failedBy: Record<string, number>; medianSeconds: number; p90Seconds: number };
   /** Union of turn intervals over the window, and over the hours that had any turn at all. */
   dutyCycle: { busyHours: number; rawPercent: number; activeHours: number; withWorkPercent: number };
   tokens: { total: number; byKind: Record<string, number>; perTurn: number };
@@ -92,17 +92,18 @@ export function computeMetrics(input: MetricsInput): Metrics {
   // Turns: pair begin and end by id. An attempt with no end is still open (or died); it counts
   // as busy until the window's end, which is what a person watching would have seen.
   const begins = new Map<string, number>();
-  const ends = new Map<string, { at: number; how: string }>();
+  const ends = new Map<string, { at: number; how: string; category?: string }>();
   for (const line of input.turns) {
-    const record = parse<{ id?: string; event?: string; at?: string; how?: string }>(line);
+    const record = parse<{ id?: string; event?: string; at?: string; how?: string; category?: string }>(line);
     if (record?.id === undefined || record.at === undefined) continue;
     const at = Date.parse(record.at);
     if (Number.isNaN(at)) continue;
     if (record.event === "begin") begins.set(record.id, at);
-    else if (record.event === "end") ends.set(record.id, { at, how: record.how ?? "unknown" });
+    else if (record.event === "end") ends.set(record.id, { at, how: record.how ?? "unknown", ...(record.category !== undefined ? { category: record.category } : {}) });
   }
   const intervals: { start: number; end: number }[] = [];
   const byHow: Record<string, number> = {};
+  const failedBy: Record<string, number> = {};
   const durations: number[] = [];
   for (const [id, start] of begins) {
     if (start < fromMs || start > toMs) continue;
@@ -111,6 +112,10 @@ export function computeMetrics(input: MetricsInput): Metrics {
     intervals.push({ start, end: Math.max(start, stop) });
     const how = end === undefined ? "open" : end.how;
     byHow[how] = (byHow[how] ?? 0) + 1;
+    if (how === "failed") {
+      const category = end?.category ?? "unknown";
+      failedBy[category] = (failedBy[category] ?? 0) + 1;
+    }
     if (end !== undefined) durations.push((end.at - start) / 1000);
   }
   durations.sort((a, b) => a - b);
@@ -205,6 +210,7 @@ export function computeMetrics(input: MetricsInput): Metrics {
     turns: {
       total: turnsTotal,
       byHow,
+      failedBy,
       medianSeconds: percentile(durations, 0.5),
       p90Seconds: percentile(durations, 0.9),
     },
@@ -240,7 +246,10 @@ export function renderMetrics(metrics: Metrics): string {
   const c = metrics.conduct;
   return [
     `Window: ${hours(metrics.windowHours)}`,
-    `Turns: ${metrics.turns.total} (${hows || "none"}); median ${metrics.turns.medianSeconds.toFixed(0)} s, p90 ${metrics.turns.p90Seconds.toFixed(0)} s`,
+    `Turns: ${metrics.turns.total} (${hows || "none"}); median ${metrics.turns.medianSeconds.toFixed(0)} s, p90 ${metrics.turns.p90Seconds.toFixed(0)} s` +
+      (Object.keys(metrics.turns.failedBy).length > 0
+        ? `; failed by class: ${Object.entries(metrics.turns.failedBy).map(([k, n]) => `${k} ${n}`).join(", ")}`
+        : ""),
     `Duty cycle: ${pct(metrics.dutyCycle.rawPercent)} of the wall clock (${hours(metrics.dutyCycle.busyHours)} busy); ` +
       `${pct(metrics.dutyCycle.withWorkPercent)} of the ${metrics.dutyCycle.activeHours} hour(s) that had work`,
     `Tokens: ${metrics.tokens.total.toLocaleString()} (${kinds || "none"}); ${Math.round(metrics.tokens.perTurn).toLocaleString()} per turn`,
