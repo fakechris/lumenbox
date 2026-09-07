@@ -37,10 +37,19 @@ export const MCP_SEPARATOR = "__";
 export interface McpServerConfig {
   /** How this server is named in tool names and in the settings dialog. */
   name: string;
-  command: string;
+  /** stdio: the command to spawn. Exactly one of `command` and `url` must be set. */
+  command?: string;
   args?: string[];
   /** Extra environment for the child. Inherits the orchestrator's, minus nothing. */
   env?: Record<string, string>;
+  /**
+   * Remote: a Streamable HTTP endpoint (the official hosted servers — Linear, Notion —
+   * publish these). The JSON-RPC is the same wire the stdio child speaks; only the pipe
+   * differs, and the pipe is the part this file owns.
+   */
+  url?: string;
+  /** Request headers for a remote server — where a bearer credential travels. */
+  headers?: Record<string, string>;
 }
 
 export interface McpTool {
@@ -130,7 +139,8 @@ class McpServer {
   }
 
   private async start(): Promise<void> {
-    const child = spawn(this.config.command, this.config.args ?? [], {
+    if (this.config.url !== undefined) throw new Error(`${this.config.name} is a remote server; use RemoteMcpServer`);
+    const child = spawn(this.config.command!, this.config.args ?? [], {
       stdio: ["pipe", "pipe", "pipe"],
       env: { ...process.env, ...this.config.env },
     });
@@ -293,9 +303,172 @@ class McpServer {
 function sameServer(a: McpServerConfig, b: McpServerConfig): boolean {
   return (
     a.command === b.command &&
+    a.url === b.url &&
     JSON.stringify(a.args ?? []) === JSON.stringify(b.args ?? []) &&
-    JSON.stringify(a.env ?? {}) === JSON.stringify(b.env ?? {})
+    JSON.stringify(a.env ?? {}) === JSON.stringify(b.env ?? {}) &&
+    JSON.stringify(a.headers ?? {}) === JSON.stringify(b.headers ?? {})
   );
+}
+
+/**
+ * A remote MCP server, spoken to over Streamable HTTP.
+ *
+ * The hosted servers — Linear's, Notion's — are URLs, not processes: the same JSON-RPC
+ * methods the stdio child answers, carried in HTTP POSTs, the session named by a response
+ * header instead of a pipe. A reply arrives either as one JSON document or as an
+ * `text/event-stream` of `data:` lines; both are the same messages, so both parsers end at
+ * `settle`. A server that forgets the session (restart, expiry) gets one re-initialize and
+ * then reports the failure like any other.
+ */
+export class RemoteMcpServer implements ToolServer {
+  readonly config: McpServerConfig;
+  private session: string | undefined;
+  private tools: McpTool[] = [];
+  private detail = "not started";
+  private startPromise: Promise<void> | undefined;
+  private nextId = 1;
+
+  constructor(
+    options: McpServerConfig,
+    private readonly log: (line: string) => void
+  ) {
+    if (options.url === undefined) throw new Error(`${options.name}: a remote server needs a url`);
+    this.config = options;
+  }
+
+  status(): McpServerStatus {
+    return { name: this.config.name, running: this.startPromise !== undefined, toolCount: this.tools.length, detail: this.detail };
+  }
+
+  listTools(): McpTool[] {
+    return this.tools;
+  }
+
+  /** Starts if needed, and resolves once the tool list is known. Never throws to callers. */
+  ensureStarted(): Promise<void> {
+    if (this.startPromise !== undefined) return this.startPromise;
+    this.startPromise = this.start().catch(error => {
+      this.detail = error instanceof Error ? error.message : String(error);
+      this.log(`mcp ${this.config.name}: ${this.detail}`);
+      this.startPromise = undefined; // a later turn retries, like a stdio server that was down
+    });
+    return this.startPromise;
+  }
+
+  private async start(): Promise<void> {
+    const init = (await this.post(
+      { jsonrpc: "2.0", id: this.nextId++, method: "initialize", params: { protocolVersion: "2025-06-18", capabilities: {}, clientInfo: { name: "agentbox", version: "1" } } },
+      START_TIMEOUT_MS
+    )) as { result?: unknown };
+    if (init === undefined) throw new Error("the server never answered initialize");
+    await this.post({ jsonrpc: "2.0", method: "notifications/initialized" }, START_TIMEOUT_MS);
+    const listed = (await this.post({ jsonrpc: "2.0", id: this.nextId++, method: "tools/list", params: {} }, START_TIMEOUT_MS)) as {
+      result?: { tools?: { name?: string; description?: string; inputSchema?: Record<string, unknown> }[] };
+    };
+    this.tools = (listed?.result?.tools ?? [])
+      .filter((tool): tool is { name: string; description?: string; inputSchema?: Record<string, unknown> } => typeof tool?.name === "string")
+      .map(tool => ({
+        name: `${this.config.name}${MCP_SEPARATOR}${tool.name}`,
+        description: tool.description ?? `${tool.name}, from the ${this.config.name} server`,
+        inputSchema:
+          tool.inputSchema !== undefined && typeof tool.inputSchema === "object"
+            ? tool.inputSchema
+            : { type: "object", properties: {} },
+      }));
+    this.detail = `${this.tools.length} tool${this.tools.length === 1 ? "" : "s"} (remote)`;
+    this.log(`mcp ${this.config.name}: ${this.detail}`);
+  }
+
+  /** Calls a tool by its bare (unprefixed) name and returns the result as text. */
+  async call(bareName: string, input: unknown): Promise<string> {
+    await this.ensureStarted();
+    const result = (await this.post(
+      { jsonrpc: "2.0", id: this.nextId++, method: "tools/call", params: { name: bareName, arguments: input ?? {} } },
+      CALL_TIMEOUT_MS
+    )) as { result?: { content?: { type?: string; text?: string }[]; isError?: boolean; structuredContent?: unknown } } | undefined;
+    if (result === undefined) throw new Error(`The ${this.config.name} MCP server is not answering: ${this.detail}`);
+    const content = result.result?.content ?? [];
+    const text = content
+      .map(block =>
+        block.type === "text" && typeof block.text === "string"
+          ? block.text
+          : `(${block.type ?? "content"} omitted — this bridge carries text)`
+      )
+      .join("\n");
+    const body =
+      text !== ""
+        ? text
+        : result.result?.structuredContent !== undefined
+          ? JSON.stringify(result.result.structuredContent)
+          : "(the tool returned nothing)";
+    if (result.result?.isError === true) throw new Error(body);
+    return body;
+  }
+
+  /** One POST; resolves to the response with `id` (a notification resolves to undefined). */
+  private async post(body: Record<string, unknown>, timeoutMs: number): Promise<unknown> {
+    const id = typeof body.id === "number" ? body.id : undefined;
+    const response = await fetch(this.config.url!, {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        accept: "application/json, text/event-stream",
+        ...(this.session !== undefined ? { "mcp-session-id": this.session } : {}),
+        ...this.config.headers,
+      },
+      body: JSON.stringify(body),
+      signal: AbortSignal.timeout(timeoutMs),
+    });
+    const session = response.headers.get("mcp-session-id");
+    if (session !== null && session !== "") this.session = session;
+    if (response.status === 202) return undefined;
+    if (response.status === 404 && this.session !== undefined) {
+      // the session expired server-side: once, drop it and let the caller's retry re-initialize
+      this.session = undefined;
+      this.startPromise = undefined;
+      throw new Error("the server forgot the session; retrying will re-initialize");
+    }
+    if (!response.ok) throw new Error(`HTTP ${response.status} from ${this.config.url}`);
+    const contentType = response.headers.get("content-type") ?? "";
+    const text = await response.text();
+    if (contentType.includes("text/event-stream")) {
+      for (const event of text.split(/\n\n/)) {
+        for (const line of event.split("\n")) {
+          if (!line.startsWith("data:")) continue;
+          const payload = line.slice(5).trim();
+          if (payload === "" || payload === "[DONE]") continue;
+          let message: { id?: number; result?: unknown; error?: { message?: string } };
+          try {
+            message = JSON.parse(payload);
+          } catch {
+            continue;
+          }
+          if (id !== undefined && message.id === id) {
+            if (message.error !== undefined) throw new Error(message.error.message ?? "the server refused");
+            return { result: message.result ?? {} };
+          }
+        }
+      }
+      return undefined; // a stream that answered somebody else's request (or only notifications)
+    }
+    const message = JSON.parse(text) as { id?: number; result?: unknown; error?: { message?: string } };
+    if (id !== undefined && message.id !== id) return undefined;
+    if (message.error !== undefined) throw new Error(message.error.message ?? "the server refused");
+    return { result: message.result ?? {} };
+  }
+
+  stop(): void {
+    const session = this.session;
+    this.session = undefined;
+    this.tools = [];
+    this.startPromise = undefined;
+    if (session === undefined) return;
+    void fetch(this.config.url!, {
+      method: "DELETE",
+      headers: { "mcp-session-id": session, ...this.config.headers },
+      signal: AbortSignal.timeout(5_000),
+    }).catch(() => {});
+  }
 }
 
 /**
@@ -365,7 +538,12 @@ export class McpManager {
     configs: readonly McpServerConfig[],
     private readonly log: (line: string) => void = () => {}
   ) {
-    this.servers = configs.map(config => new McpServer(config, log));
+    this.servers = configs.map(config => this.create(config));
+  }
+
+  /** stdio when a command is named, remote when a url is; the manager treats them alike. */
+  private create(config: McpServerConfig): ToolServer {
+    return config.url !== undefined ? new RemoteMcpServer(config, this.log) : new McpServer(config, this.log);
   }
 
   /**
@@ -385,7 +563,7 @@ export class McpManager {
     const remaining: ToolServer[] = [];
     for (const server of this.servers) {
       // Virtual servers are not config: they stay across a config reload.
-      if (!(server instanceof McpServer)) {
+      if (!(server instanceof McpServer) && !(server instanceof RemoteMcpServer)) {
         remaining.push(server);
         continue;
       }
@@ -400,7 +578,7 @@ export class McpManager {
     }
     for (const config of configs) {
       if (kept.includes(config.name)) continue;
-      const server = new McpServer(config, this.log);
+      const server = this.create(config);
       remaining.push(server);
       void server.ensureStarted();
       started.push(config.name);
@@ -443,7 +621,7 @@ export class McpManager {
    */
   setVirtual(server: VirtualServer): boolean {
     const at = this.servers.findIndex(entry => entry.config.name === server.config.name);
-    if (at >= 0 && this.servers[at] instanceof McpServer) {
+    if (at >= 0 && (this.servers[at] instanceof McpServer || this.servers[at] instanceof RemoteMcpServer)) {
       this.log(`a configured MCP server is already named ${server.config.name}; the in-process one is not installed`);
       return false;
     }

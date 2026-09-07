@@ -184,6 +184,7 @@ import { costOfTasks, type Rates, spendByDay, summariseSpend } from "../host/spe
 import { seedStarterSkills } from "../host/starter-skills.ts";
 import { describeTask, isLive, isTaskStatus } from "../host/tasks.ts";
 import { catalogTemplate, describeTemplate, parseTemplate, rewriteFrontmatter, templatesEnabled, unresolvedPlaceholders } from "../host/template.ts";
+import { connectorSatisfied } from "../host/mcp-connectors.ts";
 import { adminRecipients, decideUpgrade, upgradeMessage } from "../host/upgrade.ts";
 import type { UsageRecord } from "../host/usage.ts";
 import { type Grant, Vault } from "../host/vault.ts";
@@ -4098,6 +4099,9 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
           const connected = [
             "browser",
             ...channelRecords.map(record => record.type),
+            // every connector the template names that a configured MCP server or a live
+            // connector door satisfies; the rest stay pending and the setup turn asks (mcp-connectors.ts)
+            ...parsed.template.connectors.filter(connector => connectorSatisfied(connector, orchestrator.mcp.statuses().map(status => status.name))),
           ];
           let imported: ReturnType<typeof orchestrator.importTemplate>;
           try {
