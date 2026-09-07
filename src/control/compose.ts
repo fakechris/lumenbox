@@ -25,13 +25,13 @@
  * host's memory divided by the per-box ceiling, and nothing here pretends otherwise.
  */
 
-import { createHash } from "node:crypto";
 import { execFile } from "node:child_process";
+import { createHash } from "node:crypto";
 import { promisify } from "node:util";
-import { BoxManager, DockerError, defaultBoxConfig } from "../box/docker.ts";
 import type { BoxStatus, ContainerState } from "../box/docker.ts";
-import type { BoxSpec, AllocatorKind, BoxHandle, BoxTokens } from "./allocator.ts";
-import { StoreBackedAllocator } from "./allocator.ts";
+import { BoxManager, DockerError, defaultBoxConfig } from "../box/docker.ts";
+import type { AllocatorKind, BoxHandle, BoxSpec, BoxTokens } from "./allocator.ts";
+import { DEFAULT_RELAY_PROVIDER, StoreBackedAllocator } from "./allocator.ts";
 import type { BoxState, ControlStore } from "./store.ts";
 
 export interface ComposeAllocatorOptions {
@@ -177,7 +177,7 @@ export class ComposeAllocator extends StoreBackedAllocator {
                 // to see its own screen. Behind a relay only the endpoint and credential change; the
                 // capabilities still follow the model.
                 "--env",
-                `AGENTBOX_PROVIDER=${this.options.relayProvider ?? "anthropic"}`,
+                `AGENTBOX_PROVIDER=${this.options.relayProvider ?? DEFAULT_RELAY_PROVIDER}`,
                 // host.docker.internal resolves on Docker Desktop already; the mapping is what makes
                 // the same address work on a Linux engine.
                 "--add-host",

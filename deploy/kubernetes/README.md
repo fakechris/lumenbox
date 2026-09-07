@@ -19,13 +19,20 @@ docker push <your-registry>/agentbox/box:latest
 #    Deployment references the ServiceAccount, so this order is the one that applies cleanly.
 kubectl apply -f deploy/kubernetes/namespace.yaml
 kubectl apply -f deploy/kubernetes/rbac.yaml
+
+# 3. Tenants and passwords, generated rather than committed: the Deployment reads them from this
+#    Secret. Save what it prints — the random part is the admin password.
+kubectl -n agentbox create secret generic agentbox-control-users \
+  --from-literal=AGENTBOX_CONTROL_USERS="admin:$(openssl rand -hex 8):default"
+
 kubectl apply -f deploy/kubernetes/control-plane.yaml
 ```
 
-Then edit `control-plane.yaml` before real use: the ConfigMap's `AGENTBOX_CONTROL_USERS`, the
-Secret's provider key, and the image name if you pushed to your own registry. There is no TLS on
-the gateway — put an Ingress with a terminator in front of the `agentbox-control` Service's
-`gateway` port before anyone signs in over a network.
+Then edit `control-plane.yaml` before real use: the `agentbox-control` Secret's provider key, and
+the image name if you pushed to your own registry. If you skipped step 3, the control plane logs a
+generated admin password on every start instead — fine for a look around, wrong for anything
+longer. There is no TLS on the gateway — put an Ingress with a terminator in front of the
+`agentbox-control` Service's `gateway` port before anyone signs in over a network.
 
 ## How it wires together
 

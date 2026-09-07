@@ -28,13 +28,15 @@
 import { existsSync, readFileSync } from "node:fs";
 import https from "node:https";
 import { homedir } from "node:os";
-import { join } from "node:path";
+import { dirname, isAbsolute, join } from "node:path";
 
 /** A name and the labels it carries. Everything else about an object is kind-specific. */
 export interface KubeObjectMeta {
   name: string;
   labels?: Record<string, string>;
   annotations?: Record<string, string>;
+  /** Set once deletion starts: the object is leaving, whatever its status still claims. */
+  deletionTimestamp?: string;
 }
 
 /**
@@ -93,8 +95,6 @@ export interface KubeApi {
   deletePvc(name: string): Promise<void>;
   applySecret(secret: KubeSecret): Promise<void>;
   deleteSecret(name: string): Promise<void>;
-  /** Every pod carrying these labels — how a sweep asks "what does this allocator own". */
-  listByLabel(selector: Record<string, string>): Promise<KubePod[]>;
 }
 
 export class KubernetesError extends Error {
@@ -112,8 +112,12 @@ export class KubernetesError extends Error {
 export interface KubeCredentials {
   /** e.g. `https://kubernetes.default.svc` — no trailing slash, no path. */
   server: string;
-  /** Bearer token, when token auth is used. */
-  token?: string;
+  /**
+   * Bearer token — a value, or a function returning the current value. The function shape is how
+   * in-cluster credentials come in: ServiceAccount tokens rotate (BoundServiceAccountTokenVolume
+   * rewrites the file, hourly by default), so a token read once at startup is a 401 an hour in.
+   */
+  token?: string | (() => string);
   /** CA bundle the server's certificate is checked against. */
   ca?: Buffer;
   /** Client certificate and key, the other auth shape a kubeconfig carries. */
@@ -128,12 +132,20 @@ const SERVICE_ACCOUNT_DIR = "/var/run/secrets/kubernetes.io/serviceaccount";
  *
  * Undefined rather than an error, because "am I in a cluster" is a legitimate question with a
  * legitimate no — the caller falls through to the kubeconfig.
+ *
+ * The token is a *function*, not a value: Kubernetes rotates ServiceAccount tokens and rewrites
+ * the file underneath us, so the token is re-read on every request. Reading a file costs nothing;
+ * an hour-old token is a 401 with nothing pointing at the cause. The CA does not rotate on that
+ * cadence, so it is still read once. The directory is a parameter so a test can be a cluster.
  */
-export function inClusterCredentials(env: NodeJS.ProcessEnv = process.env): KubeCredentials | undefined {
+export function inClusterCredentials(
+  env: NodeJS.ProcessEnv = process.env,
+  serviceAccountDir = SERVICE_ACCOUNT_DIR
+): KubeCredentials | undefined {
   const host = env.KUBERNETES_SERVICE_HOST;
   const port = env.KUBERNETES_SERVICE_PORT;
   if (host === undefined || host === "") return undefined;
-  const tokenPath = join(SERVICE_ACCOUNT_DIR, "token");
+  const tokenPath = join(serviceAccountDir, "token");
   if (!existsSync(tokenPath)) {
     // The variable says in-cluster but the mount says otherwise: half a deployment. Loud, because
     // silently falling through to someone's laptop kubeconfig would allocate boxes into whatever
@@ -144,10 +156,10 @@ export function inClusterCredentials(env: NodeJS.ProcessEnv = process.env): Kube
         `ServiceAccount, or unset KUBERNETES_SERVICE_HOST.`
     );
   }
-  const caPath = join(SERVICE_ACCOUNT_DIR, "ca.crt");
+  const caPath = join(serviceAccountDir, "ca.crt");
   return {
     server: `https://${host}:${port ?? "443"}`,
-    token: readFileSync(tokenPath, "utf8").trim(),
+    token: () => readFileSync(tokenPath, "utf8").trim(),
     ca: existsSync(caPath) ? readFileSync(caPath) : undefined,
   };
 }
@@ -183,24 +195,6 @@ export function kubeconfigCredentials(
     throw new KubernetesError(`${path}: no current-context — nothing says which cluster to use`);
   }
 
-  const named = (list: unknown): Record<string, unknown> | undefined => {
-    if (!Array.isArray(list)) return undefined;
-    for (const entry of list) {
-      if (typeof entry === "object" && entry !== null && (entry as Record<string, unknown>).name === currentContext) {
-        return entry as Record<string, unknown>;
-      }
-    }
-    return undefined;
-  };
-
-  const context = named(root.contexts)?.context as Record<string, unknown> | undefined;
-  if (context === undefined) {
-    throw new KubernetesError(`${path}: current-context ${currentContext} is not in contexts`);
-  }
-  // A context names its cluster and user; find *those* entries, not the one sharing the
-  // context's name — they coincide in kind-generated configs and diverge in hand-written ones.
-  const clusterName = typeof context.cluster === "string" ? context.cluster : currentContext;
-  const userName = typeof context.user === "string" ? context.user : currentContext;
   const byName = (list: unknown, name: string): Record<string, unknown> | undefined => {
     if (!Array.isArray(list)) return undefined;
     for (const entry of list) {
@@ -210,16 +204,43 @@ export function kubeconfigCredentials(
     }
     return undefined;
   };
+
+  const context = byName(root.contexts, currentContext)?.context as Record<string, unknown> | undefined;
+  if (context === undefined) {
+    throw new KubernetesError(`${path}: current-context ${currentContext} is not in contexts`);
+  }
+  // A context names its cluster and user; find *those* entries, not the one sharing the
+  // context's name — they coincide in kind-generated configs and diverge in hand-written ones.
+  const clusterName = typeof context.cluster === "string" ? context.cluster : currentContext;
+  const userName = typeof context.user === "string" ? context.user : currentContext;
   const cluster = byName(root.clusters, clusterName)?.cluster as Record<string, unknown> | undefined;
   if (cluster === undefined) {
     throw new KubernetesError(`${path}: context ${currentContext} names cluster ${clusterName}, which is not in clusters`);
   }
+  if (cluster["insecure-skip-tls-verify"] === "true" || cluster["insecure-skip-tls-verify"] === true) {
+    // Refused rather than honoured: a client that does not check the server's certificate
+    // authenticates nobody, and every token this client sends is a tenant's. The same posture as
+    // the exec plugin below — the loud error names the way out.
+    throw new KubernetesError(
+      `${path}: cluster ${clusterName} sets insecure-skip-tls-verify, which this client refuses. ` +
+        `Give it the CA instead: certificate-authority-data, or certificate-authority by path.`
+    );
+  }
   const server = cluster.server;
-  if (typeof server !== "string" || !server.startsWith("http")) {
+  if (typeof server === "string" && server.startsWith("http://")) {
+    throw new KubernetesError(
+      `${path}: cluster ${clusterName} uses a plain-http server (${server}) — bearer tokens would ` +
+        `travel in the clear. Use https, or put a port-forward between this client and the apiserver.`
+    );
+  }
+  if (typeof server !== "string" || !server.startsWith("https://")) {
     throw new KubernetesError(`${path}: cluster ${clusterName} has no usable server URL`);
   }
 
-  const ca = inlineOrFile(cluster, "certificate-authority", readFile);
+  // Paths in a kubeconfig resolve against the kubeconfig's own directory, as kubectl resolves
+  // them — not against wherever this process happened to be started from.
+  const baseDir = dirname(path);
+  const ca = inlineOrFile(cluster, "certificate-authority", readFile, baseDir);
   const user = byName(root.users, userName)?.user as Record<string, unknown> | undefined;
   if (user !== undefined && user.exec !== undefined) {
     // gke/eks/SSO helpers. Refused rather than executed: shelling out to a credential plugin from
@@ -232,8 +253,8 @@ export function kubeconfigCredentials(
     );
   }
   const token = typeof user?.token === "string" ? user.token : undefined;
-  const clientCert = user === undefined ? undefined : inlineOrFile(user, "client-certificate", readFile);
-  const clientKey = user === undefined ? undefined : inlineOrFile(user, "client-key", readFile);
+  const clientCert = user === undefined ? undefined : inlineOrFile(user, "client-certificate", readFile, baseDir);
+  const clientKey = user === undefined ? undefined : inlineOrFile(user, "client-key", readFile, baseDir);
   if (token === undefined && (clientCert === undefined || clientKey === undefined)) {
     throw new KubernetesError(
       `${path}: user ${userName} has neither a token nor a client certificate pair — nothing here ` +
@@ -243,16 +264,17 @@ export function kubeconfigCredentials(
   return { server: server.replace(/\/+$/, ""), token, ca, clientCert, clientKey };
 }
 
-/** A `*-data` field is inline base64; the bare name is a path. Both exist in the wild. */
+/** A `*-data` field is inline base64; the bare name is a path, resolved against `baseDir`. Both exist in the wild. */
 function inlineOrFile(
   holder: Record<string, unknown>,
   base: string,
-  readFile: (path: string) => Buffer
+  readFile: (path: string) => Buffer,
+  baseDir: string
 ): Buffer | undefined {
   const inline = holder[`${base}-data`];
   if (typeof inline === "string" && inline !== "") return Buffer.from(inline, "base64");
   const file = holder[base];
-  if (typeof file === "string" && file !== "") return readFile(file);
+  if (typeof file === "string" && file !== "") return readFile(isAbsolute(file) ? file : join(baseDir, file));
   return undefined;
 }
 
@@ -274,7 +296,10 @@ export function parseMinimalYaml(text: string, source = "<yaml>"): unknown {
     if (raw.includes("\t")) {
       throw new KubernetesError(`${source}:${i + 1}: a tab in the indentation — YAML forbids it`);
     }
-    const stripped = raw.replace(/#.*$/, "").replace(/\s+$/, "");
+    // A `#` starts a comment only at the start of a line or after whitespace — `token: abc#def`
+    // is a value, and tokens with `#` in them exist. (A quoted `"abc #def"` is still misread; the
+    // day a kubeconfig needs that is the day the YAML-dependency question is reopened.)
+    const stripped = raw.replace(/(^|\s)#.*$/, "").replace(/\s+$/, "");
     if (stripped.trim() === "" || stripped.trim() === "---") return;
     const indent = stripped.length - stripped.trimStart().length;
     lines.push({ indent, text: stripped.trimStart(), line: i + 1 });
@@ -387,11 +412,26 @@ const RESOURCES = {
 type ResourceKind = keyof typeof RESOURCES;
 
 /**
- * The real client: one HTTPS request per verb, keep-alive off.
+ * Fields the apiserver assigns and forbids changing. Carried from the live object into a
+ * replacement PUT so "create-or-replace" is not read as an attempt to change them.
+ */
+const SERVER_ASSIGNED: Record<ResourceKind, readonly string[]> = {
+  pods: [],
+  services: ["clusterIP", "clusterIPs", "ipFamilies", "ipFamilyPolicy"],
+  persistentvolumeclaims: ["volumeName"],
+  secrets: [],
+};
+
+/** How long `replacePod` waits for a deleted pod's name to free. A wedged kubelet, not a slow one. */
+const POD_DELETION_WAIT_MS = 60_000;
+
+/**
+ * The real client: one HTTPS request per verb over a keep-alive agent.
  *
- * No watch, no informers, no paging — the allocator's questions are all "this one name" or "pods
- * with these labels in one namespace", and a fleet of tenants does not make a list response large.
- * The day it does, `listByLabel` is where pagination lands, not a rewrite.
+ * Keep-alive because the readiness wait polls the same pod every two seconds — a fresh TLS
+ * handshake per answer would make the polling itself the load. No watch, no informers, no paging:
+ * the allocator's questions are all "this one name", and list answers come from the store, not
+ * the apiserver.
  */
 export class HttpKubeApi implements KubeApi {
   private readonly agent: https.Agent;
@@ -402,6 +442,7 @@ export class HttpKubeApi implements KubeApi {
     private readonly timeoutMs = 30_000
   ) {
     this.agent = new https.Agent({
+      keepAlive: true,
       ca: credentials.ca,
       cert: credentials.clientCert,
       key: credentials.clientKey,
@@ -441,14 +482,6 @@ export class HttpKubeApi implements KubeApi {
   deleteSecret(name: string): Promise<void> {
     return this.remove("secrets", name);
   }
-  async listByLabel(selector: Record<string, string>): Promise<KubePod[]> {
-    const query = Object.entries(selector)
-      .map(([key, value]) => `${key}=${value}`)
-      .join(",");
-    const body = await this.request("GET", `${this.pathFor("pods")}?labelSelector=${encodeURIComponent(query)}`);
-    const list = body as { items?: KubePod[] };
-    return list.items ?? [];
-  }
 
   private pathFor(kind: ResourceKind, name?: string): string {
     const base = RESOURCES[kind].replace("{ns}", encodeURIComponent(this.namespace));
@@ -456,7 +489,8 @@ export class HttpKubeApi implements KubeApi {
   }
 
   /**
-   * Create-or-replace. POST first; on 409 read the object back for its resourceVersion and PUT.
+   * Create-or-replace. POST first; on 409, what "replace" means depends on the kind — see
+   * `replacePod` and `replaceInPlace`.
    *
    * Server-side apply would avoid the read, at the cost of speaking `application/apply-patch+yaml`
    * and owning field-management semantics. The read is one request against a control plane that
@@ -465,17 +499,102 @@ export class HttpKubeApi implements KubeApi {
   private async apply(kind: ResourceKind, name: string, manifest: Record<string, unknown>): Promise<void> {
     try {
       await this.request("POST", this.pathFor(kind), manifest);
+      return;
     } catch (error) {
       if (!(error instanceof KubernetesError) || error.status !== 409) throw error;
-      const existing = (await this.request("GET", this.pathFor(kind, name))) as {
-        metadata?: { resourceVersion?: string };
-      };
-      const manifestMeta = (manifest.metadata ?? {}) as Record<string, unknown>;
-      await this.request("PUT", this.pathFor(kind, name), {
-        ...manifest,
-        metadata: { ...manifestMeta, resourceVersion: existing.metadata?.resourceVersion },
-      });
     }
+    if (kind === "pods") return this.replacePod(name, manifest);
+    return this.replaceInPlace(kind, name, manifest);
+  }
+
+  /**
+   * A pod is recreated, never updated: nearly the whole spec is immutable once created, so a PUT
+   * is a 422 the apiserver is right to return. A 409 here means a previous incarnation still
+   * holds the name — delete it (grace 0: the box it was is already broken, and a 30s graceful
+   * shutdown on a pod being replaced is pure latency) and wait for the name to actually free
+   * before re-POSTing. Deletion is asynchronous; an immediate re-POST is just the 409 again.
+   */
+  private async replacePod(name: string, manifest: Record<string, unknown>): Promise<void> {
+    await this.request("DELETE", this.pathFor("pods", name), {
+      apiVersion: "v1",
+      kind: "DeleteOptions",
+      gracePeriodSeconds: 0,
+    });
+    const deadline = Date.now() + POD_DELETION_WAIT_MS;
+    for (;;) {
+      if ((await this.get("pods", name)) === undefined) break;
+      if (Date.now() > deadline) {
+        throw new KubernetesError(
+          `pod ${name} still existed ${POD_DELETION_WAIT_MS / 1000}s after a grace-0 delete — the ` +
+            `kubelet is not letting go; look at the node before retrying`
+        );
+      }
+      await new Promise(resolve => setTimeout(resolve, 500));
+    }
+    await this.request("POST", this.pathFor("pods"), manifest);
+  }
+
+  /**
+   * Services, PVCs and Secrets are replaced in place — but a PUT is a *full* replace of the
+   * object, and the apiserver assigned fields we never knew: a Service's clusterIP/clusterIPs/
+   * ipFamilies are immutable once assigned, a bound PVC's volumeName likewise. Those are carried
+   * over from the live object, or the PUT is a 422 for "changing" a field we never touched.
+   */
+  private async replaceInPlace(kind: ResourceKind, name: string, manifest: Record<string, unknown>): Promise<void> {
+    let lastError: unknown;
+    // Bounded retries: between our GET and PUT someone else may write the object, which the
+    // apiserver reports as a 409 resourceVersion conflict. Three attempts, then we are the fight.
+    for (let attempt = 0; attempt < 3; attempt++) {
+      const existing = (await this.get(kind, name)) as
+        | { metadata?: Record<string, unknown>; spec?: Record<string, unknown> }
+        | undefined;
+      if (existing === undefined) {
+        // Deleted between the 409 and now — plain create, then.
+        await this.request("POST", this.pathFor(kind), manifest);
+        return;
+      }
+      const manifestMeta = (manifest.metadata ?? {}) as Record<string, unknown>;
+      const spec = { ...((manifest.spec ?? {}) as Record<string, unknown>) };
+      for (const field of SERVER_ASSIGNED[kind]) {
+        if (spec[field] === undefined && existing.spec?.[field] !== undefined) {
+          spec[field] = existing.spec[field];
+        }
+      }
+      try {
+        await this.request("PUT", this.pathFor(kind, name), {
+          ...manifest,
+          metadata: {
+            ...manifestMeta,
+            // Annotations the server set (the PV binder marks claims bound, provisioners sign
+            // their work) must survive a full-object replace, or the object half-forgets what it
+            // is. Ours win where both set the same key.
+            annotations: {
+              ...((existing.metadata?.annotations ?? {}) as Record<string, unknown>),
+              ...((manifestMeta.annotations ?? {}) as Record<string, unknown>),
+            },
+            resourceVersion: existing.metadata?.resourceVersion,
+          },
+          spec,
+        });
+        return;
+      } catch (error) {
+        lastError = error;
+        if (error instanceof KubernetesError && error.status === 409) continue;
+        if (error instanceof KubernetesError && error.status === 422 && kind === "persistentvolumeclaims") {
+          // A bound claim's spec is largely immutable, and merging could not square ours with it.
+          // Loud, and the claim is left alone: it holds a tenant's data, and a client that deletes
+          // a volume it failed to update is not a client, it is an incident.
+          throw new KubernetesError(
+            `persistentvolumeclaim ${name} cannot take the requested spec: ${error.message} ` +
+              `The claim was left in place — reconcile it by hand (recreate the claim and re-run); ` +
+              `this client will not delete a volume.`,
+            422
+          );
+        }
+        throw error;
+      }
+    }
+    throw lastError;
   }
 
   private async get(kind: ResourceKind, name: string): Promise<unknown> {
@@ -500,6 +619,10 @@ export class HttpKubeApi implements KubeApi {
   private request(method: string, path: string, body?: unknown): Promise<unknown> {
     const url = new URL(`${this.credentials.server}${path}`);
     const payload = body === undefined ? undefined : JSON.stringify(body);
+    // Resolved per request, not in the constructor: an in-cluster token is a re-read of a file
+    // Kubernetes rotates, and this is the one place every request passes through.
+    const token =
+      typeof this.credentials.token === "function" ? this.credentials.token() : this.credentials.token;
     return new Promise((resolve, reject) => {
       const req = https.request(
         {
@@ -512,9 +635,7 @@ export class HttpKubeApi implements KubeApi {
           headers: {
             accept: "application/json",
             ...(payload !== undefined ? { "content-type": "application/json" } : {}),
-            ...(this.credentials.token !== undefined
-              ? { authorization: `Bearer ${this.credentials.token}` }
-              : {}),
+            ...(token !== undefined ? { authorization: `Bearer ${token}` } : {}),
           },
         },
         res => {

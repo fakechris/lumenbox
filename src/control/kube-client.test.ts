@@ -163,6 +163,91 @@ test("in-cluster credentials come from the environment and the mounted token", (
   assert.throws(() => inClusterCredentials({ KUBERNETES_SERVICE_HOST: "10.0.0.1" }), /ServiceAccount is not mounted/);
 });
 
+test("an in-cluster token is re-read every time it is asked for, because it rotates", () => {
+  // Kubernetes rotates ServiceAccount tokens (BoundServiceAccountTokenVolume, hourly by default)
+  // and rewrites the file underneath the process; a token read once at startup is a 401 an hour
+  // in, with nothing pointing at the cause.
+  const dir = mkdtempSync(join(tmpdir(), "agentbox-sa-"));
+  try {
+    writeFileSync(join(dir, "token"), "tok-one\n");
+    writeFileSync(join(dir, "ca.crt"), "FAKE-CA");
+    const credentials = inClusterCredentials({ KUBERNETES_SERVICE_HOST: "10.0.0.1" }, dir);
+    assert.ok(credentials !== undefined);
+    assert.equal(typeof credentials.token, "function", "a reader, not a value");
+    const readToken = credentials.token as () => string;
+    assert.equal(readToken(), "tok-one");
+    writeFileSync(join(dir, "token"), "tok-two\n");
+    assert.equal(readToken(), "tok-two", "the rotation is picked up without a restart");
+    assert.equal(credentials.ca?.toString("utf8"), "FAKE-CA");
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("a # only starts a comment at line start or after whitespace", () => {
+  // `token: abc#def` is a value — tokens with a # in them exist, and stripping at any # would
+  // silently truncate a credential.
+  assert.deepEqual(parseMinimalYaml("token: abc#def\n"), { token: "abc#def" });
+  assert.deepEqual(parseMinimalYaml("key: value # the comment\n"), { key: "value" });
+  assert.deepEqual(parseMinimalYaml("# just a comment\nkey: value\n"), { key: "value" });
+});
+
+test("insecure-skip-tls-verify is refused, with the way out", () => {
+  withKubeconfig(
+    KIND_CONFIG.replace(/certificate-authority-data: \S+/, "insecure-skip-tls-verify: true"),
+    path => {
+      assert.throws(() => kubeconfigCredentials({ KUBECONFIG: path }), /insecure-skip-tls-verify/);
+    }
+  );
+});
+
+test("a plain-http cluster server is refused, not silently used", () => {
+  withKubeconfig(KIND_CONFIG.replace("https://127.0.0.1:6443", "http://127.0.0.1:6443"), path => {
+    assert.throws(() => kubeconfigCredentials({ KUBECONFIG: path }), /plain-http/);
+  });
+});
+
+test("certificate paths resolve against the kubeconfig's own directory, not cwd", () => {
+  // kubectl resolves relative certificate-authority / client-certificate / client-key paths
+  // against the config file's directory; resolving against process.cwd() would load whichever
+  // files the working directory happened to hold.
+  const dir = mkdtempSync(join(tmpdir(), "agentbox-kubeconfig-"));
+  try {
+    writeFileSync(join(dir, "ca.pem"), "CA-BY-PATH");
+    writeFileSync(join(dir, "client.pem"), "CERT-BY-PATH");
+    writeFileSync(join(dir, "client-key.pem"), "KEY-BY-PATH");
+    writeFileSync(
+      join(dir, "config"),
+      `
+current-context: c
+contexts:
+- name: c
+  context:
+    cluster: c
+    user: c
+clusters:
+- name: c
+  cluster:
+    server: https://c.example.com
+    certificate-authority: ca.pem
+users:
+- name: c
+  user:
+    client-certificate: client.pem
+    client-key: client-key.pem
+`
+    );
+    const credentials = kubeconfigCredentials({ KUBECONFIG: join(dir, "config") });
+    assert.equal(credentials.server, "https://c.example.com");
+    assert.equal(credentials.ca?.toString("utf8"), "CA-BY-PATH");
+    assert.equal(credentials.clientCert?.toString("utf8"), "CERT-BY-PATH");
+    assert.equal(credentials.clientKey?.toString("utf8"), "KEY-BY-PATH");
+    assert.equal(credentials.token, undefined);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
 test("the parser refuses the YAML it does not understand, with a line number", () => {
   assert.throws(() => parseMinimalYaml("key: |\n  multi\n  line\n"), /block scalars/);
   assert.throws(() => parseMinimalYaml("key:\n\tvalue: 1\n"), /tab/);

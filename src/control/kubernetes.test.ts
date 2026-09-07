@@ -29,10 +29,19 @@ interface Call {
  * An in-memory API server: remembers which objects "exist" and records every call.
  *
  * Pods become Ready the moment they are applied — the fake is a *kind* cluster where everything
- * schedules instantly — unless `neverReady` asks it to be the other kind, which is the timeout
- * path's whole test.
+ * schedules instantly — unless `neverReady` asks it to be the other kind (the timeout path's
+ * whole test) or `podFate` asks for one of the ways a pod never becomes Ready at all.
  */
-function fakeApi(options: { existingPods?: KubePod[]; neverReady?: boolean; failPvcDelete?: string } = {}) {
+function fakeApi(
+  options: {
+    existingPods?: KubePod[];
+    neverReady?: boolean;
+    failPvcDelete?: string;
+    failApplyService?: boolean;
+    /** `vanished`: apply never lands. `failed` / `terminating`: the pod exists but cannot Ready. */
+    podFate?: "vanished" | "failed" | "terminating";
+  } = {}
+) {
   const pods = new Map<string, KubePod>();
   const services = new Map<string, KubeService>();
   const pvcs = new Map<string, KubePvc>();
@@ -44,13 +53,25 @@ function fakeApi(options: { existingPods?: KubePod[]; neverReady?: boolean; fail
   const api: KubeApi = {
     async applyPod(pod) {
       calls.push({ verb: "apply", kind: "pod", name: pod.metadata.name });
+      // A pod that never lands at all: the scheduler lost it between POST and the first poll.
+      if (options.podFate === "vanished") return;
       // A real kubelet flips the Ready condition once the probe passes; the fake does it at
       // apply, so `waitReady` returns on its first poll.
       pods.set(pod.metadata.name, {
         ...pod,
-        status: options.neverReady === true
-          ? { phase: "Pending" }
-          : { phase: "Running", conditions: [{ type: "Ready", status: "True" }] },
+        metadata: {
+          ...pod.metadata,
+          // Terminating: someone deleted the pod underneath the readiness wait.
+          ...(options.podFate === "terminating"
+            ? { deletionTimestamp: new Date().toISOString() }
+            : {}),
+        },
+        status:
+          options.podFate === "failed"
+            ? { phase: "Failed" }
+            : options.neverReady === true || options.podFate !== undefined
+              ? { phase: "Pending" }
+              : { phase: "Running", conditions: [{ type: "Ready", status: "True" }] },
       });
     },
     async getPod(name) {
@@ -63,6 +84,7 @@ function fakeApi(options: { existingPods?: KubePod[]; neverReady?: boolean; fail
     },
     async applyService(service) {
       calls.push({ verb: "apply", kind: "service", name: service.metadata.name });
+      if (options.failApplyService === true) throw new Error("the apiserver said no");
       services.set(service.metadata.name, service);
     },
     async getService(name) {
@@ -96,16 +118,18 @@ function fakeApi(options: { existingPods?: KubePod[]; neverReady?: boolean; fail
       calls.push({ verb: "delete", kind: "secret", name });
       secrets.delete(name);
     },
-    async listByLabel(selector) {
-      return [...pods.values()].filter(pod =>
-        Object.entries(selector).every(([key, value]) => pod.metadata.labels?.[key] === value)
-      );
-    },
   };
   return { api, pods, services, pvcs, secrets, calls };
 }
 
-function fixture(options: Parameters<typeof fakeApi>[0] & { relayUrl?: string; policy?: AllocationPolicy } = {}) {
+function fixture(
+  options: Parameters<typeof fakeApi>[0] & {
+    relayUrl?: string;
+    controlUrl?: string;
+    namespace?: string;
+    policy?: AllocationPolicy;
+  } = {}
+) {
   const dir = mkdtempSync(join(tmpdir(), "agentbox-kubernetes-"));
   const store = new SqliteControlStore({ path: join(dir, "control.db") });
   const fake = fakeApi(options);
@@ -113,6 +137,8 @@ function fixture(options: Parameters<typeof fakeApi>[0] & { relayUrl?: string; p
     api: fake.api,
     image: "agentbox/box:test",
     relayUrl: options.relayUrl,
+    controlUrl: options.controlUrl,
+    namespace: options.namespace,
     policy: options.policy,
   });
   return {
@@ -148,12 +174,17 @@ test("a tenant gets a pod, a service, three PVCs and a secret, all named and lab
     }
     assert.ok(fake.secrets.has(`${name}-tokens`), "the token secret exists");
 
-    // Everything this allocator makes is labelled, so `listByLabel` — and an operator's kubectl —
-    // can ask what it owns without knowing any names.
+    // Everything this allocator makes is labelled, so an operator's kubectl can ask what it owns
+    // without knowing any names.
     const labels = fake.pods.get(name)?.metadata.labels ?? {};
     assert.equal(labels["app.kubernetes.io/managed-by"], "agentbox");
     assert.equal(labels["app.kubernetes.io/instance"], name);
     assert.match(labels["agentbox/tenant"] ?? "", /^[0-9a-f]{8}$/);
+
+    // A box runs code its agents write; the pod asks the cluster for no credential of its own.
+    const podSpec = fake.pods.get(name)!.spec;
+    assert.equal(podSpec.automountServiceAccountToken, false);
+    assert.equal(podSpec.enableServiceLinks, false);
 
     // Creation order: secret, PVCs, service, pod. The pod references the others by name, so they
     // exist first — and the order is what a reader of the calls can hold the code to.
@@ -413,7 +444,7 @@ test("a pod that never becomes ready fails loudly, with its phase", async () => 
   }
 });
 
-test("losing an allocation race leaves one box and one pod", async () => {
+test("two concurrent allocates serialize: one secret, one pod, and the tokens match", async () => {
   const { store, allocator, fake, cleanup } = fixture();
   try {
     const acme = store.upsertTenant({ name: "acme" });
@@ -423,30 +454,242 @@ test("losing an allocation race leaves one box and one pod", async () => {
       allocator.allocate(acme.id, spec),
     ]);
 
-    assert.equal(first.id, second.id, "one box, whichever of them won");
-    assert.equal(store.boxForTenant(acme.id)?.id, first.id);
-    // The loser's create deleted and re-applied the shared pod (a name derived from the tenant is
-    // one name), but the loser's destroy path must not have run: the volumes are the winner's.
-    assert.ok(fake.pods.has(first.externalId), "the pod is still there");
-    for (const suffix of ["work", "config", "hostd"]) {
-      assert.ok(fake.pvcs.has(`${first.externalId}-${suffix}`), "the winner's volumes survive the race");
-    }
+    assert.equal(first.id, second.id, "one box, and both callers hold it");
+    // Without the per-tenant chain the loser would apply its own Secret after the winner's pod
+    // started, and the store's token and the pod's environment would disagree forever.
+    assert.equal(
+      fake.calls.filter(c => c.verb === "apply" && c.kind === "secret").length,
+      1,
+      "exactly one secret was ever written"
+    );
+    assert.equal(fake.calls.filter(c => c.verb === "apply" && c.kind === "pod").length, 1);
+    assert.equal(fake.pvcs.size, 3, "one set of volumes");
+
+    // And the one secret that exists carries the tokens the handle claims — the property the
+    // race used to break.
+    const secret = fake.secrets.get(`${first.externalId}-tokens`)!;
+    assert.equal(Buffer.from(secret.data.BOXD_TOKEN!, "base64").toString("utf8"), first.tokens.box);
+    assert.equal(Buffer.from(secret.data.AGENTBOX_UI_TOKEN!, "base64").toString("utf8"), first.tokens.ui);
   } finally {
     cleanup();
   }
 });
 
-test("listByLabel finds what this allocator owns", async () => {
+test("a create that fails half-way removes what it made, but keeps the volumes", async () => {
+  const { store, allocator, fake, cleanup } = fixture({ failApplyService: true });
+  try {
+    const acme = store.upsertTenant({ name: "acme" });
+    await assert.rejects(
+      allocator.allocate(acme.id, { image: "agentbox/box:test" }),
+      /the apiserver said no/
+    );
+    const name = containerNameFor("agentbox", "acme", acme.id);
+
+    // The Secret held live tokens; an orphaned one would be a credential nobody owns.
+    assert.equal(fake.secrets.size, 0, "the secret was removed");
+    assert.ok(
+      fake.calls.some(c => c.verb === "delete" && c.kind === "secret" && c.name === `${name}-tokens`),
+      "and the removal was actually attempted"
+    );
+    assert.equal(fake.services.size, 0, "the service never landed");
+    assert.equal(fake.pods.size, 0, "the pod never landed");
+    // The volumes stay on purpose: they are data, and a retried allocate applies over them cleanly.
+    assert.equal(fake.pvcs.size, 3, "the volumes are kept");
+  } finally {
+    cleanup();
+  }
+});
+
+test("a control plane pointed at another namespace is told so, not told the box is gone", async () => {
   const { store, allocator, fake, cleanup } = fixture();
   try {
     const acme = store.upsertTenant({ name: "acme" });
-    const beta = store.upsertTenant({ name: "beta" });
-    await allocator.allocate(acme.id, { image: "agentbox/box:test" });
-    await allocator.allocate(beta.id, { image: "agentbox/box:test" });
+    const handle = await allocator.allocate(acme.id, { image: "agentbox/box:test" });
+    assert.match(handle.boxdUrl, /\.agentbox\.svc:/);
 
-    const owned = await fake.api.listByLabel({ "app.kubernetes.io/managed-by": "agentbox" });
-    assert.equal(owned.length, 2);
-    assert.ok(owned.every(pod => pod.metadata.labels?.["agentbox/tenant"] !== undefined));
+    // The namespace is encoded in the stored address, so the drift is detectable — and reporting
+    // "gone" would send the next allocate to create a second box in the wrong namespace.
+    const drifted = new KubernetesAllocator(store, { api: fake.api, namespace: "elsewhere" });
+    await assert.rejects(drifted.find(acme.id), /lives in the "agentbox" namespace/);
+    await assert.rejects(drifted.find(acme.id), /AGENTBOX_K8S_NAMESPACE=agentbox/);
+  } finally {
+    cleanup();
+  }
+});
+
+test("policy labels can add, but never overwrite the ownership labels the Service selects on", async () => {
+  // A hostile or merely careless policy: every ownership label set to something wrong.
+  const policy: AllocationPolicy = {
+    decide: () => ({
+      resources: { memoryRequest: "4g", memoryLimit: "4g" },
+      storageSize: "10Gi",
+      labels: {
+        "app.kubernetes.io/instance": "someone-else",
+        "app.kubernetes.io/managed-by": "not-us",
+        "agentbox/tenant": "forgery",
+        "example.com/tier": "premium",
+      },
+    }),
+  };
+  const { store, allocator, fake, cleanup } = fixture({ policy });
+  try {
+    const acme = store.upsertTenant({ name: "acme" });
+    const handle = await allocator.allocate(acme.id, { image: "agentbox/box:test" });
+
+    const labels = fake.pods.get(handle.externalId)!.metadata.labels ?? {};
+    assert.equal(labels["app.kubernetes.io/instance"], handle.externalId);
+    assert.equal(labels["app.kubernetes.io/managed-by"], "agentbox");
+    assert.match(labels["agentbox/tenant"] ?? "", /^[0-9a-f]{8}$/);
+    assert.equal(labels["example.com/tier"], "premium", "the policy's own labels still land");
+    // And the Service still selects exactly this pod, which is what the order protects.
+    assert.deepEqual(fake.services.get(handle.externalId)?.spec.selector, {
+      "app.kubernetes.io/instance": handle.externalId,
+    });
+  } finally {
+    cleanup();
+  }
+});
+
+test("a pod that vanishes while we wait is loud, not a timeout", async () => {
+  const { store, allocator, cleanup } = fixture({ podFate: "vanished" });
+  try {
+    const acme = store.upsertTenant({ name: "acme" });
+    await assert.rejects(
+      allocator.allocate(acme.id, { image: "agentbox/box:test" }),
+      /vanished while waiting for it to become ready/
+    );
+  } finally {
+    cleanup();
+  }
+});
+
+test("a pod that fails while we wait is loud, not a timeout", async () => {
+  const { store, allocator, cleanup } = fixture({ podFate: "failed" });
+  try {
+    const acme = store.upsertTenant({ name: "acme" });
+    await assert.rejects(
+      allocator.allocate(acme.id, { image: "agentbox/box:test" }),
+      /failed before it became ready/
+    );
+  } finally {
+    cleanup();
+  }
+});
+
+test("a pod deleted underneath the readiness wait is loud, not waited out", async () => {
+  const { store, allocator, cleanup } = fixture({ podFate: "terminating" });
+  try {
+    const acme = store.upsertTenant({ name: "acme" });
+    // Terminating is terminal for this incarnation; waiting five minutes would only delay the news.
+    await assert.rejects(
+      allocator.allocate(acme.id, { image: "agentbox/box:test" }),
+      /was deleted while waiting for it to become ready/
+    );
+  } finally {
+    cleanup();
+  }
+});
+
+test("controlUrl and spec env are plain env on the container, never in the Secret", async () => {
+  const { store, allocator, fake, cleanup } = fixture({
+    controlUrl: "http://agentbox-control.agentbox.svc:8080",
+  });
+  try {
+    const acme = store.upsertTenant({ name: "acme" });
+    const handle = await allocator.allocate(acme.id, {
+      image: "agentbox/box:test",
+      env: { AGENTBOX_PROVIDER: "minimax", EXTRA_FLAG: "1" },
+    });
+
+    const container = (fake.pods.get(handle.externalId)!.spec.containers as Record<string, unknown>[])[0]!;
+    assert.deepEqual(container.env, [
+      { name: "AGENTBOX_CONTROL_URL", value: "http://agentbox-control.agentbox.svc:8080" },
+      { name: "AGENTBOX_PROVIDER", value: "minimax" },
+      { name: "EXTRA_FLAG", value: "1" },
+    ]);
+    // No relay configured here, so the Secret holds exactly the two tokens and nothing else.
+    const secret = fake.secrets.get(`${handle.externalId}-tokens`)!;
+    assert.deepEqual(Object.keys(secret.data).sort(), ["AGENTBOX_UI_TOKEN", "BOXD_TOKEN"]);
+  } finally {
+    cleanup();
+  }
+});
+
+test("restart re-applies the secret and recreates the pod, keeping the service and volumes", async () => {
+  const { store, allocator, fake, cleanup } = fixture();
+  try {
+    const acme = store.upsertTenant({ name: "acme" });
+    const handle = await allocator.allocate(acme.id, { image: "agentbox/box:test" });
+    const name = handle.externalId;
+
+    // The accident restart exists for: a node failure takes the pod, and the secret with it.
+    // The Service and the volumes survive.
+    fake.pods.delete(name);
+    fake.secrets.delete(`${name}-tokens`);
+    store.setBoxState(handle.id, "unreachable");
+
+    await allocator.restart(handle);
+
+    assert.ok(fake.pods.has(name), "the pod is back");
+    const secret = fake.secrets.get(`${name}-tokens`);
+    assert.ok(secret !== undefined, "the secret is back");
+    assert.equal(
+      Buffer.from(secret.data.BOXD_TOKEN!, "base64").toString("utf8"),
+      handle.tokens.box,
+      "re-applied from the store's tokens — minting new ones would break every open session"
+    );
+    assert.ok(fake.services.has(name), "the service was never touched");
+    assert.equal(fake.pvcs.size, 3, "the volumes were never touched");
+    assert.equal(store.getBox(handle.id)?.state, "ready");
+    assert.ok(store.recentAudit().some(row => row.action === "restart"));
+  } finally {
+    cleanup();
+  }
+});
+
+test("restart over a surviving pod deletes it first and waits for the name to free", async () => {
+  const { store, allocator, fake, cleanup } = fixture();
+  try {
+    const acme = store.upsertTenant({ name: "acme" });
+    const handle = await allocator.allocate(acme.id, { image: "agentbox/box:test" });
+    const appliesBefore = fake.calls.filter(c => c.verb === "apply" && c.kind === "pod").length;
+
+    await allocator.restart(handle);
+
+    // get (does it exist) → delete → get (waitPodGone; the fake deletes instantly) → apply →
+    // get (waitReady).
+    const podCalls = fake.calls
+      .filter(c => c.kind === "pod")
+      .map(c => c.verb)
+      .slice(-5);
+    assert.deepEqual(podCalls, ["get", "delete", "get", "apply", "get"]);
+    assert.equal(
+      fake.calls.filter(c => c.verb === "apply" && c.kind === "pod").length,
+      appliesBefore + 1
+    );
+  } finally {
+    cleanup();
+  }
+});
+
+test("prefix and namespace are validated as DNS-1123 before anything talks to a cluster", () => {
+  const { store, fake, cleanup } = fixture();
+  try {
+    assert.throws(
+      () => new KubernetesAllocator(store, { api: fake.api, prefix: "Bad_Prefix" }),
+      /not a DNS-1123 label/
+    );
+    assert.throws(
+      () => new KubernetesAllocator(store, { api: fake.api, namespace: "not_valid" }),
+      /not a DNS-1123 label/
+    );
+    // The name scheme is prefix + "-" + slug(≤40) + "-" + hash(8) = prefix + 50, against the 63
+    // a Service name allows: 14 is over, 13 is exactly right.
+    assert.throws(
+      () => new KubernetesAllocator(store, { api: fake.api, prefix: "a".repeat(14) }),
+      /needs 50/
+    );
+    assert.ok(new KubernetesAllocator(store, { api: fake.api, prefix: "a".repeat(13) }));
   } finally {
     cleanup();
   }

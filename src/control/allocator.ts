@@ -22,6 +22,13 @@ import type { BoxRow, BoxState, ControlStore } from "./store.ts";
 
 export type AllocatorKind = "static" | "compose" | "kubernetes";
 
+/**
+ * Which provider a relayed box assumes when nothing says otherwise — the box's `AGENTBOX_PROVIDER`
+ * and the relay's upstream selection must agree, so the default is written once here and read by
+ * the allocators and `main.ts`, rather than spelt out in three places that can drift.
+ */
+export const DEFAULT_RELAY_PROVIDER = "anthropic";
+
 export interface BoxSpec {
   image: string;
   /** Passed to the box as environment. Provider configuration lives here for now. */

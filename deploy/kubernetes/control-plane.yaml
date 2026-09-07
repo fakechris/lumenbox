@@ -15,9 +15,6 @@ metadata:
   labels:
     app.kubernetes.io/managed-by: agentbox
 data:
-  # Tenants and passwords. Prefer your own over this example; the gateway also accepts
-  # AGENTBOX_CONTROL_USERS from a Secret if the list should not live in a ConfigMap.
-  AGENTBOX_CONTROL_USERS: "admin:change-me:default"
   AGENTBOX_K8S_NAMESPACE: "agentbox"
   # Where the control plane keeps its SQLite store — the mounted PVC below, stated as a path
   # rather than relying on which user the image happens to run as.
@@ -25,6 +22,10 @@ data:
   # AGENTBOX_K8S_STORAGE_CLASS: "standard"
   # AGENTBOX_K8S_MEMORY: "4g"
   # AGENTBOX_K8S_STORAGE: "10Gi"
+  #
+  # AGENTBOX_CONTROL_USERS is deliberately not here: a default password in a git-tracked manifest
+  # is a password someone will deploy. Create the agentbox-control-users Secret before applying —
+  # see README.md.
 ---
 apiVersion: v1
 kind: Secret
@@ -77,6 +78,12 @@ spec:
                 name: agentbox-control
             - secretRef:
                 name: agentbox-control
+            # Tenants and passwords, created by the deployer (see README.md) rather than shipped
+            # in this file. Optional so a forgotten Secret degrades to a generated password in the
+            # pod's log, not a CrashLoopBackOff.
+            - secretRef:
+                name: agentbox-control-users
+                optional: true
           volumeMounts:
             - name: state
               mountPath: /state
