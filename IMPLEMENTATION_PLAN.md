@@ -197,3 +197,10 @@ through PolicyGate and resumes after a restart; no `host.docker.internal` in the
 path; a fork's prompt carries no skill bodies; a mismatched image refuses to start with a
 named reason.
 **Status**: Not Started
+
+## Stage 16: Argus round — reviewer must look, exit sidecar
+**Goal**: the two mechanical checks from the Argus read (docs/11, 2026-09-06 evening).
+**Success Criteria**: a named reviewer whose turn used no tool but `Tasks` gets a refusal
+and the task stays in review; sending back with a note is allowed; a box job's `<id>.rc`
+is written by the child shell and recovery reads it as an exit code, not `interrupted`.
+**Status**: Complete (2026-09-06) on `feat/argus-round`. Suite 1101, floor 1101.

@@ -77,6 +77,7 @@ export class JobService {
       return;
     }
     const done = new Set(names.filter(name => name.endsWith(".exit")).map(name => name.slice(0, -".exit".length)));
+    const sidecars = new Set(names.filter(name => name.endsWith(".rc")).map(name => name.slice(0, -".rc".length)));
     for (const name of names) {
       if (!name.endsWith(".log")) continue;
       const jobId = name.slice(0, -".log".length);
@@ -106,7 +107,17 @@ export class JobService {
         } catch {
           // Unknown start is still a job.
         }
-        status = { job_id: jobId, command: "", running: false, interrupted: true, started_at: startedAt, log_path: logPath, log_bytes: 0 };
+        // The child's own sidecar: the job ended after boxd stopped watching, and this is
+        // how it ended. Only its absence means "interrupted".
+        let exitCode: number | undefined;
+        if (sidecars.has(jobId)) {
+          const raw = Number(readFileSync(join(this.dir, `${jobId}.rc`), "utf8").trim());
+          if (Number.isInteger(raw)) exitCode = raw;
+        }
+        status =
+          exitCode === undefined
+            ? { job_id: jobId, command: "", running: false, interrupted: true, started_at: startedAt, log_path: logPath, log_bytes: 0 }
+            : { job_id: jobId, command: "", running: false, exit_code: exitCode, started_at: startedAt, log_path: logPath, log_bytes: 0 };
       }
       this.jobs.set(jobId, { status, pid: -1, finished: Promise.resolve() });
     }
@@ -163,9 +174,26 @@ export class JobService {
     const logPath = join(this.dir, `${jobId}.log`);
     const log = createWriteStream(logPath, { flags: "a" });
 
+    // The child shell writes the exit code itself, beside the log, after the command ends.
+    // boxd's own `<id>.exit` is the full record, but boxd writes it from the `exit` event —
+    // and a boxd that restarted while the job ran gets no such event, so the job used to
+    // come back `interrupted` with its outcome unknown even though the process finished
+    // fine and its log was complete. The sidecar survives boxd because the process that
+    // writes it is the one that knows the answer (Argus's detached workers do the same).
+    // Command and paths ride as arguments, not interpolated, so quoting cannot break it.
+    const rcPath = join(this.dir, `${jobId}.rc`);
     const child = spawn(
       "nice",
-      ["-n", String(input.nice), "/bin/bash", "-lc", input.command],
+      [
+        "-n",
+        String(input.nice),
+        "/bin/bash",
+        "-c",
+        '/bin/bash -lc "$1"; rc=$?; printf %s "$rc" > "$2.tmp" && mv -f "$2.tmp" "$2"; exit "$rc"',
+        "job",
+        input.command,
+        rcPath,
+      ],
       {
         cwd: input.cwd ?? process.env.HOME ?? "/home/box",
         env: {

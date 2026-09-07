@@ -1324,6 +1324,45 @@ engine in the image) keep their place and are folded into the rounds where they 
 14. **Box image contract and version pin**: a contract file in the image, checked at boxd
     start, the image tag pinned to the app version. S.
 
+**Added 2026-09-06 evening from the Argus read** (`research/ARGUS-COMPARISON.md`; Microsoft's
+four-role long-campaign runtime, MIT). Argus is about long work with an independent reviewer,
+so what it adds lands on our task board and the delegate engine, not on channels or memory.
+
+Built the same evening (Stage 16):
+- **A reviewer that has looked at nothing cannot accept.** When the named reviewer marks a
+  task done and its turn has called no tool but the board, the acceptance is refused with
+  what to do instead. The one mechanical fact behind "did you check", no model opinion —
+  docs/20's objection made a gate.
+- **A box job's exit code is written by the job's own shell**, so a boxd restart mid-job no
+  longer turns a finished job into "interrupted".
+
+Folded into round two:
+- **Structured handoff line from forks, delegates and reviewers** — one JSON line
+  `{status, reason, next_action, forward_progress}` parsed by the engine, fail-closed when
+  missing; `forward_progress` feeds a typed stall rule (a "continue" with no progress twice
+  in a row, or past a hard round ceiling, becomes blocked). S/M. Goes with the
+  approval-continuation item.
+- **Questions an agent parks a task on become cards** with options, answered by task id,
+  stale answers refused; same family as the approval cards. M.
+- **Duty cycle and interruption rate** computed from usage.jsonl, turns.jsonl and the
+  `[conduct]` counters, once, as the number that settles the R40 shadow-week questions. S.
+
+Folded into round three:
+- **Delegate session capsule**: resume an engine's thread only when role, objective, workdir,
+  branch, engine and model are unchanged, else rotate with a named reason; rotate on turn or
+  token ceilings. Argus's backend facts (claude stream-json result event, codex `turn.completed`,
+  exit 0 without a terminal event is a failure, idle watchdog, killpg ladder, 429/auth retry
+  once in a fresh session, `total_cost_usd`) are the contract tests for item 11. S+M.
+- **Completion record with evidence fingerprints**: on acceptance, write the verdict with
+  the sha256 of what was reviewed, so "reviewed against which bytes" is answerable. M.
+- **Anti-Goodhart deny-list**: a skill or memory an agent writes that names our own control
+  surfaces (tasks, claims, policy, pending-work) is quarantined, not promoted. S.
+- **Skill directories passed to the delegate engine natively** rather than pasted. S.
+
+Not copied from Argus: the self-maintenance loop that edits its own source; a model turn to
+classify every incoming message; the 24-vertical stage machines; yolo permissions
+everywhere (its "ask before sudo" is README prose, ours is PolicyGate).
+
 **Feeding the multiuser branch, not this line:** the three-layer identity model (observed
 identity, revocable binding, per-box allow/deny), fail-closed row-level security for a
 future control-plane database, and the personal-box contract (data in the snapshot layer,
