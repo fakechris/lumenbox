@@ -680,6 +680,23 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
     incarnationOf,
     defaultAgentFor: adapterName =>
       channelRecords.find(record => record.id === adapterName)?.defaultAgent,
+    groupMessagesFor: adapterName =>
+      channelRecords.find(record => record.id === adapterName)?.groupMessages,
+    heard: input => {
+      let agentId: string | undefined;
+      try {
+        agentId = registry.resolve(input.agentName ?? "").id;
+      } catch {
+        // No default agent for this door: nobody would have answered, so nobody keeps it.
+        return;
+      }
+      registry.appendHeard(agentId, input.conversation, {
+        at: new Date().toISOString(),
+        sender: input.senderLabel,
+        text: input.text,
+        ...(input.messageId !== undefined ? { messageId: input.messageId } : {}),
+      });
+    },
     // The live desktop, phone-shaped: the same noVNC page the web's Take over
     // opens, reachable only when the operator said where this installation is
     // reachable from (AGENTBOX_PUBLIC_URL — guessing would put a dead link in a
@@ -2914,6 +2931,7 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
               type: record.type,
               name: record.name,
               defaultAgent: record.defaultAgent,
+              groupMessages: record.groupMessages ?? "all",
               grandfathered: record.id === record.type,
               credentialsSet: channelCredentialsSet(record),
               envBase: channelEnvBase(record.id),
@@ -2957,6 +2975,14 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
               return;
             }
           }
+          const groupMessages =
+            body.groupMessages === "all" || body.groupMessages === "addressed"
+              ? (body.groupMessages as "all" | "addressed")
+              : undefined;
+          if (body.groupMessages !== undefined && groupMessages === undefined) {
+            send(res, 400, { error: `groupMessages must be "all" or "addressed".` });
+            return;
+          }
           const wasKnown = channelRecords.some(record => record.id === id);
           let updated: ReturnType<typeof upsertChannelRecord> | undefined;
           try {
@@ -2967,6 +2993,7 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
                 type,
                 ...(typeof body.name === "string" ? { name: body.name } : {}),
                 ...(defaultAgent !== undefined ? { defaultAgent } : {}),
+                ...(groupMessages !== undefined ? { groupMessages } : {}),
               },
               registry.box.id
             );

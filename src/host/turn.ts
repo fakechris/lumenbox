@@ -1160,6 +1160,7 @@ export async function runTurn(
       sharedMemory: registry.readSharedMemory(),
       skills: deps.skills,
       transcript: registry.readTranscript(agent.id, conversation),
+      heard: registry.readHeard(agent.id, conversation),
       // Read fresh, which is what makes the plan and the todo list survive a compaction: they are in
       // the prompt rather than in the history a summary replaces.
       durable: registry.readDurableState(agent.id, conversation),

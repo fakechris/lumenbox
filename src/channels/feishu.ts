@@ -332,6 +332,34 @@ const LABEL_LOOKUP_TIMEOUT_MS = 5_000;
  * A socket that has said nothing in this long is closed and opened again, out loud.
  */
 export const SOCKET_READY_TIMEOUT_MS = 45_000;
+
+/**
+ * Whether a message was for the bot, from what the wire says.
+ *
+ * A direct chat always is. In a group: a mention of the bot's own open_id, or a reply
+ * whose parent (or root) is a message the bot sent. `undefined` when the bot's own id is
+ * not known yet — the manager reads that as addressed, which is the old behaviour.
+ */
+export function isAddressed(
+  message: {
+    chat_type?: string;
+    mentions?: unknown[];
+    parent_id?: string;
+    root_id?: string;
+  },
+  botOpenId: string | undefined,
+  sentByUs: (messageId: string) => boolean
+): boolean | undefined {
+  if (message.chat_type !== "group") return true;
+  if (message.parent_id !== undefined && sentByUs(message.parent_id)) return true;
+  if (message.root_id !== undefined && sentByUs(message.root_id)) return true;
+  if (botOpenId === undefined) return undefined;
+  const mentioned = (message.mentions ?? []).some(mention => {
+    const id = (mention as { id?: { open_id?: string } }).id?.open_id;
+    return id === botOpenId;
+  });
+  return mentioned;
+}
 /** Seconds a ping may go unanswered before the socket is declared dead and rebuilt. */
 export const SOCKET_PONG_TIMEOUT_S = 30;
 
@@ -737,6 +765,30 @@ export class FeishuChannel implements ChannelAdapter {
     this.name = channelId;
   }
 
+  /** The bot's own open_id, fetched once; undefined while unknown or if the vendor refuses. */
+  private ownOpenIdCache: string | undefined;
+  private ownOpenIdAskedAt = 0;
+  private async ownOpenId(): Promise<string | undefined> {
+    if (this.ownOpenIdCache !== undefined) return this.ownOpenIdCache;
+    // Not more than once a minute: a refusal must not become a request per message.
+    if (Date.now() - this.ownOpenIdAskedAt < 60_000) return undefined;
+    this.ownOpenIdAskedAt = Date.now();
+    try {
+      const response = (await (this.apiClient as unknown as {
+        request: (payload: { method: string; url: string }) => Promise<unknown>;
+      }).request({ method: "GET", url: "/open-apis/bot/v3/info" })) as { bot?: { open_id?: string } };
+      const id = response?.bot?.open_id;
+      if (typeof id === "string" && id !== "") this.ownOpenIdCache = id;
+    } catch (error) {
+      this.log(
+        `channel ${this.name}: could not learn the bot's own open_id (${
+          error instanceof Error ? error.message : String(error)
+        }); group messages are read as addressed until it is known`
+      );
+    }
+    return this.ownOpenIdCache;
+  }
+
   /** Records a discard against the arrival, so no drop is silent. */
   private discard(messageId: string | undefined, reason: string): void {
     this.log(`channel ${this.name}: dropped ${messageId ?? "?"} — ${reason}`);
@@ -1067,6 +1119,11 @@ export class FeishuChannel implements ChannelAdapter {
               }
               files.push({ name: `image-${index + 1}.png`, base64 });
             }
+            const addressed = isAddressed(
+              data.message ?? {},
+              await this.ownOpenId(),
+              id => this.sentRoots?.chatKeyFor(id) !== undefined
+            );
             return onMessage({
               identity,
               chatKey: `${this.name}:${chatId}`,
@@ -1075,6 +1132,7 @@ export class FeishuChannel implements ChannelAdapter {
               senderLabel,
               text,
               ...(files.length > 0 ? { files } : {}),
+              ...(addressed !== undefined ? { addressed } : {}),
             });
           })
           .then(reply =>

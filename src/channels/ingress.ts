@@ -34,7 +34,9 @@ export type Fate =
   /** The sender may not drive this installation. */
   | "refused"
   /** Discarded before it ever reached the manager, with a reason. */
-  | "dropped";
+  | "dropped"
+  /** Heard in a room but not addressed to the bot: kept as context, no turn. */
+  | "heard";
 
 export interface Arrival {
   id: string;

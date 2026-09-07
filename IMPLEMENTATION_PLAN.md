@@ -185,9 +185,9 @@ invents one; a group message that did not trigger the bot is visible in the next
 context; a restart between a card press and the reply loses no output and repeats none;
 a long reply streams as card patches; `schedule`-style runs record usage.
 **Status**: In Progress — provenance (2026-09-06), fork handoff line, routine run cost and the
-autonomy metrics script (2026-09-07) built; approval continuation found covered by the turn and
-deliveries ledgers. Remaining: passive group timeline + directed commands, Feishu streaming
-cards, question cards. Suite 1103, floor 1103.
+autonomy metrics script, passive group timeline with a per-door group rule (2026-09-07) built;
+approval continuation found covered by the turn and deliveries ledgers. Remaining: Feishu
+streaming cards, question cards. Suite 1107, floor 1107.
 
 ## Stage 15: Memoh round three — the real engine in the box and the box contract
 **Goal**: Claude Code (and codex) as pinned, first-class delegate engines behind one

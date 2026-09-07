@@ -1311,10 +1311,18 @@ engine in the image) keep their place and are folded into the rounds where they 
    turns spend 2.4% of the hours that had work; every turn opened with a reply and the
    interim line landed each time; the guard never fired. Also found and fixed: turn-loop
    usage rows carried no kind.
-7. **Passive group timeline and directed commands.** Group messages that do not trigger the
-   bot are still recorded for context; a slash command in a group must be addressed to this
-   bot; two bots in one room never answer the same command. Ground for the multiuser end
-   state. M.
+7. **Passive group timeline and directed commands.** **Built 2026-09-07.** Each door has a
+   group rule, `all` (unchanged default: every group message runs a turn) or `addressed`
+   (Settings → channels, or `POST /api/channels/records` with `groupMessages`). Under
+   `addressed`, a group message that names nobody is *heard*: kept beside the room's
+   conversation (last 40 lines, `<conversation>.jsonl.heard.jsonl`), shown to the agent's
+   next turn as "Said in this room recently, not to you" with a do-not-act line, and settled
+   in the ingress ledger as `heard`. Addressed means a direct chat, a mention of the bot's
+   own open_id (learned once from the vendor), or a reply to or inside a topic the bot
+   wrote. The verbs (停, 可以, 桌面, scope changes) run only on addressed messages under this
+   rule, which is the "directed commands" half; two bots in one room therefore never answer
+   the same unaddressed line. Not done: DingTalk and Telegram mark nothing (their groups
+   already deliver only mentions), and there is no per-room override yet.
 8. **Approval continuation keeps its output.** The reply an agent produces after a person
    presses a card button is written to a log before it is sent, claimed by one sender, and
    never replayed twice — so a restart between the press and the reply loses nothing.
