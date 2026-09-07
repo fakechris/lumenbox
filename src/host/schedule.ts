@@ -453,6 +453,16 @@ interface RunRecord {
   slug: string;
   at: string;
   event: "started" | "finished" | "skipped";
+  /** Which agent ran it. On `started` and `finished`. */
+  agent?: string;
+  /**
+   * Tokens billed to that agent between start and finish, on `finished`. The agent runs its
+   * turns one at a time, so what it spent in that window is this run — give or take a memory
+   * write from the turn before. Absent when there is no usage log to ask.
+   */
+  tokens?: number;
+  /** How long the run took, on `finished`. */
+  ms?: number;
 }
 
 /**
@@ -493,6 +503,8 @@ export interface SchedulerDeps {
   writerOf?: (slug: string) => { agentId: string; agentName: string } | undefined;
   now?: () => Date;
   log?: (line: string) => void;
+  /** What an agent has been billed since a moment, so each run's cost goes on its record. */
+  spentSinceAgent?: (sinceMs: number, agentId: string) => number;
   /**
    * Where to keep the run history. `null` means keep none, which is what a test wants; omitted means
    * the default path, which is what production wants.
@@ -576,13 +588,17 @@ export class Scheduler {
     }
   }
 
-  private record(slug: string, event: RunRecord["event"]): void {
+  private record(
+    slug: string,
+    event: RunRecord["event"],
+    extra: Pick<RunRecord, "agent" | "tokens" | "ms"> = {}
+  ): void {
     if (this.path === undefined) return;
     try {
       mkdirSync(dirname(this.path), { recursive: true });
       appendLine(
         this.path,
-        JSON.stringify({ slug, at: this.now().toISOString(), event } satisfies RunRecord)
+        JSON.stringify({ slug, at: this.now().toISOString(), event, ...extra } satisfies RunRecord)
       );
     } catch (error) {
       // Never stop firing over bookkeeping. The cost of a lost record is a window that may repeat
@@ -636,7 +652,8 @@ export class Scheduler {
       if (agent === undefined) continue;
       const deliver = message.threadKey ?? message.chatKey;
       this.running.add(skill.slug);
-      this.record(skill.slug, "started");
+      const startedAt = this.now();
+      this.record(skill.slug, "started", { agent });
       this.log(`${skill.name}: fired by a message in ${deliver}`);
       fired.push(skill.slug);
       void this.deps
@@ -654,7 +671,13 @@ export class Scheduler {
         })
         .finally(() => {
           this.running.delete(skill.slug);
-          this.record(skill.slug, "finished");
+          this.record(skill.slug, "finished", {
+            agent,
+            ms: this.now().getTime() - startedAt.getTime(),
+            ...(this.deps.spentSinceAgent !== undefined
+              ? { tokens: this.deps.spentSinceAgent(startedAt.getTime(), agent) }
+              : {}),
+          });
         });
     }
     return fired;
@@ -696,7 +719,8 @@ export class Scheduler {
       // Marked before starting, so a slow first tick cannot be overtaken by the next one.
       this.lastRun.set(skill.slug, this.now());
       this.running.add(skill.slug);
-      this.record(skill.slug, "started");
+      const startedAt = this.now();
+      this.record(skill.slug, "started", { agent });
       this.log(`${skill.name}: firing (${describeSchedule(skill.schedule)})`);
 
       void this.deps
@@ -714,7 +738,13 @@ export class Scheduler {
         })
         .finally(() => {
           this.running.delete(skill.slug);
-          this.record(skill.slug, "finished");
+          this.record(skill.slug, "finished", {
+            agent,
+            ms: this.now().getTime() - startedAt.getTime(),
+            ...(this.deps.spentSinceAgent !== undefined
+              ? { tokens: this.deps.spentSinceAgent(startedAt.getTime(), agent) }
+              : {}),
+          });
         });
     }
   }
@@ -820,7 +850,8 @@ export class Scheduler {
     if (agent === undefined) return { ok: false, reason: `No agent to run ${skill.name}.` };
 
     this.running.add(slug);
-    this.record(slug, "started");
+    const startedAt = this.now();
+      this.record(slug, "started", { agent });
     this.log(`${skill.name}: firing now, by hand`);
     void this.deps
       .run(
@@ -835,7 +866,13 @@ export class Scheduler {
       })
       .finally(() => {
         this.running.delete(slug);
-        this.record(slug, "finished");
+        this.record(slug, "finished", {
+            agent,
+            ms: this.now().getTime() - startedAt.getTime(),
+            ...(this.deps.spentSinceAgent !== undefined
+              ? { tokens: this.deps.spentSinceAgent(startedAt.getTime(), agent) }
+              : {}),
+          });
       });
     return { ok: true };
   }

@@ -1864,6 +1864,10 @@ export async function runTurn(
     deps.usage?.record({
       agentId: agent.id,
       agentName: agent.profile.name,
+      // The turn loop's own spend. Was never set here, so every turn row read as
+      // "unattributed" beside the bookkeeping kinds — 8.5M of 8.7M tokens with no name on
+      // them when the first metrics run looked (2026-09-07).
+      kind: "turn",
       // What a report groups by. `turnId` would be the obvious key and is the wrong one: it
       // is minted per attempt, so it splits one long piece of work into several short ones.
       workId,
