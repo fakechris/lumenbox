@@ -225,3 +225,42 @@ test("a fork child is fenced: the withheld tools are not offered, and a forged c
     cleanup();
   }
 });
+
+test("a fork's handoff line is read, not guessed: status reaches the parent, a missing line is unstated", async () => {
+  const { readHandoff, HANDOFF_PREFIX } = await import("./tools.ts");
+  // Well-formed: status and reason come off the end, the body is what remains.
+  const blocked = readHandoff(`I read the file.\n${HANDOFF_PREFIX}{"status":"blocked","reason":"needs the board"}`);
+  assert.equal(blocked.status, "blocked");
+  assert.equal(blocked.reason, "needs the board");
+  assert.equal(blocked.body, "I read the file.");
+  // Absent, malformed, or an unknown status: unstated, never done.
+  assert.equal(readHandoff("I read the file.").status, "unstated");
+  assert.equal(readHandoff(`x\n${HANDOFF_PREFIX}{"status":`).status, "unstated");
+  assert.equal(readHandoff(`x\n${HANDOFF_PREFIX}{"status":"finished"}`).status, "unstated");
+  // A line that is not last is prose, not a verdict.
+  assert.equal(readHandoff(`${HANDOFF_PREFIX}{"status":"done"}\nmore text`).status, "unstated");
+
+  // End to end: the parent's join header carries what the child said.
+  const root = mkdtempSync(join(tmpdir(), "agentbox-fork-handoff-"));
+  try {
+    const registry = new AgentRegistry(root);
+    const agent = registry.create({ name: "Ada" });
+    const bus = new AgentBus(registry, async (record, inbound: readonly InboundMessage[], _signal, conversation) => {
+      const brief = inbound.map(message => message.text).join(" ");
+      const line = brief.includes("BLOCK")
+        ? `${HANDOFF_PREFIX}{"status":"blocked","reason":"needs a person"}`
+        : brief.includes("QUIET")
+          ? ""
+          : `${HANDOFF_PREFIX}{"status":"done"}`;
+      registry.appendTranscript(record.id, { role: "assistant", text: `read ${brief}\n${line}`, at: new Date().toISOString() }, conversation);
+    });
+    const context = { agent, registry, bus, box: undefined } as unknown as Parameters<typeof dispatchTool>[2];
+    const result = await dispatchTool("Fork", { briefs: ["one", "two BLOCK", "three QUIET"] }, context);
+    assert.match(result.text, /3 forks finished \(1 done, 1 blocked, 1 unstated\)/);
+    assert.match(result.text, /--- fork 2 \(blocked: needs a person\) ---/);
+    assert.match(result.text, /--- fork 3 \(unstated\) ---/);
+    assert.doesNotMatch(result.text, /HANDOFF:/, "the line is consumed, not shown as prose");
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});

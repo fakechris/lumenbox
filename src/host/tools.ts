@@ -283,13 +283,57 @@ export function isForkConversation(conversation: string | undefined): boolean {
   return (conversation ?? "").startsWith(FORK_PREFIX);
 }
 
+/** The line a fork ends with, so its outcome is read rather than guessed from prose. */
+export const HANDOFF_PREFIX = "HANDOFF: ";
+
 /** The line a fork child's system prompt carries, so it knows what it is and is not. */
 export const FORK_PROMPT_LINE =
   "# You are a fork\n\n" +
   "You were forked by your own main conversation to work one slice of a larger job. Your findings " +
   "go back to it as your final message — say them plainly and completely. You cannot message " +
   "anyone, change the task board, remember for the team, ask a person, or fork again; if a slice " +
-  "needs one of those, say so in your findings and the turn that forked you will decide.";
+  "needs one of those, say so in your findings and the turn that forked you will decide.\n\n" +
+  "End your final message with exactly one line, on its own, of the form\n" +
+  `${HANDOFF_PREFIX}{"status":"done","reason":"…"}\n` +
+  'where status is "done" (the slice is complete), "partial" (some of it, say what is missing) or ' +
+  '"blocked" (it needs something only the turn that forked you can do — say what). The reason is ' +
+  "one sentence. The line is read by a program, so keep it exact and last.";
+
+export interface Handoff {
+  status: "done" | "partial" | "blocked" | "unstated";
+  reason?: string;
+  /** The findings with the handoff line removed. */
+  body: string;
+}
+
+/**
+ * Reads a fork's handoff line off the end of its findings.
+ *
+ * Fail-closed: no line, or a line that does not parse, or a status outside the three, is
+ * `unstated` — reported as such, never promoted to done. A missing verdict is information
+ * (the child ran out of context, or ignored the instruction), and the parent should see it
+ * as that rather than as a quiet success. (Argus parses its roles' decision line the same
+ * way; its incident log has a challenge channel that existed but was never reachable
+ * because the parser and the prompt disagreed — hence the test that a well-formed line
+ * changes what the parent is told.)
+ */
+export function readHandoff(findings: string): Handoff {
+  const lines = findings.trimEnd().split("\n");
+  const last = lines[lines.length - 1]?.trim() ?? "";
+  if (!last.startsWith(HANDOFF_PREFIX)) return { status: "unstated", body: findings };
+  const body = lines.slice(0, -1).join("\n").trimEnd();
+  try {
+    const parsed = JSON.parse(last.slice(HANDOFF_PREFIX.length)) as { status?: unknown; reason?: unknown };
+    const status = parsed.status;
+    if (status !== "done" && status !== "partial" && status !== "blocked") {
+      return { status: "unstated", body };
+    }
+    const reason = typeof parsed.reason === "string" ? parsed.reason.trim().slice(0, 300) : undefined;
+    return { status, body, ...(reason !== undefined && reason !== "" ? { reason } : {}) };
+  } catch {
+    return { status: "unstated", body };
+  }
+}
 /**
  * How many forks one call may open.
  *
@@ -1793,6 +1837,7 @@ export async function dispatchTool(
       // without waiting for what has not.
       const landed: (string | undefined)[] = briefs.map(() => undefined);
       const hows: CommitHow[] = briefs.map(() => "done");
+      const handoffs: Handoff["status"][] = briefs.map(() => "unstated");
       const runs = briefs.map(async (brief, index) => {
         // Each fork is its own conversation of the same agent, which is what makes
         // the context separate and the runs concurrent — the bus already serialises
@@ -1816,7 +1861,16 @@ export async function dispatchTool(
             )
             .map(entry => entry.text)
             .join("\n\n");
-          result = `--- fork ${index + 1} ---\n${said.trim() === "" ? "(said nothing)" : said}`;
+          // The header says how the slice ended, from the child's own line: the parent
+          // reads "blocked: needs the board" before the prose, and "unstated" is a fact
+          // about the child, not a success by default.
+          const handoff = readHandoff(said);
+          handoffs[index] = handoff.status;
+          const label =
+            handoff.status === "done"
+              ? ""
+              : ` (${handoff.status}${handoff.reason !== undefined ? `: ${handoff.reason}` : ""})`;
+          result = `--- fork ${index + 1}${label} ---\n${handoff.body.trim() === "" ? "(said nothing)" : handoff.body}`;
         } catch (error) {
           // One fork failing is a gap in the findings, not a failure of the fan-out:
           // reported in place so the caller can see which piece is missing.
@@ -1849,9 +1903,16 @@ export async function dispatchTool(
         indices.filter(index => ids[index] !== undefined).map(index => ({ id: ids[index]!, how: hows[index]! }));
 
       if (outcome === "done") {
+        // The count by outcome, up front, so a parent with twelve findings below knows
+        // before reading whether any slice is blocked or unfinished.
+        const tally = (["done", "partial", "blocked", "unstated"] as const)
+          .map(status => [status, handoffs.filter(h => h === status).length] as const)
+          .filter(([, n]) => n > 0)
+          .map(([status, n]) => `${n} ${status}`)
+          .join(", ");
         return {
           text:
-            `${briefs.length} fork${briefs.length === 1 ? "" : "s"} finished. Their findings ` +
+            `${briefs.length} fork${briefs.length === 1 ? "" : "s"} finished (${tally}). Their findings ` +
             `are below; combining them is yours to do.\n\n${landed.join("\n\n")}`,
           commit: commitFor(briefs.map((_, index) => index)),
         };
