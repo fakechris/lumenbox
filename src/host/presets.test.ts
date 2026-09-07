@@ -62,3 +62,25 @@ test("without a relay a delegated engine gets nothing, and with one it gets only
     else process.env.AGENTBOX_RELAY_TOKEN = token;
   }
 });
+
+test("pi is driven through a models.json entry that names the relay, and Claude Code's runtime is its environment", () => {
+  const pi = presetNamed("pi")!;
+  assert.deepEqual(pi.wires, ["anthropic", "openai"]);
+  const config = pi.relayConfig!("http://host/relay/abc", "LUMENBOX_RELAY_TOKEN", "openai", "MiniMax-M3");
+  const parsed = JSON.parse(config.content) as { providers: { lumenbox: { baseUrl: string; api: string; apiKey: string; models: { id: string }[] } } };
+  assert.equal(parsed.providers.lumenbox.baseUrl, "http://host/relay/abc");
+  assert.equal(parsed.providers.lumenbox.api, "openai-completions");
+  assert.equal(parsed.providers.lumenbox.apiKey, "$LUMENBOX_RELAY_TOKEN", "the token is a reference, never inline");
+  assert.deepEqual(parsed.providers.lumenbox.models, [{ id: "MiniMax-M3" }]);
+  assert.match(pi.run("'fix it'", "MiniMax-M3"), /pi -p --no-session --approve --model 'lumenbox\/MiniMax-M3' 'fix it'/);
+  assert.deepEqual(pi.relayEnv("http://host/relay/abc", "tok"), { LUMENBOX_RELAY_TOKEN: "tok" });
+
+  const claude = presetNamed("claude")!;
+  assert.deepEqual(claude.wires, ["anthropic"]);
+  const env = claude.relayEnv("http://host/relay/abc", "tok");
+  assert.equal(env.ANTHROPIC_BASE_URL, "http://host/relay/abc");
+  assert.equal(env.ANTHROPIC_API_KEY, "tok");
+  assert.equal(env.CLAUDE_CONFIG_DIR, "/home/box/.claude");
+  assert.equal(env.DISABLE_AUTOUPDATER, "1");
+  assert.match(claude.run("'x'", "claude-sonnet-5"), /--model claude-sonnet-5/);
+});

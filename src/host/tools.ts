@@ -26,6 +26,7 @@ import { dedupe, dedupeKey, describeFrom, memoryRef, validateRecord } from "./me
 import { type Claims, heldElsewhere } from "./claims.ts";
 import { forkTag, type CommitHow, type PendingWork } from "./pending-work.ts";
 import { MCP_FACE_DIR, MCP_FACE_TOKEN_VARIABLE, type McpFace } from "./mcp-face.ts";
+import type { ModelRelay } from "./model-relay.ts";
 import { randomBytes } from "node:crypto";
 import { MAIN_CONVERSATION } from "../agents/registry.ts";
 import { describeTask, isLive, isTaskStatus, TASK_STATUSES, type TaskStore } from "./tasks.ts";
@@ -156,6 +157,8 @@ export interface ToolContext {
   pendingWork?: PendingWork;
   /** The MCP face (docs/33): routes a delegated engine may call the host's MCP tools through. */
   mcpFace?: McpFace;
+  /** The model relay: a delegated engine's model traffic through the host, no key in the box. */
+  modelRelay?: ModelRelay;
   /** The MCP tool names this turn itself may call — profile ∩ scope ∩ chat scope, as the turn computed them. */
   allowedMcpTools?: readonly string[];
   /** What kind of box the agent's is: an attached one cannot reach the host's loopback. */
@@ -1986,7 +1989,42 @@ export async function dispatchTool(
           isError: true,
         };
       }
-      const env = delegateEnv(preset);
+      // Where the engine's model traffic goes. An operator-configured relay (the two
+      // environment variables) wins; otherwise the host's own relay mints a route for this
+      // job, unless the box is attached and cannot reach the host. An engine that cannot
+      // speak the provider's wire is refused here, not after its first failed call.
+      let env = delegateEnv(preset);
+      let relayKey: string | undefined;
+      let relayFile: { file: string; content: string } | undefined;
+      let relayModel: string | undefined;
+      if (Object.keys(env).length === 0 && context.modelRelay !== undefined && context.boxKind !== "attached") {
+        const wire = context.modelRelay.wire();
+        if (!preset.wires.includes(wire)) {
+          return {
+            text:
+              `${preset.name} speaks only the ${preset.wires.join("/")} model API, and this installation's ` +
+              `provider is on the ${wire} wire, so the relay cannot carry it. Pick another preset, ` +
+              `or configure a provider ${preset.name} can talk to.`,
+            isError: true,
+          };
+        }
+        const minted = context.modelRelay.mint({
+          agentId: context.agent.id,
+          agentName: context.agent.profile.name,
+          conversation: context.conversation ?? MAIN_CONVERSATION,
+          ...(context.workId !== undefined ? { workId: context.workId } : {}),
+          preset: preset.name,
+        });
+        if ("error" in minted) return { text: minted.error, isError: true };
+        relayKey = minted.route.key;
+        relayModel = delegateModel() ?? context.modelRelay.model();
+        env = preset.relayEnv(minted.url, minted.route.token);
+        const config = preset.relayConfig?.(minted.url, "LUMENBOX_RELAY_TOKEN", wire, relayModel);
+        if (config !== undefined) {
+          relayFile = config;
+          Object.assign(env, config.env);
+        }
+      }
 
       // The job id is ours (docs/32 slice two): minted here, recorded in the ledger before the
       // box hears of it, and handed to boxd, which makes a repeated start idempotent.
@@ -2059,9 +2097,19 @@ export async function dispatchTool(
         }
       }
 
+      if (relayFile !== undefined) {
+        try {
+          await box.writeFile(relayFile.file, relayFile.content);
+        } catch (error) {
+          if (relayKey !== undefined) context.modelRelay?.revoke(relayKey, "config file could not be written");
+          if (pendingId !== undefined) context.pendingWork?.dropped(pendingId, "unrecorded");
+          return { text: `Could not write the engine's provider config in the box: ${error instanceof Error ? error.message : String(error)}`, isError: true };
+        }
+      }
+
       let started: Awaited<ReturnType<typeof box.startJob>>;
       try {
-        started = await box.startJob(preset.run(quoteForShell(prompt), delegateModel(), extraArgs), {
+        started = await box.startJob(preset.run(quoteForShell(prompt), relayModel ?? delegateModel(), extraArgs), {
           ...(input.cwd ? { cwd: String(input.cwd) } : {}),
           ...(Object.keys(jobEnv).length > 0 ? { env: jobEnv } : {}),
           ...(context.boxOwner !== undefined ? { owner: context.boxOwner } : {}),
@@ -2069,10 +2117,12 @@ export async function dispatchTool(
         });
       } catch (error) {
         if (routeKey !== undefined) context.mcpFace?.revoke(routeKey, "job failed to start");
+        if (relayKey !== undefined) context.modelRelay?.revoke(relayKey, "job failed to start");
         if (pendingId !== undefined) context.pendingWork?.dropped(pendingId, "unrecorded");
         throw error;
       }
       // A box from before slice two mints its own id; the ledger then follows the box's.
+      if (relayKey !== undefined) context.modelRelay?.bindJob(relayKey, started.job_id);
       if (started.job_id !== jobId) {
         if (routeKey !== undefined) context.mcpFace?.bindJob(routeKey, started.job_id);
         if (pendingId !== undefined) {
@@ -2086,10 +2136,14 @@ export async function dispatchTool(
           `Delegated to ${preset.name} as ${started.job_id}.\n` +
           `Its work is going to ${started.log_path}.\n` +
           faceNote +
-          (Object.keys(env).length > 0
-            ? "It is billed through this installation, so its spend is on the same budget as yours.\n"
-            : "No model relay is configured here, so it is using whatever credential the box " +
-              "itself has — if it has none, it will say so in its output.\n") +
+          (relayKey !== undefined
+            ? `Its model traffic goes through this host to ${relayModel ?? "the configured model"}; no credential is in the box, and its spend is recorded here as yours.\n`
+            : Object.keys(env).length > 0
+              ? "It is billed through this installation, so its spend is on the same budget as yours.\n"
+              : context.boxKind === "attached"
+                ? "This box is attached over the network and cannot reach the host's relay, so the engine is using whatever credential the box itself has.\n"
+                : "No model relay is configured here, so it is using whatever credential the box " +
+                  "itself has — if it has none, it will say so in its output.\n") +
           `Use Jobs to wait for it. It is doing the work; you are still the one who ` +
           `has to check it did the right thing.`,
       };

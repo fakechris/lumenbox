@@ -21,6 +21,7 @@ import type { FileVersions } from "./files.ts";
 import type { TurnLedger } from "./resume.ts";
 import type { PendingWork } from "./pending-work.ts";
 import type { McpFace } from "./mcp-face.ts";
+import type { ModelRelay } from "./model-relay.ts";
 import type { Skill } from "./skills.ts";
 import {
   classifyLimit,
@@ -426,6 +427,7 @@ export interface TurnDeps {
   pendingWork?: PendingWork;
   /** The MCP face (docs/33), for Delegate. */
   mcpFace?: McpFace;
+  modelRelay?: ModelRelay;
   /** What kind of box this agent's is, for Delegate's face decision. */
   boxKind?: "docker" | "attached";
   /**
@@ -2203,6 +2205,7 @@ export async function runTurn(
             workId,
             ...(deps.pendingWork !== undefined ? { pendingWork: deps.pendingWork } : {}),
             ...(deps.mcpFace !== undefined ? { mcpFace: deps.mcpFace } : {}),
+            ...(deps.modelRelay !== undefined ? { modelRelay: deps.modelRelay } : {}),
             ...(deps.boxKind !== undefined ? { boxKind: deps.boxKind } : {}),
             allowedMcpTools: allowedMcp.map(tool => tool.name),
             ...(deps.templateSetup !== undefined ? { templateSetup: deps.templateSetup } : {}),

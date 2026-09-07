@@ -12,6 +12,7 @@ import { Inbox, inboxPath } from "../agents/inbox.ts";
 import { Claims, claimsPath } from "./claims.ts";
 import { PendingWork, isForkChild, pendingWorkPath } from "./pending-work.ts";
 import { McpFace } from "./mcp-face.ts";
+import { ModelRelay } from "./model-relay.ts";
 import { Extensions, extensionsDir } from "./extensions.ts";
 import { FileVersions } from "./files.ts";
 import {
@@ -293,6 +294,8 @@ export class Orchestrator {
   readonly pendingWork: PendingWork | undefined;
   /** The MCP face (docs/33): per-job routes a delegated engine calls the host's MCP tools through. */
   readonly mcpFace: McpFace;
+  /** The model relay (docs/11 round three): delegated engines' model traffic, keyless in the box. */
+  readonly modelRelay: ModelRelay;
   /** The extension layer (docs/34): tools and listeners from ~/.agentbox/extensions, hot-reloadable. */
   readonly extensions: Extensions | undefined;
 
@@ -677,6 +680,15 @@ export class Orchestrator {
       ...(options.pendingWork === null ? { auditPath: null } : {}),
       log: line => console.error(`[mcp-face] ${line}`),
       onEvent: event => options.onTurnEvent?.(event),
+    });
+    this.modelRelay = new ModelRelay({
+      provider: () => this.provider,
+      key: profile => {
+        const key = process.env[profile.keyEnv];
+        return key === undefined || key === "" ? undefined : key;
+      },
+      usage: () => this.usage,
+      log: line => console.error(`[model-relay] ${line}`),
     });
     this.bus = new AgentBus(
       this.registry,
@@ -1207,6 +1219,7 @@ export class Orchestrator {
       turns: this.turns,
       ...(this.pendingWork !== undefined ? { pendingWork: this.pendingWork } : {}),
       mcpFace: this.mcpFace,
+      modelRelay: this.modelRelay,
       boxKind: this.boxEntryOf(agent.id).kind,
       // The same cheap profile the summariser and the note-taker use. Choosing which memories to
       // show is the least interesting work in the system and should be billed accordingly.

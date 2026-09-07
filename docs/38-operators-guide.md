@@ -217,6 +217,22 @@ fallback: with the proxy configured and the relay down, the browser gets
 with a fresh profile, because the first attempt at that check was reading Chromium's disk
 cache.
 
+### Delegated engines: Claude Code, pi, opencode
+
+An agent can hand deep repository work to an engine with the `Delegate` tool. The engines
+are baked into the box image only when a version is named at build time
+(`CLAUDE_CODE_VERSION=… PI_VERSION=… OPENCODE_VERSION=… npm run build:image`), pinned,
+never latest. No engine holds a credential: each run gets a per-job route on this host
+(`/relay/<key>`) and a token good only for it; the host attaches the provider's key,
+forwards the traffic as sent, and records the spend in usage.jsonl as `delegate`. Claude
+Code's runtime is set per run through its environment (`ANTHROPIC_BASE_URL`, key, model,
+`CLAUDE_CONFIG_DIR`); pi reads a generated `~/.pi/agent/models.json`; opencode its config
+file. Claude Code speaks only Anthropic's API, so it needs an Anthropic-wire provider
+(first-party, or a compatible endpoint such as MiniMax's); pi and opencode take either wire.
+If `AGENTBOX_RELAY_URL` and `AGENTBOX_RELAY_TOKEN` are both set, that relay is used instead.
+A box attached over the network cannot reach the host's relay and runs the engine on
+whatever credential the box itself has.
+
 ### Groups: answer everything, or only when addressed
 
 Each door has a group rule, set in Settings → channels (or `POST /api/channels/records` with

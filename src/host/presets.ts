@@ -60,6 +60,24 @@ export interface Preset {
   /** Environment that points the engine's model traffic at our relay. */
   relayEnv: (baseUrl: string, token: string) => Record<string, string>;
   /**
+   * The wires this engine can speak to a model over. The built-in relay forwards bytes as
+   * sent, so an engine that only speaks Anthropic's API cannot be pointed at an OpenAI-wire
+   * provider through it; the Delegate tool checks this and says so instead of starting a run
+   * that fails on its first call.
+   */
+  wires: readonly ("anthropic" | "openai")[];
+  /**
+   * A config file some engines need before a relay URL means anything to them (pi's
+   * models.json, opencode's provider catalog). Written into the box before the job starts,
+   * with the token as an environment reference, never inline.
+   */
+  relayConfig?: (
+    url: string,
+    tokenVar: string,
+    wire: "anthropic" | "openai",
+    model: string
+  ) => { file: string; content: string; env: Record<string, string> };
+  /**
    * The sixth face (docs/33): the file, environment and command-line fragment that make this
    * engine talk to one remote MCP server — ours, on the host — and no other of ours. The token
    * travels in the environment under `tokenVar`, never in the file and never on the command
@@ -81,7 +99,11 @@ export interface Preset {
  * single command today and whose session protocol is native for the v2. Others follow
  * the same shape or they are not presets.
  */
-export const PRESETS: readonly Preset[] = [
+const PRESETS_MUTABLE: Preset[] = [
+  // Filled below; the pi preset is appended after the definitions it refers to.
+];
+export const PRESETS: readonly Preset[] = PRESETS_MUTABLE;
+PRESETS_MUTABLE.push(...([
   {
     name: "opencode",
     summary: "A coding agent: reads a repository, edits files, runs tests, iterates.",
@@ -93,6 +115,7 @@ export const PRESETS: readonly Preset[] = [
     run: (quoted, model, extraArgs) =>
       `opencode run --auto${model ? ` -m ${model}` : ""}${extraArgs ? ` ${extraArgs}` : ""} ${quoted}`,
     skillsMount: "~/.config/opencode/skill",
+    wires: ["anthropic", "openai"],
     // Measured on 1.18.25: opencode ignores ANTHROPIC_BASE_URL/OPENAI_BASE_URL — its
     // endpoints come from a provider catalog, overridable only in its config file. The
     // BASE_URL pair stays for engine versions that do honor it; what actually routes
@@ -141,9 +164,16 @@ export const PRESETS: readonly Preset[] = [
     run: (quoted, model, extraArgs) =>
       `claude -p --dangerously-skip-permissions${model ? ` --model ${model}` : ""}${extraArgs ? ` ${extraArgs}` : ""} ${quoted}`,
     skillsMount: "~/.claude/skills",
+    wires: ["anthropic"],
+    // Claude Code's runtime is its environment: where the model is, which key, which model,
+    // where its own state lives. All of it is set per run, none of it persists in the box.
     relayEnv: (baseUrl, token) => ({
       ANTHROPIC_BASE_URL: baseUrl,
       ANTHROPIC_API_KEY: token,
+      CLAUDE_CONFIG_DIR: "/home/box/.claude",
+      DISABLE_AUTOUPDATER: "1",
+      DISABLE_TELEMETRY: "1",
+      CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: "1",
     }),
     // Claude Code expands `${VAR}` in MCP config, and `--strict-mcp-config` restricts it to the
     // servers given by `--mcp-config` — so the file must be *passed*, not merely present in the
@@ -162,7 +192,56 @@ export const PRESETS: readonly Preset[] = [
       args: `--mcp-config ${quoteForShell(file)} --strict-mcp-config`,
     }),
   },
-];
+] as Preset[]));
+
+export const PI_MODELS_FILE = "/home/box/.pi/agent/models.json";
+
+PRESETS_MUTABLE.push({
+  name: "pi",
+  summary: "pi: a small coding agent with sessions and skills; good for scoped edits and scripts.",
+  probe: "command -v pi",
+  // -p prints and exits; --no-session keeps a one-shot run out of pi's session store;
+  // --approve trusts the project's own skills and extensions, since the box is the sandbox.
+  // The provider is the relay's entry in models.json (relayConfig), so the model is named
+  // as `lumenbox/<id>`. Measured on 0.85.1 (README and docs/models.md).
+  run: (quoted, model, extraArgs) =>
+    `pi -p --no-session --approve${model ? ` --model ${quoteForShell(`lumenbox/${model}`)}` : ""}${extraArgs ? ` ${extraArgs}` : ""} ${quoted}`,
+  skillsMount: "~/.pi/agent/skills",
+  wires: ["anthropic", "openai"],
+  // pi reads no BASE_URL variables; its providers come from models.json (below). The token
+  // still travels in the environment, which the file references as `$VAR`.
+  relayEnv: (_baseUrl, token) => ({ LUMENBOX_RELAY_TOKEN: token }),
+  relayConfig: (url, _tokenVar, wire, model) => ({
+    file: PI_MODELS_FILE,
+    content: `${JSON.stringify(
+      {
+        providers: {
+          lumenbox: {
+            baseUrl: url,
+            api: wire === "openai" ? "openai-completions" : "anthropic-messages",
+            apiKey: "$LUMENBOX_RELAY_TOKEN",
+            models: [{ id: model }],
+          },
+        },
+      },
+      null,
+      2
+    )}\n`,
+    env: {},
+  }),
+  // pi has no MCP client (its README says so, and why). The face file is still written, as
+  // a note the engine can read, so a lent tool is at least named where the run looks.
+  mcpFace: (url, tokenVar) => ({
+    content: `${JSON.stringify(
+      { note: "pi cannot call MCP servers; these host tools were offered but are unreachable from pi", url, token: `$${tokenVar}` },
+      null,
+      2
+    )}\n`,
+    env: {},
+    args: "",
+    note: "pi has no MCP client; lend it tools as CLI scripts in the box instead",
+  }),
+});
 
 export function presetNamed(name: string): Preset | undefined {
   return PRESETS.find(preset => preset.name === name);
