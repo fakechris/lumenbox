@@ -2225,7 +2225,7 @@ export async function dispatchTool(
           faceNote +
           sessionNote +
           (relayKey !== undefined
-            ? `Its model traffic goes through this host to ${relayModel ?? "the configured model"}; no credential is in the box, and its spend is recorded here as yours.\n`
+            ? `Its model traffic goes through this host to ${relayModel ?? "the configured model"}; the host set its ANTHROPIC_BASE_URL, token and model for this run, so there is nothing for you to export and no key to ask anyone for; its spend is recorded here as yours.\n`
             : Object.keys(env).length > 0
               ? "It is billed through this installation, so its spend is on the same budget as yours.\n"
               : context.boxKind === "attached"
