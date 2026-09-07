@@ -83,8 +83,8 @@ export interface Preset {
    * directory is linked here at install.
    */
   skillsMount?: string;
-  /** Environment that points the engine's model traffic at our relay. */
-  relayEnv: (baseUrl: string, token: string) => Record<string, string>;
+  /** Environment that points the engine's model traffic at our relay, and names the model where the engine reads one. */
+  relayEnv: (baseUrl: string, token: string, model?: string) => Record<string, string>;
   /**
    * The wires this engine can speak to a model over. The built-in relay forwards bytes as
    * sent, so an engine that only speaks Anthropic's API cannot be pointed at an OpenAI-wire
@@ -214,9 +214,12 @@ PRESETS_MUTABLE.push(...([
     wires: ["anthropic"],
     // Claude Code's runtime is its environment: where the model is, which key, which model,
     // where its own state lives. All of it is set per run, none of it persists in the box.
-    relayEnv: (baseUrl, token) => ({
+    relayEnv: (baseUrl, token, model) => ({
       ANTHROPIC_BASE_URL: baseUrl,
-      ANTHROPIC_API_KEY: token,
+      // The bearer form: what a compatible endpoint (MiniMax's /anthropic, and the relay
+      // in front of it) expects, and what Chris runs Claude Code with by hand.
+      ANTHROPIC_AUTH_TOKEN: token,
+      ...(model !== undefined ? { ANTHROPIC_MODEL: model } : {}),
       CLAUDE_CONFIG_DIR: "/home/box/.claude",
       DISABLE_AUTOUPDATER: "1",
       DISABLE_TELEMETRY: "1",

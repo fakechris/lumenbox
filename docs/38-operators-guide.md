@@ -235,7 +235,15 @@ Code's runtime is set per run through its environment (`ANTHROPIC_BASE_URL`, key
 `CLAUDE_CONFIG_DIR`); pi reads a generated `~/.pi/agent/models.json`; opencode its config
 file. Claude Code speaks only Anthropic's API, so it needs an Anthropic-wire provider
 (first-party, or a compatible endpoint such as MiniMax's); pi and opencode take either wire.
-If `AGENTBOX_RELAY_URL` and `AGENTBOX_RELAY_TOKEN` are both set, that relay is used instead.
+If `AGENTBOX_RELAY_URL` and `AGENTBOX_RELAY_TOKEN` are both set, that relay is used instead
+— including the degenerate case where they name the vendor itself
+(`https://api.minimaxi.com/anthropic` and the MiniMax key), which hands Claude Code the same
+`ANTHROPIC_AUTH_TOKEN` / `ANTHROPIC_BASE_URL` / `ANTHROPIC_MODEL` a person would export in
+a shell, at the cost of the key being in the box. With the built-in relay the box sees a
+per-job token and the host attaches the MiniMax key from `config.json`'s `env` (the app is
+started from Finder and reads no `.zshrc`). The `engine-check` skill, seeded into every box,
+walks an agent through installing an engine and proving the install, a real task, the
+consent card and a resumed thread.
 A box attached over the network cannot reach the host's relay and runs the engine on
 whatever credential the box itself has.
 

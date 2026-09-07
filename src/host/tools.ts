@@ -2073,7 +2073,7 @@ export async function dispatchTool(
         if ("error" in minted) return { text: minted.error, isError: true };
         relayKey = minted.route.key;
         relayModel = delegateModel() ?? context.modelRelay.model();
-        env = preset.relayEnv(minted.url, minted.route.token);
+        env = preset.relayEnv(minted.url, minted.route.token, relayModel);
         const config = preset.relayConfig?.(minted.url, "LUMENBOX_RELAY_TOKEN", wire, relayModel);
         if (config !== undefined) {
           relayFile = config;
