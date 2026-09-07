@@ -394,8 +394,10 @@ export const APP_HTML = String.raw`<!doctype html>
   /* The children. The left padding is the indent; the parent's border is the guide. */
   details.step > .kids { padding: 1px 0 3px 18px; }
   /* Whatever the agent said beyond the one line in the summary. */
+  /* Same size as a reply, muted only: this text was a reply until a tool call revealed it
+     as narration, and shrinking it at that moment read as the page changing its mind. */
   details.step .saidfull {
-    font-family: var(--font-sans); font-size: 0.82rem; line-height: 1.5;
+    font-family: var(--font-sans); line-height: 1.5;
     color: var(--muted); margin: 0 0 5px;
   }
   details.step .saidfull p { margin: 0 0 4px; }
@@ -2331,12 +2333,16 @@ function stepGroupBar() {
   return group;
 }
 
-function beginStep(text) {
+function beginStep(text, keepOpen) {
   var chat = $("chat");
   var stick = nearBottom(chat);
   var step = document.createElement("details");
   step.className = "step";
-  step.open = !folded;
+  // A step opened under text the person was reading stays open while the turn runs:
+  // the text they were reading gets a heading and calls under it, and folds with the
+  // rest when the turn ends and the transcript is re-rendered. Folding it the moment a
+  // tool call arrived made the sentence vanish mid-read.
+  step.open = keepOpen === true || !folded;
   step.innerHTML =
     '<summary><span class="lbl"></span><span class="cnt"></span></summary>' +
     '<div class="kids"></div>';
@@ -3658,7 +3664,7 @@ stream.onmessage = function (raw) {
       var said = narrating.text;
       var block = narrating.node.parentNode;
       if (block && block.parentNode) block.parentNode.removeChild(block);
-      beginStep(said);
+      beginStep(said, true);
     } else if (!openStep) {
       beginStep("");
     }
