@@ -290,3 +290,61 @@ test("Delegate records the job before the box hears of it, under an id the host 
     rmSync(root, { recursive: true, force: true });
   }
 });
+
+test("an engine's permission prompt is answered by the gate: allowed calls pass, consent is asked of the person and waited for, a refusal is a deny", async () => {
+  const { PERMISSION_POLL_MS, mapEngineTool } = await import("./mcp-face.ts");
+  assert.equal(mapEngineTool("Bash", { command: "ls" }), "bash");
+  assert.equal(mapEngineTool("Write", { file_path: "x" }), "write_file");
+  assert.equal(mapEngineTool("Grep", {}), "engine:Grep");
+
+  const root = mkdtempSync(join(tmpdir(), "agentbox-face-permission-"));
+  try {
+    const policy = new PolicyGate({
+      path: join(root, "policy.jsonl"),
+      limits: { approvalRequiredTools: [], approvalRequiredCommands: ["rm -rf"], maxRoundsPerTurn: 400, maxTurnsPerHour: 1000 } as never,
+    });
+    let now = 1_000_000;
+    const face = new McpFace({ mcp: () => fakeManager([], async () => ""), policy, jobsOf: () => undefined, auditPath: null, now: () => now, pollMs: 5 });
+    face.baseUrl = "http://127.0.0.1:1";
+    const minted = face.mint({ agentId: "a1", agentName: "Ada", conversation: "main", requested: [], allowedMcp: [], permission: true });
+    assert.ok("route" in minted, "a permission-only route needs no lent tools");
+    face.bindJob(minted.route.key, "job-7");
+    const tools = face.toolsFor(minted.route);
+    assert.deepEqual(tools.map(tool => tool.name), ["permission"]);
+    const permission = tools[0]!;
+
+    // Nothing the gate minds: allowed at once, input handed back unchanged.
+    const allowed = JSON.parse(await permission.run({ tool_name: "Bash", input: { command: "ls -la" } }, "a1")) as { behavior: string; updatedInput: unknown };
+    assert.equal(allowed.behavior, "allow");
+    assert.deepEqual(allowed.updatedInput, { command: "ls -la" });
+
+    // Consent needed: the person sees the delegated call in full, grants it, the engine proceeds.
+    const granting = permission.run({ tool_name: "Bash", input: { command: "rm -rf build" } }, "a1");
+    await new Promise(resolve => setTimeout(resolve, 20));
+    const pending = policy.pending();
+    assert.equal(pending.length, 1);
+    assert.match(pending[0]!.description, /\[delegated engine job-7\] Ada: bash — rm -rf build/);
+    policy.grant(pending[0]!.id, "test");
+    const granted = JSON.parse(await granting) as { behavior: string };
+    assert.equal(granted.behavior, "allow");
+
+    // Refused: a deny, and no request left dangling.
+    const refusing = permission.run({ tool_name: "Bash", input: { command: "rm -rf /" } }, "a1");
+    await new Promise(resolve => setTimeout(resolve, 20));
+    policy.deny(policy.pending()[0]!.id, "test", "no");
+    const denied = JSON.parse(await refusing) as { behavior: string; message: string };
+    assert.equal(denied.behavior, "deny");
+    assert.match(denied.message, /refused/);
+    assert.equal(policy.pending().length, 0, "the re-check's request was withdrawn");
+
+    // Nobody answers: a deny at the deadline, not a hang.
+    const silent = permission.run({ tool_name: "Bash", input: { command: "rm -rf cache" } }, "a1");
+    now += 11 * 60_000;
+    const timedOut = JSON.parse(await silent) as { behavior: string; message: string };
+    assert.equal(timedOut.behavior, "deny");
+    assert.match(timedOut.message, /Nobody answered/);
+    assert.ok(PERMISSION_POLL_MS >= 500);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});

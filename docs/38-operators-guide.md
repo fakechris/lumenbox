@@ -219,10 +219,16 @@ cache.
 
 ### Delegated engines: Claude Code, pi, opencode
 
-An agent can hand deep repository work to an engine with the `Delegate` tool. The engines
-are baked into the box image only when a version is named at build time
-(`CLAUDE_CODE_VERSION=… PI_VERSION=… OPENCODE_VERSION=… npm run build:image`), pinned,
-never latest. No engine holds a credential: each run gets a per-job route on this host
+An agent can hand deep repository work to an engine with the `Delegate` tool. An engine is
+either baked into the box image when a version is named at build time
+(`CLAUDE_CODE_VERSION=… PI_VERSION=… OPENCODE_VERSION=… npm run build:image`) or installed
+on demand: when it is missing, the tool tells the agent to ask the person, and `install:
+true` installs the preset's pinned version on the work volume, where a rebuilt box keeps
+it. Pinned either way, never latest. Claude Code runs with its permission prompts routed to
+this host: a call the policy allows proceeds, one on the approval list is put to the person
+as "[delegated engine job-…] …" and waited for, a refusal is a refusal. Its thread is
+resumed across delegations from the same conversation, directory and model, and rotated
+with a stated reason otherwise. No engine holds a credential: each run gets a per-job route on this host
 (`/relay/<key>`) and a token good only for it; the host attaches the provider's key,
 forwards the traffic as sent, and records the spend in usage.jsonl as `delegate`. Claude
 Code's runtime is set per run through its environment (`ANTHROPIC_BASE_URL`, key, model,

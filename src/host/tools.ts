@@ -16,7 +16,8 @@ import type { HostRunner } from "./host-runner.ts";
 import type { Vault } from "./vault.ts";
 import type { ScopeStore } from "./scopes.ts";
 import type { McpManager } from "./mcp.ts";
-import { delegateEnv, delegateModel, PRESETS, presetNamed, quoteForShell } from "./presets.ts";
+import { delegateEnv, delegateModel, PRESETS, presetNamed, quoteForShell, installCommand, withEnginesPath } from "./presets.ts";
+import { namesControlSurface } from "./control-surfaces.ts";
 import { catalogMenu, intersectTools, profilesFor } from "./catalog.ts";
 import { describeHistory, readHistory } from "./history.ts";
 import { canSearch, fetchPage, guardUrl, isSearchEngine, searchWeb, WebError } from "./web.ts";
@@ -27,6 +28,7 @@ import { type Claims, heldElsewhere } from "./claims.ts";
 import { forkTag, type CommitHow, type PendingWork } from "./pending-work.ts";
 import { MCP_FACE_DIR, MCP_FACE_TOKEN_VARIABLE, type McpFace } from "./mcp-face.ts";
 import type { ModelRelay } from "./model-relay.ts";
+import type { DelegateSessions } from "./delegate-sessions.ts";
 import { randomBytes } from "node:crypto";
 import { MAIN_CONVERSATION } from "../agents/registry.ts";
 import { describeTask, isLive, isTaskStatus, TASK_STATUSES, type TaskStore } from "./tasks.ts";
@@ -151,6 +153,12 @@ export interface ToolContext {
    * with nothing here but `Tasks` has read the assignee's summary and checked nothing.
    */
   toolsUsedThisTurn?: ReadonlySet<string>;
+  /**
+   * The same calls, one line each, in order — what a reviewer's acceptance is recorded
+   * against: "read_file src/app.ts", "bash npm test". The evidence a later reader can
+   * check, where the reviewer's prose is what it thought of it.
+   */
+  callsThisTurn?: readonly string[];
   /** The piece of work this turn is an attempt at (docs/11 R30), for the fork ledger's record. */
   workId?: string;
   /** The fork ledger (docs/32). Absent means forks are not recorded — tests, or nobody. */
@@ -159,6 +167,8 @@ export interface ToolContext {
   mcpFace?: McpFace;
   /** The model relay: a delegated engine's model traffic through the host, no key in the box. */
   modelRelay?: ModelRelay;
+  /** Session capsules: when an engine's own thread is resumed and when it is rotated. */
+  delegateSessions?: DelegateSessions;
   /** The MCP tool names this turn itself may call — profile ∩ scope ∩ chat scope, as the turn computed them. */
   allowedMcpTools?: readonly string[];
   /** What kind of box the agent's is: an attached one cannot reach the host's loopback. */
@@ -661,6 +671,20 @@ export function buildTools(
                 "MCP tools the engine may call through this host, by name (`server__tool`) or a " +
                 "whole server (`server__*`) — only ones you can call yourself. Name what the brief " +
                 "needs and nothing more: the engine sees exactly this list. Omit for none.",
+            },
+            session: {
+              type: "boolean",
+              description:
+                "Resume the engine's own thread from the last delegation in this conversation " +
+                "with the same directory and model (default true where the engine supports it). " +
+                "False starts a fresh thread.",
+            },
+            install: {
+              type: "boolean",
+              description:
+                "When the engine is not in the box: install it now, at the pinned version, on " +
+                "the work volume (it survives a rebuild). Takes a few minutes and runs as a job; " +
+                "ask the person first, then call again with the brief once the job has finished.",
             },
           },
           required: ["preset", "prompt"],
@@ -1625,6 +1649,19 @@ function requireBox(context: ToolContext): BoxClient {
   return context.box;
 }
 
+/** One line for a tool call, for the record: the tool and the thing it touched. */
+export function describeCall(tool: string, input: Record<string, unknown>): string {
+  const pick = (...keys: string[]) => {
+    for (const key of keys) {
+      const value = input[key];
+      if (typeof value === "string" && value.trim() !== "") return value.trim();
+    }
+    return undefined;
+  };
+  const about = pick("path", "command", "url", "action", "search", "id", "preset", "job_id") ?? "";
+  return `${tool}${about === "" ? "" : ` ${about.replace(/\s+/g, " ").slice(0, 80)}`}`;
+}
+
 export async function dispatchTool(
   name: string,
   input: Record<string, unknown>,
@@ -1979,13 +2016,31 @@ export async function dispatchTool(
       // Checked rather than assumed, and said as an install problem rather than as a
       // failed run: an engine that is not there produces a shell error the model would
       // otherwise try to debug.
-      const probe = await box.exec(preset.probe, { timeoutMs: 15_000 });
+      const probe = await box.exec(withEnginesPath(preset.probe), { timeoutMs: 15_000 });
       if (probe.exit_code !== 0) {
+        // Not there. Either the image carries it (a version named at build) or the person
+        // chooses it now and it is installed on the work volume at the preset's pinned
+        // version — the same engine on every box that chose it, and still there after a
+        // rebuild. The choice is the person's, so the tool offers rather than installs.
+        if (input.install === true) {
+          const installJobId = `job-${randomBytes(8).toString("hex")}`;
+          const started = await box.startJob(installCommand(preset), {
+            ...(context.boxOwner !== undefined ? { owner: context.boxOwner } : {}),
+            jobId: installJobId,
+          });
+          return {
+            text:
+              `Installing ${preset.name} ${preset.install.version} into the box as ${started.job_id} ` +
+              `(log: ${started.log_path}). Use Jobs to wait for it, then call Delegate again with the ` +
+              `brief. It is pinned: the same version every time, on the work volume, so a rebuilt box keeps it.`,
+          };
+        }
         return {
           text:
-            `The ${preset.name} engine is not installed in this box. An operator adds it ` +
-            `to the image — it is a pinned part of the box, not something to install ` +
-            `mid-task.`,
+            `The ${preset.name} engine is not in this box. Ask the person whether to install it ` +
+            `(${preset.install.package} ${preset.install.version}, a few minutes, kept on the work ` +
+            `volume) and if they say yes call Delegate again with \`install: true\`. Or an operator ` +
+            `bakes it into the image with a version named at build.`,
           isError: true,
         };
       }
@@ -2059,7 +2114,11 @@ export async function dispatchTool(
       let routeKey: string | undefined;
       let extraArgs: string | undefined;
       const jobEnv: Record<string, string> = { ...env };
-      if (requested.length > 0) {
+      // Permission prompts go to the host when the engine can route them and a face can be
+      // reached; otherwise the run skips them, and says so — the box is the sandbox either way.
+      const wantsPermission =
+        preset.permissionArgs !== undefined && context.mcpFace !== undefined && context.boxKind !== "attached";
+      if (requested.length > 0 || wantsPermission) {
         if (context.mcpFace === undefined) {
           return { text: "This installation has no MCP face, so an engine cannot be lent tools.", isError: true };
         }
@@ -2073,6 +2132,7 @@ export async function dispatchTool(
             ...(context.workId !== undefined ? { workId: context.workId } : {}),
             requested,
             allowedMcp: context.allowedMcpTools ?? [],
+            ...(wantsPermission ? { permission: true } : {}),
           });
           if ("error" in minted) {
             if (pendingId !== undefined) context.pendingWork?.dropped(pendingId, "unrecorded");
@@ -2089,12 +2149,39 @@ export async function dispatchTool(
             return { text: `Could not write the engine's MCP config in the box: ${error instanceof Error ? error.message : String(error)}`, isError: true };
           }
           Object.assign(jobEnv, face.env, { [MCP_FACE_TOKEN_VARIABLE]: minted.route.token });
-          extraArgs = face.args || undefined;
+          extraArgs = [face.args, wantsPermission ? preset.permissionArgs : ""].filter(part => part !== undefined && part !== "").join(" ") || undefined;
           faceNote =
-            `It may call ${minted.route.allowed.length} MCP tool${minted.route.allowed.length === 1 ? "" : "s"} through this host ` +
-            `(${minted.route.allowed.join(", ")}); every call is checked and recorded here.\n` +
+            (minted.route.allowed.length > 0
+              ? `It may call ${minted.route.allowed.length} MCP tool${minted.route.allowed.length === 1 ? "" : "s"} through this host ` +
+                `(${minted.route.allowed.join(", ")}); every call is checked and recorded here.\n`
+              : "") +
+            (wantsPermission
+              ? "Its permission prompts come to this host: a call the policy allows proceeds, one that needs consent waits for the person, and a refusal is a refusal.\n"
+              : "") +
             (face.note !== undefined ? `Note: ${face.note}.\n` : "");
         }
+      }
+      if (preset.permissionArgs !== undefined && !wantsPermission) {
+        faceNote += "No face is reachable from this box, so the engine runs with permissions skipped; the box is the sandbox.\n";
+      }
+
+      // The engine's own thread: resumed when this conversation delegated to the same engine
+      // in the same directory with the same model, fresh with a reason otherwise.
+      let sessionNote = "";
+      if (preset.session !== undefined && input.session !== false && context.delegateSessions !== undefined) {
+        const capsule = context.delegateSessions.open({
+          agentId: context.agent.id,
+          conversation: context.conversation ?? MAIN_CONVERSATION,
+          preset: preset.name,
+          cwd: input.cwd ? String(input.cwd) : "~",
+          model: relayModel ?? delegateModel() ?? "default",
+        });
+        extraArgs = [extraArgs, preset.session(capsule.id, capsule.resumed)].filter(part => part !== undefined && part !== "").join(" ");
+        sessionNote = capsule.resumed
+          ? "It resumes the thread from this conversation's last delegation to it.\n"
+          : capsule.rotated !== undefined
+            ? `It starts a fresh thread: ${capsule.rotated}.\n`
+            : "";
       }
 
       if (relayFile !== undefined) {
@@ -2109,7 +2196,7 @@ export async function dispatchTool(
 
       let started: Awaited<ReturnType<typeof box.startJob>>;
       try {
-        started = await box.startJob(preset.run(quoteForShell(prompt), relayModel ?? delegateModel(), extraArgs), {
+        started = await box.startJob(withEnginesPath(preset.run(quoteForShell(prompt), relayModel ?? delegateModel(), extraArgs)), {
           ...(input.cwd ? { cwd: String(input.cwd) } : {}),
           ...(Object.keys(jobEnv).length > 0 ? { env: jobEnv } : {}),
           ...(context.boxOwner !== undefined ? { owner: context.boxOwner } : {}),
@@ -2136,6 +2223,7 @@ export async function dispatchTool(
           `Delegated to ${preset.name} as ${started.job_id}.\n` +
           `Its work is going to ${started.log_path}.\n` +
           faceNote +
+          sessionNote +
           (relayKey !== undefined
             ? `Its model traffic goes through this host to ${relayModel ?? "the configured model"}; no credential is in the box, and its spend is recorded here as yours.\n`
             : Object.keys(env).length > 0
@@ -2444,6 +2532,15 @@ export async function dispatchTool(
       }
 
       const updated = templateStamp(context, path, existing.content.replace(oldText, newText));
+      const named = skillSlugOf(path) !== undefined ? namesControlSurface(updated) : undefined;
+      if (named !== undefined) {
+        return {
+          text:
+            `Not edited: a skill may not name the host's own records or secrets, and after this ` +
+            `edit it would name ${named}. Leave that part out.`,
+          isError: true,
+        };
+      }
       await box.writeFile(path, updated);
       // Recorded like any other write, so the next writer still sees a conflict rather
       // than overwriting an edit nobody else knows happened.
@@ -2512,6 +2609,17 @@ export async function dispatchTool(
         if (refusal !== undefined) return { text: refusal, isError: true };
       }
 
+      const named = skillSlugOf(path) !== undefined ? namesControlSurface(content) : undefined;
+      if (named !== undefined) {
+        return {
+          text:
+            `Not written: a skill may not name the host's own records or secrets, and this one ` +
+            `names ${named}. A skill is a method for doing work; the board, the ledgers and the ` +
+            `policy log are how that work is judged, and a method that touches them is a way to ` +
+            `write the verdict instead of earning it. Leave that part out.`,
+          isError: true,
+        };
+      }
       const written = templateStamp(context, path, content);
       const result = await box.writeFile(path, written);
       // Its own write is the newest thing it has seen, so writing twice in a row is not a conflict
@@ -3131,10 +3239,16 @@ export async function dispatchTool(
         if (assigneeRaw !== "" && assigneeId === undefined) {
           return { text: `No agent called "${assigneeRaw}" to assign.`, isError: true };
         }
+        // What the reviewer did before saying done, on the record beside the verdict.
+        const checked =
+          status === "done" && target !== undefined && target.reviewerId === context.agent.id
+            ? (context.callsThisTurn ?? []).filter(line => !line.startsWith("Tasks")).slice(-12)
+            : [];
         const updated = board.update(
           String(input.id ?? ""),
           {
             ...(isTaskStatus(status) ? { status } : {}),
+            ...(checked.length > 0 ? { checked } : {}),
             ...(typeof input.note === "string" && input.note.trim() !== ""
               ? { note: input.note }
               : {}),

@@ -77,6 +77,12 @@ export interface TaskChange {
    * ordinary move to review. Additive and optional: records written before it read fine.
    */
   coerced?: true;
+  /**
+   * What the reviewer did this turn before accepting: one line per tool call. The record
+   * of a verdict is the verdict and what it rested on; without this a "done" from a
+   * reviewer is a name on the assignee's summary.
+   */
+  checked?: string[];
 }
 
 export interface Task {
@@ -262,6 +268,7 @@ export class TaskStore {
       title?: string;
       description?: string;
       options?: string[];
+      checked?: string[];
     },
     by: string,
     run?: string,
@@ -335,6 +342,9 @@ export class TaskStore {
       changes.note !== undefined &&
       changes.note.trim() !== ""
         ? { options: changes.options.map(option => option.trim().slice(0, 80)).filter(o => o !== "").slice(0, 6) }
+        : {}),
+      ...(status === "done" && changes.checked !== undefined && changes.checked.length > 0
+        ? { checked: changes.checked.map(line => line.slice(0, 120)).slice(0, 12) }
         : {}),
       ...(run !== undefined ? { run } : {}),
     };

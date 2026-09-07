@@ -1358,17 +1358,41 @@ engine in the image) keep their place and are folded into the rounds where they 
     (`lumenbox/<model>`), one-shot, no session store; it has no MCP client, which the face
     note says. Each preset declares the wires it speaks and Delegate refuses a mismatch with
     the provider before starting.
-11. **Claude Code as a first-class delegate engine.** Left after 11a/11b: the session capsule
-    (`--resume`/`--session` keyed on agent, conversation, engine, workdir, model with a named
-    rotation), permission prompts routed to PolicyGate (`--permission-prompt-tool` on a face
-    tool), the transcript checkpoint, and the contract file at boxd start. The original text: stream-json both ways,
+11c. **Engines install on demand** (built 2026-09-07, Chris's call): the image layers stay
+    optional; when an engine is missing, Delegate says so and offers `install: true`, which
+    installs the preset's pinned version under `/home/box/work/.lumenbox/engines` (the work
+    volume, so a rebuilt box keeps it) as a job. Every preset carries its pinned version.
+11d. **Session capsule** (built): `delegate-sessions.json` keys a thread on agent, conversation,
+    engine, directory and model; the same key resumes (`--resume`), a changed directory or
+    model, six runs, or twelve hours rotates with the reason in the tool's reply.
+11e. **Permission prompts routed to PolicyGate** (built): a Claude Code run gets a face route
+    even with no lent tools, `--permission-prompt-tool mcp__lumenbox__permission`, and no
+    `--dangerously-skip-permissions`. The face's `permission` tool maps the engine's tool
+    names onto ours, asks the gate as a delegated call that may ask, and when consent is
+    needed the person sees "[delegated engine job-…] Ada: bash — rm -rf build" in full, the
+    tool waits up to ten minutes, a refusal or silence is a deny. Consent fingerprints differ
+    from the agent's own, so nothing is reused either way (docs/33's rule kept; its "no input
+    logged" is relaxed only for a request a person must read).
+11f. **Image contract** (built): `/etc/lumenbox/contract.json` written at build with the engine
+    versions; boxd reports it in `/health`; `box up` logs it.
+11g. **Reviewer evidence** (built): a reviewer's acceptance records the tool calls it made this
+    turn (`checked` on the task change), beside the verdict.
+11h. **Anti-Goodhart deny-list** (built): a skill that names the host's ledgers, `~/.agentbox`
+    or the relay/face tokens is refused at write and skipped at load, with the name said.
+11i. **Progressive skills** — found already so: the prompt carries names and descriptions under
+    a budget and the body is read on use. Not changed.
+11. **Claude Code as a first-class delegate engine.** Left after the above: live verification
+    in a box with an engine installed, and the transcript checkpoint. The original text: stream-json both ways,
     `--permission-prompt-tool stdio` routed to PolicyGate, `--resume` for continuity, the
     transcript checkpointed; claude and codex pinned in the image with a contract file
     smoke-tested at build. Behind one external-runtime interface so a second engine is a
     row, not a special case. L.
-12. **The MCP face is served into the box over a reverse stream** rather than reached through
-    `host.docker.internal`, which is the wrong name on Linux and on attached boxes. boxd
-    already owns a socket. M.
+12. **The MCP face is served into the box over a reverse stream** — **deferred 2026-09-07**:
+    the two cases it would fix are already covered by `AGENTBOX_MCP_FACE_URL` (Linux, a
+    self-contained box: name the bridge address) and by the attached box reaching the host
+    over Tailscale with the same variable; a reverse channel in boxd buys a default that a
+    one-line setting already provides. Revisit if a topology appears where the box cannot
+    reach the host at all.
 13. **Skills are disclosed progressively**: a catalogue of names in the prompt, the body
     fetched on demand with a reason, hard byte caps, none of it in a fork's prompt. S.
 14. **Box image contract and version pin**: a contract file in the image, checked at boxd

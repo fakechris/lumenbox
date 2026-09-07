@@ -320,6 +320,11 @@ export interface HealthResult {
   ok: boolean;
   version: string;
   /**
+   * What the image was built with (`/etc/lumenbox/contract.json`): the engines it carries,
+   * by pinned version, empty where none. Absent on an image from before the file existed.
+   */
+  contract?: { contract: number; engines: Record<string, string>; builtAt?: string };
+  /**
    * The surface version this box speaks. Absent from any box built before it existed,
    * which is itself the answer: that box is too old for this host.
    */

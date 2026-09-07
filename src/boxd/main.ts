@@ -185,6 +185,7 @@ async function handleHealth(): Promise<HealthResult> {
   return {
     ok: true,
     version: VERSION,
+    ...(imageContract() !== undefined ? { contract: imageContract()! } : {}),
     protocol: BOXD_PROTOCOL,
     display,
     resolution,
@@ -194,6 +195,19 @@ async function handleHealth(): Promise<HealthResult> {
     desktop_health: displays.health(),
     crashes: recentCrashes(),
   };
+}
+
+/** The image's own statement of what it carries; read once, absent on older images. */
+let contractCache: { contract: number; engines: Record<string, string>; builtAt?: string } | null | undefined;
+function imageContract(): { contract: number; engines: Record<string, string>; builtAt?: string } | undefined {
+  if (contractCache === undefined) {
+    try {
+      contractCache = JSON.parse(readFileSync("/etc/lumenbox/contract.json", "utf8")) as typeof contractCache;
+    } catch {
+      contractCache = null;
+    }
+  }
+  return contractCache ?? undefined;
 }
 
 async function handleComputer(body: ComputerRequest): Promise<ComputerResult> {

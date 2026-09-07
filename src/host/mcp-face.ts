@@ -34,6 +34,19 @@ export const RENEW_EVERY_MS = 5 * 60_000;
 export const IN_FLIGHT_LIMIT = 4;
 /** A route's result is clamped here; a direct call's is clamped only on replay. */
 export const RESULT_MAX_CHARS = 200_000;
+/** How long an engine's permission prompt waits for a person, and how often it looks. */
+export const PERMISSION_WAIT_MS = 10 * 60_000;
+export const PERMISSION_POLL_MS = 1_000;
+
+/** Claude Code's tool names onto the gate's, where the gate has rules for them. */
+export function mapEngineTool(name: string, input: Record<string, unknown>): string {
+  const lower = name.toLowerCase();
+  if (lower === "bash" && typeof input.command === "string") return "bash";
+  if (lower === "write") return "write_file";
+  if (lower === "edit" || lower === "multiedit") return "edit_file";
+  if (lower === "webfetch") return "WebFetch";
+  return `engine:${name}`;
+}
 
 export function auditPath(): string {
   return process.env.AGENTBOX_DELEGATE_CALLS ?? join(agentboxHome(), "delegate-calls.jsonl");
@@ -49,6 +62,8 @@ export interface McpRoute {
   jobId?: string;
   /** Exact tool names, expanded at mint. */
   allowed: string[];
+  /** The route also answers the engine's permission prompts through the policy gate. */
+  permission?: true;
   createdAt: number;
   leaseUntil: number;
   ceiling: number;
@@ -68,6 +83,8 @@ export interface McpFaceDeps {
   auditPath?: string | null;
   log?: (line: string) => void;
   now?: () => number;
+  /** How often a waiting permission prompt looks for its answer; a test shortens it. */
+  pollMs?: number;
   onEvent?: (event: { type: "delegate_call"; agentId: string; agentName: string; conversation: string; tool: string; ok: boolean; ms: number }) => void;
 }
 
@@ -129,6 +146,8 @@ export class McpFace {
     workId?: string;
     requested: readonly string[];
     allowedMcp: readonly string[];
+    /** Serve the engine's permission prompts too (Claude Code's `--permission-prompt-tool`). */
+    permission?: boolean;
   }): { route: McpRoute; url: string } | { error: string } {
     if (input.conversation.startsWith("fork/")) {
       return { error: "A fork cannot delegate with tools: a child never has more than its parent." };
@@ -136,7 +155,10 @@ export class McpFace {
     if (this.baseUrl === undefined) {
       return { error: "The MCP face has no address yet (the web server has not said where the box can reach it)." };
     }
-    const expanded = expandRequested(input.requested, input.allowedMcp);
+    const expanded =
+      input.requested.length === 0 && input.permission === true
+        ? { allowed: [] as string[] }
+        : expandRequested(input.requested, input.allowedMcp);
     if ("error" in expanded) return expanded;
     const now = this.now();
     const route: McpRoute = {
@@ -147,6 +169,7 @@ export class McpFace {
       conversation: input.conversation,
       ...(input.workId !== undefined ? { workId: input.workId } : {}),
       allowed: expanded.allowed,
+      ...(input.permission === true ? { permission: true as const } : {}),
       createdAt: now,
       leaseUntil: now + LEASE_MS,
       ceiling: now + CEILING_MS,
@@ -227,7 +250,29 @@ export class McpFace {
   toolsFor(route: McpRoute): McpServerTool[] {
     const manager = this.deps.mcp();
     const live = new Map((manager?.tools() ?? []).map(tool => [tool.name, tool]));
-    return route.allowed.map(name => {
+    const permission: McpServerTool[] =
+      route.permission === true
+        ? [
+            {
+              name: "permission",
+              description:
+                "Asks this host whether the engine may make a tool call. Answers allow or deny; " +
+                "when a person's consent is needed it waits for them.",
+              inputSchema: {
+                type: "object",
+                properties: {
+                  tool_name: { type: "string" },
+                  input: { type: "object" },
+                  tool_use_id: { type: "string" },
+                },
+                required: ["tool_name", "input"],
+              },
+              readOnly: true,
+              run: input => this.permit(route, String(input.tool_name ?? ""), (input.input ?? {}) as Record<string, unknown>),
+            },
+          ]
+        : [];
+    return [...permission, ...route.allowed.map(name => {
       const tool = live.get(name);
       return {
         name,
@@ -237,7 +282,54 @@ export class McpFace {
         readOnly: false,
         run: (input: Record<string, unknown>) => this.call(route, name, input),
       };
-    });
+    })];
+  }
+
+  /**
+   * The engine's permission prompt, answered by the policy gate.
+   *
+   * The engine's tool names are mapped onto ours where the gate has rules for them (its
+   * Bash is our bash, with the command in the same place), so an operator's approval list
+   * applies to a delegated run as it does to the agent's own. A needed consent is asked
+   * of the person as "[delegated engine job-…] bash rm -rf …" and waited for here, up to
+   * the limit; no answer is a deny, and so is the person's refusal. The answer is the
+   * shape Claude Code reads: `{"behavior":"allow","updatedInput":…}` or
+   * `{"behavior":"deny","message":…}`.
+   */
+  private async permit(route: McpRoute, engineTool: string, input: Record<string, unknown>): Promise<string> {
+    const tool = mapEngineTool(engineTool, input);
+    const allow = JSON.stringify({ behavior: "allow", updatedInput: input });
+    const deny = (message: string) => JSON.stringify({ behavior: "deny", message });
+    const policy = this.deps.policy;
+    if (policy === undefined) return allow;
+    const ask = () =>
+      policy.check({
+        kind: "tool",
+        agentId: route.agentId,
+        agentName: route.agentName,
+        tool,
+        input,
+        delegated: { ...(route.jobId !== undefined ? { jobId: route.jobId } : {}), ask: true },
+      });
+    const first = ask();
+    if (first.allow) return allow;
+    if (first.approval === undefined) return deny(first.reason);
+    const waitingFor = first.approval.id;
+    const deadline = this.now() + PERMISSION_WAIT_MS;
+    this.deps.log?.(`route ${route.key}: waiting for a person on ${engineTool} (${waitingFor})`);
+    while (this.now() < deadline) {
+      await new Promise(resolve => setTimeout(resolve, this.deps.pollMs ?? PERMISSION_POLL_MS));
+      if (policy.pending().some(pending => pending.id === waitingFor)) continue;
+      // Answered one way or the other: a grant makes the re-check pass and consumes it; a
+      // refusal makes the re-check open a *new* request, which is the tell, and is withdrawn.
+      const again = ask();
+      if (again.allow) return allow;
+      if (again.approval !== undefined && again.approval.id !== waitingFor) {
+        policy.deny(again.approval.id, "mcp-face", "the person refused the delegated call");
+      }
+      return deny("A person refused this call.");
+    }
+    return deny("Nobody answered the request for consent in time; the call is not made.");
   }
 
   private async call(route: McpRoute, name: string, input: Record<string, unknown>): Promise<string> {
