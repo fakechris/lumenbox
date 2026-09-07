@@ -58,7 +58,15 @@ export type PolicyRequest =
        * consent is refused, because the person consented to the agent's own action, not to an
        * engine's under the agent's name.
        */
-      delegated?: { jobId?: string };
+      delegated?: {
+        jobId?: string;
+        /**
+         * The engine is asking through the permission tool and will wait for the answer.
+         * Without this a delegated call that needs consent is refused outright, because an
+         * engine that cannot wait would act on a refusal as if it were a decision.
+         */
+        ask?: true;
+      };
     };
 
 export type PolicyDecision =
@@ -455,7 +463,7 @@ export class PolicyGate {
 
   private decideTool(request: Extract<PolicyRequest, { kind: "tool" }>): Outcome {
     if (!this.needsApproval(request)) return { decision: { allow: true } };
-    if (request.delegated !== undefined) {
+    if (request.delegated !== undefined && request.delegated.ask !== true) {
       return {
         decision: {
           allow: false,
@@ -467,7 +475,13 @@ export class PolicyGate {
       };
     }
 
-    const description = describeRequest(request);
+    // A delegated engine's request is named as such, and the fingerprint follows the
+    // description: consent given to the agent for its own action never covers the engine's,
+    // and consent given to the engine's job never covers the agent's (docs/33).
+    const description =
+      request.delegated?.ask === true
+        ? `[delegated engine${request.delegated.jobId !== undefined ? ` ${request.delegated.jobId}` : ""}] ${describeRequest(request)}`
+        : describeRequest(request);
     // Refused outright, not truncated: see `tooLargeToApprove`.
     const tooLarge = tooLargeToApprove(description);
     if (tooLarge !== undefined) return { decision: { allow: false, reason: tooLarge } };
@@ -815,7 +829,9 @@ export function describeRequest(request: PolicyRequest): string {
     case "wake":
       return `${request.agentName}: wake ${request.targetName}`;
     case "tool": {
-      if (request.delegated !== undefined) {
+      // An engine asking for consent is shown in full: a person cannot consent to "N bytes,
+      // not recorded". A delegated call merely being checked stays summarised, as before.
+      if (request.delegated !== undefined && request.delegated.ask !== true) {
         const bytes = Buffer.byteLength(JSON.stringify(request.input));
         return `${request.agentName}: ${request.tool} via delegated job ${request.delegated.jobId ?? "(starting)"} (${bytes} bytes of input, not recorded)`;
       }

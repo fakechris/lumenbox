@@ -22,6 +22,7 @@ import type { TurnLedger } from "./resume.ts";
 import type { PendingWork } from "./pending-work.ts";
 import type { McpFace } from "./mcp-face.ts";
 import type { ModelRelay } from "./model-relay.ts";
+import type { DelegateSessions } from "./delegate-sessions.ts";
 import type { Skill } from "./skills.ts";
 import {
   classifyLimit,
@@ -95,6 +96,7 @@ import {
   dispatchTool,
   type ToolContext,
   type ToolOutcome,
+  describeCall,
 } from "./tools.ts";
 import type { HostRunner } from "./host-runner.ts";
 import type { Vault } from "./vault.ts";
@@ -428,6 +430,7 @@ export interface TurnDeps {
   /** The MCP face (docs/33), for Delegate. */
   mcpFace?: McpFace;
   modelRelay?: ModelRelay;
+  delegateSessions?: DelegateSessions;
   /** What kind of box this agent's is, for Delegate's face decision. */
   boxKind?: "docker" | "attached";
   /**
@@ -1109,6 +1112,7 @@ export async function runTurn(
   /** Every tool this turn has called so far. The Tasks tool reads it: a reviewer that has
    *  looked at nothing may not accept (Argus's harness makes the same check). */
   const toolsUsedThisTurn = new Set<string>();
+  const callsThisTurn: string[] = [];
   // The turn is the attempt; the work is what the attempts are attempts at. A resumption
   // inherits rather than mints, which is the whole point of the field: without it a turn that
   // resumed twice appears in every report as three unrelated short turns.
@@ -2128,6 +2132,7 @@ export async function runTurn(
         input: toolUse.input,
       });
       toolsUsedThisTurn.add(toolUse.name);
+      callsThisTurn.push(describeCall(toolUse.name, (toolUse.input ?? {}) as Record<string, unknown>));
 
       // Auto-review, for the binding class only. Shadow mode classifies beside the call and
       // records the verdict; enforce mode waits for it and hands a BLOCK back to the model as the
@@ -2206,6 +2211,7 @@ export async function runTurn(
             ...(deps.pendingWork !== undefined ? { pendingWork: deps.pendingWork } : {}),
             ...(deps.mcpFace !== undefined ? { mcpFace: deps.mcpFace } : {}),
             ...(deps.modelRelay !== undefined ? { modelRelay: deps.modelRelay } : {}),
+            ...(deps.delegateSessions !== undefined ? { delegateSessions: deps.delegateSessions } : {}),
             ...(deps.boxKind !== undefined ? { boxKind: deps.boxKind } : {}),
             allowedMcpTools: allowedMcp.map(tool => tool.name),
             ...(deps.templateSetup !== undefined ? { templateSetup: deps.templateSetup } : {}),
@@ -2213,6 +2219,7 @@ export async function runTurn(
             turnId,
             conversation,
             toolsUsedThisTurn,
+            callsThisTurn,
           }
         );
       } catch (error) {

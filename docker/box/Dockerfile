@@ -284,6 +284,14 @@ RUN if [ -n "$PI_VERSION" ]; then \
       && chown -R box:box /home/box/.pi /home/box/.local; \
     fi
 
+# The image contract: what this build carries, readable by boxd (in /health) and by the host
+# at box up, so "which engines does this box have" is a fact the box states rather than a
+# probe. Versions are the build args above; empty means not carried.
+RUN mkdir -p /etc/lumenbox \
+    && printf '{"contract":1,"engines":{"opencode":"%s","claude":"%s","pi":"%s"},"builtAt":"%s"}\n' \
+       "$OPENCODE_VERSION" "$CLAUDE_CODE_VERSION" "$PI_VERSION" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+       > /etc/lumenbox/contract.json
+
 # The entrypoint runs as root and drops privileges per process: the desktop and the
 # daemon to `box`, the orchestrator to `hostd`. Nothing stays root.
 #

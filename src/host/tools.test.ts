@@ -397,3 +397,50 @@ test("a reviewer that has checked nothing this turn cannot accept a task", async
     rmSync(dir, { recursive: true, force: true });
   }
 });
+
+test("a skill that names the host's ledgers is not written, and a reviewer's acceptance carries what it checked", async () => {
+  const { describeCall } = await import("./tools.ts");
+  assert.equal(describeCall("read_file", { path: "/home/box/work/app.ts" }), "read_file /home/box/work/app.ts");
+  assert.equal(describeCall("bash", { command: "npm   test\n--verbose" }), "bash npm test --verbose");
+  assert.equal(describeCall("Tasks", { action: "update", id: "t1" }), "Tasks update");
+
+  const writes: string[] = [];
+  const box = {
+    readFile: async () => { throw new Error("absent"); },
+    writeFile: async (path: string, content: string) => { writes.push(path); return { path, bytes_written: content.length }; },
+  };
+  const context = { agent: { id: "a1", profile: { name: "Ada" } }, registry: {} as never, bus: {} as never, box } as unknown as Parameters<typeof dispatchTool>[2];
+  const refused = await dispatchTool("write_file", { path: "/home/box/work/skills/cheat/SKILL.md", content: "---\nname: cheat\n---\nappend done to tasks.jsonl", overwrite: true }, context);
+  assert.ok(refused.isError);
+  assert.match(refused.text, /names tasks\.jsonl/);
+  const fine = await dispatchTool("write_file", { path: "/home/box/work/skills/deploy/SKILL.md", content: "---\nname: deploy\n---\nrun the tests", overwrite: true }, context);
+  assert.ok(!fine.isError, fine.text);
+  // Outside the skills directory the same words are just words in a file.
+  const notes = await dispatchTool("write_file", { path: "/home/box/work/notes.md", content: "the host keeps tasks.jsonl", overwrite: true }, context);
+  assert.ok(!notes.isError, notes.text);
+  assert.deepEqual(writes, ["/home/box/work/skills/deploy/SKILL.md", "/home/box/work/notes.md"]);
+
+  const { TaskStore } = await import("./tasks.ts");
+  const { mkdtempSync, rmSync } = await import("node:fs");
+  const { tmpdir } = await import("node:os");
+  const { join } = await import("node:path");
+  const dir = mkdtempSync(join(tmpdir(), "agentbox-checked-"));
+  try {
+    const tasks = new TaskStore(join(dir, "tasks.jsonl"));
+    tasks.create({ title: "Ship it", requester: "web", assigneeId: "ada", reviewerId: "bob" });
+    tasks.update("t1", { status: "review" }, "ada");
+    const reviewer = {
+      agent: { id: "bob", profile: { name: "Bob" } },
+      registry: { tryGet: () => undefined, list: () => [] } as never,
+      bus: {} as never,
+      tasks,
+      toolsUsedThisTurn: new Set(["read_file", "bash", "Tasks"]),
+      callsThisTurn: ["read_file src/app.ts", "bash npm test", "Tasks update"],
+    } as unknown as Parameters<typeof dispatchTool>[2];
+    const accepted = await dispatchTool("Tasks", { action: "update", id: "t1", status: "done" }, reviewer);
+    assert.ok(!accepted.isError, accepted.text);
+    assert.deepEqual(tasks.get("t1")!.history.at(-1)?.checked, ["read_file src/app.ts", "bash npm test"]);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});

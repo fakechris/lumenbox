@@ -6,6 +6,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { delegateEnv, PRESETS, presetNamed, quoteForShell } from "./presets.ts";
+import * as presetsModule from "./presets.ts";
 
 test("a prompt survives quoting, including the character that would end it", () => {
   assert.equal(quoteForShell("make the tests pass"), "'make the tests pass'");
@@ -83,4 +84,29 @@ test("pi is driven through a models.json entry that names the relay, and Claude 
   assert.equal(env.CLAUDE_CONFIG_DIR, "/home/box/.claude");
   assert.equal(env.DISABLE_AUTOUPDATER, "1");
   assert.match(claude.run("'x'", "claude-sonnet-5"), /--model claude-sonnet-5/);
+});
+
+test("an engine chosen at use time installs pinned, on the work volume, and is found on the PATH", () => {
+  const { installCommand, withEnginesPath, ENGINES_DIR } = presetsModule;
+  const claude = presetNamed("claude")!;
+  const command = installCommand(claude);
+  assert.match(command, new RegExp(`npm install -g --prefix ${ENGINES_DIR} '@anthropic-ai/claude-code@2\\.1\\.250'`));
+  assert.match(command, /ln -sfn \/home\/box\/work\/skills ~\/.claude\/skills/);
+  assert.doesNotMatch(command, /@latest/);
+  const pi = presetNamed("pi")!;
+  assert.match(installCommand(pi), /--ignore-scripts/, "pi's own install instruction");
+  assert.match(withEnginesPath("command -v claude"), /export PATH="\$PATH:\/home\/box\/work\/\.lumenbox\/engines\/bin"; command -v claude/);
+  for (const preset of PRESETS) {
+    assert.match(preset.install.version, /^\d+\.\d+\.\d+$/, `${preset.name} is pinned`);
+  }
+});
+
+test("Claude Code routes permissions to the face when told to, and opens or resumes its thread by capsule id", () => {
+  const claude = presetNamed("claude")!;
+  const routed = claude.run("'x'", undefined, `--mcp-config '/f.json' --strict-mcp-config ${claude.permissionArgs}`);
+  assert.doesNotMatch(routed, /--dangerously-skip-permissions/);
+  assert.match(routed, /--permission-prompt-tool mcp__lumenbox__permission/);
+  assert.match(claude.run("'x'"), /--dangerously-skip-permissions/, "no face, no prompt tool: skipped, as before");
+  assert.equal(claude.session!("abc", false), "--session-id abc");
+  assert.equal(claude.session!("abc", true), "--resume abc");
 });

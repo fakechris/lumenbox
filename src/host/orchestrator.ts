@@ -13,6 +13,7 @@ import { Claims, claimsPath } from "./claims.ts";
 import { PendingWork, isForkChild, pendingWorkPath } from "./pending-work.ts";
 import { McpFace } from "./mcp-face.ts";
 import { ModelRelay } from "./model-relay.ts";
+import { DelegateSessions } from "./delegate-sessions.ts";
 import { Extensions, extensionsDir } from "./extensions.ts";
 import { FileVersions } from "./files.ts";
 import {
@@ -296,6 +297,7 @@ export class Orchestrator {
   readonly mcpFace: McpFace;
   /** The model relay (docs/11 round three): delegated engines' model traffic, keyless in the box. */
   readonly modelRelay: ModelRelay;
+  readonly delegateSessions: DelegateSessions;
   /** The extension layer (docs/34): tools and listeners from ~/.agentbox/extensions, hot-reloadable. */
   readonly extensions: Extensions | undefined;
 
@@ -681,6 +683,7 @@ export class Orchestrator {
       log: line => console.error(`[mcp-face] ${line}`),
       onEvent: event => options.onTurnEvent?.(event),
     });
+    this.delegateSessions = new DelegateSessions(options.pendingWork === null ? null : undefined);
     this.modelRelay = new ModelRelay({
       provider: () => this.provider,
       key: profile => {
@@ -1220,6 +1223,7 @@ export class Orchestrator {
       ...(this.pendingWork !== undefined ? { pendingWork: this.pendingWork } : {}),
       mcpFace: this.mcpFace,
       modelRelay: this.modelRelay,
+      delegateSessions: this.delegateSessions,
       boxKind: this.boxEntryOf(agent.id).kind,
       // The same cheap profile the summariser and the note-taker use. Choosing which memories to
       // show is the least interesting work in the system and should be billed accordingly.

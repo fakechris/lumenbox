@@ -35,9 +35,35 @@
  * delegated engine visible, interruptible and loggable exactly like any other job.
  */
 
+/**
+ * Where an engine installed on demand lives: on the work volume, so it survives a box
+ * rebuild, under a prefix of its own so nothing else in the box depends on it. The
+ * image's own layer (when a version was named at build) is found first on PATH; this is
+ * the fallback the person chose at use time.
+ */
+export const ENGINES_DIR = "/home/box/work/.lumenbox/engines";
+export const ENGINES_BIN = `${ENGINES_DIR}/bin`;
+
+/** A command with the on-demand engines on its PATH, ahead of nothing the image ships. */
+export function withEnginesPath(command: string): string {
+  return `export PATH="$PATH:${ENGINES_BIN}"; ${command}`;
+}
+
 export interface Preset {
   /** What an agent names in the Delegate tool. */
   name: string;
+  /**
+   * How to put it in the box when the person wants it and the image does not carry it.
+   * Pinned, like the image layer: the version is the preset's, not npm's latest, so two
+   * boxes that chose the same engine run the same engine. Installed under ENGINES_DIR.
+   */
+  install: {
+    package: string;
+    version: string;
+    ignoreScripts?: boolean;
+    /** Run after the install, as the box user: skills links and the like. */
+    after?: string;
+  };
   /** One line, in the tool description, so a model can pick between presets. */
   summary: string;
   /** How to check it is installed. Non-zero means not there. */
@@ -78,6 +104,14 @@ export interface Preset {
     model: string
   ) => { file: string; content: string; env: Record<string, string> };
   /**
+   * The command-line fragment that routes the engine's permission prompts to the host's face
+   * (Claude Code's `--permission-prompt-tool`), when the engine has one. With it the run does
+   * not skip permissions; without a face the run falls back to skipping them, said out loud.
+   */
+  permissionArgs?: string;
+  /** The fragment that opens or resumes the engine's own thread under a capsule id. */
+  session?: (id: string, resumed: boolean) => string;
+  /**
    * The sixth face (docs/33): the file, environment and command-line fragment that make this
    * engine talk to one remote MCP server — ours, on the host — and no other of ours. The token
    * travels in the environment under `tokenVar`, never in the file and never on the command
@@ -108,6 +142,11 @@ PRESETS_MUTABLE.push(...([
     name: "opencode",
     summary: "A coding agent: reads a repository, edits files, runs tests, iterates.",
     probe: "command -v opencode",
+    install: {
+      package: "opencode-ai",
+      version: "1.18.25",
+      after: "mkdir -p ~/.config/opencode && ln -sfn /home/box/work/skills ~/.config/opencode/skill",
+    },
     // --auto, because a headless `opencode run` auto-rejects every tool permission
     // without it — the engine "works" and does nothing. The box is the sandbox; the
     // permission prompt has no one to ask. The model travels as a flag because this
@@ -158,11 +197,19 @@ PRESETS_MUTABLE.push(...([
     name: "claude",
     summary: "Claude Code: the same shape, for repositories it already knows well.",
     probe: "command -v claude",
+    install: {
+      package: "@anthropic-ai/claude-code",
+      version: "2.1.250",
+      after: "mkdir -p ~/.claude && ln -sfn /home/box/work/skills ~/.claude/skills",
+    },
     // The same headless truth as opencode's --auto, in this engine's dialect; inside
     // the box the sandbox is the container, not the prompt. Untested until a claude
     // build ships in an image — says so in docs/25.
     run: (quoted, model, extraArgs) =>
-      `claude -p --dangerously-skip-permissions${model ? ` --model ${model}` : ""}${extraArgs ? ` ${extraArgs}` : ""} ${quoted}`,
+      `claude -p${extraArgs?.includes("--permission-prompt-tool") ? "" : " --dangerously-skip-permissions"}` +
+      `${model ? ` --model ${model}` : ""}${extraArgs ? ` ${extraArgs}` : ""} ${quoted}`,
+    permissionArgs: "--permission-prompt-tool mcp__lumenbox__permission",
+    session: (id, resumed) => (resumed ? `--resume ${id}` : `--session-id ${id}`),
     skillsMount: "~/.claude/skills",
     wires: ["anthropic"],
     // Claude Code's runtime is its environment: where the model is, which key, which model,
@@ -200,6 +247,12 @@ PRESETS_MUTABLE.push({
   name: "pi",
   summary: "pi: a small coding agent with sessions and skills; good for scoped edits and scripts.",
   probe: "command -v pi",
+  install: {
+    package: "@earendil-works/pi-coding-agent",
+    version: "0.85.1",
+    ignoreScripts: true,
+    after: "mkdir -p ~/.pi/agent && ln -sfn /home/box/work/skills ~/.pi/agent/skills",
+  },
   // -p prints and exits; --no-session keeps a one-shot run out of pi's session store;
   // --approve trusts the project's own skills and extensions, since the box is the sandbox.
   // The provider is the relay's entry in models.json (relayConfig), so the model is named
@@ -242,6 +295,17 @@ PRESETS_MUTABLE.push({
     note: "pi has no MCP client; lend it tools as CLI scripts in the box instead",
   }),
 });
+
+/** The one-line install for a preset, as `bash -lc` runs it in the box. */
+export function installCommand(preset: Preset): string {
+  const { package: pkg, version, ignoreScripts, after } = preset.install;
+  return (
+    `mkdir -p ${ENGINES_DIR} && npm install -g --prefix ${ENGINES_DIR}${ignoreScripts ? " --ignore-scripts" : ""} ` +
+    `${quoteForShell(`${pkg}@${version}`)}` +
+    (after !== undefined ? ` && ${after}` : "") +
+    ` && echo "installed ${preset.name} ${version} under ${ENGINES_DIR}"`
+  );
+}
 
 export function presetNamed(name: string): Preset | undefined {
   return PRESETS.find(preset => preset.name === name);

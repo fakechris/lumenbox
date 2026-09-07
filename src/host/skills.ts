@@ -30,6 +30,7 @@
  */
 
 import { envNumber } from "../config.ts";
+import { namesControlSurface } from "./control-surfaces.ts";
 import { describeSchedule, knownTimezone, parseSchedule, type Schedule } from "./schedule.ts";
 
 /** Where skills live inside the box. Under the work volume for the reasons in the module comment. */
@@ -526,6 +527,13 @@ export async function loadSkills(
       const earlier = seen.get(entry.name);
       if (earlier !== undefined) {
         problems.push(`${entry.name}: also in ${root}, shadowed by the one in ${earlier}.`);
+        continue;
+      }
+      // A skill that names the host's own records is not loaded, whoever wrote it: see
+      // control-surfaces.ts. Said as a problem, so the person who put it there finds out.
+      const named = namesControlSurface(text);
+      if (named !== undefined) {
+        problems.push(`${entry.name}: not loaded — it names ${named}, which a skill may not touch.`);
         continue;
       }
       const result = skillFrom(entry.name, parseSkillFile(text), helpers, root);

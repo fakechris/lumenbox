@@ -284,3 +284,17 @@ test("a blocked move keeps its answer options; any other move drops them", () =>
     cleanup();
   }
 });
+
+test("a reviewer's acceptance records what it checked; other moves carry nothing", () => {
+  const { store, cleanup } = tempStore();
+  try {
+    store.create({ title: "Ship it", requester: "web", assigneeId: "ada", reviewerId: "bob" });
+    store.update("t1", { status: "review" }, "ada");
+    store.update("t1", { status: "done", checked: ["read_file src/app.ts", "bash npm test"] }, "bob");
+    assert.deepEqual(store.get("t1")!.history.at(-1)?.checked, ["read_file src/app.ts", "bash npm test"]);
+    store.update("t1", { status: "doing", checked: ["x"] }, "ada");
+    assert.equal(store.get("t1")!.history.at(-1)?.checked, undefined);
+  } finally {
+    cleanup();
+  }
+});

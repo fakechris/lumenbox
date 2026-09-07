@@ -720,6 +720,15 @@ export class BoxManager {
             `box ready: display ${health.display} at ` +
               `${health.resolution.display.width}x${health.resolution.display.height}`
           );
+          if (health.contract !== undefined) {
+            const carried = Object.entries(health.contract.engines)
+              .filter(([, version]) => version !== "")
+              .map(([name, version]) => `${name} ${version}`);
+            onOutput?.(
+              `box image contract ${health.contract.contract}: ` +
+                (carried.length === 0 ? "no delegated engines baked in (install on demand)" : `engines ${carried.join(", ")}`)
+            );
+          }
           return;
         }
         // Daemon is up but X is still coming; keep waiting.
