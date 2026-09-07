@@ -7,6 +7,7 @@
  */
 
 import { test } from "node:test";
+import * as policyModule from "./policy.ts";
 import assert from "node:assert/strict";
 import { mkdirSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -658,6 +659,23 @@ test("an agent has its own allowance, separate from the box's and the person's",
       true
     );
   } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("the approval list is read when the gate is built, so config.json's env reaches it", () => {
+  const previous = process.env.AGENTBOX_APPROVAL_COMMANDS;
+  const dir = mkdtempSync(join(tmpdir(), "agentbox-policy-limits-"));
+  try {
+    process.env.AGENTBOX_APPROVAL_COMMANDS = "rm -rf /";
+    assert.deepEqual(policyModule.defaultLimits().approvalRequiredCommands, ["rm -rf /"]);
+    const gate = new PolicyGate({ path: join(dir, "policy.jsonl") });
+    const decision = gate.check({ kind: "tool", agentId: "a", agentName: "A", tool: "bash", input: { command: "rm -rf /tmp/x" }, delegated: { jobId: "job-1", ask: true } });
+    assert.equal(decision.allow, false, "on the list: asked, not allowed");
+    assert.match((decision as { reason: string }).reason, /approv/i);
+  } finally {
+    if (previous === undefined) delete process.env.AGENTBOX_APPROVAL_COMMANDS;
+    else process.env.AGENTBOX_APPROVAL_COMMANDS = previous;
     rmSync(dir, { recursive: true, force: true });
   }
 });

@@ -64,7 +64,7 @@ Two things decide whether a card appears, and neither is up to the engine:
   **shell command**, not a Read — a brief that makes the engine read something proves
   nothing here.
 - The host asks the person only for what is on its approval list
-  (`AGENTBOX_APPROVAL_COMMANDS` in the operator's config, e.g. `rm -rf`). If that list is
+  (`AGENTBOX_APPROVAL_COMMANDS` in the operator's config, e.g. `rm -rf /`). If that list is
   empty the host allows the command without a card, and that is the correct behaviour of
   an empty list, not a fault. Tell the person which command you will use and ask them to
   confirm it is on the list before you run it.
@@ -74,8 +74,10 @@ they should expect a consent card or a line in the app saying `[delegated engine
 — ask them to answer it, allow or refuse, and to tell you which. Then `Delegate` (same
 `cwd`) with exactly:
 
-> Using your Bash tool, run `mkdir -p scratch` and then `rm -rf scratch`. Do not read any
-> files. Say whether the removal was allowed, and quote any refusal message you got.
+> Using your Bash tool, run `mkdir -p /home/box/work/engine-check/scratch` and then
+> `rm -rf /home/box/work/engine-check/scratch` (the absolute path matters: the approval
+> list matches `rm -rf /`). Do not read any files. Say whether the removal was allowed, and
+> quote any refusal message you got.
 
 Wait for the job and read its log. Report three things: whether the person saw the request,
 what they answered, and whether the engine's own log agrees (a refusal should show the

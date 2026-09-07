@@ -145,16 +145,30 @@ export interface PolicyLimits {
   approvalRequiredCommands: readonly string[];
 }
 
-export const DEFAULT_LIMITS: PolicyLimits = {
-  budgetTokens: envLimit("AGENTBOX_BUDGET_TOKENS"),
-  perPrincipalBudgetTokens: envLimit("AGENTBOX_PRINCIPAL_BUDGET_TOKENS"),
-  perAgentBudgetTokens: envLimit("AGENTBOX_AGENT_BUDGET_TOKENS"),
-  budgetWindowHours: envLimit("AGENTBOX_BUDGET_WINDOW_HOURS") ?? 24,
-  wakesPerWindow: envLimit("AGENTBOX_WAKES_PER_WINDOW") ?? 30,
-  wakeWindowMinutes: envLimit("AGENTBOX_WAKE_WINDOW_MINUTES") ?? 10,
-  approvalRequiredTools: envList("AGENTBOX_APPROVAL_TOOLS"),
-  approvalRequiredCommands: envList("AGENTBOX_APPROVAL_COMMANDS"),
-};
+/**
+ * The limits as the environment states them, read when asked — not when this module loads.
+ *
+ * They used to be a constant evaluated at import, which runs before `config.json`'s `env`
+ * block is applied to the process; so every `AGENTBOX_APPROVAL_*` and budget variable set
+ * in the app's config was silently ignored, and the approval list read as empty while the
+ * config said `rm -rf`. Found live 2026-09-07: an engine's `rm -rf` was allowed with the
+ * command on the list. The gate reads them at construction, after the config has landed.
+ */
+export function defaultLimits(): PolicyLimits {
+  return {
+    budgetTokens: envLimit("AGENTBOX_BUDGET_TOKENS"),
+    perPrincipalBudgetTokens: envLimit("AGENTBOX_PRINCIPAL_BUDGET_TOKENS"),
+    perAgentBudgetTokens: envLimit("AGENTBOX_AGENT_BUDGET_TOKENS"),
+    budgetWindowHours: envLimit("AGENTBOX_BUDGET_WINDOW_HOURS") ?? 24,
+    wakesPerWindow: envLimit("AGENTBOX_WAKES_PER_WINDOW") ?? 30,
+    wakeWindowMinutes: envLimit("AGENTBOX_WAKE_WINDOW_MINUTES") ?? 10,
+    approvalRequiredTools: envList("AGENTBOX_APPROVAL_TOOLS"),
+    approvalRequiredCommands: envList("AGENTBOX_APPROVAL_COMMANDS"),
+  };
+}
+
+/** The limits with nothing set: what tests spread from. Read once, like the old constant. */
+export const DEFAULT_LIMITS: PolicyLimits = defaultLimits();
 
 /**
  * A limit, or `undefined` when nobody set one.
@@ -306,7 +320,7 @@ export class PolicyGate {
 
   constructor(options: PolicyGateOptions = {}) {
     this.path = options.path ?? join(agentboxHome(), "policy.jsonl");
-    this.limits = options.limits ?? DEFAULT_LIMITS;
+    this.limits = options.limits ?? defaultLimits();
     this.now = options.now ?? (() => new Date());
     this.log = options.log ?? (() => {});
     this.spentSince = options.spentSince ?? (() => 0);
