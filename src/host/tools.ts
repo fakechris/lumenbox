@@ -1784,6 +1784,25 @@ export function sideEffectScopeOf(tool: string): SideEffectScope {
 }
 
 /** The caller's teammates, through the registry's one definition; every agent when a test's registry has none. */
+/**
+ * A teammate by name or id. Names are looked up among teammates, not the whole
+ * installation: with a stale "OVP-Ops-Bot" left in the Docker box, a global lookup found
+ * that one first and SendToAgent refused the real teammate as "in a different box"
+ * (2026-09-08). An id still resolves anywhere, and the caller decides what to do with a
+ * match outside the box.
+ */
+function teammateNamed(context: ToolContext, raw: string): AgentRecord | undefined {
+  const trimmed = raw.trim();
+  if (trimmed === "") return undefined;
+  const lower = trimmed.replace(/^@/, "").toLowerCase();
+  const mates = teammatesFor(context);
+  return (
+    mates.find(record => record.id === trimmed) ??
+    mates.find(record => record.profile.name.toLowerCase() === lower) ??
+    context.registry.tryGet(trimmed)
+  );
+}
+
 function teammatesFor(context: ToolContext): AgentRecord[] {
   if (typeof (context.registry as { teammatesOf?: unknown }).teammatesOf === "function") {
     try {
@@ -3183,11 +3202,7 @@ export async function dispatchTool(
       const raw = String(input.target_id ?? input.target ?? "").trim();
       // A name is the normal way to say who; an id still works. Resolved against the live
       // roster, so a stale or invented id fails with the real names in the reply.
-      let target = context.registry.tryGet(raw);
-      if (target === undefined && raw !== "") {
-        const lower = raw.replace(/^@/, "").toLowerCase();
-        target = context.registry.list().find(record => record.profile.name.toLowerCase() === lower);
-      }
+      const target = teammateNamed(context, raw);
       if (target === undefined) {
         const names = teammatesFor(context).map(r => r.profile.name);
         return { text: `No teammate called "${raw}". Your teammates are: ${names.join(", ") || "(none)"}. Use one of these names.`, isError: true };
@@ -3411,9 +3426,7 @@ export async function dispatchTool(
       // rather than what they said they did.
       let target = context.agent;
       if (who !== "" && who !== context.agent.id && who !== context.agent.profile.name) {
-        const found = context.registry.tryGet(who) ?? context.registry.list().find(
-          record => record.profile.name.toLowerCase() === who.toLowerCase()
-        );
+        const found = teammateNamed(context, who);
         if (found === undefined) return { text: `No agent "${who}".`, isError: true };
         target = found;
       }
@@ -3442,14 +3455,7 @@ export async function dispatchTool(
       const action = String(input.action ?? "");
       const nameOf = (id: string) => context.registry.tryGet(id)?.profile.name ?? id;
       /** An id or a name; teammates say names, the board stores ids. */
-      const resolveAgent = (raw: string): string | undefined => {
-        const direct = context.registry.tryGet(raw);
-        if (direct !== undefined) return direct.id;
-        const byName = context.registry
-          .list()
-          .find(agent => agent.profile.name.toLowerCase() === raw.toLowerCase());
-        return byName?.id;
-      };
+      const resolveAgent = (raw: string): string | undefined => teammateNamed(context, raw)?.id;
 
       if (action === "list") {
         const wanted = String(input.list_status ?? "");
