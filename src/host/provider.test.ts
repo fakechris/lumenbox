@@ -192,7 +192,10 @@ test("the prompt tells a blind agent it has no screen", () => {
 
 test("describeProvider surfaces what is missing", () => {
   withEnv(CLEAN, () => {
-    assert.match(describeProvider(resolveProvider("minimax")), /no prompt caching/);
+    // MiniMax caches a repeated prefix on its own (measured 2026-09-01; the usage ledger shows
+    // cache reads on every turn), so the header must not say it has none.
+    assert.doesNotMatch(describeProvider(resolveProvider("minimax")), /no prompt caching/);
+    assert.match(describeProvider(resolveProvider("deepseek")), /no prompt caching/);
     assert.doesNotMatch(describeProvider(resolveProvider("anthropic")), /no /);
   });
 });

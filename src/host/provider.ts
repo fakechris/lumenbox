@@ -54,6 +54,12 @@ export interface ProviderProfile {
   adaptiveThinking: boolean;
   effort: boolean;
   promptCaching: boolean;
+  /**
+   * The endpoint caches a repeated prefix on its own, with no markers sent. Billing shows
+   * it as cache reads all the same; what differs is only that `promptCaching` stays false
+   * so no cache_control breakpoints go out. Reported as having caching, because it does.
+   */
+  implicitCaching?: boolean;
 
   /**
    * How the key is presented. Third-party endpoints generally want
@@ -119,6 +125,7 @@ const MINIMAX: ProviderProfile = {
   // provider had no caching (and that it mooted the prefix-stability audit) was
   // wrong and is withdrawn.
   promptCaching: false,
+  implicitCaching: true,
   auth: "bearer",
   keyEnv: "MINIMAX_CODE_CN_API_KEY",
 };
@@ -616,7 +623,7 @@ export function resolveSummaryProvider(agentProfile: ProviderProfile): ProviderP
 export function describeProvider(profile: ProviderProfile): string {
   const missing: string[] = [];
   if (!profile.vision) missing.push("no vision (computer tool withheld)");
-  if (!profile.promptCaching) missing.push("no prompt caching");
+  if (!profile.promptCaching && !profile.implicitCaching) missing.push("no prompt caching");
   const suffix = missing.length > 0 ? ` — ${missing.join(", ")}` : "";
   return `${profile.label} ${profile.model}${profile.baseUrl ? ` at ${profile.baseUrl}` : ""}${suffix}`;
 }

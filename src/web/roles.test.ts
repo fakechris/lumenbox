@@ -115,3 +115,41 @@ test("installation and organisation are an admin's; a person's own access is the
     rmSync(home, { recursive: true, force: true });
   }
 });
+
+// ── behind a gateway, the gateway's word is the roster (2026-09-08, k8s) ──────────────────
+//
+// On the multi-tenant control plane every request arrives with x-agentbox-user and
+// x-agentbox-role, and the tenant's roster lives in the control plane. This pod's own roster is
+// empty, so consulting it turned a tenant's owner into a viewer on their first click ("This
+// account can watch but not drive").
+
+test("a role asserted by the gateway is honoured over the pod's empty roster", async () => {
+  const home = mkdtempSync(join(tmpdir(), "agentbox-roles-gw-"));
+  const previous = process.env.AGENTBOX_HOME;
+  process.env.AGENTBOX_HOME = home;
+  let stop: (() => void) | undefined;
+  try {
+    stop = await startWebServer({ port: PORT + 1, host: "127.0.0.1", token: "t0k", useBox: false, onLog: () => {} });
+    const base = `http://127.0.0.1:${PORT + 1}`;
+    const as = (role: string) => ({
+      "content-type": "application/json",
+      authorization: "Bearer t0k",
+      "x-agentbox-user": "u-chris",
+      "x-agentbox-role": role,
+    });
+    const status = async (path: string, role: string, body: unknown): Promise<number> =>
+      (await fetch(`${base}${path}`, { method: "POST", headers: as(role), body: JSON.stringify(body) })).status;
+
+    // An owner drives and administers; a member drives; a viewer watches.
+    assert.notEqual(await status("/api/templates/stamp", "owner", {}), 403, "owner stamps");
+    assert.notEqual(await status("/api/scopes", "owner", { scopes: [] }), 403, "owner administers");
+    assert.notEqual(await status("/api/templates/stamp", "member", {}), 403, "member stamps");
+    assert.equal(await status("/api/scopes", "member", { scopes: [] }), 403, "member does not administer");
+    assert.equal(await status("/api/templates/stamp", "viewer", {}), 403, "viewer watches");
+  } finally {
+    stop?.();
+    if (previous === undefined) delete process.env.AGENTBOX_HOME;
+    else process.env.AGENTBOX_HOME = previous;
+    rmSync(home, { recursive: true, force: true });
+  }
+});

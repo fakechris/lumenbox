@@ -45,6 +45,7 @@ import {
   mayDrive,
   parseCookies,
   refusalToDrive,
+  ROLE_HEADER,
   type Caller,
 } from "./auth.ts";
 import {
@@ -2424,13 +2425,22 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
        * `if` nest. Every route that changes something calls this — a check per handler is how one
        * handler ends up missing it.
        */
+      // Whether a gateway stood in front of this request and said who and what the
+      // person is. Behind the control plane every request carries both headers; the
+      // tenant's roster lives there, and this pod's own roster is empty — consulting it
+      // turned a tenant's owner into a viewer on their first click (2026-09-08, k8s).
+      const assertedByGateway =
+        gatewayCaller.userId !== undefined && req.headers[ROLE_HEADER] !== undefined;
+
       const refused = (agentId?: string): boolean => {
         // Whoever the session says this is, their authority is the roster's answer —
-        // not the gateway header's, which is absent here and therefore reads as the
-        // direct operator. Identity arrived through the session and authority has to
-        // travel with it, or a viewer who signed in is a viewer in name only.
+        // unless a gateway asserted it, in which case the gateway's word is the roster.
+        // Identity that arrived through a web session has no header, so authority has
+        // to travel with it from here, or a viewer who signed in is a viewer in name only.
         const known: Caller =
-          caller.userId !== undefined && !roleAtLeast(principals.roleOf(caller.userId), "driver")
+          !assertedByGateway &&
+          caller.userId !== undefined &&
+          !roleAtLeast(principals.roleOf(caller.userId), "driver")
             ? { ...caller, role: "viewer" }
             : caller;
         const agent = agentId === undefined ? undefined : registry.tryGet(agentId);
@@ -2473,8 +2483,14 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
       };
 
       const refusedRole = (need: Role): boolean => {
+        // The gateway's owner runs their tenant; its member drives; its viewer watches.
+        const fromGateway: Record<Caller["role"], Role> = { owner: "admin", member: "driver", viewer: "viewer" };
         const role: Role =
-          caller.userId === undefined ? "admin" : principals.roleOf(caller.userId);
+          caller.userId === undefined
+            ? "admin"
+            : assertedByGateway
+              ? fromGateway[caller.role]
+              : principals.roleOf(caller.userId);
         if (roleAtLeast(role, need)) return false;
         send(res, 403, {
           error: `This needs the ${need} role; you are ${role}. Ask an admin.`,
