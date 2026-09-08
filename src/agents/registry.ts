@@ -273,6 +273,28 @@ export class AgentRegistry {
     return this.list().filter(record => (record.profile.boxId ?? this.box.id) === boxId);
   }
 
+  /**
+   * The agents that share a box with this one, itself excluded, hidden ones excluded.
+   *
+   * The one definition of "teammate" (docs/39 §1). Every roster — the prompt's, the
+   * Teammates tool's, a door's, the page's — reads this, so that a rule about who may
+   * message whom is written once. Four copies of the same filter had drifted by an
+   * afternoon (2026-09-08).
+   */
+  teammatesOf(agentId: string): AgentRecord[] {
+    const boxId = this.boxOf(agentId).id;
+    return this.agentsIn(boxId).filter(record => record.id !== agentId && record.profile.hidden !== true);
+  }
+
+  /** Whether two agents live in the same box: the precondition for messaging. */
+  sameBox(agentId: string, otherId: string): boolean {
+    try {
+      return this.boxOf(agentId).id === this.boxOf(otherId).id;
+    } catch {
+      return false;
+    }
+  }
+
   attachBox(entry: BoxEntry): BoxEntry {
     if (this.boxes.some(existing => existing.name === entry.name)) throw new Error(`A box named ${entry.name} is already attached.`);
     if (this.boxes.some(existing => existing.id === entry.id)) throw new Error(`A box with id ${entry.id} already exists.`);
@@ -528,6 +550,13 @@ export class AgentRegistry {
     tools?: readonly string[];
     /** The scope to place it in. Its tool set and secrets then come from the scope. */
     scopeId?: string;
+    /**
+     * The agent this one is created next to: it lands in that agent's box. The way an agent
+     * creates a teammate; a person creating from the page names `boxId` instead. One of
+     * the two is expected — an agent made with neither goes to the installation's own box,
+     * which is only right at install time (the starter team) and is guarded by a test.
+     */
+    beside?: string;
     /** Provider preset and model override; absent means the installation default. */
     provider?: string;
     model?: string;
@@ -539,6 +568,9 @@ export class AgentRegistry {
      */
     boxId?: string;
   }): AgentRecord {
+    if (input.beside !== undefined && input.boxId === undefined) {
+      input = { ...input, boxId: this.boxOf(input.beside).id };
+    }
     const name = clampLine(input.name ?? "", AGENT_NAME_MAX_LENGTH);
     if (!name) throw new Error("An agent needs a non-empty name.");
     const box = input.boxId === undefined || input.boxId === "" ? this.defaultBox() : this.boxById(input.boxId);

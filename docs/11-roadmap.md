@@ -1522,6 +1522,12 @@ real names. The page's composer has `@` completion of this box's agents, and "@B
 start of a message goes to Bob's chat. Still to do in this line: the ack wording that lets an
 agent read "queued" as "answered"; a name-collision rule when two products share a machine.
 
+**Box membership has one home (2026-09-08, after the CreateAgent bug).** The registry owns
+`teammatesOf`, `sameBox`, `agentsIn`, and `create({ beside })`; the prompt roster, the Teammates
+tool, SendToAgent, a door's roster and the page all read those. A guard test fails the build
+when a `registry.create` names neither `boxId` nor `beside`. The rule for next time: when a
+concept gets a second definition in a second file, the second one is the bug, even if it works.
+
 **Feeding the multiuser branch, not this line:** the three-layer identity model (observed
 identity, revocable binding, per-box allow/deny), fail-closed row-level security for a
 future control-plane database, and the personal-box contract (data in the snapshot layer,

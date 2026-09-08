@@ -467,7 +467,7 @@ function cmdAgentNew(argv: string[]): number {
     return 1;
   }
   const registry = new AgentRegistry();
-  const created = registry.create({ name, description: rest.join(" ") });
+  const created = registry.create({ name, description: rest.join(" "), boxId: registry.box.id });
   out(`Created ${created.profile.name} (id: ${created.id})`);
   out(dim(`  ${created.dir}`));
   return 0;
