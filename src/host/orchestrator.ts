@@ -149,6 +149,8 @@ export interface OrchestratorOptions {
    * than pretending a question was delivered.
    */
   askUser?: TurnDeps["askUser"];
+  askSecret?: TurnDeps["askSecret"];
+  handOver?: TurnDeps["handOver"];
   /** Reads Feishu documents with the bot's workspace identity, where one is configured. */
   docReader?: TurnDeps["docReader"];
   /**
@@ -678,7 +680,7 @@ export class Orchestrator {
       ...(this.hooks !== undefined ? { hooks: this.hooks } : {}),
       jobsOf: agentId => this.boxFor(agentId)?.jobs().then(result => result.jobs),
       onJobEnded: (jobId, status) => {
-        this.pendingWork?.commitDelegate(jobId, status?.exit_code === 0 ? "done" : "failed");
+        this.noteJobEnded(jobId, status);
       },
       ...(options.pendingWork === null ? { auditPath: null } : {}),
       log: line => console.error(`[mcp-face] ${line}`),
@@ -1216,6 +1218,8 @@ export class Orchestrator {
       scopes: this.scopes,
       mcp: this.mcp,
       askUser: this.options.askUser,
+      askSecret: this.options.askSecret,
+      handOver: this.options.handOver,
       docReader: this.options.docReader ?? this.docReader,
       conversation,
       provider: runtime.provider,
@@ -1528,6 +1532,48 @@ export class Orchestrator {
   }
 
   /**
+   * A delegated job ended while nobody was waiting on it: settle the ledger and tell the
+   * agent, as a message that opens a turn. Without this a job that finished after the
+   * agent's turn ended was found only if the agent thought to ask (Grok persists these
+   * completions as pending wakes for the same reason).
+   */
+  noteJobEnded(jobId: string, status: { exit_code?: number; running?: boolean } | undefined): void {
+    const open = this.pendingWork?.open().find(item => item.kind === "delegate" && item.child === jobId);
+    const committed = this.pendingWork?.commitDelegate(jobId, status?.exit_code === 0 ? "done" : "failed") ?? false;
+    if (!committed || open === undefined) return;
+    const how = status === undefined ? "is gone" : status.exit_code === 0 ? "finished" : `exited ${status.exit_code ?? "?"}`;
+    this.bus.deliverSystem(
+      open.agentId,
+      `[A job you delegated ${how}: ${jobId} (${open.brief.slice(0, 120)}). Read its output with Jobs and fold the result into your work, or say why it does not matter.]`,
+      open.parent
+    );
+  }
+
+  /** Every open delegated job, checked against the box: what ended unattended is noted. */
+  async sweepDelegates(): Promise<number> {
+    const open = this.pendingWork?.open().filter(item => item.kind === "delegate") ?? [];
+    if (open.length === 0) return 0;
+    let noted = 0;
+    const byAgent = new Map<string, typeof open>();
+    for (const item of open) byAgent.set(item.agentId, [...(byAgent.get(item.agentId) ?? []), item]);
+    for (const [agentId, items] of byAgent) {
+      let jobs: { job_id: string; running: boolean; exit_code?: number; interrupted?: boolean }[];
+      try {
+        jobs = (await this.boxFor(agentId)?.jobs())?.jobs ?? [];
+      } catch {
+        continue;
+      }
+      for (const item of items) {
+        const job = jobs.find(candidate => candidate.job_id === item.child);
+        if (job === undefined || job.running) continue;
+        this.noteJobEnded(item.child, { exit_code: job.interrupted === true ? 1 : job.exit_code, running: false });
+        noted += 1;
+      }
+    }
+    return noted;
+  }
+
+  /**
    * The agent's own prose since a transcript position — what an extractor reasons
    * over, and what a chat channel sends back as the reply.
    */
@@ -1658,6 +1704,8 @@ export const ALL_TOOLS: readonly string[] = [
   "ReadFeishuDoc",
   "SendToAgent",
   "AskUser",
+  "AskSecret",
+  "HandOverDesktop",
   "CreateAgent",
   "UpdateAgent",
   "PackTemplate",

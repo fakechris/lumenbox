@@ -1601,6 +1601,31 @@ $("setchadd").onclick = function () {
 document.getElementById("setknocks").addEventListener("click", function (event) {
   var target = event.target;
   if (!target.getAttribute) return;
+  var secretSave = event.target.getAttribute && event.target.getAttribute("data-secret-save");
+  if (secretSave) {
+    event.preventDefault();
+    var field = document.querySelector('[data-secret-input="' + secretSave + '"]');
+    var value = field ? field.value : "";
+    if (!value) { field && field.focus(); return; }
+    fetch("/api/secrets/requests/answer", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ id: secretSave, value: value }) })
+      .then(function () { if (field) field.value = ""; return refreshPolicy(); })
+      .catch(function () {});
+    return;
+  }
+  var secretDismiss = event.target.getAttribute && event.target.getAttribute("data-secret-dismiss");
+  if (secretDismiss) {
+    event.preventDefault();
+    fetch("/api/secrets/requests/dismiss", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ id: secretDismiss }) })
+      .then(function () { return refreshPolicy(); }).catch(function () {});
+    return;
+  }
+  var handback = event.target.getAttribute && event.target.getAttribute("data-handback");
+  if (handback) {
+    event.preventDefault();
+    fetch("/api/handover/back", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ agent: handback }) })
+      .then(function () { return refreshPolicy(); }).catch(function () {});
+    return;
+  }
   var approve = target.getAttribute("data-approve");
   if (approve) {
     fetch("/api/channels/approve", {
@@ -2869,15 +2894,49 @@ setInterval(function () {
  * nothing while its request sits unseen on the server. Cheap: two small reads every few seconds.
  */
 function refreshPolicy() {
-  return fetch("/api/policy")
-    .then(function (r) { return r.json(); })
-    .then(function (state) { renderApprovals(state.pending || []); })
+  return Promise.all([
+    fetch("/api/policy").then(function (r) { return r.json(); }),
+    fetch("/api/secrets/requests").then(function (r) { return r.json(); }).catch(function () { return { requests: [] }; }),
+    fetch("/api/handover").then(function (r) { return r.json(); }).catch(function () { return { pending: [] }; })
+  ])
+    .then(function (all) { renderApprovals(all[0].pending || [], all[1].requests || [], all[2].pending || []); })
     .catch(function () { /* a dropped poll is not worth a message; the next one covers it */ });
 }
 
-function renderApprovals(pending) {
+/** An agent asked the person for a secret by name: the value goes to the vault, never to the agent. */
+function secretCard(item) {
+  return '<div class="consent">' +
+    '<div class="chead"><span class="dot"></span>' + esc(item.agentName) + ' needs a secret: <code>' + esc(item.id) + "</code></div>" +
+    '<div class="note">' + esc(item.description) + "</div>" +
+    '<div class="cactions" style="gap:8px;align-items:center">' +
+      '<input type="password" data-secret-input="' + esc(item.id) + '" placeholder="paste the value" autocomplete="off" style="flex:1;height:30px;border-radius:6px;border:1px solid var(--border-strong);background:var(--bg);color:var(--text);padding:0 8px">' +
+      '<button class="btn sm accent" data-secret-save="' + esc(item.id) + '">Save securely</button>' +
+      '<button class="btn sm ghost" data-secret-dismiss="' + esc(item.id) + '">Dismiss</button>' +
+    "</div>" +
+    '<div class="note">Stored in this machine\'s vault with a grant to ' + esc(item.agentName) + " only. The agent never sees the value; the box never holds it.</div>" +
+  "</div>";
+}
+
+/** An agent handed its desktop to the person with one instruction. */
+function handoverCard(item) {
+  var open = item.desktopPath
+    ? '<a class="btn sm" href="' + esc(item.desktopPath) + '" target="_blank" rel="noopener" style="text-decoration:none">Open computer</a>'
+    : "";
+  return '<div class="consent">' +
+    '<div class="chead"><span class="dot"></span>Computer &mdash; ' + esc(item.agentName) + " is waiting for you (" + esc(item.reason) + ")</div>" +
+    '<div style="padding:4px 0 8px;font-size:14px">' + esc(item.instruction) + "</div>" +
+    '<div class="cactions">' + open +
+      '<button class="btn sm accent" data-handback="' + esc(item.agentId) + '">Hand back</button>' +
+    "</div>" +
+    '<div class="note">When you hand it back the agent is woken and looks at the screen first.</div>' +
+  "</div>";
+}
+
+function renderApprovals(pending, secretRequests, handovers) {
+  secretRequests = secretRequests || [];
+  handovers = handovers || [];
   var box = $("approvals");
-  if (!pending.length) {
+  if (!pending.length && !secretRequests.length && !handovers.length) {
     box.style.display = "none";
     box.innerHTML = "";
     return;
@@ -2896,7 +2955,7 @@ function renderApprovals(pending) {
       '<button class="btn sm" data-approve="' + esc(item.id) + '" data-scope="always">Always</button>' +
       '<button class="btn sm ghost" data-deny="' + esc(item.id) + '">Refuse</button>' +
       "</div></div>";
-  }).join("");
+  }).join("") + secretRequests.map(secretCard).join("") + handovers.map(handoverCard).join("");
 }
 
 document.getElementById("approvals").addEventListener("click", function (event) {
@@ -3319,7 +3378,13 @@ function taskDetail(t) {
       '<span style="white-space:nowrap">' + esc(who) + "</span>" +
       (h.status ? '<span style="color:' + taskStatusColor(h.status) + '">' + esc(h.status) + "</span>" : "") +
       (h.note ? '<span class="dim" style="flex:1;font-style:italic">' + esc(h.note) + "</span>" : "") +
-    "</div>";
+    "</div>" +
+    (h.evidence && h.evidence.length
+      ? '<div class="dim mono" style="font-size:11px;padding-left:12px">evidence: ' + h.evidence.map(esc).join(" · ") + "</div>"
+      : "") +
+    (h.checked && h.checked.length
+      ? '<div class="dim mono" style="font-size:11px;padding-left:12px">checked: ' + h.checked.map(esc).join(" · ") + "</div>"
+      : "");
   }).join("");
   // The conversation is a link only when there is an agent whose transcript to open it
   // in: a conversation without an assignee has nowhere to take you.

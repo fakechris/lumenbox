@@ -453,3 +453,25 @@ test("every tool's effect on the world is declared, and an unknown one is not as
   assert.equal(sideEffectScopeOf("bash"), "mutate");
   assert.equal(sideEffectScopeOf("acme__delete_everything"), "mutate", "an MCP tool is never read by default");
 });
+
+test("an agent asks for a secret by name and hands its desktop over with one instruction; forks may do neither", async () => {
+  const asked: { id: string; description: string }[] = [];
+  const handed: { instruction: string; reason: string }[] = [];
+  const context = {
+    agent: { id: "a1", profile: { name: "Ada" } },
+    registry: {} as never,
+    bus: {} as never,
+    askSecret: (input: { id: string; description: string }) => { asked.push(input); return "in the app"; },
+    handOver: (input: { instruction: string; reason: string }) => { handed.push(input); return "in the app"; },
+  } as unknown as Parameters<typeof dispatchTool>[2];
+  const secret = await dispatchTool("AskSecret", { id: "minimax api key", description: "for pi via the relay" }, context);
+  assert.ok(!secret.isError, secret.text);
+  assert.equal(asked[0]?.id, "MINIMAX_API_KEY", "named like an environment variable");
+  assert.match(secret.text, /never see its value/);
+  const over = await dispatchTool("HandOverDesktop", { instruction: "在这个 Chrome 窗口登录 X，完成后点交还", reason: "auth" }, context);
+  assert.ok(!over.isError, over.text);
+  assert.equal(handed[0]?.reason, "auth");
+  assert.match(over.text, /Your turn ends here/);
+  const { FORK_WITHHELD_TOOLS } = await import("./tools.ts");
+  assert.ok(FORK_WITHHELD_TOOLS.has("AskSecret") && FORK_WITHHELD_TOOLS.has("HandOverDesktop"));
+});
