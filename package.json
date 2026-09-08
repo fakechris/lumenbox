@@ -31,14 +31,14 @@
     "release:check": "npm run check && npm run build && node scripts/release-check.mjs"
   },
   "dependencies": {
-    "@anthropic-ai/sdk": "^0.122.0",
-    "@larksuiteoapi/node-sdk": "^1.73.0",
+    "@anthropic-ai/sdk": "^0.124.0",
+    "@larksuiteoapi/node-sdk": "^1.73.3",
     "markdown-it": "^15.0.1"
   },
   "devDependencies": {
-    "@biomejs/biome": "^2.5.11",
-    "@types/node": "^26.4.0",
-    "electron": "^44.0.0",
+    "@biomejs/biome": "^2.5.12",
+    "@types/node": "^26.4.1",
+    "electron": "^44.2.0",
     "electron-builder": "^26.15.3",
     "esbuild": "^0.28.2",
     "typescript": "^7.0.2"
