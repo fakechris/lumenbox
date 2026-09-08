@@ -1898,7 +1898,12 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
     boxId?: string
   ): Promise<void> {
     const origin = await resolveBoxdOrigin(retried, boxId);
+    const isPage = /\/vnc\.html/.test(path);
     if (!origin) {
+      if (isPage) {
+        sendDesktopWaiting(res, "The box is not available. Start it with `agentbox box up`.");
+        return;
+      }
       res.writeHead(503, { "content-type": "text/plain" });
       res.end("The box is not available. Start it with `agentbox box up`.");
       return;
@@ -1924,10 +1929,31 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
         // charset, came out as mojibake. The page streams through like every asset. The
         // page itself is marked no-store, so a browser that cached the bannered version
         // does not keep showing it after the server stopped sending it.
-        const headers = /\/vnc\.html/.test(path)
+        //
+        // Not ready is a page too, never JSON. Before a desktop is up boxd answers the page
+        // request with a JSON error, and a browser renders JSON in its own viewer — a white
+        // box with a "Pretty-print" checkbox, which is what the pane showed on every start
+        // (2026-09-08, Chris). The iframe's src never changes afterwards, so it never
+        // recovered either. The waiting page is black like the desktop and reloads itself
+        // until noVNC answers.
+        const status = response.statusCode ?? 502;
+        if (isPage && status >= 400) {
+          let body = "";
+          response.setEncoding("utf8");
+          response.on("data", (chunk: string) => { body += chunk; });
+          response.on("end", () => {
+            let reason = body;
+            try {
+              reason = String((JSON.parse(body) as { error?: unknown }).error ?? body);
+            } catch { /* not JSON; the text is the reason */ }
+            sendDesktopWaiting(res, reason);
+          });
+          return;
+        }
+        const headers = isPage
           ? { ...response.headers, "cache-control": "no-store" }
           : response.headers;
-        res.writeHead(response.statusCode ?? 502, headers);
+        res.writeHead(status, headers);
         response.pipe(res);
       }
     );
@@ -1940,6 +1966,10 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
         return;
       }
       if (!res.headersSent) {
+        if (isPage) {
+          sendDesktopWaiting(res, `Cannot reach the box desktop: ${error.message}`);
+          return;
+        }
         res.writeHead(502, { "content-type": "text/plain" });
         res.end(`Cannot reach the box desktop: ${error.message}`);
       } else {
@@ -1948,6 +1978,16 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
     });
 
     req.pipe(upstream);
+  }
+
+  function sendDesktopWaiting(res: ServerResponse, reason: string): void {
+    const page = desktopWaitingPage(reason);
+    res.writeHead(503, {
+      "content-type": "text/html; charset=utf-8",
+      "content-length": Buffer.byteLength(page),
+      "cache-control": "no-store",
+    });
+    res.end(page);
   }
 
   function send(res: ServerResponse, status: number, body: unknown, type = "application/json") {
@@ -4858,6 +4898,25 @@ export function desktopUpstreamPath(
   canDrive: boolean
 ): string | undefined {
   return desktopRouteOf(pathname, search, canDrive)?.upstream;
+}
+
+/**
+ * The page a desktop iframe shows until noVNC answers: the desktop's own black, one
+ * quiet line, and a reload every two seconds. Standing in for an error response from
+ * boxd, so the frame never renders raw JSON or text.
+ */
+export function desktopWaitingPage(reason: string): string {
+  const escaped = reason
+    .replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
+  return (
+    "<!doctype html><html><head><meta charset=\"utf-8\">" +
+    "<meta http-equiv=\"refresh\" content=\"2\"><title>desktop</title>" +
+    "<style>html,body{margin:0;height:100%;background:#000;color:#8a8a8a;" +
+    "font:13px -apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif}" +
+    "body{display:flex;align-items:center;justify-content:center;text-align:center;padding:24px;box-sizing:border-box}" +
+    "small{display:block;margin-top:8px;color:#555}</style></head>" +
+    "<body><div>Desktop is starting\u2026<small>" + escaped + "</small></div></body></html>"
+  );
 }
 
 /**
