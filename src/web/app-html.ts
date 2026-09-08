@@ -351,10 +351,23 @@ export const APP_HTML = String.raw`<!doctype html>
      nothing inside it gets compressed. */
   #chat > * { flex-shrink: 0; }
   .msg { padding: 6px 0; word-break: break-word; position: relative; }
-  /* The message toolbar (docs/40 §2): at the right edge, faint until hovered. */
-  .msg .mtools { position: absolute; top: 2px; right: 0; display: flex; gap: 2px; opacity: 0.35; transition: opacity var(--dur) var(--ease); }
+  /* The message toolbar (docs/41 §1): under the message, never over it. Faint until hovered. */
+  .msg .mtools { display: flex; gap: 2px; margin-top: 4px; opacity: 0.3; transition: opacity var(--dur) var(--ease); }
   .msg:hover .mtools, .msg .mtools:focus-within { opacity: 1; }
-  .msg.user .mtools { right: auto; left: 0; }
+  .msg.user .mtools { justify-content: flex-end; }
+  /* A teammate speaking here (docs/41 §1): a bubble with its own colour, sans, labelled. */
+  .msg.peer .body { font-family: var(--font-sans); font-size: 0.92rem; line-height: 1.6; background: var(--surface); border: 1px solid var(--border); border-left: 3px solid var(--peer-colour, var(--border-strong)); border-radius: var(--radius-card); padding: 10px 14px; }
+  .msg.peer .who .chip { text-transform: none; letter-spacing: 0; font-weight: 400; }
+  .sentfoot { text-align: right; font-size: 11px; color: var(--muted); margin: -2px 0 6px; }
+  .sentfoot .peerdot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; vertical-align: middle; margin-right: 4px; }
+  .sentfoot details { display: inline; }
+  .sentfoot summary { display: inline; cursor: pointer; list-style: none; }
+  .sentfoot .det { text-align: left; margin-top: 4px; white-space: pre-wrap; color: var(--text-soft); font-size: 12px; }
+  .peerfold { font-size: 11px; color: var(--muted); cursor: pointer; padding: 4px 0; }
+  .peerfold.shut + .peerrun { display: none; }
+  /* The plan card folds itself when everything is done; a person can open it again. */
+  #progress details > summary { cursor: pointer; list-style: none; }
+  #progress details > summary::-webkit-details-marker { display: none; }
   .mtools button { border: 1px solid var(--border); background: var(--surface); color: var(--muted); font-size: 11px; padding: 1px 7px; border-radius: 6px; cursor: pointer; }
   .mtools button:hover { color: var(--text); border-color: var(--border-strong); }
   .msg.copied .mtools button[data-act="copy"] { color: var(--ok, #3fb950); }
@@ -2462,9 +2475,16 @@ function stepGroupBar() {
   // can set it too, and so that both read the same thing rather than two flags that drift.
   var label = function () {
     var n = group.querySelectorAll("details.step").length;
+    var calls = group.querySelectorAll("details.tool").length;
     var shut = group.classList.contains("shut");
-    link.textContent =
-      (shut ? "\u25b8 show " : "\u25be hide ") + n + (n === 1 ? " step" : " steps");
+    // Duration from the messages around the work: the one before it and the one after.
+    var before = group.previousElementSibling, after = group.nextElementSibling;
+    while (before && !(before.classList && before.classList.contains("msg") && before.getAttribute("data-at"))) before = before.previousElementSibling;
+    while (after && !(after.classList && after.classList.contains("msg") && after.getAttribute("data-at"))) after = after.nextElementSibling;
+    var ms = before && after ? Date.parse(after.getAttribute("data-at")) - Date.parse(before.getAttribute("data-at")) : NaN;
+    var dur = isFinite(ms) && ms > 0 ? (ms < 60000 ? Math.round(ms / 1000) + "s" : Math.floor(ms / 60000) + "m " + Math.round((ms % 60000) / 1000) + "s") : "";
+    link.textContent = (shut ? "\u25b8 " : "\u25be ") + "Worked" + (dur ? " for " + dur : "") +
+      " · " + (calls ? calls + (calls === 1 ? " call" : " calls") : n + (n === 1 ? " step" : " steps"));
   };
   // Hiding, not collapsing. Each step keeps whatever it was \u2014 open or shut \u2014 so bringing
   // the group back gives the reader the view they left, which is what a tree does.
@@ -2552,7 +2572,7 @@ function whenLabel(at) {
 /** The index of the entry being replayed, so a bubble can carry a permalink; -1 while live. */
 var replayIndex = -1;
 
-function bubble(role, who, text, at) {
+function bubble(role, who, text, at, extra) {
   var el = $("chat");
   var stick = nearBottom(el);
   var div = document.createElement("div");
@@ -2560,8 +2580,10 @@ function bubble(role, who, text, at) {
   var when = whenLabel(at);
   if (replayIndex >= 0) div.setAttribute("data-m", String(replayIndex));
   if (at) div.setAttribute("data-at", String(at));
-  div.setAttribute("data-role", role === "user" ? "user" : "agent");
-  div.innerHTML = '<div class="who">' + esc(who) + (when ? ' <span style="text-transform:none;letter-spacing:0;font-weight:400" title="' + esc(String(at)) + '">' + esc(when) + "</span>" : "") + '</div><div class="body"></div>' +
+  div.setAttribute("data-role", role === "user" ? "user" : role === "peer" ? "peer" : "agent");
+  if (extra && extra.colour) div.style.setProperty("--peer-colour", extra.colour);
+  var chips = extra && extra.chips ? extra.chips.map(function (c) { return ' <span class="chip">' + esc(c) + "</span>"; }).join("") : "";
+  div.innerHTML = '<div class="who">' + esc(who) + chips + (when ? ' <span style="text-transform:none;letter-spacing:0;font-weight:400" title="' + esc(String(at)) + '">' + esc(when) + "</span>" : "") + '</div><div class="body"></div>' +
     '<div class="mtools">' +
       '<button type="button" data-act="copy" title="Copy the text">copy</button>' +
       '<button type="button" data-act="md" title="Copy as Markdown">md</button>' +
@@ -2740,23 +2762,55 @@ function toolCall(name, detail, result, isError) {
  * direction, and the message itself is one click away. The dot carries the teammate's
  * identity color, the same one the roster gave them.
  */
-function peerNote(direction, name, text, priority) {
-  var oneLine = String(text == null ? "" : text).replace(/\s+/g, " ");
-  var row = document.createElement("details");
-  row.className = "note";
-  row.innerHTML = "<summary>" +
-    '<span class="peerdot" style="background:' + colorOfName(name) + '"></span>' +
-    esc(direction) + ' <span class="chip">' + esc(name) + "</span>" +
-    (direction === "from" ? ' <span class="dim">a teammate, not you</span>' : "") +
-    (priority ? " (priority)" : "") +
-    ' <span class="dim">' + esc(oneLine.slice(0, 60)) + "</span>" +
-    '</summary><div class="det"></div>';
-  row.querySelector(".det").textContent = String(text == null ? "" : text);
+/**
+ * A teammate speaking here, or this agent having messaged one (docs/41 §1).
+ *
+ * Incoming: a bubble in the teammate's colour with its name — it spoke in this room, and it
+ * reads like a speaker, not like a log line. Three or more in a row fold to one line, as
+ * Grok's "5 messages with 2 Bots" does. Outgoing: the text was the agent's own prose above;
+ * the footer only says where it went.
+ */
+function peerNote(direction, name, text, priority, at) {
   var el = $("chat");
   var stick = nearBottom(el);
-  el.appendChild(row);
+  if (direction === "to") {
+    var foot = document.createElement("div");
+    foot.className = "sentfoot";
+    foot.innerHTML = '<details><summary><span class="peerdot" style="background:' + colorOfName(name) + '"></span>Messaged ⟶ ' + esc(name) + (priority ? " (priority)" : "") + '</summary><div class="det"></div></details>';
+    foot.querySelector(".det").textContent = String(text == null ? "" : text);
+    el.appendChild(foot);
+    if (stick) el.scrollTop = el.scrollHeight;
+    return foot;
+  }
+  var chips = ["teammate"];
+  if (priority) chips.push("priority");
+  var body = bubble("peer", name, text, at, { colour: colorOfName(name), chips: chips });
+  var msg = body.parentNode;
+  // Runs: the third incoming teammate message in a row starts a fold line above the run.
+  var prev = msg.previousElementSibling;
+  var run = prev && prev.classList.contains("peerrun") ? prev : null;
+  if (run) { run.appendChild(msg); }
+  else if (prev && prev.classList.contains("msg") && prev.classList.contains("peer")) {
+    var wrap = document.createElement("div");
+    wrap.className = "peerrun";
+    var fold = document.createElement("div");
+    fold.className = "peerfold";
+    el.insertBefore(fold, prev);
+    el.insertBefore(wrap, fold.nextSibling);
+    wrap.appendChild(prev); wrap.appendChild(msg);
+    fold.onclick = function () { fold.classList.toggle("shut"); relabelPeerFold(fold, wrap); };
+    run = wrap;
+  }
+  if (run) relabelPeerFold(run.previousElementSibling, run);
   if (stick) el.scrollTop = el.scrollHeight;
-  return row;
+  return body;
+}
+function relabelPeerFold(fold, run) {
+  var msgs = run.querySelectorAll(".msg.peer");
+  var names = {};
+  for (var i = 0; i < msgs.length; i++) names[msgs[i].querySelector(".who").firstChild.textContent] = 1;
+  var m = Object.keys(names).length;
+  fold.textContent = (fold.classList.contains("shut") ? "▸ " : "▾ ") + msgs.length + " messages from " + m + (m === 1 ? " teammate" : " teammates");
 }
 
 /**
@@ -2821,7 +2875,7 @@ function showDesktop(id) {
 function replayEntry(id, entry) {
   if (entry.kind === "peer") {
     for (var p = 0; p < entry.messages.length; p++) {
-      peerNote("from", entry.messages[p].from, entry.messages[p].text, entry.messages[p].priority);
+      peerNote("from", entry.messages[p].from, entry.messages[p].text, entry.messages[p].priority, entry.at);
     }
     return;
   }
@@ -3260,8 +3314,21 @@ function refreshProgress() {
       }
       $("progress").style.display = "";
       var done = todos.filter(function (t) { return t.status === "done"; }).length;
-      head.innerHTML = "<b>plan</b> " + (hasPlan ? esc(state.plan.split("\n")[0]) : "&mdash;") +
-        (todos.length ? ' <span class="dim mono">' + done + "/" + todos.length + " done</span>" : "");
+      var complete = todos.length > 0 && done === todos.length;
+      var planKey = "lumen-plan:" + current + ":" + currentConversation;
+      var remembered = null;
+      try { remembered = localStorage.getItem(planKey); } catch (error) {}
+      var open = remembered === "open" ? true : remembered === "shut" ? false : !complete;
+      head.innerHTML = '<details' + (open ? " open" : "") + '><summary><b>plan</b> ' + (hasPlan ? esc(state.plan.split("\n")[0]) : "&mdash;") +
+        (todos.length ? ' <span class="dim mono">' + done + "/" + todos.length + " done</span>" : "") +
+        ' <span class="dim">' + (open ? "▾" : "▸") + "</span></summary></details>";
+      var det = head.querySelector("details");
+      det.ontoggle = function () {
+        try { localStorage.setItem(planKey, det.open ? "open" : "shut"); } catch (error) {}
+        list.style.display = det.open ? "" : "none";
+        var arrow = det.querySelector("summary .dim:last-child"); if (arrow) arrow.textContent = det.open ? "▾" : "▸";
+      };
+      list.style.display = open ? "" : "none";
       list.innerHTML = todos.map(function (t) {
         var mark = t.status === "done" ? "&#10003;" : t.status === "doing" ? "&rarr;" :
           t.status === "blocked" ? "&#9888;" : "&middot;";
@@ -4022,8 +4089,8 @@ stream.onmessage = function (raw) {
     // Both sides, in their own chat: the sender's record of messaging a teammate, and
     // the recipient's of being messaged. Without the second, the pane jumps from
     // nothing to a reply and what prompted it only shows up on reload.
-    if (e.toId === current) peerNote("from", e.fromName, e.text, e.priority);
-    else if (e.fromId === current) peerNote("to", e.toName, e.text, e.priority);
+    if (e.toId === current) peerNote("from", e.fromName, e.text, e.priority, new Date().toISOString());
+    else if (e.fromId === current) peerNote("to", e.toName, e.text, e.priority, new Date().toISOString());
     return;
   }
 
