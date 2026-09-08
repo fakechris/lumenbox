@@ -105,6 +105,8 @@ export interface ToolContext {
     agentName: string;
     question: string;
     options?: string[];
+    /** What the agent does if the person moves on without answering. */
+    fallback?: string;
     conversation?: string;
   }) => Promise<string | undefined>;
   /**
@@ -318,6 +320,9 @@ export const FORK_WITHHELD_TOOLS: ReadonlySet<string> = new Set([
 ]);
 
 /** Whether a conversation name is a fork child's. */
+/** The tools that reach the person. Withheld on a turn teammates opened (docs/42 §2). */
+export const PERSON_FACING_TOOLS: ReadonlySet<string> = new Set(["AskUser", "AskSecret", "HandOverDesktop"]);
+
 export function isForkConversation(conversation: string | undefined): boolean {
   return (conversation ?? "").startsWith(FORK_PREFIX);
 }
@@ -636,11 +641,14 @@ export function buildTools(
       {
         name: "Fork",
         description:
-          "Split work across copies of yourself, each with its own fresh context, and " +
-          "get back what each one found. Use this when the material is too large to " +
-          "read yourself — a hundred files, a long log, a dataroom — and it divides into " +
-          "independent pieces. Slice it first with the shell (ls, grep, split) so each " +
-          "brief names its own piece, then fork over the slices.\n\n" +
+          "Hand work to copies of yourself, each with its own fresh context, and get back " +
+          "what each one found. Two uses. With `background: true` it is how you keep your own " +
+          "turns short: any heavy piece — an investigation, many files, a long command " +
+          "sequence — runs behind your reply and reports into this conversation as a message " +
+          "when it lands, while you keep answering the person. Without it, this call waits for " +
+          "the forks and returns their findings, for when the material is too large to read " +
+          "yourself and divides into independent pieces: slice it first with the shell (ls, " +
+          "grep, split) so each brief names its own piece, then fork over the slices.\n\n" +
           "Each fork starts knowing nothing but its brief: say which files or range it " +
           "owns, and what to report back. They cannot see each other's work, which is " +
           "the point — none of them fills your context, and only their answers come " +
@@ -655,6 +663,12 @@ export function buildTools(
                 "One self-contained brief per fork. Each is the whole of what that fork " +
                 "will be told.",
               items: { type: "string" },
+            },
+            background: {
+              type: "boolean",
+              description:
+                "Return at once; each fork reports here as a message when it lands. This is the " +
+                "normal way to do heavy work while staying answerable.",
             },
           },
           required: ["briefs"],
@@ -802,7 +816,10 @@ export function buildTools(
           "make each option read like a reply they would actually send.\n\n" +
           "When the answer is one of a few, always pass `options` — they become buttons the " +
           "person taps. Never number choices in your prose and wait for a digit; that is this " +
-          "tool's job. Each option is one plain string.",
+          "tool's job. Each option is one plain string.\n\n" +
+          "Name a `default`: what you do if they say something else or nothing. The person can " +
+          "move past a question, and you then proceed on that default. Two questions in a row is " +
+          "the most this tool allows; a third is refused and you decide.",
         input_schema: {
           type: "object",
           properties: {
@@ -811,6 +828,12 @@ export function buildTools(
               type: "array",
               description: "The answers you can act on, if it is a choice between a few.",
               items: { type: "string" },
+            },
+            default: {
+              type: "string",
+              description:
+                "What you will do if they move on without answering — one sentence. Always " +
+                "give one; a question with no default is a stall.",
             },
           },
           required: ["question"],
@@ -1837,6 +1860,37 @@ export function describeCall(tool: string, input: Record<string, unknown>): stri
 }
 
 /**
+ * How many of the agent's most recent turns in this conversation were nothing but a question.
+ * Read from the transcript: an assistant blocks entry whose only tool call is AskUser, with
+ * the person's reply between. Stops at the first turn that did anything else.
+ */
+export function consecutiveQuestions(context: ToolContext): number {
+  let entries: unknown[];
+  try {
+    entries = context.registry.readTranscript(context.agent.id, context.conversation ?? MAIN_CONVERSATION) as unknown[];
+  } catch {
+    return 0;
+  }
+  let count = 0;
+  for (let index = entries.length - 1; index >= 0; index -= 1) {
+    const entry = entries[index] as { role?: string; kind?: string; blocks?: { type?: string; name?: string }[]; text?: string };
+    if (entry.role !== "assistant") continue;
+    if (entry.kind === "blocks" && Array.isArray(entry.blocks)) {
+      const calls = entry.blocks.filter(block => block.type === "tool_use");
+      if (calls.length > 0) {
+        if (calls.every(block => block.name === "AskUser")) { count += 1; continue; }
+        return count;
+      }
+      continue;
+    }
+    // Plain prose after a question is the agent's "asked, waiting" line, not work.
+    if (entry.kind === undefined && typeof entry.text === "string") continue;
+    return count;
+  }
+  return count;
+}
+
+/**
  * Assigning a task is telling someone. Bot Boss put t158 on dr eggbot and nothing woke dr
  * eggbot, so the board said "assigned" and the work sat for an hour (2026-09-08). The note is
  * carried by the host, not relayed, so the assignee's prose answer comes back to the requester.
@@ -2143,6 +2197,32 @@ export async function dispatchTool(
         landed[index] = result;
         return result;
       });
+
+      // Background (docs/42 §3): no join. Each fork reports into the parent as a message when
+      // it lands, the same path a cut-short join already uses, so the front agent's turn ends
+      // now and the person keeps getting answers.
+      if (input.background === true) {
+        for (const [index, run] of runs.entries()) {
+          void run.then(text => {
+            const tag = ids[index] !== undefined ? `${forkTag(ids[index]!)} ` : "";
+            const seq = context.bus.deliverSystem(
+              context.agent.id,
+              `${tag}A fork you started has finished. Fold it into what you tell the person; ` +
+                `they never heard of the fork.\n\n${text}`,
+              parent
+            );
+            if (ids[index] !== undefined && (seq !== undefined || context.bus.inboxless)) {
+              context.pendingWork?.commit([{ id: ids[index]!, how: hows[index]! === "failed" ? "failed" : "late" }]);
+            }
+          });
+        }
+        return {
+          text:
+            `Started ${briefs.length} fork${briefs.length === 1 ? "" : "s"} in the background. ` +
+            `Each reports here as a message when it lands. End your turn now with what the ` +
+            `person should hear — that you are on it, in your own words, not that you forked.`,
+        };
+      }
 
       // The join, racing the person. A coordinator parked here for minutes could not be
       // reached: steering is read at a round boundary, and a join is one long tool call
@@ -2703,6 +2783,18 @@ export async function dispatchTool(
       const options = Array.isArray(input.options)
         ? input.options.map(optionLabel).filter((option): option is string => option !== undefined)
         : undefined;
+      const fallback = typeof input.default === "string" && input.default.trim() !== "" ? input.default.trim() : undefined;
+      // The budget (docs/42 §5). dr eggbot asked five questions in a row for an agent that
+      // did not exist yet; each was a stall. Two consecutive question-only turns in this
+      // conversation is the most; the third is refused with the instruction to decide.
+      if (consecutiveQuestions(context) >= 2) {
+        return {
+          text:
+            "Not asked: your last two turns here were questions. Decide this one yourself, say " +
+            "plainly which way you went and why, and go on — the person can correct you.",
+          isError: true,
+        };
+      }
       if (context.askUser === undefined) {
         return {
           text:
@@ -2717,6 +2809,7 @@ export async function dispatchTool(
         agentName: context.agent.profile.name,
         question,
         ...(options !== undefined && options.length > 0 ? { options } : {}),
+        ...(fallback !== undefined ? { fallback } : {}),
         ...(context.conversation !== undefined ? { conversation: context.conversation } : {}),
       });
       if (where === undefined) {

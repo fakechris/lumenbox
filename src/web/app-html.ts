@@ -3155,14 +3155,17 @@ function drawItem(item) {
     }
     if (item.answered === undefined) {
       html += '<form class="qfree"><input placeholder="Type your own answer" spellcheck="false"><button type="submit" class="btn sm accent">Send</button></form>';
+      if (item.fallback) html += '<div class="qdone">or move on, and it will: <b class="fb"></b></div>';
     } else if (opts.indexOf(item.answered) < 0) {
-      html += '<div class="qdone">you answered: <b></b></div>';
+      html += '<div class="qdone">you moved on: <b></b></div>';
     }
     div.innerHTML = html;
     div.querySelector(".qtitle").textContent = item.question || "";
     var labels = div.querySelectorAll(".qopt span:last-child");
     for (var l = 0; l < labels.length; l++) labels[l].textContent = opts[l];
-    var done = div.querySelector(".qdone b");
+    var fb = div.querySelector(".qdone b.fb");
+    if (fb) fb.textContent = item.fallback;
+    var done = div.querySelector(".qdone b:not(.fb)");
     if (done) done.textContent = item.answered;
     div.addEventListener("click", function (event) {
       var btn = event.target.closest && event.target.closest(".qopt");
@@ -3226,7 +3229,7 @@ function replayEntry(id, entry, index) {
     redrawItem(openWork);
     if (asked) {
       closeOpen();
-      openQuestion = pushItem({ kind: "question", question: asked.question, options: asked.options || [], at: entry.at });
+      openQuestion = pushItem({ kind: "question", question: asked.question, options: asked.options || [], fallback: asked.fallback, at: entry.at });
     }
     return;
   }
@@ -4433,7 +4436,7 @@ stream.onmessage = function (raw) {
   if (e.type === "question") {
     if (!inView(e)) return;
     closeOpen();
-    openQuestion = pushItem({ kind: "question", question: e.question, options: e.options || [], at: new Date().toISOString() });
+    openQuestion = pushItem({ kind: "question", question: e.question, options: e.options || [], fallback: e.fallback, at: new Date().toISOString() });
     return;
   }
 

@@ -92,6 +92,7 @@ import {
   FORK_PROMPT_LINE,
   isForkConversation,
   PARALLEL_SAFE_TOOLS,
+  PERSON_FACING_TOOLS,
   PARALLEL_TOOL_LIMIT,
   buildTools,
   dispatchTool,
@@ -1428,6 +1429,11 @@ export async function runTurn(
           input_schema: tool.inputSchema as Anthropic.Tool["input_schema"],
         }));
 
+  const personOpened = inbound.some(message => message.fromId === "user");
+  /** Every message that opened this turn came from another agent. */
+  const peerOpened =
+    !personOpened && inbound.length > 0 && inbound.every(message => registry.tryGet(message.fromId) !== undefined);
+
   const tools = buildTools(
     box !== undefined,
     provider.vision,
@@ -1442,7 +1448,11 @@ export async function runTurn(
     deps.templates !== undefined,
     isForkConversation(conversation)
     // MCP tools are outward channels too — a fork gets none (docs/32 §2).
-  ).concat(isForkConversation(conversation) ? [] : mcpTools);
+  ).concat(isForkConversation(conversation) ? [] : mcpTools)
+    // A turn opened by teammates has no line to the person (docs/42 §2): the person is
+    // talking to the sender, and a question from here lands in a chat they are not reading.
+    // What needs deciding goes back to the sender in the reply.
+    .filter(tool => !(peerOpened && PERSON_FACING_TOOLS.has(tool.name)));
 
   // One entry per completed round, for the loop and progress judgements. Held out here rather than
   // inside runRounds so a continuation can reset it: a fresh budget deserves a fresh judgement.
@@ -1451,7 +1461,6 @@ export async function runTurn(
   // layer 1a). Turn-scoped, not round-scoped: a continuation restarts the round count and
   // must not greet them twice.
   let interimDelivered = false;
-  const personOpened = inbound.some(message => message.fromId === "user");
 
   /**
    * A prose reply on a teammate-woken turn is the reply.
@@ -1470,6 +1479,8 @@ export async function runTurn(
     const peer = inbound[0]!;
     if (inbound.some(message => message.relayed === true)) return;
     const peerRecord = registry.tryGet(peer.fromId);
+    // A system note (a fork landing, a saved secret) is not a peer; prose after it is for the record.
+    if (peerRecord === undefined) return;
     const names = [peer.fromId.toLowerCase(), (peerRecord?.profile.name ?? peer.fromName).toLowerCase()];
     if (names.some(name => messagedThisTurn.has(name))) return;
     const ack = deps.bus.send({ fromId: agent.id, toId: peer.fromId, text, relayed: true });

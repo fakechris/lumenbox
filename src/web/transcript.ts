@@ -23,18 +23,23 @@ export interface DisplayTool {
   result?: string;
   isError?: boolean;
   /** For AskUser: the question and its answers, so the page can draw the card again on reload. */
-  question?: { question: string; options?: string[] };
+  question?: { question: string; options?: string[]; fallback?: string };
 }
 
 /** The question an AskUser call carried, in the shape the page draws. */
-export function questionOf(input: unknown): { question: string; options?: string[] } | undefined {
-  const args = (input ?? {}) as { question?: unknown; options?: unknown };
+export function questionOf(input: unknown): { question: string; options?: string[]; fallback?: string } | undefined {
+  const args = (input ?? {}) as { question?: unknown; options?: unknown; default?: unknown };
   const question = typeof args.question === "string" ? args.question.trim() : "";
   if (question === "") return undefined;
   const options = Array.isArray(args.options)
     ? args.options.map(optionLabel).filter((option): option is string => option !== undefined)
     : [];
-  return options.length > 0 ? { question, options } : { question };
+  const fallback = typeof args.default === "string" && args.default.trim() !== "" ? args.default.trim() : undefined;
+  return {
+    question,
+    ...(options.length > 0 ? { options } : {}),
+    ...(fallback !== undefined ? { fallback } : {}),
+  };
 }
 
 

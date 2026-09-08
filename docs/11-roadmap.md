@@ -1547,8 +1547,12 @@ an agent that did not exist yet, and every answer landed in the wrong memory.
 
 **docs/41 stage two shipped (2026-09-08):** consent, secret, computer and question cards live
 in the thread with kept state; the strip is gone; approval wakes the agent. Next per docs/42:
-executor delegation (`Delegate preset: "self"`), workers without a line to the person,
-dismissable questions with a stated default, drafted personas, a question budget.
+executor delegation, workers without a line to the person, dismissable questions with a
+stated default, drafted personas, a question budget — **all five shipped the same day**:
+the executor is `Fork` with `background: true` (a fork was already the blank, mute copy of
+oneself; only the blocking join was in the way), the prompt has a `front` section from
+Grok's dispatcher persona, a teammate-opened turn is offered no person-facing tool, AskUser
+carries a `default` and refuses a third question in a row.
 
 **Feeding the multiuser branch, not this line:** the three-layer identity model (observed
 identity, revocable binding, per-box allow/deny), fail-closed row-level security for a

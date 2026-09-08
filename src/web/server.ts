@@ -219,7 +219,7 @@ type OutboundEvent =
   | { type: "prompt"; agentId: string; text: string; userId?: string; conversation?: string }
   | { type: "error"; message: string }
   /** An agent asked the person something; the page shows a card with the answers as buttons. */
-  | { type: "question"; agentId: string; agentName: string; question: string; options?: string[]; conversation?: string }
+  | { type: "question"; agentId: string; agentName: string; question: string; options?: string[]; fallback?: string; conversation?: string }
   /** One line of docker output while the box is brought up from the page. */
   | { type: "box_setup"; line: string; done?: boolean; ok?: boolean }
   /** An approval was just created; the desktop shell turns this into a notification. */
@@ -466,6 +466,7 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
         agentName: input.agentName,
         question: input.question,
         ...(input.options !== undefined ? { options: input.options } : {}),
+        ...(input.fallback !== undefined ? { fallback: input.fallback } : {}),
         ...(input.conversation !== undefined ? { conversation: input.conversation } : {}),
       });
       const where = chats?.askQuestion(input);
