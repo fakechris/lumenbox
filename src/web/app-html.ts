@@ -350,7 +350,28 @@ export const APP_HTML = String.raw`<!doctype html>
      happened: every tool call rendered as a 2px hairline. The scroller scrolls;
      nothing inside it gets compressed. */
   #chat > * { flex-shrink: 0; }
-  .msg { padding: 6px 0; word-break: break-word; }
+  .msg { padding: 6px 0; word-break: break-word; position: relative; }
+  /* The message toolbar (docs/40 §2): at the right edge, faint until hovered. */
+  .msg .mtools { position: absolute; top: 2px; right: 0; display: flex; gap: 2px; opacity: 0.35; transition: opacity var(--dur) var(--ease); }
+  .msg:hover .mtools, .msg .mtools:focus-within { opacity: 1; }
+  .msg.user .mtools { right: auto; left: 0; }
+  .mtools button { border: 1px solid var(--border); background: var(--surface); color: var(--muted); font-size: 11px; padding: 1px 7px; border-radius: 6px; cursor: pointer; }
+  .mtools button:hover { color: var(--text); border-color: var(--border-strong); }
+  .msg.copied .mtools button[data-act="copy"] { color: var(--ok, #3fb950); }
+  /* Code blocks copy (docs/40 §3). */
+  .msg .body pre { position: relative; }
+  .msg .body pre .precopy { position: absolute; top: 6px; right: 6px; font-size: 11px; padding: 1px 7px; border-radius: 6px; border: 1px solid var(--border); background: var(--surface); color: var(--muted); cursor: pointer; opacity: 0.35; }
+  .msg .body pre:hover .precopy { opacity: 1; }
+  /* Dividers (docs/40 §4). */
+  .divider { display: flex; align-items: center; gap: 10px; margin: 10px 0 4px; font-size: 11px; color: var(--muted); letter-spacing: 0.08em; text-transform: uppercase; }
+  .divider::before, .divider::after { content: "\\200b"; flex: 1; border-top: 1px solid var(--border); }
+  .divider.new { color: var(--accent); }
+  .divider.new::before, .divider.new::after { border-color: var(--accent-soft); }
+  #jumplatest { position: absolute; bottom: 110px; left: 50%; transform: translateX(-50%); display: none; z-index: 5; }
+  #middle { position: relative; }
+  #sharemenu { position: absolute; right: 0; top: 26px; background: var(--surface); border: 1px solid var(--border-strong); border-radius: var(--radius-md); box-shadow: var(--shadow-pop); padding: 4px; display: none; z-index: 20; min-width: 180px; }
+  #sharemenu a { display: block; padding: 6px 10px; font-size: 12px; text-decoration: none; color: var(--text); border-radius: 6px; }
+  #sharemenu a:hover { background: var(--surface-hover); }
   .msg .who {
     font-size: 11px; letter-spacing: 0.1em; text-transform: uppercase; color: var(--muted);
     margin-bottom: 5px;
@@ -694,7 +715,13 @@ export const APP_HTML = String.raw`<!doctype html>
       <a href="#" id="agentcfg" style="font-size:12px;flex:none">Configure</a>
       <a href="#" id="agentdel" style="font-size:12px;flex:none;color:var(--danger)" title="Delete this agent (asks first)">Delete</a>
     </span>
-    <span class="headactions">
+    <span class="headactions" style="position:relative">
+      <a href="#" id="sharebtn" title="Copy or download this thread, or its link">share ▾</a>
+      <div id="sharemenu">
+        <a href="#" data-share="md">Copy as Markdown</a>
+        <a href="#" data-share="file">Download .md</a>
+        <a href="#" data-share="link">Copy link to this thread</a>
+      </div>
       <a href="#" id="foldall" title="Fold or unfold every step in this conversation">fold steps</a>
       <span id="round" class="roundpill"></span>
       <!-- Only shown while a turn is running: a stop button with nothing to stop invites a click
@@ -710,6 +737,7 @@ export const APP_HTML = String.raw`<!doctype html>
     <div id="progresslist"></div>
   </div>
   <div class="scroll" id="chat"></div>
+  <button id="jumplatest" class="btn sm accent" type="button">↓ latest</button>
   <form id="form">
     <!-- Anchored above the composer so it does not cover what is being typed. -->
     <div id="slashmenu" style="display:none"></div>
@@ -2519,19 +2547,99 @@ function whenLabel(at) {
   return sameDay ? hm : (d.getMonth() + 1) + "/" + d.getDate() + " " + hm;
 }
 
+/** The index of the entry being replayed, so a bubble can carry a permalink; -1 while live. */
+var replayIndex = -1;
+
 function bubble(role, who, text, at) {
   var el = $("chat");
   var stick = nearBottom(el);
   var div = document.createElement("div");
   div.className = "msg " + role;
   var when = whenLabel(at);
-  div.innerHTML = '<div class="who">' + esc(who) + (when ? ' <span style="text-transform:none;letter-spacing:0;font-weight:400" title="' + esc(String(at)) + '">' + esc(when) + "</span>" : "") + '</div><div class="body"></div>';
+  if (replayIndex >= 0) div.setAttribute("data-m", String(replayIndex));
+  if (at) div.setAttribute("data-at", String(at));
+  div.setAttribute("data-role", role === "user" ? "user" : "agent");
+  div.innerHTML = '<div class="who">' + esc(who) + (when ? ' <span style="text-transform:none;letter-spacing:0;font-weight:400" title="' + esc(String(at)) + '">' + esc(when) + "</span>" : "") + '</div><div class="body"></div>' +
+    '<div class="mtools">' +
+      '<button type="button" data-act="copy" title="Copy the text">copy</button>' +
+      '<button type="button" data-act="md" title="Copy as Markdown">md</button>' +
+      '<button type="button" data-act="quote" title="Quote into the composer">quote</button>' +
+      (replayIndex >= 0 ? '<button type="button" data-act="link" title="Copy a link to this message">link</button>' : "") +
+      (role === "user" ? '<button type="button" data-act="resend" title="Put this back in the composer">resend</button>' : "") +
+    "</div>";
   var body = div.querySelector(".body");
   body.innerHTML = renderMarkdown(text);
+  div.__md = String(text == null ? "" : text);
+  addCodeCopy(body);
   el.appendChild(div);
   if (stick) el.scrollTop = el.scrollHeight;
   return body;
 }
+
+/** A copy button on every code block (docs/40 §3). */
+function addCodeCopy(body) {
+  var pres = body.querySelectorAll("pre");
+  for (var i = 0; i < pres.length; i++) {
+    if (pres[i].querySelector(".precopy")) continue;
+    var b = document.createElement("button");
+    b.type = "button"; b.className = "precopy"; b.textContent = "copy"; b.title = "Copy this code";
+    b.onclick = (function (pre, btn) {
+      return function (event) {
+        event.preventDefault();
+        var code = pre.querySelector("code");
+        copyText(code ? code.textContent : pre.textContent.replace(/copy$/, ""));
+        btn.textContent = "copied"; setTimeout(function () { btn.textContent = "copy"; }, 1200);
+      };
+    })(pres[i], b);
+    pres[i].appendChild(b);
+  }
+}
+
+function copyText(text) {
+  if (navigator.clipboard && navigator.clipboard.writeText) return navigator.clipboard.writeText(text).catch(function () { fallbackCopy(text); });
+  fallbackCopy(text);
+  return Promise.resolve();
+}
+function fallbackCopy(text) {
+  var ta = document.createElement("textarea");
+  ta.value = text; ta.style.position = "fixed"; ta.style.opacity = "0";
+  document.body.appendChild(ta); ta.select();
+  try { document.execCommand("copy"); } catch (error) {}
+  document.body.removeChild(ta);
+}
+
+/** Puts text into the composer, after whatever is there, and focuses it. */
+function intoComposer(text) {
+  var input = $("input");
+  input.value = (input.value ? input.value.replace(/\s+$/, "") + "\n\n" : "") + text;
+  input.focus();
+  input.selectionStart = input.selectionEnd = input.value.length;
+  input.dispatchEvent(new Event("input"));
+}
+
+function messageLink(index) {
+  var u = new URL(location.href);
+  u.search = "";
+  u.searchParams.set("agent", current);
+  u.searchParams.set("conversation", currentConversation);
+  u.searchParams.set("m", String(index));
+  return u.toString();
+}
+
+$("chat").addEventListener("click", function (event) {
+  var btn = event.target.closest(".mtools button");
+  if (!btn) return;
+  event.preventDefault();
+  var msg = btn.closest(".msg");
+  var act = btn.getAttribute("data-act");
+  var mdText = msg.__md || msg.querySelector(".body").textContent;
+  var flash = function (label) { var was = btn.textContent; btn.textContent = label; setTimeout(function () { btn.textContent = was; }, 1200); };
+  if (act === "copy") { copyText(msg.querySelector(".body").innerText); flash("copied"); }
+  else if (act === "md") { copyText(mdText); flash("copied"); }
+  else if (act === "quote") { intoComposer(mdText.split("\n").slice(0, 6).map(function (l) { return "> " + l; }).join("\n") + "\n"); }
+  else if (act === "link") { copyText(messageLink(msg.getAttribute("data-m"))); flash("copied"); }
+  else if (act === "resend") { intoComposer(mdText); }
+});
 
 /**
  * A collapsed row: one line of summary, the rest behind a click.
@@ -2770,8 +2878,23 @@ function select(id, conversation) {
       "&conversation=" + encodeURIComponent(currentConversation))
     .then(function (r) { return r.json(); })
     .then(function (entries) {
-      for (var i = 0; i < entries.length; i++) replayEntry(id, entries[i]);
+      var seenKey = "lumen-seen:" + id + ":" + currentConversation;
+      var lastSeen = -1;
+      try { lastSeen = Number(localStorage.getItem(seenKey) || "-1"); } catch (error) {}
+      var lastDay = "";
+      var newShown = false;
+      for (var i = 0; i < entries.length; i++) {
+        var e = entries[i];
+        var day = e.at ? dayLabel(e.at) : "";
+        if (day && day !== lastDay) { divider(day, false); lastDay = day; }
+        if (!newShown && lastSeen >= 0 && i > lastSeen && e.kind === "text") { divider("new", true); newShown = true; }
+        replayIndex = i;
+        replayEntry(id, e);
+      }
+      replayIndex = -1;
+      try { localStorage.setItem(seenKey, String(entries.length - 1)); } catch (error) {}
       $("chat").scrollTop = $("chat").scrollHeight;
+      landMessageFromUrl();
       return loadTemplateCardInChat(id);
     });
 }
@@ -2983,7 +3106,12 @@ function refresh() {
           }).join("\n")
         : "Tokens spent today, all agents";
     }
-    if (!current && agents.length) return select(agents[0].id);
+    if (!current && agents.length) {
+      var wantAgent = new URLSearchParams(location.search).get("agent");
+      var wantConv = new URLSearchParams(location.search).get("conversation");
+      var known = wantAgent && agents.some(function (a) { return a.id === wantAgent; });
+      return select(known ? wantAgent : agents[0].id, known && wantConv ? wantConv : undefined);
+    }
     renderAgents();
     // A newly created agent gets its display assigned server-side; keep the pane
     // in step without reloading an unchanged one.
@@ -4880,6 +5008,106 @@ $("agentdel").onclick = function (event) {
   var danger = $("agdanger");
   if (danger) setTimeout(function () { danger.scrollIntoView({ block: "end" }); }, 30);
 };
+// ── dividers, jump to latest, share (docs/40 §4, §5) ──────────────────────────
+function dayLabel(at) {
+  var d = new Date(at);
+  if (isNaN(d.getTime())) return "";
+  var now = new Date();
+  if (d.toDateString() === now.toDateString()) return "today";
+  var y = new Date(now); y.setDate(now.getDate() - 1);
+  if (d.toDateString() === y.toDateString()) return "yesterday";
+  return d.toLocaleDateString(undefined, { weekday: "short", month: "short", day: "numeric" });
+}
+function divider(label, isNew) {
+  var div = document.createElement("div");
+  div.className = "divider" + (isNew ? " new" : "");
+  div.textContent = label;
+  $("chat").appendChild(div);
+}
+
+var unseenSinceScroll = 0;
+$("chat").addEventListener("scroll", function () {
+  if (nearBottom($("chat"))) { unseenSinceScroll = 0; $("jumplatest").style.display = "none"; }
+});
+var chatObserver = new MutationObserver(function (records) {
+  var chat = $("chat");
+  if (nearBottom(chat)) return;
+  var added = 0;
+  for (var i = 0; i < records.length; i++) for (var j = 0; j < records[i].addedNodes.length; j++) {
+    var n = records[i].addedNodes[j];
+    if (n.nodeType === 1 && n.classList && n.classList.contains("msg")) added += 1;
+  }
+  if (!added) return;
+  unseenSinceScroll += added;
+  $("jumplatest").textContent = "↓ " + unseenSinceScroll + " new";
+  $("jumplatest").style.display = "";
+});
+chatObserver.observe($("chat"), { childList: true });
+$("jumplatest").onclick = function () { var chat = $("chat"); chat.scrollTop = chat.scrollHeight; unseenSinceScroll = 0; this.style.display = "none"; };
+
+/** The thread as Markdown a person can paste: who, when, what; steps as one line each. */
+function threadAsMarkdown() {
+  var out = [];
+  var nodes = $("chat").children;
+  for (var i = 0; i < nodes.length; i++) {
+    var n = nodes[i];
+    if (n.classList.contains("msg")) {
+      var who = n.getAttribute("data-role") === "user" ? "You" : nameOf(current);
+      var when = whenLabel(n.getAttribute("data-at"));
+      out.push("**" + who + "**" + (when ? " (" + when + ")" : "") + "\n\n" + (n.__md || n.querySelector(".body").innerText) + "\n");
+    } else if (n.classList.contains("divider")) {
+      out.push("---\n_" + n.textContent + "_\n");
+    } else if (n.classList.contains("steps")) {
+      var steps = n.querySelectorAll("details.step > summary .lbl");
+      for (var k = 0; k < steps.length; k++) out.push("— " + steps[k].textContent);
+      if (steps.length) out.push("");
+    }
+  }
+  return out.join("\n");
+}
+$("sharebtn").onclick = function (event) {
+  event.preventDefault();
+  var m = $("sharemenu");
+  m.style.display = m.style.display === "block" ? "none" : "block";
+};
+document.addEventListener("click", function (event) {
+  if (!event.target.closest("#sharebtn") && !event.target.closest("#sharemenu")) $("sharemenu").style.display = "none";
+});
+$("sharemenu").onclick = function (event) {
+  var a = event.target.closest("a[data-share]");
+  if (!a) return;
+  event.preventDefault();
+  var what = a.getAttribute("data-share");
+  if (what === "md") { copyText(threadAsMarkdown()); feed("thread copied as Markdown", ""); }
+  else if (what === "file") {
+    var blob = new Blob([threadAsMarkdown()], { type: "text/markdown" });
+    var url = URL.createObjectURL(blob);
+    var link = document.createElement("a");
+    link.href = url; link.download = nameOf(current) + "-" + currentConversation.replace(/[^A-Za-z0-9_-]+/g, "_") + "-" + new Date().toISOString().slice(0, 10) + ".md";
+    document.body.appendChild(link); link.click(); document.body.removeChild(link);
+    setTimeout(function () { URL.revokeObjectURL(url); }, 1000);
+  } else if (what === "link") {
+    var u = new URL(location.href); u.search = "";
+    u.searchParams.set("agent", current); u.searchParams.set("conversation", currentConversation);
+    copyText(u.toString()); feed("thread link copied", "");
+  }
+  $("sharemenu").style.display = "none";
+};
+
+/** A permalink: open the agent and thread it names, then scroll to the message. */
+var landed = false;
+function landMessageFromUrl() {
+  var p = new URLSearchParams(location.search);
+  var m = p.get("m");
+  if (m === null || landed) return;
+  var node = document.querySelector('.msg[data-m="' + m + '"]');
+  if (!node) return;
+  landed = true;
+  node.scrollIntoView({ block: "center" });
+  node.style.outline = "2px solid var(--accent)";
+  setTimeout(function () { node.style.outline = ""; }, 2500);
+}
+
 </script>
 </body>
 </html>`;
