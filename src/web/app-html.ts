@@ -364,7 +364,7 @@ export const APP_HTML = String.raw`<!doctype html>
   .msg .body pre:hover .precopy { opacity: 1; }
   /* Dividers (docs/40 §4). */
   .divider { display: flex; align-items: center; gap: 10px; margin: 10px 0 4px; font-size: 11px; color: var(--muted); letter-spacing: 0.08em; text-transform: uppercase; }
-  .divider::before, .divider::after { content: "\\200b"; flex: 1; border-top: 1px solid var(--border); }
+  .divider::before, .divider::after { content: "\200b"; flex: 1; border-top: 1px solid var(--border); }
   .divider.new { color: var(--accent); }
   .divider.new::before, .divider.new::after { border-color: var(--accent-soft); }
   #jumplatest { position: absolute; bottom: 110px; left: 50%; transform: translateX(-50%); display: none; z-index: 5; }
