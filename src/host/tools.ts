@@ -31,7 +31,7 @@ import type { ModelRelay } from "./model-relay.ts";
 import type { DelegateSessions } from "./delegate-sessions.ts";
 import { randomBytes } from "node:crypto";
 import { MAIN_CONVERSATION } from "../agents/registry.ts";
-import { describeTask, isLive, isTaskStatus, TASK_STATUSES, type TaskStore } from "./tasks.ts";
+import { describeTask, isLive, isTaskStatus, TASK_STATUSES, type TaskStore, clampContract } from "./tasks.ts";
 import { ABSENT, versionOf, type FileVersions } from "./files.ts";
 import {
   describeTodos,
@@ -901,6 +901,11 @@ export function buildTools(
         "you can message it immediately. Use this when a body of work deserves a dedicated " +
         "owner with its own memory and chat. There is no tool to delete an agent, so only " +
         "create one that is genuinely worth keeping; the user removes agents themselves. " +
+        "Write the persona in four short parts and nothing else: ONLY job (the one thing it " +
+        "owns), Anti-jobs (what it must never pick up, by name — this is what keeps two agents " +
+        "out of each other's lane), Voice (how it talks), Wake (when it should act and when it " +
+        "should stay quiet). If the persona names a concrete first assignment, the agent " +
+        "starts on it at once instead of introducing itself. " +
         catalogMenu(),
       input_schema: {
         type: "object",
@@ -1139,6 +1144,18 @@ export function buildTools(
             type: "string",
             description: "For update: what happened — a blocker, a finding, a handoff note.",
           },
+          propose: {
+            type: "boolean",
+            description:
+              "For create: this is a proposal, not committed work. It goes on the board marked " +
+              "proposed and nobody can take it until a person commits it. Use it when you are " +
+              "suggesting work rather than being asked for it.",
+          },
+          outcome: { type: "string", description: "For create: what comes out when this is done — the deliverable, in one or two sentences." },
+          scope: { type: "string", description: "For create: what is in bounds and what is out." },
+          constraints: { type: "string", description: "For create: what must not be done or changed." },
+          acceptance: { type: "string", description: "For create: how the reviewer decides it is done." },
+          verification: { type: "string", description: "For create: how the result is to be checked — the command, the page, the file." },
           options: {
             type: "array",
             items: { type: "string" },
@@ -2376,6 +2393,10 @@ export async function dispatchTool(
           refusedSecrets.length > 0
             ? `Not run with these secrets — you have not been granted them: ${refusedSecrets.join(", ")}.`
             : "",
+          Object.keys(secretEnv).length > 0
+            ? `The secrets were in the command's environment only. Never quote a value back, even ` +
+              `partly; confirm a secret by its effect (a 200, a login, a non-empty check), not by printing it.`
+            : "",
           `exit code: ${result.code === null ? "unknown" : result.code}`,
         ].filter(part => part !== "");
         const granted = Object.keys(secretEnv);
@@ -3151,6 +3172,21 @@ export async function dispatchTool(
         return { text: `No agent found with id ${agentId}.`, isError: true };
       }
       const updated = context.registry.update(agentId, changes);
+      // Told to the agent itself, as a message it reads next turn: a persona that changed
+      // under a running agent otherwise shows up only as its own behaviour changing.
+      if (agentId !== context.agent.id) {
+        const fields = Object.keys(changes).filter(key => (changes as Record<string, unknown>)[key] !== undefined);
+        try {
+          context.bus.deliverSystem(
+            agentId,
+            `[Your profile was just updated by ${context.agent.profile.name}: ${fields.join(", ") || "no fields"} changed. ` +
+              `Your instructions now are the ones in your prompt; read them before continuing what you were doing.]`,
+            MAIN_CONVERSATION
+          );
+        } catch {
+          // A bus without an inbox (tests) has nobody to tell.
+        }
+      }
       return {
         text: `Updated agent "${updated.profile.name}" (id: ${updated.id}).`,
       };
@@ -3214,6 +3250,8 @@ export async function dispatchTool(
       }
 
       if (action === "create") {
+        const contract = clampContract(input as Record<string, unknown>);
+        const propose = input.propose === true;
         const assigneeRaw = String(input.assignee ?? "").trim();
         const reviewerRaw = String(input.reviewer ?? "").trim();
         const assigneeId = assigneeRaw === "" ? undefined : resolveAgent(assigneeRaw);
@@ -3231,6 +3269,8 @@ export async function dispatchTool(
           ...(assigneeId !== undefined ? { assigneeId } : {}),
           ...(reviewerId !== undefined ? { reviewerId } : {}),
           ...(context.conversation !== undefined ? { conversation: context.conversation } : {}),
+          ...(contract !== undefined ? { contract } : {}),
+          ...(propose ? { proposedBy: context.agent.id } : {}),
         });
         if (created === undefined) return { text: "A task needs a title.", isError: true };
         return { text: `Created ${describeTask(created, nameOf)}.` };

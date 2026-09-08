@@ -298,3 +298,32 @@ test("a reviewer's acceptance records what it checked; other moves carry nothing
     cleanup();
   }
 });
+
+test("a proposal carries its contract and waits for a person's commit before anyone may start it", () => {
+  const { store, cleanup } = tempStore();
+  try {
+    const task = store.create({
+      title: "Add a retry to the fetch",
+      requester: "ada",
+      proposedBy: "ada",
+      contract: { outcome: "fetch retries twice", acceptance: "the flaky test passes 10/10", verification: "npm test" },
+    })!;
+    assert.equal(task.proposedBy, "ada");
+    assert.equal(task.contract?.acceptance, "the flaky test passes 10/10");
+    assert.match(describeTask(task, id => id), /proposed/);
+    // An agent cannot start it.
+    const tried = store.update("t1", { status: "doing", assigneeId: "ada" }, "ada")!;
+    assert.equal(tried.task.status, "open");
+    assert.match(tried.coerced ?? "", /awaiting a person's commit/);
+    // A person commits; then it is ordinary work.
+    assert.equal(store.commit("t1", "web"), true);
+    assert.equal(store.get("t1")!.proposedBy, undefined);
+    assert.equal(store.commit("t1", "web"), false, "nothing left to commit");
+    assert.equal(store.commit("t99", "web"), undefined);
+    const taken = store.update("t1", { status: "doing" }, "ada")!;
+    assert.equal(taken.task.status, "doing");
+    assert.equal(taken.coerced, undefined);
+  } finally {
+    cleanup();
+  }
+});

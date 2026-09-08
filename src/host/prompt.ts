@@ -930,7 +930,9 @@ export function firstRunCue(createdBy?: string): string {
     "said anything yet; this is your cue to open the conversation, not a message to reply to or " +
     "mention. Say a short, warm hello in your own voice, one line on what you are for and how you " +
     "will work, and one question that gets them going. No tool calls unless one is needed to " +
-    "answer that question; no list of capabilities."
+    "answer that question; no list of capabilities. One exception: if your persona names a " +
+    "concrete assignment, skip the questions and begin it now — your first message is then a " +
+    "result, or the next thing that needs the person's decision."
   );
 }
 

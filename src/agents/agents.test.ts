@@ -916,3 +916,22 @@ test("what a room said is kept beside the conversation, bounded, and read back o
     rmSync(root, { recursive: true, force: true });
   }
 });
+
+test("the same message to the same teammate within minutes is refused as a repeat", async () => {
+  const root = mkdtempSync(join(tmpdir(), "agentbox-dupe-"));
+  try {
+    const registry = new AgentRegistry(root);
+    const ada = registry.create({ name: "Ada" });
+    const bob = registry.create({ name: "Bob" });
+    const { AgentBus } = await import("./bus.ts");
+    const bus = new AgentBus(registry, async () => {});
+    const first = bus.send({ fromId: ada.id, toId: bob.id, text: "status?" });
+    assert.match(first, /Recorded and queued/);
+    const second = bus.send({ fromId: ada.id, toId: bob.id, text: "status?" });
+    assert.match(second, /Not sent: you sent Bob this exact message/);
+    const different = bus.send({ fromId: ada.id, toId: bob.id, text: "status of t3?" });
+    assert.match(different, /Recorded and queued/);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
