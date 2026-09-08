@@ -4088,6 +4088,9 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
                 desktopUrl:
                   `/${desktopPrefix}/vnc.html?autoconnect=1&resize=scale` +
                   `&path=${desktopPrefix}/websockify`,
+                // Mid-turn right now, so a page opened after the turn began shows the agent is
+                // on it — the live event is the only other way to learn this, and it is past.
+                running: orchestrator.bus.isActive(record.id),
               };
             }),
           });
