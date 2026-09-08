@@ -3177,6 +3177,8 @@ function select(id, conversation) {
         replayEntry(id, e, i);
       }
       closeOpen();
+      // Opened mid-turn: the start event is past, so say it from the state instead.
+      if (busy.has(id) && id === current) showWorking();
       try { localStorage.setItem(seenKey, String(entries.length - 1)); } catch (error) {}
       $("chat").scrollTop = $("chat").scrollHeight;
       landMessageFromUrl();
@@ -3356,6 +3358,8 @@ function refresh() {
   return fetch("/api/state").then(function (r) { return r.json(); }).then(function (state) {
     boxesSeen = state.boxes || [];
     agents = state.agents;
+    // Who is mid-turn as of this load; the stream carries changes from here on.
+    for (var b = 0; b < agents.length; b++) if (agents[b].running) busy.add(agents[b].id);
     // The box in view: the one already chosen, else the agent in view's, else this machine's own.
     if (!currentBox || !boxesSeen.some(function (b) { return b.id === currentBox; })) {
       var viewing = agentById(current);
