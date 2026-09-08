@@ -3285,6 +3285,9 @@ function select(id, conversation) {
       closeOpen();
       // Opened mid-turn: the start event is past, so say it from the state instead.
       if (busy.has(id) && id === current) showWorking();
+      // Whatever is waiting on the person for this agent, drawn from the state — the replay
+      // just reset the thread, so any card the first poll drew is gone.
+      refreshPolicy();
       try { localStorage.setItem(seenKey, String(entries.length - 1)); } catch (error) {}
       $("chat").scrollTop = $("chat").scrollHeight;
       landMessageFromUrl();
