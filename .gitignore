@@ -25,3 +25,7 @@ docker/box/hostd.mjs
 # The source of truth is src/host/catalog-data.
 docker/box/catalog-data/
 dist/catalog-data/
+
+# Per-environment ops material (real cluster addresses, credentials, patched manifests) lives
+# here, untracked. The tracked deploy/kubernetes files stay generic on purpose.
+deploy/kubernetes/local/
