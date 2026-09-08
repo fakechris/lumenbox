@@ -3006,3 +3006,118 @@ test("shedding an old tool result keeps its tail, where the exit code and the er
   assert.match(text, /exit code 2 at the very end$/);
   assert.match(text, /truncated to fit the context window/);
 });
+
+// ── a prose reply on a teammate-woken turn is the reply (2026-09-08) ─────────────────────
+//
+// dr eggbot answered Bot Boss with three questions as plain text and never called SendToAgent;
+// nobody reads a peer-woken agent's prose but the peer, so the questions went nowhere and the
+// handoff stalled for an hour. The host carries the prose — one hop only.
+
+function peerMessage(from: { id: string; profile: { name: string } }, text: string, relayed = false) {
+  return { id: `m-${text.length}`, fromId: from.id, fromName: from.profile.name, text, priority: false, receivedAt: "", ...(relayed ? { relayed: true } : {}) };
+}
+
+test("prose written on a teammate-woken turn is delivered to that teammate", async () => {
+  const { registry, cleanup } = fixture();
+  try {
+    const ada = registry.create({ name: "Ada" });
+    const bob = registry.create({ name: "Bob" });
+    const woken: { name: string; text: string; relayed: boolean | undefined }[] = [];
+    const bus = new AgentBus(registry, async (agent, inbound) => {
+      for (const m of inbound) woken.push({ name: agent.profile.name, text: m.text, relayed: m.relayed });
+    });
+    const { client } = stubClient([message([textBlock("Three questions: what, where, when?")])], { params: [] });
+
+    await runTurn(ada, [peerMessage(bob, "hand me the doc")], new AbortController().signal, {
+      client, registry, bus, box: undefined, resolution: undefined,
+    });
+    await bus.idle();
+    assert.deepEqual(woken, [{ name: "Bob", text: "Three questions: what, where, when?", relayed: true }]);
+  } finally {
+    cleanup();
+  }
+});
+
+test("a relayed reply is not relayed back, and a turn that already messaged the sender is left alone", async () => {
+  const { registry, cleanup } = fixture();
+  try {
+    const ada = registry.create({ name: "Ada" });
+    const bob = registry.create({ name: "Bob" });
+    const woken: string[] = [];
+    const bus = new AgentBus(registry, async (agent, inbound) => {
+      for (const m of inbound) woken.push(`${agent.profile.name}:${m.text}`);
+    });
+
+    // Woken by a relayed message: prose stays prose. This is the loop cap.
+    const first = stubClient([message([textBlock("noted")])], { params: [] });
+    await runTurn(ada, [peerMessage(bob, "ok thanks", true)], new AbortController().signal, {
+      client: first.client, registry, bus, box: undefined, resolution: undefined,
+    });
+    await bus.idle();
+    assert.deepEqual(woken, []);
+
+    // Messaged the sender by name already: the prose is a note to self, not a second reply.
+    const second = stubClient(
+      [
+        message([toolUseBlock("SendToAgent", { target_id: "Bob", message: "here you go" })], "tool_use"),
+        message([textBlock("Sent Bob the doc.")]),
+      ],
+      { params: [] }
+    );
+    await runTurn(ada, [peerMessage(bob, "doc please")], new AbortController().signal, {
+      client: second.client, registry, bus, box: undefined, resolution: undefined,
+    });
+    await bus.idle();
+    assert.deepEqual(woken, ["Bob:here you go"]);
+
+    // The user opened the turn: prose is for the user, never carried to a teammate.
+    const third = stubClient([message([textBlock("Done.")])], { params: [] });
+    await runTurn(
+      ada,
+      [{ id: "m-u", fromId: "user", fromName: "user", text: "go", priority: false, receivedAt: "" }, peerMessage(bob, "fyi")],
+      new AbortController().signal,
+      { client: third.client, registry, bus, box: undefined, resolution: undefined }
+    );
+    await bus.idle();
+    assert.deepEqual(woken, ["Bob:here you go"]);
+  } finally {
+    cleanup();
+  }
+});
+
+test("assigning a task tells the assignee, and creating an agent greets it", async () => {
+  const { registry, cleanup } = fixture();
+  try {
+    const boss = registry.create({ name: "Boss" });
+    const egg = registry.create({ name: "Egg" });
+    const woken: string[] = [];
+    const bus = new AgentBus(registry, async (agent, inbound) => {
+      for (const m of inbound) woken.push(`${agent.profile.name}<-${m.fromName}:${m.text.slice(0, 40)}`);
+    });
+    const { TaskStore } = await import("./tasks.ts");
+    const tasks = new TaskStore(join(registry.root, "tasks.jsonl"));
+    const { client } = stubClient(
+      [
+        message([toolUseBlock("Tasks", { action: "create", title: "handoff doc", assignee: "Egg" })], "tool_use"),
+        message([toolUseBlock("CreateAgent", { name: "Ops", description: "owns ops" })], "tool_use"),
+        message([textBlock("Set up.")]),
+      ],
+      { params: [] }
+    );
+    await runTurn(
+      boss,
+      [{ id: "m-u", fromId: "user", fromName: "user", text: "delegate", priority: false, receivedAt: "" }],
+      new AbortController().signal,
+      { client, registry, bus, tasks, box: undefined, resolution: undefined }
+    );
+    await bus.idle();
+    assert.equal(registry.list().some(a => a.profile.name === "Ops"), true);
+    assert.deepEqual(woken.sort(), [
+      "Egg<-Boss:Task t1 is assigned to you: \"handoff doc",
+      "Ops<-Boss:You were just created by Boss. Your desc",
+    ].sort());
+    void egg;
+  } finally {
+    cleanup();
+  }
+});

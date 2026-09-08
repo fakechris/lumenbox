@@ -1135,6 +1135,8 @@ export async function runTurn(
    *  looked at nothing may not accept (Argus's harness makes the same check). */
   const toolsUsedThisTurn = new Set<string>();
   const callsThisTurn: string[] = [];
+  /** Who this turn addressed with SendToAgent, by the name or id it used, lowercased. */
+  const messagedThisTurn = new Set<string>();
   // The turn is the attempt; the work is what the attempts are attempts at. A resumption
   // inherits rather than mints, which is the whole point of the field: without it a turn that
   // resumed twice appears in every report as three unrelated short turns.
@@ -1450,6 +1452,29 @@ export async function runTurn(
   // must not greet them twice.
   let interimDelivered = false;
   const personOpened = inbound.some(message => message.fromId === "user");
+
+  /**
+   * A prose reply on a teammate-woken turn is the reply.
+   *
+   * dr eggbot answered Bot Boss's message with three questions as plain text and never called
+   * SendToAgent, so the questions went nowhere and the handoff stalled (2026-09-08). Nobody reads
+   * a peer-woken agent's prose but the peer, so the host carries it. One hop: a turn woken by a
+   * relayed message does not relay back, which is what keeps two agents from bouncing
+   * acknowledgements at each other. A turn that already messaged the sender itself said what it
+   * meant to say.
+   */
+  const relayProseToPeer = (text: string): void => {
+    if (personOpened || text.trim() === "") return;
+    const peers = new Set(inbound.map(message => message.fromId));
+    if (peers.size !== 1) return;
+    const peer = inbound[0]!;
+    if (inbound.some(message => message.relayed === true)) return;
+    const peerRecord = registry.tryGet(peer.fromId);
+    const names = [peer.fromId.toLowerCase(), (peerRecord?.profile.name ?? peer.fromName).toLowerCase()];
+    if (names.some(name => messagedThisTurn.has(name))) return;
+    const ack = deps.bus.send({ fromId: agent.id, toId: peer.fromId, text, relayed: true });
+    console.error(`[turn] ${agent.profile.name}: prose reply carried to ${peer.fromName}: ${ack.slice(0, 80)}`);
+  };
   // How many tool calls this turn has made, across continuations: the structural signal the
   // guards read (docs/31 layer 1e). A ruling reached with this at zero is a ruling from memory.
   let toolCallsInTurn = 0;
@@ -2076,6 +2101,7 @@ export async function runTurn(
             continue;
           }
         }
+        relayProseToPeer(finalText);
         return;
       }
 
@@ -2161,6 +2187,11 @@ export async function runTurn(
       });
       toolsUsedThisTurn.add(toolUse.name);
       callsThisTurn.push(describeCall(toolUse.name, (toolUse.input ?? {}) as Record<string, unknown>));
+      if (toolUse.name === "SendToAgent") {
+        const shaped = (toolUse.input ?? {}) as { target_id?: unknown; target?: unknown };
+        const raw = String(shaped.target_id ?? shaped.target ?? "").trim().replace(/^@/, "");
+        if (raw !== "") messagedThisTurn.add(raw.toLowerCase());
+      }
 
       // Auto-review, for the binding class only. Shadow mode classifies beside the call and
       // records the verdict; enforce mode waits for it and hands a BLOCK back to the model as the
