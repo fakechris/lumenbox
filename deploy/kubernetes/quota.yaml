@@ -1,0 +1,45 @@
+# The fleet-level ceiling, stated once for the cluster to enforce.
+#
+# The allocator limits each box (AGENTBOX_K8S_MEMORY is request *and* limit, so every box pod
+# reserves its share at schedule time). This file limits the *sum*: without it, "one tenant too
+# many" is a node outage rather than a clean Pending. Numbers below assume the 4Gi / 10Gi
+# per-box defaults — divide requests.memory by the per-box memory and you have the tenant cap.
+#
+# Not applied by default: whether the agentbox namespace should share a quota with anything else
+# is a cluster-policy question, not ours. Apply with:
+#   kubectl apply -f deploy/kubernetes/quota.yaml
+apiVersion: v1
+kind: ResourceQuota
+metadata:
+  name: agentbox-boxes
+  namespace: agentbox
+  labels:
+    app.kubernetes.io/managed-by: agentbox
+spec:
+  hard:
+    # 64Gi / 4Gi per box ≈ 16 boxes, minus the control plane's own share.
+    requests.memory: 64Gi
+    limits.memory: 64Gi
+    # Three PVCs per box plus the control plane's state volume.
+    persistentvolumeclaims: "60"
+    requests.storage: 200Gi
+---
+# A LimitRange is the complement: it applies to anything created in the namespace that did NOT
+# come through the allocator (a debugging pod someone runs by hand), which a ResourceQuota with
+# memory limits would otherwise reject for having no limits at all.
+apiVersion: v1
+kind: LimitRange
+metadata:
+  name: agentbox-boxes
+  namespace: agentbox
+  labels:
+    app.kubernetes.io/managed-by: agentbox
+spec:
+  limits:
+    - type: Container
+      default: # limit, when the pod does not say
+        memory: 4Gi
+      defaultRequest: # request, when the pod does not say
+        memory: 1Gi
+      max: # nothing in this namespace may exceed the per-box ceiling
+        memory: 8Gi

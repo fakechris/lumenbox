@@ -634,7 +634,13 @@ export class HttpKubeApi implements KubeApi {
           timeout: this.timeoutMs,
           headers: {
             accept: "application/json",
-            ...(payload !== undefined ? { "content-type": "application/json" } : {}),
+            // Content-Length, never chunked: a chunked body the apiserver's handler does not
+            // fully read poisons the keep-alive connection — the leftover chunk frames are parsed
+            // as the next request, which fails as a plain-text "400 Bad Request" with nothing
+            // pointing at the real cause. Measured against a 1.16 apiserver by k8s-smoke.ts.
+            ...(payload !== undefined
+              ? { "content-type": "application/json", "content-length": Buffer.byteLength(payload) }
+              : {}),
             ...(token !== undefined ? { authorization: `Bearer ${token}` } : {}),
           },
         },
