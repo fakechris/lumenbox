@@ -279,6 +279,10 @@ export class KubernetesAllocator extends StoreBackedAllocator {
             // already read secrets in this namespace.
             envFrom: [{ secretRef: { name: `${name}-tokens` } }],
             env: [
+              // The gateway proxies to the box's UI, so the in-box orchestrator is not optional
+              // here the way it is for a laptop box: without it nothing listens on the UI port
+              // and every proxied request is a 502. Compose sets the same variable (box/docker.ts).
+              { name: "AGENTBOX_HOST_ENABLED", value: "1" },
               ...(this.options.controlUrl !== undefined
                 ? [{ name: "AGENTBOX_CONTROL_URL", value: this.options.controlUrl }]
                 : []),
