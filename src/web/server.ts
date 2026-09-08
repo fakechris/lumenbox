@@ -779,13 +779,21 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
     // What this door shows is what it routes: the box's agents, the door's default
     // marked (or the installation fallback, so the marker never lies by omission).
     roster: adapterName => {
-      const doorDefault =
-        channelRecords.find(record => record.id === adapterName)?.defaultAgent ??
-        registry.list()[0]?.profile.name;
+      const door = channelRecords.find(record => record.id === adapterName);
+      const doorDefault = door?.defaultAgent ?? registry.list()[0]?.profile.name;
+      // A door opens into one box; its roster is that box's agents (docs/39 §1).
+      const inBox = (agentId: string) => {
+        if (door?.boxId === undefined) return true;
+        try {
+          return registry.boxOf(agentId).id === door.boxId;
+        } catch {
+          return true;
+        }
+      };
       return rosterText(
         registry
           .list()
-          .filter(record => record.profile.hidden !== true)
+          .filter(record => record.profile.hidden !== true && inBox(record.id))
           .map(record => ({
             name: record.profile.name,
             ...(record.profile.title ? { title: record.profile.title } : {}),
