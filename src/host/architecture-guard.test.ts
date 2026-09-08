@@ -64,3 +64,37 @@ test("policy limits are never read at module load", () => {
     .map(file => file.path);
   assert.deepEqual(offenders, []);
 });
+
+test("an agent is created into a named box, or beside its creator — never by default", () => {
+  // The bug of 2026-09-08: an agent on the attached VM created teammates that landed in
+  // the Docker box because the call named no box. The registry resolves `beside` to the
+  // creator's box; a call that passes neither is an install-time site and is listed here.
+  const allowed = new Set([
+    "cli.ts:STARTER_TEAM", "cli.ts:golden", "host/orchestrator.ts:STARTER_TEAM",
+  ]);
+  const offenders: string[] = [];
+  for (const file of sources()) {
+    if (file.path === "agents/registry.ts") continue;
+    let from = 0;
+    for (;;) {
+      const at = file.text.indexOf("registry.create(", from);
+      if (at < 0) break;
+      // The whole argument list, parentheses balanced, so a call spanning lines and nested
+      // calls is read to its real end rather than to the first ')'.
+      let depth = 0, end = at + "registry.create".length;
+      for (; end < file.text.length; end += 1) {
+        const ch = file.text[end];
+        if (ch === "(") depth += 1;
+        else if (ch === ")") { depth -= 1; if (depth === 0) break; }
+      }
+      const args = file.text.slice(at, end + 1);
+      from = end + 1;
+      const before = file.text.slice(Math.max(0, at - 80), at);
+      if (/boxId|beside/.test(args)) continue;
+      if (/STARTER_TEAM/.test(before + args) && allowed.has(`${file.path}:STARTER_TEAM`)) continue;
+      if (/"Gold"|"Silver"/.test(args) && allowed.has(`${file.path}:golden`)) continue;
+      offenders.push(`${file.path}: ${args.replace(/\s+/g, " ").slice(0, 70)}`);
+    }
+  }
+  assert.deepEqual(offenders, [], "a registry.create with no box: pass boxId, or beside: <creator id>");
+});

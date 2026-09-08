@@ -1783,6 +1783,18 @@ export function sideEffectScopeOf(tool: string): SideEffectScope {
   return SIDE_EFFECT_SCOPE[tool] ?? "mutate";
 }
 
+/** The caller's teammates, through the registry's one definition; every agent when a test's registry has none. */
+function teammatesFor(context: ToolContext): AgentRecord[] {
+  if (typeof (context.registry as { teammatesOf?: unknown }).teammatesOf === "function") {
+    try {
+      return context.registry.teammatesOf(context.agent.id);
+    } catch {
+      // fall through
+    }
+  }
+  return context.registry.list().filter(r => r.id !== context.agent.id && r.profile.hidden !== true);
+}
+
 /** One line for a tool call, for the record: the tool and the thing it touched. */
 export function describeCall(tool: string, input: Record<string, unknown>): string {
   const pick = (...keys: string[]) => {
@@ -3119,11 +3131,7 @@ export async function dispatchTool(
     case "Teammates": {
       // The roster, live, from the host: the one answer to "who can I message". An agent that
       // reads files in the box for this finds another product's bots (2026-09-08).
-      const mine = (() => { try { return context.registry.boxOf(context.agent.id).id; } catch { return undefined; } })();
-      const rows = context.registry
-        .list()
-        .filter(record => record.id !== context.agent.id && record.profile.hidden !== true)
-        .filter(record => { try { return mine === undefined || context.registry.boxOf(record.id).id === mine; } catch { return true; } })
+      const rows = teammatesFor(context)
         .map(record => `- ${record.profile.name}${record.profile.title ? ` (${record.profile.title})` : ""} — id ${record.id}`);
       return {
         text: rows.length === 0
@@ -3142,7 +3150,7 @@ export async function dispatchTool(
         target = context.registry.list().find(record => record.profile.name.toLowerCase() === lower);
       }
       if (target === undefined) {
-        const names = context.registry.list().filter(r => r.id !== context.agent.id && r.profile.hidden !== true).map(r => r.profile.name);
+        const names = teammatesFor(context).map(r => r.profile.name);
         return { text: `No teammate called "${raw}". Your teammates are: ${names.join(", ") || "(none)"}. Use one of these names.`, isError: true };
       }
       const targetId = target.id;
@@ -3151,19 +3159,11 @@ export async function dispatchTool(
       // Teammates are the agents in the same box (docs/39 §1). Another box's agent is
       // another computer's worker; when a courier between boxes is wanted it will be a
       // thing of its own, not this tool reaching across.
-      if (target !== undefined && typeof context.registry.boxOf === "function") {
-        try {
-          const mine = context.registry.boxOf(context.agent.id).id;
-          const theirs = context.registry.boxOf(target.id).id;
-          if (mine !== theirs) {
-            return {
-              text: `${target.profile.name} lives in a different box, and messages do not cross boxes. Your teammates are the agents in yours.`,
-              isError: true,
-            };
-          }
-        } catch {
-          // A registry without box records (tests) has one box.
-        }
+      if (target !== undefined && typeof context.registry.sameBox === "function" && !context.registry.sameBox(context.agent.id, target.id)) {
+        return {
+          text: `${target.profile.name} lives in a different box, and messages do not cross boxes. Your teammates are the agents in yours.`,
+          isError: true,
+        };
       }
       const wake = context.policy?.check({
         kind: "wake",
@@ -3244,13 +3244,6 @@ export async function dispatchTool(
       // A teammate is created into the creator's box (docs/39 §1). Without this an agent on
       // the attached VM created three "OVP Ops" into the Docker box, could not see them in
       // its own roster, and concluded the host had failed (2026-09-08).
-      const creatorBox = (() => {
-        try {
-          return typeof context.registry.boxOf === "function" ? { boxId: context.registry.boxOf(context.agent.id).id } : {};
-        } catch {
-          return {};
-        }
-      })();
       const from = String(input.from ?? "").trim();
       const held = context.agent.profile.tools;
       if (from !== "") {
@@ -3274,7 +3267,7 @@ export async function dispatchTool(
             description: row.description,
             title: row.title,
             tools: [...intersectTools(row.tools, held)],
-            ...creatorBox,
+            beside: context.agent.id,
           });
           existing.add(name);
           created.push({ name: record.profile.name, id: record.id });
@@ -3309,7 +3302,7 @@ export async function dispatchTool(
         name,
         description,
         title: input.title ? String(input.title) : undefined,
-        ...creatorBox,
+        beside: context.agent.id,
         // A colleague cannot be given tools its creator does not have. Without this, an agent that
         // may not write files creates one that may and asks it to write — and the restriction was
         // never a restriction, only a longer path. Same rule as a teammate's message carrying no

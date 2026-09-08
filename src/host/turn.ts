@@ -314,21 +314,14 @@ function truncateOldestResults(
   }
   return { dropped, chars };
 }
-/** The agents in the same box as this one: the roster a prompt shows (docs/39 §1). */
+/** The roster a prompt shows: the registry's one definition of a teammate, plus the agent itself. */
 function teammatesOf(registry: AgentRegistry, agentId: string): AgentRecord[] {
-  const all = registry.list();
-  if (typeof (registry as { boxOf?: unknown }).boxOf !== "function") return all;
+  if (typeof (registry as { teammatesOf?: unknown }).teammatesOf !== "function") return registry.list();
   try {
-    const mine = registry.boxOf(agentId).id;
-    return all.filter(record => {
-      try {
-        return registry.boxOf(record.id).id === mine;
-      } catch {
-        return true;
-      }
-    });
+    const self = registry.tryGet(agentId);
+    return [...(self !== undefined ? [self] : []), ...registry.teammatesOf(agentId)];
   } catch {
-    return all;
+    return registry.list();
   }
 }
 
