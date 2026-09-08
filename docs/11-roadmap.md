@@ -1545,6 +1545,11 @@ and first word. CreateAgent says: create from what you know, the new agent's pre
 its own questions in its own chat — dr eggbot had interviewed Chris through five questions for
 an agent that did not exist yet, and every answer landed in the wrong memory.
 
+**docs/41 stage two shipped (2026-09-08):** consent, secret, computer and question cards live
+in the thread with kept state; the strip is gone; approval wakes the agent. Next per docs/42:
+executor delegation (`Delegate preset: "self"`), workers without a line to the person,
+dismissable questions with a stated default, drafted personas, a question budget.
+
 **Feeding the multiuser branch, not this line:** the three-layer identity model (observed
 identity, revocable binding, per-box allow/deny), fail-closed row-level security for a
 future control-plane database, and the personal-box contract (data in the snapshot layer,
