@@ -3241,6 +3241,16 @@ export async function dispatchTool(
     }
 
     case "CreateAgent": {
+      // A teammate is created into the creator's box (docs/39 §1). Without this an agent on
+      // the attached VM created three "OVP Ops" into the Docker box, could not see them in
+      // its own roster, and concluded the host had failed (2026-09-08).
+      const creatorBox = (() => {
+        try {
+          return typeof context.registry.boxOf === "function" ? { boxId: context.registry.boxOf(context.agent.id).id } : {};
+        } catch {
+          return {};
+        }
+      })();
       const from = String(input.from ?? "").trim();
       const held = context.agent.profile.tools;
       if (from !== "") {
@@ -3264,6 +3274,7 @@ export async function dispatchTool(
             description: row.description,
             title: row.title,
             tools: [...intersectTools(row.tools, held)],
+            ...creatorBox,
           });
           existing.add(name);
           created.push({ name: record.profile.name, id: record.id });
@@ -3298,6 +3309,7 @@ export async function dispatchTool(
         name,
         description,
         title: input.title ? String(input.title) : undefined,
+        ...creatorBox,
         // A colleague cannot be given tools its creator does not have. Without this, an agent that
         // may not write files creates one that may and asks it to write — and the restriction was
         // never a restriction, only a longer path. Same rule as a teammate's message carrying no
