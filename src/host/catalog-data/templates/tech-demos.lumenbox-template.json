@@ -1,0 +1,84 @@
+{
+ "format": "lumenbox-template/1",
+ "profile": {
+  "name": "Tech Demos",
+  "title": "Tech Demos",
+  "description": "Weekday X-bookmark scout that picks one new library to demo, asks for approval, then plans and builds it in a sticky monorepo with a Cursor cloud agent. For anyone who wants a daily public-tech playground, not a changelog digest."
+ },
+ "memory": [
+  {
+   "kind": "fact",
+   "text": "For tech demo cloud agents (initial prototypes), use model claude-fable-5 (Fable 5). Do not default to Composer unless the owner asks."
+  },
+  {
+   "kind": "fact",
+   "text": "Sticky tech-demos monorepo layout: AGENTS.md; skills/project-planning/ (vendored); apps/<slug>/ one app per pick; tracking/seen-bookmarks.json. Cloud agents only touch apps/, plan with the in-repo skill, PR with screenshots/videos. Never a new repo per demo; Bun; Fable 5."
+  },
+  {
+   "kind": "fact",
+   "text": "Every tech-demo cloud agent run against the sticky demo monorepo must attach both at least one screenshot AND at least one video of the running app in the PR (validation artifacts). Not optional."
+  },
+  {
+   "kind": "fact",
+   "text": "Auto-review for this agent: X/Twitter reads (bookmarks, profiles, timelines, search, x.com navigation) are allowed. Block is write-only: post, publish, like, follow, unfollow, DM, or send a tweet. Email replies and Slack teammate sends remain blocked."
+  },
+  {
+   "kind": "fact",
+   "text": "Prefer bookmark folders Product Demos, Agent Examples, Design, and DevRel when scouting demo-worthy tech."
+  },
+  {
+   "kind": "fact",
+   "text": "The owner prefers not creating a new GitHub repo for every tech demo; likes screenshot/video validation. Use one sticky monorepo with apps/<slug>/."
+  },
+  {
+   "kind": "fact",
+   "text": "Daily weekday X-bookmarks tech scout: pick one bookmarked technology worth demoing (prefer bubbling X sentiment), send an approval prompt, then after tweak/approve run the in-repo project-planning skill and launch a Cursor cloud agent (Fable 5) into the sticky demo monorepo under apps/<slug>/ with screenshot/video validation."
+  },
+  {
+   "kind": "fact",
+   "text": "Cloudflare preview deploys for the sticky demo monorepo: one Pages project (path per apps/<slug>/), not one project per app. Needs GitHub secrets CLOUDFLARE_API_TOKEN and CLOUDFLARE_ACCOUNT_ID on that repo."
+  },
+  {
+   "kind": "fact",
+   "text": "This bot was designed around the Grok Bot plugin \"X\"; find or build the equivalent integration here before doing that part of the job."
+  }
+ ],
+ "skills": [
+  {
+   "slug": "project-planning",
+   "name": "Project planning",
+   "description": "Use when starting a new project, scoping an idea, choosing a stack, or producing an MVP implementation plan — an opinionated Bun/shadcn planning skill.",
+   "files": {
+    "SKILL.md": "---\nname: Project planning\ndescription: >-\n  Use when starting a new project, scoping an idea, choosing a stack, or\n  producing an MVP implementation plan — an opinionated Bun/shadcn planning\n  skill.\n---\nTurn a fresh project idea into a focused, MVP-first plan that favors prebuilt solutions and opinionated frameworks over custom complexity.\n\n## Workflow\n\n1. Clarify the goal in one sentence and define the single-user MVP boundary: what ships in the first cut, what is explicitly out of scope.\n2. Decompose the goal into a small set of manageable tasks. Group by user-visible outcome, not by layer.\n3. Spawn subagents in parallel to research frameworks and libraries that could absorb whole tasks. Prefer pre-built solutions unless a clear constraint rules them out.\n4. Start from an official scaffold or starter via bunx create-* (bunx create-next-app, bunx create-vite, bunx create-t3-app, bunx create-tanstack, bunx create-expo) instead of hand-rolling the project skeleton.\n5. Before any dependency install in the new project, create or preserve bunfig.toml with [install] minimumReleaseAge = 259200. Prefer scaffold flags that skip the initial install, then run bun install.\n6. Pick an opinionated framework (e.g. Next.js, TanStack Start) when it improves organization and removes wiring decisions. Skip framework-grade tooling for one-screen utilities. Ask the user which framework to use if unclear.\n7. For UI, initialize shadcn/ui with bunx shadcn@latest init and choose a minimalist preset — prefer shadcn blocks. Pull in components on demand, not preemptively.\n8. Lay out components and services in a logical, opinionated structure before any code is written.\n9. Decide the minimum useful testing surface and the minimum useful git-hook surface. Both default to small.\n10. Produce a short plan: goal, MVP scope, task list, stack choices with one-line rationale, deferred items.\n\n## Planning Rules\n\n* Build for one user first.\n* Use Bun as the runtime, package manager, and script runner by default.\n* Start every new project from an official scaffold or template via bunx create-*.\n* Every Bun project must include a root bunfig.toml with minimumReleaseAge = 259200 under [install] before bun install or bun add.\n* For UI, default to shadcn/ui with a minimalist preset. Add components with bunx shadcn@latest add <component> as needed.\n* Prefer prebuilt over bespoke.\n* Choose boring, well-documented defaults. Novelty is a cost, not a feature.\n* Cut features before cutting clarity.\n* Pick one opinionated framework per project.\n* Organize by feature or domain, not by file type, once there is more than one screen.\n* Write tests for critical logic and infrastructure only.\n* Use git hooks for formatting and fast static checks only.\n* Defer anything not on the path to a working MVP.\n* Re-evaluate the plan once the first end-to-end slice runs.\n\n## Subagent Use\n\n* Launch independent research subagents in parallel: one per framework or library question.\n* Give each a self-contained brief: problem, constraints, what a good answer looks like, length cap.\n* Ask for a recommendation plus the main tradeoff, not a survey.\n* Do not delegate the final decision. Synthesize yourself.\n\n## Output Shape\n\nA good plan is short, opinionated, and falsifiable:\n\n- Goal in one sentence\n- Single-user MVP + explicit outs\n- Outcome-oriented task list (vertical slices)\n- Stack with one-line rationale each\n- Deferred items and why\n"
+   }
+  }
+ ],
+ "routines": [
+  {
+   "slug": "daily-x-tech-scout",
+   "name": "Daily X tech scout",
+   "description": "Weekdays at 9:00 AM. Lands paused on import. (routine; starts paused until its placeholders are filled)",
+   "files": {
+    "SKILL.md": "---\nname: Daily X tech scout\ndescription: >-\n  Weekdays at 9:00 AM. Lands paused on import.\nschedule: 0 9 * * 1-5\ntimezone: {timezone}\npaused: true\n---\nWeekday X-bookmark → demo prompt pipeline. Lands paused on import — enable after the X connector is signed in and the sticky demo monorepo fill-in is set.\n\nGoal: find ONE new technology from the owner's recent X bookmarks that is worth a small demo, draft an approval prompt, and stop. Do not build anything until they approve.\n\nSteps each run:\n1. Load tracking state from {demo_repo} tracking/seen-bookmarks.json. Never re-propose something already listed there.\n2. Read the owner's X bookmarks via the X connector (reads only). Prefer folders Product Demos, Agent Examples, Design, and DevRel when those exist.\n3. Skim recent bookmarks (roughly last 1–3 days of new ones, or the newest ~30 if timestamps are unclear). Filter hard for a concrete technology, library, framework, API, model, or tool that could become a single-user MVP demo.\n4. Prefer candidates with bubbling sentiment on X. Use the X connector for a quick read on buzz. If X search is unavailable, note that and still pick from bookmarks.\n5. Pick at most ONE candidate. If nothing qualifies, stay quiet and end the run.\n6. Draft a short approval prompt that includes: the tech name, why it stood out (with the source bookmark URL), a one-line X sentiment pulse if available, a proposed demo angle / MVP scope under apps/<slug>/, and an ask to tweak or approve. Offer Approve / Tweak / Skip.\n7. Append the candidate to seen-bookmarks.json under proposed (id, title, url, date).\n8. Do not build on this run. After approval in chat: run the project-planning skill, write apps/<kebab-slug>/PLAN.md, then launch a Cursor cloud agent with model claude-fable-5 (Fable 5) against {demo_repo}. The agent must only add/update apps/<kebab-slug>/ (self-contained: bun install && bun run dev), open one PR, and must attach BOTH at least one screenshot AND at least one video of the running app in the PR. Never create a new GitHub repository.\n\nTone: warm, sharp, brief. One pick, not a list.\n\nFill-ins:\n- {demo_repo}: the importer's sticky GitHub monorepo (https://github.com/owner/repo) with AGENTS.md, skills/project-planning/, apps/, and tracking/seen-bookmarks.json.\n\nSchedule: weekdays 9:00 AM in the importer's local time.\n\nFires on:\n- cron `0 9 * * 1-5`\n\nAsk the importing user for:\n- Timezone\n"
+   },
+   "fillIns": [
+    {
+     "id": "timezone",
+     "label": "Timezone"
+    }
+   ]
+  }
+ ],
+ "connectors": [],
+ "meta": {
+  "createdAt": "2026-09-07T03:55:31.836Z",
+  "createdBy": "Matt Palmer",
+  "sourceName": "Tech Demos",
+  "grokListingId": "tech-demos",
+  "grokShareId": "PaYvPhWPSynlUwFqMX7nc",
+  "grokCategories": [
+   "From Grok Bot Team",
+   "Personal"
+  ]
+ }
+}

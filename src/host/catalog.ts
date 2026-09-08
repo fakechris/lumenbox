@@ -28,6 +28,62 @@ function persona(slug: string): string {
   return readFileSync(join(catalogDataDir(), "experts", `${slug}.md`), "utf8").trim();
 }
 
+/**
+ * The shelf's ready-made templates: fifty Grok Bots ported to `lumenbox-template/1`
+ * (marketplace-sync, 2026-09-07) — persona, memory conventions, skills with their full
+ * SKILL.md, routines, connectors — each shipped as one file. This is what a person means
+ * by "a template": a whole working bot, not a persona paragraph.
+ */
+export interface ShelfTemplate {
+  slug: string;
+  name: string;
+  title: string;
+  description: string;
+  createdBy?: string;
+  source?: string;
+  skills: string[];
+  routines: string[];
+  connectors: string[];
+  memoryCount: number;
+  path: string;
+}
+
+export function shelfTemplates(): ShelfTemplate[] {
+  const dir = join(catalogDataDir(), "templates");
+  if (!existsSync(dir)) return [];
+  return readdirSync(dir)
+    .filter(name => name.endsWith(".lumenbox-template.json"))
+    .sort()
+    .flatMap(name => {
+      try {
+        const raw = JSON.parse(readFileSync(join(dir, name), "utf8")) as {
+          profile?: { name?: string; title?: string; description?: string };
+          skills?: { name?: string; slug?: string }[];
+          routines?: { name?: string; slug?: string }[];
+          connectors?: unknown[];
+          memory?: unknown[];
+          meta?: { createdBy?: string; grokListingId?: string; grokShareId?: string };
+        };
+        const profile = raw.profile ?? {};
+        return [{
+          slug: name.replace(/\.lumenbox-template\.json$/, ""),
+          name: profile.name ?? name,
+          title: profile.title ?? "",
+          description: profile.description ?? "",
+          ...(raw.meta?.createdBy !== undefined ? { createdBy: raw.meta.createdBy } : {}),
+          ...(raw.meta?.grokListingId !== undefined ? { source: `grok:${raw.meta.grokListingId}` } : {}),
+          skills: (raw.skills ?? []).map(skill => skill.name ?? skill.slug ?? "").filter(s => s !== ""),
+          routines: (raw.routines ?? []).map(routine => routine.name ?? routine.slug ?? "").filter(r => r !== ""),
+          connectors: (raw.connectors ?? []).map(c => (typeof c === "string" ? c : String((c as { name?: string }).name ?? ""))).filter(c => c !== ""),
+          memoryCount: (raw.memory ?? []).length,
+          path: join(dir, name),
+        }];
+      } catch {
+        return [];
+      }
+    });
+}
+
 /** Skill-hub packages we actually vendored. Missing SKILL.md is not a skill. */
 export function hubSkillSlugs(): string[] {
   const dir = join(catalogDataDir(), "skills");

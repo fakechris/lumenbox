@@ -1,0 +1,80 @@
+{
+ "format": "lumenbox-template/1",
+ "profile": {
+  "name": "Bot Boss",
+  "title": "Bot Boss",
+  "description": "Ported from the Grok Bot \"Bot Boss\". See its skills for what it does."
+ },
+ "memory": [],
+ "skills": [],
+ "routines": [
+  {
+   "slug": "cos-morning",
+   "name": "cos-morning",
+   "description": "Weekday morning desk board (routine; starts paused until its placeholders are filled)",
+   "files": {
+    "SKILL.md": "---\nname: cos-morning\ndescription: >-\n  Weekday morning desk board\nschedule: 50 7 * * 1-5\ntimezone: {timezone}\ndeliver: {chat}\npaused: true\n---\nWeekday morning desk (~7:50 local). If fire is at or after noon local, do not ship a morning pack; merge catch-up instead. Route-first to siblings when present (inbox manager <INBOX_MANAGER_AGENT_ID>, calendar ea <CALENDAR_EA_AGENT_ID>, intel scout <INTEL_SCOUT_AGENT_ID>) with paths/asks not corpora dumps; QG sibling artifacts before asserting (open artifact, quote claims, pass/fail success criteria; fail → one rewrite or kill). Hub-and-spoke only. Assume human saw obvious Slack/mail. Board: A last-24h themes · B ranked priorities · C ONE same-day impact play; plus Needs you now · Calendar risks · Intel to carry · Waiting. VERIFY-BEFORE-ASSERT or {slack_user}. Fail-closed assembly. Quiet-on-noop. Draft-then-approve outbound or calendar writes. Do not Enable sibling clocks. Auth fail 2×: pause this clock once and tell once.\n\nFires on:\n- cron `50 7 * * 1-5`\n\nAsk the importing user for:\n- Timezone\n- Slack user\n"
+   },
+   "fillIns": [
+    {
+     "id": "timezone",
+     "label": "Timezone"
+    },
+    {
+     "id": "slack_user",
+     "label": "Slack user"
+    },
+    {
+     "id": "chat",
+     "label": "Chat to deliver to"
+    }
+   ]
+  },
+  {
+   "slug": "cos-afternoon",
+   "name": "cos-afternoon",
+   "description": "Weekday afternoon non-obvious ping (routine; starts paused until its placeholders are filled)",
+   "files": {
+    "SKILL.md": "---\nname: cos-afternoon\ndescription: >-\n  Weekday afternoon non-obvious ping\nschedule: 0 16 * * 1-5\ntimezone: {timezone}\ndeliver: {chat}\npaused: true\n---\nWeekday afternoon (~4pm). Route-first to siblings when present (inbox manager <INBOX_MANAGER_AGENT_ID>, calendar ea <CALENDAR_EA_AGENT_ID>, intel scout <INTEL_SCOUT_AGENT_ID>). QG artifacts before asserting. Speak only on non-obvious: cal add/move/cancel, conflict, new note action, shifted deadline. Else silence. Board when needed: Needs you now · Calendar risks · Intel to carry · Waiting. VERIFY-BEFORE-ASSERT or {slack_user}. Fail-closed. Quiet-on-noop. Draft-then-approve. Do not Enable sibling clocks. Auth fail 2×: pause this clock once.\n\nFires on:\n- cron `0 16 * * 1-5`\n\nAsk the importing user for:\n- Timezone\n- Slack user\n"
+   },
+   "fillIns": [
+    {
+     "id": "timezone",
+     "label": "Timezone"
+    },
+    {
+     "id": "slack_user",
+     "label": "Slack user"
+    },
+    {
+     "id": "chat",
+     "label": "Chat to deliver to"
+    }
+   ]
+  },
+  {
+   "slug": "cos-mon-learning",
+   "name": "cos-mon-learning",
+   "description": "Monday briefing relevance tweak (routine; starts paused until its placeholders are filled)",
+   "files": {
+    "SKILL.md": "---\nname: cos-mon-learning\ndescription: >-\n  Monday briefing relevance tweak\nschedule: 15 9 * * 1\ntimezone: {timezone}\npaused: true\n---\nMonday learning (~9:15). If ≥2 same-type briefing misses, ONE scoped tweak + short changelog. Else silence. Ask before adopting non-trivial self-improve tweaks. Do not Enable sibling clocks.\n\nFires on:\n- cron `15 9 * * 1`\n\nAsk the importing user for:\n- Timezone\n"
+   },
+   "fillIns": [
+    {
+     "id": "timezone",
+     "label": "Timezone"
+    }
+   ]
+  }
+ ],
+ "connectors": [
+  "mcp:gmail",
+  "mcp:google-calendar",
+  "mcp:slack"
+ ],
+ "meta": {
+  "createdAt": "2026-09-07T03:55:31.800Z",
+  "createdBy": "grok-bot marketplace",
+  "sourceName": "Bot Boss"
+ }
+}

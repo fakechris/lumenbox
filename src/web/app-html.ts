@@ -4883,11 +4883,15 @@ setInterval(refresh, 15000);
 // already open. Done after the first refresh so the roster is there to name people.
 if (openTask) showTab("tasks");
 // ── the shelf and the Set up card (docs/39 §2, §4) ───────────────────────────────────
-function shelfCard(head, sub, action, dataAttr) {
-  return '<div style="display:flex;gap:10px;align-items:center;padding:8px 4px;border-bottom:1px solid var(--border)">' +
+function shelfCard(head, sub, action, dataAttr, preview) {
+  return '<div class="shelfrow" style="padding:8px 4px;border-bottom:1px solid var(--border)">' +
+    '<div style="display:flex;gap:10px;align-items:center">' +
     '<div style="flex:1;min-width:0"><div style="font-size:13px;font-weight:500">' + head + "</div>" +
     '<div class="dim" style="font-size:11px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">' + sub + "</div></div>" +
-    '<button class="btn sm accent" ' + dataAttr + '>' + action + "</button></div>";
+    (preview ? '<button class="btn sm ghost" data-preview="1" type="button">Preview</button>' : "") +
+    '<button class="btn sm accent" ' + dataAttr + '>' + action + "</button></div>" +
+    (preview ? '<div class="shelfpreview" style="display:none;margin:8px 0 2px;padding:8px 10px;border:1px solid var(--border);border-radius:var(--radius-md);background:var(--bg);font-size:12px;line-height:1.5">' + preview + "</div>" : "") +
+    "</div>";
 }
 
 function openShelf() {
@@ -4900,8 +4904,25 @@ function openShelf() {
       return '<option value="' + esc(b.id) + '"' + (b.id === currentBox ? " selected" : "") + ">" + esc(b.name) + (b.kind === "docker" ? " (docker)" : " (attached)") + "</option>";
     }).join("");
     var html = "";
+    var market = d.marketplace || [];
+    if (market.length) {
+      html += '<div class="eyebrow" style="margin:6px 0;display:flex;justify-content:space-between;align-items:center"><span>Ready-made bots (' + market.length + ')</span>' +
+        '<input id="shelffilter" placeholder="filter" style="height:22px;font-size:11px;border-radius:6px;border:1px solid var(--border);background:var(--bg);color:var(--text);padding:0 6px;width:140px;text-transform:none;letter-spacing:0"></div>';
+      html += market.map(function (t) {
+        var badges = [t.skills.length + " skill" + (t.skills.length === 1 ? "" : "s")];
+        if (t.routines.length) badges.push(t.routines.length + " routine" + (t.routines.length === 1 ? "" : "s"));
+        if (t.connectors.length) badges.push("needs " + t.connectors.join(", "));
+        if (t.memoryCount) badges.push(t.memoryCount + " conventions");
+        var preview = '<div>' + esc(t.description) + "</div>" +
+          (t.skills.length ? '<div style="margin-top:6px"><b>Skills:</b> ' + t.skills.map(esc).join(" · ") + "</div>" : "") +
+          (t.routines.length ? '<div style="margin-top:4px"><b>Routines:</b> ' + t.routines.map(esc).join(" · ") + "</div>" : "") +
+          (t.createdBy ? '<div class="dim" style="margin-top:4px">by ' + esc(t.createdBy) + " · ported from Grok Bot</div>" : "");
+        return shelfCard(esc(t.name) + (t.title && t.title !== t.name ? ' <span class="dim">' + esc(t.title) + "</span>" : "") + ' <span class="dim" style="font-weight:400">' + esc(badges.join(" · ")) + "</span>",
+          esc(t.description), "Stamp", 'data-stamp-template="' + esc(t.slug) + '" data-stamp-name="' + esc(t.name) + '"', preview);
+      }).join("");
+    }
     var mine = d.mine || [];
-    html += '<div class="eyebrow" style="margin:6px 0">Mine</div>';
+    html += '<div class="eyebrow" style="margin:12px 0 6px">Mine</div>';
     html += mine.length ? mine.map(function (t) {
       return shelfCard(esc(t.name) + ' <span class="dim">v' + esc(String(t.version)) + " · from " + esc(t.agentName) + "</span>",
         esc(t.description || t.counts || "") + (t.stamped ? " · stamped " + t.stamped + "×" : ""),
@@ -4914,12 +4935,21 @@ function openShelf() {
         return '<div class="dim" style="font-size:12px;padding:3px 4px">' + esc(a.agentName) + " — from “" + esc(a.from.name || "") + "”" + (a.from.createdBy ? " by " + esc(a.from.createdBy) : "") + "</div>";
       }).join("");
     }
-    html += '<div class="eyebrow" style="margin:10px 0 6px">Catalog</div>';
+    html += '<div class="eyebrow" style="margin:10px 0 6px">Roles (persona only — the same as + agent)</div>';
     html += (d.catalog || []).map(function (c) {
       return shelfCard(esc(c.name) + (c.title ? ' <span class="dim">' + esc(c.title) + "</span>" : "") + (c.kind === "crew" ? ' <span class="chip">crew of ' + c.members.length + "</span>" : ""),
         esc(c.summary || ""), "Stamp", 'data-stamp-catalog="' + esc(c.slug) + '" data-stamp-name="' + esc(c.name) + '"');
     }).join("");
     $("shelfbody").innerHTML = html;
+    var filter = document.getElementById("shelffilter");
+    if (filter) filter.oninput = function () {
+      var q = filter.value.trim().toLowerCase();
+      var rows = $("shelfbody").querySelectorAll(".shelfrow");
+      for (var i = 0; i < rows.length; i++) {
+        if (!rows[i].querySelector("button[data-stamp-template]")) continue;
+        rows[i].style.display = !q || rows[i].textContent.toLowerCase().indexOf(q) >= 0 ? "" : "none";
+      }
+    };
   }).catch(function (e) { $("shelfbody").innerHTML = '<div class="dim">Could not read the shelf: ' + esc(String(e.message || e)) + "</div>"; });
 }
 
@@ -4927,28 +4957,19 @@ $("shelfopen").onclick = function (e) { e.preventDefault(); openShelf(); };
 $("shelfclose").onclick = function () { $("shelfwrap").style.display = "none"; };
 $("shelfpaste").onclick = function () { $("shelfwrap").style.display = "none"; openAgentModal("new", null); };
 $("shelfbody").onclick = function (event) {
-  var btn = event.target.closest("button[data-stamp-catalog],button[data-stamp-agent]");
-  if (!btn) return;
-  var boxId = $("shelfbox").value;
-  var defaultName = btn.getAttribute("data-stamp-name") || "";
-  // No window.prompt: the desktop shell does not implement it (the click did nothing).
-  // The name is asked inline, on the card, and confirmed with a second press.
-  if (!btn.getAttribute("data-armed")) {
-    var holder = btn.parentNode;
-    var input = document.createElement("input");
-    input.type = "text"; input.value = defaultName; input.placeholder = "name";
-    input.setAttribute("data-stamp-input", "1");
-    input.style.cssText = "height:26px;border-radius:6px;border:1px solid var(--border-strong);background:var(--bg);color:var(--text);padding:0 6px;width:120px;margin-right:6px";
-    holder.insertBefore(input, btn);
-    btn.textContent = "Create";
-    btn.setAttribute("data-armed", "1");
-    input.focus();
+  var pv = event.target.closest("button[data-preview]");
+  if (pv) {
+    var box = pv.closest(".shelfrow").querySelector(".shelfpreview");
+    if (box) box.style.display = box.style.display === "none" ? "" : "none";
     return;
   }
-  var nameField = btn.parentNode.querySelector("input[data-stamp-input]");
-  var name = nameField ? nameField.value.trim() : defaultName;
-  var body = { boxId: boxId, name: name || undefined };
-  if (btn.getAttribute("data-stamp-catalog")) body.catalogSlug = btn.getAttribute("data-stamp-catalog");
+  var btn = event.target.closest("button[data-stamp-template],button[data-stamp-catalog],button[data-stamp-agent]");
+  if (!btn) return;
+  var boxId = $("shelfbox").value;
+  // One click. The name is the template's own; the server picks a free one if it is taken.
+  var body = { boxId: boxId };
+  if (btn.getAttribute("data-stamp-template")) body.templateSlug = btn.getAttribute("data-stamp-template");
+  else if (btn.getAttribute("data-stamp-catalog")) body.catalogSlug = btn.getAttribute("data-stamp-catalog");
   else { body.agentId = btn.getAttribute("data-stamp-agent"); body.version = Number(btn.getAttribute("data-stamp-version")); }
   $("shelfstatus").textContent = "Stamping…";
   btn.disabled = true;

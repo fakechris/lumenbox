@@ -1506,6 +1506,13 @@ messages stay in a box, per-box rosters); Stage B built the same day (`GET
 expert allowed CreateAgent, stays after building and stays quiet; the Set up card from
 `GET /api/setup`). Left: object cards on hover, Doors and Box panels lifted out of Settings.
 
+**UI polish, parked (Chris, 2026-09-08: "界面要打磨的地方太多了，先回到功能").** In one place so
+none is lost: object cards on hover (docs/39 §5); Doors and Box panels out of Settings;
+Feishu/DingTalk versions of the secret and hand-over cards; inline cards in the thread at
+the point they happened (docs/40 §6); search within a thread; diff rendering for edit_file
+rows; "worked for N s · k calls" on folded steps; the toolbar overlapping a long "who" line;
+the Set up card for a fresh install to be walked once by a new person.
+
 **Feeding the multiuser branch, not this line:** the three-layer identity model (observed
 identity, revocable binding, per-box allow/deny), fail-closed row-level security for a
 future control-plane database, and the personal-box contract (data in the snapshot layer,
