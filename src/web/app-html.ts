@@ -375,6 +375,15 @@ export const APP_HTML = String.raw`<!doctype html>
   .msg .body pre { position: relative; }
   .msg .body pre .precopy { position: absolute; top: 6px; right: 6px; font-size: 11px; padding: 1px 7px; border-radius: 6px; border: 1px solid var(--border); background: var(--surface); color: var(--muted); cursor: pointer; opacity: 0.35; }
   .msg .body pre:hover .precopy { opacity: 1; }
+  /* The work fold (docs/41 §1): one line, the calls inside. Prose never lives in here. */
+  details.work { margin: 4px 0 8px; max-width: 700px; }
+  details.work > summary { cursor: pointer; list-style: none; font-size: 12px; color: var(--muted); padding: 4px 0; display: flex; align-items: center; gap: 8px; }
+  details.work > summary::-webkit-details-marker { display: none; }
+  details.work > summary::before { content: "\25b8"; color: var(--muted); }
+  details.work[open] > summary::before { content: "\25be"; }
+  details.work > summary:hover { color: var(--text); }
+  details.work > .calls { padding: 2px 0 2px 16px; border-left: 2px solid var(--border); margin-left: 4px; }
+  details.work details.tool { font-size: 11.5px; }
   /* Dividers (docs/40 §4). */
   .divider { display: flex; align-items: center; gap: 10px; margin: 10px 0 4px; font-size: 11px; color: var(--muted); letter-spacing: 0.08em; text-transform: uppercase; }
   .divider::before, .divider::after { content: "\200b"; flex: 1; border-top: 1px solid var(--border); }
@@ -2872,31 +2881,150 @@ function showDesktop(id) {
  * because the stored transcript is written for the model and needs a real parse to read
  * as a conversation. See src/web/transcript.ts.
  */
-function replayEntry(id, entry) {
+/* ── the chat column, one model and one renderer (docs/41 §2) ─────────────────────────
+   Every item in the column is one of: person, agent, teammate, sent, work, divider. The
+   live stream and the replay both produce items through pushItem; drawItem is the only
+   thing that turns an item into DOM; redrawItem replaces a node in place when an item
+   grows (a streaming reply, a call whose result arrives). Nothing is moved, shrunk or
+   re-filed after it was drawn: prose stays prose, work stays a fold. */
+
+var thread = [];          // items in order, for the thread on screen
+var openAgent = null;     // the agent item still streaming, if any
+var openWork = null;      // the work item still collecting calls, if any
+var openCall = new Map(); // agentId → the call awaiting its result
+
+function resetThread() {
+  thread = []; openAgent = null; openWork = null; openCall.clear();
+  $("chat").innerHTML = "";
+}
+
+function pushItem(item) {
+  thread.push(item);
+  var el = $("chat");
+  var stick = nearBottom(el);
+  item.node = drawItem(item);
+  el.appendChild(item.node);
+  if (stick) el.scrollTop = el.scrollHeight;
+  return item;
+}
+
+function redrawItem(item) {
+  if (!item.node || !item.node.isConnected) return;
+  var el = $("chat");
+  var stick = nearBottom(el);
+  var next = drawItem(item);
+  item.node.replaceWith(next);
+  item.node = next;
+  if (stick) el.scrollTop = el.scrollHeight;
+}
+
+function whoLine(who, at, chips) {
+  var when = whenLabel(at);
+  return '<div class="who">' + esc(who) +
+    (chips || []).map(function (c) { return ' <span class="chip">' + esc(c) + "</span>"; }).join("") +
+    (when ? ' <span style="text-transform:none;letter-spacing:0;font-weight:400" title="' + esc(String(at)) + '">' + esc(when) + "</span>" : "") +
+    "</div>";
+}
+
+function toolsHtml(kind, hasIndex) {
+  return '<div class="mtools">' +
+    '<button type="button" data-act="copy" title="Copy the text">copy</button>' +
+    '<button type="button" data-act="md" title="Copy as Markdown">md</button>' +
+    '<button type="button" data-act="quote" title="Quote into the composer">quote</button>' +
+    (hasIndex ? '<button type="button" data-act="link" title="Copy a link to this message">link</button>' : "") +
+    (kind === "person" ? '<button type="button" data-act="resend" title="Put this back in the composer">resend</button>' : "") +
+    "</div>";
+}
+
+function drawItem(item) {
+  var div = document.createElement("div");
+  if (item.kind === "person" || item.kind === "agent" || item.kind === "teammate") {
+    div.className = "msg " + (item.kind === "person" ? "user" : item.kind === "teammate" ? "peer" : "");
+    div.setAttribute("data-role", item.kind === "person" ? "user" : item.kind === "teammate" ? "peer" : "agent");
+    if (item.index !== undefined) div.setAttribute("data-m", String(item.index));
+    if (item.at) div.setAttribute("data-at", String(item.at));
+    if (item.streaming) div.setAttribute("data-partial", "1");
+    var who = item.kind === "person" ? "you" : item.kind === "teammate" ? item.from : nameOf(current);
+    var chips = item.kind === "teammate" ? ["teammate"].concat(item.priority ? ["priority"] : []) : [];
+    if (item.kind === "teammate") div.style.setProperty("--peer-colour", colorOfName(item.from));
+    div.innerHTML = whoLine(who, item.at, chips) + '<div class="body"></div>' + toolsHtml(item.kind, item.index !== undefined);
+    var body = div.querySelector(".body");
+    body.innerHTML = renderMarkdown(item.text);
+    div.__md = String(item.text == null ? "" : item.text);
+    addCodeCopy(body);
+    return div;
+  }
+  if (item.kind === "sent") {
+    div.className = "sentfoot";
+    div.innerHTML = '<details><summary><span class="peerdot" style="background:' + colorOfName(item.to) + '"></span>Messaged ⟶ ' + esc(item.to) + (item.priority ? " (priority)" : "") + '</summary><div class="det"></div></details>';
+    div.querySelector(".det").textContent = String(item.text == null ? "" : item.text);
+    return div;
+  }
+  if (item.kind === "work") {
+    var det = document.createElement("details");
+    det.className = "work";
+    det.open = item.open !== undefined ? item.open : !folded;
+    var calls = item.calls || [];
+    var ms = item.startAt && item.endAt ? Date.parse(item.endAt) - Date.parse(item.startAt) : NaN;
+    var dur = isFinite(ms) && ms > 0 ? (ms < 60000 ? Math.round(ms / 1000) + "s" : Math.floor(ms / 60000) + "m " + Math.round((ms % 60000) / 1000) + "s") : "";
+    var label = (item.done ? "Worked" : "Working") + (dur ? " for " + dur : "") + " · " + calls.length + (calls.length === 1 ? " call" : " calls");
+    det.innerHTML = "<summary>" + esc(label) + '</summary><div class="calls"></div>';
+    det.ontoggle = function () { item.open = det.open; };
+    var host = det.querySelector(".calls");
+    for (var i = 0; i < calls.length; i++) host.appendChild(drawCall(calls[i]));
+    return det;
+  }
+  div.className = "divider" + (item.isNew ? " new" : "");
+  div.textContent = item.label || "";
+  return div;
+}
+
+function drawCall(call) {
+  var row = document.createElement("details");
+  row.className = "tool " + (call.isError ? "err" : "");
+  var oneLine = String(call.detail == null ? "" : call.detail).replace(/\s+/g, " ");
+  row.innerHTML = "<summary>" + '<span class="nm">' + esc(call.name) + "</span> " + esc(oneLine.slice(0, 140)) + '</summary><div class="det"></div>';
+  row.querySelector(".det").textContent = String(call.detail == null ? "" : call.detail) + (call.result ? "\n\n" + String(call.result) : "");
+  if (call.shot) {
+    var img = document.createElement("img");
+    img.className = "shot";
+    img.src = "data:image/webp;base64," + call.shot;
+    row.appendChild(img);
+  }
+  return row;
+}
+
+/** Closes whatever is still open: the next thing is a new item, not a continuation. */
+function closeOpen() {
+  if (openAgent) { openAgent.streaming = false; redrawItem(openAgent); openAgent = null; }
+  if (openWork) { openWork.done = true; if (!openWork.endAt) openWork.endAt = new Date().toISOString(); redrawItem(openWork); openWork = null; }
+}
+
+/** One stored entry from the server, as items. Prose is prose whether or not calls followed it. */
+function replayEntry(id, entry, index) {
   if (entry.kind === "peer") {
+    closeOpen();
     for (var p = 0; p < entry.messages.length; p++) {
-      peerNote("from", entry.messages[p].from, entry.messages[p].text, entry.messages[p].priority, entry.at);
+      pushItem({ kind: "teammate", from: entry.messages[p].from, text: entry.messages[p].text, priority: entry.messages[p].priority, at: entry.at });
     }
     return;
   }
   if (entry.kind === "tools") {
-    // The transcript emits a round's prose immediately before its calls, so the pairing
-    // needs no guessing — if no round was opened by that prose, this round had none.
-    if (!openStep) beginStep("");
-    for (var t = 0; t < entry.tools.length; t++) {
-      var call = entry.tools[t];
-      toolCall(call.name, call.detail, call.result, call.isError);
+    if (openAgent) { openAgent.streaming = false; redrawItem(openAgent); openAgent = null; }
+    if (!openWork) {
+      var before = thread.length ? thread[thread.length - 1] : null;
+      openWork = pushItem({ kind: "work", calls: [], startAt: before && before.at ? before.at : entry.at, done: false });
     }
-    endStep();
+    for (var t = 0; t < entry.tools.length; t++) {
+      var c = entry.tools[t];
+      openWork.calls.push({ name: c.name, detail: c.detail, result: c.result, isError: c.isError });
+    }
+    redrawItem(openWork);
     return;
   }
-  // Narration opens the round its calls will be filed under; anything else is a message.
-  if (entry.aside) {
-    beginStep(entry.text);
-    return;
-  }
-  endStep();
-  bubble(entry.role === "user" ? "user" : "", entry.role === "user" ? "you" : nameOf(id), entry.text, entry.at);
+  if (openWork) { openWork.done = true; openWork.endAt = entry.at || openWork.endAt; redrawItem(openWork); openWork = null; }
+  if (openAgent) { openAgent.streaming = false; redrawItem(openAgent); openAgent = null; }
+  pushItem({ kind: entry.role === "user" ? "person" : "agent", text: entry.text, at: entry.at, index: index });
 }
 
 function agentById(id) {
@@ -2927,7 +3055,7 @@ function select(id, conversation) {
   showDesktop(id);
   if (switching) refreshConversations(id);
   updateComposerTarget();
-  $("chat").innerHTML = "";
+  resetThread();
   live.delete(id);
 
   return fetch("/api/transcript?agent=" + encodeURIComponent(id) +
@@ -2942,12 +3070,11 @@ function select(id, conversation) {
       for (var i = 0; i < entries.length; i++) {
         var e = entries[i];
         var day = e.at ? dayLabel(e.at) : "";
-        if (day && day !== lastDay) { divider(day, false); lastDay = day; }
-        if (!newShown && lastSeen >= 0 && i > lastSeen && e.kind === "text") { divider("new", true); newShown = true; }
-        replayIndex = i;
-        replayEntry(id, e);
+        if (day && day !== lastDay) { closeOpen(); pushItem({ kind: "divider", label: day }); lastDay = day; }
+        if (!newShown && lastSeen >= 0 && i > lastSeen && e.kind === "text") { closeOpen(); pushItem({ kind: "divider", label: "new", isNew: true }); newShown = true; }
+        replayEntry(id, e, i);
       }
-      replayIndex = -1;
+      closeOpen();
       try { localStorage.setItem(seenKey, String(entries.length - 1)); } catch (error) {}
       $("chat").scrollTop = $("chat").scrollHeight;
       landMessageFromUrl();
@@ -3062,12 +3189,10 @@ $("foldall").onclick = function (event) {
   // the steps away did not mean "until the agent says something else".
   // The same act as clicking every group bar, because two controls that say "fold" and do
   // different things is worse than either one alone.
-  var bars = document.querySelectorAll(".steps");
-  for (var b = 0; b < bars.length; b++) {
-    bars[b].classList.toggle("shut", folded);
-    if (bars[b].relabel) bars[b].relabel();
-  }
-  $("foldall").textContent = folded ? "unfold steps" : "fold steps";
+  var works = document.querySelectorAll("details.work");
+  for (var b = 0; b < works.length; b++) works[b].open = !folded;
+  for (var t = 0; t < thread.length; t++) if (thread[t].kind === "work") thread[t].open = !folded;
+  $("foldall").textContent = folded ? "unfold work" : "fold work";
 };
 
 $("convbtn").onclick = function (event) {
@@ -4054,8 +4179,7 @@ stream.onmessage = function (raw) {
   if (line) feed(line.html, line.cls);
 
   if (e.type === "prompt") {
-    endStep();
-    if (inView(e)) bubble("user", "you", e.text, new Date().toISOString());
+    if (inView(e)) { closeOpen(); pushItem({ kind: "person", text: e.text, at: new Date().toISOString() }); }
     return;
   }
 
@@ -4066,28 +4190,21 @@ stream.onmessage = function (raw) {
 
   if (e.type === "text") {
     if (!inView(e)) return;
-    // Prose arriving with no round open is the answer, and prose after a round has run is
-    // the answer too — either way it belongs outside the tree.
-    endStep();
-    var open = live.get(e.agentId);
-    if (!open) {
-      open = { node: bubble("", e.agentName, "", new Date().toISOString()), text: "", queued: false };
-      // Marked while it is still streaming, so a retry can drop it. Cleared when the turn's own
-      // message is stored, at which point it is no longer a partial anyone should discard.
-      open.node.setAttribute("data-partial", "1");
-      live.set(e.agentId, open);
-    }
-    open.text += e.delta;
-    // The whole message has to be re-rendered, not appended to: half a fence is not
-    // yet a code block, and a list grows an item at a time. Deltas arrive far faster
-    // than the screen refreshes, so paint once per frame instead of once per delta.
-    if (!open.queued) {
-      open.queued = true;
+    // Prose is a message. If the agent was mid-work, that work is done; what follows is a
+    // new message, drawn the same way whether it turns out to be the answer or a sentence
+    // before more calls. Nothing is shrunk or re-filed later.
+    if (openWork) { openWork.done = true; openWork.endAt = new Date().toISOString(); redrawItem(openWork); openWork = null; }
+    if (!openAgent) openAgent = pushItem({ kind: "agent", text: "", at: new Date().toISOString(), streaming: true });
+    openAgent.text += e.delta;
+    if (!openAgent.queued) {
+      openAgent.queued = true;
       requestAnimationFrame(function () {
-        open.queued = false;
-        var chat = $("chat");
-        var stick = nearBottom(chat);
-        open.node.innerHTML = renderMarkdown(open.text);
+        var item = openAgent && openAgent.queued ? openAgent : null;
+        if (!item) return;
+        item.queued = false;
+        var chat = $("chat"), stick = nearBottom(chat);
+        var body = item.node && item.node.querySelector(".body");
+        if (body) { body.innerHTML = renderMarkdown(item.text); item.node.__md = item.text; addCodeCopy(body); }
         if (stick) chat.scrollTop = chat.scrollHeight;
       });
     }
@@ -4095,41 +4212,23 @@ stream.onmessage = function (raw) {
   }
 
   if (e.type === "tool_start") {
-    // Text followed by a tool call is narration, not the answer — the same distinction
-    // turn.ts already makes when it decides whether a round is final. Marking it here is
-    // what lets the two read differently: the process de-emphasised, the answer not.
-    // The sentence that was streaming is revealed to have been a heading: the calls that
-    // follow belong under it. Opening the round here rather than at text time is what
-    // makes a final answer — text with no calls after it — stay out of the tree.
-    var narrating = live.get(e.agentId);
-    if (narrating && narrating.node) {
-      var said = narrating.text;
-      var block = narrating.node.parentNode;
-      if (block && block.parentNode) block.parentNode.removeChild(block);
-      beginStep(said, true);
-    } else if (!openStep) {
-      beginStep("");
-    }
-    live.delete(e.agentId);
-    // Held so the result can be folded into the same row when it arrives.
-    if (inView(e)) {
-      openTool.set(e.agentId, toolCall(e.tool, toolDetail(e.tool, e.input)));
-    }
+    if (!inView(e)) return;
+    if (openAgent) { openAgent.streaming = false; openAgent.queued = false; redrawItem(openAgent); openAgent = null; }
+    if (!openWork) openWork = pushItem({ kind: "work", calls: [], startAt: new Date().toISOString(), done: false });
+    var call = { name: e.tool, detail: toolDetail(e.tool, e.input), result: "", isError: false };
+    openWork.calls.push(call);
+    redrawItem(openWork);
+    openCall.set(e.agentId, { work: openWork, call: call });
     return;
   }
 
   if (e.type === "tool_end") {
-    var row = openTool.get(e.agentId);
-    openTool.delete(e.agentId);
-    if (!inView(e) || !row) return;
-    appendDetail(row, e.summary);
-    if (e.screenshot) {
-      var img = document.createElement("img");
-      img.className = "shot";
-      img.src = "data:image/webp;base64," + e.screenshot;
-      // Inside the row, so it appears when opened rather than filling the column.
-      row.appendChild(img);
-    }
+    var pending = openCall.get(e.agentId);
+    openCall.delete(e.agentId);
+    if (!inView(e) || !pending) return;
+    pending.call.result = e.summary || "";
+    if (e.screenshot) pending.call.shot = e.screenshot;
+    redrawItem(pending.work);
     return;
   }
 
@@ -4140,8 +4239,8 @@ stream.onmessage = function (raw) {
     // Both sides, in their own chat: the sender's record of messaging a teammate, and
     // the recipient's of being messaged. Without the second, the pane jumps from
     // nothing to a reply and what prompted it only shows up on reload.
-    if (e.toId === current) peerNote("from", e.fromName, e.text, e.priority, new Date().toISOString());
-    else if (e.fromId === current) peerNote("to", e.toName, e.text, e.priority, new Date().toISOString());
+    if (e.toId === current) { closeOpen(); pushItem({ kind: "teammate", from: e.fromName, text: e.text, priority: e.priority, at: new Date().toISOString() }); }
+    else if (e.fromId === current) pushItem({ kind: "sent", to: e.toName, text: e.text, priority: e.priority, at: new Date().toISOString() });
     return;
   }
 
@@ -4153,8 +4252,7 @@ stream.onmessage = function (raw) {
   if (e.type === "turn_finished") {
     // No longer running, so the stop button goes away rather than staying to be clicked at nothing.
     if (e.agentId === current) $("stop").style.display = "none";
-    var settled = live.get(e.agentId);
-    if (settled) settled.node.removeAttribute("data-partial");
+    if (inView(e)) closeOpen();
     busy.delete(e.agentId); live.delete(e.agentId); renderAgents();
     // A teammate that just worked may be new to this page, or have new history.
     refresh();
@@ -5225,10 +5323,13 @@ function threadAsMarkdown() {
       out.push("**" + who + "**" + (when ? " (" + when + ")" : "") + "\n\n" + (n.__md || n.querySelector(".body").innerText) + "\n");
     } else if (n.classList.contains("divider")) {
       out.push("---\n_" + n.textContent + "_\n");
-    } else if (n.classList.contains("steps")) {
-      var steps = n.querySelectorAll("details.step > summary .lbl");
-      for (var k = 0; k < steps.length; k++) out.push("— " + steps[k].textContent);
-      if (steps.length) out.push("");
+    } else if (n.classList.contains("work")) {
+      var calls = n.querySelectorAll("details.tool > summary");
+      out.push("_" + n.querySelector("summary").textContent + "_");
+      for (var k = 0; k < calls.length; k++) out.push("— " + calls[k].textContent);
+      out.push("");
+    } else if (n.classList.contains("sentfoot")) {
+      out.push("_" + n.querySelector("summary").textContent + "_\n");
     }
   }
   return out.join("\n");
