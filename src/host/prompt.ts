@@ -390,11 +390,19 @@ function teamSection(context: PromptContext): string {
     lines.push(describeTeammate(record));
   }
   if (visible.length > AGENT_DIRECTORY_LIMIT) {
-    lines.push(
-      `...and ${visible.length - AGENT_DIRECTORY_LIMIT} more. Every agent is a directory ` +
-        `under ${context.agentsRoot}; read <id>/profile.json for the full roster.`
-    );
+    lines.push(`...and ${visible.length - AGENT_DIRECTORY_LIMIT} more; ask the person for a name if you need one.`);
   }
+  // The roster is the whole of it, and it is kept on the host, not in the box. Said because
+  // an agent on a shared machine went looking: it found another product's bot profiles under
+  // /home/box/agent-data, took them for teammates, and spent a day trying to reach them
+  // (Bot Boss on the Grok VM, 2026-09-08). Files in the box are never a roster.
+  lines.push(
+    "",
+    "This list is the whole team. The ids are the host's; there is no profile file for them in the box,",
+    "and nothing you find on disk — /home/box/agent-data, ~/sand-data, any profile.json — is a teammate.",
+    "Those belong to whatever else runs on this machine. If a name is not in the list above, you",
+    "cannot message it; say so, and ask the person."
+  );
 
   return lines.join("\n");
 }

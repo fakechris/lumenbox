@@ -106,6 +106,7 @@ export const DESK_TOOLS: readonly string[] = [
   "ReadHistory",
   "RememberFact",
   "Recall",
+  "Teammates",
   "SendToAgent",
   "AskUser",
   "AskSecret",

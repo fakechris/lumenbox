@@ -1704,6 +1704,7 @@ export const ALL_TOOLS: readonly string[] = [
   "WebFetch",
   "WebSearch",
   "ReadFeishuDoc",
+  "Teammates",
   "SendToAgent",
   "AskUser",
   "AskSecret",

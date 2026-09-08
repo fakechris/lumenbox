@@ -1513,6 +1513,15 @@ the point they happened (docs/40 §6); search within a thread; diff rendering fo
 rows; "worked for N s · k calls" on folded steps; the toolbar overlapping a long "who" line;
 the Set up card for a fresh install to be walked once by a new person.
 
+**Multi-agent protocol, first correction (2026-09-08, the Bot Boss case on the Grok VM):** an agent
+on a shared machine grepped another product's bot profiles, took them for teammates, and
+concluded its own roster ids were fake. Fixed three ways: the roster section says the list is
+the whole team and nothing on disk is a teammate; a `Teammates` tool answers "who can I
+message" live from the host; `SendToAgent` takes a **name** and, on a miss, replies with the
+real names. The page's composer has `@` completion of this box's agents, and "@Bob …" at the
+start of a message goes to Bob's chat. Still to do in this line: the ack wording that lets an
+agent read "queued" as "answered"; a name-collision rule when two products share a machine.
+
 **Feeding the multiuser branch, not this line:** the three-layer identity model (observed
 identity, revocable binding, per-box allow/deny), fail-closed row-level security for a
 future control-plane database, and the personal-box contract (data in the snapshot layer,
