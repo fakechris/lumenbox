@@ -3907,6 +3907,55 @@ function renderSlash() {
   }).join("");
 }
 
+// ── @ mentions (the composer names a teammate) ───────────────────────────────────────
+var mentionIndex = 0;
+/** The @word at the caret, or null when the caret is not in one. */
+function mentionQuery() {
+  var input = $("input");
+  var before = input.value.slice(0, input.selectionStart);
+  var m = /(^|\s)@([^\s@]*)$/.exec(before);
+  return m ? m[2] : null;
+}
+function mentionMatches(query) {
+  var q = query.toLowerCase();
+  return agentsInView().filter(function (a) { return !q || a.name.toLowerCase().indexOf(q) >= 0; }).slice(0, 8);
+}
+function renderMention() {
+  var query = mentionQuery();
+  var menu = $("slashmenu");
+  if (query === null) return false;
+  var found = mentionMatches(query);
+  menu.style.display = "";
+  if (!found.length) { menu.innerHTML = '<div class="dim" style="padding:8px 11px">No agent in this box matches.</div>'; return true; }
+  if (mentionIndex >= found.length) mentionIndex = 0;
+  menu.innerHTML = found.map(function (a, index) {
+    return '<div class="row' + (index === mentionIndex ? " on" : "") + '" data-mention="' + esc(a.name) + '">' +
+      '<span class="peerdot" style="display:inline-block;width:8px;height:8px;border-radius:50%;margin-right:6px;background:' + colorOfName(a.name) + '"></span>' +
+      "<b>" + esc(a.name) + "</b>" + (a.id === current ? ' <span class="dim">(this chat)</span>' : "") +
+      '<div class="dim" style="font-size:11px">' + esc(a.title || a.description || "") + "</div></div>";
+  }).join("");
+  return true;
+}
+function chooseMention(name) {
+  var input = $("input");
+  var before = input.value.slice(0, input.selectionStart);
+  var after = input.value.slice(input.selectionStart);
+  var replaced = before.replace(/(^|\s)@[^\s@]*$/, "$1@" + name + " ");
+  input.value = replaced + after;
+  input.selectionStart = input.selectionEnd = replaced.length;
+  $("slashmenu").style.display = "none";
+  input.focus();
+}
+/** "@Name …" at the start of a message is addressed to Name: it goes to that agent's chat. */
+function addressedTo(text) {
+  var m = /^@(\S+)\s*/.exec(text);
+  if (!m) return null;
+  var name = m[1].toLowerCase();
+  var hit = null;
+  for (var i = 0; i < agents.length; i++) if (agents[i].name.toLowerCase() === name) hit = agents[i];
+  return hit ? { agent: hit, rest: text.slice(m[0].length) } : null;
+}
+
 function chooseSkill(name) {
   $("slashmenu").style.display = "none";
   // Phrased as an instruction, because that is what it is. The agent resolves the name against the
@@ -3916,6 +3965,8 @@ function chooseSkill(name) {
 }
 
 document.getElementById("slashmenu").addEventListener("mousedown", function (event) {
+  var mention = event.target.closest && event.target.closest("[data-mention]");
+  if (mention) { event.preventDefault(); chooseMention(mention.getAttribute("data-mention")); return; }
   var row = event.target.closest && event.target.closest("[data-skill]");
   if (!row) return;
   event.preventDefault();
@@ -4179,6 +4230,15 @@ $("form").onsubmit = function (event) {
   event.preventDefault();
   var text = $("input").value.trim();
   if (!text || !current) return;
+  // "@Bob do X" from Ada's chat goes to Bob, as it would in a group: the page switches to
+  // Bob and sends the rest there. A mention in the middle of a sentence stays as text —
+  // the agent reads names and messages a teammate itself.
+  var target = current, conversation = currentConversation, addressed = addressedTo(text);
+  if (addressed && addressed.agent.id !== current && addressed.rest.trim()) {
+    target = addressed.agent.id; conversation = "main"; text = addressed.rest.trim();
+    select(target);
+    feed("to " + esc(addressed.agent.name), "");
+  }
   $("input").value = "";
   $("send").disabled = true;
   fetch("/api/prompt", {
@@ -4186,7 +4246,7 @@ $("form").onsubmit = function (event) {
     headers: { "content-type": "application/json" },
     // Send to the thread on screen, not always the team room: reading a chat thread
     // and replying should reach that chat, not surface in the room the reader left.
-    body: JSON.stringify({ agent: current, text: text, conversation: currentConversation })
+    body: JSON.stringify({ agent: target, text: text, conversation: conversation })
   }).then(function (res) {
     if (!res.ok) return res.text().then(function (t) { feed("prompt rejected: " + esc(t), "err"); });
   }).catch(function (error) {
@@ -4214,14 +4274,31 @@ $("input").addEventListener("compositionend", function () {
 });
 
 $("input").addEventListener("input", function () {
-  slashIndex = 0;
-  renderSlash();
+  slashIndex = 0; mentionIndex = 0;
+  if (!renderMention()) renderSlash();
 });
 
 $("input").onkeydown = function (event) {
   // The slash menu takes the arrow keys and Enter while it is open, and nothing else — Escape
   // closes it so a person who opened it by accident is not trapped.
   var menu = $("slashmenu");
+  if (menu.style.display !== "none" && mentionQuery() !== null) {
+    var names = mentionMatches(mentionQuery());
+    if (event.key === "ArrowDown" || event.key === "ArrowUp") {
+      event.preventDefault();
+      mentionIndex = (mentionIndex + (event.key === "ArrowDown" ? 1 : -1) + names.length) % Math.max(1, names.length);
+      renderMention();
+      return;
+    }
+    if (event.key === "Escape") { event.preventDefault(); menu.style.display = "none"; return; }
+    if ((event.key === "Enter" || event.key === "Tab") && names.length > 0) {
+      if (event.isComposing || event.keyCode === 229 || composing) return;
+      if (Date.now() - compositionEndedAt < 50) return;
+      event.preventDefault();
+      chooseMention(names[mentionIndex].name);
+      return;
+    }
+  }
   if (menu.style.display !== "none" && slashQuery() !== null) {
     var found = slashMatches(slashQuery());
     if (event.key === "ArrowDown" || event.key === "ArrowUp") {

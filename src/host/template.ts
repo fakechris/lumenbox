@@ -49,6 +49,7 @@ export const TEMPLATE_SETUP_TOOLS: readonly string[] = [
   "SetPlan",
   "SetTodos",
   "ReadHistory",
+  "Teammates",
   "AskUser",
   "AskSecret",
   "HandOverDesktop",

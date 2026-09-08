@@ -920,6 +920,13 @@ export function buildTools(
 
   tools.push(
     {
+      name: "Teammates",
+      description:
+        "Who you can message: your teammates in this box, by name, from the host's own roster. " +
+        "The answer to 'who is on my team' is always this tool, never a file on disk.",
+      input_schema: { type: "object", properties: {} },
+    },
+    {
       name: "SendToAgent",
       description:
         "Send a message to another of your user's agents. Delivery is fire-and-forget: it " +
@@ -937,7 +944,7 @@ export function buildTools(
           target_id: {
             type: "string",
             description:
-              "The recipient's agent id, taken from your teammates list — not their name.",
+              "The teammate's name (Bob) — or its id. Names come from Teammates or your teammates list.",
           },
           message: {
             type: "string",
@@ -1756,6 +1763,7 @@ const SIDE_EFFECT_SCOPE: Record<string, SideEffectScope> = {
   WebFetch: "read",
   WebSearch: "read",
   Recall: "read",
+  Teammates: "read",
   Jobs: "read",
   History: "read",
   OtherThreads: "read",
@@ -3108,11 +3116,38 @@ export async function dispatchTool(
       }
     }
 
+    case "Teammates": {
+      // The roster, live, from the host: the one answer to "who can I message". An agent that
+      // reads files in the box for this finds another product's bots (2026-09-08).
+      const mine = (() => { try { return context.registry.boxOf(context.agent.id).id; } catch { return undefined; } })();
+      const rows = context.registry
+        .list()
+        .filter(record => record.id !== context.agent.id && record.profile.hidden !== true)
+        .filter(record => { try { return mine === undefined || context.registry.boxOf(record.id).id === mine; } catch { return true; } })
+        .map(record => `- ${record.profile.name}${record.profile.title ? ` (${record.profile.title})` : ""} — id ${record.id}`);
+      return {
+        text: rows.length === 0
+          ? "You have no teammates in this box. Anyone else on this machine is not one of them."
+          : `Your teammates in this box, by name (SendToAgent takes the name):\n${rows.join("\n")}\n\nNobody else on this machine is a teammate, whatever files say.`,
+      };
+    }
+
     case "SendToAgent": {
-      const targetId = String(input.target_id ?? "");
+      const raw = String(input.target_id ?? input.target ?? "").trim();
+      // A name is the normal way to say who; an id still works. Resolved against the live
+      // roster, so a stale or invented id fails with the real names in the reply.
+      let target = context.registry.tryGet(raw);
+      if (target === undefined && raw !== "") {
+        const lower = raw.replace(/^@/, "").toLowerCase();
+        target = context.registry.list().find(record => record.profile.name.toLowerCase() === lower);
+      }
+      if (target === undefined) {
+        const names = context.registry.list().filter(r => r.id !== context.agent.id && r.profile.hidden !== true).map(r => r.profile.name);
+        return { text: `No teammate called "${raw}". Your teammates are: ${names.join(", ") || "(none)"}. Use one of these names.`, isError: true };
+      }
+      const targetId = target.id;
       // Checked as a wake rather than as a tool call, because the limit that matters here is on how
       // often agents set each other going — the shape that produces a loop nothing else stops.
-      const target = context.registry.tryGet(targetId);
       // Teammates are the agents in the same box (docs/39 §1). Another box's agent is
       // another computer's worker; when a courier between boxes is wanted it will be a
       // thing of its own, not this tool reaching across.
