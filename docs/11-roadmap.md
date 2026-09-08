@@ -1496,6 +1496,12 @@ shown in the task detail; and a note delivered to the agent when a delegated job
 nobody is waiting (every five minutes, over the open delegate ledger). Not done: the secret
 and hand-over cards on Feishu and DingTalk (web only for now).
 
+**The page (docs/39, design 2026-09-08).** The four objects a person holds — box, agent,
+template, work — shown as such: boxes as tabs with identical pages, agents per box, a
+template shelf whose verb is "stamp into this box", a Team designer in the catalog, a
+four-step Set up card, object cards. Three stages, A first. Cross-box agent messaging is
+deferred and the tool's targets are filtered by box to say so.
+
 **Feeding the multiuser branch, not this line:** the three-layer identity model (observed
 identity, revocable binding, per-box allow/deny), fail-closed row-level security for a
 future control-plane database, and the personal-box contract (data in the snapshot layer,
