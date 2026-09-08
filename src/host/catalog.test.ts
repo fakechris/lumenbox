@@ -49,7 +49,12 @@ test("catalog experts are small, distinct, and standing identity", () => {
     for (const tool of entry.tools) {
       assert.ok(ALL_TOOLS.includes(tool), `${entry.slug} offers unknown tool ${tool}`);
     }
-    assert.ok(!entry.tools.includes("CreateAgent"), `${entry.slug} must not build the team`);
+    // One exception, on purpose: the Team designer (docs/39 §3) exists to build the team,
+    // and stays afterwards, quiet by default (Chris, 2026-09-08). Every other expert is a
+    // worker and must not be able to grow the roster.
+    if (entry.slug !== "designer") {
+      assert.ok(!entry.tools.includes("CreateAgent"), `${entry.slug} must not build the team`);
+    }
     assert.ok(!entry.tools.includes("computer"), `${entry.slug} does not need a desktop`);
   }
 });

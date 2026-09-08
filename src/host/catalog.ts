@@ -75,6 +75,8 @@ export const WEB_TOOLS: readonly string[] = [
 
 /** Desk plus delegated coding engines. No browser: the engine reads the repo. */
 export const CODE_TOOLS: readonly string[] = [...DESK_TOOLS, "Delegate"];
+/** The desk plus building the team: the one role that creates and adjusts agents. */
+export const TEAM_TOOLS: readonly string[] = [...new Set([...DESK_TOOLS, "CreateAgent", "UpdateAgent", "Tasks", "SendToAgent"])];
 
 export type CatalogDomain = "engineering" | "media" | "data" | "product";
 
@@ -110,6 +112,19 @@ export interface CatalogConnector {
 }
 
 export const CATALOG_EXPERTS: readonly CatalogExpert[] = [
+  {
+    // First on the shelf: the answer to "where do I start a team" (docs/39 §3). Interviews,
+    // proposes lanes with four-part personas, creates on a yes, files first work as
+    // proposals, then stays and stays quiet.
+    slug: "designer",
+    domain: "engineering",
+    name: "设计",
+    title: "组队者",
+    summary: "Interviews you, proposes a small team with clear lanes, creates it on your yes, then stays quiet.",
+    description: persona("designer"),
+    tools: TEAM_TOOLS,
+    skills: ["grill-me", "deep-research"],
+  },
   {
     slug: "lin",
     domain: "engineering",

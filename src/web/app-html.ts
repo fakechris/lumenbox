@@ -41,6 +41,104 @@ export const APP_HTML = String.raw`<!doctype html>
   }
   document.documentElement.setAttribute("data-theme", theme);
 })();
+// ── the shelf and the Set up card (docs/39 §2, §4) ───────────────────────────────────
+function shelfCard(head, sub, action, dataAttr) {
+  return '<div style="display:flex;gap:10px;align-items:center;padding:8px 4px;border-bottom:1px solid var(--border)">' +
+    '<div style="flex:1;min-width:0"><div style="font-size:13px;font-weight:500">' + head + "</div>" +
+    '<div class="dim" style="font-size:11px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">' + sub + "</div></div>" +
+    '<button class="btn sm accent" ' + dataAttr + '>' + action + "</button></div>";
+}
+
+function openShelf() {
+  $("shelfwrap").style.display = "";
+  $("shelfstatus").textContent = "";
+  $("shelfbody").innerHTML = '<div class="dim">Loading…</div>';
+  fetch("/api/templates/shelf").then(function (r) { return r.json(); }).then(function (d) {
+    var boxes = d.boxes || [];
+    $("shelfbox").innerHTML = boxes.map(function (b) {
+      return '<option value="' + esc(b.id) + '"' + (b.id === currentBox ? " selected" : "") + ">" + esc(b.name) + (b.kind === "docker" ? " (docker)" : " (attached)") + "</option>";
+    }).join("");
+    var html = "";
+    var mine = d.mine || [];
+    html += '<div class="eyebrow" style="margin:6px 0">Mine</div>';
+    html += mine.length ? mine.map(function (t) {
+      return shelfCard(esc(t.name) + ' <span class="dim">v' + esc(String(t.version)) + " · from " + esc(t.agentName) + "</span>",
+        esc(t.description || t.counts || "") + (t.stamped ? " · stamped " + t.stamped + "×" : ""),
+        "Stamp", 'data-stamp-agent="' + esc(t.agentId) + '" data-stamp-version="' + esc(String(t.version)) + '" data-stamp-name="' + esc(t.name) + '"');
+    }).join("") : '<div class="dim" style="font-size:12px;padding:4px">None yet — open an agent\'s Configure and press “Ask it to draft a template”.</div>';
+    var imported = d.imported || [];
+    if (imported.length) {
+      html += '<div class="eyebrow" style="margin:10px 0 6px">Stamped here from elsewhere</div>';
+      html += imported.map(function (a) {
+        return '<div class="dim" style="font-size:12px;padding:3px 4px">' + esc(a.agentName) + " — from “" + esc(a.from.name || "") + "”" + (a.from.createdBy ? " by " + esc(a.from.createdBy) : "") + "</div>";
+      }).join("");
+    }
+    html += '<div class="eyebrow" style="margin:10px 0 6px">Catalog</div>';
+    html += (d.catalog || []).map(function (c) {
+      return shelfCard(esc(c.name) + (c.title ? ' <span class="dim">' + esc(c.title) + "</span>" : "") + (c.kind === "crew" ? ' <span class="chip">crew of ' + c.members.length + "</span>" : ""),
+        esc(c.summary || ""), "Stamp", 'data-stamp-catalog="' + esc(c.slug) + '" data-stamp-name="' + esc(c.name) + '"');
+    }).join("");
+    $("shelfbody").innerHTML = html;
+  }).catch(function (e) { $("shelfbody").innerHTML = '<div class="dim">Could not read the shelf: ' + esc(String(e.message || e)) + "</div>"; });
+}
+
+$("shelfopen").onclick = function (e) { e.preventDefault(); openShelf(); };
+$("shelfclose").onclick = function () { $("shelfwrap").style.display = "none"; };
+$("shelfpaste").onclick = function () { $("shelfwrap").style.display = "none"; openAgentModal("new", null); };
+$("shelfbody").onclick = function (event) {
+  var btn = event.target.closest("button[data-stamp-catalog],button[data-stamp-agent]");
+  if (!btn) return;
+  var boxId = $("shelfbox").value;
+  var defaultName = btn.getAttribute("data-stamp-name") || "";
+  var name = window.prompt ? (window.prompt("Name for the new agent", defaultName) || "") : defaultName;
+  if (name === "" && window.prompt) return;
+  var body = { boxId: boxId, name: name || undefined };
+  if (btn.getAttribute("data-stamp-catalog")) body.catalogSlug = btn.getAttribute("data-stamp-catalog");
+  else { body.agentId = btn.getAttribute("data-stamp-agent"); body.version = Number(btn.getAttribute("data-stamp-version")); }
+  $("shelfstatus").textContent = "Stamping…";
+  btn.disabled = true;
+  fetch("/api/templates/stamp", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body) })
+    .then(function (r) { return r.json().then(function (d) { if (!r.ok) throw new Error(d.error || "stamp failed"); return d; }); })
+    .then(function (d) {
+      $("shelfwrap").style.display = "none";
+      var made = (d.created || []).map(function (c) { return c.name; }).join(", ");
+      feed("stamped " + esc(made) + " — it installs its recipe on its first turn", "");
+      return refresh().then(function () { if (d.created && d.created[0]) select(d.created[0].id); });
+    })
+    .catch(function (err) { $("shelfstatus").textContent = String(err.message || err); btn.disabled = false; });
+};
+
+/** Four steps, shown until all four are done; each names the object it introduces. */
+function refreshSetup() {
+  return fetch("/api/setup").then(function (r) { return r.json(); }).then(function (s) {
+    var card = $("setupcard");
+    if (!card) return;
+    var steps = [
+      { done: s.box, head: "A computer for the agents", sub: "A box is a computer: desktop, files, shell, engines. Create the Docker box, or attach one.", act: "Set up a box", go: function () { $("settingsbtn").click(); } },
+      { done: s.agentTurn, head: "Your first agent", sub: "An agent lives in one box. Stamp one from the shelf — 设计 (Team designer) builds a team for you.", act: "Open templates", go: openShelf },
+      { done: s.door, head: "A door (optional)", sub: "Feishu, DingTalk or Telegram reach this box; this page is a door too.", act: "Connect a door", go: function () { $("settingsbtn").click(); } },
+      { done: s.review, head: "First work", sub: "Say it in chat or add a task; it is done when it reaches review.", act: "Open tasks", go: function () { var t = $("tabtasks"); if (t) t.click(); } }
+    ];
+    if (steps.every(function (x) { return x.done; })) { card.style.display = "none"; return; }
+    card.style.display = "";
+    card.innerHTML = '<div style="margin:10px 16px 0;padding:10px 14px;border:1px solid var(--border-strong);border-radius:var(--radius-card);background:var(--surface)">' +
+      '<div class="eyebrow" style="margin-bottom:6px">Set up</div>' +
+      steps.map(function (x, i) {
+        return '<div style="display:flex;gap:10px;align-items:center;padding:4px 0;font-size:12px">' +
+          '<span style="width:16px;color:' + (x.done ? "var(--ok, #3fb950)" : "var(--muted)") + '">' + (x.done ? "✓" : String(i + 1)) + "</span>" +
+          '<div style="flex:1"><b>' + esc(x.head) + "</b> <span class=\"dim\">" + esc(x.sub) + "</span></div>" +
+          (x.done ? "" : '<button class="btn sm" data-setup="' + i + '">' + esc(x.act) + "</button>") +
+        "</div>";
+      }).join("") + "</div>";
+    card.onclick = function (event) {
+      var b = event.target.closest("button[data-setup]");
+      if (b) { event.preventDefault(); steps[Number(b.getAttribute("data-setup"))].go(); }
+    };
+  }).catch(function () {});
+}
+refreshSetup();
+setInterval(refreshSetup, 30000);
+
 </script>
 <style>
   /* ── Lumen tokens ─────────────────────────────────────────────────────────── */
@@ -668,6 +766,7 @@ export const APP_HTML = String.raw`<!doctype html>
 <div class="pane" id="sidebar">
   <div class="eyebrow-row"><span class="eyebrow">Agents</span><button id="new" class="btn ghost sm" title="New agent">+</button></div>
   <div class="scroll" id="agents"></div>
+  <div class="eyebrow-row" style="margin-top:6px"><a href="#" id="shelfopen" class="eyebrow" style="text-decoration:none" title="Templates: saved agents you can stamp into this box">Templates</a></div>
   <div id="sidefoot">
     <div class="footrow"><span class="dot" id="boxdot"></span><span id="boxinfo">box</span></div>
     <div id="buildinfo"></div>
@@ -675,6 +774,7 @@ export const APP_HTML = String.raw`<!doctype html>
 </div>
 
 <div class="pane" id="middle">
+  <div id="setupcard" style="display:none"></div>
   <div class="paneheader">
     <span class="lead">
       <span id="title">&mdash;</span>
@@ -1022,6 +1122,21 @@ export const APP_HTML = String.raw`<!doctype html>
 <!-- One dialog for creating and configuring an agent: identity, persona, tool set.
      The old path was window.prompt, which a desktop shell does not implement at all —
      the + button did nothing and said nothing. -->
+<!-- The shelf (docs/39 §2): everything a person can stamp into a box, with one verb. -->
+<div id="shelfwrap" style="display:none">
+  <div class="modal" style="width:680px">
+    <h3>Templates</h3>
+    <div class="fieldnote">A template is a saved agent: persona, skills, routines, conventions — never history, never people. Stamping one makes a new agent in a box.</div>
+    <div class="field"><label>Stamp into</label><select id="shelfbox" style="height:32px;border-radius:var(--radius-input);border:1px solid var(--border-strong);background:var(--bg);color:var(--text);padding:0 8px"></select></div>
+    <div id="shelfbody" class="scroll" style="max-height:52vh"></div>
+    <div class="fieldnote" id="shelfstatus"></div>
+    <div class="actions">
+      <button class="btn" id="shelfpaste">Paste or link…</button>
+      <button class="btn ghost" id="shelfclose">Close</button>
+    </div>
+  </div>
+</div>
+
 <div id="agentwrap" style="display:none">
   <div class="modal">
     <h3 id="agenttitle">New agent</h3>

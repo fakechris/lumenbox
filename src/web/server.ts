@@ -3514,6 +3514,7 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
           const existing = new Set(registry.list().map(agent => agent.profile.name));
           const created: { id: string; name: string }[] = [];
           const skipped: string[] = [];
+          const targetBox = typeof body.boxId === "string" && registry.boxById(body.boxId) !== undefined ? body.boxId : undefined;
           for (const row of rows) {
             if (existing.has(row.name)) {
               skipped.push(row.name);
@@ -3526,6 +3527,7 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
               caller,
               connected: ["browser", ...channelRecords.map(record => record.type)],
               shareId: `catalog:${row.slug}`,
+              ...(targetBox !== undefined ? { boxId: targetBox } : {}),
               log,
             });
             existing.add(row.name);
@@ -3533,6 +3535,90 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
             log(`catalog ${slug}: created ${imported.agent.profile.name} (${imported.agent.id})`);
           }
           send(res, 200, { slug, created, skipped });
+          return;
+        }
+
+        // The shelf (docs/39 §2): everything a person can stamp into a box, in one list.
+        if (route === "GET /api/templates/shelf") {
+          const mine = registry.list().flatMap(agent => {
+            const versions = orchestrator.stagedTemplates(agent.id);
+            const latest = versions[versions.length - 1];
+            if (latest === undefined) return [];
+            const stamped = registry.list().filter(other => other.profile.importedFrom?.name === latest.name).length;
+            return [{ agentId: agent.id, agentName: agent.profile.name, version: latest.version, name: latest.name, description: latest.description, counts: latest.counts, stagedAt: latest.stagedAt, stamped }];
+          });
+          const imported = registry.list()
+            .filter(agent => agent.profile.importedFrom !== undefined && !String(agent.profile.importedFrom.id ?? "").startsWith("catalog:"))
+            .map(agent => ({ agentId: agent.id, agentName: agent.profile.name, boxId: registry.boxOf(agent.id).id, from: agent.profile.importedFrom }));
+          const catalog = [
+            ...CATALOG_EXPERTS.map(entry => ({ kind: "expert", slug: entry.slug, name: entry.name, title: entry.title, summary: entry.summary, domain: entry.domain })),
+            ...CATALOG_CREWS.map(crew => ({ kind: "crew", slug: crew.slug, name: crew.name, title: "", summary: crew.summary, domain: crew.domain, members: crew.members })),
+          ];
+          send(res, 200, { mine, imported, catalog, boxes: orchestrator.boxStatus() });
+          return;
+        }
+        // Stamp: one template, one box, one new agent (or a crew's several). Wraps the two
+        // existing paths — a staged version of mine, or a catalog entry — behind one verb.
+        if (route === "POST /api/templates/stamp") {
+          if (refused()) return;
+          const body = await readJson(req);
+          const boxId = typeof body.boxId === "string" && registry.boxById(body.boxId) !== undefined ? body.boxId : undefined;
+          const name = typeof body.name === "string" && body.name.trim() !== "" ? body.name.trim() : undefined;
+          if (typeof body.catalogSlug === "string" && body.catalogSlug !== "") {
+            const rows = profilesFor(body.catalogSlug);
+            if (rows === undefined) {
+              send(res, 404, { error: `No catalog entry named ${body.catalogSlug}.` });
+              return;
+            }
+            const created: { id: string; name: string }[] = [];
+            for (const row of rows) {
+              const imported = orchestrator.importTemplate(catalogTemplate(row), {
+                caller,
+                connected: ["browser", ...channelRecords.map(record => record.type)],
+                shareId: `catalog:${row.slug}`,
+                ...(boxId !== undefined ? { boxId } : {}),
+                ...(name !== undefined && rows.length === 1 ? { name } : {}),
+                log,
+              });
+              created.push({ id: imported.agent.id, name: imported.agent.profile.name });
+            }
+            send(res, 200, { created });
+            return;
+          }
+          const sourceAgent = typeof body.agentId === "string" ? registry.tryGet(body.agentId) : undefined;
+          if (sourceAgent === undefined) {
+            send(res, 400, { error: "Pass catalogSlug, or agentId (and version) of a staged template." });
+            return;
+          }
+          const versions = orchestrator.stagedTemplates(sourceAgent.id);
+          const wanted = typeof body.version === "number" ? versions.find(v => v.version === body.version) : versions[versions.length - 1];
+          if (wanted === undefined) {
+            send(res, 404, { error: `${sourceAgent.profile.name} has no staged template.` });
+            return;
+          }
+          const parsed = parseTemplate(readFileSync(wanted.path, "utf8"));
+          if ("problem" in parsed) {
+            send(res, 400, { error: parsed.problem });
+            return;
+          }
+          const imported = orchestrator.importTemplate(parsed.template, {
+            caller,
+            connected: ["browser", ...channelRecords.map(record => record.type)],
+            ...(boxId !== undefined ? { boxId } : {}),
+            ...(name !== undefined ? { name } : {}),
+            log,
+          });
+          send(res, 200, { created: [{ id: imported.agent.id, name: imported.agent.profile.name }] });
+          return;
+        }
+        // The Set up card's four facts (docs/39 §4): a box answered, an agent had a turn, a
+        // door is configured, a task reached review. Read, never stored.
+        if (route === "GET /api/setup") {
+          const boxes = orchestrator.boxStatus();
+          const agentTurn = registry.list().some(agent => registry.readTranscript(agent.id).length > 0);
+          const door = channelRecords.some(record => channelCredentialsSet(record));
+          const review = (orchestrator.tasks?.list() ?? []).some(task => task.status === "review" || task.status === "done");
+          send(res, 200, { box: boxes.some(box => box.connected), agentTurn, door, review });
           return;
         }
 

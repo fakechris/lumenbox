@@ -1499,8 +1499,12 @@ and hand-over cards on Feishu and DingTalk (web only for now).
 **The page (docs/39, design 2026-09-08).** The four objects a person holds — box, agent,
 template, work — shown as such: boxes as tabs with identical pages, agents per box, a
 template shelf whose verb is "stamp into this box", a Team designer in the catalog, a
-four-step Set up card, object cards. Three stages, A first. Cross-box agent messaging is
-deferred and the tool's targets are filtered by box to say so.
+four-step Set up card, object cards. Stage A built 2026-09-08 (box bar, agents per box,
+messages stay in a box, per-box rosters); Stage B built the same day (`GET
+/api/templates/shelf`, `POST /api/templates/stamp`, the Templates shelf with "Stamp into
+<box>"); Stage C built the same day (设计 / Team designer first in the catalog — the one
+expert allowed CreateAgent, stays after building and stays quiet; the Set up card from
+`GET /api/setup`). Left: object cards on hover, Doors and Box panels lifted out of Settings.
 
 **Feeding the multiuser branch, not this line:** the three-layer identity model (observed
 identity, revocable binding, per-box allow/deny), fail-closed row-level security for a
