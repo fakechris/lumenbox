@@ -86,7 +86,7 @@ test("tool traffic becomes tool rows, not empty bubbles", () => {
 
   const display = toDisplayEntries(entries, [{ id: "id-Ada", name: "Ada" }]);
 
-  assert.deepEqual(display[0], { kind: "text", role: "user", text: "take a screenshot" });
+  assert.deepEqual(display[0], { kind: "text", role: "user", text: "take a screenshot", at: "t" });
   // Marked `aside`: prose in the same turn as tool calls is running commentary, not the
   // answer, and the reader of a long piece of research needs to see where the work stops
   // and the conclusion starts. Known here by construction rather than guessed — a
@@ -96,6 +96,7 @@ test("tool traffic becomes tool rows, not empty bubbles", () => {
     role: "assistant",
     text: "Looking now.",
     aside: true,
+    at: "t",
   });
   // The result is folded into the call it answers, so the page has one row to collapse.
   assert.deepEqual(display[2], {
@@ -119,7 +120,7 @@ test("a wake prompt in a transcript becomes a peer entry", () => {
     kind: "peer",
     messages: [{ from: "Ada", priority: false, text: "over to you" }],
   });
-  assert.deepEqual(display[1], { kind: "text", role: "assistant", text: "on it" });
+  assert.deepEqual(display[1], { kind: "text", role: "assistant", text: "on it", at: "t" });
 });
 
 test("entries with nothing to show are dropped", () => {
