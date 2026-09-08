@@ -218,6 +218,8 @@ type OutboundEvent =
   | BusEvent
   | { type: "prompt"; agentId: string; text: string; userId?: string; conversation?: string }
   | { type: "error"; message: string }
+  /** An agent asked the person something; the page shows a card with the answers as buttons. */
+  | { type: "question"; agentId: string; agentName: string; question: string; options?: string[]; conversation?: string }
   /** One line of docker output while the box is brought up from the page. */
   | { type: "box_setup"; line: string; done?: boolean; ok?: boolean }
   /** An approval was just created; the desktop shell turns this into a notification. */
@@ -451,9 +453,16 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
       return "in the app";
     },
     askUser: async input => {
+      // A question is a card in the chat with the answers as buttons (docs/41 §4), not an
+      // error line: the person was typing "3" and "chat优先" against a numbered list in prose,
+      // and the options the tool carried never reached the page (2026-09-08).
       broadcast({
-        type: "error",
-        message: `${input.agentName} asked: ${input.question}`,
+        type: "question",
+        agentId: input.agentId,
+        agentName: input.agentName,
+        question: input.question,
+        ...(input.options !== undefined ? { options: input.options } : {}),
+        ...(input.conversation !== undefined ? { conversation: input.conversation } : {}),
       });
       const where = chats?.askQuestion(input);
       // The page is always a place an answer can come from, so a question is never

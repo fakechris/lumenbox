@@ -7,6 +7,7 @@
  */
 
 import type Anthropic from "@anthropic-ai/sdk";
+import { optionLabel } from "./ask-options.ts";
 import type { BoxClient } from "../box/client.ts";
 import type { DisplayLease } from "../box/display-lease.ts";
 import type { AgentBus } from "../agents/bus.ts";
@@ -798,7 +799,10 @@ export function buildTools(
           "to undo.\n\n" +
           "Phrase it as the question you would ask out loud (\"Which account — work or " +
           "personal?\"), never as a menu instruction (\"Pick one of the following\"), and " +
-          "make each option read like a reply they would actually send.",
+          "make each option read like a reply they would actually send.\n\n" +
+          "When the answer is one of a few, always pass `options` — they become buttons the " +
+          "person taps. Never number choices in your prose and wait for a digit; that is this " +
+          "tool's job. Each option is one plain string.",
         input_schema: {
           type: "object",
           properties: {
@@ -973,7 +977,12 @@ export function buildTools(
         "owns), Anti-jobs (what it must never pick up, by name — this is what keeps two agents " +
         "out of each other's lane), Voice (how it talks), Wake (when it should act and when it " +
         "should stay quiet). If the persona names a concrete first assignment, the agent " +
-        "starts on it at once instead of introducing itself. " +
+        "starts on it at once instead of introducing itself.\n\n" +
+        "Create from what you already know. Do not interview the person about the new " +
+        "agent's preferences first — language, cadence, priorities, how it connects to " +
+        "things: those are its questions to ask, in its own chat, where the answers land " +
+        "in its memory and not yours. If one fact decides whether to create at all, ask " +
+        "that one; otherwise write the persona and create. " +
         catalogMenu(),
       input_schema: {
         type: "object",
@@ -1862,7 +1871,8 @@ function greetNewAgent(context: ToolContext, newId: string): void {
     text:
       `You were just created by ${context.agent.profile.name}. Your description says what you own. ` +
       `Look around your box, then tell ${context.agent.profile.name} in one message what you ` +
-      `understood and what you need from them before you can start.`,
+      `understood. Anything the person still has to decide about how you work, ask them ` +
+      `yourself with AskUser, in your own chat — not through ${context.agent.profile.name}.`,
   });
 }
 
@@ -2688,18 +2698,10 @@ export async function dispatchTool(
       // four identical unreadable bullets in their chat. A schema does not bind a model,
       // so the reader takes what the object calls itself — same rule as describeArg on
       // the web side, which caught the same failure in SetTodos.
-      const optionText = (option: unknown): string => {
-        if (typeof option === "string") return option;
-        if (option !== null && typeof option === "object") {
-          const named = option as { label?: unknown; text?: unknown; title?: unknown; name?: unknown };
-          const name = named.label ?? named.text ?? named.title ?? named.name;
-          if (typeof name === "string" && name.trim() !== "") return name;
-          return JSON.stringify(option);
-        }
-        return String(option);
-      };
+      // Nested arrays shipped too — [["a", ["b"]]] — and String() of those is "a,b". One
+      // reader for every shape, shared with the page's replay: web/transcript.ts optionLabel.
       const options = Array.isArray(input.options)
-        ? input.options.map(optionText).filter(option => option !== "")
+        ? input.options.map(optionLabel).filter((option): option is string => option !== undefined)
         : undefined;
       if (context.askUser === undefined) {
         return {
@@ -3372,7 +3374,8 @@ export async function dispatchTool(
       return {
         text:
           `Created agent "${created.profile.name}" (id: ${created.id}). ` +
-          `It has been told you made it and will report to you; message it by name with SendToAgent.${inherited}`,
+          `It has been told you made it. Tell the person it exists and to talk to it directly; ` +
+          `anything still undecided about how it works is for it to ask them, not you.${inherited}`,
       };
     }
 

@@ -386,6 +386,25 @@ export const APP_HTML = String.raw`<!doctype html>
   details.work details.tool { font-size: 11.5px; }
   /* Dividers (docs/40 §4). */
   .divider { display: flex; align-items: center; gap: 10px; margin: 10px 0 4px; font-size: 11px; color: var(--muted); letter-spacing: 0.08em; text-transform: uppercase; }
+  /* The agent is on it, before its first word (docs/41 §3). Three dots, one row, gone the
+     moment prose or a call arrives. */
+  .working { display: flex; align-items: center; gap: 8px; margin: 8px 0; color: var(--muted); font-size: 12px; }
+  .working .dots span { display: inline-block; width: 5px; height: 5px; margin-right: 3px; border-radius: 50%; background: var(--muted); animation: blink 1.2s infinite; }
+  .working .dots span:nth-child(2) { animation-delay: 0.2s; }
+  .working .dots span:nth-child(3) { animation-delay: 0.4s; }
+  @keyframes blink { 0%, 80%, 100% { opacity: 0.25; } 40% { opacity: 1; } }
+  /* A question is a card with the answers as buttons (docs/41 §4): tap one, or type. Kept
+     in place with the answer once given, so the thread reads as the exchange it was. */
+  .question { border: 1px solid var(--border-strong); background: var(--surface-2, var(--surface)); border-radius: var(--radius-card); padding: 14px 16px; margin: 10px 0; display: flex; flex-direction: column; gap: 10px; }
+  .question .qtitle { font-weight: 600; font-size: 0.95rem; }
+  .question .qopt { display: flex; align-items: center; gap: 10px; text-align: left; width: 100%; padding: 9px 12px; border: 1px solid var(--border); border-radius: var(--radius-md); background: var(--surface); color: var(--text); font: inherit; cursor: pointer; }
+  .question .qopt:hover:not(:disabled) { border-color: var(--border-strong); background: var(--surface-2, var(--surface)); }
+  .question .qopt:disabled { cursor: default; opacity: 0.6; }
+  .question .qopt.chosen { border-color: var(--accent); opacity: 1; }
+  .question .qkey { flex: none; width: 22px; height: 22px; border-radius: 6px; background: var(--border); display: inline-flex; align-items: center; justify-content: center; font-size: 11px; font-weight: 600; color: var(--text-soft); }
+  .question .qfree { display: flex; gap: 8px; }
+  .question .qfree input { flex: 1; padding: 8px 10px; border: 1px solid var(--border); border-radius: var(--radius-md); background: var(--surface); color: var(--text); font: inherit; }
+  .question .qdone { font-size: 12px; color: var(--text-soft); }
   .divider::before, .divider::after { content: "\200b"; flex: 1; border-top: 1px solid var(--border); }
   .divider.new { color: var(--accent); }
   .divider.new::before, .divider.new::after { border-color: var(--accent-soft); }
@@ -2892,13 +2911,53 @@ var thread = [];          // items in order, for the thread on screen
 var openAgent = null;     // the agent item still streaming, if any
 var openWork = null;      // the work item still collecting calls, if any
 var openCall = new Map(); // agentId → the call awaiting its result
+var openQuestion = null;  // the question item still waiting for an answer, if any
+var workingItem = null;   // the "on it" row shown between turn start and the first word
 
 function resetThread() {
-  thread = []; openAgent = null; openWork = null; openCall.clear();
+  thread = []; openAgent = null; openWork = null; openCall.clear(); openQuestion = null; workingItem = null;
   $("chat").innerHTML = "";
 }
 
+/** The agent has started and said nothing yet. */
+function showWorking() {
+  if (workingItem || openAgent || openWork) return;
+  workingItem = pushItem({ kind: "working" });
+}
+
+function dropWorking() {
+  if (!workingItem) return;
+  var at = thread.indexOf(workingItem);
+  if (at >= 0) thread.splice(at, 1);
+  if (workingItem.node && workingItem.node.isConnected) workingItem.node.remove();
+  workingItem = null;
+}
+
+/** A person's message answers the question that was waiting, if one was. */
+function answerQuestion(text) {
+  if (!openQuestion) return;
+  openQuestion.answered = String(text == null ? "" : text);
+  redrawItem(openQuestion);
+  openQuestion = null;
+}
+
+/** Sends an answer to the agent that asked, the same way the composer does. */
+function sendAnswer(item, text) {
+  if (!text || !current) return;
+  item.answered = text; redrawItem(item);
+  if (openQuestion === item) openQuestion = null;
+  fetch("/api/prompt", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ agent: current, text: text, conversation: currentConversation })
+  }).then(function (res) {
+    if (!res.ok) return res.text().then(function (t) { feed("answer rejected: " + esc(t), "err"); });
+  }).catch(function (error) { feed("answer failed: " + esc(error.message), "err"); });
+}
+
 function pushItem(item) {
+  if (item.kind !== "working") dropWorking();
+  if (item.kind === "person") answerQuestion(item.text);
   thread.push(item);
   var el = $("chat");
   var stick = nearBottom(el);
@@ -2974,6 +3033,43 @@ function drawItem(item) {
     for (var i = 0; i < calls.length; i++) host.appendChild(drawCall(calls[i]));
     return det;
   }
+  if (item.kind === "working") {
+    div.className = "working";
+    div.innerHTML = '<span class="dots"><span></span><span></span><span></span></span>' + esc(nameOf(current)) + " is on it";
+    return div;
+  }
+  if (item.kind === "question") {
+    div.className = "question";
+    if (item.at) div.setAttribute("data-at", String(item.at));
+    var opts = item.options || [];
+    var html = whoLine(nameOf(current), item.at, ["question"]) + '<div class="qtitle"></div>';
+    for (var o = 0; o < opts.length; o++) {
+      html += '<button type="button" class="qopt' + (item.answered === opts[o] ? " chosen" : "") + '" data-opt="' + o + '"' + (item.answered !== undefined ? " disabled" : "") + '>' +
+        '<span class="qkey">' + String.fromCharCode(65 + o) + "</span><span></span></button>";
+    }
+    if (item.answered === undefined) {
+      html += '<form class="qfree"><input placeholder="Type your own answer" spellcheck="false"><button type="submit" class="btn sm accent">Send</button></form>';
+    } else if (opts.indexOf(item.answered) < 0) {
+      html += '<div class="qdone">you answered: <b></b></div>';
+    }
+    div.innerHTML = html;
+    div.querySelector(".qtitle").textContent = item.question || "";
+    var labels = div.querySelectorAll(".qopt span:last-child");
+    for (var l = 0; l < labels.length; l++) labels[l].textContent = opts[l];
+    var done = div.querySelector(".qdone b");
+    if (done) done.textContent = item.answered;
+    div.addEventListener("click", function (event) {
+      var btn = event.target.closest && event.target.closest(".qopt");
+      if (!btn || btn.disabled) return;
+      sendAnswer(item, opts[Number(btn.getAttribute("data-opt"))]);
+    });
+    var free = div.querySelector(".qfree");
+    if (free) free.onsubmit = function (event) {
+      event.preventDefault();
+      sendAnswer(item, free.querySelector("input").value.trim());
+    };
+    return div;
+  }
   div.className = "divider" + (item.isNew ? " new" : "");
   div.textContent = item.label || "";
   return div;
@@ -3015,11 +3111,17 @@ function replayEntry(id, entry, index) {
       var before = thread.length ? thread[thread.length - 1] : null;
       openWork = pushItem({ kind: "work", calls: [], startAt: before && before.at ? before.at : entry.at, done: false });
     }
+    var asked = null;
     for (var t = 0; t < entry.tools.length; t++) {
       var c = entry.tools[t];
       openWork.calls.push({ name: c.name, detail: c.detail, result: c.result, isError: c.isError });
+      if (c.question) asked = c.question;
     }
     redrawItem(openWork);
+    if (asked) {
+      closeOpen();
+      openQuestion = pushItem({ kind: "question", question: asked.question, options: asked.options || [], at: entry.at });
+    }
     return;
   }
   if (openWork) { openWork.done = true; openWork.endAt = entry.at || openWork.endAt; redrawItem(openWork); openWork = null; }
@@ -4131,6 +4233,7 @@ function activityLine(e) {
     return { html: who(nameOf(e.agentId)) + " interrupted (" + esc(e.reason) + ")", cls: "warn" };
   }
   if (e.type === "error") return { html: esc(e.message), cls: "err" };
+  if (e.type === "question") return { html: who(e.agentName) + " asked: " + esc(String(e.question).slice(0, 90)), cls: "warn" };
   if (e.type === "template_import") {
     return { html: who(e.agentName) + " &larr; template: " + esc(e.summary), cls: e.complete && /but not all/.test(e.summary) ? "warn" : "" };
   }
@@ -4246,13 +4349,21 @@ stream.onmessage = function (raw) {
 
   if (e.type === "turn_started") {
     busy.add(e.agentId); renderAgents();
+    if (inView(e)) showWorking();
+    return;
+  }
+
+  if (e.type === "question") {
+    if (!inView(e)) return;
+    closeOpen();
+    openQuestion = pushItem({ kind: "question", question: e.question, options: e.options || [], at: new Date().toISOString() });
     return;
   }
 
   if (e.type === "turn_finished") {
     // No longer running, so the stop button goes away rather than staying to be clicked at nothing.
     if (e.agentId === current) $("stop").style.display = "none";
-    if (inView(e)) closeOpen();
+    if (inView(e)) { closeOpen(); dropWorking(); }
     busy.delete(e.agentId); live.delete(e.agentId); renderAgents();
     // A teammate that just worked may be new to this page, or have new history.
     refresh();
@@ -4260,6 +4371,7 @@ stream.onmessage = function (raw) {
   }
 
   if (e.type === "turn_failed") {
+    if (inView(e)) dropWorking();
     busy.delete(e.agentId); renderAgents();
     return;
   }
