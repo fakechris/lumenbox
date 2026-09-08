@@ -44,8 +44,8 @@ export interface KubeObjectMeta {
  *
  * `spec` is intentionally `Record<string, unknown>`: the allocator builds it, the API server
  * validates it, and re-declaring the whole Pod schema here would be a copy of someone else's
- * documentation that rots on contact. Only `status` is read back, and only the two fields the
- * readiness wait needs.
+ * documentation that rots on contact. `status` carries only what is read back: the readiness
+ * wait's two fields, and the waiting reason the prewarm script fails fast on.
  */
 export interface KubePod {
   metadata: KubeObjectMeta;
@@ -53,6 +53,8 @@ export interface KubePod {
   status?: {
     phase?: string;
     conditions?: readonly { type: string; status: string }[];
+    /** Lets a watcher say "ErrImagePull" in seconds instead of timing out blind. */
+    containerStatuses?: readonly { state?: { waiting?: { reason?: string } } }[];
   };
 }
 
@@ -481,6 +483,21 @@ export class HttpKubeApi implements KubeApi {
   }
   deleteSecret(name: string): Promise<void> {
     return this.remove("secrets", name);
+  }
+
+  /**
+   * Nodes are cluster-scoped — no namespace in the path, unlike everything else here. The
+   * allocator never asks (the scheduler owns placement); the prewarm script does, because
+   * "pull the image onto every node before the rollout points at it" needs the node list.
+   */
+  async listNodes(): Promise<{ name: string; schedulable: boolean }[]> {
+    const list = (await this.request("GET", "/api/v1/nodes")) as
+      | { items?: { metadata: { name: string }; spec?: { unschedulable?: boolean } }[] }
+      | undefined;
+    return (list?.items ?? []).map(node => ({
+      name: node.metadata.name,
+      schedulable: node.spec?.unschedulable !== true,
+    }));
   }
 
   private pathFor(kind: ResourceKind, name?: string): string {

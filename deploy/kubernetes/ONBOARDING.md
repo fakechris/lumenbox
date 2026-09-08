@@ -94,6 +94,23 @@ kubectl -n agentbox get pvc              # <box>-work, <box>-config, <box>-hostd
 kubectl -n agentbox describe pod <box-pod>   # the Events section says which
 ```
 
+### Updating to a new image
+
+The Deployment's strategy is Recreate (the SQLite store tolerates no second writer), so a
+rollout is downtime for exactly as long as the new image takes to pull. Pull first, roll second:
+
+```sh
+node --experimental-transform-types scripts/k8s-prewarm.ts --image <registry>/<project>/agentbox:<tag>
+kubectl -n agentbox set image deploy/agentbox-control control=<registry>/<project>/agentbox:<tag>
+kubectl -n agentbox rollout status deploy/agentbox-control
+```
+
+`k8s-prewarm.ts` runs a throwaway pod per node and waits for it — a node whose pull wedges is
+named *before* the old control plane is stopped, not after. A node it reports UNSCHEDULABLE is
+one the scheduler could not place a box on today either; that is a warning about capacity, not
+a prewarm failure. The ConfigMap's `AGENTBOX_IMAGE` decides what *new* boxes run and is
+independent of what the control plane itself runs.
+
 Cluster-age failure modes seen in the wild, so they are not mysteries when you meet them:
 
 - **PVC stuck `Pending` with "create process timeout" from the provisioner.** OpenEBS localpv's

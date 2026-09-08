@@ -83,37 +83,7 @@ RUN useradd --create-home --shell /usr/sbin/nologin --uid 1001 hostd \
     && mkdir -p /tmp/.X11-unix \
     && chmod 1777 /tmp/.X11-unix
 
-# 6. The daemon bundle, built by `npm run build:boxd`, plus the browser wrapper.
-COPY boxd.cjs /opt/boxd/boxd.cjs
-# The orchestrator, bundled with its dependencies because there is no node_modules in
-# here, plus the browser build the web UI serves for the same reason.
-COPY hostd.mjs /opt/hostd/hostd.mjs
-COPY markdown-it.js /opt/hostd/vendor/markdown-it.js
-# Data the bundle reads at runtime, beside the bundle that reads it: the catalog resolves
-# personas and vendored skills against its own module directory, and a bundler has no way
-# to know that. Missing, the host inside the box dies on its first import — which is
-# exactly how the packaged CLI broke for a day (docs/27).
-COPY catalog-data /opt/hostd/catalog-data
-# Reference notes the agent reads when its computer misbehaves or when guiding a person
-# through the web app: real paths only. Projected into ~/reference at every start.
-COPY reference /opt/box-reference
-COPY entrypoint.sh /usr/local/bin/entrypoint.sh
-COPY start-display /usr/local/bin/start-display
-COPY box-chrome /usr/local/bin/box-chrome
-COPY box-clip /usr/local/bin/box-clip
-COPY box-doctor /usr/local/bin/box-doctor
-COPY box-init /usr/local/bin/box-init
-COPY box-healthcheck /usr/local/bin/box-healthcheck
-COPY wait-compositor /usr/local/bin/wait-compositor
-COPY vnc-probe /usr/local/bin/vnc-probe
-COPY box-keepalive /usr/local/bin/box-keepalive
-RUN chmod +x /usr/local/bin/entrypoint.sh /usr/local/bin/start-display \
-      /usr/local/bin/box-chrome /usr/local/bin/box-clip \
-      /usr/local/bin/box-doctor /usr/local/bin/box-init \
-      /usr/local/bin/box-healthcheck \
-      /usr/local/bin/wait-compositor \
-      /usr/local/bin/vnc-probe \
-      /usr/local/bin/box-keepalive
+# 6. (The context COPYs live at the end of this file — see "build-context payloads" there.)
 
 # Chromium's managed policy. Two things it turns off, both of which are traps for an
 # agent rather than merely untidy:
@@ -304,6 +274,47 @@ WORKDIR /home/box/work
 # Covers what the running topology promises, not just boxd — see box-healthcheck.
 HEALTHCHECK --interval=10s --timeout=8s --start-period=60s --retries=6 \
   CMD /usr/local/bin/box-healthcheck
+
+# ── build-context payloads ───────────────────────────────────────────────────────────
+#
+# Everything COPYed from the build context lives down here, after every apt layer, for one
+# reason: layer caching is a chain, and a COPY early in the file invalidates every layer after
+# it. These payloads change with every code edit; the apt layers above change with Debian. When
+# the daemon bundle sat at what used to be step 6, any code change re-busted chromium and the
+# desktop stack below it — ~600MB that every node then re-pulled on every deploy. Down here, a
+# code change rebuilds only these top layers and a node pulls only what actually changed.
+#
+# The daemon bundle, built by `npm run build:boxd`, plus the browser wrapper.
+COPY boxd.cjs /opt/boxd/boxd.cjs
+# The orchestrator, bundled with its dependencies because there is no node_modules in
+# here, plus the browser build the web UI serves for the same reason.
+COPY hostd.mjs /opt/hostd/hostd.mjs
+COPY markdown-it.js /opt/hostd/vendor/markdown-it.js
+# Data the bundle reads at runtime, beside the bundle that reads it: the catalog resolves
+# personas and vendored skills against its own module directory, and a bundler has no way
+# to know that. Missing, the host inside the box dies on its first import — which is
+# exactly how the packaged CLI broke for a day (docs/27).
+COPY catalog-data /opt/hostd/catalog-data
+# Reference notes the agent reads when its computer misbehaves or when guiding a person
+# through the web app: real paths only. Projected into ~/reference at every start.
+COPY reference /opt/box-reference
+COPY entrypoint.sh /usr/local/bin/entrypoint.sh
+COPY start-display /usr/local/bin/start-display
+COPY box-chrome /usr/local/bin/box-chrome
+COPY box-clip /usr/local/bin/box-clip
+COPY box-doctor /usr/local/bin/box-doctor
+COPY box-init /usr/local/bin/box-init
+COPY box-healthcheck /usr/local/bin/box-healthcheck
+COPY wait-compositor /usr/local/bin/wait-compositor
+COPY vnc-probe /usr/local/bin/vnc-probe
+COPY box-keepalive /usr/local/bin/box-keepalive
+RUN chmod +x /usr/local/bin/entrypoint.sh /usr/local/bin/start-display \
+      /usr/local/bin/box-chrome /usr/local/bin/box-clip \
+      /usr/local/bin/box-doctor /usr/local/bin/box-init \
+      /usr/local/bin/box-healthcheck \
+      /usr/local/bin/wait-compositor \
+      /usr/local/bin/vnc-probe \
+      /usr/local/bin/box-keepalive
 
 # box-init is PID 1 rather than tini, for one reason: only PID 1 sees an orphan die, and
 # tini reaped every one of them and discarded the status. Everything unsupervised in here
