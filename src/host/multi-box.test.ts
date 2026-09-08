@@ -195,3 +195,45 @@ test("two boxes: files, skills, desktops and memory follow the agent's box; a sc
     rmSync(root, { recursive: true, force: true });
   }
 });
+
+// ── a name means the teammate of that name, not the first agent anywhere (2026-09-08) ─────
+//
+// Two stale "OVP-Ops-Bot" profiles in the Docker box, one real one on the Grok VM. Bot Boss on
+// the VM sent by name; the global lookup found a Docker one first and the tool refused the real
+// teammate as "in a different box". Name resolution is scoped to the box the caller is in.
+
+test("SendToAgent and Tasks resolve a name among teammates before anyone else", async () => {
+  const root = mkdtempSync(join(tmpdir(), "agentbox-multibox-names-"));
+  process.env.AGENTBOX_HOME = root;
+  try {
+    const registry = new AgentRegistry(join(root, "agents"));
+    const tokenFile = join(root, "grok.token");
+    writeFileSync(tokenFile, "t\n");
+    const grok = registry.attachBox(attachedBox({ name: "grok", baseUrl: "http://127.0.0.1:1", tokenFile, displayFloor: 10 }));
+    registry.create({ name: "OVP-Ops-Bot", description: "stale, docker box" });
+    const boss = registry.create({ name: "Boss", boxId: grok.id });
+    const real = registry.create({ name: "OVP-Ops-Bot", description: "real, grok box", boxId: grok.id });
+
+    const { dispatchTool } = await import("./tools.ts");
+    const { AgentBus } = await import("../agents/bus.ts");
+    const { TaskStore } = await import("./tasks.ts");
+    const woken: string[] = [];
+    const bus = new AgentBus(registry, async (agent, inbound) => {
+      for (const m of inbound) woken.push(`${agent.id}:${m.text.slice(0, 12)}`);
+    });
+    const tasks = new TaskStore(join(root, "tasks.jsonl"));
+    const context = { agent: boss, registry, bus, tasks, box: undefined } as unknown as Parameters<typeof dispatchTool>[2];
+
+    const sent = await dispatchTool("SendToAgent", { target_id: "OVP-Ops-Bot", message: "first wake" }, context);
+    assert.ok(!sent.isError, sent.text);
+    await bus.idle();
+    assert.deepEqual(woken, [`${real.id}:first wake`]);
+
+    const created = await dispatchTool("Tasks", { action: "create", title: "healthcheck", assignee: "ovp-ops-bot" }, context);
+    assert.ok(!created.isError, created.text);
+    assert.equal(tasks.list()[0]?.assigneeId, real.id);
+  } finally {
+    delete process.env.AGENTBOX_HOME;
+    rmSync(root, { recursive: true, force: true });
+  }
+});
