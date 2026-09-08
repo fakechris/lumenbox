@@ -46,6 +46,17 @@ Prefer the content-hash tag over `:latest` when you edit `control-plane.yaml`: n
 `:latest`, and `imagePullPolicy: IfNotPresent` plus a warm cache is how a control plane and its
 boxes silently run different builds.
 
+Two cross-architecture facts this step is where you find out about:
+
+- **Build for the nodes' architecture, not your laptop's.** From Apple Silicon that is
+  `DOCKER_DEFAULT_PLATFORM=linux/amd64 npm run build:image` — check with
+  `kubectl get nodes -o jsonpath='{.items[*].status.nodeInfo.architecture}'` first, because a
+  wrong-arch image is a `CrashLoopBackOff` ("exec format error") an hour later, not a build error.
+- **Old kubelets pull schema2, not OCI.** Docker ≤ 19.x on the nodes may refuse an OCI-format
+  manifest. If pulls fail with manifest errors, push through a converter instead of `docker push`:
+  `skopeo copy --format v2s2 docker-archive:img.tar docker://<registry>/<project>/agentbox:<tag>`
+  (this is also the way around a `docker push` that must traverse a proxy the registry is not on).
+
 ## 3. Deploy the control plane
 
 ```sh
@@ -82,6 +93,22 @@ kubectl -n agentbox get pvc              # <box>-work, <box>-config, <box>-hostd
 ```sh
 kubectl -n agentbox describe pod <box-pod>   # the Events section says which
 ```
+
+Cluster-age failure modes seen in the wild, so they are not mysteries when you meet them:
+
+- **PVC stuck `Pending` with "create process timeout" from the provisioner.** OpenEBS localpv's
+  provisioner shells out to a helper pod whose image (`OPENEBS_IO_HELPER_IMAGE`) defaults to
+  docker.io. On a cluster where docker.io is unreachable, every new PVC times out — pre-existing
+  ones keep working, so the breakage hides until someone provisions. Mirror the helper image into
+  your registry and patch the env on the provisioner Deployment.
+- **`kubectl apply` fails schema validation on resources you never heard of.** Old apiservers
+  carrying CRDs with broken OpenAPI schemas (a classic: velero's Restore) fail client-side
+  validation of *unrelated* manifests. `--validate=false` is the workaround; it is a property of
+  that cluster, not of these manifests.
+- **A first request that 502s with "Your box is not answering"** while the pod is still booting
+  is normal — retry once the pod is Ready. If it 502s with the pod Ready, the box's UI port is
+  not listening; the allocator sets `AGENTBOX_HOST_ENABLED=1` for exactly this, so a 502 then
+  means the box predates that and should be restarted through the admin API.
 
 ## 5. Wire-level validation without the box image
 
