@@ -90,8 +90,22 @@ $("shelfbody").onclick = function (event) {
   if (!btn) return;
   var boxId = $("shelfbox").value;
   var defaultName = btn.getAttribute("data-stamp-name") || "";
-  var name = window.prompt ? (window.prompt("Name for the new agent", defaultName) || "") : defaultName;
-  if (name === "" && window.prompt) return;
+  // No window.prompt: the desktop shell does not implement it (the click did nothing).
+  // The name is asked inline, on the card, and confirmed with a second press.
+  if (!btn.getAttribute("data-armed")) {
+    var holder = btn.parentNode;
+    var input = document.createElement("input");
+    input.type = "text"; input.value = defaultName; input.placeholder = "name";
+    input.setAttribute("data-stamp-input", "1");
+    input.style.cssText = "height:26px;border-radius:6px;border:1px solid var(--border-strong);background:var(--bg);color:var(--text);padding:0 6px;width:120px;margin-right:6px";
+    holder.insertBefore(input, btn);
+    btn.textContent = "Create";
+    btn.setAttribute("data-armed", "1");
+    input.focus();
+    return;
+  }
+  var nameField = btn.parentNode.querySelector("input[data-stamp-input]");
+  var name = nameField ? nameField.value.trim() : defaultName;
   var body = { boxId: boxId, name: name || undefined };
   if (btn.getAttribute("data-stamp-catalog")) body.catalogSlug = btn.getAttribute("data-stamp-catalog");
   else { body.agentId = btn.getAttribute("data-stamp-agent"); body.version = Number(btn.getAttribute("data-stamp-version")); }
@@ -141,6 +155,18 @@ function refreshSetup() {
 refreshSetup();
 setInterval(refreshSetup, 30000);
 $("guidebtn").onclick = function () { guideForced = true; refreshSetup(); };
+
+$("agentdel").onclick = function (event) {
+  event.preventDefault();
+  var agent = agentById(current);
+  if (!agent) return;
+  openAgentModal("edit", agent);
+  // Straight to the last field, with the two-step delete already open.
+  $("agdel1").style.display = "none";
+  $("agdel2").style.display = "flex";
+  var danger = $("agdanger");
+  if (danger) setTimeout(function () { danger.scrollIntoView({ block: "end" }); }, 30);
+};
 
 </script>
 <style>
@@ -793,6 +819,7 @@ $("guidebtn").onclick = function () { guideForced = true; refreshSetup(); };
         </div>
       </span>
       <a href="#" id="agentcfg" style="font-size:12px;flex:none">Configure</a>
+      <a href="#" id="agentdel" style="font-size:12px;flex:none;color:var(--danger)" title="Delete this agent (asks first)">Delete</a>
     </span>
     <span class="headactions">
       <a href="#" id="foldall" title="Fold or unfold every step in this conversation">fold steps</a>
@@ -2607,12 +2634,24 @@ function firstLineOf(text) {
 /** Whether new steps arrive folded. Flipped by the header control, remembered per page. */
 var folded = false;
 
-function bubble(role, who, text) {
+/** A time as a person reads it beside a message: the clock today, the date otherwise. */
+function whenLabel(at) {
+  if (!at) return "";
+  var d = new Date(at);
+  if (isNaN(d.getTime())) return "";
+  var now = new Date();
+  var sameDay = d.toDateString() === now.toDateString();
+  var hm = d.toTimeString().slice(0, 5);
+  return sameDay ? hm : (d.getMonth() + 1) + "/" + d.getDate() + " " + hm;
+}
+
+function bubble(role, who, text, at) {
   var el = $("chat");
   var stick = nearBottom(el);
   var div = document.createElement("div");
   div.className = "msg " + role;
-  div.innerHTML = '<div class="who">' + esc(who) + '</div><div class="body"></div>';
+  var when = whenLabel(at);
+  div.innerHTML = '<div class="who">' + esc(who) + (when ? ' <span style="text-transform:none;letter-spacing:0;font-weight:400" title="' + esc(String(at)) + '">' + esc(when) + "</span>" : "") + '</div><div class="body"></div>';
   var body = div.querySelector(".body");
   body.innerHTML = renderMarkdown(text);
   el.appendChild(div);
@@ -2819,7 +2858,7 @@ function replayEntry(id, entry) {
     return;
   }
   endStep();
-  bubble(entry.role === "user" ? "user" : "", entry.role === "user" ? "you" : nameOf(id), entry.text);
+  bubble(entry.role === "user" ? "user" : "", entry.role === "user" ? "you" : nameOf(id), entry.text, entry.at);
 }
 
 function agentById(id) {
@@ -3894,7 +3933,7 @@ stream.onmessage = function (raw) {
 
   if (e.type === "prompt") {
     endStep();
-    if (inView(e)) bubble("user", "you", e.text);
+    if (inView(e)) bubble("user", "you", e.text, new Date().toISOString());
     return;
   }
 
@@ -3910,7 +3949,7 @@ stream.onmessage = function (raw) {
     endStep();
     var open = live.get(e.agentId);
     if (!open) {
-      open = { node: bubble("", e.agentName, ""), text: "", queued: false };
+      open = { node: bubble("", e.agentName, "", new Date().toISOString()), text: "", queued: false };
       // Marked while it is still streaming, so a retry can drop it. Cleared when the turn's own
       // message is stored, at which point it is no longer a partial anyone should discard.
       open.node.setAttribute("data-partial", "1");
@@ -4326,14 +4365,51 @@ function renderAgentCatalog() {
   $("agcatalog").innerHTML = html || "<span class=\"fieldnote\">No catalog loaded.</span>";
 }
 
+function installCrew(slug, boxId) {
+  fetch("/api/catalog/install", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ slug: slug, boxId: boxId || undefined })
+  })
+    .then(function (r) { return r.json().then(function (d) { if (!r.ok) throw new Error(d.error || "install failed"); return d; }); })
+    .then(function (d) {
+      $("agentwrap").style.display = "none";
+      return refresh().then(function () { if (d.created && d.created[0]) return select(d.created[0].id); });
+    })
+    .catch(function (error) { $("agstatus").textContent = "Install failed: " + error.message; })
+    .then(function () { $("agsave").disabled = false; });
+}
+
 $("agcatalog").onclick = function (event) {
   var chip = event.target.closest ? event.target.closest("[data-slug]") : null;
   if (!chip) return;
   var slug = chip.getAttribute("data-slug");
   var kind = chip.getAttribute("data-kind");
   if (kind === "crew") {
-    $("agstatus").textContent = "Adding " + slug + "…";
-    $("agsave").disabled = true;
+    // A look first, then a yes: the chip used to install the whole crew on one click,
+    // into the first box, with no way to read what it was. Now it shows the members and
+    // waits for the button; the crew lands in the box chosen in the form.
+    var crew = null;
+    for (var c = 0; c < (agentCatalog.crews || []).length; c++) if (agentCatalog.crews[c].slug === slug) crew = agentCatalog.crews[c];
+    var members = crew ? (crew.members || []).map(function (m) {
+      var e = null;
+      for (var q = 0; q < agentCatalog.experts.length; q++) if (agentCatalog.experts[q].slug === m) e = agentCatalog.experts[q];
+      return e ? e.name + "（" + e.title + "）— " + e.summary : m;
+    }) : [];
+    var boxSel = $("agbox");
+    var boxName = boxSel && boxSel.options[boxSel.selectedIndex] ? boxSel.options[boxSel.selectedIndex].textContent : "this box";
+    $("agstatus").innerHTML = '<div><b>' + esc(crew ? crew.name : slug) + "</b> — " + esc(crew ? crew.summary : "") + "</div>" +
+      '<ul style="margin:6px 0 8px 16px;padding:0">' + members.map(function (m) { return "<li>" + esc(m) + "</li>"; }).join("") + "</ul>" +
+      '<button class="btn sm accent" id="agcrewgo" type="button">Create these ' + members.length + " in " + esc(boxName) + "</button>";
+    $("agcrewgo").onclick = function () {
+      $("agcrewgo").disabled = true;
+      $("agstatus").textContent = "Adding " + (crew ? crew.name : slug) + "…";
+      $("agsave").disabled = true;
+      installCrew(slug, boxSel ? boxSel.value : undefined);
+    };
+    return;
+  }
+  if (false) {
     fetch("/api/catalog/install", {
       method: "POST",
       headers: { "content-type": "application/json" },
