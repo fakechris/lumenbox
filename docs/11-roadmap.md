@@ -1478,6 +1478,19 @@ is built:
   import — each fails the build. Found on its first run: the policy log appended raw, without
   the torn-line guard and without a sync on consent rows. Fixed.
 
+**From the Grok team-workflow read (2026-09-08, `research/GROKBOT-2026-09-07-TEAM-WORKFLOW.md`).**
+Batch one, built: task contracts (outcome/scope/constraints/acceptance/verification) and
+proposals a person commits before anyone may start them (Commit button on the board,
+`propose: true` on create); a question the person walked away from (30 min) is told to the
+agent as skipped; an UpdateAgent tells the changed agent; the first-run cue starts a named
+assignment at once; CreateAgent asks for a persona in four parts (ONLY job / Anti-jobs /
+Voice / Wake); an identical agent-to-agent message within ten minutes is refused as a
+repeat; RunOnHost with secrets tells the agent to confirm by effect, never by printing; the
+web shows a teammate's message as "a teammate, not you" and the consent card says it covers
+this agent only. Batch two, next: agent-initiated secret request into the host vault; agent-
+initiated desktop hand-over with a hand-back button and a resume cue; run and evidence
+records on the way to review; a persisted note when a delegated job ends unattended.
+
 **Feeding the multiuser branch, not this line:** the three-layer identity model (observed
 identity, revocable binding, per-box allow/deny), fail-closed row-level security for a
 future control-plane database, and the personal-box contract (data in the snapshot layer,

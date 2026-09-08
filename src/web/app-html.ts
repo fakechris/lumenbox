@@ -2508,6 +2508,7 @@ function peerNote(direction, name, text, priority) {
   row.innerHTML = "<summary>" +
     '<span class="peerdot" style="background:' + colorOfName(name) + '"></span>' +
     esc(direction) + ' <span class="chip">' + esc(name) + "</span>" +
+    (direction === "from" ? ' <span class="dim">a teammate, not you</span>' : "") +
     (priority ? " (priority)" : "") +
     ' <span class="dim">' + esc(oneLine.slice(0, 60)) + "</span>" +
     '</summary><div class="det"></div>';
@@ -2888,7 +2889,7 @@ function renderApprovals(pending) {
     return '<div class="consent">' +
       '<div class="chead"><span class="dot"></span>Consent needed &mdash; the turn is paused until you answer</div>' +
       "<code>" + esc(item.description) + "</code>" +
-      '<div class="note">Each button says what it covers: this exact action, once, for this session, or until you revoke it in Settings.</div>' +
+      '<div class="note">Each button says what it covers: this exact action, once, for this session, or until you revoke it in Settings. It covers this agent only — never another agent, never another command.</div>' +
       '<div class="cactions">' +
       '<button class="btn sm accent" data-approve="' + esc(item.id) + '" data-scope="once">Allow once</button>' +
       '<button class="btn sm" data-approve="' + esc(item.id) + '" data-scope="session">This session</button>' +
@@ -3360,11 +3361,15 @@ function refreshTasks() {
         var last = t.history && t.history.length ? t.history[t.history.length - 1] : null;
         var lastNote = last && last.note ? esc(last.note) : "";
         var open = t.id === openTask;
+        var proposed = t.proposedBy
+          ? ' <span class="chip" style="font-size:10px">proposed</span>' +
+            ' <button class="btn sm accent" data-commit="' + esc(t.id) + '" title="Make this proposal real work: agents may take it after you commit">Commit</button>'
+          : "";
         return '<div style="padding:10px 16px;border-bottom:1px solid var(--border)' +
             (open ? ";background:var(--surface)" : "") + '">' +
           '<div style="display:flex;gap:9px;align-items:baseline">' +
             '<a href="#" data-open="' + esc(t.id) + '" class="mono" style="font-size:11px;color:var(--muted);text-decoration:none">' + esc(t.id) + "</a>" +
-            '<a href="#" data-open="' + esc(t.id) + '" style="flex:1;font-size:13px;font-weight:500;color:var(--text);text-decoration:none">' + esc(t.title) + "</a>" +
+            '<a href="#" data-open="' + esc(t.id) + '" style="flex:1;font-size:13px;font-weight:500;color:var(--text);text-decoration:none">' + esc(t.title) + "</a>" + proposed +
             '<select data-task="' + esc(t.id) + '" style="height:24px;border-radius:6px;border:1px solid var(--border);background:var(--surface);color:' + taskStatusColor(t.status) + ';font-size:11px">' +
               TASK_STATUSES.map(function (s) {
                 return '<option value="' + s + '"' + (s === t.status ? " selected" : "") + ">" + s + "</option>";
@@ -3416,6 +3421,14 @@ document.getElementById("tasklist").addEventListener("click", function (event) {
 });
 
 document.getElementById("tasklist").addEventListener("change", function (event) {
+  var commitId = event.target.getAttribute && event.target.getAttribute("data-commit");
+  if (commitId) {
+    event.preventDefault();
+    fetch("/api/tasks/commit", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ id: commitId }) })
+      .then(function () { loadTasks(); })
+      .catch(function () {});
+    return;
+  }
   var id = event.target.getAttribute && event.target.getAttribute("data-task");
   if (!id) return;
   fetch("/api/tasks/update", {

@@ -85,6 +85,24 @@ export interface TaskChange {
   checked?: string[];
 }
 
+export interface TaskContract {
+  outcome?: string;
+  scope?: string;
+  constraints?: string;
+  acceptance?: string;
+  verification?: string;
+}
+
+export function clampContract(input: Partial<Record<keyof TaskContract, unknown>> | undefined): TaskContract | undefined {
+  if (input === undefined) return undefined;
+  const out: TaskContract = {};
+  for (const key of ["outcome", "scope", "constraints", "acceptance", "verification"] as const) {
+    const value = input[key];
+    if (typeof value === "string" && value.trim() !== "") out[key] = value.trim().slice(0, 1_000);
+  }
+  return Object.keys(out).length === 0 ? undefined : out;
+}
+
 export interface Task {
   id: string;
   title: string;
@@ -95,6 +113,20 @@ export interface Task {
   assigneeId?: string;
   /** Named, "done" means this identity accepted it — the assignee cannot self-accept. */
   reviewerId?: string;
+  /**
+   * What finished looks like, in the requester's words, kept apart from the description.
+   * Five fields because that is what a reviewer needs and a title cannot carry: what comes
+   * out, what is in and out of bounds, what must not be done, how "done" is judged, and how
+   * it was checked. (Involute's work items carry the same five; two days of bots working
+   * from them stayed in lane.)
+   */
+  contract?: TaskContract;
+  /**
+   * Set while an agent's proposal waits for a person: the agent may describe work, a person
+   * commits it before anyone starts. Cleared by `commit`. An agent cannot take or start a
+   * proposed task, which is the whole point of the field.
+   */
+  proposedBy?: string;
   conversation?: string;
   createdAt: string;
   updatedAt: string;
@@ -161,6 +193,24 @@ export class TaskStore {
    */
   private readonly listeners: ((task: Task) => void)[] = [];
 
+  /**
+   * A person commits a proposed task: from then on it is ordinary work anyone may take.
+   * Returns undefined for an unknown id, false when there was nothing to commit.
+   */
+  commit(id: string, by: string, now: Date = new Date()): boolean | undefined {
+    const task = this.tasks.get(id);
+    if (task === undefined) return undefined;
+    if (task.proposedBy === undefined) return false;
+    const at = now.toISOString();
+    const change: TaskChange = { at, by, note: `committed by ${by}` };
+    const next: Task = { ...task, updatedAt: at, history: [...task.history, change].slice(-HISTORY_LIMIT) };
+    delete next.proposedBy;
+    this.tasks.set(id, next);
+    this.append({ kind: "task", task: next });
+    for (const listener of this.listeners) listener(next);
+    return true;
+  }
+
   onChange(listener: (task: Task) => void): void {
     this.listeners.push(listener);
   }
@@ -198,6 +248,9 @@ export class TaskStore {
     assigneeId?: string;
     reviewerId?: string;
     conversation?: string;
+    contract?: TaskContract;
+    /** The agent proposing, when a person has yet to commit the work. */
+    proposedBy?: string;
     now?: Date;
   }): Task | undefined {
     const title = input.title.replace(/\s+/g, " ").trim().slice(0, 200);
@@ -215,9 +268,11 @@ export class TaskStore {
       ...(input.assigneeId !== undefined ? { assigneeId: input.assigneeId } : {}),
       ...(input.reviewerId !== undefined ? { reviewerId: input.reviewerId } : {}),
       ...(input.conversation !== undefined ? { conversation: input.conversation } : {}),
+      ...(input.contract !== undefined ? { contract: input.contract } : {}),
+      ...(input.proposedBy !== undefined ? { proposedBy: input.proposedBy } : {}),
       createdAt: at,
       updatedAt: at,
-      history: [{ at, by: input.requester, status: "open", note: "created" }],
+      history: [{ at, by: input.requester, status: "open", note: input.proposedBy !== undefined ? "proposed, awaiting a person's commit" : "created" }],
     };
     this.tasks.set(task.id, task);
     this.append({ kind: "task", task });
@@ -280,6 +335,20 @@ export class TaskStore {
     const at = now.toISOString();
     let coerced: string | undefined;
     let status = changes.status;
+
+    // A proposal is not work yet: nobody starts it until a person commits it. Redirected
+    // rather than refused, like the review gate, so the caller learns the rule from the
+    // board rather than from an error it might retry.
+    if (
+      task.proposedBy !== undefined &&
+      (status === "doing" || status === "review" || status === "done") &&
+      !HARNESS_ACTORS.has(by)
+    ) {
+      status = undefined;
+      coerced =
+        `${task.id} is a proposal awaiting a person's commit, so it cannot be started or finished ` +
+        `yet. Ask the person to commit it (the board has a Commit button), then take it.`;
+    }
 
     // The review gate. Two rules, both about who may say a thing is finished, because
     // "done is the requester's word" was prose in an audit prompt and prose is not a gate.
@@ -454,5 +523,6 @@ export class TaskStore {
 export function describeTask(task: Task, nameOf: (id: string) => string): string {
   const assignee = task.assigneeId !== undefined ? ` @${nameOf(task.assigneeId)}` : " (unassigned)";
   const reviewer = task.reviewerId !== undefined ? ` · review by ${nameOf(task.reviewerId)}` : "";
-  return `${task.id} [${task.status}]${assignee} ${task.title}${reviewer}`;
+  const proposed = task.proposedBy !== undefined ? " (proposed — a person commits it before anyone starts)" : "";
+  return `${task.id} [${task.status}]${assignee} ${task.title}${reviewer}${proposed}`;
 }

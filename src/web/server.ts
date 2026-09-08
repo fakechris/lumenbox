@@ -2759,6 +2759,23 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
           return;
         }
 
+        if (route === "POST /api/tasks/commit") {
+          if (refused()) return;
+          const board = orchestrator.tasks;
+          if (board === undefined) {
+            send(res, 503, { error: "No task board on this installation." });
+            return;
+          }
+          const body = await readJson(req);
+          const committed = board.commit(String(body.id ?? ""), caller.userId ?? "web");
+          if (committed === undefined) {
+            send(res, 404, { error: `No task ${String(body.id ?? "")}.` });
+            return;
+          }
+          send(res, 200, { committed, task: board.get(String(body.id ?? "")) });
+          return;
+        }
+
         if (route === "POST /api/tasks/update") {
           if (refused()) return;
           const board = orchestrator.tasks;

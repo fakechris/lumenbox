@@ -578,6 +578,8 @@ const ACK_AFTER_MS = 8_000;
 
 /** Card rewrites are rate-limited to this; the final state is always written. */
 const CARD_UPDATE_MS = 3_000;
+/** A question older than this is treated as walked away from, not as awaiting this reply. */
+const QUESTION_STALE_MS = 30 * 60_000;
 /**
  * How often the streaming reply may rewrite the card, and how much of it the card holds.
  * 700 ms, or sooner at a line break, is where a card reads as typing rather than as
@@ -890,7 +892,7 @@ export class ChannelManager {
     // work that asked — not new work. Without this, answering opened a fresh task and a
     // fresh card titled with the answer ("附件刚上传完 · 已完成"), which is noise wearing
     // a task's clothes. One-shot: only the immediately next message counts.
-    this.awaitingAnswer.add(asker.identity);
+    this.awaitingAnswer.set(asker.identity, { question: input.question, at: Date.now() });
     // Buttons where the wire has them: the person answers a choice with one tap, and the
     // press goes through the same door as a typed reply. Words keep working either way.
     if (
@@ -1352,7 +1354,19 @@ ${input.options.map(option => `· ${option}`).join("\n")}`
     // An answer to the question the agent just asked continues that work — no new board
     // row, no new card. Consumed exactly once, so the message after the answer is
     // ordinary again.
-    const answering = this.awaitingAnswer.delete(message.identity);
+    const awaited = this.awaitingAnswer.get(message.identity);
+    this.awaitingAnswer.delete(message.identity);
+    const answering = awaited !== undefined;
+    // A question the person walked away from is not answered by whatever they say next:
+    // an hour later "帮我看看邮件" is new work, and reading it as the answer to "which
+    // region?" sends the agent down the wrong road with a straight face. Said to the
+    // agent, so it decides; the message is still a continuation of that work.
+    const staleQuestion =
+      awaited !== undefined && Date.now() - awaited.at > QUESTION_STALE_MS
+        ? `[Earlier you asked: "${awaited.question.slice(0, 160)}" and the person moved on without answering ` +
+          `(${Math.round((Date.now() - awaited.at) / 60_000)} minutes ago). Treat that question as skipped ` +
+          `unless what follows plainly answers it.]\n\n`
+        : "";
 
     // The door's own default (docs/22 §2): a message that names nobody goes to this
     // adapter's defaultAgent. Applied here, to *new* work only — the steering and
@@ -1373,12 +1387,13 @@ ${input.options.map(option => `· ${option}`).join("\n")}`
       joinNo !== undefined
         ? (this.deps.meetingJoinPrompt?.(joinNo, adapter.name) ?? text)
         : text;
+    const textForTurn = staleQuestion === "" ? finalText : `${staleQuestion}${finalText}`;
 
     // "屏幕" is a look, not a task: no turn runs, the desktop is captured as it is.
     const work =
       parseScreenRequest(text) && this.deps.screenshot !== undefined
         ? this.runScreenshot(adapter, message, addressed)
-        : this.runTask(adapter, message, addressed, finalText, undefined, { continuation: answering });
+        : this.runTask(adapter, message, addressed, textForTurn, undefined, { continuation: answering });
 
     // The work runs behind this return; the decisions above stay synchronous because
     // a refusal or an approval answer *is* the whole response.
@@ -1424,7 +1439,7 @@ ${input.options.map(option => `· ${option}`).join("\n")}`
   private readonly lastTask = new Map<string, string>();
 
   /** Who owes an answer to an open question. Their next message continues, not begins. */
-  private readonly awaitingAnswer = new Set<string>();
+  private readonly awaitingAnswer = new Map<string, { question: string; at: number }>();
 
   /** How long a wordless drop waits for its instruction. */
   private static readonly DROP_WINDOW_MS = 10 * 60 * 1000;
