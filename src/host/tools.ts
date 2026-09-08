@@ -76,6 +76,29 @@ export interface ToolContext {
    * Absent means nobody is reachable to ask — a CLI run, a test — and the tool then
    * says so rather than pretending the question was delivered.
    */
+  /**
+   * Asks the person for a secret by name. The value goes into the host vault with a grant to
+   * this agent and never into the box or the transcript; RunOnHost can name it, the relay can
+   * carry it if it is a provider key. Returns where it was asked, or undefined for nowhere.
+   */
+  askSecret?: (input: {
+    agentId: string;
+    agentName: string;
+    id: string;
+    description: string;
+    conversation?: string;
+  }) => string | undefined;
+  /**
+   * Hands the agent's desktop to the person with one instruction. The person sees the
+   * instruction and a hand-back control; on hand-back the agent is woken with a cue to look.
+   */
+  handOver?: (input: {
+    agentId: string;
+    agentName: string;
+    instruction: string;
+    reason: "auth" | "captcha" | "payment" | "other";
+    conversation?: string;
+  }) => string | undefined;
   askUser?: (input: {
     agentId: string;
     agentName: string;
@@ -288,6 +311,8 @@ export const FORK_WITHHELD_TOOLS: ReadonlySet<string> = new Set([
   "Delegate",
   "Fork",
   "AskUser",
+  "AskSecret",
+  "HandOverDesktop",
   "OtherThreads",
 ]);
 
@@ -718,6 +743,42 @@ export function buildTools(
             },
           },
           required: ["action"],
+        },
+      },
+      {
+        name: "AskSecret",
+        description:
+          "Ask the person for a credential — an API key, a token, a password — by name, " +
+          "without ever seeing it. It is stored in this host's vault with a grant to you; " +
+          "RunOnHost commands may name it in `secrets`, and a provider key can carry a " +
+          "delegated engine through the relay. You get told when it is saved. Never ask for a " +
+          "value in chat, never export one, never read a file to find one. Ask once per " +
+          "secret; if the person already saved it, just use it.",
+        input_schema: {
+          type: "object",
+          properties: {
+            id: { type: "string", description: "The secret's name, as an environment variable would be written: MINIMAX_API_KEY, GITHUB_TOKEN." },
+            description: { type: "string", description: "One line on what it is for and where it will be used, shown on the card." },
+          },
+          required: ["id", "description"],
+        },
+      },
+      {
+        name: "HandOverDesktop",
+        description:
+          "Hand your desktop to the person for something only they can do there — a login, " +
+          "a captcha, a payment — with one instruction they will read on the card. Your turn " +
+          "ends when you call this: say what you are waiting for and stop. When they hand it " +
+          "back you are woken with a cue; start by looking at the screen again, because it " +
+          "changed while you were not there. Do not ask first whether to hand over — the " +
+          "handover is the ask.",
+        input_schema: {
+          type: "object",
+          properties: {
+            instruction: { type: "string", description: "What they should do, in their language, one or two sentences." },
+            reason: { type: "string", enum: ["auth", "captcha", "payment", "other"] },
+          },
+          required: ["instruction", "reason"],
         },
       },
       {
@@ -1156,6 +1217,14 @@ export function buildTools(
           constraints: { type: "string", description: "For create: what must not be done or changed." },
           acceptance: { type: "string", description: "For create: how the reviewer decides it is done." },
           verification: { type: "string", description: "For create: how the result is to be checked — the command, the page, the file." },
+          evidence: {
+            type: "array",
+            items: { type: "string" },
+            description:
+              "For update to review: what the reviewer should look at — a URL, a path, a " +
+              "command and its result — one line each with a word on what it shows. Never a " +
+              "file that holds a secret. A submission with no evidence is a claim.",
+          },
           options: {
             type: "array",
             items: { type: "string" },
@@ -2489,6 +2558,50 @@ export async function dispatchTool(
       return { text: `${header}\n\n${result.content}` };
     }
 
+    case "AskSecret": {
+      const id = String(input.id ?? "").trim().toUpperCase().replace(/[^A-Z0-9_]/g, "_");
+      const description = String(input.description ?? "").trim();
+      if (id === "" || description === "") return { text: "AskSecret needs an id and a description.", isError: true };
+      if (context.askSecret === undefined) {
+        return { text: "There is nowhere to ask for a secret on this run. Say what you would need and stop.", isError: true };
+      }
+      const where = context.askSecret({
+        agentId: context.agent.id,
+        agentName: context.agent.profile.name,
+        id,
+        description,
+        ...(context.conversation !== undefined ? { conversation: context.conversation } : {}),
+      });
+      if (where === undefined) return { text: "The request could not be shown to anyone. Say what you would need and stop.", isError: true };
+      return {
+        text:
+          `Requested ${id} from the person securely (${where}). You will never see its value. When they save it ` +
+          `you will be told; until then, continue with what does not need it, or end your turn saying what is waiting.`,
+      };
+    }
+
+    case "HandOverDesktop": {
+      const instruction = String(input.instruction ?? "").trim();
+      const reason = String(input.reason ?? "other");
+      if (instruction === "") return { text: "Say what the person should do on the desktop.", isError: true };
+      if (context.handOver === undefined) {
+        return { text: "There is no desktop to hand over on this run.", isError: true };
+      }
+      const where = context.handOver({
+        agentId: context.agent.id,
+        agentName: context.agent.profile.name,
+        instruction,
+        reason: reason === "auth" || reason === "captcha" || reason === "payment" ? reason : "other",
+        ...(context.conversation !== undefined ? { conversation: context.conversation } : {}),
+      });
+      if (where === undefined) return { text: "Nobody can take the desktop from here. Continue without it or ask a question instead.", isError: true };
+      return {
+        text:
+          `Handed the desktop to the person (${where}) with your instruction. Your turn ends here: say in one line ` +
+          `what you are waiting for and stop. Do not touch the desktop until you are woken with the hand-back cue.`,
+      };
+    }
+
     case "AskUser": {
       const question = String(input.question ?? "").trim();
       if (question === "") return { text: "Ask something.", isError: true };
@@ -3334,6 +3447,9 @@ export async function dispatchTool(
               : {}),
             ...(Array.isArray(input.options)
               ? { options: input.options.filter((o): o is string => typeof o === "string") }
+              : {}),
+            ...(Array.isArray(input.evidence)
+              ? { evidence: input.evidence.filter((e): e is string => typeof e === "string") }
               : {}),
             ...(assigneeId !== undefined ? { assigneeId } : {}),
           },

@@ -220,6 +220,10 @@ type OutboundEvent =
   | { type: "box_setup"; line: string; done?: boolean; ok?: boolean }
   /** An approval was just created; the desktop shell turns this into a notification. */
   | { type: "approval_pending"; agentId: string; agentName: string; description: string }
+  /** An agent asked the person for a secret by name; the page shows a card. */
+  | { type: "secret_requested"; agentId: string; agentName: string; id: string; description: string }
+  /** An agent handed its desktop to the person; the page shows the instruction and a hand-back. */
+  | { type: "handover_pending"; agentId: string; agentName: string; instruction: string; reason: string }
   /** An imported bot's setup turn ended; `summary` says what landed (docs/29 §5.4). */
   | { type: "template_import"; agentId: string; agentName: string; summary: string; complete: boolean }
   /** A bot staged a version of its template; the chat shows a card with what it carries. */
@@ -411,6 +415,10 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
   // can be driving two agents at once.
   const channelTurnListeners = new Set<(event: TurnEvent) => void>();
   const idempotency = new IdempotencyStore();
+  /** Secrets agents asked the person for, by id; names and descriptions only. */
+  const pendingSecrets = new Map<string, { agentId: string; agentName: string; id: string; description: string; conversation?: string; at: string }>();
+  /** Desktops handed to the person, by agent. */
+  const pendingHandovers = new Map<string, { agentId: string; agentName: string; instruction: string; reason: string; conversation?: string; at: string; desktopPath?: string }>();
 
   const orchestrator = new Orchestrator({
     registry,
@@ -423,6 +431,23 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
     // it the work — the same routing an approval uses, because the person who asked
     // for it is the one who can say what they meant. It reaches their chat and the
     // page; the reply is an ordinary message, so nothing here has to hold a turn open.
+    askSecret: input => {
+      pendingSecrets.set(input.id, { ...input, at: new Date().toISOString() });
+      broadcast({ type: "secret_requested", agentId: input.agentId, agentName: input.agentName, id: input.id, description: input.description });
+      return "in the app";
+    },
+    handOver: input => {
+      const index = registry.tryGet(input.agentId)?.profile.displayIndex;
+      pendingHandovers.set(input.agentId, {
+        ...input,
+        at: new Date().toISOString(),
+        ...(index !== undefined
+          ? { desktopPath: `/desktop/${index}/vnc.html?autoconnect=1&resize=scale&path=desktop/${index}/websockify` }
+          : {}),
+      });
+      broadcast({ type: "handover_pending", agentId: input.agentId, agentName: input.agentName, instruction: input.instruction, reason: input.reason });
+      return "in the app";
+    },
     askUser: async input => {
       broadcast({
         type: "error",
@@ -2759,6 +2784,79 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
           return;
         }
 
+        // Secrets an agent asked for (AskSecret): names and descriptions, never values.
+        if (route === "GET /api/secrets/requests") {
+          send(res, 200, { requests: [...pendingSecrets.values()] });
+          return;
+        }
+        if (route === "POST /api/secrets/requests/answer") {
+          if (refusedRole("admin")) return;
+          const body = await readJson(req);
+          const id = String(body.id ?? "");
+          const request = pendingSecrets.get(id);
+          const value = typeof body.value === "string" ? body.value : "";
+          if (request === undefined) {
+            send(res, 404, { error: `No pending request for ${id}.` });
+            return;
+          }
+          if (value.trim() === "") {
+            send(res, 400, { error: "A value is required." });
+            return;
+          }
+          // Into the vault with a grant to the agent that asked, and nothing else changes:
+          // the box never sees it, the transcript never holds it, RunOnHost may name it.
+          vault.setSecret({ id, description: request.description, value, grants: [{ holder: request.agentId }] });
+          pendingSecrets.delete(id);
+          orchestrator.bus.deliverSystem(
+            request.agentId,
+            `[The person saved the secret ${id} securely. You never see its value; name it in RunOnHost's \`secrets\` to use it, ` +
+              `or, if it is a provider key, delegated engines can use it through the relay. Confirm it by its effect, never by printing it.]`,
+            request.conversation ?? MAIN_CONVERSATION
+          );
+          send(res, 200, { saved: true });
+          return;
+        }
+        if (route === "POST /api/secrets/requests/dismiss") {
+          if (refusedRole("admin")) return;
+          const body = await readJson(req);
+          const id = String(body.id ?? "");
+          const request = pendingSecrets.get(id);
+          pendingSecrets.delete(id);
+          if (request !== undefined) {
+            orchestrator.bus.deliverSystem(
+              request.agentId,
+              `[The person dismissed your request for ${id} without saving it. Do without it, or say plainly what cannot be done.]`,
+              request.conversation ?? MAIN_CONVERSATION
+            );
+          }
+          send(res, 200, { dismissed: request !== undefined });
+          return;
+        }
+
+        // Desktops handed to the person (HandOverDesktop), and the hand-back.
+        if (route === "GET /api/handover") {
+          send(res, 200, { pending: [...pendingHandovers.values()] });
+          return;
+        }
+        if (route === "POST /api/handover/back") {
+          if (refused()) return;
+          const body = await readJson(req);
+          const agentId = String(body.agent ?? "");
+          const handover = pendingHandovers.get(agentId);
+          pendingHandovers.delete(agentId);
+          if (handover === undefined) {
+            send(res, 404, { error: "No desktop is handed over for that agent." });
+            return;
+          }
+          orchestrator.bus.deliverSystem(
+            agentId,
+            `[The person handed the desktop back to you. Continue your task — start by taking a screenshot, because the screen changed while you were not there${typeof body.note === "string" && body.note.trim() !== "" ? `. They said: ${body.note.trim().slice(0, 300)}` : ""}.]`,
+            handover.conversation ?? MAIN_CONVERSATION
+          );
+          send(res, 200, { returned: true });
+          return;
+        }
+
         if (route === "POST /api/tasks/commit") {
           if (refused()) return;
           const board = orchestrator.tasks;
@@ -4570,6 +4668,7 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
   const renewRoutes = setInterval(() => {
     void orchestrator.mcpFace.renew();
     orchestrator.modelRelay.sweep();
+    void orchestrator.sweepDelegates().catch(() => {});
   }, RENEW_EVERY_MS);
   renewRoutes.unref();
 

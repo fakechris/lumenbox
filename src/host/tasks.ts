@@ -83,6 +83,12 @@ export interface TaskChange {
    * reviewer is a name on the assignee's summary.
    */
   checked?: string[];
+  /**
+   * What the assignee points at when submitting for review: a URL, a path, a command's
+   * output — each with a word on what it shows. Never a secret-bearing path. The reviewer
+   * reads these before the summary.
+   */
+  evidence?: string[];
 }
 
 export interface TaskContract {
@@ -324,6 +330,7 @@ export class TaskStore {
       description?: string;
       options?: string[];
       checked?: string[];
+      evidence?: string[];
     },
     by: string,
     run?: string,
@@ -411,6 +418,9 @@ export class TaskStore {
       changes.note !== undefined &&
       changes.note.trim() !== ""
         ? { options: changes.options.map(option => option.trim().slice(0, 80)).filter(o => o !== "").slice(0, 6) }
+        : {}),
+      ...(changes.evidence !== undefined && changes.evidence.length > 0
+        ? { evidence: changes.evidence.map(line => line.trim().slice(0, 300)).filter(l => l !== "").slice(0, 6) }
         : {}),
       ...(status === "done" && changes.checked !== undefined && changes.checked.length > 0
         ? { checked: changes.checked.map(line => line.slice(0, 120)).slice(0, 12) }

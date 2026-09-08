@@ -377,6 +377,8 @@ export interface TurnDeps {
   mcp?: McpManager;
   /** Puts a question to whoever drove this agent. Absent means there is nobody to ask. */
   askUser?: ToolContext["askUser"];
+  askSecret?: ToolContext["askSecret"];
+  handOver?: ToolContext["handOver"];
   /**
    * Reads Feishu documents with the bot's own workspace identity. Absent means the
    * installation has no Feishu app configured and the tool is withheld entirely.
@@ -2220,6 +2222,8 @@ export async function runTurn(
             scopes: deps.scopes,
             mcp: isForkConversation(conversation) ? undefined : deps.mcp,
             askUser: deps.askUser,
+            askSecret: deps.askSecret,
+            handOver: deps.handOver,
             docReader: deps.docReader,
             skillProvenance: deps.skillProvenance,
             workId,

@@ -238,7 +238,7 @@ test("packing reads the live files: a slug that is not there is dropped and name
     },
   };
   const context = {
-    self: { name: "Ada", title: "转写", avatarColor: "brown", tools: ["bash", "Jobs", "read_file", "write_file", "edit_file", "list_dir", "SetPlan", "SetTodos", "ReadHistory", "RememberFact", "Recall", "SendToAgent", "AskUser", "OtherThreads", "Tasks", "ClaimWork"] },
+    self: { name: "Ada", title: "转写", avatarColor: "brown", tools: ["bash", "Jobs", "read_file", "write_file", "edit_file", "list_dir", "SetPlan", "SetTodos", "ReadHistory", "RememberFact", "Recall", "SendToAgent", "AskUser", "AskSecret", "HandOverDesktop", "OtherThreads", "Tasks", "ClaimWork"] },
     teammates: ["Bob"],
     memoryRecords: [
       { at: "2026-09-01T00:00:00Z", kind: "fact" as const, text: "Chris prefers replies in Chinese and works from Shanghai.", about: "chris" },

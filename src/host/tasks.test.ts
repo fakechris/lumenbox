@@ -327,3 +327,16 @@ test("a proposal carries its contract and waits for a person's commit before any
     cleanup();
   }
 });
+
+test("a submission for review carries its evidence lines, bounded", () => {
+  const { store, cleanup } = tempStore();
+  try {
+    store.create({ title: "Fix the fetch", requester: "web", assigneeId: "ada", reviewerId: "bob" });
+    store.update("t1", { status: "review", evidence: ["https://github.com/x/y/pull/9 — the diff", "npm test → 12 passed", "", "x".repeat(400)] }, "ada");
+    const last = store.get("t1")!.history.at(-1)!;
+    assert.equal(last.evidence?.length, 3);
+    assert.equal(last.evidence?.[2]?.length, 300);
+  } finally {
+    cleanup();
+  }
+});

@@ -52,6 +52,8 @@ export const DESK_TOOLS: readonly string[] = [
   "Recall",
   "SendToAgent",
   "AskUser",
+  "AskSecret",
+  "HandOverDesktop",
   "OtherThreads",
   "Tasks",
   "ClaimWork",

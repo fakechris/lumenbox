@@ -1487,9 +1487,14 @@ assignment at once; CreateAgent asks for a persona in four parts (ONLY job / Ant
 Voice / Wake); an identical agent-to-agent message within ten minutes is refused as a
 repeat; RunOnHost with secrets tells the agent to confirm by effect, never by printing; the
 web shows a teammate's message as "a teammate, not you" and the consent card says it covers
-this agent only. Batch two, next: agent-initiated secret request into the host vault; agent-
-initiated desktop hand-over with a hand-back button and a resume cue; run and evidence
-records on the way to review; a persisted note when a delegated job ends unattended.
+this agent only. Batch two, built: `AskSecret` (the agent names a secret; the page shows a card; the value
+goes to the host vault with a grant to that agent; the agent is told when it is saved or
+dismissed and never sees the value); `HandOverDesktop` (one instruction and a reason; the
+page shows the instruction with Open computer and Hand back; the agent's turn ends and it is
+woken with a look-first cue on hand-back); `evidence` lines on a submission for review,
+shown in the task detail; and a note delivered to the agent when a delegated job ends while
+nobody is waiting (every five minutes, over the open delegate ledger). Not done: the secret
+and hand-over cards on Feishu and DingTalk (web only for now).
 
 **Feeding the multiuser branch, not this line:** the three-layer identity model (observed
 identity, revocable binding, per-box allow/deny), fail-closed row-level security for a
