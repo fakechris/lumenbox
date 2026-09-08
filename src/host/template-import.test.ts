@@ -171,7 +171,12 @@ test("an imported bot installs its own recipe on its first turn, and the host re
     // The cue told it what to do and where, and lands on the classifier's untrusted side.
     assert.ok(cue.startsWith(TEMPLATE_CUE), cue.slice(0, 80));
     assert.match(cue, /from the template "下载专家" by kin/);
-    assert.match(cue, /one at a time: Feishu chat to deliver to; Timezone; feishu is not connected here/);
+    // The host fills the timezone, leaves the chat for the person to pick when the routine is
+    // turned on, tells once that feishu is not connected, and asks at most one question.
+    assert.match(cue, /Fill these placeholders yourself while installing: \{timezone\} = /);
+    assert.match(cue, /Leave \{feishu_chat\} empty/);
+    assert.match(cue, /Not connected here, and not yours to ask about: feishu/);
+    assert.doesNotMatch(cue, /one at a time/);
     // The setup turn held files and memory and a way to ask, and nothing that reaches out.
     assert.ok(offered.includes("write_file") && offered.includes("RememberFact") && offered.includes("AskUser"), offered.join(","));
     for (const tool of ["bash", "SendToAgent", "Delegate", "browser_open", "WebFetch", "computer", "CreateAgent"]) {

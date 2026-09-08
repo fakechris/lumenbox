@@ -177,7 +177,11 @@ test("the recipe the new bot reads has its own name in place of {self}, and the 
   assert.match(cue, /write each skill to \/home\/box\/work\/skills\/<slug>\/SKILL\.md with write_file/);
   assert.match(cue, /save each memory with RememberFact/);
   assert.match(cue, /`paused: true`/);
-  assert.match(cue, /one at a time: Timezone; Feishu chat to deliver to; Teammate to hand work to; browser is not connected here/);
+  // No timezone known to this cue, so it stays a question; the chat is deferred; the one
+  // real question is the teammate; the connector is told, not asked.
+  assert.match(cue, /Leave \{feishu_chat\} empty/);
+  assert.match(cue, /exactly one question, the first of these, the rest only if they ask: Timezone; Teammate to hand work to/);
+  assert.match(cue, /Not connected here, and not yours to ask about: browser/);
   assert.match(cue, /Read and follow the skill "transcribe" before you speak\.$/);
 });
 
