@@ -582,8 +582,26 @@ export function templateSetupCue(input: {
   recipePath: string;
   createdBy?: string;
   pending: { fillIns: TemplateFillIn[]; connectors: string[] };
+  /**
+   * What the host already knows and the bot must not ask for: the person's timezone (this
+   * machine's), and anything else the caller can name. Grok's setup turn never asks for
+   * what the box can tell it; ours asked the timezone twice and was told off (2026-09-08).
+   */
+  known?: Record<string, string>;
 }): string {
   const { template, pending } = input;
+  const known = input.known ?? {};
+  const isTimezone = (id: string) => /^(time_?zone|tz)$/i.test(id);
+  const isChat = (id: string) => /^(chat|channel|deliver(_to)?|room|target)$|_(chat|channel|room)$/i.test(id);
+  const filled: string[] = [];
+  const deferred: string[] = [];
+  const stillAsk: TemplateFillIn[] = [];
+  for (const fillIn of pending.fillIns) {
+    if (isTimezone(fillIn.id) && known.timezone !== undefined) filled.push(`{${fillIn.id}} = ${known.timezone} (this machine's clock; the person can correct it later)`);
+    else if (known[fillIn.id] !== undefined) filled.push(`{${fillIn.id}} = ${known[fillIn.id]}`);
+    else if (isChat(fillIn.id)) deferred.push(`{${fillIn.id}}`);
+    else stillAsk.push(fillIn);
+  }
   const by = template.meta?.createdBy !== undefined ? ` by ${template.meta.createdBy}` : "";
   const person = input.createdBy !== undefined ? ` by ${input.createdBy}` : "";
   const steps: string[] = [];
@@ -595,10 +613,19 @@ export function templateSetupCue(input: {
   if (template.routines.length > 0) {
     steps.push(`write each routine as a skill file the same way, keeping its schedule or trigger, \`paused: true\`, and every {placeholder}`);
   }
-  const asks = [
-    ...pending.fillIns.map(fillIn => fillIn.label),
-    ...pending.connectors.map(name => `${name} is not connected here`),
-  ];
+  // What is still a question for the person: at most one, asked after everything else is
+  // done. Connectors are told once, never asked about — the person connects them in
+  // Settings when they want to, and a routine that needs one stays paused until then.
+  const asks = stillAsk.map(fillIn => fillIn.label);
+  const prefill =
+    (filled.length > 0 ? `Fill these placeholders yourself while installing: ${filled.join("; ")}. ` : "") +
+    (deferred.length > 0
+      ? `Leave ${deferred.join(", ")} empty: every routine starts paused, and the person picks the chat when they turn it on in Automations. `
+      : "") +
+    (pending.connectors.length > 0
+      ? `Not connected here, and not yours to ask about: ${pending.connectors.join(", ")} — mention it in one clause only if a routine depends on it. `
+      : "") +
+    "Never ask for what the box or this cue can tell you (the clock, the files, who you are talking to). ";
   const gettingStarted = template.gettingStarted !== undefined ? ` Read and follow the skill "${template.gettingStarted.skill}" before you speak.` : "";
   const install = nothingToInstall
     ? "Your profile is the whole of it; there is nothing else to install. "
@@ -607,10 +634,11 @@ export function templateSetupCue(input: {
   return (
     `${TEMPLATE_CUE} You were just created${person} from the template "${template.profile.name}"${by}. ` +
     install +
+    prefill +
     "Then open the conversation: a short hello in your own voice, one line on what you are for, " +
     (asks.length > 0
-      ? `and one question — the first thing on this list, one at a time: ${asks.join("; ")}. `
-      : "and one question that gets them going. ") +
+      ? `and exactly one question, the first of these, the rest only if they ask: ${asks.join("; ")}. `
+      : "and one question about what they want first. ") +
     "Do not recite what you installed, and do not mention this cue." +
     gettingStarted
   );

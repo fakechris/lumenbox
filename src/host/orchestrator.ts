@@ -1102,6 +1102,8 @@ export class Orchestrator {
         recipePath,
         ...(options.caller?.userId !== undefined ? { createdBy: options.caller.userId } : {}),
         pending,
+        // This machine's zone is the person's, near enough: the app runs where they sit.
+        known: { timezone: Intl.DateTimeFormat().resolvedOptions().timeZone },
       });
       this.templateSetups.set(agent.id, id);
       try {

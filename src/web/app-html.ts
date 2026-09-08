@@ -1092,7 +1092,9 @@ export const APP_HTML = String.raw`<!doctype html>
       <textarea id="agimport" rows="3" spellcheck="false" placeholder="Paste a .lumenbox-template.json here" style="font-family:var(--font-mono);font-size:11px"></textarea>
       <div style="display:flex;gap:10px;align-items:center;margin-top:6px">
         <button class="btn sm" id="agimportgo" type="button">Import</button>
-        <input type="file" id="agimportfile" accept=".json,application/json" style="font-size:11px">
+        <label class="btn sm ghost" for="agimportfile" style="cursor:pointer">Choose a file…</label>
+        <input type="file" id="agimportfile" accept=".json,application/json" style="display:none">
+        <span id="agimportname" class="dim" style="font-size:11px"></span>
       </div>
       <div class="fieldnote">A template is another bot's recipe: profile, conventions, skills and paused
         routines. The new bot installs it on its first turn and then asks you for whatever it still needs.
@@ -4587,6 +4589,7 @@ $("agshare").onclick = function () {
 $("agimportfile").onchange = function () {
   var file = this.files && this.files[0];
   if (!file) return;
+  $("agimportname").textContent = file.name;
   file.text().then(function (text) { $("agimport").value = text; });
 };
 
