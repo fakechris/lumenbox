@@ -223,7 +223,9 @@ type OutboundEvent =
   /** One line of docker output while the box is brought up from the page. */
   | { type: "box_setup"; line: string; done?: boolean; ok?: boolean }
   /** An approval was just created; the desktop shell turns this into a notification. */
-  | { type: "approval_pending"; agentId: string; agentName: string; description: string }
+  | { type: "approval_pending"; id: string; agentId: string; agentName: string; description: string }
+  /** An approval was answered, here or in a chat; the card in the thread settles. */
+  | { type: "approval_settled"; id: string; agentId: string; how: "allowed" | "refused"; scope?: string }
   /** An agent asked the person for a secret by name; the page shows a card. */
   | { type: "secret_requested"; agentId: string; agentName: string; id: string; description: string }
   /** An agent handed its desktop to the person; the page shows the instruction and a hand-back. */
@@ -390,12 +392,14 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
   // polling: the desktop shell turns this into a system notification, which is the
   // only way to learn about it while the window is closed.
   const announceApproval = (approval: {
+    id: string;
     agentId: string;
     agentName: string;
     description: string;
   }) => {
     broadcast({
       type: "approval_pending",
+      id: approval.id,
       agentId: approval.agentId,
       agentName: approval.agentName,
       description: approval.description,
@@ -3769,6 +3773,7 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
           const id = String(body.id ?? "");
           const scope =
             body.scope === "session" || body.scope === "always" ? body.scope : "once";
+          const waiting = orchestrator.policy.pending().find(item => item.id === id);
           const answered =
             route === "POST /api/approve"
               ? orchestrator.policy.grant(id, "user", scope)
@@ -3778,6 +3783,19 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
           if (!answered) {
             send(res, 404, { error: "That approval is not waiting for an answer." });
             return;
+          }
+          // The answer reaches the agent as a message, so it goes on by itself. It used to sit
+          // until the person typed something — the strip even said so — which read as the
+          // approval not having worked (docs/41 §4, 2026-09-08).
+          if (waiting !== undefined) {
+            const allowed = route === "POST /api/approve";
+            broadcast({ type: "approval_settled", id, agentId: waiting.agentId, how: allowed ? "allowed" : "refused", ...(allowed ? { scope } : {}) });
+            orchestrator.bus.deliverSystem(
+              waiting.agentId,
+              allowed
+                ? `[The person allowed it${scope === "once" ? " once" : scope === "session" ? " for this session" : ", standing until revoked"}: ${waiting.description}. Go ahead now.]`
+                : `[The person refused it: ${waiting.description}. Do not retry it; do without, or say what cannot be done.]`
+            );
           }
           send(res, 200, { id });
           return;

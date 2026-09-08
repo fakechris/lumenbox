@@ -323,7 +323,10 @@ export const APP_HTML = String.raw`<!doctype html>
 
   /* ── consent, before the conversation: an agent waiting on a person has stopped
         working, and scrolling to find that out is the interface keeping them waiting. */
-  #approvals { flex: none; display: flex; flex-direction: column; gap: 8px; padding: 12px 18px 0; }
+  /* Cards sit in the thread like anything else said (docs/41 §4). */
+  #chat .consent { margin: 10px 0; }
+  #chat .consent.settled { opacity: 0.75; }
+  #chat .consent .settledline { font-size: 12px; color: var(--text-soft); }
   .consent {
     border: 1px solid var(--warn-border); background: var(--warn-soft);
     border-radius: var(--radius-card); padding: 14px 16px;
@@ -772,7 +775,6 @@ export const APP_HTML = String.raw`<!doctype html>
   </div>
   <!-- Ahead of the conversation on purpose. An agent waiting on consent has stopped working, and a
        person who has to scroll to find that out has been kept waiting by the interface. -->
-  <div id="approvals" style="display:none"></div>
   <div id="progress" style="display:none">
     <div id="progresshead"></div>
     <div id="progresslist"></div>
@@ -2912,12 +2914,38 @@ var openAgent = null;     // the agent item still streaming, if any
 var openWork = null;      // the work item still collecting calls, if any
 var openCall = new Map(); // agentId → the call awaiting its result
 var openQuestion = null;  // the question item still waiting for an answer, if any
+var cards = new Map();    // approval / secret / computer cards on screen, by key
 var workingItem = null;   // the "on it" row shown between turn start and the first word
 
 function resetThread() {
-  thread = []; openAgent = null; openWork = null; openCall.clear(); openQuestion = null; workingItem = null;
+  thread = []; openAgent = null; openWork = null; openCall.clear(); openQuestion = null; workingItem = null; cards.clear();
   $("chat").innerHTML = "";
 }
+
+/**
+ * A card the person has to act on: consent, a secret, a computer handed over. Drawn once,
+ * in place, and kept with its outcome — the thread reads as what happened, and nothing is
+ * shown twice. The key is the thing's own id, so the poll and the stream agree on it.
+ */
+function showCard(key, item) {
+  if (cards.has(key)) return cards.get(key);
+  closeOpen();
+  item.kind = "card"; item.key = key; item.state = item.state || "pending";
+  if (!item.at) item.at = new Date().toISOString();
+  cards.set(key, pushItem(item));
+  return cards.get(key);
+}
+
+function settleCard(key, line) {
+  var item = cards.get(key);
+  if (!item || item.state !== "pending") return;
+  item.state = "settled"; item.settled = line; redrawItem(item);
+}
+
+function post(path, body) {
+  return fetch(path, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body) });
+}
+
 
 /** The agent has started and said nothing yet. */
 function showWorking() {
@@ -3032,6 +3060,84 @@ function drawItem(item) {
     var host = det.querySelector(".calls");
     for (var i = 0; i < calls.length; i++) host.appendChild(drawCall(calls[i]));
     return det;
+  }
+  if (item.kind === "card") {
+    div.className = "consent" + (item.state === "settled" ? " settled" : "");
+    if (item.at) div.setAttribute("data-at", String(item.at));
+    var pending = item.state === "pending";
+    var html = "";
+    if (item.card === "consent") {
+      // The exact text the fingerprint was taken over. Not a summary of it: consent is given to
+      // what is read here, so anything shortened would be consent to something else.
+      html = '<div class="chead"><span class="dot"></span>' + (pending ? "Consent needed &mdash; " + esc(nameOf(current)) + " is waiting" : "Consent") + "</div>" +
+        "<code></code>" +
+        (pending
+          ? '<div class="note">Each button says what it covers: this exact action, once, for this session, or until you revoke it in Settings. This agent only — never another agent, never another command.</div>' +
+            '<div class="cactions">' +
+            '<button class="btn sm accent" data-approve="once">Allow once</button>' +
+            '<button class="btn sm" data-approve="session">This session</button>' +
+            '<button class="btn sm" data-approve="always">Always</button>' +
+            '<button class="btn sm ghost" data-deny="1">Refuse</button></div>'
+          : '<div class="settledline"></div>');
+    } else if (item.card === "secret") {
+      html = '<div class="chead"><span class="dot"></span>' + esc(item.agentName) + " needs a secret: <code>" + esc(item.id) + "</code></div>" +
+        '<div class="note"></div>' +
+        (pending
+          ? '<div class="cactions" style="gap:8px;align-items:center">' +
+            '<input type="password" placeholder="paste the value" autocomplete="off" style="flex:1;height:30px;border-radius:6px;border:1px solid var(--border-strong);background:var(--bg);color:var(--text);padding:0 8px">' +
+            '<button class="btn sm accent" data-secret-save="1">Save securely</button>' +
+            '<button class="btn sm ghost" data-secret-dismiss="1">Dismiss</button></div>' +
+            '<div class="note">Stored in this machine\'s vault with a grant to ' + esc(item.agentName) + " only. The agent never sees the value; the box never holds it.</div>"
+          : '<div class="settledline"></div>');
+    } else {
+      html = '<div class="chead"><span class="dot"></span>Computer &mdash; ' + esc(item.agentName) + (pending ? " is waiting for you (" + esc(item.reason) + ")" : " had the desktop handed over") + "</div>" +
+        '<div style="padding:4px 0 8px;font-size:14px" class="instr"></div>' +
+        (pending
+          ? '<div class="cactions">' +
+            (item.desktopPath ? '<a class="btn sm" href="' + esc(item.desktopPath) + '" target="_blank" rel="noopener" style="text-decoration:none">Open computer</a>' : "") +
+            '<button class="btn sm accent" data-handback="1">Hand back</button></div>' +
+            '<div class="note">When you hand it back the agent is woken and looks at the screen first.</div>'
+          : '<div class="settledline"></div>');
+    }
+    div.innerHTML = html;
+    var code = div.querySelector("code"); if (code && item.card === "consent") code.textContent = item.description || "";
+    var note = div.querySelector(".note"); if (note && item.card === "secret") note.textContent = item.description || "";
+    var instr = div.querySelector(".instr"); if (instr) instr.textContent = item.instruction || "";
+    var sl = div.querySelector(".settledline"); if (sl) sl.textContent = item.settled || "settled";
+    div.addEventListener("click", function (event) {
+      var t = event.target; if (!t.getAttribute) return;
+      var scope = t.getAttribute("data-approve");
+      if (scope) {
+        t.disabled = true;
+        post("/api/approve", { id: item.id, scope: scope }).then(function (r) {
+          if (!r.ok) return r.text().then(function (x) { feed("approve failed: " + esc(x), "err"); });
+          settleCard(item.key, "you allowed it" + (scope === "session" ? " for this session" : scope === "always" ? ", standing until revoked" : " once") + " · the agent goes on");
+        });
+        return;
+      }
+      if (t.getAttribute("data-deny")) {
+        t.disabled = true;
+        post("/api/deny", { id: item.id }).then(function () { settleCard(item.key, "you refused it"); });
+        return;
+      }
+      if (t.getAttribute("data-secret-save")) {
+        var field = div.querySelector("input"); var value = field ? field.value : "";
+        if (!value) { field && field.focus(); return; }
+        t.disabled = true;
+        post("/api/secrets/requests/answer", { id: item.id, value: value }).then(function () { if (field) field.value = ""; settleCard(item.key, "saved to the vault"); });
+        return;
+      }
+      if (t.getAttribute("data-secret-dismiss")) {
+        t.disabled = true;
+        post("/api/secrets/requests/dismiss", { id: item.id }).then(function () { settleCard(item.key, "dismissed without saving"); });
+        return;
+      }
+      if (t.getAttribute("data-handback")) {
+        t.disabled = true;
+        post("/api/handover/back", { agent: item.agentId }).then(function () { settleCard(item.key, "handed back · the agent looks at the screen first"); });
+      }
+    });
+    return div;
   }
   if (item.kind === "working") {
     div.className = "working";
@@ -3430,89 +3536,36 @@ function refreshPolicy() {
     fetch("/api/secrets/requests").then(function (r) { return r.json(); }).catch(function () { return { requests: [] }; }),
     fetch("/api/handover").then(function (r) { return r.json(); }).catch(function () { return { pending: [] }; })
   ])
-    .then(function (all) { renderApprovals(all[0].pending || [], all[1].requests || [], all[2].pending || []); })
+    .then(function (all) { reconcileCards(all[0].pending || [], all[1].requests || [], all[2].pending || []); })
     .catch(function () { /* a dropped poll is not worth a message; the next one covers it */ });
 }
 
-/** An agent asked the person for a secret by name: the value goes to the vault, never to the agent. */
-function secretCard(item) {
-  return '<div class="consent">' +
-    '<div class="chead"><span class="dot"></span>' + esc(item.agentName) + ' needs a secret: <code>' + esc(item.id) + "</code></div>" +
-    '<div class="note">' + esc(item.description) + "</div>" +
-    '<div class="cactions" style="gap:8px;align-items:center">' +
-      '<input type="password" data-secret-input="' + esc(item.id) + '" placeholder="paste the value" autocomplete="off" style="flex:1;height:30px;border-radius:6px;border:1px solid var(--border-strong);background:var(--bg);color:var(--text);padding:0 8px">' +
-      '<button class="btn sm accent" data-secret-save="' + esc(item.id) + '">Save securely</button>' +
-      '<button class="btn sm ghost" data-secret-dismiss="' + esc(item.id) + '">Dismiss</button>' +
-    "</div>" +
-    '<div class="note">Stored in this machine\'s vault with a grant to ' + esc(item.agentName) + " only. The agent never sees the value; the box never holds it.</div>" +
-  "</div>";
-}
-
-/** An agent handed its desktop to the person with one instruction. */
-function handoverCard(item) {
-  var open = item.desktopPath
-    ? '<a class="btn sm" href="' + esc(item.desktopPath) + '" target="_blank" rel="noopener" style="text-decoration:none">Open computer</a>'
-    : "";
-  return '<div class="consent">' +
-    '<div class="chead"><span class="dot"></span>Computer &mdash; ' + esc(item.agentName) + " is waiting for you (" + esc(item.reason) + ")</div>" +
-    '<div style="padding:4px 0 8px;font-size:14px">' + esc(item.instruction) + "</div>" +
-    '<div class="cactions">' + open +
-      '<button class="btn sm accent" data-handback="' + esc(item.agentId) + '">Hand back</button>' +
-    "</div>" +
-    '<div class="note">When you hand it back the agent is woken and looks at the screen first.</div>' +
-  "</div>";
-}
-
-function renderApprovals(pending, secretRequests, handovers) {
-  secretRequests = secretRequests || [];
-  handovers = handovers || [];
-  var box = $("approvals");
-  if (!pending.length && !secretRequests.length && !handovers.length) {
-    box.style.display = "none";
-    box.innerHTML = "";
-    return;
-  }
-  box.style.display = "";
-  box.innerHTML = pending.map(function (item) {
-    // The exact text the fingerprint was taken over. Not a summary of it: consent is given to what
-    // is read here, so anything shortened would be consent to something else.
-    return '<div class="consent">' +
-      '<div class="chead"><span class="dot"></span>Consent needed &mdash; the turn is paused until you answer</div>' +
-      "<code>" + esc(item.description) + "</code>" +
-      '<div class="note">Each button says what it covers: this exact action, once, for this session, or until you revoke it in Settings. It covers this agent only — never another agent, never another command.</div>' +
-      '<div class="cactions">' +
-      '<button class="btn sm accent" data-approve="' + esc(item.id) + '" data-scope="once">Allow once</button>' +
-      '<button class="btn sm" data-approve="' + esc(item.id) + '" data-scope="session">This session</button>' +
-      '<button class="btn sm" data-approve="' + esc(item.id) + '" data-scope="always">Always</button>' +
-      '<button class="btn sm ghost" data-deny="' + esc(item.id) + '">Refuse</button>' +
-      "</div></div>";
-  }).join("") + secretRequests.map(secretCard).join("") + handovers.map(handoverCard).join("");
-}
-
-document.getElementById("approvals").addEventListener("click", function (event) {
-  var allow = event.target.getAttribute && event.target.getAttribute("data-approve");
-  var deny = event.target.getAttribute && event.target.getAttribute("data-deny");
-  if (!allow && !deny) return;
-  var scope = (event.target.getAttribute && event.target.getAttribute("data-scope")) || "once";
-  event.target.disabled = true;
-  fetch(allow ? "/api/approve" : "/api/deny", {
-    method: "POST",
-    headers: { "content-type": "application/json" },
-    body: JSON.stringify({ id: allow || deny, scope: scope })
-  }).then(function () {
-    feed(
-      allow
-        ? "you allowed an action" +
-          (scope === "session" ? " for this session" : scope === "always" ? ", standing until revoked" : "")
-        : "you refused an action",
-      "warn"
-    );
-    // The agent does not resume by itself: it was told to stop and ask. Say so, rather than
-    // leaving a person waiting for something that is not coming.
-    if (allow) feed("send the agent a message to have it retry the approved action", "");
-    return refreshPolicy();
+/**
+ * The state is the truth, the stream is the hurry. Anything waiting on the person for the
+ * agent in view becomes a card if it is not one yet (a page opened after the event); a
+ * card whose thing is no longer waiting was answered elsewhere and settles as such.
+ */
+function reconcileCards(pending, secretRequests, handovers) {
+  var alive = {};
+  pending.forEach(function (p) {
+    if (p.agentId !== current) return;
+    alive["consent:" + p.id] = true;
+    showCard("consent:" + p.id, { card: "consent", id: p.id, agentId: p.agentId, description: p.description, at: p.requestedAt });
   });
-});
+  secretRequests.forEach(function (r) {
+    if (r.agentId !== current) return;
+    alive["secret:" + r.id] = true;
+    showCard("secret:" + r.id, { card: "secret", id: r.id, agentId: r.agentId, agentName: r.agentName, description: r.description, at: r.at });
+  });
+  handovers.forEach(function (h) {
+    if (h.agentId !== current) return;
+    alive["computer:" + h.agentId] = true;
+    showCard("computer:" + h.agentId, { card: "computer", agentId: h.agentId, agentName: h.agentName, instruction: h.instruction, reason: h.reason, desktopPath: h.desktopPath, at: h.at });
+  });
+  cards.forEach(function (item, key) {
+    if (item.state === "pending" && !alive[key]) settleCard(key, "answered elsewhere");
+  });
+}
 
 document.getElementById("stop").addEventListener("click", function () {
   if (!current) return;
@@ -4354,6 +4407,23 @@ stream.onmessage = function (raw) {
   if (e.type === "turn_started") {
     busy.add(e.agentId); renderAgents();
     if (inView(e)) showWorking();
+    return;
+  }
+
+  if (e.type === "approval_pending") {
+    if (e.agentId === current) showCard("consent:" + e.id, { card: "consent", id: e.id, agentId: e.agentId, description: e.description });
+    return;
+  }
+  if (e.type === "approval_settled") {
+    settleCard("consent:" + e.id, e.how === "allowed" ? "allowed" + (e.scope === "session" ? " for this session" : e.scope === "always" ? ", standing" : " once") + " · the agent goes on" : "refused");
+    return;
+  }
+  if (e.type === "secret_requested") {
+    if (e.agentId === current) showCard("secret:" + e.id, { card: "secret", id: e.id, agentId: e.agentId, agentName: e.agentName, description: e.description });
+    return;
+  }
+  if (e.type === "handover_pending") {
+    if (e.agentId === current) showCard("computer:" + e.agentId, { card: "computer", agentId: e.agentId, agentName: e.agentName, instruction: e.instruction, reason: e.reason, desktopPath: agentById(e.agentId) && agentById(e.agentId).desktopUrl });
     return;
   }
 
