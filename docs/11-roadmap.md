@@ -1538,6 +1538,13 @@ assignee; a new agent gets its first message from its creator. The wake cue says
 what you write is the reply, silence is no reply. Rule: whenever a tool result says something
 happened to another agent, that agent must hear it in the same call.
 
+**Questions are cards, and the new agent asks its own (2026-09-08).** AskUser's options now
+reach the page as buttons (A/B/C plus a free line), kept in place with the answer; an AskUser
+call is drawn again on reload from the transcript. The turn shows "X is on it" between start
+and first word. CreateAgent says: create from what you know, the new agent's preferences are
+its own questions in its own chat — dr eggbot had interviewed Chris through five questions for
+an agent that did not exist yet, and every answer landed in the wrong memory.
+
 **Feeding the multiuser branch, not this line:** the three-layer identity model (observed
 identity, revocable binding, per-box allow/deny), fail-closed row-level security for a
 future control-plane database, and the personal-box contract (data in the snapshot layer,

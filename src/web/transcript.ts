@@ -13,6 +13,7 @@
  */
 
 import { parseWakePrompt, type WakeMessage } from "../host/prompt.ts";
+import { optionLabel } from "../host/ask-options.ts";
 
 export interface DisplayTool {
   name: string;
@@ -21,7 +22,21 @@ export interface DisplayTool {
   /** Filled in from the matching tool_result, so a call and its outcome stay together. */
   result?: string;
   isError?: boolean;
+  /** For AskUser: the question and its answers, so the page can draw the card again on reload. */
+  question?: { question: string; options?: string[] };
 }
+
+/** The question an AskUser call carried, in the shape the page draws. */
+export function questionOf(input: unknown): { question: string; options?: string[] } | undefined {
+  const args = (input ?? {}) as { question?: unknown; options?: unknown };
+  const question = typeof args.question === "string" ? args.question.trim() : "";
+  if (question === "") return undefined;
+  const options = Array.isArray(args.options)
+    ? args.options.map(optionLabel).filter((option): option is string => option !== undefined)
+    : [];
+  return options.length > 0 ? { question, options } : { question };
+}
+
 
 /** The entry's own time, when the transcript kept one. */
 function stamp(raw: unknown): { at?: string } {
@@ -115,6 +130,9 @@ export function toDisplayEntries(
       const tools: DisplayTool[] = calls.map(block => ({
         name: String(block.name ?? "tool"),
         detail: toolDetail(String(block.name ?? ""), block.input, roster),
+        ...(block.name === "AskUser" && questionOf(block.input) !== undefined
+          ? { question: questionOf(block.input)! }
+          : {}),
       }));
       if (tools.length > 0) {
         const entryWithTools = { kind: "tools" as const, tools };
