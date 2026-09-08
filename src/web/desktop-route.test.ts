@@ -11,7 +11,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { NOVNC_BASE_PORT, NOVNC_VIEW_ONLY_BASE_PORT } from "../protocol/index.ts";
 import { DisplayManager } from "../boxd/displays.ts";
-import { desktopUpstreamPath } from "./server.ts";
+import { desktopUpstreamPath, desktopWaitingPage } from "./server.ts";
 
 test("someone who may only watch is joined to the view-only stack", () => {
   assert.equal(desktopUpstreamPath("/desktop/1/websockify", "", true), "/vnc/1/websockify");
@@ -43,3 +43,15 @@ test("the two stacks cannot land on the same port for any desktop", () => {
   assert.ok(NOVNC_VIEW_ONLY_BASE_PORT > NOVNC_BASE_PORT + 32);
 });
 
+
+test("a desktop that is not up yet is shown as a page, never as JSON", () => {
+  // Before the display exists boxd answers the page request with a JSON error. Passed
+  // through, Chromium rendered it in its JSON viewer — a white box with a "Pretty-print"
+  // checkbox — and the frame's src never changed, so the pane stayed that way.
+  const page = desktopWaitingPage('Desktop 3 is not running. Ensure it first. <script>');
+  assert.match(page, /^<!doctype html>/);
+  assert.match(page, /http-equiv="refresh" content="2"/);
+  assert.match(page, /Desktop 3 is not running/);
+  assert.doesNotMatch(page, /<script>/);
+  assert.match(page, /background:#000/);
+});
