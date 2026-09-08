@@ -23,6 +23,12 @@ export interface DisplayTool {
   isError?: boolean;
 }
 
+/** The entry's own time, when the transcript kept one. */
+function stamp(raw: unknown): { at?: string } {
+  const at = (raw as { at?: unknown }).at;
+  return typeof at === "string" && at !== "" ? { at } : {};
+}
+
 export type DisplayEntry =
   | {
       kind: "text";
@@ -35,6 +41,8 @@ export type DisplayEntry =
        * live stream draws when a `tool_start` follows an open message.
        */
       aside?: true;
+      /** When it was said, from the transcript; absent on entries written before it was kept. */
+      at?: string;
     }
   /** A turn a teammate started: the messages, without the scaffolding around them. */
   | { kind: "peer"; messages: WakeMessage[] }
@@ -101,7 +109,7 @@ export function toDisplayEntries(
         .map(block => String(block.text ?? ""))
         .join("")
         .trim();
-      if (text) display.push({ kind: "text", role: "assistant", text, aside: true });
+      if (text) display.push({ kind: "text", role: "assistant", text, aside: true, ...stamp(raw) });
 
       const calls = blocks.filter(block => block.type === "tool_use");
       const tools: DisplayTool[] = calls.map(block => ({
@@ -139,11 +147,11 @@ export function toDisplayEntries(
     if (entry.role === "user") {
       const peers = parseWakePrompt(text, knownNames);
       if (peers) display.push({ kind: "peer", messages: peers });
-      else display.push({ kind: "text", role: "user", text });
+      else display.push({ kind: "text", role: "user", text, ...stamp(raw) });
       continue;
     }
 
-    display.push({ kind: "text", role: "assistant", text });
+    display.push({ kind: "text", role: "assistant", text, ...stamp(raw) });
   }
 
   return display;
