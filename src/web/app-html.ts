@@ -41,133 +41,6 @@ export const APP_HTML = String.raw`<!doctype html>
   }
   document.documentElement.setAttribute("data-theme", theme);
 })();
-// ── the shelf and the Set up card (docs/39 §2, §4) ───────────────────────────────────
-function shelfCard(head, sub, action, dataAttr) {
-  return '<div style="display:flex;gap:10px;align-items:center;padding:8px 4px;border-bottom:1px solid var(--border)">' +
-    '<div style="flex:1;min-width:0"><div style="font-size:13px;font-weight:500">' + head + "</div>" +
-    '<div class="dim" style="font-size:11px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">' + sub + "</div></div>" +
-    '<button class="btn sm accent" ' + dataAttr + '>' + action + "</button></div>";
-}
-
-function openShelf() {
-  $("shelfwrap").style.display = "";
-  $("shelfstatus").textContent = "";
-  $("shelfbody").innerHTML = '<div class="dim">Loading…</div>';
-  fetch("/api/templates/shelf").then(function (r) { return r.json(); }).then(function (d) {
-    var boxes = d.boxes || [];
-    $("shelfbox").innerHTML = boxes.map(function (b) {
-      return '<option value="' + esc(b.id) + '"' + (b.id === currentBox ? " selected" : "") + ">" + esc(b.name) + (b.kind === "docker" ? " (docker)" : " (attached)") + "</option>";
-    }).join("");
-    var html = "";
-    var mine = d.mine || [];
-    html += '<div class="eyebrow" style="margin:6px 0">Mine</div>';
-    html += mine.length ? mine.map(function (t) {
-      return shelfCard(esc(t.name) + ' <span class="dim">v' + esc(String(t.version)) + " · from " + esc(t.agentName) + "</span>",
-        esc(t.description || t.counts || "") + (t.stamped ? " · stamped " + t.stamped + "×" : ""),
-        "Stamp", 'data-stamp-agent="' + esc(t.agentId) + '" data-stamp-version="' + esc(String(t.version)) + '" data-stamp-name="' + esc(t.name) + '"');
-    }).join("") : '<div class="dim" style="font-size:12px;padding:4px">None yet — open an agent\'s Configure and press “Ask it to draft a template”.</div>';
-    var imported = d.imported || [];
-    if (imported.length) {
-      html += '<div class="eyebrow" style="margin:10px 0 6px">Stamped here from elsewhere</div>';
-      html += imported.map(function (a) {
-        return '<div class="dim" style="font-size:12px;padding:3px 4px">' + esc(a.agentName) + " — from “" + esc(a.from.name || "") + "”" + (a.from.createdBy ? " by " + esc(a.from.createdBy) : "") + "</div>";
-      }).join("");
-    }
-    html += '<div class="eyebrow" style="margin:10px 0 6px">Catalog</div>';
-    html += (d.catalog || []).map(function (c) {
-      return shelfCard(esc(c.name) + (c.title ? ' <span class="dim">' + esc(c.title) + "</span>" : "") + (c.kind === "crew" ? ' <span class="chip">crew of ' + c.members.length + "</span>" : ""),
-        esc(c.summary || ""), "Stamp", 'data-stamp-catalog="' + esc(c.slug) + '" data-stamp-name="' + esc(c.name) + '"');
-    }).join("");
-    $("shelfbody").innerHTML = html;
-  }).catch(function (e) { $("shelfbody").innerHTML = '<div class="dim">Could not read the shelf: ' + esc(String(e.message || e)) + "</div>"; });
-}
-
-$("shelfopen").onclick = function (e) { e.preventDefault(); openShelf(); };
-$("shelfclose").onclick = function () { $("shelfwrap").style.display = "none"; };
-$("shelfpaste").onclick = function () { $("shelfwrap").style.display = "none"; openAgentModal("new", null); };
-$("shelfbody").onclick = function (event) {
-  var btn = event.target.closest("button[data-stamp-catalog],button[data-stamp-agent]");
-  if (!btn) return;
-  var boxId = $("shelfbox").value;
-  var defaultName = btn.getAttribute("data-stamp-name") || "";
-  // No window.prompt: the desktop shell does not implement it (the click did nothing).
-  // The name is asked inline, on the card, and confirmed with a second press.
-  if (!btn.getAttribute("data-armed")) {
-    var holder = btn.parentNode;
-    var input = document.createElement("input");
-    input.type = "text"; input.value = defaultName; input.placeholder = "name";
-    input.setAttribute("data-stamp-input", "1");
-    input.style.cssText = "height:26px;border-radius:6px;border:1px solid var(--border-strong);background:var(--bg);color:var(--text);padding:0 6px;width:120px;margin-right:6px";
-    holder.insertBefore(input, btn);
-    btn.textContent = "Create";
-    btn.setAttribute("data-armed", "1");
-    input.focus();
-    return;
-  }
-  var nameField = btn.parentNode.querySelector("input[data-stamp-input]");
-  var name = nameField ? nameField.value.trim() : defaultName;
-  var body = { boxId: boxId, name: name || undefined };
-  if (btn.getAttribute("data-stamp-catalog")) body.catalogSlug = btn.getAttribute("data-stamp-catalog");
-  else { body.agentId = btn.getAttribute("data-stamp-agent"); body.version = Number(btn.getAttribute("data-stamp-version")); }
-  $("shelfstatus").textContent = "Stamping…";
-  btn.disabled = true;
-  fetch("/api/templates/stamp", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body) })
-    .then(function (r) { return r.json().then(function (d) { if (!r.ok) throw new Error(d.error || "stamp failed"); return d; }); })
-    .then(function (d) {
-      $("shelfwrap").style.display = "none";
-      var made = (d.created || []).map(function (c) { return c.name; }).join(", ");
-      feed("stamped " + esc(made) + " — it installs its recipe on its first turn", "");
-      return refresh().then(function () { if (d.created && d.created[0]) select(d.created[0].id); });
-    })
-    .catch(function (err) { $("shelfstatus").textContent = String(err.message || err); btn.disabled = false; });
-};
-
-/** Four steps, shown until all four are done; each names the object it introduces. */
-var guideForced = false;
-function refreshSetup() {
-  return fetch("/api/setup").then(function (r) { return r.json(); }).then(function (s) {
-    var card = $("setupcard");
-    if (!card) return;
-    var steps = [
-      { done: s.box, head: "A computer for the agents", sub: "A box is a computer: desktop, files, shell, engines. Create the Docker box, or attach one.", act: "Set up a box", go: function () { openSettings("boxes"); } },
-      { done: s.agentTurn, head: "Your first agent", sub: "An agent lives in one box. Stamp one from the shelf — 设计 (Team designer) builds a team for you.", act: "Open templates", go: openShelf },
-      { done: s.door, head: "A door (optional)", sub: "Feishu, DingTalk or Telegram reach this box; this page is a door too.", act: "Connect a door", go: function () { openSettings("doors"); } },
-      { done: s.review, head: "First work", sub: "Say it in chat or add a task; it is done when it reaches review.", act: "Open tasks", go: function () { var t = $("tabtasks"); if (t) t.click(); } }
-    ];
-    if (steps.every(function (x) { return x.done; }) && !guideForced) { card.style.display = "none"; return; }
-    card.style.display = "";
-    card.innerHTML = '<div style="margin:10px 16px 0;padding:10px 14px;border:1px solid var(--border-strong);border-radius:var(--radius-card);background:var(--surface)">' +
-      '<div class="eyebrow" style="margin-bottom:6px;display:flex;justify-content:space-between"><span>Set up</span><a href="#" data-setup-close="1" style="text-transform:none;letter-spacing:0">close</a></div>' +
-      steps.map(function (x, i) {
-        return '<div style="display:flex;gap:10px;align-items:center;padding:4px 0;font-size:12px">' +
-          '<span style="width:16px;color:' + (x.done ? "var(--ok, #3fb950)" : "var(--muted)") + '">' + (x.done ? "✓" : String(i + 1)) + "</span>" +
-          '<div style="flex:1"><b>' + esc(x.head) + "</b> <span class=\"dim\">" + esc(x.sub) + "</span></div>" +
-          '<button class="btn sm' + (x.done ? " ghost" : "") + '" data-setup="' + i + '">' + esc(x.act) + "</button>" +
-        "</div>";
-      }).join("") + "</div>";
-    card.onclick = function (event) {
-      var b = event.target.closest("button[data-setup]");
-      if (b) { event.preventDefault(); steps[Number(b.getAttribute("data-setup"))].go(); return; }
-      if (event.target.closest("a[data-setup-close]")) { event.preventDefault(); guideForced = false; card.style.display = "none"; }
-    };
-  }).catch(function () {});
-}
-refreshSetup();
-setInterval(refreshSetup, 30000);
-$("guidebtn").onclick = function () { guideForced = true; refreshSetup(); };
-
-$("agentdel").onclick = function (event) {
-  event.preventDefault();
-  var agent = agentById(current);
-  if (!agent) return;
-  openAgentModal("edit", agent);
-  // Straight to the last field, with the two-step delete already open.
-  $("agdel1").style.display = "none";
-  $("agdel2").style.display = "flex";
-  var danger = $("agdanger");
-  if (danger) setTimeout(function () { danger.scrollIntoView({ block: "end" }); }, 30);
-};
-
 </script>
 <style>
   /* ── Lumen tokens ─────────────────────────────────────────────────────────── */
@@ -1182,6 +1055,7 @@ $("agentdel").onclick = function (event) {
     <div class="field" id="agcatalogwrap">
       <label>From catalog</label>
       <div id="agcatalog" class="toolchips"></div>
+      <div id="agcatalogpreview" style="display:none;margin-top:8px;padding:10px 12px;border:1px solid var(--border-strong);border-radius:var(--radius-md);background:var(--bg);font-size:12px"></div>
       <div class="fieldnote">Specialists and crews that ship with the install. A specialist fills
         this form; a crew adds its members in one step. Not seeded — adding is a choice.</div>
     </div>
@@ -4392,18 +4266,25 @@ $("agcatalog").onclick = function (event) {
     var crew = null;
     for (var c = 0; c < (agentCatalog.crews || []).length; c++) if (agentCatalog.crews[c].slug === slug) crew = agentCatalog.crews[c];
     var members = crew ? (crew.members || []).map(function (m) {
+      var slugOf = typeof m === "string" ? m : (m && m.slug) || "";
       var e = null;
-      for (var q = 0; q < agentCatalog.experts.length; q++) if (agentCatalog.experts[q].slug === m) e = agentCatalog.experts[q];
-      return e ? e.name + "（" + e.title + "）— " + e.summary : m;
+      for (var q = 0; q < agentCatalog.experts.length; q++) if (agentCatalog.experts[q].slug === slugOf) e = agentCatalog.experts[q];
+      if (e) return e.name + "（" + e.title + "）— " + e.summary;
+      return typeof m === "string" ? m : ((m && m.name) || slugOf) + (m && m.title ? "（" + m.title + "）" : "");
     }) : [];
     var boxSel = $("agbox");
     var boxName = boxSel && boxSel.options[boxSel.selectedIndex] ? boxSel.options[boxSel.selectedIndex].textContent : "this box";
-    $("agstatus").innerHTML = '<div><b>' + esc(crew ? crew.name : slug) + "</b> — " + esc(crew ? crew.summary : "") + "</div>" +
+    // Right under the chips, where the eye is — not at the far bottom of the dialog.
+    var preview = $("agcatalogpreview");
+    preview.style.display = "";
+    preview.innerHTML = '<div><b>' + esc(crew ? crew.name : slug) + "</b> — " + esc(crew ? crew.summary : "") + "</div>" +
       '<ul style="margin:6px 0 8px 16px;padding:0">' + members.map(function (m) { return "<li>" + esc(m) + "</li>"; }).join("") + "</ul>" +
-      '<button class="btn sm accent" id="agcrewgo" type="button">Create these ' + members.length + " in " + esc(boxName) + "</button>";
+      '<button class="btn sm accent" id="agcrewgo" type="button">Create these ' + members.length + " in " + esc(boxName) + "</button>" +
+      ' <button class="btn sm ghost" id="agcrewno" type="button">Not now</button>';
+    $("agcrewno").onclick = function () { preview.style.display = "none"; preview.innerHTML = ""; };
     $("agcrewgo").onclick = function () {
       $("agcrewgo").disabled = true;
-      $("agstatus").textContent = "Adding " + (crew ? crew.name : slug) + "…";
+      preview.innerHTML = "Adding " + esc(crew ? crew.name : slug) + "…";
       $("agsave").disabled = true;
       installCrew(slug, boxSel ? boxSel.value : undefined);
     };
@@ -4628,6 +4509,8 @@ $("agimportgo").onclick = function () {
 };
 
 function openAgentModal(mode, agent) {
+  var preview0 = document.getElementById("agcatalogpreview");
+  if (preview0) { preview0.style.display = "none"; preview0.innerHTML = ""; }
   agentModal.mode = mode;
   agentModal.id = agent ? agent.id : null;
   $("agenttitle").textContent = mode === "new" ? "New agent" : "Configure " + agent.name;
@@ -4871,6 +4754,132 @@ setInterval(refresh, 15000);
 // A chat card's "open in the workshop" link lands here: the board, with that task
 // already open. Done after the first refresh so the roster is there to name people.
 if (openTask) showTab("tasks");
+// ── the shelf and the Set up card (docs/39 §2, §4) ───────────────────────────────────
+function shelfCard(head, sub, action, dataAttr) {
+  return '<div style="display:flex;gap:10px;align-items:center;padding:8px 4px;border-bottom:1px solid var(--border)">' +
+    '<div style="flex:1;min-width:0"><div style="font-size:13px;font-weight:500">' + head + "</div>" +
+    '<div class="dim" style="font-size:11px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">' + sub + "</div></div>" +
+    '<button class="btn sm accent" ' + dataAttr + '>' + action + "</button></div>";
+}
+
+function openShelf() {
+  $("shelfwrap").style.display = "";
+  $("shelfstatus").textContent = "";
+  $("shelfbody").innerHTML = '<div class="dim">Loading…</div>';
+  fetch("/api/templates/shelf").then(function (r) { return r.json(); }).then(function (d) {
+    var boxes = d.boxes || [];
+    $("shelfbox").innerHTML = boxes.map(function (b) {
+      return '<option value="' + esc(b.id) + '"' + (b.id === currentBox ? " selected" : "") + ">" + esc(b.name) + (b.kind === "docker" ? " (docker)" : " (attached)") + "</option>";
+    }).join("");
+    var html = "";
+    var mine = d.mine || [];
+    html += '<div class="eyebrow" style="margin:6px 0">Mine</div>';
+    html += mine.length ? mine.map(function (t) {
+      return shelfCard(esc(t.name) + ' <span class="dim">v' + esc(String(t.version)) + " · from " + esc(t.agentName) + "</span>",
+        esc(t.description || t.counts || "") + (t.stamped ? " · stamped " + t.stamped + "×" : ""),
+        "Stamp", 'data-stamp-agent="' + esc(t.agentId) + '" data-stamp-version="' + esc(String(t.version)) + '" data-stamp-name="' + esc(t.name) + '"');
+    }).join("") : '<div class="dim" style="font-size:12px;padding:4px">None yet — open an agent\'s Configure and press “Ask it to draft a template”.</div>';
+    var imported = d.imported || [];
+    if (imported.length) {
+      html += '<div class="eyebrow" style="margin:10px 0 6px">Stamped here from elsewhere</div>';
+      html += imported.map(function (a) {
+        return '<div class="dim" style="font-size:12px;padding:3px 4px">' + esc(a.agentName) + " — from “" + esc(a.from.name || "") + "”" + (a.from.createdBy ? " by " + esc(a.from.createdBy) : "") + "</div>";
+      }).join("");
+    }
+    html += '<div class="eyebrow" style="margin:10px 0 6px">Catalog</div>';
+    html += (d.catalog || []).map(function (c) {
+      return shelfCard(esc(c.name) + (c.title ? ' <span class="dim">' + esc(c.title) + "</span>" : "") + (c.kind === "crew" ? ' <span class="chip">crew of ' + c.members.length + "</span>" : ""),
+        esc(c.summary || ""), "Stamp", 'data-stamp-catalog="' + esc(c.slug) + '" data-stamp-name="' + esc(c.name) + '"');
+    }).join("");
+    $("shelfbody").innerHTML = html;
+  }).catch(function (e) { $("shelfbody").innerHTML = '<div class="dim">Could not read the shelf: ' + esc(String(e.message || e)) + "</div>"; });
+}
+
+$("shelfopen").onclick = function (e) { e.preventDefault(); openShelf(); };
+$("shelfclose").onclick = function () { $("shelfwrap").style.display = "none"; };
+$("shelfpaste").onclick = function () { $("shelfwrap").style.display = "none"; openAgentModal("new", null); };
+$("shelfbody").onclick = function (event) {
+  var btn = event.target.closest("button[data-stamp-catalog],button[data-stamp-agent]");
+  if (!btn) return;
+  var boxId = $("shelfbox").value;
+  var defaultName = btn.getAttribute("data-stamp-name") || "";
+  // No window.prompt: the desktop shell does not implement it (the click did nothing).
+  // The name is asked inline, on the card, and confirmed with a second press.
+  if (!btn.getAttribute("data-armed")) {
+    var holder = btn.parentNode;
+    var input = document.createElement("input");
+    input.type = "text"; input.value = defaultName; input.placeholder = "name";
+    input.setAttribute("data-stamp-input", "1");
+    input.style.cssText = "height:26px;border-radius:6px;border:1px solid var(--border-strong);background:var(--bg);color:var(--text);padding:0 6px;width:120px;margin-right:6px";
+    holder.insertBefore(input, btn);
+    btn.textContent = "Create";
+    btn.setAttribute("data-armed", "1");
+    input.focus();
+    return;
+  }
+  var nameField = btn.parentNode.querySelector("input[data-stamp-input]");
+  var name = nameField ? nameField.value.trim() : defaultName;
+  var body = { boxId: boxId, name: name || undefined };
+  if (btn.getAttribute("data-stamp-catalog")) body.catalogSlug = btn.getAttribute("data-stamp-catalog");
+  else { body.agentId = btn.getAttribute("data-stamp-agent"); body.version = Number(btn.getAttribute("data-stamp-version")); }
+  $("shelfstatus").textContent = "Stamping…";
+  btn.disabled = true;
+  fetch("/api/templates/stamp", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body) })
+    .then(function (r) { return r.json().then(function (d) { if (!r.ok) throw new Error(d.error || "stamp failed"); return d; }); })
+    .then(function (d) {
+      $("shelfwrap").style.display = "none";
+      var made = (d.created || []).map(function (c) { return c.name; }).join(", ");
+      feed("stamped " + esc(made) + " — it installs its recipe on its first turn", "");
+      return refresh().then(function () { if (d.created && d.created[0]) select(d.created[0].id); });
+    })
+    .catch(function (err) { $("shelfstatus").textContent = String(err.message || err); btn.disabled = false; });
+};
+
+/** Four steps, shown until all four are done; each names the object it introduces. */
+var guideForced = false;
+function refreshSetup() {
+  return fetch("/api/setup").then(function (r) { return r.json(); }).then(function (s) {
+    var card = $("setupcard");
+    if (!card) return;
+    var steps = [
+      { done: s.box, head: "A computer for the agents", sub: "A box is a computer: desktop, files, shell, engines. Create the Docker box, or attach one.", act: "Set up a box", go: function () { openSettings("boxes"); } },
+      { done: s.agentTurn, head: "Your first agent", sub: "An agent lives in one box. Stamp one from the shelf — 设计 (Team designer) builds a team for you.", act: "Open templates", go: openShelf },
+      { done: s.door, head: "A door (optional)", sub: "Feishu, DingTalk or Telegram reach this box; this page is a door too.", act: "Connect a door", go: function () { openSettings("doors"); } },
+      { done: s.review, head: "First work", sub: "Say it in chat or add a task; it is done when it reaches review.", act: "Open tasks", go: function () { var t = $("tabtasks"); if (t) t.click(); } }
+    ];
+    if (steps.every(function (x) { return x.done; }) && !guideForced) { card.style.display = "none"; return; }
+    card.style.display = "";
+    card.innerHTML = '<div style="margin:10px 16px 0;padding:10px 14px;border:1px solid var(--border-strong);border-radius:var(--radius-card);background:var(--surface)">' +
+      '<div class="eyebrow" style="margin-bottom:6px;display:flex;justify-content:space-between"><span>Set up</span><a href="#" data-setup-close="1" style="text-transform:none;letter-spacing:0">close</a></div>' +
+      steps.map(function (x, i) {
+        return '<div style="display:flex;gap:10px;align-items:center;padding:4px 0;font-size:12px">' +
+          '<span style="width:16px;color:' + (x.done ? "var(--ok, #3fb950)" : "var(--muted)") + '">' + (x.done ? "✓" : String(i + 1)) + "</span>" +
+          '<div style="flex:1"><b>' + esc(x.head) + "</b> <span class=\"dim\">" + esc(x.sub) + "</span></div>" +
+          '<button class="btn sm' + (x.done ? " ghost" : "") + '" data-setup="' + i + '">' + esc(x.act) + "</button>" +
+        "</div>";
+      }).join("") + "</div>";
+    card.onclick = function (event) {
+      var b = event.target.closest("button[data-setup]");
+      if (b) { event.preventDefault(); steps[Number(b.getAttribute("data-setup"))].go(); return; }
+      if (event.target.closest("a[data-setup-close]")) { event.preventDefault(); guideForced = false; card.style.display = "none"; }
+    };
+  }).catch(function () {});
+}
+refreshSetup();
+setInterval(refreshSetup, 30000);
+$("guidebtn").onclick = function () { guideForced = true; refreshSetup(); };
+
+$("agentdel").onclick = function (event) {
+  event.preventDefault();
+  var agent = agentById(current);
+  if (!agent) return;
+  openAgentModal("edit", agent);
+  // Straight to the last field, with the two-step delete already open.
+  $("agdel1").style.display = "none";
+  $("agdel2").style.display = "flex";
+  var danger = $("agdanger");
+  if (danger) setTimeout(function () { danger.scrollIntoView({ block: "end" }); }, 30);
+};
 </script>
 </body>
 </html>`;
