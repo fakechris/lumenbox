@@ -3121,3 +3121,62 @@ test("assigning a task tells the assignee, and creating an agent greets it", asy
     cleanup();
   }
 });
+
+// ── docs/42: one front, invisible workers ─────────────────────────────────────────────────
+
+test("a turn opened by a teammate is offered no tool that reaches the person", async () => {
+  const { registry, cleanup } = fixture();
+  try {
+    const ada = registry.create({ name: "Ada" });
+    const bob = registry.create({ name: "Bob" });
+    const bus = new AgentBus(registry, async () => {});
+    const capture: Capture = { params: [] };
+    const { client } = stubClient([message([textBlock("noted")])], capture);
+    await runTurn(ada, [peerMessage(bob, "what colour?", true)], new AbortController().signal, {
+      client, registry, bus, box: undefined, resolution: undefined, askUser: async () => "in the app",
+    });
+    const offered = (capture.params[0]!.tools ?? []).map(tool => tool.name);
+    assert.ok(!offered.includes("AskUser"), "AskUser withheld on a peer-opened turn");
+    assert.ok(!offered.includes("AskSecret"));
+    const system = String(capture.params[0]!.system ?? "");
+    assert.ok(system.length > 0);
+
+    // The person opened it: the tool is there.
+    const second = stubClient([message([textBlock("ok")])], { params: [] });
+    await runTurn(ada, [{ id: "m-u", fromId: "user", fromName: "user", text: "hi", priority: false, receivedAt: "" }], new AbortController().signal, {
+      client: second.client, registry, bus, box: undefined, resolution: undefined, askUser: async () => "in the app",
+    });
+  } finally {
+    cleanup();
+  }
+});
+
+test("a background fork returns at once and its findings arrive in the parent as a message", async () => {
+  const { registry, cleanup } = fixture();
+  try {
+    const ada = registry.create({ name: "Ada" });
+    const woken: string[] = [];
+    // The stub answers every conversation: the parent forks, the child says its piece.
+    const client = fakeModel(({ params }) => {
+      const system = typeof params.system === "string" ? params.system : (params.system ?? []).map(b => ("text" in b ? b.text : "")).join("\n");
+      if (/You are a fork/.test(system)) return message([textBlock("Found 3 files.\nHANDOFF: {\"status\":\"done\"}")]);
+      assert.match(system, /Your turns stay short/, "the front section is on the parent");
+      if (params.messages.length === 1) {
+        return message([toolUseBlock("Fork", { briefs: ["count files"], background: true })], "tool_use");
+      }
+      return message([textBlock("On it.")]);
+    });
+    const bus = new AgentBus(registry, async (agent, inbound, signal, conversation) => {
+      for (const m of inbound) woken.push(`${conversation}:${m.fromId}:${m.text.slice(0, 40)}`);
+      await runTurn(agent, inbound, signal, { client, registry, bus, box: undefined, resolution: undefined, conversation });
+    });
+    bus.sendFromUser(ada.id, "how many files?");
+    await bus.wake(ada.id);
+    await bus.idle();
+    // The child ran in its fork conversation, and its findings came back to main as a system message.
+    assert.ok(woken.some(line => /^fork\//.test(line)), `fork ran: ${woken.join(" | ")}`);
+    assert.ok(woken.some(line => /^main:system:.*A fork you started has finished/.test(line)), `reported: ${woken.join(" | ")}`);
+  } finally {
+    cleanup();
+  }
+});
