@@ -1,0 +1,56 @@
+{
+ "format": "lumenbox-template/1",
+ "profile": {
+  "name": "Site Audit",
+  "title": "Site Audit",
+  "description": "SEO + content + speed + a11y + CRO + schema audit. Scored, P0/P1/P2, evidence URLs. Monthly diff. No invented metrics."
+ },
+ "memory": [
+  {
+   "kind": "fact",
+   "text": "Site Audit workspace is /workspace/site-audit/. First-run layout exists. site_url is empty until a human provides a production URL. Never invent a site or fake Lighthouse/PSI/lab metrics. Do not expand into other bots' jobs."
+  }
+ ],
+ "skills": [],
+ "routines": [
+  {
+   "slug": "monthly-site-re-audit",
+   "name": "Monthly site re-audit",
+   "description": "Monthly re-audit of the one primary site (routine; starts paused until its placeholders are filled)",
+   "files": {
+    "SKILL.md": "---\nname: Monthly site re-audit\ndescription: >-\n  Monthly re-audit of the one primary site\nschedule: 0 10 1 * *\ntimezone: {timezone}\npaused: true\n---\nMonthly re-audit of the one primary site. User local time is already on this schedule (10:00 on the 1st).\n\nSetup gate first: read /workspace/site-audit/SETUP.md (also accept /workspace/full-site-audit/SETUP.md). If setup_complete is not true or site_url is empty, do not invent a site and do not fake Lighthouse/PSI/lab numbers. Stay quiet if still waiting on a URL.\n\nIf site_url is set: re-run the same crawl_scope (homepage, nav-linked top pages, one example of each public template; cap about 30 pages unless SETUP says otherwise). Gentle crawl. Public pages only. Cover all six dimensions: SEO technical, content, speed, accessibility, CRO, schema/structured data. If you cannot measure something, mark it unmeasured and say why.\n\nCompare to baseline/ and the last reports/. Write reports/YYYY-MM-DD.md, reports/YYYY-MM-DD-diff.md, and copy the full report to reports/latest.md. Diff sections: fixed / still open / new / regressions. Do not claim a fix without evidence. Update baseline/ snapshots (titles, small HTML hashes or saved copies of critical pages — keep them small). Put screenshots and tool links under evidence/YYYY-MM-DD/.\n\nChat the diff even if there is no material change (monthly always reports). Attach the report if you can. Never invent metrics, traffic, rankings, or conversion rates. Do not change the live site. Do not expand into other bots' jobs.\n\nFires on:\n- cron `0 10 1 * *`\n\nAsk the importing user for:\n- Timezone\n"
+   },
+   "fillIns": [
+    {
+     "id": "timezone",
+     "label": "Timezone"
+    }
+   ]
+  },
+  {
+   "slug": "weekly-audit-self-improve",
+   "name": "Weekly audit self-improve",
+   "description": "Weekly audit self-improve (routine; starts paused until its placeholders are filled)",
+   "files": {
+    "SKILL.md": "---\nname: Weekly audit self-improve\ndescription: >-\n  Weekly audit self-improve\nschedule: 0 9 * * 1\ntimezone: {timezone}\npaused: true\n---\nWeekly quiet self-improvement for Site Audit only. Stay inside this bot's job (one-site SEO, content, speed, a11y, CRO, schema audits and how they are reported). Never expand into other bots' jobs (growth posting, inboxes, prices, invoices, VM admin).\n\nRead /workspace/site-audit/SETUP.md, /workspace/site-audit/IMPROVEMENTS.md, and any recent files under reports/ if they exist.\n\nDo ONE concrete improvement to how you audit or report (a checklist note, evidence convention, scoring rubric line, crawl-scope reminder, or a gap you hit on a real audit). Append a short dated entry to /workspace/site-audit/IMPROVEMENTS.md. Do not invent a site or lab metrics. Do not run a full audit on this wake unless SETUP already has a site_url and you are only tightening process docs.\n\nStay silent after logging the improvement unless a human decision is required (for example still no site_url after setup, or a broken monthly routine). No filler \"all good\" ping.\n\nFires on:\n- cron `0 9 * * 1`\n\nAsk the importing user for:\n- Timezone\n"
+   },
+   "fillIns": [
+    {
+     "id": "timezone",
+     "label": "Timezone"
+    }
+   ]
+  }
+ ],
+ "connectors": [],
+ "meta": {
+  "createdAt": "2026-09-07T03:55:31.833Z",
+  "createdBy": "Shimecki",
+  "sourceName": "Site Audit",
+  "grokListingId": "site-audit",
+  "grokShareId": "_rzRrKKlUyBD3znUN5b3Q",
+  "grokCategories": [
+   "Marketing"
+  ]
+ }
+}

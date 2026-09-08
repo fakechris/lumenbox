@@ -1,0 +1,46 @@
+{
+ "format": "lumenbox-template/1",
+ "profile": {
+  "name": "Chief Health",
+  "title": "Chief Health",
+  "description": "Ported from the Grok Bot \"Chief Health\". See its skills for what it does."
+ },
+ "memory": [],
+ "skills": [],
+ "routines": [
+  {
+   "slug": "daily-train-check",
+   "name": "Daily train check",
+   "description": "7:00am local, all seven days. Ask if training happened. (routine; starts paused until its placeholders are filled)",
+   "files": {
+    "SKILL.md": "---\nname: Daily train check\ndescription: >-\n  7:00am local, all seven days. Ask if training happened.\nschedule: 0 7 * * *\ntimezone: {timezone}\npaused: true\n---\nAsk if training happened today. If yes, log it in one line and stay short. If no, rewrite the next session so the week still holds. If a wearable is connected and recovery is red, one line and lower intensity. Do not cancel the week. Do not diagnose. Never prescribe. Never invent numbers that were not pulled from a connected workout app, nutrition app, wearable, or lab. Stay quiet only if the user already logged today's session.\n\nFires on:\n- cron `0 7 * * *`\n\nAsk the importing user for:\n- Timezone\n"
+   },
+   "fillIns": [
+    {
+     "id": "timezone",
+     "label": "Timezone"
+    }
+   ]
+  },
+  {
+   "slug": "sunday-health-review",
+   "name": "Sunday health review",
+   "description": "Sunday 5:00pm local. Five-line week review. (routine; starts paused until its placeholders are filled)",
+   "files": {
+    "SKILL.md": "---\nname: Sunday health review\ndescription: >-\n  Sunday 5:00pm local. Five-line week review.\nschedule: 0 17 * * 0\ntimezone: {timezone}\npaused: true\n---\nFive lines only. Sessions hit, sessions missed, sleep if a wearable is connected, one new lab or wearable trend if data landed, one change for next week. No dashboard essay. Never invent numbers that were not pulled from a connected source. Do not diagnose. Never prescribe.\n\nFires on:\n- cron `0 17 * * 0`\n\nAsk the importing user for:\n- Timezone\n"
+   },
+   "fillIns": [
+    {
+     "id": "timezone",
+     "label": "Timezone"
+    }
+   ]
+  }
+ ],
+ "connectors": [],
+ "meta": {
+  "createdAt": "2026-09-07T03:55:31.803Z",
+  "createdBy": "grok-bot marketplace",
+  "sourceName": "Chief Health"
+ }
+}

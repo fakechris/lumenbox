@@ -140,6 +140,7 @@ import {
   CATALOG_EXPERTS,
   expertNamed,
   profilesFor,
+  shelfTemplates,
 } from "../host/catalog.ts";
 import { preflight } from "../box/preflight.ts";
 import { rescueMessage, rescueStuck } from "../host/rescue.ts";
@@ -3550,11 +3551,16 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
           const imported = registry.list()
             .filter(agent => agent.profile.importedFrom !== undefined && !String(agent.profile.importedFrom.id ?? "").startsWith("catalog:"))
             .map(agent => ({ agentId: agent.id, agentName: agent.profile.name, boxId: registry.boxOf(agent.id).id, from: agent.profile.importedFrom }));
+          const marketplace = shelfTemplates().map(t => ({
+            slug: t.slug, name: t.name, title: t.title, description: t.description,
+            ...(t.createdBy !== undefined ? { createdBy: t.createdBy } : {}),
+            skills: t.skills, routines: t.routines, connectors: t.connectors, memoryCount: t.memoryCount,
+          }));
           const catalog = [
             ...CATALOG_EXPERTS.map(entry => ({ kind: "expert", slug: entry.slug, name: entry.name, title: entry.title, summary: entry.summary, domain: entry.domain })),
             ...CATALOG_CREWS.map(crew => ({ kind: "crew", slug: crew.slug, name: crew.name, title: "", summary: crew.summary, domain: crew.domain, members: crew.members })),
           ];
-          send(res, 200, { mine, imported, catalog, boxes: orchestrator.boxStatus() });
+          send(res, 200, { mine, imported, catalog, marketplace, boxes: orchestrator.boxStatus() });
           return;
         }
         // Stamp: one template, one box, one new agent (or a crew's several). Wraps the two
@@ -3564,6 +3570,36 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
           const body = await readJson(req);
           const boxId = typeof body.boxId === "string" && registry.boxById(body.boxId) !== undefined ? body.boxId : undefined;
           const name = typeof body.name === "string" && body.name.trim() !== "" ? body.name.trim() : undefined;
+          // A name that is free: the template's own, or the template's own with a number,
+          // so nobody is asked to invent one (docs/39 §2 — the shelf's verb is one click).
+          const freeName = (wanted: string): string => {
+            const taken = new Set(registry.list().map(agent => agent.profile.name));
+            if (!taken.has(wanted)) return wanted;
+            for (let n = 2; n < 100; n += 1) if (!taken.has(`${wanted} ${n}`)) return `${wanted} ${n}`;
+            return `${wanted} ${Date.now()}`;
+          };
+          if (typeof body.templateSlug === "string" && body.templateSlug !== "") {
+            const entry = shelfTemplates().find(t => t.slug === body.templateSlug);
+            if (entry === undefined) {
+              send(res, 404, { error: `No shelf template named ${body.templateSlug}.` });
+              return;
+            }
+            const parsed = parseTemplate(readFileSync(entry.path, "utf8"));
+            if ("problem" in parsed) {
+              send(res, 400, { error: parsed.problem });
+              return;
+            }
+            const imported = orchestrator.importTemplate(parsed.template, {
+              caller,
+              connected: ["browser", ...channelRecords.map(record => record.type)],
+              shareId: `shelf:${entry.slug}`,
+              ...(boxId !== undefined ? { boxId } : {}),
+              name: freeName(name ?? entry.name),
+              log,
+            });
+            send(res, 200, { created: [{ id: imported.agent.id, name: imported.agent.profile.name }] });
+            return;
+          }
           if (typeof body.catalogSlug === "string" && body.catalogSlug !== "") {
             const rows = profilesFor(body.catalogSlug);
             if (rows === undefined) {

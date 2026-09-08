@@ -1,0 +1,41 @@
+{
+ "format": "lumenbox-template/1",
+ "profile": {
+  "name": "LumenBox Bridge",
+  "title": "LumenBox Bridge",
+  "description": "Ported from the Grok Bot \"LumenBox Bridge\". See its skills for what it does."
+ },
+ "memory": [
+  {
+   "kind": "fact",
+   "text": "LumenBox (github.com/fakechris/lumenbox) is the person's own agent team on their laptop; it can drive this box as an attached box over their Tailscale network, on desktop :10 and port 13370, without touching the host bot's own desktops :1-:9."
+  },
+  {
+   "kind": "fact",
+   "text": "The bridge installer is ~/.lumen/bin/lumen-bridge.sh (check / tailscale / install / start / status / token / connect-hint); every subcommand is safe to run again."
+  }
+ ],
+ "skills": [],
+ "routines": [
+  {
+   "slug": "lumenbox-bridge-keepalive",
+   "name": "lumenbox-bridge-keepalive",
+   "description": "Every hour, make sure the LumenBox daemon on this box is running; say something only when it had to be restarted or could not be. (routine; starts paused until its placeholders are filled)",
+   "files": {
+    "SKILL.md": "---\nname: lumenbox-bridge-keepalive\ndescription: >-\n  Every hour, make sure the LumenBox daemon on this box is running; say something only when it had to be restarted or could not be.\nschedule: 50 * * * *\ntimezone: {timezone}\npaused: true\n---\nRun `~/.lumen/bin/lumen-bridge.sh status`. If it reports the daemon up, do nothing and say nothing. Otherwise run `~/.lumen/bin/lumen-bridge.sh start`; if that prints a `BOXD_URL` line, tell the person in one line that the LumenBox bridge was restarted after the box came back; if it fails, send them the last lines of its output.\n\nFires on: every hour.\n\nFires on:\n- cron `50 * * * *`\n\nAsk the importing user for:\n- Timezone\n"
+   },
+   "fillIns": [
+    {
+     "id": "timezone",
+     "label": "Timezone"
+    }
+   ]
+  }
+ ],
+ "connectors": [],
+ "meta": {
+  "createdAt": "2026-09-07T03:55:31.822Z",
+  "createdBy": "grok-bot marketplace",
+  "sourceName": "LumenBox Bridge"
+ }
+}
