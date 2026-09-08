@@ -79,8 +79,10 @@ test("a round's calls are nested inside it, not laid beside it", () => {
 test("the answer is not a node in the tree", () => {
   // Nesting the answer would bury the thing the rounds were for. Both paths close the
   // round before rendering prose that no call follows.
-  assert.match(APP_HTML, /endStep\(\);\s*\n\s*bubble\(entry\.role/, "replay closes before the answer");
-  assert.match(APP_HTML, /function endStep\(\) \{\s*openStep = null;/, "closing is explicit");
+  // One renderer (docs/41 §2): prose closes any open work and is pushed as its own item,
+  // never nested and never re-filed later.
+  assert.match(APP_HTML, /if \(openWork\) \{ openWork\.done = true;[^\n]*\n\s*if \(openAgent\)[^\n]*\n\s*pushItem\(\{ kind: entry\.role === "user" \? "person" : "agent"/, "replay closes work before prose");
+  assert.match(APP_HTML, /function closeOpen\(\) \{/, "closing is explicit");
 });
 
 test("no backtick reaches the page script", () => {
@@ -147,15 +149,11 @@ test("a control that says hide leaves nothing on screen to read", () => {
 test("the page-wide control and the per-turn control mean the same thing", () => {
   // Two links both labelled some form of "fold" that did different things is worse than
   // either alone: the header one collapsed bodies while the group one claimed to hide.
+  assert.match(APP_HTML, /works\[b\]\.open = !folded/, "folding the page is folding every work item");
   assert.match(
     APP_HTML,
-    /bars\[b\]\.classList\.toggle\("shut", folded\)/,
-    "folding the page is folding every group"
-  );
-  assert.match(
-    APP_HTML,
-    /if \(folded\) group\.classList\.add\("shut"\)/,
-    "a turn that starts while the page is folded arrives folded"
+    /det\.open = item\.open !== undefined \? item\.open : !folded/,
+    "work that starts while the page is folded arrives folded"
   );
 });
 
