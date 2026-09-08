@@ -314,6 +314,24 @@ function truncateOldestResults(
   }
   return { dropped, chars };
 }
+/** The agents in the same box as this one: the roster a prompt shows (docs/39 §1). */
+function teammatesOf(registry: AgentRegistry, agentId: string): AgentRecord[] {
+  const all = registry.list();
+  if (typeof (registry as { boxOf?: unknown }).boxOf !== "function") return all;
+  try {
+    const mine = registry.boxOf(agentId).id;
+    return all.filter(record => {
+      try {
+        return registry.boxOf(record.id).id === mine;
+      } catch {
+        return true;
+      }
+    });
+  } catch {
+    return all;
+  }
+}
+
 /** The shedding cut, exposed for its test; not part of the turn's interface. */
 export const truncateOldestResultsForTest = truncateOldestResults;
 
@@ -1171,7 +1189,7 @@ export async function runTurn(
   const buildParts = (recallToUse: typeof memoryRecall) =>
     buildSystemPromptParts({
       agent,
-      teammates: registry.list(),
+      teammates: teammatesOf(registry, agent.id),
       memory: registry.readMemoryRecords(agent.id),
       memoryRecall: recallToUse,
       sharedMemory: registry.readSharedMemory(),
@@ -1200,7 +1218,7 @@ export async function runTurn(
   // an absence is indistinguishable from "nothing to say" unless something checks.
   for (const fault of emptySectionFaults({
     agent,
-    teammates: registry.list(),
+    teammates: teammatesOf(registry, agent.id),
     memory: [],
     agentsRoot: registry.root,
     hasBox: box !== undefined,

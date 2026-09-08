@@ -3113,6 +3113,23 @@ export async function dispatchTool(
       // Checked as a wake rather than as a tool call, because the limit that matters here is on how
       // often agents set each other going — the shape that produces a loop nothing else stops.
       const target = context.registry.tryGet(targetId);
+      // Teammates are the agents in the same box (docs/39 §1). Another box's agent is
+      // another computer's worker; when a courier between boxes is wanted it will be a
+      // thing of its own, not this tool reaching across.
+      if (target !== undefined && typeof context.registry.boxOf === "function") {
+        try {
+          const mine = context.registry.boxOf(context.agent.id).id;
+          const theirs = context.registry.boxOf(target.id).id;
+          if (mine !== theirs) {
+            return {
+              text: `${target.profile.name} lives in a different box, and messages do not cross boxes. Your teammates are the agents in yours.`,
+              isError: true,
+            };
+          }
+        } catch {
+          // A registry without box records (tests) has one box.
+        }
+      }
       const wake = context.policy?.check({
         kind: "wake",
         agentId: context.agent.id,

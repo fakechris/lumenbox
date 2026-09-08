@@ -230,6 +230,13 @@ export const APP_HTML = String.raw`<!doctype html>
   .modal .actions { display: flex; gap: 10px; padding-top: 2px; }
 
   #shell { flex: 1; min-height: 0; display: flex; }
+  /* The box bar: one tab per box, above everything, because switching a box switches the
+     whole page (docs/39 §1). Hidden with one box — a bar of one tab says nothing. */
+  #boxbar { display: none; align-items: center; gap: 6px; padding: 6px 14px; border-bottom: 1px solid var(--border); background: var(--surface); }
+  #boxbar.many { display: flex; }
+  #boxbar .tab { display: inline-flex; align-items: center; gap: 6px; }
+  #boxbar .tab .dot { width: 7px; height: 7px; border-radius: 50%; }
+  #boxbar .kind { font-size: 10px; color: var(--muted); text-transform: none; }
   .pane { min-width: 0; min-height: 0; overflow: hidden; display: flex; flex-direction: column; }
   .scroll { overflow-y: auto; flex: 1; min-height: 0; }
 
@@ -653,6 +660,8 @@ export const APP_HTML = String.raw`<!doctype html>
     <svg id="thememoon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12.8A9 9 0 1 1 11.2 3a7 7 0 0 0 9.8 9.8Z"/></svg>
   </button>
 </header>
+
+<div id="boxbar" role="tablist" aria-label="Boxes"></div>
 
 <div id="shell">
 
@@ -2259,27 +2268,66 @@ function boxHeaderHtml(box, index) {
     "</span></div>";
 }
 
+/** The box whose page is showing; null until the state arrives, then always one of boxesSeen. */
+var currentBox = null;
+
+/** The box bar: a tab per box, the current one lit, and a way to add one. */
+function renderBoxBar() {
+  var bar = $("boxbar");
+  if (!bar) return;
+  var many = boxesSeen.length > 1;
+  bar.className = many ? "many" : "";
+  if (!many) return;
+  bar.innerHTML = boxesSeen.map(function (b) {
+    return '<a href="#" role="tab" class="tab' + (b.id === currentBox ? " on" : "") + '" data-box="' + esc(b.id) + '"' +
+      ' title="' + esc(b.kind === "docker" ? "the box on this machine" : "attached at " + (b.baseUrl || b.address || "another machine")) + '">' +
+      '<span class="dot" style="background:' + (b.connected ? "var(--ok, #3fb950)" : "var(--warn)") + '"></span>' +
+      esc(b.name) + ' <span class="kind">' + esc(b.kind === "docker" ? "docker" : "attached") + "</span>" +
+      "</a>";
+  }).join("") +
+    '<a href="#" class="tab" data-newbox="1" title="Create or attach a box">+ box</a>';
+}
+
+$("boxbar").onclick = function (event) {
+  var tab = event.target.closest("a[data-box]");
+  if (tab) {
+    event.preventDefault();
+    selectBox(tab.getAttribute("data-box"));
+    return;
+  }
+  if (event.target.closest("a[data-newbox]")) {
+    event.preventDefault();
+    $("settingsbtn").click();
+    var wrap = document.getElementById("setboxeswrap");
+    if (wrap) setTimeout(function () { wrap.scrollIntoView({ block: "start" }); }, 50);
+  }
+};
+
+/** Switching a box switches the page: the list, the selected agent, the board. */
+function selectBox(boxId) {
+  if (boxId === currentBox) return;
+  currentBox = boxId;
+  renderBoxBar();
+  renderAgents();
+  var selected = agentById(current);
+  if (!selected || selected.boxId !== currentBox) {
+    var first = agents.filter(function (a) { return a.boxId === currentBox; })[0];
+    if (first) select(first.id);
+  }
+  if (typeof loadTasks === "function") loadTasks();
+}
+
+/** The agents of the box whose page is showing. With one box, all of them. */
+function agentsInView() {
+  if (boxesSeen.length <= 1 || !currentBox) return agents;
+  return agents.filter(function (a) { return a.boxId === currentBox; });
+}
+
 function renderAgents() {
   var html = "";
-  // More than one box: the list is grouped by box, own first, so where an agent lives is
-  // visible without opening it — the whole point of a second box is that they differ.
-  var grouped = boxesSeen.length > 1;
-  var order = grouped ? boxesSeen.map(function (b) { return b.id; }) : [];
-  var sorted = grouped
-    ? agents.slice().sort(function (x, y) {
-        var bx = order.indexOf(x.boxId), by = order.indexOf(y.boxId);
-        return bx !== by ? bx - by : agents.indexOf(x) - agents.indexOf(y);
-      })
-    : agents;
-  var lastBox = null;
+  var sorted = agentsInView();
   for (var i = 0; i < sorted.length; i++) {
     var a = sorted[i];
-    if (grouped && a.boxId !== lastBox) {
-      var boxIndex = order.indexOf(a.boxId);
-      var box = boxesSeen[boxIndex] || { name: a.boxName || "?", connected: true, kind: "attached", displayFloor: 1 };
-      html += boxHeaderHtml(box, boxIndex);
-      lastBox = a.boxId;
-    }
     html += '<div class="agent ' + (a.id === current ? "on" : "") + '" data-id="' + esc(a.id) + '">' +
       '<div class="dot ' + (busy.has(a.id) ? "busy" : "") +
       '" style="background:var(--c-' + ((i % 8) + 1) + ')"></div>' +
@@ -2639,6 +2687,12 @@ function agentById(id) {
 function select(id, conversation) {
   var switching = id !== current;
   current = id;
+  // Selecting an agent selects its box: a link into another box's agent changes the page.
+  var owner = agentById(id);
+  if (owner && owner.boxId && owner.boxId !== currentBox && boxesSeen.some(function (b) { return b.id === owner.boxId; })) {
+    currentBox = owner.boxId;
+    renderBoxBar();
+  }
   currentConversation = conversation || (switching ? "main" : currentConversation);
   $("title").textContent = nameOf(id);
   var selected = agentById(id);
@@ -2840,6 +2894,12 @@ function refresh() {
   return fetch("/api/state").then(function (r) { return r.json(); }).then(function (state) {
     boxesSeen = state.boxes || [];
     agents = state.agents;
+    // The box in view: the one already chosen, else the agent in view's, else this machine's own.
+    if (!currentBox || !boxesSeen.some(function (b) { return b.id === currentBox; })) {
+      var viewing = agentById(current);
+      currentBox = (viewing && viewing.boxId) || state.own || (boxesSeen[0] && boxesSeen[0].id) || null;
+    }
+    renderBoxBar();
     allTools = state.allTools || allTools;
     $("model").innerHTML = "<b>" + esc(state.provider) + "</b>";
     boxState = { ok: !!state.box.ok, detail: String(state.box.detail || "") };
@@ -4529,7 +4589,12 @@ function saveAgentModal() {
     .then(function () { $("agsave").disabled = false; });
 }
 
-$("new").onclick = function () { openAgentModal("new", null); };
+$("new").onclick = function () {
+  openAgentModal("new", null);
+  // A new agent goes into the box whose page is showing, unless the person picks another.
+  var pick = document.getElementById("agbox");
+  if (pick && currentBox) pick.value = currentBox;
+};
 $("agentcfg").onclick = function (event) {
   event.preventDefault();
   var agent = agentById(current);
