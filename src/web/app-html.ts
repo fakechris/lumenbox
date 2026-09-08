@@ -109,35 +109,38 @@ $("shelfbody").onclick = function (event) {
 };
 
 /** Four steps, shown until all four are done; each names the object it introduces. */
+var guideForced = false;
 function refreshSetup() {
   return fetch("/api/setup").then(function (r) { return r.json(); }).then(function (s) {
     var card = $("setupcard");
     if (!card) return;
     var steps = [
-      { done: s.box, head: "A computer for the agents", sub: "A box is a computer: desktop, files, shell, engines. Create the Docker box, or attach one.", act: "Set up a box", go: function () { $("settingsbtn").click(); } },
+      { done: s.box, head: "A computer for the agents", sub: "A box is a computer: desktop, files, shell, engines. Create the Docker box, or attach one.", act: "Set up a box", go: function () { openSettings("boxes"); } },
       { done: s.agentTurn, head: "Your first agent", sub: "An agent lives in one box. Stamp one from the shelf — 设计 (Team designer) builds a team for you.", act: "Open templates", go: openShelf },
-      { done: s.door, head: "A door (optional)", sub: "Feishu, DingTalk or Telegram reach this box; this page is a door too.", act: "Connect a door", go: function () { $("settingsbtn").click(); } },
+      { done: s.door, head: "A door (optional)", sub: "Feishu, DingTalk or Telegram reach this box; this page is a door too.", act: "Connect a door", go: function () { openSettings("doors"); } },
       { done: s.review, head: "First work", sub: "Say it in chat or add a task; it is done when it reaches review.", act: "Open tasks", go: function () { var t = $("tabtasks"); if (t) t.click(); } }
     ];
-    if (steps.every(function (x) { return x.done; })) { card.style.display = "none"; return; }
+    if (steps.every(function (x) { return x.done; }) && !guideForced) { card.style.display = "none"; return; }
     card.style.display = "";
     card.innerHTML = '<div style="margin:10px 16px 0;padding:10px 14px;border:1px solid var(--border-strong);border-radius:var(--radius-card);background:var(--surface)">' +
-      '<div class="eyebrow" style="margin-bottom:6px">Set up</div>' +
+      '<div class="eyebrow" style="margin-bottom:6px;display:flex;justify-content:space-between"><span>Set up</span><a href="#" data-setup-close="1" style="text-transform:none;letter-spacing:0">close</a></div>' +
       steps.map(function (x, i) {
         return '<div style="display:flex;gap:10px;align-items:center;padding:4px 0;font-size:12px">' +
           '<span style="width:16px;color:' + (x.done ? "var(--ok, #3fb950)" : "var(--muted)") + '">' + (x.done ? "✓" : String(i + 1)) + "</span>" +
           '<div style="flex:1"><b>' + esc(x.head) + "</b> <span class=\"dim\">" + esc(x.sub) + "</span></div>" +
-          (x.done ? "" : '<button class="btn sm" data-setup="' + i + '">' + esc(x.act) + "</button>") +
+          '<button class="btn sm' + (x.done ? " ghost" : "") + '" data-setup="' + i + '">' + esc(x.act) + "</button>" +
         "</div>";
       }).join("") + "</div>";
     card.onclick = function (event) {
       var b = event.target.closest("button[data-setup]");
-      if (b) { event.preventDefault(); steps[Number(b.getAttribute("data-setup"))].go(); }
+      if (b) { event.preventDefault(); steps[Number(b.getAttribute("data-setup"))].go(); return; }
+      if (event.target.closest("a[data-setup-close]")) { event.preventDefault(); guideForced = false; card.style.display = "none"; }
     };
   }).catch(function () {});
 }
 refreshSetup();
 setInterval(refreshSetup, 30000);
+$("guidebtn").onclick = function () { guideForced = true; refreshSetup(); };
 
 </script>
 <style>
@@ -330,6 +333,7 @@ setInterval(refreshSetup, 30000);
   #shell { flex: 1; min-height: 0; display: flex; }
   /* The box bar: one tab per box, above everything, because switching a box switches the
      whole page (docs/39 §1). Hidden with one box — a bar of one tab says nothing. */
+  .settab-off { display: none !important; }
   #boxbar { display: none; align-items: center; gap: 6px; padding: 6px 14px; border-bottom: 1px solid var(--border); background: var(--surface); }
   #boxbar.many { display: flex; }
   #boxbar .tab { display: inline-flex; align-items: center; gap: 6px; }
@@ -750,6 +754,7 @@ setInterval(refreshSetup, 30000);
         style="font-size:12px;color:var(--muted);white-space:nowrap"
         title="Tokens spent today, all agents \u2014 open the spend view"></span>
   <span id="whoami" style="font-size:12px;color:var(--muted);white-space:nowrap"></span>
+  <button id="guidebtn" class="btn ghost sm" title="The four set-up steps, and where each thing is">Guide</button>
   <button id="settingsbtn" title="Settings" aria-label="Settings">
     <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3.2"/><path d="M19.4 15a1.7 1.7 0 0 0 .34 1.87l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.7 1.7 0 0 0-1.87-.34 1.7 1.7 0 0 0-1.03 1.56V21a2 2 0 1 1-4 0v-.09a1.7 1.7 0 0 0-1.11-1.56 1.7 1.7 0 0 0-1.87.34l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.7 1.7 0 0 0 .34-1.87 1.7 1.7 0 0 0-1.56-1.03H3a2 2 0 1 1 0-4h.09a1.7 1.7 0 0 0 1.56-1.11 1.7 1.7 0 0 0-.34-1.87l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.7 1.7 0 0 0 1.87.34h.09a1.7 1.7 0 0 0 1.03-1.56V3a2 2 0 1 1 4 0v.09a1.7 1.7 0 0 0 1.03 1.56 1.7 1.7 0 0 0 1.87-.34l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.7 1.7 0 0 0-.34 1.87v.09a1.7 1.7 0 0 0 1.56 1.03H21a2 2 0 1 1 0 4h-.09a1.7 1.7 0 0 0-1.56 1.03Z"/></svg>
   </button>
@@ -766,7 +771,7 @@ setInterval(refreshSetup, 30000);
 <div class="pane" id="sidebar">
   <div class="eyebrow-row"><span class="eyebrow">Agents</span><button id="new" class="btn ghost sm" title="New agent">+</button></div>
   <div class="scroll" id="agents"></div>
-  <div class="eyebrow-row" style="margin-top:6px"><a href="#" id="shelfopen" class="eyebrow" style="text-decoration:none" title="Templates: saved agents you can stamp into this box">Templates</a></div>
+  <div style="padding:6px 12px 4px"><button id="shelfopen" class="btn sm" style="width:100%;justify-content:space-between;display:flex" title="Templates: saved agents you can stamp into this box"><span>Templates</span><span class="dim">stamp ▸</span></button></div>
   <div id="sidefoot">
     <div class="footrow"><span class="dot" id="boxdot"></span><span id="boxinfo">box</span></div>
     <div id="buildinfo"></div>
@@ -918,26 +923,33 @@ setInterval(refreshSetup, 30000);
      the launch command used to carry, its model override, and the key. -->
 <div id="settingswrap" style="display:none">
   <div class="modal">
-    <h3>Settings &mdash; model &amp; key</h3>
+    <h3>Settings</h3>
+    <div id="settabs" class="tabs" style="display:flex;gap:6px;flex-wrap:wrap">
+      <a href="#" class="tab on" data-settab="model">Model</a>
+      <a href="#" class="tab" data-settab="boxes">Boxes</a>
+      <a href="#" class="tab" data-settab="doors">Doors</a>
+      <a href="#" class="tab" data-settab="team">Team</a>
+      <a href="#" class="tab" data-settab="mine">Mine</a>
+    </div>
     <div class="fieldnote" id="setwelcome" style="display:none;border:1px solid var(--border);border-radius:var(--radius-md);padding:10px 12px;color:var(--text-soft)">
       Welcome. LumenBox needs two things before agents can work: a model provider with a
       key, and the box &mdash; one Linux container with a desktop, a browser and a shell,
       running on this machine. Both are set up here.
     </div>
-    <div class="field" data-tier="installation">
+    <div class="field" data-tier="installation" data-settab="model">
       <label>Provider</label>
       <select id="setprovider"></select>
     </div>
-    <div class="field" data-tier="installation">
+    <div class="field" data-tier="installation" data-settab="model">
       <label>Model</label>
       <input id="setmodel" list="modellist" placeholder="preset default" spellcheck="false">
       <datalist id="modellist"></datalist>
     </div>
-    <div class="field" data-tier="installation" id="setbasewrap" style="display:none">
+    <div class="field" data-tier="installation" id="setbasewrap" style="display:none" data-settab="model">
       <label>Base URL</label>
       <input id="setbase" placeholder="https://&hellip;" spellcheck="false">
     </div>
-    <div class="field" data-tier="installation">
+    <div class="field" data-tier="installation" data-settab="model">
       <label>API key</label>
       <input id="setkey" type="password" spellcheck="false" autocomplete="off">
       <div class="fieldnote" id="setkeynote"></div>
@@ -945,7 +957,7 @@ setInterval(refreshSetup, 30000);
     <div class="fieldnote">Saved to ~/.agentbox/config.json on this machine, mode 0600. A key stored
       here is used only when the environment does not already provide one, and is never placed
       inside the box. Changes take effect when the server restarts.</div>
-    <div class="field" data-tier="installation" id="setboxwrap">
+    <div class="field" data-tier="installation" id="setboxwrap" data-settab="boxes">
       <label>Box</label>
       <div class="fieldnote" id="setboxstate" style="margin:0"></div>
       <div id="setboxactions" style="display:none">
@@ -953,7 +965,7 @@ setInterval(refreshSetup, 30000);
       </div>
       <pre id="setboxlog" style="display:none;max-height:140px;overflow:auto;background:var(--code-bg);color:var(--code-text);border:1px solid var(--border);border-radius:var(--radius-md);padding:10px 12px;font-family:var(--font-mono);font-size:11px;line-height:1.6;margin:0;white-space:pre-wrap"></pre>
     </div>
-    <div class="field" data-tier="installation" id="setboxeswrap">
+    <div class="field" data-tier="installation" id="setboxeswrap" data-settab="boxes">
       <label>Boxes</label>
       <div id="setboxes" style="display:flex;flex-direction:column;gap:6px"></div>
       <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-top:4px">
@@ -968,7 +980,7 @@ setInterval(refreshSetup, 30000);
         from the display you name. An agent is created into a box and stays there.</div>
       <div class="fieldnote" id="setboxesstatus"></div>
     </div>
-    <div class="field" data-tier="installation">
+    <div class="field" data-tier="installation" data-settab="boxes">
       <label>Host execution</label>
       <label class="radio"><input type="checkbox" id="sethostenabled">
         Let agents run commands on this computer, outside the box</label>
@@ -979,13 +991,13 @@ setInterval(refreshSetup, 30000);
         before it runs. Takes effect after a restart.</div>
       <div class="fieldnote" id="sethoststatus"></div>
     </div>
-    <div class="field" data-tier="installation">
+    <div class="field" data-tier="installation" data-settab="boxes">
       <label>Startup item</label>
       <label class="radio"><input type="checkbox" id="setstartupitem">
         Launch LumenBox automatically on system login (Startup Item)</label>
       <div class="fieldnote">Registers LumenBox as a login item so agents, desktop services, and chat channels are running after a computer restart. Applied by the app when it restarts the server.</div>
     </div>
-    <div class="field" data-tier="organisation">
+    <div class="field" data-tier="organisation" data-settab="team">
       <label>Scopes</label>
       <div id="setscopes" style="display:flex;flex-direction:column;gap:6px"></div>
       <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
@@ -997,7 +1009,7 @@ setInterval(refreshSetup, 30000);
         scope grants it to every agent in the scope; removing an agent from the scope revokes it.</div>
       <div class="fieldnote" id="setscopestatus"></div>
     </div>
-    <div class="field" data-tier="organisation">
+    <div class="field" data-tier="organisation" data-settab="team">
       <label>Secrets</label>
       <div id="setsecrets" style="display:flex;flex-direction:column;gap:6px"></div>
       <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
@@ -1012,7 +1024,7 @@ setInterval(refreshSetup, 30000);
         is audited in ~/.agentbox/vault-audit.jsonl.</div>
       <div class="fieldnote" id="setsecstatus"></div>
     </div>
-    <div class="field" data-tier="installation">
+    <div class="field" data-tier="installation" data-settab="doors">
       <label>Channels</label>
       <div id="setchannels" style="display:flex;flex-direction:column;gap:6px"></div>
       <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
@@ -1036,7 +1048,7 @@ setInterval(refreshSetup, 30000);
         prefix work); with credentials in hand a new door opens immediately, no restart.</div>
       <div class="fieldnote" id="setchstatus"></div>
     </div>
-    <div class="field" data-tier="installation" id="setmcpwrap" style="display:none">
+    <div class="field" data-tier="installation" id="setmcpwrap" style="display:none" data-settab="team">
       <label>MCP servers</label>
       <div id="setmcp" style="display:flex;flex-direction:column;gap:6px"></div>
       <div style="display:flex;gap:8px;align-items:center;margin-top:6px">
@@ -1054,13 +1066,13 @@ setInterval(refreshSetup, 30000);
         approvals as the built-in ones. Edit the file, then reload: servers whose entry is
         unchanged keep running, changed or removed ones stop, new ones start.</div>
     </div>
-    <div class="field" data-tier="organisation" id="setknockswrap" style="display:none">
+    <div class="field" data-tier="organisation" id="setknockswrap" style="display:none" data-settab="doors">
       <label>Waiting at the door</label>
       <div id="setknocks" style="display:flex;flex-direction:column;gap:6px"></div>
       <div class="fieldnote">People who messaged the bot and are not on the list yet. One click
         lets them in, and they are told so on the channel they knocked from.</div>
     </div>
-    <div class="field" data-tier="organisation">
+    <div class="field" data-tier="organisation" data-settab="team">
       <label>People</label>
       <div id="setpeople" style="display:flex;flex-direction:column;gap:6px"></div>
       <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
@@ -1091,7 +1103,7 @@ setInterval(refreshSetup, 30000);
       </details>
       <div class="fieldnote" id="setpeoplestatus"></div>
     </div>
-    <div class="field" data-tier="personal" id="setmcptokenswrap" style="display:none">
+    <div class="field" data-tier="personal" id="setmcptokenswrap" style="display:none" data-settab="mine">
       <label>Your MCP tokens</label>
       <div id="setmcptokens" style="display:flex;flex-direction:column;gap:6px"></div>
       <div style="display:flex;gap:6px;margin-top:6px">
@@ -1103,7 +1115,7 @@ setInterval(refreshSetup, 30000);
         as you. The token is shown once — copy it now. Work done through it is attributed to
         you, and revoking one stops it immediately.</div>
     </div>
-    <div class="field" data-tier="personal" id="setgrantswrap" style="display:none">
+    <div class="field" data-tier="personal" id="setgrantswrap" style="display:none" data-settab="mine">
       <label>Standing approvals</label>
       <div id="setgrants" style="display:flex;flex-direction:column;gap:6px"></div>
       <div class="fieldnote">Each covers one exact action until revoked. Revoking makes the next
@@ -1296,7 +1308,25 @@ if (navigator.userAgent.indexOf("Electron") >= 0) {
 // shell relaunches the server; under a bare CLI the page says the process has ended.
 var settingsPresets = [];
 
-function openSettings() {
+/** Which settings tab is showing; fields carry data-settab, and those not on the tab are hidden. */
+function showSettingsTab(name) {
+  var tabs = document.querySelectorAll("#settabs a[data-settab]");
+  for (var i = 0; i < tabs.length; i++) tabs[i].className = "tab" + (tabs[i].getAttribute("data-settab") === name ? " on" : "");
+  var fields = document.querySelectorAll("#settingswrap .field[data-settab]");
+  for (var j = 0; j < fields.length; j++) {
+    if (fields[j].getAttribute("data-settab") === name) fields[j].classList.remove("settab-off");
+    else fields[j].classList.add("settab-off");
+  }
+}
+document.getElementById("settabs").onclick = function (event) {
+  var a = event.target.closest("a[data-settab]");
+  if (!a) return;
+  event.preventDefault();
+  showSettingsTab(a.getAttribute("data-settab"));
+};
+
+function openSettings(tab) {
+  showSettingsTab(typeof tab === "string" ? tab : "model");
   // Applied on open as well as on load: the dialog is built once and reopened, and
   // whoever is at the browser may have signed in since the page did.
   applyRole();
@@ -2085,7 +2115,7 @@ $("settest").onclick = function () {
     .then(function () { $("settest").disabled = false; });
 };
 
-$("settingsbtn").onclick = openSettings;
+$("settingsbtn").onclick = function () { openSettings("model"); };
 $("setprovider").onchange = settingsProviderChanged;
 $("setsave").onclick = function () { saveSettings(false); };
 $("setsaverestart").onclick = function () { saveSettings(true); };
@@ -2412,9 +2442,7 @@ $("boxbar").onclick = function (event) {
   }
   if (event.target.closest("a[data-newbox]")) {
     event.preventDefault();
-    $("settingsbtn").click();
-    var wrap = document.getElementById("setboxeswrap");
-    if (wrap) setTimeout(function () { wrap.scrollIntoView({ block: "start" }); }, 50);
+    openSettings("boxes");
   }
 };
 
