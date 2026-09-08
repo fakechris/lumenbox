@@ -1808,6 +1808,45 @@ export function describeCall(tool: string, input: Record<string, unknown>): stri
   return `${tool}${about === "" ? "" : ` ${about.replace(/\s+/g, " ").slice(0, 80)}`}`;
 }
 
+/**
+ * Assigning a task is telling someone. Bot Boss put t158 on dr eggbot and nothing woke dr
+ * eggbot, so the board said "assigned" and the work sat for an hour (2026-09-08). The note is
+ * carried by the host, not relayed, so the assignee's prose answer comes back to the requester.
+ */
+function tellAssignee(
+  context: ToolContext,
+  taskId: string,
+  title: string,
+  assigneeId: string | undefined
+): string {
+  if (assigneeId === undefined || assigneeId === context.agent.id) return "";
+  const ack = context.bus.send({
+    fromId: context.agent.id,
+    toId: assigneeId,
+    text:
+      `Task ${taskId} is assigned to you: "${title}". Read it with Tasks (action: list), ` +
+      `take it with Tasks (action: take, id: ${taskId}), or say why not.`,
+  });
+  const name = context.registry.tryGet(assigneeId)?.profile.name ?? assigneeId;
+  return ack.startsWith("Not sent") || ack.startsWith("No agent") ? ` (${name} was not told: ${ack})` : ` ${name} has been told.`;
+}
+
+/**
+ * A new agent's first message, from whoever made it. An agent that is created and never
+ * spoken to is a profile on disk: OVP-Ops-Bot sat for an hour with zero turns while its
+ * creator waited on a teammate to introduce them (2026-09-08).
+ */
+function greetNewAgent(context: ToolContext, newId: string): void {
+  context.bus.send({
+    fromId: context.agent.id,
+    toId: newId,
+    text:
+      `You were just created by ${context.agent.profile.name}. Your description says what you own. ` +
+      `Look around your box, then tell ${context.agent.profile.name} in one message what you ` +
+      `understood and what you need from them before you can start.`,
+  });
+}
+
 export async function dispatchTool(
   name: string,
   input: Record<string, unknown>,
@@ -3271,6 +3310,7 @@ export async function dispatchTool(
           });
           existing.add(name);
           created.push({ name: record.profile.name, id: record.id });
+          greetNewAgent(context, record.id);
         }
         if (created.length === 0) {
           return {
@@ -3313,10 +3353,11 @@ export async function dispatchTool(
         held === undefined
           ? ""
           : " It has the same tools you do — an agent cannot hand out what it does not hold.";
+      greetNewAgent(context, created.id);
       return {
         text:
           `Created agent "${created.profile.name}" (id: ${created.id}). ` +
-          `Message it with SendToAgent using that id.${inherited}`,
+          `It has been told you made it and will report to you; message it by name with SendToAgent.${inherited}`,
       };
     }
 
@@ -3443,7 +3484,8 @@ export async function dispatchTool(
           ...(propose ? { proposedBy: context.agent.id } : {}),
         });
         if (created === undefined) return { text: "A task needs a title.", isError: true };
-        return { text: `Created ${describeTask(created, nameOf)}.` };
+        const told = tellAssignee(context, created.id, created.title, assigneeId);
+        return { text: `Created ${describeTask(created, nameOf)}.${told}` };
       }
 
       if (action === "take") {
@@ -3516,10 +3558,15 @@ export async function dispatchTool(
         if (updated === undefined) {
           return { text: `No task ${String(input.id ?? "")} on the board.`, isError: true };
         }
+        const told =
+          assigneeId !== undefined && assigneeId !== target?.assigneeId
+            ? tellAssignee(context, updated.task.id, updated.task.title, assigneeId)
+            : "";
         return {
           text:
             `${describeTask(updated.task, nameOf)}.` +
-            (updated.coerced !== undefined ? `\n\n${updated.coerced}` : ""),
+            (updated.coerced !== undefined ? `\n\n${updated.coerced}` : "") +
+            told,
         };
       }
 

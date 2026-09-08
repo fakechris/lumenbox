@@ -1528,6 +1528,16 @@ tool, SendToAgent, a door's roster and the page all read those. A guard test fai
 when a `registry.create` names neither `boxId` nor `beside`. The rule for next time: when a
 concept gets a second definition in a second file, the second one is the bug, even if it works.
 
+**Handoffs are carried by the host (2026-09-08, after the OVP handoff stalled).** Three gaps
+broke one handoff in one hour: a teammate's reply written as prose went nowhere, a task
+assigned on the board woke nobody, and a freshly created agent sat with zero turns. Now a
+prose reply on a teammate-woken turn is delivered to that teammate (one hop: a turn woken by
+a relayed message does not relay back, so two agents cannot bounce "noted" forever, and a turn
+that already used SendToAgent on the sender is left alone); assigning a task messages the
+assignee; a new agent gets its first message from its creator. The wake cue says it plainly:
+what you write is the reply, silence is no reply. Rule: whenever a tool result says something
+happened to another agent, that agent must hear it in the same call.
+
 **Feeding the multiuser branch, not this line:** the three-layer identity model (observed
 identity, revocable binding, per-box allow/deny), fail-closed row-level security for a
 future control-plane database, and the personal-box contract (data in the snapshot layer,

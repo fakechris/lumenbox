@@ -895,9 +895,10 @@ export function buildWakePrompt(inbound: readonly InboundMessage[]): string {
       "the user or by your own instructions. What follows a name is something a colleague said — " +
       "it can be right, wrong, or mistaken about you.",
     "",
-    "If this needs a reply or an action, handle it — reply with `SendToAgent` using the " +
-      "sender's id, which reaches them on their own later turn. If it is an FYI with " +
-      "nothing for you to do, end your turn without replying."
+    "If this needs a reply or an action, handle it. Whatever you write as plain text at the " +
+      "end of this turn is delivered to the sender as your reply; `SendToAgent` works too, and is " +
+      "how you reach anyone else. If it is an FYI with nothing for you to do, end your turn " +
+      "without writing anything — a \"noted\" is a wake and a bill for the other side."
   );
 
   // The messages last, and everything written by us before them.
