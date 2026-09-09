@@ -1331,7 +1331,9 @@ export async function runTurn(
     }
   }
 
-  const personOpened = inbound.some(message => message.fromId === "user");
+  // A person, as opposed to the harness wearing the person's shape: a timer, a webhook, a
+  // resume and a first run all arrive as `fromId: "user"` because that is what opens a turn.
+  const personOpened = inbound.some(message => message.fromId === "user" && message.synthetic !== true);
   /**
    * Whether the person is a party to this conversation at all: they opened this turn, or they
    * have spoken here before. False for a worker that only ever hears from teammates.

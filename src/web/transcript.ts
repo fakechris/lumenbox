@@ -34,7 +34,6 @@ export interface DisplayTool {
  * exists; the cue is the fallback for turns recorded before that field did.
  */
 export function triggerOf(text: string, fromPerson: boolean): string | undefined {
-  if (fromPerson) return undefined;
   const cue = /^\[([a-z][a-z ]{2,20})\]/.exec(text.trimStart());
   if (cue === null) return undefined;
   const label = cue[1]!.trim();
@@ -46,7 +45,12 @@ export function triggerOf(text: string, fromPerson: boolean): string | undefined
     system: "system",
     "template setup": "setting itself up",
   };
-  return known[label] ?? `started by ${label}`;
+  // The known cues are the harness's own vocabulary and win outright: nobody types
+  // "[webhook] This turn was started by something calling this routine's URL". They have to
+  // win, because turns recorded before the synthetic flag existed are stored as though a
+  // person had opened them. Any other bracketed word is only a cue when nobody typed it.
+  if (known[label] !== undefined) return known[label];
+  return fromPerson ? undefined : `started by ${label}`;
 }
 
 /** The question an AskUser call carried, in the shape the page draws. */

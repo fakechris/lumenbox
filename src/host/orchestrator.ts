@@ -446,7 +446,7 @@ export class Orchestrator {
     // rather than in the main conversation, which no chat has ever read.
     run: async (agent, prompt, deliver) => {
       if (deliver === undefined) {
-        await this.prompt(agent, prompt, undefined, { steerable: false, lane: "background" });
+        await this.prompt(agent, prompt, undefined, { steerable: false, lane: "background", synthetic: true });
         return;
       }
       const conversation = conversationIdFor(deliver);
@@ -458,6 +458,7 @@ export class Orchestrator {
       await this.prompt(agent, prompt, undefined, {
         steerable: false,
         lane: "background",
+        synthetic: true,
         conversation,
       });
       await this.settle();
@@ -471,7 +472,7 @@ export class Orchestrator {
     runAndSay: async (agent, prompt) => {
       const agentId = this.registry.resolve(agent).id;
       const before = this.registry.readTranscript(agentId).length;
-      await this.prompt(agent, prompt, undefined, { steerable: false, lane: "background" });
+      await this.prompt(agent, prompt, undefined, { steerable: false, lane: "background", synthetic: true });
       await this.settle();
       return this.replySince(agentId, before).trim();
     },
@@ -1395,6 +1396,7 @@ export class Orchestrator {
         ...(turn.workId !== undefined ? { workId: turn.workId } : {}),
       });
       this.bus.sendFromUser(agent.id, resumePrompt(turn.about, turn.at), {
+        synthetic: true,
         // The turn resumes in the conversation it was interrupted in: an answer to a
         // group chat's question must not surface in the team room.
         ...(turn.conversation !== undefined ? { conversation: turn.conversation } : {}),
@@ -1517,7 +1519,7 @@ export class Orchestrator {
     agentIdOrName: string,
     text: string,
     caller?: { userId?: string },
-    options: { conversation?: string; steerable?: boolean; lane?: Lane } = {}
+    options: { conversation?: string; steerable?: boolean; lane?: Lane; synthetic?: boolean } = {}
   ): Promise<void> {
     const agent = this.registry.resolve(agentIdOrName);
     const conversation = options.conversation ?? MAIN_CONVERSATION;
