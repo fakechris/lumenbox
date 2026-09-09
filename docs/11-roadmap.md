@@ -1560,6 +1560,11 @@ one scenario per real episode that went wrong; `npm run scenario` runs the same 
 real provider N times for a conduct scorecard. The rule: a conduct fix is not finished until the
 episode that prompted it is a scenario.
 
+**Webhook triggers (2026-09-09, docs/44).** `trigger: webhook` in a routine's frontmatter mints a
+URL and a per-routine secret; anything that can POST can start the work — an iOS Shortcut on a
+share sheet is the case that prompted it. Open: no delivery receipt to the caller, no signature
+verification (GitHub), and rate limiting is one-in-flight per routine.
+
 **Feeding the multiuser branch, not this line:** the three-layer identity model (observed
 identity, revocable binding, per-box allow/deny), fail-closed row-level security for a
 future control-plane database, and the personal-box contract (data in the snapshot layer,

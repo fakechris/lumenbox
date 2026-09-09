@@ -147,6 +147,7 @@ import { preflight } from "../box/preflight.ts";
 import { rescueMessage, rescueStuck } from "../host/rescue.ts";
 import { Deliveries, deliveriesPath } from "../host/deliveries.ts";
 import { Ingress, ingressPath } from "../channels/ingress.ts";
+import { Webhooks, webhooksPath, presentedSecret, secretMatches } from "../host/webhooks.ts";
 import { ConversationDirectory, conversationsPath } from "../channels/conversations.ts";
 import { SentRootsLedger, sentRootsPath } from "../channels/sent-roots.ts";
 import { randomUUID } from "node:crypto";
@@ -272,6 +273,16 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
   /** Web token subjects and unknown prefixes are incarnation 1 forever. */
   const incarnationOf = (identity: string): number =>
     channelIncarnations.get(identity.split(":")[0] ?? "") ?? 1;
+  /**
+   * The address something outside this machine should call.
+   *
+   * `AGENTBOX_PUBLIC_URL` when an operator has said what it is; otherwise the address this
+   * server is actually bound to, which is right on a LAN and useless from a phone on mobile
+   * data. The page says which of the two it is showing rather than pretending.
+   */
+  const publicBase = (): string =>
+    (process.env.AGENTBOX_PUBLIC_URL ?? `http://${options.host === "0.0.0.0" ? "127.0.0.1" : options.host}:${options.port}`).replace(/\/$/, "");
+
   /** One rule for every door's credential names: the id, uppercased. */
   const channelEnvBase = (id: string): string => id.toUpperCase().replace(/[^A-Z0-9]+/g, "_");
   /** Whether a door's credentials exist — in the environment or saved in the config. */
@@ -649,6 +660,8 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
    * arrived and went nowhere used to leave the same trace as one that never arrived.
    */
   const ingress = new Ingress(ingressPath(agentboxHome()));
+  /** One URL and secret per webhook routine (docs/44). */
+  const webhooks = new Webhooks(webhooksPath(agentboxHome()));
   /**
    * When a door last had anything from outside. The catch-up sweep's floor: a socket
    * that reconnects asks the vendor what was said since this, and replays what it
@@ -2005,6 +2018,62 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
     res.end(page);
   }
 
+  /**
+   * A routine's URL was called.
+   *
+   * Answered in milliseconds whatever happens: the caller is a phone on a train or a CI step with
+   * a two-second timeout, and neither can wait for a turn. So the work is started and 202 is
+   * returned — "accepted", which is the truth — and everything the person needs to see about the
+   * run is in the app, where it belongs.
+   *
+   * Refusals are deliberately uniform. A wrong secret and an unknown id both answer 401 with the
+   * same words after the same work, so the endpoint cannot be used to find out which routines
+   * exist. Only the ledger records which it was.
+   */
+  async function handleWebhook(req: IncomingMessage, res: ServerResponse, id: string): Promise<void> {
+    const refuse = () => send(res, 401, { error: "Unknown hook, or the secret is wrong." });
+    const record = webhooks.byId(id);
+    const presented = presentedSecret(req.headers);
+    if (record === undefined || presented === undefined || !secretMatches(presented, record.secret)) {
+      if (record !== undefined) webhooks.record(id, "bad-secret");
+      log(`webhook ${id}: refused`);
+      refuse();
+      return;
+    }
+    if (req.method !== "POST" && req.method !== "PUT") {
+      send(res, 405, { error: "POST the content to this URL." });
+      return;
+    }
+
+    // Bounded, and read as text whatever the content type: the sender is unknown software and
+    // the routine is what interprets it. A body larger than this is a file transfer, which is
+    // not what a trigger is for.
+    const MAX_BODY = 64 * 1024;
+    let body = "";
+    let tooBig = false;
+    for await (const chunk of req) {
+      body += (chunk as Buffer).toString("utf8");
+      if (body.length > MAX_BODY) { tooBig = true; break; }
+    }
+    if (tooBig) {
+      send(res, 413, { error: `The body may be ${MAX_BODY} bytes. Send a link or a path instead.` });
+      return;
+    }
+
+    const from = String(req.headers["user-agent"] ?? "").slice(0, 80) || undefined;
+    const fired = await orchestrator.scheduler.fireWebhook(record.slug, body, from);
+    webhooks.record(id, fired.ok ? "ran" : "refused");
+    if (!fired.ok) {
+      // 409 rather than 500: "already running" and "paused" are states the caller can act on,
+      // and a shortcut that retries into a 500 forever is worse than one that is told why.
+      log(`webhook ${id} (${record.slug}): ${fired.reason}`);
+      send(res, 409, { error: fired.reason });
+      return;
+    }
+    log(`webhook ${id}: ${record.slug} started`);
+    send(res, 202, { accepted: true, routine: record.slug });
+  }
+
   function send(res: ServerResponse, status: number, body: unknown, type = "application/json") {
     const payload = type === "application/json" ? JSON.stringify(body) : String(body);
     res.writeHead(status, {
@@ -2385,6 +2454,15 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
           return;
         }
         await orchestrator.modelRelay.proxy(req, res, relayRoute, relayMatch[2] ?? "/");
+        return;
+      }
+      // A webhook trigger (docs/44). Before the UI's token gate and authenticated by its own
+      // per-routine secret, because the whole point is that a phone or a CI job can call it
+      // without holding this installation's credentials. Everything after the secret check is
+      // the ordinary path: the same routine, the same agent, the same policy gate and budget.
+      const webhookMatch = /^\/hooks\/([A-Za-z0-9_-]{6,64})\/?$/.exec(url.pathname);
+      if (webhookMatch !== null) {
+        await handleWebhook(req, res, webhookMatch[1]!);
         return;
       }
       const routeMatch = ROUTE_PATH.exec(url.pathname);
@@ -2812,6 +2890,45 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
             schedules: await orchestrator.scheduler.status(),
             armed: process.env.AGENTBOX_SCHEDULER !== "0",
           });
+          return;
+        }
+
+        // The URLs and their secrets. Admin only and never in /api/schedules, which any signed-in
+        // session may read: a viewer who can see a hook secret can drive the box through it.
+        if (route === "GET /api/hooks") {
+          if (refusedRole("admin")) return;
+          const hooked = await orchestrator.webhookRoutines();
+          // Minted on sight rather than at save time: a routine's URL exists because the routine
+          // does, and there is no separate act of creation for a person to forget.
+          const rows = hooked.map(routine => {
+            const record = webhooks.ensure(routine.boxId ?? orchestrator.registry.box.id, routine.slug);
+            return {
+              slug: routine.slug,
+              name: routine.name,
+              url: `${publicBase()}/hooks/${record.id}`,
+              secret: record.secret,
+              fired: record.fired ?? 0,
+              lastFiredAt: record.lastFiredAt ?? null,
+              lastResult: record.lastResult ?? null,
+            };
+          });
+          webhooks.prune(hooked.map(routine => ({ boxId: routine.boxId ?? orchestrator.registry.box.id, slug: routine.slug })));
+          send(res, 200, { hooks: rows, reachable: process.env.AGENTBOX_PUBLIC_URL !== undefined });
+          return;
+        }
+
+        if (route === "POST /api/hooks/rotate") {
+          if (refusedRole("admin")) return;
+          const body = await readJson(req);
+          const slug = String(body.slug ?? "");
+          const record = webhooks.list().find(row => row.slug === slug);
+          if (record === undefined) {
+            send(res, 404, { error: `No webhook routine "${slug}".` });
+            return;
+          }
+          const rotated = webhooks.rotate(record.id);
+          log(`webhook ${record.id} (${slug}): secret rotated`);
+          send(res, 200, { secret: rotated?.secret });
           return;
         }
 

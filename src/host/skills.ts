@@ -105,6 +105,12 @@ export interface Skill {
    */
   listener?: { match: string; chat?: string };
   /**
+   * `trigger: webhook` — it fires when its own URL is called, by anything that can make a
+   * request. The URL and its secret are minted by the host on first sight and shown in the
+   * automations list; they are deliberately not in this file, which lives in the box.
+   */
+  webhook?: true;
+  /**
    * Who wrote this, when an agent did — and why it thought the routine was worth having.
    *
    * Not a permission and not a gate. An agent can already create a scheduled routine
@@ -289,13 +295,19 @@ export function skillFrom(
   // A listener needs both halves: what to listen for, and that it is listening at all.
   const trigger = parsed.meta.trigger?.trim();
   const match = parsed.meta.match?.trim();
-  if (trigger !== undefined && trigger !== "" && trigger !== "message") {
-    return { problem: `${slug}: trigger must be "message" (the only kind); "${trigger}" is not one.` };
+  if (trigger !== undefined && trigger !== "" && trigger !== "message" && trigger !== "webhook") {
+    return {
+      problem: `${slug}: trigger must be "message" or "webhook"; "${trigger}" is not one.`,
+    };
+  }
+  // A webhook routine takes no match: it fires when its URL is called, and nothing else.
+  if (trigger === "webhook" && match !== undefined && match !== "") {
+    return { problem: `${slug}: trigger: webhook fires when its URL is called; match: has nothing to match.` };
   }
   if (trigger === "message" && (match === undefined || match === "")) {
     return { problem: `${slug}: trigger: message needs a match: — a /regex/ or a phrase to listen for.` };
   }
-  if ((trigger === undefined || trigger === "") && match !== undefined && match !== "") {
+  if (trigger !== "webhook" && (trigger === undefined || trigger === "") && match !== undefined && match !== "") {
     return { problem: `${slug}: match is set but there is no trigger: message, so nothing listens.` };
   }
   if (trigger === "message" && match !== undefined && /^\/.*\/[a-z]*$/s.test(match)) {
@@ -313,7 +325,7 @@ export function skillFrom(
 
   // Likewise a delivery target with nothing to deliver: the person meant to schedule it.
   const deliver = parsed.meta.deliver?.trim();
-  if (deliver !== undefined && deliver !== "" && schedule === undefined) {
+  if (deliver !== undefined && deliver !== "" && schedule === undefined && trigger !== "webhook") {
     return { problem: `${slug}: deliver is set but the skill has no schedule, so nothing fires.` };
   }
 
@@ -328,6 +340,7 @@ export function skillFrom(
       helpers,
       ...(schedule !== undefined ? { schedule } : {}),
       ...(listener !== undefined ? { listener } : {}),
+      ...(trigger === "webhook" ? { webhook: true as const } : {}),
       ...(parsed.meta.agent ? { runAs: parsed.meta.agent.trim() } : {}),
       ...(timezone !== undefined && timezone !== "" ? { timezone } : {}),
       ...(deliver !== undefined && deliver !== "" ? { deliver } : {}),

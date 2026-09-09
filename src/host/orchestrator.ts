@@ -378,6 +378,14 @@ export class Orchestrator {
    * Started by whoever runs the orchestrator rather than in the constructor: a CLI invocation that
    * asks one question should not begin running someone's automations as a side effect.
    */
+  /** The routines that fire on a webhook, for the page that shows their URLs. */
+  async webhookRoutines(): Promise<readonly { boxId?: string; slug: string; name: string }[]> {
+    const everywhere = await this.skillsEverywhere();
+    return everywhere.flatMap(({ boxId, skills }) =>
+      skills.filter(skill => skill.webhook === true).map(skill => ({ boxId, slug: skill.slug, name: skill.name }))
+    );
+  }
+
   readonly scheduler = new Scheduler({
     spentSinceAgent: (sinceMs, agentId) => this.usage.spentSinceAgent(sinceMs, agentId),
     due: async () => {
@@ -392,6 +400,22 @@ export class Orchestrator {
           schedule: skill.schedule!,
           ...(skill.runAs !== undefined ? { runAs: skill.runAs } : {}),
           ...(skill.timezone !== undefined ? { timezone: skill.timezone } : {}),
+          ...(skill.deliver !== undefined ? { deliver: skill.deliver } : {}),
+          ...(skill.authoredBy !== undefined ? { authoredBy: skill.authoredBy } : {}),
+          ...(skill.because !== undefined ? { because: skill.because } : {}),
+          ...(skill.paused === true ? { paused: true } : {}),
+        })));
+    },
+    hooked: async () => {
+      const everywhere = await this.skillsEverywhere();
+      return everywhere.flatMap(({ boxId, skills }) => skills
+        .filter(skill => skill.webhook === true)
+        .map(skill => ({
+          boxId,
+          slug: skill.slug,
+          name: skill.name,
+          path: skill.path,
+          ...(skill.runAs !== undefined ? { runAs: skill.runAs } : {}),
           ...(skill.deliver !== undefined ? { deliver: skill.deliver } : {}),
           ...(skill.authoredBy !== undefined ? { authoredBy: skill.authoredBy } : {}),
           ...(skill.because !== undefined ? { because: skill.because } : {}),

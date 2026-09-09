@@ -3875,6 +3875,25 @@ function automationRow(s) {
   var toggle = s.paused
     ? '<button class="btn ghost sm" data-resume="' + esc(s.slug) + '">Turn on</button>'
     : '<button class="btn ghost sm" data-pause="' + esc(s.slug) + '">Pause</button>';
+  // A webhook routine's URL and secret are the whole of its interface: without them on screen
+  // there is nothing to paste into a phone, and the routine is armed but unreachable.
+  var hook = s.kind === "webhook" ? hookRows[s.slug] : undefined;
+  var hookBlock = hook
+    ? '<div style="margin-top:6px;padding:8px 10px;border:1px solid var(--border);border-radius:8px">' +
+        '<div class="dim" style="font-size:11px">POST here, with <span class="mono">Authorization: Bearer &lt;secret&gt;</span></div>' +
+        '<div class="mono" style="font-size:11px;word-break:break-all;margin-top:3px">' + esc(hook.url) + "</div>" +
+        '<div style="display:flex;gap:6px;align-items:center;margin-top:5px">' +
+          '<span class="mono secret" data-secret-for="' + esc(s.slug) + '" style="font-size:11px;word-break:break-all;flex:1">' + "•".repeat(24) + "</span>" +
+          '<button class="btn ghost sm" data-reveal="' + esc(s.slug) + '">Show</button>' +
+          '<button class="btn ghost sm" data-copyhook="' + esc(s.slug) + '">Copy</button>' +
+          '<button class="btn ghost sm" data-rotate="' + esc(s.slug) + '">New secret</button>' +
+        "</div>" +
+        '<div class="dim" style="font-size:11px;margin-top:4px">' +
+          (hook.fired ? "called " + hook.fired + " time" + (hook.fired === 1 ? "" : "s") : "never called") +
+          (hook.lastFiredAt ? " · last " + esc(new Date(hook.lastFiredAt).toLocaleString()) + (hook.lastResult && hook.lastResult !== "ran" ? " (" + esc(hook.lastResult) + ")" : "") : "") +
+        "</div>" +
+      "</div>"
+    : "";
   return '<div style="padding:10px 16px;border-bottom:1px solid var(--border)' + (s.paused ? ";opacity:.75" : "") + '">' +
     '<div style="display:flex;gap:9px;align-items:baseline">' +
       '<span style="flex:1;font-size:13px;font-weight:500">' + esc(s.name) + " " + origin + " " + pausedTag + "</span>" +
@@ -3885,20 +3904,39 @@ function automationRow(s) {
       (s.agent ? " · as " + esc(s.agent) : "") + " · " + where + "</div>" +
     '<div class="dim" style="font-size:11px">' + last + ' · <span class="mono">' + esc(s.schedule) + "</span></div>" +
     (s.because ? '<div class="dim" style="font-size:11px;font-style:italic">' + esc(s.because) + "</div>" : "") +
+    hookBlock +
   "</div>";
 }
 
+// The URLs and secrets, by slug. Admin-only, so a non-admin simply sees the routine without
+// them rather than an error: they may know it exists, they may not drive it.
+var hookRows = {};
+var hooksReachable = true;
+
 function refreshAutomations() {
-  return fetch("/api/schedules")
+  return fetch("/api/hooks")
+    .then(function (r) { return r.ok ? r.json() : { hooks: [], reachable: true }; })
+    .catch(function () { return { hooks: [], reachable: true }; })
+    .then(function (data) {
+      hookRows = {};
+      (data.hooks || []).forEach(function (h) { hookRows[h.slug] = h; });
+      hooksReachable = data.reachable !== false;
+      return fetch("/api/schedules");
+    })
     .then(function (r) { return r.json(); })
     .then(function (data) {
       var list = data.schedules || [];
-      $("autostate").innerHTML = data.armed
+      // A URL nothing outside can reach is a trap: it works from this machine and silently
+      // does not from the phone it was made for. Said once, above the list.
+      var unreachable = !hooksReachable && Object.keys(hookRows).length > 0
+        ? '<div style="color:var(--warn);font-size:11px;margin-top:3px">The webhook URLs below point at this machine. For a phone to reach them, set AGENTBOX_PUBLIC_URL to an address that resolves from outside (a tunnel, or a host on your network).</div>'
+        : "";
+      $("autostate").innerHTML = unreachable + (data.armed
         ? list.length + " automation" + (list.length === 1 ? "" : "s") + " armed"
-        : '<span style="color:var(--warn)">The scheduler is off (AGENTBOX_SCHEDULER=0) — nothing below will fire.</span>';
+        : '<span style="color:var(--warn)">The scheduler is off (AGENTBOX_SCHEDULER=0) — nothing below will fire.</span>');
       $("autolist").innerHTML = list.length
         ? list.map(automationRow).join("")
-        : '<div class="dim" style="padding:12px 16px;font-size:13px">Nothing runs by itself. A skill becomes an automation by adding <span class="mono">schedule:</span> to its frontmatter — plus <span class="mono">timezone:</span> if the time was agreed in someone else’s zone, and <span class="mono">deliver:</span> for the chat that should receive the report.</div>';
+        : '<div class="dim" style="padding:12px 16px;font-size:13px">Nothing runs by itself. A skill becomes an automation by adding <span class="mono">schedule:</span> (a timer), <span class="mono">trigger: webhook</span> (a URL anything can call) or <span class="mono">trigger: message</span> to its frontmatter — plus <span class="mono">timezone:</span> if the time was agreed in someone else’s zone, and <span class="mono">deliver:</span> for the chat that should receive the report.</div>';
     })
     .catch(function () {
       $("autolist").innerHTML = '<div class="dim" style="padding:12px 16px">Could not read the automations.</div>';
@@ -3914,6 +3952,47 @@ document.getElementById("autorefresh").addEventListener("click", function (e) {
 // at 06:30 — and it deliberately does not count as the scheduled run.
 document.getElementById("autolist").addEventListener("click", function (e) {
   var get = function (name) { return e.target && e.target.getAttribute && e.target.getAttribute(name); };
+  // The secret is on screen only when asked for, and only in this tab's memory: a settings page
+  // left open on a desk should not be a credential on a desk.
+  var reveal = get("data-reveal");
+  if (reveal) {
+    e.preventDefault();
+    var field = document.querySelector('[data-secret-for="' + reveal.replace(/"/g, '\\"') + '"]');
+    var row = hookRows[reveal];
+    if (field && row) {
+      var shown = field.getAttribute("data-shown") === "1";
+      field.textContent = shown ? "\u2022".repeat(24) : row.secret;
+      field.setAttribute("data-shown", shown ? "0" : "1");
+      e.target.textContent = shown ? "Show" : "Hide";
+    }
+    return;
+  }
+  var copyHook = get("data-copyhook");
+  if (copyHook) {
+    e.preventDefault();
+    var entry = hookRows[copyHook];
+    if (entry) {
+      // The whole call, not the pieces: what a person needs is something they can paste into a
+      // shortcut or a terminal and have work.
+      var snippet = "curl -X POST " + entry.url + " \\\n  -H 'Authorization: Bearer " + entry.secret + "' \\\n  -H 'Content-Type: text/plain' \\\n  --data 'https://example.com/the-thing'";
+      navigator.clipboard.writeText(snippet).then(function () {
+        e.target.textContent = "Copied";
+        setTimeout(function () { e.target.textContent = "Copy"; }, 1200);
+      });
+    }
+    return;
+  }
+  var rotate = get("data-rotate");
+  if (rotate) {
+    e.preventDefault();
+    if (!confirm("Make a new secret for this routine? Anything using the old one stops working.")) return;
+    e.target.disabled = true;
+    fetch("/api/hooks/rotate", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ slug: rotate }) })
+      .then(function (r) { return r.json(); })
+      .then(function (data) { if (data.error) alert(data.error); return refreshAutomations(); })
+      .catch(function () { return refreshAutomations(); });
+    return;
+  }
   var toggleSlug = get("data-resume") || get("data-pause");
   if (toggleSlug) {
     e.preventDefault();
