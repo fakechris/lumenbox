@@ -1186,7 +1186,8 @@ export function buildTools(
             type: "string",
             description:
               "The note to keep, as one or two self-contained sentences that will still " +
-              "make sense without this conversation around them.",
+              "make sense without this conversation around them. Under 500 characters — " +
+              "longer is refused, and a paragraph is several facts or a document.",
           },
           scope: {
             type: "string",
@@ -3432,7 +3433,9 @@ export async function dispatchTool(
           };
         }
         const lines = created.map(
-          row => `Created agent "${row.name}" (id: ${row.id}). Message it with SendToAgent using that id.`
+          row =>
+            `Created agent "${row.name}" (id: ${row.id}). It exists now — on the roster, listed by ` +
+            `Teammates, nothing to verify in the box. Message it by name with SendToAgent.`
         );
         if (skipped.length > 0) {
           lines.push(`Already present, left as they were: ${skipped.join(", ")}.`);
@@ -3466,9 +3469,11 @@ export async function dispatchTool(
       greetNewAgent(context, created.id);
       return {
         text:
-          `Created agent "${created.profile.name}" (id: ${created.id}). ` +
-          `It has been told you made it. Tell the person it exists and to talk to it directly; ` +
-          `anything still undecided about how it works is for it to ask them, not you.${inherited}`,
+          `Created agent "${created.profile.name}" (id: ${created.id}). It exists now: it is on the ` +
+          `roster, \`Teammates\` lists it, and it has been told you made it. There is nothing to ` +
+          `verify — no file lands in the box, no process appears, and waiting or polling for one ` +
+          `finds nothing however long you wait. Tell the person it exists and to talk to it ` +
+          `directly; anything still undecided about how it works is for it to ask them, not you.${inherited}`,
       };
     }
 

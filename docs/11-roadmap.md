@@ -1554,6 +1554,12 @@ oneself; only the blocking join was in the way), the prompt has a `front` sectio
 Grok's dispatcher persona, a teammate-opened turn is offered no person-facing tool, AskUser
 carries a `default` and refuses a third question in a row.
 
+**Episodes are tests now (2026-09-09, docs/43).** `src/host/scenario.ts` runs a whole episode on
+the real stack with a scripted model and an in-memory box and scores it; `scenario.test.ts` holds
+one scenario per real episode that went wrong; `npm run scenario` runs the same ones against the
+real provider N times for a conduct scorecard. The rule: a conduct fix is not finished until the
+episode that prompted it is a scenario.
+
 **Feeding the multiuser branch, not this line:** the three-layer identity model (observed
 identity, revocable binding, per-box allow/deny), fail-closed row-level security for a
 future control-plane database, and the personal-box contract (data in the snapshot layer,
