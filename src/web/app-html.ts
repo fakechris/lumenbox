@@ -3850,7 +3850,14 @@ document.getElementById("tabauto").addEventListener("click", function (e) { e.pr
 // The three things a cron expression in a file cannot tell a person: whether the timer
 // is armed at all, when this one last actually fired, and where its report goes.
 
-function automationRow(s) {
+/**
+ * One routine. The rows argument is the webhook table this render was built from, passed in
+ * rather than read
+ * from the module's copy: two refreshes can be in flight at once (page init and opening the tab),
+ * and a render that reads a shared object gets whichever state the other call left behind. That
+ * is why the URL was missing until you pressed refresh.
+ */
+function automationRow(s, rows) {
   var when = esc(s.described) + (s.timezone ? ' <span class="dim">(' + esc(s.timezone) + ")</span>" : "");
   var last = s.running
     ? '<span style="color:var(--accent)">running now</span>'
@@ -3877,7 +3884,10 @@ function automationRow(s) {
     : '<button class="btn ghost sm" data-pause="' + esc(s.slug) + '">Pause</button>';
   // A webhook routine's URL and secret are the whole of its interface: without them on screen
   // there is nothing to paste into a phone, and the routine is armed but unreachable.
-  var hook = s.kind === "webhook" ? hookRows[s.slug] : undefined;
+  // Keyed on the hook data alone. It used to also require s.kind === "webhook", which is the
+  // same fact said twice by two endpoints — and when the two disagreed the URL vanished from the
+  // page with nothing to explain it, which is exactly the failure a person cannot debug.
+  var hook = (rows || hookRows)[s.slug];
   var hookBlock = hook
     ? '<div style="margin-top:6px;padding:8px 10px;border:1px solid var(--border);border-radius:8px">' +
         '<div class="dim" style="font-size:11px">POST here, with <span class="mono">Authorization: Bearer &lt;secret&gt;</span></div>' +
@@ -3918,24 +3928,29 @@ function refreshAutomations() {
     .then(function (r) { return r.ok ? r.json() : { hooks: [], reachable: true }; })
     .catch(function () { return { hooks: [], reachable: true }; })
     .then(function (data) {
-      hookRows = {};
-      (data.hooks || []).forEach(function (h) { hookRows[h.slug] = h; });
+      var rows = {};
+      (data.hooks || []).forEach(function (h) { rows[h.slug] = h; });
+      // The module's copy is for the click handlers, which run long after this render.
+      hookRows = rows;
       hooksReachable = data.reachable !== false;
-      return fetch("/api/schedules");
+      return fetch("/api/schedules").then(function (r) { return r.json(); }).then(function (schedules) {
+        return { rows: rows, reachable: data.reachable !== false, schedules: schedules };
+      });
     })
-    .then(function (r) { return r.json(); })
     .then(function (data) {
-      var list = data.schedules || [];
+      var list = (data.schedules && data.schedules.schedules) || [];
+      var rows = data.rows || {};
       // A URL nothing outside can reach is a trap: it works from this machine and silently
       // does not from the phone it was made for. Said once, above the list.
-      var unreachable = !hooksReachable && Object.keys(hookRows).length > 0
+      var unreachable = !data.reachable && Object.keys(rows).length > 0
         ? '<div style="color:var(--warn);font-size:11px;margin-top:3px">The webhook URLs below point at this machine. For a phone to reach them, set AGENTBOX_PUBLIC_URL to an address that resolves from outside (a tunnel, or a host on your network).</div>'
         : "";
-      $("autostate").innerHTML = unreachable + (data.armed
-        ? list.length + " automation" + (list.length === 1 ? "" : "s") + " armed"
+      $("autostate").innerHTML = unreachable + (data.schedules && data.schedules.armed
+        ? list.length + " automation" + (list.length === 1 ? "" : "s") + " armed" +
+          (Object.keys(rows).length > 0 ? " · " + Object.keys(rows).length + " with a webhook URL" : "")
         : '<span style="color:var(--warn)">The scheduler is off (AGENTBOX_SCHEDULER=0) — nothing below will fire.</span>');
       $("autolist").innerHTML = list.length
-        ? list.map(automationRow).join("")
+        ? list.map(function (entry) { return automationRow(entry, rows); }).join("")
         : '<div class="dim" style="padding:12px 16px;font-size:13px">Nothing runs by itself. A skill becomes an automation by adding <span class="mono">schedule:</span> (a timer), <span class="mono">trigger: webhook</span> (a URL anything can call) or <span class="mono">trigger: message</span> to its frontmatter — plus <span class="mono">timezone:</span> if the time was agreed in someone else’s zone, and <span class="mono">deliver:</span> for the chat that should receive the report.</div>';
     })
     .catch(function () {
