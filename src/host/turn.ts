@@ -574,6 +574,16 @@ type TurnEventBody =
  * called nothing. An audit trail the model can forge is not an audit trail.
  * `tool_use` and `tool_result` blocks are a separate channel it cannot type into.
  */
+/**
+ * Whether the person has ever opened a turn in this transcript.
+ *
+ * Read from the stored entries rather than kept as state: the transcript is already the record
+ * of who said what, and a second store of the same fact is a second thing to keep true.
+ */
+export function personHasSpoken(history: readonly TranscriptEntry[]): boolean {
+  return history.some(entry => (entry as { fromPerson?: boolean }).fromPerson === true);
+}
+
 export type TranscriptEntry =
   | {
       role: "user" | "assistant";
@@ -587,6 +597,14 @@ export type TranscriptEntry =
        * one clock, so ordering was never the missing piece; the link was.
        */
       causedBy?: readonly string[];
+      /**
+       * The person opened this turn, as opposed to a teammate or the harness.
+       *
+       * Kept because it answers a question no later reader can: whether the person has ever
+       * talked to this agent in this conversation. That is what decides whether it may reach
+       * them (docs/42 §2) — a worker nobody has spoken to has no chat anyone is reading.
+       */
+      fromPerson?: true;
     }
   /** An assistant turn that called tools; carries text and tool_use blocks. */
   | { role: "assistant"; kind: "blocks"; blocks: Anthropic.ContentBlockParam[]; at: string }
@@ -1313,6 +1331,14 @@ export async function runTurn(
     }
   }
 
+  const personOpened = inbound.some(message => message.fromId === "user");
+  /**
+   * Whether the person is a party to this conversation at all: they opened this turn, or they
+   * have spoken here before. False for a worker that only ever hears from teammates.
+   */
+  const personIsHere =
+    personOpened || personHasSpoken(registry.readTranscript(agent.id, conversation) as TranscriptEntry[]);
+
   const turnText = buildTurnPrompt(inbound);
 
   // Before assembling: a conversation that has grown past what fits is summarised, once, and the
@@ -1356,6 +1382,7 @@ export async function runTurn(
     // list of uuids. Without it a turn holds no trace of what set it off, so "who caused this" can
     // not be walked backwards however precisely everything was timed.
     causedBy: inbound.map(message => message.id),
+    ...(personOpened ? { fromPerson: true as const } : {}),
   } satisfies TranscriptEntry, conversation);
 
   // Narrowed by this agent's profile. Withheld, not refused: a tool it may not use is not in its
@@ -1429,10 +1456,6 @@ export async function runTurn(
           input_schema: tool.inputSchema as Anthropic.Tool["input_schema"],
         }));
 
-  const personOpened = inbound.some(message => message.fromId === "user");
-  /** Every message that opened this turn came from another agent. */
-  const peerOpened =
-    !personOpened && inbound.length > 0 && inbound.every(message => registry.tryGet(message.fromId) !== undefined);
 
   const tools = buildTools(
     box !== undefined,
@@ -1449,10 +1472,12 @@ export async function runTurn(
     isForkConversation(conversation)
     // MCP tools are outward channels too — a fork gets none (docs/32 §2).
   ).concat(isForkConversation(conversation) ? [] : mcpTools)
-    // A turn opened by teammates has no line to the person (docs/42 §2): the person is
-    // talking to the sender, and a question from here lands in a chat they are not reading.
-    // What needs deciding goes back to the sender in the reply.
-    .filter(tool => !(peerOpened && PERSON_FACING_TOOLS.has(tool.name)));
+    // Only an agent the person actually talks to may reach them (docs/42 §2). A worker created
+    // by another agent and woken only by teammates has a chat nobody is reading, and its
+    // question would sit there unseen; what it needs decided goes back to the sender instead.
+    // The test is the whole conversation, not this turn: the front agent woken by a worker's
+    // report is still the person's counterpart, and it is the one that has to be able to ask.
+    .filter(tool => !(!personIsHere && PERSON_FACING_TOOLS.has(tool.name)));
 
   // One entry per completed round, for the loop and progress judgements. Held out here rather than
   // inside runRounds so a continuation can reset it: a fresh budget deserves a fresh judgement.

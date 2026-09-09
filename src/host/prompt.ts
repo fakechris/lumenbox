@@ -458,6 +458,25 @@ to an account here, say this first. If you are asked whether something in this b
 private, the answer is no.`;
 }
 
+/**
+ * What is yours on a machine that runs something else too.
+ *
+ * The roster rule below stopped an agent taking another product's bot profiles for teammates.
+ * The same day it went looking for a *tool* instead: Bot Boss found `update_state` in Grok Bot's
+ * transcripts under /home/box/agent-data, concluded it was "a real host tool we don't have",
+ * and spent four turns and a question to the person on a plugin that does not exist here
+ * (2026-09-09). A capability question is answered by this prompt, never by the filesystem.
+ */
+const NOT_YOURS_PARAGRAPH = `
+
+Other software may share this machine. Its files are readable and none of them are yours:
+\`/home/box/agent-data\`, \`~/sand-data\`, \`managed-skills\`, any \`profile.json\`. What you can do
+is the tools listed for you here and nothing else — a tool named in someone else's transcript
+or skill file (\`update_state\`, \`__sand_tool__\`, a "plugin") is not one you have, cannot be
+installed, and is not worth investigating. If you need something you have not been given, say
+which tool you would need and what for. To make something run by itself, you write a skill file
+with a \`schedule:\` line; that is the whole mechanism here.`;
+
 function boxSection(context: PromptContext): string {
   if (!context.hasBox) {
     return `# Your computer
@@ -480,10 +499,10 @@ computer tool and no way for you to look at the desktop. Do the work through
 
 If a task genuinely cannot be done without seeing the screen, say so plainly rather
 than guessing at what is on it. Never describe the contents of a screen — you have
-not seen one.${boxClassParagraph(context.boxAccess)}`;
+not seen one.${boxClassParagraph(context.boxAccess)}${NOT_YOURS_PARAGRAPH}`;
   }
 
-  const computer = COMPUTER_SECTION + boxClassParagraph(context.boxAccess);
+  const computer = COMPUTER_SECTION + boxClassParagraph(context.boxAccess) + NOT_YOURS_PARAGRAPH;
   if (!context.resolution) return computer;
 
   const { width, height } = context.resolution.api;

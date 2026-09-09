@@ -3135,7 +3135,7 @@ test("a turn opened by a teammate is offered no tool that reaches the person", a
     await runTurn(ada, [peerMessage(bob, "what colour?", true)], new AbortController().signal, {
       client, registry, bus, box: undefined, resolution: undefined, askUser: async () => "in the app",
     });
-    const offered = (capture.params[0]!.tools ?? []).map(tool => tool.name);
+    const offered = (capture.params[0]!.tools ?? []).map(tool => ("name" in tool ? tool.name : ""));
     assert.ok(!offered.includes("AskUser"), "AskUser withheld on a peer-opened turn");
     assert.ok(!offered.includes("AskSecret"));
     const system = String(capture.params[0]!.system ?? "");

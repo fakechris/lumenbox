@@ -17,6 +17,7 @@
     "build:image": "npm run build:box && node scripts/build-image.mjs",
     "typecheck": "tsc -p tsconfig.json",
     "test": "node scripts/test-floor.mjs",
+    "scenario": "node --experimental-transform-types scripts/scenario-live.mjs",
     "agentbox": "node --experimental-transform-types src/cli.ts",
     "smoke": "node --experimental-transform-types scripts/smoke.mjs",
     "lint": "biome lint src/ scripts/",
