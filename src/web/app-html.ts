@@ -316,7 +316,7 @@ export const APP_HTML = String.raw`<!doctype html>
     flex: none; height: 52px; border-bottom: 1px solid var(--border);
     display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 0 18px;
   }
-  .paneheader .lead { display: flex; align-items: center; gap: 10px; min-width: 0; }
+  .paneheader .lead { display: flex; align-items: center; gap: 5px; min-width: 0; }
   /* Right pane only: a crowded lead clips inside its own box instead of painting
      under the actions — the badge shrinks first (it repeats what the notice banner
      says in full), the tabs never do. NOT the left pane's lead: the conversation
@@ -682,12 +682,14 @@ export const APP_HTML = String.raw`<!doctype html>
 
   /* ── right pane: what is happening now ────────────────────────────────────── */
   .tab {
-    padding: 4px 12px; border-radius: var(--radius-pill); text-decoration: none;
+    padding: 4px 8px; border-radius: var(--radius-pill); text-decoration: none;
     font-size: 12px; color: var(--muted); transition: background var(--dur) var(--ease);
+    flex: none; white-space: nowrap;
   }
   .tab:hover { text-decoration: none; background: var(--surface-hover); }
   .tab.on { background: var(--accent-soft); color: var(--accent); }
-  #desktoptitle { font-size: 12px; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  /* The one thing that yields space when the tabs need it, so the last tab is never clipped. */
+  #desktoptitle { font-size: 12px; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; flex: 1 1 auto; min-width: 0; }
   /* Always rendered, never dismissible: docs/18 §3.1. A shared box is warn-toned because
      what it says changes what a person should be willing to type; a private one is quiet
      because it is only stating the ordinary case. */
@@ -881,8 +883,8 @@ export const APP_HTML = String.raw`<!doctype html>
       <span id="desktoptitle"></span>
       <span id="boxclass" class="boxclass" style="display:none"></span>
     </span>
-    <span class="headactions">
-      <a id="rec" href="#">&#9679; record</a>
+    <span class="headactions" id="desktopactions">
+      <a id="rec" href="#" title="Record this desktop">&#9679;</a>
       <a id="full" href="#" target="_blank" rel="noopener" class="btn sm" style="text-decoration:none">Take over</a>
     </span>
   </div>
@@ -4199,6 +4201,7 @@ function showTab(which) {
   $("tabtasks").className = "tab" + (which === "tasks" ? " on" : "");
   $("tabauto").className = "tab" + (which === "auto" ? " on" : "");
   $("tabaudit").className = "tab" + (which === "audit" ? " on" : "");
+  $("desktopactions").style.display = which === "desktop" ? "" : "none";
   if (which === "files") refreshFiles();
   if (which === "tasks") refreshTasks();
   if (which === "auto") refreshAutomations();
@@ -5276,12 +5279,12 @@ $("rec").onclick = function (event) {
     });
   }).then(function (data) {
     recording = starting ? data.file : null;
-    link.textContent = starting ? "■ stop" : "● record";
+    link.textContent = starting ? "■" : "●"; link.title = starting ? "Stop recording" : "Record this desktop";
     link.className = starting ? "on" : "";
     if (!starting) feed("recording saved: " + esc(data.file), "mail");
     return loadRecordings();
   }).catch(function (error) {
-    link.textContent = "● record";
+    link.textContent = "●"; link.title = "Record this desktop";
     link.className = "";
     recording = null;
     feed("recording: " + esc(error.message), "err");
