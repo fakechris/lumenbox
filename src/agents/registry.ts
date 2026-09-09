@@ -92,6 +92,30 @@ export const PLAN_FILENAME = "plan.md";
 export const TODOS_FILENAME = "todos.json";
 export const BOX_OWNER_FILENAME = "box-owner";
 
+/** How many teams one agent may be in, and how long a team name may be. */
+export const MAX_TAGS = 5;
+export const MAX_TAG_CHARS = 24;
+
+/**
+ * Team names, cleaned up.
+ *
+ * Lowercased and trimmed so "Editorial" and "editorial " are one team rather than two — the
+ * failure that makes grouping useless is two spellings of the same department. Deduplicated,
+ * bounded, and anything that is not a word is dropped rather than refused: this is called from a
+ * tool an agent uses, and a refusal there costs a turn to learn something the system can fix.
+ */
+export function normaliseTags(tags: readonly unknown[]): string[] {
+  const seen: string[] = [];
+  for (const raw of tags) {
+    if (typeof raw !== "string") continue;
+    const tag = raw.trim().toLowerCase().replace(/\s+/g, "-").replace(/[^a-z0-9\u4e00-\u9fff-]/g, "");
+    if (tag === "" || tag.length > MAX_TAG_CHARS) continue;
+    if (!seen.includes(tag)) seen.push(tag);
+    if (seen.length >= MAX_TAGS) break;
+  }
+  return seen;
+}
+
 export interface AgentProfile {
   name: string;
   description: string;
@@ -100,6 +124,16 @@ export interface AgentProfile {
   avatarColor?: string;
   /** Removes the agent from listings without disabling it. */
   hidden?: boolean;
+  /**
+   * The teams this agent belongs to, lowercased.
+   *
+   * Several, not one, and that is the whole design. A person asked for this after a template
+   * stamped five agents at once and the alphabetical list stopped being findable — but a single
+   * team would force a lie about the ops agent that every project uses. So an agent appears
+   * under each of its teams, the way a person in two departments appears on both org charts.
+   * Absent is not a bug: an agent with no team is fine, and lands in its own group.
+   */
+  tags?: string[];
   /**
    * The agent's own desktop in the box.
    *
@@ -563,6 +597,11 @@ export class AgentRegistry {
     /** The template it is being created from, when it is. */
     importedFrom?: { id: string; name: string; createdBy?: string; at: string };
     /**
+     * The teams it belongs to. Set at birth by whatever made it — a crew stamps its own name
+     * here — so a batch of five is findable together without anyone tidying up afterwards.
+     */
+    tags?: readonly string[];
+    /**
      * Which box it lives in (docs/30). Absent means the installation's own. Chosen here and
      * never changed: a worker's authority is its box's, and `update` has no such field.
      */
@@ -584,6 +623,9 @@ export class AgentRegistry {
       title: input.title ? clampLine(input.title, 64) : undefined,
       avatarColor: input.avatarColor,
       hidden: input.hidden ?? false,
+      ...(input.tags !== undefined && normaliseTags(input.tags).length > 0
+        ? { tags: normaliseTags(input.tags) }
+        : {}),
       displayIndex: this.nextDisplayIndex(this.displayFloor, box.id),
       // Bound at creation like the display, immutable the same way: chosen once above and
       // not on update's allow-list.
@@ -629,11 +671,18 @@ export class AgentRegistry {
       /** Provider preset and model override; `null`/`""` clears back to the default. */
       provider?: string | null;
       model?: string | null;
+      /** The teams it belongs to. An empty array removes it from all of them. */
+      tags?: readonly string[];
     }
   ): AgentRecord {
     const existing = this.get(agentId);
     const profile: AgentProfile = { ...existing.profile };
 
+    if (changes.tags !== undefined) {
+      const tags = normaliseTags(changes.tags);
+      if (tags.length === 0) delete profile.tags;
+      else profile.tags = tags;
+    }
     if (changes.name !== undefined) {
       const name = clampLine(changes.name, AGENT_NAME_MAX_LENGTH);
       if (name) profile.name = name;

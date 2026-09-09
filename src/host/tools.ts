@@ -31,7 +31,7 @@ import { MCP_FACE_DIR, MCP_FACE_TOKEN_VARIABLE, type McpFace } from "./mcp-face.
 import type { ModelRelay } from "./model-relay.ts";
 import type { DelegateSessions } from "./delegate-sessions.ts";
 import { randomBytes } from "node:crypto";
-import { MAIN_CONVERSATION } from "../agents/registry.ts";
+import { MAIN_CONVERSATION, normaliseTags } from "../agents/registry.ts";
 import { describeTask, isLive, isTaskStatus, TASK_STATUSES, type TaskStore, clampContract } from "./tasks.ts";
 import { ABSENT, versionOf, type FileVersions } from "./files.ts";
 import {
@@ -1030,16 +1030,25 @@ export function buildTools(
             type: "string",
             description: 'A short role label, e.g. "release manager".',
           },
+          tags: {
+            type: "array",
+            items: { type: "string" },
+            description:
+              "The teams it belongs to, e.g. [\"editorial\"]. Agents are grouped by these in the " +
+              "sidebar, so a set of agents made for one job should share one. Several are fine — " +
+              "an ops agent every project uses belongs to each of them.",
+          },
         },
       },
     },
     {
       name: "UpdateAgent",
       description:
-        "Edit another agent's name, description, or role label. Only the fields you pass " +
-        "change; the rest are left exactly as they were, and there is no way to blank a " +
+        "Edit another agent's name, description, role label, or teams. Only the fields you " +
+        "pass change; the rest are left exactly as they were, and there is no way to blank a " +
         "profile or remove an agent through this tool. Use it to refine a teammate's remit " +
-        "as the work becomes clearer.",
+        "as the work becomes clearer, and to put agents that work together on the same team " +
+        "so a person can find them as a group. Pass your own id to tag yourself.",
       input_schema: {
         type: "object",
         properties: {
@@ -1050,6 +1059,13 @@ export function buildTools(
             description: "New persona/remit. Omit to leave unchanged.",
           },
           title: { type: "string", description: "New role label. Omit to leave unchanged." },
+          tags: {
+            type: "array",
+            items: { type: "string" },
+            description:
+              "The teams it belongs to, replacing whatever it had — pass the full list, not an " +
+              "addition. Several are fine, and an empty array removes it from all of them.",
+          },
         },
         required: ["agent_id"],
       },
@@ -3396,6 +3412,7 @@ export async function dispatchTool(
       // its own roster, and concluded the host had failed (2026-09-08).
       const from = String(input.from ?? "").trim();
       const held = context.agent.profile.tools;
+      const askedTags = Array.isArray(input.tags) ? normaliseTags(input.tags) : [];
       if (from !== "") {
         const rows = profilesFor(from);
         if (rows === undefined) {
@@ -3418,6 +3435,9 @@ export async function dispatchTool(
             title: row.title,
             tools: [...intersectTools(row.tools, held)],
             beside: context.agent.id,
+            // A crew arrives as a team. Tagged with the catalog entry it came from, so five
+            // agents stamped in one go are findable together without anyone tidying up.
+            tags: askedTags.length > 0 ? askedTags : [from],
           });
           existing.add(name);
           created.push({ name: record.profile.name, id: record.id });
@@ -3456,6 +3476,10 @@ export async function dispatchTool(
         description,
         title: input.title ? String(input.title) : undefined,
         beside: context.agent.id,
+        // Inherits the creator's teams when none is named: an agent made by the editorial
+        // coordinator is editorial until somebody says otherwise, which is nearly always right
+        // and is the difference between a list that stays organised and one that decays.
+        tags: askedTags.length > 0 ? askedTags : (context.agent.profile.tags ?? []),
         // A colleague cannot be given tools its creator does not have. Without this, an agent that
         // may not write files creates one that may and asks it to write — and the restriction was
         // never a restriction, only a longer path. Same rule as a teammate's message carrying no
@@ -3484,14 +3508,16 @@ export async function dispatchTool(
         description:
           input.description === undefined ? undefined : String(input.description),
         title: input.title === undefined ? undefined : String(input.title),
+        tags: Array.isArray(input.tags) ? normaliseTags(input.tags) : undefined,
       };
       if (
         changes.name === undefined &&
         changes.description === undefined &&
-        changes.title === undefined
+        changes.title === undefined &&
+        changes.tags === undefined
       ) {
         return {
-          text: "Nothing to update: provide a new name, description, or title.",
+          text: "Nothing to update: provide a new name, description, title, or tags.",
           isError: true,
         };
       }

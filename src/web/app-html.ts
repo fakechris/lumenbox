@@ -277,6 +277,12 @@ export const APP_HTML = String.raw`<!doctype html>
   }
   .agent:hover { background: var(--surface-hover); }
   .agent.on { background: var(--accent-soft); }
+  /* A team heading. Quiet: it is scaffolding for finding an agent, not a thing to look at. */
+  .teamhead {
+    display: flex; align-items: baseline; gap: 6px; padding: 10px 14px 3px;
+    font-size: 10.5px; letter-spacing: 0.08em; text-transform: uppercase; color: var(--muted);
+  }
+  .teamhead .count { text-transform: none; letter-spacing: 0; opacity: 0.7; }
   .agent.on .nm, .agent.on .ttl, .agent.on .dnum { color: var(--accent); }
   /* The dot beside an agent carries its identity color (--c-1…8, stable by roster
      position); state is the word next to it, and the pulse while a turn runs. */
@@ -733,7 +739,9 @@ export const APP_HTML = String.raw`<!doctype html>
 <div id="shell">
 
 <div class="pane" id="sidebar">
-  <div class="eyebrow-row"><span class="eyebrow">Agents</span><button id="new" class="btn ghost sm" title="New agent">+</button></div>
+  <div class="eyebrow-row"><span class="eyebrow">Agents</span>
+    <a href="#" id="groupby" class="dim" style="font-size:11px;margin-right:8px" title="Group the list by team, or list it A to Z">teams</a>
+    <button id="new" class="btn ghost sm" title="New agent">+</button></div>
   <div class="scroll" id="agents"></div>
   <div style="padding:6px 12px 4px"><button id="shelfopen" class="btn sm" style="width:100%;justify-content:space-between;display:flex" title="Templates: saved agents you can stamp into this box"><span>Templates</span><span class="dim">stamp ▸</span></button></div>
   <div id="sidefoot">
@@ -2440,19 +2448,70 @@ function agentsInView() {
   return agents.filter(function (a) { return a.boxId === currentBox; });
 }
 
+/**
+ * How the list is arranged: by team, or A to Z.
+ *
+ * Kept because a person's answer is about their own habits, not about this session. A team stamps
+ * five agents at once now, and past a dozen an alphabetical list stops being findable — but
+ * somebody with six agents and no teams should not be made to look at headings.
+ */
+var groupBy = (function () {
+  try { return localStorage.getItem("lumenbox.groupBy") || "teams"; } catch (error) { return "teams"; }
+})();
+
+function oneAgentRow(a, index) {
+  return '<div class="agent ' + (a.id === current ? "on" : "") + '" data-id="' + esc(a.id) + '">' +
+    '<div class="dot ' + (busy.has(a.id) ? "busy" : "") +
+    '" style="background:var(--c-' + ((index % 8) + 1) + ')"></div>' +
+    '<div class="cols"><div class="nm">' + esc(a.name) + "</div>" +
+    '<div class="ttl">' + esc(busy.has(a.id) ? "Running" : String(a.title || a.description || "idle").slice(0, 40)) +
+    "</div></div>" +
+    (a.displayIndex ? '<span class="dnum">d' + esc(a.displayIndex) + "</span>" : "") +
+    "</div>";
+}
+
+/**
+ * The list, grouped into teams.
+ *
+ * An agent in two teams appears under both. That is the point rather than a compromise: the ops
+ * agent every project uses really is in every project, and hiding it under one arbitrary heading
+ * is the thing that would make the grouping lie. Teams are ordered by the most recently active
+ * member so the one being worked with is at the top, and everything untagged falls into a last
+ * group rather than disappearing.
+ */
 function renderAgents() {
+  var list = agentsInView();
+  var tagged = list.some(function (a) { return (a.tags || []).length > 0; });
+  $("groupby").textContent = groupBy === "teams" ? "teams" : "a\u2013z";
+  $("groupby").style.display = tagged ? "" : "none";
+
   var html = "";
-  var sorted = agentsInView();
-  for (var i = 0; i < sorted.length; i++) {
-    var a = sorted[i];
-    html += '<div class="agent ' + (a.id === current ? "on" : "") + '" data-id="' + esc(a.id) + '">' +
-      '<div class="dot ' + (busy.has(a.id) ? "busy" : "") +
-      '" style="background:var(--c-' + ((i % 8) + 1) + ')"></div>' +
-      '<div class="cols"><div class="nm">' + esc(a.name) + "</div>" +
-      '<div class="ttl">' + esc(busy.has(a.id) ? "Running" : String(a.title || a.description || "idle").slice(0, 40)) +
-      "</div></div>" +
-      (a.displayIndex ? '<span class="dnum">d' + esc(a.displayIndex) + "</span>" : "") +
-      "</div>";
+  var index = 0;
+  if (groupBy !== "teams" || !tagged) {
+    for (var i = 0; i < list.length; i++) html += oneAgentRow(list[i], index++);
+  } else {
+    var groups = {};
+    var order = [];
+    var loose = [];
+    for (var k = 0; k < list.length; k++) {
+      var a = list[k];
+      var tags = a.tags || [];
+      if (tags.length === 0) { loose.push(a); continue; }
+      for (var t = 0; t < tags.length; t++) {
+        if (!groups[tags[t]]) { groups[tags[t]] = []; order.push(tags[t]); }
+        groups[tags[t]].push(a);
+      }
+    }
+    order.sort();
+    for (var g = 0; g < order.length; g++) {
+      var members = groups[order[g]];
+      html += '<div class="teamhead">' + esc(order[g]) + ' <span class="count">' + members.length + "</span></div>";
+      for (var m = 0; m < members.length; m++) html += oneAgentRow(members[m], index++);
+    }
+    if (loose.length > 0) {
+      html += '<div class="teamhead">no team <span class="count">' + loose.length + "</span></div>";
+      for (var n = 0; n < loose.length; n++) html += oneAgentRow(loose[n], index++);
+    }
   }
   $("agents").innerHTML = html;
   var nodes = document.querySelectorAll(".agent");
@@ -2460,6 +2519,13 @@ function renderAgents() {
     nodes[j].onclick = function () { select(this.dataset.id); };
   }
 }
+
+document.getElementById("groupby").addEventListener("click", function (event) {
+  event.preventDefault();
+  groupBy = groupBy === "teams" ? "az" : "teams";
+  try { localStorage.setItem("lumenbox.groupBy", groupBy); } catch (error) {}
+  renderAgents();
+});
 
 /* ── the trace as a tree ───────────────────────────────────────────────────────
    A turn is rounds: the model says what it is about to do, then does it. That is a
