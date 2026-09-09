@@ -2866,7 +2866,12 @@ function clearMarks() {
 
 /** Which messages a filter admits. The tool-call option searches the work folds instead. */
 function searchable(who, when) {
-  var nodes = $("chat").querySelectorAll(who === "work" ? "details.work" : ".msg");
+  // "anyone" means everything in the thread, not only the message bubbles: the trigger lines,
+  // the work folds and the cards are part of the conversation, and a search that quietly skips
+  // them reports "1 match" for something on screen twice.
+  var nodes = $("chat").querySelectorAll(
+    who === "work" ? "details.work" : who === "all" ? "#chat > *" : ".msg"
+  );
   var cutoff = when === "all" ? 0 : Date.now() - Number(when) * 86400000;
   var out = [];
   for (var i = 0; i < nodes.length; i++) {
