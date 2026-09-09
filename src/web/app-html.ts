@@ -364,6 +364,10 @@ export const APP_HTML = String.raw`<!doctype html>
   .trigger summary { cursor: pointer; list-style: none; text-align: center; }
   .trigger summary::-webkit-details-marker { display: none; }
   .trigger .det { margin-top: 6px; padding: 8px 12px; border: 1px solid var(--border); border-radius: 10px; background: var(--surface-2); white-space: pre-wrap; text-align: left; color: var(--text-soft); font-size: 12px; }
+  #auditlist { font-size: 12.5px; }
+  .auditrow { padding: 3px 16px; border-bottom: 1px solid var(--border); line-height: 1.5; word-break: break-word; }
+  .auditrow .at { color: var(--muted); margin-right: 8px; font-variant-numeric: tabular-nums; }
+  .auditrow.dim { color: var(--text-soft); }
   mark.hit { background: var(--accent-soft); color: inherit; border-radius: 3px; padding: 0 1px; }
   mark.hit.on { background: var(--accent); color: var(--on-ink); }
   #searchbar { display: none; gap: 8px; align-items: center; padding: 7px 18px; border-bottom: 1px solid var(--border); font-size: 12px; }
@@ -873,6 +877,7 @@ export const APP_HTML = String.raw`<!doctype html>
       <a href="#" id="tabfiles" class="tab">Files</a>
       <a href="#" id="tabtasks" class="tab">Tasks</a>
       <a href="#" id="tabauto" class="tab">Automations</a>
+      <a href="#" id="tabaudit" class="tab">Audit</a>
       <span id="desktoptitle"></span>
       <span id="boxclass" class="boxclass" style="display:none"></span>
     </span>
@@ -934,6 +939,12 @@ export const APP_HTML = String.raw`<!doctype html>
       <a href="#" id="autorefresh" class="dim" style="font-size:12px">refresh</a>
     </div>
     <div class="scroll" id="autolist"></div>
+  </div>
+  <!-- Behaviour audit for a company jump box (docs/47): commands run and windows focused, and a
+       red bar when the auditor stops answering on a session that can sudo. Admin only. -->
+  <div id="auditview" style="display:none;flex:1;min-height:0;flex-direction:column">
+    <div class="bar" id="auditstate" style="display:flex;gap:8px;align-items:center;border-bottom:1px solid var(--border);font-size:12px"></div>
+    <div class="scroll" id="auditlist"></div>
   </div>
   <div class="eyebrow-row activityhead"><span class="eyebrow">Activity &mdash; all agents</span></div>
   <div class="feed" id="feed"></div>
@@ -4182,18 +4193,95 @@ function showTab(which) {
   $("filesview").style.display = which === "files" ? "flex" : "none";
   $("tasksview").style.display = which === "tasks" ? "flex" : "none";
   $("autoview").style.display = which === "auto" ? "flex" : "none";
+  $("auditview").style.display = which === "audit" ? "flex" : "none";
   $("tabdesktop").className = "tab" + (which === "desktop" ? " on" : "");
   $("tabfiles").className = "tab" + (which === "files" ? " on" : "");
   $("tabtasks").className = "tab" + (which === "tasks" ? " on" : "");
   $("tabauto").className = "tab" + (which === "auto" ? " on" : "");
+  $("tabaudit").className = "tab" + (which === "audit" ? " on" : "");
   if (which === "files") refreshFiles();
   if (which === "tasks") refreshTasks();
   if (which === "auto") refreshAutomations();
+  if (which === "audit") startAudit(); else stopAudit();
 }
 document.getElementById("tabdesktop").addEventListener("click", function (e) { e.preventDefault(); showTab("desktop"); });
 document.getElementById("tabfiles").addEventListener("click", function (e) { e.preventDefault(); showTab("files"); });
 document.getElementById("tabtasks").addEventListener("click", function (e) { e.preventDefault(); showTab("tasks"); });
 document.getElementById("tabauto").addEventListener("click", function (e) { e.preventDefault(); showTab("auto"); });
+document.getElementById("tabaudit").addEventListener("click", function (e) { e.preventDefault(); showTab("audit"); });
+
+// ── audit (docs/47) ──────────────────────────────────────────────────────────
+//
+// A live tail of the jump-box behaviour audit for the box in view: the commands people ran and
+// the windows they focused, newest last, with a red bar the moment the auditor stops answering on
+// a session that can sudo. Admin only — the endpoint refuses anyone lower, and this shows why.
+
+var auditSince = 0;
+var auditBox = null;
+var auditTimer = null;
+
+function auditRow(e) {
+  var when = e.time ? new Date(e.time).toLocaleTimeString() : "";
+  var d = e.detail || {};
+  var body, cls = "";
+  if (e.type === "exec") {
+    var who = d.user ? esc(String(d.user)) : "";
+    var pwd = d.pwd ? ' <span class="dim">' + esc(String(d.pwd)) + "</span>" : "";
+    body = '<span class="mono">' + esc(String(d.cmd || "")) + "</span>" + pwd + (who ? ' <span class="dim">· ' + who + "</span>" : "");
+  } else if (e.type === "window_focus") {
+    body = '<span class="dim">focused</span> ' + esc(String(e.window || d.to || ""));
+    cls = "dim";
+  } else {
+    // system: startup / heartbeat / shutdown_signal. Heartbeats are the pulse, not news — muted.
+    var action = String(d.action || "");
+    if (action === "heartbeat") return "";
+    body = '<span class="dim">' + esc(action || "system") + "</span>";
+    if (action === "shutdown_signal") { body = '<b style="color:var(--danger)">auditor received ' + esc(String(d.signal || "signal")) + " — shutting down</b>"; }
+  }
+  return '<div class="auditrow ' + cls + '"><span class="at">' + esc(when) + "</span>" + body + "</div>";
+}
+
+function renderAuditState(meta) {
+  var el = $("auditstate");
+  if (meta.forbidden) { el.innerHTML = '<span class="dim">Audit is admin-only.</span>'; return; }
+  if (meta.atRisk) {
+    el.innerHTML = '<span style="flex:1;color:var(--danger);font-weight:600">⚠ HIGH-RISK: the auditor is not answering on this box — it may have been stopped on a session that can sudo.</span>';
+    return;
+  }
+  var age = meta.heartbeatAgeMs !== undefined ? " · last heartbeat " + Math.round(meta.heartbeatAgeMs / 1000) + "s ago" : "";
+  el.innerHTML = '<span style="flex:1"><span class="dot ok"></span> auditor live' + esc(age) + '</span><span class="dim">commands &amp; window focus · no keystrokes (docs/47)</span>';
+}
+
+function pollAudit() {
+  var box = currentBox;
+  if (box !== auditBox) { auditBox = box; auditSince = 0; $("auditlist").innerHTML = ""; }
+  var url = "/api/xwatchdog/events?since=" + auditSince + "&limit=500" + (box ? "&boxId=" + encodeURIComponent(box) : "");
+  fetch(url).then(function (r) {
+    if (r.status === 403) { renderAuditState({ forbidden: true }); stopAudit(); return null; }
+    return r.json();
+  }).then(function (data) {
+    if (!data) return;
+    renderAuditState({ atRisk: data.at_risk === true, heartbeatAgeMs: data.heartbeat_age_ms });
+    var list = $("auditlist");
+    var stick = list.scrollTop + list.clientHeight >= list.scrollHeight - 40;
+    var html = "";
+    (data.events || []).forEach(function (e) { html += auditRow(e); });
+    if (html) list.insertAdjacentHTML("beforeend", html);
+    if (typeof data.next_seq === "number" && data.next_seq > auditSince) auditSince = data.next_seq;
+    // Cap the DOM so a long session does not grow without bound.
+    while (list.children.length > 1000) list.removeChild(list.firstChild);
+    if (stick) list.scrollTop = list.scrollHeight;
+  }).catch(function () { /* a dropped poll is covered by the next */ });
+}
+
+function startAudit() {
+  if (auditTimer) return;
+  pollAudit();
+  auditTimer = setInterval(pollAudit, 4000);
+}
+function stopAudit() {
+  if (auditTimer) { clearInterval(auditTimer); auditTimer = null; }
+}
 
 // ── automations ────────────────────────────────────────────────────────────
 //
