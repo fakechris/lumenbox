@@ -29,3 +29,7 @@ dist/catalog-data/
 # Per-environment ops material (real cluster addresses, credentials, patched manifests) lives
 # here, untracked. The tracked deploy/kubernetes files stay generic on purpose.
 deploy/kubernetes/local/
+
+# Native audit daemon build artifact (docs/47), like hostd.mjs/boxd.cjs
+docker/box/xwatchdog
+src/xwatchdog/xwatchdog

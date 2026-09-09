@@ -349,6 +349,16 @@ elif ! port_listening "${WS_RO_PORT}"; then
   repaired+=("websockify-ro")
 fi
 
+# ── xwatchdog (behaviour auditor for a company jump box, docs/47) ────────────────
+# Disclosed, not hidden: records commands (via Snoopy) and which window was focused, and emits a
+# heartbeat the host watches so a killed auditor shows up as a high-risk session. No keystroke
+# content. Kept alive by the same self-heal loop as the rest of the desktop.
+if command -v xwatchdog > /dev/null 2>&1 && ! running_here "xwatchdog.*${DISP}"; then
+  log "starting xwatchdog on ${DISP}"
+  setsid xwatchdog -display "${DISP}" -port 49099 >> "/tmp/xwatchdog-${N}.log" 2>&1 &
+  repaired+=("xwatchdog")
+fi
+
 # Wait for the VNC path, not just X: boxd reports the display ready and the UI
 # connects immediately, so a half-started stack shows as a failed connection.
 # Both stacks: the driving one, and the view-only one a viewer's page is served from. Waiting only

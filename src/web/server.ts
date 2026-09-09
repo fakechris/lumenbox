@@ -26,7 +26,7 @@ import { AgentRegistry, MAIN_CONVERSATION, conversationIdFor } from "../agents/r
 import type { BusEvent } from "../agents/bus.ts";
 import { BoxManager, defaultBoxConfig } from "../box/docker.ts";
 import { resolveBoxProvisioner, type BoxProvisioner } from "../box/provisioner.ts";
-import { classifyBox } from "../box/access.ts";
+import { classifyBox, auditNotice } from "../box/access.ts";
 import { envNumber } from "../config.ts";
 import { buildInfo } from "../host/build-info.ts";
 import { faceBaseUrl, RENEW_EVERY_MS, ROUTE_PATH } from "../host/mcp-face.ts";
@@ -288,6 +288,16 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
    * server is actually bound to, which is right on a LAN and useless from a phone on mobile
    * data. The page says which of the two it is showing rather than pretending.
    */
+  /**
+   * The box's class with the audit disclosure folded into its notice, when this installation runs
+   * the behaviour auditor (AGENTBOX_AUDIT=1). One surface, the label already on screen — no popup.
+   */
+  const auditedClass = <T extends { notice: string }>(box: T): T => {
+    if (process.env.AGENTBOX_AUDIT !== "1") return box;
+    const sep = box.notice.trim() === "" ? "" : " ";
+    return { ...box, notice: `${box.notice}${sep}${auditNotice()}` };
+  };
+
   const publicBase = (): string =>
     (process.env.AGENTBOX_PUBLIC_URL ?? `http://${options.host === "0.0.0.0" ? "127.0.0.1" : options.host}:${options.port}`).replace(/\/$/, "");
 
@@ -4260,7 +4270,7 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
             box: {
               ...box,
               ok: box.connected,
-              ...classifyBox(provisioner.boxName, loadConfig(), registry.box.name),
+              ...auditedClass(classifyBox(provisioner.boxName, loadConfig(), registry.box.name)),
             },
             allTools: ALL_TOOLS,
             // Every box this installation drives, own first (docs/30). An agent's row names its
@@ -4356,6 +4366,36 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
         // ── boxes (docs/30) ─────────────────────────────────────────────────────────
         if (route === "GET /api/boxes") {
           send(res, 200, { boxes: orchestrator.boxStatus(), own: registry.box.id });
+          return;
+        }
+
+        // ── xwatchdog audit stream ──────────────────────────────────────────
+        if (route === "GET /api/xwatchdog/events") {
+          // The behaviour audit is an admin's to read, not any signed-in session's: it is the
+          // record of what people did on a company jump box, bound to their identity.
+          if (refusedRole("admin")) return;
+          const boxId = url.searchParams.get("boxId") ?? undefined;
+          const since = Number(url.searchParams.get("since") ?? 0);
+          const limit = Math.min(Number(url.searchParams.get("limit") ?? 100) || 100, 500);
+          const client = boxId ? orchestrator.boxClientById(boxId) : orchestrator.boxClient();
+          if (!client) {
+            send(res, 404, { error: "No box client available" });
+            return;
+          }
+          try {
+            const result = await client.xwatchdogEvents(since, limit);
+            // A killed or unreachable auditor on a session that can sudo is the thing an operator
+            // must not miss. Logged here (the host, which the box user does not control) and
+            // flagged in the payload so the audit view can show the session red.
+            if (result.at_risk === true) {
+              log(`[audit] HIGH-RISK: xwatchdog not answering on box ${boxId ?? registry.box.id} — auditor may be down or killed`);
+            }
+            send(res, 200, { ...result, boxId: boxId ?? registry.box.id });
+          } catch (error) {
+            send(res, 502, {
+              error: `Failed to query xwatchdog: ${error instanceof Error ? error.message : String(error)}`,
+            });
+          }
           return;
         }
 

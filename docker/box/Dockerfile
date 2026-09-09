@@ -38,8 +38,22 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
       git jq ripgrep less vim-tiny procps psmisc \
       python3 python3-venv \
       poppler-utils \
-      sudo tini \
-    && rm -rf /var/lib/apt/lists/*
+      sudo tini snoopy \
+    && rm -rf /var/lib/apt/lists/* \
+    && mkdir -p /var/log/xwatchdog \
+    && printf '%s\n' \
+      '[snoopy]' \
+      'output = file:/var/log/xwatchdog/exec.log' \
+      'message_format = "time=%{datetime} | uid=%{uid} | user=%{username} | tty=%{tty} | pwd=%{cwd} | pid=%{pid} | ppid=%{ppid} | cmd=%{cmdline}"' \
+      > /etc/snoopy.ini \
+    && printf '%s\n' \
+      '================================================================' \
+      ' Company operations jump box.' \
+      ' Commands and window activity in this session are recorded and' \
+      ' audited, bound to your enterprise identity. For company operations' \
+      ' only — not for personal or private use. (docs/47)' \
+      '================================================================' \
+      > /etc/motd
 
 # 3. Node.js for the daemon.
 #    Downloaded to a file first, because `curl | bash` reports bash's exit status: on
@@ -308,13 +322,15 @@ COPY box-healthcheck /usr/local/bin/box-healthcheck
 COPY wait-compositor /usr/local/bin/wait-compositor
 COPY vnc-probe /usr/local/bin/vnc-probe
 COPY box-keepalive /usr/local/bin/box-keepalive
+COPY xwatchdog /usr/local/bin/xwatchdog
 RUN chmod +x /usr/local/bin/entrypoint.sh /usr/local/bin/start-display \
       /usr/local/bin/box-chrome /usr/local/bin/box-clip \
       /usr/local/bin/box-doctor /usr/local/bin/box-init \
       /usr/local/bin/box-healthcheck \
       /usr/local/bin/wait-compositor \
       /usr/local/bin/vnc-probe \
-      /usr/local/bin/box-keepalive
+      /usr/local/bin/box-keepalive \
+      /usr/local/bin/xwatchdog
 
 # box-init is PID 1 rather than tini, for one reason: only PID 1 sees an orphan die, and
 # tini reaped every one of them and discarded the status. Everything unsupervised in here

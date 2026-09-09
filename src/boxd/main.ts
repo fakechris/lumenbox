@@ -56,6 +56,8 @@ import {
   type RecordingInfo,
   type WriteFileRequest,
   type WriteFileResult,
+  type XWatchdogQuery,
+  type XWatchdogEventsResult,
 } from "../protocol/index.ts";
 import { DisplayManager, DisplayOwnershipError } from "./displays.ts";
 import { detectDisplay, getDisplay, parseDisplayNum } from "../cua/display.ts";
@@ -66,6 +68,7 @@ import { AGENT_NICE, reapSpool, runShell, withoutBoxToken } from "./shell-servic
 import { JobService } from "./job-service.ts";
 import { BrowserService } from "./browser-service.ts";
 import { downloadFile, listDir, readFile, uploadFile, writeFile } from "./fs-service.ts";
+import { XWatchdogService } from "./xwatchdog-service.ts";
 
 const VERSION = "0.1.0";
 const MAX_BODY_BYTES = 32 * 1024 * 1024;
@@ -76,6 +79,7 @@ const token = process.env.BOXD_TOKEN ?? "";
 
 const displays = new DisplayManager(line => log(line));
 const recorder = new RecordService(line => log(line));
+const xwatchdog = new XWatchdogService();
 
 /** The desktop `box shot` and the smoke test look at when none is named. */
 const defaultDisplayIndex = (() => {
@@ -495,6 +499,8 @@ const routes: Record<string, Handler> = {
     writeFile(body),
   "POST /fs/list": (body: ListDirRequest): Promise<ListDirResult> =>
     listDir(body),
+  "POST /xwatchdog/events": (body: XWatchdogQuery): Promise<XWatchdogEventsResult> =>
+    xwatchdog.events(body.since, body.limit),
 };
 
 /**
@@ -577,6 +583,14 @@ const server = createServer((req, res) => {
       // browser seeks in a video; without it the player can only play from the start.
       if (route === "GET /recordings/file") {
         serveRecording(req, res);
+        return;
+      }
+
+      if (route === "GET /xwatchdog/events") {
+        const parsedUrl = new URL(req.url ?? "", "http://box");
+        const since = Number(parsedUrl.searchParams.get("since") ?? 0);
+        const limit = Number(parsedUrl.searchParams.get("limit") ?? 100);
+        send(res, 200, await xwatchdog.events(since, limit));
         return;
       }
 

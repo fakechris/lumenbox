@@ -558,3 +558,39 @@ export interface BrowserResponse {
   /** Something that happened to the page itself: a tab opened, a tab closed, a wait ended. */
   note?: string;
 }
+
+/**
+ * What xwatchdog audits on a company operations jump box: commands run (Snoopy execve), which
+ * window was focused, and the daemon's own lifecycle (startup, heartbeat, shutdown_signal). It
+ * records actions, never keystroke content — see docs/47.
+ */
+export type XWatchdogEventType = "exec" | "window_focus" | "system";
+
+export interface XWatchdogEvent {
+  seq: number;
+  type: XWatchdogEventType;
+  time: string;
+  display?: number;
+  window?: string;
+  detail: Record<string, unknown>;
+}
+
+export interface XWatchdogQuery {
+  since?: number;
+  limit?: number;
+}
+
+export interface XWatchdogEventsResult {
+  events: XWatchdogEvent[];
+  next_seq: number;
+  has_more: boolean;
+  /**
+   * Tamper-evidence, computed on the host the box user does not control. `daemon_up` is whether
+   * the native daemon answered; `heartbeat_age_ms` is how long since its last heartbeat.
+   * `at_risk` is true when the daemon is unreachable or its heartbeat has gone stale — a killed
+   * or wedged auditor on a session that can sudo, which the operator must be able to see.
+   */
+  daemon_up?: boolean;
+  heartbeat_age_ms?: number;
+  at_risk?: boolean;
+}

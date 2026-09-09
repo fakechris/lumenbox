@@ -138,3 +138,16 @@ export function sharedNotice(group?: string): string {
     "在这里登录任何账号,等于替他们一起登录。"
   );
 }
+
+/**
+ * The audit disclosure, appended to whatever notice a box already shows when the installation
+ * runs the behaviour auditor (docs/47). A jump box tells people once, on the label they already
+ * read — it does not pop a warning each time. Said plainly: this is a company operations box,
+ * commands and window activity are recorded against your identity, and it is not for personal use.
+ */
+export function auditNotice(): string {
+  return (
+    "这是一台公司运维用的跳板机。你在这里执行的命令与窗口活动会被记录、审计,并绑定到你的企业身份;" +
+    "请仅用于公司运维,不要用于个人或私人事务。"
+  );
+}
