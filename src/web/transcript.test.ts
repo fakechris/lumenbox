@@ -238,13 +238,16 @@ test("a webhook, a timer and a restart are labelled, and a person's words are no
       { role: "user", text: "[webhook] This turn was started by something calling this routine's URL.\n\nbody", at: "2026-09-09T07:12:00.000Z" },
       { role: "user", text: "[scheduled] This turn was started by a timer.", at: "2026-09-09T07:13:00.000Z" },
       { role: "user", text: "clean up the worktrees", at: "2026-09-09T07:14:00.000Z", fromPerson: true },
-      // A person who opens their message with a bracket is still a person: fromPerson decides.
+      // A person who opens their message with a bracket of their own is still a person.
       { role: "user", text: "[urgent] do this first", at: "2026-09-09T07:15:00.000Z", fromPerson: true },
+      // But the harness's own vocabulary wins outright, because turns recorded before the
+      // synthetic flag existed are stored as though a person had opened them.
+      { role: "user", text: "[scheduled] the morning brief", at: "2026-09-09T07:16:00.000Z", fromPerson: true },
     ] as never,
     []
   );
   const kinds = rows.map(row => row.kind);
-  assert.deepEqual(kinds, ["trigger", "trigger", "text", "text"], JSON.stringify(rows));
+  assert.deepEqual(kinds, ["trigger", "trigger", "text", "text", "trigger"], JSON.stringify(rows));
   assert.equal((rows[0] as { label: string }).label, "started by a webhook");
   assert.equal((rows[1] as { label: string }).label, "started by a timer");
   assert.equal((rows[2] as { role: string }).role, "user");
