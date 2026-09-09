@@ -1566,6 +1566,12 @@ share sheet is the case that prompted it. `?wait=<seconds>` returns what the rou
 HMAC-signed bodies are accepted (GitHub's shape), and a hook is capped at thirty calls per ten
 minutes. Open: no replay window, and no overlap window when rotating a secret.
 
+**The chat reads as a chat (2026-09-09, docs/46).** The person's message is a filled bubble on the
+right, the agent's a light one on the left, both hugging their content — telling who spoke no
+longer requires reading. Search with who/when filters marks matches in place (Ctrl+F), and
+right-click gives the same actions as the toolbar. Open: search is one conversation only, no
+jump-to-date.
+
 **Teams (2026-09-09, docs/45).** Agents carry several tags and appear under each in the sidebar,
 because the ops agent every project uses really is in every project. A crew is born tagged with
 the catalog entry it came from; an agent that makes a teammate passes on its own teams.
