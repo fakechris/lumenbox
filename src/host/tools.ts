@@ -1001,6 +1001,9 @@ export function buildTools(
         "out of each other's lane), Voice (how it talks), Wake (when it should act and when it " +
         "should stay quiet). If the persona names a concrete first assignment, the agent " +
         "starts on it at once instead of introducing itself.\n\n" +
+        "Making several for one job: give every one of them the same `tags`, named for the job. " +
+        "Five agents made together and left untagged scatter through an alphabetical list and " +
+        "the person cannot see the team they asked for.\n\n" +
         "Create from what you already know. Do not interview the person about the new " +
         "agent's preferences first — language, cadence, priorities, how it connects to " +
         "things: those are its questions to ask, in its own chat, where the answers land " +
@@ -1034,9 +1037,10 @@ export function buildTools(
             type: "array",
             items: { type: "string" },
             description:
-              "The teams it belongs to, e.g. [\"editorial\"]. Agents are grouped by these in the " +
-              "sidebar, so a set of agents made for one job should share one. Several are fine — " +
-              "an ops agent every project uses belongs to each of them.",
+              "The teams it belongs to, e.g. [\"media\"]. Always pass one when you are making " +
+              "several agents for one job, the same one for each of them: that is what makes the " +
+              "group findable in the person's list afterwards. Name it for the job in their own " +
+              "words. Several are fine — an ops agent every project uses belongs to each of them.",
           },
         },
       },

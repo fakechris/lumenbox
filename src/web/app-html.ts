@@ -1159,6 +1159,13 @@ export const APP_HTML = String.raw`<!doctype html>
       <label>Role label</label>
       <input id="agrole" placeholder="e.g. release manager" spellcheck="false" style="font-family:var(--font-sans)">
     </div>
+    <div class="field">
+      <label>Teams</label>
+      <input id="agtags" placeholder="e.g. editorial, ops" spellcheck="false" style="font-family:var(--font-sans)">
+      <div class="fieldnote">Comma separated. Agents are grouped by these in the list, and an agent
+        can be in more than one &mdash; the ops agent every project uses belongs to each of them.
+        Agents set these themselves too, so a crew made in one go arrives as a team.</div>
+    </div>
     <div class="field" id="agboxwrap">
       <label>Box</label>
       <select id="agbox" style="font-family:var(--font-sans)"></select>
@@ -5252,6 +5259,7 @@ function openAgentModal(mode, agent) {
   }
   $("agname").value = agent ? agent.name : "";
   $("agrole").value = agent ? String(agent.title || "") : "";
+  $("agtags").value = agent && agent.tags ? agent.tags.join(", ") : "";
   $("agpersona").value = agent ? String(agent.description || "") : "";
   // null means unrestricted — every tool, including ones that do not exist yet.
   var granted = agent && agent.tools ? agent.tools : null;
@@ -5377,6 +5385,9 @@ function saveAgentModal() {
   var body = {
     name: name,
     title: $("agrole").value.trim(),
+    // Split here rather than at the server so an empty field is an explicit "no teams" and
+    // clears them, which is what a person emptying a box expects.
+    tags: $("agtags").value.split(",").map(function (t) { return t.trim(); }).filter(Boolean),
     description: $("agpersona").value,
     // A full set is sent as null — "everything", which stays true for future tools.
     tools: granted.length === allTools.length ? null : granted,
