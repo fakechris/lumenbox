@@ -147,7 +147,15 @@ import { preflight } from "../box/preflight.ts";
 import { rescueMessage, rescueStuck } from "../host/rescue.ts";
 import { Deliveries, deliveriesPath } from "../host/deliveries.ts";
 import { Ingress, ingressPath } from "../channels/ingress.ts";
-import { Webhooks, webhooksPath, presentedSecret, secretMatches } from "../host/webhooks.ts";
+import {
+  Webhooks,
+  webhooksPath,
+  presentedSecret,
+  presentedSignature,
+  secretMatches,
+  signatureMatches,
+  HookRate,
+} from "../host/webhooks.ts";
 import { ConversationDirectory, conversationsPath } from "../channels/conversations.ts";
 import { SentRootsLedger, sentRootsPath } from "../channels/sent-roots.ts";
 import { randomUUID } from "node:crypto";
@@ -662,6 +670,8 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
   const ingress = new Ingress(ingressPath(agentboxHome()));
   /** One URL and secret per webhook routine (docs/44). */
   const webhooks = new Webhooks(webhooksPath(agentboxHome()));
+  /** How often one hook may fire. In memory: a restart forgives, and the budget is the backstop. */
+  const hookRate = new HookRate();
   /**
    * When a door last had anything from outside. The catch-up sweep's floor: a socket
    * that reconnects asks the vendor what was said since this, and replays what it
@@ -2030,24 +2040,23 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
    * same words after the same work, so the endpoint cannot be used to find out which routines
    * exist. Only the ledger records which it was.
    */
-  async function handleWebhook(req: IncomingMessage, res: ServerResponse, id: string): Promise<void> {
+  async function handleWebhook(
+    req: IncomingMessage,
+    res: ServerResponse,
+    id: string,
+    query: URLSearchParams
+  ): Promise<void> {
     const refuse = () => send(res, 401, { error: "Unknown hook, or the secret is wrong." });
     const record = webhooks.byId(id);
-    const presented = presentedSecret(req.headers);
-    if (record === undefined || presented === undefined || !secretMatches(presented, record.secret)) {
-      if (record !== undefined) webhooks.record(id, "bad-secret");
-      log(`webhook ${id}: refused`);
-      refuse();
-      return;
-    }
     if (req.method !== "POST" && req.method !== "PUT") {
       send(res, 405, { error: "POST the content to this URL." });
       return;
     }
 
-    // Bounded, and read as text whatever the content type: the sender is unknown software and
-    // the routine is what interprets it. A body larger than this is a file transfer, which is
-    // not what a trigger is for.
+    // The body is read before the sender is authenticated, because a signature is over the body
+    // and cannot be checked without it. Bounded, so an unauthenticated caller can cost this
+    // process 64 KB and nothing more, and read as text whatever the content type: the sender is
+    // unknown software and the routine is what interprets it.
     const MAX_BODY = 64 * 1024;
     let body = "";
     let tooBig = false;
@@ -2060,7 +2069,63 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
       return;
     }
 
-    const from = String(req.headers["user-agent"] ?? "").slice(0, 80) || undefined;
+    // Two ways to prove you hold the secret: present it, or sign the body with it. The second is
+    // what GitHub and everything shaped like it do, and it is the better one — the credential
+    // never crosses the wire.
+    const presented = presentedSecret(req.headers);
+    const signature = presentedSignature(req.headers);
+    const authorised =
+      record !== undefined &&
+      ((presented !== undefined && secretMatches(presented, record.secret)) ||
+        (signature !== undefined && signatureMatches(body, signature, record.secret)));
+    if (!authorised) {
+      if (record !== undefined) webhooks.record(id, "bad-secret");
+      log(`webhook ${id}: refused`);
+      refuse();
+      return;
+    }
+
+    const allowed = hookRate.take(id);
+    if (!allowed.allowed) {
+      log(`webhook ${id} (${record.slug}): rate limited`);
+      res.setHeader("retry-after", String(allowed.retryAfterSeconds));
+      send(res, 429, {
+        error: `This hook has fired too often. Try again in ${allowed.retryAfterSeconds}s.`,
+      });
+      return;
+    }
+
+    // `?wait=20` holds the connection until the routine finishes and hands back what it said, for
+    // a caller that can show an answer — a shortcut that wants to display the result rather than
+    // trust that something happened. Capped below the timeouts a phone and a proxy impose.
+    const askedWait = Number(query.get("wait") ?? "0");
+    const waitSeconds = Number.isFinite(askedWait) ? Math.min(Math.max(askedWait, 0), 55) : 0;
+
+    const from =
+      String(req.headers["x-github-event"] ?? "") ||
+      String(req.headers["user-agent"] ?? "").slice(0, 80) ||
+      undefined;
+    if (waitSeconds > 0) {
+      const timeout = new Promise<"timeout">(resolve => setTimeout(() => resolve("timeout"), waitSeconds * 1000));
+      const run = orchestrator.scheduler.fireWebhook(record.slug, body, from, { wait: true });
+      const outcome = await Promise.race([run, timeout]);
+      if (outcome === "timeout") {
+        // Still running. Said plainly rather than answering with a half-result: the work is not
+        // cancelled, and the caller can look in the app.
+        webhooks.record(id, "ran");
+        send(res, 202, { accepted: true, routine: record.slug, waited: waitSeconds, done: false });
+        return;
+      }
+      webhooks.record(id, outcome.ok ? "ran" : "refused");
+      if (!outcome.ok) {
+        send(res, 409, { error: outcome.reason });
+        return;
+      }
+      log(`webhook ${id}: ${record.slug} finished`);
+      send(res, 200, { accepted: true, routine: record.slug, done: true, said: outcome.said ?? "" });
+      return;
+    }
+
     const fired = await orchestrator.scheduler.fireWebhook(record.slug, body, from);
     webhooks.record(id, fired.ok ? "ran" : "refused");
     if (!fired.ok) {
@@ -2071,7 +2136,7 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
       return;
     }
     log(`webhook ${id}: ${record.slug} started`);
-    send(res, 202, { accepted: true, routine: record.slug });
+    send(res, 202, { accepted: true, routine: record.slug, done: false });
   }
 
   function send(res: ServerResponse, status: number, body: unknown, type = "application/json") {
@@ -2462,7 +2527,7 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
       // the ordinary path: the same routine, the same agent, the same policy gate and budget.
       const webhookMatch = /^\/hooks\/([A-Za-z0-9_-]{6,64})\/?$/.exec(url.pathname);
       if (webhookMatch !== null) {
-        await handleWebhook(req, res, webhookMatch[1]!);
+        await handleWebhook(req, res, webhookMatch[1]!, url.searchParams);
         return;
       }
       const routeMatch = ROUTE_PATH.exec(url.pathname);
@@ -4215,6 +4280,7 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
                 boxName: boxEntry.name,
                 // null means unrestricted — every tool, including ones added later.
                 tools: record.profile.tools ?? null,
+                tags: record.profile.tags ?? [],
                 ...(record.profile.scopeId !== undefined ? { scopeId: record.profile.scopeId } : {}),
                 ...(record.profile.provider !== undefined ? { provider: record.profile.provider } : {}),
                 ...(record.profile.model !== undefined ? { model: record.profile.model } : {}),
@@ -4757,6 +4823,7 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
             ...(tools !== undefined
               ? { tools: tools === null || tools.length >= ALL_TOOLS.length ? null : tools }
               : {}),
+            ...(Array.isArray(body.tags) ? { tags: body.tags as string[] } : {}),
             ...(typeof body.scopeId === "string" ? { scopeId: body.scopeId === "" ? null : body.scopeId } : {}),
             ...(typeof body.provider === "string" ? { provider: body.provider === "" ? null : body.provider } : {}),
             ...(typeof body.model === "string" ? { model: body.model === "" ? null : body.model } : {}),

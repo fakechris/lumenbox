@@ -1562,8 +1562,13 @@ episode that prompted it is a scenario.
 
 **Webhook triggers (2026-09-09, docs/44).** `trigger: webhook` in a routine's frontmatter mints a
 URL and a per-routine secret; anything that can POST can start the work — an iOS Shortcut on a
-share sheet is the case that prompted it. Open: no delivery receipt to the caller, no signature
-verification (GitHub), and rate limiting is one-in-flight per routine.
+share sheet is the case that prompted it. `?wait=<seconds>` returns what the routine said,
+HMAC-signed bodies are accepted (GitHub's shape), and a hook is capped at thirty calls per ten
+minutes. Open: no replay window, and no overlap window when rotating a secret.
+
+**Teams (2026-09-09, docs/45).** Agents carry several tags and appear under each in the sidebar,
+because the ops agent every project uses really is in every project. A crew is born tagged with
+the catalog entry it came from; an agent that makes a teammate passes on its own teams.
 
 **Feeding the multiuser branch, not this line:** the three-layer identity model (observed
 identity, revocable binding, per-box allow/deny), fail-closed row-level security for a

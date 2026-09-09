@@ -467,6 +467,14 @@ export class Orchestrator {
       if (said === "") return;
       await this.options.deliverToChat?.(deliver, said);
     },
+    // A waiting webhook: the same turn, but the caller is told what came of it.
+    runAndSay: async (agent, prompt) => {
+      const agentId = this.registry.resolve(agent).id;
+      const before = this.registry.readTranscript(agentId).length;
+      await this.prompt(agent, prompt, undefined, { steerable: false, lane: "background" });
+      await this.settle();
+      return this.replySince(agentId, before).trim();
+    },
     // A skill runs on the box its file is in, as that box's first agent; the installation's
     // first agent only when the box has none (or the skill did not say).
     defaultAgent: boxId =>

@@ -19,7 +19,7 @@
  * that happens to share the English word.
  */
 
-import { randomBytes, timingSafeEqual, createHash } from "node:crypto";
+import { randomBytes, timingSafeEqual, createHash, createHmac } from "node:crypto";
 import { readFileSync, writeFileSync, mkdirSync, renameSync, statSync } from "node:fs";
 import { dirname, join } from "node:path";
 
@@ -178,6 +178,67 @@ function newSecret(): string {
 export function secretMatches(presented: string, actual: string): boolean {
   const digest = (value: string) => createHash("sha256").update(value).digest();
   return timingSafeEqual(digest(presented), digest(actual));
+}
+
+/**
+ * Whether a signature over the raw body proves the sender holds the secret.
+ *
+ * GitHub, Stripe and everything modelled on them do not send the secret: they sign the body with
+ * it (`X-Hub-Signature-256: sha256=<hex>`) so the credential never crosses the wire. Accepting
+ * that shape costs one function and makes those senders usable without a proxy in between.
+ *
+ * The body must be the bytes as received — re-serialising JSON changes whitespace and breaks
+ * every signature — which is why the handler holds the raw text.
+ */
+export function signatureMatches(body: string, presented: string, secret: string): boolean {
+  const offered = presented.trim().replace(/^sha256=/i, "");
+  if (!/^[0-9a-f]{64}$/i.test(offered)) return false;
+  const expected = createHmac("sha256", secret).update(body, "utf8").digest("hex");
+  return timingSafeEqual(Buffer.from(expected, "hex"), Buffer.from(offered.toLowerCase(), "hex"));
+}
+
+/** The signature a sender offered, in any of the header names the common senders use. */
+export function presentedSignature(
+  headers: Record<string, string | string[] | undefined>
+): string | undefined {
+  const first = (name: string) => {
+    const value = headers[name];
+    return Array.isArray(value) ? value[0] : value;
+  };
+  return first("x-hub-signature-256") ?? first("x-signature-256") ?? first("x-lumenbox-signature");
+}
+
+/**
+ * How often one hook may fire.
+ *
+ * The endpoint is reachable by anything, so the failure to prevent is a loop: a misconfigured
+ * shortcut, a retrying CI job, or somebody who has the URL, firing it until the month's budget is
+ * gone. One-in-flight already stops the common double-press; this stops the pathological case.
+ * A sliding window in memory — a restart forgives, which is the right side to err on for
+ * something whose real backstop is the budget.
+ */
+export class HookRate {
+  private hits = new Map<string, number[]>();
+
+  constructor(
+    private readonly limit = 30,
+    private readonly windowMs = 10 * 60_000,
+    private readonly now: () => number = Date.now
+  ) {}
+
+  /** Records a call and says whether it is allowed; when not, how many seconds to wait. */
+  take(id: string): { allowed: true } | { allowed: false; retryAfterSeconds: number } {
+    const at = this.now();
+    const recent = (this.hits.get(id) ?? []).filter(when => at - when < this.windowMs);
+    if (recent.length >= this.limit) {
+      this.hits.set(id, recent);
+      const oldest = recent[0] ?? at;
+      return { allowed: false, retryAfterSeconds: Math.max(1, Math.ceil((this.windowMs - (at - oldest)) / 1000)) };
+    }
+    recent.push(at);
+    this.hits.set(id, recent);
+    return { allowed: true };
+  }
 }
 
 /** The bearer token out of an Authorization header, or the value of the fallback header. */

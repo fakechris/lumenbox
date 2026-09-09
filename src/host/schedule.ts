@@ -500,6 +500,13 @@ export interface SchedulerDeps {
   /** The skills that fire on a webhook, re-read per call for the same reason. */
   hooked?: () => Promise<readonly Hooked[]>;
   /**
+   * Runs a turn and comes back with what the agent said.
+   *
+   * Only a waiting webhook needs this: the caller is holding an HTTP connection open and the
+   * point of waiting is to hand back the answer. Everything else fires and forgets.
+   */
+  runAndSay?: (agent: string, prompt: string) => Promise<string>;
+  /**
    * Starts a turn. Rejecting is fine: the next window is the retry.
    *
    * `deliver` is the chat this run reports to, when the skill named one — the runner
@@ -891,8 +898,9 @@ export class Scheduler {
   async fireWebhook(
     slug: string,
     body: string,
-    from?: string
-  ): Promise<{ ok: true } | { ok: false; reason: string }> {
+    from?: string,
+    options: { wait?: boolean } = {}
+  ): Promise<{ ok: true; said?: string } | { ok: false; reason: string }> {
     const hooked = this.deps.hooked === undefined ? [] : await this.deps.hooked().catch(() => []);
     const skill = hooked.find(candidate => candidate.slug === slug);
     if (skill === undefined) return { ok: false, reason: `No webhook routine "${slug}".` };
@@ -908,31 +916,44 @@ export class Scheduler {
     this.record(slug, "started", { agent });
     this.lastRun.set(slug, startedAt);
     this.log(`${skill.name}: fired by webhook`);
-    void this.deps
-      .run(
+    const prompt = webhookPrompt({
+      skillName: skill.name,
+      path: skill.path,
+      body,
+      ...(from !== undefined ? { from } : {}),
+      ...(skill.deliver !== undefined ? { deliver: skill.deliver } : {}),
+    });
+    const finish = () => {
+      this.running.delete(slug);
+      this.record(slug, "finished", {
         agent,
-        webhookPrompt({
-          skillName: skill.name,
-          path: skill.path,
-          body,
-          ...(from !== undefined ? { from } : {}),
-          ...(skill.deliver !== undefined ? { deliver: skill.deliver } : {}),
-        }),
-        skill.deliver
-      )
+        ms: this.now().getTime() - startedAt.getTime(),
+        ...(this.deps.spentSinceAgent !== undefined
+          ? { tokens: this.deps.spentSinceAgent(startedAt.getTime(), agent) }
+          : {}),
+      });
+    };
+
+    // The caller asked to be told what happened, and is holding a connection open for it. Awaited
+    // here rather than fired and forgotten, and the bookkeeping is the same either way.
+    if (options.wait === true && this.deps.runAndSay !== undefined) {
+      try {
+        const said = await this.deps.runAndSay(agent, prompt);
+        return { ok: true, said };
+      } catch (error) {
+        this.log(`${skill.name}: webhook run failed — ${error instanceof Error ? error.message : String(error)}`);
+        return { ok: false, reason: error instanceof Error ? error.message : String(error) };
+      } finally {
+        finish();
+      }
+    }
+
+    void this.deps
+      .run(agent, prompt, skill.deliver)
       .catch(error => {
         this.log(`${skill.name}: webhook run failed — ${error instanceof Error ? error.message : String(error)}`);
       })
-      .finally(() => {
-        this.running.delete(slug);
-        this.record(slug, "finished", {
-          agent,
-          ms: this.now().getTime() - startedAt.getTime(),
-          ...(this.deps.spentSinceAgent !== undefined
-            ? { tokens: this.deps.spentSinceAgent(startedAt.getTime(), agent) }
-            : {}),
-        });
-      });
+      .finally(finish);
     return { ok: true };
   }
 

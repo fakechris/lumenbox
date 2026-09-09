@@ -182,3 +182,30 @@ test("what a webhook delivers is data, and the routine is told so", async () => 
   // No chat named, so nobody is waiting and the result has to be written down somewhere findable.
   assert.match(prompt, /record the result where it can be found later/);
 });
+
+// ── 2026-09-09, the list that stopped being findable ──────────────────────────────────────
+//
+// A template stamps five agents in one go. Alphabetical, they scatter among everything else, and
+// the person cannot see the team they just made. So a crew is born tagged, and an agent an agent
+// makes inherits its maker's teams.
+
+test("a crew is born as a team, and a teammate inherits its maker's", async () => {
+  const script: Script = ({ agent, round }) => {
+    if (agent === "Boss" && round === 0) {
+      return { call: "CreateAgent", input: { name: "scout", description: "ONLY job: gather. Anti-jobs: writing. Voice: plain. Wake: when routed to.", tags: ["Content Team"] } };
+    }
+    if (agent === "scout" && round === 0) {
+      return { call: "CreateAgent", input: { name: "helper", description: "ONLY job: help scout. Anti-jobs: the rest. Voice: plain. Wake: when asked." } };
+    }
+    return { say: "done" };
+  };
+  const episode = await runEpisode({ team: [{ name: "Boss" }], says: ["build me a content team"], script });
+  try {
+    const scout = episode.registry.list().find(record => record.profile.name === "scout");
+    const helper = episode.registry.list().find(record => record.profile.name === "helper");
+    assert.deepEqual(scout?.profile.tags, ["content-team"], "the crew names its team once");
+    assert.deepEqual(helper?.profile.tags, ["content-team"], "and one it makes joins it without being told");
+  } finally {
+    episode.cleanup();
+  }
+});

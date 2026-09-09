@@ -11,7 +11,16 @@ import assert from "node:assert/strict";
 import { mkdtempSync, rmSync, mkdirSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { Webhooks, webhooksPath, secretMatches, presentedSecret, webhookPrompt } from "./webhooks.ts";
+import {
+  Webhooks,
+  webhooksPath,
+  secretMatches,
+  presentedSecret,
+  webhookPrompt,
+  signatureMatches,
+  presentedSignature,
+  HookRate,
+} from "./webhooks.ts";
 import { parseSkillFile, skillFrom } from "./skills.ts";
 
 function store(): { hooks: Webhooks; cleanup: () => void } {
@@ -161,4 +170,46 @@ test("the endpoint refuses a wrong secret and an unknown id the same way, and ru
     rmSync(home, { recursive: true, force: true });
     void writeFileSync;
   }
+});
+
+// ── the two other ways a sender proves itself, and the ceiling on how often ────────────────
+
+test("a body signed with the secret is accepted, and a tampered one is not", async () => {
+  const { createHmac } = await import("node:crypto");
+  const secret = "lmbxhook_test";
+  const body = JSON.stringify({ action: "opened", number: 7 });
+  const good = createHmac("sha256", secret).update(body, "utf8").digest("hex");
+
+  assert.equal(signatureMatches(body, `sha256=${good}`, secret), true, "GitHub's shape");
+  assert.equal(signatureMatches(body, good, secret), true, "and the bare hex");
+  assert.equal(signatureMatches(body, `sha256=${good.toUpperCase()}`, secret), true, "case is not meaning");
+
+  // The body is what was signed: one changed byte and the signature is worthless.
+  assert.equal(signatureMatches(body + " ", `sha256=${good}`, secret), false);
+  assert.equal(signatureMatches(body, `sha256=${good}`, "another secret"), false);
+  // Junk must be refused rather than throw: this runs on unauthenticated input.
+  assert.equal(signatureMatches(body, "sha256=nope", secret), false);
+  assert.equal(signatureMatches(body, "", secret), false);
+
+  assert.equal(presentedSignature({ "x-hub-signature-256": "sha256=abc" }), "sha256=abc");
+  assert.equal(presentedSignature({ "x-lumenbox-signature": "abc" }), "abc");
+  assert.equal(presentedSignature({}), undefined);
+});
+
+test("a hook has a ceiling on how often it fires, and the refusal says when to come back", () => {
+  let now = 0;
+  const rate = new HookRate(3, 60_000, () => now);
+  assert.equal(rate.take("a").allowed, true);
+  assert.equal(rate.take("a").allowed, true);
+  assert.equal(rate.take("a").allowed, true);
+  const refused = rate.take("a");
+  assert.equal(refused.allowed, false);
+  assert.ok("retryAfterSeconds" in refused && refused.retryAfterSeconds > 0 && refused.retryAfterSeconds <= 60);
+
+  // Another hook has its own ceiling: one runaway shortcut must not silence the others.
+  assert.equal(rate.take("b").allowed, true);
+
+  // The window slides.
+  now += 61_000;
+  assert.equal(rate.take("a").allowed, true);
 });

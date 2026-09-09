@@ -80,12 +80,43 @@ The URL points at whatever this installation is reachable at. On a laptop that i
 address that resolves from outside — a tunnel, or a host on your network — and the page shows
 that instead. Until then, the automations page says plainly that the URLs are local.
 
+## Waiting for the answer
+
+`?wait=<seconds>` (up to 55) holds the connection until the routine finishes and returns what it
+said:
+
+```
+POST /hooks/<id>?wait=30
+→ 200 {"done":true,"said":"Filed at /home/box/work/inbox/2026-09-09-webhook.md"}
+```
+
+A shortcut can then show the result instead of trusting that something happened. If the routine
+outlives the wait the answer is `202 {"done":false}` — the work is not cancelled, and the run is
+in the app. Without the parameter nothing changes: `202` immediately, which is right for a phone
+on a train.
+
+## Signed bodies
+
+GitHub, Stripe and everything shaped like them do not send the secret; they sign the body with it.
+Both are accepted: `Authorization: Bearer <secret>`, or an HMAC-SHA256 of the raw body in
+`X-Hub-Signature-256` (also `X-Signature-256`, `X-Lumenbox-Signature`), with or without the
+`sha256=` prefix. The routine's own secret is the shared secret, so a GitHub webhook needs no
+proxy in between. The body is compared as received — re-serialising JSON breaks every signature,
+which is why the handler keeps the raw text and authenticates after reading it.
+
+## How often
+
+Thirty calls per ten minutes per routine, on top of one run in flight. Over that is `429` with a
+`Retry-After`. The counter is in memory, so a restart forgives — the right side to err on for
+something whose real backstop is the budget. What this stops is the pathological case: a
+misconfigured shortcut, a retrying CI job, or somebody with the URL firing it until the month's
+spend is gone.
+
 ## Still open
 
-- **No delivery receipt to the caller.** The shortcut learns the run was accepted, not what came
-  of it. A `?wait=10s` that holds the connection for a short run would fix the "did it work"
-  question on the phone, and is the obvious next slice.
-- **Rate limiting is one-in-flight per routine, nothing more.** A hostile holder of a URL can
-  still fire it as fast as runs complete. The budget is the backstop, which is coarse.
-- **No signature verification** (`X-Hub-Signature` and friends), so a sender that signs bodies
-  rather than presenting a bearer token cannot be accepted yet. GitHub is the one that matters.
+- **No replay window.** A signed body proves who sent it, not when. A sender that replays a
+  captured request is accepted until the rate limit bites. Stripe-style timestamp checking is the
+  fix, and needs the sender to provide one.
+- **One secret per routine, no second one during rotation.** Rotating breaks anything still using
+  the old secret at that instant; two live secrets with an overlap window would make rotation
+  free.
