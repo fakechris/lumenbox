@@ -83,6 +83,51 @@ if [ -d /opt/box-reference ]; then
   log "reference notes projected"
 fi
 
+# ── behaviour audit (Snoopy exec + xwatchdog), disclosed, for a company jump box ────────────
+# docs/47. This is a *disclosed* audit for a company operations jump box, not covert surveillance:
+# the person is told on the box label and at login (MOTD). It records commands and window focus,
+# never keystroke content or credentials.
+#
+# The box user can sudo, so nothing here truly stops a determined operator from disabling the
+# auditor — chattr below is best-effort and is defeated by the same sudo. The real guarantee is
+# off-box: the host pulls events by sequence and raises a high-risk alarm the moment the daemon
+# stops answering (heartbeat), and the command that disables the auditor is itself execve-logged
+# before it takes effect. Do not read the chattr calls as "root cannot undo this".
+mkdir -p /var/log/xwatchdog /home/box/work/.xwatchdog
+touch /var/log/xwatchdog/exec.log /var/log/xwatchdog/events.jsonl
+# Owned by the box user (the daemon and Snoopy run as it and must append); not world-writable,
+# so a second uid cannot forge or wipe events. Integrity against the box user's own sudo is the
+# host's job, not a file mode's.
+chown -R box:box /var/log/xwatchdog /home/box/work/.xwatchdog 2>/dev/null || true
+chmod 0755 /var/log/xwatchdog /home/box/work/.xwatchdog 2>/dev/null || true
+chmod 0644 /var/log/xwatchdog/exec.log /var/log/xwatchdog/events.jsonl 2>/dev/null || true
+
+# Persistent copy under the work volume, so it survives a container recreate until the host has it.
+if [[ ! -L /home/box/work/.xwatchdog/exec.log ]]; then
+  ln -sf /var/log/xwatchdog/exec.log /home/box/work/.xwatchdog/exec.log 2>/dev/null || true
+  ln -sf /var/log/xwatchdog/events.jsonl /home/box/work/.xwatchdog/events.jsonl 2>/dev/null || true
+fi
+
+# Activate Snoopy execve logging — the command auditor. Every program a shell runs (including in
+# xterm) is logged with argv/uid/tty/pwd before it executes, however it was typed.
+if [[ -f /etc/snoopy.ini ]]; then
+  if [[ ! -f /etc/ld.so.preload ]] || ! grep -q "libsnoopy" /etc/ld.so.preload 2>/dev/null; then
+    for lib in /usr/lib/x86_64-linux-gnu/libsnoopy.so /usr/lib/aarch64-linux-gnu/libsnoopy.so /usr/lib/libsnoopy.so; do
+      if [[ -f "$lib" ]]; then
+        echo "$lib" >> /etc/ld.so.preload
+        break
+      fi
+    done
+  fi
+  # Best-effort local tamper-evidence: append-only logs, immutable preload config. Silently a
+  # no-op on filesystems without the capability, and defeatable by the box user's sudo — kept
+  # because it raises the bar, not because it is a boundary. The boundary is the host heartbeat.
+  chattr +i /etc/snoopy.ini 2>/dev/null || true
+  chattr +i /etc/ld.so.preload 2>/dev/null || true
+  chattr +a /var/log/xwatchdog/exec.log 2>/dev/null || true
+  chattr +a /var/log/xwatchdog/events.jsonl 2>/dev/null || true
+fi
+
 if command -v opencode >/dev/null 2>&1; then
   mkdir -p /home/box/.config/opencode
   ln -sfn /home/box/work/skills /home/box/.config/opencode/skill

@@ -25,6 +25,7 @@ import type {
   RecordListResult,
   RecordingInfo,
   WriteFileResult,
+  XWatchdogEventsResult,
 } from "../protocol/index.ts";
 
 export interface BoxClientOptions {
@@ -364,5 +365,13 @@ export class BoxClient {
 
   listDir(path: string): Promise<ListDirResult> {
     return this.post<ListDirResult>("/fs/list", { path });
+  }
+
+  /**
+   * Reads events from xwatchdog (Snoopy command execution + GUI/input interaction).
+   * Monotonic sequence cursor for reliable catch-up.
+   */
+  xwatchdogEvents(since = 0, limit = 100): Promise<XWatchdogEventsResult> {
+    return this.post<XWatchdogEventsResult>("/xwatchdog/events", { since, limit });
   }
 }
