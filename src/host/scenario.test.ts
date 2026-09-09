@@ -209,3 +209,63 @@ test("a crew is born as a team, and a teammate inherits its maker's", async () =
     episode.cleanup();
   }
 });
+
+// ── the agent has to be able to see teams, not just set them ──────────────────────────────
+//
+// Setting a tag it cannot see is a write-only field: an agent asked to "build a media team"
+// would have no way to know the concept exists, and the five agents would arrive untagged.
+
+test("an agent is told its own teams, its teammates', and to name one for a batch", async () => {
+  const seen: string[] = [];
+  const script: Script = ({ system }) => {
+    seen.push(system);
+    return { say: "ok" };
+  };
+  const episode = await runEpisode({
+    team: [{ name: "Boss" }, { name: "Scout" }],
+    says: ["hello"],
+    script,
+  });
+  try {
+    episode.registry.update(episode.registry.list().find(r => r.profile.name === "Scout")!.id, { tags: ["media"] });
+    const after = await runEpisode({
+      team: [{ name: "Boss" }],
+      says: ["build me a media team"],
+      script,
+    });
+    after.cleanup();
+    const system = seen.join("\n");
+    assert.match(system, /Teams are how the person finds a group of agents/);
+    assert.match(system, /give them all the same team/);
+    assert.match(system, /You are on no team/, "an untagged agent is told so plainly");
+  } finally {
+    episode.cleanup();
+  }
+});
+
+test("a teammate's teams are in the roster the agent reads", async () => {
+  const seen: string[] = [];
+  const script: Script = ({ system }) => {
+    seen.push(system);
+    return { say: "ok" };
+  };
+  // Built by hand so the roster has a tagged member before the first turn runs.
+  const episode = await runEpisode({ team: [{ name: "Boss" }, { name: "Scout" }], says: [], script });
+  try {
+    const scout = episode.registry.list().find(r => r.profile.name === "Scout")!;
+    episode.registry.update(scout.id, { tags: ["media", "ops"] });
+    const { buildSystemPrompt } = await import("./prompt.ts");
+    const boss = episode.registry.list().find(r => r.profile.name === "Boss")!;
+    const prompt = buildSystemPrompt({
+      agent: boss,
+      teammates: episode.registry.list(),
+      memory: [],
+      resolution: undefined,
+      agentsRoot: episode.registry.root,
+      hasBox: false,
+    } as never);
+    assert.match(prompt, /- Scout \(id: [^)]+\) \[media, ops\]/);
+  } finally {
+    episode.cleanup();
+  }
+});

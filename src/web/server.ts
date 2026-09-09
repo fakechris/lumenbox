@@ -4725,6 +4725,7 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
             send(res, 400, { error: tools.message });
             return;
           }
+          const tags = Array.isArray(body.tags) ? (body.tags as string[]) : undefined;
           const boxId = typeof body.boxId === "string" && body.boxId.trim() !== "" ? body.boxId.trim() : undefined;
           if (boxId !== undefined && registry.boxById(boxId) === undefined) {
             send(res, 400, { error: `No box with id ${boxId}.` });
@@ -4748,6 +4749,7 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
             ...(typeof body.scopeId === "string" && body.scopeId !== "" ? { scopeId: body.scopeId } : {}),
             ...(typeof body.provider === "string" && body.provider !== "" ? { provider: body.provider } : {}),
             ...(typeof body.model === "string" && body.model !== "" ? { model: body.model } : {}),
+            ...(tags !== undefined ? { tags } : {}),
             visibility: body.visibility === "private" ? "private" : "shared",
           });
           log(

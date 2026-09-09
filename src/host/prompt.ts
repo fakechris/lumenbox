@@ -366,7 +366,10 @@ export function describeTeammate(record: AgentRecord): string {
   const summary = description
     ? ` — ${description.replace(/\s+/g, " ").slice(0, 120)}`
     : "";
-  return `- ${record.profile.name} (id: ${record.id})${summary}`;
+  // The teams, because they are how a person finds this agent in their list and how you tell
+  // which of eleven names belong to the job in front of you.
+  const teams = (record.profile.tags ?? []).length > 0 ? ` [${(record.profile.tags ?? []).join(", ")}]` : "";
+  return `- ${record.profile.name} (id: ${record.id})${teams}${summary}`;
 }
 
 function teamSection(context: PromptContext): string {
@@ -386,7 +389,21 @@ function teamSection(context: PromptContext): string {
     return lines.join("\n");
   }
 
-  lines.push("Teammates you can message right now:");
+  const mine = context.agent.profile.tags ?? [];
+  lines.push(
+    mine.length > 0
+      ? `You are on ${mine.length === 1 ? "the team" : "the teams"} ${mine.join(", ")}. Teams are how the person finds a group of agents in their list; each teammate's are in brackets below.`
+      : "You are on no team. Teams are how the person finds a group of agents in their list; each teammate's are in brackets below.",
+    "",
+    "When you create agents for one job, give them all the same team — that is what makes them " +
+      "findable together afterwards, and a list of a dozen agents in alphabetical order is not. " +
+      "Name it for the job in the person's own words (a media team is `media`, a content " +
+      "pipeline is `content`), pass it as `tags` on every `CreateAgent` call in that batch, and " +
+      "put yourself on it with `UpdateAgent` if you are running the job. An agent can be on " +
+      "several: one that every team uses belongs to each of them.",
+    "",
+    "Teammates you can message right now:"
+  );
   for (const record of visible.slice(0, AGENT_DIRECTORY_LIMIT)) {
     lines.push(describeTeammate(record));
   }

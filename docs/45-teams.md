@@ -24,6 +24,18 @@ nobody finds that confusing when they read it.
 The cost is that the list is longer than the number of agents. That is worth paying: scanning
 one group and finding everyone who works on it beats scanning one flat list and finding nobody.
 
+## The agent can see them, which is the point
+
+A tag an agent can set but not see would be a write-only field: asked to "build a media team" it
+would have no way to know the concept exists, and the five agents would arrive untagged anyway.
+So the prompt carries three things — the agent's own teams, each teammate's in brackets beside
+their name in the roster, and one instruction: when you make several agents for one job, give
+them all the same team, named for the job in the person's own words.
+
+That is what closes the loop on the case this came from. "用我们的 agents 建一个媒体团队" now
+produces five agents tagged `media`, because the agent doing the creating knows that grouping is
+a thing, knows what its teammates are grouped as, and is told to name one.
+
 ## How an agent gets a team
 
 Three ways, in the order that matters:
@@ -35,7 +47,8 @@ Three ways, in the order that matters:
    made by the editorial coordinator is editorial until somebody says otherwise, which is nearly
    always right and is the difference between a list that stays organised and one that decays.
 3. **Said.** `UpdateAgent` takes `tags` — including on itself, so an agent that notices it has
-   become the one doing the writing can say so. A person edits them in Configure.
+   become the one doing the writing can say so. A person edits them in the agent's Configure
+   dialog, in a Teams field, comma separated; the same field is on the New agent form.
 
 Names are lowercased and spaces become hyphens, so "Editorial", "editorial " and "content team"
 do not become three departments. Five teams per agent, 24 characters each. Any language.
