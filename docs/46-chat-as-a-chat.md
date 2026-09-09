@@ -55,6 +55,20 @@ message — a person who reaches for the second and finds fewer actions than the
 bug, not a menu. With text selected the browser's own menu is left alone, because that one can
 copy exactly what is selected.
 
+## Turns nobody typed
+
+Making the person's messages loud exposed an old bug immediately: a webhook's brief, a timer's
+cue and a restart's resume prompt are all stored with role "user" — that is what opens a turn —
+and were drawn as the person's own words. A webhook body appeared in the chat as something
+Chris had said. Harmless while both sides looked alike; glaring the moment one of them became a
+filled bubble, which is the usual way a display bug is finally seen.
+
+They now render as a quiet centred line — "started by a webhook · 07:12" — with the brief behind
+a fold, the way a chat renders "X joined". The authority is the `fromPerson` flag on the turn
+entry (added for a different reason: deciding whether an agent may reach the person); the
+bracketed cue is the fallback for turns recorded before that field existed. A person whose own
+message happens to start with a bracket is still a person.
+
 ## Not done
 
 - **Search is this conversation only.** Across every agent and every thread is the obvious next

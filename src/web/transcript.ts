@@ -26,6 +26,29 @@ export interface DisplayTool {
   question?: { question: string; options?: string[]; fallback?: string };
 }
 
+/**
+ * What started this turn, when it was not a person typing.
+ *
+ * The harness opens turns with a bracketed cue as the first token — `[webhook]`, `[scheduled]`,
+ * `[first run]`, `[resumed]`, `[system]`. `fromPerson` on the entry is the authority where it
+ * exists; the cue is the fallback for turns recorded before that field did.
+ */
+export function triggerOf(text: string, fromPerson: boolean): string | undefined {
+  if (fromPerson) return undefined;
+  const cue = /^\[([a-z][a-z ]{2,20})\]/.exec(text.trimStart());
+  if (cue === null) return undefined;
+  const label = cue[1]!.trim();
+  const known: Record<string, string> = {
+    webhook: "started by a webhook",
+    scheduled: "started by a timer",
+    "first run": "first run",
+    resumed: "picked up after a restart",
+    system: "system",
+    "template setup": "setting itself up",
+  };
+  return known[label] ?? `started by ${label}`;
+}
+
 /** The question an AskUser call carried, in the shape the page draws. */
 export function questionOf(input: unknown): { question: string; options?: string[]; fallback?: string } | undefined {
   const args = (input ?? {}) as { question?: unknown; options?: unknown; default?: unknown };
@@ -66,6 +89,15 @@ export type DisplayEntry =
     }
   /** A turn a teammate started: the messages, without the scaffolding around them. */
   | { kind: "peer"; messages: WakeMessage[] }
+  /**
+   * A turn nobody typed: a webhook fired, a timer came round, the process restarted.
+   *
+   * Stored with role "user" because that is what opens a turn, and drawn as the person's own
+   * words until now — so a webhook's brief appeared in the chat as something Chris had said.
+   * Harmless while both sides looked alike; glaring the moment the person's messages became a
+   * filled bubble (docs/46), which is the usual way a display bug is finally seen.
+   */
+  | { kind: "trigger"; label: string; text: string; at?: string }
   | { kind: "tools"; tools: DisplayTool[] };
 
 export interface RosterEntry {
@@ -169,8 +201,13 @@ export function toDisplayEntries(
 
     if (entry.role === "user") {
       const peers = parseWakePrompt(text, knownNames);
-      if (peers) display.push({ kind: "peer", messages: peers });
-      else display.push({ kind: "text", role: "user", text, ...stamp(raw) });
+      if (peers) { display.push({ kind: "peer", messages: peers }); continue; }
+      const trigger = triggerOf(text, (raw as { fromPerson?: boolean }).fromPerson === true);
+      if (trigger !== undefined) {
+        display.push({ kind: "trigger", label: trigger, text, ...stamp(raw) });
+        continue;
+      }
+      display.push({ kind: "text", role: "user", text, ...stamp(raw) });
       continue;
     }
 

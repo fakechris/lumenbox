@@ -360,6 +360,10 @@ export const APP_HTML = String.raw`<!doctype html>
   #chat { padding: 18px 18px 8px; display: flex; flex-direction: column; gap: 6px; }
   /* Search (docs/46). A hit is marked in place and the thread scrolls to it, so the
      surrounding conversation stays readable — a filtered list of fragments is not. */
+  .trigger { align-self: center; max-width: 90%; margin: 6px 0; font-size: 11px; color: var(--muted); }
+  .trigger summary { cursor: pointer; list-style: none; text-align: center; }
+  .trigger summary::-webkit-details-marker { display: none; }
+  .trigger .det { margin-top: 6px; padding: 8px 12px; border: 1px solid var(--border); border-radius: 10px; background: var(--surface-2); white-space: pre-wrap; text-align: left; color: var(--text-soft); font-size: 12px; }
   mark.hit { background: var(--accent-soft); color: inherit; border-radius: 3px; padding: 0 1px; }
   mark.hit.on { background: var(--accent); color: var(--on-ink); }
   #searchbar { display: none; gap: 8px; align-items: center; padding: 7px 18px; border-bottom: 1px solid var(--border); font-size: 12px; }
@@ -3465,6 +3469,16 @@ function drawItem(item) {
     });
     return div;
   }
+  if (item.kind === "trigger") {
+    // Centred and quiet, like a chat's own "X joined" line: it is a fact about the
+    // conversation rather than something anybody said. The brief is behind the fold, because
+    // it is occasionally exactly what a person needs and never what they are reading for.
+    div.className = "trigger";
+    if (item.at) div.setAttribute("data-at", String(item.at));
+    div.innerHTML = "<details><summary>" + esc(item.label) + (item.at ? " · " + esc(whenLabel(item.at)) : "") + '</summary><div class="det"></div></details>';
+    div.querySelector(".det").textContent = String(item.text == null ? "" : item.text);
+    return div;
+  }
   if (item.kind === "working") {
     div.className = "working";
     div.innerHTML = '<span class="dots"><span></span><span></span><span></span></span>' + esc(nameOf(current)) + " is on it";
@@ -3538,6 +3552,11 @@ function replayEntry(id, entry, index) {
     for (var p = 0; p < entry.messages.length; p++) {
       pushItem({ kind: "teammate", from: entry.messages[p].from, text: entry.messages[p].text, priority: entry.messages[p].priority, at: entry.at });
     }
+    return;
+  }
+  if (entry.kind === "trigger") {
+    closeOpen();
+    pushItem({ kind: "trigger", label: entry.label, text: entry.text, at: entry.at });
     return;
   }
   if (entry.kind === "tools") {

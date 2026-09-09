@@ -224,3 +224,29 @@ test("the final answer is not marked as commentary", () => {
   assert.equal((texts[0] as { aside?: true }).aside, true, "the narration");
   assert.equal((texts[1] as { aside?: true }).aside, undefined, "the answer");
 });
+
+// ── a turn nobody typed is not the person speaking (docs/46) ──────────────────────────────
+//
+// The harness opens turns with a bracketed cue and stores them with role "user", because that
+// is what opens a turn. Drawn as the person's own words, a webhook's brief appeared in the chat
+// as something Chris had said — harmless while both sides looked alike, glaring once the
+// person's messages became a filled bubble.
+
+test("a webhook, a timer and a restart are labelled, and a person's words are not", () => {
+  const rows = toDisplayEntries(
+    [
+      { role: "user", text: "[webhook] This turn was started by something calling this routine's URL.\n\nbody", at: "2026-09-09T07:12:00.000Z" },
+      { role: "user", text: "[scheduled] This turn was started by a timer.", at: "2026-09-09T07:13:00.000Z" },
+      { role: "user", text: "clean up the worktrees", at: "2026-09-09T07:14:00.000Z", fromPerson: true },
+      // A person who opens their message with a bracket is still a person: fromPerson decides.
+      { role: "user", text: "[urgent] do this first", at: "2026-09-09T07:15:00.000Z", fromPerson: true },
+    ] as never,
+    []
+  );
+  const kinds = rows.map(row => row.kind);
+  assert.deepEqual(kinds, ["trigger", "trigger", "text", "text"], JSON.stringify(rows));
+  assert.equal((rows[0] as { label: string }).label, "started by a webhook");
+  assert.equal((rows[1] as { label: string }).label, "started by a timer");
+  assert.equal((rows[2] as { role: string }).role, "user");
+  assert.equal((rows[3] as { role: string }).role, "user");
+});
