@@ -391,8 +391,13 @@ test("a listener is both halves or a problem, and shows in the index", () => {
   assert.ok("problem" in noMatch && /needs a match/.test(noMatch.problem));
   const noTrigger = skillFrom("x", parseSkillFile("---\ndescription: d\nmatch: hello\n---\nbody"));
   assert.ok("problem" in noTrigger && /no trigger: message/.test(noTrigger.problem));
-  const badKind = skillFrom("x", parseSkillFile("---\ndescription: d\ntrigger: webhook\nmatch: x\n---\nbody"));
-  assert.ok("problem" in badKind && /the only kind/.test(badKind.problem));
+  // `webhook` used to stand in here as a kind that does not exist. It does now (docs/44), so the
+  // refusal it earns is a different one: a webhook fires when its URL is called, and a match: on
+  // it matches nothing.
+  const hookWithMatch = skillFrom("x", parseSkillFile("---\ndescription: d\ntrigger: webhook\nmatch: x\n---\nbody"));
+  assert.ok("problem" in hookWithMatch && /nothing to match/.test(hookWithMatch.problem), JSON.stringify(hookWithMatch));
+  const badKind = skillFrom("x", parseSkillFile("---\ndescription: d\ntrigger: smoke-signal\nmatch: x\n---\nbody"));
+  assert.ok("problem" in badKind && /"message" or "webhook"/.test(badKind.problem), JSON.stringify(badKind));
   const badRegex = skillFrom("x", parseSkillFile("---\ndescription: d\ntrigger: message\nmatch: /(unclosed/\n---\nbody"));
   assert.ok("problem" in badRegex && /not a valid regex/.test(badRegex.problem));
 });

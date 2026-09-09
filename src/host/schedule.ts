@@ -33,6 +33,7 @@
  */
 
 import { envNumber } from "../config.ts";
+import { webhookPrompt } from "./webhooks.ts";
 import { existsSync, mkdirSync, readFileSync } from "node:fs";
 import { appendLine } from "./jsonl.ts";
 import { dirname, join } from "node:path";
@@ -395,6 +396,19 @@ export interface Scheduled {
 }
 
 /** A skill that fires on a matching message. Same runner rules as a schedule. */
+/** A routine that fires when its own URL is called (webhooks.ts). */
+export interface Hooked {
+  slug: string;
+  name: string;
+  path: string;
+  runAs?: string;
+  deliver?: string;
+  paused?: boolean;
+  boxId?: string;
+  authoredBy?: string;
+  because?: string;
+}
+
 export interface Listening {
   slug: string;
   name: string;
@@ -483,6 +497,8 @@ export interface SchedulerDeps {
   due: () => Promise<readonly Scheduled[]>;
   /** The skills with listeners, re-read on each message so an edit takes effect at once. */
   listeners?: () => Promise<readonly Listening[]>;
+  /** The skills that fire on a webhook, re-read per call for the same reason. */
+  hooked?: () => Promise<readonly Hooked[]>;
   /**
    * Starts a turn. Rejecting is fine: the next window is the retry.
    *
@@ -769,10 +785,11 @@ export class Scheduler {
       lastRun: string | undefined;
       running: boolean;
       paused: boolean;
+      kind: "schedule" | "webhook";
     }[]
   > {
     const skills = await this.deps.due().catch(() => []);
-    return skills.map(skill => ({
+    const scheduled = skills.map(skill => ({
       slug: skill.slug,
       name: skill.name,
       described: describeSchedule(skill.schedule),
@@ -785,7 +802,30 @@ export class Scheduler {
       lastRun: this.lastRun.get(skill.slug)?.toISOString(),
       running: this.running.has(skill.slug),
       paused: skill.paused === true,
+      kind: "schedule" as const,
     }));
+    // Webhook routines belong in the same list: to a person, "what runs by itself" is one
+    // question, and a routine that is missing from the automations page is a routine nobody
+    // knows is armed.
+    const hooked = this.deps.hooked === undefined ? [] : await this.deps.hooked().catch(() => []);
+    return [
+      ...scheduled,
+      ...hooked.map(skill => ({
+        slug: skill.slug,
+        name: skill.name,
+        described: "when its webhook is called",
+        schedule: "webhook",
+        agent: skill.runAs,
+        timezone: undefined,
+        deliver: skill.deliver,
+        authoredBy: skill.authoredBy,
+        because: skill.because,
+        lastRun: this.lastRun.get(skill.slug)?.toISOString(),
+        running: this.running.has(skill.slug),
+        paused: skill.paused === true,
+        kind: "webhook" as const,
+      })),
+    ];
   }
 
   /**
@@ -838,6 +878,62 @@ export class Scheduler {
         `because naming another agent in a file you can write is a way to borrow its permissions.`
     );
     return undefined;
+  }
+
+  /**
+   * Fires a webhook routine with the body that arrived.
+   *
+   * Same bookkeeping as every other run — the pause switch, the "already running" guard, the
+   * records the automations page reads — because to a person this is the same object as a timer,
+   * differing only in what starts it. It does not wait for the turn: whatever called the URL is a
+   * phone on a train, and it gets its answer in milliseconds either way.
+   */
+  async fireWebhook(
+    slug: string,
+    body: string,
+    from?: string
+  ): Promise<{ ok: true } | { ok: false; reason: string }> {
+    const hooked = this.deps.hooked === undefined ? [] : await this.deps.hooked().catch(() => []);
+    const skill = hooked.find(candidate => candidate.slug === slug);
+    if (skill === undefined) return { ok: false, reason: `No webhook routine "${slug}".` };
+    if (skill.paused === true) return { ok: false, reason: `${skill.name} is paused; turn it on first.` };
+    // Refused rather than queued: a shortcut pressed twice on a train should not stack two runs
+    // of the same routine, and the second press is nearly always the same content.
+    if (this.running.has(slug)) return { ok: false, reason: `${skill.name} is already running.` };
+    const agent = this.runnerFor(skill);
+    if (agent === undefined) return { ok: false, reason: `No agent to run ${skill.name}.` };
+
+    this.running.add(slug);
+    const startedAt = this.now();
+    this.record(slug, "started", { agent });
+    this.lastRun.set(slug, startedAt);
+    this.log(`${skill.name}: fired by webhook`);
+    void this.deps
+      .run(
+        agent,
+        webhookPrompt({
+          skillName: skill.name,
+          path: skill.path,
+          body,
+          ...(from !== undefined ? { from } : {}),
+          ...(skill.deliver !== undefined ? { deliver: skill.deliver } : {}),
+        }),
+        skill.deliver
+      )
+      .catch(error => {
+        this.log(`${skill.name}: webhook run failed — ${error instanceof Error ? error.message : String(error)}`);
+      })
+      .finally(() => {
+        this.running.delete(slug);
+        this.record(slug, "finished", {
+          agent,
+          ms: this.now().getTime() - startedAt.getTime(),
+          ...(this.deps.spentSinceAgent !== undefined
+            ? { tokens: this.deps.spentSinceAgent(startedAt.getTime(), agent) }
+            : {}),
+        });
+      });
+    return { ok: true };
   }
 
   async runNow(slug: string): Promise<{ ok: true } | { ok: false; reason: string }> {
