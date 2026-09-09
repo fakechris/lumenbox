@@ -62,6 +62,8 @@ export const APP_HTML = String.raw`<!doctype html>
   :root, [data-theme="light"] {
     color-scheme: light;
     --bg: #f7f6f2; --bg-deep: #efece5; --surface: #fffdfa; --surface-2: #fbf7f0;
+    /* The person's own bubble: filled, near-black, so their words are found by shape. */
+    --ink: #1f1a17; --on-ink: #faf8f5;
     --border: #e7e1d8; --border-strong: #cdc4b6;
     --text: #1f1a17; --text-soft: #443a32; --muted: #71675d;
     --accent: #9f4f24; --accent-soft: #f4dfd2; --accent-strong: #843c15;
@@ -79,6 +81,8 @@ export const APP_HTML = String.raw`<!doctype html>
   [data-theme="dark"] {
     color-scheme: dark;
     --bg: #0a0e16; --bg-deep: #05080d; --surface: #11161f; --surface-2: #161c27;
+    /* Dark mode inverts the trick: the filled bubble is the light one. */
+    --ink: #3b82f6; --on-ink: #f2f7ff;
     --border: #1f2937; --border-strong: #2c3a4f;
     --text: #e6edf5; --text-soft: #c2cfde; --muted: #7d8aa0;
     --accent: #3b82f6; --accent-soft: rgba(59,130,246,0.16); --accent-strong: #5b98f8;
@@ -353,7 +357,22 @@ export const APP_HTML = String.raw`<!doctype html>
   #progresslist { color: var(--muted); margin-top: 2px; }
 
   /* ── the conversation ─────────────────────────────────────────────────────── */
-  #chat { padding: 18px 18px 8px; display: flex; flex-direction: column; gap: 4px; }
+  #chat { padding: 18px 18px 8px; display: flex; flex-direction: column; gap: 6px; }
+  /* Search (docs/46). A hit is marked in place and the thread scrolls to it, so the
+     surrounding conversation stays readable — a filtered list of fragments is not. */
+  mark.hit { background: var(--accent-soft); color: inherit; border-radius: 3px; padding: 0 1px; }
+  mark.hit.on { background: var(--accent); color: var(--on-ink); }
+  #searchbar { display: none; gap: 8px; align-items: center; padding: 7px 18px; border-bottom: 1px solid var(--border); font-size: 12px; }
+  #searchbar.on { display: flex; }
+  #searchbar input[type="search"] { flex: 1; min-width: 80px; height: 28px; padding: 0 10px; border: 1px solid var(--border-strong); border-radius: 8px; background: var(--bg); color: var(--text); font: inherit; }
+  #searchbar select { height: 28px; border: 1px solid var(--border); border-radius: 8px; background: var(--bg); color: var(--text-soft); font: inherit; }
+  #searchbar .count { color: var(--muted); min-width: 66px; text-align: right; }
+  /* The right-click menu (docs/46): the actions the toolbar has, where the pointer is. */
+  #ctxmenu { position: fixed; z-index: 60; display: none; min-width: 180px; padding: 5px; border: 1px solid var(--border-strong); border-radius: 10px; background: var(--surface); box-shadow: 0 12px 30px rgba(0,0,0,0.18); }
+  #ctxmenu.on { display: block; }
+  #ctxmenu button { display: block; width: 100%; text-align: left; padding: 6px 10px; border: 0; border-radius: 7px; background: none; color: var(--text); font: inherit; font-size: 12.5px; cursor: pointer; }
+  #ctxmenu button:hover { background: var(--surface-2); }
+  #ctxmenu .sep { height: 1px; margin: 4px 6px; background: var(--border); }
   /* A flex column whose content overflows shrinks its items to fit — and an item with
      overflow: hidden (the tool rows) may shrink to nothing, which is exactly what
      happened: every tool call rendered as a 2px hairline. The scroller scrolls;
@@ -365,7 +384,7 @@ export const APP_HTML = String.raw`<!doctype html>
   .msg:hover .mtools, .msg .mtools:focus-within { opacity: 1; }
   .msg.user .mtools { justify-content: flex-end; }
   /* A teammate speaking here (docs/41 §1): a bubble with its own colour, sans, labelled. */
-  .msg.peer .body { font-family: var(--font-sans); font-size: 0.92rem; line-height: 1.6; background: var(--surface); border: 1px solid var(--border); border-left: 3px solid var(--peer-colour, var(--border-strong)); border-radius: var(--radius-card); padding: 10px 14px; }
+  .msg.peer .body { font-family: var(--font-sans); font-size: 0.92rem; line-height: 1.6; background: var(--surface-2); border: 1px solid var(--border); border-left: 3px solid var(--peer-colour, var(--border-strong)); border-radius: 5px 16px 16px 5px; padding: 10px 14px; }
   .msg.peer .who .chip { text-transform: none; letter-spacing: 0; font-weight: 400; }
   .sentfoot { text-align: right; font-size: 11px; color: var(--muted); margin: -2px 0 6px; }
   .sentfoot .peerdot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; vertical-align: middle; margin-right: 4px; }
@@ -426,15 +445,34 @@ export const APP_HTML = String.raw`<!doctype html>
     font-size: 11px; letter-spacing: 0.1em; text-transform: uppercase; color: var(--muted);
     margin-bottom: 5px;
   }
-  /* The agent's prose reads in the serif; everything operational stays in sans/mono. */
-  .msg .body { max-width: 680px; font-family: var(--font-serif); font-size: 1rem; line-height: 1.68; color: var(--text); }
-  .msg.user { align-self: flex-end; max-width: 560px; }
+  /* ── who is talking, at a glance (docs/46) ──────────────────────────────────────────
+     This used to be a web page: the person's words and the agent's were both pale
+     rectangles the same width, and telling them apart needed reading. Every chat people
+     actually use answers "who said this" before a word is read — side, and contrast. So:
+     the person is a filled bubble on the right, the agent is a light one on the left, and
+     both hug their content instead of filling the column. */
+  .msg .body {
+    max-width: min(78%, 680px); font-family: var(--font-serif); font-size: 1rem;
+    line-height: 1.66; color: var(--text);
+    background: var(--surface); border: 1px solid var(--border);
+    border-radius: 16px 16px 16px 5px; padding: 11px 15px;
+    width: fit-content;
+  }
+  .msg.user { align-self: flex-end; max-width: 100%; }
   .msg.user .who { text-align: right; }
   .msg.user .body {
-    font-family: var(--font-sans); font-size: 0.92rem; line-height: 1.6;
-    background: var(--surface-2); border: 1px solid var(--border);
-    border-radius: var(--radius-card); padding: 12px 15px;
+    font-family: var(--font-sans); font-size: 0.94rem; line-height: 1.55;
+    /* Filled, not tinted. A person scanning back through a day finds their own words by
+       shape alone, the way they do in every other chat they use. */
+    background: var(--ink); color: var(--on-ink); border-color: var(--ink);
+    border-radius: 16px 16px 5px 16px;
+    margin-left: auto; max-width: min(70%, 560px);
   }
+  .msg.user .body a { color: inherit; text-decoration: underline; }
+  .msg.user .body code { background: rgba(255,255,255,0.16); border-color: rgba(255,255,255,0.22); color: inherit; }
+  /* Code and tables are allowed the whole bubble: wrapping them to a chat width is worse
+     than a wide bubble, and this is where the reference designs give up on bubbles too. */
+  .msg .body:has(pre), .msg .body:has(table) { max-width: min(94%, 760px); }
   /* The trace as a tree.
      A round is a node: what the agent said it was about to do, with the calls it made
      nested under it. The nesting is drawn, not implied — children are indented and hang
@@ -774,6 +812,7 @@ export const APP_HTML = String.raw`<!doctype html>
         <a href="#" data-share="file">Download .md</a>
         <a href="#" data-share="link">Copy link to this thread</a>
       </div>
+      <a href="#" id="searchbtn" title="Search this conversation (Ctrl+F)">search</a>
       <a href="#" id="foldall" title="Fold or unfold every step in this conversation">fold steps</a>
       <span id="round" class="roundpill"></span>
       <!-- Only shown while a turn is running: a stop button with nothing to stop invites a click
@@ -787,7 +826,28 @@ export const APP_HTML = String.raw`<!doctype html>
     <div id="progresshead"></div>
     <div id="progresslist"></div>
   </div>
+  <div id="searchbar">
+    <input type="search" id="searchq" placeholder="Search this conversation&hellip;" autocomplete="off" spellcheck="false">
+    <select id="searchwho" title="Whose messages to search">
+      <option value="all">anyone</option>
+      <option value="person">you</option>
+      <option value="agent">this agent</option>
+      <option value="teammate">teammates</option>
+      <option value="work">tool calls</option>
+    </select>
+    <select id="searchwhen" title="How far back">
+      <option value="all">any time</option>
+      <option value="1">today</option>
+      <option value="7">last 7 days</option>
+      <option value="30">last 30 days</option>
+    </select>
+    <span class="count" id="searchcount"></span>
+    <button class="btn ghost sm" id="searchprev" title="Previous match (Shift+Enter)">&uarr;</button>
+    <button class="btn ghost sm" id="searchnext" title="Next match (Enter)">&darr;</button>
+    <button class="btn ghost sm" id="searchclose" title="Close (Esc)">&times;</button>
+  </div>
   <div class="scroll" id="chat"></div>
+<div id="ctxmenu" role="menu"></div>
   <button id="jumplatest" class="btn sm accent" type="button">↓ latest</button>
   <form id="form">
     <!-- Anchored above the composer so it does not cover what is being typed. -->
@@ -2753,20 +2813,210 @@ function messageLink(index) {
   return u.toString();
 }
 
+/**
+ * What can be done with one message. One list, used by the toolbar under it and by the
+ * right-click menu — a person who reaches for the second and finds fewer actions than the
+ * first has found a bug, not a menu.
+ */
+function messageAction(msg, act) {
+  var mdText = msg.__md || msg.querySelector(".body").textContent;
+  if (act === "copy") { copyText(msg.querySelector(".body").innerText); return "copied"; }
+  if (act === "md") { copyText(mdText); return "copied"; }
+  if (act === "quote") { intoComposer(mdText.split("\n").slice(0, 6).map(function (l) { return "> " + l; }).join("\n") + "\n"); return "quoted"; }
+  if (act === "link") { copyText(messageLink(msg.getAttribute("data-m"))); return "copied"; }
+  if (act === "resend") { intoComposer(mdText); return "in the composer"; }
+  if (act === "find") { openSearch(msg.querySelector(".body").innerText.trim().split(/\s+/).slice(0, 4).join(" ")); return "searching"; }
+  return "";
+}
+
 $("chat").addEventListener("click", function (event) {
   var btn = event.target.closest(".mtools button");
   if (!btn) return;
   event.preventDefault();
   var msg = btn.closest(".msg");
-  var act = btn.getAttribute("data-act");
-  var mdText = msg.__md || msg.querySelector(".body").textContent;
-  var flash = function (label) { var was = btn.textContent; btn.textContent = label; setTimeout(function () { btn.textContent = was; }, 1200); };
-  if (act === "copy") { copyText(msg.querySelector(".body").innerText); flash("copied"); }
-  else if (act === "md") { copyText(mdText); flash("copied"); }
-  else if (act === "quote") { intoComposer(mdText.split("\n").slice(0, 6).map(function (l) { return "> " + l; }).join("\n") + "\n"); }
-  else if (act === "link") { copyText(messageLink(msg.getAttribute("data-m"))); flash("copied"); }
-  else if (act === "resend") { intoComposer(mdText); }
+  var label = messageAction(msg, btn.getAttribute("data-act"));
+  if (label) { var was = btn.textContent; btn.textContent = label; setTimeout(function () { btn.textContent = was; }, 1200); }
 });
+
+/* ── search (docs/46) ───────────────────────────────────────────────────────────────────
+   In place rather than as a filtered list: a person searching a conversation is looking for
+   the moment something was said, and a list of matching fragments has thrown away the thing
+   that makes it findable — what came before and after. So matches are marked where they are,
+   the thread scrolls to each in turn, and the filters narrow which messages are considered
+   rather than hiding the rest. */
+
+var searchHits = [];
+var searchAt = -1;
+
+function clearMarks() {
+  var marked = $("chat").querySelectorAll("mark.hit");
+  for (var i = 0; i < marked.length; i++) {
+    var mark = marked[i];
+    var parent = mark.parentNode;
+    parent.replaceChild(document.createTextNode(mark.textContent), mark);
+    parent.normalize();
+  }
+  searchHits = [];
+  searchAt = -1;
+}
+
+/** Which messages a filter admits. The tool-call option searches the work folds instead. */
+function searchable(who, when) {
+  var nodes = $("chat").querySelectorAll(who === "work" ? "details.work" : ".msg");
+  var cutoff = when === "all" ? 0 : Date.now() - Number(when) * 86400000;
+  var out = [];
+  for (var i = 0; i < nodes.length; i++) {
+    var node = nodes[i];
+    if (who !== "all" && who !== "work") {
+      var role = node.getAttribute("data-role");
+      if (who === "person" && role !== "user") continue;
+      if (who === "agent" && role !== "agent") continue;
+      if (who === "teammate" && role !== "peer") continue;
+    }
+    if (cutoff > 0) {
+      var at = node.getAttribute("data-at");
+      // A row with no timestamp is kept: dropping it would silently hide the live turn,
+      // which is the most likely thing being looked for.
+      if (at && Date.parse(at) < cutoff) continue;
+    }
+    out.push(node);
+  }
+  return out;
+}
+
+/** Marks every occurrence inside one element, without touching its markup. */
+function markInside(root, needle) {
+  var walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT, null);
+  var texts = [];
+  while (walker.nextNode()) texts.push(walker.currentNode);
+  var found = 0;
+  for (var i = 0; i < texts.length; i++) {
+    var node = texts[i];
+    if (node.parentNode && node.parentNode.closest && node.parentNode.closest(".mtools")) continue;
+    var lower = node.nodeValue.toLowerCase();
+    var at = lower.indexOf(needle);
+    while (at >= 0) {
+      var tail = node.splitText(at);
+      var rest = tail.splitText(needle.length);
+      var mark = document.createElement("mark");
+      mark.className = "hit";
+      mark.appendChild(document.createTextNode(tail.nodeValue));
+      tail.parentNode.replaceChild(mark, tail);
+      searchHits.push(mark);
+      found += 1;
+      node = rest;
+      lower = node.nodeValue.toLowerCase();
+      at = lower.indexOf(needle);
+    }
+  }
+  return found;
+}
+
+function runSearch(jump) {
+  clearMarks();
+  var needle = $("searchq").value.trim().toLowerCase();
+  if (needle === "") { $("searchcount").textContent = ""; return; }
+  var rows = searchable($("searchwho").value, $("searchwhen").value);
+  for (var i = 0; i < rows.length; i++) markInside(rows[i], needle);
+  $("searchcount").textContent = searchHits.length === 0
+    ? "no matches"
+    : (searchHits.length === 1 ? "1 match" : searchHits.length + " matches");
+  if (searchHits.length > 0 && jump !== false) stepSearch(1);
+}
+
+function stepSearch(by) {
+  if (searchHits.length === 0) return;
+  if (searchAt >= 0 && searchHits[searchAt]) searchHits[searchAt].classList.remove("on");
+  searchAt = (searchAt + by + searchHits.length) % searchHits.length;
+  var hit = searchHits[searchAt];
+  hit.classList.add("on");
+  // Opens the fold the match is inside, or scrolling lands on a closed row.
+  var fold = hit.closest("details");
+  while (fold) { fold.open = true; fold = fold.parentNode && fold.parentNode.closest ? fold.parentNode.closest("details") : null; }
+  hit.scrollIntoView({ block: "center", behavior: "smooth" });
+  $("searchcount").textContent = (searchAt + 1) + " of " + searchHits.length;
+}
+
+function openSearch(prefill) {
+  $("searchbar").className = "on";
+  if (prefill !== undefined) $("searchq").value = prefill;
+  $("searchq").focus();
+  $("searchq").select();
+  if ($("searchq").value.trim() !== "") runSearch();
+}
+
+function closeSearch() {
+  clearMarks();
+  $("searchbar").className = "";
+  $("searchcount").textContent = "";
+}
+
+$("searchbtn").addEventListener("click", function (event) { event.preventDefault(); openSearch(); });
+$("searchclose").addEventListener("click", function () { closeSearch(); });
+$("searchnext").addEventListener("click", function () { stepSearch(1); });
+$("searchprev").addEventListener("click", function () { stepSearch(-1); });
+$("searchwho").addEventListener("change", function () { runSearch(); });
+$("searchwhen").addEventListener("change", function () { runSearch(); });
+$("searchq").addEventListener("input", function () { runSearch(false); });
+$("searchq").addEventListener("keydown", function (event) {
+  if (event.key === "Enter") { event.preventDefault(); if (searchHits.length === 0) runSearch(); else stepSearch(event.shiftKey ? -1 : 1); }
+  if (event.key === "Escape") { event.preventDefault(); closeSearch(); }
+});
+document.addEventListener("keydown", function (event) {
+  // The shortcut everyone already has in their fingers. The browser's own find cannot see
+  // into a closed fold and cannot filter by who said it, so ours takes the key.
+  if ((event.metaKey || event.ctrlKey) && event.key === "f") { event.preventDefault(); openSearch(); }
+});
+
+/* ── the right-click menu (docs/46) ─────────────────────────────────────────────────────
+   Every chat people use has one, and reaching for it and getting the browser's own menu
+   reads as "this is a web page", which is the whole complaint this round answers. */
+var ctxTarget = null;
+
+function closeCtx() { $("ctxmenu").className = ""; ctxTarget = null; }
+
+$("chat").addEventListener("contextmenu", function (event) {
+  var msg = event.target.closest(".msg");
+  // A selection means they want the browser's own menu, which can copy exactly what is
+  // selected. Ours would be in the way.
+  if (!msg || String(window.getSelection() || "").length > 0) return;
+  event.preventDefault();
+  ctxTarget = msg;
+  var isPerson = msg.getAttribute("data-role") === "user";
+  var hasIndex = msg.getAttribute("data-m") !== null;
+  var items = [
+    ["copy", "Copy text"],
+    ["md", "Copy as Markdown"],
+    ["quote", "Quote in a reply"],
+  ];
+  if (hasIndex) items.push(["link", "Copy link to this message"]);
+  if (isPerson) items.push(["resend", "Send again"]);
+  items.push(["sep", ""]);
+  items.push(["find", "Find messages like this"]);
+  $("ctxmenu").innerHTML = items.map(function (item) {
+    return item[0] === "sep" ? '<div class="sep"></div>' : '<button type="button" data-ctx="' + item[0] + '">' + esc(item[1]) + "</button>";
+  }).join("");
+  var menu = $("ctxmenu");
+  menu.className = "on";
+  // Kept on screen: a menu opened near the bottom right of the window would otherwise
+  // hang off it and the last item would be unreachable.
+  var width = menu.offsetWidth, height = menu.offsetHeight;
+  menu.style.left = Math.min(event.clientX, window.innerWidth - width - 8) + "px";
+  menu.style.top = Math.min(event.clientY, window.innerHeight - height - 8) + "px";
+});
+
+$("ctxmenu").addEventListener("click", function (event) {
+  var btn = event.target.closest("button[data-ctx]");
+  if (!btn || !ctxTarget) return;
+  var label = messageAction(ctxTarget, btn.getAttribute("data-ctx"));
+  if (label) feed(label, "");
+  closeCtx();
+});
+
+document.addEventListener("click", function (event) {
+  if (!event.target.closest("#ctxmenu")) closeCtx();
+});
+document.addEventListener("scroll", closeCtx, true);
 
 /**
  * A collapsed row: one line of summary, the rest behind a click.
@@ -3093,6 +3343,7 @@ function toolsHtml(kind, hasIndex) {
     '<button type="button" data-act="quote" title="Quote into the composer">quote</button>' +
     (hasIndex ? '<button type="button" data-act="link" title="Copy a link to this message">link</button>' : "") +
     (kind === "person" ? '<button type="button" data-act="resend" title="Put this back in the composer">resend</button>' : "") +
+    '<button type="button" data-act="find" title="Search this conversation for these words">find</button>' +
     "</div>";
 }
 
@@ -3123,6 +3374,8 @@ function drawItem(item) {
   if (item.kind === "work") {
     var det = document.createElement("details");
     det.className = "work";
+    // For the search's time filter: a fold with no time is searched whatever the window.
+    if (item.startAt) det.setAttribute("data-at", String(item.startAt));
     det.open = item.open !== undefined ? item.open : !folded;
     var calls = item.calls || [];
     var ms = item.startAt && item.endAt ? Date.parse(item.endAt) - Date.parse(item.startAt) : NaN;
