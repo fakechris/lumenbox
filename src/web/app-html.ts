@@ -2263,6 +2263,14 @@ function renderSpend(data) {
     // a report a person is meant to re-derive by hand should print the number it counted.
     num(totals.inputTokens) + " tokens in &middot; " + num(totals.outputTokens) +
     " out &middot; " + num(totals.cacheReadTokens) + " cache read" +
+    // Cache hit rate: how much of the input was served from cache rather than paid for fresh.
+    // The single number that says whether the caching lever is doing anything.
+    (function () {
+      var fresh = totals.inputTokens || 0, cached = totals.cacheReadTokens || 0;
+      return fresh + cached > 0
+        ? ' &middot; <span title="input served from cache vs paid fresh">缓存命中 ' + Math.round(cached / (fresh + cached) * 100) + "%</span>"
+        : "";
+    })() +
     (report.money !== undefined && report.money !== null
       ? " &middot; <b>$" + report.money.toFixed(2) + "</b>"
       : "");
@@ -2344,6 +2352,13 @@ function renderSpend(data) {
       ". Add a \u201crates\u201d block to config.json to price them.");
   }
   if (report.unjoinable) caveats.push(esc(report.unjoinable));
+  // The省钱 levers, named with where each lives, so a big number here is actionable rather than
+  // just alarming: cheaper provider, tighter compaction, per-person budget.
+  caveats.push(
+    "省钱杠杆:换更便宜的 provider 或开隐式缓存(设置 &rarr; Model)&middot; " +
+    "调压缩阈值 <span class=\"mono\">AGENTBOX_COMPACT_AT_TOKENS</span>(config.json 的 env)&middot; " +
+    "按人/回合预算(policy 限额)。"
+  );
   $("spendcaveat").innerHTML = caveats.join("<br>");
 }
 
