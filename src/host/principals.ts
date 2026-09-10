@@ -61,6 +61,12 @@ export interface Principal {
   role: Role;
   /** Every `channel:id` (or web token subject) this person speaks from. */
   identities: string[];
+  /**
+   * Verified merge anchors, currently just `email:alice@corp.com` (docs/48). The one value that
+   * is the same for one human across Feishu and DingTalk inside an org, so a new channel identity
+   * carrying a matching email is known to be this person. Email only — nothing uncertain merges.
+   */
+  anchors?: string[];
 }
 
 /** A link as stored: the identity plus the incarnation it was bound under. */
@@ -74,6 +80,7 @@ interface StoredPrincipal {
   name: string;
   role: Role;
   links: IdentityLink[];
+  anchors: string[];
 }
 
 interface PrincipalsFile {
@@ -83,7 +90,14 @@ interface PrincipalsFile {
     role: Role;
     /** Stamped links, or plain strings from before incarnations existed. */
     identities: Array<string | IdentityLink>;
+    /** Verified merge anchors, e.g. `email:alice@corp.com` (docs/48). Absent on older files. */
+    anchors?: string[];
   }>;
+}
+
+/** The anchor string for a work email — lowercased, so casing never splits one person in two. */
+export function emailAnchor(email: string): string {
+  return `email:${email.trim().toLowerCase()}`;
 }
 
 export function principalsPath(): string {
@@ -100,6 +114,8 @@ export function principalsPath(): string {
 export class Principals {
   private stored: StoredPrincipal[] = [];
   private byIdentity = new Map<string, Principal>();
+  /** anchor → the principals holding it. Several means a conflict, which never auto-merges. */
+  private byAnchor = new Map<string, StoredPrincipal[]>();
   private readonly incarnationOf: (identity: string) => number;
   private readonly warn: (line: string) => void;
 
@@ -124,6 +140,7 @@ export class Principals {
   reload(): void {
     this.stored = [];
     this.byIdentity.clear();
+    this.byAnchor.clear();
     if (!existsSync(this.path)) return;
     try {
       const parsed = JSON.parse(readFileSync(this.path, "utf8")) as PrincipalsFile;
@@ -146,8 +163,19 @@ export class Principals {
           claimed.add(link.identity);
           links.push(link);
         }
-        const principal: StoredPrincipal = { id: raw.id, name: raw.name, role, links };
+        const anchors = [
+          ...new Set(
+            (Array.isArray(raw.anchors) ? raw.anchors : [])
+              .filter((a): a is string => typeof a === "string")
+              .map(a => a.trim().toLowerCase())
+              .filter(Boolean)
+          ),
+        ];
+        const principal: StoredPrincipal = { id: raw.id, name: raw.name, role, links, anchors };
         this.stored.push(principal);
+        for (const anchor of anchors) {
+          (this.byAnchor.get(anchor) ?? this.byAnchor.set(anchor, []).get(anchor)!).push(principal);
+        }
         for (const link of links) {
           // A link from a retired incarnation stays on the record (visible in the
           // roster, preserved across saves) but resolves nothing: the person behind
@@ -168,6 +196,7 @@ export class Principals {
       name: principal.name,
       role: principal.role,
       identities: principal.links.map(link => link.identity),
+      ...(principal.anchors.length > 0 ? { anchors: [...principal.anchors] } : {}),
     };
   }
 
@@ -220,6 +249,7 @@ export class Principals {
         id: principal.id,
         name: principal.name.trim(),
         role: principal.role,
+        anchors: [...new Set((principal.anchors ?? []).map(a => a.trim().toLowerCase()).filter(Boolean))],
         links: [...new Set(principal.identities.map(identity => identity.trim()).filter(Boolean))]
           .filter(identity => {
             if (claimed.has(identity)) {
@@ -243,6 +273,7 @@ export class Principals {
         name: principal.name,
         role: principal.role,
         identities: principal.links,
+        anchors: principal.anchors,
       })),
     };
     writeFileSync(temp, `${JSON.stringify(file, null, 2)}\n`, {
@@ -253,6 +284,54 @@ export class Principals {
     chmodSync(this.path, 0o600);
     this.reload();
   }
+
+  /**
+   * Records a person's verified email, so a later channel identity carrying the same email links
+   * to them (docs/48). No-op unless `identity` already belongs to a configured person: we anchor
+   * a known person, never mint one from an email. Idempotent.
+   */
+  noteEmail(identity: string, email: string): void {
+    this.reload();
+    const anchor = emailAnchor(email);
+    if (anchor === "email:") return;
+    const owner = this.stored.find(p => p.links.some(l => l.identity === identity));
+    if (owner === undefined) return;
+    if (owner.anchors.includes(anchor)) return;
+    this.save(this.list().map(p => (p.id === owner.id ? { ...p, anchors: [...(p.anchors ?? []), anchor] } : p)));
+  }
+
+  /**
+   * Attaches an as-yet-unknown channel identity to the one person whose verified email matches
+   * (docs/48). The safe, non-inventing half of the merge:
+   *
+   * - `linked` — exactly one configured person holds this email; the identity is now theirs.
+   * - `conflict` — more than one person holds it; nothing is merged, and it is a person's call.
+   * - `already` — the identity already belongs to someone; linkage is left alone.
+   * - `no-match` — nobody holds this email; the identity stays the ad-hoc viewer it was.
+   *
+   * It never creates a principal and never moves an identity off its current owner: an email can
+   * only pull a *new* identity toward a *known* person, never rewrite existing authority.
+   */
+  linkByEmail(identity: string, email: string): "linked" | "conflict" | "already" | "no-match" {
+    this.reload();
+    if (this.byIdentity.has(identity)) return "already";
+    const anchor = emailAnchor(email);
+    if (anchor === "email:") return "no-match";
+    const holders = this.byAnchor.get(anchor) ?? [];
+    if (holders.length === 0) return "no-match";
+    if (holders.length > 1) {
+      this.warn(`${anchor} is held by ${holders.length} people; not merging ${identity} — resolve it by hand`);
+      return "conflict";
+    }
+    const owner = holders[0]!;
+    this.save(
+      this.list().map(p =>
+        p.id === owner.id ? { ...p, identities: [...p.identities, identity.trim()] } : p
+      )
+    );
+    return "linked";
+  }
+
 }
 
 function asLink(entry: string | IdentityLink | unknown): IdentityLink | undefined {
