@@ -38,10 +38,13 @@ principal**, and how accurately.
 
 ### 1. The accurate key: a verified org anchor
 
-The canonical person key stays `Principal.id` (opaque, stable). The **merge key** is a
-**verified enterprise anchor** — work email first, else the org's unionid/mobile — resolved from
-the door's own contact API (`dingtalk-contact`, `lark-contact`) the first time an identity is
-seen. The Principal gains an `anchors` set (`email:alice@corp.com`, `dingtalk-union:…`).
+The canonical person key stays `Principal.id` (opaque, stable). The **merge key** is exactly one thing:
+the person's **verified work email**, resolved from the door's own contact API (`dingtalk-contact`,
+`lark-contact`) the first time an identity is seen. Email is the natural anchor — both Feishu and
+DingTalk carry it in user data, and it is the same value for one human across both. The Principal
+gains an `anchors` set holding `email:alice@corp.com`. Nothing else is used to merge: a per-vendor
+unionid is not shared across vendors, and a mobile is not certain enough — anything uncertain does
+not merge, it falls back to an explicit claim.
 
 Never merge on: a vendor open_id across vendors (not shared), a display name (ambiguous), or a
 value the person can type unverified. Anchors are **tenant-scoped**: `email:alice@corpA` is not
@@ -88,14 +91,14 @@ the same person as an identical string in another tenant.
 | Thing | Key | Never |
 |---|---|---|
 | A person | `Principal.id` (opaque, stable) | — |
-| Merge two identities | verified org anchor (`email:` / `union:`), tenant-scoped | vendor open_id across vendors; display name; unverified input |
+| Merge two identities | verified **work email** only (`email:`), tenant-scoped | vendor open_id across vendors; unionid; mobile; display name; anything uncertain |
 | An identity link | `(channelId, incarnation, vendorSubject)` | keying on the door's display name |
 | Who may answer an approval | the `Principal.id` the answering identity resolves to | the raw channel identity |
 | Spend / requester / audit | `Principal.id` | the channel identity |
 
 ## What to build (tracked in Involute under the identity milestone)
 
-1. Resolve and store a **verified anchor** per identity via the door contact APIs.
+1. Resolve and store the **work email** per identity via the door contact APIs (email only).
 2. **Auto-link** on matching anchor within a tenant; surface conflicts to an admin.
 3. **Self-service "link another account"** OAuth claim on the web.
 4. **Per-principal standing grant** for an action class (the true "auto-approve").
@@ -103,7 +106,8 @@ the same person as an identical string in another tenant.
 
 ## Not done / risks
 
-- Anchors depend on the door having contact-read scope; without it, fall back to explicit claim.
+- The email anchor depends on the door having contact-read scope and on the user having a work
+  email; without either, fall back to explicit claim. No other field is used to merge.
 - Cross-tenant is the dangerous direction: an anchor must never merge two people across tenants —
   the tenant scope on the anchor is load-bearing and must be tested.
 - Bumping incarnation before the §7 migration is the reviewed failure (a new tenant's colliding
