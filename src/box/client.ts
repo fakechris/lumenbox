@@ -4,7 +4,7 @@
  * Everything the agent does inside the box goes through here.
  */
 
-import { BOXD_PROTOCOL } from "../protocol/index.ts";
+import { BOXD_PROTOCOL, type DisplayInfo } from "../protocol/index.ts";
 import type {
   BrowserRequest,
   BrowserResponse,
@@ -219,6 +219,20 @@ export class BoxClient {
         bind_unmapped_characters: options.bindUnmappedCharacters ?? true,
       },
       COMPUTER_TIMEOUT_MS
+    );
+  }
+
+  /** Every desktop and who drives it (INV-404). */
+  listDisplays(): Promise<DisplayInfo[]> {
+    return this.post<DisplayInfo[]>("/displays", {}, 10_000);
+  }
+
+  /** A person takes a desktop over, or hands it back (INV-404). */
+  setDisplayControl(index: number, controller: "agent" | "user", ttlSeconds?: number): Promise<DisplayInfo> {
+    return this.post<DisplayInfo>(
+      "/displays/control",
+      { index, controller, ...(ttlSeconds !== undefined ? { ttl_seconds: ttlSeconds } : {}) },
+      10_000
     );
   }
 

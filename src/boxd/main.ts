@@ -58,8 +58,9 @@ import {
   type WriteFileResult,
   type XWatchdogQuery,
   type XWatchdogEventsResult,
+  type DisplayControlRequest,
 } from "../protocol/index.ts";
-import { DisplayManager, DisplayOwnershipError } from "./displays.ts";
+import { DisplayManager, DisplayOwnershipError, UserInControlError } from "./displays.ts";
 import { CdpError } from "./cdp.ts";
 import { detectDisplay, getDisplay, parseDisplayNum } from "../cua/display.ts";
 import { readClipboard, writeClipboard } from "./clipboard-service.ts";
@@ -221,6 +222,10 @@ async function handleComputer(body: ComputerRequest): Promise<ComputerResult> {
   }
   const index = body.display ?? defaultDisplayIndex;
   displays.assertOwner(index, body.owner);
+  // A look is fine while a person holds the desktop; a write is not (INV-404).
+  if (body.actions.some(action => !["screenshot", "cursor_position", "list_windows", "screenshot_window", "wait"].includes(action.action))) {
+    displays.assertAgentControls(index);
+  }
   const desktop = await displays.ensure(index, body.owner);
   const x11 = desktop.executor;
   const started = Date.now();
@@ -379,7 +384,11 @@ const routes: Record<string, Handler> = {
   "POST /exec": async (body: ExecRequest): Promise<ExecResult | JobStartedResult> => {
     // A shell on someone else's desktop can do everything computer-use can — start a
     // window on it, type with xdotool — so it is gated the same way.
-    if (body.display !== undefined) displays.assertOwner(body.display, body.owner);
+    if (body.display !== undefined) {
+      displays.assertOwner(body.display, body.owner);
+      // A shell given a display can type into it; while a person holds that display, no.
+      displays.assertAgentControls(body.display);
+    }
     // Every shell command, with who asked for it. Nothing recorded this before, so the
     // box could not answer "who ran that" for the one endpoint where the answer matters
     // most. Truncated because a log is not a transcript; the spool files hold output.
@@ -417,6 +426,8 @@ const routes: Record<string, Handler> = {
   "POST /browser": async (body: BrowserRequest): Promise<BrowserResponse> => {
     const display = body.display ?? defaultDisplayIndex;
     displays.assertOwner(display, body.owner);
+    // Reading the page is fine while a person holds the desktop; acting on it is not.
+    if (!["snapshot", "read", "wait", "check"].includes(body.op)) displays.assertAgentControls(display);
     await displays.ensure(display);
     switch (body.op) {
       case "open":
@@ -457,6 +468,19 @@ const routes: Record<string, Handler> = {
     }
   },
   "GET /displays": async (): Promise<DisplayInfo[]> => displays.list(),
+  "POST /displays": async (): Promise<DisplayInfo[]> => displays.list(),
+  // A person takes a desktop over, or hands it back (INV-404). Not gated on the agent's
+  // owner token: the host asks on the person's behalf, with its own token.
+  "POST /displays/control": async (body: DisplayControlRequest): Promise<DisplayInfo> => {
+    if (body.controller === "user") {
+      displays.takeOver(body.index, body.ttl_seconds !== undefined ? body.ttl_seconds * 1000 : undefined);
+    } else {
+      displays.handBack(body.index);
+    }
+    const info = displays.list().find(entry => entry.index === body.index);
+    if (info === undefined) throw new HttpError(404, `Desktop ${body.index} is not running.`);
+    return info;
+  },
   // Per desktop, like everything else: each agent has its own, so "the clipboard" is
   // whichever screen the caller means.
   "POST /clipboard/read": async (body: ClipboardReadRequest): Promise<ClipboardResult> => ({
@@ -625,6 +649,8 @@ const server = createServer((req, res) => {
           ? error.status
           : error instanceof DisplayOwnershipError
             ? 403
+            : error instanceof UserInControlError
+              ? 423
             : error instanceof StaleSnapshotError
               ? 409
               : error instanceof IrreversibleActionError

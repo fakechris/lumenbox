@@ -49,6 +49,7 @@ import {
   outcomeLine,
   type BrowserRequest,
   type ComputerAction,
+  type DisplayInfo,
   type Outcome,
 } from "../protocol/index.ts";
 import { skillSlugOf } from "./skill-provenance.ts";
@@ -175,6 +176,8 @@ export interface ToolContext {
   tasks?: TaskStore;
   /** The scopes registry, so a secret granted by the caller's scope resolves. */
   scopes?: ScopeStore;
+  /** How often WaitForControl polls the box; tests shorten it. */
+  waitForControlPollMs?: number;
   /**
    * The turn this call belongs to — the Run, in work-control terms. Recorded on every
    * task change an agent makes, which is what links a board movement back to the
@@ -560,6 +563,24 @@ export function buildTools(
   fork = false
 ): Anthropic.Tool[] {
   const tools: Anthropic.Tool[] = [];
+
+  if (hasBox && canUseDesktop) {
+    tools.push({
+      name: "WaitForControl",
+      description:
+        "Wait until a person who took over your desktop hands it back. While they hold it, " +
+        "every computer and browser write is refused as USER_IN_CONTROL — that is not an " +
+        "error to retry around. Call this to pause until the desktop is yours again, or do " +
+        "work that needs no screen meanwhile. Returns as soon as control returns, or when " +
+        "the wait runs out, saying which.",
+      input_schema: {
+        type: "object",
+        properties: {
+          seconds: { type: "integer", description: "How long to wait. Defaults to 120, max 600." },
+        },
+      },
+    });
+  }
 
   if (hasBox && vision && canUseDesktop) {
     tools.push({
@@ -1821,7 +1842,7 @@ function templateStamp(context: ToolContext, path: string, content: string): str
  */
 export function boxErrorOutcome(error: unknown): Outcome | undefined {
   if (!(error instanceof BoxError)) return undefined;
-  if (error.status === 403 || error.status === 409 || error.status === 428 || error.kind === "refused") return "refused";
+  if (error.status === 403 || error.status === 409 || error.status === 423 || error.status === 428 || error.kind === "refused") return "refused";
   if (error.kind === "timeout" || error.kind === "crashed" || error.kind === "unreachable") {
     return "unknown";
   }
@@ -2026,6 +2047,36 @@ export async function dispatchTool(
   }
 
   switch (name) {
+    case "WaitForControl": {
+      const box = requireBox(context);
+      const index = context.displayIndex ?? 1;
+      const seconds = Math.min(600, Math.max(1, Number.isFinite(input.seconds) ? Number(input.seconds) : 120));
+      const deadline = Date.now() + seconds * 1000;
+      const poll = context.waitForControlPollMs ?? 3_000;
+      for (;;) {
+        let mine: DisplayInfo | undefined;
+        try {
+          mine = (await box.listDisplays()).find(entry => entry.index === index);
+        } catch (error) {
+          const outcome = boxErrorOutcome(error) ?? "failed";
+          return { text: outcomeLine(outcome, error instanceof Error ? error.message : String(error)), isError: true };
+        }
+        if (mine === undefined || mine.controller !== "user") {
+          return { text: `${outcomeLine("ok")} Your desktop is yours again. Take a screenshot before acting: the person may have changed what is on it.` };
+        }
+        if (Date.now() >= deadline) {
+          return {
+            text:
+              `${outcomeLine("unknown", `a person still holds your desktop after ${seconds}s`)} ` +
+              `Their takeover lapses at ${mine.user_until ?? "an unknown time"} unless renewed. ` +
+              "Do work that needs no screen, or wait again.",
+            isError: true,
+          };
+        }
+        await new Promise(resolve => setTimeout(resolve, poll));
+      }
+    }
+
     case "computer": {
       const box = requireBox(context);
       const actions = input.actions as ComputerAction[] | undefined;

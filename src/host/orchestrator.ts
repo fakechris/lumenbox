@@ -1719,6 +1719,7 @@ export class Orchestrator {
  * to compare against.
  */
 export const ALL_TOOLS: readonly string[] = [
+  "WaitForControl",
   "computer",
   "bash",
   "Jobs",
