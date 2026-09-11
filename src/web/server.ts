@@ -12,6 +12,7 @@
  */
 
 import { randomBytes } from "node:crypto";
+import { NetworkEventLog, networkEventsPath, summariseEvents } from "../egress/events.ts";
 import {
   createServer,
   request as httpRequest,
@@ -2800,6 +2801,23 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
         // A different question from the rest of this API, which answers "what is this agent
         // doing now". This one answers "where did it go", which is why it is admin-only and
         // a separate surface rather than another tab on the agent view.
+        // What the relay decided (INV-432): by box, by time, refusals only. Admin-only for
+        // the same reason spend is — it says where the money and the traffic went.
+        if (route === "GET /api/network-events") {
+          if (refusedRole("admin")) return;
+          const log = new NetworkEventLog();
+          const limitParam = url.searchParams.get("limit");
+          const { events, total } = log.query({
+            box: url.searchParams.get("box") ?? undefined,
+            from: url.searchParams.get("from") ?? undefined,
+            to: url.searchParams.get("to") ?? undefined,
+            refused: url.searchParams.get("refused") === "1",
+            limit: limitParam !== null ? Number(limitParam) : undefined,
+          });
+          send(res, 200, { events, total, summary: summariseEvents(events), path: networkEventsPath() });
+          return;
+        }
+
         if (route === "GET /api/spend") {
           if (refusedRole("admin")) return;
           const records = orchestrator.usage.since(0, Number.MAX_SAFE_INTEGER);
