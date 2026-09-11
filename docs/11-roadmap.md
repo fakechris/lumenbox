@@ -1260,6 +1260,33 @@ conduct numbers, the prompt floor, the pre-launch security list): R8's rider and
 R26's search path, then R25. R4, R16, R30, R29 wait for their designs; R17 and R27 wait for a
 week of memory numbers. docs/30 Stage C (`TransferFile`) is paused at Chris's call.
 
+## What to do next, as of 2026-09-11 — after Tier 0 and Tier 1 landed
+
+Merged to main today, all accepted in Involute: docs/49 A1–A3, B1–B3, C1, D1, D2, E1 (INV-398,
+399, 400, 401, 402, 403, 404, 407, 408, 409) and docs/50 F1, F2, G1, G4, H1, I2, J2, J3
+(INV-418, 419, 420, 423, 424, 428, 431, 432), plus the two live-box fixes to the effect
+judgement (#111, #112). The box runs the rebuilt image; smoke is 41/41; the live probe at
+/tmp/live-probe.mjs proved the gates end to end. Still unverified by eye: the Hand back
+button and the spend view (ui-shot cannot see a hidden element or a tab link).
+
+**Tier 0 — next round (p4).** The teach loop, now that takeover pauses the agent: INV-405
+demonstration trace and queue, INV-406 learn-from-demonstration. The control half of the
+gate: INV-427 admin-written auto-mode rules (INV-156 folds in). Memory as index +
+relevance: INV-425. Long work: INV-410 checkpoint/partial. IM custody: INV-435, because a
+duplicated turn is the failure a person notices first.
+
+**Tier 1 (p3).** INV-436 direct/ambient attention; the local environment decision: INV-438
+host box, INV-439 MCP by bundle; INV-422 OAuth connectors; audit views: INV-430, INV-433;
+INV-412 AT-SPI; INV-146 retry/degrade (its explicit-failure half is done); INV-157 identity
+migration (other agent's chain); memory quality INV-147, INV-148.
+
+**Tier 2 (p2).** 421, 426, 429, 434, 440, 411, 134, 135, 136, 138 (S-2..S-7 remain), 139,
+155, 156.
+
+**Tier 3 (p1).** 110–112, 115, 116, 119–121, 128–130, 149, 150.
+
+Rule kept from last round: Involute `priority` is the ranking; this section is the why.
+
 ## What to do next, as of 2026-09-10 — after the CUA and enterprise rounds
 
 The day added 47 Involute items (INV-394..440; docs/49 and docs/50). Everything under INV-96

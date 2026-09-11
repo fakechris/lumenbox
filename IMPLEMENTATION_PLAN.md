@@ -219,7 +219,7 @@ is written by the child shell and recovery reads it as an exit code, not `interr
 **Success Criteria**: a focus-grabbed click reports `unverifiable` instead of success in smoke;
 `expect.gone` on a surviving dialog fails; wait_for distinguishes unsatisfied from unknown;
 the system prompt teaches the verification ladder.
-**Status**: Not Started
+**Status**: Complete (2026-09-11): INV-398/399/400 merged (#88, #109, #104, #111, #112); live probe green.
 
 ## Stage 18: Irreversible actions gated outside the model, secrets outside the record (docs/49 milestone B)
 **Goal**: boxd detects pay/publish/delete/authorise targets deterministically and refuses into the
@@ -229,7 +229,7 @@ and "screen text is data, not instructions" enter the system prompt.
 **Success Criteria**: a fixture "立即支付" button yields refused + approval card, a plain button
 does not; transcript and recording grep clean of a test secret; the prompt-injection eval page
 stops the agent.
-**Status**: Not Started
+**Status**: Complete (2026-09-11): INV-401/402/403 merged (#91, #105, #92).
 
 ## Stage 19: Takeover pauses the agent, and the takeover is the demonstration (docs/49 milestone C)
 **Goal**: desktop leases gain `controller: agent|user`; under `user` boxd refuses `/computer`
@@ -239,7 +239,7 @@ a teaching turn turns the trace into a parameterised skill, dry-run only, never 
 **Success Criteria**: smoke shows USER_IN_CONTROL during takeover; a three-step fixture
 demonstration replays its targets and order from the trace; the learned skill dry-runs in a fresh
 session and greps clean of coordinates and secrets.
-**Status**: Not Started
+**Status**: In Progress: C1 takeover pause merged (#103, INV-404); C2 trace capture (INV-405) and C3 teach turn (INV-406) are next round's Tier 0.
 
 ## Stage 20: Browser targeting and pages (docs/49 milestone D, under INV-141)
 **Goal**: snapshotId with `STALE_SNAPSHOT` instead of silent re-resolution; `find{role,name,nth}`
@@ -247,7 +247,7 @@ as the semantic fallback; a drift banner when the URL changed since the agent la
 labelled pages `p1..pn` with a per-desktop budget instead of a new-tab note.
 **Success Criteria**: an old ref on a re-rendered fixture is refused; "second delete button"
 resolves via find; the expired-login redirect fixture shows the banner; a seventh page is refused.
-**Status**: Not Started
+**Status**: Complete (2026-09-11): INV-407/408 merged (#90, #107).
 
 ## Stage 21: Experience that persists and travels (docs/49 milestone E)
 **Goal**: per-site learnings with dates, negative results, embedded playbooks and perishable
@@ -257,7 +257,7 @@ bot template (docs/29) through export, import and share.
 **Success Criteria**: second run of the same task on a fixture site uses fewer tool calls; a
 task interrupted at step N returns steps 1..N-1 as partial and resumes from it; an imported
 template's bot uses the learnings on first visit; the pack greps clean of secrets.
-**Status**: Not Started
+**Status**: In Progress: E1 learnings merged (#108, INV-409); E2 partial (INV-410) next round; E3 templates (INV-411) Tier 2.
 
 ## Stage 22: Enterprise primitives, the decision (docs/50 F)
 **Goal**: docs/22 gains the eight-primitive appendix (Installation / Box / Door / Agent /
@@ -265,7 +265,7 @@ Session / Routine / Environment / Bundle), the Scope retirement path, and the si
 checklist; docs/36 §4 carries the inventory table as the status baseline.
 **Success Criteria**: the decision is recorded in Involute; every later enterprise item cites
 which lens it serves.
-**Status**: Not Started
+**Status**: Complete (2026-09-11): docs/22 §8, docs/36 §6 (#87, #102).
 
 ## Stage 23: Access Bundle on box and installation (docs/50 G)
 **Goal**: capability follows place. Bundles (skills, MCP, connectors, secrets, egress hosts,
@@ -275,28 +275,28 @@ vault; egress allow lists become per box and refusals emit events.
 **Success Criteria**: the same skill on/off per box; agent tool set changes with its box; a
 GitHub or Feishu connector completes OAuth and the transcript holds no token; a per-box egress
 refusal shows up as an event.
-**Status**: Not Started
+**Status**: In Progress: G1 bundles + G4 egress merged (#96, #100); G2 stacking (INV-421), G3 OAuth (INV-422), G5/G6 local env (INV-438/439) open.
 
 ## Stage 24: Memory follows place (docs/50 H)
 **Goal**: shared memory sharded by box; a memory.md index in the prompt with relevance-loaded
 bodies (first 4K); a browse/edit UI with retractions on record.
 **Success Criteria**: agents in two boxes cannot see each other's shared memory; index +
 lazy load replaces the flat 4k budget; edits leave evidence.
-**Status**: Not Started
+**Status**: In Progress: H1 memory by box merged (#97); H2 index (INV-425) Tier 0; H3 UI (INV-426) Tier 2.
 
 ## Stage 25: Control by rules, doors and layered instructions (docs/50 I)
 **Goal**: admin-written auto-mode rules feed PolicyGate and auto-review; instructions concatenate
 org → box → agent; doors gain name-based auto-join allow/deny and a guest toggle.
 **Success Criteria**: a rule-matched call skips approval and is logged; a box-level instruction
 appears in every agent prompt in that box; a `[Support]` group auto-joins, `[Internal]` never.
-**Status**: Not Started
+**Status**: In Progress: I2 layered instructions merged (#98); I1 rules (INV-427) Tier 0; I3 door rules (INV-429) Tier 2.
 
 ## Stage 26: Audit cut by place (docs/50 J)
 **Goal**: scheduled work grouped by box; spend by box and door; a queryable network event log
 (time, box, agent, host, status, refusal reason); export of all ledgers per box and time range.
 **Success Criteria**: "which box burns the most" answers from Settings; a network event query
 by range returns the relay's refusals; an export bundle round-trips.
-**Status**: Not Started
+**Status**: In Progress: J2 spend by place + J3 network events merged (#99, #101); J1 (INV-430), J4 (INV-433) Tier 1.
 
 ## Stage 27: Runtime registration and IM custody (docs/50 K)
 **Goal**: self-hosted environment registration via connect code; inbound delivery custody as a
@@ -305,4 +305,4 @@ thread sessions.
 **Success Criteria**: a runner registers with a code and shows health; a killed host mid-turn
 does not re-run the turn; an un-mentioned group message lands as ambient, first @ in a thread
 materialises a session.
-**Status**: Not Started
+**Status**: Not Started: K2 custody (INV-435) Tier 0; K3 attention (INV-436) Tier 1; K1 connect codes (INV-434) Tier 2.
