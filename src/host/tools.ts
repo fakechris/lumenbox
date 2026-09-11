@@ -45,6 +45,7 @@ import {
 } from "./durable.ts";
 import {
   computerOutcome,
+  effectLine,
   outcomeLine,
   type BrowserRequest,
   type ComputerAction,
@@ -2054,6 +2055,10 @@ export async function dispatchTool(
 
       const outcome = computerOutcome(result);
       const notes: string[] = [outcomeLine(outcome, result.error)];
+      // The verdict says the batch ran; the effect says whether its writes took. Both,
+      // because "ok" with "suspected_noop" is the exact case this exists for: xdotool
+      // succeeded and the screen did not care.
+      if (result.effect !== undefined) notes.push(effectLine(result.effect, result.effect_detail));
       if (!result.error) {
         notes.push(`Ran ${result.action_count} action(s) in ${result.duration_ms}ms.`);
       }

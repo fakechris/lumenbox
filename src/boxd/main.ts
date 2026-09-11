@@ -232,7 +232,11 @@ async function handleComputer(body: ComputerRequest): Promise<ComputerResult> {
     return {
       // Ran, but nothing to show for it, is not "ok": the capture is the only evidence
       // the host has that the screen is in the state the actions were meant to leave it.
-      outcome: result.screenshot === "" ? "unknown" : "ok",
+      outcome:
+        result.screenshot === "" || result.effect === "unverifiable" ? "unknown" : "ok",
+      ...(result.effect !== undefined
+        ? { effect: result.effect, effect_detail: result.effectDetail }
+        : {}),
       success: result.success,
       screenshot: result.screenshot,
       windows: result.windows,
