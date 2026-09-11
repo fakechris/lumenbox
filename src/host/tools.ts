@@ -15,6 +15,7 @@ import type { AgentRecord, AgentRegistry } from "../agents/registry.ts";
 import type { PolicyGate } from "./policy.ts";
 import type { HostRunner } from "./host-runner.ts";
 import type { Vault } from "./vault.ts";
+import { appendLearning, hostOf, learningsDir, readLearnings, renderLearnings } from "./learnings.ts";
 import type { ScopeStore } from "./scopes.ts";
 import type { McpManager } from "./mcp.ts";
 import { delegateEnv, delegateModel, PRESETS, presetNamed, quoteForShell, installCommand, withEnginesPath } from "./presets.ts";
@@ -178,6 +179,8 @@ export interface ToolContext {
   scopes?: ScopeStore;
   /** How often WaitForControl polls the box; tests shorten it. */
   waitForControlPollMs?: number;
+  /** Where site learnings live; tests point it at a temp dir (INV-409). */
+  learningsDir?: string;
   /**
    * The turn this call belongs to — the Run, in work-control terms. Recorded on every
    * task change an agent makes, which is what links a board movement back to the
@@ -1403,6 +1406,26 @@ export function buildTools(
           snapshot: { type: "string", description: "The id of the outline the ref came from." },
         },
         required: ["ref", "secret"],
+      },
+    });
+    tools.push({
+      name: "NoteSiteLearning",
+      description:
+        "Keep something you found out about a site, for whoever opens it next — you or a " +
+        "teammate. One sentence or two: a control that only works one way, a step the site " +
+        "needs first, a thing that looked like it worked and did not. Say whether it worked: " +
+        "a note about what failed saves the next visit from repeating it. Never a credential; " +
+        "say where a credential lives instead. Coordinates are accepted but dated as " +
+        "perishable, since a redesign makes them wrong. The notes for a site are shown to you " +
+        "whenever you open it.",
+      input_schema: {
+        type: "object",
+        properties: {
+          url: { type: "string", description: "The site, as a URL or a host name; the note is filed under the host." },
+          text: { type: "string", description: "The learning, in one or two sentences." },
+          worked: { type: "boolean", description: "true for something that works, false for something that does not." },
+        },
+        required: ["url", "text", "worked"],
       },
     });
     tools.push(
@@ -3179,6 +3202,22 @@ export async function dispatchTool(
       return { text: `${result.path}\n\n${lines.join("\n")}` };
     }
 
+    case "NoteSiteLearning": {
+      const host = hostOf(String(input.url ?? ""));
+      if (host === undefined) return { text: outcomeLine("failed", "say which site, as a URL or a host name"), isError: true };
+      if (typeof input.worked !== "boolean") return { text: outcomeLine("failed", "say whether it worked: worked true or false"), isError: true };
+      try {
+        const line = appendLearning(
+          host,
+          { at: new Date(), worked: input.worked, text: String(input.text ?? ""), by: context.agent.profile.name },
+          context.learningsDir ?? learningsDir()
+        );
+        return { text: `${outcomeLine("ok")} Kept for ${host}: ${line}` };
+      } catch (error) {
+        return { text: outcomeLine("failed", error instanceof Error ? error.message : String(error)), isError: true };
+      }
+    }
+
     case "browser_fill_secret": {
       const box = requireBox(context);
       const ref = String(input.ref ?? "").trim();
@@ -3359,6 +3398,13 @@ export async function dispatchTool(
         // agent, or a wait that ran out, changes how the outline below should be read.
         if (result.note !== undefined) parts.push(result.note);
         if (result.dialog !== undefined) parts.push(result.dialog);
+        // What was learned here before, on every open (INV-409). Before the outline, so the
+        // agent reads "the Pay button is disabled until…" before it goes looking for it.
+        if (name === "browser_open") {
+          const host = hostOf(result.url);
+          const learned = host === undefined ? undefined : renderLearnings(host, readLearnings(host, context.learningsDir ?? learningsDir()));
+          if (learned !== undefined) parts.push(learned);
+        }
         if (result.pages !== undefined) {
           parts.push(
             `Tabs on your desktop:\n${result.pages.map(page => `${page.current ? "▶" : " "} ${page.label}  ${page.title || "(untitled)"} — ${page.url}`).join("\n")}`
