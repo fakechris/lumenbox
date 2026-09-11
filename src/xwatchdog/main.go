@@ -56,6 +56,24 @@ func main() {
 	// 1. Tail Snoopy logs
 	go TailSnoopyLog(ctx, *snoopyLogFlag, store, 200*time.Millisecond)
 
+	// Periodic exec.log size check & copy-truncate保尾 (INV-462)
+	execLogMaxBytes := parseExecMaxBytes()
+	_ = CapExecLog(*snoopyLogFlag, execLogMaxBytes)
+	go func() {
+		t := time.NewTicker(30 * time.Second)
+		defer t.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-t.C:
+				if err := CapExecLog(*snoopyLogFlag, execLogMaxBytes); err != nil {
+					log.Printf("[xwatchdog] cap exec.log error: %v", err)
+				}
+			}
+		}
+	}()
+
 	// 2. Window-focus monitoring (which app was in front, never what was typed into it).
 	focus := NewWindowFocus(dispNum, store)
 	go MonitorX11(ctx, *displayFlag, dispNum, focus, 500*time.Millisecond)

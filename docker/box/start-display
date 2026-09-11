@@ -1,4 +1,4 @@
-#!/usr/bin/env bash
+#!/bin/bash
 # Brings up one independent desktop, numbered, and repairs one that is half up.
 #
 # Each agent gets its own X display rather than sharing one. On a shared display X
@@ -353,7 +353,8 @@ fi
 # Disclosed, not hidden: records commands (via Snoopy) and which window was focused, and emits a
 # heartbeat the host watches so a killed auditor shows up as a high-risk session. No keystroke
 # content. Kept alive by the same self-heal loop as the rest of the desktop.
-if command -v xwatchdog > /dev/null 2>&1 && ! running_here "xwatchdog.*${DISP}"; then
+# Bound to primary display :1 on standard audit port 49099; background displays skip it.
+if [ "${N}" -eq 1 ] && command -v xwatchdog > /dev/null 2>&1 && ! running_here "xwatchdog.*${DISP}"; then
   log "starting xwatchdog on ${DISP}"
   setsid xwatchdog -display "${DISP}" -port 49099 >> "/tmp/xwatchdog-${N}.log" 2>&1 &
   repaired+=("xwatchdog")

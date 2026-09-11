@@ -111,6 +111,10 @@ fi
 # Activate Snoopy execve logging — the command auditor. Every program a shell runs (including in
 # xterm) is logged with argv/uid/tty/pwd before it executes, however it was typed.
 if [[ -f /etc/snoopy.ini ]]; then
+  if ! grep -q "filter_chain" /etc/snoopy.ini 2>/dev/null; then
+    chattr -i /etc/snoopy.ini 2>/dev/null || true
+    echo 'filter_chain = "exclude_spawns_of:start-display,box-healthcheck"' >> /etc/snoopy.ini
+  fi
   if [[ ! -f /etc/ld.so.preload ]] || ! grep -q "libsnoopy" /etc/ld.so.preload 2>/dev/null; then
     for lib in /usr/lib/x86_64-linux-gnu/libsnoopy.so /usr/lib/aarch64-linux-gnu/libsnoopy.so /usr/lib/libsnoopy.so; do
       if [[ -f "$lib" ]]; then
@@ -119,13 +123,13 @@ if [[ -f /etc/snoopy.ini ]]; then
       fi
     done
   fi
-  # Best-effort local tamper-evidence: append-only logs, immutable preload config. Silently a
+  # Best-effort local tamper-evidence: immutable preload config and snoopy ini. Silently a
   # no-op on filesystems without the capability, and defeatable by the box user's sudo — kept
   # because it raises the bar, not because it is a boundary. The boundary is the host heartbeat.
+  # Log files are kept bounded by xwatchdog (docs/47 ring compaction & copy-truncate).
   chattr +i /etc/snoopy.ini 2>/dev/null || true
   chattr +i /etc/ld.so.preload 2>/dev/null || true
-  chattr +a /var/log/xwatchdog/exec.log 2>/dev/null || true
-  chattr +a /var/log/xwatchdog/events.jsonl 2>/dev/null || true
+  chattr -a /var/log/xwatchdog/exec.log /var/log/xwatchdog/events.jsonl 2>/dev/null || true
 fi
 
 if command -v opencode >/dev/null 2>&1; then

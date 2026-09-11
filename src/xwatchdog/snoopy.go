@@ -7,8 +7,135 @@ import (
 	"os"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 )
+
+const DefaultExecMaxBytes = 64 * 1024 * 1024 // 64MB
+
+func parseExecMaxBytes() int64 {
+	val := os.Getenv("AGENTBOX_AUDIT_EXEC_MB")
+	if val != "" {
+		if mb, err := strconv.ParseInt(strings.TrimSpace(val), 10, 64); err == nil && mb > 0 {
+			return mb * 1024 * 1024
+		}
+	}
+	return DefaultExecMaxBytes
+}
+
+var (
+	truncMu       sync.Mutex
+	lastTruncSize int64
+)
+
+// CapExecLog truncates the file in place to approximately maxBytes/2 when it exceeds maxBytes,
+// preserving the tail (most recent lines) and discarding any leading partial line.
+func CapExecLog(filePath string, maxBytes int64) error {
+	if maxBytes <= 0 {
+		return nil
+	}
+
+	fi, err := os.Stat(filePath)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil
+		}
+		return err
+	}
+
+	fileSize := fi.Size()
+	if fileSize <= maxBytes {
+		return nil
+	}
+
+	targetRetain := maxBytes / 2
+	if targetRetain < 1 {
+		targetRetain = 1
+	}
+	startOffset := fileSize - targetRetain
+	if startOffset < 0 {
+		startOffset = 0
+	}
+
+	f, err := os.OpenFile(filePath, os.O_RDWR, 0644)
+	if err != nil {
+		return err
+	}
+	defer f.Close()
+
+	if _, err := f.Seek(startOffset, io.SeekStart); err != nil {
+		return err
+	}
+
+	reader := bufio.NewReader(f)
+	var discardLen int64 = 0
+	if startOffset > 0 {
+		partial, err := reader.ReadString('\n')
+		if err != nil && err != io.EOF {
+			return err
+		}
+		discardLen = int64(len(partial))
+	}
+
+	actualStart := startOffset + discardLen
+	if actualStart >= fileSize {
+		// Nothing left to copy, truncate to 0
+		if err := f.Truncate(0); err != nil {
+			return err
+		}
+		truncMu.Lock()
+		lastTruncSize = 0
+		truncMu.Unlock()
+		return nil
+	}
+
+	if _, err := f.Seek(actualStart, io.SeekStart); err != nil {
+		return err
+	}
+
+	var writePos int64 = 0
+	buf := make([]byte, 64*1024)
+
+	for {
+		readPos, err := f.Seek(0, io.SeekCurrent)
+		if err != nil {
+			return err
+		}
+
+		n, readErr := f.Read(buf)
+		if n > 0 {
+			if _, err := f.Seek(writePos, io.SeekStart); err != nil {
+				return err
+			}
+			if _, err := f.Write(buf[:n]); err != nil {
+				return err
+			}
+			writePos += int64(n)
+
+			if _, err := f.Seek(readPos+int64(n), io.SeekStart); err != nil {
+				return err
+			}
+		}
+
+		if readErr == io.EOF {
+			break
+		}
+		if readErr != nil {
+			return readErr
+		}
+	}
+
+	if err := f.Truncate(writePos); err != nil {
+		return err
+	}
+	_ = f.Sync()
+
+	truncMu.Lock()
+	lastTruncSize = writePos
+	truncMu.Unlock()
+
+	return nil
+}
 
 // ParseSnoopyLine parses a single Snoopy log line into an Event.
 // Format:
@@ -144,7 +271,15 @@ func TailSnoopyLog(ctx context.Context, filePath string, store *EventStore, poll
 			}
 		} else if fi.Size() < offset {
 			// Handle truncation / rotation
-			offset = 0
+			truncMu.Lock()
+			isCapTruncate := lastTruncSize > 0 && fi.Size() >= lastTruncSize
+			if isCapTruncate {
+				offset = fi.Size()
+				lastTruncSize = 0
+			} else {
+				offset = 0
+			}
+			truncMu.Unlock()
 		}
 
 		if _, err := file.Seek(offset, io.SeekStart); err != nil {

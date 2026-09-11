@@ -77,6 +77,22 @@ project keeps deleting. So the guarantee lives where the box user has no authori
 the kill case. Catching a *wedged* (alive but stuck) daemon reliably needs the host to track the
 maximum heartbeat time across polls; that is the next slice.
 
+## 资源上限（Bounded disk & memory footprint）
+
+本地落盘是**有界近窗**（bounded near-window）而非无期限全量归档；容器通常分配紧凑磁盘，审计落盘
+绝不能因无上限追加撑爆容器根分区（INV-462）：
+
+1. **events.jsonl 环形压实（compact-from-ring）**：`EventStore` 是宿主按 seq 增量拉取的耐久层，
+   内存环已有界（默认 20,000 条）。当落盘文件超过上限（默认 32MB，环境变量 `AGENTBOX_AUDIT_EVENTS_MB` 可调）
+   时，自动从内存环重写文件（保留半数预算的最热近窗事件）并重开追加模式；启动时以现有文件大小为种子，
+   保证历史巨型文件在守护启动首次写入时即刻被压实。
+2. **exec.log 原地 copy-truncate 保尾**：Snoopy 独占写入该日志，守护进程每 30 秒巡检一次，超过
+   上限（默认 64MB，环境变量 `AGENTBOX_AUDIT_EXEC_MB` 可调）时就地截断并保留后半段有效内容，丢弃
+   可能残缺的首行；`TailSnoopyLog` 在检测到该截断后平滑调整偏移量至新尾部，无缝续读且无重复事件。
+3. **Snoopy 祖先过滤**：在 `/etc/snoopy.ini` 中启用 `filter_chain = "exclude_spawns_of:start-display,box-healthcheck"`，
+   使高频自愈巡检与探针在 `execve()` 拦截层直接被丢弃，源头降噪 99% 以上，同时完好保留所有终端交互与 agent 工具调用。
+4. **单实例守护**：`start-display` 仅由主桌面（`:1`）拉起 `xwatchdog`，消除多桌面后台轮询的端口冲突。
+
 ## Surfaces
 
 - **Disclosure (web):** appended to the box's existing notice (`#boxnotice`) when the installation
