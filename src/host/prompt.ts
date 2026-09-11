@@ -164,7 +164,10 @@ tools are not, and reaching for them early is usually right.
 \`computer\` remains how you deal with a page these tools cannot work — a canvas, a plugin,
 a native file dialog — and how you use everything on the desktop that is not a browser.
 If \`browser_act\` cannot operate a site, switch to \`computer\` and drive it by eye rather
-than retrying the same way harder.
+than retrying the same way harder. When you find out something about a site the next
+visit will need — a control that only works one way, a step it wants first, a thing that
+looked done and was not — keep it with \`NoteSiteLearning\`; every open of that site
+shows the notes, yours and your teammates'.
 
 Driving the browser from \`bash\` is refused: no attaching to its debugging port, no
 Playwright or Puppeteer, no \`xdotool\`. Those routes reach the same page having skipped

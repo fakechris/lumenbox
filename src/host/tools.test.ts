@@ -843,3 +843,35 @@ test("a read carries the drift banner before the text", async () => {
   const read = await dispatchTool("browser_read", {}, context);
   assert.match(read.text, /^The page moved since you last looked[^\n]*\n\nhttps:\/\/a\.test\/login\n\nSign in$/);
 });
+
+// ── site learnings: kept by a tool, shown on open (INV-409) ─────────────────────────
+import { mkdtempSync as mkLearn, rmSync as rmLearn } from "node:fs";
+import { tmpdir as tmpLearn } from "node:os";
+import { join as joinLearn } from "node:path";
+
+test("a learning is kept under its host and shown the next time the site is opened", async () => {
+  const dir = mkLearn(joinLearn(tmpLearn(), "agentbox-tool-learnings-"));
+  try {
+    const base = boxContext({
+      browser: async () => ({ url: "https://www.shop.test/cart", title: "Cart", snapshot: "- button \"Pay\" [ref=e1] disabled" }),
+    });
+    const context = { ...base, learningsDir: dir } as unknown as Parameters<typeof dispatchTool>[2];
+
+    const first = await dispatchTool("browser_open", { url: "https://shop.test/cart" }, context);
+    assert.doesNotMatch(first.text, /learned on shop\.test/);
+
+    const kept = await dispatchTool("NoteSiteLearning", { url: "https://shop.test/anything", text: "The Pay button stays disabled until the address is verified.", worked: false }, context);
+    assert.match(kept.text, /^Outcome: ok\. Kept for shop\.test: - \d{4}-\d{2}-\d{2} ❌ The Pay button/);
+
+    const again = await dispatchTool("browser_open", { url: "https://shop.test/cart" }, context);
+    assert.match(again.text, /learned on shop\.test before \(1 note\(s\), 1 about what did not work\)/);
+    assert.ok(again.text.indexOf("learned on shop.test") < again.text.indexOf('- button "Pay"'), "notes come before the outline");
+
+    const refused = await dispatchTool("NoteSiteLearning", { url: "shop.test", text: "use ghp_abcdefghijklmnopqrstuvwxyz0123456789", worked: true }, context);
+    assert.match(refused.text, /^Outcome: failed — That looks like it holds a credential/);
+    const nohost = await dispatchTool("NoteSiteLearning", { url: "", text: "x", worked: true }, context);
+    assert.match(nohost.text, /say which site/);
+  } finally {
+    rmLearn(dir, { recursive: true, force: true });
+  }
+});

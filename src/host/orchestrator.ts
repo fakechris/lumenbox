@@ -1722,6 +1722,7 @@ export const ALL_TOOLS: readonly string[] = [
   "WaitForControl",
   "browser_fill_secret",
   "browser_pages",
+  "NoteSiteLearning",
   "computer",
   "bash",
   "Jobs",
