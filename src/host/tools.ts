@@ -1259,6 +1259,15 @@ export function buildTools(
               "it the old one stays alongside the new one and both are presented to you later as " +
               "things you know.",
           },
+          audience: {
+            type: "string",
+            enum: ["box", "everyone"],
+            description:
+              "For scope 'team': who may read it. 'box' (the default) is the agents on your box — " +
+              "memory follows the place, and another box's agents do not see it. 'everyone' " +
+              "promotes it to every box on this installation; say so only for something that is " +
+              "true everywhere, such as who the person is or how they like to be addressed.",
+          },
         },
         required: ["fact"],
       },
@@ -3552,7 +3561,7 @@ export async function dispatchTool(
             record,
             tier: "yours",
           }));
-      const team = dedupe(context.registry.readSharedMemory()).map(record => ({
+      const team = dedupe(context.registry.readSharedMemory(context.agent.id)).map(record => ({
         record,
         tier: "team",
       }));
@@ -4119,7 +4128,7 @@ export async function dispatchTool(
       // something a colleague already shared, and should not share what it already knows privately
       // without that being visible.
       const own = context.registry.readMemoryRecords(context.agent.id);
-      const team = context.registry.readSharedMemory();
+      const team = context.registry.readSharedMemory(context.agent.id);
 
       // What this fact withdraws, if anything. Written as its own record rather than by editing the
       // file: memory is an append-only log of what was believed when, and that is what makes a
@@ -4177,6 +4186,9 @@ export async function dispatchTool(
         // Where it was decided: the conversation this turn is in, now. A template's facts come
         // from the template, which `source` already says.
         ...(fromTemplate ? {} : { from: [memoryRef(context.conversation ?? MAIN_CONVERSATION, new Date())] }),
+        // An explicit promotion beyond the box (INV-424). The box itself is stamped by the
+        // registry on write, from the roster, so it is not set here.
+        ...(shared && String(input.audience ?? "box") === "everyone" ? { audience: "everyone" as const } : {}),
       };
       const withdrawn = retracted ? " The one it replaces has been withdrawn." : "";
       if (shared) {

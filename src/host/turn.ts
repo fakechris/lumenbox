@@ -1232,7 +1232,7 @@ export async function runTurn(
       teammates: teammatesOf(registry, agent.id),
       memory: registry.readMemoryRecords(agent.id),
       memoryRecall: recallToUse,
-      sharedMemory: registry.readSharedMemory(),
+      sharedMemory: registry.readSharedMemory(agent.id),
       skills: narrowSkills(deps.skills ?? [], deps.bundles?.forBox(registry.boxOf(agent.id))),
       place: placeOf(registry, agent.id, deps.bundles),
       transcript: registry.readTranscript(agent.id, conversation),

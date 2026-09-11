@@ -1000,7 +1000,18 @@ export class AgentRegistry {
    * `via` is stamped on read from the filename rather than trusted from the record, so a shard cannot
    * claim to have been written by a different agent.
    */
-  readSharedMemory(): MemoryRecord[] {
+  readSharedMemory(forAgentId?: string): MemoryRecord[] {
+    const all = this.readAllSharedMemory();
+    if (forAgentId === undefined) return all;
+    // Memory follows the place (INV-424): a reader sees its own box's records, what was
+    // promoted to everyone, and what predates boxes on shared records. A writer's box is
+    // stamped on write, so a record cannot claim a box it was not kept in.
+    const boxId = this.boxOf(forAgentId).id;
+    return all.filter(record => record.box === undefined || record.box === boxId || record.audience === "everyone");
+  }
+
+  /** Every shard, every box — for compaction and for the installation-level view. */
+  private readAllSharedMemory(): MemoryRecord[] {
     const dir = this.sharedMemoryDir();
     if (!existsSync(dir)) return [];
     const out: MemoryRecord[] = [];
@@ -1040,8 +1051,10 @@ export class AgentRegistry {
   appendSharedMemory(agentId: string, records: readonly MemoryRecord[]): void {
     if (records.length === 0) return;
     mkdirSync(this.sharedMemoryDir(), { recursive: true });
+    // The writer's box, from the roster — not from the record, which the tool built.
+    const box = this.boxOf(agentId).id;
     for (const record of records) {
-      appendLine(this.sharedMemoryPathFor(agentId), JSON.stringify(record));
+      appendLine(this.sharedMemoryPathFor(agentId), JSON.stringify({ ...record, box }));
     }
     this.maybeCompactSharedMemory();
   }
