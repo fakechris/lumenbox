@@ -25,7 +25,7 @@ import type { Outcome, WaitOutcome } from "../protocol/index.ts";
 import { spawn } from "node:child_process";
 import { realpathSync, statSync } from "node:fs";
 import { CdpError, CdpSession, closeTarget, listTargets, openTarget, type CdpTarget } from "./cdp.ts";
-import { MAX_NODES, MAX_READ_CHARS, READ_SCRIPT, snapshotScript } from "./browser-snapshot.ts";
+import { MAX_NODES, MAX_READ_CHARS, READ_SCRIPT, snapshotScript, findScript, MUTATIONS_SCRIPT, STALE_MUTATIONS } from "./browser-snapshot.ts";
 
 /**
  * The desktop the upgrade check runs on.
@@ -148,10 +148,45 @@ export function dialogAnswer(kind: string, message: string): { accept: boolean; 
   };
 }
 
+/**
+ * The ref an agent holds is older than the page.
+ *
+ * Distinct from a CdpError so the box answers 409 and the host reads it as refused: the
+ * same call gets the same answer until a fresh outline is taken, which is what the
+ * message says to do.
+ */
+export class StaleSnapshotError extends CdpError {}
+
+/**
+ * Why a held outline id can no longer be acted on, or undefined when it can.
+ *
+ * Three cases, named so the agent knows which: no outline yet, a newer outline exists,
+ * or this outline's page has re-rendered underneath it.
+ */
+export function staleReason(
+  claimed: string | undefined,
+  current: string | undefined,
+  mutations: number
+): string | undefined {
+  if (claimed === undefined) return undefined;
+  if (current === undefined) {
+    return `STALE_SNAPSHOT: no outline has been taken of this page yet, so ${claimed} cannot be from it. Take a browser_snapshot first.`;
+  }
+  if (claimed !== current) {
+    return `STALE_SNAPSHOT: you are holding ${claimed}, but the latest outline of this page is ${current}. Take a fresh browser_snapshot and use a ref from it.`;
+  }
+  if (mutations > STALE_MUTATIONS) {
+    return `STALE_SNAPSHOT: the page has changed since ${claimed} (${mutations} elements added or removed), so its refs may point at different things now. Take a fresh browser_snapshot.`;
+  }
+  return undefined;
+}
+
 export interface BrowserResult {
   url: string;
   title: string;
   snapshot: string;
+  /** The id of this outline; act with a ref from it and say so. */
+  snapshot_id?: string;
   /** Set when a page asked a question while we were acting, and how it was answered. */
   dialog?: string;
   /** Set when something went wrong in a way the agent can act on. */
@@ -235,6 +270,9 @@ function frameSuffix(url: string): string {
 class BrowserPage {
   private readonly contexts = new Map<string, number>();
   private frames: FrameContext[] = [];
+  private snapshotSeq = 0;
+  /** The id of the last outline taken, or undefined before the first. */
+  snapshotId: string | undefined;
   private lastDialog: string | undefined;
   lastDownload: string | undefined;
   private loaded = false;
@@ -462,6 +500,10 @@ class BrowserPage {
     // A PDF, an image or a video renders in a viewer with an empty body, so the outline
     // is empty and the honest-looking answer — "nothing to act on" — reads as "this page
     // is blank". Naming what it actually is stops the agent reasoning about an absence.
+    // Every outline gets a new id, viewer pages included: an id is what a ref is dated by.
+    this.snapshotSeq += 1;
+    this.snapshotId = `s${this.snapshotSeq}`;
+
     if (parsed.type !== undefined && !/html|xml/i.test(parsed.type) && parts.length === 0) {
       return {
         text: `(this is ${parsed.type}, not a web page — the browser is displaying it in a viewer, so there is nothing to act on. Download it and read it with your file tools instead.)`,
@@ -753,9 +795,63 @@ class BrowserPage {
       url,
       title,
       snapshot: text,
+      ...(this.snapshotId !== undefined ? { snapshot_id: this.snapshotId } : {}),
       ...(dialog !== undefined ? { dialog } : {}),
       ...(download !== undefined ? { note: download } : {}),
     };
+  }
+
+  /**
+   * Refuses a ref taken from an outline the page has moved past.
+   *
+   * A ref is derived from what an element is, so it survives a re-render *when the
+   * element does* — and quietly lands on the wrong one when a list re-sorted or a modal
+   * replaced the page. The snapshot id plus the mutation count since it are what tell
+   * those apart; a caller that names no id (an older host) is trusted as before.
+   */
+  async assertFresh(claimed: string | undefined): Promise<void> {
+    if (claimed === undefined) return;
+    let mutations = 0;
+    if (this.snapshotId !== undefined && claimed === this.snapshotId) {
+      const counted = (await this.session.send("Runtime.evaluate", {
+        expression: MUTATIONS_SCRIPT,
+        returnByValue: true,
+      })) as { result?: { value?: number } };
+      mutations = Number(counted.result?.value ?? 0);
+    }
+    const reason = staleReason(claimed, this.snapshotId, mutations);
+    if (reason !== undefined) throw new StaleSnapshotError(reason);
+  }
+
+  /**
+   * The ref of the element an agent describes, from the index the last outline left.
+   *
+   * Main frame only: the index is per document. Resolved now, against the page as it
+   * stands, so it is the fallback when a held ref has gone stale.
+   */
+  async find(query: { role?: string; name?: string; nth?: number }): Promise<string> {
+    const evaluated = (await this.session.send("Runtime.evaluate", {
+      expression: findScript(query),
+      returnByValue: true,
+    })) as { result?: { value?: string } };
+    const parsed = JSON.parse(evaluated.result?.value ?? "{}") as {
+      ref?: string | null;
+      count?: number;
+      sample?: string[];
+      error?: string;
+    };
+    const asked = JSON.stringify(query);
+    if (parsed.error !== undefined) {
+      throw new CdpError(`Nothing to find in yet: take a browser_snapshot first, then find ${asked}.`);
+    }
+    if (parsed.ref === null || parsed.ref === undefined) {
+      const seen = parsed.sample && parsed.sample.length > 0 ? ` Matches: ${parsed.sample.join("; ")}.` : "";
+      throw new CdpError(
+        `No element matched find ${asked} (${parsed.count ?? 0} candidate(s)).${seen} ` +
+          "Take a fresh browser_snapshot and look at the roles and names it lists."
+      );
+    }
+    return parsed.ref;
   }
 
   close(): void {
@@ -920,22 +1016,39 @@ export class BrowserService {
   async act(
     display: number,
     action: string,
-    options: { ref?: string; text?: string; key?: string; replace?: boolean }
+    options: {
+      ref?: string;
+      text?: string;
+      key?: string;
+      replace?: boolean;
+      snapshot?: string;
+      find?: { role?: string; name?: string; nth?: number };
+    }
   ): Promise<BrowserResult> {
     const page = await this.pageFor(display);
     const needsRef = action === "click" || action === "type" || action === "hover";
-    if (needsRef && (options.ref === undefined || options.ref === "")) {
-      throw new CdpError(`${action} needs the ref of the thing to act on, from a snapshot.`);
+    let ref = options.ref;
+    if (needsRef) {
+      if (options.find !== undefined) {
+        // By description, against the page as it stands: nothing held, nothing stale.
+        ref = await page.find(options.find);
+      } else if (ref === undefined || ref === "") {
+        throw new CdpError(
+          `${action} needs the ref of the thing to act on, from a snapshot — or a find {role, name, nth} describing it.`
+        );
+      } else {
+        await page.assertFresh(options.snapshot);
+      }
     }
     switch (action) {
       case "click":
-        await page.click(options.ref!);
+        await page.click(ref!);
         break;
       case "hover":
-        await page.hover(options.ref!);
+        await page.hover(ref!);
         break;
       case "type":
-        await page.type(options.ref!, options.text ?? "", options.replace !== false);
+        await page.type(ref!, options.text ?? "", options.replace !== false);
         break;
       case "key":
         await page.press(options.key ?? "Enter");

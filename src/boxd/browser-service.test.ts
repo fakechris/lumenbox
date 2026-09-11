@@ -104,3 +104,17 @@ test("the wait note distinguishes 'never appeared' from 'could not look'", () =>
   assert.match(dunno, /not a no/);
   assert.doesNotMatch(dunno, /never contained/);
 });
+
+// ── a held outline id, and when it is refused (INV-407) ──────────────────────
+import { staleReason } from "./browser-service.ts";
+
+test("a ref is refused when its outline is not the latest, or the page moved past it", () => {
+  // A caller that names no outline is an older host and is trusted as before.
+  assert.equal(staleReason(undefined, "s3", 999), undefined);
+  // The happy path: the id the agent holds is the current one and little has changed.
+  assert.equal(staleReason("s3", "s3", 4), undefined);
+  // Three refusals, each naming its own cause.
+  assert.match(staleReason("s3", undefined, 0) ?? "", /^STALE_SNAPSHOT: no outline/);
+  assert.match(staleReason("s2", "s3", 0) ?? "", /^STALE_SNAPSHOT: you are holding s2, but the latest outline of this page is s3/);
+  assert.match(staleReason("s3", "s3", 80) ?? "", /^STALE_SNAPSHOT: the page has changed since s3 \(80 elements/);
+});

@@ -651,6 +651,14 @@ export interface BrowserRequest {
   waitFor?: string;
   value?: string;
   seconds?: number;
+  /**
+   * For `act`: the id of the outline the ref came from. A ref from an older outline, or
+   * from an outline the page has since re-rendered, is refused as STALE_SNAPSHOT instead
+   * of being resolved to whatever now carries that ref.
+   */
+  snapshot?: string;
+  /** For `act`: find the element by what it is, instead of (or as a fallback for) a ref. */
+  find?: { role?: string; name?: string; nth?: number };
 }
 
 export interface BrowserResponse {
@@ -668,6 +676,8 @@ export interface BrowserResponse {
   outcome?: Outcome;
   /** For `wait`: whether the condition held, never held, or could not be checked. */
   wait?: WaitOutcome;
+  /** The id of this outline, to hand back with a ref taken from it. */
+  snapshot_id?: string;
 }
 
 /**

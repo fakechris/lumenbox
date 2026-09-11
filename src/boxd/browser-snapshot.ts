@@ -45,6 +45,25 @@ const SNAPSHOT_BODY = String.raw`
   const MAX_NODES = __BUDGET__;
   const refs = new Map();
   globalThis.__lumenRefs = refs;
+  // What each ref is, by role and name, so an agent can ask for "the second Delete
+  // button" without holding a ref at all (browser_act's find).
+  const index = [];
+  globalThis.__lumenIndex = index;
+  // How much the document has changed since this outline was taken. A ref from an
+  // outline the page has since re-rendered may still resolve — to an element that looks
+  // the same and is not — so the count is what makes a held ref refusable (STALE_SNAPSHOT).
+  if (!globalThis.__lumenObserver && globalThis.MutationObserver && document.documentElement) {
+    const observer = new MutationObserver(records => {
+      for (const record of records) {
+        if (record.addedNodes.length > 0 || record.removedNodes.length > 0) {
+          globalThis.__lumenMutations = (globalThis.__lumenMutations || 0) + 1;
+        }
+      }
+    });
+    observer.observe(document.documentElement, { childList: true, subtree: true });
+    globalThis.__lumenObserver = observer;
+  }
+  globalThis.__lumenMutations = 0;
   const seen = new Map();
   const lines = [];
   let truncated = false;
@@ -169,6 +188,7 @@ const SNAPSHOT_BODY = String.raw`
     if (interactive && !element.disabled) {
       const ref = refFor(role, name, tag);
       refs.set(ref, element);
+      index.push([ref, role, name]);
       line += " [ref=" + ref + "]";
     }
     if (element.disabled) line += " disabled";
@@ -237,3 +257,42 @@ export function snapshotScript(budget: number): string {
 
 /** How much text `browser_read` may return, matching WebFetch's own limit. */
 export const MAX_READ_CHARS = 40_000;
+
+/**
+ * How many element additions or removals since the last outline make a held ref
+ * untrustworthy. A live ticker or a chat feed moves a few; a re-render, a route change
+ * or a modal moves dozens. Chosen so the common "banner appeared" does not refuse, and
+ * "the page you were looking at is gone" does.
+ */
+export const STALE_MUTATIONS = 25;
+
+/** Reads the mutation count the snapshot script keeps. */
+export const MUTATIONS_SCRIPT = "globalThis.__lumenMutations || 0";
+
+/**
+ * Resolves a description to a ref against the index the last outline left on the page.
+ *
+ * Evaluated in the page. Role matches exactly (case-insensitive); name is a substring
+ * match; `nth` is one-based. Returns JSON: the ref when exactly one thing is meant, and
+ * always how many matched and the first few, so a miss says what was there.
+ */
+export function findScript(query: { role?: string; name?: string; nth?: number }): string {
+  return String.raw`
+(() => {
+  const index = globalThis.__lumenIndex;
+  if (!Array.isArray(index)) return JSON.stringify({ error: "no outline" });
+  const role = ${JSON.stringify((query.role ?? "").trim().toLowerCase())};
+  const name = ${JSON.stringify((query.name ?? "").trim().toLowerCase())};
+  const nth = ${JSON.stringify(Math.max(1, Math.floor(query.nth ?? 1)))};
+  const matches = index.filter(([, r, n]) =>
+    (role === "" || String(r).toLowerCase() === role) &&
+    (name === "" || String(n).toLowerCase().includes(name)));
+  const chosen = matches[nth - 1];
+  return JSON.stringify({
+    ref: chosen ? chosen[0] : null,
+    count: matches.length,
+    sample: matches.slice(0, 5).map(([ref, r, n]) => r + " " + JSON.stringify(n) + " [ref=" + ref + "]"),
+  });
+})()
+`;
+}

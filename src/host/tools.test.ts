@@ -479,6 +479,7 @@ test("an agent asks for a secret by name and hands its desktop over with one ins
 // ── the verdict line (INV-400) ──────────────────────────────────────────────────
 import { BoxError } from "../box/client.ts";
 import { boxErrorOutcome } from "./tools.ts";
+import type { BrowserRequest } from "../protocol/index.ts";
 
 function boxContext(box: Record<string, unknown>) {
   return {
@@ -604,4 +605,51 @@ test("a computer result carries its measured effect after the verdict (INV-398)"
   assert.match(unseen.text, /^Outcome: unknown/);
   assert.match(unseen.text, /Effect: unverifiable/);
   assert.equal(unseen.isError, true);
+});
+
+// ── snapshot ids and find travel with an act; a stale ref is refused (INV-407) ──
+test("browser_act sends the outline id and find with the request, and shows the id on the way back", async () => {
+  const requests: BrowserRequest[] = [];
+  const context = boxContext({
+    browser: async (request: BrowserRequest) => {
+      requests.push(request);
+      return { url: "https://x.test/", title: "X", snapshot: "- button \"Delete\" [ref=e4d]", snapshot_id: "s3" };
+    },
+  });
+  const result = await dispatchTool(
+    "browser_act",
+    { action: "click", ref: "e2b", snapshot: "s3", find: { role: "button", name: "Delete", nth: 2 } },
+    context
+  );
+  assert.equal(requests[0]?.snapshot, "s3");
+  assert.deepEqual(requests[0]?.find, { role: "button", name: "Delete", nth: 2 });
+  assert.match(result.text, /^Outcome: ok\.\n\nSnapshot s3: X — https:\/\/x\.test\//);
+
+  // An older boxd sends no id; the header simply has none.
+  const old = boxContext({ browser: async () => ({ url: "https://x.test/", title: "X", snapshot: "-" }) });
+  const plain = await dispatchTool("browser_snapshot", {}, old);
+  assert.match(plain.text, /\n\nX — https:\/\/x\.test\//);
+});
+
+test("a stale outline is refused, not failed; a browser-side error is failed, not unknown", async () => {
+  let calls = 0;
+  const stale = boxContext({
+    browser: async () => {
+      calls += 1;
+      if (calls === 1) throw new BoxError("STALE_SNAPSHOT: you are holding s2, but the latest outline of this page is s3.", 409);
+      return { url: "https://x.test/", title: "X", snapshot: "-", snapshot_id: "s3" };
+    },
+  });
+  const refused = await dispatchTool("browser_act", { action: "click", ref: "e2b", snapshot: "s2" }, stale);
+  assert.match(refused.text, /^Outcome: refused — STALE_SNAPSHOT/);
+  assert.match(refused.text, /refused again/);
+  assert.equal(refused.isError, true);
+
+  const covered = boxContext({
+    browser: async () => {
+      throw new BoxError("That click would land on \"div#cookie\" instead", 422);
+    },
+  });
+  const failed = await dispatchTool("browser_act", { action: "click", ref: "e2b" }, covered);
+  assert.match(failed.text, /^Outcome: failed — That click would land on/);
 });
