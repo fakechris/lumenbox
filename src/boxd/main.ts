@@ -431,12 +431,18 @@ const routes: Record<string, Handler> = {
     await displays.ensure(display);
     switch (body.op) {
       case "open":
-        return browser.open(display, String(body.url ?? "about:blank"));
+        return browser.open(display, String(body.url ?? "about:blank"), body.page);
+      case "pages":
+        return browser.tabs(display);
+      case "switch":
+        return browser.switchPage(display, String(body.page ?? ""));
+      case "close":
+        return browser.closePage(display, String(body.page ?? ""));
       case "snapshot":
         return browser.snapshot(display);
       case "read": {
         const result = await browser.read(display);
-        return { url: result.url, title: "", snapshot: "", text: result.text };
+        return { url: result.url, title: "", snapshot: "", text: result.text, ...(result.note !== undefined ? { note: result.note } : {}) };
       }
       case "act":
         return browser.act(display, String(body.action ?? ""), {

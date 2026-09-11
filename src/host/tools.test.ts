@@ -805,3 +805,41 @@ test("browser_fill_secret resolves through the vault, sends the value only to th
   const none = await dispatchTool("browser_fill_secret", { ref: "e2", secret: "SHOP_PASSWORD" }, boxContext({ browser: async () => ({ url: "", title: "", snapshot: "" }) }));
   assert.match(none.text, /^Outcome: refused — there is no vault here/);
 });
+
+// ── tabs and drift reach the model (INV-408) ────────────────────────────────────────
+test("browser_pages lists tabs with the current one marked, and browser_open can name a tab", async () => {
+  const requests: BrowserRequest[] = [];
+  const context = boxContext({
+    browser: async (request: BrowserRequest) => {
+      requests.push(request);
+      return {
+        url: "https://a.test/",
+        title: "A",
+        snapshot: "-",
+        pages: [
+          { label: "p1", url: "https://a.test/", title: "A", current: true },
+          { label: "p2", url: "https://b.test/", title: "B", current: false },
+        ],
+      };
+    },
+  });
+  const listed = await dispatchTool("browser_pages", { action: "list" }, context);
+  assert.equal(requests[0]?.op, "pages");
+  assert.match(listed.text, /Tabs on your desktop:\n▶ p1  A — https:\/\/a\.test\/\n  p2  B — https:\/\/b\.test\//);
+
+  await dispatchTool("browser_pages", { action: "switch", page: "p2" }, context);
+  assert.equal(requests[1]?.op, "switch");
+  assert.equal(requests[1]?.page, "p2");
+
+  await dispatchTool("browser_open", { url: "https://c.test/", page: "new" }, context);
+  assert.equal(requests[2]?.op, "open");
+  assert.equal(requests[2]?.page, "new");
+});
+
+test("a read carries the drift banner before the text", async () => {
+  const context = boxContext({
+    browser: async () => ({ url: "https://a.test/login", title: "", snapshot: "", text: "Sign in", note: "The page moved since you last looked: you were on https://a.test/app and it is now https://a.test/login." }),
+  });
+  const read = await dispatchTool("browser_read", {}, context);
+  assert.match(read.text, /^The page moved since you last looked[^\n]*\n\nhttps:\/\/a\.test\/login\n\nSign in$/);
+});
