@@ -21,7 +21,7 @@
  * Verified against the box's own Chromium rather than assumed.
  */
 
-import type { Outcome, WaitOutcome } from "../protocol/index.ts";
+import type { Outcome, WaitOutcome, ActExpectation, Effect } from "../protocol/index.ts";
 import { spawn } from "node:child_process";
 import { realpathSync, statSync } from "node:fs";
 import { CdpError, CdpSession, closeTarget, listTargets, openTarget, type CdpTarget } from "./cdp.ts";
@@ -237,12 +237,90 @@ export function irreversibleReason(target: ClickTarget): string | undefined {
   return undefined;
 }
 
+/** What the target looks like, before and after an action, for `judgeEffect`. */
+export interface TargetState {
+  value?: string;
+  checked?: boolean;
+  text: string;
+  focused: boolean;
+  aria: string;
+  /** A cheap fingerprint of the target's subtree. */
+  subtree: string;
+  disabled: boolean;
+}
+
+/**
+ * Did the action change its target (INV-399, huashu-chrome's effect evidence)?
+ *
+ * `after` undefined means the element is gone — which for a dismissed dialog or a deleted
+ * row is the strongest confirmation there is. A navigation is a change too. Only focus
+ * moving is "partial": the click landed, the page did nothing with it yet. Nothing
+ * changing is a suspected no-op: the page painted the text and the app did not take it,
+ * or the click was swallowed. Global text length is deliberately not evidence.
+ */
+export function judgeEffect(
+  before: TargetState,
+  after: TargetState | undefined,
+  navigated: boolean
+): { effect: Effect; changed: string[] } {
+  const changed: string[] = [];
+  if (navigated) changed.push("navigated");
+  if (after === undefined) {
+    changed.push("gone");
+    return { effect: "confirmed", changed };
+  }
+  if (before.value !== after.value) changed.push("value");
+  if (before.checked !== after.checked) changed.push("checked");
+  if (before.text !== after.text) changed.push("text");
+  if (before.aria !== after.aria) changed.push("aria");
+  if (before.disabled !== after.disabled) changed.push("disabled");
+  if (before.subtree !== after.subtree) changed.push("subtree");
+  if (before.focused !== after.focused) changed.push("focus");
+  const substantive = changed.filter(what => what !== "focus");
+  if (substantive.length > 0) return { effect: "confirmed", changed };
+  if (changed.length > 0) return { effect: "partial", changed };
+  return { effect: "suspected_noop", changed };
+}
+
+/**
+ * Whether the page became what the agent meant. Undefined when it did; otherwise one
+ * sentence naming the first expectation that failed, with what was found.
+ */
+export function unmetExpectation(
+  expect: ActExpectation | undefined,
+  after: TargetState | undefined,
+  pageText: string
+): string | undefined {
+  if (expect === undefined) return undefined;
+  if (expect.gone === true && after !== undefined) return "expected the element to be gone, and it is still on the page";
+  if (expect.gone === false && after === undefined) return "expected the element to remain, and it is gone";
+  if (after === undefined && (expect.value !== undefined || expect.text !== undefined || expect.checked !== undefined)) {
+    return "expected to read the element afterwards, and it is gone from the page";
+  }
+  if (expect.value !== undefined && after !== undefined && (after.value ?? "") !== expect.value) {
+    return `expected value ${JSON.stringify(expect.value)}, found ${JSON.stringify(after.value ?? "")}`;
+  }
+  if (expect.text !== undefined && after !== undefined && !after.text.toLowerCase().includes(expect.text.toLowerCase())) {
+    return `expected the element's text to contain ${JSON.stringify(expect.text)}, found ${JSON.stringify(after.text.slice(0, 80))}`;
+  }
+  if (expect.checked !== undefined && after !== undefined && after.checked !== expect.checked) {
+    return `expected checked=${expect.checked}, found checked=${String(after.checked)}`;
+  }
+  if (expect.appears !== undefined && !pageText.toLowerCase().includes(expect.appears.toLowerCase())) {
+    return `expected ${JSON.stringify(expect.appears)} to appear on the page, and it did not`;
+  }
+  return undefined;
+}
+
 export interface BrowserResult {
   url: string;
   title: string;
   snapshot: string;
   /** The id of this outline; act with a ref from it and say so. */
   snapshot_id?: string;
+  /** For an act on a ref: whether the target changed, and how (INV-399). */
+  effect?: Effect;
+  changed?: string[];
   /** Set when a page asked a question while we were acting, and how it was answered. */
   dialog?: string;
   /** Set when something went wrong in a way the agent can act on. */
@@ -686,6 +764,66 @@ class BrowserPage {
     }
   }
 
+  /** The target's state, for `judgeEffect` (INV-399). */
+  async targetState(objectId: string): Promise<TargetState> {
+    const described = (await this.session.send("Runtime.callFunctionOn", {
+      objectId,
+      returnByValue: true,
+      functionDeclaration:
+        "function(){ const t = this; const attrs = ['aria-expanded','aria-pressed','aria-selected','aria-checked','aria-disabled'];" +
+        " const aria = attrs.map(a => a + '=' + (t.getAttribute ? (t.getAttribute(a) || '') : '')).join(';');" +
+        " const html = t.outerHTML || ''; let h = 2166136261; for (let i = 0; i < html.length; i++) { h ^= html.charCodeAt(i); h = Math.imul(h, 16777619) >>> 0; }" +
+        " return JSON.stringify({ value: ('value' in t && typeof t.value === 'string') ? t.value : undefined," +
+        "   checked: typeof t.checked === 'boolean' ? t.checked : undefined," +
+        "   text: String(t.innerText || t.textContent || '').replace(/\\s+/g, ' ').trim().slice(0, 400)," +
+        "   focused: t.ownerDocument ? t.ownerDocument.activeElement === t : false, aria: aria," +
+        "   subtree: html.length + ':' + h.toString(36), disabled: t.disabled === true }); }",
+    })) as { result?: { value?: string } };
+    const parsed = JSON.parse(described.result?.value ?? "{}") as Partial<TargetState>;
+    return {
+      value: parsed.value,
+      checked: parsed.checked,
+      text: parsed.text ?? "",
+      focused: parsed.focused === true,
+      aria: parsed.aria ?? "",
+      subtree: parsed.subtree ?? "",
+      disabled: parsed.disabled === true,
+    };
+  }
+
+  /** The target's state after an action, or undefined when it left the page. */
+  async targetStateAfter(ref: string): Promise<TargetState | undefined> {
+    try {
+      const objectId = await this.resolve(ref);
+      return await this.targetState(objectId);
+    } catch {
+      return undefined;
+    }
+  }
+
+  /** Whether the main frame started a navigation since the flag was last cleared. */
+  get navigatedSince(): boolean {
+    return this.navigating || !this.loaded;
+  }
+
+  /** The visible text of the page, for `expect.appears`. Bounded like read(). */
+  async visibleText(): Promise<string> {
+    try {
+      const result = (await this.session.send("Runtime.evaluate", {
+        expression: "document.body ? String(document.body.innerText || '').slice(0, 40000) : ''",
+        returnByValue: true,
+      })) as { result?: { value?: string } };
+      return String(result.result?.value ?? "");
+    } catch {
+      return "";
+    }
+  }
+
+  /** The object id of a ref, for a caller that wants the state before acting. */
+  async objectOf(ref: string): Promise<string> {
+    return this.resolve(ref);
+  }
+
   /** The target's own words and the text around it, for `irreversibleReason`. */
   private async describeTarget(objectId: string): Promise<ClickTarget> {
     const described = (await this.session.send("Runtime.callFunctionOn", {
@@ -1111,6 +1249,7 @@ export class BrowserService {
       snapshot?: string;
       find?: { role?: string; name?: string; nth?: number };
       confirmed?: boolean;
+      expect?: ActExpectation;
     }
   ): Promise<BrowserResult> {
     const page = await this.pageFor(display);
@@ -1128,6 +1267,10 @@ export class BrowserService {
         await page.assertFresh(options.snapshot);
       }
     }
+    // The target before, for the effect judgement (INV-399). Read after the stale check and
+    // the find, so it is the element that will be acted on; a target that cannot be read is
+    // simply unmeasured, never a refusal.
+    const before = needsRef && ref !== undefined ? await page.targetStateAfter(ref) : undefined;
     switch (action) {
       case "click":
         await page.click(ref!, options.confirmed === true);
@@ -1144,7 +1287,22 @@ export class BrowserService {
       default:
         throw new CdpError(`${action} is not something this does: click, type, key or hover.`);
     }
-    return this.settled(display, await page.report());
+    const navigated = page.navigatedSince;
+    const result = await this.settled(display, await page.report());
+    if (before === undefined || ref === undefined) {
+      if (options.expect !== undefined) {
+        const unmet = unmetExpectation(options.expect, undefined, await page.visibleText());
+        if (unmet !== undefined && options.expect.appears !== undefined) throw new CdpError(`The page is not what you expected: ${unmet}.`);
+      }
+      return result;
+    }
+    const after = await page.targetStateAfter(ref);
+    const judged = judgeEffect(before, after, navigated);
+    const unmet = unmetExpectation(options.expect, after, options.expect?.appears !== undefined ? await page.visibleText() : "");
+    if (unmet !== undefined) {
+      throw new CdpError(`The page is not what you expected: ${unmet}. (Effect: ${judged.effect}${judged.changed.length > 0 ? `, changed ${judged.changed.join(", ")}` : ""}.)`);
+    }
+    return { ...result, effect: judged.effect, changed: judged.changed };
   }
 
   async scroll(display: number, direction: string, amount: number): Promise<BrowserResult> {

@@ -144,3 +144,43 @@ test("a bare OK is caught only when there is money next to it; ordinary buttons 
     assert.equal(irreversibleReason({ text, role: "button", nearby: "Total $12" }), undefined, `${JSON.stringify(text)} is not gated`);
   }
 });
+
+// ── did the act change its target, and did it become what was meant (INV-399) ───────
+import { judgeEffect, unmetExpectation, type TargetState } from "./browser-service.ts";
+
+const state = (over: Partial<TargetState> = {}): TargetState => ({
+  value: "",
+  checked: undefined,
+  text: "Send",
+  focused: false,
+  aria: "aria-expanded=;aria-pressed=;aria-selected=;aria-checked=;aria-disabled=",
+  subtree: "42:abc",
+  disabled: false,
+  ...over,
+});
+
+test("a target that changed is confirmed; only focus moving is partial; nothing is a suspected no-op; gone is confirmed", () => {
+  assert.deepEqual(judgeEffect(state(), state({ value: "hello" }), false), { effect: "confirmed", changed: ["value"] });
+  assert.deepEqual(judgeEffect(state(), state({ focused: true }), false), { effect: "partial", changed: ["focus"] });
+  // The React case: the screen painted the text, the framework's state did not take it —
+  // value unchanged in the DOM the app re-rendered, focus moved. Partial, not confirmed.
+  assert.equal(judgeEffect(state(), state({ focused: true }), false).effect, "partial");
+  assert.deepEqual(judgeEffect(state(), state(), false), { effect: "suspected_noop", changed: [] });
+  assert.deepEqual(judgeEffect(state(), undefined, false), { effect: "confirmed", changed: ["gone"] });
+  assert.deepEqual(judgeEffect(state(), state(), true), { effect: "confirmed", changed: ["navigated"] });
+  assert.deepEqual(judgeEffect(state(), state({ aria: "x", disabled: true }), false).changed, ["aria", "disabled"]);
+});
+
+test("an expectation names the first thing that is not so, and says nothing when all is well", () => {
+  assert.equal(unmetExpectation(undefined, state(), ""), undefined);
+  assert.equal(unmetExpectation({ value: "hello" }, state({ value: "hello" }), ""), undefined);
+  assert.match(unmetExpectation({ value: "hello" }, state({ value: "" }), "") ?? "", /expected value "hello", found ""/);
+  assert.match(unmetExpectation({ text: "saved" }, state({ text: "Save" }), "") ?? "", /text to contain "saved"/);
+  assert.equal(unmetExpectation({ text: "SEND" }, state(), ""), undefined, "text is case-insensitive");
+  assert.match(unmetExpectation({ checked: true }, state({ checked: false }), "") ?? "", /expected checked=true, found checked=false/);
+  assert.match(unmetExpectation({ gone: true }, state(), "") ?? "", /expected the element to be gone/);
+  assert.equal(unmetExpectation({ gone: true }, undefined, ""), undefined);
+  assert.match(unmetExpectation({ value: "x" }, undefined, "") ?? "", /gone from the page/);
+  assert.match(unmetExpectation({ appears: "Saved" }, state(), "Your changes were discarded") ?? "", /"Saved" to appear/);
+  assert.equal(unmetExpectation({ appears: "saved" }, state(), "Changes Saved."), undefined);
+});
