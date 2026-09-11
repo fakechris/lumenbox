@@ -45,12 +45,16 @@ const looksLikeMarkdown = sharedLooksLikeMarkdown;
  * answers as buttons, and a note that the words still work — because a person typing
  * "允许" at a card is right, not wrong.
  */
-export function renderApprovalCard(card: ApprovalCardState): object {
+export function renderApprovalCard(card: ApprovalCardState, chatKey?: string): object {
   const button = (label: string, type: string, reply: string) => ({
     tag: "button",
     text: { tag: "plain_text", content: label },
     type,
-    value: { approval: card.approvalId, reply },
+    value: {
+      approval: card.approvalId,
+      reply,
+      ...(chatKey !== undefined ? { chatKey } : {}),
+    },
   });
   return {
     config: { wide_screen_mode: true },
@@ -92,12 +96,15 @@ export function renderApprovalCard(card: ApprovalCardState): object {
  * person mid-commute answers with a thumb and a person at a desk answers in their own
  * phrasing — both have to land.
  */
-export function renderQuestionCard(card: QuestionCardState): object {
+export function renderQuestionCard(card: QuestionCardState, chatKey?: string): object {
   const button = (option: string) => ({
     tag: "button",
     text: { tag: "plain_text", content: option },
     type: "default",
-    value: { ask: option },
+    value: {
+      ask: option,
+      ...(chatKey !== undefined ? { chatKey } : {}),
+    },
   });
   return {
     config: { wide_screen_mode: true },
@@ -1212,30 +1219,44 @@ export class FeishuChannel implements ChannelAdapter {
       // ordinary message — the SDK's own response to the event is just the ack.
       "card.action.trigger": (data: {
         operator?: { open_id?: string };
-        action?: { value?: { approval?: string; reply?: string; ask?: string } };
-        context?: { open_chat_id?: string };
+        action?: { value?: { approval?: string; reply?: string; ask?: string; chatKey?: string } };
+        context?: { open_chat_id?: string; open_message_id?: string };
+        open_message_id?: string;
       }) => {
         const approvalId = data.action?.value?.approval;
         const reply = data.action?.value?.reply;
         const openId = data.operator?.open_id;
         const chatId = data.context?.open_chat_id;
+        const cardMessageId = data.context?.open_message_id ?? data.open_message_id;
+        const buttonChatKey = data.action?.value?.chatKey;
         // A pressed answer button is the person saying that answer. It goes through the
         // same door a typed reply would, so everything downstream — waking the agent,
         // the task flow, the transcript — is one path, not two.
         const chosen = data.action?.value?.ask;
         if (chosen !== undefined && openId !== undefined && this.messageHandler !== undefined) {
-          void this.labelFor(openId, chatId ?? "")
+          const resolvedChatKey = buttonChatKey ?? (chatId !== undefined ? `${this.name}:${chatId}` : undefined);
+          const { chatId: targetChatId, rootId } = resolvedChatKey
+            ? splitChatKey(resolvedChatKey)
+            : { chatId: chatId ?? "", rootId: undefined };
+          const threadKey = rootId
+            ? resolvedChatKey
+            : cardMessageId !== undefined && targetChatId !== ""
+              ? `${this.name}:${targetChatId}:${cardMessageId}`
+              : undefined;
+          void this.labelFor(openId, targetChatId || (chatId ?? ""))
             .then(senderLabel =>
               this.messageHandler!({
                 identity: `${this.name}:${openId}`,
-                ...(chatId !== undefined ? { chatKey: `${this.name}:${chatId}` } : {}),
+                ...(targetChatId !== "" ? { chatKey: `${this.name}:${targetChatId}` } : {}),
+                ...(threadKey !== undefined ? { threadKey } : {}),
+                ...(cardMessageId !== undefined ? { messageId: cardMessageId } : {}),
                 senderLabel,
                 text: chosen,
               })
             )
             .then(line =>
-              line !== undefined && line !== "" && chatId !== undefined
-                ? this.sendToChat(`${this.name}:${chatId}`, line)
+              line !== undefined && line !== "" && (threadKey ?? resolvedChatKey) !== undefined
+                ? this.sendToChat(threadKey ?? resolvedChatKey!, line)
                 : undefined
             )
             .catch((error: unknown) => {
@@ -1252,10 +1273,11 @@ export class FeishuChannel implements ChannelAdapter {
         ) {
           return {};
         }
+        const resolvedChatKey = buttonChatKey ?? (chatId !== undefined ? `${this.name}:${chatId}` : undefined);
         void this.approvalHandler({ approvalId, reply, identity: `${this.name}:${openId}` })
           .then(line =>
-            line !== undefined && chatId !== undefined
-              ? this.sendToChat(`${this.name}:${chatId}`, line)
+            line !== undefined && resolvedChatKey !== undefined
+              ? this.sendToChat(resolvedChatKey, line)
               : undefined
           )
           .catch((error: unknown) => {
@@ -1859,10 +1881,11 @@ export class FeishuChannel implements ChannelAdapter {
       ? thread.chatId
       : this.chats.get(identity);
     if (chatId === undefined || this.apiClient === undefined) return;
+    const effectiveChatKey = chatKey ?? (chatId !== undefined ? `${this.name}:${chatId}` : undefined);
     await this.post(
       chatId,
       "interactive",
-      JSON.stringify(renderQuestionCard(card)),
+      JSON.stringify(renderQuestionCard(card, effectiveChatKey)),
       thread?.rootId,
       chatKey
     );
@@ -1873,10 +1896,11 @@ export class FeishuChannel implements ChannelAdapter {
     const thread = chatKey !== undefined ? splitChatKey(chatKey) : undefined;
     const threadChat = thread?.chatId !== undefined && thread.chatId !== "" ? thread.chatId : undefined;
     if (threadChat !== undefined && this.apiClient !== undefined) {
+      const effectiveChatKey = chatKey ?? `${this.name}:${threadChat}`;
       await this.post(
         threadChat,
         "interactive",
-        JSON.stringify(renderApprovalCard(card)),
+        JSON.stringify(renderApprovalCard(card, effectiveChatKey)),
         thread?.rootId,
         chatKey
       );
@@ -1884,12 +1908,13 @@ export class FeishuChannel implements ChannelAdapter {
     }
     const chatId = this.chats.get(identity);
     if (chatId === undefined || this.apiClient === undefined) return;
+    const effectiveChatKey = chatKey ?? (chatId !== undefined ? `${this.name}:${chatId}` : undefined);
     await this.apiClient.im.message.create({
       params: { receive_id_type: "chat_id" },
       data: {
         receive_id: chatId,
         msg_type: "interactive",
-        content: JSON.stringify(renderApprovalCard(card)),
+        content: JSON.stringify(renderApprovalCard(card, effectiveChatKey)),
       },
     });
   }

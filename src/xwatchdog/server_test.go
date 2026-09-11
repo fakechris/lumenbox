@@ -85,4 +85,37 @@ func TestServerEventsGetAndPost(t *testing.T) {
 	if len(postRes.Events) != 2 {
 		t.Fatalf("expected 2 events, got %d", len(postRes.Events))
 	}
+
+	// GET with tail
+	tailReq := httptest.NewRequest(http.MethodGet, "/events?tail=1&limit=1", nil)
+	tailW := httptest.NewRecorder()
+	srv.Routes().ServeHTTP(tailW, tailReq)
+
+	if tailW.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d", tailW.Code)
+	}
+	var tailRes EventsResult
+	if err := json.Unmarshal(tailW.Body.Bytes(), &tailRes); err != nil {
+		t.Fatal(err)
+	}
+	if len(tailRes.Events) != 1 || tailRes.Events[0].Seq != 2 {
+		t.Fatalf("expected tail event seq 2, got %+v", tailRes)
+	}
+
+	// POST with tail
+	postTailBody := `{"tail": true, "limit": 1}`
+	postTailReq := httptest.NewRequest(http.MethodPost, "/events", strings.NewReader(postTailBody))
+	postTailW := httptest.NewRecorder()
+	srv.Routes().ServeHTTP(postTailW, postTailReq)
+
+	if postTailW.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d", postTailW.Code)
+	}
+	var postTailRes EventsResult
+	if err := json.Unmarshal(postTailW.Body.Bytes(), &postTailRes); err != nil {
+		t.Fatal(err)
+	}
+	if len(postTailRes.Events) != 1 || postTailRes.Events[0].Seq != 2 {
+		t.Fatalf("expected post tail event seq 2, got %+v", postTailRes)
+	}
 }

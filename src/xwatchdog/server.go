@@ -47,6 +47,7 @@ func (s *Server) handleEvents(w http.ResponseWriter, r *http.Request) {
 
 	var since int64 = 0
 	limit := 100
+	tail := false
 
 	if r.Method == http.MethodGet {
 		if sStr := r.URL.Query().Get("since"); sStr != "" {
@@ -59,10 +60,14 @@ func (s *Server) handleEvents(w http.ResponseWriter, r *http.Request) {
 				limit = n
 			}
 		}
+		if tStr := r.URL.Query().Get("tail"); tStr == "1" || tStr == "true" {
+			tail = true
+		}
 	} else if r.Method == http.MethodPost {
 		var body struct {
 			Since *int64 `json:"since"`
 			Limit *int   `json:"limit"`
+			Tail  *bool  `json:"tail"`
 		}
 		if err := json.NewDecoder(r.Body).Decode(&body); err == nil {
 			if body.Since != nil && *body.Since >= 0 {
@@ -71,10 +76,18 @@ func (s *Server) handleEvents(w http.ResponseWriter, r *http.Request) {
 			if body.Limit != nil && *body.Limit > 0 {
 				limit = *body.Limit
 			}
+			if body.Tail != nil {
+				tail = *body.Tail
+			}
 		}
 	}
 
-	res := s.store.Query(since, limit)
+	var res EventsResult
+	if tail {
+		res = s.store.QueryTail(limit)
+	} else {
+		res = s.store.Query(since, limit)
+	}
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(res)
 }

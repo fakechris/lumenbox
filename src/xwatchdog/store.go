@@ -102,6 +102,42 @@ func (s *EventStore) Query(sinceSeq int64, limit int) EventsResult {
 	}
 }
 
+// QueryTail returns up to limit most recent events in memory.
+func (s *EventStore) QueryTail(limit int) EventsResult {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	if limit <= 0 {
+		limit = 100
+	}
+	if limit > 500 {
+		limit = 500
+	}
+
+	n := len(s.events)
+	if n == 0 {
+		return EventsResult{
+			Events:  []Event{},
+			NextSeq: s.currentSeq,
+			HasMore: false,
+		}
+	}
+
+	start := n - limit
+	if start < 0 {
+		start = 0
+	}
+	slice := s.events[start:]
+	matched := make([]Event, len(slice))
+	copy(matched, slice)
+
+	return EventsResult{
+		Events:  matched,
+		NextSeq: s.currentSeq,
+		HasMore: false,
+	}
+}
+
 // Close closes any underlying file handles.
 // Snapshot returns a copy of the buffered events, for tests and health checks.
 func (s *EventStore) Snapshot() []Event {

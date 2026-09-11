@@ -6,7 +6,7 @@
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { FeishuChannel, SOCKET_RETRY_MS, classifySocketLine, meetingInvitePrompt, parseMeetingInvite, looksLikeMarkdown, markdownPost, renderCard, renderQuestionCard, splitChatKey } from "./feishu.ts";
+import { FeishuChannel, SOCKET_RETRY_MS, classifySocketLine, meetingInvitePrompt, parseMeetingInvite, looksLikeMarkdown, markdownPost, renderApprovalCard, renderCard, renderQuestionCard, splitChatKey } from "./feishu.ts";
 import type { TaskCardState } from "./manager.ts";
 
 interface CardShape {
@@ -339,6 +339,52 @@ test("a question card carries each answer as a button that speaks the answer", (
   );
   const note = card.elements.find(element => element.tag === "note");
   assert.match(note!.elements![0]!.content, /直接把答案打在下面/);
+});
+
+test("a question card carries thread chatKey in each button value so clicks stay in thread", () => {
+  const card = renderQuestionCard(
+    {
+      agentName: "Ada",
+      question: "有 12 份报表缺'成本'列。跳过并在总表标注,还是停下来等你?",
+      options: ["跳过并标注", "停下来"],
+    },
+    "feishu:oc_room123:omt_root456"
+  ) as {
+    elements: { tag: string; actions?: { value: { ask: string; chatKey?: string } }[] }[];
+  };
+
+  const actions = card.elements.find(element => element.tag === "action")!.actions!;
+  assert.deepEqual(
+    actions.map(action => action.value),
+    [
+      { ask: "跳过并标注", chatKey: "feishu:oc_room123:omt_root456" },
+      { ask: "停下来", chatKey: "feishu:oc_room123:omt_root456" },
+    ]
+  );
+});
+
+test("an approval card carries thread chatKey in each button value so decisions stay in thread", () => {
+  const card = renderApprovalCard(
+    {
+      agentName: "Ada",
+      approvalId: "ap_42",
+      description: "Run bash command",
+      stakes: "Stakes high",
+    },
+    "feishu:oc_room123:omt_root456"
+  ) as {
+    elements: { tag: string; actions?: { value: { approval: string; reply: string; chatKey?: string } }[] }[];
+  };
+
+  const actions = card.elements.find(element => element.tag === "action")!.actions!;
+  assert.deepEqual(
+    actions.map(action => action.value),
+    [
+      { approval: "ap_42", reply: "once", chatKey: "feishu:oc_room123:omt_root456" },
+      { approval: "ap_42", reply: "always", chatKey: "feishu:oc_room123:omt_root456" },
+      { approval: "ap_42", reply: "deny", chatKey: "feishu:oc_room123:omt_root456" },
+    ]
+  );
 });
 
 test("the board card groups tasks under bold headings, links ids, and footnotes the finishes", async () => {

@@ -197,3 +197,74 @@ test("XWatchdogService classifies sources (user, agent, system) and detects supe
     rmSync(dir, { recursive: true, force: true });
   }
 });
+
+test("XWatchdogService queries tail from daemon and fallback files", async () => {
+  let requestedUrl = "";
+  const fakeDaemon = createServer((req, res) => {
+    requestedUrl = req.url ?? "";
+    res.writeHead(200, { "content-type": "application/json" });
+    res.end(
+      JSON.stringify({
+        events: [
+          {
+            seq: 42,
+            type: "exec",
+            time: "2026-09-09T09:30:00Z",
+            detail: { cmd: "top" },
+          },
+        ],
+        next_seq: 42,
+        has_more: false,
+      })
+    );
+  });
+
+  await new Promise<void>(resolve => fakeDaemon.listen(0, "127.0.0.1", resolve));
+  const port = (fakeDaemon.address() as { port: number }).port;
+
+  try {
+    const service = new XWatchdogService({
+      daemonUrl: `http://127.0.0.1:${port}`,
+    });
+
+    const result = await service.events(0, 50, true);
+    assert.ok(requestedUrl.includes("tail=1"), `expected url to have tail=1, got ${requestedUrl}`);
+    assert.equal(result.events.length, 1);
+    assert.equal(result.events[0]?.detail["cmd"], "top");
+    assert.equal(result.next_seq, 42);
+  } finally {
+    fakeDaemon.close();
+  }
+
+  // Fallback tail test
+  const dir = mkdtempSync(join(tmpdir(), "xwatchdog-tail-test-"));
+  try {
+    const eventsPath = join(dir, "events.jsonl");
+    const lines = [];
+    for (let i = 1; i <= 20; i++) {
+      lines.push(
+        JSON.stringify({
+          time: `2026-09-09T09:30:${i < 10 ? "0" + i : i}.000Z`,
+          type: "exec",
+          source: "user",
+          detail: { cmd: `cmd-${i}` },
+        })
+      );
+    }
+    writeFileSync(eventsPath, lines.join("\n") + "\n");
+
+    const fileService = new XWatchdogService({
+      eventsLogPath: eventsPath,
+      daemonUrl: "http://127.0.0.1:49996", // unreachable
+    });
+
+    const tailResult = await fileService.events(0, 5, true);
+    assert.equal(tailResult.events.length, 5);
+    assert.equal(tailResult.events[0]?.detail["cmd"], "cmd-16");
+    assert.equal(tailResult.events[4]?.detail["cmd"], "cmd-20");
+    assert.equal(tailResult.next_seq, 20);
+    assert.equal(tailResult.has_more, false);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});

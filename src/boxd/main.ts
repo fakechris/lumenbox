@@ -500,7 +500,7 @@ const routes: Record<string, Handler> = {
   "POST /fs/list": (body: ListDirRequest): Promise<ListDirResult> =>
     listDir(body),
   "POST /xwatchdog/events": (body: XWatchdogQuery): Promise<XWatchdogEventsResult> =>
-    xwatchdog.events(body.since, body.limit),
+    xwatchdog.events(body.since, body.limit, body.tail),
 };
 
 /**
@@ -590,7 +590,8 @@ const server = createServer((req, res) => {
         const parsedUrl = new URL(req.url ?? "", "http://box");
         const since = Number(parsedUrl.searchParams.get("since") ?? 0);
         const limit = Number(parsedUrl.searchParams.get("limit") ?? 100);
-        send(res, 200, await xwatchdog.events(since, limit));
+        const tail = parsedUrl.searchParams.get("tail") === "1" || parsedUrl.searchParams.get("tail") === "true";
+        send(res, 200, await xwatchdog.events(since, limit, tail));
         return;
       }
 
