@@ -15,6 +15,36 @@ export const DEFAULT_GUI_LOG_PATH = "/var/log/xwatchdog/gui.log";
 export const DEFAULT_EVENTS_LOG_PATH = "/var/log/xwatchdog/events.jsonl";
 export const DEFAULT_DAEMON_URL = "http://127.0.0.1:49099";
 
+/**
+ * Recognizes recurring system supervisor health check probes (e.g. from start-display running_here).
+ */
+export function isProbeCommand(cmd: string): boolean {
+  const c = cmd.trim();
+  if (/^tr\s+(['"]?)\\0\1\s+(['"]?)\\n\2/.test(c)) return true;
+  if (/^grep\s+.*DISPLAY=/.test(c)) return true;
+  if (/^pgrep\s+-(f\s+--?\s*|f\s+)(pcmanfm|xwatchdog|autocutsel|Xvfb)/.test(c)) return true;
+  if (/^xdpyinfo\s+-display/.test(c)) return true;
+  return false;
+}
+
+/**
+ * Determines whether an exec command originates from a human user terminal, an agent tool,
+ * or a system daemon / supervisor probe.
+ */
+export function classifyExecSource(
+  tty: string | undefined,
+  cmd: string,
+  user: string | undefined
+): "user" | "agent" | "system" {
+  if (tty && tty !== "none" && (tty.includes("pts") || tty.includes("tty"))) {
+    return "user";
+  }
+  if (isProbeCommand(cmd) || user === "hostd") {
+    return "system";
+  }
+  return "agent";
+}
+
 export interface XWatchdogServiceOptions {
   execLogPath?: string;
   guiLogPath?: string;
@@ -93,7 +123,7 @@ export class XWatchdogService {
    */
   parseExecLine(line: string): Omit<XWatchdogEvent, "seq"> | undefined {
     const trimmed = line.trim();
-    if (!trimmed || !trimmed.startsWith("time=")) return undefined;
+    if (!trimmed.startsWith("time=")) return undefined;
 
     const parts = trimmed.split(" | ");
     const fields: Record<string, string> = {};
@@ -113,8 +143,8 @@ export class XWatchdogService {
     // Normalize timestamp to ISO string
     let isoTime: string;
     try {
-      const parsed = new Date(rawTime.includes("T") ? rawTime : rawTime.replace(" ", "T") + "Z");
-      isoTime = isNaN(parsed.getTime()) ? new Date().toISOString() : parsed.toISOString();
+      const parsed = new Date(rawTime.includes("T") ? rawTime : `${rawTime.replace(" ", "T")}Z`);
+      isoTime = Number.isNaN(parsed.getTime()) ? new Date().toISOString() : parsed.toISOString();
     } catch {
       isoTime = new Date().toISOString();
     }
@@ -122,17 +152,25 @@ export class XWatchdogService {
     const uid = fields.uid ? Number(fields.uid) : undefined;
     const pid = fields.pid ? Number(fields.pid) : undefined;
     const ppid = fields.ppid ? Number(fields.ppid) : undefined;
+    const tty = fields.tty ?? "";
+    const cmd = fields.cmd ?? "";
+    const user = fields.user ?? "box";
+    const window = tty && tty !== "none" ? `tty:${tty}` : undefined;
+    const probe = isProbeCommand(cmd);
+    const source = classifyExecSource(tty, cmd, user);
 
     return {
       type: "exec",
       time: isoTime,
-      window: fields.tty ? `tty:${fields.tty}` : undefined,
+      source,
+      ...(probe ? { probe: true } : {}),
+      ...(window ? { window } : {}),
       detail: {
-        cmd: fields.cmd ?? "",
+        cmd,
         pwd: fields.pwd ?? "",
-        user: fields.user ?? "box",
+        user,
         uid,
-        tty: fields.tty ?? "",
+        tty,
         pid,
         ppid,
       },
@@ -144,7 +182,7 @@ export class XWatchdogService {
    */
   parseGuiLine(line: string): Omit<XWatchdogEvent, "seq"> | undefined {
     const trimmed = line.trim();
-    if (!trimmed || !trimmed.startsWith("{")) return undefined;
+    if (!trimmed.startsWith("{")) return undefined;
 
     try {
       const parsed = JSON.parse(trimmed) as Record<string, unknown>;
@@ -163,9 +201,17 @@ export class XWatchdogService {
           ? (parsed.detail as Record<string, unknown>)
           : {};
 
+      let source = typeof parsed.source === "string" ? (parsed.source as "user" | "agent" | "system") : undefined;
+      if (!source) {
+        if (type === "window_focus") source = "user";
+        else if (type === "system") source = "system";
+      }
+
       return {
         type,
         time,
+        ...(source ? { source } : {}),
+        ...(parsed.probe === true ? { probe: true } : {}),
         display,
         window,
         detail,
@@ -219,6 +265,23 @@ export class XWatchdogService {
       const tb = Date.parse(b.time) || 0;
       return ta - tb;
     });
+
+    // Refine process lineage: children of agent shells inherit "agent" source
+    const agentPids = new Set<number>();
+    for (const ev of allParsed) {
+      if (ev.type === "exec") {
+        const cmd = String(ev.detail.cmd || "");
+        const pid = typeof ev.detail.pid === "number" ? ev.detail.pid : undefined;
+        const ppid = typeof ev.detail.ppid === "number" ? ev.detail.ppid : undefined;
+        if (cmd.startsWith("nice -n") || cmd.includes("boxd-session-")) {
+          if (pid) agentPids.add(pid);
+          ev.source = "agent";
+        } else if (ppid && agentPids.has(ppid)) {
+          if (pid) agentPids.add(pid);
+          if (!ev.probe) ev.source = "agent";
+        }
+      }
+    }
 
     // Assign monotonic sequence
     const sequenced: XWatchdogEvent[] = allParsed.map((ev, index) => ({

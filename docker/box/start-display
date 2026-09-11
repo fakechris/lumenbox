@@ -82,7 +82,7 @@ running_here() {
   local pattern="$1" pid
   for pid in $(pgrep -f -- "${pattern}" 2>/dev/null || true); do
     [ "${pid}" = "$$" ] && continue
-    if tr '\0' '\n' < "/proc/${pid}/environ" 2>/dev/null | grep -Fqx "DISPLAY=${DISP}"; then
+    if grep -Fqxz "DISPLAY=${DISP}" "/proc/${pid}/environ" 2>/dev/null; then
       return 0
     fi
   done

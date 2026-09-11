@@ -365,9 +365,16 @@ export const APP_HTML = String.raw`<!doctype html>
   .trigger summary::-webkit-details-marker { display: none; }
   .trigger .det { margin-top: 6px; padding: 8px 12px; border: 1px solid var(--border); border-radius: 10px; background: var(--surface-2); white-space: pre-wrap; text-align: left; color: var(--text-soft); font-size: 12px; }
   #auditlist { font-size: 12.5px; }
-  .auditrow { padding: 3px 16px; border-bottom: 1px solid var(--border); line-height: 1.5; word-break: break-word; }
-  .auditrow .at { color: var(--muted); margin-right: 8px; font-variant-numeric: tabular-nums; }
+  .auditrow { display: flex; gap: 8px; align-items: baseline; padding: 4px 16px; border-bottom: 1px solid var(--border); line-height: 1.5; word-break: break-word; }
+  .auditrow .at { color: var(--muted); font-variant-numeric: tabular-nums; flex-shrink: 0; min-width: 82px; }
+  .auditrow .badge { display: inline-block; font-size: 10px; font-weight: 600; padding: 1px 5px; border-radius: 3px; font-family: var(--font-mono, monospace); line-height: 1.2; text-transform: uppercase; letter-spacing: 0.5px; flex-shrink: 0; }
+  .auditrow .badge-user { background: rgba(59, 130, 246, 0.15); color: #3b82f6; }
+  .auditrow .badge-agent { background: rgba(16, 185, 129, 0.15); color: #10b981; }
+  .auditrow .badge-system { background: rgba(156, 163, 175, 0.15); color: var(--muted, #9ca3af); }
+  .auditrow .audit-body { flex: 1; min-width: 0; }
   .auditrow.dim { color: var(--text-soft); }
+  .auditrow.probe { opacity: 0.7; }
+  #auditlist.hide-probes .auditrow.probe { display: none; }
   mark.hit { background: var(--accent-soft); color: inherit; border-radius: 3px; padding: 0 1px; }
   mark.hit.on { background: var(--accent); color: var(--on-ink); }
   #searchbar { display: none; gap: 8px; align-items: center; padding: 7px 18px; border-bottom: 1px solid var(--border); font-size: 12px; }
@@ -945,8 +952,13 @@ export const APP_HTML = String.raw`<!doctype html>
   <!-- Behaviour audit for a company jump box (docs/47): commands run and windows focused, and a
        red bar when the auditor stops answering on a session that can sudo. Admin only. -->
   <div id="auditview" style="display:none;flex:1;min-height:0;flex-direction:column">
-    <div class="bar" id="auditstate" style="display:flex;gap:8px;align-items:center;border-bottom:1px solid var(--border);font-size:12px"></div>
-    <div class="scroll" id="auditlist"></div>
+    <div class="bar" id="auditstate" style="display:flex;gap:8px;align-items:center;border-bottom:1px solid var(--border);font-size:12px;padding:6px 16px">
+      <span id="auditstatetext" style="flex:1"></span>
+      <label id="auditprobelabel" style="display:inline-flex;align-items:center;gap:5px;cursor:pointer;font-size:11.5px;color:var(--text-soft);user-select:none">
+        <input type="checkbox" id="audithideprobes" checked> Hide system probes<span id="auditprobecount" class="dim"></span>
+      </label>
+    </div>
+    <div class="scroll hide-probes" id="auditlist"></div>
   </div>
   <div class="eyebrow-row activityhead"><span class="eyebrow">Activity &mdash; all agents</span></div>
   <div class="feed" id="feed"></div>
@@ -4227,6 +4239,10 @@ document.getElementById("tabfiles").addEventListener("click", function (e) { e.p
 document.getElementById("tabtasks").addEventListener("click", function (e) { e.preventDefault(); showTab("tasks"); });
 document.getElementById("tabauto").addEventListener("click", function (e) { e.preventDefault(); showTab("auto"); });
 document.getElementById("tabaudit").addEventListener("click", function (e) { e.preventDefault(); showTab("audit"); });
+document.getElementById("audithideprobes").addEventListener("change", function () {
+  var list = $("auditlist");
+  if (list) list.classList.toggle("hide-probes", this.checked);
+});
 
 // ── audit (docs/47) ──────────────────────────────────────────────────────────
 //
@@ -4238,41 +4254,102 @@ var auditSince = 0;
 var auditBox = null;
 var auditTimer = null;
 
+function sanitizeAuditCmd(cmd) {
+  if (!cmd) return "";
+  var clean = String(cmd).replace(/\x1b\[[0-9;]*[a-zA-Z]/g, "");
+  clean = clean.replace(/[\x00-\x08\x0b-\x1f\x7f]/g, function (c) {
+    return "\\x" + (c.charCodeAt(0) < 16 ? "0" : "") + c.charCodeAt(0).toString(16);
+  });
+  return esc(clean);
+}
+
+function isAuditProbe(cmd) {
+  if (!cmd) return false;
+  var c = String(cmd).trim();
+  if (/^tr\s+(['"]?)\\0\1\s+(['"]?)\\n\2/.test(c)) return true;
+  if (/^grep\s+.*DISPLAY=/.test(c)) return true;
+  if (/^pgrep\s+-(f\s+--?\s*|f\s+)(pcmanfm|xwatchdog|autocutsel|Xvfb)/.test(c)) return true;
+  if (/^xdpyinfo\s+-display/.test(c)) return true;
+  return false;
+}
+
+function auditSource(e) {
+  if (e.source) return String(e.source);
+  if (e.type === "window_focus") return "user";
+  if (e.type === "system") return "system";
+  var d = e.detail || {};
+  var tty = String(d.tty || "");
+  if (tty && tty !== "none" && (tty.indexOf("pts") !== -1 || tty.indexOf("tty") !== -1)) {
+    return "user";
+  }
+  var cmd = String(d.cmd || "").trim();
+  if (isAuditProbe(cmd) || d.user === "hostd") return "system";
+  return "agent";
+}
+
 function auditRow(e) {
   var when = e.time ? new Date(e.time).toLocaleTimeString() : "";
   var d = e.detail || {};
+  var src = auditSource(e);
+  var isProbe = e.probe === true || (e.type === "exec" && isAuditProbe(d.cmd));
   var body, cls = "";
+  if (isProbe) cls += " probe dim";
+
   if (e.type === "exec") {
     var who = d.user ? esc(String(d.user)) : "";
     var pwd = d.pwd ? ' <span class="dim">' + esc(String(d.pwd)) + "</span>" : "";
-    body = '<span class="mono">' + esc(String(d.cmd || "")) + "</span>" + pwd + (who ? ' <span class="dim">· ' + who + "</span>" : "");
+    var cmdHtml = '<span class="mono">' + sanitizeAuditCmd(String(d.cmd || "")) + "</span>";
+    body = '<div class="audit-body">' + cmdHtml + pwd + (who ? ' <span class="dim">· ' + who + "</span>" : "") + "</div>";
   } else if (e.type === "window_focus") {
-    body = '<span class="dim">focused</span> ' + esc(String(e.window || d.to || ""));
-    cls = "dim";
+    body = '<div class="audit-body"><span class="dim">focused</span> ' + esc(String(e.window || d.to || "")) + "</div>";
+    cls += " dim";
   } else {
     // system: startup / heartbeat / shutdown_signal. Heartbeats are the pulse, not news — muted.
     var action = String(d.action || "");
     if (action === "heartbeat") return "";
-    body = '<span class="dim">' + esc(action || "system") + "</span>";
-    if (action === "shutdown_signal") { body = '<b style="color:var(--danger)">auditor received ' + esc(String(d.signal || "signal")) + " — shutting down</b>"; }
+    var systemText = '<span class="dim">' + esc(action || "system") + "</span>";
+    if (action === "shutdown_signal") {
+      systemText = '<b style="color:var(--danger)">auditor received ' + esc(String(d.signal || "signal")) + " — shutting down</b>";
+    }
+    body = '<div class="audit-body">' + systemText + "</div>";
   }
-  return '<div class="auditrow ' + cls + '"><span class="at">' + esc(when) + "</span>" + body + "</div>";
+  var badgeHtml = '<span class="badge badge-' + esc(src) + '">' + esc(src) + "</span>";
+  return '<div class="auditrow' + (cls ? " " + cls.trim() : "") + '"><span class="at">' + esc(when) + "</span> " + badgeHtml + " " + body + "</div>";
+}
+
+function updateAuditProbeCount() {
+  var countEl = $("auditprobecount");
+  if (!countEl) return;
+  var count = document.querySelectorAll("#auditlist .auditrow.probe").length;
+  countEl.textContent = count > 0 ? " (" + count + ")" : "";
 }
 
 function renderAuditState(meta) {
-  var el = $("auditstate");
-  if (meta.forbidden) { el.innerHTML = '<span class="dim">Audit is admin-only.</span>'; return; }
+  var statEl = $("auditstatetext");
+  var labelEl = $("auditprobelabel");
+  if (!statEl) return;
+  if (meta.forbidden) {
+    statEl.innerHTML = '<span class="dim">Audit is admin-only.</span>';
+    if (labelEl) labelEl.style.display = "none";
+    return;
+  }
+  if (labelEl) labelEl.style.display = "inline-flex";
   if (meta.atRisk) {
-    el.innerHTML = '<span style="flex:1;color:var(--danger);font-weight:600">⚠ HIGH-RISK: the auditor is not answering on this box — it may have been stopped on a session that can sudo.</span>';
+    statEl.innerHTML = '<span style="color:var(--danger);font-weight:600">⚠ HIGH-RISK: the auditor is not answering on this box — it may have been stopped on a session that can sudo.</span>';
     return;
   }
   var age = meta.heartbeatAgeMs !== undefined ? " · last heartbeat " + Math.round(meta.heartbeatAgeMs / 1000) + "s ago" : "";
-  el.innerHTML = '<span style="flex:1"><span class="dot ok"></span> auditor live' + esc(age) + '</span><span class="dim">commands &amp; window focus · no keystrokes (docs/47)</span>';
+  statEl.innerHTML = '<span class="dot ok"></span> auditor live' + esc(age) + ' <span class="dim">commands &amp; window focus · no keystrokes (docs/47)</span>';
 }
 
 function pollAudit() {
   var box = currentBox;
-  if (box !== auditBox) { auditBox = box; auditSince = 0; $("auditlist").innerHTML = ""; }
+  if (box !== auditBox) {
+    auditBox = box;
+    auditSince = 0;
+    $("auditlist").innerHTML = "";
+    updateAuditProbeCount();
+  }
   var url = "/api/xwatchdog/events?since=" + auditSince + "&limit=500" + (box ? "&boxId=" + encodeURIComponent(box) : "");
   fetch(url).then(function (r) {
     if (r.status === 403) { renderAuditState({ forbidden: true }); stopAudit(); return null; }
@@ -4284,7 +4361,10 @@ function pollAudit() {
     var stick = list.scrollTop + list.clientHeight >= list.scrollHeight - 40;
     var html = "";
     (data.events || []).forEach(function (e) { html += auditRow(e); });
-    if (html) list.insertAdjacentHTML("beforeend", html);
+    if (html) {
+      list.insertAdjacentHTML("beforeend", html);
+      updateAuditProbeCount();
+    }
     if (typeof data.next_seq === "number" && data.next_seq > auditSince) auditSince = data.next_seq;
     // Cap the DOM so a long session does not grow without bound.
     while (list.children.length > 1000) list.removeChild(list.firstChild);

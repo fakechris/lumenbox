@@ -27,6 +27,38 @@ func TestParseSnoopyLine(t *testing.T) {
 	if ev.Window != "tty:/dev/pts/0" {
 		t.Fatalf("expected window tty:/dev/pts/0, got %s", ev.Window)
 	}
+	if ev.Source != "user" {
+		t.Fatalf("expected source 'user', got %s", ev.Source)
+	}
+	if ev.Probe {
+		t.Fatalf("expected probe false, got true")
+	}
+
+	// Probe line
+	probeLine := "time=2026-09-09 09:30:16 | uid=1000 | user=box | tty=none | pwd=/home/box | pid=124 | ppid=456 | cmd=tr \\0 \\n"
+	probeEv := ParseSnoopyLine(probeLine)
+	if probeEv == nil {
+		t.Fatal("expected parsed probe event, got nil")
+	}
+	if !probeEv.Probe {
+		t.Fatalf("expected probe true for tr \\0 \\n")
+	}
+	if probeEv.Source != "system" {
+		t.Fatalf("expected source 'system' for probe event, got %s", probeEv.Source)
+	}
+
+	// Agent tool line (tty=none, non-probe)
+	agentLine := "time=2026-09-09 09:30:17 | uid=1000 | user=box | tty=none | pwd=/home/box/work | pid=125 | ppid=456 | cmd=pytest"
+	agentEv := ParseSnoopyLine(agentLine)
+	if agentEv == nil {
+		t.Fatal("expected parsed agent event, got nil")
+	}
+	if agentEv.Probe {
+		t.Fatalf("expected probe false for pytest")
+	}
+	if agentEv.Source != "agent" {
+		t.Fatalf("expected source 'agent' for agent tool, got %s", agentEv.Source)
+	}
 }
 
 func TestTailSnoopyLog(t *testing.T) {
@@ -65,4 +97,50 @@ func TestTailSnoopyLog(t *testing.T) {
 	}
 
 	_ = f.Close()
+}
+
+func TestIsProbeCommand(t *testing.T) {
+	probes := []string{
+		"tr \\0 \\n",
+		"tr '\\0' '\\n'",
+		"grep -Fqx DISPLAY=:1",
+		"grep -Fqxz DISPLAY=:1 /proc/123/environ",
+		"pgrep -f -- pcmanfm --desktop",
+		"pgrep -f xwatchdog",
+		"pgrep -f autocutsel",
+		"xdpyinfo -display :1",
+	}
+	for _, p := range probes {
+		if !IsProbeCommand(p) {
+			t.Errorf("expected IsProbeCommand(%q) to be true", p)
+		}
+	}
+
+	nonProbes := []string{
+		"git status",
+		"npm test",
+		"python3 app.py",
+		"tr a-z A-Z",
+		"grep foo bar.txt",
+	}
+	for _, np := range nonProbes {
+		if IsProbeCommand(np) {
+			t.Errorf("expected IsProbeCommand(%q) to be false", np)
+		}
+	}
+}
+
+func TestClassifyExecSource(t *testing.T) {
+	if s := ClassifyExecSource("/dev/pts/1", "ls", "box"); s != "user" {
+		t.Errorf("expected user, got %s", s)
+	}
+	if s := ClassifyExecSource("none", "node hostd.mjs", "hostd"); s != "system" {
+		t.Errorf("expected system, got %s", s)
+	}
+	if s := ClassifyExecSource("none", "tr \\0 \\n", "box"); s != "system" {
+		t.Errorf("expected system for probe, got %s", s)
+	}
+	if s := ClassifyExecSource("none", "pytest tests/", "box"); s != "agent" {
+		t.Errorf("expected agent, got %s", s)
+	}
 }

@@ -53,20 +53,56 @@ func ParseSnoopyLine(line string) *Event {
 		window = "tty:" + tty
 	}
 
+	cmd := fields["cmd"]
+	user := fields["user"]
+	source := ClassifyExecSource(tty, cmd, user)
+	probe := IsProbeCommand(cmd)
+
 	return &Event{
 		Type:   TypeExec,
 		Time:   isoTime,
+		Source: source,
+		Probe:  probe,
 		Window: window,
 		Detail: map[string]any{
-			"cmd":  fields["cmd"],
+			"cmd":  cmd,
 			"pwd":  fields["pwd"],
-			"user": fields["user"],
+			"user": user,
 			"uid":  uid,
 			"tty":  tty,
 			"pid":  pid,
 			"ppid": ppid,
 		},
 	}
+}
+
+// IsProbeCommand checks if an exec command is an internal repetitive system supervisor health probe.
+func IsProbeCommand(cmd string) bool {
+	c := strings.TrimSpace(cmd)
+	if strings.HasPrefix(c, "tr \\0 \\n") || strings.HasPrefix(c, "tr '\\0' '\\n'") || strings.HasPrefix(c, "tr \"\\0\" \"\\n\"") {
+		return true
+	}
+	if strings.HasPrefix(c, "grep") && strings.Contains(c, "DISPLAY=") {
+		return true
+	}
+	if strings.HasPrefix(c, "pgrep") && (strings.Contains(c, "pcmanfm") || strings.Contains(c, "xwatchdog") || strings.Contains(c, "autocutsel") || strings.Contains(c, "Xvfb")) {
+		return true
+	}
+	if strings.HasPrefix(c, "xdpyinfo -display") {
+		return true
+	}
+	return false
+}
+
+// ClassifyExecSource determines whether an exec event originated from human user, agent tool, or system daemon.
+func ClassifyExecSource(tty string, cmd string, user string) string {
+	if tty != "" && tty != "none" && (strings.Contains(tty, "pts") || strings.Contains(tty, "tty")) {
+		return "user"
+	}
+	if IsProbeCommand(cmd) || user == "hostd" {
+		return "system"
+	}
+	return "agent"
 }
 
 // TailSnoopyLog tails a file and feeds parsed events to store.
