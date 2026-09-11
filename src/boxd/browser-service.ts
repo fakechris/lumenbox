@@ -458,6 +458,13 @@ class BrowserPage {
   private snapshotSeq = 0;
   /** The id of the last outline taken, or undefined before the first. */
   snapshotId: string | undefined;
+  /**
+   * Main-frame navigations seen, counted from `Page.frameStartedLoading`. What `act`
+   * compares before and after: the first version read the `loaded` flag, which `click`
+   * itself clears before dispatching, so every click on a page that went nowhere was
+   * reported as "navigated" — seen on the live box on the day it shipped.
+   */
+  navigations = 0;
   private lastDialog: string | undefined;
   lastDownload: string | undefined;
   private loaded = false;
@@ -484,6 +491,7 @@ class BrowserPage {
       if (params.frameId === page.mainFrameId) {
         page.navigating = true;
         page.loaded = false;
+        page.navigations += 1;
       }
     });
     session.on("Page.loadEventFired", () => {
@@ -850,11 +858,6 @@ class BrowserPage {
     } catch {
       return undefined;
     }
-  }
-
-  /** Whether the main frame started a navigation since the flag was last cleared. */
-  get navigatedSince(): boolean {
-    return this.navigating || !this.loaded;
   }
 
   /** The visible text of the page, for `expect.appears`. Bounded like read(). */
@@ -1478,6 +1481,7 @@ export class BrowserService {
     // the find, so it is the element that will be acted on; a target that cannot be read is
     // simply unmeasured, never a refusal.
     const before = needsRef && ref !== undefined ? await page.targetStateAfter(ref) : undefined;
+    const navigationsBefore = page.navigations;
     switch (action) {
       case "click":
         await page.click(ref!, options.confirmed === true);
@@ -1494,8 +1498,9 @@ export class BrowserService {
       default:
         throw new CdpError(`${action} is not something this does: click, type, key or hover.`);
     }
-    const navigated = page.navigatedSince;
     const result = await this.settled(display, await page.report());
+    // Judged after the settle, which is when a navigation the click started has begun.
+    const navigated = page.navigations > navigationsBefore;
     if (before === undefined || ref === undefined) {
       if (options.expect !== undefined) {
         const unmet = unmetExpectation(options.expect, undefined, await page.visibleText());

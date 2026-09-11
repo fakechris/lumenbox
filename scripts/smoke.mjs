@@ -551,7 +551,10 @@ await check("a point read off a window capture can be clicked", async () => {
 await check("a desktop refuses input from another agent", async () => {
   // Demonstrated before it was fixed: an agent can read BOXD_TOKEN's power through the
   // daemon and name any display, so one agent could type into another's screen.
-  const claimed = 7;
+  // High, so it cannot collide with a real agent's desktop: with twenty-odd agents the
+  // low numbers are all taken, and this check then failed on "already bound" — its own
+  // premise, misread as a regression.
+  const claimed = 30;
   await box.ensureDisplay(claimed, "owner-alpha");
 
   const mine = await box.computer([{ action: "cursor_position" }], {
@@ -816,7 +819,7 @@ await check("a second agent is refused the display", async () => {
     assert(!refused.images, "the refused agent still received an image");
     assert(/SmokeHolder/.test(refused.text), "refusal does not name the holder");
 
-    display.release(first.id);
+    display.releaseAll(first.id);
     const afterRelease = await dispatchTool(
       "computer",
       { actions: [{ action: "screenshot" }] },
