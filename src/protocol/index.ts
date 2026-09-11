@@ -492,6 +492,34 @@ export interface DisplayInfo {
   user_until?: string;
 }
 
+/** A demonstration the box recorded while a person held a desktop (INV-405). */
+export interface TeachQueueEntry {
+  id: string;
+  sessionDir: string;
+  display: number;
+  startedAt: string;
+  endedAt?: string;
+  videoPath?: string;
+  leaseUntil?: string;
+}
+
+export interface TeachQueueList {
+  pending: TeachQueueEntry[];
+  claimed: TeachQueueEntry[];
+  /** Desktops a session is being recorded on right now. */
+  recording: number[];
+}
+
+export interface TeachClaimResult {
+  entry?: TeachQueueEntry;
+}
+
+export interface TeachDoneRequest {
+  id: string;
+  /** Remove the video once the teaching turn has what it needs. */
+  delete_video?: boolean;
+}
+
 /** A person taking a desktop over, or handing it back (INV-404). */
 export interface DisplayControlRequest {
   index: number;

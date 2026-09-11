@@ -763,6 +763,29 @@ export class X11Executor {
    * position it cannot read means it skips nothing, which is the behaviour that existed
    * before. A failed query must never be worse than not asking.
    */
+  /**
+   * Where the pointer is, in API space, and the window under it with its title — what a
+   * demonstration records for a click (INV-405). Throws when X cannot say.
+   */
+  async pointerWithWindow(): Promise<{ x: number; y: number; window?: string; title?: string }> {
+    const at = await this.pointerLocation();
+    if (at === undefined) throw new Error("Failed to read cursor position from xdotool");
+    const api = this.scaler.displayToApi(at.x, at.y);
+    let window: string | undefined;
+    let title: string | undefined;
+    try {
+      const out = await this.xdotool("getmouselocation --shell");
+      const id = /WINDOW=(\d+)/.exec(out)?.[1];
+      if (id !== undefined && id !== "0") {
+        window = `0x${Number(id).toString(16).padStart(8, "0")}`;
+        title = (await this.xdotool(`getwindowname ${id}`)).trim();
+      }
+    } catch {
+      // The click is still recorded; the window is nice to have.
+    }
+    return { x: api.x, y: api.y, ...(window !== undefined ? { window } : {}), ...(title !== undefined && title !== "" ? { title } : {}) };
+  }
+
   protected async pointerLocation(): Promise<{ x: number; y: number } | undefined> {
     try {
       const output = await this.xdotool("getmouselocation --shell");

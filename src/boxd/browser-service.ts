@@ -1456,6 +1456,20 @@ export class BrowserService {
     return { ...result, pages: list };
   }
 
+  /**
+   * The current outline if a browser is already open on this desktop, else undefined.
+   * For the teach recorder (INV-405): it must never *start* a browser on a person's screen.
+   */
+  async snapshotIfOpen(display: number): Promise<BrowserResult | undefined> {
+    try {
+      await listTargets(portForDisplay(display));
+    } catch {
+      return undefined;
+    }
+    const page = await this.pageFor(display);
+    return page.report();
+  }
+
   async snapshot(display: number): Promise<BrowserResult> {
     const page = await this.pageFor(display);
     // Drift is judged against what the agent last saw, before `settled` records this look.
