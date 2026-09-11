@@ -8,6 +8,7 @@ test("failures are classed by what a person reads in the message, unknown otherw
   assert.equal(classifyFailure("fetch failed: ECONNRESET"), "network");
   assert.equal(classifyFailure("401 unauthorized: invalid api key"), "auth");
   assert.equal(classifyFailure("prompt is too long: 210000 tokens > 200000 maximum"), "context_overflow");
+  assert.equal(classifyFailure('400 {"type":"error","error":{"type":"invalid_request_error","message":"invalid params, context window exceeds limit (2013)"}}'), "context_overflow");
   assert.equal(classifyFailure("bash: permission denied"), "permission_denied");
   assert.equal(classifyFailure("npm test exited 1"), "tool_error");
   assert.equal(classifyFailure("something odd"), "unknown");

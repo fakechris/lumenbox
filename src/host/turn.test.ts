@@ -22,6 +22,7 @@ import { HookRunner } from "./hooks.ts";
 import type { BoxClient } from "../box/client.ts";
 import { DisplayLease } from "../box/display-lease.ts";
 import {
+  classifyOverflow,
   isTruncatedByContext,
   runTurn,
   storableResult,
@@ -945,6 +946,119 @@ test("a turn that overflows mid-way sheds screenshots and finishes", async () =>
     // And every request that was actually accepted was within the provider's limit.
     const accepted = capture.params.filter(params => imagesIn(params) <= 2);
     assert.ok(accepted.length > 0);
+  } finally {
+    DEFAULT_POLICY.triggerTokens = previousTrigger;
+    cleanup();
+  }
+});
+
+test("classifyOverflow recognizes MiniMax and standard context window errors", () => {
+  assert.equal(
+    classifyOverflow(
+      new Error(
+        '400 {"type":"error","error":{"type":"invalid_request_error","message":"invalid params, context window exceeds limit (2013)"},"request_id":"06f19a6acde5861557ae9996ecf863c7"}'
+      )
+    ),
+    "context-window"
+  );
+  assert.equal(classifyOverflow(new Error("context_window_exceeded")), "context-window");
+  assert.equal(classifyOverflow(new Error("prompt is too long")), "context-window");
+  assert.equal(classifyOverflow(new Error("context length exceeded")), "context-window");
+  assert.equal(classifyOverflow(new Error("too many images or documents")), "too-many-images");
+  assert.equal(classifyOverflow(new Error("rate limit reached")), undefined);
+});
+
+test("a turn that overflows mid-way on context window sheds tool results and finishes", async () => {
+  const { registry, cleanup } = fixture();
+  const previousTrigger = DEFAULT_POLICY.triggerTokens;
+  try {
+    const ada = registry.create({ name: "Ada" });
+    const bus = new AgentBus(registry, async () => {});
+    const { box } = stubBox();
+    const capture: Capture = { params: [] };
+
+    // High, so the proactive guard does not fire and the *reactive* path is what is under test.
+    DEFAULT_POLICY.triggerTokens = 10_000_000;
+
+    const longOutput = "Search result details ".repeat(40);
+    const boxWithLongOutput = {
+      ...box,
+      exec: async () => ({
+        stdout: longOutput,
+        stderr: "",
+        exit_code: 0,
+        timed_out: false,
+      }),
+    } as unknown as BoxClient;
+
+    const replies: Anthropic.Message[] = [
+      message([toolUseBlock("bash", { command: "search" }, "toolu_1")], "tool_use"),
+      message([textBlock("done with search")]),
+    ];
+
+    let rejectedOnce = false;
+    const client = fakeModel(
+      ({ params }) => {
+        const hasLongToolResult = params.messages.some(
+          msg =>
+            Array.isArray(msg.content) &&
+            msg.content.some(
+              (block: unknown) =>
+                (block as { type?: string }).type === "tool_result" &&
+                Array.isArray((block as { content?: unknown }).content) &&
+                ((block as { content: unknown[] }).content).some(
+                  (part: unknown) =>
+                    typeof (part as { text?: unknown }).text === "string" &&
+                    ((part as { text: string }).text).length > 500 &&
+                    !((part as { text: string }).text).includes("truncated to fit the context window")
+                )
+            )
+        );
+        if (hasLongToolResult && !rejectedOnce) {
+          rejectedOnce = true;
+          throw new Error(
+            '400 {"type":"error","error":{"type":"invalid_request_error","message":"invalid params, context window exceeds limit (2013)"},"request_id":"06f19a6acde5861557ae9996ecf863c7"}'
+          );
+        }
+        return replies[params.messages.length > 2 ? 1 : 0]!;
+      },
+      { capture }
+    );
+
+    const events: { type: string; detail?: string }[] = [];
+    await runTurn(
+      ada,
+      [{ id: "m-test", fromId: "user", fromName: "user", text: "do search", priority: false, receivedAt: "" }],
+      new AbortController().signal,
+      {
+        client,
+        registry,
+        bus,
+        box: boxWithLongOutput,
+        resolution: undefined,
+        displayIndex: 1,
+        onEvent: event => events.push(event as { type: string }),
+      }
+    );
+
+    const texts = (registry.readTranscript(ada.id) as TranscriptEntry[]).filter(
+      entry => !("kind" in entry)
+    );
+    assert.ok(
+      JSON.stringify(texts).includes("done with search"),
+      "the turn recovered from context window overflow and finished"
+    );
+
+    const shed = events.filter(event => event.type === "compacted");
+    assert.ok(shed.length > 0, "the recovery is reported");
+    assert.ok(
+      shed.some(event => (event.detail ?? "").includes("context-window")),
+      `the reason survives: ${JSON.stringify(shed.map(event => event.detail))}`
+    );
+    assert.ok(
+      JSON.stringify(capture.params).includes("truncated to fit the context window"),
+      "the retried request carried the truncated tool result"
+    );
   } finally {
     DEFAULT_POLICY.triggerTokens = previousTrigger;
     cleanup();

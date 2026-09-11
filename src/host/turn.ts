@@ -148,7 +148,7 @@ const MAX_SHED_ATTEMPTS = envNumber("AGENTBOX_MAX_SHED_ATTEMPTS", 3);
 const FILED_ANSWER_FLOOR = 80;
 
 /** What kind of "too big" a provider is complaining about, or undefined if it is not that. */
-type Overflow = "context-window" | "too-many-images";
+export type Overflow = "context-window" | "too-many-images";
 
 /**
  * Reads a provider error for the two distinct ways a request can be too large.
@@ -162,7 +162,7 @@ type Overflow = "context-window" | "too-many-images";
  * with unrelated failures, and an over-broad match here would turn a genuine bug into a silent
  * retry. Hence the specific phrases rather than a search for "token" or "large".
  */
-function classifyOverflow(error: unknown): Overflow | undefined {
+export function classifyOverflow(error: unknown): Overflow | undefined {
   const message = (error instanceof Error ? error.message : String(error)).toLowerCase();
   const imagePhrases = [
     "too many images",
@@ -173,6 +173,8 @@ function classifyOverflow(error: unknown): Overflow | undefined {
   if (imagePhrases.some(phrase => message.includes(phrase))) return "too-many-images";
 
   const contextPhrases = [
+    "context window",
+    "context_window",
     "prompt is too long",
     "context length",
     "context_length_exceeded",
