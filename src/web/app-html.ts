@@ -2357,7 +2357,9 @@ function renderSpend(data) {
       : "");
 
   var sections = [];
-  ["byKind", "byAgent", "byModel"].forEach(function (key) {
+  // Place first: which box and which door burn the money is the question a person
+  // running several teams asks before which model does (INV-431).
+  ["byBox", "byDoor", "byKind", "byAgent", "byModel"].forEach(function (key) {
     var rows = report[key] || [];
     if (rows.length < 2) return;
     var label = key.slice(2).toLowerCase();

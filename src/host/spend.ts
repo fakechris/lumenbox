@@ -19,7 +19,7 @@
  * and an empty window says so rather than reporting a confident zero.
  */
 
-import type { UsageRecord, UsageTotals } from "./usage.ts";
+import { UNATTRIBUTED, type UsageRecord, type UsageTotals } from "./usage.ts";
 
 /**
  * What a model costs, per million tokens.
@@ -62,6 +62,9 @@ export interface SpendReport {
   byKind: { kind: string; totals: UsageTotals }[];
   byAgent: { agent: string; totals: UsageTotals }[];
   byModel: { model: string; totals: UsageTotals }[];
+  /** By place: which box, and which door, the spend came through (INV-431). */
+  byBox: { box: string; totals: UsageTotals }[];
+  byDoor: { door: string; totals: UsageTotals }[];
   /** Money, only when every model in the window had a rate. See `unpriced`. */
   money?: number;
   /** Models seen with no rate configured. Non-empty means `money` is withheld. */
@@ -182,6 +185,8 @@ export function summariseSpend(records: readonly UsageRecord[], query: SpendQuer
     byKind: group(selected, record => record.kind ?? "unattributed", "kind"),
     byAgent: group(selected, record => record.agentName, "agent"),
     byModel: group(selected, record => record.model, "model"),
+    byBox: group(selected, record => record.box ?? UNATTRIBUTED, "box"),
+    byDoor: group(selected, record => record.door ?? UNATTRIBUTED, "door"),
     ...(money !== undefined ? { money } : {}),
     unpriced,
     compacted: query.compacted === true,

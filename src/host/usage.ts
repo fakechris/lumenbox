@@ -58,6 +58,15 @@ export interface UsageRecord {
   /** Which thread it ran in. A fork child has its own, which is what makes one costable. */
   conversation?: string;
   /**
+   * The box the agent lives in, by name, and the door the conversation came through
+   * (INV-431, docs/50 J2). The two cuts Claude Tag's dashboard leads with — "which
+   * workspace, which channel burns the money" — and the two this ledger could not answer:
+   * every row carried an agent and a thread, and neither is a place. Optional because
+   * rows from before keep replaying; those read as "unattributed", never as a place.
+   */
+  box?: string;
+  door?: string;
+  /**
    * The attempt, as opposed to the work — and the key the task board already writes down.
    *
    * `workId` is the right thing to *group* by and the wrong thing to join a task on: every

@@ -191,3 +191,42 @@ test("an empty window has no cost, not a cost of zero", () => {
   assert.equal(report.money, undefined);
   assert.doesNotMatch(describeSpend(report).join("\n"), /\$/);
 });
+
+// ── by place: which box, which door (INV-431) ─────────────────────────────────────
+import { UNATTRIBUTED } from "./usage.ts";
+import { doorOf } from "./turn.ts";
+
+test("a report cuts spend by box and by door, heaviest first, and names the unattributed rows", () => {
+  const row = (over: Partial<UsageRecord>): UsageRecord =>
+    ({
+      seq: 1,
+      at: "2026-09-11T10:00:00.000Z",
+      agentId: "a",
+      agentName: "Ada",
+      kind: "turn",
+      model: "m",
+      inputTokens: 10,
+      outputTokens: 100,
+      cacheReadTokens: 0,
+      cacheWriteTokens: 0,
+      ...over,
+    }) as UsageRecord;
+  const report = summariseSpend(
+    [
+      row({ box: "grok", door: "feishu", outputTokens: 500 }),
+      row({ box: "agentbox", door: "web", outputTokens: 100 }),
+      row({ box: "grok", door: "dingtalk", outputTokens: 50 }),
+      row({ outputTokens: 7 }),
+    ],
+    {}
+  );
+  assert.deepEqual(report.byBox.map(r => [r.box, r.totals.outputTokens]), [["grok", 550], ["agentbox", 100], [UNATTRIBUTED, 7]]);
+  assert.deepEqual(report.byDoor.map(r => [r.door, r.totals.outputTokens]), [["feishu", 500], ["web", 100], ["dingtalk", 50], [UNATTRIBUTED, 7]]);
+});
+
+test("the door of a conversation is the channel it came through, or the web", () => {
+  assert.equal(doorOf("main"), "web");
+  assert.equal(doorOf("feishu-oc_room-om_topic"), "feishu");
+  assert.equal(doorOf("dingtalk-cid123"), "dingtalk");
+  assert.equal(doorOf("odd"), "odd");
+});
