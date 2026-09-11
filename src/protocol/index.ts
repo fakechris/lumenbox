@@ -659,6 +659,11 @@ export interface BrowserRequest {
   snapshot?: string;
   /** For `act`: find the element by what it is, instead of (or as a fallback for) a ref. */
   find?: { role?: string; name?: string; nth?: number };
+  /**
+   * For `act`: a person has approved this exact action, so the box's irreversible-action
+   * check is satisfied. Set by the host after the policy gate said so; never by the model.
+   */
+  confirmed?: boolean;
 }
 
 export interface BrowserResponse {

@@ -653,3 +653,55 @@ test("a stale outline is refused, not failed; a browser-side error is failed, no
   const failed = await dispatchTool("browser_act", { action: "click", ref: "e2b" }, covered);
   assert.match(failed.text, /^Outcome: failed — That click would land on/);
 });
+
+// ── the box refuses an irreversible click; the gate decides (INV-401) ─────────────
+test("an irreversible click waits for a person, and runs confirmed once one has said yes", async () => {
+  const requests: BrowserRequest[] = [];
+  const checks: Record<string, unknown>[] = [];
+  let allow = false;
+  const box = {
+    browser: async (request: BrowserRequest) => {
+      requests.push(request);
+      if (request.confirmed !== true) throw new BoxError('IRREVERSIBLE: pay or order: click button "立即支付"', 428);
+      return { url: "https://shop.test/pay", title: "Pay", snapshot: "- heading \"Paid\"", snapshot_id: "s4" };
+    },
+  };
+  const context = {
+    ...boxContext(box),
+    policy: {
+      check: (request: Record<string, unknown>) => {
+        checks.push(request);
+        // The ordinary dispatch check passes (browser_act is on no list); only the
+        // irreversible finding makes the gate ask.
+        if (request.irreversible === undefined || allow) return { allow: true };
+        return { allow: false, reason: "Waiting for a person to approve: Ada: browser_act — pay or order…" };
+      },
+    },
+  } as unknown as Parameters<typeof dispatchTool>[2];
+
+  const waiting = await dispatchTool("browser_act", { action: "click", ref: "e2b", snapshot: "s3" }, context);
+  assert.match(waiting.text, /^Outcome: refused — Waiting for a person to approve/);
+  assert.equal(waiting.isError, true);
+  // The gate was asked with the box's finding, never with anything the model wrote.
+  assert.equal(checks.length, 2, "the ordinary dispatch check, then the irreversible one");
+  assert.equal(checks[1]?.irreversible, 'pay or order: click button "立即支付"');
+  assert.equal(requests.length, 1, "nothing was clicked");
+
+  // The person approved; the same call goes through, confirmed on the way to the box.
+  allow = true;
+  const done = await dispatchTool("browser_act", { action: "click", ref: "e2b", snapshot: "s3" }, context);
+  assert.match(done.text, /^Outcome: ok\.\n\nSnapshot s4: Pay/);
+  assert.equal(requests[2]?.confirmed, true);
+  assert.equal(requests[1]?.confirmed, undefined, "the first attempt was never confirmed");
+});
+
+test("with no policy gate an irreversible click fails closed, with the finding", async () => {
+  const context = boxContext({
+    browser: async () => {
+      throw new BoxError("IRREVERSIBLE: delete or remove: click button \"Delete\"", 428);
+    },
+  });
+  const result = await dispatchTool("browser_act", { action: "click", ref: "e1" }, context);
+  assert.match(result.text, /^Outcome: refused — delete or remove: click button "Delete"\. A person has to approve/);
+  assert.equal(result.isError, true);
+});

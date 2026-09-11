@@ -181,6 +181,62 @@ export function staleReason(
   return undefined;
 }
 
+/**
+ * The click would do something a person has to say yes to.
+ *
+ * Deterministic and outside the model, which is the point (docs/49 B1, huashu-chrome's
+ * payment gate): a prompt can be talked out of caution by the page it is reading; a word
+ * list in the box cannot. Answered as HTTP 428 so the host routes it to the policy gate
+ * and comes back with `confirmed` once a person has read what it is.
+ */
+export class IrreversibleActionError extends CdpError {}
+
+/** What the box reads off a click target before deciding whether to ask. */
+export interface ClickTarget {
+  /** The button's own words: aria-label, value, or text. */
+  text: string;
+  /** Role or tag, for the message. */
+  role?: string;
+  /** The text of the form, dialog or section the target sits in, for the money check. */
+  nearby: string;
+}
+
+const PAY_WORDS =
+  /\b(pay(?: now)?|checkout|check out|place (?:your )?order|buy now|purchase|subscribe|confirm (?:order|purchase|payment)|transfer|withdraw|top up)\b|支付|付款|立即购买|下单|结算|购买|订购|充值|转账|提现|续费/i;
+const PUBLISH_WORDS = /\b(publish|go live|post now)\b|发布|上线|投稿/i;
+const DELETE_WORDS =
+  /\b(delete|remove|destroy|erase|wipe|uninstall|deactivate|close (?:my )?account|permanently)\b|删除|移除|清空|销毁|注销|永久/i;
+const AUTHORIZE_WORDS = /\b(authori[sz]e|grant access|allow access|connect account|approve)\b|授权|允许访问|绑定/i;
+/** A generic yes, which means whatever the surrounding text says it means. */
+const GENERIC_YES = /^\s*(ok|okay|yes|confirm|continue|proceed|确认|确定|继续|好的|是)\s*$/i;
+const MONEY =
+  /(?:[¥￥$€£]|\b(?:RMB|CNY|USD|EUR|GBP)\b)\s?\d[\d,]*(?:\.\d+)?|\d[\d,]*(?:\.\d+)?\s?(?:元|美元|欧元|英镑|块钱|USD|CNY|RMB)\b/i;
+
+/**
+ * Why a click needs a person, or undefined when it does not.
+ *
+ * Four families by the target's own words, plus the shape the words miss: a bare
+ * "Confirm" or "OK" whose form shows an amount. Send and submit are deliberately absent —
+ * they are most of what a bot does all day, and a gate that fires on every message is a
+ * gate people switch off.
+ */
+export function irreversibleReason(target: ClickTarget): string | undefined {
+  const words = target.text.trim();
+  if (words === "") return undefined;
+  const what = `${target.role ?? "element"} ${JSON.stringify(words.slice(0, 60))}`;
+  if (PAY_WORDS.test(words)) return `pay or order: click ${what}`;
+  if (PUBLISH_WORDS.test(words)) return `publish: click ${what}`;
+  if (DELETE_WORDS.test(words)) return `delete or remove: click ${what}`;
+  if (AUTHORIZE_WORDS.test(words)) return `authorise or grant access: click ${what}`;
+  if (GENERIC_YES.test(words)) {
+    const amount = MONEY.exec(target.nearby);
+    if (amount !== null) {
+      return `confirm with money on the page: click ${what} next to ${JSON.stringify(amount[0].trim())}`;
+    }
+  }
+  return undefined;
+}
+
 export interface BrowserResult {
   url: string;
   title: string;
@@ -575,9 +631,16 @@ class BrowserPage {
     };
   }
 
-  async click(ref: string): Promise<void> {
+  async click(ref: string, confirmed = false): Promise<void> {
     const objectId = await this.resolve(ref);
     const { x, y } = await this.centreOf(objectId);
+
+    // Before anything is dispatched: what the click would do. A person's consent is asked
+    // for by the host on a 428, and the same call comes back with `confirmed`.
+    if (!confirmed) {
+      const reason = irreversibleReason(await this.describeTarget(objectId));
+      if (reason !== undefined) throw new IrreversibleActionError(`IRREVERSIBLE: ${reason}`);
+    }
 
     // What is actually on top at that point. A cookie wall or a modal changes none of the
     // things visibility is tested on — it is not hidden, the element under it still has a
@@ -623,6 +686,29 @@ class BrowserPage {
     }
   }
 
+  /** The target's own words and the text around it, for `irreversibleReason`. */
+  private async describeTarget(objectId: string): Promise<ClickTarget> {
+    const described = (await this.session.send("Runtime.callFunctionOn", {
+      objectId,
+      returnByValue: true,
+      functionDeclaration:
+        "function(){ const t = this;" +
+        " const own = (t.getAttribute && (t.getAttribute('aria-label') || t.getAttribute('title'))) ||" +
+        "   (t.tagName && t.tagName.toLowerCase() === 'input' ? t.value : '') || t.textContent || '';" +
+        " const role = (t.getAttribute && t.getAttribute('role')) || (t.tagName || '').toLowerCase();" +
+        " const scope = t.closest ? (t.closest('form,[role=dialog],dialog,[role=alertdialog],section,article,main') || t.parentElement) : null;" +
+        " const nearby = scope ? (scope.innerText || scope.textContent || '') : '';" +
+        " return JSON.stringify({ text: String(own).replace(/\\s+/g, ' ').trim().slice(0, 200)," +
+        "   role: role, nearby: String(nearby).replace(/\\s+/g, ' ').trim().slice(0, 1500) }); }",
+    })) as { result?: { value?: string } };
+    try {
+      const parsed = JSON.parse(described.result?.value ?? "{}") as Partial<ClickTarget>;
+      return { text: parsed.text ?? "", role: parsed.role, nearby: parsed.nearby ?? "" };
+    } catch {
+      return { text: "", nearby: "" };
+    }
+  }
+
   async hover(ref: string): Promise<void> {
     const objectId = await this.resolve(ref);
     const { x, y } = await this.centreOf(objectId);
@@ -632,8 +718,9 @@ class BrowserPage {
   async type(ref: string, text: string, replace: boolean): Promise<void> {
     const objectId = await this.resolve(ref);
     await this.session.send("DOM.focus", { objectId }).catch(async () => {
-      // Not everything focusable through a click is focusable through DOM.focus.
-      await this.click(ref);
+      // Not everything focusable through a click is focusable through DOM.focus. Confirmed:
+      // the click is to focus a field, not to press what the field is.
+      await this.click(ref, true);
     });
     if (replace) {
       await this.session.send("Runtime.callFunctionOn", {
@@ -1023,6 +1110,7 @@ export class BrowserService {
       replace?: boolean;
       snapshot?: string;
       find?: { role?: string; name?: string; nth?: number };
+      confirmed?: boolean;
     }
   ): Promise<BrowserResult> {
     const page = await this.pageFor(display);
@@ -1042,7 +1130,7 @@ export class BrowserService {
     }
     switch (action) {
       case "click":
-        await page.click(ref!);
+        await page.click(ref!, options.confirmed === true);
         break;
       case "hover":
         await page.hover(ref!);

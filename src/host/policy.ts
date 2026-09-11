@@ -68,6 +68,14 @@ export type PolicyRequest =
          */
         ask?: true;
       };
+      /**
+       * What the box found the action would do that cannot be undone — "click the button
+       * \"立即支付\" in a form totalling ¥1,299" — when it refused to do it unasked (INV-401).
+       * Set by the host after the box's deterministic check, never by the model: it forces
+       * an approval whatever the configured lists say, and the description the person reads
+       * (and the fingerprint binds) carries it, so consent is to *that* button on *that* page.
+       */
+      irreversible?: string;
     };
 
 export type PolicyDecision =
@@ -575,6 +583,9 @@ export class PolicyGate {
     // the one tool that runs outside the box, and an operator turning it off is done
     // by not enabling it at all, not by trusting an empty approval list.
     if (request.tool === "RunOnHost") return true;
+    // The box saw a payment, a publish, a delete, an authorisation. Not configurable off:
+    // the operator's lists say which tools always ask; this says this call must.
+    if (request.irreversible !== undefined) return true;
     if (this.limits.approvalRequiredTools.includes(request.tool)) return true;
     const command = typeof request.input.command === "string" ? request.input.command : "";
     if (command === "") return false;
@@ -858,7 +869,12 @@ export function describeRequest(request: PolicyRequest): string {
         return `${request.agentName}: ${request.tool} via delegated job ${request.delegated.jobId ?? "(starting)"} (${bytes} bytes of input, not recorded)`;
       }
       const command = typeof request.input.command === "string" ? request.input.command : undefined;
-      const detail = command ?? JSON.stringify(request.input);
+      // The irreversible finding leads, so the card says what the click *does* before what
+      // the call *is*: "pay ¥1,299" is the thing a person is consenting to.
+      const detail =
+        request.irreversible !== undefined
+          ? `${request.irreversible} — ${JSON.stringify(request.input)}`
+          : (command ?? JSON.stringify(request.input));
       // Said on the card when it is certain, so a person approving `git status && ls` is told the
       // one thing that decides it. Silence otherwise: "not known to be read-only" is not a warning.
       const readOnly =

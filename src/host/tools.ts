@@ -1821,7 +1821,7 @@ function templateStamp(context: ToolContext, path: string, content: string): str
  */
 export function boxErrorOutcome(error: unknown): Outcome | undefined {
   if (!(error instanceof BoxError)) return undefined;
-  if (error.status === 403 || error.status === 409 || error.kind === "refused") return "refused";
+  if (error.status === 403 || error.status === 409 || error.status === 428 || error.kind === "refused") return "refused";
   if (error.kind === "timeout" || error.kind === "crashed" || error.kind === "unreachable") {
     return "unknown";
   }
@@ -3156,8 +3156,7 @@ export async function dispatchTool(
         if (Number.isFinite(input.seconds)) request.seconds = Number(input.seconds);
       }
 
-      try {
-        const result = await box.browser(request);
+      const render = (result: Awaited<ReturnType<BoxClient["browser"]>>): ToolOutcome => {
         if (name === "browser_read") {
           return { text: `${result.url}\n\n${result.text ?? "(the page has no text)"}` };
         }
@@ -3175,10 +3174,43 @@ export async function dispatchTool(
         if (result.dialog !== undefined) parts.push(result.dialog);
         parts.push(result.snapshot);
         return { text: parts.join("\n\n"), ...(outcome === "unknown" ? { isError: true } : {}) };
+      };
+      try {
+        return render(await box.browser(request));
       } catch (error) {
         // A browser error is nearly always actionable — no browser running, a stale ref,
         // an element with no position — so it goes back as text rather than as a throw.
         const message = error instanceof Error ? error.message : String(error);
+        // The box found the click would pay, publish, delete or authorise, and refused to do
+        // it unasked (428). The decision is the policy gate's, made on the box's description
+        // and never on the model's: with a person's grant for this exact action the same
+        // request goes back confirmed; without one the agent is told to wait, and that
+        // asking again does not help until a person answers.
+        if (error instanceof BoxError && error.status === 428) {
+          const finding = message.replace(/^IRREVERSIBLE:\s*/, "");
+          if (context.policy === undefined) {
+            // No gate to ask: fail closed, and let the finding travel so it is read.
+            return {
+              text: outcomeLine("refused", `${finding}. A person has to approve this, and there is no approval channel here`),
+              isError: true,
+            };
+          }
+          const decision = context.policy.check({
+            kind: "tool",
+            agentId: context.agent.id,
+            agentName: context.agent.profile.name,
+            tool: name,
+            input,
+            irreversible: finding,
+          });
+          if (!decision.allow) return { text: outcomeLine("refused", decision.reason), isError: true };
+          try {
+            return render(await box.browser({ ...request, confirmed: true }));
+          } catch (again) {
+            const why = again instanceof Error ? again.message : String(again);
+            return { text: outcomeLine(boxErrorOutcome(again) ?? "failed", why), isError: true };
+          }
+        }
         // An owner refusal is refused; a box that went quiet is unknown; anything the
         // browser itself said (a stale ref, no position) is a plain failure.
         const verdict = outcomeLine(boxErrorOutcome(error) ?? "failed", message);
