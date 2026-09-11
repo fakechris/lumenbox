@@ -64,6 +64,7 @@ import { PolicyGate } from "./policy.ts";
 import { TaskStore, type Task } from "./tasks.ts";
 import { buildAuditPrompt, manifestDiff, MANIFEST_COMMAND, parseManifest } from "./audit.ts";
 import { ScopeStore } from "./scopes.ts";
+import { BundleStore } from "./bundles.ts";
 import { MAIN_CONVERSATION, conversationIdFor } from "../agents/registry.ts";
 import type { HostRunner } from "./host-runner.ts";
 import type { Vault } from "./vault.ts";
@@ -138,6 +139,8 @@ export interface OrchestratorOptions {
   tasks?: TaskStore | null;
   /** The scopes registry. `null` keeps none. */
   scopes?: ScopeStore | null;
+  /** The bundle store; tests pass one over a temp file. */
+  bundles?: BundleStore;
   /**
    * MCP servers whose tools the agents may call. Absent reads the config file; `null`
    * keeps none, which is what a test that must not spawn a child process wants.
@@ -240,6 +243,8 @@ export class Orchestrator {
    */
   readonly tasks: TaskStore | undefined;
   readonly scopes: ScopeStore | undefined;
+  /** Bundles attached to boxes (INV-420). */
+  readonly bundles: BundleStore;
 
   /**
    * Reads Feishu documents with the bot's workspace identity. A field rather than an
@@ -637,6 +642,7 @@ export class Orchestrator {
     if (this.tasks !== undefined) this.tasks.onChange(task => this.maybeAudit(task));
     if (this.tasks !== undefined) this.tasks.onChange(task => this.maybeLearnFrom(task));
     this.scopes = options.scopes === null ? undefined : (options.scopes ?? new ScopeStore());
+    this.bundles = options.bundles ?? new BundleStore();
     this.mcpFromConfig = options.mcp === undefined;
     this.mcp =
       options.mcp === null || options.mcp === undefined
@@ -1251,6 +1257,7 @@ export class Orchestrator {
       vault: this.options.vault,
       tasks: this.tasks,
       scopes: this.scopes,
+      bundles: this.bundles,
       mcp: this.mcp,
       askUser: this.options.askUser,
       askSecret: this.options.askSecret,

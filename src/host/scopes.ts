@@ -1,4 +1,10 @@
 /**
+ * **Deprecated since INV-420: attached to the wrong subject.** A scope hangs off an agent or a
+ * chat, and docs/22 §3 retired both. Its replacement is the Bundle (`bundles.ts`), attached to
+ * the installation and to boxes. `agentbox bundle migrate` turns this file into bundles; until
+ * that has run on an installation, scopes are still honoured here so nothing loses a grant
+ * overnight.
+ *
  * A Scope: the authority an agent has, as one named object instead of five settings.
  *
  * An agent's power was scattered — a tool allowlist on its profile, secret grants in

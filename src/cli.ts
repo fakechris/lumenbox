@@ -12,6 +12,8 @@ import { createInterface } from "node:readline/promises";
 import { fileURLToPath } from "node:url";
 import type { BusEvent } from "./agents/bus.ts";
 import { AgentRegistry, defaultAgentsRoot } from "./agents/registry.ts";
+import { BundleStore, planMigration } from "./host/bundles.ts";
+import { ScopeStore } from "./host/scopes.ts";
 import { attachedBox } from "./box/boxes.ts";
 import {
   BACKUP_CARRIES,
@@ -575,6 +577,65 @@ function cmdBoxList(): number {
  * process: importing starts a turn on a box that is already someone's, and two hosts on one
  * state directory is the collision docs/17 forbids. The token is the UI's own.
  */
+/**
+ * `agentbox bundle list` and `agentbox bundle migrate [--write]` (INV-420).
+ *
+ * Migration is a plan first: it prints every scope → bundle, every attachment it would
+ * make and everything it drops, and writes nothing without `--write`. Local files only —
+ * scopes.json, bundles.json, the agent roster — so it runs with the web down.
+ */
+function cmdBundle(argv: string[]): number {
+  const [sub, ...flags] = argv;
+  const bundles = new BundleStore();
+  if (sub === "list") {
+    const all = bundles.list();
+    const { defaults, boxes } = bundles.attachments();
+    if (all.length === 0) out(dim("No bundles. Run `agentbox bundle migrate` to make them from scopes, or edit bundles.json."));
+    for (const bundle of all) {
+      const parts = [
+        bundle.skills !== undefined ? `skills ${bundle.skills.length}` : "skills all",
+        `secrets ${bundle.secretIds.length}`,
+        `egress ${bundle.egressHosts?.length ?? 0}`,
+        `repos ${bundle.repositories?.length ?? 0}`,
+        bundle.instructions !== undefined ? "instructions" : "",
+      ].filter(Boolean);
+      out(`${bold(bundle.id)}  ${bundle.name}  ${dim(parts.join(", "))}`);
+    }
+    if (defaults.length > 0) out(`${bold("installation")} ← ${defaults.join(", ")}`);
+    for (const [box, ids] of Object.entries(boxes)) out(`${bold(`box ${box}`)} ← ${ids.join(", ")}`);
+    const dangling = bundles.dangling();
+    if (dangling.length > 0) err(`Attached but undefined: ${dangling.join(", ")}`);
+    return 0;
+  }
+  if (sub === "migrate") {
+    const scopes = new ScopeStore().list();
+    const registry = new AgentRegistry();
+    const agents = registry.list().map(record => {
+      let box: { id: string; name: string } | undefined;
+      try {
+        const entry = registry.boxOf(record.id);
+        box = { id: entry.id, name: entry.name };
+      } catch {
+        box = undefined;
+      }
+      return { id: record.id, name: record.profile.name, scopeId: record.profile.scopeId, box };
+    });
+    const existing = { bundles: bundles.list(), ...bundles.attachments() };
+    const { file, report } = planMigration(scopes, agents, existing);
+    if (scopes.length === 0) out(dim("No scopes to migrate."));
+    for (const line of report) out(line);
+    if (!flags.includes("--write")) {
+      out(dim("\nDry run. Add --write to save bundles.json; scopes.json is left in place until you remove it."));
+      return 0;
+    }
+    bundles.save(file);
+    out(`Wrote ${file.bundles.length} bundle(s). Scopes are still honoured until scopes.json is removed.`);
+    return 0;
+  }
+  err(`Unknown bundle command: ${sub ?? "(none)"}. One of: list, migrate [--write].`);
+  return 1;
+}
+
 async function cmdTemplate(argv: string[]): Promise<number> {
   const [sub, ...args] = argv;
   const base = process.env.AGENTBOX_WEB_URL ?? "http://127.0.0.1:7777";
@@ -1278,6 +1339,9 @@ async function main(): Promise<number> {
 
     case "template":
       return cmdTemplate(rest);
+
+    case "bundle":
+      return cmdBundle(rest);
 
     case "chat":
       return cmdChat(rest);
