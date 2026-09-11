@@ -168,6 +168,8 @@ test("a target that changed is confirmed; only focus moving is partial; nothing 
   assert.deepEqual(judgeEffect(state(), state(), false), { effect: "suspected_noop", changed: [] });
   assert.deepEqual(judgeEffect(state(), undefined, false), { effect: "confirmed", changed: ["gone"] });
   assert.deepEqual(judgeEffect(state(), state(), true), { effect: "confirmed", changed: ["navigated"] });
+  // The button looks the same and the list it refreshed re-rendered: confirmed by the page.
+  assert.deepEqual(judgeEffect(state(), state({ focused: true }), false, true), { effect: "confirmed", changed: ["page", "focus"] });
   assert.deepEqual(judgeEffect(state(), state({ aria: "x", disabled: true }), false).changed, ["aria", "disabled"]);
 });
 

@@ -563,19 +563,20 @@ await check("a desktop refuses input from another agent", async () => {
   });
   assert(mine.success, "the owner was refused its own desktop");
 
-  for (const [label, owner] of [["no token", undefined], ["another agent's", "owner-beta"]]) {
-    let refused = false;
-    try {
-      await box.computer([{ action: "type", text: "CROSS-DESKTOP" }], {
-        display: claimed,
-        owner,
-      });
-    } catch (error) {
-      refused = /belongs to another agent/.test(String(error));
-    }
-    assert(refused, `a request with ${label} was allowed onto a claimed desktop`);
+  // Another agent's token is refused. No token at all is the ungated single-user path
+  // by design (displays.ts assertOwner, 2026-08-20): ownership only means something once
+  // a gateway puts an identity on the request, and the host always sends one.
+  let refused = false;
+  try {
+    await box.computer([{ action: "type", text: "CROSS-DESKTOP" }], {
+      display: claimed,
+      owner: "owner-beta",
+    });
+  } catch (error) {
+    refused = /belongs to another agent/.test(String(error));
   }
-  return "owner served, others refused";
+  assert(refused, "a request with another agent's token was allowed onto a claimed desktop");
+  return "owner served, another agent refused";
 });
 
 await check("the desktop can be recorded", async () => {
