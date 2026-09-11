@@ -238,3 +238,43 @@ use case's scenes so each stage ends with a scene that works end to end:
 Still open, small: the compose/deployment packaging itself is written when
 there is a real VM to measure on — a compose file nobody has run is a
 doc-shaped guess, and this codebase does not ship those.
+
+## 6. The six-lens checklist and the baseline, 2026-09-10 (INV-419)
+
+docs/50 read Claude Tag through six lenses and translated it into our primitives (docs/22 §8).
+From here every enterprise-facing change says which lens it serves, and a change that touches
+one is reviewed against the others:
+
+1. **Primitives** — which of the eight (Installation, Box, Door, Agent, Session, Routine,
+   Environment, Bundle) does it add to or alter; does it create a ninth?
+2. **Data** — who owns the record; where in Installation → Box → Agent does it live; what is
+   append-only?
+3. **Product detail** — is the control per place (box) rather than per person?
+4. **Memory** — which shard does it read and write; does it leak across boxes?
+5. **Audit** — which ledger records it; can it be cut by box and by time range?
+6. **Runtime** — which environment runs it; what may it reach on the network?
+
+The baseline, as of the day the plan was written. Update the status column with the PR that
+moves a row; the Involute column is the contract.
+
+| Claude Tag primitive | Ours | Status 2026-09-10 | Involute |
+| --- | --- | --- | --- |
+| Organization | Installation | shipped | — |
+| Workspace + Environment | Box | shipped (docker, attached) | INV-434 (connect codes) |
+| Channel | Door | shipped; no authority by design | INV-429 (name rules, guest) |
+| Session | turn on an agent conversation | shipped | — |
+| Routine | skill with `schedule:`/`trigger:` | shipped | INV-430 (view by box) |
+| Repositories | none | absent | INV-438 (bundle repositories, host box) |
+| Domains | relay allow list, global | partial | INV-423 (per box), INV-432 (events) |
+| Plugins | skills + MCP + connectors + extensions | shipped, installation-wide | INV-439 (per bundle) |
+| Credentials | connector doors on env vars; vault | shipped, no OAuth | INV-422 (OAuth), INV-402 (fill_secret) |
+| Access Bundle | Scope (deprecated) → Bundle | INV-420 in review | INV-420, INV-421 |
+| Custom instructions | per agent only | INV-428 in review | INV-428 |
+| Memory by place | per agent + installation shards | INV-424 in review | INV-424, INV-425, INV-426 |
+| Auto-mode allow rules | PolicyGate grants by fingerprint | partial | INV-427 |
+| Channel name rules / guest | knock/bind for people | partial | INV-429 |
+| Audit: scheduled work | Automations, installation-wide | shipped | INV-430 |
+| Audit: memory | mirror files, retractions | partial | INV-426 |
+| Audit: network events | none → relay event log | INV-432 in review | INV-432, INV-433 |
+| Spend by place | by agent/model/kind → by box/door | INV-431 in review | INV-431 |
+| Custom runtime | `box attach` | shipped | INV-434 |
