@@ -111,7 +111,7 @@ func TailSnoopyLog(ctx context.Context, filePath string, store *EventStore, poll
 		pollInterval = 200 * time.Millisecond
 	}
 
-	var offset int64 = 0
+	var offset int64 = -1
 
 	for {
 		select {
@@ -134,8 +134,16 @@ func TailSnoopyLog(ctx context.Context, filePath string, store *EventStore, poll
 			continue
 		}
 
-		// Handle truncation / rotation
-		if fi.Size() < offset {
+		if offset < 0 {
+			// On daemon startup, seed from the last 1MB rather than reprocessing gigabytes of logs
+			const maxInitialSeed = 1024 * 1024 // 1 MB
+			if fi.Size() > maxInitialSeed {
+				offset = fi.Size() - maxInitialSeed
+			} else {
+				offset = 0
+			}
+		} else if fi.Size() < offset {
+			// Handle truncation / rotation
 			offset = 0
 		}
 
@@ -146,6 +154,13 @@ func TailSnoopyLog(ctx context.Context, filePath string, store *EventStore, poll
 		}
 
 		reader := bufio.NewReader(file)
+		// If we jumped into the middle of a file, skip partial first line
+		if offset > 0 {
+			if partial, err := reader.ReadString('\n'); err == nil {
+				offset += int64(len(partial))
+			}
+		}
+
 		for {
 			line, err := reader.ReadString('\n')
 			if len(line) > 0 {

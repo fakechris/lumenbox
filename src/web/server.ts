@@ -4377,13 +4377,14 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
           const boxId = url.searchParams.get("boxId") ?? undefined;
           const since = Number(url.searchParams.get("since") ?? 0);
           const limit = Math.min(Number(url.searchParams.get("limit") ?? 100) || 100, 500);
+          const tail = url.searchParams.get("tail") === "1" || url.searchParams.get("tail") === "true";
           const client = boxId ? orchestrator.boxClientById(boxId) : orchestrator.boxClient();
           if (!client) {
             send(res, 404, { error: "No box client available" });
             return;
           }
           try {
-            const result = await client.xwatchdogEvents(since, limit);
+            const result = await client.xwatchdogEvents(since, limit, tail);
             // A killed or unreachable auditor on a session that can sudo is the thing an operator
             // must not miss. Logged here (the host, which the box user does not control) and
             // flagged in the payload so the audit view can show the session red.

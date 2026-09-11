@@ -162,3 +162,11 @@ test("CSS rules include hide-probes rule and audit state elements exist in templ
   assert.match(APP_HTML, /id="audithideprobes"[^>]*checked/, "hide probes toggle must be checked by default");
   assert.match(APP_HTML, /class="scroll hide-probes" id="auditlist"/, "auditlist must default to hiding probes");
 });
+
+test("pollAudit queries tail=1&limit=200 on initial load to prevent lag", () => {
+  assert.match(
+    APP_HTML,
+    /auditSince === 0\s*\?\s*["']\/api\/xwatchdog\/events\?tail=1&limit=200["']/,
+    "pollAudit must request recent tail on initial load when auditSince is 0"
+  );
+});

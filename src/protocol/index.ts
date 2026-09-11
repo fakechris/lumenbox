@@ -581,6 +581,7 @@ export interface XWatchdogEvent {
 export interface XWatchdogQuery {
   since?: number;
   limit?: number;
+  tail?: boolean;
 }
 
 export interface XWatchdogEventsResult {

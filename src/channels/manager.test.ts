@@ -1301,8 +1301,9 @@ test("a chat's files follow the conversation, and its reply follows the room", a
   });
   await manager.idle();
 
-  // The topic owns the files; the room is still where the answer is posted.
+  // The topic owns the files, and the answer is posted inside the topic thread.
   assert.deepEqual(asked, ["feishu:oc_room:omt_topic"]);
+  assert.equal(adapter.chatSent.at(-1)?.chatKey, "feishu:oc_room:omt_topic");
   assert.equal(adapter.chatSent.at(-1)?.text, "done");
 });
 

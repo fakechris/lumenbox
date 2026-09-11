@@ -369,9 +369,9 @@ export class BoxClient {
 
   /**
    * Reads events from xwatchdog (Snoopy command execution + GUI/input interaction).
-   * Monotonic sequence cursor for reliable catch-up.
+   * Monotonic sequence cursor for reliable catch-up, or tail=true for recent live events.
    */
-  xwatchdogEvents(since = 0, limit = 100): Promise<XWatchdogEventsResult> {
-    return this.post<XWatchdogEventsResult>("/xwatchdog/events", { since, limit });
+  xwatchdogEvents(since = 0, limit = 100, tail = false): Promise<XWatchdogEventsResult> {
+    return this.post<XWatchdogEventsResult>("/xwatchdog/events", { since, limit, ...(tail ? { tail: true } : {}) });
   }
 }

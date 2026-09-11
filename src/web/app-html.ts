@@ -4350,7 +4350,9 @@ function pollAudit() {
     $("auditlist").innerHTML = "";
     updateAuditProbeCount();
   }
-  var url = "/api/xwatchdog/events?since=" + auditSince + "&limit=500" + (box ? "&boxId=" + encodeURIComponent(box) : "");
+  var url = auditSince === 0
+    ? "/api/xwatchdog/events?tail=1&limit=200" + (box ? "&boxId=" + encodeURIComponent(box) : "")
+    : "/api/xwatchdog/events?since=" + auditSince + "&limit=500" + (box ? "&boxId=" + encodeURIComponent(box) : "");
   fetch(url).then(function (r) {
     if (r.status === 403) { renderAuditState({ forbidden: true }); stopAudit(); return null; }
     return r.json();

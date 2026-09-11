@@ -7,7 +7,7 @@
  * falling back to reading raw/persistent log files if the daemon is starting up.
  */
 
-import { existsSync, readFileSync } from "node:fs";
+import { closeSync, existsSync, openSync, readFileSync, readSync, statSync } from "node:fs";
 import type { XWatchdogEvent, XWatchdogEventsResult } from "../protocol/index.ts";
 
 export const DEFAULT_EXEC_LOG_PATH = "/var/log/xwatchdog/exec.log";
@@ -68,12 +68,15 @@ export class XWatchdogService {
   /**
    * Queries events via the native Go xwatchdog daemon or falls back to reading files.
    */
-  async events(since = 0, limit = 100): Promise<XWatchdogEventsResult> {
+  async events(since = 0, limit = 100, tail = false): Promise<XWatchdogEventsResult> {
     const boundedLimit = Math.max(1, Math.min(limit, 500));
 
     // 1. Try the native daemon via loopback. If it answers, it is up.
     try {
-      const res = await fetch(`${this.daemonUrl}/events?since=${since}&limit=${boundedLimit}`, {
+      const url = tail
+        ? `${this.daemonUrl}/events?tail=1&limit=${boundedLimit}`
+        : `${this.daemonUrl}/events?since=${since}&limit=${boundedLimit}`;
+      const res = await fetch(url, {
         signal: AbortSignal.timeout(600),
       });
       if (res.ok) {
@@ -86,7 +89,7 @@ export class XWatchdogService {
     }
 
     // 2. Fallback: parse the persisted log. The daemon is down; mark it so.
-    return this.withHealth(this.eventsFromFiles(since, boundedLimit), false);
+    return this.withHealth(this.eventsFromFiles(since, boundedLimit, tail), false);
   }
 
   /**
@@ -222,11 +225,30 @@ export class XWatchdogService {
   }
 
   /**
-   * Reads raw lines from a log file safely.
+   * Reads raw lines from a log file safely. If maxBytes is provided and file exceeds it,
+   * reads only the last maxBytes bytes from the end of the file.
    */
-  private readLines(filePath: string): string[] {
+  private readLines(filePath: string, maxBytes?: number): string[] {
     if (!existsSync(filePath)) return [];
     try {
+      if (maxBytes !== undefined) {
+        const stats = statSync(filePath);
+        if (stats.size > maxBytes) {
+          const fd = openSync(filePath, "r");
+          try {
+            const buf = Buffer.alloc(maxBytes);
+            const offset = stats.size - maxBytes;
+            readSync(fd, buf, 0, maxBytes, offset);
+            const content = buf.toString("utf8");
+            const lines = content.split("\n");
+            // Discard first line as it may be partially truncated
+            if (lines.length > 1) lines.shift();
+            return lines.filter(l => l.trim().length > 0);
+          } finally {
+            closeSync(fd);
+          }
+        }
+      }
       const content = readFileSync(filePath, "utf8");
       return content.split("\n").filter(l => l.trim().length > 0);
     } catch {
@@ -237,23 +259,24 @@ export class XWatchdogService {
   /**
    * Reads events directly from on-disk log files.
    */
-  eventsFromFiles(since = 0, limit = 100): XWatchdogEventsResult {
+  eventsFromFiles(since = 0, limit = 100, tail = false): XWatchdogEventsResult {
     const boundedLimit = Math.max(1, Math.min(limit, 500));
     const allParsed: Omit<XWatchdogEvent, "seq">[] = [];
+    const maxBytes = tail ? 2 * 1024 * 1024 : undefined;
 
     // 1. If persistent events.jsonl exists, read directly
     if (existsSync(this.eventsLogPath)) {
-      for (const line of this.readLines(this.eventsLogPath)) {
+      for (const line of this.readLines(this.eventsLogPath, maxBytes)) {
         const parsed = this.parseGuiLine(line);
         if (parsed) allParsed.push(parsed);
       }
     } else {
       // Otherwise merge exec.log and gui.log
-      for (const line of this.readLines(this.execLogPath)) {
+      for (const line of this.readLines(this.execLogPath, maxBytes)) {
         const parsed = this.parseExecLine(line);
         if (parsed) allParsed.push(parsed);
       }
-      for (const line of this.readLines(this.guiLogPath)) {
+      for (const line of this.readLines(this.guiLogPath, maxBytes)) {
         const parsed = this.parseGuiLine(line);
         if (parsed) allParsed.push(parsed);
       }
@@ -288,6 +311,16 @@ export class XWatchdogService {
       ...ev,
       seq: index + 1,
     }));
+
+    if (tail) {
+      const slice = sequenced.slice(-boundedLimit);
+      const nextSeq = slice.length > 0 ? (slice[slice.length - 1]?.seq ?? sequenced.length) : sequenced.length;
+      return {
+        events: slice,
+        next_seq: nextSeq,
+        has_more: false,
+      };
+    }
 
     const filtered = sequenced.filter(e => e.seq > since);
     const slice = filtered.slice(0, boundedLimit);

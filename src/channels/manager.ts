@@ -1589,7 +1589,8 @@ ${input.options.map(option => `· ${option}`).join("\n")}`
         message.threadKey ?? chatKey,
         undefined
       );
-      if (reply.trim() !== "") await this.deliver(adapter, chatKey, message.identity, reply, anchor);
+      const targetChatKey = message.threadKey ?? chatKey;
+      if (reply.trim() !== "") await this.deliver(adapter, targetChatKey, message.identity, reply, anchor);
     } catch (error) {
       // A failed look must not spam the chat: the receipt already landed, and the
       // person's instruction still works exactly as before.
@@ -1607,6 +1608,7 @@ ${input.options.map(option => `· ${option}`).join("\n")}`
     agentName: string | undefined
   ): Promise<void> {
     const chatKey = message.chatKey ?? message.identity;
+    const targetChatKey = message.threadKey ?? chatKey;
     const anchor: PushOptions | undefined =
       message.messageId !== undefined ? { replyTo: message.messageId } : undefined;
     try {
@@ -1614,7 +1616,7 @@ ${input.options.map(option => `· ${option}`).join("\n")}`
       if (image === undefined) {
         await this.deliver(
           adapter,
-          chatKey,
+          targetChatKey,
           message.identity,
           "No desktop to show — the box may be off, or this agent has not started one.",
           anchor
@@ -1624,18 +1626,18 @@ ${input.options.map(option => `· ${option}`).join("\n")}`
       if (adapter.sendImage === undefined) {
         await this.deliver(
           adapter,
-          chatKey,
+          targetChatKey,
           message.identity,
           "This channel cannot show images; open the app to watch the desktop.",
           anchor
         );
         return;
       }
-      await adapter.sendImage(chatKey, image, anchor);
+      await adapter.sendImage(targetChatKey, image, anchor);
     } catch (error) {
       await this.deliver(
         adapter,
-        chatKey,
+        targetChatKey,
         message.identity,
         error instanceof Error ? error.message : String(error),
         anchor
@@ -1662,6 +1664,7 @@ ${input.options.map(option => `· ${option}`).join("\n")}`
   ): Promise<void> {
     const chatKey = message.chatKey ?? message.identity;
     const runningKey = message.threadKey ?? chatKey;
+    const targetChatKey = message.threadKey ?? chatKey;
     this.runningWork.set(runningKey, { agentName });
     // What this turn should know it was handed: files in this message, plus any dropped
     // wordlessly in this conversation just before. In the prompt and nowhere else — the
@@ -1674,7 +1677,7 @@ ${input.options.map(option => `· ${option}`).join("\n")}`
     const anchor: PushOptions | undefined =
       message.messageId !== undefined ? { replyTo: message.messageId } : undefined;
     const deliver = (line: string) =>
-      this.deliver(adapter, chatKey, message.identity, line, anchor);
+      this.deliver(adapter, targetChatKey, message.identity, line, anchor);
     const mark = (status: "working" | "done" | "failed") => {
       if (message.messageId === undefined) return;
       void adapter.noteStatus?.(message.messageId, status).catch(() => {});
@@ -1727,7 +1730,7 @@ ${input.options.map(option => `· ${option}`).join("\n")}`
       acknowledged = true;
       if (adapter.postTaskCard !== undefined) {
         try {
-          cardHandle = await adapter.postTaskCard(chatKey, { ...card }, anchor, message.identity);
+          cardHandle = await adapter.postTaskCard(targetChatKey, { ...card }, anchor, message.identity);
           lastCardWrite = Date.now();
           // Durably, so the card outlives this closure: an acceptance typed after a
           // restart still finds the handle to flip.
@@ -1876,7 +1879,7 @@ ${input.options.map(option => `· ${option}`).join("\n")}`
       // Whatever the turn left in the chat's outbox follows the reply — images shown
       // as images, everything else as a file. What was pushed is marked delivered;
       // what failed stays in the outbox for the next task rather than vanishing.
-      await this.deliverFiles(adapter, chatKey, message.threadKey ?? chatKey, reply, anchor, line =>
+      await this.deliverFiles(adapter, targetChatKey, message.threadKey ?? chatKey, reply, anchor, line =>
         deliver(line)
       );
       // The desk as the task left it: evidence at a glance — but only when the turn
@@ -1892,7 +1895,7 @@ ${input.options.map(option => `· ${option}`).join("\n")}`
       ) {
         try {
           const image = await this.deps.screenshot(agentName);
-          if (image !== undefined) await adapter.sendImage(chatKey, image, anchor);
+          if (image !== undefined) await adapter.sendImage(targetChatKey, image, anchor);
         } catch {
           // Nothing: the missing poster is not worth a line in the chat.
         }
