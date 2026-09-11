@@ -580,3 +580,28 @@ test("a browser wait that could not look is unknown, with the wait's own three-s
   assert.match(plain.text, /^Outcome: ok\./);
   assert.equal(plain.isError, undefined);
 });
+
+test("a computer result carries its measured effect after the verdict (INV-398)", async () => {
+  const swallowed = boxContext({
+    computer: async () => ({
+      success: true,
+      screenshot: "UklGR",
+      action_count: 1,
+      duration_ms: 12,
+      effect: "suspected_noop",
+      effect_detail: "click@(400,300) suspected_noop 0.0%",
+    }),
+  });
+  const result = await dispatchTool("computer", { actions: [{ action: "click", coordinate: [400, 300] }] }, swallowed);
+  assert.match(result.text, /^Outcome: ok\. Effect: suspected_noop \(click@\(400,300\) suspected_noop 0\.0%\)/);
+  assert.match(result.text, /Do not assume it took/);
+  assert.equal(result.isError, false);
+
+  const blind = boxContext({
+    computer: async () => ({ success: true, screenshot: "UklGR", action_count: 1, duration_ms: 12, effect: "unverifiable" }),
+  });
+  const unseen = await dispatchTool("computer", { actions: [{ action: "click", coordinate: [1, 1] }] }, blind);
+  assert.match(unseen.text, /^Outcome: unknown/);
+  assert.match(unseen.text, /Effect: unverifiable/);
+  assert.equal(unseen.isError, true);
+});

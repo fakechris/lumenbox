@@ -282,3 +282,104 @@ test("an unreadable pointer position skips nothing", () => {
     "mousemove --sync 400 300",
   ]);
 });
+
+// ── effect measurement in the batch loop (INV-398) ─────────────────────────────
+import type { Region } from "./effect.ts";
+import type { ComputerAction } from "../protocol/index.ts";
+
+/** An executor with no X server: actions are recorded, frames are scripted. */
+class ScriptedExecutor extends X11Executor {
+  readonly ran: string[] = [];
+  /** Frames handed back per grabRegion call, in order; a `null` throws. */
+  frames: (Buffer | null)[] = [];
+  pointer = { x: 100, y: 100 };
+  constructor(overrides: Partial<ConstructorParameters<typeof X11Executor>[0]> = {}) {
+    super({
+      display: ":9",
+      resolution: { display: { width: 1280, height: 800 }, api: { width: 1280, height: 800 } },
+      screenshotDelayMs: 0,
+      effectSettleMs: 0,
+      ...overrides,
+    });
+  }
+  protected override async executeAction(action: ComputerAction): Promise<void> {
+    this.ran.push(action.action);
+  }
+  protected override async pointerLocation() {
+    return this.pointer;
+  }
+  protected override async grabRegion(_region: Region): Promise<Buffer> {
+    const next = this.frames.shift();
+    if (next === undefined) throw new Error("no frame scripted");
+    if (next === null) throw new Error("x11grab failed");
+    return next;
+  }
+  override async takeScreenshot(): Promise<string> {
+    return "UklGR";
+  }
+}
+
+const flat = (value: number, pixels = 1000) => Buffer.alloc(pixels * 3, value);
+
+test("a click whose neighbourhood did not change is reported as a suspected no-op", async () => {
+  // The hole this closes: xdotool ran, the grab ate the click, "success: true".
+  const executor = new ScriptedExecutor();
+  // before, after, and the second look after the batch settles — all identical.
+  executor.frames = [flat(10), flat(10), flat(10)];
+  const result = await executor.execute([{ action: "click", coordinate: [400, 300] }]);
+  assert.equal(result.success, true);
+  assert.equal(result.effect, "suspected_noop");
+  assert.match(result.effectDetail ?? "", /^click@\(400,300\) suspected_noop 0\.0%$/);
+  assert.deepEqual(executor.ran, ["click"]);
+});
+
+test("a click that repainted its neighbourhood is confirmed, and one that failed to capture is unverifiable", async () => {
+  const executor = new ScriptedExecutor();
+  executor.frames = [flat(10), flat(200)];
+  const taken = await executor.execute([{ action: "click", coordinate: [400, 300] }]);
+  assert.equal(taken.effect, "confirmed");
+  assert.match(taken.effectDetail ?? "", /confirmed 100\.0%/);
+
+  const blind = new ScriptedExecutor();
+  blind.frames = [null];
+  const unseen = await blind.execute([{ action: "click", coordinate: [400, 300] }]);
+  assert.equal(unseen.effect, "unverifiable");
+  // The action still ran: a failed capture must never fail the click.
+  assert.deepEqual(blind.ran, ["click"]);
+});
+
+test("a slow repaint gets a second look after the batch settles", async () => {
+  // A page answering a click over the network: nothing at the short settle, everything
+  // by the time the screenshot is taken. The first "no-op" must not stand.
+  const executor = new ScriptedExecutor();
+  executor.frames = [flat(10), flat(10), flat(250)];
+  const result = await executor.execute([{ action: "click", coordinate: [400, 300] }]);
+  assert.equal(result.effect, "confirmed");
+});
+
+test("a batch is judged by its weakest write, and reads and moves are not measured", async () => {
+  const executor = new ScriptedExecutor();
+  // click: taken. type (at the pointer): nothing happened — focus had gone elsewhere.
+  executor.frames = [flat(10), flat(200), flat(10), flat(10), flat(10)];
+  const result = await executor.execute([
+    { action: "mouse_move", coordinate: [1, 1] },
+    { action: "click", coordinate: [400, 300] },
+    { action: "type", text: "hello" },
+    { action: "wait", duration_ms: 0 },
+  ]);
+  assert.equal(result.effect, "suspected_noop");
+  assert.match(result.effectDetail ?? "", /^click@\(400,300\) confirmed 100\.0%; type@\(100,100\) suspected_noop 0\.0%$/);
+  assert.equal(result.actionCount, 4);
+});
+
+test("a batch of reads has no effect to report, and measurement can be switched off", async () => {
+  const executor = new ScriptedExecutor();
+  const looked = await executor.execute([{ action: "screenshot" }]);
+  assert.equal(looked.effect, undefined);
+  assert.equal(looked.effectDetail, undefined);
+
+  const off = new ScriptedExecutor({ measureEffect: false });
+  const result = await off.execute([{ action: "click", coordinate: [1, 1] }]);
+  assert.equal(result.effect, undefined);
+  assert.deepEqual(off.ran, ["click"]);
+});

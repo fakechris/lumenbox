@@ -81,6 +81,7 @@ test("the prompt keeps the facts the model cannot work out for itself", () => {
   assert.match(prompt, /Unknown is never success/);
   assert.match(prompt, /never\s+repeat a write/);
   assert.match(prompt, /send button that greys out/);
+  assert.match(prompt, /suspected_noop/, "INV-398: the measured effect has a name the model knows");
 });
 
 test("the prompt says how to hand a file to a person", () => {

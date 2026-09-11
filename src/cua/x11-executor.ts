@@ -16,9 +16,19 @@ import type {
   ResolutionConfig,
   ScrollDirection,
   WindowInfo,
+  Effect,
 } from "../protocol/index.ts";
 import { CoordinateScaler } from "./scaling.ts";
 import { exec, execBuffer, execWithInput, sleep } from "./shell.ts";
+import {
+  describeMeasurement,
+  effectOf,
+  neighbourhoodOf,
+  regionDiff,
+  worstEffect,
+  type Point,
+  type Region,
+} from "./effect.ts";
 
 const execFileAsync = promisify(execFile);
 
@@ -109,6 +119,12 @@ const KEYMAP_SETTLE_MS = 300;
  * contains a screen-changing action, not per action.
  */
 export const DEFAULT_SCREENSHOT_DELAY_MS = envNumber("AGENTBOX_SETTLE_MS", 2000);
+/**
+ * How long a write gets to show before its neighbourhood is compared. Most toolkits
+ * repaint within a frame or two; a page reacting over the network gets a second look
+ * after the batch's full settle (see `execute`).
+ */
+const DEFAULT_EFFECT_SETTLE_MS = 400;
 export const DEFAULT_TYPING_DELAY_MS = 12;
 export const DEFAULT_TYPING_BATCH_SIZE = 50;
 
@@ -248,6 +264,15 @@ export function runThatFits(text: string, capacity: number): string {
 }
 
 /** Actions after which the UI needs a moment before a screenshot is meaningful. */
+/** A diff that cannot be computed (sizes differ: the screen changed size mid-batch) is no evidence. */
+function safeDiff(before: Buffer, after: Buffer): number | undefined {
+  try {
+    return regionDiff(before, after);
+  } catch {
+    return undefined;
+  }
+}
+
 export function actionRequiresSettle(action: ComputerAction): boolean {
   switch (action.action) {
     case "mouse_move":
@@ -300,6 +325,14 @@ export interface X11Config {
   screenshotDelayMs?: number;
   typingDelayMs?: number;
   typingBatchSize?: number;
+  /**
+   * Whether each write is followed by a capture of the point's neighbourhood and a
+   * comparison with the one taken before it. On by default; the cost is two small
+   * x11grab frames and `effectSettleMs` per write.
+   */
+  measureEffect?: boolean;
+  /** How long a write gets to repaint before its effect is judged. */
+  effectSettleMs?: number;
 }
 
 export interface TypingOptions {
@@ -314,6 +347,10 @@ export interface TypingOptions {
 export interface X11ExecutionResult {
   success: boolean;
   screenshot: string;
+  /** The weakest measured effect among the batch's writes; absent when nothing was measured. */
+  effect?: Effect;
+  /** One line per measured write. */
+  effectDetail?: string;
   cursorPosition?: { x: number; y: number };
   /** Present when the batch included list_windows. */
   windows?: readonly WindowInfo[];
@@ -334,6 +371,8 @@ export class X11Executor {
       screenshotDelayMs: config.screenshotDelayMs ?? DEFAULT_SCREENSHOT_DELAY_MS,
       typingDelayMs: config.typingDelayMs ?? DEFAULT_TYPING_DELAY_MS,
       typingBatchSize: config.typingBatchSize ?? DEFAULT_TYPING_BATCH_SIZE,
+      measureEffect: config.measureEffect ?? true,
+      effectSettleMs: config.effectSettleMs ?? DEFAULT_EFFECT_SETTLE_MS,
     };
     this.scaler = new CoordinateScaler(this.config.resolution);
     this.env = { DISPLAY: this.config.display };
@@ -371,6 +410,10 @@ export class X11Executor {
     let windows: readonly WindowInfo[] | undefined;
     let screenshotTaken = false;
     let settleNeeded = false;
+    // What each write did to the pixels around it (docs/49 A1). The last one is kept
+    // whole so a slow repaint can be re-judged after the batch settles.
+    const measured: { action: string; point?: Point; effect: Effect; fraction?: number }[] = [];
+    let pending: { region: Region; before: Buffer; index: number } | undefined;
 
     for (const action of actions) {
       if (action.action === "screenshot") {
@@ -395,20 +438,59 @@ export class X11Executor {
         lastScreenshot = await this.screenshotWindow(action.window_id);
         screenshotTaken = true;
       } else {
+        const anchor = this.config.measureEffect ? await this.anchorOf(action) : undefined;
+        // "before" is taken now, not at the batch's start: an earlier action in the same
+        // batch may have changed this very region, and that change is not this write's.
+        const region = anchor !== undefined ? this.neighbourhood(anchor) : undefined;
+        const before = region !== undefined ? await this.grabQuietly(region) : undefined;
         await this.executeAction(action, options);
         if (actionRequiresSettle(action)) settleNeeded = true;
+        if (anchor !== undefined) {
+          if (region === undefined || before === undefined) {
+            measured.push({ action: action.action, point: this.apiPoint(anchor), effect: "unverifiable" });
+            pending = undefined;
+            continue;
+          }
+          await sleep(this.config.effectSettleMs);
+          const after = await this.grabQuietly(region);
+          const fraction = after === undefined ? undefined : safeDiff(before, after);
+          const effect: Effect = fraction === undefined ? "unverifiable" : effectOf(fraction);
+          measured.push({ action: action.action, point: this.apiPoint(anchor), effect, fraction });
+          pending = { region, before, index: measured.length - 1 };
+        }
       }
     }
 
     // Always hand back a screenshot, so the model never has to ask for one.
     if (!screenshotTaken) {
       if (settleNeeded) await sleep(this.config.screenshotDelayMs);
+      // A second look for the last write, after the full settle. A page that answers a
+      // click over the network shows nothing at 400ms and everything at two seconds; the
+      // first judgement stands only if the second agrees it was a no-op.
+      const last = pending !== undefined ? measured[pending.index] : undefined;
+      if (pending !== undefined && last !== undefined && last.effect === "suspected_noop") {
+        const again = await this.grabQuietly(pending.region);
+        const fraction = again === undefined ? undefined : safeDiff(pending.before, again);
+        if (fraction !== undefined && effectOf(fraction) !== "suspected_noop") {
+          last.effect = effectOf(fraction);
+          last.fraction = fraction;
+        }
+      }
       lastScreenshot = await this.takeScreenshot();
     }
 
+    const effect = worstEffect(measured.map(m => m.effect));
     return {
       success: true,
       screenshot: lastScreenshot ?? "",
+      ...(effect !== undefined
+        ? {
+            effect,
+            effectDetail: measured
+              .map(m => describeMeasurement(m.action, m.point, m.effect, m.fraction))
+              .join("; "),
+          }
+        : {}),
       cursorPosition,
       windows,
       actionCount: actions.length,
@@ -416,7 +498,79 @@ export class X11Executor {
     };
   }
 
-  private async executeAction(
+  /**
+   * Where a write lands, in display pixels — or undefined for an action whose effect is
+   * not worth measuring (a bare mouse move, a wait, a scroll the screenshot shows anyway).
+   *
+   * A keystroke or typed text goes to the focused window, wherever the pointer is; the
+   * pointer is the best guess for where the change will show, and a guess that is off
+   * reads as "partial", never as a false "confirmed".
+   */
+  protected async anchorOf(action: ComputerAction): Promise<Point | undefined> {
+    switch (action.action) {
+      case "click":
+        if (action.coordinate) return this.scale(action.coordinate);
+        return this.pointerLocation();
+      case "click_in_window": {
+        try {
+          const geometry = await this.windowGeometry(assertWindowId(action.window_id));
+          return windowPointToScreen(geometry, action.coordinate);
+        } catch {
+          // The action itself will report the bad id; nothing to measure.
+          return undefined;
+        }
+      }
+      case "drag": {
+        const end = action.path[action.path.length - 1];
+        return end !== undefined ? this.scale(end) : undefined;
+      }
+      case "type":
+      case "key":
+        return this.pointerLocation();
+      default:
+        return undefined;
+    }
+  }
+
+  private neighbourhood(point: Point): Region {
+    return neighbourhoodOf(point, this.config.resolution.display);
+  }
+
+  private apiPoint(point: Point): Point {
+    return this.scaler.displayToApi(point.x, point.y);
+  }
+
+  /** A capture that fails is evidence of nothing, and must not fail the action. */
+  private async grabQuietly(region: Region): Promise<Buffer | undefined> {
+    try {
+      return await this.grabRegion(region);
+    } catch {
+      return undefined;
+    }
+  }
+
+  /**
+   * Raw RGB of one region of the screen, straight from x11grab. Not WebP: comparing two
+   * frames byte for byte needs no decoder, and the region is small enough to be cheap.
+   */
+  protected async grabRegion(region: Region): Promise<Buffer> {
+    return execBuffer(
+      "ffmpeg",
+      [
+        "-loglevel", "error",
+        "-f", "x11grab",
+        "-video_size", `${region.width}x${region.height}`,
+        "-i", `${this.config.display}+${region.x},${region.y}`,
+        "-frames:v", "1",
+        "-f", "rawvideo",
+        "-pix_fmt", "rgb24",
+        "pipe:1",
+      ],
+      { env: this.env }
+    );
+  }
+
+  protected async executeAction(
     action: ComputerAction,
     options: TypingOptions
   ): Promise<void> {
@@ -609,7 +763,7 @@ export class X11Executor {
    * position it cannot read means it skips nothing, which is the behaviour that existed
    * before. A failed query must never be worse than not asking.
    */
-  private async pointerLocation(): Promise<{ x: number; y: number } | undefined> {
+  protected async pointerLocation(): Promise<{ x: number; y: number } | undefined> {
     try {
       const output = await this.xdotool("getmouselocation --shell");
       const xMatch = /X=(\d+)/.exec(output);

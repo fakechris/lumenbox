@@ -7,7 +7,7 @@
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { computerOutcome, outcomeLine } from "./index.ts";
+import { computerOutcome, effectLine, outcomeLine } from "./index.ts";
 
 test("a computer result with nothing to show for itself is unknown, not ok", () => {
   // Ran, no error, no screenshot: the box could not capture what the actions left
@@ -31,4 +31,13 @@ test("the verdict line says the one thing the model must do with it", () => {
   assert.match(unknown, /^Outcome: unknown\./);
   assert.match(unknown, /may or may not have taken effect/);
   assert.match(unknown, /do not repeat a write/);
+});
+
+test("a batch whose effect could not be measured is unknown, and the effect line says what to do", () => {
+  assert.equal(computerOutcome({ success: true, screenshot: "UklGR", effect: "unverifiable" }), "unknown");
+  assert.equal(computerOutcome({ success: true, screenshot: "UklGR", effect: "suspected_noop" }), "ok");
+  assert.match(effectLine("suspected_noop", "click@(1,2) suspected_noop 0.0%"), /^Effect: suspected_noop \(click@\(1,2\) suspected_noop 0\.0%\) — nothing near the point changed/);
+  assert.match(effectLine("suspected_noop"), /before clicking again/);
+  assert.equal(effectLine("confirmed"), "Effect: confirmed.");
+  assert.match(effectLine("unverifiable"), /no evidence either way/);
 });

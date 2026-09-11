@@ -160,6 +160,41 @@ export type Outcome = "ok" | "failed" | "refused" | "unknown";
 export type WaitOutcome = "satisfied" | "unsatisfied" | "unknown";
 
 /**
+ * Whether a write to the screen — a click, a keystroke, a drag — visibly did anything.
+ *
+ * Measured, not inferred: the box captures the neighbourhood of the point before and
+ * after, and compares. A click that a window manager's grab swallowed, a keystroke
+ * delivered to a window that had lost focus, a button under an invisible overlay — all
+ * returned "success" before this, because xdotool had run without complaint.
+ *
+ * - `confirmed` — the neighbourhood changed the way a taken click changes things.
+ * - `partial` — something changed, but little: a hover highlight, a caret.
+ * - `suspected_noop` — nothing near the point changed. Not proof of nothing (a page can
+ *   change elsewhere), but the model must look before repeating a write.
+ * - `unverifiable` — a capture failed; there is no evidence either way.
+ */
+export type Effect = "confirmed" | "partial" | "suspected_noop" | "unverifiable";
+
+/** The line after the verdict, for a result that measured its own effect. */
+export function effectLine(effect: Effect, detail?: string): string {
+  const which = detail !== undefined && detail !== "" ? ` (${detail})` : "";
+  switch (effect) {
+    case "confirmed":
+      return `Effect: confirmed${which}.`;
+    case "partial":
+      return `Effect: partial${which} — something near the point changed, but little; check the screenshot for what.`;
+    case "suspected_noop":
+      return (
+        `Effect: suspected_noop${which} — nothing near the point changed. Do not assume it ` +
+        "took; look at the screenshot, and if the target is not in the state you meant, " +
+        "work out why before clicking again (focus, an overlay, the wrong window)."
+      );
+    case "unverifiable":
+      return `Effect: unverifiable${which} — the capture around the point failed, so there is no evidence either way.`;
+  }
+}
+
+/**
  * The outcome of a computer result, for a host that may be talking to an older box.
  *
  * A boxd from before this field reports only `success`/`error`/`screenshot`; the
@@ -170,11 +205,14 @@ export function computerOutcome(result: {
   success: boolean;
   screenshot: string;
   error?: string;
+  effect?: Effect;
 }): Outcome {
   if (result.outcome !== undefined) return result.outcome;
   if (result.error !== undefined || !result.success) return "failed";
   // Ran, but there is no picture of what it did: that is not the same as ran and worked.
-  return result.screenshot === "" ? "unknown" : "ok";
+  if (result.screenshot === "") return "unknown";
+  // Ran, and the evidence for its effect could not be gathered: same answer.
+  return result.effect === "unverifiable" ? "unknown" : "ok";
 }
 
 /** The first line of a tool result, so the model reads the verdict before the detail. */
@@ -201,6 +239,10 @@ export function outcomeLine(outcome: Outcome, reason?: string): string {
 export interface ComputerResult {
   /** Present from boxd versions that know it; `computerOutcome` derives it otherwise. */
   outcome?: Outcome;
+  /** The worst measured effect among the batch's writes; absent when the batch wrote nothing. */
+  effect?: Effect;
+  /** One entry per measured write: `click@(400,300) confirmed 8.1%`. */
+  effect_detail?: string;
   success: boolean;
   /** base64 WebP at API resolution. Empty only if capture failed. */
   screenshot: string;
