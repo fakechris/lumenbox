@@ -14,7 +14,7 @@ import type { BusEvent } from "./agents/bus.ts";
 import { AgentRegistry, defaultAgentsRoot } from "./agents/registry.ts";
 import { BundleStore, planMigration } from "./host/bundles.ts";
 import { ScopeStore } from "./host/scopes.ts";
-import { attachedBox } from "./box/boxes.ts";
+import { attachedBox, tokenOf } from "./box/boxes.ts";
 import {
   BACKUP_CARRIES,
   type BoxConfig,
@@ -1030,6 +1030,26 @@ async function cmdControl(argv: string[]): Promise<number> {
   }
 }
 
+/**
+ * The boxes the relay should know, from the roster and their bundles. Never throws: a
+ * roster that cannot be read means a relay that knows only its own token, as before.
+ */
+function relayBoxes(): { name: string; token: string; allow: string[] }[] {
+  try {
+    const registry = new AgentRegistry();
+    const bundles = new BundleStore();
+    const out: { name: string; token: string; allow: string[] }[] = [];
+    for (const entry of registry.listBoxes()) {
+      const token = entry.endpoint === undefined ? loadBoxToken() : tokenOf(entry);
+      if (token === undefined || token === "") continue;
+      out.push({ name: entry.name, token, allow: bundles.forBox(entry)?.egressHosts ?? [] });
+    }
+    return out;
+  } catch {
+    return [];
+  }
+}
+
 async function cmdEgress(argv: string[]): Promise<number> {
   const { flags } = parseArgs(argv);
   const portFlag = flags.get("--port");
@@ -1037,6 +1057,10 @@ async function cmdEgress(argv: string[]): Promise<number> {
   const allowFlag = flags.get("--allow");
 
   try {
+    // Each box by its own token, with what its bundles let it reach (INV-423). The
+    // own box's token is the relay token, so it is named here too and its bundle hosts
+    // apply; an attached box is known by the token file its record names.
+    const boxes = relayBoxes();
     const server = startEgressRelay({
       // The box token by default, so a box started by this CLI can already authenticate.
       token: loadBoxToken(),
@@ -1046,8 +1070,12 @@ async function cmdEgress(argv: string[]): Promise<number> {
         typeof allowFlag === "string"
           ? allowFlag.split(",").map(entry => entry.trim()).filter(Boolean)
           : undefined,
+      boxes,
       log: line => out(dim(line)),
     });
+    for (const box of boxes) {
+      out(dim(`  ${box.name}: ${box.allow !== undefined && box.allow.length > 0 ? box.allow.join(", ") : "no bundle hosts"}`));
+    }
     out("");
     out(`${bold("egress relay")} running. Point a box at it with:`);
     out(dim("  AGENTBOX_EGRESS_RELAY=host.docker.internal:8790 agentbox box up --recreate"));

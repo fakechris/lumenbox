@@ -34,7 +34,55 @@ export interface RelayOptions {
    * wants public egress sets this to what it means.
    */
   allow?: readonly string[];
+  /**
+   * Per box (INV-423, docs/50 G4): each box authenticates with its own token, and its
+   * allow list is the union of the global one above and what its bundles grant. A stream
+   * whose token names no box is refused, unless it carries the relay's own `token` —
+   * which stays valid so a relay started the old way keeps working.
+   */
+  boxes?: readonly RelayBox[];
+  /** Every decision, allowed or not, for the network event log (INV-432). */
+  onEvent?: (event: NetworkEvent) => void;
   log?: (line: string) => void;
+}
+
+export interface RelayBox {
+  name: string;
+  token: string;
+  /** Hosts this box may reach beyond the global list. Empty adds nothing. */
+  allow?: readonly string[];
+}
+
+/** One decision the relay made: who asked, for what, and what it said. */
+export interface NetworkEvent {
+  at: string;
+  /** The box name, or `relay` for a stream carrying the relay's own token. */
+  box: string;
+  host: string;
+  port: number;
+  allowed: boolean;
+  /** Why it was refused, when it was. */
+  reason?: "unauthorized" | "not allowed";
+}
+
+/**
+ * Who a stream is from, and what it may reach: the box its token names, or the relay
+ * itself on the shared token, or nobody.
+ */
+export function identify(
+  token: string,
+  options: Pick<RelayOptions, "token" | "allow" | "boxes">
+): { box: string; allow: readonly string[] } | undefined {
+  const global = options.allow ?? [];
+  const named = (options.boxes ?? []).find(box => box.token === token);
+  if (named !== undefined) {
+    // Union, and "anywhere" only when both are empty: a global list that says "only
+    // these" is not widened by a box that says nothing.
+    const own = named.allow ?? [];
+    return { box: named.name, allow: [...global, ...own] };
+  }
+  if (token === options.token) return { box: "relay", allow: global };
+  return undefined;
 }
 
 const DEFAULT_PORT = 8790;
@@ -51,7 +99,6 @@ export function startEgressRelay(options: RelayOptions): Server {
     );
   }
   const log = options.log ?? (() => {});
-  const allow = options.allow ?? [];
 
   const server = createServer(box => {
     box.setNoDelay(true);
@@ -76,16 +123,34 @@ export function startEgressRelay(options: RelayOptions): Server {
       box.setTimeout(0);
       const { request, rest } = decoded;
 
-      if (request.token !== options.token) {
+      const who = identify(request.token, options);
+      const event = (allowed: boolean, reason?: NetworkEvent["reason"]) => {
+        try {
+          options.onEvent?.({
+            at: new Date().toISOString(),
+            box: who?.box ?? "unknown",
+            host: request.host,
+            port: request.port,
+            allowed,
+            ...(reason !== undefined ? { reason } : {}),
+          });
+        } catch {
+          // The log must never decide a stream.
+        }
+      };
+      if (who === undefined) {
         log(`relay: wrong token for ${request.host}:${request.port}`);
+        event(false, "unauthorized");
         box.end(encodeResponse(false, "unauthorized"));
         return;
       }
-      if (!permitted(request, allow)) {
-        log(`relay: ${request.host}:${request.port} is not in the allow list`);
+      if (!permitted(request, who.allow)) {
+        log(`relay: ${who.box}: ${request.host}:${request.port} is not in the allow list`);
+        event(false, "not allowed");
         box.end(encodeResponse(false, "not allowed"));
         return;
       }
+      event(true);
 
       const upstream = netConnect(request.port, request.host);
       upstream.setNoDelay(true);
@@ -118,7 +183,7 @@ export function startEgressRelay(options: RelayOptions): Server {
   server.listen(options.port ?? DEFAULT_PORT, host, () => {
     log(
       `egress relay on ${host}:${options.port ?? DEFAULT_PORT}` +
-        (allow.length > 0 ? `, allowing ${allow.join(", ")}` : ", allowing anywhere")
+        ((options.allow ?? []).length > 0 ? `, allowing ${(options.allow ?? []).join(", ")}` : ", allowing anywhere")
     );
   });
   return server;
