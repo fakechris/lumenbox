@@ -76,6 +76,8 @@ export function needsReview(tool: string, input: Record<string, unknown>): strin
     }
     case "browser_upload":
       return "uploads a file to a web page";
+    case "browser_fill_secret":
+      return "fills a credential into a web page";
     case "write_file":
     case "edit_file": {
       const path = typeof input.path === "string" ? input.path : "";

@@ -1385,6 +1385,26 @@ export function buildTools(
   }
 
   if (hasBox) {
+    tools.push({
+      name: "browser_fill_secret",
+      description:
+        "Type a vault secret into a field on the current page without ever seeing it. Name " +
+        "the field's ref from the outline and the secret's id; the host looks the value up, " +
+        "the box types it in a way the page's scripts cannot watch, and the outline you get " +
+        "back shows the field as <redacted>. It works only on a page whose host the secret " +
+        "was configured for, and only if the secret is granted to you — otherwise it is " +
+        "refused and says why. Use it for passwords, API keys and card numbers; never type " +
+        "those with browser_act.",
+      input_schema: {
+        type: "object",
+        properties: {
+          ref: { type: "string", description: "The field's handle from the outline, e.g. e2." },
+          secret: { type: "string", description: "The vault secret id, e.g. GITHUB_PASSWORD." },
+          snapshot: { type: "string", description: "The id of the outline the ref came from." },
+        },
+        required: ["ref", "secret"],
+      },
+    });
     tools.push(
       {
         name: "browser_open",
@@ -3133,6 +3153,59 @@ export async function dispatchTool(
           : `${entry.name}  (${entry.size} bytes)`
       );
       return { text: `${result.path}\n\n${lines.join("\n")}` };
+    }
+
+    case "browser_fill_secret": {
+      const box = requireBox(context);
+      const ref = String(input.ref ?? "").trim();
+      const secretId = String(input.secret ?? "").trim();
+      if (ref === "" || secretId === "") return { text: outcomeLine("failed", "ref and secret are both required"), isError: true };
+      if (context.displayIndex === undefined) {
+        return { text: outcomeLine("refused", "your desktop is not available, so the browser cannot be driven"), isError: true };
+      }
+      if (context.vault === undefined) {
+        return { text: outcomeLine("refused", "there is no vault here, so no secret can be looked up"), isError: true };
+      }
+      // Resolved by the host against the agent's grants, audited in the vault as any
+      // resolution is. The value goes to the box and nowhere else: not into this result,
+      // not into the transcript, not through keystrokes.
+      const value = context.vault.resolve(secretId, {
+        agentId: context.agent.id,
+        agentName: context.agent.profile.name,
+        ...(context.caller?.userId !== undefined ? { principalId: context.caller.userId } : {}),
+        // Bundles (INV-420) join this once that branch merges; a scope grant counts today.
+        scopeGrants: context.scopes?.grantsSecret(context.agent.profile.scopeId, secretId) === true,
+      });
+      if (value === undefined) {
+        return {
+          text: outcomeLine("refused", `${secretId} is not a secret granted to you (or does not exist). Ask the person to grant it in Settings → Vault`),
+          isError: true,
+        };
+      }
+      const domains = context.vault.domainsOf(secretId);
+      try {
+        const result = await box.browser({
+          op: "fill_secret",
+          display: context.displayIndex,
+          ...(context.boxOwner !== undefined ? { owner: context.boxOwner } : {}),
+          ref,
+          secret_value: value,
+          domains,
+          ...(typeof input.snapshot === "string" && input.snapshot !== "" ? { snapshot: input.snapshot } : {}),
+        });
+        const outcome: Outcome = result.outcome ?? "ok";
+        return {
+          text: [
+            `${outcomeLine(outcome)} ${secretId} was filled into ${ref}; the outline shows it redacted.`,
+            `${result.snapshot_id !== undefined ? `Snapshot ${result.snapshot_id}: ` : ""}${result.title || "(untitled)"} — ${result.url}`,
+            ...(result.note !== undefined ? [result.note] : []),
+            result.snapshot,
+          ].join("\n\n"),
+        };
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        return { text: outcomeLine(boxErrorOutcome(error) ?? "failed", message), isError: true };
+      }
     }
 
     case "browser_open":

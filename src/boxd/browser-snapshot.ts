@@ -166,7 +166,9 @@ const SNAPSHOT_BODY = String.raw`
   // one would otherwise end up — in a transcript, and in a model's context.
   const secret = element =>
     (element.getAttribute("type") || "").toLowerCase() === "password" ||
-    /current-password|new-password/i.test(element.getAttribute("autocomplete") || "");
+    /current-password|new-password/i.test(element.getAttribute("autocomplete") || "") ||
+    // A field the box filled from the vault (INV-402): its value must never reach the model.
+    element.getAttribute("data-lumen-secret") === "1";
 
   const emit = (element, depth) => {
     const role = roleOf(element);

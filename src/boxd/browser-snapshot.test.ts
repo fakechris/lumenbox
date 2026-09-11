@@ -58,3 +58,7 @@ test("the outline script leaves an index and a mutation counter on the page", ()
   assert.match(script, /globalThis\.__lumenMutations = 0/);
   assert.ok(STALE_MUTATIONS > 5, "a banner appearing must not refuse every ref");
 });
+
+test("a field the box filled from the vault is redacted in the outline (INV-402)", () => {
+  assert.match(snapshotScript(10), /data-lumen-secret/);
+});

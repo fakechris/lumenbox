@@ -766,3 +766,42 @@ test("browser_act sends expect and renders the measured effect after the verdict
   const swallowed = await dispatchTool("browser_act", { action: "click", ref: "e1" }, noop);
   assert.match(swallowed.text, /^Outcome: ok\. Effect: suspected_noop — nothing near the point changed/);
 });
+
+// ── a secret is typed without being seen (INV-402) ────────────────────────────────
+test("browser_fill_secret resolves through the vault, sends the value only to the box, and never echoes it", async () => {
+  const requests: BrowserRequest[] = [];
+  const audits: string[] = [];
+  const vault = {
+    resolve: (id: string, caller: { agentId: string }) => {
+      audits.push(`${caller.agentId}:${id}`);
+      return id === "SHOP_PASSWORD" ? "hunter2-very-secret" : undefined;
+    },
+    domainsOf: (id: string) => (id === "SHOP_PASSWORD" ? ["*.shop.test"] : []),
+  };
+  const context = {
+    ...boxContext({
+      browser: async (request: BrowserRequest) => {
+        requests.push(request);
+        return { url: "https://www.shop.test/login", title: "Sign in", snapshot: '- textbox "Password" [ref=e2] value="<redacted>"', snapshot_id: "s3" };
+      },
+    }),
+    vault,
+  } as unknown as Parameters<typeof dispatchTool>[2];
+
+  const filled = await dispatchTool("browser_fill_secret", { ref: "e2", secret: "SHOP_PASSWORD", snapshot: "s3" }, context);
+  assert.equal(requests[0]?.op, "fill_secret");
+  assert.equal(requests[0]?.secret_value, "hunter2-very-secret", "the box gets the value");
+  assert.deepEqual(requests[0]?.domains, ["*.shop.test"]);
+  assert.match(filled.text, /^Outcome: ok\. SHOP_PASSWORD was filled into e2; the outline shows it redacted/);
+  assert.doesNotMatch(filled.text, /hunter2/, "the model never sees the value");
+  assert.deepEqual(audits, ["a1:SHOP_PASSWORD"], "every resolution is audited by the vault");
+
+  // Not granted: refused, with where to fix it. Nothing reaches the box.
+  const denied = await dispatchTool("browser_fill_secret", { ref: "e2", secret: "OTHER" }, context);
+  assert.match(denied.text, /^Outcome: refused — OTHER is not a secret granted to you/);
+  assert.equal(requests.length, 1);
+
+  // No vault at all: refused, not thrown.
+  const none = await dispatchTool("browser_fill_secret", { ref: "e2", secret: "SHOP_PASSWORD" }, boxContext({ browser: async () => ({ url: "", title: "", snapshot: "" }) }));
+  assert.match(none.text, /^Outcome: refused — there is no vault here/);
+});

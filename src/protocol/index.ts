@@ -643,8 +643,16 @@ export interface ClipboardResult {
 export interface BrowserRequest {
   display?: number;
   owner?: string;
-  /** What to do: open, snapshot, read, act, scroll or upload. */
+  /** What to do: open, snapshot, read, act, scroll, upload, wait, or fill_secret. */
   op: string;
+  /**
+   * For `fill_secret` (INV-402): the value the host resolved from the vault, and the hosts
+   * it may be typed into. The value never appears in a tool input, a transcript or a
+   * recording: the host holds it, the box types it in an isolated world, the outline
+   * redacts the field afterwards.
+   */
+  secret_value?: string;
+  domains?: string[];
   /** For `open`. */
   url?: string;
   /** For `act`: click, type, key or hover. */

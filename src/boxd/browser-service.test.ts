@@ -184,3 +184,17 @@ test("an expectation names the first thing that is not so, and says nothing when
   assert.match(unmetExpectation({ appears: "Saved" }, state(), "Your changes were discarded") ?? "", /"Saved" to appear/);
   assert.equal(unmetExpectation({ appears: "saved" }, state(), "Changes Saved."), undefined);
 });
+
+// ── where a secret may be typed (INV-402) ─────────────────────────────────────────
+import { hostAllowed } from "./browser-service.ts";
+
+test("a secret is fillable only on the hosts it names; none named means nowhere", () => {
+  assert.equal(hostAllowed("github.com", ["github.com"]), true);
+  assert.equal(hostAllowed("GitHub.com", ["github.com"]), true);
+  assert.equal(hostAllowed("api.github.com", ["github.com"]), false, "exact means exact");
+  assert.equal(hostAllowed("api.github.com", ["*.github.com"]), true);
+  assert.equal(hostAllowed("github.com", ["*.github.com"]), true);
+  assert.equal(hostAllowed("evilgithub.com", ["*.github.com"]), false, "a lookalike is not a subdomain");
+  assert.equal(hostAllowed("github.com", []), false, "no domains, no fill");
+  assert.equal(hostAllowed("", ["github.com"]), false);
+});
