@@ -94,6 +94,7 @@ test("isAuditProbe correctly identifies repetitive system supervisor health prob
   assert.ok(isAuditProbe("pgrep -f autocutsel"));
   assert.ok(isAuditProbe("pgrep -f Xvfb :1"));
   assert.ok(isAuditProbe("xdpyinfo -display :1"));
+  assert.ok(isAuditProbe("/usr/local/bin/box-healthcheck"));
 
   // Normal user / agent commands must not be identified as probes
   assert.ok(!isAuditProbe("git commit -m 'feat: update'"));
@@ -101,6 +102,7 @@ test("isAuditProbe correctly identifies repetitive system supervisor health prob
   assert.ok(!isAuditProbe("grep -rn 'DISPLAY' src/"));
   assert.ok(!isAuditProbe("tr '[:lower:]' '[:upper:]'"));
   assert.ok(!isAuditProbe("pgrep my_custom_service"));
+  assert.ok(!isAuditProbe("cat /usr/local/bin/box-healthcheck"));
 });
 
 test("auditSource classifies human user terminal, agent execution, and system probes", () => {

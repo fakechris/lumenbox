@@ -4338,6 +4338,7 @@ function isAuditProbe(cmd) {
   if (/^grep\s+.*DISPLAY=/.test(c)) return true;
   if (/^pgrep\s+-(f\s+--?\s*|f\s+)(pcmanfm|xwatchdog|autocutsel|Xvfb)/.test(c)) return true;
   if (/^xdpyinfo\s+-display/.test(c)) return true;
+  if (/^(\/\S+\/)?box-healthcheck(\s|$)/.test(c)) return true;
   return false;
 }
 

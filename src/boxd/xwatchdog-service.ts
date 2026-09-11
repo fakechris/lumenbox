@@ -24,6 +24,9 @@ export function isProbeCommand(cmd: string): boolean {
   if (/^grep\s+.*DISPLAY=/.test(c)) return true;
   if (/^pgrep\s+-(f\s+--?\s*|f\s+)(pcmanfm|xwatchdog|autocutsel|Xvfb)/.test(c)) return true;
   if (/^xdpyinfo\s+-display/.test(c)) return true;
+  // The container health probe's own exec line: the Go daemon drops it at ingestion, but the
+  // file-fallback path can still read it from a raw exec.log.
+  if (/^(\/\S+\/)?box-healthcheck(\s|$)/.test(c)) return true;
   return false;
 }
 
