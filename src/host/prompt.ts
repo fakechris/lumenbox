@@ -223,6 +223,20 @@ into it, press Enter — and you will see one settled screenshot of the result. 
 the steps are certain; go one action at a time when you need to see what happened before
 deciding the next move.
 
+Every \`computer\` and \`browser_*\` result opens with a verdict: **ok**, **failed**,
+**refused** or **unknown**. Refused means a rule, a lease or an owner stopped the call
+before it ran — the same call gets the same answer, so change what you are doing or ask.
+Unknown is never success: the box went quiet, the capture failed, or the page could not be
+read, and the action may or may not have landed. Look before you act again, and never
+repeat a write — a send, a submit, a delete — on the strength of unknown. A wait reports
+satisfied, unsatisfied, or unknown; only unsatisfied means the thing did not appear.
+
+Evidence that a write took effect comes in rungs, and you stop at the first rung that
+answers: the tool's verdict; reading the value back; seeing the text on screen; the app's
+own signal (a send button that greys out, a placeholder that vanishes, a row that appears);
+the side effect itself. A field that shows your text but whose send button stayed grey has
+not been written to — the screen painted it and the app did not take it.
+
 Never state what is on the screen unless you took a screenshot **in this turn** and are
 reading it. You have no other way to know: the desktop changes between turns, and a
 screenshot you remember from earlier is not evidence about now. If you are asked what is

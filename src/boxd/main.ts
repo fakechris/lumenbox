@@ -60,6 +60,7 @@ import {
   type XWatchdogEventsResult,
 } from "../protocol/index.ts";
 import { DisplayManager, DisplayOwnershipError } from "./displays.ts";
+import { CdpError } from "./cdp.ts";
 import { detectDisplay, getDisplay, parseDisplayNum } from "../cua/display.ts";
 import { readClipboard, writeClipboard } from "./clipboard-service.ts";
 import { startEgressProxy } from "../egress/proxy.ts";
@@ -229,6 +230,9 @@ async function handleComputer(body: ComputerRequest): Promise<ComputerResult> {
       bindUnmappedCharacters: body.bind_unmapped_characters ?? true,
     });
     return {
+      // Ran, but nothing to show for it, is not "ok": the capture is the only evidence
+      // the host has that the screen is in the state the actions were meant to leave it.
+      outcome: result.screenshot === "" ? "unknown" : "ok",
       success: result.success,
       screenshot: result.screenshot,
       windows: result.windows,
@@ -254,6 +258,7 @@ async function handleComputer(body: ComputerRequest): Promise<ComputerResult> {
     }
 
     return {
+      outcome: "failed",
       success: false,
       screenshot,
       action_count: body.actions.length,
@@ -604,12 +609,18 @@ const server = createServer((req, res) => {
       const body = req.method === "GET" ? {} : await readBody(req);
       send(res, 200, await handler(body));
     } catch (error) {
+      // The status is the verdict the host reads (INV-400): 403 is refused, 4xx is
+      // failed, 5xx is unknown. A CdpError is the browser saying no — a stale ref, an
+      // element with no box, a covered click — which is a failure of the request, not of
+      // the box; as a 500 it would read as "the box went quiet", the one thing it is not.
       const status =
         error instanceof HttpError
           ? error.status
           : error instanceof DisplayOwnershipError
             ? 403
-            : 500;
+            : error instanceof CdpError
+              ? 422
+              : 500;
       if (status >= 500) log(`error on ${route}: ${describe(error)}`);
       send(res, status, { error: describe(error) });
     }

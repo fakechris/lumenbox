@@ -77,6 +77,10 @@ test("the prompt keeps the facts the model cannot work out for itself", () => {
   assert.match(prompt, /\/home\/box\/work/, "the only directory that survives a rebuild");
   assert.match(prompt, /box-clip/, "xclip behaves differently in this container");
   assert.match(prompt, /box-doctor/, "there is a self-check, and it is not guessable");
+  // INV-400: the verdict vocabulary and the rung that catches "painted but not taken".
+  assert.match(prompt, /Unknown is never success/);
+  assert.match(prompt, /never\s+repeat a write/);
+  assert.match(prompt, /send button that greys out/);
 });
 
 test("the prompt says how to hand a file to a person", () => {

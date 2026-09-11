@@ -135,7 +135,72 @@ export interface WindowInfo {
   title: string;
 }
 
+/**
+ * The four answers a tool can give, and the one rule about them: **`unknown` is never
+ * success.**
+ *
+ * Before this, a tool result was a text and a flag. A click that the window manager's
+ * grab swallowed, a wait whose probe threw because the page was mid-navigation, and a
+ * desktop that belonged to somebody else all came back as either "fine" or "error", and
+ * the model treated "error" as "try again" — which is right for a failed action and
+ * wrong for a refused one (the rule will refuse it again) and dangerous for an unknown
+ * one (the write may already have landed; a retry doubles it).
+ *
+ * - `ok` — the action ran and its effect was observed.
+ * - `failed` — the action ran and did not do what was asked; the error says why.
+ * - `refused` — a rule, a lease or an owner stopped it before it ran. Retrying the same
+ *   call gets the same answer; change the approach or ask.
+ * - `unknown` — the action may or may not have taken effect: the box did not answer, the
+ *   capture after it failed, the probe threw. Look before acting again; never repeat a
+ *   write on the strength of `unknown`.
+ */
+export type Outcome = "ok" | "failed" | "refused" | "unknown";
+
+/** What a wait answers with: the condition held, it never held, or we could not tell. */
+export type WaitOutcome = "satisfied" | "unsatisfied" | "unknown";
+
+/**
+ * The outcome of a computer result, for a host that may be talking to an older box.
+ *
+ * A boxd from before this field reports only `success`/`error`/`screenshot`; the
+ * derivation here is the one boxd itself applies, so the two agree.
+ */
+export function computerOutcome(result: {
+  outcome?: Outcome;
+  success: boolean;
+  screenshot: string;
+  error?: string;
+}): Outcome {
+  if (result.outcome !== undefined) return result.outcome;
+  if (result.error !== undefined || !result.success) return "failed";
+  // Ran, but there is no picture of what it did: that is not the same as ran and worked.
+  return result.screenshot === "" ? "unknown" : "ok";
+}
+
+/** The first line of a tool result, so the model reads the verdict before the detail. */
+export function outcomeLine(outcome: Outcome, reason?: string): string {
+  const why = reason !== undefined && reason !== "" ? ` — ${reason}` : "";
+  switch (outcome) {
+    case "ok":
+      return "Outcome: ok.";
+    case "failed":
+      return `Outcome: failed${why}.`;
+    case "refused":
+      return (
+        `Outcome: refused${why}. The same call will be refused again; change what you ` +
+        "are doing, or ask."
+      );
+    case "unknown":
+      return (
+        `Outcome: unknown${why}. The action may or may not have taken effect. Look ` +
+        "before you act again, and do not repeat a write on the strength of this."
+      );
+  }
+}
+
 export interface ComputerResult {
+  /** Present from boxd versions that know it; `computerOutcome` derives it otherwise. */
+  outcome?: Outcome;
   success: boolean;
   /** base64 WebP at API resolution. Empty only if capture failed. */
   screenshot: string;
@@ -557,6 +622,10 @@ export interface BrowserResponse {
   text?: string;
   /** Something that happened to the page itself: a tab opened, a tab closed, a wait ended. */
   note?: string;
+  /** Absent from an older boxd; the host reads it as `ok`. */
+  outcome?: Outcome;
+  /** For `wait`: whether the condition held, never held, or could not be checked. */
+  wait?: WaitOutcome;
 }
 
 /**
