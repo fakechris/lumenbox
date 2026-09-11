@@ -30,6 +30,7 @@ import { DockerBoxProvisioner } from "./box/provisioner.ts";
 import { applyConfigEnv, ensureConfigFile, loadConfig } from "./config.ts";
 import { describeControlPlane, startControlPlane } from "./control/main.ts";
 import { startEgressRelay } from "./egress/relay.ts";
+import { NetworkEventLog, networkEventsPath, summariseEvents } from "./egress/events.ts";
 import { describeAbsences } from "./host/absences.ts";
 import { backupNow, backupRoot } from "./host/backup.ts";
 import { Orchestrator, STARTER_TEAM } from "./host/orchestrator.ts";
@@ -1051,6 +1052,28 @@ function relayBoxes(): { name: string; token: string; allow: string[] }[] {
 }
 
 async function cmdEgress(argv: string[]): Promise<number> {
+  // `agentbox egress events [--box X] [--from ISO] [--to ISO] [--refused] [--limit N]`:
+  // what the relay decided, from the log it writes (INV-432).
+  if (argv[0] === "events") {
+    const { flags } = parseArgs(argv.slice(1));
+    const str = (name: string) => (typeof flags.get(name) === "string" ? String(flags.get(name)) : undefined);
+    const log = new NetworkEventLog(str("--file") ?? networkEventsPath());
+    const { events, total } = log.query({
+      box: str("--box"),
+      from: str("--from"),
+      to: str("--to"),
+      refused: flags.has("--refused"),
+      limit: str("--limit") !== undefined ? Number(str("--limit")) : undefined,
+    });
+    for (const row of summariseEvents(events)) {
+      out(`${bold(row.box)}  allowed ${row.allowed}  refused ${row.refused}${row.refusedHosts.length > 0 ? dim(`  (${row.refusedHosts.join(", ")})`) : ""}`);
+    }
+    for (const event of events) {
+      out(`${dim(event.at)}  ${event.box}  ${event.host}:${event.port}  ${event.allowed ? "allowed" : `refused (${event.reason ?? "?"})`}`);
+    }
+    out(dim(`${events.length} of ${total} shown`));
+    return 0;
+  }
   const { flags } = parseArgs(argv);
   const portFlag = flags.get("--port");
   const hostFlag = flags.get("--host");
@@ -1061,6 +1084,8 @@ async function cmdEgress(argv: string[]): Promise<number> {
     // own box's token is the relay token, so it is named here too and its bundle hosts
     // apply; an attached box is known by the token file its record names.
     const boxes = relayBoxes();
+    const eventsFlag = flags.get("--events");
+    const events = new NetworkEventLog(typeof eventsFlag === "string" ? eventsFlag : networkEventsPath());
     const server = startEgressRelay({
       // The box token by default, so a box started by this CLI can already authenticate.
       token: loadBoxToken(),
@@ -1071,6 +1096,8 @@ async function cmdEgress(argv: string[]): Promise<number> {
           ? allowFlag.split(",").map(entry => entry.trim()).filter(Boolean)
           : undefined,
       boxes,
+      // Every decision to disk, for `agentbox egress events` and the web (INV-432).
+      onEvent: event => events.append(event),
       log: line => out(dim(line)),
     });
     for (const box of boxes) {
