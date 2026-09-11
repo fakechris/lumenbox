@@ -46,6 +46,13 @@ export interface Secret {
   description: string;
   value: string;
   grants: Grant[];
+  /**
+   * Where this secret may be typed into a web page (INV-402, docs/15 design C): host
+   * names, exact or `*.example.com`. `browser_fill_secret` refuses any page whose host is
+   * not listed, and refuses when the list is empty — a credential with no home is not
+   * fillable anywhere, which is the safe reading of "nobody said where".
+   */
+  domains?: string[];
 }
 
 /** A secret as a reader may see it: everything but the value. */
@@ -53,6 +60,7 @@ export interface SecretView {
   id: string;
   description: string;
   grants: Grant[];
+  domains?: string[];
 }
 
 interface VaultFile {
@@ -116,6 +124,7 @@ export class Vault {
                   ...(typeof g.expiresAt === "string" ? { expiresAt: g.expiresAt } : {}),
                 }))
             : [],
+          ...(Array.isArray(raw.domains) ? { domains: raw.domains.filter((d: unknown): d is string => typeof d === "string" && d !== "") } : {}),
         });
       }
     } catch {
@@ -130,7 +139,13 @@ export class Vault {
       id: secret.id,
       description: secret.description,
       grants: secret.grants.map(grant => ({ ...grant })),
+      ...(secret.domains !== undefined ? { domains: [...secret.domains] } : {}),
     }));
+  }
+
+  /** The hosts a secret may be filled into, or an empty list when none were named. */
+  domainsOf(id: string): string[] {
+    return [...(this.secrets.find(secret => secret.id === id)?.domains ?? [])];
   }
 
   /**
@@ -138,7 +153,7 @@ export class Vault {
    * operator editing a description or grants does not have to re-paste the secret,
    * and the UI never has to hold a value it was never shown.
    */
-  setSecret(input: { id: string; description?: string; value?: string; grants?: Grant[] }): void {
+  setSecret(input: { id: string; description?: string; value?: string; grants?: Grant[]; domains?: string[] }): void {
     const id = input.id.trim();
     if (id === "") return;
     const existing = this.secrets.find(secret => secret.id === id);
@@ -151,6 +166,9 @@ export class Vault {
       description: input.description ?? existing?.description ?? "",
       value: input.value !== undefined && input.value !== "" ? input.value : existing?.value ?? "",
       grants: input.grants ?? existing?.grants ?? [],
+      ...((input.domains ?? existing?.domains) !== undefined && (input.domains ?? existing?.domains)!.length > 0
+        ? { domains: [...(input.domains ?? existing?.domains)!] }
+        : {}),
     };
     this.secrets = [...this.secrets.filter(s => s.id !== id), secret];
     this.persist();

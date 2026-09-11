@@ -3318,6 +3318,12 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
             ...(typeof body.description === "string" ? { description: body.description } : {}),
             ...(typeof body.value === "string" && body.value !== "" ? { value: body.value } : {}),
             grants,
+            // Where it may be typed into a page (INV-402). Sent as a list or a comma string.
+            ...(Array.isArray(body.domains)
+              ? { domains: (body.domains as unknown[]).filter((d): d is string => typeof d === "string").map(d => d.trim()).filter(Boolean) }
+              : typeof body.domains === "string"
+                ? { domains: body.domains.split(",").map(d => d.trim()).filter(Boolean) }
+                : {}),
           });
           log(`vault: saved secret ${id}`);
           send(res, 200, { secrets: vault.list() });

@@ -1720,6 +1720,7 @@ export class Orchestrator {
  */
 export const ALL_TOOLS: readonly string[] = [
   "WaitForControl",
+  "browser_fill_secret",
   "computer",
   "bash",
   "Jobs",

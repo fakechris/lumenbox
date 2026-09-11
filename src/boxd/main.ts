@@ -457,6 +457,8 @@ const routes: Record<string, Handler> = {
         const checked = await browser.check(display, String(body.url ?? "about:blank"));
         return { url: String(body.url ?? ""), title: checked.title, snapshot: checked.snapshot };
       }
+      case "fill_secret":
+        return browser.fillSecret(display, String(body.ref ?? ""), String(body.secret_value ?? ""), body.domains ?? [], body.snapshot);
       case "wait":
         return browser.waitFor(
           display,

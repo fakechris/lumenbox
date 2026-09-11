@@ -128,3 +128,26 @@ test("a reload sees another writer's secret; a broken file is an empty vault", (
     cleanup();
   }
 });
+
+// ── where a secret may be filled (INV-402) ────────────────────────────────────────
+import { mkdtempSync as mkTmp, rmSync as rmTmp } from "node:fs";
+import { tmpdir as osTmp } from "node:os";
+import { join as joinPath } from "node:path";
+
+test("a secret remembers the hosts it may be typed into, across a reload", () => {
+  const dir = mkTmp(joinPath(osTmp(), "agentbox-vault-domains-"));
+  try {
+    const vault = new Vault(joinPath(dir, "vault.json"), joinPath(dir, "audit.jsonl"));
+    vault.setSecret({ id: "SHOP_PASSWORD", value: "x", grants: [], domains: ["*.shop.test", "shop.test"] });
+    assert.deepEqual(vault.domainsOf("SHOP_PASSWORD"), ["*.shop.test", "shop.test"]);
+    assert.deepEqual(vault.domainsOf("NOPE"), []);
+    // Editing the description keeps the domains, like it keeps the value.
+    vault.setSecret({ id: "SHOP_PASSWORD", description: "shop login" });
+    assert.deepEqual(vault.domainsOf("SHOP_PASSWORD"), ["*.shop.test", "shop.test"]);
+    const again = new Vault(joinPath(dir, "vault.json"), joinPath(dir, "audit.jsonl"));
+    assert.deepEqual(again.domainsOf("SHOP_PASSWORD"), ["*.shop.test", "shop.test"]);
+    assert.deepEqual(again.list()[0]?.domains, ["*.shop.test", "shop.test"]);
+  } finally {
+    rmTmp(dir, { recursive: true, force: true });
+  }
+});

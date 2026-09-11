@@ -312,6 +312,25 @@ export function unmetExpectation(
   return undefined;
 }
 
+/**
+ * Whether a page's host is one a secret may be typed into: exact, or `*.example.com`
+ * for the domain and its subdomains. An empty list allows nothing — a credential with no
+ * home is fillable nowhere.
+ */
+export function hostAllowed(host: string, domains: readonly string[]): boolean {
+  const target = host.trim().toLowerCase();
+  if (target === "") return false;
+  return domains.some(entry => {
+    const pattern = entry.trim().toLowerCase();
+    if (pattern === "") return false;
+    if (pattern.startsWith("*.")) {
+      const bare = pattern.slice(2);
+      return target === bare || target.endsWith(`.${bare}`);
+    }
+    return target === pattern;
+  });
+}
+
 export interface BrowserResult {
   url: string;
   title: string;
@@ -824,6 +843,64 @@ class BrowserPage {
     return this.resolve(ref);
   }
 
+  /**
+   * Types a vault secret into a field without the page's own scripts seeing the write
+   * (INV-402, browser-use-pi's fillSecret; docs/15 design C).
+   *
+   * Main document only, and only on a host the secret names. The value is set in an
+   * isolated world through the native setter — the page's monkey-patched `value` setter,
+   * if it has one, never runs — then `input` and `change` are dispatched so the app takes
+   * it, and the field is marked so the outline redacts it. Nothing here goes through
+   * `Input.insertText`, so no keystroke reaches a recording.
+   */
+  async fillSecret(ref: string, value: string, domains: readonly string[]): Promise<void> {
+    if (ref.includes("@")) {
+      throw new CdpError("fill_secret works on the main document only; a field inside a frame cannot be filled this way.");
+    }
+    const objectId = await this.resolve(ref);
+    const where = (await this.session.send("Runtime.evaluate", {
+      expression: "location.host",
+      returnByValue: true,
+    })) as { result?: { value?: string } };
+    const host = String(where.result?.value ?? "");
+    if (!hostAllowed(host, domains)) {
+      throw new CdpError(
+        domains.length === 0
+          ? `This secret names no domains it may be filled into, so it cannot be typed anywhere. An operator adds them in Settings → Vault.`
+          : `This page is ${host || "(no host)"}, and the secret may only be filled into ${domains.join(", ")}.`
+      );
+    }
+    if (this.mainFrameId === undefined) throw new CdpError("The page has no main frame to fill into yet; take a snapshot first.");
+    const node = (await this.session.send("DOM.describeNode", { objectId })) as { node?: { backendNodeId?: number } };
+    const backendNodeId = node.node?.backendNodeId;
+    if (backendNodeId === undefined) throw new CdpError("That element cannot be addressed for a secret fill; take a fresh snapshot.");
+    const world = (await this.session.send("Page.createIsolatedWorld", {
+      frameId: this.mainFrameId,
+      worldName: "lumenbox-secret",
+    })) as { executionContextId?: number };
+    if (world.executionContextId === undefined) throw new CdpError("Could not open an isolated world on this page.");
+    const isolated = (await this.session.send("DOM.resolveNode", {
+      backendNodeId,
+      executionContextId: world.executionContextId,
+    })) as { object?: { objectId?: string } };
+    const target = isolated.object?.objectId;
+    if (target === undefined) throw new CdpError("That element is not reachable from the isolated world; take a fresh snapshot.");
+    const outcome = (await this.session.send("Runtime.callFunctionOn", {
+      objectId: target,
+      arguments: [{ value }],
+      returnByValue: true,
+      functionDeclaration:
+        "function(v){ const proto = this instanceof HTMLTextAreaElement ? HTMLTextAreaElement.prototype : HTMLInputElement.prototype;" +
+        " const d = Object.getOwnPropertyDescriptor(proto, 'value'); if (!d || !d.set) return 'not a field';" +
+        " this.focus(); d.set.call(this, v);" +
+        " this.dispatchEvent(new Event('input', {bubbles:true})); this.dispatchEvent(new Event('change', {bubbles:true}));" +
+        " this.setAttribute('data-lumen-secret', '1'); return 'ok'; }",
+    })) as { result?: { value?: string } };
+    if (outcome.result?.value !== "ok") {
+      throw new CdpError(`That element is ${outcome.result?.value ?? "not fillable"}: fill_secret needs an input or a textarea.`);
+    }
+  }
+
   /** The target's own words and the text around it, for `irreversibleReason`. */
   private async describeTarget(objectId: string): Promise<ClickTarget> {
     const described = (await this.session.send("Runtime.callFunctionOn", {
@@ -1303,6 +1380,16 @@ export class BrowserService {
       throw new CdpError(`The page is not what you expected: ${unmet}. (Effect: ${judged.effect}${judged.changed.length > 0 ? `, changed ${judged.changed.join(", ")}` : ""}.)`);
     }
     return { ...result, effect: judged.effect, changed: judged.changed };
+  }
+
+  /** Fills a vault secret into a field (INV-402). The value is never in the result. */
+  async fillSecret(display: number, ref: string, value: string, domains: readonly string[], snapshot?: string): Promise<BrowserResult> {
+    if (ref === "") throw new CdpError("fill_secret needs the ref of the field, from a snapshot.");
+    if (value === "") throw new CdpError("The secret resolved to nothing; nothing was typed.");
+    const page = await this.pageFor(display);
+    await page.assertFresh(snapshot);
+    await page.fillSecret(ref, value, domains);
+    return this.settled(display, await page.report());
   }
 
   async scroll(display: number, direction: string, amount: number): Promise<BrowserResult> {
