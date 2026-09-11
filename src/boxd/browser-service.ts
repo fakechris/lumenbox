@@ -261,10 +261,14 @@ export interface TargetState {
 export function judgeEffect(
   before: TargetState,
   after: TargetState | undefined,
-  navigated: boolean
+  navigated: boolean,
+  pageChanged = false
 ): { effect: Effect; changed: string[] } {
   const changed: string[] = [];
   if (navigated) changed.push("navigated");
+  // Elements added or removed anywhere on the page since the action. Counted, not
+  // measured in text length: a ticking clock changes text and moves no element.
+  if (pageChanged) changed.push("page");
   if (after === undefined) {
     changed.push("gone");
     return { effect: "confirmed", changed };
@@ -858,6 +862,28 @@ class BrowserPage {
     } catch {
       return undefined;
     }
+  }
+
+  /**
+   * Element additions and removals since the last outline, from the observer the outline
+   * script installs. What says a click changed the page *somewhere else* — a list that
+   * re-rendered, a panel that opened — when the button itself looks the same.
+   */
+  async mutationsSinceSnapshot(): Promise<number> {
+    try {
+      const counted = (await this.session.send("Runtime.evaluate", {
+        expression: MUTATIONS_SCRIPT,
+        returnByValue: true,
+      })) as { result?: { value?: number } };
+      return Number(counted.result?.value ?? 0);
+    } catch {
+      return 0;
+    }
+  }
+
+  /** Lets the page settle after an action without taking the outline that resets counters. */
+  async settleAfterAction(): Promise<void> {
+    await this.settle(false);
   }
 
   /** The visible text of the page, for `expect.appears`. Bounded like read(). */
@@ -1482,6 +1508,7 @@ export class BrowserService {
     // simply unmeasured, never a refusal.
     const before = needsRef && ref !== undefined ? await page.targetStateAfter(ref) : undefined;
     const navigationsBefore = page.navigations;
+    const mutationsBefore = before === undefined ? 0 : await page.mutationsSinceSnapshot();
     switch (action) {
       case "click":
         await page.click(ref!, options.confirmed === true);
@@ -1498,6 +1525,14 @@ export class BrowserService {
       default:
         throw new CdpError(`${action} is not something this does: click, type, key or hover.`);
     }
+    // Settle first and read the page's own change counter before the outline resets it:
+    // a click whose whole effect is elsewhere on the page — a list re-rendered, a panel
+    // opened — is a change, even when the button itself looks the same afterwards.
+    let pageChanged = false;
+    if (before !== undefined) {
+      await page.settleAfterAction();
+      pageChanged = (await page.mutationsSinceSnapshot()) > mutationsBefore;
+    }
     const result = await this.settled(display, await page.report());
     // Judged after the settle, which is when a navigation the click started has begun.
     const navigated = page.navigations > navigationsBefore;
@@ -1509,7 +1544,7 @@ export class BrowserService {
       return result;
     }
     const after = await page.targetStateAfter(ref);
-    const judged = judgeEffect(before, after, navigated);
+    const judged = judgeEffect(before, after, navigated, pageChanged);
     const unmet = unmetExpectation(options.expect, after, options.expect?.appears !== undefined ? await page.visibleText() : "");
     if (unmet !== undefined) {
       throw new CdpError(`The page is not what you expected: ${unmet}. (Effect: ${judged.effect}${judged.changed.length > 0 ? `, changed ${judged.changed.join(", ")}` : ""}.)`);
