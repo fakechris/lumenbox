@@ -255,3 +255,20 @@ test("a begin record says which model, which build and which prompt produced the
     rmSync(root, { recursive: true, force: true });
   }
 });
+
+// ── custody is per conversation (INV-435) ─────────────────────────────────────────
+import { openTurnFor } from "./resume.ts";
+
+test("an open turn is matched by agent and conversation, and the main conversation is the ledger's absent one", () => {
+  const open = [
+    { id: "t1", agentId: "a1", at: "2026-09-11T10:00:00.000Z", about: "x", attempt: 0 },
+    { id: "t2", agentId: "a1", at: "2026-09-11T10:01:00.000Z", about: "y", attempt: 0, conversation: "feishu-oc_room" },
+    { id: "t3", agentId: "a2", at: "2026-09-11T10:02:00.000Z", about: "z", attempt: 0, conversation: "feishu-oc_other" },
+  ];
+  assert.equal(openTurnFor(open, "a1", "feishu-oc_room")?.id, "t2");
+  assert.equal(openTurnFor(open, "a1", "main")?.id, "t1");
+  // The case that held up deliveries: the agent has a turn open elsewhere, none here.
+  assert.equal(openTurnFor(open, "a1", "feishu-oc_third"), undefined);
+  assert.equal(openTurnFor(open, "a1")?.id, "t1", "no conversation: the coarse question");
+  assert.equal(openTurnFor(open, "a3"), undefined);
+});

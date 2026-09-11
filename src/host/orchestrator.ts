@@ -22,6 +22,7 @@ import {
   resumePrompt,
   TurnLedger,
   turnLedgerPath,
+  openTurnFor,
 } from "./resume.ts";
 import { AgentRegistry, type AgentRecord } from "../agents/registry.ts";
 import type { BoxClient } from "../box/client.ts";
@@ -1404,8 +1405,12 @@ export class Orchestrator {
    * For the owed-delivery sweep: an answer must not be handed over while the turn that is
    * writing it is still running, or the person gets half a reply followed by silence.
    */
-  hasOpenTurn(agentId: string): boolean {
-    return (this.turns?.interrupted() ?? []).some(turn => turn.agentId === agentId);
+  /**
+   * Whether a turn is still writing in this conversation (INV-435). Without the
+   * conversation, any open turn of the agent's — the older, coarser question.
+   */
+  hasOpenTurn(agentId: string, conversation?: string): boolean {
+    return openTurnFor(this.turns?.interrupted() ?? [], agentId, conversation) !== undefined;
   }
 
   /**
