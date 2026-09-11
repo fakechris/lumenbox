@@ -3420,6 +3420,20 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
           return;
         }
 
+        // Operator rules (INV-427): what they are, what was ignored, and a re-read after an
+        // edit — the edge reloads, like MCP servers; every change lands in the policy log.
+        if (route === "GET /api/rules") {
+          if (refusedRole("admin")) return;
+          send(res, 200, { rules: orchestrator.rules.list(), ignored: orchestrator.rules.ignored() });
+          return;
+        }
+        if (route === "POST /api/rules/reload") {
+          if (refusedRole("admin")) return;
+          orchestrator.rules.reload();
+          send(res, 200, { ok: true, rules: orchestrator.rules.list(), ignored: orchestrator.rules.ignored() });
+          return;
+        }
+
         if (route === "POST /api/mcp/reload") {
           if (refused()) return;
           // The edges reload; the core does not (R36). An operator edited mcpServers in

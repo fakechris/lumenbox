@@ -137,3 +137,22 @@ test("a computer batch that writes to the desktop is reviewed; a look is not (IN
   assert.equal(needsReview("computer", { actions: [{ action: "type", text: "hi" }] }), "drives the desktop by coordinates");
   assert.equal(needsReview("computer", { actions: "nonsense" }), undefined);
 });
+
+test("operator rules reach the reviewer as a section that can authorise, and rule 7 says so (INV-427)", () => {
+  const prompt = buildReviewPrompt({
+    agentName: "Ada",
+    trusted: ["comment on X-1 that it is done"],
+    untrusted: [],
+    tool: "bash",
+    input: { command: "jira comment X-1 'done'" },
+    why: "shell command that reaches out or destroys",
+    operatorRules: ["[allow-jira] (allow) Commenting on Jira is routine here."],
+  });
+  const rules = prompt.indexOf("## OPERATOR RULES");
+  const untrusted = prompt.indexOf("## AGENT NARRATION");
+  assert.ok(rules > 0 && rules < untrusted, "operator rules sit with the trusted text, before the untrusted block");
+  assert.match(prompt, /\[allow-jira\] \(allow\) Commenting on Jira is routine here\./);
+  assert.match(prompt, /7\. An OPERATOR RULE outranks the person/);
+  const without = buildReviewPrompt({ agentName: "Ada", trusted: [], untrusted: [], tool: "bash", input: {}, why: "x" });
+  assert.doesNotMatch(without, /OPERATOR RULES/);
+});

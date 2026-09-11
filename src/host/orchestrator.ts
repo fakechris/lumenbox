@@ -66,6 +66,7 @@ import { buildAuditPrompt, manifestDiff, MANIFEST_COMMAND, parseManifest } from 
 import { ScopeStore } from "./scopes.ts";
 import { BundleStore } from "./bundles.ts";
 import { TeachRunner } from "./teach.ts";
+import { RuleStore } from "./rules.ts";
 import { MAIN_CONVERSATION, conversationIdFor } from "../agents/registry.ts";
 import type { HostRunner } from "./host-runner.ts";
 import type { Vault } from "./vault.ts";
@@ -142,6 +143,8 @@ export interface OrchestratorOptions {
   scopes?: ScopeStore | null;
   /** The bundle store; tests pass one over a temp file. */
   bundles?: BundleStore;
+  /** Operator rules; tests pass one over a temp dir. */
+  rules?: RuleStore;
   /**
    * MCP servers whose tools the agents may call. Absent reads the config file; `null`
    * keeps none, which is what a test that must not spawn a child process wants.
@@ -234,6 +237,14 @@ export class Orchestrator {
       this.usage.spentSincePrincipal(sinceMs, principalId),
     spentSinceAgent: (sinceMs, agentId) => this.usage.spentSinceAgent(sinceMs, agentId),
     log: line => console.error(`[policy] ${line}`),
+    // Read lazily: the store is built after the gate, and rules reload with the config.
+    rules: {
+      decide: (tool: string, input: Record<string, unknown>) => this.rules?.decide(tool, input),
+      forReview: () => this.rules?.forReview() ?? [],
+      list: () => this.rules?.list() ?? [],
+      ignored: () => this.rules?.ignored() ?? [],
+      reload: () => this.rules?.reload(),
+    } as unknown as RuleStore,
   });
 
   readonly provider: ProviderProfile;
@@ -258,6 +269,8 @@ export class Orchestrator {
     skillsDir: SKILLS_DIR,
     log: line => console.error(`[teach] ${line}`),
   });
+  /** Operator rules (INV-427); reloaded with the config, audited into the policy log. */
+  readonly rules: RuleStore;
 
   /**
    * Reads Feishu documents with the bot's workspace identity. A field rather than an
@@ -656,6 +669,9 @@ export class Orchestrator {
     if (this.tasks !== undefined) this.tasks.onChange(task => this.maybeLearnFrom(task));
     this.scopes = options.scopes === null ? undefined : (options.scopes ?? new ScopeStore());
     this.bundles = options.bundles ?? new BundleStore();
+    this.rules =
+      options.rules ??
+      new RuleStore(undefined, change => this.policy.notifyRulesLoaded(change), line => console.error(`[rules] ${line}`));
     this.mcpFromConfig = options.mcp === undefined;
     this.mcp =
       options.mcp === null || options.mcp === undefined
@@ -1300,6 +1316,7 @@ export class Orchestrator {
       tasks: this.tasks,
       scopes: this.scopes,
       bundles: this.bundles,
+      operatorRules: () => this.rules.forReview(),
       mcp: this.mcp,
       askUser: this.options.askUser,
       askSecret: this.options.askSecret,
