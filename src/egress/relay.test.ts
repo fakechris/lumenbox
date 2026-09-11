@@ -39,3 +39,28 @@ test("a wildcard matches the domain and its subdomains, not a lookalike", () => 
 test("a bare star allows everything, for a deployment that means it", () => {
   assert.equal(permitted({ host: "anything.at.all", port: 8080 }, ["*"]), true);
 });
+
+// ── per box (INV-423) ─────────────────────────────────────────────────────────────
+import { identify } from "./relay.ts";
+
+test("a stream is the box its token names, with the global list widened by its bundles", () => {
+  const options = {
+    token: "relay-token-1234567890",
+    allow: ["api.search.test"],
+    boxes: [
+      { name: "agentbox", token: "relay-token-1234567890", allow: ["vendor.test"] },
+      { name: "grok", token: "grok-token-1234567890", allow: [] },
+    ],
+  };
+  // The own box shares the relay token and is named as a box, so its bundle hosts apply.
+  assert.deepEqual(identify("relay-token-1234567890", options), { box: "agentbox", allow: ["api.search.test", "vendor.test"] });
+  // An attached box with nothing in its bundles gets the global list and no more.
+  assert.deepEqual(identify("grok-token-1234567890", options), { box: "grok", allow: ["api.search.test"] });
+  assert.equal(identify("nope", options), undefined);
+  // A relay started the old way: only its token, no boxes — still works.
+  assert.deepEqual(identify("relay-token-1234567890", { token: "relay-token-1234567890", allow: [] }), { box: "relay", allow: [] });
+  // A global list that names hosts is not widened to anywhere by a box that says nothing.
+  const strict = identify("grok-token-1234567890", options)!;
+  assert.equal(permitted({ host: "vendor.test", port: 443 }, strict.allow), false);
+  assert.equal(permitted({ host: "vendor.test", port: 443 }, identify("relay-token-1234567890", options)!.allow), true);
+});
