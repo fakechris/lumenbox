@@ -105,6 +105,7 @@ import type { Vault } from "./vault.ts";
 import type { TaskStore } from "./tasks.ts";
 import type { ScopeStore } from "./scopes.ts";
 import { narrowSkills, type BundleStore } from "./bundles.ts";
+import { readInstallationInstructions } from "./place.ts";
 import type { McpManager } from "./mcp.ts";
 import { TOOL_BUDGET_WARNING } from "./mcp.ts";
 import { narrowTools } from "./scopes.ts";
@@ -319,6 +320,26 @@ function truncateOldestResults(
   return { dropped, chars };
 }
 /** The roster a prompt shows: the registry's one definition of a teammate, plus the agent itself. */
+/**
+ * The instructions of the place an agent works in (INV-428): the installation's file and
+ * the bundles its box carries. Undefined when neither says anything, so the section is
+ * simply absent.
+ */
+function placeOf(registry: AgentRegistry, agentId: string, bundles: BundleStore | undefined) {
+  const installation = readInstallationInstructions();
+  let boxName: string | undefined;
+  let fromBundles: string[] = [];
+  try {
+    const box = registry.boxOf(agentId);
+    boxName = box.name;
+    fromBundles = bundles?.forBox(box)?.instructions ?? [];
+  } catch {
+    // No box to speak of: the installation's word still stands.
+  }
+  if (installation === undefined && fromBundles.length === 0) return undefined;
+  return { ...(installation !== undefined ? { installation } : {}), ...(boxName !== undefined ? { boxName } : {}), box: fromBundles };
+}
+
 function teammatesOf(registry: AgentRegistry, agentId: string): AgentRecord[] {
   if (typeof (registry as { teammatesOf?: unknown }).teammatesOf !== "function") return registry.list();
   try {
@@ -1213,6 +1234,7 @@ export async function runTurn(
       memoryRecall: recallToUse,
       sharedMemory: registry.readSharedMemory(),
       skills: narrowSkills(deps.skills ?? [], deps.bundles?.forBox(registry.boxOf(agent.id))),
+      place: placeOf(registry, agent.id, deps.bundles),
       transcript: registry.readTranscript(agent.id, conversation),
       heard: registry.readHeard(agent.id, conversation),
       // Read fresh, which is what makes the plan and the todo list survive a compaction: they are in
