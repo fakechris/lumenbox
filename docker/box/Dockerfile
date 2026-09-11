@@ -45,6 +45,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
       '[snoopy]' \
       'output = file:/var/log/xwatchdog/exec.log' \
       'message_format = "time=%{datetime} | uid=%{uid} | user=%{username} | tty=%{tty} | pwd=%{cwd} | pid=%{pid} | ppid=%{ppid} | cmd=%{cmdline}"' \
+      'filter_chain = "exclude_spawns_of:start-display,box-healthcheck"' \
       > /etc/snoopy.ini \
     && printf '%s\n' \
       '================================================================' \

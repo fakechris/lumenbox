@@ -1,4 +1,4 @@
-#!/usr/bin/env bash
+#!/bin/bash
 # The container's health check.
 #
 # Checks what the running topology actually promises, which is the fix for a real defect: the

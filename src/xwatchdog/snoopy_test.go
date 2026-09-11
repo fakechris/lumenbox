@@ -2,8 +2,10 @@ package main
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 )
@@ -142,5 +144,96 @@ func TestClassifyExecSource(t *testing.T) {
 	}
 	if s := ClassifyExecSource("none", "pytest tests/", "box"); s != "agent" {
 		t.Errorf("expected agent, got %s", s)
+	}
+}
+
+func TestCapExecLogLeavesSmallFile(t *testing.T) {
+	tmpDir, err := os.MkdirTemp("", "xwatchdog-cap-small-*")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer os.RemoveAll(tmpDir)
+
+	execPath := filepath.Join(tmpDir, "exec.log")
+	content := "time=2026-09-09 09:30:15 | uid=1000 | user=box | tty=pts/0 | pwd=/home/box | pid=10 | ppid=1 | cmd=echo hello\n"
+	if err := os.WriteFile(execPath, []byte(content), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	// Ceiling 10KB, file is ~110 bytes
+	if err := CapExecLog(execPath, 10*1024); err != nil {
+		t.Fatalf("CapExecLog error: %v", err)
+	}
+
+	data, err := os.ReadFile(execPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(data) != content {
+		t.Fatalf("expected small file to remain unchanged, got %s", string(data))
+	}
+}
+
+func TestCapExecLog(t *testing.T) {
+	tmpDir, err := os.MkdirTemp("", "xwatchdog-cap-large-*")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer os.RemoveAll(tmpDir)
+
+	execPath := filepath.Join(tmpDir, "exec.log")
+	f, err := os.Create(execPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Write ~2000 lines (~200KB)
+	for i := 1; i <= 2000; i++ {
+		line := fmt.Sprintf("time=2026-09-09 09:30:15 | uid=1000 | user=box | tty=pts/0 | pwd=/home/box | pid=%d | ppid=1 | cmd=echo line-%d\n", i, i)
+		_, _ = f.WriteString(line)
+	}
+	_ = f.Close()
+
+	fiBefore, err := os.Stat(execPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Cap at 64KB, targetRetain is ~32KB
+	const maxBytes = 64 * 1024
+	if err := CapExecLog(execPath, maxBytes); err != nil {
+		t.Fatalf("CapExecLog failed: %v", err)
+	}
+
+	fiAfter, err := os.Stat(execPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if fiAfter.Size() > maxBytes {
+		t.Fatalf("expected capped file <= %d, got %d", maxBytes, fiAfter.Size())
+	}
+	if fiAfter.Size() >= fiBefore.Size() {
+		t.Fatalf("expected file to shrink from %d, got %d", fiBefore.Size(), fiAfter.Size())
+	}
+
+	// Read and verify first and last lines
+	data, err := os.ReadFile(execPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	lines := strings.Split(strings.TrimSpace(string(data)), "\n")
+	if len(lines) == 0 {
+		t.Fatal("expected lines in capped file")
+	}
+
+	// First line should be a complete valid Snoopy line
+	if !strings.HasPrefix(lines[0], "time=") {
+		t.Fatalf("expected first line to start with time=, got: %s", lines[0])
+	}
+	// Last line should match the final line written (line-2000)
+	lastLine := lines[len(lines)-1]
+	if !strings.Contains(lastLine, "line-2000") {
+		t.Fatalf("expected last line to contain line-2000, got: %s", lastLine)
 	}
 }
