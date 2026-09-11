@@ -571,3 +571,32 @@ test("a single exchange is cited without being asked, and the prompt only number
   assert.equal(describeFrom(["main@2026-09-06T10:00"]), " — from main at 2026-09-06 10:00");
   assert.equal(describeFrom(undefined), "");
 });
+
+// ── the index of what was kept and not shown (INV-425) ──────────────────────────────
+import { renderMemoryIndex, recall as recallRecords, INDEX_HEAD_CHARS } from "./memory.ts";
+
+test("what the budget dropped is listed by head, newest first, under its own small budget", () => {
+  const records = Array.from({ length: 12 }, (_, i) => ({
+    at: `2026-09-${String(i + 1).padStart(2, "0")}T00:00:00.000Z`,
+    kind: "fact" as const,
+    text: `Fact number ${i + 1}: ${"detail ".repeat(20)}`,
+  }));
+  const recalled = recallRecords(records, 400);
+  assert.ok(recalled.omitted > 0);
+  assert.equal(recalled.omittedRecords?.length, recalled.omitted);
+  const index = renderMemoryIndex(recalled.omittedRecords ?? [], 400);
+  assert.match(index[1] ?? "", /^Also kept, not shown in full \(\d+\)\. Recall with a word/);
+  const heads = index.slice(2).filter(line => /^- 2026/.test(line));
+  assert.ok(heads.length >= 2, "at least a couple fit a 400-char index");
+  assert.ok(heads[0]! > heads[1]!, "newest first");
+  assert.ok(heads.every(line => line.length <= 12 + 6 + INDEX_HEAD_CHARS + 8), "each line is a head, not the memory");
+  assert.match(index[index.length - 1] ?? "", /… and \d+ more; Recall searches all of them/);
+  assert.deepEqual(renderMemoryIndex([]), []);
+
+  const prompt = renderMemory(recalled);
+  assert.match(prompt, /are not shown in full\./);
+  assert.match(prompt, /Also kept, not shown in full/);
+  // Nothing dropped: no index, no claim of an index.
+  const all = renderMemory(recallRecords(records.slice(0, 2), 10_000));
+  assert.doesNotMatch(all, /Also kept/);
+});
