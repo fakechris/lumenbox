@@ -198,3 +198,26 @@ test("a secret is fillable only on the hosts it names; none named means nowhere"
   assert.equal(hostAllowed("github.com", []), false, "no domains, no fill");
   assert.equal(hostAllowed("", ["github.com"]), false);
 });
+
+// ── tabs by label, a cap, and a page that moved (INV-408) ─────────────────────────
+import { driftNote, nextLabel, pageBudgetReason, PAGE_BUDGET } from "./browser-service.ts";
+
+test("labels are minted in order and a closed tab's label is reused", () => {
+  assert.equal(nextLabel([]), "p1");
+  assert.equal(nextLabel(["p1", "p2"]), "p3");
+  assert.equal(nextLabel(["p1", "p3"]), "p2");
+});
+
+test("a page that moved since the agent last looked is said; the same page, or a fragment, is not", () => {
+  assert.equal(driftNote(undefined, "https://a.test/"), undefined);
+  assert.equal(driftNote("https://a.test/", "https://a.test/"), undefined);
+  assert.equal(driftNote("https://a.test/#top", "https://a.test/#form"), undefined);
+  assert.match(driftNote("https://a.test/app", "https://a.test/login?expired=1") ?? "", /^The page moved since you last looked: you were on https:\/\/a\.test\/app and it is now https:\/\/a\.test\/login\?expired=1/);
+});
+
+test("the tab cap refuses the next tab and says how to make room", () => {
+  assert.equal(pageBudgetReason(0), undefined);
+  assert.equal(pageBudgetReason(PAGE_BUDGET - 1), undefined);
+  assert.match(pageBudgetReason(PAGE_BUDGET) ?? "", /Close one with browser_pages/);
+  assert.match(pageBudgetReason(9, 4) ?? "", /already have 9 tabs/);
+});

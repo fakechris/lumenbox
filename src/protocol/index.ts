@@ -643,8 +643,10 @@ export interface ClipboardResult {
 export interface BrowserRequest {
   display?: number;
   owner?: string;
-  /** What to do: open, snapshot, read, act, scroll, upload, wait, or fill_secret. */
+  /** What to do: open, snapshot, read, act, scroll, upload, wait, fill_secret, pages, switch or close. */
   op: string;
+  /** For `open` (which page to open in), `switch` and `close`: a page label from `pages`, e.g. p2 (INV-408). */
+  page?: string;
   /**
    * For `fill_secret` (INV-402): the value the host resolved from the vault, and the hosts
    * it may be typed into. The value never appears in a tool input, a transcript or a
@@ -692,6 +694,14 @@ export interface BrowserRequest {
   expect?: ActExpectation;
 }
 
+/** One tab, as the agent addresses it. */
+export interface PageInfo {
+  label: string;
+  url: string;
+  title: string;
+  current: boolean;
+}
+
 export interface ActExpectation {
   /** The target's value afterwards (a textbox after `type`). */
   value?: string;
@@ -722,6 +732,8 @@ export interface BrowserResponse {
   wait?: WaitOutcome;
   /** The id of this outline, to hand back with a ref taken from it. */
   snapshot_id?: string;
+  /** For `pages`: every tab on this desktop, labelled, current one marked (INV-408). */
+  pages?: PageInfo[];
   /** For `act` on a ref: whether the target visibly changed (INV-399). */
   effect?: Effect;
   /** What changed on the target: `value`, `checked`, `text`, `focus`, `aria`, `subtree`, `gone`, `navigated`. */

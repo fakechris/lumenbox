@@ -21,7 +21,7 @@
  * Verified against the box's own Chromium rather than assumed.
  */
 
-import type { Outcome, WaitOutcome, ActExpectation, Effect } from "../protocol/index.ts";
+import type { Outcome, WaitOutcome, ActExpectation, Effect, PageInfo } from "../protocol/index.ts";
 import { spawn } from "node:child_process";
 import { realpathSync, statSync } from "node:fs";
 import { CdpError, CdpSession, closeTarget, listTargets, openTarget, type CdpTarget } from "./cdp.ts";
@@ -331,10 +331,42 @@ export function hostAllowed(host: string, domains: readonly string[]): boolean {
   });
 }
 
+/** How many tabs one desktop's agent may hold open. Beyond this, close one first. */
+export const PAGE_BUDGET = 6;
+
+/** The next label for a tab: p1, p2, … skipping labels already given on this desktop. */
+export function nextLabel(taken: Iterable<string>): string {
+  const used = new Set(taken);
+  for (let n = 1; ; n++) {
+    const label = `p${n}`;
+    if (!used.has(label)) return label;
+  }
+}
+
+/**
+ * The sentence for a page that moved since the agent last looked (INV-408, huashu-chrome's
+ * drift warning). Only a *different* URL is drift; a same-URL re-render is not, and a
+ * fragment-only change is not either.
+ */
+export function driftNote(lastSeen: string | undefined, now: string): string | undefined {
+  if (lastSeen === undefined || lastSeen === "") return undefined;
+  const strip = (url: string) => url.replace(/#.*$/, "");
+  if (strip(lastSeen) === strip(now)) return undefined;
+  return `The page moved since you last looked: you were on ${lastSeen} and it is now ${now}. A redirect, an expired session or the site itself did this — read the outline below before acting as if you were still there.`;
+}
+
+/** Why another tab may not be opened, or undefined when it may. */
+export function pageBudgetReason(open: number, budget = PAGE_BUDGET): string | undefined {
+  if (open < budget) return undefined;
+  return `You already have ${open} tabs open on this desktop, which is the limit. Close one with browser_pages {action: "close", page: "pN"} first — a tab you are done with costs nothing to close and confuses every later "which page" question while it stays.`;
+}
+
 export interface BrowserResult {
   url: string;
   title: string;
   snapshot: string;
+  /** For `pages`: every tab, labelled (INV-408). */
+  pages?: PageInfo[];
   /** The id of this outline; act with a ref from it and say so. */
   snapshot_id?: string;
   /** For an act on a ref: whether the target changed, and how (INV-399). */
@@ -1181,6 +1213,74 @@ export class BrowserService {
   private readonly knownTargets = new Map<number, Set<string>>();
   /** Something worth saying on the next result — that the tab changed under the agent. */
   private readonly pendingNote = new Map<number, string>();
+  /** Tab labels per desktop: target id → p1, p2, … Stable while the tab lives (INV-408). */
+  private readonly labels = new Map<number, Map<string, string>>();
+  /** The URL the agent last saw on each desktop, for the drift banner (INV-408). */
+  private readonly lastSeen = new Map<number, string>();
+
+  /** The label of a target, minting one the first time it is seen. */
+  private labelFor(display: number, targetId: string): string {
+    const byTarget = this.labels.get(display) ?? new Map<string, string>();
+    this.labels.set(display, byTarget);
+    const existing = byTarget.get(targetId);
+    if (existing !== undefined) return existing;
+    const label = nextLabel(byTarget.values());
+    byTarget.set(targetId, label);
+    return label;
+  }
+
+  /** Every tab on a desktop, labelled, the attached one marked current. */
+  async listPages(display: number): Promise<PageInfo[]> {
+    const port = portForDisplay(display);
+    const targets = (await listTargets(port)).filter(target => target.type === "page");
+    const current = this.pages.get(display)?.session;
+    const live = new Set(targets.map(target => target.id));
+    // Labels of tabs that closed are released, so a long session does not climb to p40.
+    const byTarget = this.labels.get(display);
+    if (byTarget !== undefined) for (const id of [...byTarget.keys()]) if (!live.has(id)) byTarget.delete(id);
+    return targets.map(target => ({
+      label: this.labelFor(display, target.id),
+      url: target.url,
+      title: target.title ?? "",
+      current: current !== undefined && current.targetId === target.id,
+    }));
+  }
+
+  /** Switches the desktop's session to the tab with this label. */
+  async switchPage(display: number, label: string): Promise<BrowserResult> {
+    const pages = await this.listPages(display);
+    const wanted = pages.find(page => page.label === label);
+    if (wanted === undefined) {
+      throw new CdpError(`No tab ${label} on this desktop. Open tabs: ${pages.map(page => `${page.label} ${page.title || page.url}`).join("; ") || "(none)"}.`);
+    }
+    const port = portForDisplay(display);
+    const target = (await listTargets(port)).find(candidate => candidate.url === wanted.url && this.labelFor(display, candidate.id) === label);
+    if (target === undefined) throw new CdpError(`Tab ${label} closed while switching to it.`);
+    this.pages.get(display)?.close();
+    const page = await BrowserPage.attach(port, target);
+    this.pages.set(display, page);
+    return this.settled(display, await page.report());
+  }
+
+  /** Closes the tab with this label; the session moves to whatever is left. */
+  async closePage(display: number, label: string): Promise<BrowserResult> {
+    const pages = await this.listPages(display);
+    const wanted = pages.find(page => page.label === label);
+    if (wanted === undefined) throw new CdpError(`No tab ${label} on this desktop.`);
+    const port = portForDisplay(display);
+    const byTarget = this.labels.get(display);
+    const targetId = byTarget === undefined ? undefined : [...byTarget.entries()].find(([, l]) => l === label)?.[0];
+    if (targetId === undefined) throw new CdpError(`Tab ${label} is not known any more.`);
+    if (wanted.current) {
+      this.pages.get(display)?.close();
+      this.pages.delete(display);
+    }
+    await closeTarget(port, targetId);
+    byTarget?.delete(targetId);
+    const page = await this.pageFor(display);
+    this.pendingNote.set(display, `Closed ${label}. You are now on the tab below.`);
+    return this.settled(display, await page.report());
+  }
 
   /**
    * Starts the browser on a desktop, and waits for it to be drivable.
@@ -1291,28 +1391,58 @@ export class BrowserService {
   private async settled(display: number, result: BrowserResult): Promise<BrowserResult> {
     const adopted = await this.adoptPopup(display);
     const final = adopted ?? result;
-    const note = this.pendingNote.get(display);
+    const notes = [this.pendingNote.get(display), final.note].filter((n): n is string => n !== undefined);
     this.pendingNote.delete(display);
-    if (note === undefined) return final;
-    return { ...final, note: final.note === undefined ? note : `${note} ${final.note}` };
+    this.lastSeen.set(display, final.url);
+    return notes.length === 0 ? final : { ...final, note: notes.join(" ") };
   }
 
-  async open(display: number, url: string): Promise<BrowserResult> {
+
+  async open(display: number, url: string, inPage?: string): Promise<BrowserResult> {
+    if (inPage !== undefined && inPage !== "" && inPage !== "new") {
+      // Navigate a named tab: switch to it first, then go.
+      await this.switchPage(display, inPage);
+    } else if (inPage === "new") {
+      const pages = await this.listPages(display);
+      const refusal = pageBudgetReason(pages.length);
+      if (refusal !== undefined) throw new CdpError(refusal);
+      const port = portForDisplay(display);
+      const target = await openTarget(port, "about:blank");
+      this.pages.get(display)?.close();
+      const page = await BrowserPage.attach(port, target);
+      this.pages.set(display, page);
+      this.knownTargets.get(display)?.add(target.id);
+      this.labelFor(display, target.id);
+    }
     const page = await this.pageFor(display, url);
     await page.navigate(url);
     return this.settled(display, await page.report(true));
   }
 
-  async snapshot(display: number): Promise<BrowserResult> {
+  /** The tabs on a desktop, with the current outline (INV-408). */
+  async tabs(display: number): Promise<BrowserResult> {
     const page = await this.pageFor(display);
-    return this.settled(display, await page.report());
+    const list = await this.listPages(display);
+    const result = await page.report();
+    return { ...result, pages: list };
   }
 
-  async read(display: number): Promise<{ text: string; url: string }> {
+  async snapshot(display: number): Promise<BrowserResult> {
+    const page = await this.pageFor(display);
+    // Drift is judged against what the agent last saw, before `settled` records this look.
+    const before = this.lastSeen.get(display);
+    const result = await this.settled(display, await page.report());
+    const drift = driftNote(before, result.url);
+    return drift === undefined ? result : { ...result, note: result.note === undefined ? drift : `${drift} ${result.note}` };
+  }
+
+  async read(display: number): Promise<{ text: string; url: string; note?: string }> {
     const page = await this.pageFor(display);
     const text = await page.read();
     const { url } = await page.snapshot();
-    return { text, url };
+    const drift = driftNote(this.lastSeen.get(display), url);
+    this.lastSeen.set(display, url);
+    return { text, url, ...(drift !== undefined ? { note: drift } : {}) };
   }
 
   async act(

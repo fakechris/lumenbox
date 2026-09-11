@@ -1407,6 +1407,23 @@ export function buildTools(
     });
     tools.push(
       {
+        name: "browser_pages",
+        description:
+          "Your tabs on this desktop, labelled p1, p2, …, with the one you are on marked. " +
+          "`list` shows them; `switch` moves you to one; `close` closes one (do this for tabs " +
+          "you are done with — there is a cap per desktop). Every browser result also warns you " +
+          "when the page moved since you last looked, so a redirect or an expired session is " +
+          "not mistaken for the page you were on.",
+        input_schema: {
+          type: "object",
+          properties: {
+            action: { type: "string", enum: ["list", "switch", "close"] },
+            page: { type: "string", description: "For switch and close: the label, e.g. p2." },
+          },
+          required: ["action"],
+        },
+      },
+      {
         name: "browser_open",
         description:
           "Open a URL in your box's browser and get the page back as an outline. Start " +
@@ -1430,6 +1447,13 @@ export function buildTools(
               description:
                 "The URL to open: http, https, or a file:// path inside your box — the " +
                 "browser runs in the box, so it can open an HTML file you just wrote.",
+            },
+            page: {
+              type: "string",
+              description:
+                "Which tab to open it in: a label from browser_pages (p2), or \"new\" for a fresh " +
+                "tab. Default is the tab you are on. Tabs are capped per desktop; close what you " +
+                "are done with.",
             },
           },
           required: ["url"],
@@ -3214,6 +3238,7 @@ export async function dispatchTool(
     case "browser_act":
     case "browser_scroll":
     case "browser_wait_for":
+    case "browser_pages":
     case "browser_upload": {
       const box = requireBox(context);
       // Refused rather than left to a default. With no display named, boxd falls back to
@@ -3246,8 +3271,14 @@ export async function dispatchTool(
           isError: true,
         };
       }
+      const pagesAction = name === "browser_pages" ? String(input.action ?? "list") : undefined;
       const request: BrowserRequest = {
-        op: name === "browser_wait_for" ? "wait" : name.slice("browser_".length),
+        op:
+          name === "browser_wait_for"
+            ? "wait"
+            : pagesAction !== undefined
+              ? pagesAction === "list" ? "pages" : pagesAction
+              : name.slice("browser_".length),
         display: context.displayIndex,
         ...(context.boxOwner !== undefined ? { owner: context.boxOwner } : {}),
       };
@@ -3259,6 +3290,7 @@ export async function dispatchTool(
           // work directory rather than the operator's disk.
           const target = await guardUrl(String(input.url ?? ""), true);
           request.url = target.toString();
+          if (typeof input.page === "string" && input.page !== "") request.page = input.page;
         } catch (error) {
           return {
             text: error instanceof WebError ? error.message : `Cannot open that: ${error}`,
@@ -3296,6 +3328,7 @@ export async function dispatchTool(
         request.direction = String(input.direction ?? "down");
         request.amount = Number.isFinite(input.amount) ? Number(input.amount) : 3;
       }
+      if (name === "browser_pages" && typeof input.page === "string") request.page = input.page;
       if (name === "browser_upload") {
         request.ref = String(input.ref ?? "");
         request.files = [String(input.path ?? "")];
@@ -3308,7 +3341,9 @@ export async function dispatchTool(
 
       const render = (result: Awaited<ReturnType<BoxClient["browser"]>>): ToolOutcome => {
         if (name === "browser_read") {
-          return { text: `${result.url}\n\n${result.text ?? "(the page has no text)"}` };
+          return {
+            text: `${result.note !== undefined ? `${result.note}\n\n` : ""}${result.url}\n\n${result.text ?? "(the page has no text)"}`,
+          };
         }
         // The verdict first. An older boxd sends none, and for it "it answered" is ok.
         const outcome: Outcome = result.outcome ?? "ok";
@@ -3324,6 +3359,11 @@ export async function dispatchTool(
         // agent, or a wait that ran out, changes how the outline below should be read.
         if (result.note !== undefined) parts.push(result.note);
         if (result.dialog !== undefined) parts.push(result.dialog);
+        if (result.pages !== undefined) {
+          parts.push(
+            `Tabs on your desktop:\n${result.pages.map(page => `${page.current ? "▶" : " "} ${page.label}  ${page.title || "(untitled)"} — ${page.url}`).join("\n")}`
+          );
+        }
         parts.push(result.snapshot);
         return { text: parts.join("\n\n"), ...(outcome === "unknown" ? { isError: true } : {}) };
       };
