@@ -52,6 +52,19 @@ export interface MemoryRecord {
   /** The person it is about, when the box was told who was driving. Absent means "the team". */
   about?: string;
   /**
+   * The box it was kept in, on a shared record (INV-424, docs/50 H1). Stamped by the
+   * registry on write from the writer's box, never trusted from the tool. Memory follows
+   * the place: a box's agents read their own box's shared records, not another box's.
+   * Absent on records from before this existed, which stay visible everywhere — they
+   * were, and nothing is quietly withdrawn by a migration.
+   */
+  box?: string;
+  /**
+   * Who may read a shared record beyond its box. `everyone` is an explicit promotion to
+   * the installation, said by the agent that kept it; absent means the box.
+   */
+  audience?: "everyone";
+  /**
    * Where it came from: `<conversation>@<time>` of the exchange(s) it was taken from, so a
    * belief can be checked against what was actually said (R27). Absent when nobody could say
    * — an extractor that did not cite, an import — and absence is kept honest: nothing here
