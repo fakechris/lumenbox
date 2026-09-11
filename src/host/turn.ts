@@ -340,6 +340,25 @@ function placeOf(registry: AgentRegistry, agentId: string, bundles: BundleStore 
   return { ...(installation !== undefined ? { installation } : {}), ...(boxName !== undefined ? { boxName } : {}), box: fromBundles };
 }
 
+/** The name of the box an agent lives in, for the spend ledger; undefined when the roster cannot say. */
+function boxNameOf(registry: AgentRegistry, agentId: string): string | undefined {
+  try {
+    return registry.boxOf(agentId).name;
+  } catch {
+    return undefined;
+  }
+}
+
+/**
+ * The door a conversation came through: `web` for the main conversation, else the channel
+ * id that prefixes a bound chat's conversation id (`feishu-oc_x-om_y` → `feishu`).
+ */
+export function doorOf(conversation: string): string {
+  if (conversation === MAIN_CONVERSATION) return "web";
+  const dash = conversation.indexOf("-");
+  return dash > 0 ? conversation.slice(0, dash) : conversation;
+}
+
 function teammatesOf(registry: AgentRegistry, agentId: string): AgentRecord[] {
   if (typeof (registry as { teammatesOf?: unknown }).teammatesOf !== "function") return registry.list();
   try {
@@ -1993,6 +2012,9 @@ export async function runTurn(
       // "unattributed" beside the bookkeeping kinds — 8.5M of 8.7M tokens with no name on
       // them when the first metrics run looked (2026-09-07).
       kind: "turn",
+      // The place (INV-431): the box from the roster, the door from the conversation id.
+      box: boxNameOf(registry, agent.id),
+      door: doorOf(conversation),
       // What a report groups by. `turnId` would be the obvious key and is the wrong one: it
       // is minted per attempt, so it splits one long piece of work into several short ones.
       workId,
