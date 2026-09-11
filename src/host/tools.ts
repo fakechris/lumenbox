@@ -1422,8 +1422,13 @@ export function buildTools(
           "unless you say otherwise); `hover` moves the pointer onto it; `key` sends a key " +
           "to whatever has focus — Enter, Tab, Escape, Backspace, Delete, the arrows, " +
           "PageUp, PageDown, Home, End.\n\n" +
-          "click, type and hover need `ref` from the latest outline. If a ref is refused as " +
-          "stale, take a fresh snapshot rather than guessing another one.\n\n" +
+          "click, type and hover need `ref` from the latest outline, and `snapshot` — the " +
+          "outline's id, shown at the top of it — so a ref from an older outline, or from a " +
+          "page that has re-rendered since, is refused as STALE_SNAPSHOT instead of landing " +
+          "on the wrong thing. When that happens, take a fresh snapshot; or describe the " +
+          "element with `find` — {role, name, nth} — which resolves against the page as it " +
+          "stands and needs no ref: find {role: \"button\", name: \"Delete\", nth: 2} is " +
+          "the second Delete button.\n\n" +
           "Never type somebody's password, one-time code or card number. If a step needs a " +
           "credential, or a captcha, stop and say so — name the site and the step — so a " +
           "person can take the box and do it themselves.",
@@ -1432,6 +1437,20 @@ export function buildTools(
           properties: {
             action: { type: "string", enum: ["click", "type", "key", "hover"] },
             ref: { type: "string", description: "Handle from the outline, e.g. e4 or e2@f1." },
+            snapshot: {
+              type: "string",
+              description: "The id of the outline the ref came from, e.g. s7. Always pass it with a ref.",
+            },
+            find: {
+              type: "object",
+              description:
+                "Instead of a ref: the element by what it is. role is exact (button, link, textbox, checkbox…), name is a substring of its visible text or label, nth picks among several (1-based).",
+              properties: {
+                role: { type: "string" },
+                name: { type: "string" },
+                nth: { type: "integer" },
+              },
+            },
             text: { type: "string", description: "For `type`: what to enter." },
             key: { type: "string", description: "For `key`: which key, e.g. Enter." },
             replace: {
@@ -1802,7 +1821,7 @@ function templateStamp(context: ToolContext, path: string, content: string): str
  */
 export function boxErrorOutcome(error: unknown): Outcome | undefined {
   if (!(error instanceof BoxError)) return undefined;
-  if (error.status === 403 || error.kind === "refused") return "refused";
+  if (error.status === 403 || error.status === 409 || error.kind === "refused") return "refused";
   if (error.kind === "timeout" || error.kind === "crashed" || error.kind === "unreachable") {
     return "unknown";
   }
@@ -3110,6 +3129,15 @@ export async function dispatchTool(
       if (name === "browser_act") {
         request.action = String(input.action ?? "");
         if (typeof input.ref === "string") request.ref = input.ref;
+        if (typeof input.snapshot === "string" && input.snapshot !== "") request.snapshot = input.snapshot;
+        if (input.find !== null && typeof input.find === "object") {
+          const find = input.find as { role?: unknown; name?: unknown; nth?: unknown };
+          request.find = {
+            ...(typeof find.role === "string" ? { role: find.role } : {}),
+            ...(typeof find.name === "string" ? { name: find.name } : {}),
+            ...(Number.isFinite(find.nth) ? { nth: Number(find.nth) } : {}),
+          };
+        }
         if (typeof input.text === "string") request.text = input.text;
         if (typeof input.key === "string") request.key = input.key;
         if (typeof input.replace === "boolean") request.replace = input.replace;
@@ -3139,7 +3167,7 @@ export async function dispatchTool(
           name === "browser_wait_for" && result.wait !== undefined
             ? `${outcomeLine(outcome)} Wait: ${result.wait}.`
             : outcomeLine(outcome),
-          `${result.title || "(untitled)"} — ${result.url}`,
+          `${result.snapshot_id !== undefined ? `Snapshot ${result.snapshot_id}: ` : ""}${result.title || "(untitled)"} — ${result.url}`,
         ];
         // What happened to the page comes before the page. A tab that opened under the
         // agent, or a wait that ran out, changes how the outline below should be read.
