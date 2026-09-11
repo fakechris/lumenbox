@@ -290,3 +290,78 @@ mechanism, none of it is buildable honestly — **today every box is shared, and
 says so**, which items 1–4 already made true. This answers the v4 reviewer's
 "docs/18 has no user" gate: the user is the owner, the use case is a one-person
 box, and the schedule is "with multiuser, not before".
+
+## 8. Appendix, 2026-09-10: the eight primitives, and where a capability lives
+
+Decided with docs/50 (the enterprise reading of Claude Tag through six lenses). This
+appendix adds no third gate. It names the things §0–§7 already talk about, says what each
+may carry, and settles the one question §3 left open: where a *capability* is attached now
+that per-agent and per-chat scopes are retired.
+
+### 8.1 The primitives
+
+| Primitive | Is | Owns / carries | Claude Tag's word |
+| --- | --- | --- | --- |
+| **Installation** | one host process, one Principal roster, one config | the default **Bundle**, the org-level instructions, the doors, the boxes | Organization |
+| **Box** | a room and a machine: the inner gate and the runtime in one | `members`, its **Bundles**, box-level instructions, its shared-memory shard, its desktops, its logins, its egress list | Workspace + Environment |
+| **Door** | a channel record: an entrance into one box | `boxId`, `defaultAgent`, incarnation, name rules, guest toggle. **No authority.** | Channel |
+| **Agent** | a worker in one box | persona, model, `tools` (labour shaping only, §0), its own memory | — |
+| **Session** | one person-opened turn on an agent's conversation | the turn ledger, the transcript entries | Session |
+| **Routine** | a time- or event-triggered turn, a file in the box with provenance | schedule, trigger, deliver-to | Routine |
+| **Environment** | how a box is provisioned: docker, attached, compose, kubernetes, and (docs/50 G5) a desktop-less host | the provisioner and its health | Environment |
+| **Bundle** | a named, reusable set of capabilities | `skills`, `mcpServers`, `connectors`, `secretIds`, `egressHosts`, `repositories`, `instructions` | Access Bundle |
+
+The ownership chain is Installation → Box → Agent. A Door points at a Box and grants
+nothing; two doors into one box are two entrances to the same authority, which is §2
+restated.
+
+### 8.2 Inheritance is union downward, then labour narrowing
+
+A box's *effective* capability is the union of the installation's default bundle and every
+bundle the box lists. An agent's *offered* tool set is that union narrowed by its own
+`tools`, under §0's rule: narrowing may shape labour, it may never be the only thing between
+an agent and a secret. Bundles stack; a conflict between two bundles (the same MCP server
+name with different configuration) is an error at load, not a silent override. Instructions
+concatenate installation → box → agent, in that order, as separate prompt sections.
+
+### 8.3 What is *not* a place for a bundle
+
+- **A door.** Rejected again here for the reason §2 gives. Claude Tag attaches bundles to
+  channels; docs/50 §4 says why we do not, and notes the analysis it came from predicts
+  Claude Tag will drop channel-level configuration itself.
+- **An agent.** A bundle on an agent is the per-agent scope of §3 under a new name.
+- **A chat.** Same, one layer over.
+
+### 8.4 The Scope retirement path
+
+`Scope` (`src/host/scopes.ts`: `tools`, `secretIds`, `egressHosts`, `filesRoot`, `chats`) was
+the first attempt at a bundle, attached to the wrong subjects. It retires field by field:
+
+| Scope field | Goes to | Note |
+| --- | --- | --- |
+| `tools` | `Agent.tools` (already there) | labour shaping stays on the worker |
+| `secretIds` | `Bundle.secretIds`, granted to the box | vault grants gain a `box:<id>` subject; `agent:<id>` grants migrate or fail closed (§7 item 6) |
+| `egressHosts` | `Bundle.egressHosts`, enforced per box by the relay | today declared, not enforced (docs/10 S-8) |
+| `filesRoot` | `Bundle.repositories[]` with `{path, mode}` | the "local project" of docs/50 G5 is one of these |
+| `chats` (chatKey → scope) | removed | doors route; nothing binds authority to a chat |
+| `scopeId` on an agent | removed | the agent reads its box's bundles |
+
+The migration is one change with a script: every existing scope becomes a bundle listed on
+the box its agents live in; a scope bound to a chat is reported and dropped; anything
+ambiguous fails closed with the operator named. The acceptance matrix of §7 item 6 covers
+it: every agent in a box yields identical secret and policy decisions.
+
+### 8.5 The six-lens checklist
+
+Every enterprise-facing change from here on says which of these it serves, and any change
+that touches one is reviewed against the others:
+
+1. **Primitives** — which of the eight does it add to or alter; does it create a ninth?
+2. **Data** — who owns the record; where in Installation → Box → Agent does it live; what is
+   append-only?
+3. **Product detail** — is the control per place (box) rather than per person?
+4. **Memory** — which shard does it read and write; does it leak across boxes?
+5. **Audit** — which ledger records it; can it be cut by box and by time range?
+6. **Runtime** — which environment runs it; what may it reach on the network?
+
+docs/50 §3 carries the inventory of where we stand on each, and docs/36 §4 tracks it.

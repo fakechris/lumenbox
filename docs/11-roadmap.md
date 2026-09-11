@@ -1260,6 +1260,41 @@ conduct numbers, the prompt floor, the pre-launch security list): R8's rider and
 R26's search path, then R25. R4, R16, R30, R29 wait for their designs; R17 and R27 wait for a
 week of memory numbers. docs/30 Stage C (`TransferFile`) is paused at Chris's call.
 
+## What to do next, as of 2026-09-10 — after the CUA and enterprise rounds
+
+The day added 47 Involute items (INV-394..440; docs/49 and docs/50). Everything under INV-96
+was re-ranked on one scale, written to Involute `priority` (4 = this round … 1 = later).
+Tier 0 of the previous round closed as: INV-144 and INV-154 In Review; INV-153 blocked on
+Feishu/DingTalk contact-read credentials; INV-145 moved to In Review as R11 (RUN-189), its
+desktop half split into INV-412.
+
+**Tier 0 — this round (p4).** Small, each unblocks a family, none needs a design decision.
+INV-418 domain model v2 decision (docs/22 appendix); INV-400 four-state tool outcome;
+INV-398 `computer` effect evidence (the grab-eaten-click hole); INV-407 `STALE_SNAPSHOT` +
+`find`; INV-401 irreversible-action gate and `computer` into auto-review; INV-403 stop-line
+prompt. Still open from last round: INV-153 (needs credentials).
+
+**Tier 1 — next (p3).** The "place" model lands together: INV-420 bundle on box, INV-424
+memory by box, INV-428 layered instructions, INV-431 spend by box, INV-423 egress by box,
+INV-432 network events. CUA reliability: INV-399 `browser_act` diff + expect, INV-404 takeover
+pauses the agent, INV-402 `fill_secret`, INV-409 site learnings, INV-408 tabs. Docs: INV-419.
+Identity precondition: INV-157. INV-146 browser reliability is mostly covered by 407/408; keep
+it for the retry/degrade half.
+
+**Tier 2 (p2).** Teach loop (405, 406), partial delivery (410), admin rules (427), memory index
+(425), IM custody and attention (435, 436), local environment and MCP by bundle (438, 439),
+OAuth connectors (422), memory quality (147, 148), approvals by principal (156), account
+claim (155), audit set (134, 135, 136, 430, 433), S-1..S-8 (138; S-1 and S-8 are also 402 and
+423), AT-SPI (412), multiuser direction (139).
+
+**Tier 3 (p1).** Bundle stacking and template refs (421), memory UI (426), door name rules
+(429), environment connect codes (434), standing MCP face (440), learnings in templates (411),
+chat niceties (110–112), webhook hardening (115, 116), roster (119–121), conduct corpus
+(128–130), voice and long-tail connectors (149, 150).
+
+Overlaps to resolve by hand when committing: 146 ↔ 407/408; 138 ↔ 402/423; 156 ↔ 427;
+136 ↔ 432/433. Keep the older one for what the newer does not say, or mark DUPLICATE_OF.
+
 ## What to do next, as of 2026-09-06 — three rounds from the Memoh read
 
 Two source-level reads of Memoh (`research/MEMOH-COMPARISON.md` in this repo and
