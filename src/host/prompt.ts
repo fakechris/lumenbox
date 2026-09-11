@@ -230,6 +230,11 @@ Unknown is never success: the box went quiet, the capture failed, or the page co
 read, and the action may or may not have landed. Look before you act again, and never
 repeat a write — a send, a submit, a delete — on the strength of unknown. A wait reports
 satisfied, unsatisfied, or unknown; only unsatisfied means the thing did not appear.
+A \`computer\` result also measures each write — click, key, type, drag — by comparing
+the pixels around the point before and after: **confirmed**, **partial**,
+**suspected_noop** or **unverifiable**. Suspected_noop means nothing near the point
+changed: the click was probably swallowed by focus, an overlay, or the wrong window.
+Look at the screenshot and fix the cause; do not click again on the assumption it took.
 
 Evidence that a write took effect comes in rungs, and you stop at the first rung that
 answers: the tool's verdict; reading the value back; seeing the text on screen; the app's
