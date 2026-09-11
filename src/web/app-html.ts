@@ -945,7 +945,75 @@ export const APP_HTML = String.raw`<!doctype html>
   <div id="autoview" style="display:none;flex:1;min-height:0;flex-direction:column">
     <div class="bar" style="display:flex;gap:8px;align-items:center;border-bottom:1px solid var(--border)">
       <span class="dim" id="autostate" style="flex:1;font-size:12px"></span>
+      <a href="#" id="autonew" class="dim" style="font-size:12px">+ New</a>
       <a href="#" id="autorefresh" class="dim" style="font-size:12px">refresh</a>
+    </div>
+    <div id="autocreate" style="display:none;padding:16px;border-bottom:1px solid var(--border)">
+      <div style="display:flex;flex-direction:column;gap:12px">
+        <!-- Name -->
+        <div>
+          <div class="dim" style="font-size:11px;margin-bottom:4px">Name</div>
+          <input id="autoname" placeholder="Name this routine…" spellcheck="false" style="width:100%;box-sizing:border-box;padding:6px 10px;border-radius:var(--radius-input);border:1px solid var(--border-strong);background:var(--surface);color:var(--text);font:inherit;font-size:13px">
+        </div>
+        <!-- Instruction -->
+        <div>
+          <div class="dim" style="font-size:11px;margin-bottom:4px">Instruction</div>
+          <textarea id="autobody" placeholder="What should this routine do each time it runs?" rows="3" spellcheck="false" style="width:100%;box-sizing:border-box;padding:6px 10px;border-radius:var(--radius-input);border:1px solid var(--border-strong);background:var(--surface);color:var(--text);font:inherit;font-size:13px;resize:vertical"></textarea>
+        </div>
+        <!-- Trigger type -->
+        <div>
+          <div class="dim" style="font-size:11px;margin-bottom:4px">When to run</div>
+          <div id="autotrigger" style="display:flex;gap:6px">
+            <button class="btn sm" data-trigger="schedule" style="flex:1">⏱ On a schedule</button>
+            <button class="btn sm ghost" data-trigger="webhook" style="flex:1">🔗 Webhook</button>
+            <button class="btn sm ghost" data-trigger="message" style="flex:1">💬 Message</button>
+          </div>
+        </div>
+        <!-- Schedule options (shown when schedule selected) -->
+        <div id="autoschedule" style="display:flex;flex-direction:column;gap:8px">
+          <div style="display:flex;flex-wrap:wrap;gap:6px" id="autopresets">
+            <button class="btn sm ghost" data-cron="0 * * * *">Every hour</button>
+            <button class="btn sm ghost" data-cron="0 9 * * *">Every day 09:00</button>
+            <button class="btn sm ghost" data-cron="0 9 * * 1-5">Weekdays 09:00</button>
+            <button class="btn sm ghost" data-cron="0 9 * * 1">Every Monday</button>
+            <button class="btn sm ghost" data-cron="custom">Custom…</button>
+          </div>
+          <div id="autocronwrap" style="display:none">
+            <input id="autocron" placeholder="cron: 0 9 * * * or @daily" spellcheck="false" style="width:100%;box-sizing:border-box;padding:6px 10px;border-radius:var(--radius-input);border:1px solid var(--border-strong);background:var(--surface);color:var(--text);font:inherit;font-size:12px;font-family:var(--mono)">
+          </div>
+          <div id="autocrondesc" class="dim" style="font-size:11px"></div>
+        </div>
+        <!-- Message options (hidden by default) -->
+        <div id="automessage" style="display:none">
+          <div class="dim" style="font-size:11px;margin-bottom:4px">Match pattern (text or /regex/)</div>
+          <input id="automatch" placeholder="e.g. hello or /invoice .*/i" spellcheck="false" style="width:100%;box-sizing:border-box;padding:6px 10px;border-radius:var(--radius-input);border:1px solid var(--border-strong);background:var(--surface);color:var(--text);font:inherit;font-size:13px">
+        </div>
+        <!-- Webhook hint (hidden by default) -->
+        <div id="autowebhook" style="display:none">
+          <div class="dim" style="font-size:11px">A URL and secret will be generated automatically. You can find them in the automation row after creation.</div>
+        </div>
+        <!-- Agent -->
+        <div>
+          <div class="dim" style="font-size:11px;margin-bottom:4px">Run as agent</div>
+          <select id="autoagent" style="width:100%;box-sizing:border-box;height:32px;border-radius:var(--radius-input);border:1px solid var(--border-strong);background:var(--surface);color:var(--text);font-size:13px"></select>
+        </div>
+        <!-- Deliver -->
+        <div>
+          <div class="dim" style="font-size:11px;margin-bottom:4px">Report to <span class="dim">(optional chat key, e.g. feishu:oc_xxx)</span></div>
+          <input id="autodeliver" placeholder="Leave empty for no chat delivery" spellcheck="false" style="width:100%;box-sizing:border-box;padding:6px 10px;border-radius:var(--radius-input);border:1px solid var(--border-strong);background:var(--surface);color:var(--text);font:inherit;font-size:13px">
+        </div>
+        <!-- Timezone -->
+        <div>
+          <div class="dim" style="font-size:11px;margin-bottom:4px">Timezone <span class="dim">(optional, e.g. Asia/Shanghai)</span></div>
+          <input id="autotimezone" placeholder="Host timezone" spellcheck="false" style="width:100%;box-sizing:border-box;padding:6px 10px;border-radius:var(--radius-input);border:1px solid var(--border-strong);background:var(--surface);color:var(--text);font:inherit;font-size:13px">
+        </div>
+        <!-- Actions -->
+        <div style="display:flex;gap:8px;justify-content:flex-end">
+          <button class="btn sm ghost" id="autocancel">Cancel</button>
+          <button class="btn sm" id="autosave">Create (paused)</button>
+        </div>
+        <div id="autoerror" style="display:none;color:var(--warn);font-size:12px"></div>
+      </div>
     </div>
     <div class="scroll" id="autolist"></div>
   </div>
@@ -4579,6 +4647,156 @@ document.getElementById("autolist").addEventListener("click", function (e) {
     })
     .catch(function () { e.target.disabled = false; });
 });
+
+
+// The form toggle
+var autoCreateOpen = false;
+document.getElementById("autonew").addEventListener("click", function (e) {
+  e.preventDefault();
+  autoCreateOpen = !autoCreateOpen;
+  $("autocreate").style.display = autoCreateOpen ? "" : "none";
+  if (autoCreateOpen) {
+    // populate agent dropdown
+    $("autoagent").innerHTML = '<option value="">(first agent)</option>' +
+      agents.map(function (a) { return '<option value="' + esc(a.name) + '">' + esc(a.name) + '</option>'; }).join("");
+  }
+});
+
+// Track selected trigger and cron
+var autoTrigger = "schedule";
+var autoCron = "";
+
+// Trigger type switching
+$("autotrigger").addEventListener("click", function (e) {
+  var btn = e.target.closest("[data-trigger]");
+  if (!btn) return;
+  autoTrigger = btn.getAttribute("data-trigger");
+  // Update button styles
+  $("autotrigger").querySelectorAll("[data-trigger]").forEach(function (b) {
+    b.className = b.getAttribute("data-trigger") === autoTrigger ? "btn sm" : "btn sm ghost";
+  });
+  $("autoschedule").style.display = autoTrigger === "schedule" ? "" : "none";
+  $("automessage").style.display = autoTrigger === "message" ? "" : "none";
+  $("autowebhook").style.display = autoTrigger === "webhook" ? "" : "none";
+});
+
+// Schedule presets
+$("autopresets").addEventListener("click", function (e) {
+  var btn = e.target.closest("[data-cron]");
+  if (!btn) return;
+  var cron = btn.getAttribute("data-cron");
+  if (cron === "custom") {
+    $("autocronwrap").style.display = "";
+    $("autocron").focus();
+    return;
+  }
+  autoCron = cron;
+  $("autocronwrap").style.display = "none";
+  $("autocron").value = "";
+  // Highlight selected preset
+  $("autopresets").querySelectorAll("[data-cron]").forEach(function (b) {
+    b.className = b.getAttribute("data-cron") === cron ? "btn sm" : "btn sm ghost";
+  });
+  $("autocrondesc").textContent = cron;
+});
+
+$("autocron").addEventListener("input", function () {
+  autoCron = $("autocron").value.trim();
+  // Deselect presets
+  $("autopresets").querySelectorAll("[data-cron]").forEach(function (b) {
+    b.className = b.getAttribute("data-cron") === "custom" ? "btn sm" : "btn sm ghost";
+  });
+});
+
+// Create automation
+$("autosave").addEventListener("click", function () {
+  var name = $("autoname").value.trim();
+  var body = $("autobody").value.trim();
+  if (!name) { $("autoerror").textContent = "A name is required."; $("autoerror").style.display = ""; return; }
+  if (!body) { $("autoerror").textContent = "An instruction is required."; $("autoerror").style.display = ""; return; }
+  
+  var payload = {
+    name: name,
+    body: body,
+    triggerType: autoTrigger
+  };
+  
+  if (autoTrigger === "schedule") {
+    var cron = autoCron || $("autocron").value.trim();
+    if (!cron) { $("autoerror").textContent = "Pick a schedule or enter a cron expression."; $("autoerror").style.display = ""; return; }
+    payload.schedule = cron;
+  }
+  if (autoTrigger === "message") {
+    var match = $("automatch").value.trim();
+    if (!match) { $("autoerror").textContent = "A match pattern is required for message triggers."; $("autoerror").style.display = ""; return; }
+    payload.match = match;
+  }
+  
+  var agent = $("autoagent").value;
+  if (agent) payload.agent = agent;
+  var deliver = $("autodeliver").value.trim();
+  if (deliver) payload.deliver = deliver;
+  var tz = $("autotimezone").value.trim();
+  if (tz) payload.timezone = tz;
+  
+  $("autosave").disabled = true;
+  $("autoerror").style.display = "none";
+  
+  fetch("/api/automations", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify(payload)
+  })
+  .then(function (r) { return r.json().then(function (data) { return { ok: r.ok, data: data }; }); })
+  .then(function (result) {
+    $("autosave").disabled = false;
+    if (!result.ok) {
+      $("autoerror").textContent = result.data.error || "Something went wrong.";
+      $("autoerror").style.display = "";
+      return;
+    }
+    // Success: reset form, close it, refresh the list
+    resetAutoForm();
+    autoCreateOpen = false;
+    $("autocreate").style.display = "none";
+    refreshAutomations();
+  })
+  .catch(function () {
+    $("autosave").disabled = false;
+    $("autoerror").textContent = "Could not reach the server.";
+    $("autoerror").style.display = "";
+  });
+});
+
+// Cancel
+$("autocancel").addEventListener("click", function () {
+  resetAutoForm();
+  autoCreateOpen = false;
+  $("autocreate").style.display = "none";
+});
+
+function resetAutoForm() {
+  $("autoname").value = "";
+  $("autobody").value = "";
+  $("automatch").value = "";
+  $("autocron").value = "";
+  $("autodeliver").value = "";
+  $("autotimezone").value = "";
+  $("autoerror").style.display = "none";
+  autoTrigger = "schedule";
+  autoCron = "";
+  $("autoschedule").style.display = "";
+  $("automessage").style.display = "none";
+  $("autowebhook").style.display = "none";
+  $("autocronwrap").style.display = "none";
+  $("autocrondesc").textContent = "";
+  $("autotrigger").querySelectorAll("[data-trigger]").forEach(function (b) {
+    b.className = b.getAttribute("data-trigger") === "schedule" ? "btn sm" : "btn sm ghost";
+  });
+  $("autopresets").querySelectorAll("[data-cron]").forEach(function (b) {
+    b.className = "btn sm ghost";
+  });
+}
 
 // ── the task board ─────────────────────────────────────────────────────────
 var TASK_STATUSES = ["open", "doing", "blocked", "review", "done", "dropped"];
