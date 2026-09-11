@@ -3007,6 +3007,85 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
           return;
         }
 
+        if (route === "POST /api/automations") {
+          if (refused()) return;
+          const body = await readJson(req);
+          const name = typeof body.name === "string" ? body.name.trim() : "";
+          const instruction = typeof body.body === "string" ? body.body.trim() : "";
+          if (name === "") {
+            send(res, 400, { error: "Name is required." });
+            return;
+          }
+          if (instruction === "") {
+            send(res, 400, { error: "Instruction body is required." });
+            return;
+          }
+          
+          const slug = slugify(name);
+          const box = orchestrator.boxClient();
+          if (box === undefined) {
+            send(res, 503, { error: "No box is connected." });
+            return;
+          }
+
+          const triggerType = typeof body.triggerType === "string" ? body.triggerType : "";
+          let triggerLines = "";
+          if (triggerType === "schedule") {
+            const schedule = typeof body.schedule === "string" ? body.schedule.trim() : "";
+            if (schedule === "") {
+              send(res, 400, { error: "Schedule is required for schedule trigger." });
+              return;
+            }
+            triggerLines = `schedule: "${schedule.replace(/"/g, '\\"')}"`;
+          } else if (triggerType === "webhook") {
+            triggerLines = `trigger: webhook`;
+          } else if (triggerType === "message") {
+            const match = typeof body.match === "string" ? body.match.trim() : "";
+            if (match === "") {
+              send(res, 400, { error: "Match pattern is required for message trigger." });
+              return;
+            }
+            triggerLines = `trigger: message\nmatch: "${match.replace(/"/g, '\\"')}"`;
+          } else {
+            send(res, 400, { error: "Invalid triggerType." });
+            return;
+          }
+          
+          const firstLine = (instruction.split("\n")[0] ?? "").trim().slice(0, 200).replace(/"/g, '\\"');
+          let frontmatter = `---\nname: "${name.replace(/"/g, '\\"')}"\ndescription: "${firstLine}"\n${triggerLines}\n`;
+          
+          if (typeof body.agent === "string" && body.agent.trim() !== "") {
+            frontmatter += `agent: "${body.agent.trim().replace(/"/g, '\\"')}"\n`;
+          }
+          if (typeof body.deliver === "string" && body.deliver.trim() !== "") {
+            frontmatter += `deliver: "${body.deliver.trim().replace(/"/g, '\\"')}"\n`;
+          }
+          if (typeof body.timezone === "string" && body.timezone.trim() !== "") {
+            frontmatter += `timezone: "${body.timezone.trim().replace(/"/g, '\\"')}"\n`;
+          }
+          frontmatter += `paused: true\nauthored_by: web\n---\n`;
+          
+          const fileContent = frontmatter + instruction + "\n";
+          const dirPath = `${SKILLS_DIR}/${slug}`;
+          
+          try {
+            // Refuse to overwrite an existing skill — renaming or editing is a different action.
+            const existing = await box.readFile(`${dirPath}/${SKILL_FILENAME}`).catch(() => undefined);
+            if (existing !== undefined) {
+              send(res, 409, { error: `A skill named "${slug}" already exists.` });
+              return;
+            }
+            await box.exec(`mkdir -p '${dirPath}'`, { timeoutMs: 5000 });
+            await box.writeFile(`${dirPath}/${SKILL_FILENAME}`, fileContent);
+            await orchestrator.skills.refresh();
+            log(`automation created: ${slug} (${triggerType})${caller.userId === undefined ? "" : ` by ${caller.userId}`}`);
+            send(res, 200, { ok: true, slug });
+          } catch (e) {
+            send(res, 500, { error: "Failed to write automation to box." });
+          }
+          return;
+        }
+
         if (route === "POST /api/schedules/run") {
           if (refused()) return;
           const body = await readJson(req);
