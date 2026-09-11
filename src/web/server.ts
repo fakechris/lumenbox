@@ -1741,6 +1741,13 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
   // The box dying is exactly the event nobody is looking at the page for. A light
   // health probe, and only the ok→gone *transition* is announced — a box that stays
   // down does not deserve a notification a minute.
+  // A demonstration that ended because the takeover lapsed, or the daemon stopped, had
+  // no hand-back to start its teaching turn (INV-406). Once a minute, every box is asked.
+  const teachWatch = setInterval(() => {
+    void orchestrator.teachEverywhere().catch(error => log(`teach: ${error instanceof Error ? error.message : String(error)}`));
+  }, 60_000);
+  teachWatch.unref();
+
   let boxWasHealthy = false;
   const boxWatch = setInterval(() => {
     // The attached boxes, on their own: one that stops answering (a tunnel that died, a VM
@@ -4331,6 +4338,11 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
             const info = await client.setDisplayControl(registry.displayIndexFor(agentId), controller);
             log(`${registry.get(agentId).profile.name}'s desktop: ${controller === "user" ? "a person took over" : "handed back"}`);
             send(res, 200, info);
+            // The hand-back is the moment the demonstration is complete (INV-406): the
+            // teaching turn starts now, not on the request's clock.
+            if (controller === "agent") {
+              void orchestrator.teachFrom(agentId, caller).catch(error => log(`teach: ${error instanceof Error ? error.message : String(error)}`));
+            }
           } catch (error) {
             send(res, 400, { error: error instanceof Error ? error.message : String(error) });
           }
@@ -5266,6 +5278,7 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
     // firing alongside the new — two backups a tick, sharing a timestamp and a partial directory.
     backups?.stop();
     clearInterval(boxWatch);
+    clearInterval(teachWatch);
     channels.stop();
     orchestrator.scheduler.stop();
     server.close();
