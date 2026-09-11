@@ -4287,6 +4287,32 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
           return;
         }
 
+        // A person takes an agent's desktop over, or hands it back (INV-404). While they hold
+        // it the agent's writes are refused as USER_IN_CONTROL; the noVNC tab is opened after.
+        if (route === "POST /api/desktop/control") {
+          if (refused()) return;
+          const body = await readJson(req);
+          const agentId = String(body.agent ?? "");
+          const controller = body.controller === "user" ? "user" : "agent";
+          if (!registry.has(agentId)) {
+            send(res, 404, { error: `No agent ${agentId}` });
+            return;
+          }
+          const client = orchestrator.boxClient(agentId);
+          if (!client) {
+            send(res, 503, { error: "The box is not available." });
+            return;
+          }
+          try {
+            const info = await client.setDisplayControl(registry.displayIndexFor(agentId), controller);
+            log(`${registry.get(agentId).profile.name}'s desktop: ${controller === "user" ? "a person took over" : "handed back"}`);
+            send(res, 200, info);
+          } catch (error) {
+            send(res, 400, { error: error instanceof Error ? error.message : String(error) });
+          }
+          return;
+        }
+
         if (route === "POST /api/record") {
           if (refused()) return;
           const body = await readJson(req);

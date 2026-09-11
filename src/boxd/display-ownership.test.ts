@@ -175,3 +175,39 @@ test("a reused desktop refuses its previous owner's token", async () => {
     rmSync(OWNER_FILE, { force: true });
   }
 });
+
+// ── a person takes the desktop, the agent waits (INV-404) ─────────────────────────
+import { UserInControlError } from "./displays.ts";
+
+test("while a person holds the desktop, an agent's write is refused; handing back or lapsing frees it", () => {
+  const manager = withDesktop();
+  manager.assertAgentControls(INDEX);
+  assert.equal(manager.list().find(d => d.index === INDEX)?.controller, "agent");
+
+  const lease = manager.takeOver(INDEX, 60_000);
+  assert.ok(lease.until > lease.since);
+  assert.throws(() => manager.assertAgentControls(INDEX), UserInControlError);
+  assert.throws(() => manager.assertAgentControls(INDEX), /USER_IN_CONTROL/);
+  const shown = manager.list().find(d => d.index === INDEX);
+  assert.equal(shown?.controller, "user");
+  assert.ok(shown?.user_until !== undefined);
+
+  // Taking over again renews, keeping the original start.
+  const renewed = manager.takeOver(INDEX, 120_000);
+  assert.equal(renewed.since, lease.since);
+  assert.ok(renewed.until > lease.until);
+
+  manager.handBack(INDEX);
+  manager.assertAgentControls(INDEX);
+  manager.handBack(INDEX);
+
+  // A takeover that was never handed back lapses on its own.
+  manager.takeOver(INDEX, 1);
+  const desktop = (manager as unknown as { desktops: Map<number, { userControl?: { until: number } }> }).desktops.get(INDEX)!;
+  desktop.userControl!.until = Date.now() - 1;
+  manager.assertAgentControls(INDEX);
+  assert.equal(manager.userInControl(INDEX), undefined);
+
+  // Nothing to take over on a desktop that is not running.
+  assert.throws(() => manager.takeOver(INDEX + 1, 1000), /not running/);
+});

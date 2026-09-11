@@ -893,6 +893,7 @@ export const APP_HTML = String.raw`<!doctype html>
     <span class="headactions" id="desktopactions">
       <a id="rec" href="#" title="Record this desktop">&#9679;</a>
       <a id="full" href="#" target="_blank" rel="noopener" class="btn sm" style="text-decoration:none">Take over</a>
+      <a id="handback" href="#" class="btn sm" style="text-decoration:none;display:none" title="Give the desktop back to the agent">Hand back</a>
     </span>
   </div>
   <div id="desktopview">
@@ -5576,6 +5577,41 @@ function loadRecordings() {
     .then(function (data) { renderRecordings(data.recordings); })
     .catch(function () { /* the box may be down; the pane just stays hidden */ });
 }
+
+// Taking over tells the box first, so the agent's next write is refused rather than typed
+// into the person's hands (INV-404); the noVNC tab opens once the box has said yes.
+function setDesktopControl(controller) {
+  if (!current) return Promise.reject(new Error("no agent selected"));
+  return fetch("/api/desktop/control", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ agent: current, controller: controller })
+  }).then(function (r) {
+    return r.json().then(function (data) {
+      if (!r.ok) throw new Error(data.error || "failed");
+      return data;
+    });
+  });
+}
+$("full").onclick = function (event) {
+  event.preventDefault();
+  var url = $("full").href;
+  setDesktopControl("user").then(function () {
+    $("handback").style.display = "";
+    window.open(url, "_blank", "noopener");
+  }).catch(function (error) {
+    feed("take over: " + esc(error.message), "err");
+  });
+};
+$("handback").onclick = function (event) {
+  event.preventDefault();
+  setDesktopControl("agent").then(function () {
+    $("handback").style.display = "none";
+    feed("desktop handed back to the agent", "mail");
+  }).catch(function (error) {
+    feed("hand back: " + esc(error.message), "err");
+  });
+};
 
 $("rec").onclick = function (event) {
   event.preventDefault();

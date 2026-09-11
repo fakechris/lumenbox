@@ -73,6 +73,14 @@ export interface Desktop {
   /** Set when the desktop was created on someone's behalf. See assertOwner. */
   owner?: string;
   /**
+   * A person has taken this desktop over (INV-404, docs/49 C1). While set and unexpired,
+   * every write from the agent — computer input, browser actions, a shell with a display —
+   * is refused as USER_IN_CONTROL rather than typed into the person's hands. A lease with
+   * an end, not a flag: a takeover tab closed without handing back must not lock the agent
+   * out for the life of the daemon.
+   */
+  userControl?: { since: number; until: number };
+  /**
    * When its owner last touched it.
    *
    * The in-memory half of the same lease. Without it a claim held by an agent that stopped lasts as
@@ -82,6 +90,12 @@ export interface Desktop {
 }
 
 export class DisplayOwnershipError extends Error {}
+
+/** The desktop is a person's right now. Answered as HTTP 423; the host reads it as refused. */
+export class UserInControlError extends Error {}
+
+/** How long a takeover lasts unless renewed or handed back. */
+export const USER_CONTROL_TTL_MS = 20 * 60_000;
 
 /**
  * Where a desktop's owner is remembered, so a boxd restart does not orphan it.
@@ -336,12 +350,62 @@ export class DisplayManager {
   list(): DisplayInfo[] {
     return [...this.desktops.values()]
       .sort((a, b) => a.index - b.index)
-      .map(desktop => ({
-        index: desktop.index,
-        display: desktop.display,
-        resolution: desktop.detection.resolution,
-        vnc_path: DisplayManager.vncPath(desktop.index),
-      }));
+      .map(desktop => {
+        const user = this.userInControl(desktop.index);
+        return {
+          index: desktop.index,
+          display: desktop.display,
+          resolution: desktop.detection?.resolution,
+          vnc_path: DisplayManager.vncPath(desktop.index),
+          controller: user === undefined ? ("agent" as const) : ("user" as const),
+          ...(user !== undefined ? { user_until: new Date(user.until).toISOString() } : {}),
+        };
+      });
+  }
+
+  /**
+   * A person takes the desktop. Renewable: clicking Take over again extends the lease.
+   * The desktop must exist — there is nothing to take over on a screen nobody started.
+   */
+  takeOver(index: number, ttlMs = USER_CONTROL_TTL_MS): { since: number; until: number } {
+    const desktop = this.desktops.get(index);
+    if (desktop === undefined) throw new Error(`Desktop ${index} is not running, so there is nothing to take over.`);
+    const now = Date.now();
+    const since = desktop.userControl !== undefined && desktop.userControl.until > now ? desktop.userControl.since : now;
+    desktop.userControl = { since, until: now + Math.max(1_000, ttlMs) };
+    this.log(`desktop ${index}: a person took over (until ${new Date(desktop.userControl.until).toISOString()})`);
+    return desktop.userControl;
+  }
+
+  /** The person hands the desktop back. Idempotent. */
+  handBack(index: number): void {
+    const desktop = this.desktops.get(index);
+    if (desktop?.userControl === undefined) return;
+    delete desktop.userControl;
+    this.log(`desktop ${index}: handed back to the agent`);
+  }
+
+  /** The current takeover, or undefined once it lapsed or was handed back. */
+  userInControl(index: number): { since: number; until: number } | undefined {
+    const desktop = this.desktops.get(index);
+    if (desktop?.userControl === undefined) return undefined;
+    if (desktop.userControl.until <= Date.now()) {
+      delete desktop.userControl;
+      return undefined;
+    }
+    return desktop.userControl;
+  }
+
+  /** Refuses an agent's write while a person holds the desktop. */
+  assertAgentControls(index: number): void {
+    const user = this.userInControl(index);
+    if (user === undefined) return;
+    const minutes = Math.max(1, Math.round((user.until - Date.now()) / 60_000));
+    throw new UserInControlError(
+      `USER_IN_CONTROL: a person has taken over desktop ${index} (since ${new Date(user.since).toISOString()}). ` +
+        `It returns to you when they hand it back, or in about ${minutes} min. Wait with WaitForControl, ` +
+        "or do work that needs no screen — bash and the file tools still work."
+    );
   }
 
   has(index: number): boolean {

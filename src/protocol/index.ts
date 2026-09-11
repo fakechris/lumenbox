@@ -486,6 +486,18 @@ export interface DisplayInfo {
   resolution?: ResolutionConfig;
   /** Path on the daemon that serves this desktop's noVNC. */
   vnc_path: string;
+  /** Who drives it now (INV-404). Absent from an older boxd means the agent. */
+  controller?: "agent" | "user";
+  /** When a person's takeover lapses unless renewed or handed back. */
+  user_until?: string;
+}
+
+/** A person taking a desktop over, or handing it back (INV-404). */
+export interface DisplayControlRequest {
+  index: number;
+  controller: "agent" | "user";
+  /** For `user`: how long, in seconds. Defaults to twenty minutes. */
+  ttl_seconds?: number;
 }
 
 export interface EnsureDisplayRequest {

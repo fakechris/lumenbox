@@ -705,3 +705,40 @@ test("with no policy gate an irreversible click fails closed, with the finding",
   assert.match(result.text, /^Outcome: refused — delete or remove: click button "Delete"\. A person has to approve/);
   assert.equal(result.isError, true);
 });
+
+// ── a person holds the desktop (INV-404) ───────────────────────────────────────────
+test("a write while a person holds the desktop is refused, and WaitForControl returns when it is handed back", async () => {
+  const held = boxContext({
+    computer: async () => {
+      throw new BoxError("USER_IN_CONTROL: a person has taken over desktop 3", 423);
+    },
+  });
+  const refused = await dispatchTool("computer", { actions: [{ action: "click", coordinate: [1, 1] }] }, held);
+  assert.match(refused.text, /^Outcome: refused — USER_IN_CONTROL/);
+  assert.equal(boxErrorOutcome(new BoxError("x", 423)), "refused");
+
+  let polls = 0;
+  const context = {
+    ...boxContext({
+      listDisplays: async () => {
+        polls += 1;
+        return [{ index: 3, display: ":3", vnc_path: "/vnc/3", controller: polls < 3 ? "user" : "agent", user_until: "2026-09-11T12:00:00.000Z" }];
+      },
+    }),
+    waitForControlPollMs: 1,
+  } as unknown as Parameters<typeof dispatchTool>[2];
+  const back = await dispatchTool("WaitForControl", { seconds: 5 }, context);
+  assert.match(back.text, /^Outcome: ok\. Your desktop is yours again/);
+  assert.equal(polls, 3);
+
+  const stuck = {
+    ...boxContext({
+      listDisplays: async () => [{ index: 3, display: ":3", vnc_path: "/vnc/3", controller: "user", user_until: "2026-09-11T12:00:00.000Z" }],
+    }),
+    waitForControlPollMs: 1,
+  } as unknown as Parameters<typeof dispatchTool>[2];
+  const gaveUp = await dispatchTool("WaitForControl", { seconds: 1 }, stuck);
+  assert.match(gaveUp.text, /^Outcome: unknown — a person still holds your desktop after 1s/);
+  assert.match(gaveUp.text, /2026-09-11T12:00:00/);
+  assert.equal(gaveUp.isError, true);
+});
