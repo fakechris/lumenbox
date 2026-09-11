@@ -104,6 +104,7 @@ import type { HostRunner } from "./host-runner.ts";
 import type { Vault } from "./vault.ts";
 import type { TaskStore } from "./tasks.ts";
 import type { ScopeStore } from "./scopes.ts";
+import { narrowSkills, type BundleStore } from "./bundles.ts";
 import type { McpManager } from "./mcp.ts";
 import { TOOL_BUDGET_WARNING } from "./mcp.ts";
 import { narrowTools } from "./scopes.ts";
@@ -387,6 +388,8 @@ export interface TurnDeps {
   tasks?: TaskStore;
   /** The scopes registry, for an agent placed in a scope. Absent means no scoping. */
   scopes?: ScopeStore;
+  /** The bundles a box carries (INV-420). Narrows the skills an agent is offered. */
+  bundles?: BundleStore;
   /** MCP servers whose tools this turn may offer and call. Absent means none. */
   mcp?: McpManager;
   /** Puts a question to whoever drove this agent. Absent means there is nobody to ask. */
@@ -1209,7 +1212,7 @@ export async function runTurn(
       memory: registry.readMemoryRecords(agent.id),
       memoryRecall: recallToUse,
       sharedMemory: registry.readSharedMemory(),
-      skills: deps.skills,
+      skills: narrowSkills(deps.skills ?? [], deps.bundles?.forBox(registry.boxOf(agent.id))),
       transcript: registry.readTranscript(agent.id, conversation),
       heard: registry.readHeard(agent.id, conversation),
       // Read fresh, which is what makes the plan and the todo list survive a compaction: they are in

@@ -17,6 +17,7 @@ import type { HostRunner } from "./host-runner.ts";
 import type { Vault } from "./vault.ts";
 import { appendLearning, hostOf, learningsDir, readLearnings, renderLearnings } from "./learnings.ts";
 import type { ScopeStore } from "./scopes.ts";
+import type { BundleStore } from "./bundles.ts";
 import type { McpManager } from "./mcp.ts";
 import { delegateEnv, delegateModel, PRESETS, presetNamed, quoteForShell, installCommand, withEnginesPath } from "./presets.ts";
 import { namesControlSurface } from "./control-surfaces.ts";
@@ -181,6 +182,8 @@ export interface ToolContext {
   waitForControlPollMs?: number;
   /** Where site learnings live; tests point it at a temp dir (INV-409). */
   learningsDir?: string;
+  /** The box's bundles (INV-420): a secret they grant resolves like a scope grant did. */
+  bundles?: BundleStore;
   /**
    * The turn this call belongs to — the Run, in work-control terms. Recorded on every
    * task change an agent makes, which is what links a board movement back to the
@@ -1933,6 +1936,16 @@ export function boxErrorOutcome(error: unknown): Outcome | undefined {
   return "failed";
 }
 
+/** The box an agent lives in, for bundle lookups; undefined when the registry cannot say. */
+function boxOfAgent(context: ToolContext): { id: string; name: string } | undefined {
+  try {
+    const box = context.registry.boxOf(context.agent.id);
+    return { id: box.id, name: box.name };
+  } catch {
+    return undefined;
+  }
+}
+
 function requireBox(context: ToolContext): BoxClient {
   if (!context.box) {
     throw new Error(
@@ -2825,8 +2838,10 @@ export async function dispatchTool(
           agentId: context.agent.id,
           agentName: context.agent.profile.name,
           ...(context.caller?.userId !== undefined ? { principalId: context.caller.userId } : {}),
-          // A scope the agent is in can grant the secret without a direct vault grant.
-          scopeGrants: context.scopes?.grantsSecret(context.agent.profile.scopeId, secretId) === true,
+          // The box's bundles grant it (INV-420), or — until migrated — the agent's scope.
+          scopeGrants:
+            context.bundles?.grantsSecret(boxOfAgent(context), secretId) === true ||
+            context.scopes?.grantsSecret(context.agent.profile.scopeId, secretId) === true,
         });
         if (value === undefined) refusedSecrets.push(secretId);
         else secretEnv[secretId] = value;
@@ -3236,8 +3251,10 @@ export async function dispatchTool(
         agentId: context.agent.id,
         agentName: context.agent.profile.name,
         ...(context.caller?.userId !== undefined ? { principalId: context.caller.userId } : {}),
-        // Bundles (INV-420) join this once that branch merges; a scope grant counts today.
-        scopeGrants: context.scopes?.grantsSecret(context.agent.profile.scopeId, secretId) === true,
+        // The box's bundles grant it (INV-420), or — until migrated — the agent's scope.
+        scopeGrants:
+          context.bundles?.grantsSecret(boxOfAgent(context), secretId) === true ||
+          context.scopes?.grantsSecret(context.agent.profile.scopeId, secretId) === true,
       });
       if (value === undefined) {
         return {
