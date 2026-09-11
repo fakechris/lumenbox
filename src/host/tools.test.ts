@@ -875,3 +875,32 @@ test("a learning is kept under its host and shown the next time the site is open
     rmLearn(dir, { recursive: true, force: true });
   }
 });
+
+// ── Checkpoint writes durable state and says so (INV-410) ──────────────────────────────
+test("Checkpoint keeps a named result in durable state, replacing by name, and refuses an empty one", async () => {
+  const written: unknown[] = [];
+  let state: { checkpoints?: { name: string; value: string; at: string; partial: boolean }[] } = {};
+  const context = {
+    agent: { id: "a1", profile: { name: "Ada" } },
+    registry: {
+      readDurableState: () => state,
+      writeCheckpoints: (_id: string, checkpoints: never) => {
+        written.push(checkpoints);
+        state = { checkpoints: checkpoints as never };
+      },
+      tryGet: () => undefined,
+      list: () => [],
+    },
+    bus: {},
+    box: undefined,
+    conversation: "main",
+  } as unknown as Parameters<typeof dispatchTool>[2];
+  const first = await dispatchTool("Checkpoint", { name: "prices so far", value: "3 rows" }, context);
+  assert.match(first.text, /^Checkpointed "prices so far" \(partial\)/);
+  const second = await dispatchTool("Checkpoint", { name: "prices so far", value: "7 rows", partial: false }, context);
+  assert.match(second.text, /\(final\).*1 checkpoint\(s\) held/);
+  assert.deepEqual(state.checkpoints?.map(c => [c.name, c.value, c.partial]), [["prices so far", "7 rows", false]]);
+  const refused = await dispatchTool("Checkpoint", { name: "x", value: " " }, context);
+  assert.equal(refused.isError, true);
+  assert.equal(written.length, 2);
+});

@@ -32,7 +32,7 @@ import { BOXES_FILENAME, type BoxEntry, ensureBoxes, saveBoxes } from "../box/bo
 import { DEFAULT_CONTAINER } from "../box/docker.ts";
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
-import { isTodoStatus, type DurableState, type TodoItem } from "../host/durable.ts";
+import { isTodoStatus, type Checkpoint, type DurableState, type TodoItem } from "../host/durable.ts";
 import {
   compactMemoryLines,
   compactSharedShardLines,
@@ -827,6 +827,15 @@ export class AgentRegistry {
     return join(this.dirFor(agentId), CONVERSATIONS_DIRNAME, `${conversation}.plan.md`);
   }
 
+  checkpointsPathFor(agentId: string, conversation = MAIN_CONVERSATION): string {
+    if (conversation === MAIN_CONVERSATION) return join(this.dirFor(agentId), "checkpoints.json");
+    return join(this.dirFor(agentId), CONVERSATIONS_DIRNAME, `${conversation}.checkpoints.json`);
+  }
+
+  writeCheckpoints(agentId: string, checkpoints: readonly Checkpoint[], conversation = MAIN_CONVERSATION): void {
+    this.writeAtomic(this.checkpointsPathFor(agentId, conversation), `${JSON.stringify(checkpoints, null, 2)}\n`);
+  }
+
   todosPathFor(agentId: string, conversation = MAIN_CONVERSATION): string {
     if (conversation === MAIN_CONVERSATION) return join(this.dirFor(agentId), TODOS_FILENAME);
     return join(this.dirFor(agentId), CONVERSATIONS_DIRNAME, `${conversation}.todos.json`);
@@ -865,6 +874,20 @@ export class AgentRegistry {
         }
       } catch {
         // Same: an unreadable list is no list.
+      }
+    }
+    const checkpointsPath = this.checkpointsPathFor(agentId, conversation);
+    if (existsSync(checkpointsPath)) {
+      try {
+        const parsed = JSON.parse(readFileSync(checkpointsPath, "utf8")) as unknown;
+        if (Array.isArray(parsed)) {
+          state.checkpoints = parsed.filter(
+            (entry): entry is Checkpoint =>
+              typeof entry?.name === "string" && typeof entry?.value === "string" && typeof entry?.at === "string"
+          );
+        }
+      } catch {
+        // Left absent: a torn file is no checkpoints, not a broken prompt.
       }
     }
     return state;

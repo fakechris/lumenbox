@@ -417,3 +417,30 @@ test("a read that fails is not treated as the file being absent", async () => {
     cleanup();
   }
 });
+
+// ── checkpoints: a result written down the moment it exists (INV-410) ─────────────────
+import { checkpointSummary, validateCheckpoint, withCheckpoint, MAX_CHECKPOINTS, MAX_CHECKPOINT_CHARS } from "./durable.ts";
+
+test("a checkpoint is named, capped, replaced by name, and summarised for a stopped turn", () => {
+  assert.equal(validateCheckpoint("prices so far", "12 rows"), undefined);
+  assert.match(validateCheckpoint("", "x")?.reason ?? "", /short name/);
+  assert.match(validateCheckpoint("ok", "  ")?.reason ?? "", /keeps nothing/);
+  assert.match(validateCheckpoint("ok", "x".repeat(MAX_CHECKPOINT_CHARS + 1))?.reason ?? "", /in a file/);
+
+  let list = withCheckpoint(undefined, { name: "a", value: "1", at: "2026-09-11T10:00:00.000Z", partial: true });
+  list = withCheckpoint(list, { name: "b", value: "2", at: "2026-09-11T10:01:00.000Z", partial: true });
+  list = withCheckpoint(list, { name: "a", value: "3", at: "2026-09-11T10:02:00.000Z", partial: false });
+  assert.deepEqual(list.map(c => `${c.name}=${c.value}`), ["b=2", "a=3"], "same name replaces and moves to the end");
+  for (let i = 0; i < MAX_CHECKPOINTS + 5; i++) list = withCheckpoint(list, { name: `n${i}`, value: "v", at: "2026-09-11T11:00:00.000Z", partial: true });
+  assert.equal(list.length, MAX_CHECKPOINTS);
+
+  assert.equal(checkpointSummary({}), undefined);
+  const summary = checkpointSummary({ checkpoints: [{ name: "q1", value: "42", at: "2026-09-11T10:00:00.000Z", partial: false }, { name: "rows", value: "x".repeat(400), at: "2026-09-11T10:03:00.000Z", partial: true }] }) ?? "";
+  assert.match(summary, /^Checkpointed before stopping \(2, 1 partial\):/);
+  assert.match(summary, /- q1: 42/);
+  assert.match(summary, /- rows \(partial\): x{300}…/);
+
+  const rendered = renderDurableBlocks({ checkpoints: [{ name: "q1", value: "42", at: "2026-09-11T10:00:00.000Z", partial: true }] });
+  assert.match(rendered, /## Your checkpoints \(1\)/);
+  assert.match(rendered, /\*\*q1\*\* \(partial\) — 2026-09-11 10:00: 42/);
+});
