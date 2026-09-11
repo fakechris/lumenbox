@@ -679,3 +679,34 @@ test("the approval list is read when the gate is built, so config.json's env rea
     rmSync(dir, { recursive: true, force: true });
   }
 });
+
+// ── the box found the click irreversible (INV-401) ────────────────────────────────
+test("a click the box called irreversible must be approved, and the card says what it does", () => {
+  const { gate, cleanup } = fixture();
+  try {
+    const pay: PolicyRequest = {
+      kind: "tool",
+      agentId: "agent-1",
+      agentName: "Ada",
+      tool: "browser_act",
+      input: { action: "click", ref: "e2b", snapshot: "s3" },
+      irreversible: 'pay or order: click button "立即支付"',
+    };
+    // browser_act is on no approval list; the finding alone makes it ask.
+    const first = gate.check(pay);
+    assert.equal(first.allow, false);
+    assert.ok(!first.allow && first.approval);
+    // The person reads what the click does before what the call is.
+    assert.match(gate.pending()[0]?.description ?? "", /^Ada: browser_act — pay or order: click button "立即支付" — \{/);
+
+    // A grant is for this button on this page, not for the next irreversible thing.
+    const id = (!first.allow && first.approval?.id) as string;
+    assert.equal(gate.grant(id, "alice"), true);
+    const other = gate.check({ ...pay, irreversible: 'delete or remove: click button "Delete"' });
+    assert.equal(other.allow, false, "a different finding is a different approval");
+    assert.equal(gate.check(pay).allow, true, "the approved click runs");
+    assert.equal(gate.check(pay).allow, false, "once");
+  } finally {
+    cleanup();
+  }
+});

@@ -122,10 +122,18 @@ test("the trajectory fixture is balanced and every case is in the reviewed class
   const fixture = JSON.parse(
     readFileSync(new URL("./fixtures/auto-review-trajectories.json", import.meta.url), "utf8")
   ) as { cases: { name: string; expected: string; input: { tool: string; input: Record<string, unknown> } }[] };
-  assert.equal(fixture.cases.length, 10);
-  assert.equal(fixture.cases.filter(c => c.expected === "ALLOW").length, 5);
-  assert.equal(fixture.cases.filter(c => c.expected === "BLOCK").length, 5);
+  assert.equal(fixture.cases.length, 12);
+  assert.equal(fixture.cases.filter(c => c.expected === "ALLOW").length, 6);
+  assert.equal(fixture.cases.filter(c => c.expected === "BLOCK").length, 6);
   for (const c of fixture.cases) {
     assert.ok(needsReview(c.input.tool, c.input.input) !== undefined, `${c.name} is a reviewed call`);
   }
+});
+
+test("a computer batch that writes to the desktop is reviewed; a look is not (INV-401)", () => {
+  assert.equal(needsReview("computer", { actions: [{ action: "screenshot" }] }), undefined);
+  assert.equal(needsReview("computer", { actions: [{ action: "list_windows" }, { action: "cursor_position" }] }), undefined);
+  assert.equal(needsReview("computer", { actions: [{ action: "screenshot" }, { action: "click", coordinate: [1, 2] }] }), "drives the desktop by coordinates");
+  assert.equal(needsReview("computer", { actions: [{ action: "type", text: "hi" }] }), "drives the desktop by coordinates");
+  assert.equal(needsReview("computer", { actions: "nonsense" }), undefined);
 });

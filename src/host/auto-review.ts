@@ -65,6 +65,15 @@ export function needsReview(tool: string, input: Record<string, unknown>): strin
       return "sends work to another agent";
     case "browser_act":
       return "acts on a web page";
+    case "computer": {
+      // A screenshot or a window listing is a look; a click, a keystroke, a drag is a
+      // hand on the desktop, and the same desktop the browser tools are reviewed on.
+      const actions = Array.isArray(input.actions) ? (input.actions as { action?: unknown }[]) : [];
+      const writes = actions.some(a =>
+        ["click", "click_in_window", "type", "key", "drag", "mouse_down", "mouse_up", "close_window"].includes(String(a?.action))
+      );
+      return writes ? "drives the desktop by coordinates" : undefined;
+    }
     case "browser_upload":
       return "uploads a file to a web page";
     case "write_file":

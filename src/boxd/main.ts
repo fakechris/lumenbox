@@ -67,7 +67,7 @@ import { startEgressProxy } from "../egress/proxy.ts";
 import { RecordService, RECORDINGS_DIR } from "./record-service.ts";
 import { AGENT_NICE, reapSpool, runShell, withoutBoxToken } from "./shell-service.ts";
 import { JobService } from "./job-service.ts";
-import { BrowserService, StaleSnapshotError } from "./browser-service.ts";
+import { BrowserService, StaleSnapshotError, IrreversibleActionError } from "./browser-service.ts";
 import { downloadFile, listDir, readFile, uploadFile, writeFile } from "./fs-service.ts";
 import { XWatchdogService } from "./xwatchdog-service.ts";
 
@@ -435,6 +435,7 @@ const routes: Record<string, Handler> = {
           ...(body.replace !== undefined ? { replace: body.replace } : {}),
           ...(body.snapshot !== undefined ? { snapshot: body.snapshot } : {}),
           ...(body.find !== undefined ? { find: body.find } : {}),
+          ...(body.confirmed === true ? { confirmed: true } : {}),
         });
       case "scroll":
         return browser.scroll(display, String(body.direction ?? "down"), Number(body.amount ?? 3));
@@ -626,9 +627,11 @@ const server = createServer((req, res) => {
             ? 403
             : error instanceof StaleSnapshotError
               ? 409
-              : error instanceof CdpError
-                ? 422
-                : 500;
+              : error instanceof IrreversibleActionError
+                ? 428
+                : error instanceof CdpError
+                  ? 422
+                  : 500;
       if (status >= 500) log(`error on ${route}: ${describe(error)}`);
       send(res, status, { error: describe(error) });
     }

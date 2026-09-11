@@ -118,3 +118,29 @@ test("a ref is refused when its outline is not the latest, or the page moved pas
   assert.match(staleReason("s2", "s3", 0) ?? "", /^STALE_SNAPSHOT: you are holding s2, but the latest outline of this page is s3/);
   assert.match(staleReason("s3", "s3", 80) ?? "", /^STALE_SNAPSHOT: the page has changed since s3 \(80 elements/);
 });
+
+// ── the deterministic irreversible-action check (INV-401) ────────────────────────
+import { irreversibleReason } from "./browser-service.ts";
+
+test("pay, publish, delete and authorise are caught by the target's own words", () => {
+  assert.match(irreversibleReason({ text: "立即支付", role: "button", nearby: "" }) ?? "", /^pay or order: click button "立即支付"/);
+  assert.match(irreversibleReason({ text: "Place your order", role: "button", nearby: "" }) ?? "", /^pay or order/);
+  assert.match(irreversibleReason({ text: "Publish", role: "button", nearby: "" }) ?? "", /^publish/);
+  assert.match(irreversibleReason({ text: "删除", role: "button", nearby: "" }) ?? "", /^delete or remove/);
+  assert.match(irreversibleReason({ text: "Authorize app", role: "button", nearby: "" }) ?? "", /^authorise or grant access/);
+  assert.match(irreversibleReason({ text: "Close my account", role: "link", nearby: "" }) ?? "", /^delete or remove: click link/);
+});
+
+test("a bare OK is caught only when there is money next to it; ordinary buttons pass", () => {
+  // The shape the word lists miss: the checkout's last button is just "Confirm".
+  assert.match(
+    irreversibleReason({ text: "确认", role: "button", nearby: "订单金额 ¥1,299.00 使用余额支付" }) ?? "",
+    /^confirm with money on the page: click button "确认" next to "¥1,299.00"/
+  );
+  assert.match(irreversibleReason({ text: "OK", role: "button", nearby: "Total: $49.99 Ship to home" }) ?? "", /next to "\$49\.99"/);
+  assert.equal(irreversibleReason({ text: "OK", role: "button", nearby: "Your settings were saved." }), undefined);
+  // Send, search, save, submit, agree: the everyday buttons, deliberately not gated.
+  for (const text of ["Send", "Search", "Save", "Submit", "Agree", "下一步", "登录", ""]) {
+    assert.equal(irreversibleReason({ text, role: "button", nearby: "Total $12" }), undefined, `${JSON.stringify(text)} is not gated`);
+  }
+});

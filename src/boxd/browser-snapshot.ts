@@ -277,7 +277,7 @@ export const MUTATIONS_SCRIPT = "globalThis.__lumenMutations || 0";
  * always how many matched and the first few, so a miss says what was there.
  */
 export function findScript(query: { role?: string; name?: string; nth?: number }): string {
-  return String.raw`
+  return `
 (() => {
   const index = globalThis.__lumenIndex;
   if (!Array.isArray(index)) return JSON.stringify({ error: "no outline" });
