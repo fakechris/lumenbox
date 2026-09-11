@@ -565,11 +565,14 @@ export interface BrowserResponse {
  * records actions, never keystroke content — see docs/47.
  */
 export type XWatchdogEventType = "exec" | "window_focus" | "system";
+export type XWatchdogEventSource = "user" | "agent" | "system";
 
 export interface XWatchdogEvent {
   seq: number;
   type: XWatchdogEventType;
   time: string;
+  source?: XWatchdogEventSource;
+  probe?: boolean;
   display?: number;
   window?: string;
   detail: Record<string, unknown>;

@@ -19,6 +19,8 @@ type Event struct {
 	Seq     int64          `json:"seq"`
 	Type    EventType      `json:"type"`
 	Time    string         `json:"time"`
+	Source  string         `json:"source,omitempty"`
+	Probe   bool           `json:"probe,omitempty"`
 	Display int            `json:"display,omitempty"`
 	Window  string         `json:"window,omitempty"`
 	Detail  map[string]any `json:"detail"`

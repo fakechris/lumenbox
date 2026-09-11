@@ -78,6 +78,7 @@ func main() {
 				store.Append(Event{
 					Type:    TypeSystem,
 					Time:    time.Now().UTC().Format(time.RFC3339),
+					Source:  "system",
 					Display: dispNum,
 					Detail:  map[string]any{"action": "heartbeat", "pid": os.Getpid()},
 				})
@@ -113,6 +114,7 @@ func main() {
 	store.Append(Event{
 		Type:    TypeSystem,
 		Time:    time.Now().UTC().Format(time.RFC3339),
+		Source:  "system",
 		Display: dispNum,
 		Detail: map[string]any{
 			"action": "shutdown_signal",

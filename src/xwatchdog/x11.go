@@ -34,6 +34,7 @@ func (w *WindowFocus) SetWindow(title string) {
 		w.store.Append(Event{
 			Type:    TypeWindowFocus,
 			Time:    time.Now().UTC().Format(time.RFC3339),
+			Source:  "user",
 			Display: w.display,
 			Window:  title,
 			Detail:  map[string]any{"from": w.current},

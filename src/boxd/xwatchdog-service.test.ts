@@ -133,3 +133,67 @@ test("XWatchdogService proxies to native Go daemon if running", async () => {
     fakeDaemon.close();
   }
 });
+
+test("XWatchdogService classifies sources (user, agent, system) and detects supervisor probes", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "xwatchdog-source-test-"));
+  try {
+    const execPath = join(dir, "exec.log");
+    const guiPath = join(dir, "gui.log");
+
+    writeFileSync(
+      execPath,
+      [
+        // User command from interactive terminal (pts)
+        "time=2026-09-09 09:30:00 | uid=1000 | user=box | tty=/dev/pts/0 | pwd=/home/box/work | pid=101 | ppid=100 | cmd=vim main.ts",
+        // System supervisor probes
+        "time=2026-09-09 09:30:01 | uid=1000 | user=box | tty=none | pwd=/home/box | pid=102 | ppid=100 | cmd=pgrep -f -- pcmanfm --desktop",
+        "time=2026-09-09 09:30:02 | uid=1000 | user=box | tty=none | pwd=/home/box | pid=103 | ppid=100 | cmd=tr \\0 \\n",
+        "time=2026-09-09 09:30:03 | uid=1000 | user=box | tty=none | pwd=/home/box | pid=104 | ppid=100 | cmd=grep -Fqx DISPLAY=:1",
+        // Agent shell execution and child command
+        "time=2026-09-09 09:30:04 | uid=1000 | user=box | tty=none | pwd=/home/box/work | pid=200 | ppid=100 | cmd=nice -n 19 /bin/bash -lc echo hello",
+        "time=2026-09-09 09:30:05 | uid=1000 | user=box | tty=none | pwd=/home/box/work | pid=201 | ppid=200 | cmd=git commit -m done",
+      ].join("\n") + "\n"
+    );
+
+    writeFileSync(
+      guiPath,
+      [
+        JSON.stringify({
+          time: "2026-09-09T09:30:00.500Z",
+          type: "window_focus",
+          display: 1,
+          window: "Terminal",
+          detail: { to: "Terminal" },
+        }),
+      ].join("\n") + "\n"
+    );
+
+    const service = new XWatchdogService({
+      execLogPath: execPath,
+      guiLogPath: guiPath,
+      daemonUrl: "http://127.0.0.1:49997",
+    });
+
+    const res = await service.events(0, 20);
+    assert.equal(res.events.length, 7);
+
+    const userEvents = res.events.filter(e => e.source === "user");
+    assert.equal(userEvents.length, 2); // vim main.ts (pts) and Terminal window_focus
+
+    const systemEvents = res.events.filter(e => e.source === "system");
+    assert.equal(systemEvents.length, 3); // pgrep pcmanfm, tr \0 \n, grep DISPLAY
+    for (const se of systemEvents) {
+      assert.equal(se.probe, true);
+    }
+
+    const agentEvents = res.events.filter(e => e.source === "agent");
+    assert.equal(agentEvents.length, 2); // nice -n 19 bash, and child git commit
+    assert.equal(agentEvents[0]?.detail["cmd"], "nice -n 19 /bin/bash -lc echo hello");
+    assert.equal(agentEvents[1]?.detail["cmd"], "git commit -m done");
+    for (const ae of agentEvents) {
+      assert.notEqual(ae.probe, true);
+    }
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
