@@ -25,6 +25,7 @@ import {
   type MemoryRecord,
 } from "./memory.ts";
 import { renderSkills, visibleTo, type Skill } from "./skills.ts";
+import { renderPlace, type PlaceInstructions } from "./place.ts";
 import { renderHistoryBlock } from "./history.ts";
 import type { ResolutionConfig } from "../protocol/index.ts";
 
@@ -359,6 +360,11 @@ export interface PromptContext {
    * the conversation. The agent reads the one it picks.
    */
   skills?: readonly Skill[];
+  /**
+   * What the installation and the box ask of every agent there (INV-428). Rendered as the
+   * `place` section, after the box and before the persona: org, then box, then self.
+   */
+  place?: PlaceInstructions;
   /**
    * The transcript, used only to decide whether to mention that history was summarised.
    *
@@ -771,6 +777,8 @@ export const STABLE_SECTIONS: readonly PromptSection[] = [
   { name: "conduct", render: () => (ablated("conduct") ? "" : CONDUCT_PROMPT) },
   { name: "front", render: context => (isForkConversation(context.conversation) ? "" : FRONT_PROMPT) },
   { name: "box", render: context => boxSection(context) },
+  // The place speaks before the worker: installation, then box, then the persona below.
+  { name: "place", render: context => renderPlace(context.place) },
   { name: "profile", render: context => profileSection(context.agent) },
 ];
 
