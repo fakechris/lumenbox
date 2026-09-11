@@ -101,6 +101,67 @@ func TestTailSnoopyLog(t *testing.T) {
 	_ = f.Close()
 }
 
+func TestIsSupervisorSelfExec(t *testing.T) {
+	selfExecs := []string{
+		"/usr/local/bin/box-healthcheck",
+		"box-healthcheck",
+	}
+	for _, c := range selfExecs {
+		if !IsSupervisorSelfExec(c) {
+			t.Errorf("expected IsSupervisorSelfExec(%q) to be true", c)
+		}
+	}
+
+	notSelfExecs := []string{
+		"/usr/local/bin/box-healthcheck-extra",
+		"cat /usr/local/bin/box-healthcheck",
+		"wmctrl -m",
+		"",
+	}
+	for _, c := range notSelfExecs {
+		if IsSupervisorSelfExec(c) {
+			t.Errorf("expected IsSupervisorSelfExec(%q) to be false", c)
+		}
+	}
+}
+
+func TestTailSnoopyLogDropsSupervisorSelfExec(t *testing.T) {
+	tmpDir, err := os.MkdirTemp("", "xwatchdog-selfexec-test-*")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer os.RemoveAll(tmpDir)
+
+	logPath := filepath.Join(tmpDir, "exec.log")
+	store := NewEventStore(100, "")
+	defer store.Close()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	go TailSnoopyLog(ctx, logPath, store, 50*time.Millisecond)
+
+	f, err := os.OpenFile(logPath, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0644)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer f.Close()
+
+	_, _ = f.WriteString("time=2026-09-11 10:00:00 | uid=0 | user=root | tty=(none) | pwd=/home/box/work | pid=10 | ppid=9 | cmd=/usr/local/bin/box-healthcheck\n")
+	_, _ = f.WriteString("time=2026-09-11 10:00:01 | uid=1000 | user=box | tty=/dev/pts/0 | pwd=/home/box | pid=11 | ppid=1 | cmd=whoami\n")
+	_ = f.Sync()
+
+	time.Sleep(250 * time.Millisecond)
+
+	res := store.Query(0, 10)
+	if len(res.Events) != 1 {
+		t.Fatalf("expected 1 event (healthcheck self-exec dropped), got %d", len(res.Events))
+	}
+	if res.Events[0].Detail["cmd"] != "whoami" {
+		t.Fatalf("expected whoami, got %v", res.Events[0].Detail["cmd"])
+	}
+}
+
 func TestIsProbeCommand(t *testing.T) {
 	probes := []string{
 		"tr \\0 \\n",

@@ -149,6 +149,8 @@ test("XWatchdogService classifies sources (user, agent, system) and detects supe
         "time=2026-09-09 09:30:01 | uid=1000 | user=box | tty=none | pwd=/home/box | pid=102 | ppid=100 | cmd=pgrep -f -- pcmanfm --desktop",
         "time=2026-09-09 09:30:02 | uid=1000 | user=box | tty=none | pwd=/home/box | pid=103 | ppid=100 | cmd=tr \\0 \\n",
         "time=2026-09-09 09:30:03 | uid=1000 | user=box | tty=none | pwd=/home/box | pid=104 | ppid=100 | cmd=grep -Fqx DISPLAY=:1",
+        // The container health probe's own exec line (raw exec.log fallback path)
+        "time=2026-09-09 09:30:03 | uid=0 | user=root | tty=(none) | pwd=/home/box/work | pid=105 | ppid=100 | cmd=/usr/local/bin/box-healthcheck",
         // Agent shell execution and child command
         "time=2026-09-09 09:30:04 | uid=1000 | user=box | tty=none | pwd=/home/box/work | pid=200 | ppid=100 | cmd=nice -n 19 /bin/bash -lc echo hello",
         "time=2026-09-09 09:30:05 | uid=1000 | user=box | tty=none | pwd=/home/box/work | pid=201 | ppid=200 | cmd=git commit -m done",
@@ -175,13 +177,13 @@ test("XWatchdogService classifies sources (user, agent, system) and detects supe
     });
 
     const res = await service.events(0, 20);
-    assert.equal(res.events.length, 7);
+    assert.equal(res.events.length, 8);
 
     const userEvents = res.events.filter(e => e.source === "user");
     assert.equal(userEvents.length, 2); // vim main.ts (pts) and Terminal window_focus
 
     const systemEvents = res.events.filter(e => e.source === "system");
-    assert.equal(systemEvents.length, 3); // pgrep pcmanfm, tr \0 \n, grep DISPLAY
+    assert.equal(systemEvents.length, 4); // pgrep pcmanfm, tr \0 \n, grep DISPLAY, box-healthcheck self-exec
     for (const se of systemEvents) {
       assert.equal(se.probe, true);
     }

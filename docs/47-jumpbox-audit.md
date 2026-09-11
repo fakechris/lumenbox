@@ -91,6 +91,10 @@ maximum heartbeat time across polls; that is the next slice.
    可能残缺的首行；`TailSnoopyLog` 在检测到该截断后平滑调整偏移量至新尾部，无缝续读且无重复事件。
 3. **Snoopy 祖先过滤**：在 `/etc/snoopy.ini` 中启用 `filter_chain = "exclude_spawns_of:start-display,box-healthcheck"`，
    使高频自愈巡检与探针在 `execve()` 拦截层直接被丢弃，源头降噪 99% 以上，同时完好保留所有终端交互与 agent 工具调用。
+   `exclude_spawns_of` 只覆盖两者的*子进程*；`box-healthcheck` 自身的 exec 行由容器健康探针拉起，祖先链在容器之外，
+   且 Snoopy 2.5.2 没有 `exclude_comm` 过滤器——因此这一行（每 10 秒一条）改由 `xwatchdog` 在摄取层丢弃
+   （`IsSupervisorSelfExec`），`exec.log` 保留原始记录，事件流不占内存环与落盘预算；boxd 文件回退路径与
+   Web UI 则将其归类为 probe，默认隐藏。
 4. **单实例守护**：`start-display` 仅由主桌面（`:1`）拉起 `xwatchdog`，消除多桌面后台轮询的端口冲突。
 
 ## Surfaces

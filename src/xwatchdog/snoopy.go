@@ -203,6 +203,16 @@ func ParseSnoopyLine(line string) *Event {
 	}
 }
 
+// IsSupervisorSelfExec reports exec lines that are the supervisor's own processes, not anything a
+// person or agent ran. Snoopy's exclude_spawns_of drops their *children* at the execve() layer, but
+// the box-healthcheck self-exec is emitted by the container health probe, whose ancestry lives
+// outside the container and cannot be matched — and Snoopy 2.5.2 has no exclude_comm filter. So the
+// drop happens here, at ingestion: exec.log keeps the raw record, the event stream does not.
+func IsSupervisorSelfExec(cmd string) bool {
+	c := strings.TrimSpace(cmd)
+	return c == "/usr/local/bin/box-healthcheck" || c == "box-healthcheck"
+}
+
 // IsProbeCommand checks if an exec command is an internal repetitive system supervisor health probe.
 func IsProbeCommand(cmd string) bool {
 	c := strings.TrimSpace(cmd)
@@ -301,6 +311,9 @@ func TailSnoopyLog(ctx context.Context, filePath string, store *EventStore, poll
 			if len(line) > 0 {
 				offset += int64(len(line))
 				if ev := ParseSnoopyLine(line); ev != nil {
+					if cmd, _ := ev.Detail["cmd"].(string); IsSupervisorSelfExec(cmd) {
+						continue
+					}
 					store.Append(*ev)
 				}
 			}
