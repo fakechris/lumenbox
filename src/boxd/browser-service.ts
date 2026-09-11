@@ -21,6 +21,7 @@
  * Verified against the box's own Chromium rather than assumed.
  */
 
+import type { Outcome, WaitOutcome } from "../protocol/index.ts";
 import { spawn } from "node:child_process";
 import { realpathSync, statSync } from "node:fs";
 import { CdpError, CdpSession, closeTarget, listTargets, openTarget, type CdpTarget } from "./cdp.ts";
@@ -155,6 +156,49 @@ export interface BrowserResult {
   dialog?: string;
   /** Set when something went wrong in a way the agent can act on. */
   note?: string;
+  /** See `Outcome` in the protocol. Absent means ok. */
+  outcome?: Outcome;
+  /** For a wait: held, never held, or could not be checked. */
+  wait?: WaitOutcome;
+}
+
+/**
+ * What a wait concludes from how it ended.
+ *
+ * A probe that threw — the page was navigating, the execution context was torn down —
+ * tells us nothing about whether the condition holds, and reporting that as "never
+ * contained" sent agents off to fix pages that were merely mid-load. Only a probe that
+ * *ran* and came back without the value is a real "no".
+ */
+export function waitOutcome(met: boolean, lastProbeFailed: boolean): WaitOutcome {
+  if (met) return "satisfied";
+  return lastProbeFailed ? "unknown" : "unsatisfied";
+}
+
+/** The sentence the agent reads before the page, for each way a wait can end. */
+export function waitNote(
+  kind: string,
+  value: string,
+  waitedMs: number,
+  outcome: WaitOutcome,
+  probeError?: string
+): string {
+  const shown = JSON.stringify(value);
+  switch (outcome) {
+    case "satisfied":
+      return `The ${kind} contained ${shown} after ${Math.round(waitedMs / 100) / 10}s.`;
+    case "unsatisfied":
+      return (
+        `Waited ${Math.round(waitedMs / 1000)}s and the ${kind} never contained ${shown}. ` +
+        "The page as it stands is below."
+      );
+    case "unknown":
+      return (
+        `Waited ${Math.round(waitedMs / 1000)}s and could not tell whether the ${kind} ` +
+        `contained ${shown}: the page could not be read (${probeError ?? "no reason given"}). ` +
+        "That is not a no. Look at the page below before acting."
+      );
+  }
 }
 
 interface FrameContext {
@@ -646,7 +690,7 @@ class BrowserPage {
     kind: string,
     value: string,
     timeoutMs: number
-  ): Promise<{ met: boolean; waitedMs: number }> {
+  ): Promise<{ met: boolean; waitedMs: number; probeError?: string }> {
     const started = Date.now();
     const probe: Record<string, string> = {
       text: "document.body ? document.body.innerText : ''",
@@ -658,20 +702,29 @@ class BrowserPage {
       throw new CdpError(`Wait for text, url or title — not ${JSON.stringify(kind)}.`);
     }
     const wanted = value.toLowerCase();
+    // The last probe's failure, if it failed. A probe throws while the page is between
+    // documents; that is not evidence the value is absent, and the caller must be told
+    // the difference (`waitOutcome`).
+    let probeError: string | undefined;
     while (Date.now() - started < timeoutMs) {
-      const result = (await this.session.send("Runtime.evaluate", {
-        expression,
-        returnByValue: true,
-      })) as { result?: { value?: string } };
-      const seen = String(result.result?.value ?? "").toLowerCase();
-      // Contains rather than equals: a title gains suffixes, a URL gains query
-      // parameters, and an agent that has to predict them exactly will not wait correctly.
-      if (kind === "gone" ? !seen.includes(wanted) : seen.includes(wanted)) {
-        return { met: true, waitedMs: Date.now() - started };
+      try {
+        const result = (await this.session.send("Runtime.evaluate", {
+          expression,
+          returnByValue: true,
+        })) as { result?: { value?: string } };
+        probeError = undefined;
+        const seen = String(result.result?.value ?? "").toLowerCase();
+        // Contains rather than equals: a title gains suffixes, a URL gains query
+        // parameters, and an agent that has to predict them exactly will not wait correctly.
+        if (kind === "gone" ? !seen.includes(wanted) : seen.includes(wanted)) {
+          return { met: true, waitedMs: Date.now() - started };
+        }
+      } catch (error) {
+        probeError = error instanceof Error ? error.message : String(error);
       }
       await new Promise(resolve => setTimeout(resolve, 250));
     }
-    return { met: false, waitedMs: Date.now() - started };
+    return { met: false, waitedMs: Date.now() - started, ...(probeError !== undefined ? { probeError } : {}) };
   }
 
   async read(): Promise<string> {
@@ -919,16 +972,18 @@ export class BrowserService {
   ): Promise<BrowserResult> {
     const page = await this.pageFor(display);
     const limit = Math.min(Math.max((seconds ?? WAIT_DEFAULT_MS / 1000) * 1000, 500), WAIT_MAX_MS);
-    const { met, waitedMs } = await page.waitFor(kind, value, limit);
+    const { met, waitedMs, probeError } = await page.waitFor(kind, value, limit);
+    const outcome = waitOutcome(met, probeError !== undefined);
     const result = await page.report();
     return {
       ...result,
       // Reported either way rather than thrown on timeout: the page below is the answer to
       // "what happened instead", and an agent that only gets an error has to ask again.
-      note: met
-        ? `The ${kind} contained ${JSON.stringify(value)} after ${Math.round(waitedMs / 100) / 10}s.`
-        : `Waited ${Math.round(waitedMs / 1000)}s and the ${kind} never contained ` +
-          `${JSON.stringify(value)}. The page as it stands is below.`,
+      note: waitNote(kind, value, waitedMs, outcome, probeError),
+      wait: outcome,
+      // A wait that could not be checked is an unknown result, not a failed one: the
+      // page may well say what was asked, and the agent has to look rather than retry.
+      outcome: outcome === "unknown" ? "unknown" : "ok",
     };
   }
 

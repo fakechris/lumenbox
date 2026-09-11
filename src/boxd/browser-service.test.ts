@@ -79,3 +79,28 @@ test("a file may only be uploaded from somewhere it was meant to be sent from", 
     rmSync(root, { recursive: true, force: true });
   }
 });
+
+// ── wait: three answers, not two (INV-400) ────────────────────────────────────
+import { waitNote, waitOutcome } from "./browser-service.ts";
+
+test("a wait whose probe threw could not tell, and says so instead of 'never'", () => {
+  // Observed: a wait during a redirect threw inside Runtime.evaluate on every probe
+  // (execution context destroyed), and the old code reported the value never appeared.
+  // The agent then went to "fix" a page that was merely loading.
+  assert.equal(waitOutcome(true, false), "satisfied");
+  assert.equal(waitOutcome(false, false), "unsatisfied");
+  assert.equal(waitOutcome(false, true), "unknown");
+  // Met wins even if an earlier probe failed: the value was seen.
+  assert.equal(waitOutcome(true, true), "satisfied");
+});
+
+test("the wait note distinguishes 'never appeared' from 'could not look'", () => {
+  assert.match(waitNote("text", "Saved", 1200, "satisfied"), /contained "Saved" after 1\.2s/);
+  const no = waitNote("text", "Saved", 10_000, "unsatisfied");
+  assert.match(no, /never contained "Saved"/);
+  const dunno = waitNote("text", "Saved", 10_000, "unknown", "Execution context was destroyed");
+  assert.match(dunno, /could not tell/);
+  assert.match(dunno, /Execution context was destroyed/);
+  assert.match(dunno, /not a no/);
+  assert.doesNotMatch(dunno, /never contained/);
+});

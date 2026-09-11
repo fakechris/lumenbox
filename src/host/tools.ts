@@ -8,7 +8,7 @@
 
 import type Anthropic from "@anthropic-ai/sdk";
 import { optionLabel } from "./ask-options.ts";
-import type { BoxClient } from "../box/client.ts";
+import { BoxError, type BoxClient } from "../box/client.ts";
 import type { DisplayLease } from "../box/display-lease.ts";
 import type { AgentBus } from "../agents/bus.ts";
 import type { AgentRecord, AgentRegistry } from "../agents/registry.ts";
@@ -43,7 +43,13 @@ import {
   type TodoItem,
   type TodoStatus,
 } from "./durable.ts";
-import type { BrowserRequest, ComputerAction } from "../protocol/index.ts";
+import {
+  computerOutcome,
+  outcomeLine,
+  type BrowserRequest,
+  type ComputerAction,
+  type Outcome,
+} from "../protocol/index.ts";
 import { skillSlugOf } from "./skill-provenance.ts";
 import { SKILL_FILENAME } from "./skills.ts";
 import {
@@ -1785,6 +1791,24 @@ function templateStamp(context: ToolContext, path: string, content: string): str
   return stampTemplateWrite(content, context.templateSetup);
 }
 
+/**
+ * What a thrown box error means for the tool's verdict, or undefined when it is not a
+ * box error at all and should propagate as the bug it is.
+ *
+ * A 403 is the desktop-ownership refusal (`DisplayOwnershipError` on the box side): the
+ * call will be refused again. A timeout, a crash, or an unreachable box are all the same
+ * fact for the model — the request may have run before the answer was lost.
+ */
+export function boxErrorOutcome(error: unknown): Outcome | undefined {
+  if (!(error instanceof BoxError)) return undefined;
+  if (error.status === 403 || error.kind === "refused") return "refused";
+  if (error.kind === "timeout" || error.kind === "crashed" || error.kind === "unreachable") {
+    return "unknown";
+  }
+  if (error.status !== undefined && error.status >= 500) return "unknown";
+  return "failed";
+}
+
 function requireBox(context: ToolContext): BoxClient {
   if (!context.box) {
     throw new Error(
@@ -2002,8 +2026,8 @@ export async function dispatchTool(
         const seconds = Math.round(context.display.heldForMs(computerDisplay) / 1000);
         return {
           text:
-            `${holder?.profile.name ?? holderId} is using this desktop ` +
-            `(for ${seconds}s). Only one agent can drive a screen at a time, because ` +
+            `${outcomeLine("refused", `${holder?.profile.name ?? holderId} is using this desktop (for ${seconds}s)`)} ` +
+            "Only one agent can drive a screen at a time, because " +
             "keystrokes and screenshots would otherwise cross between you. Do something " +
             "that does not need the screen — `bash` and the file tools still work — or " +
             "wait and try again.",
@@ -2011,15 +2035,26 @@ export async function dispatchTool(
         };
       }
 
-      const result = await box.computer(actions, {
-        display: context.displayIndex,
-        owner: context.boxOwner,
-      });
+      let result: Awaited<ReturnType<BoxClient["computer"]>>;
+      try {
+        result = await box.computer(actions, {
+          display: context.displayIndex,
+          owner: context.boxOwner,
+        });
+      } catch (error) {
+        // The box said no, or said nothing. Those are different answers and the model
+        // must not be handed one where the other is true: an owner refusal is refused
+        // (retrying gets the same refusal); a box that timed out or dropped the
+        // connection is unknown (the keystrokes may have landed before it went quiet).
+        const outcome = boxErrorOutcome(error);
+        if (outcome === undefined) throw error;
+        const message = error instanceof Error ? error.message : String(error);
+        return { text: outcomeLine(outcome, message), isError: true };
+      }
 
-      const notes: string[] = [];
-      if (result.error) {
-        notes.push(`The action sequence failed: ${result.error}`);
-      } else {
+      const outcome = computerOutcome(result);
+      const notes: string[] = [outcomeLine(outcome, result.error)];
+      if (!result.error) {
         notes.push(`Ran ${result.action_count} action(s) in ${result.duration_ms}ms.`);
       }
       if (result.cursor_position) {
@@ -2059,7 +2094,7 @@ export async function dispatchTool(
         images: result.screenshot
           ? [{ mediaType: "image/webp", data: result.screenshot }]
           : undefined,
-        isError: Boolean(result.error),
+        isError: outcome !== "ok",
       };
     }
 
@@ -3042,8 +3077,8 @@ export async function dispatchTool(
         const holder = context.registry.tryGet(holderId);
         return {
           text:
-            `${holder?.profile.name ?? holderId} is using this desktop. Do something ` +
-            "that does not need the screen, or wait and try again.",
+            `${outcomeLine("refused", `${holder?.profile.name ?? holderId} is using this desktop`)} ` +
+            "Do something that does not need the screen, or wait and try again.",
           isError: true,
         };
       }
@@ -3093,17 +3128,27 @@ export async function dispatchTool(
         if (name === "browser_read") {
           return { text: `${result.url}\n\n${result.text ?? "(the page has no text)"}` };
         }
-        const parts = [`${result.title || "(untitled)"} — ${result.url}`];
+        // The verdict first. An older boxd sends none, and for it "it answered" is ok.
+        const outcome: Outcome = result.outcome ?? "ok";
+        const parts = [
+          name === "browser_wait_for" && result.wait !== undefined
+            ? `${outcomeLine(outcome)} Wait: ${result.wait}.`
+            : outcomeLine(outcome),
+          `${result.title || "(untitled)"} — ${result.url}`,
+        ];
         // What happened to the page comes before the page. A tab that opened under the
         // agent, or a wait that ran out, changes how the outline below should be read.
         if (result.note !== undefined) parts.push(result.note);
         if (result.dialog !== undefined) parts.push(result.dialog);
         parts.push(result.snapshot);
-        return { text: parts.join("\n\n") };
+        return { text: parts.join("\n\n"), ...(outcome === "unknown" ? { isError: true } : {}) };
       } catch (error) {
         // A browser error is nearly always actionable — no browser running, a stale ref,
         // an element with no position — so it goes back as text rather than as a throw.
         const message = error instanceof Error ? error.message : String(error);
+        // An owner refusal is refused; a box that went quiet is unknown; anything the
+        // browser itself said (a stale ref, no position) is a plain failure.
+        const verdict = outcomeLine(boxErrorOutcome(error) ?? "failed", message);
         // With the page, not on its own. An agent told only "that ref is stale" has to
         // guess what to do; an agent shown the page can see what happened instead. This
         // is the reasoning `browser_wait_for` already used for its timeout, applied to
@@ -3115,13 +3160,13 @@ export async function dispatchTool(
             ...(context.boxOwner !== undefined ? { owner: context.boxOwner } : {}),
           });
           return {
-            text: `${message}\n\nThe page as it stands: ${now.title || "(untitled)"} — ${now.url}\n\n${now.snapshot}`,
+            text: `${verdict}\n\nThe page as it stands: ${now.title || "(untitled)"} — ${now.url}\n\n${now.snapshot}`,
             isError: true,
           };
         } catch {
           // The snapshot failing too means the browser is the problem, and the original
           // message already says so.
-          return { text: message, isError: true };
+          return { text: verdict, isError: true };
         }
       }
     }

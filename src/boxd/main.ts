@@ -229,6 +229,9 @@ async function handleComputer(body: ComputerRequest): Promise<ComputerResult> {
       bindUnmappedCharacters: body.bind_unmapped_characters ?? true,
     });
     return {
+      // Ran, but nothing to show for it, is not "ok": the capture is the only evidence
+      // the host has that the screen is in the state the actions were meant to leave it.
+      outcome: result.screenshot === "" ? "unknown" : "ok",
       success: result.success,
       screenshot: result.screenshot,
       windows: result.windows,
@@ -254,6 +257,7 @@ async function handleComputer(body: ComputerRequest): Promise<ComputerResult> {
     }
 
     return {
+      outcome: "failed",
       success: false,
       screenshot,
       action_count: body.actions.length,

@@ -475,3 +475,108 @@ test("an agent asks for a secret by name and hands its desktop over with one ins
   const { FORK_WITHHELD_TOOLS } = await import("./tools.ts");
   assert.ok(FORK_WITHHELD_TOOLS.has("AskSecret") && FORK_WITHHELD_TOOLS.has("HandOverDesktop"));
 });
+
+// ── the verdict line (INV-400) ──────────────────────────────────────────────────
+import { BoxError } from "../box/client.ts";
+import { boxErrorOutcome } from "./tools.ts";
+
+function boxContext(box: Record<string, unknown>) {
+  return {
+    agent: { id: "a1", profile: { name: "Rex" } },
+    registry: { tryGet: () => undefined, list: () => [] },
+    bus: {},
+    box,
+    displayIndex: 3,
+    boxOwner: "tok",
+  } as unknown as Parameters<typeof dispatchTool>[2];
+}
+
+test("a computer batch with no screenshot is reported unknown, and as an error", async () => {
+  // The old result: "Ran 2 action(s) in 40ms." with success true and no image — read as
+  // fine. The screen may have changed; nobody saw it.
+  const context = boxContext({
+    computer: async () => ({ success: true, screenshot: "", action_count: 2, duration_ms: 40 }),
+  });
+  const result = await dispatchTool("computer", { actions: [{ action: "screenshot" }] }, context);
+  assert.match(result.text, /^Outcome: unknown/);
+  assert.match(result.text, /do not repeat a write/);
+  assert.equal(result.isError, true);
+  assert.equal(result.images, undefined);
+
+  const fine = boxContext({
+    computer: async () => ({ success: true, screenshot: "UklGR", action_count: 1, duration_ms: 5 }),
+  });
+  const ok = await dispatchTool("computer", { actions: [{ action: "screenshot" }] }, fine);
+  assert.match(ok.text, /^Outcome: ok\./);
+  assert.equal(ok.isError, false);
+});
+
+test("the box refusing is refused; the box going quiet is unknown; a bug still throws", async () => {
+  const refused = await dispatchTool(
+    "computer",
+    { actions: [{ action: "screenshot" }] },
+    boxContext({
+      computer: async () => {
+        throw new BoxError("Desktop 3 belongs to another agent", 403, "refused");
+      },
+    })
+  );
+  assert.match(refused.text, /^Outcome: refused — Desktop 3 belongs to another agent/);
+  assert.match(refused.text, /refused again/);
+
+  const quiet = await dispatchTool(
+    "computer",
+    { actions: [{ action: "click", coordinate: [1, 1] }] },
+    boxContext({
+      computer: async () => {
+        throw new BoxError("timed out after 60s", undefined, "timeout");
+      },
+    })
+  );
+  assert.match(quiet.text, /^Outcome: unknown — timed out after 60s/);
+  assert.match(quiet.text, /may or may not have taken effect/);
+
+  // Not a box error: a programming mistake, which must surface as one.
+  await assert.rejects(
+    () =>
+      dispatchTool(
+        "computer",
+        { actions: [{ action: "screenshot" }] },
+        boxContext({
+          computer: async () => {
+            throw new TypeError("x is not a function");
+          },
+        })
+      ),
+    /x is not a function/
+  );
+
+  assert.equal(boxErrorOutcome(new BoxError("nope", 403)), "refused");
+  assert.equal(boxErrorOutcome(new BoxError("gone", 502)), "unknown");
+  assert.equal(boxErrorOutcome(new BoxError("bad request", 400)), "failed");
+  assert.equal(boxErrorOutcome(new Error("plain")), undefined);
+});
+
+test("a browser wait that could not look is unknown, with the wait's own three-state verdict", async () => {
+  const context = boxContext({
+    browser: async () => ({
+      url: "https://x.test/",
+      title: "X",
+      snapshot: "- heading \"X\"",
+      note: "could not tell",
+      wait: "unknown",
+      outcome: "unknown",
+    }),
+  });
+  const result = await dispatchTool("browser_wait_for", { for: "text", value: "Saved" }, context);
+  assert.match(result.text, /^Outcome: unknown\..*Wait: unknown\./);
+  assert.equal(result.isError, true);
+
+  // An older boxd sends no verdict; that is ok, and the wait line is simply absent.
+  const old = boxContext({
+    browser: async () => ({ url: "https://x.test/", title: "X", snapshot: "-" }),
+  });
+  const plain = await dispatchTool("browser_snapshot", {}, old);
+  assert.match(plain.text, /^Outcome: ok\./);
+  assert.equal(plain.isError, undefined);
+});
