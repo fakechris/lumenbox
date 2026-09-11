@@ -447,6 +447,7 @@ const routes: Record<string, Handler> = {
           ...(body.snapshot !== undefined ? { snapshot: body.snapshot } : {}),
           ...(body.find !== undefined ? { find: body.find } : {}),
           ...(body.confirmed === true ? { confirmed: true } : {}),
+          ...(body.expect !== undefined ? { expect: body.expect } : {}),
         });
       case "scroll":
         return browser.scroll(display, String(body.direction ?? "down"), Number(body.amount ?? 3));

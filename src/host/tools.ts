@@ -1472,6 +1472,22 @@ export function buildTools(
                 nth: { type: "integer" },
               },
             },
+            expect: {
+              type: "object",
+              description:
+                "What the page should look like afterwards. Not met is a failure that says what was found, " +
+                "so 'it changed' becomes 'it became what I meant'. value: the field's value after typing; " +
+                "text: what the element's text should contain; checked: true/false; gone: true when the " +
+                "element (a dialog, a row) should disappear; appears: text that should show up on the page " +
+                "(a 'Saved' confirmation).",
+              properties: {
+                value: { type: "string" },
+                text: { type: "string" },
+                checked: { type: "boolean" },
+                gone: { type: "boolean" },
+                appears: { type: "string" },
+              },
+            },
             text: { type: "string", description: "For `type`: what to enter." },
             key: { type: "string", description: "For `key`: which key, e.g. Enter." },
             replace: {
@@ -3181,6 +3197,16 @@ export async function dispatchTool(
         request.action = String(input.action ?? "");
         if (typeof input.ref === "string") request.ref = input.ref;
         if (typeof input.snapshot === "string" && input.snapshot !== "") request.snapshot = input.snapshot;
+        if (input.expect !== null && typeof input.expect === "object") {
+          const expect = input.expect as Record<string, unknown>;
+          request.expect = {
+            ...(typeof expect.value === "string" ? { value: expect.value } : {}),
+            ...(typeof expect.text === "string" ? { text: expect.text } : {}),
+            ...(typeof expect.checked === "boolean" ? { checked: expect.checked } : {}),
+            ...(typeof expect.gone === "boolean" ? { gone: expect.gone } : {}),
+            ...(typeof expect.appears === "string" ? { appears: expect.appears } : {}),
+          };
+        }
         if (input.find !== null && typeof input.find === "object") {
           const find = input.find as { role?: unknown; name?: unknown; nth?: unknown };
           request.find = {
@@ -3216,7 +3242,9 @@ export async function dispatchTool(
         const parts = [
           name === "browser_wait_for" && result.wait !== undefined
             ? `${outcomeLine(outcome)} Wait: ${result.wait}.`
-            : outcomeLine(outcome),
+            : result.effect !== undefined
+              ? `${outcomeLine(outcome)} ${effectLine(result.effect, result.changed !== undefined && result.changed.length > 0 ? `changed: ${result.changed.join(", ")}` : undefined)}`
+              : outcomeLine(outcome),
           `${result.snapshot_id !== undefined ? `Snapshot ${result.snapshot_id}: ` : ""}${result.title || "(untitled)"} — ${result.url}`,
         ];
         // What happened to the page comes before the page. A tab that opened under the

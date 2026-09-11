@@ -742,3 +742,27 @@ test("a write while a person holds the desktop is refused, and WaitForControl re
   assert.match(gaveUp.text, /2026-09-11T12:00:00/);
   assert.equal(gaveUp.isError, true);
 });
+
+// ── expect travels with an act, and the effect comes back (INV-399) ────────────────
+test("browser_act sends expect and renders the measured effect after the verdict", async () => {
+  const requests: BrowserRequest[] = [];
+  const context = boxContext({
+    browser: async (request: BrowserRequest) => {
+      requests.push(request);
+      return { url: "https://x.test/", title: "X", snapshot: "-", snapshot_id: "s2", effect: "confirmed", changed: ["value", "focus"] };
+    },
+  });
+  const result = await dispatchTool(
+    "browser_act",
+    { action: "type", ref: "e1", snapshot: "s2", text: "hello", expect: { value: "hello", appears: "Saved", gone: "no" } },
+    context
+  );
+  assert.deepEqual(requests[0]?.expect, { value: "hello", appears: "Saved" }, "only well-typed expectations travel");
+  assert.match(result.text, /^Outcome: ok\. Effect: confirmed \(changed: value, focus\)\./);
+
+  const noop = boxContext({
+    browser: async () => ({ url: "https://x.test/", title: "X", snapshot: "-", effect: "suspected_noop", changed: [] }),
+  });
+  const swallowed = await dispatchTool("browser_act", { action: "click", ref: "e1" }, noop);
+  assert.match(swallowed.text, /^Outcome: ok\. Effect: suspected_noop — nothing near the point changed/);
+});

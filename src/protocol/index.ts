@@ -676,6 +676,25 @@ export interface BrowserRequest {
    * check is satisfied. Set by the host after the policy gate said so; never by the model.
    */
   confirmed?: boolean;
+  /**
+   * For `act`: what the page should look like afterwards (INV-399). Not met is a failure,
+   * with what was expected and what was found — "did it change" becomes "did it become
+   * what I meant".
+   */
+  expect?: ActExpectation;
+}
+
+export interface ActExpectation {
+  /** The target's value afterwards (a textbox after `type`). */
+  value?: string;
+  /** Text the target should contain afterwards. */
+  text?: string;
+  /** The target's checked state afterwards. */
+  checked?: boolean;
+  /** The target should be gone from the page (a dismissed dialog, a deleted row). */
+  gone?: boolean;
+  /** Text that should appear somewhere on the page afterwards ("Saved", a confirmation). */
+  appears?: string;
 }
 
 export interface BrowserResponse {
@@ -695,6 +714,10 @@ export interface BrowserResponse {
   wait?: WaitOutcome;
   /** The id of this outline, to hand back with a ref taken from it. */
   snapshot_id?: string;
+  /** For `act` on a ref: whether the target visibly changed (INV-399). */
+  effect?: Effect;
+  /** What changed on the target: `value`, `checked`, `text`, `focus`, `aria`, `subtree`, `gone`, `navigated`. */
+  changed?: string[];
 }
 
 /**
