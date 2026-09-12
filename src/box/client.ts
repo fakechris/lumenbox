@@ -4,7 +4,7 @@
  * Everything the agent does inside the box goes through here.
  */
 
-import { BOXD_PROTOCOL, type DisplayInfo } from "../protocol/index.ts";
+import { BOXD_PROTOCOL, type DisplayInfo, type TeachQueueList, type TeachClaimResult } from "../protocol/index.ts";
 import type {
   BrowserRequest,
   BrowserResponse,
@@ -234,6 +234,24 @@ export class BoxClient {
       { index, controller, ...(ttlSeconds !== undefined ? { ttl_seconds: ttlSeconds } : {}) },
       10_000
     );
+  }
+
+  /** Demonstrations waiting for a teaching turn, and desktops being recorded (INV-405). */
+  teachSessions(): Promise<TeachQueueList> {
+    return this.post<TeachQueueList>("/teach/sessions", {}, 10_000);
+  }
+
+  /** Claims the oldest pending demonstration; `entry` absent when there is none. */
+  teachClaim(): Promise<TeachClaimResult> {
+    return this.post<TeachClaimResult>("/teach/claim", {}, 10_000);
+  }
+
+  teachRelease(id: string): Promise<{ released: boolean }> {
+    return this.post<{ released: boolean }>("/teach/release", { id }, 10_000);
+  }
+
+  teachDone(id: string, deleteVideo = false): Promise<{ done: boolean }> {
+    return this.post<{ done: boolean }>("/teach/done", { id, delete_video: deleteVideo }, 10_000);
   }
 
   /** Brings up an agent's desktop, or adopts it if already running. */

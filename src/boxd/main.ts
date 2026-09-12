@@ -59,9 +59,13 @@ import {
   type XWatchdogQuery,
   type XWatchdogEventsResult,
   type DisplayControlRequest,
+  type TeachQueueList,
+  type TeachClaimResult,
+  type TeachDoneRequest,
 } from "../protocol/index.ts";
 import { DisplayManager, DisplayOwnershipError, UserInControlError } from "./displays.ts";
 import { CdpError } from "./cdp.ts";
+import { TeachService, defaultInputSpawner } from "./teach-service.ts";
 import { detectDisplay, getDisplay, parseDisplayNum } from "../cua/display.ts";
 import { readClipboard, writeClipboard } from "./clipboard-service.ts";
 import { startEgressProxy } from "../egress/proxy.ts";
@@ -379,6 +383,50 @@ const jobs = new JobService();
  */
 const browser = new BrowserService();
 
+/**
+ * A demonstration is recorded while a person holds a desktop (INV-405). Started by the
+ * takeover route, ended by hand-back, by the lease lapsing (the reaper below), or by
+ * shutdown; every ended session is queued for a teaching turn.
+ */
+const teach = new TeachService({
+  spawnInput: defaultInputSpawner,
+  pointer: async index => {
+    const desktop = displays.has(index) ? await displays.ensure(index) : undefined;
+    if (desktop === undefined) throw new Error(`no desktop ${index}`);
+    const where = await desktop.executor.pointerWithWindow();
+    return where;
+  },
+  snapshot: async index => {
+    const result = await browser.snapshotIfOpen(index);
+    return result === undefined ? undefined : { url: result.url, title: result.title, snapshot: result.snapshot, ...(result.snapshot_id !== undefined ? { snapshot_id: result.snapshot_id } : {}) };
+  },
+  startRecording: (index, name) => {
+    if (recorder.isRecording(index)) return undefined;
+    const desktop = [...displays.list()].find(entry => entry.index === index);
+    if (desktop?.resolution === undefined) return undefined;
+    try {
+      return { path: recorder.start({ display: index, resolution: desktop.resolution.display, name }).path };
+    } catch {
+      return undefined;
+    }
+  },
+  stopRecording: async index => {
+    if (!recorder.isRecording(index)) return undefined;
+    const status = await recorder.stop(index);
+    return { path: status.path };
+  },
+  execsBetween: async (from, to) => {
+    const result = await xwatchdog.events(0, 500, true);
+    return result.events
+      .filter(event => event.type === "exec" && event.time >= from && event.time <= to)
+      .map(event => ({ at: event.time, cmd: String(event.detail.cmd ?? ""), ...(typeof event.detail.user === "string" ? { user: event.detail.user } : {}) }));
+  },
+  log: line => log(line),
+});
+setInterval(() => {
+  void teach.reapLapsed(index => displays.userInControl(index) !== undefined);
+}, 5_000).unref();
+
 const routes: Record<string, Handler> = {
   "POST /computer": (body: ComputerRequest) => handleComputer(body),
   "POST /exec": async (body: ExecRequest): Promise<ExecResult | JobStartedResult> => {
@@ -483,8 +531,12 @@ const routes: Record<string, Handler> = {
   "POST /displays/control": async (body: DisplayControlRequest): Promise<DisplayInfo> => {
     if (body.controller === "user") {
       displays.takeOver(body.index, body.ttl_seconds !== undefined ? body.ttl_seconds * 1000 : undefined);
+      // The takeover is the demonstration (INV-405). Started after the lease, so a
+      // takeover that is refused records nothing; not awaited past its start.
+      await teach.begin(body.index);
     } else {
       displays.handBack(body.index);
+      await teach.finish(body.index, "handback");
     }
     const info = displays.list().find(entry => entry.index === body.index);
     if (info === undefined) throw new HttpError(404, `Desktop ${body.index} is not running.`);
@@ -546,6 +598,25 @@ const routes: Record<string, Handler> = {
     listDir(body),
   "POST /xwatchdog/events": (body: XWatchdogQuery): Promise<XWatchdogEventsResult> =>
     xwatchdog.events(body.since, body.limit, body.tail),
+  // The demonstrations waiting for a teaching turn (INV-405). Claim is atomic and leased.
+  "GET /teach/sessions": async (): Promise<TeachQueueList> => ({
+    ...teach.queue.list(),
+    recording: displays.list().map(entry => entry.index).filter(index => teach.isTeaching(index)),
+  }),
+  "POST /teach/sessions": async (): Promise<TeachQueueList> => ({
+    ...teach.queue.list(),
+    recording: displays.list().map(entry => entry.index).filter(index => teach.isTeaching(index)),
+  }),
+  "POST /teach/claim": async (): Promise<TeachClaimResult> => {
+    const entry = teach.queue.claim();
+    return entry === undefined ? {} : { entry };
+  },
+  "POST /teach/release": async (body: { id: string }): Promise<{ released: boolean }> => ({
+    released: teach.queue.release(String(body.id ?? "")),
+  }),
+  "POST /teach/done": async (body: TeachDoneRequest): Promise<{ done: boolean }> => ({
+    done: teach.queue.done(String(body.id ?? ""), body.delete_video === true),
+  }),
 };
 
 /**
@@ -810,6 +881,7 @@ server.listen(listenPort, listenHost, () => {
 for (const signal of ["SIGINT", "SIGTERM"] as const) {
   process.on(signal, () => {
     log(`${signal} received, shutting down`);
-    server.close(() => process.exit(0));
+    // A demonstration in progress is closed and queued rather than lost with the daemon.
+    void teach.shutdown().finally(() => server.close(() => process.exit(0)));
   });
 }

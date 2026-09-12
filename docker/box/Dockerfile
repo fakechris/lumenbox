@@ -24,7 +24,7 @@ ENV DEBIAN_FRONTEND=noninteractive \
 #    framebuffer, xrandr/xdpyinfo report geometry, xmodmap lends keycodes to
 #    unmapped Unicode characters.
 RUN apt-get update && apt-get install -y --no-install-recommends \
-      xvfb x11vnc xdotool xauth x11-xserver-utils x11-utils \
+      xvfb x11vnc xdotool xauth x11-xserver-utils x11-utils xinput \
       x11-apps \
       ffmpeg \
       xfwm4 xfconf dbus-x11 \
