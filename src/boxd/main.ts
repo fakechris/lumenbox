@@ -73,7 +73,8 @@ import { RecordService, RECORDINGS_DIR } from "./record-service.ts";
 import { AGENT_NICE, reapSpool, runShell, withoutBoxToken } from "./shell-service.ts";
 import { JobService } from "./job-service.ts";
 import { BrowserService, StaleSnapshotError, IrreversibleActionError } from "./browser-service.ts";
-import { downloadFile, listDir, readFile, uploadFile, writeFile } from "./fs-service.ts";
+import { currentRoots, downloadFile, listDir, readFile, uploadFile, writeFile } from "./fs-service.ts";
+import { headlessRefusal } from "./headless.ts";
 import { XWatchdogService } from "./xwatchdog-service.ts";
 
 const VERSION = "0.1.0";
@@ -82,6 +83,8 @@ const startedAt = Date.now();
 
 const display = getDisplay();
 const token = process.env.BOXD_TOKEN ?? "";
+/** A box with no desktop by design (INV-438): nothing that needs X is started or served. */
+const HEADLESS = process.env.BOXD_HEADLESS === "1";
 
 const displays = new DisplayManager(line => log(line));
 const recorder = new RecordService(line => log(line));
@@ -185,7 +188,7 @@ async function handleHealth(): Promise<HealthResult> {
   // restart the desktop is up and an agent's, and "no display" would be a claim about this
   // process's bookkeeping presented as a fact about the screen.
   let resolution = primary?.resolution;
-  if (resolution === undefined) {
+  if (resolution === undefined && !HEADLESS) {
     try {
       resolution = (await detectDisplay(display)).resolution;
     } catch {
@@ -198,6 +201,8 @@ async function handleHealth(): Promise<HealthResult> {
     ...(imageContract() !== undefined ? { contract: imageContract()! } : {}),
     protocol: BOXD_PROTOCOL,
     display,
+    ...(HEADLESS ? { headless: true } : {}),
+    ...(currentRoots().restricted ? { repositories: currentRoots().list() } : {}),
     resolution,
     refresh_rate: undefined,
     uptime_seconds: Math.round((Date.now() - startedAt) / 1000),
@@ -711,6 +716,11 @@ const server = createServer((req, res) => {
         return;
       }
 
+      const refusedHeadless = HEADLESS ? headlessRefusal(route) : undefined;
+      if (refusedHeadless !== undefined) {
+        send(res, 409, { error: refusedHeadless });
+        return;
+      }
       const handler = routes[route];
       if (!handler) {
         send(res, 404, { error: `No route for ${route}` });
@@ -772,6 +782,10 @@ if (token.length < 16) {
  * itself. What is being authenticated here is the hop, not the human.
  */
 server.on("upgrade", (req, clientSocket: Socket, head: Buffer) => {
+  if (HEADLESS) {
+    clientSocket.end("HTTP/1.1 409 Conflict\r\n\r\n");
+    return;
+  }
   if (!authorized(req)) {
     clientSocket.end("HTTP/1.1 401 Unauthorized\r\n\r\n");
     return;
@@ -866,6 +880,10 @@ server.listen(listenPort, listenHost, () => {
   // touched: ensuring it without that agent's token would only be refused, and the agent
   // registers it again on its next call. Everything else about it — the components, the
   // supervisor — resumes then.
+  if (HEADLESS) {
+    log(`headless: no desktop on this box; ${currentRoots().restricted ? `files limited to ${currentRoots().list().map(r => `${r.path} (${r.mode})`).join(", ")}` : "files unrestricted"}`);
+    return;
+  }
   if (displays.isClaimed(defaultDisplayIndex)) {
     log(`default desktop ${defaultDisplayIndex} is an agent's; leaving it to them`);
   } else {

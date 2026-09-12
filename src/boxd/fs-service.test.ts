@@ -13,7 +13,7 @@
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { lstatSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { lstatSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -90,4 +90,28 @@ test("an upload arrives whole or not at all, and a link's target stays a link's 
   await uploadFile({ path: join(ROOT, "alias.txt"), base64: base64("through the link") });
   assert.equal(readFileSync(join(ROOT, "target.txt"), "utf8"), "through the link");
   assert.ok(lstatSync(join(ROOT, "alias.txt")).isSymbolicLink(), "the link must survive");
+});
+
+// ── the roots a restricted box may touch (INV-438) ─────────────────────────────────
+
+test("with roots set, reads and writes outside them are refused, and inside they work", async () => {
+  // Imported here, not at the top: the tests above set the work directory before the module
+  // loads, and a hoisted import would fix it to the box's default for all of them.
+  const { setRoots, currentRoots, readFile: readInside, writeFile: writeInside, listDir: listInside } = await import("./fs-service.ts");
+  const dir = realpathSync(mkdtempSync(join(tmpdir(), "agentbox-fs-roots-")));
+  try {
+    const allowed = join(dir, "proj");
+    mkdirSync(allowed);
+    setRoots([{ path: allowed, mode: "rw" }]);
+    assert.equal(currentRoots().restricted, true);
+    await writeInside({ path: join(allowed, "note.txt"), content: "hi" });
+    assert.equal((await readInside({ path: join(allowed, "note.txt") })).content, "hi");
+    assert.ok((await listInside({ path: allowed })).entries.some(e => e.name === "note.txt"));
+    await assert.rejects(() => writeInside({ path: join(dir, "outside.txt"), content: "no" }), /outside the directories/);
+    await assert.rejects(() => readInside({ path: "/etc/hosts" }), /outside the directories/);
+    await assert.rejects(() => listInside({ path: dir }), /outside the directories/);
+  } finally {
+    setRoots([]);
+    rmSync(dir, { recursive: true, force: true });
+  }
 });
