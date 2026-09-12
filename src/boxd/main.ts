@@ -227,7 +227,7 @@ async function handleComputer(body: ComputerRequest): Promise<ComputerResult> {
   const index = body.display ?? defaultDisplayIndex;
   displays.assertOwner(index, body.owner);
   // A look is fine while a person holds the desktop; a write is not (INV-404).
-  if (body.actions.some(action => !["screenshot", "cursor_position", "list_windows", "screenshot_window", "wait"].includes(action.action))) {
+  if (body.actions.some(action => !["screenshot", "cursor_position", "list_windows", "list_elements", "screenshot_window", "wait"].includes(action.action))) {
     displays.assertAgentControls(index);
   }
   const desktop = await displays.ensure(index, body.owner);
@@ -241,14 +241,19 @@ async function handleComputer(body: ComputerRequest): Promise<ComputerResult> {
     return {
       // Ran, but nothing to show for it, is not "ok": the capture is the only evidence
       // the host has that the screen is in the state the actions were meant to leave it.
+      // An outline that was asked for and could not be read is the same: the model has
+      // to know it is working from the screenshot alone (INV-412).
       outcome:
-        result.screenshot === "" || result.effect === "unverifiable" ? "unknown" : "ok",
+        result.screenshot === "" || result.effect === "unverifiable" || result.elementsNote !== undefined ? "unknown" : "ok",
       ...(result.effect !== undefined
         ? { effect: result.effect, effect_detail: result.effectDetail }
         : {}),
       success: result.success,
       screenshot: result.screenshot,
       windows: result.windows,
+      ...(result.elements !== undefined ? { elements: result.elements } : {}),
+      ...(result.elementsNote !== undefined ? { elements_note: result.elementsNote } : {}),
+      ...(result.elementsWindow !== undefined ? { elements_window: result.elementsWindow } : {}),
       cursor_position: result.cursorPosition,
       action_count: result.actionCount,
       duration_ms: result.durationMs,

@@ -383,3 +383,75 @@ test("a batch of reads has no effect to report, and measurement can be switched 
   assert.equal(result.effect, undefined);
   assert.deepEqual(off.ran, ["click"]);
 });
+
+// ── the control tree behind list_elements / click_element (INV-412) ─────────────────
+import { parseAxOutput } from "./x11-executor.ts";
+
+const AX_SAMPLE = JSON.stringify({
+  window: { title: "Documents - Thunar", app: "thunar", truncated: false },
+  elements: [
+    { ref: "a1", role: "menu", name: "File", x: 10, y: 40, width: 40, height: 20, states: [] },
+    { ref: "a2", role: "push button", name: "Back", x: 100, y: 80, width: 60, height: 30, states: ["disabled"] },
+    { ref: "a3", role: "entry", name: "Location", x: 200, y: 80, width: 800, height: 30, states: ["editable", "focused"] },
+  ],
+});
+
+test("box-ax output is read: a tree, an error, or nothing readable — never an empty success", () => {
+  const tree = parseAxOutput(`some stray warning\n${AX_SAMPLE}\n`);
+  assert.ok(tree !== undefined && "elements" in tree && tree.elements.length === 3 && tree.window.app === "thunar");
+  assert.deepEqual(parseAxOutput('{"error":"no window on the accessibility bus exposes a tree"}'), { error: "no window on the accessibility bus exposes a tree" });
+  assert.equal(parseAxOutput(""), undefined);
+  assert.equal(parseAxOutput("not json"), undefined);
+});
+
+class TreeExecutor extends ScriptedExecutor {
+  tree: string | undefined = AX_SAMPLE;
+  readonly clicks: { action: string; ref?: string }[] = [];
+  protected override async listElements() {
+    const parsed = this.tree === undefined ? undefined : parseAxOutput(this.tree);
+    if (parsed === undefined) return { error: "the accessibility reader is not available (no box-ax)" };
+    if ("error" in parsed) return parsed;
+    return this.adoptElements(parsed);
+  }
+  protected override async executeAction(action: ComputerAction): Promise<void> {
+    this.ran.push(action.action);
+    if (action.action === "click_element") {
+      // What the real executor does before xdotool: the ref has to be one it knows.
+      this.clicks.push({ action: action.action, ref: action.ref });
+      (this as unknown as { elementCentre: (ref: string) => unknown }).elementCentre(action.ref);
+    }
+  }
+}
+
+test("list_elements scales the tree to API space and remembers where each control is; click_element clicks there", async () => {
+  const executor = new TreeExecutor({ resolution: { display: { width: 2560, height: 1600 }, api: { width: 1280, height: 800 } } });
+  const listed = await executor.execute([{ action: "list_elements" }]);
+  assert.equal(listed.elementsNote, undefined);
+  assert.equal(listed.elementsWindow?.title, "Documents - Thunar");
+  assert.deepEqual(listed.elements?.map(e => `${e.ref} ${e.role} ${e.name} @${e.x},${e.y} ${e.width}x${e.height} [${e.states.join(",")}]`), [
+    "a1 menu File @5,20 20x10 []",
+    "a2 push button Back @50,40 30x15 [disabled]",
+    "a3 entry Location @100,40 400x15 [editable,focused]",
+  ]);
+
+  // The click measures its effect at the control's centre, like any click.
+  executor.frames = [flat(10), flat(90), flat(90)];
+  const clicked = await executor.execute([{ action: "click_element", ref: "a3" }]);
+  assert.deepEqual(executor.clicks, [{ action: "click_element", ref: "a3" }]);
+  assert.equal(clicked.effect, "confirmed");
+  assert.match(clicked.effectDetail ?? "", /click_element@\(300,48\)/, "measured at the entry's centre, in API space");
+
+  // A ref from nowhere is a failure that names the fix, not a click somewhere.
+  await assert.rejects(executor.execute([{ action: "click_element", ref: "a9" }]), /no element a9 in the last list_elements outline/);
+});
+
+test("an app with no tree is said in words, and the batch is unknown, not an empty success", async () => {
+  const executor = new TreeExecutor();
+  executor.tree = '{"error":"no window on the accessibility bus exposes a tree (the active app has none: a terminal, or an Electron app)"}';
+  const result = await executor.execute([{ action: "list_elements" }]);
+  assert.equal(result.elements, undefined);
+  assert.match(result.elementsNote ?? "", /exposes a tree/);
+  executor.tree = undefined;
+  const missing = await executor.execute([{ action: "list_elements" }]);
+  assert.match(missing.elementsNote ?? "", /not available/);
+});
