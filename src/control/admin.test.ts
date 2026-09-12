@@ -75,6 +75,7 @@ function fixture() {
     alice,
     asOwner,
     call,
+    allocator,
     destroyed,
     restarted,
     cleanup: () => {
@@ -308,6 +309,65 @@ test("the audit feed shows this tenant's rows and nobody else's", async () => {
     assert.ok(rows.length > 0);
     assert.ok(rows.every(row => row.tenantId !== other.id), "another tenant's rows are not shown");
     assert.ok(rows.some(row => row.action === "admin.invite"));
+  } finally {
+    cleanup();
+  }
+});
+
+
+test("settings: the trace URL is set, read, cleared, and every change audited", async () => {
+  const { store, call, asOwner, allocator, cleanup } = fixture();
+  try {
+    // Routing.
+    assert.deepEqual(adminRouteOf("GET", "/api/admin/settings"), { kind: "settings" });
+    assert.deepEqual(adminRouteOf("PUT", "/api/admin/settings"), { kind: "put-settings" });
+    assert.equal(adminRouteOf("POST", "/api/admin/settings"), undefined, "wrong method is not a route");
+
+    // Nothing configured, no env default: off, and said so.
+    const unset = await call("GET", "/api/admin/settings");
+    assert.deepEqual(unset.body, { traceUrl: null, source: "none" });
+
+    // A bad value is refused with a reason, and stores nothing.
+    const bad = await call("PUT", "/api/admin/settings", { traceUrl: "opik:8080" });
+    assert.equal(bad.status, 400);
+    assert.equal(store.getSetting("traceUrl"), undefined);
+
+    const set = await call("PUT", "/api/admin/settings", {
+      traceUrl: "http://opik:8080/api/v1/private/otel",
+    });
+    assert.equal(set.status, 200);
+    assert.match((set.body as { note?: string }).note ?? "", /restart/i, "says when boxes pick it up");
+    assert.equal(store.getSetting("traceUrl"), "http://opik:8080/api/v1/private/otel");
+
+    const read = await call("GET", "/api/admin/settings");
+    assert.deepEqual(read.body, {
+      traceUrl: "http://opik:8080/api/v1/private/otel",
+      source: "setting",
+    });
+
+    // The environment is the fallback, and losing to the setting is visible in `source`.
+    const route = adminRouteOf("GET", "/api/admin/settings");
+    assert.ok(route);
+    const fromEnv = await handleAdmin(route, {}, new URLSearchParams(), {
+      store,
+      allocator,
+      session: asOwner,
+      settingsDefaults: { traceUrl: "http://env-collector:4318" },
+    });
+    assert.deepEqual(fromEnv.body, {
+      traceUrl: "http://opik:8080/api/v1/private/otel",
+      source: "setting",
+    });
+
+    // Clearing falls back to the env default, not to nothing.
+    const cleared = await call("PUT", "/api/admin/settings", { traceUrl: null });
+    assert.equal(cleared.status, 200);
+    assert.equal(store.getSetting("traceUrl"), undefined);
+    assert.equal((cleared.body as { traceUrl: string | null }).traceUrl, null, "no env here, so null");
+    assert.ok(
+      store.recentAudit().filter(row => row.action === "admin.settings.trace-url").length >= 2,
+      "set and clear are both on the record"
+    );
   } finally {
     cleanup();
   }

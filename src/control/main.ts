@@ -240,9 +240,20 @@ export async function startControlPlane(
     image: options.image,
     // Whatever this process was told about a provider is what a box is told. When the relay exists
     // this becomes a relay address and a per-box token instead of a key.
-    boxEnv: process.env.AGENTBOX_PROVIDER
-      ? { AGENTBOX_PROVIDER: process.env.AGENTBOX_PROVIDER }
-      : undefined,
+    //
+    // A function rather than a snapshot: the trace URL is admin-settable at runtime
+    // (PUT /api/admin/settings), and a box created after the change should carry the new
+    // value without a control-plane restart. The stored setting wins over the env var.
+    boxEnv: () => {
+      const env: Record<string, string> = {};
+      if (process.env.AGENTBOX_PROVIDER) env.AGENTBOX_PROVIDER = process.env.AGENTBOX_PROVIDER;
+      const traceUrl = store.getSetting("traceUrl") ?? process.env.AGENTBOX_TRACE_URL;
+      if (traceUrl !== undefined && traceUrl.trim() !== "") env.AGENTBOX_TRACE_URL = traceUrl.trim();
+      return Object.keys(env).length > 0 ? env : undefined;
+    },
+    ...(process.env.AGENTBOX_TRACE_URL !== undefined
+      ? { settingsDefaults: { traceUrl: process.env.AGENTBOX_TRACE_URL } }
+      : {}),
     secureCookies: options.secureCookies,
     publicUrl: options.publicUrl ?? `http://${options.host}:${options.port}`,
     log: line => out(`  ${line}`),
