@@ -14,6 +14,7 @@ import type Anthropic from "@anthropic-ai/sdk";
 import type { AgentRecord, AgentRegistry } from "../agents/registry.ts";
 import type { AgentBus, InboundMessage } from "../agents/bus.ts";
 import type { BoxClient } from "../box/client.ts";
+import type { Tracer } from "./trace.ts";
 import type { DisplayLease } from "../box/display-lease.ts";
 import type { PolicyGate } from "./policy.ts";
 import type { Claims } from "./claims.ts";
@@ -506,6 +507,12 @@ export interface TurnDeps {
    */
   resumeOf?: { id: string; attempt: number; workId?: string };
   onEvent?: (event: TurnEvent) => void;
+  /**
+   * Where one span per LLM call goes (trace.ts). Absent by default: a box whose
+   * operator configured no collector has no tracer, and the `?.` below is the
+   * entire cost of that.
+   */
+  tracer?: Tracer;
 }
 
 const FULL_CLAUDE: ProviderProfile = {
@@ -1823,6 +1830,24 @@ export async function runTurn(
     const onOuterAbort = () => attemptControl.abort();
     signal.addEventListener("abort", onOuterAbort, { once: true });
 
+    // One span per attempt, all of a turn's rounds in one trace (traceId is the
+    // turnId). Covers both wires: OpenAIWireClient answers the same messages.stream
+    // shape, so this is the single boundary every LLM call crosses.
+    const span = deps.tracer?.start(
+      "llm.round",
+      {
+        "gen_ai.system": provider.label,
+        "gen_ai.request.model": provider.model,
+        "agentbox.agent_id": agent.id,
+        "agentbox.agent_name": agent.profile.name,
+        "agentbox.work_id": workId,
+        "agentbox.turn_id": turnId,
+        "agentbox.conversation": conversation,
+        "agentbox.round": round,
+        "agentbox.attempt": attempts + 1,
+      },
+      { traceId: turnId }
+    );
     const stream = client.messages.stream(
       {
         model: provider.model,
@@ -1904,6 +1929,9 @@ export async function runTurn(
       // A first-token stall arrives as an abort, because that is how the request was ended. Named
       // properly here so the retry decision and the message a person reads both say what happened.
       const error = stalled ? new FirstTokenStallError(FIRST_TOKEN_DEADLINE_MS) : rawError;
+      // The span ends failed however the round recovers — retried, shed, or given up on:
+      // a retried failure is still a failed call, and that is what the trace should show.
+      span?.end(stalled ? { "agentbox.stalled": true } : {}, error);
       // The outer abort is the only one that means "a person stopped this"; our own deadline abort
       // must not be mistaken for it.
       if (signal.aborted) {
@@ -1993,6 +2021,12 @@ export async function runTurn(
       cacheWriteTokens: response.usage.cache_creation_input_tokens ?? 0,
     };
     emit({ type: "usage", agentId: agent.id, round, ...usage });
+    span?.end({
+      "gen_ai.usage.input_tokens": usage.inputTokens,
+      "gen_ai.usage.output_tokens": usage.outputTokens,
+      "agentbox.usage.cache_read_tokens": usage.cacheReadTokens,
+      "agentbox.usage.cache_write_tokens": usage.cacheWriteTokens,
+    });
     // Learn the real context window while we are here. Providers report it under different names —
     // Anthropic does not report it at all today, several OpenAI-compatible endpoints do — so this
     // reads whatever is present and falls back to the configured constants when nothing is.

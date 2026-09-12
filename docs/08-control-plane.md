@@ -360,6 +360,26 @@ Two things that run found:
   money invisibly, and it logged `usage unavailable (HTTP 404)` rather than reporting a comfortable
   zero. That is the whole reason R-02 and R-03 were done before this.
 
+## 8a. Tracing
+
+Usage metering answers "what did it cost"; it cannot answer "what did this turn actually do". For
+that the turn engine emits one OTLP span per LLM call (`llm.round`: model, round, attempt, latency,
+token usage, error), all of a turn's rounds sharing one trace id, POSTed as OTLP/HTTP JSON to any
+collector that speaks it (an opik deployment is the intended one). The exporter is hand-rolled in
+`src/host/trace.ts` — the protocol is one POST — and fire-and-forget: a dead collector costs the
+turn nothing, which is the same discipline as the webhook notifier.
+
+Off by default, configured three ways, first one wins:
+
+1. `PUT /api/admin/settings` with `{ "traceUrl": "http://opik:8080/api/v1/private/otel" }` —
+   owner-only, audited, stored in the `setting` table, and picked up by boxes created after the
+   change (a running box is told its environment once, at creation, so restart it to apply).
+2. `AGENTBOX_TRACE_URL` on the control plane — the seed the admin setting overrides.
+3. `AGENTBOX_TRACE_URL` on a plain local box (no control plane) — forwarded like the provider keys.
+
+With none of them there is no tracer object at all, and the turn loop's `deps.tracer?.` is the
+entire cost of the feature.
+
 ## 9. Failure model
 
 | Failure | Effect | Recovery |

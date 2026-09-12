@@ -436,3 +436,25 @@ test("a box and its credentials land together, or neither does", () => {
     cleanup();
   }
 });
+
+
+test("settings round-trip: absent, written, overwritten, deleted", () => {
+  const dir = mkdtempSync(join(tmpdir(), "agentbox-store-"));
+  const store = new SqliteControlStore({ path: join(dir, "control.db") });
+  try {
+    assert.equal(store.getSetting("traceUrl"), undefined, "an unset key is absent, never empty");
+
+    store.putSetting("traceUrl", "http://opik:8080/api/v1/private/otel");
+    assert.equal(store.getSetting("traceUrl"), "http://opik:8080/api/v1/private/otel");
+
+    store.putSetting("traceUrl", "http://other:4318");
+    assert.equal(store.getSetting("traceUrl"), "http://other:4318", "put is an upsert");
+
+    store.deleteSetting("traceUrl");
+    assert.equal(store.getSetting("traceUrl"), undefined);
+    store.deleteSetting("traceUrl"); // deleting what is not there is not an error
+  } finally {
+    store.close();
+    rmSync(dir, { recursive: true, force: true });
+  }
+});

@@ -156,8 +156,14 @@ export interface GatewayOptions {
   sessionSecret?: Buffer;
   /** The image a new box is created from. */
   image: string;
-  /** Environment handed to a new box: provider configuration, and later the relay address. */
-  boxEnv?: Record<string, string>;
+  /**
+   * Environment handed to a new box: provider configuration, and later the relay address.
+   * A function is resolved at each allocation, so an admin change (e.g. the trace URL)
+   * reaches the next box created without a control-plane restart.
+   */
+  boxEnv?: Record<string, string> | (() => Record<string, string> | undefined);
+  /** Values the admin settings surface falls back to when no setting overrides them. */
+  settingsDefaults?: { traceUrl?: string };
   /** True behind TLS: sets `Secure` on the cookie. */
   secureCookies?: boolean;
   /**
@@ -326,6 +332,9 @@ export class Gateway {
         store: this.options.store,
         allocator: this.options.allocator,
         session,
+        ...(this.options.settingsDefaults !== undefined
+          ? { settingsDefaults: this.options.settingsDefaults }
+          : {}),
         log: this.log,
       });
       res.writeHead(result.status, { "content-type": "application/json", "cache-control": "no-store" });
@@ -367,7 +376,7 @@ export class Gateway {
     try {
       const created = await this.options.allocator.allocate(tenantId, {
         image: this.options.image,
-        env: this.options.boxEnv,
+        env: typeof this.options.boxEnv === "function" ? this.options.boxEnv() : this.options.boxEnv,
       });
       return created.state === "ready" ? created : undefined;
     } catch (error) {

@@ -360,6 +360,7 @@ function hostCredentialArgs(): string[] {
     "AGENTBOX_PROVIDER",
     "AGENTBOX_KEY_ENV",
     "AGENTBOX_AUTH",
+    "AGENTBOX_TRACE_URL",
   ];
   return names.flatMap(name => {
     const value = process.env[name];
