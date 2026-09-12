@@ -4,7 +4,7 @@
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { buildTools, dispatchTool } from "./tools.ts";
+import { buildTools, dispatchTool, elementsOutline } from "./tools.ts";
 
 test("edit_file changes part of a file, and refuses the two ways it could change the wrong part", async () => {
   const file = { path: "/home/box/work/app.py", content: "" };
@@ -903,4 +903,18 @@ test("Checkpoint keeps a named result in durable state, replacing by name, and r
   const refused = await dispatchTool("Checkpoint", { name: "x", value: " " }, context);
   assert.equal(refused.isError, true);
   assert.equal(written.length, 2);
+});
+
+// ── the control outline the model reads (INV-412) ────────────────────────────────────
+test("elementsOutline is one line per control in the browser outline's shape, and says plainly when there is no tree", () => {
+  const outline = elementsOutline({
+    elements_window: { title: "Documents - Thunar", app: "thunar", truncated: true },
+    elements: [
+      { ref: "a1", role: "menu", name: "File", x: 5, y: 20, width: 20, height: 10, states: [] },
+      { ref: "a2", role: "push button", name: "", x: 50, y: 40, width: 30, height: 15, states: ["disabled"] },
+    ],
+  });
+  assert.equal(outline, 'Controls of "Documents - Thunar" (thunar):\n- menu "File" [ref=a1] at (15,25)\n- push button [ref=a2] [disabled] at (65,48)\n… (more controls than shown; act on what is here or scroll)');
+  assert.match(elementsOutline({ elements_note: "the active app has none" }), /^No control outline: the active app has none\. Work from the screenshot\./);
+  assert.match(elementsOutline({ elements: [], elements_window: { title: "x", app: "", truncated: false } }), /no operable controls are showing/);
 });

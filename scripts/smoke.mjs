@@ -445,6 +445,43 @@ await check("the clipboard is one clipboard", async () => {
   return "PRIMARY and CLIPBOARD agree";
 });
 
+await check("the control tree is read for a GTK app and refused in words for a terminal (INV-412)", async () => {
+  // What this buys: a desktop app can be operated by its controls, not by guessing pixels.
+  // And the half that matters as much: an app with no tree says so, so the model falls
+  // back to the screenshot knowingly rather than acting on an empty list.
+  await box.exec("DISPLAY=:1 setsid thunar /home/box >/dev/null 2>&1 &");
+  await new Promise(resolve => setTimeout(resolve, 6000));
+  const listed = await box.computer([{ action: "list_windows" }, { action: "list_elements" }], { display: 1, owner: owner() });
+  const thunar = listed.windows?.find(w => /thunar|box|home/i.test(w.title));
+  assert(thunar, `no thunar window in ${JSON.stringify(listed.windows?.map(w => w.title))}`);
+  if (listed.elements === undefined) {
+    // Thunar may not be the active window yet; raise it and read again.
+    await box.computer([{ action: "activate_window", window_id: thunar.id }], { display: 1, owner: owner() });
+    await new Promise(resolve => setTimeout(resolve, 1500));
+  }
+  const tree = listed.elements !== undefined ? listed : await box.computer([{ action: "list_elements" }], { display: 1, owner: owner() });
+  assert(Array.isArray(tree.elements) && tree.elements.length > 0, `no controls: ${tree.elements_note ?? "empty"}`);
+  const menu = tree.elements.find(e => /menu/.test(e.role) && /file|edit|view/i.test(e.name));
+  assert(menu, `no menu among ${tree.elements.slice(0, 8).map(e => `${e.role}:${e.name}`).join(", ")}`);
+  const clicked = await box.computer([{ action: "click_element", ref: menu.ref }], { display: 1, owner: owner() });
+  assert(clicked.success, clicked.error ?? "click_element failed");
+  assert(clicked.effect === "confirmed" || clicked.effect === "partial", `menu click effect was ${clicked.effect}`);
+  await box.computer([{ action: "key", key: "Escape" }], { display: 1, owner: owner() });
+  await box.exec("pkill -f 'thunar /home/box' || true");
+
+  await box.exec('DISPLAY=:1 setsid xterm -T smoke-no-tree -geometry 40x8+200+200 >/dev/null 2>&1 &');
+  await new Promise(resolve => setTimeout(resolve, 3000));
+  const windows = await box.computer([{ action: "list_windows" }], { display: 1, owner: owner() });
+  const term = windows.windows?.find(w => /smoke-no-tree/.test(w.title));
+  assert(term, "no xterm");
+  await box.computer([{ action: "activate_window", window_id: term.id }], { display: 1, owner: owner() });
+  const none = await box.computer([{ action: "list_elements" }], { display: 1, owner: owner() });
+  assert(none.elements === undefined && typeof none.elements_note === "string", `xterm should have no tree, got ${JSON.stringify(none.elements?.length)}`);
+  assert(none.outcome === "unknown", `outcome should be unknown, was ${none.outcome}`);
+  await box.exec("pkill -f smoke-no-tree || true");
+  return `${tree.elements.length} controls read; xterm: ${none.elements_note}`;
+});
+
 await check("windows can be listed, raised, and read while covered", async () => {
   // What this buys: the model no longer has to find windows by eye. A dialog behind the
   // browser is invisible in a screenshot, and a window it cannot see it cannot decide to

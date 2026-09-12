@@ -54,6 +54,7 @@ import {
   type BrowserRequest,
   type ComputerAction,
   type DisplayInfo,
+  type ElementInfo,
   type Outcome,
 } from "../protocol/index.ts";
 import { skillSlugOf } from "./skill-provenance.ts";
@@ -459,6 +460,8 @@ const actionSchema = {
         "screenshot",
         "cursor_position",
         "list_windows",
+        "list_elements",
+        "click_element",
         "activate_window",
         "close_window",
         "screenshot_window",
@@ -467,6 +470,7 @@ const actionSchema = {
       description: "Which action to perform.",
     },
     coordinate: coordinateSchema,
+    ref: { type: "string", description: "For click_element: a ref from the last list_elements outline, e.g. a3." },
     path: {
       type: "array" as const,
       description: "For drag: the points to move through, starting point first.",
@@ -616,7 +620,12 @@ export function buildTools(
           "nothing responds — a dialog or menu is probably holding the input grab, and " +
           "clicking its close button is swallowed like everything else. `close_window` on " +
           "the offending window (find it with list_windows) closes it through the window " +
-          "manager, which a grab cannot block.",
+          "manager, which a grab cannot block.\n\n" +
+          "Before clicking by coordinates in a desktop app, try `list_elements`: it reads the " +
+          "active window's controls from the accessibility tree — role, name, state and " +
+          "position — and gives each a ref; `click_element` with that ref clicks it exactly, " +
+          "with the same effect evidence as a click. Not every app has a tree (a terminal, " +
+          "an Electron app): then the result says so and the screenshot is what you have.",
         input_schema: {
           type: "object",
           properties: {
@@ -1968,6 +1977,26 @@ export function boxErrorOutcome(error: unknown): Outcome | undefined {
 }
 
 /** The box an agent lives in, for bundle lookups; undefined when the registry cannot say. */
+/**
+ * The active window's controls as an outline, in the shape the browser outline uses
+ * (INV-412): one line per control, the ref first so it can be copied into click_element.
+ */
+export function elementsOutline(result: { elements?: readonly ElementInfo[]; elements_note?: string; elements_window?: { title: string; app: string; truncated: boolean } }): string {
+  if (result.elements === undefined) {
+    return `No control outline: ${result.elements_note ?? "the active window exposes no accessibility tree"}. Work from the screenshot.`;
+  }
+  const where = result.elements_window !== undefined ? ` of "${result.elements_window.title}"${result.elements_window.app !== "" ? ` (${result.elements_window.app})` : ""}` : "";
+  const lines = result.elements.map(element => {
+    const name = element.name !== "" ? ` "${element.name}"` : "";
+    const states = element.states.length > 0 ? ` [${element.states.join(", ")}]` : "";
+    return `- ${element.role}${name} [ref=${element.ref}]${states} at (${element.x + Math.round(element.width / 2)},${element.y + Math.round(element.height / 2)})`;
+  });
+  const cap = result.elements_window?.truncated === true ? "\n… (more controls than shown; act on what is here or scroll)" : "";
+  return lines.length > 0
+    ? `Controls${where}:\n${lines.join("\n")}${cap}`
+    : `The active window${where} exposes a tree but no operable controls are showing.`;
+}
+
 function boxOfAgent(context: ToolContext): { id: string; name: string } | undefined {
   try {
     const box = context.registry.boxOf(context.agent.id);
@@ -2263,6 +2292,9 @@ export async function dispatchTool(
         notes.push(
           `Cursor is at (${result.cursor_position.x}, ${result.cursor_position.y}).`
         );
+      }
+      if (result.elements !== undefined || result.elements_note !== undefined) {
+        notes.push(elementsOutline(result));
       }
       if (result.windows) {
         // As text, not as an image: these are ids to be copied into the next call, and a
