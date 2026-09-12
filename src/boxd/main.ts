@@ -65,6 +65,7 @@ import {
 } from "../protocol/index.ts";
 import { DisplayManager, DisplayOwnershipError, UserInControlError } from "./displays.ts";
 import { CdpError } from "./cdp.ts";
+import { HEADLESS_NOTE, headlessFetch, withRecovery } from "./browser-recovery.ts";
 import { TeachService, defaultInputSpawner } from "./teach-service.ts";
 import { detectDisplay, getDisplay, parseDisplayNum } from "../cua/display.ts";
 import { readClipboard, writeClipboard } from "./clipboard-service.ts";
@@ -477,6 +478,7 @@ const routes: Record<string, Handler> = {
     // Reading the page is fine while a person holds the desktop; acting on it is not.
     if (!["snapshot", "read", "wait", "check"].includes(body.op)) displays.assertAgentControls(display);
     await displays.ensure(display);
+    const browserOp = async (): Promise<BrowserResponse> => {
     switch (body.op) {
       case "open":
         return browser.open(display, String(body.url ?? "about:blank"), body.page);
@@ -523,6 +525,37 @@ const routes: Record<string, Handler> = {
       default:
         throw new Error(`Unknown browser op ${body.op}`);
     }
+    };
+    // Retry and degrade (INV-146): a read that lost the browser is retried once after
+    // re-attaching; a write is never repeated and comes back unknown; a browser that
+    // stays down degrades `open` to a fetch without a browser, said as such.
+    const recovered = await withRecovery(body.op, browserOp, { forget: () => browser.forget(display), log });
+    if (recovered.kind === "ok") {
+      if (recovered.recovered === undefined) return recovered.result;
+      const said =
+        recovered.recovered === "connection"
+          ? "The browser connection had dropped; it was re-attached and this is a fresh read."
+          : "The page was still loading on the first try; this is the second.";
+      return { ...recovered.result, note: [recovered.result.note, said].filter(Boolean).join(" ") };
+    }
+    if (recovered.kind === "unknown") {
+      return {
+        url: "",
+        title: "",
+        snapshot: "",
+        outcome: "unknown",
+        note:
+          `The browser connection failed while ${body.op} was in flight (${recovered.error.message}). ` +
+          "It may or may not have happened: take a snapshot and look before repeating it.",
+      };
+    }
+    const url = String(body.url ?? "");
+    if (body.op === "open" && /^https?:\/\//.test(url)) {
+      log(`browser open: browser unavailable, degrading to a headless fetch of ${url}`);
+      const page = await headlessFetch(url);
+      return { url: page.url, title: page.title, snapshot: "", text: page.text, outcome: "unknown", note: `${HEADLESS_NOTE} (${recovered.error.message})` };
+    }
+    throw recovered.error;
   },
   "GET /displays": async (): Promise<DisplayInfo[]> => displays.list(),
   "POST /displays": async (): Promise<DisplayInfo[]> => displays.list(),

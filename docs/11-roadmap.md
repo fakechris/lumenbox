@@ -1277,7 +1277,7 @@ duplicated turn is the failure a person notices first.
 
 **Tier 1 (p3).** INV-436 direct/ambient attention; the local environment decision: INV-438
 host box, INV-439 MCP by bundle; INV-422 OAuth connectors; audit views: INV-430, INV-433;
-INV-412 AT-SPI; INV-146 retry/degrade (its explicit-failure half is done); INV-157 identity
+INV-412 AT-SPI (PR #127); INV-146 retry/degrade (explicit-failure half done; retry/degrade built 2026-09-11 in `src/boxd/browser-recovery.ts`: reads retried once after re-attach, writes never repeated → unknown, `open` degrades to a headless fetch said as such); INV-157 identity
 migration (other agent's chain); memory quality INV-147, INV-148.
 
 **Tier 2 (p2).** 421, 426, 429, 434, 440, 411, 134, 135, 136, 138 (S-2..S-7 remain), 139,
