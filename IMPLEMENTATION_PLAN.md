@@ -296,7 +296,7 @@ appears in every agent prompt in that box; a `[Support]` group auto-joins, `[Int
 (time, box, agent, host, status, refusal reason); export of all ledgers per box and time range.
 **Success Criteria**: "which box burns the most" answers from Settings; a network event query
 by range returns the relay's refusals; an export bundle round-trips.
-**Status**: In Progress: J2 spend by place + J3 network events merged (#99, #101); J1 (INV-430), J4 (INV-433) Tier 1.
+**Status**: In Progress: J2 spend by place + J3 network events merged (#99, #101); J1 (INV-430 #125), J4 (INV-433 PR) in review.
 
 ## Stage 27: Runtime registration and IM custody (docs/50 K)
 **Goal**: self-hosted environment registration via connect code; inbound delivery custody as a
