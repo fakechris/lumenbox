@@ -992,6 +992,20 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
       // chat stays the address — replies, files and the outbox still go to the room.
       const conversation = conversationIdFor(threadKey ?? chatKey);
       conversations.record(conversation, threadKey ?? chatKey);
+      // A topic's first direct message materialises its session (INV-436): it inherits
+      // the last lines the room heard, and the room hears that a topic started, so the
+      // agent answering at room level knows work moved into a thread.
+      if (threadKey !== undefined) {
+        const room = conversationIdFor(chatKey);
+        const seeded = registry.seedHeardFrom(agent.id, conversation, room);
+        if (seeded > 0 || registry.readTranscript(agent.id, conversation).length === 0) {
+          registry.appendHeard(agent.id, room, {
+            at: new Date().toISOString(),
+            sender: identity,
+            text: `[in a topic] ${text.slice(0, 200)}`,
+          });
+        }
+      }
       const principal = principals.resolve(identity).id;
 
       // Made before the turn, because the prompt states the path as a fact — "its

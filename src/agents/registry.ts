@@ -48,6 +48,8 @@ export const PROFILE_FILENAME = "profile.json";
 export const TRANSCRIPT_FILENAME = "conversation.jsonl";
 /** How many heard lines a room keeps, and how often the file is trimmed back to them. */
 const HEARD_KEEP = 40;
+/** How much of the room a new topic inherits: enough to know what it is about, not the room's history. */
+const HEARD_BOOTSTRAP = 12;
 const HEARD_COMPACT_EVERY = 200;
 /**
  * The conversation every agent always has: the one the web page, teammates and the
@@ -455,6 +457,32 @@ export class AgentRegistry {
   }
 
   private readonly heardAppends = new Map<string, number>();
+
+  /**
+   * Whether a conversation has been seen at all: no transcript, nothing heard (INV-436).
+   * The moment a topic's first direct message arrives is the moment it is materialised.
+   */
+  isFreshConversation(agentId: string, conversation: string): boolean {
+    return (
+      !existsSync(this.heardPathFor(agentId, conversation)) &&
+      this.readTranscript(agentId, conversation).length === 0
+    );
+  }
+
+  /**
+   * Seeds a new thread's room context from its parent chat (INV-436, opentag's thread
+   * sessions): the last lines the room heard, marked as such, so the first @ inside a
+   * topic reads the screen the person was looking at rather than starting blind.
+   * Bounded, and only ever once — a thread that has anything is left alone.
+   */
+  seedHeardFrom(agentId: string, thread: string, parent: string, limit = HEARD_BOOTSTRAP): number {
+    if (!this.isFreshConversation(agentId, thread)) return 0;
+    const lines = this.readHeard(agentId, parent, limit);
+    for (const line of lines) {
+      this.appendHeard(agentId, thread, { ...line, text: `[from the room] ${line.text}` });
+    }
+    return lines.length;
+  }
 
   memoryPathFor(agentId: string): string {
     return join(this.dirFor(agentId), MEMORY_FILENAME);
