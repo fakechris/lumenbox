@@ -65,6 +65,7 @@ import { TaskStore, type Task } from "./tasks.ts";
 import { buildAuditPrompt, manifestDiff, MANIFEST_COMMAND, parseManifest } from "./audit.ts";
 import { ScopeStore } from "./scopes.ts";
 import { BundleStore } from "./bundles.ts";
+import { TeachRunner } from "./teach.ts";
 import { MAIN_CONVERSATION, conversationIdFor } from "../agents/registry.ts";
 import type { HostRunner } from "./host-runner.ts";
 import type { Vault } from "./vault.ts";
@@ -245,6 +246,18 @@ export class Orchestrator {
   readonly scopes: ScopeStore | undefined;
   /** Bundles attached to boxes (INV-420). */
   readonly bundles: BundleStore;
+  /** Turns a queued demonstration into a teaching turn (INV-406). */
+  private readonly teachRunner = new TeachRunner({
+    agentOnDisplay: (boxId, display) => {
+      const record = this.registry
+        .list()
+        .find(entry => (entry.profile.boxId ?? this.registry.box.id) === boxId && entry.profile.displayIndex === display);
+      return record === undefined ? undefined : { id: record.id, name: record.profile.name };
+    },
+    prompt: (agentId, text, caller) => this.prompt(agentId, text, caller, { steerable: true, lane: "background" }),
+    skillsDir: SKILLS_DIR,
+    log: line => console.error(`[teach] ${line}`),
+  });
 
   /**
    * Reads Feishu documents with the bot's workspace identity. A field rather than an
@@ -915,6 +928,35 @@ export class Orchestrator {
   }
 
   /** The box an agent lives in, when it is connected. */
+  /**
+   * Runs the teaching turns queued on an agent's box (INV-406). Called after a hand-back
+   * and on a timer for sessions that lapsed; never awaited by a request.
+   */
+  async teachFrom(agentId: string, caller?: { userId?: string }): Promise<number> {
+    const box = this.boxFor(agentId);
+    if (box === undefined) return 0;
+    let boxId: string;
+    try {
+      boxId = this.registry.boxOf(agentId).id;
+    } catch {
+      return 0;
+    }
+    return this.teachRunner.drain(boxId, box, caller);
+  }
+
+  /** Every connected box: demonstrations that ended by lapse or shutdown have no hand-back to trigger them. */
+  async teachEverywhere(): Promise<void> {
+    for (const [boxId, box] of this.boxClients) {
+      try {
+        const queued = await box.teachSessions();
+        if (queued.pending.length === 0) continue;
+      } catch {
+        continue;
+      }
+      await this.teachRunner.drain(boxId, box);
+    }
+  }
+
   boxFor(agentId: string): BoxClient | undefined {
     let boxId: string;
     try {
