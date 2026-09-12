@@ -458,7 +458,13 @@ export class X11Executor {
   protected async listElements(): Promise<{ elements: ElementInfo[]; window: { title: string; app: string; truncated: boolean } } | { error: string }> {
     let stdout: string;
     try {
-      const result = await execFileAsync("box-ax", [], { env: this.env, timeout: 6000, maxBuffer: 4 * 1024 * 1024 });
+      // The executor's environment is DISPLAY alone; a lookup by name needs a PATH, and
+      // the daemon's own is the one the image set.
+      const result = await execFileAsync("box-ax", [], {
+        env: { ...this.env, PATH: process.env.PATH ?? "/usr/local/bin:/usr/bin:/bin" },
+        timeout: 6000,
+        maxBuffer: 4 * 1024 * 1024,
+      });
       stdout = result.stdout;
     } catch (error) {
       const failed = error as { stdout?: string; killed?: boolean; code?: unknown };
