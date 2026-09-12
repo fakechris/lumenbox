@@ -806,6 +806,57 @@ test("browser_fill_secret resolves through the vault, sends the value only to th
   assert.match(none.text, /^Outcome: refused — there is no vault here/);
 });
 
+// ── connected services: the host holds the bearer (INV-422) ────────────────────────
+test("connector_request sends the bearer the gate minted, scrubs it from the reply, and refuses the ungranted", async () => {
+  const seen: { url: string; auth: string; method: string; body?: string }[] = [];
+  const realFetch = globalThis.fetch;
+  globalThis.fetch = (async (url: string | URL | Request, init?: RequestInit) => {
+    const headers = init?.headers as Record<string, string>;
+    seen.push({ url: String(url), auth: headers.Authorization ?? "", method: init?.method ?? "GET", ...(typeof init?.body === "string" ? { body: init.body } : {}) });
+    return new Response(JSON.stringify({ echo: headers.Authorization, ok: true }), { status: url.toString().endsWith("/missing") ? 404 : 200 });
+  }) as typeof fetch;
+  try {
+    const asked: string[] = [];
+    const oauth = { bearerFor: async (id: string, caller: { agentId: string }) => { asked.push(`${caller.agentId}:${id}`); return id === "oauth:github" ? "gh-token-1" : undefined; } };
+    const context = { ...boxContext({}), oauth } as unknown as Parameters<typeof dispatchTool>[2];
+
+    const read = await dispatchTool("connector_request", { connector: "github", path: "/user/repos?per_page=5" }, context);
+    assert.equal(seen[0]?.url, "https://api.github.com/user/repos?per_page=5");
+    assert.equal(seen[0]?.auth, "Bearer gh-token-1", "the service gets the bearer");
+    assert.match(read.text, /^Outcome: ok\. GET \/user\/repos\?per_page=5 → 200/);
+    assert.doesNotMatch(read.text, /gh-token/, "an echoing endpoint still shows the model nothing");
+    assert.match(read.text, /<redacted>/);
+    assert.deepEqual(asked, ["a1:oauth:github"]);
+
+    const write = await dispatchTool("connector_request", { connector: "github", method: "post", path: "/repos/o/r/issues", body: { title: "hi" } }, context);
+    assert.equal(seen[1]?.method, "POST");
+    assert.equal(seen[1]?.body, '{"title":"hi"}');
+    assert.equal(write.isError, undefined);
+
+    const missing = await dispatchTool("connector_request", { connector: "github", path: "/missing" }, context);
+    assert.match(missing.text, /^Outcome: failed — HTTP 404/);
+    assert.equal(missing.isError, true);
+
+    const denied = await dispatchTool("connector_request", { connector: "feishu", path: "/im/v1/messages" }, context);
+    assert.match(denied.text, /^Outcome: refused — Feishu \(Lark\) is not connected for you/);
+    assert.equal(seen.length, 3, "nothing is sent without a bearer");
+    const unknown = await dispatchTool("connector_request", { connector: "hubspot", path: "/x" }, context);
+    assert.match(unknown.text, /^Outcome: refused — hubspot is not a connected service here/);
+    const bad = await dispatchTool("connector_request", { connector: "github", path: "//evil.test/x" }, context);
+    assert.match(bad.text, /^Outcome: failed — path must start with a single \//);
+  } finally {
+    globalThis.fetch = realFetch;
+  }
+});
+
+test("connector_request is offered only when a connection is granted, and names the connectors", () => {
+  const without = buildTools(true, true, undefined, false, true, false, false, false, []);
+  assert.ok(!without.some(t => t.name === "connector_request"));
+  const withTwo = buildTools(true, true, undefined, false, true, false, false, false, ["github", "feishu"]);
+  const tool = withTwo.find(t => t.name === "connector_request");
+  assert.ok(tool !== undefined && /github, feishu/.test(tool.description ?? ""));
+});
+
 // ── tabs and drift reach the model (INV-408) ────────────────────────────────────────
 test("browser_pages lists tabs with the current one marked, and browser_open can name a tab", async () => {
   const requests: BrowserRequest[] = [];

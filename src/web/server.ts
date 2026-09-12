@@ -189,6 +189,7 @@ import {
   type McpServerTool,
 } from "./mcp-server.ts";
 import { Vault, type Grant } from "../host/vault.ts";
+import { OAuthGate } from "../host/oauth.ts";
 import { seedStarterSkills } from "../host/starter-skills.ts";
 import { firstRunCue } from "../host/prompt.ts";
 import { readBoxToken } from "../box/docker.ts";
@@ -446,6 +447,8 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
   // The credential vault. Read fresh on each edit through the routes; the orchestrator
   // holds this one instance, so a granted secret is usable on the next host command.
   const vault = new Vault();
+  // The OAuth gate over it (INV-422): tokens minted and refreshed here, never shown.
+  const oauth = new OAuthGate(vault);
 
   // Channel task cards listen here while their ask is in flight: each listener is a
   // narrow filter on (agent, conversation), added before the prompt and removed after
@@ -465,6 +468,7 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
     boxProvisioner: provisioner,
     hostRunner,
     vault,
+    oauth,
     // An agent that cannot proceed without knowing something asks the person who gave
     // it the work — the same routing an approval uses, because the person who asked
     // for it is the one who can say what they meant. It reaches their chat and the
@@ -2749,6 +2753,23 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
 
         // Recording. The video streams through this server for the same reason the
         // desktop does: boxd's port is not something the browser should know about.
+        // Where the provider sends the admin's browser back. The state came from this
+        // process, so a stray visit lands on "unknown"; the code is spent on one exchange.
+        if (route === "GET /oauth/callback") {
+          if (refusedRole("admin")) return;
+          const page = (title: string, text: string) =>
+            `<!doctype html><meta charset="utf-8"><title>${title}</title><body style="font-family:system-ui;padding:2rem"><h2>${title}</h2><p>${text}</p></body>`;
+          try {
+            const done = await oauth.complete(url.searchParams.get("state") ?? "", url.searchParams.get("code") ?? "");
+            log(`connectors: ${done.provider} connected`);
+            send(res, 200, page(`Connected ${done.provider}`, "The token is in this machine's vault. You can close this tab and grant it in Settings → Connected services."), "text/html");
+          } catch (error) {
+            const why = error instanceof Error ? error.message : String(error);
+            send(res, 400, page("Not connected", why.replace(/</g, "&lt;")), "text/html");
+          }
+          return;
+        }
+
         if (route === "GET /recording") {
           const name = url.searchParams.get("name") ?? "";
           await proxyDesktop(
@@ -3353,6 +3374,44 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
           });
           log(`vault: saved secret ${id}`);
           send(res, 200, { secrets: vault.list() });
+          return;
+        }
+
+        // Connected services (INV-422): an admin starts an authorization or pastes app
+        // credentials; the token lands in the vault under oauth:<provider>, granted to
+        // whoever the admin named, and is never returned by any route.
+        if (route === "GET /api/connectors") {
+          if (refusedRole("admin")) return;
+          send(res, 200, { providers: oauth.providers(), connected: oauth.connected() });
+          return;
+        }
+
+        if (route === "POST /api/connectors/begin" || route === "POST /api/connectors/connect") {
+          if (refusedRole("admin")) return;
+          const body = await readJson(req);
+          const grants: Grant[] = typeof body.grant === "string" && body.grant.trim() !== "" ? [{ holder: body.grant.trim() }] : [];
+          const input = {
+            provider: String(body.provider ?? ""),
+            clientId: String(body.clientId ?? ""),
+            clientSecret: String(body.clientSecret ?? ""),
+            grants,
+          };
+          try {
+            if (route === "POST /api/connectors/begin") {
+              const proto = String(req.headers["x-forwarded-proto"] ?? "").split(",")[0]?.trim() || "http";
+              const redirectUri = `${proto}://${req.headers.host ?? "localhost"}/oauth/callback`;
+              const scopes = typeof body.scopes === "string" ? body.scopes.split(/[\s,]+/).filter(Boolean) : undefined;
+              const started = oauth.begin({ ...input, redirectUri, ...(scopes !== undefined ? { scopes } : {}) });
+              log(`connectors: ${input.provider} authorization started`);
+              send(res, 200, { url: started.url });
+            } else {
+              const done = await oauth.connect(input);
+              log(`connectors: ${done.provider} connected`);
+              send(res, 200, { connected: oauth.connected() });
+            }
+          } catch (error) {
+            send(res, 400, { error: error instanceof Error ? error.message : String(error) });
+          }
           return;
         }
 

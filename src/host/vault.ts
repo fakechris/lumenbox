@@ -41,11 +41,29 @@ export interface Grant {
   expiresAt?: string;
 }
 
+/**
+ * What makes a secret an OAuth token rather than a pasted value (INV-422): the provider
+ * it came from, how it was minted, when it dies, and what mints the next one. Read by the
+ * OAuth gate only; the view a reader gets keeps the provider and the expiry and drops the
+ * refresh token and the client secret, which are credentials themselves.
+ */
+export interface OAuthMeta {
+  provider: string;
+  kind: "authorization_code" | "client_credentials";
+  /** ISO instant the access token stops working; absent when the provider did not say. */
+  expiresAt?: string;
+  refreshToken?: string;
+  clientId?: string;
+  clientSecret?: string;
+  scopes?: string[];
+}
+
 export interface Secret {
   id: string;
   description: string;
   value: string;
   grants: Grant[];
+  oauth?: OAuthMeta;
   /**
    * Where this secret may be typed into a web page (INV-402, docs/15 design C): host
    * names, exact or `*.example.com`. `browser_fill_secret` refuses any page whose host is
@@ -61,6 +79,23 @@ export interface SecretView {
   description: string;
   grants: Grant[];
   domains?: string[];
+  oauth?: { provider: string; kind: OAuthMeta["kind"]; expiresAt?: string; scopes?: string[] };
+}
+
+function oauthOfRaw(raw: unknown): OAuthMeta | undefined {
+  if (typeof raw !== "object" || raw === null) return undefined;
+  const meta = raw as Record<string, unknown>;
+  if (typeof meta.provider !== "string" || (meta.kind !== "authorization_code" && meta.kind !== "client_credentials")) return undefined;
+  const text = (key: string) => (typeof meta[key] === "string" && meta[key] !== "" ? { [key]: meta[key] as string } : {});
+  return {
+    provider: meta.provider,
+    kind: meta.kind,
+    ...text("expiresAt"),
+    ...text("refreshToken"),
+    ...text("clientId"),
+    ...text("clientSecret"),
+    ...(Array.isArray(meta.scopes) ? { scopes: meta.scopes.filter((s): s is string => typeof s === "string") } : {}),
+  };
 }
 
 interface VaultFile {
@@ -125,6 +160,7 @@ export class Vault {
                 }))
             : [],
           ...(Array.isArray(raw.domains) ? { domains: raw.domains.filter((d: unknown): d is string => typeof d === "string" && d !== "") } : {}),
+          ...(oauthOfRaw(raw.oauth) !== undefined ? { oauth: oauthOfRaw(raw.oauth)! } : {}),
         });
       }
     } catch {
@@ -140,7 +176,35 @@ export class Vault {
       description: secret.description,
       grants: secret.grants.map(grant => ({ ...grant })),
       ...(secret.domains !== undefined ? { domains: [...secret.domains] } : {}),
+      ...(secret.oauth !== undefined
+        ? {
+            oauth: {
+              provider: secret.oauth.provider,
+              kind: secret.oauth.kind,
+              ...(secret.oauth.expiresAt !== undefined ? { expiresAt: secret.oauth.expiresAt } : {}),
+              ...(secret.oauth.scopes !== undefined ? { scopes: [...secret.oauth.scopes] } : {}),
+            },
+          }
+        : {}),
     }));
+  }
+
+  /**
+   * The OAuth record behind a secret, refresh token and all. For the gate that mints the
+   * next token, and nobody else: it is not a view and must not reach a route.
+   */
+  oauthOf(id: string): OAuthMeta | undefined {
+    const meta = this.secrets.find(secret => secret.id === id)?.oauth;
+    return meta === undefined ? undefined : { ...meta, ...(meta.scopes !== undefined ? { scopes: [...meta.scopes] } : {}) };
+  }
+
+  /**
+   * Whether a live grant covers this caller, without resolving and without an audit
+   * line — for deciding what to offer, not for handing anything out.
+   */
+  covers(id: string, caller: { agentId: string; principalId?: string; scopeGrants?: boolean }, now: Date = new Date()): boolean {
+    const secret = this.secrets.find(s => s.id === id);
+    return secret !== undefined && (caller.scopeGrants === true || secret.grants.some(grant => grantCovers(grant, caller, now.getTime())));
   }
 
   /** The hosts a secret may be filled into, or an empty list when none were named. */
@@ -153,7 +217,7 @@ export class Vault {
    * operator editing a description or grants does not have to re-paste the secret,
    * and the UI never has to hold a value it was never shown.
    */
-  setSecret(input: { id: string; description?: string; value?: string; grants?: Grant[]; domains?: string[] }): void {
+  setSecret(input: { id: string; description?: string; value?: string; grants?: Grant[]; domains?: string[]; oauth?: OAuthMeta }): void {
     const id = input.id.trim();
     if (id === "") return;
     const existing = this.secrets.find(secret => secret.id === id);
@@ -169,6 +233,7 @@ export class Vault {
       ...((input.domains ?? existing?.domains) !== undefined && (input.domains ?? existing?.domains)!.length > 0
         ? { domains: [...(input.domains ?? existing?.domains)!] }
         : {}),
+      ...((input.oauth ?? existing?.oauth) !== undefined ? { oauth: { ...(input.oauth ?? existing?.oauth)! } } : {}),
     };
     this.secrets = [...this.secrets.filter(s => s.id !== id), secret];
     this.persist();
