@@ -4467,6 +4467,34 @@ function stopAudit() {
  * and a render that reads a shared object gets whichever state the other call left behind. That
  * is why the URL was missing until you pressed refresh.
  */
+/**
+ * By place, then by kind (INV-430): a box's recurring routines, its one-time tasks, and what
+ * runs on call. A one-time task in the recurring list read as a schedule that fires forever.
+ */
+function automationGroups(list, rows, boxes, defaultBox) {
+  var names = {};
+  boxes.forEach(function (b) { names[b.id] = b.name; });
+  var byBox = {};
+  var order = [];
+  list.forEach(function (s) {
+    var id = s.boxId || defaultBox || "";
+    if (!byBox[id]) { byBox[id] = []; order.push(id); }
+    byBox[id].push(s);
+  });
+  var kinds = [["schedule", "Recurring"], ["once", "One-time"], ["webhook", "On call"]];
+  return order.map(function (id) {
+    var head = boxes.length > 1
+      ? '<div style="padding:8px 16px 2px;font-size:12px;font-weight:600">' + esc(names[id] || id || "this box") + "</div>"
+      : "";
+    return head + kinds.map(function (kind) {
+      var items = byBox[id].filter(function (s) { return (s.kind || "schedule") === kind[0]; });
+      if (!items.length) return "";
+      return '<div class="dim" style="padding:6px 16px 0;font-size:10.5px;text-transform:uppercase;letter-spacing:.04em">' + kind[1] + "</div>" +
+        items.map(function (entry) { return automationRow(entry, rows); }).join("");
+    }).join("");
+  }).join("");
+}
+
 function automationRow(s, rows) {
   var when = esc(s.described) + (s.timezone ? ' <span class="dim">(' + esc(s.timezone) + ")</span>" : "");
   var last = s.running
@@ -4474,6 +4502,9 @@ function automationRow(s, rows) {
     : s.lastRun
       ? "last ran " + esc(new Date(s.lastRun).toLocaleString())
       : '<span style="color:var(--warn)">never run</span>';
+  // Next, by the tick's own rules — the one line a person cannot compute from a cron string.
+  if (s.nextRun && !s.running) last += " · next " + esc(new Date(s.nextRun).toLocaleString());
+  else if (s.kind === "once" && s.lastRun) last += " · done";
   // Where it reports is the line that matters most: a skill with no deliver runs and
   // says nothing in any chat, which is right for a tidy-up and looks broken for a brief.
   var where = s.deliver
@@ -4560,7 +4591,7 @@ function refreshAutomations() {
           (Object.keys(rows).length > 0 ? " · " + Object.keys(rows).length + " with a webhook URL" : "")
         : '<span style="color:var(--warn)">The scheduler is off (AGENTBOX_SCHEDULER=0) — nothing below will fire.</span>');
       $("autolist").innerHTML = list.length
-        ? list.map(function (entry) { return automationRow(entry, rows); }).join("")
+        ? automationGroups(list, rows, data.schedules.boxes || [], data.schedules.defaultBox)
         : '<div class="dim" style="padding:12px 16px;font-size:13px">Nothing runs by itself. A skill becomes an automation by adding <span class="mono">schedule:</span> (a timer), <span class="mono">trigger: webhook</span> (a URL anything can call) or <span class="mono">trigger: message</span> to its frontmatter — plus <span class="mono">timezone:</span> if the time was agreed in someone else’s zone, and <span class="mono">deliver:</span> for the chat that should receive the report.</div>';
     })
     .catch(function () {
