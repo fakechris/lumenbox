@@ -36,6 +36,11 @@ export interface AdminDeps {
   session: Session;
   /** Reaches the tenant's primary box for the attach/detach it forwards. Injectable for tests. */
   fetchImpl?: typeof fetch;
+  /**
+   * Values from the control plane's own environment, shown when no setting overrides them.
+   * `AGENTBOX_TRACE_URL` is the first: env is the seed, the setting the override.
+   */
+  settingsDefaults?: { traceUrl?: string };
   log?: (line: string) => void;
 }
 
@@ -46,6 +51,9 @@ export type AdminRoute =
   | { kind: "set-role"; userId: string }
   | { kind: "remove-member"; userId: string }
   | { kind: "audit" }
+  /** The deployment's own knobs (the trace exporter URL is the first). */
+  | { kind: "settings" }
+  | { kind: "put-settings" }
   | { kind: "restart-box" }
   | { kind: "destroy-box" }
   /** The tenant's boxes: the primary and what it drives beside it (docs/30 Stage D). */
@@ -69,6 +77,8 @@ export function adminRouteOf(method: string, pathname: string): AdminRoute {
   if (method === "GET" && rest === "users") return { kind: "users" };
   if (method === "POST" && rest === "users") return { kind: "invite" };
   if (method === "GET" && rest === "audit") return { kind: "audit" };
+  if (method === "GET" && rest === "settings") return { kind: "settings" };
+  if (method === "PUT" && rest === "settings") return { kind: "put-settings" };
   if (method === "POST" && rest === "box/restart") return { kind: "restart-box" };
   if (method === "POST" && rest === "box/destroy") return { kind: "destroy-box" };
   if (method === "GET" && rest === "boxes") return { kind: "boxes" };
@@ -256,6 +266,48 @@ export async function handleAdmin(
         .filter(row => row.tenantId === tenant.id)
         .slice(0, limit);
       return { status: 200, body: { rows } };
+    }
+
+    case "settings": {
+      const stored = store.getSetting("traceUrl");
+      const fallback = deps.settingsDefaults?.traceUrl;
+      return {
+        status: 200,
+        body: {
+          traceUrl: stored ?? fallback ?? null,
+          // Where the effective value comes from, so "I set it and nothing changed"
+          // is distinguishable from "the env var is winning".
+          source: stored !== undefined ? "setting" : fallback !== undefined ? "env" : "none",
+        },
+      };
+    }
+
+    case "put-settings": {
+      const value = body.traceUrl;
+      if (value === null || value === "") {
+        // Clearing falls back to the environment's value, which may itself be empty.
+        store.deleteSetting("traceUrl");
+        audit("admin.settings.trace-url", "settings", { traceUrl: null });
+        return { status: 200, body: { traceUrl: deps.settingsDefaults?.traceUrl ?? null } };
+      }
+      if (typeof value !== "string" || !/^https?:\/\/\S+$/.test(value.trim())) {
+        return {
+          status: 400,
+          body: { error: "traceUrl must be an http(s) URL, or null to clear it." },
+        };
+      }
+      const traceUrl = value.trim();
+      store.putSetting("traceUrl", traceUrl);
+      audit("admin.settings.trace-url", "settings", { traceUrl });
+      return {
+        status: 200,
+        body: {
+          traceUrl,
+          // Said in the response because it is the next question: boxes are told at
+          // creation, so ones already running pick this up on their next restart.
+          note: "New boxes get this at creation; restart a running box to apply it there.",
+        },
+      };
     }
 
     case "boxes": {

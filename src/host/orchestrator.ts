@@ -77,6 +77,7 @@ import type { PitfallSource } from "./pitfalls.ts";
 import { SkillCache } from "./skills.ts";
 import { Scheduler } from "./schedule.ts";
 import { UsageLog } from "./usage.ts";
+import { tracerFromEnv, type Tracer } from "./trace.ts";
 import {
   createClient,
   summaryRuntimeFor,
@@ -108,6 +109,11 @@ export interface OrchestratorOptions {
   /** A client for an attached box, instead of dialling its endpoint. For tests with two fake boxes. */
   boxClientFor?: (entry: BoxEntry) => BoxClient | undefined;
   onTurnEvent?: (event: TurnEvent) => void;
+  /**
+   * Where LLM-call spans go. `null` keeps none even when AGENTBOX_TRACE_URL is set;
+   * omitted reads the environment, which unset means no tracing at all.
+   */
+  tracer?: Tracer | null;
   onBusEvent?: (event: BusEvent) => void;
   /**
    * Where accepted-but-unstarted work is recorded, so a restart does not lose a request that was
@@ -249,6 +255,8 @@ export class Orchestrator {
   });
 
   readonly provider: ProviderProfile;
+  /** Where LLM-call spans go (trace.ts); undefined when no collector is configured. */
+  private readonly tracer: Tracer | undefined;
 
   /**
    * The team's task board. One per process, like the usage log: its file is
@@ -726,6 +734,9 @@ export class Orchestrator {
       void this.memoryMirror.sync(agentId);
     };
     this.provider = options.provider ?? resolveProvider();
+    // `null` is how a test says "no tracer even if the environment names one";
+    // omitted reads AGENTBOX_TRACE_URL, which unset means the feature does not exist.
+    this.tracer = options.tracer === null ? undefined : (options.tracer ?? tracerFromEnv());
     this.client = options.client ?? createClient(this.provider);
     // The Rememberer gets the *paired* summary runtime — the same review finding as
     // compaction: a profile naming another provider must not ride the primary client.
@@ -1326,6 +1337,7 @@ export class Orchestrator {
       conversation,
       provider: runtime.provider,
       effort: this.options.effort,
+      ...(this.tracer !== undefined ? { tracer: this.tracer } : {}),
       turns: this.turns,
       ...(this.pendingWork !== undefined ? { pendingWork: this.pendingWork } : {}),
       mcpFace: this.mcpFace,
