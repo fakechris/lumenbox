@@ -104,6 +104,7 @@ import type { HostRunner } from "./host-runner.ts";
 import type { Vault } from "./vault.ts";
 import type { TaskStore } from "./tasks.ts";
 import type { ScopeStore } from "./scopes.ts";
+import { checkpointSummary, type DurableState } from "./durable.ts";
 import { narrowSkills, type BundleStore } from "./bundles.ts";
 import { readInstallationInstructions } from "./place.ts";
 import type { McpManager } from "./mcp.ts";
@@ -1700,6 +1701,19 @@ export async function runTurn(
     // deserves its own turn and its own causal record, and that behaviour is pinned
     // by the race catalog. Appended at the tail, which keeps the provider's prefix
     // cache warm — the same reason compaction is the only mid-turn rewrite.
+    // The last round is for delivery, not for one more tool (INV-410, browser-use-pi's
+    // reserved final turn): the model is told, and tools are withheld for this request,
+    // so what it has becomes a reply — partial, and said so — instead of a 401st call
+    // nobody reads.
+    if (round === MAX_ROUNDS - 1) {
+      const lastCall =
+        "[last round] You have one response left in this turn and no tools. Reply now with what " +
+        "you have: the result so far, marked partial where it is, and what is left. Anything you " +
+        "checkpointed is already safe; do not repeat it, point at it.";
+      registry.appendTranscript(agent.id, { role: "user", text: lastCall, at: new Date().toISOString() } satisfies TranscriptEntry, conversation);
+      messages.push({ role: "user", content: lastCall });
+      forceTools = { type: "none" };
+    }
     const steered = finishing ? [] : deps.bus.takeSteering(agent.id, conversation);
     if (steered.length > 0) {
       const steerText = buildTurnPrompt(steered);
@@ -2498,7 +2512,7 @@ export async function runTurn(
     // every round since the second; there is nothing to learn from letting it do three hundred more.
     const loop = detectLoop(rounds);
     if (loop !== undefined) {
-      const report = loopReport(loop, round + 1);
+      const report = withCheckpoints(loopReport(loop, round + 1), registry.readDurableState(agent.id, conversation));
       registry.appendTranscript(agent.id, {
         role: "assistant",
         text: report,
@@ -2524,7 +2538,7 @@ export async function runTurn(
   const outcome = classifyLimit(rounds);
 
   if (outcome.kind === "looping") {
-    const report = loopReport(outcome.finding, MAX_ROUNDS);
+    const report = withCheckpoints(loopReport(outcome.finding, MAX_ROUNDS), registry.readDurableState(agent.id, conversation));
     registry.appendTranscript(agent.id, {
       role: "assistant",
       text: report,
@@ -2567,12 +2581,14 @@ export async function runTurn(
 
   // Neither progressing nor obviously looping, or out of continuations. Reported as what it is
   // rather than as a diagnosis nobody checked.
-  const note =
+  const note = withCheckpoints(
     outcome.kind === "progressing"
       ? `Stopped after ${MAX_CONTINUATIONS} continuations. Work was still moving, so this is a ` +
         `budget rather than a conclusion — say what is left.`
       : `Stopped after ${MAX_ROUNDS} rounds. Nothing repeated often enough to call it a loop, and ` +
-        `neither the plan nor the todo list changed, so it is not clear anything was achieved.`;
+        `neither the plan nor the todo list changed, so it is not clear anything was achieved.`,
+    registry.readDurableState(agent.id, conversation)
+  );
   registry.appendTranscript(agent.id, {
     role: "assistant",
     text: note,
@@ -2580,6 +2596,12 @@ export async function runTurn(
   } satisfies TranscriptEntry, conversation);
   throw new TurnRoundLimitExceeded(note);
   }
+}
+
+/** A stopped turn's report, with what was checkpointed appended so the person gets the half. */
+export function withCheckpoints(report: string, state: DurableState): string {
+  const summary = checkpointSummary(state);
+  return summary === undefined ? report : `${report}\n\n${summary}`;
 }
 
 /**

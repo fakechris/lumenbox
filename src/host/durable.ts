@@ -61,6 +61,64 @@ export interface DurableState {
   todos?: readonly TodoItem[];
   /** When the plan was last written, so a stale plan can be recognised as one. */
   planUpdatedAt?: string;
+  /** Results kept as they were reached (INV-410), so a stopped turn still hands something over. */
+  checkpoints?: readonly Checkpoint[];
+}
+
+/**
+ * A result written down the moment it exists (INV-410, browser-use-pi's checkpoint).
+ *
+ * A turn that runs out of rounds, is stopped, or dies used to hand over nothing, however
+ * much it had found — the findings were in tool results the person never saw. A
+ * checkpoint is the agent saying "this much is true so far": named, dated, and either
+ * partial or final. It survives compaction like the plan does, it is shown back to the
+ * agent on every round, and when a turn ends without a reply the report names what was
+ * checkpointed so the person gets the half rather than the silence.
+ */
+export interface Checkpoint {
+  name: string;
+  value: string;
+  at: string;
+  /** True while more is expected; a final checkpoint is a result, not a snapshot of one. */
+  partial: boolean;
+}
+
+export const MAX_CHECKPOINTS = 20;
+export const MAX_CHECKPOINT_CHARS = 2_000;
+const CHECKPOINT_NAME = /^[A-Za-z0-9][A-Za-z0-9 _.\-\u4e00-\u9fff]{0,63}$/;
+
+export function validateCheckpoint(name: string, value: string): Rejection | undefined {
+  if (!CHECKPOINT_NAME.test(name.trim())) {
+    return { reason: "A checkpoint needs a short name — letters, digits, spaces, dots, dashes; up to 64 characters." };
+  }
+  if (value.trim() === "") return { reason: "A checkpoint with no value keeps nothing. Say what was found, or skip it." };
+  if (value.length > MAX_CHECKPOINT_CHARS) {
+    return {
+      reason:
+        `A checkpoint may hold ${MAX_CHECKPOINT_CHARS} characters and this is ${value.length}. Put the full ` +
+        `result in a file under /home/box/work and checkpoint its path and a summary.`,
+    };
+  }
+  return undefined;
+}
+
+/** Adds or replaces a checkpoint by name, newest last, capped. */
+export function withCheckpoint(existing: readonly Checkpoint[] | undefined, next: Checkpoint): Checkpoint[] {
+  const kept = (existing ?? []).filter(entry => entry.name !== next.name);
+  kept.push(next);
+  return kept.slice(-MAX_CHECKPOINTS);
+}
+
+/** The line a stopped turn's report ends with, or undefined when nothing was checkpointed. */
+export function checkpointSummary(state: DurableState): string | undefined {
+  const checkpoints = state.checkpoints ?? [];
+  if (checkpoints.length === 0) return undefined;
+  const partial = checkpoints.filter(entry => entry.partial).length;
+  const lines = checkpoints.map(entry => `- ${entry.name}${entry.partial ? " (partial)" : ""}: ${entry.value.replace(/\s+/g, " ").slice(0, 300)}${entry.value.length > 300 ? "…" : ""}`);
+  return [
+    `Checkpointed before stopping (${checkpoints.length}${partial > 0 ? `, ${partial} partial` : ""}):`,
+    ...lines,
+  ].join("\n");
 }
 
 /**
@@ -69,11 +127,13 @@ export interface DurableState {
  * A total record over the id union: adding an id here is a compile error until it has a renderer, so
  * a block cannot be named in one place and forgotten in another.
  */
-export type DurableBlockId = "plan" | "todos";
+export type DurableBlockId = "plan" | "todos" | "checkpoints";
 
 type Renderer = (state: DurableState) => string | undefined;
 
 const RENDERERS: Record<DurableBlockId, Renderer> = {
+  // Assigned below, after the checkpoint renderer is defined; a total record still, by the type.
+  checkpoints: () => undefined,
   plan: state => {
     const plan = state.plan?.trim();
     // Nothing rather than an empty container. A heading with nothing under it tells the model a plan
@@ -107,6 +167,22 @@ const RENDERERS: Record<DurableBlockId, Renderer> = {
   },
 };
 
+const RENDER_CHECKPOINTS: Renderer = state => {
+  const checkpoints = state.checkpoints ?? [];
+  if (checkpoints.length === 0) return undefined;
+  const lines = checkpoints.map(entry => `- **${entry.name}**${entry.partial ? " (partial)" : ""} — ${entry.at.slice(0, 16).replace("T", " ")}: ${entry.value}`);
+  return [
+    `## Your checkpoints (${checkpoints.length})`,
+    "",
+    "Results you wrote down as you reached them. They survive summarisation and are handed to the",
+    "person if this turn stops before you reply. Replace one by checkpointing the same name; mark",
+    "it final once nothing more is coming.",
+    "",
+    ...lines,
+  ].join("\n");
+};
+RENDERERS.checkpoints = RENDER_CHECKPOINTS;
+
 const MARKERS: Record<TodoStatus, string> = {
   pending: " ",
   doing: ">",
@@ -120,7 +196,7 @@ const MARKERS: Record<TodoStatus, string> = {
  * Plan before todos because the plan is the why and the list is the what, and a model reading them in
  * that order has the context for the second by the time it arrives.
  */
-const PLACEMENT: readonly DurableBlockId[] = ["plan", "todos"];
+const PLACEMENT: readonly DurableBlockId[] = ["plan", "todos", "checkpoints"];
 
 /** Renders whatever is present, joined. Empty string when there is nothing, so callers can concat. */
 export function renderDurableBlocks(state: DurableState): string {

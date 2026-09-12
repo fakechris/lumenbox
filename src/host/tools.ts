@@ -44,6 +44,8 @@ import {
   validateTodos,
   type TodoItem,
   type TodoStatus,
+  validateCheckpoint,
+  withCheckpoint,
 } from "./durable.ts";
 import {
   computerOutcome,
@@ -1128,6 +1130,26 @@ export function buildTools(
           },
         },
         required: ["plan"],
+      },
+    },
+    {
+      name: "Checkpoint",
+      description:
+        "Write down a result the moment you have it, so it survives if this turn stops before " +
+        "you reply — out of rounds, stopped by a person, a crash. Named: checkpointing the same " +
+        "name again replaces it. Mark it partial while more is coming and final once nothing is. " +
+        "Use it for anything a person would rather have half of than none of: rows collected so " +
+        "far, the answer to the first of three questions, a path to a file you wrote. Not for " +
+        "narration or intent — SetPlan and SetTodos are for those. Under 2,000 characters; a big " +
+        "result goes in a file and the checkpoint says where.",
+      input_schema: {
+        type: "object",
+        properties: {
+          name: { type: "string", description: "Short, stable: \"prices so far\", \"q1 answer\"." },
+          value: { type: "string", description: "The result itself, self-contained." },
+          partial: { type: "boolean", description: "true while more is expected (the default); false when this is the whole answer." },
+        },
+        required: ["name", "value"],
       },
     },
     {
@@ -3738,6 +3760,22 @@ export async function dispatchTool(
         text:
           "Plan saved. It is in your system prompt from the next turn, and in this turn it is the " +
           "text above — so you can act on it now.",
+      };
+    }
+
+    case "Checkpoint": {
+      const name = String(input.name ?? "").trim();
+      const value = String(input.value ?? "");
+      const rejected = validateCheckpoint(name, value);
+      if (rejected !== undefined) return { text: rejected.reason, isError: true };
+      const partial = input.partial !== false;
+      const state = context.registry.readDurableState(context.agent.id, context.conversation);
+      const next = withCheckpoint(state.checkpoints, { name, value, at: new Date().toISOString(), partial });
+      context.registry.writeCheckpoints(context.agent.id, next, context.conversation);
+      return {
+        text:
+          `Checkpointed "${name}"${partial ? " (partial)" : " (final)"}. It is in your prompt from the next ` +
+          `round and goes to the person if this turn stops before you reply. ${next.length} checkpoint(s) held.`,
       };
     }
 
