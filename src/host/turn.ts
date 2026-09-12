@@ -402,6 +402,8 @@ export interface TurnDeps {
    * only place a turn can be left in a state the transcript describes correctly.
    */
   policy?: PolicyGate;
+  /** Operator rules, rendered for the reviewer (INV-427). */
+  operatorRules?: () => readonly string[];
   /** Who is driving, threaded through so a memory kept this turn records who it is about. */
   caller?: { userId?: string };
   /**
@@ -2296,6 +2298,8 @@ export async function runTurn(
           input: toolInput,
           why: reviewWhy,
         });
+        const rulesText = deps.operatorRules?.() ?? [];
+        if (rulesText.length > 0) reviewInput.operatorRules = rulesText;
         if (deps.autoReview.mode() === "enforce") {
           const verdict = await deps.autoReview.review(reviewInput);
           if (verdict.verdict === "BLOCK") blocked = verdict;

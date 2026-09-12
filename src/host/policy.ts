@@ -36,6 +36,7 @@ import { appendLine, appendLineDurably } from "./jsonl.ts";
 import { createHash, randomUUID } from "node:crypto";
 import { dirname, join } from "node:path";
 import { agentboxHome } from "../config.ts";
+import type { RuleStore } from "./rules.ts";
 
 // ── what can be asked ─────────────────────────────────────────────────────────────────
 
@@ -212,7 +213,8 @@ function envList(name: string): readonly string[] {
 
 /** One line of the policy log. Append-only, replayed to derive current state. */
 type PolicyEvent =
-  | { at: string; kind: "checked"; request: string; agentId: string; allowed: boolean; reason?: string }
+  | { at: string; kind: "checked"; request: string; agentId: string; allowed: boolean; reason?: string; rule?: string }
+  | { at: string; kind: "rules-loaded"; hash: string; ids: string[]; problems: { id: string; problem: string }[] }
   | { at: string; kind: "stop"; agentId: string; by: string }
   | { at: string; kind: "resume"; agentId: string; by: string }
   | { at: string; kind: "approval-requested"; id: string; fingerprint: string; agentId: string; description: string }
@@ -254,6 +256,8 @@ interface Outcome {
 }
 
 export interface PolicyGateOptions {
+  /** Operator rules (INV-427): deny refuses, ask forces an approval, allow lifts the operator's own lists. */
+  rules?: RuleStore;
   path?: string;
   limits?: PolicyLimits;
   /**
@@ -299,6 +303,7 @@ export class PolicyGate {
   private readonly spentSincePrincipal: (sinceMs: number, principalId: string) => number;
   private readonly spentSinceAgent: (sinceMs: number, agentId: string) => number;
   private readonly spendUnavailable: () => string | undefined;
+  private readonly rules: RuleStore | undefined;
 
   /**
    * Called the moment a new approval is created, with what a notifier needs.
@@ -336,6 +341,7 @@ export class PolicyGate {
     this.spendUnavailable = options.spendUnavailable ?? (() => undefined);
     this.spentSincePrincipal = options.spentSincePrincipal ?? (() => 0);
     this.spentSinceAgent = options.spentSinceAgent ?? (() => 0);
+    this.rules = options.rules;
     this.replay();
   }
 
@@ -356,6 +362,7 @@ export class PolicyGate {
       agentId: request.agentId,
       allowed: decision.allow,
       ...(decision.allow ? {} : { reason: decision.reason }),
+      ...(request.kind === "tool" && this.lastRule !== undefined ? { rule: this.lastRule } : {}),
     });
     // After the decision row, not before it: the log should read as the story it is — we checked, we
     // refused, so we asked a person. Both are written before this returns, so nothing acts on a
@@ -484,8 +491,36 @@ export class PolicyGate {
     };
   }
 
+  /** Records that the rule set changed. Called by the store's onChange. */
+  notifyRulesLoaded(change: { hash: string; ids: string[]; problems: { id: string; problem: string }[] }): void {
+    this.append({ at: this.now().toISOString(), kind: "rules-loaded", ...change });
+  }
+
+  /** The rule that decided the last check, for the audit row. */
+  private lastRule: string | undefined;
+
   private decideTool(request: Extract<PolicyRequest, { kind: "tool" }>): Outcome {
-    if (!this.needsApproval(request)) return { decision: { allow: true } };
+    this.lastRule = undefined;
+    // An operator rule speaks first (INV-427). Deny refuses without asking anyone; ask
+    // forces the approval below with the rule on the card; allow lifts only the
+    // operator's own approval lists — never a host command, never the box's
+    // irreversible finding, which are not the operator's to lift.
+    const rule = this.rules?.decide(request.tool, request.input);
+    if (rule !== undefined) {
+      this.lastRule = rule.id;
+      if (rule.effect === "deny") {
+        return {
+          decision: {
+            allow: false,
+            reason: `Refused by rule ${rule.id}: ${rule.text} Ask the person if you believe this case is different; the rule will refuse it again.`,
+          },
+        };
+      }
+    }
+    const configuredAsk = this.needsApproval(request);
+    const mustAsk = request.tool === "RunOnHost" || request.irreversible !== undefined;
+    const asks = rule?.effect === "ask" || mustAsk || (configuredAsk && rule?.effect !== "allow");
+    if (!asks) return { decision: { allow: true } };
     if (request.delegated !== undefined && request.delegated.ask !== true) {
       return {
         decision: {
@@ -501,10 +536,12 @@ export class PolicyGate {
     // A delegated engine's request is named as such, and the fingerprint follows the
     // description: consent given to the agent for its own action never covers the engine's,
     // and consent given to the engine's job never covers the agent's (docs/33).
-    const description =
+    const described =
       request.delegated?.ask === true
         ? `[delegated engine${request.delegated.jobId !== undefined ? ` ${request.delegated.jobId}` : ""}] ${describeRequest(request)}`
         : describeRequest(request);
+    // The rule that asked is on the card, so the person knows why they are being asked.
+    const description = rule?.effect === "ask" ? `[rule ${rule.id}] ${described}` : described;
     // Refused outright, not truncated: see `tooLargeToApprove`.
     const tooLarge = tooLargeToApprove(description);
     if (tooLarge !== undefined) return { decision: { allow: false, reason: tooLarge } };

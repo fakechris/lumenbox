@@ -710,3 +710,64 @@ test("a click the box called irreversible must be approved, and the card says wh
     cleanup();
   }
 });
+
+// ── operator rules decide first (INV-427) ─────────────────────────────────────────
+import { RuleStore } from "./rules.ts";
+import { writeFileSync as writeRule } from "node:fs";
+
+function rulesIn(dir: string, files: Record<string, string>): RuleStore {
+  mkdirSync(dir, { recursive: true });
+  for (const [name, body] of Object.entries(files)) writeRule(join(dir, `${name}.md`), body);
+  return new RuleStore(dir);
+}
+
+test("deny refuses before anyone is asked, names the rule, and the audit row carries it", () => {
+  const { gate: plain, cleanup, path } = fixture();
+  try {
+    const dir = join(path, "..", "rules");
+    const rules = rulesIn(dir, { "no-force-push": "---\neffect: deny\ntool: bash\ncommand: git push --force\n---\nNobody rewrites shared history here.\n" });
+    const gate = new PolicyGate({ path, limits: { budgetWindowHours: 24, wakesPerWindow: 30, wakeWindowMinutes: 10, approvalRequiredTools: [], approvalRequiredCommands: [] }, rules });
+    const refused = gate.check(toolRequest("git push --force origin main"));
+    assert.equal(refused.allow, false);
+    assert.match(!refused.allow ? refused.reason : "", /^Refused by rule no-force-push: Nobody rewrites shared history here\./);
+    assert.equal(gate.pending().length, 0, "no approval was created");
+    const rows = readFileSync(path, "utf8").trim().split("\n").map(line => JSON.parse(line) as { kind: string; rule?: string; ids?: string[] });
+    assert.ok(rows.some(row => row.kind === "checked" && row.rule === "no-force-push"), "the checked row names the rule");
+    assert.equal(gate.check(toolRequest("git status")).allow, true, "unmatched commands are unaffected");
+    void plain;
+  } finally {
+    cleanup();
+  }
+});
+
+test("ask forces an approval with the rule on the card; allow lifts the operator's list but never a host command or an irreversible finding", () => {
+  const { cleanup, path } = fixture();
+  try {
+    const dir = join(path, "..", "rules");
+    const rules = rulesIn(dir, {
+      "ask-deploy": "---\neffect: ask\ntool: bash\ncommand: ./deploy\n---\nDeploys are a person's call.\n",
+      "allow-jira": "---\neffect: allow\ntool: bash, RunOnHost, browser_act\ncommand: jira comment\n---\nCommenting on Jira is routine here.\n",
+    });
+    const gate = new PolicyGate({
+      path,
+      limits: { budgetWindowHours: 24, wakesPerWindow: 30, wakeWindowMinutes: 10, approvalRequiredTools: [], approvalRequiredCommands: ["jira "] },
+      rules,
+    });
+    const asked = gate.check(toolRequest("./deploy prod"));
+    assert.equal(asked.allow, false);
+    assert.match(gate.pending()[0]?.description ?? "", /^\[rule ask-deploy\] Ada: bash — \.\/deploy prod/);
+
+    // The configured list says every `jira ` command asks; the allow rule lifts it.
+    assert.equal(gate.check(toolRequest("jira comment X-1 'done'")).allow, true);
+    assert.equal(gate.check(toolRequest("jira issue delete X-1")).allow, false, "outside the rule, the list still asks");
+
+    // Not the operator's to lift: a host command always asks, whatever the rule says.
+    const host = gate.check({ kind: "tool", agentId: "agent-1", agentName: "Ada", tool: "RunOnHost", input: { command: "jira comment X-1 'done'" } });
+    assert.equal(host.allow, false);
+    // Nor the box's irreversible finding.
+    const pay = gate.check({ kind: "tool", agentId: "agent-1", agentName: "Ada", tool: "browser_act", input: { command: "jira comment", action: "click" }, irreversible: 'pay or order: click button "Pay"' });
+    assert.equal(pay.allow, false);
+  } finally {
+    cleanup();
+  }
+});
