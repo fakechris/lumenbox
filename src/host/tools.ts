@@ -216,7 +216,7 @@ export interface ToolContext {
   /** The MCP tool names this turn itself may call — profile ∩ scope ∩ chat scope, as the turn computed them. */
   allowedMcpTools?: readonly string[];
   /** What kind of box the agent's is: an attached one cannot reach the host's loopback. */
-  boxKind?: "docker" | "attached";
+  boxKind?: "docker" | "attached" | "host";
   /**
    * Reads Feishu documents with the bot's own workspace identity. Present only where
    * a Feishu app is configured; absent withholds the tool entirely, so an agent on an

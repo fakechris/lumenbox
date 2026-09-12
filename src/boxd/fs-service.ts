@@ -5,6 +5,7 @@
  * anyway, so a path jail here would be theatre. The container is the boundary.
  */
 
+import { Roots, parseRepositories, type Repository } from "./headless.ts";
 import {
   readdir,
   lstat,
@@ -79,6 +80,21 @@ const MEDIA_TYPES: Record<string, string> = {
   ".mp4": "video/mp4",
   ".zip": "application/zip",
 };
+
+/** The directories this box may touch (INV-438); unrestricted unless BOXD_REPOSITORIES says. */
+let roots = new Roots(parseRepositories(process.env.BOXD_REPOSITORIES));
+export function setRoots(repositories: readonly Repository[]): void {
+  roots = new Roots(repositories);
+}
+export function currentRoots(): Roots {
+  return roots;
+}
+
+function requireInside(path: string, mode: "ro" | "rw"): string {
+  const refusal = roots.refusal(path, mode);
+  if (refusal !== undefined) throw new Error(refusal);
+  return path;
+}
 
 function requirePath(path: string | undefined, field = "path"): string {
   if (!path || typeof path !== "string" || path.trim() === "") {
@@ -207,7 +223,7 @@ export async function uploadFile(request: UploadFileRequest): Promise<UploadFile
 export async function readFile(
   request: ReadFileRequest
 ): Promise<ReadFileResult> {
-  const path = requirePath(request.path);
+  const path = requireInside(requirePath(request.path), "ro");
 
   const info = await stat(path);
   if (info.isDirectory()) {
@@ -249,7 +265,7 @@ export async function readFile(
 export async function writeFile(
   request: WriteFileRequest
 ): Promise<WriteFileResult> {
-  const path = requirePath(request.path);
+  const path = requireInside(requirePath(request.path), "rw");
   if (typeof request.content !== "string") {
     throw new Error("content must be a string");
   }
@@ -263,7 +279,7 @@ export async function writeFile(
 }
 
 export async function listDir(request: ListDirRequest): Promise<ListDirResult> {
-  const path = requirePath(request.path);
+  const path = requireInside(requirePath(request.path), "ro");
   const names = await readdir(path);
 
   const entries: DirEntry[] = [];

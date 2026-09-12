@@ -497,7 +497,8 @@ export interface TurnDeps {
   /** Told what a compaction summary is about to replace, so memory can keep what matters. */
   onSummarised?: (agentId: string, conversation: string, entries: readonly TranscriptEntry[]) => void;
   /** What kind of box this agent's is, for Delegate's face decision. */
-  boxKind?: "docker" | "attached";
+  /** What kind of box the agent lives in; a host box (INV-438) has no desktop and its writes are reviewed. */
+  boxKind?: "docker" | "attached" | "host";
   /**
    * The ledger handle for this turn, when it is a resumption of an earlier one.
    *
@@ -1517,7 +1518,8 @@ export async function runTurn(
     // the operator is watching the team room's, and a side chat driving it would fight
     // for pixels with the room. Side conversations keep shell, files and the rest and
     // do their work headless — which is what lets them run at the same time as the room.
-    conversation === MAIN_CONVERSATION,
+    // And only when the box gave it one: a host box (INV-438) has no desktop at all.
+    conversation === MAIN_CONVERSATION && deps.displayIndex !== undefined,
     deps.docReader !== undefined,
     deps.templates !== undefined,
     isForkConversation(conversation)
@@ -2300,7 +2302,12 @@ export async function runTurn(
       // records the verdict; enforce mode waits for it and hands a BLOCK back to the model as the
       // tool's answer, with the reason, so the agent can ask rather than guess.
       const toolInput = (toolUse.input ?? {}) as Record<string, unknown>;
-      const reviewWhy = deps.autoReview === undefined ? undefined : needsReview(toolUse.name, toolInput);
+      const reviewWhy =
+        deps.autoReview === undefined
+          ? undefined
+          : (needsReview(toolUse.name, toolInput) ??
+            // On the person's own machine (INV-438) every write is a host action.
+            (deps.boxKind === "host" && HOST_WRITES.has(toolUse.name) ? "writes on the person's own machine" : undefined));
       let blocked: Verdict | undefined;
       if (reviewWhy !== undefined && deps.autoReview !== undefined && deps.autoReview.mode() !== "off") {
         const reviewInput = reviewInputFor({
@@ -2597,6 +2604,9 @@ export async function runTurn(
   throw new TurnRoundLimitExceeded(note);
   }
 }
+
+/** Tools that change the machine they run on; on a host box these are reviewed (INV-438). */
+const HOST_WRITES = new Set(["bash", "write_file", "edit_file", "browser_act", "browser_upload", "browser_fill_secret"]);
 
 /** A stopped turn's report, with what was checkpointed appended so the person gets the half. */
 export function withCheckpoints(report: string, state: DurableState): string {
