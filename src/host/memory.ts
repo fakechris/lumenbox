@@ -228,6 +228,46 @@ export interface MemoryRecall {
   records: MemoryRecord[];
   /** How many were left out by the budget, so the prompt can say so rather than imply completeness. */
   omitted: number;
+  /**
+   * The ones left out, by score, for the index (INV-425). Present so the prompt can list
+   * what exists without paying for its text: a memory the budget dropped used to be
+   * invisible until Recall happened to search for the right word.
+   */
+  omittedRecords?: MemoryRecord[];
+}
+
+/** How much of the prompt the index of unshown memories may take. */
+export const MEMORY_INDEX_CHARS = envNumber("AGENTBOX_MEMORY_INDEX", 1_500);
+/** How much of each unshown memory the index shows. Enough to recognise, not to rely on. */
+export const INDEX_HEAD_CHARS = 72;
+
+/**
+ * The index of what was kept and not shown (INV-425; Claude Tag's memory.md): one short line per
+ * memory, newest first, under its own small budget, so the agent knows the memory exists and can
+ * Recall it. Claude Tag loads memory.md as the index and the bodies by relevance; ours shows the
+ * relevant bodies (chooseRelevant) and this is the index.
+ */
+export function renderMemoryIndex(omitted: readonly MemoryRecord[], budget = MEMORY_INDEX_CHARS): string[] {
+  if (omitted.length === 0) return [];
+  const lines: string[] = [];
+  let used = 0;
+  let listed = 0;
+  for (const record of [...omitted].sort((a, b) => b.at.localeCompare(a.at))) {
+    const flat = record.text.replace(/\s+/g, " ").trim();
+    const head = flat.length > INDEX_HEAD_CHARS ? `${flat.slice(0, INDEX_HEAD_CHARS)}…` : flat;
+    const line = `- ${record.at.slice(0, 10)} ${record.kind}: ${head}`;
+    if (used + line.length + 1 > budget) break;
+    lines.push(line);
+    used += line.length + 1;
+    listed += 1;
+  }
+  const rest = omitted.length - listed;
+  return [
+    "",
+    `Also kept, not shown in full (${omitted.length}). Recall with a word from the line to read one:`,
+    ...lines,
+    ...(rest > 0 ? [`- … and ${rest} more; Recall searches all of them.`] : []),
+  ];
 }
 
 /**
@@ -274,7 +314,9 @@ export function recall(
   // facts benefits from knowing which came after which, and the scoring has already decided *which*
   // facts it sees.
   kept.sort((a, b) => a.at.localeCompare(b.at));
-  return { records: kept, omitted: ranked.length - kept.length };
+  const keptSet = new Set(kept);
+  const omittedRecords = ranked.map(entry => entry.record).filter(record => !keptSet.has(record));
+  return { records: kept, omitted: omittedRecords.length, ...(omittedRecords.length > 0 ? { omittedRecords } : {}) };
 }
 
 /**
@@ -401,9 +443,10 @@ export function renderMemory(recalled: MemoryRecall, mirrorDir?: string): string
     recalled.omitted > 0
       ? [
           "",
-          `${recalled.omitted} older or weaker memories are not shown. This is a selection, not`,
+          `${recalled.omitted} older or weaker memories are not shown in full. This is a selection, not`,
           "everything you know — so do not conclude something never happened from its absence here.",
-          "`Recall` searches all of them, including these.",
+          "`Recall` searches all of them.",
+          ...renderMemoryIndex(recalled.omittedRecords ?? []),
         ]
       : [];
 
