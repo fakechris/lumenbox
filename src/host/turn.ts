@@ -1458,7 +1458,9 @@ export async function runTurn(
   // The tools other people wrote, narrowed by the same allowlist as ours: an MCP tool
   // is an ordinary tool once it arrives, including in what an agent's profile and its
   // scope are allowed to withhold.
-  const allowedMcp = (deps.templateSetup !== undefined ? [] : (deps.mcp?.tools() ?? [])).filter(
+  // Which servers this agent's box carries (INV-439): named in its bundles, or all.
+  const boxServers = deps.bundles?.forBox(registry.boxOf(agent.id))?.mcpServers;
+  const allowedMcp = (deps.templateSetup !== undefined ? [] : (deps.mcp?.toolsFor(boxServers) ?? [])).filter(
     tool => effectiveTools === undefined || effectiveTools.includes(tool.name)
   );
   // Past a certain number they stop being a list and start being a document that every
@@ -2300,7 +2302,13 @@ export async function runTurn(
       // records the verdict; enforce mode waits for it and hands a BLOCK back to the model as the
       // tool's answer, with the reason, so the agent can ask rather than guess.
       const toolInput = (toolUse.input ?? {}) as Record<string, unknown>;
-      const reviewWhy = deps.autoReview === undefined ? undefined : needsReview(toolUse.name, toolInput);
+      const reviewWhy =
+        deps.autoReview === undefined
+          ? undefined
+          : (needsReview(toolUse.name, toolInput) ??
+            // A host-level MCP server's tools (INV-439) are reviewed like a host command:
+            // they reach the operator's own machine or their own data.
+            (deps.mcp?.isHostTool(toolUse.name) === true ? "calls a host-level MCP server" : undefined));
       let blocked: Verdict | undefined;
       if (reviewWhy !== undefined && deps.autoReview !== undefined && deps.autoReview.mode() !== "off") {
         const reviewInput = reviewInputFor({

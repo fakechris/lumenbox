@@ -87,7 +87,23 @@ export interface AgentboxConfig {
    * of decision as `hostExec`, and not one an agent should be able to make for itself.
    * An agent is a caller of these tools, never an installer of them.
    */
-  mcpServers?: Record<string, { command: string; args?: string[]; env?: Record<string, string> }>;
+  mcpServers?: Record<
+    string,
+    {
+      command?: string;
+      args?: string[];
+      env?: Record<string, string>;
+      url?: string;
+      headers?: Record<string, string>;
+      /**
+       * A host-level server (INV-439): it runs on this machine with this machine's
+       * privileges, or reaches something the operator maintains (a local knowledge base, a
+       * personal bot). Its tools are reviewed like a host command, and its writes go through
+       * the policy gate; a rule (INV-427) can let the reads through.
+       */
+      host?: boolean;
+    }
+  >;
   /**
    * Skill directories beyond the box's own `/home/box/work/skills`, as paths inside the
    * box, searched in this order after it (R26). The box's own directory always wins a
