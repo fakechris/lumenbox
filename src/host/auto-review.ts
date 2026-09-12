@@ -72,7 +72,7 @@ export function needsReview(tool: string, input: Record<string, unknown>): strin
       // hand on the desktop, and the same desktop the browser tools are reviewed on.
       const actions = Array.isArray(input.actions) ? (input.actions as { action?: unknown }[]) : [];
       const writes = actions.some(a =>
-        ["click", "click_in_window", "type", "key", "drag", "mouse_down", "mouse_up", "close_window"].includes(String(a?.action))
+        ["click", "click_in_window", "click_element", "type", "key", "drag", "mouse_down", "mouse_up", "close_window"].includes(String(a?.action))
       );
       return writes ? "drives the desktop by coordinates" : undefined;
     }

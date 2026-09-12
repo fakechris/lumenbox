@@ -16,6 +16,7 @@ import type {
   ResolutionConfig,
   ScrollDirection,
   WindowInfo,
+  ElementInfo,
   Effect,
 } from "../protocol/index.ts";
 import { CoordinateScaler } from "./scaling.ts";
@@ -288,6 +289,7 @@ export function actionRequiresSettle(action: ComputerAction): boolean {
       return /[\r\n]/.test(action.text);
     case "activate_window":
     case "click_in_window":
+    case "click_element":
     case "close_window":
       // Raising, focusing and closing repaint, and a window manager animates them.
       return true;
@@ -295,6 +297,7 @@ export function actionRequiresSettle(action: ComputerAction): boolean {
     case "screenshot":
     case "cursor_position":
     case "list_windows":
+    case "list_elements":
     case "screenshot_window":
       return false;
   }
@@ -317,6 +320,45 @@ export function patchWebpHeader(buffer: Buffer): Buffer {
     buffer.writeUInt32LE(buffer.length - 20, 16); // VP8 chunk size
   }
   return buffer;
+}
+
+/** What box-ax prints: the tree it read, or why it could not. */
+export interface AxOutput {
+  window: { title: string; app: string; truncated: boolean };
+  elements: { ref: string; role: string; name: string; x: number; y: number; width: number; height: number; states: string[] }[];
+}
+
+export function parseAxOutput(text: string): AxOutput | { error: string } | undefined {
+  const line = text.trim().split("\n").pop() ?? "";
+  if (line === "") return undefined;
+  let parsed: Record<string, unknown>;
+  try {
+    parsed = JSON.parse(line) as Record<string, unknown>;
+  } catch {
+    return undefined;
+  }
+  if (typeof parsed.error === "string") return { error: parsed.error };
+  if (!Array.isArray(parsed.elements)) return undefined;
+  const window = (parsed.window ?? {}) as Record<string, unknown>;
+  return {
+    window: {
+      title: typeof window.title === "string" ? window.title : "",
+      app: typeof window.app === "string" ? window.app : "",
+      truncated: parsed.truncated === true,
+    },
+    elements: (parsed.elements as Record<string, unknown>[])
+      .filter(e => typeof e.ref === "string" && typeof e.role === "string")
+      .map(e => ({
+        ref: e.ref as string,
+        role: e.role as string,
+        name: typeof e.name === "string" ? e.name : "",
+        x: Number(e.x ?? 0),
+        y: Number(e.y ?? 0),
+        width: Number(e.width ?? 0),
+        height: Number(e.height ?? 0),
+        states: Array.isArray(e.states) ? e.states.filter((s): s is string => typeof s === "string") : [],
+      })),
+  };
 }
 
 export interface X11Config {
@@ -354,6 +396,11 @@ export interface X11ExecutionResult {
   cursorPosition?: { x: number; y: number };
   /** Present when the batch included list_windows. */
   windows?: readonly WindowInfo[];
+  /** Present when list_elements found a tree (INV-412). */
+  elements?: readonly ElementInfo[];
+  /** Why there are none, when list_elements was asked and there was no tree. */
+  elementsNote?: string;
+  elementsWindow?: { title: string; app: string; truncated: boolean };
   actionCount: number;
   durationMs: number;
   error?: string;
@@ -363,6 +410,8 @@ export class X11Executor {
   private readonly config: Required<X11Config>;
   private readonly scaler: CoordinateScaler;
   private readonly env: Record<string, string>;
+  /** The controls of the last list_elements, by ref, at display resolution — what click_element resolves against. */
+  private elementCentres = new Map<string, Point>();
 
   constructor(config: X11Config) {
     this.config = {
@@ -376,6 +425,73 @@ export class X11Executor {
     };
     this.scaler = new CoordinateScaler(this.config.resolution);
     this.env = { DISPLAY: this.config.display };
+  }
+
+  private elementCentre(ref: string): Point {
+    const centre = this.elementCentres.get(ref.trim());
+    if (centre === undefined) {
+      throw new Error(`no element ${ref} in the last list_elements outline; list_elements again and use a ref from it`);
+    }
+    return centre;
+  }
+
+  /** One click, at a display point or where the pointer is, with the action's button, count and modifiers. */
+  private async clickAt(point: Point | undefined, action: { button?: MouseButton; count?: number; modifiers?: string }): Promise<void> {
+    const button = BUTTON_MAP[action.button ?? "left"];
+    const count = action.count ?? 1;
+    const clickArgs = count > 1 ? `--repeat ${count} --delay 50 ${button}` : button;
+    const parts: string[] = [];
+    const modifiers = modifiersForXdotool(action.modifiers);
+    for (const mod of modifiers) parts.push(`keydown ${mod}`);
+    if (point !== undefined) parts.push(...(await this.moveParts([point])));
+    parts.push(`click ${clickArgs}`);
+    // Release in reverse order so the modifier stack unwinds LIFO.
+    for (const mod of [...modifiers].reverse()) parts.push(`keyup ${mod}`);
+    await this.xdotool(parts.join(" "));
+  }
+
+  /**
+   * The active window's operable controls, from box-ax over the accessibility bus
+   * (INV-412). An app with no tree — a terminal, an Electron app — is an `error`, said in
+   * words, never an empty list: the model must fall back to the screenshot knowingly.
+   */
+  protected async listElements(): Promise<{ elements: ElementInfo[]; window: { title: string; app: string; truncated: boolean } } | { error: string }> {
+    let stdout: string;
+    try {
+      const result = await execFileAsync("box-ax", [], { env: this.env, timeout: 6000, maxBuffer: 4 * 1024 * 1024 });
+      stdout = result.stdout;
+    } catch (error) {
+      const failed = error as { stdout?: string; killed?: boolean; code?: unknown };
+      const said = parseAxOutput(failed.stdout ?? "");
+      if (said !== undefined && "error" in said) return said;
+      return { error: failed.killed === true ? "the accessibility reader did not answer in time" : `the accessibility reader is not available (${failed.code ?? "no box-ax"})` };
+    }
+    const parsed = parseAxOutput(stdout);
+    if (parsed === undefined) return { error: "the accessibility reader answered with something unreadable" };
+    if ("error" in parsed) return parsed;
+    return this.adoptElements(parsed);
+  }
+
+  /** Scales the tree's screen rectangles to API space and remembers the centres for click_element. */
+  protected adoptElements(read: AxOutput): { elements: ElementInfo[]; window: { title: string; app: string; truncated: boolean } } {
+    this.elementCentres = new Map();
+    const elements: ElementInfo[] = [];
+    for (const raw of read.elements) {
+      this.elementCentres.set(raw.ref, { x: Math.round(raw.x + raw.width / 2), y: Math.round(raw.y + raw.height / 2) });
+      const origin = this.apiPoint({ x: raw.x, y: raw.y });
+      const far = this.apiPoint({ x: raw.x + raw.width, y: raw.y + raw.height });
+      elements.push({
+        ref: raw.ref,
+        role: raw.role,
+        name: raw.name,
+        x: Math.round(origin.x),
+        y: Math.round(origin.y),
+        width: Math.max(1, Math.round(far.x - origin.x)),
+        height: Math.max(1, Math.round(far.y - origin.y)),
+        states: raw.states,
+      });
+    }
+    return { elements, window: read.window };
   }
 
   private xdotool(args: string): Promise<string> {
@@ -408,6 +524,9 @@ export class X11Executor {
     let cursorPosition: { x: number; y: number } | undefined;
     let lastScreenshot: string | undefined;
     let windows: readonly WindowInfo[] | undefined;
+    let elements: readonly ElementInfo[] | undefined;
+    let elementsNote: string | undefined;
+    let elementsWindow: { title: string; app: string; truncated: boolean } | undefined;
     let screenshotTaken = false;
     let settleNeeded = false;
     // What each write did to the pixels around it (docs/49 A1). The last one is kept
@@ -427,6 +546,19 @@ export class X11Executor {
         cursorPosition = await this.readCursorPosition();
       } else if (action.action === "list_windows") {
         windows = await this.listWindows();
+      } else if (action.action === "list_elements") {
+        if (settleNeeded) {
+          await sleep(this.config.screenshotDelayMs);
+          settleNeeded = false;
+        }
+        const read = await this.listElements();
+        if ("error" in read) {
+          elements = undefined;
+          elementsNote = read.error;
+        } else {
+          elements = read.elements;
+          elementsWindow = read.window;
+        }
       } else if (action.action === "screenshot_window") {
         // A window's own contents, so this replaces the screen shot for this batch
         // rather than adding to it: two images with no way to tell them apart would be
@@ -493,6 +625,9 @@ export class X11Executor {
         : {}),
       cursorPosition,
       windows,
+      elements,
+      elementsNote,
+      elementsWindow,
       actionCount: actions.length,
       durationMs: Date.now() - start,
     };
@@ -511,6 +646,13 @@ export class X11Executor {
       case "click":
         if (action.coordinate) return this.scale(action.coordinate);
         return this.pointerLocation();
+      case "click_element":
+        try {
+          return this.elementCentre(action.ref);
+        } catch {
+          // The action itself reports the unknown ref; nothing to measure.
+          return undefined;
+        }
       case "click_in_window": {
         try {
           const geometry = await this.windowGeometry(assertWindowId(action.window_id));
@@ -582,23 +724,15 @@ export class X11Executor {
         return;
       }
 
-      case "click": {
-        const button = BUTTON_MAP[action.button ?? "left"];
-        const count = action.count ?? 1;
-        const clickArgs =
-          count > 1 ? `--repeat ${count} --delay 50 ${button}` : button;
+      case "click":
+        await this.clickAt(action.coordinate ? this.scale(action.coordinate) : undefined, action);
+        return;
 
-        const parts: string[] = [];
-        const modifiers = modifiersForXdotool(action.modifiers);
-        for (const mod of modifiers) parts.push(`keydown ${mod}`);
-        if (action.coordinate) {
-          parts.push(...(await this.moveParts([this.scale(action.coordinate)])));
-        }
-        parts.push(`click ${clickArgs}`);
-        // Release in reverse order so the modifier stack unwinds LIFO.
-        for (const mod of [...modifiers].reverse()) parts.push(`keyup ${mod}`);
-
-        await this.xdotool(parts.join(" "));
+      case "click_element": {
+        // Resolved here, in the box, against the last outline: the model names a ref and
+        // never a coordinate, so the click lands where the tree said the control is — and
+        // the effect evidence and the review that guard `click` guard this the same way.
+        await this.clickAt(this.elementCentre(action.ref), action);
         return;
       }
 
