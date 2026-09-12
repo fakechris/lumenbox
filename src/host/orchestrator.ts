@@ -71,6 +71,7 @@ import { RuleStore } from "./rules.ts";
 import { MAIN_CONVERSATION, conversationIdFor } from "../agents/registry.ts";
 import type { HostRunner } from "./host-runner.ts";
 import type { Vault } from "./vault.ts";
+import type { OAuthGate } from "./oauth.ts";
 import { Rememberer, summariseExchange } from "./remember.ts";
 import { memoryRef } from "./memory.ts";
 import type { PitfallSource } from "./pitfalls.ts";
@@ -138,6 +139,8 @@ export interface OrchestratorOptions {
   hostRunner?: HostRunner;
   /** The credential vault, for secrets a host command may ask for by grant. */
   vault?: Vault;
+  /** The OAuth gate (INV-422), when the web server built one over the vault. */
+  oauth?: OAuthGate;
   /** The team's task board. `null` keeps none, which a test that must not touch the state directory wants. */
   tasks?: TaskStore | null;
   /** The scopes registry. `null` keeps none. */
@@ -1314,6 +1317,7 @@ export class Orchestrator {
       ...(this.boxAccesses.get(agentBoxId) !== undefined ? { boxAccess: this.boxAccesses.get(agentBoxId)! } : {}),
       hostRunner: this.options.hostRunner,
       vault: this.options.vault,
+      oauth: this.options.oauth,
       tasks: this.tasks,
       scopes: this.scopes,
       bundles: this.bundles,

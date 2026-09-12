@@ -275,7 +275,7 @@ vault; egress allow lists become per box and refusals emit events.
 **Success Criteria**: the same skill on/off per box; agent tool set changes with its box; a
 GitHub or Feishu connector completes OAuth and the transcript holds no token; a per-box egress
 refusal shows up as an event.
-**Status**: In Progress: G1 bundles + G4 egress merged (#96, #100); G2 stacking (INV-421), G3 OAuth (INV-422), G5/G6 local env (INV-438/439) open.
+**Status**: In Progress: G1 bundles + G4 egress merged (#96, #100); G2 stacking (INV-421), G3 OAuth (INV-422, PR), G5/G6 local env (INV-438 #123, INV-439 #122) in review.
 
 ## Stage 24: Memory follows place (docs/50 H)
 **Goal**: shared memory sharded by box; a memory.md index in the prompt with relevance-loaded

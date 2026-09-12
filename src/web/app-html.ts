@@ -1162,6 +1162,23 @@ export const APP_HTML = String.raw`<!doctype html>
       <div class="fieldnote" id="setsecstatus"></div>
     </div>
     <div class="field" data-tier="installation" data-settab="doors">
+      <label>Connected services</label>
+      <div id="setconns" style="display:flex;flex-direction:column;gap:6px"></div>
+      <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
+        <select id="setconnprov" style="min-width:120px"></select>
+        <input id="setconnid" placeholder="client id / app id" spellcheck="false" autocomplete="off" style="flex:1;min-width:110px">
+        <input id="setconnsecret" type="password" placeholder="client secret / app secret" spellcheck="false" autocomplete="off" style="flex:1;min-width:110px">
+        <input id="setconngrant" placeholder="* or agent:id or principal:id" spellcheck="false" style="flex:1.2;min-width:130px;font-family:var(--font-sans);font-size:12px">
+        <button class="btn sm" id="setconnadd">Connect</button>
+      </div>
+      <div class="fieldnote" id="setconnsetup"></div>
+      <div class="fieldnote">An OAuth authorization or an app credential, finished on this machine. The
+        token lives in the vault as oauth:&lt;provider&gt;, is refreshed here when it lapses, and is
+        attached by the host to every connector_request an agent makes — the agent never sees it, and
+        a box's bundles or the grant above decide who may call. Writes are reviewed like any outward act.</div>
+      <div class="fieldnote" id="setconnstatus"></div>
+    </div>
+    <div class="field" data-tier="installation" data-settab="doors">
       <label>Channels</label>
       <div id="setchannels" style="display:flex;flex-direction:column;gap:6px"></div>
       <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
@@ -1502,7 +1519,7 @@ function openSettings(tab) {
       renderStandingGrants();
       renderBoxSection();
       renderChannels();
-      renderSecrets();
+      renderSecrets(); renderConnectors();
       renderScopes();
       $("settingswrap").style.display = "flex";
     })
@@ -1640,6 +1657,65 @@ document.getElementById("setsecrets").addEventListener("click", function (event)
   if (!s) return;
   fetch("/api/vault/remove", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ id: s.id }) })
     .then(renderSecrets);
+});
+
+/** Connected services (INV-422): providers to connect, connections that exist, never a token. */
+var connProviders = [];
+
+function renderConnectors() {
+  fetch("/api/connectors")
+    .then(function (r) { if (r.status === 403) { $("setconns").innerHTML = ""; return null; } return r.json(); })
+    .then(function (data) {
+      if (!data) return;
+      connProviders = data.providers || [];
+      var select = $("setconnprov");
+      if (!select.options.length) {
+        select.innerHTML = connProviders.map(function (p) { return '<option value="' + esc(p.id) + '">' + esc(p.title) + "</option>"; }).join("");
+        select.onchange = function () {
+          var p = connProviders.filter(function (x) { return x.id === select.value; })[0];
+          $("setconnsetup").textContent = p ? p.setup : "";
+        };
+        select.onchange();
+      }
+      var connected = data.connected || [];
+      $("setconns").innerHTML = connected.length
+        ? connected.map(function (c) {
+            var who = (c.grants || []).map(function (g) { return g.holder; }).join(", ") || "nobody yet";
+            var until = c.expiresAt ? " · until " + c.expiresAt.slice(0, 16).replace("T", " ") : "";
+            return '<div style="display:flex;gap:8px;align-items:center;font-size:13px">' +
+              '<span class="mono" style="min-width:110px;font-weight:600">' + esc(c.provider) + "</span>" +
+              '<span class="dim" style="flex:1;font-size:12px;overflow:hidden;text-overflow:ellipsis">' + esc(who + until) + "</span>" +
+              '<a href="#" data-connrm="' + esc(c.id) + '" style="color:var(--danger);font-size:12px">Disconnect</a></div>';
+          }).join("")
+        : '<div class="fieldnote" style="margin:0">Nothing connected yet.</div>';
+    })
+    .catch(function () {});
+}
+
+$("setconnadd").onclick = function () {
+  var provider = $("setconnprov").value;
+  var p = connProviders.filter(function (x) { return x.id === provider; })[0];
+  var body = { provider: provider, clientId: $("setconnid").value.trim(), clientSecret: $("setconnsecret").value, grant: $("setconngrant").value.trim() };
+  if (!body.clientId || !body.clientSecret) { $("setconnstatus").textContent = "Both the id and the secret are needed."; return; }
+  var code = p && p.kind === "authorization_code";
+  $("setconnstatus").textContent = code ? "Opening the provider…" : "Connecting…";
+  fetch(code ? "/api/connectors/begin" : "/api/connectors/connect", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body) })
+    .then(function (r) { return r.json().then(function (d) { if (!r.ok) throw new Error(d.error || "failed"); return d; }); })
+    .then(function (d) {
+      $("setconnsecret").value = "";
+      if (d.url) { window.open(d.url, "_blank"); $("setconnstatus").textContent = "Finish the authorization in the new tab, then this list updates."; }
+      else { $("setconnstatus").textContent = "Connected."; }
+      renderConnectors();
+    })
+    .catch(function (error) { $("setconnstatus").textContent = error.message; });
+};
+
+document.getElementById("setconns").addEventListener("click", function (event) {
+  var id = event.target.getAttribute && event.target.getAttribute("data-connrm");
+  if (!id) return;
+  event.preventDefault();
+  fetch("/api/vault/remove", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ id: id }) })
+    .then(function () { renderConnectors(); renderSecrets(); });
 });
 
 /** The people list: one row per identity, grouped nowhere — flat and editable. */

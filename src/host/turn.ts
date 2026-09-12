@@ -102,6 +102,7 @@ import {
 } from "./tools.ts";
 import type { HostRunner } from "./host-runner.ts";
 import type { Vault } from "./vault.ts";
+import type { OAuthGate } from "./oauth.ts";
 import type { TaskStore } from "./tasks.ts";
 import type { ScopeStore } from "./scopes.ts";
 import { checkpointSummary, type DurableState } from "./durable.ts";
@@ -326,6 +327,26 @@ function truncateOldestResults(
  * the bundles its box carries. Undefined when neither says anything, so the section is
  * simply absent.
  */
+/** The OAuth connections this agent may call: provider ids, by grant, without an audit line. */
+function connectorsFor(deps: { oauth?: OAuthGate; vault?: Vault; bundles?: BundleStore; caller?: { userId?: string } }, agent: { id: string }, registry: AgentRegistry): string[] {
+  if (deps.oauth === undefined || deps.vault === undefined) return [];
+  let box: { id: string; name: string } | undefined;
+  try {
+    const found = registry.boxOf(agent.id);
+    box = { id: found.id, name: found.name };
+  } catch {
+    box = undefined;
+  }
+  const caller = {
+    agentId: agent.id,
+    ...(deps.caller?.userId !== undefined ? { principalId: deps.caller.userId } : {}),
+  };
+  return deps.oauth
+    .connected()
+    .filter(connection => deps.vault!.covers(connection.id, { ...caller, scopeGrants: deps.bundles?.grantsSecret(box, connection.id) === true }))
+    .map(connection => connection.provider);
+}
+
 function placeOf(registry: AgentRegistry, agentId: string, bundles: BundleStore | undefined) {
   const installation = readInstallationInstructions();
   let boxName: string | undefined;
@@ -427,6 +448,8 @@ export interface TurnDeps {
   hostRunner?: HostRunner;
   /** The credential vault, for secrets a host command asks for by grant. */
   vault?: Vault;
+  /** The OAuth gate (INV-422): which connected services this agent may call, and their bearers. */
+  oauth?: OAuthGate;
   /** The team's task board. Absent means no Tasks tool behaviour and no tasks section. */
   tasks?: TaskStore;
   /** The scopes registry, for an agent placed in a scope. Absent means no scoping. */
@@ -1520,7 +1543,10 @@ export async function runTurn(
     conversation === MAIN_CONVERSATION,
     deps.docReader !== undefined,
     deps.templates !== undefined,
-    isForkConversation(conversation)
+    isForkConversation(conversation),
+    // Connected services (INV-422): offered only where a live grant covers this agent —
+    // the box's bundles or the secret's own grants — and never to a fork.
+    isForkConversation(conversation) ? [] : connectorsFor(deps, agent, registry)
     // MCP tools are outward channels too — a fork gets none (docs/32 §2).
   ).concat(isForkConversation(conversation) ? [] : mcpTools)
     // Only an agent the person actually talks to may reach them (docs/42 §2). A worker created
@@ -2365,6 +2391,7 @@ export async function runTurn(
             // either lands on "unknown tool" rather than on a person or a credential.
             hostRunner: isForkConversation(conversation) ? undefined : deps.hostRunner,
             vault: deps.vault,
+            oauth: isForkConversation(conversation) ? undefined : deps.oauth,
             tasks: deps.tasks,
             scopes: deps.scopes,
             mcp: isForkConversation(conversation) ? undefined : deps.mcp,
