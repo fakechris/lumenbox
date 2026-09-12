@@ -1250,6 +1250,11 @@ State:
                             whether any value you hold appears verbatim. Values
                             are compared, never printed. A pattern match is not
                             a secret — each needs your verdict. See docs/15.
+  audit export --box <id|name> [--from <iso>] [--to <iso>] [--out <dir>]
+                            Pack one box's transcripts, usage, auto-review verdicts,
+                            vault audit and network events for a time range as
+                            JSON Lines plus a manifest, secrets redacted (INV-433).
+                            Default range: the last 30 days.
 
 Chat:
   chat [agent] [message]    Talk to an agent. Omit the message for a REPL,
@@ -1758,6 +1763,40 @@ async function main(): Promise<number> {
       return 0;
     }
 
+    case "audit": {
+      // One box, one range, every ledger — as files (INV-433). The export is the
+      // compliance copy; the app's audit pages are the live view of the same ledgers.
+      if (rest[0] !== "export") {
+        err("usage: agentbox audit export --box <id|name> [--from <iso>] [--to <iso>] [--out <dir>]");
+        return 2;
+      }
+      const flags = new Map<string, string>();
+      for (let i = 1; i < rest.length; i += 2) {
+        const key = rest[i] ?? "";
+        if (!key.startsWith("--") || rest[i + 1] === undefined) {
+          err(`audit export: ${key || "(nothing)"} needs a value`);
+          return 2;
+        }
+        flags.set(key.slice(2), rest[i + 1]!);
+      }
+      const { exportAudit, describeExport, heldValues } = await import("./host/audit-export.ts");
+      const registry = new AgentRegistry();
+      const box = flags.get("box") ?? registry.box.id;
+      const now = new Date();
+      const from = flags.get("from") ?? new Date(now.getTime() - 30 * 86_400_000).toISOString();
+      const to = flags.get("to") ?? now.toISOString();
+      const stamp = (iso: string) => iso.slice(0, 10);
+      const outDir = flags.get("out") ?? join(agentboxHome(), "exports", `audit-${box.replace(/[^A-Za-z0-9._-]/g, "_")}-${stamp(from)}-${stamp(to)}`);
+      try {
+        const manifest = exportAudit({ home: agentboxHome(), registry, box, from, to, out: outDir, held: heldValues(agentboxHome()) });
+        for (const line of describeExport(manifest, outDir)) out(line);
+        return 0;
+      } catch (error) {
+        err(`audit export: ${error instanceof Error ? error.message : String(error)}`);
+        return 1;
+      }
+    }
+
     case "scan-records": {
       // The measurement docs/15 turns on, as something anybody can re-run. The review's
       // sharpest finding was that the original figure came from a script typed into a
@@ -1767,31 +1806,8 @@ async function main(): Promise<number> {
       // values on purpose, and adding a value-enumeration API would open the surface the
       // vault exists to keep closed. This runs on the operator's own machine, against
       // their own files, at the same trust level as reading the config.
-      const held = new Map<string, string>();
-      const collect = (source: string, object: unknown, prefix = ""): void => {
-        if (object === null || typeof object !== "object") return;
-        for (const [key, value] of Object.entries(object as Record<string, unknown>)) {
-          if (typeof value === "string") held.set(`${source}${prefix}.${key}`, value);
-          else collect(source, value, `${prefix}.${key}`);
-        }
-      };
-      try {
-        collect("config", JSON.parse(readFileSync(join(agentboxHome(), "config.json"), "utf8")));
-      } catch {
-        // No config is an ordinary state, not a scan failure.
-      }
-      try {
-        const vault = JSON.parse(readFileSync(join(agentboxHome(), "vault.json"), "utf8")) as {
-          secrets?: { id?: unknown; value?: unknown }[];
-        };
-        for (const secret of vault.secrets ?? []) {
-          if (typeof secret?.id === "string" && typeof secret?.value === "string") {
-            held.set(`vault:${secret.id}`, secret.value);
-          }
-        }
-      } catch {
-        // Likewise.
-      }
+      const { heldValues } = await import("./host/audit-export.ts");
+      const held = heldValues(agentboxHome());
       out(dim(`${held.size} held value(s) to compare against; values are never printed`));
       for (const line of describeScan(scanRecords(agentboxHome(), held))) out(line);
       return 0;
