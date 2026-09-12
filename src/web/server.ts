@@ -2990,6 +2990,9 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
           send(res, 200, {
             schedules: await orchestrator.scheduler.status(),
             armed: process.env.AGENTBOX_SCHEDULER !== "0",
+            // The places (INV-430): the view groups routines by the box they live in.
+            boxes: registry.listBoxes().map(box => ({ id: box.id, name: box.name })),
+            defaultBox: registry.box.id,
           });
           return;
         }

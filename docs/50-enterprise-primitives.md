@@ -107,6 +107,7 @@ Claude Tag 的 Workspace 是一个权限文件夹加一个运行环境，Channel
 ### J. 审计按地方切
 
 - J1 **Scheduled Work 按 box**：Automations 视图按 box 分组，显示所属 agent、上次运行、下一次、暂停状态；一次性任务单独一类。
+  *Built 2026-09-11 (INV-430):* `@at <instant>` 是一次性任务（到点触发一次，宕机 24h 内补发，之后不再）；`scheduler.status()` 带 `boxId`、`nextRun`（按 tick 同一规则算出）、`kind: schedule|once|webhook`；Automations 页按 box → Recurring / One-time / On call 分组。
 - J2 **成本按地方**：spend 账本增加 boxId 与 doorId 维度，Settings 增加"哪个 box / 哪个门最烧钱"视图（docs/47 与 R31 的延伸）。
 - J3 **网络事件日志**：relay 与 box-chrome 的出口请求落 `network-events.jsonl`（时间、box、agent、host、方法、状态、被拒原因），按时间范围与 box 查询；这是六个透镜里我们唯一完全没有的审计面。
 - J4 **审计导出**：transcript、usage、auto-review、vault audit、network events 按 box 与时间范围打包导出（jsonl + 摘要），供合规留存。

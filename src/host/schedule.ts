@@ -50,7 +50,15 @@ export interface Schedule {
   daysOfWeek?: readonly number[];
   /** Set instead of the fields above for `@every <n><unit>`. */
   everyMs?: number;
+  /**
+   * Set instead of the fields above for `@at <instant>` (INV-430): a one-time task. It fires
+   * once, at or after that instant, and never again — the recorded run is what says it is done.
+   */
+  at?: number;
 }
+
+/** How late a one-time task may still fire: a host that was down at the instant catches up within this. */
+export const ONCE_GRACE_MS = 24 * 3_600_000;
 
 const ALIASES: Record<string, string> = {
   "@hourly": "0 * * * *",
@@ -93,12 +101,19 @@ export function parseSchedule(text: string): { schedule: Schedule } | { problem:
     return { schedule: { source: text.trim(), everyMs } };
   }
 
+  const once = /^@at\s+(.+)$/i.exec(text.trim());
+  if (once !== null) {
+    const at = Date.parse(once[1]!.trim());
+    if (Number.isNaN(at)) return { problem: `"${text}": @at needs an instant such as 2026-09-12T09:00 or 2026-09-12T09:00+08:00` };
+    return { schedule: { source: text.trim(), at } };
+  }
+
   const expanded = ALIASES[raw] ?? raw;
   if (expanded.startsWith("@")) {
     return {
       problem:
         `"${text}" is not a schedule this understands. Use five cron fields ` +
-        `(\`0 9 * * 1-5\`), \`@every 30m\`, or one of ${Object.keys(ALIASES).join(", ")}.`,
+        `(\`0 9 * * 1-5\`), \`@every 30m\`, \`@at 2026-09-12T09:00\`, or one of ${Object.keys(ALIASES).join(", ")}.`,
     };
   }
 
@@ -257,6 +272,13 @@ export function isDue(
     if (lastRun === undefined) return true;
     return now.getTime() - lastRun.getTime() >= schedule.everyMs;
   }
+  if (schedule.at !== undefined) {
+    // Once: never after it has run, not before its instant, and not so late that firing
+    // would be a surprise — a task set for a morning the host slept through fires when the
+    // host wakes that day, not a month later when somebody restarts it.
+    if (lastRun !== undefined) return false;
+    return now.getTime() >= schedule.at && now.getTime() - schedule.at < ONCE_GRACE_MS;
+  }
 
   const at = wallClock(now, timezone);
   const matches =
@@ -292,7 +314,42 @@ function sameMinute(a: Date, b: Date): boolean {
  * `* 9 * * *` — sixty runs — read as "at 09:00"; and it ignored the month entirely, so a schedule
  * that fires one month a year claimed to fire every month.
  */
+/**
+ * When a schedule fires next, after an instant: for the automations view, so "next" is
+ * read from the same rules the tick uses. Undefined means never again (a one-time task
+ * that ran, or a cron that matches nothing in the coming year).
+ */
+export function nextFire(schedule: Schedule, after: Date, lastRun: Date | undefined, timezone?: string): Date | undefined {
+  if (schedule.everyMs !== undefined) {
+    return lastRun === undefined ? after : new Date(Math.max(after.getTime(), lastRun.getTime() + schedule.everyMs));
+  }
+  if (schedule.at !== undefined) {
+    if (lastRun !== undefined || after.getTime() - schedule.at >= ONCE_GRACE_MS) return undefined;
+    return new Date(Math.max(schedule.at, after.getTime()));
+  }
+  // Minute by minute from the next whole minute, jumping a day or an hour at a time when
+  // the day or the hour cannot match — a year is the horizon, as a yearly cron needs.
+  const horizon = after.getTime() + 366 * 86_400_000;
+  let t = Math.floor(after.getTime() / 60_000) * 60_000 + 60_000;
+  while (t <= horizon) {
+    const now = new Date(t);
+    const at = wallClock(now, timezone);
+    if (!within(schedule.months, at.month) || !within(schedule.daysOfMonth, at.day) || !within(schedule.daysOfWeek, at.weekday)) {
+      t += (24 - at.hour) * 3_600_000 - at.minute * 60_000;
+      continue;
+    }
+    if (!within(schedule.hours, at.hour)) {
+      t += 3_600_000 - at.minute * 60_000;
+      continue;
+    }
+    if (within(schedule.minutes, at.minute)) return now;
+    t += 60_000;
+  }
+  return undefined;
+}
+
 export function describeSchedule(schedule: Schedule): string {
+  if (schedule.at !== undefined) return `once, at ${new Date(schedule.at).toISOString().slice(0, 16).replace("T", " ")} UTC`;
   if (schedule.everyMs !== undefined) {
     const minutes = Math.round(schedule.everyMs / 60_000);
     if (minutes % 1440 === 0) return `every ${minutes / 1440} day(s)`;
@@ -790,9 +847,14 @@ export class Scheduler {
       authoredBy: string | undefined;
       because: string | undefined;
       lastRun: string | undefined;
+      /** The next firing by the tick's own rules; absent when it will not fire again. */
+      nextRun: string | undefined;
       running: boolean;
       paused: boolean;
-      kind: "schedule" | "webhook";
+      /** Recurring, one-time (`@at`), or on call (INV-430): the view groups on this. */
+      kind: "schedule" | "once" | "webhook";
+      /** The box the routine lives in; absent means the installation's own. */
+      boxId: string | undefined;
     }[]
   > {
     const skills = await this.deps.due().catch(() => []);
@@ -807,9 +869,11 @@ export class Scheduler {
       authoredBy: skill.authoredBy,
       because: skill.because,
       lastRun: this.lastRun.get(skill.slug)?.toISOString(),
+      nextRun: skill.paused === true ? undefined : nextFire(skill.schedule, this.now(), this.lastRun.get(skill.slug), skill.timezone)?.toISOString(),
       running: this.running.has(skill.slug),
       paused: skill.paused === true,
-      kind: "schedule" as const,
+      kind: skill.schedule.at !== undefined ? ("once" as const) : ("schedule" as const),
+      boxId: skill.boxId,
     }));
     // Webhook routines belong in the same list: to a person, "what runs by itself" is one
     // question, and a routine that is missing from the automations page is a routine nobody
@@ -828,9 +892,11 @@ export class Scheduler {
         authoredBy: skill.authoredBy,
         because: skill.because,
         lastRun: this.lastRun.get(skill.slug)?.toISOString(),
+        nextRun: undefined,
         running: this.running.has(skill.slug),
         paused: skill.paused === true,
         kind: "webhook" as const,
+        boxId: skill.boxId,
       })),
     ];
   }
