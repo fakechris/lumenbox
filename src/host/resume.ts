@@ -323,6 +323,29 @@ export class TurnLedger {
  * natural reading of an interrupted log is "it failed", and acting on that undoes work that
  * succeeded.
  */
+/**
+ * Whether an open turn belongs to this agent *and this conversation* (INV-435).
+ *
+ * The delivery sweep used to ask only "does this agent have an open turn?", so an answer
+ * finished in one chat waited on an unrelated turn still running in another — and, worse,
+ * a turn in a second conversation that the sweep took for the writer of the first's
+ * answer. The ledger records the conversation; custody is per conversation.
+ */
+export function openTurnFor(
+  open: readonly InterruptedTurn[],
+  agentId: string,
+  conversation?: string
+): InterruptedTurn | undefined {
+  return open.find(
+    turn =>
+      turn.agentId === agentId &&
+      (conversation === undefined || (turn.conversation ?? MAIN_CONVERSATION_ID) === conversation)
+  );
+}
+
+/** The main conversation's id, as the ledger omits it. Mirrors registry's MAIN_CONVERSATION. */
+export const MAIN_CONVERSATION_ID = "main";
+
 export function resumePrompt(about: string, interruptedAt: string): string {
   return [
     `[resumed] This turn was interrupted — the orchestrator stopped while you were working, and`,

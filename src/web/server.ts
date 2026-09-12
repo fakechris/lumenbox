@@ -1534,8 +1534,9 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
   // writing it is still open.
   const settleOwed = async () => {
     for (const owed of deliveries.pending()) {
-      // A turn still running is an answer still being written. Wait for the next pass.
-      if (orchestrator.hasOpenTurn(owed.agentId)) continue;
+      // A turn still writing *in this conversation* is an answer still being written; a
+      // turn in another chat is not (INV-435). Wait for the next pass only for the first.
+      if (orchestrator.hasOpenTurn(owed.agentId, owed.conversation)) continue;
       let reply = "";
       try {
         reply = orchestrator.replySince(owed.agentId, owed.before, owed.conversation).trim();
