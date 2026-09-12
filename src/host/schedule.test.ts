@@ -15,8 +15,10 @@ import {
   describeSchedule,
   isDue,
   knownTimezone,
+  nextFire,
   parseSchedule,
   Scheduler,
+  type Schedule,
   triggerPrompt,
   type Scheduled,
 } from "./schedule.ts";
@@ -740,4 +742,40 @@ test("a paused routine is not due, does not hear, and refuses to be fired by han
   assert.ok(!byHand.ok && /paused; turn it on first/.test(byHand.reason));
   assert.equal((await scheduler.status())[0]?.paused, true, "and the status says so");
   assert.deepEqual(lines, [], "not logged per tick");
+});
+
+// ── one-time tasks and "next" (INV-430) ────────────────────────────────────────────
+test("@at is a one-time task: it fires once at or after its instant, not before, not twice, not a day late", () => {
+  const parsed = parseSchedule("@at 2026-09-12T09:00:00Z");
+  assert.ok("schedule" in parsed);
+  const schedule = parsed.schedule;
+  assert.equal(schedule.at, Date.parse("2026-09-12T09:00:00Z"));
+  assert.equal(describeSchedule(schedule), "once, at 2026-09-12 09:00 UTC");
+  const at = new Date("2026-09-12T09:00:00Z");
+  assert.equal(isDue(schedule, new Date("2026-09-12T08:59:30Z"), undefined), false, "not before");
+  assert.equal(isDue(schedule, at, undefined), true, "at the instant");
+  assert.equal(isDue(schedule, new Date("2026-09-12T11:00:00Z"), undefined), true, "a host that slept through it catches up");
+  assert.equal(isDue(schedule, new Date("2026-09-12T11:00:00Z"), at), false, "never twice");
+  assert.equal(isDue(schedule, new Date("2026-09-14T09:00:00Z"), undefined), false, "not a day late");
+  assert.equal(nextFire(schedule, new Date("2026-09-01T00:00:00Z"), undefined)?.toISOString(), "2026-09-12T09:00:00.000Z");
+  assert.equal(nextFire(schedule, new Date("2026-09-12T10:00:00Z"), undefined)?.toISOString(), "2026-09-12T10:00:00.000Z", "overdue means now");
+  assert.equal(nextFire(schedule, new Date("2026-09-13T00:00:00Z"), at), undefined, "done means never");
+  const bad = parseSchedule("@at tomorrow-ish");
+  assert.ok("problem" in bad && /@at needs an instant/.test(bad.problem));
+});
+
+test("nextFire reads cron and interval schedules by the tick's own rules, in the routine's zone", () => {
+  const weekdays = (parseSchedule("30 6 * * 1-5") as { schedule: Schedule }).schedule;
+  // Friday 2026-09-11 07:00 UTC: next weekday 06:30 is Monday the 14th. (Zone named, so the
+  // host's own clock does not decide the answer.)
+  assert.equal(nextFire(weekdays, new Date("2026-09-11T07:00:00Z"), undefined, "UTC")?.toISOString(), "2026-09-14T06:30:00.000Z");
+  // The same, agreed in Shanghai: 06:30 there is 22:30 UTC the evening before.
+  assert.equal(nextFire(weekdays, new Date("2026-09-11T07:00:00Z"), undefined, "Asia/Shanghai")?.toISOString(), "2026-09-13T22:30:00.000Z");
+  const twice = (parseSchedule("0,30 * * * *") as { schedule: Schedule }).schedule;
+  assert.equal(nextFire(twice, new Date("2026-09-11T07:10:00Z"), undefined, "UTC")?.toISOString(), "2026-09-11T07:30:00.000Z");
+  const yearly = (parseSchedule("0 0 29 2 *") as { schedule: Schedule }).schedule;
+  assert.equal(nextFire(yearly, new Date("2026-03-01T00:00:00Z"), undefined, "UTC"), undefined, "nothing within a year is honest, not a guess");
+  const every = (parseSchedule("@every 2h") as { schedule: Schedule }).schedule;
+  assert.equal(nextFire(every, new Date("2026-09-11T07:00:00Z"), new Date("2026-09-11T06:00:00Z"))?.toISOString(), "2026-09-11T08:00:00.000Z");
+  assert.equal(nextFire(every, new Date("2026-09-11T07:00:00Z"), undefined)?.toISOString(), "2026-09-11T07:00:00.000Z", "never run means now");
 });
