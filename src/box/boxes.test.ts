@@ -109,3 +109,10 @@ test("an attached box can move to a new address and keep its id, its name and it
     cleanup();
   }
 });
+
+test("a host box is an attached box with no desktop, by kind (INV-438)", () => {
+  const record = attachedBox({ name: "mac", baseUrl: "http://127.0.0.1:13380", tokenFile: "/tmp/mac.token", kind: "host", workDir: "/Users/me/agentbox-work" });
+  assert.equal(record.kind, "host");
+  assert.equal(record.workDir, "/Users/me/agentbox-work");
+  assert.equal(attachedBox({ name: "vm", baseUrl: "http://127.0.0.1:1", tokenFile: "/t" }).kind, "attached");
+});

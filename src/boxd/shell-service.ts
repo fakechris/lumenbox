@@ -53,6 +53,17 @@ export const MAX_OUTPUT_BYTES = 2 * 1024 * 1024;
  * is where the parameter always was.
  */
 export const SPOOL_DIR = "/home/box/work/.spool";
+
+/**
+ * Where this daemon spools: the fixed path in the container, and `<work>/.spool` on a
+ * host box (INV-438), whose work directory is wherever the person put it. The property
+ * the exclusion relies on holds either way — the spool is `./.spool` *of the work tree*,
+ * never somewhere an archive of that tree would not see it as such.
+ */
+export function spoolDir(): string {
+  const work = process.env.AGENTBOX_WORK_DIR;
+  return work !== undefined && work !== "" ? `${work}/.spool` : SPOOL_DIR;
+}
 export const SPILL_MARKER = "full output kept:";
 
 /**
@@ -367,8 +378,8 @@ export function runShell(request: ExecRequest): Promise<ExecResult> {
     // One spool pair per command, named by time and a short random suffix so two
     // concurrent commands cannot collide.
     const runId = `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
-    const stdout = new BoundedOutput(SPOOL_DIR, `${runId}.out.log`);
-    const stderr = new BoundedOutput(SPOOL_DIR, `${runId}.err.log`);
+    const stdout = new BoundedOutput(spoolDir(), `${runId}.out.log`);
+    const stderr = new BoundedOutput(spoolDir(), `${runId}.err.log`);
     let timedOut = false;
     let settled = false;
 
