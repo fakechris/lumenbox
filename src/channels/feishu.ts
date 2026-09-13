@@ -300,12 +300,62 @@ export function withTimeout<T>(promise: Promise<T>, ms: number, what: string): P
   });
 }
 
-export function classifySocketLine(line: string): "ready" | "failed" | undefined {
+export function classifySocketLine(line: string): "ready" | "failed" | "retrying" | undefined {
   // "ws client ready" is the socket. The HTTP client logs a bare "client ready" from its
   // constructor, which is not evidence of anything listening.
   if (/ws client ready/i.test(line)) return "ready";
   if (/connect failed|connection failed/i.test(line)) return "failed";
+  // The SDK's own reconnect loop says this, at info level, once per attempt. It used to
+  // be dropped with the heartbeats — so a socket that had been failing to come back for
+  // eighteen hours had said exactly one thing ("socket lost") in that time (2026-09-13).
+  if (/unable to connect to the server after trying/i.test(line)) return "retrying";
   return undefined;
+}
+
+/**
+ * How long a lost socket may stay lost before the SDK's reconnect loop is no longer
+ * trusted and the client is rebuilt from scratch. The loop retries every two minutes,
+ * so this is a few attempts' worth — enough to ride out a vendor blip, short enough
+ * that a loop that has quietly stopped (a non-retryable answer ends it, and it says so
+ * only through an onError nobody used to pass) costs minutes, not a day.
+ */
+export const SOCKET_LOST_GRACE_MS = 5 * 60_000;
+
+/**
+ * The socket as this adapter last saw it, kept because the SDK will not say. `since`
+ * is when it entered this state; "lost" for longer than SOCKET_LOST_GRACE_MS is what
+ * the watchdog acts on, and what the channel list shows instead of a stale "connected".
+ */
+export interface SocketState {
+  state: "connecting" | "ready" | "lost";
+  since: number;
+  /** For "lost": the last thing the SDK said about why, when it said anything. */
+  why?: string;
+}
+
+/**
+ * A ceiling on one catch-up sweep. The API client the SDK builds has no HTTP timeout at
+ * all, so one listing that hung on a stuck proxy held `catchingUp` forever and every
+ * five-minute sweep after it returned in silence — for eighteen hours, while a message
+ * sat in the group (2026-09-13). A call past this is abandoned and said so; the next
+ * sweep starts clean.
+ */
+export const CATCH_UP_CALL_TIMEOUT_MS = 30_000;
+export const CATCH_UP_DEADLINE_MS = 120_000;
+
+/** The promise, or a thrown deadline naming what was waited for. */
+export async function withDeadline<T>(promise: Promise<T>, ms: number, what: string): Promise<T> {
+  let timer: NodeJS.Timeout | undefined;
+  const deadline = new Promise<never>((_, reject) => {
+    // Not unref'd: it is cleared in the finally either way, and a deadline the event
+    // loop is allowed to abandon is not a deadline.
+    timer = setTimeout(() => reject(new Error(`${what} did not answer within ${Math.round(ms / 1000)}s`)), ms);
+  });
+  try {
+    return await Promise.race([promise, deadline]);
+  } finally {
+    if (timer !== undefined) clearTimeout(timer);
+  }
 }
 
 /** Retry delays after a refused connect: patient enough for R35's window, loud always. */
@@ -842,6 +892,59 @@ export class FeishuChannel implements ChannelAdapter {
 
   /** Catch-up runs one at a time; a reconnect storm must not fan out into API sweeps. */
   private catchingUp = false;
+  /** When the running sweep began, so a wedged one can be recognised and abandoned. */
+  private catchUpStartedAt = 0;
+  /** The socket as last seen; undefined before start(). */
+  private socket: SocketState | undefined;
+  /** The live SDK client, held so a watchdog can close it and rebuild. */
+  private wsClient: { close(options?: { force?: boolean }): void } | undefined;
+  /** Rebuilds the socket from scratch; set by start(). */
+  private reopenSocket: ((reason: string) => void) | undefined;
+  private lostTimer: NodeJS.Timeout | undefined;
+
+  /** The socket's state in words, for the channel list; undefined before start(). */
+  socketStatus(): string | undefined {
+    if (this.socket === undefined) return undefined;
+    const ago = Math.round((Date.now() - this.socket.since) / 60_000);
+    if (this.socket.state === "ready") return `socket ready for ${ago}m`;
+    if (this.socket.state === "connecting") return `socket connecting (${ago}m)`;
+    return `socket lost ${ago}m ago${this.socket.why !== undefined ? ` (${this.socket.why})` : ""}; reconnecting`;
+  }
+
+  /** The socket's state, for tests and the watchdog. */
+  socketState(): SocketState | undefined {
+    return this.socket === undefined ? undefined : { ...this.socket };
+  }
+
+  /**
+   * Closes the socket and builds a new one, saying why. The lever the liveness check
+   * lacked: it could say "restart to rule out a dead socket", and nobody restarted.
+   */
+  reconnect(reason: string): void {
+    if (this.reopenSocket === undefined) return;
+    this.log(`channel ${this.name}: rebuilding the socket — ${reason}`);
+    this.reopenSocket(reason);
+  }
+
+  private noteSocket(state: SocketState["state"], why?: string): void {
+    if (this.socket?.state === state) return;
+    this.socket = { state, since: Date.now(), ...(why !== undefined ? { why } : {}) };
+    if (this.lostTimer !== undefined) {
+      clearTimeout(this.lostTimer);
+      this.lostTimer = undefined;
+    }
+    if (state === "lost") {
+      // The SDK's loop gets its grace; past that the client is rebuilt here, because a
+      // loop that ended on a non-retryable answer will never say so on its own.
+      this.lostTimer = setTimeout(() => {
+        this.lostTimer = undefined;
+        if (this.socket?.state === "lost") {
+          this.reconnect(`lost for ${Math.round(SOCKET_LOST_GRACE_MS / 60_000)} minutes and the SDK's own reconnect has not brought it back`);
+        }
+      }, SOCKET_LOST_GRACE_MS);
+      this.lostTimer.unref?.();
+    }
+  }
 
   /** Invitations already acted on — the vendor redelivers events, agents should not rejoin. */
   private readonly seenMeetingInvites = new Set<string>();
@@ -1304,6 +1407,7 @@ export class FeishuChannel implements ChannelAdapter {
     let retryTimer: NodeJS.Timeout | undefined;
     let readyTimer: NodeJS.Timeout | undefined;
     const openSocket = (): void => {
+      this.noteSocket("connecting");
       const logger = {
         error: (...parts: unknown[]) => {
           const line = parts.map(part => String(part)).join(" ");
@@ -1323,14 +1427,24 @@ export class FeishuChannel implements ChannelAdapter {
             retryTimer.unref?.();
             return;
           }
+          if (this.socket?.state === "lost") this.socket.why = line.slice(0, 120);
           this.log(`channel ${this.name}: ws ${line}`);
         },
         warn: () => {},
         info: (...parts: unknown[]) => {
           // Info narrates every heartbeat; the one line worth keeping is the
           // evidence of life the old "connected" log never actually had.
-          if (classifySocketLine(parts.map(part => String(part)).join(" ")) === "ready") {
+          const line = parts.map(part => String(part)).join(" ");
+          const kind = classifySocketLine(line);
+          if (kind === "retrying") {
+            // Once per attempt, on the SDK's two-minute cadence: cheap, and the difference
+            // between "reconnecting" and eighteen hours of silence.
+            this.log(`channel ${this.name}: ws ${line}`);
+            return;
+          }
+          if (kind === "ready") {
             attempts = 0;
+            this.noteSocket("ready");
             if (readyTimer !== undefined) {
               clearTimeout(readyTimer);
               readyTimer = undefined;
@@ -1373,11 +1487,29 @@ export class FeishuChannel implements ChannelAdapter {
         // A handshake that hangs on a stuck proxy or DNS otherwise hangs forever.
         handshakeTimeoutMs: SOCKET_READY_TIMEOUT_MS,
         onReconnecting: () => {
-          this.log(`channel ${this.name}: socket lost; the SDK is reconnecting`);
+          this.noteSocket("lost");
+          this.log(`channel ${this.name}: socket lost; the SDK is reconnecting (rebuilt here if not back in ${Math.round(SOCKET_LOST_GRACE_MS / 60_000)}m)`);
+        },
+        // The SDK's loop has ended for good: a non-retryable answer from the vendor, or
+        // its attempts ran out. Without this hook that was the last anyone heard.
+        onError: (error: unknown) => {
+          const why = error instanceof Error ? error.message : String(error);
+          this.noteSocket("lost", why);
+          if (retryTimer !== undefined) return;
+          const delay = SOCKET_RETRY_MS[Math.min(attempts, SOCKET_RETRY_MS.length - 1)]!;
+          attempts += 1;
+          this.log(`channel ${this.name}: the SDK gave up on the socket (${why}); rebuilding it in ${delay / 1000}s (#${attempts})`);
+          retryTimer = setTimeout(() => {
+            retryTimer = undefined;
+            openSocket();
+          }, delay);
+          retryTimer.unref?.();
         },
         // A reconnect is a connect: whatever was said while the socket was dead is in the
         // vendor's history and nowhere else, so it is swept exactly like a first connect.
         onReconnected: () => {
+          attempts = 0;
+          this.noteSocket("ready");
           this.log(`channel ${this.name}: socket reconnected; sweeping what it missed`);
           void this.catchUp().catch(error => {
             this.log(
@@ -1388,7 +1520,8 @@ export class FeishuChannel implements ChannelAdapter {
           });
         },
       });
-      // The client keeps itself alive through its socket; there is nothing to hold.
+      // Held so the watchdog can close it; the client keeps itself alive through its socket.
+      this.wsClient = wsClient as unknown as FeishuChannel["wsClient"];
       wsClient.start({ eventDispatcher: dispatcher });
       // The case the retry above cannot see: no ready, no failure, nothing. Close what
       // may be half-open and go again, with the same backoff a refused connect gets.
@@ -1414,10 +1547,32 @@ export class FeishuChannel implements ChannelAdapter {
       }, SOCKET_READY_TIMEOUT_MS);
       readyTimer.unref?.();
     };
+    this.reopenSocket = (reason: string) => {
+      if (retryTimer !== undefined) {
+        clearTimeout(retryTimer);
+        retryTimer = undefined;
+      }
+      if (readyTimer !== undefined) {
+        clearTimeout(readyTimer);
+        readyTimer = undefined;
+      }
+      try {
+        this.wsClient?.close({ force: true });
+      } catch {
+        // A client that is already gone has nothing to close.
+      }
+      this.wsClient = undefined;
+      this.socket = { state: "lost", since: this.socket?.since ?? Date.now(), why: reason };
+      openSocket();
+    };
     openSocket();
   }
 
   stop(): void {
+    if (this.lostTimer !== undefined) {
+      clearTimeout(this.lostTimer);
+      this.lostTimer = undefined;
+    }
     // The SDK offers no close; the process ending is the close. Said rather than hidden.
     // The consumer lock is released though, so a successor can start without a takeover.
     this.releaseLock?.();
@@ -1447,7 +1602,18 @@ export class FeishuChannel implements ChannelAdapter {
     // Every early return says so: a sweep that silently does nothing looked exactly like
     // one that found nothing (2026-09-05, a message sat in the group for an hour after a
     // restart and the log had one word to say about it: "ready").
-    if (this.catchingUp) return;
+    if (this.catchingUp) {
+      const runningFor = Date.now() - this.catchUpStartedAt;
+      if (runningFor < CATCH_UP_DEADLINE_MS) {
+        this.log(`channel ${this.name}: catch-up skipped — a sweep started ${Math.round(runningFor / 1000)}s ago is still running`);
+        return;
+      }
+      // A sweep this old is not running, it is stuck — behind a call that never came
+      // back. It is abandoned (its promise, if it ever settles, finds catchingUp already
+      // false and changes nothing) and this one starts clean.
+      this.log(`channel ${this.name}: abandoning a catch-up sweep stuck for ${Math.round(runningFor / 1000)}s; starting a fresh one`);
+      this.catchingUp = false;
+    }
     if (this.apiClient === undefined || this.receiveMessage === undefined) {
       this.log(`channel ${this.name}: catch-up skipped — ${this.apiClient === undefined ? "no API client yet" : "no message handler yet"}`);
       return;
@@ -1466,6 +1632,7 @@ export class FeishuChannel implements ChannelAdapter {
     if (!Number.isFinite(from)) return;
 
     this.catchingUp = true;
+    this.catchUpStartedAt = Date.now();
     let tooOld = 0;
     let replayed = 0;
     const threads = new Set<string>(this.recentThreads?.() ?? []);
@@ -1529,16 +1696,20 @@ export class FeishuChannel implements ChannelAdapter {
       const collected: FeishuHistoryMessage[] = [];
       let pageToken: string | undefined;
       for (let page = 0; page < CATCH_UP_MAX_PAGES; page++) {
-        const history = await this.apiClient!.im.message.list({
-          params: {
-            container_id_type: containerType,
-            container_id: containerId,
-            start_time: String(from),
-            sort_type: "ByCreateTimeDesc",
-            page_size: 50,
-            ...(pageToken !== undefined ? { page_token: pageToken } : {}),
-          },
-        });
+        const history = await withDeadline(
+          this.apiClient!.im.message.list({
+            params: {
+              container_id_type: containerType,
+              container_id: containerId,
+              start_time: String(from),
+              sort_type: "ByCreateTimeDesc",
+              page_size: 50,
+              ...(pageToken !== undefined ? { page_token: pageToken } : {}),
+            },
+          }),
+          CATCH_UP_CALL_TIMEOUT_MS,
+          `listing messages in ${containerId}`
+        );
         const data = history?.data ?? history;
         const items = (data?.items ?? []) as FeishuHistoryMessage[];
         collected.push(...items);
@@ -1554,9 +1725,13 @@ export class FeishuChannel implements ChannelAdapter {
       const items: { chat_id?: string }[] = [];
       let chatPage: string | undefined;
       for (let page = 0; page < 5; page++) {
-        const chats = await this.apiClient.im.chat.list({
-          params: { page_size: 20, ...(chatPage !== undefined ? { page_token: chatPage } : {}) },
-        });
+        const chats = await withDeadline(
+          this.apiClient.im.chat.list({
+            params: { page_size: 20, ...(chatPage !== undefined ? { page_token: chatPage } : {}) },
+          }),
+          CATCH_UP_CALL_TIMEOUT_MS,
+          "listing chats"
+        );
         const data = (chats?.data ?? chats) as { items?: { chat_id?: string }[]; has_more?: boolean; page_token?: string } | undefined;
         items.push(...(data?.items ?? []));
         if (data?.has_more !== true || data.page_token === undefined) break;

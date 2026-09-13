@@ -47,6 +47,22 @@ These close loops the recent work opened. Days, not weeks, each.
 
 ### ~~R35~~ — shipped 2026-08-29 (`0514602`)
 
+**2026-09-13 follow-up — the socket that died and nobody rebuilt.** A message in the group
+got no reply; the log had "channel health: feishu has heard nothing for 2h … restart to rule
+out the second" and "socket lost; the SDK is reconnecting", then eighteen hours of nothing.
+Four silences stacked: (1) the SDK's reconnect loop narrates each attempt at *info*, which
+we dropped with the heartbeats, and ends for good on a non-retryable answer through an
+`onError` hook we never passed; (2) the five-minute catch-up sweep that exists for exactly
+this case wedged behind `im.chat.list` — the SDK's API client is `axios.create()` with no
+timeout — and every later sweep returned on `if (catchingUp) return` without a word; (3) the
+channel list said "connected", set once at start; (4) the log had no timestamps. Fixed in
+one change: SDK "unable to connect" lines are logged, `onError` rebuilds the client with
+backoff, a socket "lost" for five minutes is rebuilt by a watchdog, each sweep call has a
+30 s deadline and a sweep stuck past two minutes is abandoned out loud, the channel list
+shows the socket as last seen, the liveness check *rebuilds* a suspect socket instead of
+advising a restart, and `server.log` lines carry an ISO stamp. `src/channels/feishu.ts`,
+`manager.ts`, `web/server.ts`, `electron/main.cjs`.
+
 Both defects closed by one mechanism: the SDK's own logger is the witness (it exposes no
 state and no close hook), a custom logger classifies its lines, `connect failed` schedules
 a narrated retry on a 5/15/30/60s backoff, `client ready` resets it and logs

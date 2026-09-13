@@ -6,7 +6,7 @@
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { FeishuChannel, SOCKET_RETRY_MS, classifySocketLine, meetingInvitePrompt, parseMeetingInvite, looksLikeMarkdown, markdownPost, renderApprovalCard, renderCard, renderQuestionCard, splitChatKey } from "./feishu.ts";
+import { FeishuChannel, SOCKET_RETRY_MS, classifySocketLine, withDeadline, meetingInvitePrompt, parseMeetingInvite, looksLikeMarkdown, markdownPost, renderApprovalCard, renderCard, renderQuestionCard, splitChatKey } from "./feishu.ts";
 import type { TaskCardState } from "./manager.ts";
 
 interface CardShape {
@@ -765,4 +765,71 @@ test("the task card streams the reply while it is written, and drops it when set
   assert.ok(streaming.elements.some(element => element.tag === "hr"), "set off from the status line");
   const settled = renderCard({ ...base, status: "done" }) as { elements: { tag: string }[] };
   assert.ok(!settled.elements.some(element => element.tag === "hr"), "nothing streams on a settled card");
+});
+
+// ── the silent socket (2026-09-13) ─────────────────────────────────────────────────
+test("the SDK's own reconnect attempts are recognised, not dropped with the heartbeats", () => {
+  assert.equal(classifySocketLine("ws unable to connect to the server after trying 3 times\")"), "retrying");
+  assert.equal(classifySocketLine("[ws] reconnect"), undefined);
+});
+
+test("withDeadline gives a hung call a name and an end", async () => {
+  await assert.rejects(withDeadline(new Promise(() => {}), 20, "listing chats"), /listing chats did not answer within 0s/);
+  assert.equal(await withDeadline(Promise.resolve("fine"), 20, "x"), "fine");
+});
+
+test("a sweep stuck behind a call that never answered is abandoned, and the next one runs; a young one is only skipped", async () => {
+  const lines: string[] = [];
+  const adapter = new FeishuChannel("a", "b", line => lines.push(line));
+  const internals = adapter as unknown as {
+    apiClient: unknown;
+    receiveMessage: (data: unknown) => unknown;
+    catchUp: () => Promise<void>;
+    catchingUp: boolean;
+    catchUpStartedAt: number;
+  };
+  internals.receiveMessage = () => ({});
+  let listed = 0;
+  internals.apiClient = {
+    im: {
+      chat: { list: async () => { listed += 1; return { data: { items: [] } }; } },
+      message: { list: async () => ({ data: { items: [] } }) },
+    },
+  };
+  adapter.lastInboundAt = () => new Date(Date.now() - 60_000).toISOString();
+
+  internals.catchingUp = true;
+  internals.catchUpStartedAt = Date.now() - 10_000;
+  await internals.catchUp();
+  assert.equal(listed, 0, "a sweep that started ten seconds ago is left alone");
+  assert.ok(lines.some(l => /catch-up skipped — a sweep started 10s ago is still running/.test(l)), lines.join("\n"));
+
+  internals.catchUpStartedAt = Date.now() - 300_000;
+  await internals.catchUp();
+  assert.equal(listed, 1, "the stuck one is abandoned and a fresh sweep lists the chats");
+  assert.ok(lines.some(l => /abandoning a catch-up sweep stuck for 300s/.test(l)));
+  assert.equal(internals.catchingUp, false);
+});
+
+test("the socket's state is kept and said; reconnect rebuilds it with the reason on record", () => {
+  const lines: string[] = [];
+  const adapter = new FeishuChannel("a", "b", line => lines.push(line));
+  const internals = adapter as unknown as { noteSocket: (state: "connecting" | "ready" | "lost", why?: string) => void; reopenSocket?: (reason: string) => void; lostTimer?: NodeJS.Timeout };
+  assert.equal(adapter.socketStatus(), undefined, "nothing before start");
+  internals.noteSocket("connecting");
+  assert.match(adapter.socketStatus() ?? "", /^socket connecting/);
+  internals.noteSocket("ready");
+  assert.match(adapter.socketStatus() ?? "", /^socket ready for 0m/);
+  internals.noteSocket("lost", "pullConnectConfig failed: code=99991663");
+  assert.match(adapter.socketStatus() ?? "", /^socket lost 0m ago \(pullConnectConfig failed: code=99991663\); reconnecting/);
+  assert.ok(internals.lostTimer !== undefined, "a lost socket starts the watchdog");
+  clearTimeout(internals.lostTimer);
+
+  const reasons: string[] = [];
+  adapter.reconnect("nobody home");
+  assert.equal(reasons.length, 0, "before start there is nothing to rebuild");
+  internals.reopenSocket = reason => reasons.push(reason);
+  adapter.reconnect("silent for hours while the account answers");
+  assert.deepEqual(reasons, ["silent for hours while the account answers"]);
+  assert.ok(lines.some(l => /rebuilding the socket — silent for hours/.test(l)));
 });
