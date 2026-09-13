@@ -316,3 +316,33 @@ Three of the fixes above shipped, and one measured fact changed the plan:
   the skills index stops at 12k characters naming what it left out.
 - **Measured**: Bob's system prompt plus 31 tool descriptions is ≈25.6k tokens; a whole request
   ≈55k. The next cut is the tool descriptions, not memory.
+
+
+## Memory selection: the fixture floor (INV-147, 2026-09-13)
+
+Astra's revision turned "select well" into invariants over a fixed sample. The sample is
+`src/host/memory-fixtures.ts` — 24 synthetic cases in six shapes (relevant, synonym,
+conflict, retracted, wrong-box, distractor), each naming required / allowed / forbidden
+records by text — and `src/host/memory-quality.test.ts` runs them through the
+deterministic layers with a *faithful* scripted selector, so a failure is the
+machinery's, not the model's:
+
+- **A1** forbidden records never reach the body, the index or the selector's candidate
+  list; the wrong-box cases run against a real `AgentRegistry` with two boxes, both ways.
+- **A2** a retraction withdraws its fact in every phrasing `dedupeKey` collapses; a fact
+  re-recorded *after* its retraction is live again.
+- **A3** the change this landed: `nearDuplicate` (one key wholly inside the other, or
+  ≥0.8 Jaccard at three tokens and more) collapses rephrasings in `recall` and in the
+  selector's candidates. Before it, six phrasings of "prefers short answers" filled a
+  200-character budget and pushed out the one fact the question needed. A changed value
+  ("eu-west-1" → "us-east-1") is deliberately *not* a near-duplicate: that is a conflict.
+- **A4** conflicting facts are both kept, each with its own date, for the reader to weigh;
+  a retraction plus a new fact is the verified correction chain and shows only the new one.
+- **A5** the report, printed by the test and re-runnable with
+  `node --experimental-transform-types --test src/host/memory-quality.test.ts`: over the
+  20 non-registry fixtures, scored recall alone finds 16/21 required records before and
+  after (the remaining 5 need the selector, which the fixtures also exercise), and
+  near-duplicates in the body go from 11 to 0 at unchanged budgets.
+
+Not here: a vector store, training, or a real-model comparison in `npm test`. The
+fixtures are a regression floor, not a claim of significance.
