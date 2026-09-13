@@ -1067,6 +1067,7 @@ export const APP_HTML = String.raw`<!doctype html>
       <a href="#" class="tab" data-settab="doors">Doors</a>
       <a href="#" class="tab" data-settab="team">Team</a>
       <a href="#" class="tab" data-settab="mine">Mine</a>
+      <a href="#" class="tab" data-settab="memory">Memory</a>
     </div>
     <div class="fieldnote" id="setwelcome" style="display:none;border:1px solid var(--border);border-radius:var(--radius-md);padding:10px 12px;color:var(--text-soft)">
       Welcome. LumenBox needs two things before agents can work: a model provider with a
@@ -1094,6 +1095,19 @@ export const APP_HTML = String.raw`<!doctype html>
     <div class="fieldnote">Saved to ~/.agentbox/config.json on this machine, mode 0600. A key stored
       here is used only when the environment does not already provide one, and is never placed
       inside the box. Changes take effect when the server restarts.</div>
+    <div class="field" data-tier="installation" data-settab="memory">
+      <label>Memory</label>
+      <div class="fieldnote" style="margin:0">What each agent has kept, by box. Open an agent to read the lines, withdraw one, or
+        correct it. A correction is an append — the old line is withdrawn and the new one kept — with a version check,
+        so two people cannot silently overwrite each other; every change is audited in ~/.agentbox/memory-audit.jsonl and
+        recalled by the next turn.</div>
+      <div id="setmemstate" class="fieldnote" style="margin:4px 0 0"></div>
+      <div id="setmemsummary" style="display:flex;flex-direction:column;gap:6px"></div>
+      <div id="setmemdetail" style="display:none;margin-top:8px;border:1px solid var(--border);border-radius:var(--radius-md);padding:8px 10px">
+        <div style="display:flex;gap:8px;align-items:baseline"><strong id="setmemtitle" style="flex:1"></strong><a href="#" id="setmemback" class="dim" style="font-size:12px">back</a></div>
+        <div id="setmemlines" style="display:flex;flex-direction:column;gap:6px;margin-top:6px;max-height:320px;overflow:auto"></div>
+      </div>
+    </div>
     <div class="field" data-tier="installation" id="setboxwrap" data-settab="boxes">
       <label>Box</label>
       <div class="fieldnote" id="setboxstate" style="margin:0"></div>
@@ -1520,6 +1534,7 @@ function openSettings(tab) {
       renderBoxSection();
       renderChannels();
       renderSecrets(); renderConnectors();
+      renderMemorySummary();
       renderScopes();
       $("settingswrap").style.display = "flex";
     })
@@ -1659,63 +1674,8 @@ document.getElementById("setsecrets").addEventListener("click", function (event)
     .then(renderSecrets);
 });
 
-/** Connected services (INV-422): providers to connect, connections that exist, never a token. */
-var connProviders = [];
-
-function renderConnectors() {
-  fetch("/api/connectors")
-    .then(function (r) { if (r.status === 403) { $("setconns").innerHTML = ""; return null; } return r.json(); })
-    .then(function (data) {
-      if (!data) return;
-      connProviders = data.providers || [];
-      var select = $("setconnprov");
-      if (!select.options.length) {
-        select.innerHTML = connProviders.map(function (p) { return '<option value="' + esc(p.id) + '">' + esc(p.title) + "</option>"; }).join("");
-        select.onchange = function () {
-          var p = connProviders.filter(function (x) { return x.id === select.value; })[0];
-          $("setconnsetup").textContent = p ? p.setup : "";
-        };
-        select.onchange();
-      }
-      var connected = data.connected || [];
-      $("setconns").innerHTML = connected.length
-        ? connected.map(function (c) {
-            var who = (c.grants || []).map(function (g) { return g.holder; }).join(", ") || "nobody yet";
-            var until = c.expiresAt ? " · until " + c.expiresAt.slice(0, 16).replace("T", " ") : "";
-            return '<div style="display:flex;gap:8px;align-items:center;font-size:13px">' +
-              '<span class="mono" style="min-width:110px;font-weight:600">' + esc(c.provider) + "</span>" +
-              '<span class="dim" style="flex:1;font-size:12px;overflow:hidden;text-overflow:ellipsis">' + esc(who + until) + "</span>" +
-              '<a href="#" data-connrm="' + esc(c.id) + '" style="color:var(--danger);font-size:12px">Disconnect</a></div>';
-          }).join("")
-        : '<div class="fieldnote" style="margin:0">Nothing connected yet.</div>';
-    })
-    .catch(function () {});
-}
-
-$("setconnadd").onclick = function () {
-  var provider = $("setconnprov").value;
-  var p = connProviders.filter(function (x) { return x.id === provider; })[0];
-  var body = { provider: provider, clientId: $("setconnid").value.trim(), clientSecret: $("setconnsecret").value, grant: $("setconngrant").value.trim() };
-  if (!body.clientId || !body.clientSecret) { $("setconnstatus").textContent = "Both the id and the secret are needed."; return; }
-  var code = p && p.kind === "authorization_code";
-  $("setconnstatus").textContent = code ? "Opening the provider…" : "Connecting…";
-  fetch(code ? "/api/connectors/begin" : "/api/connectors/connect", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body) })
-    .then(function (r) { return r.json().then(function (d) { if (!r.ok) throw new Error(d.error || "failed"); return d; }); })
-    .then(function (d) {
-      $("setconnsecret").value = "";
-      if (d.url) { window.open(d.url, "_blank"); $("setconnstatus").textContent = "Finish the authorization in the new tab, then this list updates."; }
-      else { $("setconnstatus").textContent = "Connected."; }
-      renderConnectors();
-    })
-    .catch(function (error) { $("setconnstatus").textContent = error.message; });
-};
-
-document.getElementById("setconns").addEventListener("click", function (event) {
-  var id = event.target.getAttribute && event.target.getAttribute("data-connrm");
-  if (!id) return;
-  event.preventDefault();
-  fetch("/api/vault/remove", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ id: id }) })
-    .then(function () { renderConnectors(); renderSecrets(); });
+      renderSecrets(); renderConnectors();
+      renderMemorySummary();
 });
 
 /** The people list: one row per identity, grouped nowhere — flat and editable. */

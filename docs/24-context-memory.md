@@ -346,3 +346,22 @@ machinery's, not the model's:
 
 Not here: a vector store, training, or a real-model comparison in `npm test`. The
 fixtures are a regression floor, not a claim of significance.
+## Memory, browsed and corrected (INV-426, 2026-09-13)
+
+Settings → Memory. The installation view lists, per box, each agent the caller may drive
+(`refusalToDrive` applied to the list as to every driving route, so a private agent is
+neither named nor openable; a viewer gets 403 on the summary too — what agents remember
+about people is not for watching). Opening an agent shows every line of its own and its
+box's shared memory in file order, withdrawn lines marked rather than hidden (by what:
+a `RememberFact.replaces`, "recorded again", a web withdrawal by name).
+
+Two acts, both appends through the registry the turns read: **withdraw** (a retraction,
+`source: web:<who>`) and **edit** (a retraction plus a new fact). Each names the
+`version` it saw — a digest of (at, kind, text) — and is refused with 409 and the current
+line when that key's live line has moved, or with "no longer live" when an edit changed
+the value and the old key has no live line; the person decides again. No last-write-wins.
+Every change is one line in `~/.agentbox/memory-audit.jsonl` (who, when, agent, scope,
+key, from/to version, before/after text). `src/host/memory-admin.ts`,
+`src/web/server.ts` (`/api/memory`, `/api/memory/agent`, `/api/memory/change`),
+`memory-admin.test.ts` (view, versions, recall and mirror agree, audit) and
+`web/memory-routes.test.ts` (authorization both ways, 409, 404 vs empty).
