@@ -70,6 +70,7 @@ import {
   estimateTokens,
   SUMMARY_WORD_CAP,
   summaryEntry,
+  clampSummaryToBudget,
   type HistoryEntry,
   type SummaryEntry,
 } from "./compaction.ts";
@@ -890,14 +891,29 @@ async function summarise(
  * tool-free, text-in-text-out request, and paying the agent's own model for it is the most
  * expensive way to do the least interesting work.
  */
-async function compactHistory(options: {
+/** What one compaction pass did, with the numbers a tuning pass needs (INV-148 A5). */
+export interface CompactedEvent {
+  type: "compacted";
+  covers: number;
+  summarised: boolean;
+  detail: string;
+  /** Estimated tokens of the entries replaced, and of what replaced them. */
+  tokensBefore?: number;
+  tokensAfter?: number;
+  /** Wall time of the pass, summariser included. */
+  ms?: number;
+  /** True when the summary came from the background pass. */
+  prepared?: boolean;
+}
+
+export async function compactHistory(options: {
   history: TranscriptEntry[];
   agent: AgentRecord;
   registry: AgentRegistry;
   client: Anthropic;
   provider: ProviderProfile;
   log: (line: string) => void;
-  onCompacted: (event: { type: "compacted"; covers: number; summarised: boolean; detail: string }) => void;
+  onCompacted: (event: CompactedEvent) => void;
   /** The entries a summary is replacing, before it does. */
   onSummarised?: (entries: readonly TranscriptEntry[]) => void;
   conversation: string;
@@ -977,6 +993,7 @@ async function compactHistory(options: {
   }
 
   log(`compacting history: ${cut.reason}`);
+  const startedAt = Date.now();
 
   let entry: SummaryEntry;
   try {
@@ -1036,16 +1053,41 @@ async function compactHistory(options: {
         entry = bare as typeof entry;
       }
     }
+    // The last bound (INV-148 A4): whatever the summariser answered, the adopted entry
+    // plus the tail it fronts fits the trigger. Clipping, not another model call — the
+    // pass must end, and it ends here.
+    const clamped = clampSummaryToBudget(entry, active.slice(entry.covers), policy);
+    if (clamped !== entry) {
+      log(`the summary was longer than the request can carry; clipped from ${entry.text.length} to ${clamped.text.length} characters`);
+      entry = clamped;
+    }
+    const tokensBefore = estimateTokens(active.slice(0, entry.covers));
+    const tokensAfter = estimateTokens([entry]);
     const detail =
-      `summarised ${entry.covers} entries: about ${estimateTokens(olderEntries)} tokens ` +
-      `became ${estimateTokens([entry])}` +
+      `summarised ${entry.covers} entries: about ${tokensBefore} tokens ` +
+      `became ${tokensAfter}` +
       (ready === undefined ? "" : " (prepared in the background)");
     log(detail);
     // What the summary is about to stand in for goes to the memory extractor first: a
     // decision or a constraint in those entries survives as a record even if the summary
     // loses it (TurnkeyAI's pre-compaction flush; ours reuses the ordinary extractor).
-    onSummarised?.(active.slice(0, entry.covers));
-    onCompacted({ type: "compacted", covers: entry.covers, summarised: true, detail });
+    // In its own guard (INV-148 A3): a flush that throws must not turn a summary that
+    // exists into a dropped-history marker — the flush is insurance, not a gate.
+    try {
+      onSummarised?.(active.slice(0, entry.covers));
+    } catch (flushError) {
+      log(`pre-compaction memory flush failed (${flushError instanceof Error ? flushError.message : String(flushError)}); the summary stands`);
+    }
+    onCompacted({
+      type: "compacted",
+      covers: entry.covers,
+      summarised: true,
+      detail,
+      tokensBefore,
+      tokensAfter,
+      ms: Date.now() - startedAt,
+      prepared: ready !== undefined,
+    });
   } catch (error) {
     const reason = error instanceof Error ? error.message : String(error);
     // A refusing summariser buys a cooldown: asking again in ten seconds costs money
@@ -1060,14 +1102,30 @@ async function compactHistory(options: {
     if (pinnedEntries.length > 0) entry = { ...entry, pinned: pinnedEntries };
     const detail = `could not summarise (${reason}); dropped ${cut.index} entries instead`;
     log(detail);
-    onCompacted({ type: "compacted", covers: cut.index, summarised: false, detail });
+    onCompacted({
+      type: "compacted",
+      covers: cut.index,
+      summarised: false,
+      detail,
+      tokensBefore: estimateTokens(olderEntries),
+      tokensAfter: estimateTokens([entry]),
+      ms: Date.now() - startedAt,
+    });
   } finally {
     // Consumed either way: a summary that was adopted must not be adopted twice, and one that
     // failed must not be retried forever.
     pendingSummaries.delete(summaryKey);
   }
 
-  registry.appendTranscript(agent.id, entry, conversation);
+  // The one write. If it fails, nothing was adopted: the transcript on disk still holds
+  // every entry, the request goes out uncompacted from the unchanged history, and the
+  // next turn computes again (INV-148 A3 — a crash here loses a summary, never history).
+  try {
+    registry.appendTranscript(agent.id, entry, conversation);
+  } catch (error) {
+    log(`could not record the compaction (${error instanceof Error ? error.message : String(error)}); sending uncompacted and trying again next turn`);
+    return history;
+  }
   return [...history, entry as TranscriptEntry];
 }
 
