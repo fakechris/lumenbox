@@ -114,13 +114,30 @@ function withToolPath(env) {
  */
 const LOG_DIR = path.join(os.homedir(), "Library", "Logs", "LumenBox");
 const LOG_FILE = path.join(LOG_DIR, "server.log");
+// Each line stamped when it is written: the first real read of this log (2026-09-13)
+// had "socket lost" and "heard nothing for 2h" with no way to tell whether that was
+// ten minutes or a day ago. A chunk may end mid-line, so the stamp goes on the next
+// line start, not on every chunk.
+let logAtLineStart = true;
 function appendServerLog(text) {
   try {
     fs.mkdirSync(LOG_DIR, { recursive: true });
     try {
       if (fs.statSync(LOG_FILE).size > 5 * 1024 * 1024) fs.renameSync(LOG_FILE, `${LOG_FILE}.1`);
     } catch {}
-    fs.appendFileSync(LOG_FILE, text);
+    const stamp = `${new Date().toISOString()} `;
+    let out = "";
+    for (const piece of text.split(/(\n)/)) {
+      if (piece === "") continue;
+      if (piece === "\n") {
+        out += piece;
+        logAtLineStart = true;
+        continue;
+      }
+      out += (logAtLineStart ? stamp : "") + piece;
+      logAtLineStart = false;
+    }
+    fs.appendFileSync(LOG_FILE, out);
   } catch {}
 }
 

@@ -164,6 +164,15 @@ export interface ChannelAdapter {
    * quiet afternoon.
    */
   catchUp?(): Promise<void>;
+  /**
+   * The inbound socket as the adapter last saw it, in words — "socket ready for 40m",
+   * "socket lost 7m ago; reconnecting". Shown instead of a "connected" that was set once
+   * at start and never revised (2026-09-13: eighteen hours of "connected" over a dead
+   * socket). Absent on an adapter without a long-lived socket.
+   */
+  socketStatus?(): string | undefined;
+  /** Closes the inbound socket and builds a new one, saying why. The liveness check's lever. */
+  reconnect?(reason: string): void;
   /** Pushes a line to where this identity's messages come from, if the wire allows it. */
   send(identity: string, text: string): Promise<void>;
   /**
@@ -857,7 +866,19 @@ export class ChannelManager {
   }
 
   list(): ChannelStatus[] {
-    return [...this.statuses.values()];
+    return [...this.statuses.values()].map(status => {
+      const adapter = this.adapters.find(candidate => candidate.name === status.name);
+      const socket = status.running ? adapter?.socketStatus?.() : undefined;
+      return socket === undefined ? status : { ...status, detail: socket };
+    });
+  }
+
+  /** Rebuilds one door's socket, when the door can. False when it cannot or is unknown. */
+  reconnect(name: string, reason: string): boolean {
+    const adapter = this.adapters.find(candidate => candidate.name === name);
+    if (adapter?.reconnect === undefined) return false;
+    adapter.reconnect(reason);
+    return true;
   }
 
   /** Remembers who to notify for an agent — and, when known, the thread they spoke in. */

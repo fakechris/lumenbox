@@ -1737,6 +1737,26 @@ test("a door added while running opens live; a name already live is refused", as
   assert.ok(manager.list().some(s => s.name === "feishu-work" && s.running));
 });
 
+test("the channel list shows the socket as the door last saw it, not the 'connected' set at start", async () => {
+  const lines: string[] = [];
+  const socketed = Object.assign(testAdapter(), {
+    name: "feishu",
+    socketStatus: () => "socket lost 7m ago; reconnecting",
+    reconnect: (reason: string) => lines.push(`rebuilt: ${reason}`),
+  });
+  const manager = new ChannelManager({ mayDrive: () => true, ask: async () => "ok", log: () => {} });
+  manager.register(socketed, true, "starting");
+  manager.register(testAdapter(), true, "starting");
+  await started(manager);
+  const feishu = manager.list().find(s => s.name === "feishu");
+  assert.equal(feishu?.running, true);
+  assert.equal(feishu?.detail, "socket lost 7m ago; reconnecting");
+  assert.equal(manager.list().find(s => s.name === "telegram")?.detail, "connected", "a door without a socket keeps the plain word");
+  assert.equal(manager.reconnect("feishu", "silent for hours"), true);
+  assert.equal(manager.reconnect("telegram", "silent for hours"), false, "a door that cannot rebuild says so");
+  assert.deepEqual(lines, ["rebuilt: silent for hours"]);
+});
+
 test("「团队」answers on the wire with the door's roster; work words do not trigger it", async () => {
   const adapter = testAdapter();
   const asked: string[] = [];

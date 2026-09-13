@@ -1675,6 +1675,13 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
         channelState.set(channel, health.state);
         if (health.state !== "ok") log(`channel health: ${health.detail}`);
         else log(`channel health: ${channel} is answering again`);
+        // Repair, not advice: "restart to rule out a dead socket" sat in the log for
+        // eighteen hours with nobody to read it (2026-09-13). A door whose account
+        // answers but whose socket has been silent for hours gets its socket rebuilt,
+        // once per suspect episode, and the next sweep replays what it missed.
+        if (health.state === "suspect" && channels.reconnect(channel, "silent for hours while the account answers")) {
+          log(`channel health: ${channel}: socket rebuilt to rule out a dead connection`);
+        }
       }
     })();
     // Five minutes, not ten: measured on 2026-09-05, a message sat unanswered fourteen minutes
