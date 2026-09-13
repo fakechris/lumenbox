@@ -116,7 +116,9 @@ async function main() {
   report(chosen, results, runs);
   const out = flag("--json");
   if (out !== undefined) {
-    writeFileSync(out, JSON.stringify({ at: new Date().toISOString(), results }, null, 2));
+    // Provider and model travel with the numbers: the release scorecard compares two runs
+    // only when they came from the same wire (INV-130), and it has to be able to tell.
+    writeFileSync(out, JSON.stringify({ at: new Date().toISOString(), provider: provider.label, model: provider.model, runs, results }, null, 2));
     console.log(`\nRaw numbers: ${out}`);
   }
 }
