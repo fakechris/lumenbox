@@ -99,8 +99,9 @@ export interface EpisodeResult {
 }
 
 /** A box that keeps its files in a Map, so a scenario can assert on what landed. */
-function memoryBox(files: Map<string, string>): BoxClient {
+function memoryBox(files: Map<string, string>, overrides: Partial<BoxClient> = {}): BoxClient {
   const box = {
+    ...overrides,
     exec: async (command: string) => {
       // Enough shell for a scenario: mkdir and echo-into-file are what agents actually reach for.
       const redirect = /^echo\s+"?(.*?)"?\s*>\s*(\S+)$/.exec(command.trim());
@@ -156,6 +157,13 @@ export interface EpisodeOptions {
   files?: Record<string, string>;
   /** Stops an episode that will not settle. Default 200. */
   maxRounds?: number;
+  /**
+   * Box operations a journey scripts (INV-480): a browser that answers with a fixed page,
+   * say. Everything not given keeps the memory box's behaviour.
+   */
+  box?: Partial<BoxClient>;
+  /** A desktop index, so browser tools are offered and reach the scripted box rather than refusing for want of a display. */
+  display?: number;
 }
 
 /**
@@ -168,7 +176,7 @@ export async function runEpisode(options: EpisodeOptions): Promise<EpisodeResult
   const home = mkdtempSync(join(tmpdir(), "agentbox-scenario-"));
   const registry = new AgentRegistry(home);
   const files = new Map<string, string>(Object.entries(options.files ?? {}));
-  const box = memoryBox(files);
+  const box = memoryBox(files, options.box ?? {});
   const observations: Observation[] = [];
   const rounds = new Map<string, number>();
   let clock = 0;
@@ -238,6 +246,7 @@ export async function runEpisode(options: EpisodeOptions): Promise<EpisodeResult
       bus,
       box,
       resolution: undefined,
+      ...(options.display !== undefined ? { displayIndex: options.display } : {}),
       conversation,
       askUser: async (input: { agentName: string; question: string }) => {
         observations.push({ at: clock++, agent: input.agentName, kind: "call", name: "AskUser:delivered", input: { question: input.question } });
