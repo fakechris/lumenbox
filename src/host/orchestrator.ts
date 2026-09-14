@@ -891,6 +891,34 @@ export class Orchestrator {
     return this.connectAttached(entry);
   }
 
+  /** Boxes an admin cut off (INV-434): no client, no reconnect, no new work routed there. */
+  private readonly revokedBoxes = new Set<string>();
+
+  /**
+   * Cuts a registered box off: its client is dropped so every tool on it answers "the box
+   * is not running", and a reconnect is refused. What was running on that machine is not
+   * stopped from here and is not claimed to be; the count of agents living there is the
+   * honest measure of what may still be in flight.
+   */
+  revokeBox(boxId: string): { agentsLiving: number; wasConnected: boolean } {
+    const wasConnected = this.boxClients.has(boxId);
+    this.revokedBoxes.add(boxId);
+    this.boxClients.delete(boxId);
+    this.skillCaches.delete(boxId);
+    this.forgetDesktopsOf(boxId);
+    return { agentsLiving: this.registry.agentsIn(boxId).length, wasConnected };
+  }
+
+  isBoxRevoked(boxId: string): boolean {
+    return this.revokedBoxes.has(boxId);
+  }
+
+  /** A reconnect for a registered box: the same id, possibly a new address; refused when revoked. */
+  async reconnectBox(entry: BoxEntry): Promise<{ connected: boolean; detail: string }> {
+    if (this.revokedBoxes.has(entry.id)) return { connected: false, detail: `${entry.name}: revoked; a reconnect is refused` };
+    return this.connectAttached(entry);
+  }
+
   detachBox(nameOrId: string): BoxEntry {
     const entry = this.registry.detachBox(nameOrId);
     this.boxClients.delete(entry.id);

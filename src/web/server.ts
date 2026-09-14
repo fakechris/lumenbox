@@ -191,6 +191,7 @@ import {
 import { Vault, type Grant } from "../host/vault.ts";
 import { OAuthGate } from "../host/oauth.ts";
 import { MemoryAdmin } from "../host/memory-admin.ts";
+import { ConnectCodeStore } from "../box/connect-codes.ts";
 import { seedStarterSkills } from "../host/starter-skills.ts";
 import { firstRunCue } from "../host/prompt.ts";
 import { readBoxToken } from "../box/docker.ts";
@@ -453,6 +454,9 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
   // Memory as a person sees and corrects it (INV-426): reads the registry's files, writes
   // retractions and edits with a version check, audits to memory-audit.jsonl.
   const memoryAdmin = new MemoryAdmin(registry, join(agentboxHome(), "memory-audit.jsonl"));
+  // Connection codes and runner credentials (INV-434): how a machine elsewhere becomes a
+  // box here. Codes and credentials are stored hashed and never logged.
+  const connectCodes = new ConnectCodeStore(join(agentboxHome(), "connect.json"), registry.box.id);
 
   // Channel task cards listen here while their ask is in flight: each listener is a
   // narrow filter on (agent, conversation), added before the prompt and removed after
@@ -2578,6 +2582,72 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
         await handleWebhook(req, res, webhookMatch[1]!, url.searchParams);
         return;
       }
+      // A runner registering its boxd (INV-434). Before the UI's token gate, because the
+      // runner holds no UI credential: it holds a one-time code, or after that its own
+      // runner credential. Both are checked here; nothing else on this path is reachable.
+      if (route === "POST /api/boxes/register") {
+        const body = await readJson(req);
+        const name = String(body.name ?? "").trim();
+        const baseUrl = String(body.baseUrl ?? "").trim();
+        const token = typeof body.token === "string" ? body.token.trim() : "";
+        const version = typeof body.version === "string" ? body.version.trim() : undefined;
+        const writeToken = (boxName: string): string => {
+          const dir = join(agentboxHome(), "boxes");
+          mkdirSync(dir, { recursive: true, mode: 0o700 });
+          const tokenFile = join(dir, `${boxName}.token`);
+          writeFileSync(tokenFile, `${token}\n`, { mode: 0o600 });
+          return tokenFile;
+        };
+        if (typeof body.runner === "string" && body.runner.trim() !== "") {
+          // A reconnect: the same registration, idempotent; a new address if it moved.
+          const verdict = connectCodes.verifyRunner(body.runner);
+          if (!verdict.ok) {
+            log(`boxes: a reconnect was refused (${verdict.why})`);
+            send(res, verdict.why === "revoked" ? 403 : 401, { error: verdict.why === "revoked" ? "This box was revoked here; it will not be reconnected." : "Unknown runner credential." });
+            return;
+          }
+          const entry = registry.boxById(verdict.registration.boxId);
+          if (entry === undefined) {
+            send(res, 410, { error: "The box this credential names is no longer registered here." });
+            return;
+          }
+          if (baseUrl !== "" && token !== "") registry.updateBox(entry.id, { endpoint: { baseUrl, tokenFile: writeToken(entry.name) } });
+          connectCodes.seen(entry.id, version);
+          const result = await orchestrator.reconnectBox(registry.boxById(entry.id)!);
+          log(`boxes: ${entry.name} reconnected: ${result.detail}`);
+          send(res, 200, { boxId: entry.id, name: entry.name, ...result, state: connectCodes.stateOf(entry.id, result.connected) });
+          return;
+        }
+        const code = String(body.code ?? "");
+        const redeemed = connectCodes.redeem(code);
+        if (!redeemed.ok) {
+          log(`boxes: a connection code was refused (${redeemed.why})`);
+          const why = { unknown: "Unknown connection code.", expired: "That connection code has expired; mint a new one.", used: "That connection code was already used; a code is one-time.", "wrong-installation": "That code belongs to another installation." }[redeemed.why];
+          send(res, redeemed.why === "wrong-installation" ? 403 : 409, { error: why });
+          return;
+        }
+        const boxName = redeemed.name ?? name;
+        if (boxName === "" || baseUrl === "" || token === "") {
+          send(res, 400, { error: "A registration needs a name, a baseUrl and the daemon token." });
+          return;
+        }
+        let entry: ReturnType<typeof attachedBox>;
+        try {
+          entry = attachedBox({ name: boxName, baseUrl, tokenFile: writeToken(boxName), ...(body.kind === "host" ? { kind: "host" as const } : {}) });
+        } catch (error) {
+          send(res, 400, { error: error instanceof Error ? error.message : String(error) });
+          return;
+        }
+        try {
+          const result = await orchestrator.attachBox(entry);
+          const runner = connectCodes.register({ boxId: entry.id, name: entry.name, ...(version !== undefined ? { version } : {}) });
+          log(`boxes: ${entry.name} (${entry.id}) registered with a connection code: ${result.detail}`);
+          send(res, 200, { boxId: entry.id, name: entry.name, runner, ...result, state: connectCodes.stateOf(entry.id, result.connected) });
+        } catch (error) {
+          send(res, 409, { error: error instanceof Error ? error.message : String(error) });
+        }
+        return;
+      }
       const routeMatch = ROUTE_PATH.exec(url.pathname);
       if (routeMatch !== null) {
         const key = routeMatch[1]!;
@@ -4661,7 +4731,14 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
 
         // ── boxes (docs/30) ─────────────────────────────────────────────────────────
         if (route === "GET /api/boxes") {
-          send(res, 200, { boxes: orchestrator.boxStatus(), own: registry.box.id });
+          // Registered boxes carry their lifecycle state and version (INV-434).
+          const boxes = orchestrator.boxStatus().map(box => {
+            const registration = connectCodes.registrationOf(box.id);
+            return registration === undefined
+              ? box
+              : { ...box, state: connectCodes.stateOf(box.id, box.connected), ...(registration.version !== undefined ? { version: registration.version } : {}), lastSeenAt: registration.lastSeenAt };
+          });
+          send(res, 200, { boxes, own: registry.box.id });
           return;
         }
 
@@ -4697,6 +4774,43 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
         }
 
         // Attaching is an owner's act: it puts another machine's authority in the roster.
+        // Connection codes (INV-434): minted by an admin, one-time, fifteen minutes; the list
+        // shows expiry and who, never a code. Revocation cuts a registered box off.
+        if (route === "POST /api/boxes/connect-codes") {
+          if (refusedRole("admin")) return;
+          const body = await readJson(req);
+          const minted = connectCodes.mint({ by: caller.userId ?? "operator", ...(typeof body.name === "string" && body.name.trim() !== "" ? { name: body.name.trim() } : {}) });
+          log(`boxes: a connection code was minted by ${caller.userId ?? "operator"}, expires ${minted.expiresAt}`);
+          send(res, 200, minted);
+          return;
+        }
+        if (route === "GET /api/boxes/connect-codes") {
+          if (refusedRole("admin")) return;
+          send(res, 200, { pending: connectCodes.listPending() });
+          return;
+        }
+        if (route === "POST /api/boxes/revoke") {
+          if (refusedRole("admin")) return;
+          const body = await readJson(req);
+          const entry = registry.listBoxes().find(candidate => candidate.id === body.box || candidate.name === body.box);
+          if (entry === undefined || entry.id === registry.box.id) {
+            send(res, 404, { error: `No registered box ${String(body.box ?? "")}.` });
+            return;
+          }
+          connectCodes.revoke(entry.id, caller.userId ?? "operator");
+          const cut = orchestrator.revokeBox(entry.id);
+          log(`boxes: ${entry.name} revoked by ${caller.userId ?? "operator"}; ${cut.agentsLiving} agent(s) live there`);
+          send(res, 200, {
+            revoked: entry.id,
+            agentsLiving: cut.agentsLiving,
+            note:
+              `${entry.name} takes no new connections or work from here. ` +
+              (cut.agentsLiving > 0 ? `${cut.agentsLiving} agent(s) live there; anything they were running on that machine is not known to have stopped. ` : "") +
+              "Stop the runner on its own machine to be sure.",
+          });
+          return;
+        }
+
         if (route === "POST /api/boxes/attach") {
           if (refused()) return;
           const body = await readJson(req);
