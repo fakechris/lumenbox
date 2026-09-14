@@ -12,7 +12,8 @@ import { join } from "node:path";
 import type Anthropic from "@anthropic-ai/sdk";
 import { AgentRegistry } from "../agents/registry.ts";
 import type { BoxClient } from "../box/client.ts";
-import { Orchestrator } from "./orchestrator.ts";
+import { Orchestrator, TemplateVersionConflict } from "./orchestrator.ts";
+import { readLearnings } from "./learnings.ts";
 import { parseSkillFile } from "./skills.ts";
 import { SkillProvenance } from "./skill-provenance.ts";
 import { fakeModel } from "./testing/fake-model.ts";
@@ -231,6 +232,53 @@ test("a setup turn that installs only part of the recipe is reported as such, an
     const renamed = orchestrator.importTemplate(TEMPLATE, { name: "下载专家 2", log: () => undefined });
     assert.equal(renamed.agent.profile.name, "下载专家 2");
     await renamed.settled;
+  } finally {
+    cleanup();
+  }
+});
+
+test("the same share imported twice is one bot; a newer version is a conflict until update, then the existing bot takes it up", async () => {
+  const { root, registry, files, provenance, cleanup } = fixture();
+  try {
+    const cues: string[] = [];
+    const client = fakeModel(({ params }) => {
+      const last = params.messages[params.messages.length - 1];
+      cues.push(typeof last?.content === "string" ? last.content : "");
+      return message([text("ok")]);
+    });
+    const orchestrator = new Orchestrator({ registry, client, useBox: true, boxClient: fakeBox(files), inbox: null, turns: null, skillProvenance: provenance, hooks: null, claims: null, tasks: null, scopes: null, mcp: null });
+    await orchestrator.connectBox();
+    const learningsDir = join(root, "learnings");
+    const v1 = { ...TEMPLATE, meta: { createdBy: "kin", version: 1 }, learnings: [{ host: "shop.test", lines: ["- 2026-09-01 ✅ the coupon field is under Order summary (by Ada)"] }] };
+
+    const first = orchestrator.importTemplate(v1, { shareId: "share_abc", connected: [], learningsDir, log: () => undefined });
+    await first.settled;
+    assert.equal(first.existing, undefined);
+    assert.equal(first.agent.profile.importedFrom?.version, 1);
+    assert.equal(readLearnings("shop.test", learningsDir).length, 1, "A1: the site note is in the receiver's store before the first turn");
+
+    // Same share, same version: nothing created.
+    const again = orchestrator.importTemplate(v1, { shareId: "share_abc", connected: [], learningsDir, log: () => undefined });
+    assert.equal(again.existing, "same-version");
+    assert.equal(again.agent.id, first.agent.id);
+    assert.equal(registry.list().length, 1);
+    assert.equal(readLearnings("shop.test", learningsDir).length, 1, "and the note is not appended twice");
+
+    // A newer version: refused with both versions named, until update is asked for.
+    const v2 = { ...v1, meta: { createdBy: "kin", version: 2 } };
+    assert.throws(() => orchestrator.importTemplate(v2, { shareId: "share_abc", connected: [], learningsDir, log: () => undefined }), (error: unknown) => error instanceof TemplateVersionConflict && /at v1; this is v2/.test(error.message));
+    assert.equal(registry.list().length, 1);
+
+    const updated = orchestrator.importTemplate(v2, { shareId: "share_abc", connected: [], learningsDir, update: true, log: () => undefined });
+    assert.equal(updated.existing, "updated");
+    assert.equal(updated.agent.id, first.agent.id);
+    await updated.settled;
+    assert.equal(registry.list().length, 1, "no second bot");
+    assert.equal(registry.get(first.agent.id).profile.importedFrom?.version, 2);
+    const updateCue = cues.find(cue => /has a new version \(v2, you have v1\)/.test(cue));
+    assert.ok(updateCue !== undefined, cues.join("\n---\n"));
+    assert.match(updateCue, /authored_by: template:share_abc, in place/);
+    assert.match(updateCue, /Do not overwrite a file you or a person changed here/);
   } finally {
     cleanup();
   }

@@ -6,6 +6,7 @@
  * orchestration you see at runtime is emergent, not encoded.
  */
 
+import { learningsDir } from "./learnings.ts";
 import type Anthropic from "@anthropic-ai/sdk";
 import { AgentBus, type BusEvent, type InboundMessage, type Lane } from "../agents/bus.ts";
 import { Inbox, inboxPath } from "../agents/inbox.ts";
@@ -41,6 +42,8 @@ import {
   describeTemplate,
   pendingOf,
   describeBundleGaps,
+  installLearnings,
+  TEMPLATE_CUE,
   resolveBundleRefs,
   type BundleResolution,
   type TemplatePending,
@@ -175,6 +178,9 @@ export interface OrchestratorOptions {
    */
   deliverToChat?: (chatKey: string, text: string) => Promise<void>;
 }
+
+/** A newer version of an already-imported template arrived without `update` (INV-411). */
+export class TemplateVersionConflict extends Error {}
 
 export class Orchestrator {
   readonly registry: AgentRegistry;
@@ -1083,8 +1089,12 @@ export class Orchestrator {
       }
       const version = this.stagedTemplates(agentId).length + 1;
       const path = join(dir, `v${version}.json`);
-      writeFileSync(path, `${JSON.stringify(template, null, 2)}\n`);
-      this.onTemplateStaged?.({ agentId, id, version, template });
+      // The version travels inside the document (INV-411 A3): a receiver that already has
+      // this template at this version does not create a second bot, and one that has an
+      // older version is told, not silently overwritten.
+      const stamped: BotTemplate = { ...template, meta: { ...(template.meta ?? {}), version } };
+      writeFileSync(path, `${JSON.stringify(stamped, null, 2)}\n`);
+      this.onTemplateStaged?.({ agentId, id, version, template: stamped });
       return { id, version, path };
     },
   };
@@ -1154,6 +1164,14 @@ export class Orchestrator {
       connected?: readonly string[];
       /** How the template's bundle references resolved against the target box (INV-421). */
       bundleResolutions?: readonly BundleResolution[];
+      /**
+       * A newer version of a template already imported here (INV-411 A3): with this, the
+       * existing bot is asked to update its recipe instead of a second bot being created,
+       * and told not to overwrite what it or a person changed locally.
+       */
+      update?: boolean;
+      /** Where this installation keeps site learnings; the template's are installed there. */
+      learningsDir?: string;
       /** The importing person's tool set, which the new agent may not exceed. */
       creatorTools?: readonly string[];
       /** Where the template came from, for the profile's `importedFrom`. */
@@ -1162,10 +1180,65 @@ export class Orchestrator {
       boxId?: string;
       log?: (line: string) => void;
     } = {}
-  ): { agent: AgentRecord; id: string; pending: TemplatePending; settled: Promise<ReconcileResult | undefined> } {
+  ): { agent: AgentRecord; id: string; pending: TemplatePending; settled: Promise<ReconcileResult | undefined>; existing?: "same-version" | "updated" } {
     const log = options.log ?? ((line: string) => console.error(`[template] ${line}`));
     const id = options.shareId ?? templateId();
     const name = options.name?.trim() || template.profile.name;
+    // The same share, again (INV-411 A3): the version says whether this is the same
+    // recipe — one bot, not two — or a newer one, which is the existing bot's to take up
+    // on request, never a second install and never a silent overwrite.
+    const already = options.shareId !== undefined ? this.registry.list().find(agent => agent.profile.importedFrom?.id === options.shareId) : undefined;
+    if (already !== undefined) {
+      const have = already.profile.importedFrom?.version;
+      const incoming = template.meta?.version;
+      if (have === incoming || incoming === undefined) {
+        log(`import ${id}: ${already.profile.name} already carries this template${have !== undefined ? ` (v${have})` : ""}; nothing created`);
+        return { agent: already, id, pending: pendingOf(template, options.connected ?? [], options.bundleResolutions ?? []), settled: Promise.resolve(undefined), existing: "same-version" };
+      }
+      if (options.update !== true) {
+        throw new TemplateVersionConflict(
+          `${already.profile.name} was imported from this template at v${have ?? "?"}; this is v${incoming}. Import again with update to have ${already.profile.name} take up the new version — nothing is overwritten without that.`
+        );
+      }
+      const learned = installLearnings(template, id, options.learningsDir ?? learningsDir());
+      const pending = pendingOf(template, options.connected ?? [], options.bundleResolutions ?? []);
+      const settled = (async (): Promise<ReconcileResult | undefined> => {
+        const box = this.boxFor(already.id);
+        if (box === undefined) return undefined;
+        const dir = recipeDirFor(already.profile.name);
+        const recipePath = `${dir}/recipe.md`;
+        try {
+          await box.exec(`mkdir -p ${dir}`, { timeoutMs: 15_000, actor: "host:template" });
+          await box.writeFile(recipePath, renderRecipe(template, { self: already.profile.name }));
+          await box.writeFile(`${dir}/recipe.json`, `${JSON.stringify(template, null, 2)}\n`);
+        } catch (error) {
+          log(`import ${id}: could not place the updated recipe: ${error instanceof Error ? error.message : String(error)}`);
+          return undefined;
+        }
+        this.registry.update(already.id, { importedFrom: { ...(already.profile.importedFrom ?? { id, name: template.profile.name, at: new Date().toISOString() }), version: incoming } });
+        this.templateSetups.set(already.id, id);
+        try {
+          await this.prompt(
+            already.id,
+            `${TEMPLATE_CUE} The template you were created from, "${template.profile.name}", has a new version (v${incoming}, you have v${have ?? "?"}). ` +
+              `Its recipe is at ${recipePath}. Update what came from the template: skills and routines whose file says authored_by: template:${id}, in place. ` +
+              "Do not overwrite a file you or a person changed here (any file without that stamp, or whose body you edited); say which ones you left as they are. " +
+              "Routines you write stay paused. Then one line on what changed; do not recite the recipe." +
+              (pending.bundles.length > 0 ? ` Capabilities this version expects that this box lacks: ${describeBundleGaps(pending.bundles).join("; ")}.` : ""),
+            options.caller,
+            { steerable: false, lane: "background" }
+          );
+        } catch (error) {
+          log(`import ${id}: update turn failed: ${error instanceof Error ? error.message : String(error)}`);
+        } finally {
+          this.templateSetups.delete(already.id);
+        }
+        const result = await this.reconcileTemplate(template, already.id, id, box);
+        appendLine(join(agentboxHome(), "template-imports.jsonl"), JSON.stringify({ at: new Date().toISOString(), id, agentId: already.id, update: true, learned, ...result }));
+        return result;
+      })();
+      return { agent: already, id, pending, settled, existing: "updated" };
+    }
     if (this.registry.list().some(agent => agent.profile.name === name)) {
       throw new Error(`An agent named ${name} already exists here; pass another name.`);
     }
@@ -1184,10 +1257,15 @@ export class Orchestrator {
         id,
         name: template.profile.name,
         ...(template.meta?.createdBy !== undefined ? { createdBy: template.meta.createdBy } : {}),
+        ...(template.meta?.version !== undefined ? { version: template.meta.version } : {}),
         at: new Date().toISOString(),
       },
     });
     const pending = pendingOf(template, options.connected ?? [], options.bundleResolutions ?? []);
+    // The site notes come first and land host-side (INV-411 A1): the new bot's first
+    // browser_open reads them with everyone else's, before it has taken a single turn.
+    const learned = installLearnings(template, id, options.learningsDir ?? learningsDir());
+    if (learned.installed > 0 || learned.skipped > 0) log(`import ${id}: ${learned.installed} site note(s) installed, ${learned.skipped} already here`);
     if (pending.bundles.length > 0) log(`import ${id}: ${describeBundleGaps(pending.bundles).join("; ")}`);
     log(`import ${id}: created ${agent.profile.name} (${agent.id}) from "${template.profile.name}"`);
 

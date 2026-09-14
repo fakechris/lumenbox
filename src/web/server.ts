@@ -4875,6 +4875,7 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
           try {
             imported = orchestrator.importTemplate(parsed.template, {
               bundleResolutions,
+              ...(body.update === true ? { update: true } : {}),
               caller,
               ...(typeof body.name === "string" && body.name.trim() !== "" ? { name: body.name.trim() } : {}),
               ...(shareId !== undefined ? { shareId } : {}),
@@ -4887,7 +4888,11 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
             return;
           }
           const { agent, pending } = imported;
-          broadcast({ type: "template_import", agentId: agent.id, agentName: agent.profile.name, summary: `Adding ${parsed.template.profile.name}…`, complete: false });
+          if (imported.existing === "same-version") {
+            send(res, 200, { id: agent.id, name: agent.profile.name, templateId: imported.id, pending, existing: true, summary: `${agent.profile.name} already carries this version; nothing was created.` });
+            return;
+          }
+          broadcast({ type: "template_import", agentId: agent.id, agentName: agent.profile.name, summary: imported.existing === "updated" ? `Updating ${agent.profile.name}…` : `Adding ${parsed.template.profile.name}…`, complete: false });
           void imported.settled.then(result => {
             broadcast({
               type: "template_import",
