@@ -28,6 +28,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
       x11-apps \
       ffmpeg \
       xfwm4 xfconf dbus-x11 \
+      at-spi2-core python3-gi gir1.2-atspi-2.0 \
       novnc websockify \
       fonts-dejavu-core fonts-noto-color-emoji \
     && rm -rf /var/lib/apt/lists/*
@@ -316,6 +317,7 @@ COPY reference /opt/box-reference
 COPY entrypoint.sh /usr/local/bin/entrypoint.sh
 COPY start-display /usr/local/bin/start-display
 COPY box-chrome /usr/local/bin/box-chrome
+COPY box-ax /usr/local/bin/box-ax
 COPY box-clip /usr/local/bin/box-clip
 COPY box-doctor /usr/local/bin/box-doctor
 COPY box-init /usr/local/bin/box-init

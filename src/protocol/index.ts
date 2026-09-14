@@ -64,6 +64,13 @@ export type ComputerAction =
   /** The windows on this desktop, so a window can be found without hunting visually. */
   | { action: "list_windows" }
   /**
+   * The operable controls of the active window, from the accessibility tree (INV-412):
+   * role, name, state and where each is on screen. Nothing when the app exposes no tree.
+   */
+  | { action: "list_elements" }
+  /** Clicks a control by the ref `list_elements` gave it; resolved to coordinates in the box. */
+  | { action: "click_element"; ref: string; button?: MouseButton; count?: number; modifiers?: string }
+  /**
    * Raises a window and gives it focus.
    *
    * Needed before typing into it: synthetic input is global — it goes to whatever holds
@@ -117,6 +124,21 @@ export interface ComputerRequest {
    * the X11 executor.
    */
   bind_unmapped_characters?: boolean;
+}
+
+/** One operable control of the active window, as the accessibility tree describes it. */
+export interface ElementInfo {
+  /** `a1`, `a2`, … — what click_element takes. Valid until the next list_elements. */
+  ref: string;
+  role: string;
+  name: string;
+  /** Screen rectangle at API resolution. */
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+  /** checked, selected, expanded, focused, pressed, editable, disabled. */
+  states: readonly string[];
 }
 
 export interface WindowInfo {
@@ -249,6 +271,12 @@ export interface ComputerResult {
   cursor_position?: { x: number; y: number };
   /** Present when the batch included list_windows. */
   windows?: readonly WindowInfo[];
+  /** Present when the batch included list_elements and the active window exposed a tree. */
+  elements?: readonly ElementInfo[];
+  /** Why there are no elements, when list_elements was asked and the tree was not there. */
+  elements_note?: string;
+  /** The window the elements came from. */
+  elements_window?: { title: string; app: string; truncated: boolean };
   action_count: number;
   duration_ms: number;
   error?: string;
