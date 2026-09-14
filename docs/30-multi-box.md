@@ -184,3 +184,27 @@ needs it.
 - Any automatic failover between boxes. A box that is unreachable is reported (`box status`,
   the state panel) and its agents wait; choosing another machine for someone's work is a
   person's decision.
+
+
+## Connection codes (INV-434, 2026-09-14)
+
+A machine elsewhere becomes a box here without anyone pasting a daemon token into a
+form. An admin mints a one-time code (`POST /api/boxes/connect-codes`, fifteen minutes,
+bound to this installation by its own box id, listed by expiry and minter, never by
+value). On the runner, `agentbox box connect --control <this installation> --url <its
+boxd> --token-file <its token> --code lbx-…` posts to `POST /api/boxes/register`, which
+sits before the UI's token gate and is authenticated by the code alone: the box is
+attached, connected (or registered offline and said so), and the reply carries a
+**runner credential** — not the code, not the daemon token — that the CLI keeps under
+`~/.agentbox/runner/` and presents to reconnect after a move or a restart. A reconnect is
+the same box at a possibly new address, never a second one; a spent code is 409, a code
+from another installation 403, an unknown credential 401.
+
+States on `/api/boxes`: **pending** (a code, nothing redeemed), **connected**,
+**offline** (registered, not answering), **revoked**. `POST /api/boxes/revoke` cuts a
+box off: its client is dropped so every tool on it answers "the box is not running", a
+reconnect is refused, and the reply says how many agents live there and that whatever
+they were running on that machine is not known to have stopped — stop the runner there to
+be sure. Codes and credentials are stored hashed in `~/.agentbox/connect.json` and never
+logged. Not built: a vendor multi-tenant control plane; this is one installation's
+registry of its own machines (`src/box/connect-codes.ts`, `web/box-register.test.ts`).

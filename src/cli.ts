@@ -555,6 +555,63 @@ async function cmdBoxAttach(argv: string[]): Promise<number> {
  * and in the daemon's environment (what the file service enforces). Foreground, because a
  * process on the person's own machine should be one they can see and stop.
  */
+/**
+ * Registers this machine's boxd with another installation, using a one-time connection
+ * code it minted (INV-434). The daemon token travels once, over the control URL; what is
+ * kept here is the runner credential the reply carries, so `box connect --runner` can
+ * reconnect after a move or a restart without a new code.
+ */
+async function cmdBoxConnect(argv: string[]): Promise<number> {
+  const { flags } = parseArgs(argv);
+  const control = String(flags.get("--control") ?? "").replace(/\/$/, "");
+  const baseUrl = String(flags.get("--url") ?? "");
+  const tokenFile = String(flags.get("--token-file") ?? "");
+  const name = String(flags.get("--name") ?? "");
+  const code = String(flags.get("--code") ?? "");
+  const stateDir = join(agentboxHome(), "runner");
+  const stateFile = join(stateDir, `${name || "box"}.json`);
+  let runner = String(flags.get("--runner") ?? "");
+  if (runner === "" && code === "" && existsSync(stateFile)) {
+    try {
+      runner = String((JSON.parse(readFileSync(stateFile, "utf8")) as { runner?: string }).runner ?? "");
+    } catch {
+      // No saved credential: a code is needed.
+    }
+  }
+  if (control === "" || baseUrl === "" || tokenFile === "" || (code === "" && runner === "")) {
+    err("Usage: agentbox box connect --control http://host:7777 --url http://this-machine:13370 --token-file F --code lbx-… [--name N] [--kind host]\n       agentbox box connect --control … --url … --token-file F --name N   (reconnect with the saved runner credential)");
+    return 1;
+  }
+  let token: string;
+  try {
+    token = readFileSync(tokenFile, "utf8").trim();
+  } catch {
+    err(`Cannot read the daemon token at ${tokenFile}.`);
+    return 1;
+  }
+  const version = String((JSON.parse(readFileSync(resolve(dirname(fileURLToPath(import.meta.url)), "..", "package.json"), "utf8")) as { version?: string }).version ?? "");
+  const body = runner !== "" ? { runner, name, baseUrl, token, version } : { code, name, baseUrl, token, version, ...(flags.get("--kind") === "host" ? { kind: "host" } : {}) };
+  let response: Response;
+  try {
+    response = await fetch(`${control}/api/boxes/register`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body), signal: AbortSignal.timeout(30_000) });
+  } catch (error) {
+    err(`Could not reach ${control}: ${error instanceof Error ? error.message : String(error)}`);
+    return 1;
+  }
+  const reply = (await response.json().catch(() => ({}))) as { error?: string; boxId?: string; name?: string; runner?: string; connected?: boolean; detail?: string; state?: string };
+  if (!response.ok) {
+    err(`Registration refused (${response.status}): ${reply.error ?? "no reason given"}`);
+    return 1;
+  }
+  if (reply.runner !== undefined) {
+    mkdirSync(stateDir, { recursive: true, mode: 0o700 });
+    writeFileSync(stateFile, `${JSON.stringify({ control, boxId: reply.boxId, name: reply.name, runner: reply.runner }, null, 2)}\n`, { mode: 0o600 });
+  }
+  out(`${bold(reply.name ?? name)} is registered at ${control} as ${reply.boxId} — ${reply.state ?? (reply.connected ? "connected" : "offline")}: ${reply.detail ?? ""}`);
+  if (reply.runner !== undefined) out(dim(`runner credential saved to ${stateFile}; reconnect with the same command without --code`));
+  return 0;
+}
+
 async function cmdHostUp(argv: string[]): Promise<number> {
   const [name, ...flagList] = argv;
   const { flags, positional } = parseArgs(flagList);
@@ -1340,6 +1397,10 @@ State:
                             whether any value you hold appears verbatim. Values
                             are compared, never printed. A pattern match is not
                             a secret — each needs your verdict. See docs/15.
+  box connect --control URL --url BOXURL --token-file F --code lbx-…
+                            Register this machine's boxd with another installation
+                            using a one-time connection code (INV-434); without
+                            --code, reconnect with the saved runner credential.
   audit export --box <id|name> [--from <iso>] [--to <iso>] [--out <dir>]
                             Pack one box's transcripts, usage, auto-review verdicts,
                             vault audit and network events for a time range as
@@ -1453,6 +1514,8 @@ async function main(): Promise<number> {
           return cmdBoxBuild();
         case "up":
           return cmdBoxUp(boxArgs);
+        case "connect":
+          return cmdBoxConnect(boxArgs);
         case "status":
           return cmdBoxStatus();
         case "down":
