@@ -19,6 +19,7 @@
  * still hold the shape? Every scenario here is a real episode that went wrong.
  */
 
+import type { Skill } from "./skills.ts";
 import type Anthropic from "@anthropic-ai/sdk";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -164,6 +165,8 @@ export interface EpisodeOptions {
   box?: Partial<BoxClient>;
   /** A desktop index, so browser tools are offered and reach the scripted box rather than refusing for want of a display. */
   display?: number;
+  /** Skills the agents are offered, as the prompt would list them (INV-481). */
+  skills?: readonly Skill[];
 }
 
 /**
@@ -247,6 +250,7 @@ export async function runEpisode(options: EpisodeOptions): Promise<EpisodeResult
       box,
       resolution: undefined,
       ...(options.display !== undefined ? { displayIndex: options.display } : {}),
+      ...(options.skills !== undefined ? { skills: options.skills } : {}),
       conversation,
       askUser: async (input: { agentName: string; question: string }) => {
         observations.push({ at: clock++, agent: input.agentName, kind: "call", name: "AskUser:delivered", input: { question: input.question } });
