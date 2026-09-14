@@ -316,7 +316,7 @@ or clicks Resume on the automations row (`POST /api/schedules/resume {slug}`, ne
 with the missing label in `status()`. `paused:` is one frontmatter key, honoured by
 `SkillScheduler` and reported by `status()` — no second store.
 
-### 5.1 Bundles by name, resolved by the receiver (INV-421, 2026-09-14)
+### 5.6 Bundles by name, resolved by the receiver (INV-421, 2026-09-14)
 
 A template now carries `bundles`: the names of the bundles the author's box had, and what
 the work used from each — connector slugs, secret *ids*, skills, MCP servers, repository
