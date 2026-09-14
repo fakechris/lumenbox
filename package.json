@@ -30,7 +30,8 @@
     "dist:mac": "electron-builder --mac",
     "dist:win": "electron-builder --win",
     "dist:linux": "electron-builder --linux",
-    "release:check": "npm run check && npm run build && node scripts/release-check.mjs"
+    "release:check": "npm run check && npm run build && node scripts/release-check.mjs && node --experimental-transform-types scripts/scorecard.mjs --checked",
+    "release:scorecard": "node --experimental-transform-types scripts/scorecard.mjs"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.122.0",

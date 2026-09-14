@@ -44,6 +44,26 @@ shape that made it bad, script the model to behave that way, and assert on the s
 lines in `scenario.test.ts` are worth more than a paragraph in a prompt, because the paragraph is
 not checked and the scenario is.
 
+## The release scorecard (INV-130, 2026-09-13)
+
+`npm run release:check` now ends by writing a scorecard (`src/host/scorecard.ts`,
+`scripts/scorecard.mjs`) to `~/.agentbox/scorecards/<time>-<commit>.json`: commit and
+dirty flag, node version, build time, and three sections kept apart — **deterministic**
+(the hermetic suite), **artifact** (`release-check.mjs`), **model** (the live scenarios,
+only from a `--scenario out.json` the operator produced under their own credentials;
+never run here, never PASS when absent — SKIPPED, on the card and in the output).
+
+Verdicts: **PASS** (all three ran clean against a comparable baseline), **FAIL** (a hard
+gate: tests or artifact), **INCOMPLETE** (a section skipped, no baseline, or a baseline
+from another provider/model/fixture version — refused and said), **REVIEW** (a check's
+pass rate fell against a comparable baseline; a named person accepts it with
+`--accept "scenario/check=name"` or the build waits). Exit codes 0/1/2/3;
+`npm run release:scorecard` is the strict standalone gate, and under `release:check` an
+INCOMPLETE card does not fail a developer machine's build. `--inject-failure` proves the
+gate closes (A3) and is exercised by `scorecard.test.ts` through the real script. The
+scenario runner's `--json` now records provider and model so two runs are comparable
+or known not to be.
+
 ## What it is not
 
 The scripted model is not a model. It cannot tell you whether a real one is sensible, only whether
