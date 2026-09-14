@@ -127,3 +127,29 @@ test("migrating scopes is a plan: secrets travel, tools stay on the agent, chats
   assert.match(text, /Cy: scope missing does not exist/);
   assert.ok(file.bundles.some(b => b.id === "orphan"), "an unattached scope still becomes a bundle");
 });
+
+test("a box's bundles travel as refs (ids, never values), and a person attaches an existing bundle idempotently — never one made from a name", () => {
+  const { store, cleanup } = tempStore();
+  try {
+    store.save({
+      bundles: [
+        { id: "gh", name: "github", secretIds: ["GITHUB_TOKEN"], connectors: ["mcp:github"], repositories: [{ path: "/repo", mode: "ro" }] },
+        { id: "notes", name: "notes", secretIds: [] },
+      ],
+      boxes: { [alpha.id]: ["gh"] },
+    });
+    assert.deepEqual(store.refsFor(alpha), [{ name: "github", needs: { connectors: ["mcp:github"], secretIds: ["GITHUB_TOKEN"], repositories: [{ path: "/repo", mode: "ro" }] } }]);
+    assert.deepEqual(store.refsFor(beta), []);
+
+    assert.equal(store.attach(beta, "notes"), true);
+    assert.equal(store.attach(beta, "notes"), true, "binding twice is one attachment");
+    assert.deepEqual(store.attachments().boxes[beta.id], ["notes"]);
+    assert.equal(store.attach(beta, "github-from-a-template"), false, "a name is not a bundle");
+    assert.deepEqual(store.forBox(beta)?.names, ["notes"]);
+    // What the box may do is read from the store each time, so a detached bundle is gone at the next look.
+    store.save({ bundles: store.list(), boxes: { [alpha.id]: ["gh"] } });
+    assert.equal(store.forBox(beta), undefined);
+  } finally {
+    cleanup();
+  }
+});

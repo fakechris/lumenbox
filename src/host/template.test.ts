@@ -15,6 +15,8 @@ import {
   packTemplate,
   parseTemplate,
   pendingOf,
+  resolveBundleRefs,
+  describeBundleGaps,
   reconcile,
   renderRecipe,
   resolvePlaceholders,
@@ -312,3 +314,52 @@ test("a catalog expert is a template in the same format, with nothing to install
   assert.ok(!TEMPLATE_SETUP_TOOLS.includes("bash") && !TEMPLATE_SETUP_TOOLS.includes("SendToAgent") && TEMPLATE_SETUP_TOOLS.includes("write_file"));
 });
 
+
+// ── bundle references: names and needs, resolved by the receiver (INV-421) ─────────────
+test("a template names the bundles its work used, with needs and never values; the receiver resolves them", () => {
+  const withBundles = parseTemplate({
+    ...fixture(),
+    bundles: [
+      { name: "github", needs: { connectors: ["mcp:github"], secretIds: ["GITHUB_TOKEN"], repositories: [{ path: "/repo", mode: "rw" }] } },
+      { name: "notes" },
+    ],
+  });
+  assert.ok("template" in withBundles);
+  assert.deepEqual(withBundles.template.bundles?.map(b => b.name), ["github", "notes"]);
+  const leaking = parseTemplate({ ...fixture(), bundles: [{ name: "github", needs: { token: "ghp_x" } }] });
+  assert.ok("problem" in leaking && /never its values/.test(leaking.problem));
+
+  const refs = withBundles.template.bundles!;
+  // Nothing attached: both missing, with what the work used them for.
+  const none = resolveBundleRefs(refs, undefined);
+  assert.deepEqual(none.map(r => r.status), ["missing", "missing"]);
+  assert.match(describeBundleGaps(none)[0]!, /bundle "github" is not attached to this box \(the work used it for: connector mcp:github, secret GITHUB_TOKEN, \/repo rw\)/);
+  // Same name, a read-only grant: a conflict naming what it lacks — never upgraded to match the template.
+  const readonly = resolveBundleRefs(refs, { names: ["github", "notes"], connectors: ["mcp:github"], secretIds: ["GITHUB_TOKEN"], skills: undefined, mcpServers: [], repositories: [{ path: "/repo", mode: "ro" }] });
+  assert.deepEqual(readonly, [{ name: "github", status: "conflict", lacks: ["/repo rw"] }, { name: "notes", status: "resolved" }]);
+  // The same bundle covering the needs: resolved.
+  const full = resolveBundleRefs(refs, { names: ["github", "notes"], connectors: ["mcp:github"], secretIds: ["GITHUB_TOKEN"], skills: undefined, mcpServers: [], repositories: [{ path: "/repo", mode: "rw" }] });
+  assert.deepEqual(full.map(r => r.status), ["resolved", "resolved"]);
+
+  // Pending carries the gaps, and the cue tells the bot to say so and stop — not to ask for keys.
+  const pending = pendingOf(withBundles.template, ["feishu", "browser"], readonly);
+  assert.deepEqual(pending.bundles.map(r => r.name), ["github"]);
+  const cue = templateSetupCue({ template: withBundles.template, self: "Vera", recipePath: "/home/box/work/templates/vera/recipe.md", pending });
+  assert.match(cue, /bundle "github" is attached but does not provide \/repo rw/);
+  assert.match(cue, /a person attaches bundles in Settings → Boxes; do not ask for keys/);
+  assert.match(cue, /do not treat a same-named bundle as the same grant/);
+  const clean = templateSetupCue({ template: withBundles.template, self: "Vera", recipePath: "/x", pending: pendingOf(withBundles.template, ["feishu", "browser"], full) });
+  assert.doesNotMatch(clean, /Capabilities this recipe was made with/);
+});
+
+test("packing carries the author's bundles as names and needs, and nothing when the box has none", async () => {
+  const source = { listDir: async () => ({ entries: [] }), readFile: async () => ({ content: "" }) };
+  const selection = { profile: { description: "A bot." }, memory: [], skills: [], routines: [], connectors: [] };
+  const base = { self: { name: "Ada" }, teammates: [], memoryRecords: [] };
+  const packed = await packTemplate(source, selection, { ...base, bundles: [{ name: "github", needs: { secretIds: ["GITHUB_TOKEN"] } }] });
+  assert.ok("template" in packed);
+  assert.deepEqual(packed.template.bundles, [{ name: "github", needs: { secretIds: ["GITHUB_TOKEN"] } }]);
+  assert.doesNotMatch(JSON.stringify(packed.template), /ghp_|value/);
+  const bare = await packTemplate(source, selection, base);
+  assert.ok("template" in bare && bare.template.bundles === undefined);
+});

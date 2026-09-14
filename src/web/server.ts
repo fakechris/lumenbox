@@ -195,7 +195,7 @@ import { seedStarterSkills } from "../host/starter-skills.ts";
 import { firstRunCue } from "../host/prompt.ts";
 import { readBoxToken } from "../box/docker.ts";
 import { attachedBox, tokenOf } from "../box/boxes.ts";
-import { catalogTemplate, describeTemplate, parseTemplate, rewriteFrontmatter, templatesEnabled, unresolvedPlaceholders } from "../host/template.ts";
+import { catalogTemplate, describeTemplate, parseTemplate, resolveBundleRefs, rewriteFrontmatter, templatesEnabled, unresolvedPlaceholders } from "../host/template.ts";
 import { SKILLS_DIR, SKILL_FILENAME, slugify } from "../host/skills.ts";
 import { catchUpFloor } from "../channels/ingress.ts";
 import { REPLAY_MAX_AGE_MS } from "../channels/feishu.ts";
@@ -4801,6 +4801,36 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
           return;
         }
 
+        // Bundles, listed and attached (INV-421 A4): a person binds an existing bundle to a
+        // box, which grants only what that bundle already holds; binding twice is once.
+        if (route === "GET /api/bundles") {
+          if (refusedRole("admin")) return;
+          send(res, 200, {
+            bundles: orchestrator.bundles.list().map(bundle => ({ ...bundle, secretIds: [...bundle.secretIds] })),
+            attachments: orchestrator.bundles.attachments(),
+            dangling: orchestrator.bundles.dangling(),
+            boxes: registry.listBoxes().map(box => ({ id: box.id, name: box.name })),
+          });
+          return;
+        }
+        if (route === "POST /api/bundles/attach") {
+          if (refusedRole("admin")) return;
+          const body = await readJson(req);
+          const box = typeof body.box === "string" ? registry.listBoxes().find(entry => entry.id === body.box || entry.name === body.box) : undefined;
+          if (box === undefined) {
+            send(res, 404, { error: `No box ${String(body.box ?? "")}` });
+            return;
+          }
+          const bundleId = String(body.bundle ?? "");
+          if (!orchestrator.bundles.attach(box, bundleId)) {
+            send(res, 404, { error: `No bundle ${bundleId}; a bundle is defined in bundles.json, never created from a template's name.` });
+            return;
+          }
+          log(`bundles: ${bundleId} attached to box ${box.name}`);
+          send(res, 200, { attachments: orchestrator.bundles.attachments(), effective: orchestrator.bundles.forBox(box) ?? null });
+          return;
+        }
+
         if (route === "POST /api/templates/import") {
           if (refused()) return;
           const body = await readJson(req);
@@ -4836,9 +4866,15 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
             // connector door satisfies; the rest stay pending and the setup turn asks (mcp-connectors.ts)
             ...parsed.template.connectors.filter(connector => connectorSatisfied(connector, orchestrator.mcp.statuses().map(status => status.name))),
           ];
+          // The template's bundle references against the target box's own bundles (INV-421):
+          // resolved, missing, or a same-named bundle that does not cover the needs. Nothing
+          // is attached from a name; the gaps travel to the setup cue and back to the caller.
+          const targetBox = typeof body.boxId === "string" ? registry.boxById(body.boxId) ?? registry.box : registry.box;
+          const bundleResolutions = resolveBundleRefs(parsed.template.bundles, orchestrator.bundles.forBox(targetBox));
           let imported: ReturnType<typeof orchestrator.importTemplate>;
           try {
             imported = orchestrator.importTemplate(parsed.template, {
+              bundleResolutions,
               caller,
               ...(typeof body.name === "string" && body.name.trim() !== "" ? { name: body.name.trim() } : {}),
               ...(shareId !== undefined ? { shareId } : {}),
