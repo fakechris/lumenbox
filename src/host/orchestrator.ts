@@ -996,7 +996,10 @@ export class Orchestrator {
     const box = this.boxFor(agent.id);
     if (!box) return undefined;
 
-    const boxId = this.registry.boxOf(agent.id).id;
+    const entry = this.registry.boxOf(agent.id);
+    // A host box has no desktop by design (INV-438): nothing to start, nothing to report.
+    if (entry.kind === "host") return undefined;
+    const boxId = entry.id;
     const index = this.registry.displayIndexFor(agent.id);
     const key = `${boxId}:${index}`;
     if (this.readyDisplays.has(key)) return index;

@@ -18,7 +18,7 @@ import { dirname } from "node:path";
 import { randomUUID } from "node:crypto";
 import type { BoxRecord } from "./identity.ts";
 
-export type BoxKind = "docker" | "attached";
+export type BoxKind = "docker" | "attached" | "host";
 
 export interface BoxEntry {
   /** Opaque, minted once. The default box's is `box.json`'s. */
@@ -67,7 +67,7 @@ function readEntries(path: string): BoxEntry[] | undefined {
     return {
       id: entry.id,
       name: typeof entry.name === "string" && entry.name !== "" ? entry.name : `box-${index + 1}`,
-      kind: entry.kind === "attached" ? "attached" : "docker",
+      kind: entry.kind === "attached" ? "attached" : entry.kind === "host" ? "host" : "docker",
       ...(entry.endpoint !== undefined && typeof entry.endpoint.baseUrl === "string"
         ? { endpoint: { baseUrl: entry.endpoint.baseUrl, tokenFile: String(entry.endpoint.tokenFile ?? "") } }
         : {}),
@@ -111,7 +111,7 @@ export function saveBoxes(path: string, entries: readonly BoxEntry[]): void {
 }
 
 /** A new attached box. The id is minted here; the token stays in its file. */
-export function attachedBox(input: { name: string; baseUrl: string; tokenFile: string; displayFloor?: number; workDir?: string }): BoxEntry {
+export function attachedBox(input: { name: string; baseUrl: string; tokenFile: string; displayFloor?: number; workDir?: string; kind?: "attached" | "host" }): BoxEntry {
   if (!BOX_NAME.test(input.name)) throw new Error(`"${input.name}" is not a box name (letters, digits, . _ -, up to 48).`);
   let url: URL;
   try {
@@ -123,7 +123,7 @@ export function attachedBox(input: { name: string; baseUrl: string; tokenFile: s
   return {
     id: `box_${randomUUID()}`,
     name: input.name,
-    kind: "attached",
+    kind: input.kind ?? "attached",
     endpoint: { baseUrl: input.baseUrl.replace(/\/+$/, ""), tokenFile: input.tokenFile },
     displayFloor: input.displayFloor ?? 1,
     workDir: input.workDir ?? DEFAULT_WORK_DIR,

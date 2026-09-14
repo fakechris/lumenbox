@@ -437,6 +437,10 @@ export interface HealthResult {
    */
   protocol?: number;
   display: string;
+  /** True on a box with no desktop by design — the person's own machine (INV-438). */
+  headless?: boolean;
+  /** The directories a restricted box may touch, when it is restricted. */
+  repositories?: { path: string; mode: "ro" | "rw" }[];
   /** Absent when no X server is reachable; shell and fs still work. */
   resolution?: ResolutionConfig;
   refresh_rate?: number;

@@ -5,12 +5,14 @@
  */
 
 import { randomUUID } from "node:crypto";
-import { existsSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { createInterface } from "node:readline/promises";
 import { fileURLToPath } from "node:url";
 import type { BusEvent } from "./agents/bus.ts";
+import { randomBytes } from "node:crypto";
+import { spawn } from "node:child_process";
 import { AgentRegistry, defaultAgentsRoot } from "./agents/registry.ts";
 import { BundleStore, planMigration } from "./host/bundles.ts";
 import { ScopeStore } from "./host/scopes.ts";
@@ -541,6 +543,88 @@ async function cmdBoxAttach(argv: string[]): Promise<number> {
     err(error instanceof Error ? error.message : String(error));
     return 1;
   }
+}
+
+/**
+ * `agentbox host up <name>` (INV-438, docs/50 G5): this machine as a box with no desktop.
+ *
+ * boxd is the same daemon the container runs, started here with BOXD_HEADLESS=1 on
+ * loopback, a token of its own, the work directory the person chose and the directory
+ * roots they granted. The roots are recorded twice on purpose: in bundles.json as a
+ * bundle attached to this box (the record of truth, what the prompt and the audit read)
+ * and in the daemon's environment (what the file service enforces). Foreground, because a
+ * process on the person's own machine should be one they can see and stop.
+ */
+async function cmdHostUp(argv: string[]): Promise<number> {
+  const [name, ...flagList] = argv;
+  const { flags, positional } = parseArgs(flagList);
+  if (!name) {
+    err("Usage: agentbox host up <name> [--work D] [--repo P[:ro]]... [--port N]");
+    return 1;
+  }
+  const workDir = typeof flags.get("--work") === "string" ? resolve(String(flags.get("--work"))) : join(homedir(), "agentbox-work");
+  const repos: { path: string; mode: "ro" | "rw" }[] = [];
+  const repoFlags = [...flagList.filter((_, i) => flagList[i - 1] === "--repo"), ...positional.filter(p => p.includes("/"))];
+  for (const raw of repoFlags) {
+    const ro = raw.endsWith(":ro");
+    repos.push({ path: resolve(ro ? raw.slice(0, -3) : raw.replace(/:rw$/, "")), mode: ro ? "ro" : "rw" });
+  }
+  if (!repos.some(r => r.path === workDir)) repos.push({ path: workDir, mode: "rw" });
+  const port = typeof flags.get("--port") === "string" ? Number(flags.get("--port")) : 13380;
+  const bundlePath = resolve(dirname(fileURLToPath(import.meta.url)), "..", "docker", "box", "boxd.cjs");
+  if (!existsSync(bundlePath)) {
+    err(`No boxd bundle at ${bundlePath}. Run \`npm run build:boxd\` first.`);
+    return 1;
+  }
+  mkdirSync(workDir, { recursive: true });
+  const stateDir = join(agentboxHome(), "host-boxes");
+  mkdirSync(stateDir, { recursive: true, mode: 0o700 });
+  const tokenFile = join(stateDir, `${name}.token`);
+  if (!existsSync(tokenFile)) writeFileSync(tokenFile, `${randomBytes(24).toString("hex")}\n`, { mode: 0o600 });
+  const token = readFileSync(tokenFile, "utf8").trim();
+
+  // The record: box + bundle. Refused if the name is taken by a box that is not a host box.
+  const registry = new AgentRegistry();
+  const existing = registry.boxByName(name);
+  if (existing !== undefined && existing.kind !== "host") {
+    err(`${name} is a ${existing.kind} box already. Pick another name.`);
+    return 1;
+  }
+  const baseUrl = `http://127.0.0.1:${port}`;
+  if (existing === undefined) {
+    registry.attachBox(attachedBox({ name, baseUrl, tokenFile, kind: "host", displayFloor: 1, workDir }));
+    out(`${bold(name)} registered as a host box at ${baseUrl}; the web server connects to it on its next start (or \`box attach --replace\` to a running one).`);
+  } else {
+    registry.updateBox(name, { endpoint: { baseUrl, tokenFile } });
+  }
+  const bundles = new BundleStore();
+  const file = { bundles: bundles.list(), ...bundles.attachments() };
+  const bundleId = `host-${name}`;
+  file.bundles = [...file.bundles.filter(b => b.id !== bundleId), { id: bundleId, name: `Host box ${name}`, secretIds: [], repositories: repos, instructions: `You are on ${name}, the person's own machine, with no desktop. You may read and write only under: ${repos.map(r => `${r.path} (${r.mode})`).join(", ")}. Every write here is reviewed; say what you are about to change before you change it.` }];
+  file.boxes = { ...file.boxes, [name]: [...new Set([...(file.boxes[name] ?? []), bundleId])] };
+  bundles.save(file);
+
+  out(`${bold("host box")} ${name}: work ${workDir}; roots ${repos.map(r => `${r.path} (${r.mode})`).join(", ")}`);
+  out(dim("Ctrl-C to stop. Files outside the roots are refused by the daemon; every write is reviewed by the host."));
+  const child = spawn(process.execPath, [bundlePath], {
+    stdio: "inherit",
+    env: {
+      ...process.env,
+      BOXD_HEADLESS: "1",
+      BOXD_BIND: "127.0.0.1",
+      BOXD_PORT: String(port),
+      BOXD_TOKEN: token,
+      AGENTBOX_WORK_DIR: workDir,
+      BOXD_JOBS_DIR: join(workDir, ".jobs"),
+      BOXD_TEACH_DIR: join(workDir, "teach-sessions"),
+      BOXD_REPOSITORIES: JSON.stringify(repos),
+      DISPLAY: "",
+    },
+  });
+  return new Promise<number>(resolveExit => {
+    child.on("exit", code => resolveExit(code ?? 0));
+    for (const signal of ["SIGINT", "SIGTERM"] as const) process.on(signal, () => child.kill(signal));
+  });
 }
 
 async function cmdBoxDetach(argv: string[]): Promise<number> {
@@ -1220,6 +1304,12 @@ Box:
                             Agents are created into a box and stay there; --replace
                             moves an attached box to a new address.
   box detach <name>         Forget an attached box (refused while agents live in it)
+  host up <name> [--work D] [--repo P[:ro]]... [--port N]
+                            Run this machine as a desktop-less box (docs/50 G5): boxd
+                            headless on loopback, files limited to the --repo roots,
+                            registered as box <name> with a bundle carrying the roots.
+                            Foreground; Ctrl-C stops it. Needs \`npm run build:boxd\`.
+  host down <name>          Forget a host box (refused while agents live in it)
   box list                  Every box: own first, then attached, with who lives where
   box down [--rm]           Stop the box, optionally removing the container
   box logs [--tail N]       Container logs
@@ -1397,6 +1487,14 @@ async function main(): Promise<number> {
 
     case "bundle":
       return cmdBundle(rest);
+
+    case "host": {
+      const [sub, ...hostArgs] = rest;
+      if (sub === "up") return cmdHostUp(hostArgs);
+      if (sub === "down") return cmdBoxDetach(hostArgs);
+      err(`Unknown host command: ${sub ?? "(none)"}. One of: up, down.`);
+      return 1;
+    }
 
     case "chat":
       return cmdChat(rest);
