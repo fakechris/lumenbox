@@ -18,6 +18,7 @@ import type { Vault } from "./vault.ts";
 import { appendLearning, hostOf, learningsDir, readLearnings, renderLearnings } from "./learnings.ts";
 import type { ScopeStore } from "./scopes.ts";
 import type { BundleStore } from "./bundles.ts";
+import { oauthProvider, scrubToken, type OAuthGate } from "./oauth.ts";
 import type { McpManager } from "./mcp.ts";
 import { delegateEnv, delegateModel, PRESETS, presetNamed, quoteForShell, installCommand, withEnginesPath } from "./presets.ts";
 import { namesControlSurface } from "./control-surfaces.ts";
@@ -170,6 +171,8 @@ export interface ToolContext {
    * to resolve it from.
    */
   vault?: Vault;
+  /** The OAuth gate (INV-422): bearers for connected services, minted and refreshed on the host. */
+  oauth?: OAuthGate;
   /**
    * Which conversation this tool call belongs to. The shell session, the plan and the
    * todo list are all keyed on it, so two of an agent's conversations running at once
@@ -568,9 +571,33 @@ export function buildTools(
   /** Whether a packed template has somewhere to be staged (docs/29). */
   canPackTemplate = false,
   /** Whether this is a fork child's tool list (docs/32 §2): the withheld set is removed. */
-  fork = false
+  fork = false,
+  /** The connected services this agent may call through the OAuth gate (INV-422), by provider id. */
+  connectors: readonly string[] = []
 ): Anthropic.Tool[] {
   const tools: Anthropic.Tool[] = [];
+
+  if (connectors.length > 0) {
+    tools.push({
+      name: "connector_request",
+      description:
+        `Call a connected service's API as the person who authorized it: ${connectors.join(", ")}. ` +
+        "Name the connector, the HTTP method and the API path (relative to the service's API base, " +
+        "e.g. /user/repos for GitHub, /im/v1/messages for Feishu) and a JSON body when the call " +
+        "takes one. The host attaches the credential and refreshes it when it lapses; you never " +
+        "see it and must not ask for it. Reads are free; a write is reviewed like any outward act.",
+      input_schema: {
+        type: "object",
+        properties: {
+          connector: { type: "string", description: `One of: ${connectors.join(", ")}.` },
+          method: { type: "string", description: "GET, POST, PUT, PATCH or DELETE. Default GET." },
+          path: { type: "string", description: "The API path, starting with /. Query string allowed." },
+          body: { description: "A JSON value sent as the request body, for methods that take one." },
+        },
+        required: ["connector", "path"],
+      },
+    });
+  }
 
   if (hasBox && canUseDesktop) {
     tools.push({
@@ -3264,6 +3291,51 @@ export async function dispatchTool(
       }
     }
 
+    case "connector_request": {
+      const connector = String(input.connector ?? "").trim().toLowerCase();
+      const method = String(input.method ?? "GET").trim().toUpperCase() || "GET";
+      const path = String(input.path ?? "").trim();
+      if (connector === "" || path === "") return { text: outcomeLine("failed", "connector and path are both required"), isError: true };
+      if (!path.startsWith("/") || path.startsWith("//")) return { text: outcomeLine("failed", "path must start with a single /"), isError: true };
+      if (!["GET", "POST", "PUT", "PATCH", "DELETE"].includes(method)) return { text: outcomeLine("failed", `${method} is not a method this tool sends`), isError: true };
+      const provider = oauthProvider(connector);
+      if (provider === undefined || context.oauth === undefined) {
+        return { text: outcomeLine("refused", `${connector} is not a connected service here`), isError: true };
+      }
+      // The bearer is minted, refreshed and audited on the host; the model gets the
+      // reply with the token scrubbed even if the endpoint echoes its own headers.
+      const token = await context.oauth.bearerFor(`oauth:${connector}`, {
+        agentId: context.agent.id,
+        agentName: context.agent.profile.name,
+        ...(context.caller?.userId !== undefined ? { principalId: context.caller.userId } : {}),
+        scopeGrants: context.bundles?.grantsSecret(boxOfAgent(context), `oauth:${connector}`) === true,
+      });
+      if (token === undefined) {
+        return { text: outcomeLine("refused", `${provider.title} is not connected for you, or its token cannot be refreshed. Ask an admin in Settings → Connected services`), isError: true };
+      }
+      const hasBody = input.body !== undefined && input.body !== null && method !== "GET";
+      try {
+        const response = await fetch(`${provider.apiBase}${path}`, {
+          method,
+          headers: {
+            Authorization: `Bearer ${token}`,
+            ...(provider.apiHeaders ?? {}),
+            ...(hasBody ? { "content-type": "application/json; charset=utf-8" } : {}),
+          },
+          ...(hasBody ? { body: typeof input.body === "string" ? input.body : JSON.stringify(input.body) } : {}),
+          signal: AbortSignal.timeout(30_000),
+        });
+        const raw = await response.text();
+        const body = scrubToken(raw.length > 20_000 ? `${raw.slice(0, 20_000)}\n… (${raw.length - 20_000} more characters)` : raw, token);
+        const ok = response.status >= 200 && response.status < 300;
+        return {
+          text: `${outcomeLine(ok ? "ok" : "failed", ok ? undefined : `HTTP ${response.status}`)} ${method} ${path} → ${response.status}\n${body}`,
+          ...(ok ? {} : { isError: true }),
+        };
+      } catch (error) {
+        return { text: outcomeLine("unknown", `${provider.title} did not answer: ${error instanceof Error ? error.message : String(error)}`), isError: true };
+      }
+    }
     case "browser_fill_secret": {
       const box = requireBox(context);
       const ref = String(input.ref ?? "").trim();

@@ -66,7 +66,35 @@ empty, so a half-configured door fails loudly at startup, not mysteriously at ca
 
 ## 3. What this does not do
 
-- No OAuth browser flows: every door is credential-variable based by construction.
+- No OAuth browser flows *for the MCP doors*: every door above is credential-variable
+  based by construction. OAuth lives one level down, in §4.
 - No per-door tool allowlists beyond what scopes and agent profiles already do — an MCP
   server's tools remain ordinary tools under the same gates (mcp.ts header, unchanged).
 - No marketplace UI: the doors are infra, not a gallery (that is docs/29 Stage C, still open).
+
+## 4. The OAuth gate (INV-422, 2026-09-11)
+
+`src/host/oauth.ts` `OAuthGate`, over the vault. Two dances, both finished on the host:
+
+- **authorization code** — an admin starts it in Settings → Connected services
+  (`POST /api/connectors/begin` → the provider's page), the provider sends the browser back
+  to `GET /oauth/callback`, the host exchanges the code and lands the tokens in the vault as
+  the secret `oauth:<provider>`. GitHub is the first door.
+- **client credentials** — an app id and secret mint a tenant token (`POST /api/connectors/connect`);
+  the host re-mints it when it lapses. Feishu's `tenant_access_token` is the first door.
+
+The vault `Secret` gained `oauth` (provider, kind, expiry, refresh token, client id and
+secret); the view a route returns keeps provider and expiry and drops the rest. `Vault.oauthOf`
+is for the gate only; `Vault.covers` decides what to offer without an audit line.
+
+The agent side is one tool, `connector_request` (connector, method, path, body). It is offered
+only when a live grant covers the agent — the box's bundles (INV-420) or the secret's own
+grants — and never to a fork. The host calls `bearerFor`, which refreshes a token inside its
+last minute before handing it out, then attaches the bearer and scrubs the token from the
+reply even if the endpoint echoes its own headers. A write (anything but GET) is reviewed
+as "changes something under the person's authorization". Transcripts, logs and recordings
+never carry the token: it exists in `vault.json` (0600) and in one request header.
+
+What this still does not do: the MCP doors of §2 do not read the gate — a `mcp:github`
+door driven by an OAuth token is a follow-up, once one is wanted; and providers beyond
+GitHub and Feishu are a catalog entry each in `OAUTH_PROVIDERS`.
