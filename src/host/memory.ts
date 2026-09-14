@@ -224,6 +224,36 @@ export function dedupe(records: readonly MemoryRecord[]): MemoryRecord[] {
   return [...byKey.values()];
 }
 
+/**
+ * Whether two records say the same thing in different words (INV-147 A3).
+ *
+ * `dedupeKey` collapses punctuation, case and filler, so "they prefer short answers" and
+ * "the user prefers short answers" collide already. What it does not collapse is a real
+ * rephrasing — "keep replies brief", "answers should be short and to the point" — and
+ * six of those, each scoring as a fresh fact, filled a tight budget and pushed out the
+ * one different fact the question needed. Jaccard over the key's tokens: the same
+ * material, mostly, is the same fact. Short keys are exempt — two tokens in common out
+ * of three is a coincidence, not a rephrasing.
+ */
+export const NEAR_DUPLICATE_JACCARD = envNumber("AGENTBOX_MEMORY_NEAR_DUP", 0.8);
+
+export function nearDuplicate(a: string, b: string): boolean {
+  const left = new Set(dedupeKey(a).split(" ").filter(Boolean));
+  const right = new Set(dedupeKey(b).split(" ").filter(Boolean));
+  if (left.size < 2 || right.size < 2) return false;
+  let shared = 0;
+  for (const token of left) if (right.has(token)) shared += 1;
+  // One token's worth of difference is a value, not a rephrasing: "region is eu-west-1"
+  // and "region is us-east-1" are two facts in conflict (A4), which must both be kept for
+  // the reader to notice. So the bar is high — one key inside the other (decoration
+  // added, nothing changed: "short answers" inside "short answers always confirmed"),
+  // or, at three tokens and more, nearly everything shared.
+  if (shared === left.size || shared === right.size) return true;
+  if (left.size < 3 || right.size < 3) return false;
+  const union = left.size + right.size - shared;
+  return union > 0 && shared / union >= NEAR_DUPLICATE_JACCARD;
+}
+
 export interface MemoryRecall {
   records: MemoryRecord[];
   /** How many were left out by the budget, so the prompt can say so rather than imply completeness. */
@@ -287,8 +317,10 @@ export function recall(
    * are dropped can be decided by something better than recency and weight, without changing what
    * happens when nothing has to be dropped at all — see `chooseRelevant`.
    */
-  preferred?: ReadonlySet<string>
+  preferred?: ReadonlySet<string>,
+  options: { collapseNearDuplicates?: boolean } = {}
 ): MemoryRecall {
+  const collapse = options.collapseNearDuplicates ?? true;
   const ranked = dedupe(records)
     .map(record => ({ record, score: scoreOf(record, now) }))
     .sort((a, b) => b.score - a.score || b.record.at.localeCompare(a.record.at));
@@ -305,6 +337,9 @@ export function recall(
   const kept: MemoryRecord[] = [];
   let used = 0;
   for (const { record } of ranked) {
+    // A rephrasing of something already kept adds nothing and costs a slot (A3): it is
+    // omitted like a budget casualty, and still listed by head, so it is not hidden.
+    if (collapse && kept.some(seen => nearDuplicate(seen.text, record.text))) continue;
     const cost = record.text.length + 4; // the bullet and newline it is rendered with
     if (used + cost > budget && kept.length > 0) continue;
     kept.push(record);
@@ -806,9 +841,13 @@ export async function chooseRelevant(options: {
     .slice(0, MAX_SELECTION_CANDIDATES)
     .map(entry => entry.record);
   const lexical = selectRelevant(options.query, deduped, 20);
-  const candidates = [...byScore];
-  for (const record of lexical) {
-    if (!candidates.includes(record)) candidates.push(record);
+  const candidates: MemoryRecord[] = [];
+  // The selector is shown one phrasing of each fact, not six: a candidate list padded with
+  // rephrasings crowds out the sixtieth distinct fact, which may be the one asked about.
+  for (const record of [...byScore, ...lexical]) {
+    if (candidates.includes(record)) continue;
+    if (candidates.some(seen => nearDuplicate(seen.text, record.text))) continue;
+    candidates.push(record);
   }
 
   try {
