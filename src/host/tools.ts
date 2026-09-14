@@ -66,6 +66,7 @@ import {
   describeTemplate,
   packTemplate,
   stampTemplateWrite,
+  manifestOf,
 } from "./template.ts";
 
 export interface ToolContext {
@@ -4384,6 +4385,7 @@ export async function dispatchTool(
           skills: refs(input.skills),
           routines: refs(input.routines),
           connectors: Array.isArray(input.connectors) ? input.connectors.map(String) : [],
+          ...(Array.isArray(input.learnings) ? { learnings: input.learnings.map(String) } : {}),
           ...(typeof input.getting_started === "string" && input.getting_started.trim() !== "" ? { gettingStarted: { skill: input.getting_started.trim() } } : {}),
         },
         {
@@ -4397,6 +4399,7 @@ export async function dispatchTool(
           memoryRecords: context.registry.readMemoryRecords(context.agent.id),
           ...(context.caller?.userId !== undefined ? { createdBy: context.caller.userId } : {}),
           ...(bundleRefs.length > 0 ? { bundles: bundleRefs } : {}),
+          learningsFor: host => readLearnings(host, context.learningsDir ?? learningsDir(), 50),
         }
       );
       if ("refused" in packed) return { text: packed.refused, isError: true };
@@ -4405,7 +4408,8 @@ export async function dispatchTool(
       return {
         text:
           `Staged version ${staged.version} of the template "${packed.template.profile.name}" (${describeTemplate(packed.template)}).` +
-          `${dropped} It is not shared until the person publishes or downloads it from the card; say so.`,
+          `${dropped} It is not shared until the person publishes or downloads it from the card; say so.\n\n` +
+          `What is in it, for the person to confirm:\n${manifestOf({ ...packed.template, meta: { ...(packed.template.meta ?? {}), version: staged.version } }, packed.dropped).join("\n")}`,
       };
     }
 

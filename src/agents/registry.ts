@@ -205,7 +205,7 @@ export interface AgentProfile {
    * The template this agent was created from, when it was (docs/29). Bound at creation like
    * the box: a record of origin, not a link — the copy is this installation's from then on.
    */
-  importedFrom?: { id: string; name: string; createdBy?: string; at: string };
+  importedFrom?: { id: string; name: string; createdBy?: string; at: string; version?: number };
   createdAt: string;
   updatedAt: string;
 }
@@ -623,7 +623,7 @@ export class AgentRegistry {
     provider?: string;
     model?: string;
     /** The template it is being created from, when it is. */
-    importedFrom?: { id: string; name: string; createdBy?: string; at: string };
+    importedFrom?: { id: string; name: string; createdBy?: string; at: string; version?: number };
     /**
      * The teams it belongs to. Set at birth by whatever made it — a crew stamps its own name
      * here — so a batch of five is findable together without anyone tidying up afterwards.
@@ -701,6 +701,8 @@ export class AgentRegistry {
       model?: string | null;
       /** The teams it belongs to. An empty array removes it from all of them. */
       tags?: readonly string[];
+      /** The template this agent carries, revised when it takes up a newer version (INV-411). */
+      importedFrom?: AgentProfile["importedFrom"];
     }
   ): AgentRecord {
     const existing = this.get(agentId);
@@ -724,6 +726,7 @@ export class AgentRegistry {
     if (changes.title !== undefined) profile.title = clampLine(changes.title, 64);
     if (changes.avatarColor !== undefined) profile.avatarColor = changes.avatarColor;
     if (changes.hidden !== undefined) profile.hidden = changes.hidden;
+    if (changes.importedFrom !== undefined) profile.importedFrom = { ...changes.importedFrom };
     if (changes.tools !== undefined) {
       if (changes.tools === null) delete profile.tools;
       else profile.tools = [...changes.tools];

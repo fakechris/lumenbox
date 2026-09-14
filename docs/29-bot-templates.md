@@ -335,6 +335,33 @@ grants only what that bundle already holds and is idempotent; `GET /api/bundles`
 bundles, attachments and dangling ids. Effective capability is read from the store on
 every turn, so a detached or changed bundle is gone at the next look.
 
+### 5.7 Migration to a non-author (INV-411, 2026-09-14)
+
+**Manifest before the package.** `PackTemplate`'s result now ends with `manifestOf`: every
+skill and routine by slug with its description and fill-ins, memory count, learnings per
+host with count, date range and authors, bundle references with their needs, connectors,
+the standing exclusions (cookies, tokens and secret values, transcripts, recordings, memory
+about people, private memory not promoted) and every item left out with its reason. The
+person confirms from the card; the bot cannot publish.
+
+**Learnings travel.** A template may carry `learnings: [{ host, lines }]` — the dated
+✅/❌ lines from the author's `~/.agentbox/learnings`, chosen by host in `PackTemplate`'s
+`learnings` argument and read from the author's own store. A note holding a credential
+refuses the whole document at parse, with the place named; a path with `..` in a skill's
+files is refused the same way. On import the lines are installed into the receiver's
+learnings *before* the setup turn, stamped `template:<id>`, and a line already there is
+not appended twice — so the new bot's first `browser_open` on that site reads them.
+
+**One share, one bot.** Versions now travel inside the document (`meta.version`, set when
+a version is staged) and are kept on the agent (`importedFrom.version`). Importing the same
+share again at the same version creates nothing and says so. A newer version is refused
+(`TemplateVersionConflict`, 409) until `update: true`, and then the *existing* bot is
+asked to take it up: files stamped `authored_by: template:<id>` in place, anything it or
+a person changed left alone and named, routines still paused. Interrupted installs remain
+covered by reconcile and the retry cue (§5.4). A non-author's trial with new inputs is
+INV-481's package; the rails that keep unauthorised side effects from running during a
+setup turn are §5.3's.
+
 ## 6. Share: a file, then a link, then a shelf
 
 **Stage A — the file.** The share card's Download gives `<slug>.lumenbox-template.json`;
