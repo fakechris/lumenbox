@@ -80,6 +80,21 @@ configuration, per-journey rounds / questions / refusals / artifacts, and the tw
 this cannot verify — a real model's conduct (`npm run scenario`) and a person's acceptance
 (no trial participants recruited) — as UNVERIFIED, not inferred.
 
+## The migration trials (INV-481, 2026-09-14)
+
+`src/host/migration-trials.ts` freezes five workflows — four taught by a skill, one by a
+site learning, one of them reaching for a capability the receiver lacks — each with three
+inputs never used to demonstrate it, and runs every input taught and untaught on the
+scripted model (the harness now takes `skills`, and learnings are read from the episode's
+own `AGENTBOX_LEARNINGS`). Each cell records calls, questions, refusals, the artifact, and
+failures classified by stage: extraction (the skill reached the prompt), parameterisation
+(the artifact carries this input's own value), capability-binding (the host command was
+refused, not run, and the person told), environment (the learning was recalled on a page
+it was not written on; the untaught control recalls nothing), execution, verification.
+The report prints the 5×3 matrix taught|untaught with failures by stage, says that the
+call delta is by construction of the scripted model, and lists as UNVERIFIED the same
+matrix on a real model and the two non-author installs the contract asks for.
+
 ## What it is not
 
 The scripted model is not a model. It cannot tell you whether a real one is sensible, only whether
