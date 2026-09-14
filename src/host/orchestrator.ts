@@ -40,6 +40,10 @@ import {
   type TemplateFillIn,
   describeTemplate,
   pendingOf,
+  describeBundleGaps,
+  resolveBundleRefs,
+  type BundleResolution,
+  type TemplatePending,
   recipeDirFor,
   reconcile,
   renderRecipe,
@@ -1148,6 +1152,8 @@ export class Orchestrator {
       name?: string;
       /** Connector names this installation has, so the cue asks only about the missing ones. */
       connected?: readonly string[];
+      /** How the template's bundle references resolved against the target box (INV-421). */
+      bundleResolutions?: readonly BundleResolution[];
       /** The importing person's tool set, which the new agent may not exceed. */
       creatorTools?: readonly string[];
       /** Where the template came from, for the profile's `importedFrom`. */
@@ -1156,7 +1162,7 @@ export class Orchestrator {
       boxId?: string;
       log?: (line: string) => void;
     } = {}
-  ): { agent: AgentRecord; id: string; pending: { fillIns: TemplateFillIn[]; connectors: string[] }; settled: Promise<ReconcileResult | undefined> } {
+  ): { agent: AgentRecord; id: string; pending: TemplatePending; settled: Promise<ReconcileResult | undefined> } {
     const log = options.log ?? ((line: string) => console.error(`[template] ${line}`));
     const id = options.shareId ?? templateId();
     const name = options.name?.trim() || template.profile.name;
@@ -1181,7 +1187,8 @@ export class Orchestrator {
         at: new Date().toISOString(),
       },
     });
-    const pending = pendingOf(template, options.connected ?? []);
+    const pending = pendingOf(template, options.connected ?? [], options.bundleResolutions ?? []);
+    if (pending.bundles.length > 0) log(`import ${id}: ${describeBundleGaps(pending.bundles).join("; ")}`);
     log(`import ${id}: created ${agent.profile.name} (${agent.id}) from "${template.profile.name}"`);
 
     const settled = (async (): Promise<ReconcileResult | undefined> => {

@@ -85,6 +85,65 @@ export interface TemplateFillIn {
   label: string;
 }
 
+export interface TemplateBundleRef {
+  name: string;
+  /** What the work needed from the bundle. Subsets are fine; an empty needs is a name alone. */
+  needs?: {
+    connectors?: string[];
+    /** Secret *ids*, never values. */
+    secretIds?: string[];
+    skills?: string[];
+    mcpServers?: string[];
+    /** Repository paths with the mode the work used. */
+    repositories?: { path: string; mode: "ro" | "rw" }[];
+  };
+}
+
+export type BundleResolution =
+  | { name: string; status: "resolved" }
+  | { name: string; status: "missing"; needs: string[] }
+  | { name: string; status: "conflict"; lacks: string[] };
+
+/** Renders a needs block as short claims, for cues and conflicts. */
+function needsOf(ref: TemplateBundleRef): string[] {
+  const needs = ref.needs ?? {};
+  return [
+    ...(needs.connectors ?? []).map(c => `connector ${c}`),
+    ...(needs.secretIds ?? []).map(s => `secret ${s}`),
+    ...(needs.skills ?? []).map(s => `skill ${s}`),
+    ...(needs.mcpServers ?? []).map(m => `MCP server ${m}`),
+    ...(needs.repositories ?? []).map(r => `${r.path} ${r.mode}`),
+  ];
+}
+
+/**
+ * Resolves a template's bundle references against what the receiving box actually has
+ * (INV-421). Same name is not the same authorization: a bundle called "github" here may
+ * grant a read-only key where the author's granted a write key, so each need is checked
+ * against the effective bundle's contents, and a shortfall is a conflict left for the
+ * person — never filled in from the template.
+ */
+export function resolveBundleRefs(
+  refs: readonly TemplateBundleRef[] | undefined,
+  effective: { names: string[]; connectors: string[]; secretIds: string[]; skills: string[] | undefined; mcpServers: string[]; repositories: { path: string; mode: "ro" | "rw" }[] } | undefined
+): BundleResolution[] {
+  return (refs ?? []).map(ref => {
+    const attached = effective?.names.includes(ref.name) === true;
+    if (!attached) return { name: ref.name, status: "missing", needs: needsOf(ref) };
+    const needs = ref.needs ?? {};
+    const lacks: string[] = [];
+    for (const c of needs.connectors ?? []) if (!effective!.connectors.includes(c)) lacks.push(`connector ${c}`);
+    for (const s of needs.secretIds ?? []) if (!effective!.secretIds.includes(s)) lacks.push(`secret ${s}`);
+    for (const s of needs.skills ?? []) if (effective!.skills !== undefined && !effective!.skills.includes(s)) lacks.push(`skill ${s}`);
+    for (const m of needs.mcpServers ?? []) if (!effective!.mcpServers.includes(m)) lacks.push(`MCP server ${m}`);
+    for (const r of needs.repositories ?? []) {
+      const have = effective!.repositories.find(repo => repo.path === r.path);
+      if (have === undefined || (r.mode === "rw" && have.mode !== "rw")) lacks.push(`${r.path} ${r.mode}`);
+    }
+    return lacks.length === 0 ? { name: ref.name, status: "resolved" } : { name: ref.name, status: "conflict", lacks };
+  });
+}
+
 export interface TemplateSkill {
   slug: string;
   name: string;
@@ -106,6 +165,14 @@ export interface BotTemplate {
   routines: TemplateRoutine[];
   /** Catalog connector slugs the work needs: `feishu`, `dingtalk`, `browser`, `mcp:<server>`. */
   connectors: string[];
+  /**
+   * The bundles the work was done under, by name and by what they provided (INV-421).
+   * Names and needs only — never a secret's value, never a repository's contents. The
+   * receiver resolves each against its own bundles: a same-named bundle that provides
+   * what is needed is resolved; no such bundle is missing; one that does not cover the
+   * needs is a conflict. Nothing is granted by the name alone.
+   */
+  bundles?: TemplateBundleRef[];
   /** A skill the new bot reads before it speaks. Must name one of `skills`. */
   gettingStarted?: { skill: string };
   meta?: { createdAt?: string; createdBy?: string; sourceName?: string };
@@ -241,6 +308,30 @@ export function parseTemplate(raw: unknown): { template: BotTemplate } | { probl
     .filter((entry): entry is string => typeof entry === "string" && entry.trim() !== "")
     .map(entry => entry.trim());
 
+  const bundles: TemplateBundleRef[] = [];
+  for (const entry of Array.isArray(value.bundles) ? value.bundles : []) {
+    if (!isRecord(entry)) continue;
+    const name = stringOr(entry.name).trim();
+    if (name === "" || name.length > NAME_MAX) return { problem: `bundles: a bundle reference needs a name (up to ${NAME_MAX} characters).` };
+    const needsRaw = isRecord(entry.needs) ? entry.needs : {};
+    const strings = (v: unknown) => (Array.isArray(v) ? v.filter((x): x is string => typeof x === "string" && x.trim() !== "").map(x => x.trim()) : []);
+    const repositories = (Array.isArray(needsRaw.repositories) ? needsRaw.repositories : [])
+      .filter(isRecord)
+      .map(r => ({ path: stringOr(r.path).trim(), mode: r.mode === "rw" ? ("rw" as const) : ("ro" as const) }))
+      .filter(r => r.path !== "");
+    for (const key of ["secretValues", "values", "token", "tokens"]) {
+      if (key in needsRaw) return { problem: `bundles.${name}.needs.${key}: a template names what a bundle provided, never its values.` };
+    }
+    const needs = {
+      ...(strings(needsRaw.connectors).length > 0 ? { connectors: strings(needsRaw.connectors) } : {}),
+      ...(strings(needsRaw.secretIds).length > 0 ? { secretIds: strings(needsRaw.secretIds) } : {}),
+      ...(strings(needsRaw.skills).length > 0 ? { skills: strings(needsRaw.skills) } : {}),
+      ...(strings(needsRaw.mcpServers).length > 0 ? { mcpServers: strings(needsRaw.mcpServers) } : {}),
+      ...(repositories.length > 0 ? { repositories } : {}),
+    };
+    bundles.push({ name, ...(Object.keys(needs).length > 0 ? { needs } : {}) });
+  }
+
   let gettingStarted: BotTemplate["gettingStarted"];
   if (value.gettingStarted !== undefined) {
     const skill = isRecord(value.gettingStarted) ? stringOr(value.gettingStarted.skill).trim() : "";
@@ -264,6 +355,7 @@ export function parseTemplate(raw: unknown): { template: BotTemplate } | { probl
     skills,
     routines,
     connectors,
+    ...(bundles.length > 0 ? { bundles } : {}),
     ...(gettingStarted !== undefined ? { gettingStarted } : {}),
     ...(Object.keys(meta).length > 0 ? { meta } : {}),
   };
@@ -560,14 +652,33 @@ export function renderRecipe(template: BotTemplate, options: { self: string }): 
 }
 
 /** What is still on the person, after the bot has installed what it can. */
-export function pendingOf(template: BotTemplate, connected: readonly string[]): { fillIns: TemplateFillIn[]; connectors: string[] } {
+export interface TemplatePending {
+  fillIns: TemplateFillIn[];
+  connectors: string[];
+  /** Bundle references that did not resolve: missing here, or here but not covering the needs. */
+  bundles: BundleResolution[];
+}
+
+export function pendingOf(template: BotTemplate, connected: readonly string[], bundles: readonly BundleResolution[] = []): TemplatePending {
   const fillIns = new Map<string, string>();
   for (const routine of template.routines) for (const fillIn of routine.fillIns) fillIns.set(fillIn.id, fillIn.label);
   const have = new Set(connected.map(name => name.toLowerCase()));
   return {
     fillIns: [...fillIns].map(([id, label]) => ({ id, label })),
     connectors: template.connectors.filter(name => !have.has(name.toLowerCase())),
+    bundles: bundles.filter(resolution => resolution.status !== "resolved"),
   };
+}
+
+/** One sentence per unresolved bundle, for the cue and for the person. */
+export function describeBundleGaps(bundles: readonly BundleResolution[]): string[] {
+  return bundles.flatMap(resolution =>
+    resolution.status === "missing"
+      ? [`bundle "${resolution.name}" is not attached to this box${resolution.needs.length > 0 ? ` (the work used it for: ${resolution.needs.join(", ")})` : ""}`]
+      : resolution.status === "conflict"
+        ? [`bundle "${resolution.name}" is attached but does not provide ${resolution.lacks.join(", ")}`]
+        : []
+  );
 }
 
 /**
@@ -582,7 +693,7 @@ export function templateSetupCue(input: {
   self: string;
   recipePath: string;
   createdBy?: string;
-  pending: { fillIns: TemplateFillIn[]; connectors: string[] };
+  pending: { fillIns: TemplateFillIn[]; connectors: string[]; bundles?: BundleResolution[] };
   /**
    * What the host already knows and the bot must not ask for: the person's timezone (this
    * machine's), and anything else the caller can name. Grok's setup turn never asks for
@@ -625,6 +736,12 @@ export function templateSetupCue(input: {
       : "") +
     (pending.connectors.length > 0
       ? `Not connected here, and not yours to ask about: ${pending.connectors.join(", ")} — mention it in one clause only if a routine depends on it. `
+      : "") +
+    // A bundle is a person's grant, never the template's: the bot says exactly what is
+    // missing, points at Settings, and does not work around it with another tool.
+    ((pending.bundles ?? []).length > 0
+      ? `Capabilities this recipe was made with that this box does not have: ${describeBundleGaps(pending.bundles ?? []).join("; ")}. ` +
+        "Say so in one clause and that a person attaches bundles in Settings → Boxes; do not ask for keys, do not substitute another route, and do not treat a same-named bundle as the same grant. "
       : "") +
     "Never ask for what the box or this cue can tell you (the clock, the files, who you are talking to). ";
   const gettingStarted = template.gettingStarted !== undefined ? ` Read and follow the skill "${template.gettingStarted.skill}" before you speak.` : "";
@@ -731,6 +848,8 @@ export interface PackContext {
   teammates: readonly string[];
   /** This bot's own records, so a memory about a person is refused whatever words it arrives in. */
   memoryRecords: readonly MemoryRecord[];
+  /** The bundles the author's box carries, as names and what they provide (ids, never values). */
+  bundles?: readonly TemplateBundleRef[];
   createdBy?: string;
   now?: () => string;
 }
@@ -866,6 +985,7 @@ export async function packTemplate(
     skills,
     routines,
     connectors: [...new Set(selection.connectors.map(name => name.trim()).filter(name => name !== ""))],
+    ...(context.bundles !== undefined && context.bundles.length > 0 ? { bundles: context.bundles } : {}),
     ...(selection.gettingStarted !== undefined ? { gettingStarted: selection.gettingStarted } : {}),
     meta: {
       createdAt: (context.now ?? (() => new Date().toISOString()))(),

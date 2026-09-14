@@ -4362,6 +4362,10 @@ export async function dispatchTool(
           .filter(entry => entry.slug !== "");
       const self = context.agent.profile;
       const teammates = context.registry.list().map(agent => agent.profile.name).filter(name => name !== self.name);
+      // The bundles this box carries travel as names and needs (INV-421): what the
+      // recipe was made with, for the receiver to resolve against its own grants.
+      const ownBox = boxOfAgent(context);
+      const bundleRefs = ownBox !== undefined ? context.bundles?.refsFor(ownBox) ?? [] : [];
       const packed = await packTemplate(
         box,
         {
@@ -4392,6 +4396,7 @@ export async function dispatchTool(
           teammates,
           memoryRecords: context.registry.readMemoryRecords(context.agent.id),
           ...(context.caller?.userId !== undefined ? { createdBy: context.caller.userId } : {}),
+          ...(bundleRefs.length > 0 ? { bundles: bundleRefs } : {}),
         }
       );
       if ("refused" in packed) return { text: packed.refused, isError: true };

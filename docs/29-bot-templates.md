@@ -316,6 +316,25 @@ or clicks Resume on the automations row (`POST /api/schedules/resume {slug}`, ne
 with the missing label in `status()`. `paused:` is one frontmatter key, honoured by
 `SkillScheduler` and reported by `status()` — no second store.
 
+### 5.1 Bundles by name, resolved by the receiver (INV-421, 2026-09-14)
+
+A template now carries `bundles`: the names of the bundles the author's box had, and what
+the work used from each — connector slugs, secret *ids*, skills, MCP servers, repository
+paths with mode. Never a value; a `needs` block with a value-shaped key is refused at parse.
+`PackTemplate` fills it from the box's attached bundles (`BundleStore.refsFor`).
+
+On import the host resolves each reference against the *target box's* effective bundle
+(`resolveBundleRefs`): **resolved** when a same-named bundle is attached and covers the
+needs; **missing** when none is attached; **conflict** when one is attached but lacks
+something (a read-only repository where the work wrote, a missing secret id). Same name
+is not the same grant, and nothing is attached from a name. The gaps ride in `pending.bundles`
+back to the caller and into the setup cue, which tells the new bot to say exactly what is
+missing, that a person attaches bundles in Settings, and not to ask for keys or route
+around it. A person binds with `POST /api/bundles/attach {box, bundle}` (admin), which
+grants only what that bundle already holds and is idempotent; `GET /api/bundles` lists
+bundles, attachments and dangling ids. Effective capability is read from the store on
+every turn, so a detached or changed bundle is gone at the next look.
+
 ## 6. Share: a file, then a link, then a shelf
 
 **Stage A — the file.** The share card's Download gives `<slug>.lumenbox-template.json`;
