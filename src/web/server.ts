@@ -190,6 +190,7 @@ import {
 } from "./mcp-server.ts";
 import { Vault, type Grant } from "../host/vault.ts";
 import { OAuthGate } from "../host/oauth.ts";
+import { MemoryAdmin } from "../host/memory-admin.ts";
 import { seedStarterSkills } from "../host/starter-skills.ts";
 import { firstRunCue } from "../host/prompt.ts";
 import { readBoxToken } from "../box/docker.ts";
@@ -449,6 +450,9 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
   const vault = new Vault();
   // The OAuth gate over it (INV-422): tokens minted and refreshed here, never shown.
   const oauth = new OAuthGate(vault);
+  // Memory as a person sees and corrects it (INV-426): reads the registry's files, writes
+  // retractions and edits with a version check, audits to memory-audit.jsonl.
+  const memoryAdmin = new MemoryAdmin(registry, join(agentboxHome(), "memory-audit.jsonl"));
 
   // Channel task cards listen here while their ask is in flight: each listener is a
   // narrow filter on (agent, conversation), added before the prompt and removed after
@@ -3435,6 +3439,59 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
             }
           } catch (error) {
             send(res, 400, { error: error instanceof Error ? error.message : String(error) });
+          }
+          return;
+        }
+
+        // ── memory, browsed and corrected (INV-426) ─────────────────────────────
+        // Authorization is the same question every driving route asks — may this
+        // caller act on this agent — applied to the list too, so a summary never names
+        // an agent the caller could not open.
+        if (route === "GET /api/memory") {
+          if (refused()) return;
+          const known: Caller =
+            !assertedByGateway && caller.userId !== undefined && !roleAtLeast(principals.roleOf(caller.userId), "driver")
+              ? { ...caller, role: "viewer" }
+              : caller;
+          const visible = registry.list().filter(agent => agent.profile.hidden !== true && refusalToDrive(known, agent.profile) === undefined);
+          const boxes = registry.listBoxes().map(box => ({ id: box.id, name: box.name }));
+          send(res, 200, { boxes, agents: memoryAdmin.summary(visible) });
+          return;
+        }
+        if (route === "GET /api/memory/agent") {
+          const agentId = url.searchParams.get("agent") ?? "";
+          if (!registry.has(agentId)) {
+            send(res, 404, { error: `No agent ${agentId}` });
+            return;
+          }
+          if (refused(agentId)) return;
+          send(res, 200, { agent: agentId, ...memoryAdmin.detail(agentId) });
+          return;
+        }
+        if (route === "POST /api/memory/change") {
+          const body = await readJson(req);
+          const agentId = String(body.agent ?? "");
+          if (!registry.has(agentId)) {
+            send(res, 404, { error: `No agent ${agentId}` });
+            return;
+          }
+          if (refused(agentId)) return;
+          const scope = body.scope === "shared" ? "shared" : "own";
+          const result = memoryAdmin.change({
+            agentId,
+            scope,
+            key: String(body.key ?? ""),
+            version: String(body.version ?? ""),
+            ...(typeof body.text === "string" ? { text: body.text } : {}),
+            by: caller.userId ?? "operator",
+          });
+          if (result.ok) {
+            log(`memory: ${caller.userId ?? "operator"} ${typeof body.text === "string" ? "edited" : "withdrew"} a ${scope} line of ${registry.get(agentId).profile.name}`);
+            send(res, 200, { ok: true, ...(result.version !== undefined ? { version: result.version } : {}), ...memoryAdmin.detail(agentId) });
+          } else if (result.conflict) {
+            send(res, 409, { error: result.why, current: result.current ?? null });
+          } else {
+            send(res, 400, { error: result.why });
           }
           return;
         }
