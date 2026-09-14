@@ -50,6 +50,8 @@ export interface McpServerConfig {
   url?: string;
   /** Request headers for a remote server — where a bearer credential travels. */
   headers?: Record<string, string>;
+  /** Host-level (INV-439): reviewed like a host command; writes need the gate's consent. */
+  host?: boolean;
 }
 
 export interface McpTool {
@@ -694,6 +696,26 @@ export class McpManager {
   /** Whether a tool name belongs to one of these servers. */
   owns(name: string): boolean {
     return this.serverFor(name) !== undefined;
+  }
+
+  /** Whether a tool belongs to a server the operator marked host-level (INV-439). */
+  isHostTool(name: string): boolean {
+    return (this.serverFor(name)?.config as { host?: boolean } | undefined)?.host === true;
+  }
+
+  /**
+   * The tools a box may see (INV-439): every server's, unless the box's bundles name
+   * servers — then only those servers' tools. A bundle naming nothing narrows nothing,
+   * which is the same rule skills follow.
+   */
+  toolsFor(serverNames: readonly string[] | undefined): McpTool[] {
+    const all = this.tools();
+    if (serverNames === undefined || serverNames.length === 0) return all;
+    const wanted = new Set(serverNames);
+    return all.filter(tool => {
+      const at = tool.name.indexOf(MCP_SEPARATOR);
+      return at > 0 && wanted.has(tool.name.slice(0, at));
+    });
   }
 
   private serverFor(name: string): ToolServer | undefined {

@@ -1897,7 +1897,7 @@ export const STARTER_TEAM: readonly {
 ];
 
 /** The MCP server list as config.json spells it, in the manager's shape. */
-function mcpServersFrom(config: { mcpServers?: Record<string, { command?: string; args?: string[]; env?: Record<string, string>; url?: string; headers?: Record<string, string> }> }) {
+function mcpServersFrom(config: { mcpServers?: Record<string, { command?: string; args?: string[]; env?: Record<string, string>; url?: string; headers?: Record<string, string>; host?: boolean }> }) {
   // The connector doors (mcp-connectors.ts) sit under the operator's entries: a config.json
   // line with the same name overrides a door's default, an env credential turns a door on,
   // and either may exist without the other.
