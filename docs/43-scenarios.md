@@ -64,6 +64,22 @@ gate closes (A3) and is exercised by `scorecard.test.ts` through the real script
 scenario runner's `--json` now records provider and model so two runs are comparable
 or known not to be.
 
+## The delivery journeys (INV-480, 2026-09-14)
+
+`src/host/journeys.ts` freezes what one person asks for, in three classes — a report from
+several materials, a read-only browser collection, a check of a routine's last result —
+each in three shapes: as asked, with an authorization the rails refuse (no vault for a
+secret fill, a private address the URL guard stops, a host command with no host runner),
+and interrupted then resumed on "continue". Nine variants, each with named checks: the
+artifact says where its numbers came from, nothing from a refused step reaches it, the
+refusal is on record and the person is told, the partial is on disk and says what is
+pending, and a resume never repeats a write. `journeys.test.ts` runs them on the scripted
+model and the memory box (the harness gained `box` overrides and a `display`, so a
+collection journey's browser answers with a fixed page) and prints the report: commit,
+configuration, per-journey rounds / questions / refusals / artifacts, and the two things
+this cannot verify — a real model's conduct (`npm run scenario`) and a person's acceptance
+(no trial participants recruited) — as UNVERIFIED, not inferred.
+
 ## What it is not
 
 The scripted model is not a model. It cannot tell you whether a real one is sensible, only whether
