@@ -16,9 +16,10 @@ const API = "https://api.telegram.org";
 /** Telegram truncates at 4096; splitting on our side keeps long reports readable. */
 const CHUNK = 3900;
 
-interface Update {
+export interface Update {
   update_id: number;
   message?: {
+    message_id?: number;
     text?: string;
     chat: { id: number };
     from?: { first_name?: string; username?: string };
@@ -68,15 +69,9 @@ export class TelegramChannel implements ChannelAdapter {
         })) as Update[];
         for (const update of updates) {
           this.offset = Math.max(this.offset, update.update_id + 1);
-          const text = update.message?.text;
-          if (text === undefined || update.message === undefined) continue;
-          const chatId = update.message.chat.id;
-          const from = update.message.from;
-          const inbound: InboundMessage = {
-            identity: `telegram:${chatId}`,
-            senderLabel: from?.username ?? from?.first_name ?? String(chatId),
-            text,
-          };
+          const inbound = this.inboundOf(update);
+          if (inbound === undefined) continue;
+          const chatId = update.message!.chat.id;
           // Not awaited: a turn can run for minutes, and polling must not stop
           // receiving while one runs. Ordering per chat is the bus's job.
           void onMessage(inbound)
@@ -92,6 +87,27 @@ export class TelegramChannel implements ChannelAdapter {
         await new Promise(resolve => setTimeout(resolve, 5000));
       }
     }
+  }
+
+  /**
+   * The inbound seam (contract.ts, INV-129): one update to one message, or nothing for
+   * an update this door does not handle. Telegram delivers each update once by offset,
+   * so there is no redelivery to dedupe; the chat is the identity and the conversation.
+   */
+  inboundOf(update: Update): InboundMessage | undefined {
+    const text = update.message?.text;
+    if (text === undefined || update.message === undefined) {
+      if (update.message !== undefined) this.log(`channel telegram: dropped update ${update.update_id} — no text`);
+      return undefined;
+    }
+    const chatId = update.message.chat.id;
+    const from = update.message.from;
+    return {
+      identity: `telegram:${chatId}`,
+      senderLabel: from?.username ?? from?.first_name ?? String(chatId),
+      text,
+      ...(update.message.message_id !== undefined ? { messageId: String(update.message.message_id) } : {}),
+    };
   }
 
   private async reply(chatId: number, text: string): Promise<void> {
