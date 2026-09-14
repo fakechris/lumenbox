@@ -239,7 +239,7 @@ a teaching turn turns the trace into a parameterised skill, dry-run only, never 
 **Success Criteria**: smoke shows USER_IN_CONTROL during takeover; a three-step fixture
 demonstration replays its targets and order from the trace; the learned skill dry-runs in a fresh
 session and greps clean of coordinates and secrets.
-**Status**: In Progress: C1 takeover pause merged (#103, INV-404); C2 trace capture (INV-405) and C3 teach turn (INV-406) are next round's Tier 0.
+**Status**: Complete (2026-09-12): C1 #103 (INV-404), C2 trace capture (INV-405), C3 teach turn (INV-406) merged; live teach loop verified.
 
 ## Stage 20: Browser targeting and pages (docs/49 milestone D, under INV-141)
 **Goal**: snapshotId with `STALE_SNAPSHOT` instead of silent re-resolution; `find{role,name,nth}`
@@ -257,7 +257,7 @@ bot template (docs/29) through export, import and share.
 **Success Criteria**: second run of the same task on a fixture site uses fewer tool calls; a
 task interrupted at step N returns steps 1..N-1 as partial and resumes from it; an imported
 template's bot uses the learnings on first visit; the pack greps clean of secrets.
-**Status**: In Progress: E1 learnings merged (#108, INV-409); E2 partial (INV-410) next round; E3 templates (INV-411) Tier 2.
+**Status**: Complete (2026-09-14): E1 #108 (INV-409), E2 checkpoint/partial (INV-410), E3 templates — manifest, travelling learnings, one-share-one-bot (#139, INV-411).
 
 ## Stage 22: Enterprise primitives, the decision (docs/50 F)
 **Goal**: docs/22 gains the eight-primitive appendix (Installation / Box / Door / Agent /
@@ -275,28 +275,28 @@ vault; egress allow lists become per box and refusals emit events.
 **Success Criteria**: the same skill on/off per box; agent tool set changes with its box; a
 GitHub or Feishu connector completes OAuth and the transcript holds no token; a per-box egress
 refusal shows up as an event.
-**Status**: In Progress: G1 bundles + G4 egress merged (#96, #100); G2 stacking (INV-421), G3 OAuth (INV-422, PR), G5/G6 local env (INV-438 #123, INV-439 #122) in review.
+**Status**: Complete (2026-09-14): G1 #96, G4 #100, G2 template bundle refs (#138, INV-421), G3 OAuth gate (#124, INV-422), G5 host box (#123, INV-438), G6 MCP by bundle (#122, INV-439).
 
 ## Stage 24: Memory follows place (docs/50 H)
 **Goal**: shared memory sharded by box; a memory.md index in the prompt with relevance-loaded
 bodies (first 4K); a browse/edit UI with retractions on record.
 **Success Criteria**: agents in two boxes cannot see each other's shared memory; index +
 lazy load replaces the flat 4k budget; edits leave evidence.
-**Status**: In Progress: H1 memory by box merged (#97); H2 index (INV-425) Tier 0; H3 UI (INV-426) Tier 2.
+**Status**: Complete (2026-09-14): H1 #97, H2 index (INV-425), H3 memory UI with versioned withdraw/edit (#135, INV-426); plus INV-147 fixtures (#132) and INV-148 invariants (#131).
 
 ## Stage 25: Control by rules, doors and layered instructions (docs/50 I)
 **Goal**: admin-written auto-mode rules feed PolicyGate and auto-review; instructions concatenate
 org → box → agent; doors gain name-based auto-join allow/deny and a guest toggle.
 **Success Criteria**: a rule-matched call skips approval and is logged; a box-level instruction
 appears in every agent prompt in that box; a `[Support]` group auto-joins, `[Internal]` never.
-**Status**: In Progress: I2 layered instructions merged (#98); I1 rules (INV-427) Tier 0; I3 door rules (INV-429) Tier 2.
+**Status**: In Progress: I2 #98, I1 rules (INV-427) merged; I3 door name rules and guest switch (INV-429) is next round's Tier 0.
 
 ## Stage 26: Audit cut by place (docs/50 J)
 **Goal**: scheduled work grouped by box; spend by box and door; a queryable network event log
 (time, box, agent, host, status, refusal reason); export of all ledgers per box and time range.
 **Success Criteria**: "which box burns the most" answers from Settings; a network event query
 by range returns the relay's refusals; an export bundle round-trips.
-**Status**: In Progress: J2 spend by place + J3 network events merged (#99, #101); J1 (INV-430 #125), J4 (INV-433 PR) in review.
+**Status**: Complete (2026-09-14): J2 #99, J3 #101, J1 automations by box (#125, INV-430), J4 audit export (#126, INV-433).
 
 ## Stage 27: Runtime registration and IM custody (docs/50 K)
 **Goal**: self-hosted environment registration via connect code; inbound delivery custody as a
@@ -305,4 +305,14 @@ thread sessions.
 **Success Criteria**: a runner registers with a code and shows health; a killed host mid-turn
 does not re-run the turn; an un-mentioned group message lands as ambient, first @ in a thread
 materialises a session.
-**Status**: Not Started: K2 custody (INV-435) Tier 0; K3 attention (INV-436) Tier 1; K1 connect codes (INV-434) Tier 2.
+**Status**: Complete (2026-09-14): K2 custody (INV-435), K3 thread bootstrap / attention (#121, INV-436), K1 connection codes (#140, INV-434).
+
+## Stage 28: Acceptance packages and the Tier 0/1 close-out (2026-09-13 → 09-14)
+**Goal**: The Astra-revised contracts delivered as replayable evidence, and every Tier 0/1 item merged.
+**Success Criteria**: INV-129 adapter contract with roll call; INV-130 release scorecard (deterministic/artifact/model, SKIPPED never PASS); INV-480 nine delivery journeys; INV-481 5×3 migration matrix; INV-412 AT-SPI, INV-146 retry/degrade, INV-434 connection codes live in main; the Feishu silent-socket fix (INV-523) deployed.
+**Status**: Complete (2026-09-14): #121–#128, #130–#143 merged; main 1459/1459, floor 1459; box image rebuilt from main (AT-SPI, recovery); App rebuilt from main and relaunched; `npm run release:check` on 5f460e0: deterministic pass, artifact pass, model SKIPPED (no credentials).
+
+## Stage 29: Next round (planned 2026-09-14)
+**Goal**: Close the last open pieces that need no external data, and make the operator-side evidence possible.
+**Success Criteria**: I3 door rules (INV-429) merged; host-side wedge detection (INV-135); standing approvals by principal (INV-156, on top of INV-427 rules); tool idempotency declaration (INV-525, once committed); a real-model scorecard baseline produced under authorised credentials and compared once; security S-2..S-7 (INV-138) triaged.
+**Status**: Not Started. Waiting on data or people, outside the round: INV-128 real payloads, INV-153/157 identity environment, INV-440 a real cross-installation caller, INV-480/481 trial participants.
