@@ -1674,8 +1674,163 @@ document.getElementById("setsecrets").addEventListener("click", function (event)
     .then(renderSecrets);
 });
 
-      renderSecrets(); renderConnectors();
+/** Connected services (INV-422): providers to connect, connections that exist, never a token. */
+var connProviders = [];
+
+function renderConnectors() {
+  fetch("/api/connectors")
+    .then(function (r) { if (r.status === 403) { $("setconns").innerHTML = ""; return null; } return r.json(); })
+    .then(function (data) {
+      if (!data) return;
+      connProviders = data.providers || [];
+      var select = $("setconnprov");
+      if (!select.options.length) {
+        select.innerHTML = connProviders.map(function (p) { return '<option value="' + esc(p.id) + '">' + esc(p.title) + "</option>"; }).join("");
+        select.onchange = function () {
+          var p = connProviders.filter(function (x) { return x.id === select.value; })[0];
+          $("setconnsetup").textContent = p ? p.setup : "";
+        };
+        select.onchange();
+      }
+      var connected = data.connected || [];
+      $("setconns").innerHTML = connected.length
+        ? connected.map(function (c) {
+            var who = (c.grants || []).map(function (g) { return g.holder; }).join(", ") || "nobody yet";
+            var until = c.expiresAt ? " · until " + c.expiresAt.slice(0, 16).replace("T", " ") : "";
+            return '<div style="display:flex;gap:8px;align-items:center;font-size:13px">' +
+              '<span class="mono" style="min-width:110px;font-weight:600">' + esc(c.provider) + "</span>" +
+              '<span class="dim" style="flex:1;font-size:12px;overflow:hidden;text-overflow:ellipsis">' + esc(who + until) + "</span>" +
+              '<a href="#" data-connrm="' + esc(c.id) + '" style="color:var(--danger);font-size:12px">Disconnect</a></div>';
+          }).join("")
+        : '<div class="fieldnote" style="margin:0">Nothing connected yet.</div>';
+    })
+    .catch(function () {});
+}
+
+$("setconnadd").onclick = function () {
+  var provider = $("setconnprov").value;
+  var p = connProviders.filter(function (x) { return x.id === provider; })[0];
+  var body = { provider: provider, clientId: $("setconnid").value.trim(), clientSecret: $("setconnsecret").value, grant: $("setconngrant").value.trim() };
+  if (!body.clientId || !body.clientSecret) { $("setconnstatus").textContent = "Both the id and the secret are needed."; return; }
+  var code = p && p.kind === "authorization_code";
+  $("setconnstatus").textContent = code ? "Opening the provider…" : "Connecting…";
+  fetch(code ? "/api/connectors/begin" : "/api/connectors/connect", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body) })
+    .then(function (r) { return r.json().then(function (d) { if (!r.ok) throw new Error(d.error || "failed"); return d; }); })
+    .then(function (d) {
+      $("setconnsecret").value = "";
+      if (d.url) { window.open(d.url, "_blank"); $("setconnstatus").textContent = "Finish the authorization in the new tab, then this list updates."; }
+      else { $("setconnstatus").textContent = "Connected."; }
+      renderConnectors();
+    })
+    .catch(function (error) { $("setconnstatus").textContent = error.message; });
+};
+
+document.getElementById("setconns").addEventListener("click", function (event) {
+  var id = event.target.getAttribute && event.target.getAttribute("data-connrm");
+  if (!id) return;
+  event.preventDefault();
+  fetch("/api/vault/remove", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ id: id }) })
+    .then(function () { renderConnectors(); renderSecrets(); });
+});
+
+/** Memory, browsed and corrected (INV-426): summary by box, detail by agent, withdraw and edit with a version. */
+var memAgent = null;
+
+function renderMemorySummary() {
+  $("setmemstate").textContent = "Loading…";
+  $("setmemdetail").style.display = "none";
+  fetch("/api/memory")
+    .then(function (r) {
+      if (r.status === 403) { $("setmemstate").textContent = "This account can watch but not open memory."; $("setmemsummary").innerHTML = ""; return null; }
+      if (!r.ok) throw new Error("HTTP " + r.status);
+      return r.json();
+    })
+    .then(function (data) {
+      if (!data) return;
+      var agents = data.agents || [];
+      if (!agents.length) { $("setmemstate").textContent = "No agents you can open have kept anything yet."; $("setmemsummary").innerHTML = ""; return; }
+      $("setmemstate").textContent = "";
+      var names = {};
+      (data.boxes || []).forEach(function (b) { names[b.id] = b.name; });
+      var byBox = {};
+      agents.forEach(function (a) { (byBox[a.boxId] = byBox[a.boxId] || []).push(a); });
+      $("setmemsummary").innerHTML = Object.keys(byBox).map(function (boxId) {
+        return '<div style="font-size:12px;font-weight:600;margin-top:4px">' + esc(names[boxId] || boxId) + "</div>" +
+          byBox[boxId].map(function (a) {
+            var kinds = Object.keys(a.byKind || {}).map(function (k) { return a.byKind[k] + " " + k; }).join(", ") || "nothing live";
+            return '<div style="display:flex;gap:8px;align-items:center;font-size:13px">' +
+              '<a href="#" data-memagent="' + esc(a.agentId) + '" style="min-width:110px;font-weight:500">' + esc(a.agentName) + "</a>" +
+              '<span class="dim" style="flex:1;font-size:12px">' + esc(kinds) + (a.retracted ? " · " + a.retracted + " withdrawn" : "") + (a.lastAt ? " · last " + esc(a.lastAt.slice(0, 10)) : "") + "</span></div>";
+          }).join("");
+      }).join("");
+    })
+    .catch(function (error) { $("setmemstate").textContent = "Could not read memory: " + error.message; });
+}
+
+function renderMemoryDetail(agentId) {
+  memAgent = agentId;
+  $("setmemdetail").style.display = "";
+  $("setmemlines").innerHTML = '<div class="dim" style="font-size:12px">Loading…</div>';
+  fetch("/api/memory/agent?agent=" + encodeURIComponent(agentId))
+    .then(function (r) { if (!r.ok) throw new Error(r.status === 403 ? "not yours to open" : "HTTP " + r.status); return r.json(); })
+    .then(function (data) {
+      var lines = [];
+      var row = function (v, scope) {
+        var live = v.status === "live";
+        return '<div data-memkey="' + esc(v.key) + '" data-memver="' + esc(v.version) + '" data-memscope="' + scope + '" style="display:flex;gap:8px;align-items:flex-start;font-size:12px' + (live ? "" : ";opacity:.55") + '">' +
+          '<span class="mono dim" style="min-width:76px">' + esc(v.at.slice(0, 10)) + "</span>" +
+          '<span class="dim" style="min-width:56px">' + esc(v.kind) + (scope === "shared" ? " · team" : "") + "</span>" +
+          '<span style="flex:1;white-space:pre-wrap" class="memtext">' + esc(v.text) + (live ? "" : ' <span class="dim">(withdrawn' + (v.retractedBy ? " — " + esc(v.retractedBy) : "") + ")</span>") + "</span>" +
+          (live ? '<a href="#" data-memedit="1" class="dim" style="font-size:11px">Edit</a><a href="#" data-memdrop="1" style="color:var(--danger);font-size:11px">Withdraw</a>' : "") +
+          "</div>";
+      };
+      (data.own || []).forEach(function (v) { lines.push(row(v, "own")); });
+      (data.shared || []).forEach(function (v) { lines.push(row(v, "shared")); });
+      $("setmemlines").innerHTML = lines.length ? lines.join("") : '<div class="dim" style="font-size:12px">Nothing kept yet.</div>';
+    })
+    .catch(function (error) { $("setmemlines").innerHTML = '<div style="color:var(--danger);font-size:12px">' + esc(error.message) + "</div>"; });
+}
+
+function changeMemory(rowEl, text) {
+  var body = { agent: memAgent, scope: rowEl.getAttribute("data-memscope"), key: rowEl.getAttribute("data-memkey"), version: rowEl.getAttribute("data-memver") };
+  if (text !== undefined) body.text = text;
+  return fetch("/api/memory/change", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body) })
+    .then(function (r) { return r.json().then(function (d) { return { status: r.status, data: d }; }); })
+    .then(function (out) {
+      if (out.status === 409) {
+        alert("That line changed since you saw it" + (out.data.current ? ":\n\n" + out.data.current.text : " and is no longer live.") + "\n\nThe list is refreshed; decide again.");
+      } else if (out.status !== 200) {
+        alert(out.data.error || ("HTTP " + out.status));
+      }
+      renderMemoryDetail(memAgent);
       renderMemorySummary();
+    });
+}
+
+document.getElementById("setmemsummary").addEventListener("click", function (event) {
+  var id = event.target.getAttribute && event.target.getAttribute("data-memagent");
+  if (!id) return;
+  event.preventDefault();
+  $("setmemtitle").textContent = event.target.textContent;
+  renderMemoryDetail(id);
+});
+document.getElementById("setmemback").onclick = function (event) { event.preventDefault(); $("setmemdetail").style.display = "none"; memAgent = null; };
+document.getElementById("setmemlines").addEventListener("click", function (event) {
+  var t = event.target;
+  if (!t.getAttribute) return;
+  var rowEl = t.closest("[data-memkey]");
+  if (!rowEl) return;
+  if (t.getAttribute("data-memdrop")) {
+    event.preventDefault();
+    if (!confirm("Withdraw this line? It stays on record as withdrawn; the agent stops recalling it.")) return;
+    changeMemory(rowEl);
+  } else if (t.getAttribute("data-memedit")) {
+    event.preventDefault();
+    var current = rowEl.querySelector(".memtext").textContent;
+    var next = prompt("Correct this line. The old one is withdrawn and this is kept in its place:", current);
+    if (next === null || next.trim() === "" || next.trim() === current.trim()) return;
+    changeMemory(rowEl, next.trim());
+  }
 });
 
 /** The people list: one row per identity, grouped nowhere — flat and editable. */
