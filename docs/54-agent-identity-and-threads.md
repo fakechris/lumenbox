@@ -6,8 +6,8 @@
 -->
 # 54 · Agent 身份与在工作项上的对话
 
-*2026-09-15。v2：初稿经 codex（gpt-6-astra，high，读了我们的代码）红队后重写了 §3 之后的全部内容；
-§6 记录它推翻了什么。Chris 的需求原话：想在一条 INV 上 @ 当初写下这条的 agent，问它"你当时的判断依据是什么"；
+*2026-09-15。v2 经 codex 红队重写；v3 按 Chris 的四条方向改成长期、解耦的形态，并补了
+"发起的 agent 下线之后谁来答"的调研（Linear 的答案很明确，见 §D）。§7 记录每一版被推翻了什么。Chris 的需求原话：想在一条 INV 上 @ 当初写下这条的 agent，问它"你当时的判断依据是什么"；
 但 API 里看不出是哪个 agent 干的，角色都长一样；Involute 本身没有 agent 对话能力；Linear 是怎么把
 agent 能力和工作项解耦的；还有一种情况是 Codex / Claude Code 直接操作 INV，这种怎么 @ 回来——
 是不是需要一个 agent 协议，谁都来符合它、挂上监听。*
@@ -62,109 +62,130 @@ INV-538 的 audits 也是同一个：`actorKind: HUMAN`、`actorId: 4fcdec6e-…
 - **输出**：agent 发 **AgentActivity**，类型 `thought` / `action` / `elicitation` / `response` / `error`。
   **要求 10 秒内先发一条 thought**，表示接住了。session 的状态由 activities 自动推进，
   "No manual state management is required"。
+- **说实话的状态机**：session 有 pending / active / error / awaitingInput / complete / **stale** 六态，
+  由活动自动推进。**10 秒内没有活动就显示 unresponsive**；后续活动可以持续 30 分钟，之后进入
+  stale，**stale 可恢复**。webhook 接收端必须 5 秒内应答，所以真正的工作一定是异步的。
+  设了 `externalUrls` 的新 session 不会被标成 unresponsive。
+- **没有"转交活着的会话"这个原语**（§D 详述）：agent 不响应时的做法是换 delegate，
+  于是**开一个新 session**，上下文由评论与 `promptContext` 重建。
 - **解耦点，也就是 Chris 问的那句"怎么解耦"**：**Linear 不托管 agent**。它只定义三件事——
   一个可寻址的身份、一次对话的信封、一组可观察的活动类型。agent 跑在哪、是什么模型、
   怎么实现，它一概不管。要抄的是这三件事，不是抄它的实现。
 
-## 3. 方案（v2：红队之后）
+## 3. 长期形态（v3）：Involute 是记录，agent 在外面，中间是一个小协议
 
-### 3.0 红队推翻的三个前提，先说清楚
+Chris 的四条方向定了骨架：**agent 能以自己的身份说话**；**Involute 是基础数据与基础设施，
+给人和 agent 留足接口**；**讨论是多轮的**（人↔agent、agent↔agent、同步或异步）；
+**发起的 agent 可能已经下线，别的 agent 要能接手**。下面按这四条写，顺序是依赖顺序。
 
-1. **"换 token 就解决了身份问题"——不成立。** 换 token 解决的是**归属记录**，不是**防冒充**：
-   只要管理员 bearer 还留在 `~/.claude.json` 或任何进程读得到的地方，agent 随时可以用回它；
-   而且同一个 box 内共享文件系统与 passwordless sudo（docs/22 §0、`auth.ts` 自己写着"不是安全边界"），
-   同箱的几把 token 互相之间本来就不设防。**所以 P0 的验收不是"发了 token"，而是"agent 的每一条
-   执行路径上都不再存在 HUMAN 凭证，且 `work_commit` 对它们返回拒绝"。**
-2. **"跟进 rails 可以白拿"——不成立。** `question-expiry.ts` 看守的是 **agent 问人**；
-   Chris 要的是 **人问 agent**，方向相反，而且同一个人再说一句话就会清掉该 agent 对他的待答问题
-   （`question-expiry.ts` 的 `noteReply`）。人问 agent 的那只钟**必须由 Involute 持久保管**，
-   不能挂在某个可能已经关掉的宿主进程里。
-3. **"有权提问 = 有权看到回答"——不成立。** 一条 INV 是多人可见的；agent 把私人 box 的 transcript、
-   outbox 附件或内部 PR 内容贴回去，等于把入站授权当成了出站受众。**第一版只允许引用已批准的证据，
-   不允许自动上传 transcript/outbox**（普通 channel 回合会自动带文件，`manager.ts` 的 deliverFiles）。
+### A. 分层：谁拥有什么
 
-### 3.1 真正的骨架（四件事，不是三层）
+```
+Involute（系统 of record）        桥（一页协议）           runtime（谁都行）
+─────────────────────────       ──────────────         ─────────────────
+actor registry + 能力卡片   ←→   认领 / 应答 / 事件   ←→   lumenbox box agent
+work / comment / thread                                  Codex CLI、Claude Code
+事件 outbox + 订阅                                        CI、别人的 agent
+请求账本（claim/ack/期限）
+decision receipt
+```
 
-红队给的替代方案我采纳：**稳定的作者 + 做决定时写下的 receipt + 持久的提问记录 + 可选的消费者**。
+**Involute 不该知道任何 agent 是怎么实现的**，就像 Linear 不托管 agent 一样；它只欠三样东西：
+**一个可寻址的身份、一条可追加的线程、一份带期限与认领的请求账本**。反过来，
+**runtime 不该假设自己是唯一的消费者**——同一个 actor 的队列可以被换一个进程来领。
 
-1. **稳定作者**：每个 agent 一个 `(workspaceId, actorId)`，handle 只是别名。换 token 不换作者身份，
-   删掉再建同名 handle 不继承旧身份（docs/22 §4 的 incarnation 同款理由）。
-2. **Decision receipt（这条是整份方案里最值钱的一条）**：**做出判断的那一刻**就写下一条可定位的记录——
-   actor、run、audit revision、当时明确写下的理由、引用证据的版本。三个月后要问依据，读的是这条，
-   而不是让一个新进程去"回忆"。没有 receipt 时的标准答案是**"无法恢复"**，不是"当时没有依据"。
-3. **持久提问**：提问由 Involute 保存，状态是 `未领取 / 处理中 / 投递失败 / 已答 / 过期`，
-   带 deadline、取消位、付款 principal。**inbox 游标只是扫描位置，不能代替逐条的 claim/ack。**
-4. **可选消费者**：谁来答是一个订阅问题，不是一个 agent 分类问题。webhook 只是"来取吧"的提醒；
-   CLI 手动领同一个队列；没人领就显示"未答 + 该找谁"。**原进程不需要复活。**
+### B. 三张表（Involute 侧的最小基础设施）
 
-### 3.2 砍掉：三种 presence 分类
+1. **Actor registry + 能力卡片**。每个 agent 一个 `(workspaceId, actorId)`，handle 只是别名；
+   actor 上挂一张**能力卡片**（A2A 的 Agent Card 就是这个东西：`/.well-known/agent.json`，
+   写明 name、version、skills、auth scheme）。**卡片让"接谁"变成数据而不是代码**——
+   Involute 不需要认识 lumenbox 或 Codex，只需要知道这个 actor 的卡片在哪、支持什么。
+2. **Thread + 请求账本**。评论属于线程；**提问是一条有状态的请求**：
+   `submitted → working → input-required → completed / failed / canceled`
+   （直接借 A2A 的任务状态机，不自己发明），带 deadline、取消位、付款 principal、目标 actorId、
+   被问的 audit revision。**认领与应答在服务端**（claim/ack），所以两个 sidecar 同时在线不会重复回答。
+3. **Decision receipt**。做判断的当时写下 actor、run、audit revision、当时明确写下的理由、
+   证据版本。v2 的结论不变，而且在 v3 里它有了第二个用途：**接手的 agent 读它**（见 §D）。
 
-初稿按 always-on / on-demand / service 分类，红队指出它把**进程寿命、传输方式、对话能力**三件不同
-的事混成一维，而且立刻会出现第四类（CI 可以按需拉起一个解释器；常驻进程可以只出站轮询）。
-**砍掉。**换成 §3.1 第 4 条：actor 上只记"有没有活跃的消费者在领它的队列"，这是**可观测的事实**，
-不是预先声明的类别。
+投递方式**三种都要有，且是同一份账本的三个取法**（A2A 的做法）：轮询、SSE、
+以及往消费者自己的 URL 推。谁用哪种是部署决定，不是 agent 的类别。
 
-### 3.3 lumenbox 侧："另一道门"要先补七个断点
+### C. 多轮讨论：线程是单位，同步/异步是请求的属性
 
-把 Involute 当成 feishu/telegram 那样的 door，是**方向对、成本被低估**。红队逐条对着
-`src/channels/` 列出的不匹配，我核对后全部成立：
+- 一条线程里可以有**多个并行的请求**（两个人问两个不同的历史判断）；每条请求有自己的 id、
+  目标 actor、状态与期限。**不要一个工作项一个会话**——v2 已经记了这个坑。
+- **agent 反问**是一等状态（`input-required`），不是失败：它要材料、要授权、要澄清，
+  线程上就停在那里等人，期限照走。
+- **agent↔agent** 用同一条线程与同一套状态，但**第一版只允许人发起**（回声风险，v2 §3.5）；
+  开放时按"显式委派动作 + 根请求 id + 预算 + 跳数上限"放行。
+- **同步与异步是同一件事的两种取法**：有活跃消费者就是几秒钟内有 thought，没有就是队列里等着。
+  **Linear 把这个做成了可见状态**（10 秒内没有活动 = unresponsive；30 分钟没有后续 = stale，
+  且 stale 可恢复）。我们照抄这个"说实话的状态机"，因为**人最需要知道的是"它到底会不会回我"**。
 
-| 维度 | 照搬会怎样 | 最小修正 |
+### D. 发起的 agent 下线了，谁来答（调研结论 + 我们的规则）
+
+**Linear 的答案很明确：不迁移会话。** 它没有"把这个活着的 session 转给另一个 agent"的原语；
+遇到 agent 不响应，做法是**换 delegate——于是开一个新 session**，新 agent 的上下文由
+**工单评论 + `promptContext`（Linear 自己拼的摘要）** 重建。生态里讨论过的 in-place harness swap
+（换 Claude/Codex 继续同一个活）也明确**不做 transcript 迁移**——不同 harness 的格式不一样，
+可移植的东西是"**语义交接 + 仓库里的持久事实**"。
+
+我们的规则，三条：
+
+1. **能回答问题的是记录，不是进程。** receipt + 线程 + 证据是可移植的；
+   transcript 不是（会被压缩、格式各家不同）。所以"接手"= **读记录后以自己的身份回答**。
+2. **接手必须显式，且署自己的名。** 答复里写明"**我不是 @codex-chris-mac，我根据
+   RUN-245 与 PR#475 代答**"。**禁止冒名**：这既是审计要求，也是因为代答者不可能知道
+   当时那个进程脑子里想的事。
+3. **每个 actor 可以声明一个 successor**（它所在 box 的常驻 agent，或它的宿主人），
+   期限到了由 successor 接单；没有 successor 就显示"未答 + 该找谁"。
+   **过期文案只说"期限内没有答复"**，不能推断"它没运行"——v2 已经定死这条。
+
+原 agent 之后又回来了怎么办：**请求已经 completed 就不再重开**，它的补充作为线程里的新评论，
+不是第二个答案。（Linear 的 stale 可恢复，说的是会话，不是同一个请求的两份答复。）
+
+### E. 与 Involute 侧那份 sidecar 方案的关系：采纳，三处修正
+
+他们提的 sidecar（轮询/监听含 @ 的评论 → `work_get_context` → LLM → `commentCreate`）
+**形状是对的，就是 §A 的"桥"**，而且是 P0 就能跑起来的最小闭环。三处要改：
+
+1. **`@` 的识别要在服务端解析成 actorId**，不能靠 sidecar 匹配字符串——否则代码块里的
+   `@foo`、编辑、撤回 @ 都会变成难缠的边界，而且两个 sidecar 会重复触发。
+2. **认领要在服务端**（claim/ack + 幂等键）。他们的方案里 sidecar 是单点；一旦有第二个
+   （我们必然会有：lumenbox 一个、Codex 一个），没有 claim 就会出现两份回答。
+3. **回帖必须以被问 agent 的身份**（AGENT actor + 它自己的凭证），不是 sidecar 的身份；
+   否则又回到"所有事都是同一个人干的"。
+
+他们给的 token 签发与 MCP 配置步骤（`agent:create --scopes ...` + 每个 agent 自己的
+`Authorization`）正是我们 P0 要做的，直接照做。
+
+### F. 分阶段（v3，带验收）
+
+| 阶段 | 内容 | 验收 |
 |---|---|---|
-| **作者** | `sendToChat` 没有"以谁的身份发"这个参数；一个 adapter 服务多个 agent，回帖会全署同一个凭证 | 出站带 actorId，选它自己的凭证；系统通知另署系统身份 |
-| **线程** | 门假设有 chat/thread/reply anchor；Involute 今天只确认有 comments | 先确认 parent/root 语义；线程失败不许悄悄退回顶层评论 |
-| **幂等** | adapter 合约允许重复投递，不承诺 durable processing | 请求账本 + 出站幂等键，拿到 commentId 才标 answered |
-| **顺序** | 重试会让旧提问晚于"停下"抵达，把已取消的请求重新跑起来 | 每 thread 序号/版本，取消状态持久化，过时事件拒收 |
-| **编辑** | 按 commentId 去重会吞掉新增的 @；按 eventId 去重又会把编辑当新请求 | 明确"编辑算不算新请求、撤回 @ 算不算取消"，存 comment revision |
-| **限流/长度** | 飞书那套 8000 字切块和固定退避是飞书的契约，不是 Involute 的 | 用短摘要 + 证据链接，不做任意切块；按 429/Retry-After 排队 |
-| **产品语义** | 普通 channel 请求默认开一张本地 Task；"你当时为什么这么判断"会变成第二套工作状态 | 专门的**解释请求**入口：不开任务、不触发通用操作动词 |
+| **P0** | 每 agent 一把 AGENT 凭证；拔掉 agent 路径上的 HUMAN bearer；**开始写 decision receipt** | agent 调 `work_commit` 被拒；两个 agent 的 audits actorId 不同；transcript 压缩后 receipt 仍可读 |
+| **P1** | 服务端：mention 解析成 actorId、事件 outbox、**请求账本（状态机 + claim/ack + 期限 + 幂等）**、AGENT 作为评论作者 | 宿主在"收到"与"答复"之间崩溃，重启后不重复答；两个 sidecar 只有一个答 |
+| **P2** | 桥：受限的**解释请求**消费者（不开任务、不触发通用动词、出站按受众过滤、带自己的凭证） | 一次解释请求不产生任务卡；私有 box 的 transcript 不出现在多人工作项里 |
+| **P3** | 多轮：`input-required`（agent 反问）、线程内多请求并行、**successor 接手 + 出处署名** | 两人同时问两个历史判断不串；代答的答复写明依据来源与代答关系 |
+| **P4** | actor 能力卡片（A2A Agent Card）+ 三种取法（轮询 / SSE / 推送） | 换一个 runtime 接同一个 actor，不改 Involute 一行代码 |
+| **不做** | thought/action 活动流的 UI；agent↔agent 自由发起（先只放显式委派） | — |
 
-### 3.4 并发与预算
+**顺序的理由**：P4 的卡片看起来最"协议化"，但**没有 P1 的账本，卡片只是装饰**；
+而 P1 没有 P0 的身份与 receipt，答出来的东西不可信。
 
-一个 agent 被 20 条 INV 同时 @ 是正常的一天。现有机制不管这个：channel 的运行槽按 conversation 分，
-policy 检查的是**已经花掉的** token（`policy.ts`），follow-up budget 管的是**每个房间的主动提醒**
-（`follow-up-budget.ts`）。所以要加：**每个 actor 一个有界队列，第一版单并发**；请求带 deadline、
-取消位、付款 principal；要硬预算就做**费用预留**，不要把"历史支出检查"说成上限。
+## 7. 每一版被推翻了什么
 
-### 3.5 回声：第一版只认人发起的提问
+- **v1 → v2（codex 红队）**：换 token ≠ 隔离；跟进 rails 不能白拿（`question-expiry` 是
+  agent 问人）；三种 presence 是漏的分类；"必须引用"只能验格式——所以核心换成 **decision receipt**。
+- **v2 → v3（Chris 的四条方向 + Linear/A2A 调研）**：
+  - 补上 **agent↔agent 与多轮**：状态机直接借 A2A（`submitted/working/input-required/completed/failed/canceled`），不自己发明。
+  - **"接手"有了明确答案**：Linear 不迁移会话，换 delegate 开新会话，上下文从评论与 promptContext 重建；
+    生态里的 in-place swap 也明确不迁移 transcript，只做"语义交接 + 持久事实"。我们据此定了
+    §D 的三条规则（记录可移植、接手署自己的名、successor 显式声明）。
+  - **Involute 的定位收紧**为"三张表 + 事件"，agent 逻辑一律在外；投递的三种取法是部署决定。
+  - 采纳 Involute 侧的 sidecar 方案作为 P0/P1 的最小闭环，但把 **mention 解析、认领、署名**
+    三件事挪到服务端——否则第二个 sidecar 上线的那天就会有两份回答。
 
-初稿只禁了"自己 @ 自己"，挡不住 Mia 引用 `@leo`、Leo 又引用 `@mia`。**第一版规则**：
-只有 HUMAN 作者的评论会产生请求；AGENT/SERVICE 的回复、引用、代码块一律不产生。
-真需要 agent 之间委派时，另设显式动作，带根请求 id、预算和跳数上限。
-
-### 3.6 授权：提问是驱动，按 box 收口
-
-能在 INV 上评论的人 ≠ 能驱动某个 box 的 agent 的人。mention 里的发言 actor 必须映射到已绑定的
-principal，然后同时检查 **role + box membership**，并且**执行时重验**（排队期间可能已被撤权）。
-顺带：红队在这里找到了一个**现存的洞**——`stop` / `steer` 走的不是 `ask` 那条路，
-所以 INV-538 的成员检查没覆盖它们。已修（PR #167），与本文无关但由本文的 review 找出。
-
-## 4. 分阶段（按红队重排）
-
-| 阶段 | 内容 | 判断 |
-|---|---|---|
-| **P0 先做** | 每个 agent 一把 AGENT 凭证；**从 agent 的每条路径上移除 HUMAN 凭证**并逐入口验证 `work_commit` 被拒；稳定作者归属；**开始写 decision receipt** | 不依赖 Involute 任何新功能 |
-| **P1 改了范围** | **持久提问账本、授权、幂等、答复状态**——排在 webhook 之前；原 P4 的最小状态骨架并入这里 | webhook 只是提醒，不是协议的核心 |
-| **P2 缩小并延后** | 只做**受限的解释请求消费者**，不照搬通用 channel manager | 见 §3.3 的七个断点 |
-| **P3 砍一半** | 砍掉三类 presence 与自动代答；保留统一 inbox、服务端期限、**显式交接**（记录实际答复者） | 代答必须是人点头的动作 |
-| **P4 整个砍掉** | 不建 thought/action 活动流与它的 UI | 需要的关联与状态已在 P1 |
-
-## 5. 待核（不能当成已知）
-
-- Involute 的 AGENT actor **能不能作为评论作者**，以及 handle 字段是否已存在——api.md 没有说死。
-  这两条是 P1 的前提，要先问 Involute 的维护者（Chris 自己）。
-- Involute 评论有没有 thread/parent 语义、长度上限、限流契约。
-- 我们这把 token 现在是 `Admin / actorKind: HUMAN`，是**谁**配的、要不要保留一把给人用。
-
-## 6. 红队推翻/修改了什么（2026-09-15）
-
-codex 给了 10 条 + 一张断点表，逐条回代码核对后：**S0 三条全部成立**（HUMAN 凭证仍在、
-`stop`/`steer` 绕过 box 检查、出站受众没管），**S1 七条全部成立**（handle 不是身份、
-20 条并发没人管、三种"成功"混为一谈、一个工作项一个会话会串问题、agent 之间回声、
-离线与永不再运行、"必须引用"只能验格式）。被推翻的自家判断三条：**跟进 rails 不能白拿**、
-**三种 presence 是漏的分类**、**换 token 不等于隔离**。采纳率 10/10，其中"decision receipt"
-是它提出的、比我原方案更根本的东西——**问题不在于怎么把问题送到 agent 面前，
-而在于当时有没有留下够回答这个问题的东西。**
-
-引用：Involute `GET /docs/api.md`、`protocol_get_guide`（2026-09-15 取）、
-Linear 开发者文档（agents / agent-interaction / agent-best-practices）、docs/51 §3、docs/52、docs/22、docs/20。
+引用：Involute `GET /docs/api.md`、`protocol_get_guide`（2026-09-15 取）、Involute 侧 agent 的 sidecar 方案（2026-09-15）、
+Linear 开发者文档（agents / agent-interaction / agent-best-practices / coding-sessions changelog）、
+A2A Protocol v0.2.5 与 1.0 说明（Linux Foundation）、docs/51 §3、docs/52、docs/22、docs/20。
