@@ -312,6 +312,31 @@ materialises a session.
 **Success Criteria**: INV-129 adapter contract with roll call; INV-130 release scorecard (deterministic/artifact/model, SKIPPED never PASS); INV-480 nine delivery journeys; INV-481 5×3 migration matrix; INV-412 AT-SPI, INV-146 retry/degrade, INV-434 connection codes live in main; the Feishu silent-socket fix (INV-523) deployed.
 **Status**: Complete (2026-09-14): #121–#128, #130–#143 merged; main 1459/1459, floor 1459; box image rebuilt from main (AT-SPI, recovery); App rebuilt from main and relaunched; `npm run release:check` on 5f460e0: deterministic pass, artifact pass, model SKIPPED (no credentials).
 
+## Stage 30: Follow-through, multiuser, and the documents' own rules (2026-09-15)
+**Goal**: Close the four follow-through rails against an adversarial review, make multi-user
+real rather than advisory, and stop the design record from contradicting itself.
+**Success Criteria**: the six red-team findings on docs/51 fixed (INV-530…535); docs/52's
+M1–M4 landed (INV-537 one role vocabulary + sign-out, INV-538 box members enforced at three
+entrances, INV-539 authority's subject is the box, INV-540 per-agent visibility retired,
+INV-541 routines report into their own box's rooms); the product half (INV-542 setup card
+commands, INV-543 attention panel); a login issues its own session rather than the
+installation token; documents carry headers and a check that no two contradict.
+**Status**: Complete (2026-09-15): #151–#167 merged; main 1504/1504, floor 1504; App rebuilt
+from main and relaunched. docs/22 §3's two live violations now record their resolution and
+name the tests that pin them. Written up in docs/52 and docs/54; the Involute side of the
+agent-identity work is handed off (docs/handoff-2026-09-15-involute-agent-threads.md).
+
+## Stage 31: What is mine to finish next (2026-09-15)
+**Goal**: The committed items that need nobody else.
+**Success Criteria**: INV-550 every agent holds its own Involute credential and the admin
+bearer is off every agent path (an agent calling `work_commit` is refused); INV-551 decision
+receipts written when the judgement is made, surviving transcript compaction; INV-544 one
+locale bundle behind both the chat strings and the web UI, with a key-parity test; then
+Stage 29's own list.
+**Status**: Not Started. Blocked elsewhere: INV-553/554/556/557 wait on the Involute session's
+B1–B3; INV-552 overlaps its INV-560 (the request ledger belongs on the Involute side) and
+should be re-scoped to this side's consumer state or marked a duplicate.
+
 ## Stage 29: Next round (planned 2026-09-14)
 **Goal**: Close the last open pieces that need no external data, and make the operator-side evidence possible.
 **Success Criteria**: I3 door rules (INV-429) merged; host-side wedge detection (INV-135); standing approvals by principal (INV-156, on top of INV-427 rules); tool idempotency declaration (INV-525, once committed); a real-model scorecard baseline produced under authorised credentials and compared once; security S-2..S-7 (INV-138) triaged.
