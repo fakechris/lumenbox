@@ -193,6 +193,7 @@ import { MemoryAdmin } from "../host/memory-admin.ts";
 import { ConnectCodeStore } from "../box/connect-codes.ts";
 import { FollowUpBudget, type FollowUpItem } from "../host/follow-up-budget.ts";
 import { SessionEpochs } from "./session-epochs.ts";
+import { mayEnterBox, membersLabel, refusalToEnter } from "../box/membership.ts";
 import { QuestionWatch } from "../host/question-expiry.ts";
 import { appendLine } from "../host/jsonl.ts";
 import { seedStarterSkills } from "../host/starter-skills.ts";
@@ -1044,6 +1045,14 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
         }
       }
       const principal = principals.resolve(identity).id;
+      // The third entrance (INV-538). A message from a chat is somebody entering a box, and
+      // the same members set answers it here as on the web — otherwise membership is a
+      // property of which door you used, which is exactly what docs/22 §0 forbids.
+      const theirBox = registry.boxOf(agent.id);
+      if (!mayEnterBox(theirBox, principal)) {
+        log(`${identity} is not in ${theirBox.name}; refused at the chat door`);
+        return refusalToEnter(theirBox.name, principals.resolve(identity).name);
+      }
       // This person speaking is the answer to whatever this agent asked them (INV-533).
       // Not "somebody spoke in the room": in a group, a colleague's unrelated message
       // used to clear a question put to someone else, and the agent proceeded as though
@@ -2858,9 +2867,21 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
             : caller;
         const agent = agentId === undefined ? undefined : registry.tryGet(agentId);
         const reason = refusalToDrive(known, agent?.profile);
-        if (reason === undefined) return false;
-        send(res, 403, { error: reason });
-        return true;
+        if (reason !== undefined) {
+          send(res, 403, { error: reason });
+          return true;
+        }
+        // And whether this person is in that box at all (INV-538). Authority lives on the
+        // box, so this is the same question for every agent in it — and the operator's own
+        // credential, which names nobody, is not held to a membership it cannot have.
+        if (agent !== undefined && known.userId !== undefined) {
+          const box = registry.boxOf(agent.id);
+          if (!mayEnterBox(box, principals.resolve(known.userId).id)) {
+            send(res, 403, { error: refusalToEnter(box.name, principals.resolve(known.userId).name) });
+            return true;
+          }
+        }
+        return false;
       };
 
       /**
@@ -4907,12 +4928,24 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
 
         // ── boxes (docs/30) ─────────────────────────────────────────────────────────
         if (route === "GET /api/boxes") {
+          // Only the boxes this person is in (INV-538). A box somebody is not a member of
+          // is not theirs to see the name of: a list that shows it and refuses to open it
+          // tells them it exists, which is the one thing a members set is for.
+          const mine = (boxId: string): boolean =>
+            caller.userId === undefined ||
+            mayEnterBox(registry.listBoxes().find(entry => entry.id === boxId) ?? { members: "everyone" }, principals.resolve(caller.userId).id);
           // Registered boxes carry their lifecycle state and version (INV-434).
-          const boxes = orchestrator.boxStatus().map(box => {
+          const nameOfPrincipal = (id: string): string => principals.list().find(person => person.id === id)?.name ?? id;
+          const boxes = orchestrator.boxStatus().filter(box => mine(box.id)).map(box => {
+            const entry = registry.listBoxes().find(candidate => candidate.id === box.id);
+            const membership =
+              entry === undefined
+                ? {}
+                : { members: entry.members, membersLabel: membersLabel(entry, nameOfPrincipal) };
             const registration = connectCodes.registrationOf(box.id);
             return registration === undefined
-              ? box
-              : { ...box, state: connectCodes.stateOf(box.id, box.connected), ...(registration.version !== undefined ? { version: registration.version } : {}), lastSeenAt: registration.lastSeenAt };
+              ? { ...box, ...membership }
+              : { ...box, ...membership, state: connectCodes.stateOf(box.id, box.connected), ...(registration.version !== undefined ? { version: registration.version } : {}), lastSeenAt: registration.lastSeenAt };
           });
           send(res, 200, { boxes, own: registry.box.id });
           return;
@@ -5042,10 +5075,22 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
               send(res, 404, { error: `No box named ${name}.` });
               return;
             }
+            // Changing who a box is for is an admin's act, and only an admin's (INV-538).
+            const members =
+              body.members === "everyone"
+                ? ("everyone" as const)
+                : Array.isArray(body.members)
+                  ? (body.members as unknown[]).filter((id): id is string => typeof id === "string" && id.trim() !== "")
+                  : undefined;
+            if (members !== undefined && refusedRole("admin")) return;
             const result = await orchestrator.updateBox(name, {
               ...(baseUrl !== "" ? { endpoint: { baseUrl, tokenFile: tokenFile !== "" ? tokenFile : (existing.endpoint?.tokenFile ?? "") } } : {}),
               ...(Number.isInteger(Number(body.displayFloor)) && Number(body.displayFloor) >= 1 ? { displayFloor: Number(body.displayFloor) } : {}),
+              ...(members !== undefined ? { members } : {}),
             });
+            if (members !== undefined) {
+              log(`box ${name} is now for ${members === "everyone" ? "everyone" : members.map(id => principals.list().find(person => person.id === id)?.name ?? id).join(", ")}`);
+            }
             log(`box ${name} moved to ${result.box.endpoint?.baseUrl ?? "(no endpoint)"}: ${result.detail}`);
             send(res, 200, result);
           } catch (error) {

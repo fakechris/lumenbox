@@ -74,12 +74,16 @@ session；`admit()` 把"有效 session 且 roster 仍认识这个人"当作一�
 - *验收*（`session-credential.test.ts`）：三条入口 × 三种角色的矩阵；viewer 无论从哪条入口
   都是 403；踢下线后该人 401、别人照旧。
 
-**M2 · 地方的成员（分地方）**
-- `Box.members` 真校验三处：列 box、进 box（web/chat/MCP 任一入口）、把消息投进去。
-- UI：box 卡片上显示成员集合，admin 可编辑；标签按 docs/22 §5 由成员推导（一个人 → 那个人的名字，
-  everyone → 今天的措辞，子集 → 部门名）。
-- *验收*：不在 members 里的人 `GET /api/boxes` 看不到它、`POST /api/prompt` 403、
-  被 @ 到该 box 的 agent 时收到的是"你不在这个 box"而不是沉默。
+**M2 · 地方的成员（已做，PR 见下）**
+- `mayEnterBox(box, principalId)` 是唯一的判定（`src/box/membership.ts`），三处收口：
+  `GET /api/boxes` 只列自己在的（不在的连名字都不出现——列出来又打不开，等于告诉他它存在）、
+  web 的 `refused()`、聊天入口的 `ask`（同一套判定，否则"成员"就成了"你走哪道门"的属性）。
+- `everyone` 是默认且不变，所以个人安装察觉不到任何变化；空集是关着的箱子，不是开着的；
+  **admin 不自动在每个房间里**——要进去就把自己写进成员集合，留在文件和日志里。
+- 安装自身的凭证（CLI、脚本）不是 roster 里的人，因此不受成员制约——否则机器把自己锁在外面。
+- UI：box 行下面一行由成员推导的标签（docs/22 §5），admin 多一个 Members 按钮，按名字改集合。
+- *验收*（`session-credential.test.ts`）：改成 Dana 的箱子之后，Mia 列不到、驱动 403 且拿到
+  指名道姓的理由、driver 不能自己改成员（403）、操作者凭证照常。
 
 **M3 · 授权主体迁移（docs/22 §3 的两个洞）**
 - secret 授权主体从 `agent.scopeId` 迁到 box；policy 的 session/standing 授权指纹去掉 agentId，

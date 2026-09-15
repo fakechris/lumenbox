@@ -2234,12 +2234,52 @@ function renderBoxes() {
           '<span class="dot" style="width:8px;height:8px;background:' + (b.connected ? "var(--ok, #3fb950)" : "var(--warn)") + '"></span>' +
           '<b>' + esc(b.name) + "</b>" + (i === 0 ? ' <span class="dim">(own)</span>' : "") +
           '<span class="dim" style="flex:1">' + where + " · displays from :" + esc(b.displayFloor) + " · " + esc(b.agents) + " agent" + (b.agents === 1 ? "" : "s") + (b.connected ? "" : " · not connected") + "</span>" +
+          (myRole === "admin" ? '<button class="btn sm ghost" data-members-box="' + esc(b.name) + '" title="' + esc(b.membersLabel || "") + '">Members</button>' : "") +
           (i === 0 ? "" : '<button class="btn sm ghost" data-detach-box="' + esc(b.name) + '"' + (b.agents > 0 ? ' disabled title="delete its agents first"' : "") + ">Detach</button>") +
-          "</div>";
+          "</div>" +
+          // Who the box is for, in the words the members set produces (docs/22 §5, INV-538).
+          // Not free text: a label somebody types is a label that stops being true.
+          '<div class="dim" style="font-size:11.5px;margin:2px 0 8px 16px">' + esc(b.membersLabel || "") + "</div>";
       }).join("") || '<div class="dim">No boxes.</div>';
     })
     .catch(function () { $("setboxes").innerHTML = '<div class="dim">Could not read the boxes.</div>'; });
 }
+
+document.addEventListener("click", function (event) {
+  var button = event.target && event.target.closest ? event.target.closest("[data-members-box]") : null;
+  if (!button) return;
+  event.preventDefault();
+  var name = button.getAttribute("data-members-box");
+  fetch("/api/channels")
+    .then(function (r) { return r.json(); })
+    .then(function (data) {
+      var people = data.principals || [];
+      var current = (button.getAttribute("title") || "");
+      var typed = window.prompt(
+        "Who is " + name + " for?\n\nType names separated by commas, or the word everyone.\nKnown people: " + people.map(function (p) { return p.name; }).join(", ") + "\n\nNow: " + current,
+        ""
+      );
+      if (typed === null) return;
+      var wanted = typed.trim();
+      var members;
+      if (wanted === "" || wanted.toLowerCase() === "everyone") members = "everyone";
+      else {
+        members = [];
+        var missing = [];
+        wanted.split(/[,，]/).forEach(function (piece) {
+          var want = piece.trim().toLowerCase();
+          if (!want) return;
+          var found = people.filter(function (p) { return (p.name || "").toLowerCase() === want; })[0];
+          if (found) members.push(found.id); else missing.push(piece.trim());
+        });
+        if (missing.length) { $("setboxesstatus").textContent = "Nobody on the roster is called " + missing.join(", ") + "."; return; }
+      }
+      return fetch("/api/boxes/update", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ name: name, members: members }) })
+        .then(function (r) { return r.json().then(function (d) { if (!r.ok) throw new Error(d.error || "could not change the members"); return d; }); })
+        .then(function () { $("setboxesstatus").textContent = name + " updated."; return renderBoxes(); });
+    })
+    .catch(function (err) { $("setboxesstatus").textContent = String(err.message || err); });
+});
 
 $("setboxattach").onclick = function () {
   var body = {

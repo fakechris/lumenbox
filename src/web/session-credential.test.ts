@@ -123,3 +123,62 @@ test("one vocabulary, three entrances, and signing one person out of everywhere 
     rmSync(home, { recursive: true, force: true });
   }
 });
+
+test("a box is for its members: the list, the web, and the chat door all say the same thing (INV-538)", async () => {
+  const home = mkdtempSync(join(tmpdir(), "agentbox-members-"));
+  const previous = process.env.AGENTBOX_HOME;
+  process.env.AGENTBOX_HOME = home;
+  let stop: (() => void) | undefined;
+  try {
+    const registry = new AgentRegistry(join(home, "agents"));
+    const ada = registry.create({ name: "Ada", boxId: registry.box.id }).id;
+    stop = await startWebServer({ port: PORT + 2, host: "127.0.0.1", token: "t0k", useBox: false, onLog: () => {} });
+    const base = `http://127.0.0.1:${PORT + 2}`;
+    const ui = { "content-type": "application/json", authorization: "Bearer t0k" };
+    const signIn = async (role: string, name: string): Promise<string> => {
+      const invite = (await (await fetch(`${base}/api/channels/invite`, { method: "POST", headers: ui, body: JSON.stringify({ role }) })).json()) as { code: string };
+      const response = await fetch(`${base}/api/login`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ code: invite.code, name }) });
+      return response.headers.getSetCookie().map(cookie => cookie.split(";")[0]).join("; ");
+    };
+    const dana = await signIn("driver", "Dana");
+    const mia = await signIn("driver", "Mia");
+    const roster = (await (await fetch(`${base}/api/channels`, { headers: ui })).json()) as { principals: { id: string; name: string }[] };
+    const danaId = roster.principals.find(person => person.name === "Dana")?.id;
+    assert.ok(danaId);
+
+    const boxes = async (jar: string) =>
+      ((await (await fetch(`${base}/api/boxes`, { headers: { cookie: jar } })).json()) as { boxes: { id: string; membersLabel?: string }[] }).boxes;
+    const drive = (jar: string) =>
+      fetch(`${base}/api/prompt`, { method: "POST", headers: { "content-type": "application/json", cookie: jar }, body: JSON.stringify({ agent: ada, text: "" }) });
+
+    // Everyone, which is what every installation has today: nothing changes.
+    assert.equal((await boxes(dana)).length, 1);
+    assert.match((await boxes(dana))[0]!.membersLabel ?? "", /^共享箱子/);
+    assert.equal((await drive(dana)).status, 400, "reached the body");
+    assert.equal((await drive(mia)).status, 400);
+
+    // The box becomes Dana's. Mia cannot see it, cannot drive in it, and is told why.
+    const name = registry.box.name;
+    const update = await fetch(`${base}/api/boxes/update`, { method: "POST", headers: ui, body: JSON.stringify({ name, members: [danaId] }) });
+    assert.equal(update.status, 200);
+    assert.equal((await boxes(dana)).length, 1);
+    assert.match((await boxes(dana))[0]!.membersLabel ?? "", /Dana 的箱子/);
+    assert.deepEqual(await boxes(mia), [], "a box she is not in is not a box she is told about");
+    assert.equal((await drive(dana)).status, 400);
+    const refused = await drive(mia);
+    assert.equal(refused.status, 403);
+    assert.match(((await refused.json()) as { error: string }).error, /is not a box Mia is in/);
+
+    // The operator's own credential is not a member of anything, and is not refused.
+    assert.equal((await fetch(`${base}/api/prompt`, { method: "POST", headers: ui, body: JSON.stringify({ agent: ada, text: "" }) })).status, 400);
+
+    // A driver cannot hand themselves a box; that is an admin's act.
+    const byDriver = await fetch(`${base}/api/boxes/update`, { method: "POST", headers: { "content-type": "application/json", cookie: mia }, body: JSON.stringify({ name, members: "everyone" }) });
+    assert.equal(byDriver.status, 403);
+  } finally {
+    stop?.();
+    if (previous === undefined) delete process.env.AGENTBOX_HOME;
+    else process.env.AGENTBOX_HOME = previous;
+    rmSync(home, { recursive: true, force: true });
+  }
+});
