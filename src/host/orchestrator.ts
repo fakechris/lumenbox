@@ -241,6 +241,15 @@ export class Orchestrator {
    * estimate.
    */
   readonly policy = new PolicyGate({
+    // A reusable approval belongs to the box, not to whichever agent happened to ask
+    // (INV-539, docs/22 §3): two agents in one box must get the same answer.
+    boxOf: agentId => {
+      try {
+        return this.registry.boxOf(agentId).id;
+      } catch {
+        return agentId;
+      }
+    },
     spendUnavailable: () => this.usage.unavailable(),
     spentSince: sinceMs => {
       const totals = this.usage.totalsSince(sinceMs);

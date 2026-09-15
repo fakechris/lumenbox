@@ -23,19 +23,21 @@ import {
   type PolicyRequest,
 } from "./policy.ts";
 
-function fixture(limits: Partial<PolicyLimits> = {}, spent = 0) {
+function fixture(limits: Partial<PolicyLimits> & { boxOf?: (agentId: string) => string } = {}, spent = 0) {
   const dir = mkdtempSync(join(tmpdir(), "agentbox-policy-"));
   const path = join(dir, "policy.jsonl");
+  const { boxOf, ...limitFields } = limits;
   const make = (extra: Partial<PolicyLimits> = {}) =>
     new PolicyGate({
       path,
+      ...(boxOf !== undefined ? { boxOf } : {}),
       limits: {
         budgetWindowHours: 24,
         wakesPerWindow: 30,
         wakeWindowMinutes: 10,
         approvalRequiredTools: [],
         approvalRequiredCommands: [],
-        ...limits,
+        ...limitFields,
         ...extra,
       },
       spentSince: () => spent,
@@ -220,21 +222,46 @@ test("an approval is bound to the exact action a person was shown", () => {
   }
 });
 
-test("the fingerprint covers the text a person reads, and the agent it was for", () => {
+test("the fingerprint covers the text a person reads, and the subject it was for", () => {
   // If the shown text and the hashed text could differ, the binding would be decorative — someone
   // could be shown one command and consent to another.
   const description = describeRequest(toolRequest("rm README.md"));
   assert.equal(description, "Ada: bash — rm README.md");
-  assert.equal(fingerprintOf("agent-1", description), fingerprintOf("agent-1", description));
+  assert.equal(fingerprintOf("box-1", description), fingerprintOf("box-1", description));
   assert.notEqual(
-    fingerprintOf("agent-1", description),
-    fingerprintOf("agent-2", description),
-    "one agent's grant is not another's"
+    fingerprintOf("box-1", description),
+    fingerprintOf("box-2", description),
+    "one box's grant is not another's"
   );
   assert.notEqual(
-    fingerprintOf("agent-1", description),
-    fingerprintOf("agent-1", `${description} --force`)
+    fingerprintOf("box-1", description),
+    fingerprintOf("box-1", `${description} --force`)
   );
+});
+
+test("a standing approval belongs to the box, so two agents in it get the same answer (INV-539)", () => {
+  // docs/22 §0: agents in a box do not differ in authority. The grant used to be keyed by
+  // the agent that asked, so "allow, standing" given to Ada left Bo asking — the same rule
+  // being false in the running system, which §3 recorded as a live violation.
+  const { gate, cleanup } = fixture({
+    approvalRequiredTools: ["bash"],
+    boxOf: (agentId: string) => (agentId === "elsewhere" ? "box-2" : "box-1"),
+  });
+  try {
+    const ada = { ...toolRequest("deploy"), agentId: "ada" };
+    const first = gate.check(ada);
+    assert.equal(first.allow, false, "the first time, somebody is asked");
+    const id = (!first.allow && first.approval?.id) as string;
+    gate.grant(id, "chris", "always");
+
+    const bo = { ...toolRequest("deploy"), agentId: "bo" };
+    assert.equal(gate.check(bo).allow, true, "the person allowed the action in this box, not one worker");
+
+    const stranger = { ...toolRequest("deploy"), agentId: "elsewhere" };
+    assert.equal(gate.check(stranger).allow, false, "another box asks for itself");
+  } finally {
+    cleanup();
+  }
 });
 
 test("a pending approval survives a restart", () => {
