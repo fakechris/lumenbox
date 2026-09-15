@@ -90,19 +90,23 @@ test("identity is read only from a request authentication accepted", () => {
 
   // A box reachable directly — a developer's laptop, a misconfigured publish — would otherwise
   // accept any claimed identity. The token is the proof the request came through the gateway.
-  assert.deepEqual(callerOf(headers, false), { userId: undefined, role: "owner" });
+  assert.deepEqual(callerOf(headers, false), { userId: undefined, role: undefined });
   assert.deepEqual(callerOf(headers, true), { userId: "u1", role: "viewer" });
 });
 
-test("an absent role is owner, an unrecognised one is not", () => {
+test("the gateway's words are translated here and nowhere else; an absent role asserts nothing (INV-537)", () => {
   // Three cases, and conflating the last two is a privilege escalation.
-  assert.equal(callerOf({}, true).role, "owner", "nobody asserting anything: the single-user case");
-  assert.equal(callerOf({ "x-agentbox-role": "member" }, true).role, "member");
+  assert.equal(callerOf({}, true).role, undefined, "nobody asserted anything; the server decides what that means");
+  assert.equal(callerOf({ "x-agentbox-role": "owner" }, true).role, "admin");
+  assert.equal(callerOf({ "x-agentbox-role": "member" }, true).role, "driver");
+  assert.equal(callerOf({ "x-agentbox-role": "viewer" }, true).role, "viewer");
   assert.equal(
     callerOf({ "x-agentbox-role": "superuser" }, true).role,
     "viewer",
     "something upstream is wrong, so the answer is least privilege, not most"
   );
+  // And an unasserted caller — the installation's own credential — still drives.
+  assert.equal(mayDrive(callerOf({}, true)), true);
 });
 
 test("a viewer may watch but not drive, and is told which role would", () => {
@@ -111,7 +115,7 @@ test("a viewer may watch but not drive, and is told which role would", () => {
 
   const reason = refusalToDrive(viewer, undefined);
   assert.ok(reason, "a viewer cannot drive");
-  assert.match(reason, /member or an owner/, "a blank 403 generates a support conversation");
+  assert.match(reason, /driver or an admin/, "a blank 403 generates a support conversation");
   assert.equal(refusalToDrive(member, undefined), undefined);
   assert.equal(mayDrive(viewer), false);
   assert.equal(mayDrive(member), true);
