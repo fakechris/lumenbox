@@ -114,6 +114,25 @@ export interface AgentboxConfig {
    */
   skillRoots?: string[];
   /**
+   * Where our agents answer questions people put to them on a work item (INV-553, docs/54).
+   *
+   * `url` is the Involute MCP endpoint. Each entry pairs one of our agents with the actor
+   * it is over there: the `handle` a person types after `@`, and the vault secret holding
+   * **that agent's own credential** — not the installation's, because an answer posted
+   * with a shared token is an answer from whoever holds it (INV-550).
+   *
+   * `askers` is the allowlist of Involute actor ids whose questions we take. Blunt on
+   * purpose for the first version: mapping their actors onto this installation's
+   * principals, and then to a role and a box, is docs/54 §3.6 and its own change.
+   */
+  involute?: {
+    url: string;
+    agents: { agentId: string; handle: string; secretId: string }[];
+    askers?: string[];
+    /** Seconds between inbox polls. Absent means 60. */
+    pollSeconds?: number;
+  };
+  /**
    * Chats that asked for a daily digest, chatKey → local hour (0–23). Written by the
    * chat itself ("早报 8点" / "digest at 8"); in the file so the schedule survives a
    * restart, which is the whole difference between a digest and a reply.
@@ -280,6 +299,44 @@ export function loadConfig(onWarn: (message: string) => void = () => {}): Agentb
       ? { skillRoots: readStringList(raw.skillRoots, "skillRoots", onWarn) }
       : {}),
     ...(typeof raw.startupItem === "boolean" ? { startupItem: raw.startupItem } : {}),
+    ...(readInvolute(raw.involute, onWarn) !== undefined ? { involute: readInvolute(raw.involute, onWarn) } : {}),
+  };
+}
+
+function readInvolute(value: unknown, warn: (message: string) => void): AgentboxConfig["involute"] {
+  if (value === undefined) return undefined;
+  if (value === null || typeof value !== "object" || Array.isArray(value)) {
+    warn("config: involute must be an object of {url, agents}, ignoring it");
+    return undefined;
+  }
+  const raw = value as Record<string, unknown>;
+  const url = typeof raw.url === "string" ? raw.url.trim() : "";
+  if (url === "") {
+    warn("config: involute.url is required, ignoring the section");
+    return undefined;
+  }
+  const agents: NonNullable<AgentboxConfig["involute"]>["agents"] = [];
+  for (const entry of Array.isArray(raw.agents) ? raw.agents : []) {
+    if (entry === null || typeof entry !== "object") continue;
+    const row = entry as Record<string, unknown>;
+    const agentId = typeof row.agentId === "string" ? row.agentId.trim() : "";
+    const handle = typeof row.handle === "string" ? row.handle.trim().replace(/^@/, "") : "";
+    const secretId = typeof row.secretId === "string" ? row.secretId.trim() : "";
+    // All three or none: an entry missing its credential would fall back to whatever
+    // token the process holds, which is the shared-identity failure this exists to end.
+    if (agentId === "" || handle === "" || secretId === "") {
+      warn(`config: involute.agents entry needs agentId, handle and secretId; ignoring ${agentId || handle || "it"}`);
+      continue;
+    }
+    agents.push({ agentId, handle, secretId });
+  }
+  const askers = Array.isArray(raw.askers) ? raw.askers.filter((id): id is string => typeof id === "string" && id.trim() !== "") : undefined;
+  const pollSeconds = typeof raw.pollSeconds === "number" && Number.isFinite(raw.pollSeconds) ? Math.max(15, Math.floor(raw.pollSeconds)) : undefined;
+  return {
+    url,
+    agents,
+    ...(askers !== undefined ? { askers } : {}),
+    ...(pollSeconds !== undefined ? { pollSeconds } : {}),
   };
 }
 
