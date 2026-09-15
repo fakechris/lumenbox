@@ -136,6 +136,15 @@ export interface Task {
   conversation?: string;
   /** When it is due, as an ISO date or instant (INV-527). Absent means no date was given. */
   due?: string;
+  /**
+   * What this is waiting for, when it is not waiting for us (INV-532): a supplier, a
+   * deploy window, a person on leave. Named, the task is still nudged about — somebody
+   * should know it is still open — but it is never archived for not moving, because not
+   * moving is what waiting looks like.
+   */
+  waitingOn?: string;
+  /** Leave it alone until this instant: the answer to a nudge that is "not now" (INV-532). */
+  snoozeUntil?: string;
   /** How often the requester has been nudged about an overdue or idle task, and when last. */
   aging?: { nudges: number; lastNudgedAt: string; reason: "overdue" | "idle" };
   /**
@@ -382,6 +391,10 @@ export class TaskStore {
       evidence?: string[];
       /** A due date, or null to clear it. */
       due?: string | null;
+      /** What it is waiting for outside this box, or null to say it no longer is. */
+      waitingOn?: string | null;
+      /** Leave it alone until this date or instant, or null to look again now. */
+      snoozeUntil?: string | null;
     },
     by: string,
     run?: string,
@@ -488,6 +501,12 @@ export class TaskStore {
         : {}),
       ...(run !== undefined ? { run } : {}),
     };
+    if (change.note === undefined) {
+      // A snooze or a waiting-on with nothing else said is still a decision about the
+      // work, and the history is where a person looks to see who decided it (INV-532).
+      if (changes.snoozeUntil !== undefined && changes.snoozeUntil !== null) change.note = `not now: look again after ${dueOf(changes.snoozeUntil) ?? changes.snoozeUntil}`;
+      else if (changes.waitingOn !== undefined && changes.waitingOn !== null && changes.waitingOn.trim() !== "") change.note = `waiting on ${changes.waitingOn.trim().slice(0, 120)}`;
+    }
 
     const updated: Task = {
       ...task,
@@ -509,6 +528,8 @@ export class TaskStore {
           : { reviewerId: changes.reviewerId }
         : {}),
       ...(changes.due !== undefined ? (changes.due === null ? { due: undefined } : dueOf(changes.due) !== undefined ? { due: dueOf(changes.due)! } : {}) : {}),
+      ...(changes.waitingOn !== undefined ? (changes.waitingOn === null || changes.waitingOn.trim() === "" ? { waitingOn: undefined } : { waitingOn: changes.waitingOn.replace(/\s+/g, " ").trim().slice(0, 120) }) : {}),
+      ...(changes.snoozeUntil !== undefined ? (changes.snoozeUntil === null ? { snoozeUntil: undefined } : dueOf(changes.snoozeUntil) !== undefined ? { snoozeUntil: dueOf(changes.snoozeUntil)! } : {}) : {}),
       updatedAt: at,
       history: [...task.history, change].slice(-HISTORY_LIMIT),
     };
@@ -543,6 +564,11 @@ export class TaskStore {
     const t = now.getTime();
     for (const task of [...this.tasks.values()]) {
       if (!isLive(task.status) || task.proposedBy !== undefined) continue;
+      // Asked to come back later, and told when. Until then there is nothing to say.
+      if (task.snoozeUntil !== undefined && Date.parse(task.snoozeUntil) > t) continue;
+      // A close proposal is already a clock with a person's answer at the end of it;
+      // nudging in parallel asks the same question twice in two voices (INV-532).
+      if (task.closeProposal !== undefined) continue;
       const overdue = task.due !== undefined && Date.parse(task.due) < t;
       const idle = t - Date.parse(task.updatedAt) >= TASK_IDLE_MS;
       if (!overdue && !idle) continue;
@@ -550,16 +576,30 @@ export class TaskStore {
       if (since < TASK_NUDGE_GAP_MS) continue;
       const reason: "overdue" | "idle" = overdue ? "overdue" : "idle";
       const nudges = (task.aging?.nudges ?? 0) + 1;
+      // What may be archived for not moving, and what may only be asked about (INV-532).
+      // `blocked` and `review` are somebody else's turn; `waitingOn` names an outside
+      // party; a date still ahead means nothing is late. Archiving those reads a person's
+      // holiday, a supplier's month-end, or a reviewer's queue as an abandoned request —
+      // which contradicts the rule the sweep is written under: silence is never consent
+      // to close work. They are nudged up to the cap and then go quiet, still open.
+      const archivable =
+        (task.status === "open" || task.status === "doing") &&
+        task.waitingOn === undefined &&
+        (overdue || task.due === undefined);
+      if (nudges > TASK_NUDGES_BEFORE_ARCHIVE && !archivable) continue;
       if (nudges > TASK_NUDGES_BEFORE_ARCHIVE) {
         const text = `${task.id} "${task.title}" was archived: ${reason} and no movement after ${TASK_NUDGES_BEFORE_ARCHIVE} nudges. Reopen it on the board if it still matters.`;
         const moved = this.update(task.id, { status: "dropped", note: `archived by ageing: ${reason}, no answer to ${TASK_NUDGES_BEFORE_ARCHIVE} nudges` }, AGING_ACTOR, undefined, now);
         if (moved !== undefined) events.push({ kind: "archived", task: moved.task, text });
         continue;
       }
+      const waiting = task.waitingOn !== undefined ? ` (waiting on ${task.waitingOn})` : task.status === "blocked" || task.status === "review" ? ` (${task.status})` : "";
       const text =
-        `${task.id} "${task.title}" is ${reason === "overdue" ? `overdue (due ${task.due})` : `idle: nothing has moved for ${Math.round((t - Date.parse(task.updatedAt)) / 86_400_000)} days`}` +
+        `${task.id} "${task.title}"${waiting} is ${reason === "overdue" ? `overdue (due ${task.due})` : `idle: nothing has moved for ${Math.round((t - Date.parse(task.updatedAt)) / 86_400_000)} days`}` +
         ` — nudge ${nudges} of ${TASK_NUDGES_BEFORE_ARCHIVE}. ${NUDGE_OPTIONS.join(" / ")}? Move it on the board or answer here; ` +
-        `with no answer it is archived after the next nudge.`;
+        (archivable
+          ? `with no answer it is archived after the next nudge.`
+          : `it stays open either way — say when to look again and it goes quiet until then.`);
       events.push({ kind: "nudge", task, reason, nudge: nudges, text });
     }
     return events;

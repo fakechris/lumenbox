@@ -1364,6 +1364,8 @@ export function buildTools(
           },
           id: { type: "string", description: "The task id, e.g. \"t12\". For take, update and propose_close." },
           due: { type: "string", description: "For create or update: when it is due, as YYYY-MM-DD or an ISO instant. A task past its due date nudges the requester; two nudges with no movement archive it." },
+          waiting_on: { type: "string", description: "For update: who or what this is waiting for outside the box (a supplier, a deploy window, somebody on leave). It is still asked about, but never archived for not moving — waiting is not abandonment. Empty string clears it." },
+          snooze_until: { type: "string", description: "For update: leave it alone until this date or instant (YYYY-MM-DD or ISO). The answer to a nudge that is \"not now\" — the board stays quiet about it until then. Empty string looks again now." },
           reason: { type: "string", description: "For propose_close: why this task should be closed, in one sentence the requester can read. They have two days to object; their silence closes it." },
           title: { type: "string", description: "For create: one line of what is to be done." },
           description: { type: "string", description: "For create: details a stranger would need." },
@@ -4217,6 +4219,8 @@ export async function dispatchTool(
           {
             ...(isTaskStatus(status) ? { status } : {}),
             ...(typeof input.due === "string" && input.due.trim() !== "" ? { due: input.due } : {}),
+            ...(typeof input.waiting_on === "string" ? { waitingOn: input.waiting_on.trim() === "" ? null : input.waiting_on } : {}),
+            ...(typeof input.snooze_until === "string" ? { snoozeUntil: input.snooze_until.trim() === "" ? null : input.snooze_until } : {}),
             ...(checked.length > 0 ? { checked } : {}),
             ...(typeof input.note === "string" && input.note.trim() !== ""
               ? { note: input.note }

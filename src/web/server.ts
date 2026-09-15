@@ -3463,6 +3463,8 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
                 : {}),
               ...(typeof body.description === "string" ? { description: body.description } : {}),
               ...(typeof body.due === "string" ? { due: body.due.trim() === "" ? null : body.due } : {}),
+              ...(typeof body.waitingOn === "string" ? { waitingOn: body.waitingOn.trim() === "" ? null : body.waitingOn } : {}),
+              ...(typeof body.snoozeUntil === "string" ? { snoozeUntil: body.snoozeUntil.trim() === "" ? null : body.snoozeUntil } : {}),
             },
             caller.userId ?? "web"
           );
