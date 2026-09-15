@@ -938,6 +938,10 @@ export const APP_HTML = String.raw`<!doctype html>
       <select id="taskassign" style="height:28px;border-radius:var(--radius-input);border:1px solid var(--border-strong);background:var(--surface);color:var(--text);font-size:12px"></select>
       <button class="btn sm" id="taskadd">Add</button>
     </div>
+    <!-- What needs me, before what the board has (INV-543). Two lists and their clocks:
+         the page a person opens to answer "is anything waiting on me?" without reading
+         everybody's board. -->
+    <div id="attention" style="display:none;border-bottom:1px solid var(--border);padding:10px 16px"></div>
     <div class="scroll" id="tasklist"></div>
   </div>
   <!-- What runs without anyone asking. The page a person checks when they want to know
@@ -5122,7 +5126,79 @@ function taskDetail(t) {
   "</div>";
 }
 
+/** Relative, because "in 3 hours" is the thing a person acts on; absolute dates read as decoration. */
+function whenOf(iso) {
+  if (!iso) return "";
+  var ms = Date.parse(iso) - Date.now();
+  var past = ms < 0;
+  var minutes = Math.round(Math.abs(ms) / 60000);
+  var text = minutes < 90 ? minutes + "m" : minutes < 2160 ? Math.round(minutes / 60) + "h" : Math.round(minutes / 1440) + "d";
+  return past ? text + " ago" : "in " + text;
+}
+
+function renderAttention() {
+  return fetch("/api/attention")
+    .then(function (r) { return r.json(); })
+    .then(function (data) {
+      var mine = data.mine || [];
+      var theirs = data.theirs || [];
+      if (!mine.length && !theirs.length) {
+        $("attention").style.display = "";
+        $("attention").innerHTML = '<div class="dim" style="font-size:12.5px">Nothing is waiting on you, and nothing you asked for is outstanding.</div>';
+        return;
+      }
+      var row = function (item, owed) {
+        var act =
+          item.kind === "close-proposal" ? '<button class="btn sm ghost" data-att-keep="' + esc(item.ref) + '">Keep open</button>' :
+          item.kind === "nudged" ? '<button class="btn sm ghost" data-att-drop="' + esc(item.ref) + '">Close</button><button class="btn sm ghost" data-att-snooze="' + esc(item.ref) + '">Not now</button>' :
+          item.kind === "question" ? '<button class="btn sm ghost" data-att-open="' + esc(item.ref) + '">Answer</button>' :
+          '<button class="btn sm ghost" data-att-task="' + esc(item.ref) + '">Open</button>';
+        return '<div style="display:flex;gap:8px;align-items:baseline;padding:3px 0;font-size:12.5px">' +
+          '<span class="dim mono" style="font-size:11px;min-width:58px">' + esc(item.deadline ? whenOf(item.deadline) : "") + "</span>" +
+          '<span style="flex:1">' + esc(item.title) + ' <span class="dim">' + esc(item.detail) + "</span></span>" +
+          (owed ? act : "") +
+          "</div>";
+      };
+      $("attention").style.display = "";
+      $("attention").innerHTML =
+        (mine.length ? '<div style="font-size:11px;letter-spacing:.04em;text-transform:uppercase;color:var(--muted);margin-bottom:4px">Waiting on you</div>' + mine.map(function (i) { return row(i, true); }).join("") : "") +
+        (theirs.length ? '<div style="font-size:11px;letter-spacing:.04em;text-transform:uppercase;color:var(--muted);margin:8px 0 4px">You are waiting on</div>' + theirs.map(function (i) { return row(i, false); }).join("") : "");
+    })
+    .catch(function () { $("attention").style.display = "none"; });
+}
+
+// The actions, each one an existing route: keeping a task open, closing it, asking to be
+// left alone until a date, or opening the thread a question was asked in.
+document.addEventListener("click", function (event) {
+  var target = event.target && event.target.closest ? event.target : null;
+  if (!target) return;
+  var keep = target.closest("[data-att-keep]");
+  var drop = target.closest("[data-att-drop]");
+  var snooze = target.closest("[data-att-snooze]");
+  var open = target.closest("[data-att-open]") || target.closest("[data-att-task]");
+  if (!keep && !drop && !snooze && !open) return;
+  event.preventDefault();
+  var done = function () { return renderAttention().then(refreshTasks); };
+  if (keep) {
+    fetch("/api/tasks/oppose-close", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ id: keep.getAttribute("data-att-keep") }) }).then(done);
+  } else if (drop) {
+    fetch("/api/tasks/update", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ id: drop.getAttribute("data-att-drop"), status: "dropped" }) }).then(done);
+  } else if (snooze) {
+    var until = window.prompt("Look again after which date? (YYYY-MM-DD)", "");
+    if (!until) return;
+    fetch("/api/tasks/update", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ id: snooze.getAttribute("data-att-snooze"), snoozeUntil: until.trim() }) }).then(done);
+  } else if (open) {
+    // A question is answered where it was asked: the same conversation, in the chat
+    // column. A task opens its card on the board beside this panel.
+    var conversation = open.getAttribute("data-att-open");
+    if (conversation) select(current, conversation);
+    else { openTask = open.getAttribute("data-att-task"); taskScrolled = true; refreshTasks(); }
+  }
+});
+
 function refreshTasks() {
+  // What needs me, above the board (INV-543).
+  renderAttention();
   // The assignee picker doubles as the roster; refreshed with the board.
   $("taskassign").innerHTML = '<option value="">unassigned</option>' +
     agents.map(function (a) { return '<option value="' + esc(a.id) + '">' + esc(a.name) + "</option>"; }).join("");

@@ -194,6 +194,7 @@ import { ConnectCodeStore } from "../box/connect-codes.ts";
 import { FollowUpBudget, type FollowUpItem } from "../host/follow-up-budget.ts";
 import { SessionEpochs } from "./session-epochs.ts";
 import { mayEnterBox, membersLabel, refusalToEnter } from "../box/membership.ts";
+import { attentionFor } from "../host/attention.ts";
 import { QuestionWatch } from "../host/question-expiry.ts";
 import { appendLine } from "../host/jsonl.ts";
 import { seedStarterSkills } from "../host/starter-skills.ts";
@@ -4927,6 +4928,26 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
         }
 
         // ── boxes (docs/30) ─────────────────────────────────────────────────────────
+        // What needs me, and what I am waiting on (INV-543). Per person: the questions
+        // put to them, the closes they have not objected to, the reviews they owe, the
+        // tasks they asked for that have been nudged — and, on the other side, what they
+        // are waiting on somebody else for. The operator's own credential has no person,
+        // so it sees the installation's: everything with a clock on it.
+        if (route === "GET /api/attention") {
+          const me = caller.userId === undefined ? undefined : principals.resolve(caller.userId);
+          const board = orchestrator.tasks;
+          const answer = attentionFor({
+            principalId: me?.id ?? "",
+            identities: me?.identities ?? [],
+            tasks: board === undefined ? [] : board.list(),
+            questions: questions.list(),
+            nameOf: id => registry.tryGet(id)?.profile.name ?? principals.list().find(person => person.id === id)?.name ?? id,
+            ...(me === undefined ? { all: true } : {}),
+          });
+          send(res, 200, { ...answer, who: me?.name ?? "this installation" });
+          return;
+        }
+
         if (route === "GET /api/boxes") {
           // Only the boxes this person is in (INV-538). A box somebody is not a member of
           // is not theirs to see the name of: a list that shows it and refuses to open it
