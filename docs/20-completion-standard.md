@@ -182,3 +182,17 @@ left t12 open because closing was "the user's call". Two rules now run on the ho
 Both are appends on the same task record and survive a restart. `Tasks` gained `due`
 and `propose_close`; `/api/tasks/update` takes `due`; `/api/tasks/propose-close` and
 `/api/tasks/oppose-close`; the board shows due / overdue / nudged / close-proposed chips.
+
+**A nudge counts only once somebody got it (INV-530 — 2026-09-14).** `age()` proposes;
+`recordNudge` records, and the host calls it after the line was delivered. Two things
+made the first version archive work nobody was ever asked about: a task carries a
+*conversation id* (the chat key with unsafe characters flattened to `-`), and the sweep
+handed that string straight to `pushToChat`, which matches adapters by a `feishu:`
+prefix — so no Feishu room ever received a nudge; and `pushToChat` swallows every
+delivery failure, so the count advanced anyway. Now the sweep resolves the address
+through the conversation directory, pushes with `tryPushToChat` (the same push, with
+"did anybody get it" as its answer), and counts only on success. A task with no
+conversation is a board task: the board is where it is shown, and it counts there.
+Undeliverable is not silence — an unreachable room is proposed to again next hour, and
+the log says why. The same rule routes an expired question's one line back to the
+conversation that asked it, rather than to whoever last drove the agent from any chat.

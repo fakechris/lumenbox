@@ -1713,7 +1713,13 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
       const { question } = expiry;
       log(`question: ${question.agentName}'s "${question.question.slice(0, 60)}" expired unanswered → ${expiry.verdict}`);
       appendLine(join(agentboxHome(), "questions.jsonl"), JSON.stringify({ at: new Date().toISOString(), agentId: question.agentId, conversation: question.conversation, question: question.question, askedAt: new Date(question.askedAt).toISOString(), verdict: expiry.verdict, ...(question.fallback !== undefined ? { fallback: question.fallback } : {}) }));
-      chats?.tellAsker(question.agentId, expiry.toChat);
+      // The line goes back to the room that asked, never to "whoever drove this agent
+      // last": a question put in one group and answered by default in another hands one
+      // room's decision to a different set of people (INV-530). A question from the web
+      // has no room; the page and the ledger carry it.
+      const askedIn = question.conversation === "main" ? undefined : conversations.chatKeyFor(question.conversation);
+      if (askedIn !== undefined) void chats?.pushToChat(askedIn, expiry.toChat).catch((error: unknown) => log(`question: could not tell ${askedIn} (${error instanceof Error ? error.message : String(error)})`));
+      else if (question.conversation !== "main") log(`question: expired in ${question.conversation} but no chat is recorded for it; the ledger has it`);
       broadcast({ type: "question_expired", agentId: question.agentId, agentName: question.agentName, question: question.question, verdict: expiry.verdict });
       void orchestrator
         .prompt(question.agentId, expiry.cue, undefined, { conversation: question.conversation, steerable: false, lane: "background", synthetic: true })
@@ -1729,9 +1735,29 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
     if (board === undefined) return;
     for (const event of [...board.age(), ...board.settleCloseProposals()]) {
       log(`tasks: ${event.text}`);
-      const conversation = event.task.conversation;
-      if (conversation !== undefined && conversation.includes(":") && chats !== undefined) void chats.pushToChat(conversation, event.text).catch(() => {});
       broadcast({ type: "task_aging", taskId: event.task.id, title: event.task.title, kind: event.kind, text: event.text });
+      // A task carries a *conversation id*, not a chatKey — the same distinction that
+      // routed every rescue notice nowhere until the directory was consulted (above).
+      // A nudge counts only once this resolves and the push lands (INV-530): a room we
+      // cannot reach has not been asked anything, and cannot be said to have not answered.
+      const conversation = event.task.conversation;
+      if (conversation === undefined || conversation === "main") {
+        if (event.kind === "nudge") board.recordNudge(event.task.id, event.reason);
+        continue;
+      }
+      const chatKey = conversations.chatKeyFor(conversation);
+      if (chatKey === undefined || chats === undefined) {
+        log(`tasks: ${event.task.id} came from ${conversation} and there is no chat to tell; not counting this nudge`);
+        continue;
+      }
+      const target = chats;
+      void target.tryPushToChat(chatKey, event.text).then(result => {
+        if (!result.delivered) {
+          log(`tasks: ${event.task.id} was not told to ${chatKey} (${result.why ?? "no reason given"}); not counting this nudge`);
+          return;
+        }
+        if (event.kind === "nudge") board.recordNudge(event.task.id, event.reason);
+      });
     }
   }, 3_600_000);
   boardTimer.unref();
