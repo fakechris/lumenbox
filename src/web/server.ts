@@ -195,6 +195,7 @@ import { FollowUpBudget, type FollowUpItem } from "../host/follow-up-budget.ts";
 import { SessionEpochs } from "./session-epochs.ts";
 import { mayEnterBox, membersLabel, refusalToEnter } from "../box/membership.ts";
 import { attentionFor } from "../host/attention.ts";
+import { InvoluteConsumer } from "../host/involute-inbox.ts";
 import { QuestionWatch } from "../host/question-expiry.ts";
 import { appendLine } from "../host/jsonl.ts";
 import { seedStarterSkills } from "../host/starter-skills.ts";
@@ -471,6 +472,42 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
   // their own conversation (INV-535). Kept across a restart: a budget that resets when
   // the process does is not a budget.
   const followUps = new FollowUpBudget(join(agentboxHome(), "follow-ups.jsonl"));
+
+  /**
+   * One JSON-RPC call to Involute's MCP endpoint, as one agent (INV-553).
+   *
+   * Its own tiny client rather than the `McpManager`: that one exists to offer a server's
+   * tools *to* an agent, with a session, a tool list and a lifecycle. This is the other
+   * direction — the host speaking for one agent, with that agent's credential, to three
+   * known tools — and giving it the manager's machinery would mean every agent's
+   * credential passing through a surface built to hand tools to models.
+   */
+  const involuteCall = async (url: string, token: string, tool: string, args: Record<string, unknown>): Promise<unknown> => {
+    const response = await fetch(url, {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        accept: "application/json, text/event-stream",
+        authorization: `Bearer ${token}`,
+      },
+      body: JSON.stringify({ jsonrpc: "2.0", id: Date.now(), method: "tools/call", params: { name: tool, arguments: args } }),
+      signal: AbortSignal.timeout(20_000),
+    });
+    if (!response.ok) throw new Error(`HTTP ${response.status} from involute ${tool}`);
+    const text = await response.text();
+    const line = text.includes("data:")
+      ? (text.split(/\n\n/).flatMap(event => event.split("\n")).find(l => l.startsWith("data:"))?.slice(5).trim() ?? "{}")
+      : text;
+    const payload = JSON.parse(line) as { error?: { message?: string }; result?: { content?: { text?: string }[]; isError?: boolean } };
+    if (payload.error !== undefined) throw new Error(payload.error.message ?? `involute ${tool} refused`);
+    const body = payload.result?.content?.[0]?.text ?? "";
+    if (payload.result?.isError === true) throw new Error(body || `involute ${tool} refused`);
+    try {
+      return JSON.parse(body) as unknown;
+    } catch {
+      return body;
+    }
+  };
 
   // Channel task cards listen here while their ask is in flight: each listener is a
   // narrow filter on (agent, conversation), added before the prompt and removed after
@@ -1847,6 +1884,70 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
     }
   }, 3_600_000);
   boardTimer.unref();
+
+  /**
+   * Questions people put to our agents on a work item (INV-553, docs/54 §A).
+   *
+   * Off unless `config.involute` names agents, because it needs one credential per agent
+   * and a person on the other side who can be answered. Polling rather than a webhook:
+   * this machine has no inbound port on most networks, and the ledger over there is the
+   * same one either way.
+   */
+  const involuteConfig = loadConfig().involute;
+  const involuteConsumer =
+    involuteConfig === undefined || involuteConfig.agents.length === 0
+      ? undefined
+      : new InvoluteConsumer({
+          agents: () =>
+            involuteConfig.agents.flatMap(entry => {
+              const agent = registry.tryGet(entry.agentId);
+              // The credential is resolved per poll, not held: a revoked secret stops
+              // working on the next pass rather than at the next restart.
+              const token = vault.resolve(entry.secretId, { agentId: entry.agentId, agentName: agent?.profile.name ?? entry.handle, scopeGrants: true });
+              if (agent === undefined || token === undefined) return [];
+              return [
+                {
+                  agentId: agent.id,
+                  agentName: agent.profile.name,
+                  handle: entry.handle,
+                  call: (tool: string, args: Record<string, unknown>) => involuteCall(involuteConfig.url, token, tool, args),
+                },
+              ];
+            }),
+          runTurn: async input => {
+            const before = registry.readTranscript(input.agentId, input.conversation).length;
+            await orchestrator.prompt(input.agentId, input.prompt, undefined, {
+              conversation: input.conversation,
+              steerable: false,
+              lane: "background",
+              synthetic: true,
+            });
+            await orchestrator.settle();
+            return orchestrator.replySince(input.agentId, before, input.conversation);
+          },
+          // The blunt first version of docs/54 §3.6: an allowlist of actor ids over there.
+          // Mapping their actors onto this installation's principals, and then to a role
+          // and a box, is its own change — and until it exists, "anyone who can comment"
+          // must not mean "anyone who can start a turn here".
+          mayAnswer: ({ requestedByActorId }) => {
+            const allowed = involuteConfig.askers ?? [];
+            if (allowed.length === 0) return { ok: false, why: "this installation has not said whose questions I take; an admin sets involute.askers" };
+            if (requestedByActorId === undefined || !allowed.includes(requestedByActorId)) {
+              return { ok: false, why: "you are not on this installation's list of people I take questions from" };
+            }
+            return { ok: true };
+          },
+          askedBack: ({ agentId, conversation }) => questions.list().some(open => open.agentId === agentId && open.conversation === conversation),
+          log: line => log(line),
+        });
+  const involuteTimer =
+    involuteConsumer === undefined
+      ? undefined
+      : setInterval(() => {
+          void involuteConsumer.poll().catch((error: unknown) => log(`involute: poll failed — ${error instanceof Error ? error.message : String(error)}`));
+        }, (involuteConfig?.pollSeconds ?? 60) * 1000);
+  involuteTimer?.unref();
+  if (involuteConsumer !== undefined) log(`involute: answering for ${involuteConfig?.agents.map(a => `@${a.handle}`).join(", ")} every ${involuteConfig?.pollSeconds ?? 60}s`);
 
   const livenessTimer = setInterval(() => {
     void (async () => {
