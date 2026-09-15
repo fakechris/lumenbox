@@ -2867,7 +2867,7 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
             ? { ...caller, role: principals.roleOf(caller.userId) }
             : caller;
         const agent = agentId === undefined ? undefined : registry.tryGet(agentId);
-        const reason = refusalToDrive(known, agent?.profile);
+        const reason = refusalToDrive(known);
         if (reason !== undefined) {
           send(res, 403, { error: reason });
           return true;
@@ -3701,7 +3701,14 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
             !assertedByGateway && caller.userId !== undefined && !roleAtLeast(principals.roleOf(caller.userId), "driver")
               ? { ...caller, role: "viewer" }
               : caller;
-          const visible = registry.list().filter(agent => agent.profile.hidden !== true && refusalToDrive(known, agent.profile) === undefined);
+          // What this caller may open: the role, and then the boxes they are in (INV-540
+          // retired the per-agent check; INV-538 is what replaced it). A summary must
+          // never name an agent the caller could not open.
+          const myBoxes = (agent: { id: string }): boolean =>
+            known.userId === undefined || mayEnterBox(registry.boxOf(agent.id), principals.resolve(known.userId).id);
+          const visible = registry
+            .list()
+            .filter(agent => agent.profile.hidden !== true && refusalToDrive(known) === undefined && myBoxes(agent));
           const boxes = registry.listBoxes().map(box => ({ id: box.id, name: box.name }));
           send(res, 200, { boxes, agents: memoryAdmin.summary(visible) });
           return;

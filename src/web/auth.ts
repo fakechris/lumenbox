@@ -107,32 +107,33 @@ export function mayDrive(caller: Caller): boolean {
 }
 
 /**
- * Whether this caller may drive this particular agent, and why not if not.
+ * Whether this caller may drive at all, and why not if not.
  *
- * One function, called from every route that changes something, rather than a check per handler —
- * which is how one handler ends up missing it. A refusal names the role that would be needed,
- * because a permission system returning a blank 403 generates a support conversation every time.
+ * One function, called from every route that changes something, rather than a check per
+ * handler — which is how one handler ends up missing it. A refusal names the role that
+ * would be needed, because a permission system returning a blank 403 generates a support
+ * conversation every time.
  *
- * **This is accident prevention, not a security boundary.** Everyone in a tenant shares a box, a
- * filesystem and passwordless sudo inside it, so a member who wants another member's transcript can
- * read it from a shell. What this buys is that ordinary use does not cross wires, and that "whose
- * agent is this" has an answer. A real boundary between two people is two tenants and two boxes.
+ * **It no longer asks about the agent** (INV-540). Per-agent `visibility` was retired by
+ * docs/22 §3 — authority lives on the box and every agent in a box is equal — but the
+ * check stayed here for weeks, so two principals in one box got different answers about
+ * the same box's work, which is the thing the model forbids. What replaced it is real:
+ * `mayEnterBox` (INV-538), asked by the same callers straight after this. `ownerUserId`
+ * survives as attribution — whose creation this is, shown on the card — and never as a
+ * gate.
+ *
+ * **This is accident prevention, not a security boundary.** Everyone in a box shares a
+ * filesystem and passwordless sudo inside it, so a member who wants another member's
+ * transcript can read it from a shell. What this buys is that ordinary use does not cross
+ * wires. A real boundary between two people is two boxes with different members.
  */
-export function refusalToDrive(
-  caller: Caller,
-  agent: { ownerUserId?: string; visibility?: "shared" | "private" } | undefined
-): string | undefined {
+export function refusalToDrive(caller: Caller): string | undefined {
   if (!mayDrive(caller)) {
     return "This account can watch but not drive. A driver or an admin can act on this.";
   }
-  if (agent === undefined) return undefined;
-  const isPrivate = agent.visibility === "private";
-  if (!isPrivate) return undefined;
-  // An owner is not exempt: the point is "whose agent is this", and an owner reaching into a private
-  // agent by accident is the same accident. Deliberate access is a shell away, and visible.
-  if (agent.ownerUserId !== undefined && agent.ownerUserId === caller.userId) return undefined;
-  return "That agent is private to the person who created it.";
+  return undefined;
 }
+
 
 export interface AuthConfig {
   /** Undefined means no token was configured. */
