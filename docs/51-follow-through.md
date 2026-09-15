@@ -17,7 +17,7 @@
 
 **共同点**：都把"问题超时→按默认继续"做成了硬机制；都**没有** due 日期；都把工作项的老化做成被动诊断而不是推送；都没有把口头承诺对账成 job；都不让 agent 自己把工作关掉。**我们的差异**：我们已经有例程（`schedule:`/`@at`/`trigger:`）、任务板、提问卡、reconcile 这条 rail（docs/29 模板）——缺的正是"对象带表"和"沉默的解释"。
 
-WorkBuddy / 豆包 Work：本地没有源码，我们的 docs/25 workbuddy 程序只覆盖了 crew 与 opencode 委托，不涉及跟进机制；这两家的做法本文不下结论，列为待核（需要拿到可核对的材料再补）。
+WorkBuddy / 豆包 Work（binary 静态检查，docs/research/2026-09-14-workbuddy-doubao-binaries.md）：**WorkBuddy 5.5.6** 的 asar 里有完整的一套：审批 `DEFAULT_APPROVAL_TIMEOUT_MS = 120s`、`autoRejectOnTimeout: true`、注释写明「文本审批超时：自动拒绝，并同步通知 agent 与 IM」，UI 叫「授权超时未确认」；无人值守的定时任务遇到 AskUserQuestion 直接 `cancelQuestion`（「后台定时任务无人值守…已自动跳过」）；定时任务是一等功能（`automation.tab.scheduledTasks`，按固定时间拉数据批量建待办）；待办有 `dueDate`，但**没有**找到逾期推送、自动归档或老化提醒的字符串。即：沉默在它那里=**拒绝**，比 Hermes/OpenClaw 更保守，而挂着的工作同样只有 due、没有推送。**豆包 Work** 是站点化 Chromium 壳，逻辑在服务端，本地无可核对的产物，扫 Service Worker 缓存只命中无关内容——不下结论，也不算作反证。
 
 ## 2. 我们已经落地的四条 rail（2026-09-14，PR #145 / #146 / #147）
 
