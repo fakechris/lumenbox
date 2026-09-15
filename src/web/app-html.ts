@@ -205,6 +205,8 @@ export const APP_HTML = String.raw`<!doctype html>
     padding: 22px; display: flex; flex-direction: column; gap: 14px;
   }
   .modal h3 { margin: 0; font-size: 1.15rem; font-weight: 600; }
+  #teachreview:not([open]) { display: none; }
+  #teachreview::backdrop { background: rgba(0,0,0,0.3); }
   .field { display: flex; flex-direction: column; gap: 6px; }
   .field > label { font-size: 11px; letter-spacing: 0.08em; text-transform: uppercase; color: var(--muted); }
   .radio { display: flex; gap: 8px; align-items: baseline; font-size: 13px; color: var(--text-soft); cursor: pointer; }
@@ -780,6 +782,7 @@ export const APP_HTML = String.raw`<!doctype html>
         title="Tokens spent today, all agents \u2014 open the spend view"></span>
   <span id="whoami" style="font-size:12px;color:var(--muted);white-space:nowrap"></span>
   <button id="guidebtn" class="btn ghost sm" title="The four set-up steps, and where each thing is">Guide</button>
+  <button id="teachreviewbtn" class="btn ghost sm">Teaching drafts</button>
   <button id="settingsbtn" title="Settings" aria-label="Settings">
     <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3.2"/><path d="M19.4 15a1.7 1.7 0 0 0 .34 1.87l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.7 1.7 0 0 0-1.87-.34 1.7 1.7 0 0 0-1.03 1.56V21a2 2 0 1 1-4 0v-.09a1.7 1.7 0 0 0-1.11-1.56 1.7 1.7 0 0 0-1.87.34l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.7 1.7 0 0 0 .34-1.87 1.7 1.7 0 0 0-1.56-1.03H3a2 2 0 1 1 0-4h.09a1.7 1.7 0 0 0 1.56-1.11 1.7 1.7 0 0 0-.34-1.87l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.7 1.7 0 0 0 1.87.34h.09a1.7 1.7 0 0 0 1.03-1.56V3a2 2 0 1 1 4 0v.09a1.7 1.7 0 0 0 1.03 1.56 1.7 1.7 0 0 0 1.87-.34l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.7 1.7 0 0 0-.34 1.87v.09a1.7 1.7 0 0 0 1.56 1.03H21a2 2 0 1 1 0 4h-.09a1.7 1.7 0 0 0-1.56 1.03Z"/></svg>
   </button>
@@ -1038,6 +1041,28 @@ export const APP_HTML = String.raw`<!doctype html>
 </div>
 
 </div>
+
+<dialog id="teachreview" class="modal" style="width:min(850px,90vw);max-height:85vh;overflow:auto;color:var(--text);background:var(--surface)">
+  <h3>Teaching drafts</h3>
+  <p class="fieldnote">Review the proposed steps and inputs. Publish adds the skill to its original box; it does not run it. Only an admin can publish.</p>
+  <div id="teachreviewlist"></div>
+  <div id="teachreviewdetail" style="display:none">
+    <p id="teachreviewsource" class="fieldnote"></p>
+    <pre id="teachreviewtext" style="white-space:pre-wrap;overflow-wrap:anywhere;font-size:13px;padding:14px;border:1px solid var(--border)"></pre>
+    <details id="teachreviewhistory" style="display:none"><summary>Earlier questions and answers</summary><pre id="teachreviewhistorytext" style="white-space:pre-wrap;overflow-wrap:anywhere"></pre></details>
+    <div id="teachreviewclarification" style="display:none;margin:14px 0">
+      <label for="teachreviewanswer">Answer the teaching question</label>
+      <textarea id="teachreviewanswer" rows="4" maxlength="4096" placeholder="Explain the goal, variable inputs and expected output. Do not include credentials." style="display:block;width:100%;box-sizing:border-box;margin:8px 0"></textarea>
+      <button id="teachreviewclarify" class="btn accent">Generate revised draft</button>
+    </div>
+    <div class="actions">
+      <button id="teachreviewpublish" class="btn accent">Publish reviewed skill</button>
+      <button id="teachreviewreject" class="btn ghost">Reject draft</button>
+    </div>
+  </div>
+  <p id="teachreviewstatus" role="status" class="fieldnote"></p>
+  <div class="actions"><button id="teachreviewclose" class="btn ghost">Close</button></div>
+</dialog>
 
 <!-- Where the month went. A different question from the rest of this page, which answers
      "what is this agent doing now" — so a different surface, admin only, reached from the
@@ -5362,6 +5387,75 @@ function linkifyWorkPaths(html) {
  */
 var skills = [];
 var slashIndex = 0;
+
+var teachingDrafts = [];
+var selectedTeachingDraft = null;
+function showTeachingDraft(draft) {
+  selectedTeachingDraft = draft;
+  $("teachreviewdetail").style.display = "block";
+  $("teachreviewsource").textContent = draft.status + " · agent " + draft.agentId + " · box " + draft.boxId + " · session " + draft.sessionId + " · trace " + draft.eventsPath + (draft.videoPath ? " · video " + draft.videoPath : "");
+  $("teachreviewtext").textContent = draft.skill || draft.question;
+  $("teachreviewclarification").style.display = !draft.skill && draft.status === "draft" ? "block" : "none";
+  $("teachreviewanswer").value = "";
+  $("teachreviewclarify").disabled = draft.status !== "draft";
+  $("teachreviewhistory").style.display = (draft.clarifications || []).length ? "block" : "none";
+  $("teachreviewhistorytext").textContent = (draft.clarifications || []).map(function (item) {
+    return item.at + " · " + item.actor + "\nQuestion: " + item.question + "\nAnswer: " + item.answer;
+  }).join("\n\n");
+  $("teachreviewpublish").disabled = !draft.skill || (draft.status !== "draft" && draft.status !== "publishing");
+  $("teachreviewpublish").textContent = draft.status === "publishing" ? "Retry approved publication" : "Publish reviewed skill";
+  $("teachreviewreject").disabled = draft.status !== "draft";
+}
+async function refreshTeachingDrafts() {
+  var response = await fetch("/api/teaching-drafts");
+  var payload = await response.json();
+  if (!response.ok) throw new Error(payload.error || "Could not load teaching drafts");
+  teachingDrafts = payload.drafts || [];
+  $("teachreviewlist").replaceChildren();
+  teachingDrafts.forEach(function (draft) {
+    var button = document.createElement("button");
+    button.className = "btn ghost sm";
+    button.style.margin = "4px";
+    button.textContent = draft.sessionId + " · " + draft.status;
+    button.onclick = function () { showTeachingDraft(draft); };
+    $("teachreviewlist").appendChild(button);
+  });
+  if (!teachingDrafts.length) $("teachreviewlist").textContent = "No teaching drafts yet.";
+}
+$("teachreviewbtn").onclick = function () {
+  $("teachreview").showModal();
+  $("teachreviewdetail").style.display = "none";
+  $("teachreviewstatus").textContent = "Loading…";
+  refreshTeachingDrafts().then(function () { $("teachreviewstatus").textContent = ""; }).catch(function (e) { $("teachreviewstatus").textContent = e.message; });
+};
+$("teachreviewclose").onclick = function () { $("teachreview").close(); };
+async function decideTeachingDraft(action) {
+  var draft = selectedTeachingDraft;
+  if (!draft) return;
+  var answer = $("teachreviewanswer").value.trim();
+  if (action === "clarify" && !answer) { $("teachreviewstatus").textContent = "Enter an answer first."; return; }
+  $("teachreviewclarify").disabled = true;
+  $("teachreviewpublish").disabled = true;
+  $("teachreviewreject").disabled = true;
+  $("teachreviewstatus").textContent = action === "clarify" ? "Generating a new draft…" : "Saving…";
+  try {
+    var response = await fetch("/api/teaching-drafts/" + action, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ id: draft.id, digest: draft.digest, answer: action === "clarify" ? answer : undefined }) });
+    var payload = await response.json();
+    if (!response.ok) throw new Error(payload.error || "Could not save this decision");
+    showTeachingDraft(payload.draft);
+    $("teachreviewstatus").textContent = action === "approve" ? "Published. The skill is available for a requested dry run; nothing was executed." : action === "clarify" ? "Revised draft saved. Review it before publishing; nothing was executed." : "Draft rejected.";
+    await refreshTeachingDrafts();
+    if (action === "approve") await refreshSkills();
+  } catch (e) {
+    $("teachreviewstatus").textContent = e.message;
+    await refreshTeachingDrafts().catch(function () {});
+    showTeachingDraft(teachingDrafts.find(function (item) { return item.id === draft.id; }) || draft);
+    if (action === "clarify") $("teachreviewanswer").value = answer;
+  }
+}
+$("teachreviewclarify").onclick = function () { decideTeachingDraft("clarify"); };
+$("teachreviewpublish").onclick = function () { decideTeachingDraft("approve"); };
+$("teachreviewreject").onclick = function () { decideTeachingDraft("reject"); };
 
 function refreshSkills() {
   return fetch("/api/skills")

@@ -134,6 +134,7 @@ test("a clean stop asks ffmpeg to quit and reports the file", async () => {
   children[0]!.exit(0);
 
   const finished = await stopping;
+  assert.ok(finished !== undefined, "a live recording stops and reports");
   assert.equal(finished.size_bytes, 2048);
   assert.ok((finished.duration_ms ?? 0) > 0);
   assert.equal(service.isRecording(1), false);
@@ -165,9 +166,34 @@ test("an encoder that dies on its own frees the desktop", () => {
   assert.doesNotThrow(() => service.start({ display: 1, resolution }));
 });
 
-test("stopping something that is not recording is an error, not a crash", async () => {
+test("stopping something that is not recording is idempotent success, not a crash", async () => {
+  // the normal hand-back path has teach.finish stop the recorder first;
+  // a resolve that then stops again must not be blocked by an error.
   const service = serviceWith([]);
-  await assert.rejects(() => service.stop(9), RecordingError);
+  assert.equal(await service.stop(9), undefined);
+});
+
+test("stopIfCurrent stops only the recording it names", async () => {
+  const children: FakeChild[] = [];
+  const service = serviceWith(children);
+  const started = service.start({ display: 1, resolution });
+  writeFileSync(started.path, "x");
+
+  // The id is the identity; the file is presentation. A finished listing can reuse the
+  // file name, which is exactly why the id exists.
+  assert.ok(started.id !== undefined && started.id !== started.file);
+  // A stale identity — the recording it refers to is gone — stops nothing.
+  assert.equal(await service.stopIfCurrent(1, "somebody-elses-id"), undefined);
+  assert.equal(service.isRecording(1), true, "the current recording keeps running");
+  assert.equal(children[0]!.written, "", "no stop was sent to the encoder");
+
+  // The current identity stops it, exactly as a plain stop would.
+  const stopping = service.stopIfCurrent(1, started.id);
+  assert.equal(children[0]!.written, "q");
+  children[0]!.exit(0);
+  const stopped = await stopping;
+  assert.ok(stopped !== undefined && stopped.id === started.id && stopped.file === started.file);
+  assert.equal(service.isRecording(1), false);
 });
 
 

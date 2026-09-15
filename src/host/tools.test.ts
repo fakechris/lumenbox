@@ -956,6 +956,41 @@ test("Checkpoint keeps a named result in durable state, replacing by name, and r
   assert.equal(written.length, 2);
 });
 
+test("an assignee reads current task details through Tasks without searching host files", async () => {
+  const { TaskStore } = await import("./tasks.ts");
+  const tasks = new TaskStore(null);
+  const task = tasks.create({ title: "Inspect the retained browser", description: "Use connection incarnation one.", requester: "web", assigneeId: "ops" })!;
+  const context = {
+    agent: { id: "ops", profile: { name: "Ops" } },
+    registry: { tryGet: () => undefined },
+    tasks,
+  } as unknown as Parameters<typeof dispatchTool>[2];
+  const listed = await dispatchTool("Tasks", { action: "list" }, context);
+  assert.ok(!listed.text.includes("connection incarnation one"), "board summaries do not broadcast task details");
+  const read = await dispatchTool("Tasks", { action: "read", id: task.id }, context);
+  assert.ok(!read.isError, read.text);
+  assert.match(read.text, /Use connection incarnation one\./);
+  tasks.update(task.id, { description: "Use connection incarnation two." }, "web");
+  const refreshed = await dispatchTool("Tasks", { action: "read", id: task.id }, context);
+  assert.match(refreshed.text, /Use connection incarnation two\./);
+  assert.ok(!refreshed.text.includes("incarnation one"), "renewal is read from the current board snapshot");
+  tasks.update(task.id, { assigneeId: "other" }, "web");
+  const former = await dispatchTool("Tasks", { action: "read", id: task.id }, context);
+  assert.ok(former.isError, "a former assignee cannot read the successor's details");
+  assert.ok(!former.text.includes("incarnation two"));
+  const retake = await dispatchTool("Tasks", { action: "take", id: task.id }, context);
+  assert.ok(retake.isError, "a former assignee cannot recover details by stealing the assignment");
+  const reassign = await dispatchTool("Tasks", { action: "update", id: task.id, assignee: "ops" }, {
+    ...context, registry: { tryGet: () => undefined, list: () => [{ id: "ops", profile: { name: "Ops" } }] },
+  } as unknown as Parameters<typeof dispatchTool>[2]);
+  assert.ok(reassign.isError, "update cannot bypass the take restriction");
+  assert.equal(tasks.get(task.id)?.assigneeId, "other");
+  const afterSteal = await dispatchTool("Tasks", { action: "read", id: task.id }, context);
+  assert.ok(afterSteal.isError);
+  const missing = await dispatchTool("Tasks", { action: "read", id: "missing" }, context);
+  assert.ok(missing.isError);
+});
+
 // ── the control outline the model reads (INV-412) ────────────────────────────────────
 test("elementsOutline is one line per control in the browser outline's shape, and says plainly when there is no tree", () => {
   const outline = elementsOutline({

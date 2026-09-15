@@ -4,7 +4,7 @@
  * Everything the agent does inside the box goes through here.
  */
 
-import { BOXD_PROTOCOL, type DisplayInfo, type TeachQueueList, type TeachClaimResult } from "../protocol/index.ts";
+import { BOXD_PROTOCOL, type DisplayInfo, type TeachQueueList, type TeachClaimResult, type TeachBinding } from "../protocol/index.ts";
 import type {
   BrowserRequest,
   BrowserResponse,
@@ -228,10 +228,10 @@ export class BoxClient {
   }
 
   /** A person takes a desktop over, or hands it back (INV-404). */
-  setDisplayControl(index: number, controller: "agent" | "user", ttlSeconds?: number): Promise<DisplayInfo> {
+  setDisplayControl(index: number, controller: "agent" | "user", ttlSeconds?: number, teaching?: TeachBinding): Promise<DisplayInfo> {
     return this.post<DisplayInfo>(
       "/displays/control",
-      { index, controller, ...(ttlSeconds !== undefined ? { ttl_seconds: ttlSeconds } : {}) },
+      { index, controller, ...(ttlSeconds !== undefined ? { ttl_seconds: ttlSeconds } : {}), ...(teaching === undefined ? {} : { teaching }) },
       10_000
     );
   }
@@ -242,8 +242,8 @@ export class BoxClient {
   }
 
   /** Claims the oldest pending demonstration; `entry` absent when there is none. */
-  teachClaim(): Promise<TeachClaimResult> {
-    return this.post<TeachClaimResult>("/teach/claim", {}, 10_000);
+  teachClaim(id?: string): Promise<TeachClaimResult> {
+    return this.post<TeachClaimResult>("/teach/claim", id === undefined ? {} : { id }, 10_000);
   }
 
   teachRelease(id: string): Promise<{ released: boolean }> {

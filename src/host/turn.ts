@@ -1539,7 +1539,7 @@ export async function runTurn(
   const narrowed = narrowTools(scope?.tools ?? agent.profile.tools, chatScope?.tools);
   // A template setup turn holds files and memory and a way to ask, nothing that reaches out
   // (docs/29 §5.3): the recipe it is installing is third-party text, and installing yourself
-  // is not a reason to message anyone. Withheld, not refused, like every other narrowing.
+  // is not a reason to message anyone. The same narrowing applies when offering and executing tools.
   const effectiveTools =
     deps.templateSetup === undefined
       ? narrowed
@@ -2466,7 +2466,9 @@ export async function runTurn(
       }
 
       let outcome: ToolOutcome;
-      if (hookBlock !== undefined) {
+      if (effectiveTools !== undefined && !tools.some(tool => tool.name === toolUse.name)) {
+        outcome = { text: "This tool is unavailable in the current execution context.", isError: true };
+      } else if (hookBlock !== undefined) {
         outcome = { text: `Blocked by a PreToolUse hook: ${hookBlock}`, isError: true };
       } else if (blocked !== undefined) {
         outcome = {

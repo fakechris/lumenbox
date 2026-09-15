@@ -4488,6 +4488,56 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
 
         // For the composer's "/" menu. Names and descriptions only — the same index the agent gets,
         // for the same reason.
+        const mayReadTeachingBox = (boxId: string): boolean => {
+          const box = registry.boxById(boxId);
+          return box !== undefined && (caller.userId === undefined || mayEnterBox(box, principals.resolve(caller.userId).id));
+        };
+        if (route === "GET /api/teaching-drafts") {
+          if (refusedRole("admin")) return;
+          send(res, 200, { drafts: orchestrator.teachDrafts.list().filter(draft => mayReadTeachingBox(draft.boxId)) });
+          return;
+        }
+        if (route === "POST /api/teaching-drafts/clarify") {
+          if (refusedRole("admin")) return;
+          const body = await readJson(req);
+          if (typeof body.id !== "string" || typeof body.digest !== "string" || typeof body.answer !== "string") {
+            send(res, 400, { error: "Review a teaching question and provide an answer" });
+            return;
+          }
+          try {
+            if (!mayReadTeachingBox(orchestrator.teachDrafts.get(body.id).boxId)) {
+              send(res, 403, { error: "This teaching box is not available to this caller" });
+              return;
+            }
+            const draft = await orchestrator.clarifyTeachingDraft(body.id, body.digest, body.answer,
+              caller.userId ?? "local-operator", caller);
+            send(res, 200, { draft });
+          } catch (error) {
+            send(res, 409, { error: error instanceof Error ? error.message : "Could not clarify the teaching draft" });
+          }
+          return;
+        }
+        if (route === "POST /api/teaching-drafts/approve" || route === "POST /api/teaching-drafts/reject") {
+          if (refusedRole("admin")) return;
+          const body = await readJson(req);
+          if (typeof body.id !== "string" || typeof body.digest !== "string") {
+            send(res, 400, { error: "Review a draft before choosing publish or reject" });
+            return;
+          }
+          try {
+            if (!mayReadTeachingBox(orchestrator.teachDrafts.get(body.id).boxId)) {
+              send(res, 403, { error: "This teaching box is not available to this caller" });
+              return;
+            }
+            const draft = route.endsWith("/approve")
+              ? await orchestrator.approveTeachingDraft(body.id, body.digest, caller.userId ?? "local-operator")
+              : orchestrator.teachDrafts.reject(body.id, body.digest);
+            send(res, 200, { draft });
+          } catch (error) {
+            send(res, 409, { error: error instanceof Error ? error.message : String(error) });
+          }
+          return;
+        }
         if (route === "GET /api/skills") {
           const loaded = await orchestrator.skills.refresh();
           send(res, 200, {
@@ -4800,7 +4850,7 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
             return;
           }
           try {
-            const info = await client.setDisplayControl(registry.displayIndexFor(agentId), controller);
+            const info = await client.setDisplayControl(registry.displayIndexFor(agentId), controller, undefined, { agentId });
             log(`${registry.get(agentId).profile.name}'s desktop: ${controller === "user" ? "a person took over" : "handed back"}`);
             send(res, 200, info);
             // The hand-back is the moment the demonstration is complete (INV-406): the
@@ -5940,4 +5990,3 @@ export function desktopRouteOf(
   const rest = match[3] ?? "/";
   return { boxId: match[1], upstream: `/${canDrive ? "vnc" : "vnc-ro"}/${match[2]}${rest}${search}` };
 }
-

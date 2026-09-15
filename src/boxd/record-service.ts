@@ -30,6 +30,7 @@
  */
 
 import { spawn, type ChildProcess } from "node:child_process";
+import { randomUUID } from "node:crypto";
 import { mkdirSync, readdirSync, readFileSync, statSync } from "node:fs";
 import { join } from "node:path";
 
@@ -44,6 +45,13 @@ const QUIT_GRACE_MS = 4000;
 const TERM_GRACE_MS = 3000;
 
 export interface RecordingStatus {
+  /**
+   * The recording's immutable identity, minted when the encoder starts. This — never the
+   * file name or path, which are presentation — is what a consumer captures to stop *this*
+   * recording later: the file name only has second-resolution uniqueness, and the teach
+   * session's end must stop the recording it began, not whichever file shares a name.
+   */
+  id: string;
   display: number;
   file: string;
   path: string;
@@ -171,6 +179,7 @@ export class RecordService {
     const child = this.spawner("ffmpeg", args);
     const entry: Active = {
       status: {
+        id: randomUUID(),
         display,
         file,
         path,
@@ -276,9 +285,35 @@ export class RecordService {
     return stopped;
   }
 
-  async stop(display: number): Promise<RecordingStatus> {
+  /**
+   * Stops the desktop's recording and reports the finished file.
+   *
+   * Idempotent: a desktop that is not being recorded answers `undefined`
+   * rather than an error, so the normal hand-back path — teach.finish already stopped the
+   * recorder — does not block resolve. A recording that ran but produced no file is still
+   * an error: that is a failed recording, not an absent one.
+   */
+  async stop(display: number): Promise<RecordingStatus | undefined> {
     const entry = this.active.get(display);
-    if (!entry) throw new RecordingError(`Desktop ${display} is not being recorded.`);
+    if (!entry) return undefined;
+    return this.stopEntry(display, entry);
+  }
+
+  /**
+   * Stops the desktop's recording only when it is still the recording `id`
+   *: the teach session that began it captured the identity at begin
+   * time, and if the desktop's current recording is a different id the old session's
+   * end() must leave the new one running. The selection and removal happen in one
+   * synchronous step, so nothing can swap the recording in between; resolving the
+   * display's "current recording" again after an await is exactly what this prevents.
+   */
+  async stopIfCurrent(display: number, id: string): Promise<RecordingStatus | undefined> {
+    const entry = this.active.get(display);
+    if (entry === undefined || entry.status.id !== id) return undefined;
+    return this.stopEntry(display, entry);
+  }
+
+  private async stopEntry(display: number, entry: Active): Promise<RecordingStatus> {
     this.active.delete(display);
 
     const exited = new Promise<void>(resolve => {
@@ -337,6 +372,9 @@ export class RecordService {
           const path = join(RECORDINGS_DIR, name);
           const info = statSync(path);
           return {
+            // Finished files predate identity tracking; the name is the only identity
+            // they carry, and listings only display it.
+            id: name,
             display: 0,
             file: name,
             path,

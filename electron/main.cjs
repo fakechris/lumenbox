@@ -26,12 +26,15 @@ const {
   nativeImage,
   nativeTheme,
   powerMonitor,
+  shell,
 } = require("electron");
 const { execFile, spawn } = require("node:child_process");
 const fs = require("node:fs");
 const http = require("node:http");
 const os = require("node:os");
 const path = require("node:path");
+const { desktopAuth } = require("./ui-auth.cjs");
+const uiAuth = desktopAuth();
 
 const PORT = Number(process.env.LUMENBOX_PORT || 7777);
 const PAGE = `http://127.0.0.1:${PORT}/`;
@@ -148,7 +151,7 @@ function startServer() {
     ["--experimental-transform-types", cli, "web", "--port", String(PORT)],
     {
       cwd: REPO,
-      env: withToolPath({ ...process.env, ELECTRON_RUN_AS_NODE: "1" }),
+      env: withToolPath({ ...process.env, ELECTRON_RUN_AS_NODE: "1", ...(uiAuth.token ? { AGENTBOX_UI_TOKEN: uiAuth.token } : {}) }),
       stdio: ["ignore", "pipe", "pipe"],
     }
   );
@@ -221,7 +224,7 @@ function notify(title, body) {
 
 function watchEvents() {
   eventsRequest?.destroy();
-  const request = http.get(`${PAGE}api/events`, response => {
+  const request = http.get(`${PAGE}api/events`, { headers: uiAuth.headers }, response => {
     let buffer = "";
     response.on("data", chunk => {
       buffer += String(chunk);
@@ -338,7 +341,7 @@ function startMemoryGuard() {
 }
 
 /** Polls the page until the server answers, then calls back. */
-function whenServerReady(callback, deadline = Date.now() + 60_000) {  const request = http.get(PAGE, response => {
+function whenServerReady(callback, deadline = Date.now() + 60_000) {  const request = http.get(PAGE, { headers: uiAuth.headers }, response => {
     response.resume();
     if (response.statusCode && response.statusCode < 500) {
       callback();
@@ -377,13 +380,14 @@ function createWindow() {
   mainWindow.on("closed", () => {
     mainWindow = null;
   });
-  whenServerReady(() => mainWindow?.loadURL(PAGE));
+  whenServerReady(() => mainWindow?.loadURL(uiAuth.bootstrapUrl(PAGE)));
 }
 
 function buildTrayMenu() {
   const loginSettings = app.getLoginItemSettings();
   return Menu.buildFromTemplate([
     { label: "Open LumenBox", click: () => createWindow() },
+    { label: "Open in browser", click: () => { void shell.openExternal(uiAuth.bootstrapUrl(PAGE)); } },
     // Launch-at-login is set in Settings and applied here from config.json: one writer for
     // the file (the server), one applier for the OS (this process).
     {
@@ -456,7 +460,9 @@ if (!app.requestSingleInstanceLock()) {
     powerMonitor.on("resume", () => {
       log("system resumed; asking the server to sweep the chat channels");
       setTimeout(() => {
-        fetch(`http://127.0.0.1:${PORT}/api/channels/sweep`, { method: "POST" }).catch(error => {
+        fetch(`http://127.0.0.1:${PORT}/api/channels/sweep`, { method: "POST", headers: uiAuth.headers }).then(response => {
+          if (!response.ok) throw new Error(`HTTP ${response.status}`);
+        }).catch(error => {
           log(`sweep after resume failed: ${error.message}`);
         });
       }, 8_000);

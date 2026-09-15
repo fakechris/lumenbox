@@ -40,6 +40,8 @@ this file and the headers disagree. Edit the header, not this table.
 | [19-pitfalls](19-pitfalls.md) | Pitfalls: remembering how things went wrong | current | 2026-08-28 |
 | [37-onboarding](37-onboarding.md) | Getting started, every way in | current | 2026-09-05 |
 | [38-operators-guide](38-operators-guide.md) | The operator's guide (what the README used to be) | current | 2026-09-07 |
+| [55-external-desktops](55-external-desktops.md) | External browsers and desktop control | current | 2026-09-15 |
+| [56-teaching-upgrade](56-teaching-upgrade.md) | Teaching draft upgrade | current | 2026-09-15 |
 
 ## decision
 
@@ -94,4 +96,3 @@ this file and the headers disagree. Edit the header, not this table.
 | [handoff-2026-09-01](handoff-2026-09-01.md) | Handoff — 2026-09-01 | current | 2026-09-01 |
 | [handoff-2026-09-02](handoff-2026-09-02.md) | Handoff, 2026-09-02 | current | 2026-09-02 |
 | [handoff-2026-09-15-involute-agent-threads](handoff-2026-09-15-involute-agent-threads.md) | Handoff — Involute 侧：agent 身份与工作项上的对话 | current | 2026-09-15 |
-

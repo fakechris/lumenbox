@@ -5,6 +5,7 @@
  * Runs inside the box. The host never invokes xdotool or ffmpeg directly.
  */
 
+import { AsyncLocalStorage } from "node:async_hooks";
 import { envNumber } from "../config.ts";
 import { execFile } from "node:child_process";
 import { readFileSync, unlinkSync } from "node:fs";
@@ -32,6 +33,8 @@ import {
 } from "./effect.ts";
 
 const execFileAsync = promisify(execFile);
+const operationAuthority = new AsyncLocalStorage<(() => void) | undefined>();
+function authorizeOperation(): void { operationAuthority.getStore()?.(); }
 
 /**
  * The `mousemove` commands for a path, with the ones that would not move anything removed.
@@ -378,6 +381,8 @@ export interface X11Config {
 }
 
 export interface TypingOptions {
+  /** Rechecked after waits and before each new native input operation. */
+  authorize?: () => void;
   /**
    * Bind a keycode for each character with no key before typing it, rather than
    * letting `xdotool type` remap one per character and lose it. See
@@ -457,6 +462,7 @@ export class X11Executor {
    */
   protected async listElements(): Promise<{ elements: ElementInfo[]; window: { title: string; app: string; truncated: boolean } } | { error: string }> {
     let stdout: string;
+    authorizeOperation();
     try {
       // The executor's environment is DISPLAY alone; a lookup by name needs a PATH, and
       // the daemon's own is the one the image set.
@@ -501,6 +507,8 @@ export class X11Executor {
   }
 
   private xdotool(args: string): Promise<string> {
+    // Releasing a key already held by this action remains cleanup after revocation.
+    if (!args.startsWith("keyup ")) authorizeOperation();
     return exec("xdotool", args.split(" ").filter(Boolean), { env: this.env });
   }
 
@@ -526,6 +534,10 @@ export class X11Executor {
     actions: readonly ComputerAction[],
     options: TypingOptions = {}
   ): Promise<X11ExecutionResult> {
+    return operationAuthority.run(options.authorize, () => this.executeAuthorized(actions, options));
+  }
+
+  private async executeAuthorized(actions: readonly ComputerAction[], options: TypingOptions): Promise<X11ExecutionResult> {
     const start = Date.now();
     let cursorPosition: { x: number; y: number } | undefined;
     let lastScreenshot: string | undefined;
@@ -541,6 +553,7 @@ export class X11Executor {
     let pending: { region: Region; before: Buffer; index: number } | undefined;
 
     for (const action of actions) {
+      authorizeOperation();
       if (action.action === "screenshot") {
         if (settleNeeded) {
           await sleep(this.config.screenshotDelayMs);
@@ -581,6 +594,7 @@ export class X11Executor {
         // batch may have changed this very region, and that change is not this write's.
         const region = anchor !== undefined ? this.neighbourhood(anchor) : undefined;
         const before = region !== undefined ? await this.grabQuietly(region) : undefined;
+        authorizeOperation();
         await this.executeAction(action, options);
         if (actionRequiresSettle(action)) settleNeeded = true;
         if (anchor !== undefined) {
@@ -616,6 +630,7 @@ export class X11Executor {
       }
       lastScreenshot = await this.takeScreenshot();
     }
+    authorizeOperation();
 
     const effect = worstEffect(measured.map(m => m.effect));
     return {
@@ -702,6 +717,7 @@ export class X11Executor {
    * frames byte for byte needs no decoder, and the region is small enough to be cheap.
    */
   protected async grabRegion(region: Region): Promise<Buffer> {
+    authorizeOperation();
     return execBuffer(
       "ffmpeg",
       [
@@ -812,6 +828,7 @@ export class X11Executor {
 
         // Raise first. A click lands on whatever is topmost at that point, so clicking a
         // covered window without raising it clicks the thing covering it instead.
+        authorizeOperation();
         await execFileAsync("wmctrl", ["-i", "-a", id], { env: this.env });
         await sleep(150);
 
@@ -834,6 +851,7 @@ export class X11Executor {
       case "activate_window":
         // wmctrl -a rather than a raise: EWMH activation also takes focus and switches
         // workspace, which is what "operate this window" actually needs.
+        authorizeOperation();
         await execFileAsync("wmctrl", ["-i", "-a", assertWindowId(action.window_id)], {
           env: this.env,
         });
@@ -846,6 +864,7 @@ export class X11Executor {
         // grab while hover still rendered, so nothing on the screen could be clicked —
         // including the popup's own close button. The one channel a grab cannot block is
         // the window manager's, and this is that channel as an action.
+        authorizeOperation();
         await execFileAsync("wmctrl", ["-i", "-c", assertWindowId(action.window_id)], {
           env: this.env,
         });
@@ -994,14 +1013,20 @@ export class X11Executor {
         (char, index) => [spare[index]!, unicodeKeysym(char)] as const
       );
 
+      let bindingStarted = false;
       try {
         // Each keysym twice: X expands a keycode holding one alphabetic keysym
         // into [lowercase, uppercase], so "Á" alone would arrive as "á".
-        await this.changeKeymap(
+        authorizeOperation();
+        const binding = this.changeKeymap(
           bindings.map(
             ([keycode, keysym]) => `keycode ${keycode} = ${keysym} ${keysym}`
           )
         );
+        // execWithInput starts the native call synchronously. Record its cleanup
+        // obligation before awaiting: a failing process may have applied some keys.
+        bindingStarted = true;
+        await binding;
         await sleep(KEYMAP_SETTLE_MS);
         await this.sendKeystrokes(run, {
           clearModifiers: true,
@@ -1009,12 +1034,14 @@ export class X11Executor {
         });
         await sleep(KEYMAP_SETTLE_MS);
       } finally {
-        await this.changeKeymap(
-          bindings.map(([keycode]) => `keycode ${keycode} =`)
-        ).catch(() => {
-          // A keycode left bound produces nothing on any physical key, so a
-          // failed release must not mask a typing error.
-        });
+        if (bindingStarted) {
+          await this.changeKeymap(
+            bindings.map(([keycode]) => `keycode ${keycode} =`)
+          ).catch(() => {
+            // A keycode left bound produces nothing on any physical key, so a
+            // failed release must not mask a typing error.
+          });
+        }
       }
     }
   }
@@ -1032,6 +1059,7 @@ export class X11Executor {
     const units = byCodePoint ? [...text] : text.split("");
     for (let i = 0; i < units.length; i += typingBatchSize) {
       const batch = units.slice(i, i + typingBatchSize).join("");
+      authorizeOperation();
       await exec(
         "xdotool",
         [
@@ -1058,6 +1086,8 @@ export class X11Executor {
   }
 
   private changeKeymap(entries: string[]): Promise<void> {
+    // Only typeWithBorrowedKeys calls this: it authorizes installation and tracks
+    // whether this operation owns a cleanup obligation, independent of entry text.
     return execWithInput("xmodmap", ["-"], {
       input: `${entries.join("\n")}\n`,
       env: this.env,
@@ -1124,6 +1154,7 @@ export class X11Executor {
    * hand. Not scaled, because the result is the window's own coordinate space.
    */
   async screenshotWindow(windowId: string): Promise<string> {
+    authorizeOperation();
     const id = assertWindowId(windowId);
     const stem = `/tmp/agentbox-window-${process.pid}-${Date.now()}`;
     const dump = `${stem}.xwd`;
@@ -1158,6 +1189,7 @@ export class X11Executor {
   }
 
   async takeScreenshot(): Promise<string> {
+    authorizeOperation();
     const { width, height } = this.config.resolution.display;
     const buffer = await execBuffer(
       "ffmpeg",

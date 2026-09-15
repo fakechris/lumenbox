@@ -16,10 +16,13 @@
 import { envNumber } from "../config.ts";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
-import { copyFileSync, readFileSync, renameSync, rmSync, statSync, truncateSync, writeFileSync } from "node:fs";
-import { createHash } from "node:crypto";
+import { copyFileSync, mkdirSync, readFileSync, renameSync, rmSync, statSync, truncateSync, writeFileSync } from "node:fs";
+import { createHash, randomUUID } from "node:crypto";
+import { join } from "node:path";
 import {
   DEFAULT_DISPLAY_INDEX,
+  MAX_DISPLAY_INDEX,
+  isDisplayIndex,
   NOVNC_BASE_PORT,
   NOVNC_VIEW_ONLY_BASE_PORT,
   type DisplayInfo,
@@ -35,13 +38,57 @@ import { ComponentHealth, type ComponentStatus } from "./component-health.ts";
  */
 const START_DISPLAY = process.env.BOXD_START_DISPLAY ?? "/usr/local/bin/start-display";
 
+/**
+ * Where the desktop components' logs live — the same directory start-display writes
+ * them to. Overridable for the same reason the launcher is: a spawned test daemon must
+ * not touch a live box's files, and rotation is copy-then-truncate (destructive), not a
+ * read. Production always uses the default.
+ */
+const COMPONENT_LOG_DIR = process.env.BOXD_COMPONENT_LOG_DIR ?? "/tmp";
+
 const execFileAsync = promisify(execFile);
 
 /** Bringing up Xvfb, a WM, VNC and noVNC takes a moment on a loaded host. */
 const START_TIMEOUT_MS = 90_000;
 
 /** Guards against an agent id being turned into an unbounded desktop farm. */
-const MAX_DISPLAY_INDEX = 32;
+export { MAX_DISPLAY_INDEX } from "../protocol/index.ts";
+
+/**
+ * The in-memory half of the external control guard, per desktop. `reconciled` is per-boot:
+ * it flips true only when a trusted entry has carried controller's projection to this process.
+ */
+interface GuardState {
+  epoch: number;
+  opToken?: string;
+  /** controller revoked and no grant stands; ordinary calls are refused until re-armed. */
+  revoked: boolean;
+  /** This boot has seen controller's projection for the desktop (never persisted). */
+  reconciled: boolean;
+}
+
+/** What survives a restart: the generation and the revoked marker — never the token. */
+interface PersistedControl {
+  displays: Record<string, { epoch: number; revoked: boolean }>;
+  /** Applied revocation ids, for outbox-retried revocations to dedup against. */
+  revocations?: string[];
+  /**
+   * True while the managed set is known to be incomplete: the file was rebuilt after
+   * corruption, and desktops absent from `displays` are unknown, not unmanaged. A boot
+   * over a partial file keeps unlisted desktops closed until controller's trusted scope
+   * confirmation (a reconcile-token-bearing call with scope_complete) rewrites it.
+   */
+  partial?: boolean;
+}
+
+/** Applied revocation ids kept for dedup; bounded so the file cannot grow without end. */
+const REVOCATION_REMEMBER = 200;
+
+function assertGuardIndex(index: number): void {
+  if (!isDisplayIndex(index)) {
+    throw new DisplayGuardError(`Display index must be an integer between 1 and ${MAX_DISPLAY_INDEX}.`);
+  }
+}
 
 /** How often each live desktop is checked and repaired. */
 const SUPERVISE_INTERVAL_MS = envNumber("BOXD_SUPERVISE_MS", 15_000);
@@ -93,6 +140,14 @@ export class DisplayOwnershipError extends Error {}
 
 /** The desktop is a person's right now. Answered as HTTP 423; the host reads it as refused. */
 export class UserInControlError extends Error {}
+
+/**
+ * The external control guard refused a display-scoped call: either the
+ * request's displayEpoch is older than the desktop's current one (a late hand-back or
+ * stop from a superseded incarnation), or its operation token is not the projection controller
+ * currently stands behind. Answered as HTTP 409; the host reads it as refused, not failed.
+ */
+export class DisplayGuardError extends Error {}
 
 /** How long a takeover lasts unless renewed or handed back. */
 export const USER_CONTROL_TTL_MS = 20 * 60_000;
@@ -220,9 +275,488 @@ export class DisplayManager {
   /** In-flight starts, so concurrent turns on one desktop start it once. */
   private readonly starting = new Map<number, Promise<Desktop>>();
 
+  /**
+   * The external control guard, per desktop. One home for the
+   * whole state machine, persisted so a boxd restart cannot forget that a desktop is
+   * controller-managed:
+   *
+   *  - absent      — never managed: the unmanaged callers keep their ungated path.
+   *  - managed, unreconciled — this daemon booted over persisted state and has not yet
+   *                  seen controller's projection for it. Every ordinary display-scoped call is
+   *                  refused; only the trusted projection entries (ensure/control/revoke)
+   *                  can reconcile.
+   *  - active      — a generation is bound: ordinary calls must present exactly the bound
+   *                  epoch (only the trusted entries advance a generation, so a higher
+   *                  epoch on an ordinary call is someone trying to move the generation
+   *                  through the wrong door) and the standing op token when one stands.
+   *  - revoked     — controller revoked and no grant stands: ordinary calls are refused until a
+   *                  new projection arms the desktop again.
+   *
+   * The op token itself is never written to disk: it is a credential projection, and the
+   * agent has a shell as this uid. Only the generation and the revoked marker persist.
+   *
+   * boxd is the enforcement point, not the authority: it does not judge whether a grant
+   * is valid, only whether the request carries the projection controller last relayed. Honest
+   * residue, stated in the design: a process derived before the revocation (a background
+   * job, an already-open shell) is not terminated by this — in-flight calls fail on their
+   * *next* request, not retroactively.
+   */
+  private readonly control = new Map<number, GuardState>();
+  private appliedRevocations: string[] = [];
+  /**
+   * The guard state file existed but could not be read or parsed. Unlike "absent"
+   * (nothing was ever managed), this is an anomaly we refuse to read as "fresh system":
+   * every desktop is treated as possibly-managed and stays closed to ordinary calls
+   * until a trusted projection both re-arms and re-persists the file.
+   */
+  private guardDegraded = false;
+  /**
+   * True while the managed set is known to be incomplete (loaded from a partial file,
+   * or saved while recovering from one). Desktops absent from `control` are unknown,
+   * not unmanaged: they stay closed to ordinary calls and projectionless trusted
+   * entries until controller's trusted scope confirmation clears the flag.
+   */
+  private partial = false;
+  /**
+   * This boot's reconciliation token, minted fresh on every start. A desktop that booted
+   * managed-but-unreconciled only accepts a projection carrying this token — the bridge
+   * reads it from this boxd each cycle, so a delayed message from before the restart
+   * cannot pose as controller's current state. The endpoint registry shares it,
+   * one token per boot for both halves of the desktop control state.
+   */
+  readonly reconcileToken: string = randomUUID();
+
   private timer: NodeJS.Timeout | undefined;
 
-  constructor(private readonly log: (line: string) => void) {}
+  constructor(
+    private readonly log: (line: string) => void,
+    private readonly dataDir: string = process.env.BOXD_DATA_DIR ?? "/home/box/work/.boxd"
+  ) {
+    this.loadControl();
+  }
+
+  // ── persistence ─────────────────────────────────────────────────────────────────────
+
+  private controlPath(): string {
+    return join(this.dataDir, "guard.json");
+  }
+
+  private loadControl(): void {
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(readFileSync(this.controlPath(), "utf8"));
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException)?.code === "ENOENT") return; // never persisted
+      this.guardDegraded = true;
+      this.log(
+        `guard: ${this.controlPath()} could not be read or parsed ` +
+          `(${error instanceof Error ? error.message : String(error)}); every desktop stays closed ` +
+          "to ordinary calls until a trusted projection re-arms and heals the file"
+      );
+      return;
+    }
+    // Structural validation, exhaustively: a file this daemon wrote is always a plain
+    // object with a displays map; anything else — array, null, missing or mistyped
+    // maps — is corruption, and corruption must fail closed, never read as unmanaged
+    // and never crash the boot. Optional fields are validated too: a
+    // `partial` that is present but not a boolean is corruption, not "complete" — a
+    // wrong-typed marker must never read as the healthy state.
+    const record = parsed as PersistedControl;
+    if (
+      typeof parsed !== "object" ||
+      parsed === null ||
+      Array.isArray(parsed) ||
+      !DisplayManager.isPlainMap(record.displays) ||
+      (record.partial !== undefined && typeof record.partial !== "boolean")
+    ) {
+      this.guardDegraded = true;
+      this.log(`guard: ${this.controlPath()} is structurally invalid; failing closed until re-armed`);
+      return;
+    }
+    // Validate the ENTIRE file into candidate maps before publishing anything: a corrupt
+    // record anywhere — even after valid ones — fails the whole load closed, with no
+    // half-populated state that a later recovery would trip over.
+    const candidate = new Map<number, GuardState>();
+    for (const [key, entry] of Object.entries(record.displays)) {
+      const index = Number(key);
+      if (
+        !Number.isInteger(index) ||
+        index < 1 ||
+        index > MAX_DISPLAY_INDEX ||
+        typeof entry !== "object" ||
+        entry === null ||
+        Array.isArray(entry) ||
+        typeof entry.epoch !== "number" ||
+        !Number.isFinite(entry.epoch)
+      ) {
+        // A corrupt record must not silently disappear — its desktop would read as
+        // unmanaged. The whole file fails closed instead, and per-desktop trusted
+        // recovery can heal it.
+        this.guardDegraded = true;
+        this.log(`guard: ${this.controlPath()} has a corrupt record for ${JSON.stringify(key)}; failing closed`);
+        return;
+      }
+      // Managed, but this boot has not seen controller's projection for it: refuse ordinary
+      // calls until the trusted entries reconcile (bridge re-projects on its next call).
+      candidate.set(index, {
+        epoch: entry.epoch,
+        revoked: entry.revoked === true,
+        reconciled: false,
+      });
+    }
+    const revocations: string[] = [];
+    if (record.revocations !== undefined) {
+      if (!Array.isArray(record.revocations) || record.revocations.some(id => typeof id !== "string")) {
+        this.guardDegraded = true;
+        this.log(`guard: ${this.controlPath()} has a corrupt revocation record; failing closed`);
+        return;
+      }
+      revocations.push(...record.revocations.slice(-REVOCATION_REMEMBER));
+    }
+    // The whole file is valid: publish it at once.
+    this.control.clear();
+    for (const [index, state] of candidate) this.control.set(index, state);
+    this.appliedRevocations = revocations;
+    // A partial file names a known-incomplete managed set: desktops absent from it are
+    // unknown, and stay closed until controller's trusted scope confirmation.
+    this.partial = record.partial === true;
+    if (this.control.size > 0 || this.partial) {
+      this.log(
+        `guard: ${this.control.size} desktop(s) are externally managed` +
+          (this.partial ? " (partial set — unlisted desktops unknown)" : "") +
+          "; their gates stay closed until controller's projection reconciles them"
+      );
+    }
+  }
+
+  /** A plain object used as a map — never null, never an array. */
+  private static isPlainMap(value: unknown): value is Record<string, unknown> {
+    return typeof value === "object" && value !== null && !Array.isArray(value);
+  }
+
+  /**
+   * Writes the candidate guard state — displays, the revocation-dedup record, and the
+   * partial marker, together, as one transaction — and only then returns. The caller
+   * commits to memory after this succeeds; a failed write publishes nothing, so a retry
+   * cannot be swallowed by a dedup record the disk never received and a
+   * restart never forgets a generation the disk does not hold.
+   *
+   * `partial` records that the managed set is known to be incomplete: any save made
+   * while recovering from corruption or a partial file keeps it set, so a reboot cannot
+   * turn "unknown desktops" into "unmanaged desktops".
+   */
+  private saveControl(candidate: Map<number, GuardState>, revocations: string[], partial: boolean): void {
+    const displays: Record<string, { epoch: number; revoked: boolean }> = {};
+    for (const [index, state] of candidate) {
+      displays[String(index)] = { epoch: state.epoch, revoked: state.revoked };
+    }
+    const temp = `${this.controlPath()}.${process.pid}.tmp`;
+    try {
+      mkdirSync(this.dataDir, { recursive: true });
+      writeFileSync(
+        temp,
+        `${JSON.stringify({ displays, revocations: revocations.slice(-REVOCATION_REMEMBER), ...(partial ? { partial: true } : {}) } satisfies PersistedControl, null, 2)}\n`,
+        { encoding: "utf8", mode: 0o600 }
+      );
+      renameSync(temp, this.controlPath());
+    } catch (error) {
+      try {
+        rmSync(temp, { force: true });
+      } catch {
+        // best effort
+      }
+      throw new DisplayGuardError(
+        `guard persist failed for ${this.dataDir}: ${error instanceof Error ? error.message : String(error)}; ` +
+          "refusing to publish a generation the disk does not hold"
+      );
+    }
+  }
+
+  /** Every save while the set is incomplete keeps the partial marker on disk. */
+  private nextPartial(): boolean {
+    return this.guardDegraded || this.partial;
+  }
+
+  /**
+   * controller's trusted scope confirmation: the managed set named on disk is complete again.
+   * Validates the confirmation's credentials only — the caller must fold it into the
+   * SAME candidate it persists, and clear the degraded/partial markers only after the
+   * write succeeds. Memory must never read "complete" while the disk says otherwise
+   *.
+   */
+  private validateScopeConfirmation(scopeComplete: boolean, reconcileToken?: string): void {
+    if (scopeComplete && reconcileToken !== this.reconcileToken) {
+      throw new DisplayGuardError("scope confirmation requires this boot's reconcile token");
+    }
+  }
+
+  /**
+   * Commits a persisted transaction: the candidate state, the revocation-dedup record,
+   * and the partial marker (false when the same request carried controller's scope
+   * confirmation) were written as one; only now may memory move. `partialAfter ===
+   * false` from a scope confirmation clears the recovery markers here — after the disk
+   * holds the complete file, never before.
+   */
+  private commitControl(
+    candidate: Map<number, GuardState>,
+    revocations: string[],
+    partialAfter: boolean
+  ): void {
+    const committed = new Map(candidate);
+    this.control.clear();
+    for (const [index, state] of committed) this.control.set(index, state);
+    // The human lease belongs to the revoked authority too. Clear it only after
+    // persistence commits, so the internal teach reaper finishes the abandoned
+    // recording instead of recording an empty desktop until the old lease expires.
+    for (const [index, state] of committed) {
+      if (state.revoked) this.handBack(index);
+    }
+    this.appliedRevocations = revocations;
+    if (!partialAfter) {
+      this.guardDegraded = false;
+      this.partial = false;
+    }
+  }
+
+  private static boundedRevocations(revocations: string[], extra: string): string[] {
+    const next = revocations.includes(extra) ? [...revocations] : [...revocations, extra];
+    return next.slice(-REVOCATION_REMEMBER);
+  }
+
+  // ── the trusted entries: only these move the guard ──────────────────────────────────
+
+  /**
+   * Arms or re-arms a desktop's generation — a trusted entry, called from ensure/control
+   * when the relay carries controller's projection.
+   *
+   * A desktop that booted managed-but-unreconciled only opens for a projection bound to
+   * THIS boot (reconcileToken): an old equal-value relay, however legitimate it once was,
+   * is a delayed message and cannot mark itself current. A genuinely never-managed
+   * desktop takes its first arm on the relay's authority alone. After a restart the
+   * previous boot's token is gone with the process: a reconciling projection arms the
+   * desktop with exactly the token it carried — possibly none — never a resurrected one.
+   */
+  armControl(index: number, epoch: number, opToken?: string, reconcileToken?: string, scopeComplete = false): void {
+    assertGuardIndex(index);
+    this.validateScopeConfirmation(scopeComplete, reconcileToken);
+    // Recovery from a corrupt or partial state is itself trusted work: only a message
+    // bound to this boot may re-establish any desktop while the managed set is unknown
+    //.
+    if ((this.guardDegraded || this.partial) && reconcileToken !== this.reconcileToken) {
+      throw new DisplayGuardError(
+        "the managed set is being recovered; a projection without this boot's reconcile token " +
+          "is a delayed message, not controller's current state"
+      );
+    }
+    // The scope confirmation rides THIS write: partial clears on disk and in memory
+    // together, only after the write succeeds.
+    const partialAfter = scopeComplete ? false : this.nextPartial();
+    const existing = this.control.get(index);
+    if (existing !== undefined && !existing.reconciled) {
+      if (reconcileToken === undefined || reconcileToken !== this.reconcileToken) {
+        throw new DisplayGuardError(
+          `desktop ${index} is awaiting reconciliation; a projection without this boot's reconcile ` +
+            "token is a delayed message, not controller's current state"
+        );
+      }
+      if (epoch < existing.epoch) {
+        throw new DisplayGuardError(
+          `epoch_mismatch: desktop ${index} stands at displayEpoch ${existing.epoch}; ` +
+            `refusing to arm an older epoch ${epoch}`
+        );
+      }
+      const candidate = new Map(this.control);
+      candidate.set(index, { epoch, opToken, revoked: false, reconciled: true });
+      this.saveControl(candidate, this.appliedRevocations, partialAfter);
+      this.commitControl(candidate, this.appliedRevocations, partialAfter);
+      if (scopeComplete) this.log("guard: controller confirmed the managed scope; recovery complete");
+      this.log(`desktop ${index}: reconciled and armed at displayEpoch ${epoch}`);
+      return;
+    }
+    const bound = existing?.epoch ?? 0;
+    if (epoch < bound) {
+      throw new DisplayGuardError(
+        `epoch_mismatch: desktop ${index} stands at displayEpoch ${bound}; ` +
+          `refusing to arm an older epoch ${epoch}`
+      );
+    }
+    const standingToken =
+      existing?.reconciled === true && epoch === existing.epoch ? existing.opToken : undefined;
+    const candidate = new Map(this.control);
+    candidate.set(index, {
+      epoch,
+      // The presented token wins; otherwise the standing projection survives only on a
+      // retry at the same generation. A new generation takes exactly what the relay
+      // carried — the previous boot's credential never survives a restart.
+      opToken: opToken ?? standingToken,
+      revoked: false,
+      reconciled: true,
+    });
+    this.saveControl(candidate, this.appliedRevocations, partialAfter);
+    this.commitControl(candidate, this.appliedRevocations, partialAfter);
+    if (scopeComplete) this.log("guard: controller confirmed the managed scope; recovery complete");
+  }
+
+  /**
+   * controller's revocation, relayed by the bridge with the generation controller is
+   * revoking from and an idempotency key for the outbox retry. Applies only while the
+   * desktop stands at exactly `from_epoch` — a retry landing after controller has moved on
+   * (a newer grant established) finds a different generation and changes nothing, so a
+   * late A-era revocation can never bump a B-era grant into oblivion.
+   *
+   * The state change and the dedup record are built as one candidate and persisted
+   * together before either is published: a failed write leaves both the live state and
+   * the dedup list at the prior transaction, so a retry after the filesystem recovers is
+   * judged against what the disk actually holds. A revocation that arrives before any
+   * arm leaves a persisted tombstone — the revoked generation's lower bound — so a late
+   * arm of the already-revoked generation is refused instead of resurrecting it.
+   */
+  revokeControl(
+    index: number,
+    revokeId: string,
+    fromEpoch: number,
+    reconcileToken?: string,
+    scopeComplete = false
+  ): { epoch: number; applied: boolean } {
+    assertGuardIndex(index);
+    this.validateScopeConfirmation(scopeComplete, reconcileToken);
+    if ((this.guardDegraded || this.partial) && reconcileToken !== this.reconcileToken) {
+      throw new DisplayGuardError(
+        "the managed set is being recovered; a revocation without this boot's reconcile token " +
+          "is a delayed message, not controller's current state"
+      );
+    }
+    // The scope confirmation rides THIS write (even when the revocation itself is a
+    // no-op): partial clears on disk and in memory together, only after the write.
+    const partialAfter = scopeComplete ? false : this.nextPartial();
+    const existing = this.control.get(index);
+    if (existing !== undefined && !existing.reconciled) {
+      if (reconcileToken === undefined || reconcileToken !== this.reconcileToken) {
+        throw new DisplayGuardError(
+          `desktop ${index} is awaiting reconciliation; a revocation without this boot's reconcile ` +
+            "token is a delayed message, not controller's current state"
+        );
+      }
+      if (fromEpoch < existing.epoch) {
+        // Stale revocation against a generation newer than controller claims: superseded. If
+        // it carried a scope confirmation, that still has to land — save the unchanged
+        // candidate complete rather than dropping the confirmation with the no-op.
+        if (scopeComplete) this.persistUnchangedScope(partialAfter);
+        return { epoch: existing.epoch, applied: false };
+      }
+      const candidate = new Map(this.control);
+      candidate.set(index, { epoch: fromEpoch + 1, revoked: true, reconciled: true });
+      const revocations = DisplayManager.boundedRevocations(this.appliedRevocations, revokeId);
+      this.saveControl(candidate, revocations, partialAfter);
+      this.commitControl(candidate, revocations, partialAfter);
+      this.log(`desktop ${index}: control revoked from epoch ${fromEpoch}; displayEpoch is now ${fromEpoch + 1}`);
+      return { epoch: fromEpoch + 1, applied: true };
+    }
+    if (existing !== undefined && existing.epoch === fromEpoch && !this.appliedRevocations.includes(revokeId)) {
+      const candidate = new Map(this.control);
+      candidate.set(index, { epoch: existing.epoch + 1, revoked: true, reconciled: true });
+      const revocations = DisplayManager.boundedRevocations(this.appliedRevocations, revokeId);
+      this.saveControl(candidate, revocations, partialAfter);
+      this.commitControl(candidate, revocations, partialAfter);
+      this.log(`desktop ${index}: control revoked; displayEpoch is now ${existing.epoch + 1}`);
+      return { epoch: existing.epoch + 1, applied: true };
+    }
+    if (existing === undefined || existing.epoch < fromEpoch) {
+      // The arm for the revoked generation has not reached this box yet (or was lost),
+      // and the local projection, if any, is older than what controller is revoking. controller is
+      // the revocation authority: leave a persisted tombstone at from_epoch + 1 so a
+      // late arm of the already-revoked generation is refused instead of resurrecting
+      // it. A genuinely newer grant arms above the bound and is untouched; a bound
+      // newer than from_epoch (existing.epoch > fromEpoch) is left alone — the
+      // revocation is already superseded.
+      const candidate = new Map(this.control);
+      candidate.set(index, { epoch: fromEpoch + 1, revoked: true, reconciled: true });
+      const revocations = DisplayManager.boundedRevocations(this.appliedRevocations, revokeId);
+      this.saveControl(candidate, revocations, partialAfter);
+      this.commitControl(candidate, revocations, partialAfter);
+      this.log(`desktop ${index}: revocation ahead of the local projection; tombstone at displayEpoch ${fromEpoch + 1}`);
+      return { epoch: fromEpoch + 1, applied: true };
+    }
+    // existing.epoch > fromEpoch: a newer generation already stands, or this exact
+    // revocation was already applied — the state controller would have produced is already
+    // superseded, and a late arm of the older generation is refused by the bound. A
+    // safe no-op — but a scope confirmation riding it must still be persisted.
+    if (scopeComplete) this.persistUnchangedScope(partialAfter);
+    return { epoch: existing.epoch, applied: false };
+  }
+
+  /**
+   * Persists an UNCHANGED guard state when the request itself was a no-op but carried
+   * controller's scope confirmation: the confirmation has to land on disk, or a reboot would
+   * resurrect the partial marker and re-close the desktops it just freed.
+   */
+  private persistUnchangedScope(partialAfter: boolean): void {
+    this.saveControl(this.control, this.appliedRevocations, partialAfter);
+    this.commitControl(this.control, this.appliedRevocations, partialAfter);
+  }
+
+
+  /** The epoch a desktop is guarded by, or undefined when the desktop is not managed. */
+  controlEpoch(index: number): number | undefined {
+    return this.control.get(index)?.epoch;
+  }
+
+  /**
+   * Whether controller manages this desktop. A corrupt state file degrades the answer to
+   * "possibly" for every desktop, and a partial file says it for every desktop absent
+   * from the known set: routes then refuse projectionless ensure/control, and ordinary
+   * calls stay closed until a trusted projection heals the file.
+   */
+  isManaged(index: number): boolean {
+    return this.control.has(index) || this.guardDegraded || this.partial;
+  }
+
+  /**
+   * The single check every ordinary display-scoped channel passes through (computer,
+   * exec with a display, browser, teach begin/finish, record start/stop). Trusted
+   * entries do not pass through here — they move the guard instead.
+   */
+  assertControl(index: number, presented: { epoch?: number; op_token?: string }): void {
+    const standing = this.control.get(index);
+    if (standing === undefined) {
+      if (this.guardDegraded || this.partial) {
+        throw new DisplayGuardError(
+          `the managed set is ${this.guardDegraded ? "unreadable" : "partially known"}, so desktop ${index} ` +
+            "cannot be proven unmanaged; ordinary calls stay closed until a trusted projection heals it"
+        );
+      }
+      return;
+    }
+    if (!standing.reconciled) {
+      throw new DisplayGuardError(
+        `desktop ${index} is externally managed and awaiting reconciliation after a boxd restart; ` +
+          "ordinary calls are closed until controller's projection update reopens it"
+      );
+    }
+    if (presented.epoch !== standing.epoch) {
+      throw new DisplayGuardError(
+        `epoch_mismatch: desktop ${index} is bound to displayEpoch ${standing.epoch}; ` +
+          (presented.epoch === undefined
+            ? "this call carries no epoch"
+            : presented.epoch < standing.epoch
+              ? `epoch ${presented.epoch} is from a superseded control incarnation`
+              : `epoch ${presented.epoch} is ahead of this box's bound generation; refetch the projection`) +
+          ". Refetch the desktop control state and retry with the current epoch."
+      );
+    }
+    if (standing.revoked) {
+      throw new DisplayGuardError(
+        `grant_revoked: desktop ${index}'s operation grant was revoked and none stands; ` +
+          "ordinary calls are refused until a new projection arms it"
+      );
+    }
+    if (standing.opToken !== undefined && presented.op_token !== standing.opToken) {
+      throw new DisplayGuardError(
+        `op_token revoked: desktop ${index}'s standing operation grant was revoked; ` +
+          "presented token does not match (or is absent)"
+      );
+    }
+  }
 
   /**
    * Re-checks every live desktop on a timer, and repairs what died.
@@ -302,7 +836,7 @@ export class DisplayManager {
    */
   private rotateLogs(index: number): void {
     for (const component of LOG_COMPONENTS) {
-      const path = `/tmp/${component}-${index}.log`;
+      const path = join(COMPONENT_LOG_DIR, `${component}-${index}.log`);
       try {
         if (statSync(path).size <= LOG_LIMIT_BYTES) continue;
         copyFileSync(path, `${path}.1`);
@@ -477,7 +1011,7 @@ export class DisplayManager {
   }
 
   async ensure(index = DEFAULT_DISPLAY_INDEX, owner?: string): Promise<Desktop> {
-    if (!Number.isInteger(index) || index < 1 || index > MAX_DISPLAY_INDEX) {
+    if (!isDisplayIndex(index)) {
       throw new Error(
         `Display index must be an integer between 1 and ${MAX_DISPLAY_INDEX}, got ${index}`
       );

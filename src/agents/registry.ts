@@ -171,8 +171,8 @@ export interface AgentProfile {
    * them, which is a division of tone rather than of labour. A reviewer that *cannot* write is a
    * different thing from one that is asked not to.
    *
-   * Withheld rather than refused: a tool an agent cannot use is not in its prompt. Offering it and
-   * rejecting the call spends a round and teaches the model that its tool list is not true.
+   * Unavailable tools are omitted from the prompt and refused at execution if a model
+   * nevertheless names one. This is a tool boundary, not filesystem or OS isolation.
    *
    * An agent can never widen this — not for itself, and not by creating a colleague. See
    * `CreateAgent`, which passes its creator's set down.

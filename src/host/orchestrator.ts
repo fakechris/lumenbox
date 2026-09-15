@@ -74,7 +74,8 @@ import { TaskStore, type Task } from "./tasks.ts";
 import { buildAuditPrompt, manifestDiff, MANIFEST_COMMAND, parseManifest } from "./audit.ts";
 import { ScopeStore } from "./scopes.ts";
 import { BundleStore } from "./bundles.ts";
-import { TeachRunner } from "./teach.ts";
+import { TeachRunner, parseTrace, teachingClarificationCue } from "./teach.ts";
+import { TeachDrafts, parseTeachingResponse, publishTeachingSkill } from "./teach-drafts.ts";
 import { RuleStore } from "./rules.ts";
 import { MAIN_CONVERSATION, conversationIdFor } from "../agents/registry.ts";
 import type { HostRunner } from "./host-runner.ts";
@@ -297,18 +298,18 @@ export class Orchestrator {
   readonly scopes: ScopeStore | undefined;
   /** Bundles attached to boxes (INV-420). */
   readonly bundles: BundleStore;
+  readonly teachDrafts = new TeachDrafts(join(agentboxHome(), "skills-drafts"));
   /** What routines committed to and whether anything holds it (INV-528). */
   readonly commitments = new CommitmentLedger(join(agentboxHome(), "commitments.jsonl"));
   /** Turns a queued demonstration into a teaching turn (INV-406). */
   private readonly teachRunner = new TeachRunner({
-    agentOnDisplay: (boxId, display) => {
-      const record = this.registry
-        .list()
-        .find(entry => (entry.profile.boxId ?? this.registry.box.id) === boxId && entry.profile.displayIndex === display);
-      return record === undefined ? undefined : { id: record.id, name: record.profile.name };
+    agentById: (boxId, agentId) => {
+      const record = this.registry.tryGet(agentId);
+      return record === undefined || (record.profile.boxId ?? this.registry.box.id) !== boxId
+        ? undefined : { id: record.id, name: record.profile.name };
     },
-    prompt: (agentId, text, caller) => this.prompt(agentId, text, caller, { steerable: true, lane: "background" }),
-    skillsDir: SKILLS_DIR,
+    generate: (agentId, text, caller) => this.generateTeachingDraft(agentId, text, caller),
+    drafts: this.teachDrafts,
     log: line => console.error(`[teach] ${line}`),
   });
   /** Operator rules (INV-427); reloaded with the config, audited into the policy log. */
@@ -1066,6 +1067,43 @@ export class Orchestrator {
       return 0;
     }
     return this.teachRunner.drain(boxId, box, caller);
+  }
+
+  /** Draft generation cannot call tools or write into the box's skill directory. */
+  private async generateTeachingDraft(agentId: string, text: string, caller?: { userId?: string }): Promise<string> {
+    const agent = this.registry.get(agentId);
+    const decision = this.policy.check({ kind: "model-call", agentId, agentName: agent.profile.name, round: 1,
+      ...(caller?.userId === undefined ? {} : { principalId: caller.userId }) });
+    if (!decision.allow) throw new Error(decision.reason);
+    const { client, provider } = this.runtimeForAgent(agent);
+    const response = await client.messages.create({ model: provider.model, max_tokens: Math.min(4096, provider.maxTokens),
+      messages: [{ role: "user", content: text }] });
+    this.usage.recordAside({ kind: "review", agentId, agentName: agent.profile.name, provider: provider.label,
+      model: provider.model, usage: response.usage, ...(caller?.userId === undefined ? {} : { principal: caller.userId }) });
+    if (response.stop_reason !== "end_turn" || response.content.some(block => block.type !== "text")) throw new Error("Teaching generation did not return a complete text proposal");
+    return response.content.filter((block): block is Anthropic.TextBlock => block.type === "text").map(block => block.text).join("\n");
+  }
+
+  async clarifyTeachingDraft(id: string, digest: string, answer: string, actor: string, caller?: { userId?: string }): Promise<import("./teach-drafts.ts").TeachDraft> {
+    return this.teachDrafts.clarify(id, digest, answer, actor, async draft => {
+      const box = this.boxClients.get(draft.boxId);
+      if (!box) throw new Error("The teaching box is disconnected; retry when it reconnects");
+      const agent = this.registry.get(draft.agentId);
+      if (this.registry.boxOf(agent.id).id !== draft.boxId) throw new Error("The captured teaching agent no longer belongs to this box");
+      const trace = await box.readFile(draft.eventsPath);
+      if (trace.truncated) throw new Error("The teaching trace is incomplete; record a shorter demonstration");
+      const response = await this.generateTeachingDraft(draft.agentId,
+        teachingClarificationCue(draft, parseTrace(trace.content), answer), caller);
+      return parseTeachingResponse(response);
+    });
+  }
+
+  async approveTeachingDraft(id: string, digest: string, actor: string): Promise<import("./teach-drafts.ts").TeachDraft> {
+    return this.teachDrafts.approve(id, digest, actor, async (boxId, path, content) => {
+      const box = this.boxClients.get(boxId);
+      if (!box) throw new Error("The teaching box is disconnected; retry when it reconnects");
+      await publishTeachingSkill(box, path, content);
+    });
   }
 
   /** Every connected box: demonstrations that ended by lapse or shutdown have no hand-back to trigger them. */

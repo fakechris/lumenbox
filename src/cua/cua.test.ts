@@ -384,6 +384,23 @@ test("a batch of reads has no effect to report, and measurement can be switched 
   assert.deepEqual(off.ran, ["click"]);
 });
 
+test("a revoked computer batch stops before its next action and capture", async () => {
+  let allowed = true;
+  const executed: string[] = [];
+  class FixtureExecutor extends X11Executor {
+    protected override async executeAction(action: import("../protocol/index.ts").ComputerAction): Promise<void> {
+      executed.push(action.action);
+      if (action.action === "wait") allowed = false;
+    }
+    override async takeScreenshot(): Promise<string> { executed.push("capture"); return "fixture"; }
+  }
+  const executor = new FixtureExecutor({ display: ":31", resolution: { display: { width: 1280, height: 800 }, api: { width: 1280, height: 800 } }, measureEffect: false });
+  await assert.rejects(executor.execute([{ action: "wait", duration_ms: 0 }, { action: "click", coordinate: [10, 10] }], {
+    authorize: () => { if (!allowed) throw new Error("revoked"); },
+  }), /revoked/);
+  assert.deepEqual(executed, ["wait"]);
+});
+
 // ── the control tree behind list_elements / click_element (INV-412) ─────────────────
 import { parseAxOutput } from "./x11-executor.ts";
 

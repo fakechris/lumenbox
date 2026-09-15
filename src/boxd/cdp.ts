@@ -36,16 +36,21 @@ export interface CdpTarget {
   webSocketDebuggerUrl?: string;
 }
 
-/** Asks the browser what pages it has open. */
-export async function listTargets(port: number): Promise<CdpTarget[]> {
+/**
+ * Asks the browser what pages it has open.
+ *
+ * `host` defaults to the box's loopback; an externally registered endpoint (external
+ * registry) names its own host, reachable from this box.
+ */
+export async function listTargets(port: number, host = "127.0.0.1"): Promise<CdpTarget[]> {
   let response: Response;
   try {
-    response = await fetch(`http://127.0.0.1:${port}/json/list`, {
+    response = await fetch(`http://${host}:${port}/json/list`, {
       signal: AbortSignal.timeout(5000),
     });
   } catch (error) {
     throw new CdpError(
-      `No browser is listening on port ${port}. Start one with box-chrome on this ` +
+      `No browser is listening on ${host}:${port}. Start one with box-chrome on this ` +
         `desktop first. (${error instanceof Error ? error.message : String(error)})`
     );
   }
@@ -54,9 +59,9 @@ export async function listTargets(port: number): Promise<CdpTarget[]> {
 }
 
 /** Opens a new tab and returns it, so a fresh task does not disturb what is already open. */
-export async function openTarget(port: number, url: string): Promise<CdpTarget> {
+export async function openTarget(port: number, url: string, host = "127.0.0.1"): Promise<CdpTarget> {
   const response = await fetch(
-    `http://127.0.0.1:${port}/json/new?${encodeURIComponent(url)}`,
+    `http://${host}:${port}/json/new?${encodeURIComponent(url)}`,
     { method: "PUT", signal: AbortSignal.timeout(10_000) }
   );
   if (!response.ok) throw new CdpError(`Could not open a tab: HTTP ${response.status}.`);
@@ -67,8 +72,8 @@ export async function openTarget(port: number, url: string): Promise<CdpTarget> 
 /**
  * Closes a tab. Best effort: a tab that has already gone is the outcome we wanted.
  */
-export async function closeTarget(port: number, targetId: string): Promise<void> {
-  await fetch(`http://127.0.0.1:${port}/json/close/${targetId}`, {
+export async function closeTarget(port: number, targetId: string, host = "127.0.0.1"): Promise<void> {
+  await fetch(`http://${host}:${port}/json/close/${targetId}`, {
     signal: AbortSignal.timeout(5000),
   }).catch(() => {});
 }
@@ -89,12 +94,31 @@ export class CdpSession {
 
   private constructor(readonly targetId: string) {}
 
-  static async open(target: CdpTarget): Promise<CdpSession> {
+  /**
+   * Opens the page's debugger socket.
+   *
+   * An external browser advertises its webSocketDebuggerUrl from *its own* network view,
+   * which is unreachable or wrong from the box. When a registered endpoint stands, the
+   * socket is therefore rewritten to that endpoint's host:port — the design's condition
+   * for trusting where the browser really is.
+   */
+  static async open(target: CdpTarget, endpoint?: { host: string; port: number }): Promise<CdpSession> {
     if (target.webSocketDebuggerUrl === undefined) {
       throw new CdpError(`Target ${target.id} has no debugger endpoint; it cannot be driven.`);
     }
+    let url = target.webSocketDebuggerUrl;
+    if (endpoint !== undefined) {
+      try {
+        const rewritten = new URL(url);
+        rewritten.hostname = endpoint.host;
+        rewritten.port = String(endpoint.port);
+        url = rewritten.toString();
+      } catch {
+        throw new CdpError(`Target ${target.id} advertised an unusable debugger URL: ${url}`);
+      }
+    }
     const session = new CdpSession(target.id);
-    const socket = new WebSocket(target.webSocketDebuggerUrl);
+    const socket = new WebSocket(url);
     session.socket = socket;
 
     socket.onmessage = event => session.receive(String(event.data));
