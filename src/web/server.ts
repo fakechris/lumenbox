@@ -192,6 +192,7 @@ import { OAuthGate } from "../host/oauth.ts";
 import { MemoryAdmin } from "../host/memory-admin.ts";
 import { ConnectCodeStore } from "../box/connect-codes.ts";
 import { FollowUpBudget, type FollowUpItem } from "../host/follow-up-budget.ts";
+import { SessionEpochs } from "./session-epochs.ts";
 import { QuestionWatch } from "../host/question-expiry.ts";
 import { appendLine } from "../host/jsonl.ts";
 import { seedStarterSkills } from "../host/starter-skills.ts";
@@ -2334,6 +2335,8 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
 
   /** Signs web sessions; set from the resolved UI token before the server listens. */
   let sessionSecret = "";
+  // Which generation of each person's sign-ins is still good (INV-537).
+  const epochs = new SessionEpochs();
 
   /**
    * Who may be served at all: the installation token, or a person's own session.
@@ -2353,8 +2356,11 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
   const admit = (request: { authorization?: string; cookie?: string; query?: string | null }): AuthDecision => {
     const byToken = authorize({ token, host }, request);
     if (byToken.allow) return byToken;
-    const who = readSession(parseCookies(request.cookie).get(SESSION_COOKIE), sessionSecret);
-    if (who === undefined || !principals.isKnown(who)) return byToken;
+    const session = readSession(parseCookies(request.cookie).get(SESSION_COOKIE), sessionSecret);
+    if (session === undefined || !principals.isKnown(session.identity)) return byToken;
+    // And the generation an admin may have moved on from (INV-537): signing one person out
+    // everywhere must not mean rotating the token and signing out everybody.
+    if (session.epoch < epochs.of(principals.resolve(session.identity).id)) return byToken;
     return { allow: true, reason: "token" };
   };
 
@@ -2642,7 +2648,7 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
       // The session, and only the session: what this browser gets is a credential issued
       // to *this person*, not the installation's token (which is what it used to be
       // handed, full power and all).
-      res.writeHead(302, { "set-cookie": [sessionCookie(identity, sessionSecret)], location: pending.next });
+      res.writeHead(302, { "set-cookie": [sessionCookie(identity, sessionSecret, epochs.of(principals.resolve(identity).id))], location: pending.next });
       res.end();
       log(`web login: ${identity} via feishu door ${channelId} (${principals.resolve(identity).name})`);
     } catch (error) {
@@ -2818,7 +2824,7 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
       // by a key derived from the token that authorised it.
       const gatewayCaller = callerOf(req.headers, decision.allow);
       const webIdentity = decision.allow
-        ? readSession(parseCookies(req.headers.cookie).get(SESSION_COOKIE), sessionSecret)
+        ? readSession(parseCookies(req.headers.cookie).get(SESSION_COOKIE), sessionSecret)?.identity
         : undefined;
       const caller =
         gatewayCaller.userId === undefined && webIdentity !== undefined
@@ -2844,11 +2850,11 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
         // unless a gateway asserted it, in which case the gateway's word is the roster.
         // Identity that arrived through a web session has no header, so authority has
         // to travel with it from here, or a viewer who signed in is a viewer in name only.
+        // One vocabulary now (INV-537): the role on the caller is already the roster's
+        // kind of word, so this is a lookup rather than a translation.
         const known: Caller =
-          !assertedByGateway &&
-          caller.userId !== undefined &&
-          !roleAtLeast(principals.roleOf(caller.userId), "driver")
-            ? { ...caller, role: "viewer" }
+          !assertedByGateway && caller.userId !== undefined
+            ? { ...caller, role: principals.roleOf(caller.userId) }
             : caller;
         const agent = agentId === undefined ? undefined : registry.tryGet(agentId);
         const reason = refusalToDrive(known, agent?.profile);
@@ -2890,13 +2896,14 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
       };
 
       const refusedRole = (need: Role): boolean => {
-        // The gateway's owner runs their tenant; its member drives; its viewer watches.
-        const fromGateway: Record<Caller["role"], Role> = { owner: "admin", member: "driver", viewer: "viewer" };
+        // One vocabulary (INV-537): the gateway's words were translated in `callerOf`, so
+        // what arrives here is already `viewer | driver | admin` — or nothing, which is the
+        // operator holding the installation's own credential.
         const role: Role =
           caller.userId === undefined
             ? "admin"
-            : assertedByGateway
-              ? fromGateway[caller.role]
+            : assertedByGateway && caller.role !== undefined
+              ? caller.role
               : principals.roleOf(caller.userId);
         if (roleAtLeast(role, need)) return false;
         send(res, 403, {
@@ -3193,7 +3200,7 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
           // browser may reach the installation at all, the session says who it is. The
           // code delivers the first and mints the second; what the person may then *do*
           // is their roster role, checked on every request that changes something.
-          const admit = [sessionCookie(identity, sessionSecret)];
+          const admit = [sessionCookie(identity, sessionSecret, epochs.of(principals.resolve(identity).id))];
           if (existing !== undefined) {
             // A code made for somebody already known links this browser to them: same
             // human, second surface, one bill.
@@ -4108,6 +4115,26 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
           principals.save(roster);
           log(`principals roster updated (${roster.length} people)`);
           send(res, 200, { principals: principals.list() });
+          return;
+        }
+
+        // Signing one person out of everywhere (INV-537): their generation moves on, and
+        // every browser and tab they left signed in stops being served on its next
+        // request. Nobody else is touched — which is the difference between this and
+        // rotating the token, the only way to do it before, and therefore the reason it
+        // was never done.
+        if (route === "POST /api/principals/logout") {
+          if (refusedRole("admin")) return;
+          const body = await readJson(req);
+          const principalId = String(body.principalId ?? "").trim();
+          const person = principals.list().find(entry => entry.id === principalId);
+          if (person === undefined) {
+            send(res, 404, { error: `No such person: ${principalId}` });
+            return;
+          }
+          const epoch = epochs.bump(person.id);
+          log(`signed out everywhere: ${person.name} (generation ${epoch})`);
+          send(res, 200, { name: person.name, epoch });
           return;
         }
 

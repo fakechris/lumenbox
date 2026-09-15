@@ -63,12 +63,16 @@ session；`admit()` 把"有效 session 且 roster 仍认识这个人"当作一�
 脚本、CLI 与没有 roster 的单人安装。回归测试 `src/web/session-credential.test.ts` 钉住三件事：
 登录只 set 一个 `agentbox_who`、viewer 带 session 驱动是 403、不带 session 又没 token 是 401。
 
-**M1 · 人的凭证（其余部分）**
-- `callerOf` 只保留 header→role 的映射；`owner` 不再是"没人声明时的默认全权"，而是
-  "roster 为空的单人安装"这一显式状态。
-- 轮换 token 使所有会话失效（已经是今天的口径），另加"按人踢下线"。
-- *验收*：一个 roster 里是 viewer 的人，登录后无论带不带 cookie、无论用什么 header，
-  `POST /api/prompt` 都是 403；roster 为空的单人安装行为与今天逐字节相同。
+**M1 · 人的凭证（已做，PR 见下）**
+- 角色词表统一到 `viewer | driver | admin`；control-plane 的 `owner|member|viewer` 只是传输
+  格式，在 `callerOf` 一处翻译（owner→admin、member→driver、viewer→viewer），此外无人知道它。
+- `callerOf` 在没有 header 时返回 `role: undefined`——"没人声明"是关于这个请求的事实，
+  不是"全权"；由服务端决定它意味着什么（今天：持有安装凭证的操作者 = admin）。
+- 按人踢下线：会话 cookie 带一个 generation，`~/.agentbox/session-epochs.json` 记每个人
+  当前的代数，`POST /api/principals/logout` 把某个人的代数 +1——他的所有浏览器下一次请求
+  即失效，别人不受影响。以前唯一的办法是轮换 token，等于把所有人一起踢下线，所以从没人用。
+- *验收*（`session-credential.test.ts`）：三条入口 × 三种角色的矩阵；viewer 无论从哪条入口
+  都是 403；踢下线后该人 401、别人照旧。
 
 **M2 · 地方的成员（分地方）**
 - `Box.members` 真校验三处：列 box、进 box（web/chat/MCP 任一入口）、把消息投进去。
