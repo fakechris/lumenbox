@@ -53,9 +53,11 @@ test("overdue and idle tasks nudge twice then archive; movement resets; the hist
     deliver(store, second, plus(8 * 86_400_000 + 1));
     assert.match(second.find(e => e.task.id === idle.id)!.text, /idle: nothing has moved for 8 days/);
 
-    // The person moves the idle one: its count resets.
+    // The person moves the idle one: its count resets, and so does the clock — the next
+    // sweep an hour later does not ask them again (INV-535).
     store.update(idle.id, { status: "doing", assigneeId: "bot" }, "chris", undefined, plus(8 * 86_400_000 + 2));
-    assert.equal(store.get(idle.id)?.aging, undefined);
+    assert.deepEqual(store.get(idle.id)?.aging, { nudges: 0, lastNudgedAt: plus(8 * 86_400_000 + 2).toISOString(), reason: "idle" });
+    assert.deepEqual(store.age(plus(8 * 86_400_000 + 3_600_000)).filter(e => e.task.id === idle.id), [], "answered an hour ago; not asked again");
 
     // Day 10: the overdue one, twice nudged and untouched, is archived; the idle one is fresh again.
     const third = store.age(plus(10 * 86_400_000 + 2));

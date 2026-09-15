@@ -183,6 +183,22 @@ Both are appends on the same task record and survive a restart. `Tasks` gained `
 and `propose_close`; `/api/tasks/update` takes `due`; `/api/tasks/propose-close` and
 `/api/tasks/oppose-close`; the board shows due / overdue / nudged / close-proposed chips.
 
+**How often the host may start a conversation (INV-535 — 2026-09-14).** Each rail was
+written alone and each is quiet alone; five agents with one open question and five stale
+cards produce twenty messages in a day, and a person nudged twenty times reads none —
+the failure the rails exist to fix, arriving by the other door. `src/host/follow-up-budget.ts`
+splits every line into an **ask** (a demand on somebody's attention: "overdue — close /
+downgrade / continue?") and an **act** (the host saying what it already did: went with
+the default, archived after two nudges, closed as proposed). Acts are never held back —
+doing, saying and recording are one thing — only coalesced: everything for one room in
+one sweep is one message. Asks are budgeted: two messages per room per rolling day, five
+items each, the rest counted rather than listed ("and 3 more on the board"), and an ask
+held back is not counted as said, so nothing archives on the strength of a nudge nobody
+got. An act travelling to a room carries any ask with it, because the interruption has
+already happened. The ledger (`~/.agentbox/follow-ups.jsonl`) makes the day survive a
+restart. And answering a nudge now restarts the clock as well as the count: "continue"
+on a still-overdue card used to be followed by the same question an hour later.
+
 **A question is put to somebody, and outlives the process (INV-533 — 2026-09-14).** The
 first watch called a question answered when *anyone* spoke in that conversation after it
 was asked — so in a group, a colleague's message about lunch answered "which account do

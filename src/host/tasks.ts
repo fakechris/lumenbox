@@ -533,8 +533,11 @@ export class TaskStore {
       updatedAt: at,
       history: [...task.history, change].slice(-HISTORY_LIMIT),
     };
-    // Movement by anyone but the ageing sweep answers the nudge: the count starts over.
-    if (by !== AGING_ACTOR && updated.aging !== undefined) delete updated.aging;
+    // Movement by anyone but the ageing sweep answers the nudge: the count starts over —
+    // and so does the clock (INV-535). Deleting the whole record let a person who typed
+    // "continue" on an overdue card be nudged again an hour later, because the card was
+    // still overdue and nothing remembered that they had just answered.
+    if (by !== AGING_ACTOR && updated.aging !== undefined) updated.aging = { nudges: 0, lastNudgedAt: at, reason: updated.aging.reason };
     // Any move by the requester while a close is proposed is their answer to it.
     if (updated.closeProposal !== undefined && by === task.requester) delete updated.closeProposal;
 
