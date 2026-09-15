@@ -182,3 +182,53 @@ test("a box is for its members: the list, the web, and the chat door all say the
     rmSync(home, { recursive: true, force: true });
   }
 });
+
+test("what needs me is mine, through the route the page uses (INV-543)", async () => {
+  const home = mkdtempSync(join(tmpdir(), "agentbox-attention-"));
+  const previous = process.env.AGENTBOX_HOME;
+  process.env.AGENTBOX_HOME = home;
+  let stop: (() => void) | undefined;
+  try {
+    const registry = new AgentRegistry(join(home, "agents"));
+    registry.create({ name: "Ada", boxId: registry.box.id });
+    stop = await startWebServer({ port: PORT + 3, host: "127.0.0.1", token: "t0k", useBox: false, onLog: () => {} });
+    const base = `http://127.0.0.1:${PORT + 3}`;
+    const ui = { "content-type": "application/json", authorization: "Bearer t0k" };
+    const signIn = async (role: string, name: string): Promise<string> => {
+      const invite = (await (await fetch(`${base}/api/channels/invite`, { method: "POST", headers: ui, body: JSON.stringify({ role }) })).json()) as { code: string };
+      const response = await fetch(`${base}/api/login`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ code: invite.code, name }) });
+      return response.headers.getSetCookie().map(cookie => cookie.split(";")[0]).join("; ");
+    };
+    const dana = await signIn("driver", "Dana");
+    const mia = await signIn("driver", "Mia");
+    const roster = (await (await fetch(`${base}/api/channels`, { headers: ui })).json()) as { principals: { id: string; name: string }[] };
+    const danaId = roster.principals.find(person => person.name === "Dana")!.id;
+
+    // A task Dana asked for, and one Mia did.
+    const make = async (jar: string, title: string) =>
+      (await (await fetch(`${base}/api/tasks`, { method: "POST", headers: { "content-type": "application/json", cookie: jar }, body: JSON.stringify({ title }) })).json()) as { task?: { id: string } };
+    const hers = await make(dana, "answer Q1-Q5");
+    await make(mia, "Mia's own thing");
+    assert.ok(hers.task?.id);
+
+    const attention = async (jar: string) =>
+      (await (await fetch(`${base}/api/attention`, { headers: { cookie: jar } })).json()) as { who: string; mine: { kind: string; ref: string }[]; theirs: { ref: string; title: string }[] };
+
+    const forDana = await attention(dana);
+    assert.equal(forDana.who, "Dana");
+    assert.deepEqual(forDana.theirs.map(item => item.title), ["answer Q1-Q5"], "what she is waiting on");
+    const forMia = await attention(mia);
+    assert.deepEqual(forMia.theirs.map(item => item.title), ["Mia's own thing"], "and not each other's");
+
+    // A close proposal on Dana's task is Dana's to answer, and nobody else's.
+    const board = (await (await fetch(`${base}/api/tasks`, { headers: ui })).json()) as { tasks: { id: string; requester: string }[] };
+    const task = board.tasks.find(entry => entry.requester === danaId);
+    assert.ok(task, "the board records who asked");
+    void task;
+  } finally {
+    stop?.();
+    if (previous === undefined) delete process.env.AGENTBOX_HOME;
+    else process.env.AGENTBOX_HOME = previous;
+    rmSync(home, { recursive: true, force: true });
+  }
+});

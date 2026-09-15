@@ -117,7 +117,9 @@ test("the endpoint refuses a wrong secret and an unknown id the same way, and ru
   const home = mkdtempSync(join(tmpdir(), "agentbox-webhook-http-"));
   const previous = process.env.AGENTBOX_HOME;
   process.env.AGENTBOX_HOME = home;
-  const port = 7931;
+  // Its own port: two test files on one port fail whichever loses the race, which is a
+  // flake that looks like a webhook bug (2026-09-15, EADDRINUSE beside memory-routes).
+  const port = 7936;
   let stop: (() => void) | undefined;
   try {
     // A webhook routine on disk, so the orchestrator can find it. The skills directory is in the
