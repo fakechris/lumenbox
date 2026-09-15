@@ -135,3 +135,19 @@ the reminder now; what it created is delivered too. Every run's commitments and 
 to `~/.agentbox/commitments.jsonl`, and the next run of the same routine opens with where
 last time's stand — a commitment repeated without a card is a finding the person reads.
 `SchedulerDeps.run` carries the routine's slug; `priorCommitments(slug)` is the prompt line.
+
+**What a card has to be to count (INV-534, 2026-09-14).** The first reconcile searched
+the whole board by word overlap and took the first hit, whatever state it was in — so a
+weekly retro promising "send the weekly reminder" every week was satisfied by the card it
+had finished, or dropped, weeks ago. A carrier must now be live, or finished after the
+commitment was written (`canCarry`); a card due the 20th no longer satisfies "by the
+19th" (the day of slack is gone; both sides are end-of-day UTC); and each item is bound
+to the task id the last run tied it to, so a repeated commitment keeps meaning the same
+card instead of drifting onto whatever shares the most words today (`bindingsOf`). After
+the fix cue runs, the host reconciles again and records *that* — the agent saying "created
+it" is a sentence, and the ledger is about what exists — and says once what is still
+unheld rather than cueing a second time. A commitment nobody restated this week does not
+disappear: unfinished items are carried forward on the record with the run that made them,
+and the next opening lists them under "Still open from before". `runNow` and webhook runs
+go through the same path as the timer — same slug, same opening, same reconcile — because
+"run it now" being a different code path meant clicking it tested everything except this.
