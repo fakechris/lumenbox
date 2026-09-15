@@ -1306,19 +1306,21 @@ export function buildTools(
         "done, dropped. If a task names a reviewer, only the reviewer can move it to " +
         "done — your finish is `review`, and that is not a formality you can skip. " +
         "Your own live tasks are already in your instructions every turn; `list` is for " +
-        "seeing the whole board. A note goes to the board, not to the person who asked: " +
+        "seeing the whole board. Use `read` with an id for the current full description of " +
+        "your assigned task, including connection details; list is only a summary. " +
+        "A note goes to the board, not to the person who asked: " +
         "filing your conclusion here does not deliver it — say it in your reply too.",
       input_schema: {
         type: "object",
         properties: {
           action: {
             type: "string",
-            enum: ["create", "take", "update", "list"],
+            enum: ["create", "take", "update", "list", "read"],
             description:
               "create a task; take one (assigns it to you, status doing); update one's " +
-              "status/note/assignee; list the board.",
+              "status/note/assignee; list the board; read current details of your assigned task.",
           },
-          id: { type: "string", description: "The task id, e.g. \"t12\". For take and update." },
+          id: { type: "string", description: "The task id, e.g. \"t12\". For read, take and update." },
           title: { type: "string", description: "For create: one line of what is to be done." },
           description: { type: "string", description: "For create: details a stranger would need." },
           status: {
@@ -2119,7 +2121,7 @@ function tellAssignee(
     fromId: context.agent.id,
     toId: assigneeId,
     text:
-      `Task ${taskId} is assigned to you: "${title}". Read it with Tasks (action: list), ` +
+      `Task ${taskId} is assigned to you: "${title}". Read it with Tasks (action: read, id: ${taskId}), ` +
       `take it with Tasks (action: take, id: ${taskId}), or say why not.`,
   });
   const name = context.registry.tryGet(assigneeId)?.profile.name ?? assigneeId;
@@ -3999,6 +4001,11 @@ export async function dispatchTool(
       const nameOf = (id: string) => context.registry.tryGet(id)?.profile.name ?? id;
       /** An id or a name; teammates say names, the board stores ids. */
       const resolveAgent = (raw: string): string | undefined => teammateNamed(context, raw)?.id;
+      const mayAssign = (taskId: string): boolean => {
+        const task = board.get(taskId);
+        return task === undefined || task.assigneeId === undefined ||
+          [task.assigneeId, task.requester, task.reviewerId].includes(context.agent.id);
+      };
 
       if (action === "list") {
         const wanted = String(input.list_status ?? "");
@@ -4007,6 +4014,17 @@ export async function dispatchTool(
           : board.list().filter(task => isLive(task.status));
         if (all.length === 0) return { text: "The board is empty for that view." };
         return { text: all.map(task => describeTask(task, nameOf)).join("\n") };
+      }
+
+      if (action === "read") {
+        const task = board.get(String(input.id ?? ""));
+        if (task === undefined) return { text: "No such task on the board.", isError: true };
+        // Details can contain task-scoped connection credentials. Keep summaries
+        // team-visible, but read the current description only for its assignee.
+        if (task.assigneeId !== context.agent.id) {
+          return { text: "Task details are available to its current assignee. Ask for assignment before reading them.", isError: true };
+        }
+        return { text: `${describeTask(task, nameOf)}\n\n${task.description ?? "No additional description."}` };
       }
 
       if (action === "create") {
@@ -4038,6 +4056,9 @@ export async function dispatchTool(
       }
 
       if (action === "take") {
+        if (!mayAssign(String(input.id ?? ""))) {
+          return { text: "This task belongs to another agent. Ask its assignee, requester or reviewer to reassign it.", isError: true };
+        }
         const taken = board.update(
           String(input.id ?? ""),
           { assigneeId: context.agent.id, status: "doing" },
@@ -4080,6 +4101,9 @@ export async function dispatchTool(
         if (assigneeRaw !== "" && assigneeId === undefined) {
           return { text: `No agent called "${assigneeRaw}" to assign.`, isError: true };
         }
+        if (assigneeId !== undefined && assigneeId !== target?.assigneeId && !mayAssign(String(input.id ?? ""))) {
+          return { text: "Only the current assignee, requester or reviewer may reassign this task.", isError: true };
+        }
         // What the reviewer did before saying done, on the record beside the verdict.
         const checked =
           status === "done" && target !== undefined && target.reviewerId === context.agent.id
@@ -4119,7 +4143,7 @@ export async function dispatchTool(
         };
       }
 
-      return { text: `Unknown action "${action}". Use create, take, update or list.`, isError: true };
+      return { text: `Unknown action "${action}". Use create, take, update, list or read.`, isError: true };
     }
 
     case "ClaimWork": {
@@ -4314,6 +4338,9 @@ export async function dispatchTool(
     case "UseMcpTool": {
       if (context.mcp === undefined) return { text: "No external services are connected.", isError: true };
       const target = String(input.tool ?? "");
+      if (context.allowedMcpTools !== undefined && !context.allowedMcpTools.includes(target)) {
+        return { text: "This external tool is unavailable in the current execution context.", isError: true };
+      }
       if (!context.mcp.owns(target)) {
         return {
           text: `No external tool named ${target}. Find it with FindMcpTool first.`,

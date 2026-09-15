@@ -73,6 +73,10 @@ test("installation and organisation are an admin's; a person's own access is the
     assert.equal(await status("/api/scopes", dana, { scopes: [] }), 403, "scopes");
     assert.equal(await status("/api/principals", dana, { principals: [] }), 403, "roster");
     assert.equal(await status("/api/channels/approve", dana, { identity: "x" }), 403, "knocks");
+    assert.equal(await status("/api/teaching-drafts", vic), 403, "private teaching drafts");
+    for (const action of ["approve", "reject", "clarify"]) {
+      assert.equal(await status(`/api/teaching-drafts/${action}`, dana, { id: "draft", digest: "hash" }), 403, "teaching publication needs admin");
+    }
 
     // A person's own access is their own — and needs no principal named, because the
     // session already says who is asking.

@@ -209,6 +209,7 @@ const MODEL_CALLS: Record<string, string> = {
   "turn.ts:summarise": "meter('summarize'), which runTurn binds to usage.recordAside",
   "remember.ts:ask": "usage.recordAside('memory')",
   "orchestrator.ts:askCheaply": "usage.recordAside('select')",
+  "orchestrator.ts:generateTeachingDraft": "usage.recordAside('review'), with explicit caller and agent",
   "provider.ts:testProvider": "unmetered on purpose: an operator's connectivity probe, 16 tokens, no owner",
 };
 

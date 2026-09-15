@@ -59,13 +59,18 @@ import {
   type XWatchdogQuery,
   type XWatchdogEventsResult,
   type DisplayControlRequest,
+  type BrowserEndpointRequest,
+  type BrowserEndpointUnregisterRequest,
+  type BrowserEndpointResult,
+  type DisplayGuardRevokeRequest,
   type TeachQueueList,
   type TeachClaimResult,
   type TeachDoneRequest,
 } from "../protocol/index.ts";
-import { DisplayManager, DisplayOwnershipError, UserInControlError } from "./displays.ts";
+import { DisplayManager, DisplayOwnershipError, DisplayGuardError, UserInControlError } from "./displays.ts";
 import { CdpError } from "./cdp.ts";
-import { TeachService, defaultInputSpawner } from "./teach-service.ts";
+import { TeachService, TeachBindingConflict, defaultInputSpawner } from "./teach-service.ts";
+import { copyTeachBinding } from "../protocol/index.ts";
 import { detectDisplay, getDisplay, parseDisplayNum } from "../cua/display.ts";
 import { readClipboard, writeClipboard } from "./clipboard-service.ts";
 import { startEgressProxy } from "../egress/proxy.ts";
@@ -73,6 +78,7 @@ import { RecordService, RECORDINGS_DIR } from "./record-service.ts";
 import { AGENT_NICE, reapSpool, runShell, withoutBoxToken } from "./shell-service.ts";
 import { JobService } from "./job-service.ts";
 import { BrowserService, StaleSnapshotError, IrreversibleActionError } from "./browser-service.ts";
+import { BrowserEndpointRegistry, EndpointConflictError } from "./browser-endpoints.ts";
 import { downloadFile, listDir, readFile, uploadFile, writeFile } from "./fs-service.ts";
 import { XWatchdogService } from "./xwatchdog-service.ts";
 
@@ -225,18 +231,23 @@ async function handleComputer(body: ComputerRequest): Promise<ComputerResult> {
     throw new HttpError(400, "actions must be a non-empty array");
   }
   const index = body.display ?? defaultDisplayIndex;
-  displays.assertOwner(index, body.owner);
-  // A look is fine while a person holds the desktop; a write is not (INV-404).
-  if (body.actions.some(action => !["screenshot", "cursor_position", "list_windows", "screenshot_window", "wait"].includes(action.action))) {
-    displays.assertAgentControls(index);
-  }
+  const authorize = () => {
+    displays.assertControl(index, body);
+    displays.assertOwner(index, body.owner);
+    if (body.actions.some(action => !["screenshot", "cursor_position", "list_windows", "screenshot_window", "wait"].includes(action.action))) {
+      displays.assertAgentControls(index);
+    }
+  };
+  authorize();
   const desktop = await displays.ensure(index, body.owner);
+  authorize();
   const x11 = desktop.executor;
   const started = Date.now();
 
   try {
     const result = await x11.execute(body.actions, {
       bindUnmappedCharacters: body.bind_unmapped_characters ?? true,
+      authorize,
     });
     return {
       // Ran, but nothing to show for it, is not "ok": the capture is the only evidence
@@ -255,6 +266,7 @@ async function handleComputer(body: ComputerRequest): Promise<ComputerResult> {
       error: result.error,
     };
   } catch (error) {
+    if (error instanceof DisplayGuardError || error instanceof DisplayOwnershipError || error instanceof UserInControlError) throw error;
     // A failed action is exactly when the model most needs to see the screen:
     // it has to work out what state the desktop is actually in before retrying.
     // Returning only an error string leaves it guessing, so settle and capture
@@ -264,7 +276,7 @@ async function handleComputer(body: ComputerRequest): Promise<ComputerResult> {
       const recovery = await x11.execute([
         { action: "wait", duration_ms: 400 },
         { action: "screenshot" },
-      ]);
+      ], { authorize });
       screenshot = recovery.screenshot;
     } catch (captureError) {
       log(`could not capture an error screenshot: ${describe(captureError)}`);
@@ -368,8 +380,12 @@ const jobs = new JobService();
 // output, and the adversarial review of docs/15 said so. Hourly is far more often than
 // needed to keep a 24-hour promise, and costs one directory listing.
 {
+  // The spool's canonical home is the hardcoded constant in shell-service — the host's
+  // backup exclusion shares it, so this override exists only to let a spawned test
+  // daemon sweep a scratch directory instead of a live box's files.
+  const sweepDir = process.env.BOXD_SPOOL_SWEEP_DIR;
   const reap = (): void => {
-    const removed = reapSpool();
+    const removed = reapSpool(sweepDir);
     if (removed > 0) log(`reaped ${removed} stale spool file(s)`);
   };
   reap();
@@ -378,10 +394,19 @@ const jobs = new JobService();
 }
 
 /**
+ * Per-desktop CDP endpoint registry: controller registers the
+ * browser instance serving each desktop; boxd compares, stores, and never mints epochs.
+ * Shares the display guard's reconcile token — one token per boot binds both halves of
+ * the desktop control state to this process, so a delayed message from before a restart
+ * can pose as neither the endpoint snapshot nor the guard projection.
+ */
+const endpoints = new BrowserEndpointRegistry(line => log(line), undefined, undefined, undefined, displays.reconcileToken);
+
+/**
  * The semantic browser, per desktop. Connections are held open between calls, so this
  * outlives any one request — see browser-service.ts for why that is load-bearing.
  */
-const browser = new BrowserService();
+const browser = new BrowserService(endpoints);
 
 /**
  * A demonstration is recorded while a person holds a desktop (INV-405). Started by the
@@ -405,15 +430,17 @@ const teach = new TeachService({
     const desktop = [...displays.list()].find(entry => entry.index === index);
     if (desktop?.resolution === undefined) return undefined;
     try {
-      return { path: recorder.start({ display: index, resolution: desktop.resolution.display, name }).path };
+      const status = recorder.start({ display: index, resolution: desktop.resolution.display, name });
+      // The id is the recording's identity; the path is presentation. The session
+      // captures the id, and stop-by-identity matches on it.
+      return { id: status.id, path: status.path };
     } catch {
       return undefined;
     }
   },
-  stopRecording: async index => {
-    if (!recorder.isRecording(index)) return undefined;
-    const status = await recorder.stop(index);
-    return { path: status.path };
+  stopRecording: async (display, recordingId) => {
+    const stopped = await recorder.stopIfCurrent(display, recordingId);
+    return stopped === undefined ? undefined : { path: stopped.path };
   },
   execsBetween: async (from, to) => {
     const result = await xwatchdog.events(0, 500, true);
@@ -433,6 +460,7 @@ const routes: Record<string, Handler> = {
     // A shell on someone else's desktop can do everything computer-use can — start a
     // window on it, type with xdotool — so it is gated the same way.
     if (body.display !== undefined) {
+      displays.assertControl(body.display, body);
       displays.assertOwner(body.display, body.owner);
       // A shell given a display can type into it; while a person holds that display, no.
       displays.assertAgentControls(body.display);
@@ -473,6 +501,7 @@ const routes: Record<string, Handler> = {
   // someone else's desktop is driving their screen, whichever protocol it goes over.
   "POST /browser": async (body: BrowserRequest): Promise<BrowserResponse> => {
     const display = body.display ?? defaultDisplayIndex;
+    displays.assertControl(display, body);
     displays.assertOwner(display, body.owner);
     // Reading the page is fine while a person holds the desktop; acting on it is not.
     if (!["snapshot", "read", "wait", "check"].includes(body.op)) displays.assertAgentControls(display);
@@ -527,13 +556,26 @@ const routes: Record<string, Handler> = {
   "GET /displays": async (): Promise<DisplayInfo[]> => displays.list(),
   "POST /displays": async (): Promise<DisplayInfo[]> => displays.list(),
   // A person takes a desktop over, or hands it back (INV-404). Not gated on the agent's
-  // owner token: the host asks on the person's behalf, with its own token.
+  // owner token: the host asks on the person's behalf, with its own token. The route is
+  // also the trusted guard entry: a call carrying the projection moves the guard
+  // (armControl reconciles after a restart and refuses a stale generation); a call
+  // carrying none on a controller-managed desktop is an ordinary-shaped call and is refused.
   "POST /displays/control": async (body: DisplayControlRequest): Promise<DisplayInfo> => {
+    let teaching: ReturnType<typeof copyTeachBinding>;
+    try { teaching = copyTeachBinding(body.teaching); } catch { throw new HttpError(400, "Invalid teaching binding"); }
+    if (body.controller === "user") teach.validateBegin(body.index, body.epoch, teaching);
+    if (body.epoch !== undefined) {
+      displays.armControl(body.index, body.epoch, body.op_token, body.reconcile_token, body.scope_complete === true);
+    } else if (displays.isManaged(body.index)) {
+      throw new DisplayGuardError(
+        `desktop ${body.index} is externally managed; control calls must carry the guard projection`
+      );
+    }
     if (body.controller === "user") {
       displays.takeOver(body.index, body.ttl_seconds !== undefined ? body.ttl_seconds * 1000 : undefined);
       // The takeover is the demonstration (INV-405). Started after the lease, so a
       // takeover that is refused records nothing; not awaited past its start.
-      await teach.begin(body.index);
+      await teach.begin(body.index, body.epoch, teaching);
     } else {
       displays.handBack(body.index);
       await teach.finish(body.index, "handback");
@@ -555,6 +597,7 @@ const routes: Record<string, Handler> = {
   // Recording needs the desktop's real resolution, so it goes through ensure() rather
   // than trusting the request: a recording of a display that is not up is an empty file.
   "POST /record/start": async (body: RecordStartRequest): Promise<RecordingInfo> => {
+    displays.assertControl(body.display ?? defaultDisplayIndex, body);
     const desktop = await displays.ensure(body.display ?? defaultDisplayIndex);
     return recorder.start({
       display: desktop.index,
@@ -565,8 +608,16 @@ const routes: Record<string, Handler> = {
       drawMouse: body.draw_mouse,
     });
   },
-  "POST /record/stop": (body: RecordStopRequest): Promise<RecordingInfo> =>
-    recorder.stop(body.display ?? defaultDisplayIndex),
+  // Stopping is idempotent: a desktop that is not recording
+  // answers success with an empty result, so a hand-back whose teach session already
+  // stopped the recorder does not block resolve.
+  "POST /record/stop": async (body: RecordStopRequest): Promise<RecordingInfo> => {
+    const index = body.display ?? defaultDisplayIndex;
+    displays.assertControl(index, body);
+    const stopped = await recorder.stop(index);
+    if (stopped !== undefined) return stopped;
+    return { id: "", display: index, file: "", path: "", started_at: new Date().toISOString() };
+  },
   // Both methods: curl reaches for GET on a listing, the host client posts everything.
   "GET /recordings": async (): Promise<RecordListResult> => ({
     recordings: recorder.list(),
@@ -577,6 +628,16 @@ const routes: Record<string, Handler> = {
   "POST /displays/ensure": async (
     body: EnsureDisplayRequest
   ): Promise<EnsureDisplayResult> => {
+    // ensure is the other trusted guard entry: a carried projection moves the guard (a
+    // newer generation arms, a stale one is refused before the desktop is touched); on a
+    // controller-managed desktop a projectionless ensure is an ordinary call and is refused.
+    if (body.epoch !== undefined) {
+      displays.armControl(body.index, body.epoch, body.op_token, body.reconcile_token, body.scope_complete === true);
+    } else if (displays.isManaged(body.index)) {
+      throw new DisplayGuardError(
+        `desktop ${body.index} is externally managed; ensure must carry the guard projection`
+      );
+    }
     const desktop = await displays.ensure(body.index, body.owner);
     return {
       index: desktop.index,
@@ -587,6 +648,70 @@ const routes: Record<string, Handler> = {
   },
   "POST /fs/download": (body: DownloadFileRequest): Promise<DownloadFileResult> =>
     downloadFile(body),
+
+  // ── external desktop control ────────────────────────────────────────────────
+  // controller registers, per desktop, the external browser instance serving it — the endpoint
+  // teach snapshots and /browser must use instead of the box's own Chromium. boxd only
+  // compares and stores; the epoch is controller's. A same-five-tuple heartbeat refreshes
+  // without side effects; any change of the effective target (first registration,
+  // replacement, restore, unregister) invalidates the desktop's CDP session and caches.
+  "POST /browser/endpoint": async (body: BrowserEndpointRequest): Promise<BrowserEndpointResult> => {
+    const result = endpoints.register({
+      index: Number(body.index),
+      host: String(body.host ?? ""),
+      port: Number(body.port),
+      generation: Number(body.generation),
+      browserInstanceId: String(body.browserInstanceId ?? ""),
+      endpointEpoch: Number(body.endpointEpoch),
+      ...(body.reconcile_token !== undefined ? { reconcileToken: String(body.reconcile_token) } : {}),
+      ...(body.scope_complete === true ? { scopeComplete: true } : {}),
+    });
+    if (result.outcome !== "refreshed") browser.endpointReplaced(Number(body.index));
+    return result;
+  },
+  // The bridge reads this each cycle and presents it on its registrations while a
+  // restart gate is closed: it binds controller's current snapshot to this boxd boot, so a
+  // delayed message replaying the persisted five-tuple cannot reconcile on its own.
+  "GET /browser/endpoint/reconcile-token": async (): Promise<{ reconcile_token: string }> => ({
+    reconcile_token: endpoints.reconcileToken,
+  }),
+  // Conditional unregister: executes only when the presented browserInstanceId is the
+  // standing one, so a late unregister from a replaced instance cannot delete the new
+  // registration. controller confirming termination keeps the high water and marks the
+  // instance terminated; the successor registers with a higher epoch.
+  "POST /browser/endpoint/unregister": async (body: BrowserEndpointUnregisterRequest): Promise<{ cleared: boolean }> => {
+    const result = endpoints.unregister(
+      Number(body.index),
+      String(body.browserInstanceId ?? ""),
+      body.endpointEpoch !== undefined ? Number(body.endpointEpoch) : undefined,
+      body.reconcile_token !== undefined ? String(body.reconcile_token) : undefined,
+      body.scope_complete === true
+    );
+    browser.endpointReplaced(Number(body.index));
+    return result;
+  },
+  // controller's revocation relayed by the bridge, carrying the generation it
+  // revokes from and an idempotency key. A replayed or stale revocation changes nothing,
+  // so the outbox retry that delivers it twice can never disturb a newer grant.
+  "POST /displays/guard/revoke": async (body: DisplayGuardRevokeRequest): Promise<{ index: number; epoch: number; applied: boolean }> => {
+    const index = Number(body.index);
+    if (!Number.isInteger(index)) throw new HttpError(400, "index must be an integer");
+    const revokeId = String(body.revoke_id ?? "");
+    const fromEpoch = Number(body.from_epoch);
+    if (revokeId === "" || !Number.isFinite(fromEpoch)) {
+      throw new HttpError(400, "revoke needs revoke_id and from_epoch");
+    }
+    return {
+      index,
+      ...displays.revokeControl(
+        index,
+        revokeId,
+        fromEpoch,
+        body.reconcile_token !== undefined ? String(body.reconcile_token) : undefined,
+        body.scope_complete === true
+      ),
+    };
+  },
 
   "POST /fs/upload": (body: UploadFileRequest): Promise<UploadFileResult> => uploadFile(body),
 
@@ -607,8 +732,9 @@ const routes: Record<string, Handler> = {
     ...teach.queue.list(),
     recording: displays.list().map(entry => entry.index).filter(index => teach.isTeaching(index)),
   }),
-  "POST /teach/claim": async (): Promise<TeachClaimResult> => {
-    const entry = teach.queue.claim();
+  "POST /teach/claim": async (body: { id?: string }): Promise<TeachClaimResult> => {
+    if (body.id !== undefined && typeof body.id !== "string") throw new HttpError(400, "Invalid teaching session id");
+    const entry = teach.queue.claim(body.id);
     return entry === undefined ? {} : { entry };
   },
   "POST /teach/release": async (body: { id: string }): Promise<{ released: boolean }> => ({
@@ -731,13 +857,17 @@ const server = createServer((req, res) => {
             ? 403
             : error instanceof UserInControlError
               ? 423
-            : error instanceof StaleSnapshotError
-              ? 409
-              : error instanceof IrreversibleActionError
-                ? 428
-                : error instanceof CdpError
-                  ? 422
-                  : 500;
+              : error instanceof DisplayGuardError || error instanceof TeachBindingConflict
+                ? 409
+                : error instanceof EndpointConflictError
+                  ? 409
+                  : error instanceof StaleSnapshotError
+                    ? 409
+                    : error instanceof IrreversibleActionError
+                      ? 428
+                      : error instanceof CdpError
+                        ? 422
+                        : 500;
       if (status >= 500) log(`error on ${route}: ${describe(error)}`);
       send(res, status, { error: describe(error) });
     }
@@ -855,7 +985,9 @@ const listenPort = process.env.BOXD_PORT ? parseInt(process.env.BOXD_PORT, 10) :
 const listenHost = process.env.BOXD_BIND ?? "0.0.0.0";
 
 server.listen(listenPort, listenHost, () => {
-  log(`listening on ${listenHost}:${listenPort}, display ${display}`);
+  const address = server.address();
+  const boundPort = typeof address === "object" && address !== null ? address.port : listenPort;
+  log(`listening on ${listenHost}:${boundPort}, display ${display}`);
   // Encoders left running by a previous daemon. They are adopted by PID 1 when boxd dies and keep
   // writing, and this process's map is empty — so without this, starting a recording gives you two
   // ffmpegs on one screen and a file nobody will ever stop.
@@ -878,10 +1010,52 @@ server.listen(listenPort, listenHost, () => {
   displays.startSupervisor();
 });
 
+/**
+ * Shutdown bounds (S7-A): after SIGTERM the HTTP surface is down but the process used to
+ * stay alive — teach.shutdown() waiting on a recording that never answered, or
+ * server.close() waiting on one keep-alive socket — and the supervisor could not restart
+ * a process that had not exited. Every stage is bounded now, and a hard deadline exits
+ * no matter what any stage is still waiting on.
+ */
+const SHUTDOWN_TEACH_TIMEOUT_MS = 8_000;
+const SHUTDOWN_CLOSE_TIMEOUT_MS = 4_000;
+const SHUTDOWN_HARD_DEADLINE_MS = 15_000;
+
+/** Races `promise` against a timeout; a rejection or a hang is logged, never fatal. */
+function withShutdownTimeout(promise: Promise<unknown>, ms: number, what: string): Promise<void> {
+  return Promise.race([
+    promise.then(
+      () => undefined,
+      error => log(`${what} failed: ${describe(error)}`)
+    ),
+    new Promise<void>(resolve =>
+      setTimeout(() => {
+        log(`${what} did not finish within ${Math.round(ms / 1000)}s; continuing shutdown`);
+        resolve();
+      }, ms)
+    ),
+  ]);
+}
+
 for (const signal of ["SIGINT", "SIGTERM"] as const) {
   process.on(signal, () => {
     log(`${signal} received, shutting down`);
+    // The deadline is unref'd: an event loop that empties on its own does not need it, and
+    // one kept alive by a hung handle cannot outrun it.
+    const hardDeadline = setTimeout(() => {
+      log(`shutdown did not complete within ${Math.round(SHUTDOWN_HARD_DEADLINE_MS / 1000)}s; exiting now`);
+      process.exit(0);
+    }, SHUTDOWN_HARD_DEADLINE_MS);
+    hardDeadline.unref();
     // A demonstration in progress is closed and queued rather than lost with the daemon.
-    void teach.shutdown().finally(() => server.close(() => process.exit(0)));
+    void withShutdownTimeout(teach.shutdown(), SHUTDOWN_TEACH_TIMEOUT_MS, "teach shutdown")
+      .then(() =>
+        withShutdownTimeout(
+          new Promise<void>(resolve => server.close(() => resolve())),
+          SHUTDOWN_CLOSE_TIMEOUT_MS,
+          "server close"
+        )
+      )
+      .finally(() => process.exit(0));
   });
 }

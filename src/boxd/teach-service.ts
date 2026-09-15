@@ -18,9 +18,11 @@
 
 import type { ChildProcess } from "node:child_process";
 import { spawn } from "node:child_process";
+import { randomUUID } from "node:crypto";
 import { existsSync, mkdirSync, readFileSync, readdirSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { appendLine } from "../host/jsonl.ts";
+import { copyTeachBinding, type TeachBinding, type TeachQueueEntry } from "../protocol/index.ts";
 
 export const TEACH_ROOT = process.env.BOXD_TEACH_DIR ?? "/home/box/work/teach-sessions";
 /** A typing burst ends after this much silence. */
@@ -48,7 +50,11 @@ export interface TeachSessionRecord {
   videoPath?: string;
   eventsPath: string;
   counts: { clicks: number; keyBursts: number; snapshots: number; execs: number };
+  binding?: TeachBinding;
+  epoch?: number;
 }
+
+export class TeachBindingConflict extends Error {}
 
 /** The raw XI2 event a line of `xinput test-xi2 --root` announces, or nothing. */
 export function parseXi2Line(line: string): { kind: "button" | "key"; press: boolean } | undefined {
@@ -102,8 +108,17 @@ export interface TeachDeps {
   pointer: (display: number) => Promise<{ x: number; y: number; window?: string; title?: string }>;
   /** The browser's outline, or undefined when no browser is open on this desktop. */
   snapshot: (display: number) => Promise<{ url: string; title: string; snapshot: string; snapshot_id?: string } | undefined>;
-  startRecording: (display: number, name: string) => { path: string } | undefined;
-  stopRecording: (display: number) => Promise<{ path: string } | undefined>;
+  /**
+   * Starts the recording and returns both its immutable identity (captured by the
+   * session; stop-by-identity uses it) and its file path (presentation).
+   */
+  startRecording: (display: number, name: string) => { id: string; path: string } | undefined;
+  /**
+   * Stops the recording that began as `recordingId`, whatever the desktop's recording
+   * state is now. Returning undefined means "not the current recording any more": the
+   * session must leave whatever is recording now alone.
+   */
+  stopRecording: (display: number, recordingId: string) => Promise<{ path: string } | undefined>;
   /** Shell commands run on the box between two instants. */
   execsBetween: (from: string, to: string) => Promise<{ at: string; cmd: string; user?: string }[]>;
   now?: () => number;
@@ -131,6 +146,22 @@ export class TeachSession {
   private clickTimer: NodeJS.Timeout | undefined;
   private idleTimer: NodeJS.Timeout | undefined;
   private ended = false;
+  /**
+   * Set synchronously when end() begins, before its first await. The service uses it to
+   * tell "a session that is closing" from "the desktop's live session": a takeover that
+   * arrives while the old session is still ending must start a fresh session, not be
+   * folded into the dying one.
+   */
+  ending = false;
+  /**
+   * The identity captured when the session began: its own session id,
+   * the recording that this session started, and the displayEpoch the desktop was armed
+   * with at begin time. Immutable on purpose — an end() that ran after the desktop was
+   * handed to a newer incarnation must still act for *this* identity: it stops the
+   * recording it began, never "whatever the desktop is recording now".
+   */
+  private recordingId: string | undefined;
+  readonly epoch: number | undefined;
   private readonly now: () => number;
   private readonly log: (line: string) => void;
 
@@ -138,13 +169,20 @@ export class TeachSession {
     readonly display: number,
     private readonly deps: TeachDeps,
     root = TEACH_ROOT,
-    gapMs = KEY_BURST_GAP_MS
+    gapMs = KEY_BURST_GAP_MS,
+    epoch?: number,
+    binding?: TeachBinding
   ) {
     this.now = deps.now ?? (() => Date.now());
     this.log = deps.log ?? (() => {});
+    this.epoch = epoch;
     this.bursts = new KeyBurst(gapMs);
     const stamp = new Date(this.now()).toISOString().replace(/[:.]/g, "-").slice(0, 19);
-    this.id = `teach-${stamp}-d${display}`;
+    // The stamp only has second resolution, and two incarnations of one desktop can
+    // begin in the same second (a hand-back racing the next takeover). The id — and the
+    // directory derived from it — must be unique per incarnation regardless: a shared id
+    // would merge distinct sessions in every map and queue keyed on it.
+    this.id = `teach-${stamp}-d${display}-${randomUUID().slice(0, 8)}`;
     this.dir = join(root, this.id);
     mkdirSync(this.dir, { recursive: true });
     this.record = {
@@ -153,12 +191,17 @@ export class TeachSession {
       startedAt: new Date(this.now()).toISOString(),
       eventsPath: join(this.dir, "events.jsonl"),
       counts: { clicks: 0, keyBursts: 0, snapshots: 0, execs: 0 },
+      ...(binding === undefined ? {} : { binding: copyTeachBinding(binding) }),
+      ...(epoch === undefined ? {} : { epoch }),
     };
   }
 
   async start(): Promise<void> {
     const video = this.deps.startRecording(this.display, this.id);
-    if (video !== undefined) this.record.videoPath = video.path;
+    if (video !== undefined) {
+      this.record.videoPath = video.path;
+      this.recordingId = video.id;
+    }
     this.input = this.deps.spawnInput(this.display);
     if (this.input?.stdout) {
       let buffer = "";
@@ -259,9 +302,33 @@ export class TeachSession {
     writeFileSync(join(this.dir, "session.json"), `${JSON.stringify(this.record, null, 2)}\n`, "utf8");
   }
 
+  /**
+   * Stops the recording this session began, by the identity captured at begin time.
+   *
+   * If the desktop's current recording is not this one — the desktop was handed on and a
+   * newer session started its own — the stop is skipped and the trace says so. This check
+   * must select the recording atomically and never re-resolve "the display's current
+   * recording" after an await: the round-5 reproduction was an end() that passed the
+   * entry guard, waited, and then stopped the *new* incarnation's recording.
+   */
+  private async stopRecordingByIdentity(): Promise<void> {
+    if (this.recordingId === undefined) return;
+    try {
+      const video = await this.deps.stopRecording(this.display, this.recordingId);
+      if (video !== undefined) {
+        this.record.videoPath = video.path;
+      } else {
+        this.note("recording superseded: this session's recording is no longer the desktop's current one; it was left recording");
+      }
+    } catch (error) {
+      this.note(`recording did not stop cleanly: ${error instanceof Error ? error.message : String(error)}`);
+    }
+  }
+
   /** Closes the session: last outline, recording stopped, shell history appended, queued. */
   async end(by: TeachSessionRecord["endedBy"]): Promise<TeachSessionRecord> {
     if (this.ended) return this.record;
+    this.ending = true;
     if (this.clickTimer !== undefined) clearTimeout(this.clickTimer);
     if (this.idleTimer !== undefined) clearTimeout(this.idleTimer);
     const burst = this.bursts.flush();
@@ -274,12 +341,7 @@ export class TeachSession {
       // Already gone.
     }
     const endedAt = new Date(this.now()).toISOString();
-    try {
-      const video = await this.deps.stopRecording(this.display);
-      if (video !== undefined) this.record.videoPath = video.path;
-    } catch (error) {
-      this.note(`recording did not stop cleanly: ${error instanceof Error ? error.message : String(error)}`);
-    }
+    await this.stopRecordingByIdentity();
     try {
       for (const exec of await this.deps.execsBetween(this.record.startedAt, endedAt)) {
         this.append({ at: exec.at, type: "exec", cmd: exec.cmd, ...(exec.user !== undefined ? { user: exec.user } : {}) });
@@ -298,16 +360,7 @@ export class TeachSession {
 
 // ── the queue ───────────────────────────────────────────────────────────────────────
 
-export interface QueueEntry {
-  id: string;
-  sessionDir: string;
-  display: number;
-  startedAt: string;
-  endedAt?: string;
-  videoPath?: string;
-  /** For a claimed entry: when the lease expires. */
-  leaseUntil?: string;
-}
+export type QueueEntry = TeachQueueEntry;
 
 /**
  * Grok Bot's shape: pending/ and claimed/ directories, a claim is an atomic rename plus
@@ -330,6 +383,8 @@ export class TeachQueue {
       startedAt: record.startedAt,
       ...(record.endedAt !== undefined ? { endedAt: record.endedAt } : {}),
       ...(record.videoPath !== undefined ? { videoPath: record.videoPath } : {}),
+      ...(record.binding !== undefined ? { binding: copyTeachBinding(record.binding) } : {}),
+      ...(record.epoch !== undefined ? { epoch: record.epoch } : {}),
     };
     writeFileSync(join(this.dir("pending"), `${record.id}.json`), `${JSON.stringify(entry, null, 2)}\n`, "utf8");
   }
@@ -372,10 +427,11 @@ export class TeachQueue {
   }
 
   /** The oldest pending session, moved to claimed with a fresh lease; undefined when none. */
-  claim(): QueueEntry | undefined {
+  claim(id?: string): QueueEntry | undefined {
     this.reap();
     const pending = this.dir("pending");
     for (const name of readdirSync(pending).filter(n => n.endsWith(".json")).sort()) {
+      if (id !== undefined && name !== `${id}.json`) continue;
       const target = join(this.dir("claimed"), name);
       try {
         renameSync(join(pending, name), target);
@@ -414,6 +470,15 @@ export class TeachQueue {
 /** One session per desktop; starts on takeover, ends on hand-back or lapse. */
 export class TeachService {
   private readonly active = new Map<number, TeachSession>();
+  /**
+   * In-flight finishes keyed by the session object itself: a second
+   * finish for a session whose end is already running — a doubled hand-back, a reaper
+   * pass racing the route — returns the same promise instead of finding the session gone
+   * and starting nothing. Object identity, not the session id, is the key: same-second
+   * incarnations of one desktop have distinct ids now, but even the id must never be the
+   * thing that decides two sessions are one.
+   */
+  private readonly finishing = new Map<TeachSession, Promise<TeachSessionRecord | undefined>>();
   readonly queue: TeachQueue;
 
   constructor(private readonly deps: TeachDeps, private readonly root = TEACH_ROOT) {
@@ -424,24 +489,100 @@ export class TeachService {
     return this.active.has(display);
   }
 
-  async begin(display: number): Promise<TeachSessionRecord | undefined> {
-    if (this.active.has(display)) return this.active.get(display)!.record;
-    const session = new TeachSession(display, this.deps, this.root);
-    this.active.set(display, session);
-    try {
-      await session.start();
-    } catch (error) {
-      this.active.delete(display);
-      this.deps.log?.(`teach: could not start on desktop ${display}: ${error instanceof Error ? error.message : String(error)}`);
-      return undefined;
+  /**
+   * The highest control generation a session has ever claimed on this desktop, this
+   * boot. The slot's epoch NEVER regresses: a begin older than the floor is stale
+   * wherever it finds the slot — held by a live session, held by an ending one, or
+   * empty because the newer session just finished. This is what stops a begin that
+   * passed the route's entry guard before a generation swap from reopening an older
+   * scene after the swap (the generation regression sequences, including the double-finishing
+   * interleaving where a newer session is ENDING when the stale begin resumes).
+   */
+  private readonly epochFloor = new Map<number, number>();
+
+  /**
+   * Begins a session on a takeover. A live session from the same control generation is
+   * one session — a repeated takeover returns it. A strictly newer epoch is a new
+   * generation: the old session is ended through the normal finish path (its recording
+   * stops by identity, so a generation swap can never stop the wrong encoder), and then
+   * the whole decision is re-made from the current state before anything is created.
+   *
+   * The re-evaluation is conditional on the epoch floor, not on the slot's current
+   * holder: while this call awaited the old session's end, a higher-epoch begin may
+   * have claimed — and even started ending on — the desktop. The slot claim itself is
+   * synchronous, so two racing begins cannot both pass the check; the loser's
+   * re-evaluation converges to the winner instead of overwriting it.
+   */
+  /** Check before the control route changes the lease; begin repeats it after awaits. */
+  validateBegin(display: number, epoch?: number, teaching?: TeachBinding): void {
+    const binding = copyTeachBinding(teaching);
+    const existing = this.active.get(display);
+    if (existing && !existing.ending && (epoch === undefined || existing.epoch === undefined || epoch <= existing.epoch)
+      && JSON.stringify(binding) !== JSON.stringify(existing.record.binding)) {
+      throw new TeachBindingConflict("The active demonstration belongs to another agent or task");
     }
-    return session.record;
+  }
+
+  async begin(display: number, epoch?: number, teaching?: TeachBinding): Promise<TeachSessionRecord | undefined> {
+    const binding = copyTeachBinding(teaching);
+    for (;;) {
+      this.validateBegin(display, epoch, binding);
+      const existing = this.active.get(display);
+      if (existing !== undefined && !existing.ending) {
+        const existingEpoch = existing.epoch;
+        if (epoch === undefined || existingEpoch === undefined || epoch <= existingEpoch) {
+          return existing.record;
+        }
+        await this.finish(display, "handback");
+        continue;
+      }
+      // The slot is empty or held by an ending session. Either way, a begin below the
+      // desktop's generation floor is stale: it must never claim the slot, because that
+      // would rewind the active epoch even when the newer session it raced is ending or
+      // has just finished.
+      const floor = this.epochFloor.get(display) ?? 0;
+      if (epoch !== undefined && epoch < floor) {
+        return existing?.record;
+      }
+      const session = new TeachSession(display, this.deps, this.root, KEY_BURST_GAP_MS, epoch, binding);
+      // Claim the slot before the first await: the check above and this set are one
+      // atomic step, so a concurrent begin either sees this session or wins the slot
+      // itself — never both.
+      this.active.set(display, session);
+      if (epoch !== undefined && epoch > floor) this.epochFloor.set(display, epoch);
+      try {
+        await session.start();
+      } catch (error) {
+        if (this.active.get(display) === session) this.active.delete(display);
+        this.deps.log?.(`teach: could not start on desktop ${display}: ${error instanceof Error ? error.message : String(error)}`);
+        return undefined;
+      }
+      return session.record;
+    }
   }
 
   async finish(display: number, by: TeachSessionRecord["endedBy"]): Promise<TeachSessionRecord | undefined> {
     const session = this.active.get(display);
     if (session === undefined) return undefined;
-    this.active.delete(display);
+    // Already ending: the concurrent caller joins the in-flight finish instead of
+    // starting a second end() for the same session.
+    if (session.ending) return this.finishing.get(session);
+    const inFlight = this.finishing.get(session);
+    if (inFlight !== undefined) return inFlight;
+    const promise = this.endAndEnqueue(session, by);
+    this.finishing.set(session, promise);
+    try {
+      return await promise;
+    } finally {
+      this.finishing.delete(session);
+      // A newer session may have taken the desktop's slot while this one was ending; only
+      // release the slot when it is still ours.
+      if (this.active.get(display) === session) this.active.delete(display);
+    }
+  }
+
+  /** Ends the session and queues it; the sole body every finish path runs through. */
+  private async endAndEnqueue(session: TeachSession, by: TeachSessionRecord["endedBy"]): Promise<TeachSessionRecord> {
     const record = await session.end(by);
     this.queue.enqueue(record, session.dir);
     return record;

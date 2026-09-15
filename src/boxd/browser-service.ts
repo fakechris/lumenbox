@@ -25,6 +25,7 @@ import type { Outcome, WaitOutcome, ActExpectation, Effect, PageInfo } from "../
 import { spawn } from "node:child_process";
 import { realpathSync, statSync } from "node:fs";
 import { CdpError, CdpSession, closeTarget, listTargets, openTarget, type CdpTarget } from "./cdp.ts";
+import { sameEndpointBinding, type BrowserEndpointRegistry, type EndpointBinding } from "./browser-endpoints.ts";
 import { MAX_NODES, MAX_READ_CHARS, READ_SCRIPT, snapshotScript, findScript, MUTATIONS_SCRIPT, STALE_MUTATIONS } from "./browser-snapshot.ts";
 
 /**
@@ -477,12 +478,17 @@ class BrowserPage {
 
   private constructor(
     readonly session: CdpSession,
-    readonly port: number
+    readonly host: string,
+    readonly port: number,
+    /** The registry incarnation this connection opened against; undefined for local. */
+    readonly binding: EndpointBinding | undefined
   ) {}
 
-  static async attach(port: number, target: CdpTarget): Promise<BrowserPage> {
-    const session = await CdpSession.open(target);
-    const page = new BrowserPage(session, port);
+  static async attach(host: string, port: number, target: CdpTarget, binding?: EndpointBinding): Promise<BrowserPage> {
+    // An externally registered endpoint rewrites where the debugger socket opens: the
+    // browser's own advertisement is its network view, not the box's.
+    const session = await CdpSession.open(target, host === "127.0.0.1" ? undefined : { host, port });
+    const page = new BrowserPage(session, host, port, binding);
 
     session.on("Runtime.executionContextCreated", params => {
       const context = params.context as { id: number; auxData?: { frameId?: string } };
@@ -1247,6 +1253,98 @@ export class BrowserService {
   /** The URL the agent last saw on each desktop, for the drift banner (INV-408). */
   private readonly lastSeen = new Map<number, string>();
 
+  /**
+   * The external desktop endpoint registry. Absent in tests that predate
+   * it; when present it decides where each desktop's browser lives — an external
+   * registration, or the local box-chrome on 127.0.0.1:9222+N.
+   */
+  constructor(private readonly endpoints?: BrowserEndpointRegistry) {}
+
+  /**
+   * Where desktop `display`'s CDP answers, and whether that is an external endpoint.
+   * The single choke point every call below goes through; "blocked" resolutions throw
+   * rather than silently fall back to a local browser that is not the one being driven.
+   * `binding` is the registry incarnation this resolution names — attached connections
+   * carry it, and later checks compare identity, not address.
+   */
+  private connectionFor(display: number): {
+    host: string;
+    port: number;
+    external: boolean;
+    binding: EndpointBinding | undefined;
+  } {
+    if (this.endpoints === undefined) {
+      return { host: "127.0.0.1", port: portForDisplay(display), external: false, binding: undefined };
+    }
+    const resolution = this.endpoints.resolve(display);
+    if (resolution.kind === "blocked") throw new CdpError(resolution.reason);
+    if (resolution.kind === "endpoint") {
+      const { host, port, generation, browserInstanceId, endpointEpoch } = resolution.endpoint;
+      return {
+        host,
+        port,
+        external: true,
+        binding: { host, port, generation, browserInstanceId, endpointEpoch },
+      };
+    }
+    return { host: "127.0.0.1", port: portForDisplay(display), external: false, binding: undefined };
+  }
+
+  /**
+   * A desktop's effective endpoint changed: a registration (first external endpoint
+   * overriding a local/env one), a replacement, a restore after restart, or an
+   * unregister/termination that left the desktop with no endpoint. In every case the
+   * browser behind the desktop may be a different process at the same address, so the
+   * held CDP session and every per-desktop cache keyed on the old browser's target ids
+   * (labels, known targets, drift state) are stale. This is the sole path that clears
+   * them; the design's heartbeat requirement is untouched — an identical five-tuple
+   * refreshes without ever reaching here.
+   */
+  endpointReplaced(display: number): void {
+    this.release(display);
+    this.knownTargets.delete(display);
+    this.labels.delete(display);
+    this.lastSeen.delete(display);
+    this.pendingNote.delete(display);
+  }
+
+  /**
+   * Publishes an attached page into the cache after re-verifying the desktop's effective
+   * endpoint has not moved on. The socket can take a moment to open, and a replacement or
+   * unregister can race it; caching a page bound to a stale incarnation is what lets a
+   * superseded browser keep taking commands, so a mismatch closes the page and refuses.
+   */
+  private publishPage(display: number, page: BrowserPage): BrowserPage {
+    if (!this.cachedPageIsCurrent(display, page)) {
+      page.close();
+      throw new CdpError(
+        "The browser endpoint changed while this call was attaching. Retry against the current endpoint."
+      );
+    }
+    this.pages.set(display, page);
+    return page;
+  }
+
+  /**
+   * Whether a cached page's connection still binds to the desktop's current effective
+   * target — by incarnation identity, not address: the same host:port can front a newer
+   * browser after a same-address replacement, and only the registry can tell them apart
+   *. A page attached to an external endpoint is valid only while the
+   * registry still names that exact generation/browserInstanceId/endpointEpoch; a local
+   * page is valid only while the resolution is still local; a blocked resolution makes
+   * nothing current. An identical five-tuple heartbeat changes no identity, so the
+   * design's keep-the-connection requirement is untouched.
+   */
+  private cachedPageIsCurrent(display: number, page: BrowserPage): boolean {
+    if (this.endpoints === undefined) return true;
+    const resolution = this.endpoints.resolve(display);
+    if (resolution.kind === "endpoint") {
+      return page.binding !== undefined && sameEndpointBinding(page.binding, resolution.endpoint);
+    }
+    if (resolution.kind === "local") return page.binding === undefined;
+    return false;
+  }
+
   /** The label of a target, minting one the first time it is seen. */
   private labelFor(display: number, targetId: string): string {
     const byTarget = this.labels.get(display) ?? new Map<string, string>();
@@ -1260,8 +1358,8 @@ export class BrowserService {
 
   /** Every tab on a desktop, labelled, the attached one marked current. */
   async listPages(display: number): Promise<PageInfo[]> {
-    const port = portForDisplay(display);
-    const targets = (await listTargets(port)).filter(target => target.type === "page");
+    const { host, port } = this.connectionFor(display);
+    const targets = (await listTargets(port, host)).filter(target => target.type === "page");
     const current = this.pages.get(display)?.session;
     const live = new Set(targets.map(target => target.id));
     // Labels of tabs that closed are released, so a long session does not climb to p40.
@@ -1282,12 +1380,12 @@ export class BrowserService {
     if (wanted === undefined) {
       throw new CdpError(`No tab ${label} on this desktop. Open tabs: ${pages.map(page => `${page.label} ${page.title || page.url}`).join("; ") || "(none)"}.`);
     }
-    const port = portForDisplay(display);
-    const target = (await listTargets(port)).find(candidate => candidate.url === wanted.url && this.labelFor(display, candidate.id) === label);
+    const { host, port, binding } = this.connectionFor(display);
+    const target = (await listTargets(port, host)).find(candidate => candidate.url === wanted.url && this.labelFor(display, candidate.id) === label);
     if (target === undefined) throw new CdpError(`Tab ${label} closed while switching to it.`);
     this.pages.get(display)?.close();
-    const page = await BrowserPage.attach(port, target);
-    this.pages.set(display, page);
+    const page = await BrowserPage.attach(host, port, target, binding);
+    this.publishPage(display, page);
     return this.settled(display, await page.report());
   }
 
@@ -1296,15 +1394,15 @@ export class BrowserService {
     const pages = await this.listPages(display);
     const wanted = pages.find(page => page.label === label);
     if (wanted === undefined) throw new CdpError(`No tab ${label} on this desktop.`);
-    const port = portForDisplay(display);
     const byTarget = this.labels.get(display);
     const targetId = byTarget === undefined ? undefined : [...byTarget.entries()].find(([, l]) => l === label)?.[0];
     if (targetId === undefined) throw new CdpError(`Tab ${label} is not known any more.`);
+    const { host, port } = this.connectionFor(display);
     if (wanted.current) {
       this.pages.get(display)?.close();
       this.pages.delete(display);
     }
-    await closeTarget(port, targetId);
+    await closeTarget(port, targetId, host);
     byTarget?.delete(targetId);
     const page = await this.pageFor(display);
     this.pendingNote.set(display, `Closed ${label}. You are now on the tab below.`);
@@ -1348,8 +1446,20 @@ export class BrowserService {
 
   private async pageFor(display: number, openAt?: string): Promise<BrowserPage> {
     const existing = this.pages.get(display);
-    if (existing?.session.isOpen) return existing;
-    if (existing !== undefined) {
+    // A live session bound to a target the registry no longer names (unregistered,
+    // terminated, replaced by a successor — possibly at the same host:port) must not keep
+    // receiving commands: drop it before it can act.
+    if (existing?.session.isOpen && !this.cachedPageIsCurrent(display, existing)) {
+      existing.close();
+      this.pages.delete(display);
+      this.pendingNote.set(
+        display,
+        "The browser this desktop was driving has been replaced, so you are now on whatever else is open. " +
+          "Check the page below before acting on it."
+      );
+    } else if (existing?.session.isOpen) {
+      return existing;
+    } else if (existing !== undefined) {
       this.pages.delete(display);
       // Said out loud rather than silently reattaching. An agent whose tab was closed and
       // who is quietly moved to a different page will keep acting as if it is where it was.
@@ -1360,13 +1470,22 @@ export class BrowserService {
       );
     }
 
-    const port = portForDisplay(display);
+    const { host, port, external, binding } = this.connectionFor(display);
     let targets: CdpTarget[];
     try {
-      targets = await listTargets(port);
-    } catch {
+      targets = await listTargets(port, host);
+    } catch (error) {
+      // An externally registered endpoint is authoritative: its browser is controller's, outside
+      // this box, and boxd must not spawn a local Chromium to stand in for it. Report the
+      // endpoint as not connected; controller's heartbeat or the next registration is the fix.
+      if (external) {
+        throw new CdpError(
+          `No browser is connected at the registered endpoint ${host}:${port} for this desktop ` +
+            `(${error instanceof Error ? error.message : String(error)}).`
+        );
+      }
       await this.launch(display, port);
-      targets = await listTargets(port);
+      targets = await listTargets(port, host);
     }
     const pages = targets.filter(target => target.type === "page");
     // Reuse whatever is already open, so an agent that navigated by hand and then asked
@@ -1374,9 +1493,9 @@ export class BrowserService {
     const target =
       pages.find(candidate => candidate.url !== "about:blank") ??
       pages[0] ??
-      (await openTarget(port, openAt ?? "about:blank"));
-    const page = await BrowserPage.attach(port, target);
-    this.pages.set(display, page);
+      (await openTarget(port, openAt ?? "about:blank", host));
+    const page = await BrowserPage.attach(host, port, target, binding);
+    this.publishPage(display, page);
     // Everything open now counts as already seen, so only tabs opened after this point
     // are treated as popups to follow.
     this.knownTargets.set(display, new Set(targets.map(candidate => candidate.id)));
@@ -1391,10 +1510,17 @@ export class BrowserService {
    * the browser's own listing per action is a cheap way to stop missing every popup.
    */
   private async adoptPopup(display: number): Promise<BrowserResult | undefined> {
-    const port = portForDisplay(display);
+    let host: string;
+    let port: number;
+    let binding: EndpointBinding | undefined;
+    try {
+      ({ host, port, binding } = this.connectionFor(display));
+    } catch {
+      return undefined;
+    }
     let targets: CdpTarget[];
     try {
-      targets = (await listTargets(port)).filter(target => target.type === "page");
+      targets = (await listTargets(port, host)).filter(target => target.type === "page");
     } catch {
       return undefined;
     }
@@ -1405,8 +1531,8 @@ export class BrowserService {
     if (opened === undefined) return undefined;
 
     this.pages.get(display)?.close();
-    const page = await BrowserPage.attach(port, opened);
-    this.pages.set(display, page);
+    const page = await BrowserPage.attach(host, port, opened, binding);
+    this.publishPage(display, page);
     const result = await page.report(true);
     return {
       ...result,
@@ -1435,11 +1561,11 @@ export class BrowserService {
       const pages = await this.listPages(display);
       const refusal = pageBudgetReason(pages.length);
       if (refusal !== undefined) throw new CdpError(refusal);
-      const port = portForDisplay(display);
-      const target = await openTarget(port, "about:blank");
+      const { host, port, binding } = this.connectionFor(display);
+      const target = await openTarget(port, "about:blank", host);
       this.pages.get(display)?.close();
-      const page = await BrowserPage.attach(port, target);
-      this.pages.set(display, page);
+      const page = await BrowserPage.attach(host, port, target, binding);
+      this.publishPage(display, page);
       this.knownTargets.get(display)?.add(target.id);
       this.labelFor(display, target.id);
     }
@@ -1461,8 +1587,15 @@ export class BrowserService {
    * For the teach recorder (INV-405): it must never *start* a browser on a person's screen.
    */
   async snapshotIfOpen(display: number): Promise<BrowserResult | undefined> {
+    let host: string;
+    let port: number;
     try {
-      await listTargets(portForDisplay(display));
+      ({ host, port } = this.connectionFor(display));
+    } catch {
+      return undefined;
+    }
+    try {
+      await listTargets(port, host);
     } catch {
       return undefined;
     }
@@ -1630,26 +1763,33 @@ export class BrowserService {
    * set is touched, so the tab this opens is not mistaken for a popup to follow.
    */
   async check(display: number, url: string): Promise<{ snapshot: string; title: string }> {
-    const port = portForDisplay(display);
+    const { host, port, external, binding } = this.connectionFor(display);
     // Started if it is not up. A freshly recreated box has no browser at all, which is
     // exactly when this runs — going straight to openTarget failed there, and the upgrade
     // rolled back a working image because the *check* was broken rather than the box.
+    // An external endpoint is never started here: not ours to start.
     try {
-      await listTargets(port);
-    } catch {
+      await listTargets(port, host);
+    } catch (error) {
+      if (external) {
+        throw new CdpError(
+          `No browser is connected at the registered endpoint ${host}:${port} for this desktop ` +
+            `(${error instanceof Error ? error.message : String(error)}).`
+        );
+      }
       await this.launch(display, port);
     }
-    const target = await openTarget(port, url);
+    const target = await openTarget(port, url, host);
     let page: BrowserPage | undefined;
     try {
-      page = await BrowserPage.attach(port, target);
+      page = await BrowserPage.attach(host, port, target, binding);
       const result = await page.report(true);
       return { snapshot: result.snapshot, title: result.title };
     } finally {
       page?.close();
       // Closed even when the check failed: a failed upgrade should not also leave a tab
       // behind on somebody's desktop.
-      await closeTarget(port, target.id);
+      await closeTarget(port, target.id, host);
       // The tab existed while a popup sweep might have seen it, so it is registered as
       // already-known rather than left to look new on the next action.
       this.knownTargets.get(display)?.add(target.id);

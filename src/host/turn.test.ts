@@ -3294,3 +3294,60 @@ test("a background fork returns at once and its findings arrive in the parent as
     cleanup();
   }
 });
+
+
+test("a model cannot execute a tool omitted by its profile, while a default agent retains it", async () => {
+  const { registry, cleanup } = fixture();
+  try {
+    const restricted = registry.create({ name: "Observer", tools: ["read_file"] });
+    const unrestricted = registry.create({ name: "Operator" });
+    const { box, calls } = stubBox();
+    for (const agent of [restricted, unrestricted]) {
+      const capture: Capture = { params: [] };
+      const { client } = stubClient([
+        message([toolUseBlock("computer", { actions: [{ action: "screenshot" }] })], "tool_use"),
+        message([textBlock("Finished.")]),
+      ], capture);
+      await runTurn(agent, [{ id: "permission-check", fromId: "user", fromName: "user", text: "look", priority: false, receivedAt: "" }],
+        new AbortController().signal, { client, registry, bus: new AgentBus(registry, async () => {}), box, resolution: undefined });
+      if (agent.id === restricted.id) {
+        assert.equal(calls.length, 0);
+        assert.match(JSON.stringify(capture.params[1]?.messages), /unavailable in the current execution context/);
+      }
+    }
+    assert.equal(calls.filter(call => call.kind === "computer").length, 1);
+  } finally { cleanup(); }
+});
+
+test("scoped MCP lookup wrappers reach permitted tools and refuse an unlisted target", async () => {
+  const { registry, cleanup } = fixture();
+  try {
+    const permitted = Array.from({ length: 31 }, (_, index) => `fixture__tool${index}`);
+    const agent = registry.create({ name: "ConnectorReader", tools: permitted });
+    const calls: string[] = [];
+    const fakeMcp = {
+      tools: () => [...permitted, "fixture__private"].map(name => ({
+        name, description: name, inputSchema: { type: "object" },
+      })),
+      owns: (name: string) => name.startsWith("fixture__"),
+      describeTools: () => { calls.push("lookup"); return "fixture tool catalog"; },
+      call: async (name: string) => { calls.push(name); return "fixture result"; },
+    };
+    const capture: Capture = { params: [] };
+    const { client } = stubClient([
+      message([toolUseBlock("FindMcpTool", {})], "tool_use"),
+      message([toolUseBlock("UseMcpTool", { tool: permitted[0], arguments: {} }, "toolu_2")], "tool_use"),
+      message([toolUseBlock("UseMcpTool", { tool: "fixture__private", arguments: {} }, "toolu_3")], "tool_use"),
+      message([textBlock("Finished.")]),
+    ], capture);
+    await runTurn(agent,
+      [{ id: "connector-check", fromId: "user", fromName: "user", text: "use the assigned connector", priority: false, receivedAt: "" }],
+      new AbortController().signal, {
+        client, registry, bus: new AgentBus(registry, async () => {}), box: undefined, resolution: undefined,
+        mcp: fakeMcp as unknown as NonNullable<Parameters<typeof runTurn>[3]["mcp"]>,
+      });
+    assert.deepEqual(capture.params[0]?.tools?.map(tool => "name" in tool ? tool.name : undefined), ["FindMcpTool", "UseMcpTool"]);
+    assert.deepEqual(calls, ["lookup", permitted[0]]);
+    assert.match(JSON.stringify(capture.params[3]?.messages), /external tool is unavailable in the current execution context/);
+  } finally { cleanup(); }
+});

@@ -96,7 +96,7 @@ export type ComputerAction =
       modifiers?: string;
     };
 
-export interface ComputerRequest {
+export interface ComputerRequest extends DisplayGuardProjection {
   actions: readonly ComputerAction[];
   /**
    * Proof that the caller owns this desktop.
@@ -269,7 +269,7 @@ export interface ComputerResult {
  */
 export const DURABLE_RESULT_CHARS = 2_000;
 
-export interface ExecRequest {
+export interface ExecRequest extends DisplayGuardProjection {
   command: string;
   /** Same as on a computer request: proof of ownership when a display is named. */
   owner?: string;
@@ -493,6 +493,29 @@ export interface DisplayInfo {
 }
 
 /** A demonstration the box recorded while a person held a desktop (INV-405). */
+export interface TeachBinding {
+  /** Host registry identity captured by the trusted caller when takeover begins. */
+  agentId: string;
+  /** An external or host task identity, when the demonstration belongs to a task. */
+  taskId?: string;
+}
+
+/** One shared desktop domain for allocation, durable authority and teaching records. */
+export const MAX_DISPLAY_INDEX = 32;
+export function isDisplayIndex(value: unknown): value is number {
+  return typeof value === "number" && Number.isInteger(value) && value >= 1 && value <= MAX_DISPLAY_INDEX;
+}
+
+/** Validate and copy before any asynchronous recording work can observe caller mutations. */
+export function copyTeachBinding(value: unknown): TeachBinding | undefined {
+  if (value === undefined) return undefined;
+  if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error("Invalid teaching binding");
+  const binding = value as Record<string, unknown>;
+  const valid = (text: unknown) => typeof text === "string" && text.trim() !== "" && text.length <= 256 && Array.from(text).every(char => char.charCodeAt(0) >= 32);
+  if (!valid(binding.agentId) || (binding.taskId !== undefined && !valid(binding.taskId))) throw new Error("Invalid teaching agent or task identity");
+  return { agentId: binding.agentId as string, ...(binding.taskId === undefined ? {} : { taskId: binding.taskId as string }) };
+}
+
 export interface TeachQueueEntry {
   id: string;
   sessionDir: string;
@@ -501,6 +524,9 @@ export interface TeachQueueEntry {
   endedAt?: string;
   videoPath?: string;
   leaseUntil?: string;
+  /** Absent on legacy recordings: do not infer their owner from a reused desktop. */
+  binding?: TeachBinding;
+  epoch?: number;
 }
 
 export interface TeachQueueList {
@@ -520,15 +546,43 @@ export interface TeachDoneRequest {
   delete_video?: boolean;
 }
 
+/**
+ * Execution fence installed by the box administrator for a managed desktop.
+ * `epoch` orders control incarnations; `op_token` is an opaque operation capability.
+ * Unmanaged desktops retain their existing owner/lease checks. Once armed, a desktop
+ * refuses ordinary calls without the current projection, including after restart.
+ * These fields do not express application workflow or business completion.
+ */
+export interface DisplayGuardProjection {
+  /** The displayEpoch the caller believes this desktop is on. */
+  epoch?: number;
+  /** The operation-grant token controller relayed for this display, when one stands. */
+  op_token?: string;
+  /**
+   * This boxd boot's reconcile token, read from the boxd that is being addressed. A
+   * desktop that booted managed-but-unreconciled (after a boxd restart) — or one being
+   * recovered from corrupt state — only accepts a projection or revocation carrying it:
+   * a delayed message, however legitimate it once was, cannot mark itself current.
+   */
+  reconcile_token?: string;
+  /**
+   * The box administrator's confirmation that the complete box-wide managed set named on disk is complete again.
+   * Only meaningful alongside a valid reconcile_token; clears the guard's degraded /
+   * partial recovery state on success.
+   */
+  scope_complete?: boolean;
+}
+
 /** A person taking a desktop over, or handing it back (INV-404). */
-export interface DisplayControlRequest {
+export interface DisplayControlRequest extends DisplayGuardProjection {
   index: number;
   controller: "agent" | "user";
   /** For `user`: how long, in seconds. Defaults to twenty minutes. */
   ttl_seconds?: number;
+  teaching?: TeachBinding;
 }
 
-export interface EnsureDisplayRequest {
+export interface EnsureDisplayRequest extends DisplayGuardProjection {
   index: number;
   /**
    * Binds this desktop to the caller. Once bound, computer and exec requests naming this
@@ -621,7 +675,7 @@ export const VNC_BASE_PORT = 5900;
 export const DEFAULT_DISPLAY_INDEX = 1;
 
 /** Screen recording. One recording per desktop; the file lands on the work volume. */
-export interface RecordStartRequest {
+export interface RecordStartRequest extends DisplayGuardProjection {
   display?: number;
   /** Used in the file name, so a recording can be found by what it was for. */
   name?: string;
@@ -630,11 +684,87 @@ export interface RecordStartRequest {
   draw_mouse?: boolean;
 }
 
-export interface RecordStopRequest {
+export interface RecordStopRequest extends DisplayGuardProjection {
   display?: number;
 }
 
+/**
+ * Registers (or reconciles) the CDP endpoint an external browser instance serves for a
+ * desktop. controller is the only minter of endpointEpoch; boxd compares
+ * and stores what it is told, and never bumps the epoch itself.
+ */
+export interface BrowserEndpointRequest {
+  index: number;
+  host: string;
+  port: number;
+  generation: number;
+  browserInstanceId: string;
+  endpointEpoch: number;
+  /**
+   * Binds a registration to this boxd boot. After a restart the registry only opens a
+   * desktop's gate for a snapshot carrying the current boot's token (the bridge reads it
+   * from the authenticated reconcile-token endpoint); a delayed message replaying the
+   * persisted five-tuple without it is a late registration, not the trusted snapshot,
+   * and is refused like one.
+   */
+  reconcile_token?: string;
+  /**
+   * The box administrator's confirmation that the complete box-wide managed set named on disk is complete again.
+   * Only meaningful alongside a valid reconcile_token; clears the registry's
+   * degraded/partial recovery state on success.
+   */
+  scope_complete?: boolean;
+}
+
+/**
+ * Conditional unregister: executes only when browserInstanceId matches the registration.
+ * `reconcile_token` plays the same role as on registration while the restart gate is
+ * closed (e.g. confirming a termination from controller's current snapshot).
+ */
+export interface BrowserEndpointUnregisterRequest {
+  index: number;
+  browserInstanceId: string;
+  /** When given, an epoch below the known high water is refused like a registration would be. */
+  endpointEpoch?: number;
+  reconcile_token?: string;
+  /** The box administrator's confirmation that the complete box-wide managed set is complete; needs reconcile_token. */
+  scope_complete?: boolean;
+}
+
+/** controller's revocation, relayed by the bridge. */
+export interface DisplayGuardRevokeRequest {
+  index: number;
+  /**
+   * controller's idempotency key for this revocation (its outbox retry replays the same id).
+   * A replay already applied changes nothing, so retries are safe by construction.
+   */
+  revoke_id: string;
+  /**
+   * The displayEpoch controller is revoking from — the generation the grant was issued under.
+   * The revocation applies only while the desktop stands at exactly this generation; a
+   * replay that arrives after controller has moved on finds a newer generation and is a no-op.
+   */
+  from_epoch: number;
+  /** This boxd boot's reconcile token, required while the desktop awaits reconciliation or recovery. */
+  reconcile_token?: string;
+  /** The box administrator's confirmation that the complete box-wide managed set is complete; needs reconcile_token. */
+  scope_complete?: boolean;
+}
+
+export interface BrowserEndpointResult {
+  outcome: "registered" | "refreshed" | "restored" | "replaced";
+  endpoint: {
+    host: string;
+    port: number;
+    generation: number;
+    browserInstanceId: string;
+    endpointEpoch: number;
+  };
+}
+
 export interface RecordingInfo {
+  /** The recording's immutable identity, minted at start; stop-by-identity uses this. */
+  id: string;
   display: number;
   file: string;
   path: string;
@@ -668,7 +798,7 @@ export interface ClipboardResult {
  * what does the page look like now — and a separate result type per verb would say the
  * same thing four times.
  */
-export interface BrowserRequest {
+export interface BrowserRequest extends DisplayGuardProjection {
   display?: number;
   owner?: string;
   /** What to do: open, snapshot, read, act, scroll, upload, wait, fill_secret, pages, switch or close. */

@@ -813,7 +813,8 @@ function renderTasks(context: PromptContext): string {
     "## Your tasks on the board\n\n" +
     rows.join("\n") +
     more +
-    "\n\nMove them with the Tasks tool as they progress; a task in `review` is waiting on its " +
+    "\n\nRead current task details with Tasks (action: read, id: task id) before working. " +
+    "Move them with the Tasks tool as they progress; a task in `review` is waiting on its " +
     "reviewer, not on you. Finish what is doing before taking more."
   );
 }

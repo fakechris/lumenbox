@@ -41,7 +41,9 @@ test("ledgers append through jsonl.ts, which syncs; raw appends stay where they 
 });
 
 test("the policy gate is asked from the few places that act, and nowhere else", () => {
-  const allowed = new Set(["cli.ts", "host/mcp-face.ts", "host/tools.ts", "host/turn.ts", "web/server.ts"]);
+  // The orchestrator also makes the tool-free teaching proposal call: it must ask
+  // the same stop/budget gate even though no ordinary tool-enabled turn is started.
+  const allowed = new Set(["cli.ts", "host/mcp-face.ts", "host/tools.ts", "host/turn.ts", "host/orchestrator.ts", "web/server.ts"]);
   const offenders = sources()
     .filter(file => /\.check\(\{\s*kind:/.test(file.text) && !allowed.has(file.path))
     .map(file => file.path);

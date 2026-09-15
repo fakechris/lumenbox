@@ -223,3 +223,115 @@ test("the tab cap refuses the next tab and says how to make room", () => {
   assert.match(pageBudgetReason(PAGE_BUDGET) ?? "", /Close one with browser_pages/);
   assert.match(pageBudgetReason(9, 4) ?? "", /already have 9 tabs/);
 });
+
+import { mkdtempSync as bindingTmp, rmSync as bindingRm } from "node:fs";
+import { tmpdir as bindingTmpdir } from "node:os";
+import { join as bindingJoin } from "node:path";
+import { BrowserEndpointRegistry } from "./browser-endpoints.ts";
+import { BrowserService } from "./browser-service.ts";
+
+test("a cached page whose endpoint is gone is dropped, not driven", async () => {
+  // The registry said desktop 3's browser was A; the service cached a page for it. When
+  // A unregisters, the cached page must not keep receiving commands — even though the
+  // page object itself looks alive. Keep a regression for an otherwise healthy stale page.
+  const dir = bindingTmp(bindingJoin(bindingTmpdir(), "agentbox-binding-"));
+  try {
+    const reg = new BrowserEndpointRegistry(() => {}, dir, {});
+    reg.register({ index: 3, host: "renderer.test", port: 9333, generation: 2, browserInstanceId: "A", endpointEpoch: 12 });
+    const service = new BrowserService(reg);
+    let navigations = 0;
+    let closes = 0;
+    (service as unknown as { pages: Map<number, never> }).pages.set(3, {
+      session: { isOpen: true },
+      host: "renderer.test",
+      port: 9333,
+      navigate: async () => {
+        navigations += 1;
+      },
+      report: async () => ({ url: "old-A", title: "A", text: "A" }),
+      close: () => {
+        closes += 1;
+      },
+    } as never);
+    reg.unregister(3, "A");
+    // The registry now resolves "blocked"; opening must refuse before any navigation.
+    await assert.rejects(() => service.open(3, "http://synthetic.test/"), /awaiting|gone|terminated|unregistered|blocked/i);
+    assert.equal(navigations, 0, "the stale cached page was never driven");
+    assert.equal(closes, 1, "the stale session was closed, not leaked");
+  } finally {
+    bindingRm(dir, { recursive: true, force: true });
+  }
+});
+
+test("a cached local page is dropped when a first external registration takes the desktop", async () => {
+  const dir = bindingTmp(bindingJoin(bindingTmpdir(), "agentbox-binding-"));
+  try {
+    const reg = new BrowserEndpointRegistry(() => {}, dir, {});
+    const service = new BrowserService(reg);
+    let navigations = 0;
+    let closes = 0;
+    // A page attached to the local box-chrome while nothing was registered.
+    (service as unknown as { pages: Map<number, never> }).pages.set(3, {
+      session: { isOpen: true },
+      host: "127.0.0.1",
+      port: 9225,
+      navigate: async () => {
+        navigations += 1;
+      },
+      report: async () => ({ url: "local", title: "local", text: "local" }),
+      close: () => {
+        closes += 1;
+      },
+    } as never);
+    // controller registers the desktop's real browser: the local page is stale from here.
+    reg.register({ index: 3, host: "renderer.test", port: 9333, generation: 2, browserInstanceId: "B", endpointEpoch: 7 });
+    await assert.rejects(() => service.open(3, "http://synthetic.test/"), /No browser is connected/);
+    assert.equal(navigations, 0, "the stale local page was never driven");
+    assert.equal(closes, 1, "the local session was closed on the way out");
+  } finally {
+    bindingRm(dir, { recursive: true, force: true });
+  }
+});
+
+test("generation regression: a late attach from a replaced incarnation is refused even at the same address", async () => {
+  // The codex delta probe, pinned: A12 begins attaching at same-endpoint:9222; B13
+  // registers at the SAME host:port and the route-invalidated cache is cleared; A's
+  // socket finishes opening afterwards and must not be published.
+  const dir = bindingTmp(bindingJoin(bindingTmpdir(), "agentbox-binding-"));
+  try {
+    const reg = new BrowserEndpointRegistry(() => {}, dir, {});
+    const input = { index: 2, host: "same-endpoint", port: 9222, generation: 1, browserInstanceId: "A", endpointEpoch: 12 };
+    reg.register(input);
+    const service = new BrowserService(reg);
+    reg.register({ ...input, browserInstanceId: "B", endpointEpoch: 13 });
+    service.endpointReplaced(2);
+    // A's late-attach product: bound to A's incarnation, at the address B now serves.
+    let closed = false;
+    const oldPage = {
+      host: input.host,
+      port: input.port,
+      binding: { host: input.host, port: input.port, generation: 1, browserInstanceId: "A", endpointEpoch: 12 },
+      session: { isOpen: true },
+      close() {
+        closed = true;
+      },
+    };
+    assert.throws(() => (service as unknown as { publishPage(d: number, pg: never): void }).publishPage(2, oldPage as never), /changed while this call was attaching/);
+    assert.ok(closed, "the stale page was closed, not cached");
+    // And the heartbeat case is untouched: the CURRENT five-tuple (B13) re-registered
+    // verbatim refreshes without invalidating, and a page bound to B is published.
+    const liveB = { ...input, browserInstanceId: "B", endpointEpoch: 13 };
+    const same = reg.register(liveB);
+    assert.equal(same.outcome, "refreshed");
+    const current = {
+      host: input.host,
+      port: input.port,
+      binding: { host: input.host, port: input.port, generation: 1, browserInstanceId: "B", endpointEpoch: 13 },
+      session: { isOpen: true },
+      close() {},
+    };
+    assert.doesNotThrow(() => (service as unknown as { publishPage(d: number, pg: never): void }).publishPage(2, current as never), "same incarnation re-attaching is fine");
+  } finally {
+    bindingRm(dir, { recursive: true, force: true });
+  }
+});
