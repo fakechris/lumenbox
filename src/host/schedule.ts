@@ -1022,7 +1022,7 @@ export class Scheduler {
     }
 
     void this.deps
-      .run(agent, prompt, skill.deliver)
+      .run(agent, prompt, skill.deliver, skill.slug)
       .catch(error => {
         this.log(`${skill.name}: webhook run failed — ${error instanceof Error ? error.message : String(error)}`);
       })
@@ -1043,11 +1043,16 @@ export class Scheduler {
     const startedAt = this.now();
       this.record(slug, "started", { agent });
     this.log(`${skill.name}: firing now, by hand`);
+    // By hand is still this routine running (INV-534): same slug, same opening with last
+    // time's commitments, same reconcile afterwards. Without them "run it now" was a
+    // different code path that skipped the very thing a person clicks it to test.
+    const priorByHand = this.deps.priorCommitments?.(skill.slug);
     void this.deps
       .run(
         agent,
-        triggerPrompt(skill.name, skill.path, describeSchedule(skill.schedule), skill.deliver),
-        skill.deliver
+        triggerPrompt(skill.name, skill.path, describeSchedule(skill.schedule), skill.deliver) + (priorByHand !== undefined ? `\n\n${priorByHand}` : ""),
+        skill.deliver,
+        skill.slug
       )
       .catch(error => {
         this.log(

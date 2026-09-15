@@ -6,7 +6,7 @@
  * orchestration you see at runtime is emergent, not encoded.
  */
 
-import { CommitmentLedger, describeGaps, parseCommitments, priorCommitmentsPrompt, reconcileCommitments } from "./commitments.ts";
+import { bindingsOf, CommitmentLedger, describeGaps, parseCommitments, priorCommitmentsPrompt, reconcileCommitments } from "./commitments.ts";
 import { learningsDir } from "./learnings.ts";
 import type Anthropic from "@anthropic-ai/sdk";
 import { AgentBus, type BusEvent, type InboundMessage, type Lane } from "../agents/bus.ts";
@@ -524,10 +524,17 @@ export class Orchestrator {
       const commitments = parseCommitments(said);
       if (commitments.length === 0) return;
       const routines = (await this.scheduler.status().catch(() => [])).map(entry => ({ slug: entry.slug, name: entry.name, paused: entry.paused, ...(entry.nextRun !== undefined && entry.kind === "once" ? { at: Date.parse(entry.nextRun) } : {}) }));
-      const checks = reconcileCommitments(commitments, this.tasks?.list() ?? [], routines);
-      this.commitments.record({ at: new Date().toISOString(), slug, agentId, commitments, checks });
+      // Made now, so a card finished last month cannot be what carries it, and bound to
+      // whatever the last run tied each item to — an id rather than a word match (INV-534).
+      const madeAt = Date.now();
+      const bindings = bindingsOf(this.commitments.lastFor(slug));
+      const checks = reconcileCommitments(commitments, this.tasks?.list() ?? [], routines, madeAt, bindings);
+      const isDone = (taskId: string | undefined): boolean => taskId !== undefined && this.tasks?.get(taskId)?.status === "done";
       const gaps = describeGaps(checks);
-      if (gaps.toChat === undefined || gaps.cue === undefined) return;
+      if (gaps.toChat === undefined || gaps.cue === undefined) {
+        this.commitments.record(this.commitments.withCarried({ at: new Date(madeAt).toISOString(), slug, agentId, commitments, checks }, isDone));
+        return;
+      }
       console.error(`[commitments] ${slug}: ${checks.filter(c => c.missing.length > 0).length} of ${checks.length} commitment(s) not held`);
       await this.options.deliverToChat?.(deliver, gaps.toChat);
       const mark = this.registry.readTranscript(agentId, conversation).length;
@@ -535,6 +542,14 @@ export class Orchestrator {
       await this.settle();
       const created = this.replySince(agentId, mark, conversation).trim();
       if (created !== "") await this.options.deliverToChat?.(deliver, created);
+      // What the cue actually produced, checked rather than believed (INV-534): the agent
+      // saying "created" is a sentence, and the ledger is about what exists. Whatever is
+      // still unheld is said once — not cued again, because a second cue that produced
+      // nothing the first time is a loop, and the next run opens with it anyway.
+      const after = reconcileCommitments(commitments, this.tasks?.list() ?? [], (await this.scheduler.status().catch(() => [])).map(entry => ({ slug: entry.slug, name: entry.name, paused: entry.paused, ...(entry.nextRun !== undefined && entry.kind === "once" ? { at: Date.parse(entry.nextRun) } : {}) })), madeAt, bindings);
+      this.commitments.record(this.commitments.withCarried({ at: new Date(madeAt).toISOString(), slug, agentId, commitments, checks: after }, isDone));
+      const stillOpen = describeGaps(after);
+      if (stillOpen.toChat !== undefined) await this.options.deliverToChat?.(deliver, `Still nothing holding these after that turn:\n${stillOpen.toChat.split("\n").slice(1).join("\n")}`);
     },
     // A waiting webhook: the same turn, but the caller is told what came of it.
     runAndSay: async (agent, prompt) => {
