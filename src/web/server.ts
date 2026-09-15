@@ -192,6 +192,7 @@ import { Vault, type Grant } from "../host/vault.ts";
 import { OAuthGate } from "../host/oauth.ts";
 import { MemoryAdmin } from "../host/memory-admin.ts";
 import { ConnectCodeStore } from "../box/connect-codes.ts";
+import { FollowUpBudget, type FollowUpItem } from "../host/follow-up-budget.ts";
 import { QuestionWatch } from "../host/question-expiry.ts";
 import { appendLine } from "../host/jsonl.ts";
 import { seedStarterSkills } from "../host/starter-skills.ts";
@@ -464,6 +465,10 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
   // Questions that expire (INV-526): every AskUser is watched; unanswered past its window,
   // the agent is woken to proceed on its default or to decide, and the chat is told.
   const questions = new QuestionWatch(join(agentboxHome(), "questions.jsonl"));
+  // What the host has already said to each room today, so four rails do not each start
+  // their own conversation (INV-535). Kept across a restart: a budget that resets when
+  // the process does is not a budget.
+  const followUps = new FollowUpBudget(join(agentboxHome(), "follow-ups.jsonl"));
 
   // Channel task cards listen here while their ask is in flight: each listener is a
   // narrow filter on (agent, conversation), added before the prompt and removed after
@@ -1731,7 +1736,10 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
       // room's decision to a different set of people (INV-530). A question from the web
       // has no room; the page and the ledger carry it.
       const askedIn = question.conversation === "main" ? undefined : conversations.chatKeyFor(question.conversation);
-      if (askedIn !== undefined) void chats?.pushToChat(askedIn, expiry.toChat).catch((error: unknown) => log(`question: could not tell ${askedIn} (${error instanceof Error ? error.message : String(error)})`));
+      // Said whatever the day's budget is — this is the host reporting what it just did
+      // on somebody's behalf, and a silent default is the thing docs/51 forbids. It still
+      // counts against the room's budget, so the nudges know the room was spoken to.
+      if (askedIn !== undefined) void chats?.pushToChat(askedIn, expiry.toChat).then(() => followUps.record(askedIn)).catch((error: unknown) => log(`question: could not tell ${askedIn} (${error instanceof Error ? error.message : String(error)})`));
       else if (question.conversation !== "main") log(`question: expired in ${question.conversation} but no chat is recorded for it; the ledger has it`);
       broadcast({ type: "question_expired", agentId: question.agentId, agentName: question.agentName, question: question.question, verdict: expiry.verdict });
       void orchestrator
@@ -1746,30 +1754,50 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
   const boardTimer = setInterval(() => {
     const board = orchestrator.tasks;
     if (board === undefined) return;
+    // One message per room per sweep, inside the room's budget for the day (INV-535).
+    // Four rails each speaking for itself is how a person ends up with twenty notices
+    // and reads none: an ask can wait, an act cannot, and both travel together.
+    const byRoom = new Map<string, FollowUpItem[]>();
+    const reasons = new Map<string, "overdue" | "idle">();
     for (const event of [...board.age(), ...board.settleCloseProposals()]) {
       log(`tasks: ${event.text}`);
       broadcast({ type: "task_aging", taskId: event.task.id, title: event.task.title, kind: event.kind, text: event.text });
       // A task carries a *conversation id*, not a chatKey — the same distinction that
       // routed every rescue notice nowhere until the directory was consulted (above).
-      // A nudge counts only once this resolves and the push lands (INV-530): a room we
-      // cannot reach has not been asked anything, and cannot be said to have not answered.
+      // A nudge counts only once the push lands (INV-530): a room we cannot reach has not
+      // been asked anything, and cannot be said to have not answered.
       const conversation = event.task.conversation;
+      if (event.kind === "nudge") reasons.set(event.task.id, event.reason);
       if (conversation === undefined || conversation === "main") {
         if (event.kind === "nudge") board.recordNudge(event.task.id, event.reason);
         continue;
       }
+      const room = byRoom.get(conversation) ?? [];
+      room.push({ kind: event.kind === "nudge" ? "ask" : "act", text: event.text, ref: event.task.id });
+      byRoom.set(conversation, room);
+    }
+    for (const [conversation, items] of byRoom) {
       const chatKey = conversations.chatKeyFor(conversation);
       if (chatKey === undefined || chats === undefined) {
-        log(`tasks: ${event.task.id} came from ${conversation} and there is no chat to tell; not counting this nudge`);
+        log(`tasks: ${items.length} notice(s) for ${conversation} have no chat to go to; not counted`);
+        continue;
+      }
+      const message = followUps.compose(chatKey, items);
+      if (message === undefined || message.text === "") {
+        if ((message?.held.length ?? 0) > 0) log(`tasks: ${message!.held.length} nudge(s) for ${chatKey} held: today's follow-ups are spent`);
         continue;
       }
       const target = chats;
-      void target.tryPushToChat(chatKey, event.text).then(result => {
+      void target.tryPushToChat(chatKey, message.text).then(result => {
         if (!result.delivered) {
-          log(`tasks: ${event.task.id} was not told to ${chatKey} (${result.why ?? "no reason given"}); not counting this nudge`);
+          log(`tasks: ${chatKey} was not told (${result.why ?? "no reason given"}); nothing counted`);
           return;
         }
-        if (event.kind === "nudge") board.recordNudge(event.task.id, event.reason);
+        followUps.record(chatKey);
+        for (const id of message.sent) {
+          const reason = reasons.get(id);
+          if (reason !== undefined) board.recordNudge(id, reason);
+        }
       });
     }
   }, 3_600_000);
