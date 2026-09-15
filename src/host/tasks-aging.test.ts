@@ -15,6 +15,11 @@ import { CLOSE_PROPOSAL_MS, TASK_IDLE_MS, TASK_NUDGE_GAP_MS, TaskStore, dueOf } 
 const T0 = new Date("2026-09-01T09:00:00Z");
 const plus = (ms: number) => new Date(T0.getTime() + ms);
 
+/** What the host does after the line reached a person: the nudge counts (INV-530). */
+const deliver = (store: TaskStore, events: readonly { kind: string; task: { id: string }; reason?: "overdue" | "idle" }[], now: Date): void => {
+  for (const event of events) if (event.kind === "nudge") store.recordNudge(event.task.id, event.reason!, now);
+};
+
 test("a due date is stored as an instant, from a date or an instant", () => {
   assert.equal(dueOf("2026-09-19"), "2026-09-19T23:59:59.000Z");
   assert.equal(dueOf("2026-09-19T10:00:00Z"), "2026-09-19T10:00:00.000Z");
@@ -36,6 +41,8 @@ test("overdue and idle tasks nudge twice then archive; movement resets; the hist
     // Day 6: the overdue one is nudged; the idle one is not yet idle; the proposal is never aged.
     const first = store.age(plus(6 * 86_400_000));
     assert.deepEqual(first.map(e => [e.kind, e.task.id]), [["nudge", overdue.id]]);
+    assert.equal(store.get(overdue.id)?.aging, undefined, "a proposed nudge is not a delivered one");
+    deliver(store, first, plus(6 * 86_400_000));
     assert.match(first[0]!.text, /overdue \(due 2026-09-05T23:59:59\.000Z\) — nudge 1 of 2\. close \/ downgrade \/ continue\?/);
     assert.equal(store.get(overdue.id)?.aging?.nudges, 1);
     assert.deepEqual(store.age(plus(6 * 86_400_000 + 3_600_000)), [], "not nudged again within the gap");
@@ -43,6 +50,7 @@ test("overdue and idle tasks nudge twice then archive; movement resets; the hist
     // Day 8: idle joins; overdue gets its second nudge (48h gap passed).
     const second = store.age(plus(8 * 86_400_000 + 1));
     assert.deepEqual(second.map(e => [e.kind, e.task.id, (e as { nudge?: number }).nudge]).sort(), [["nudge", idle.id, 1], ["nudge", overdue.id, 2]].sort());
+    deliver(store, second, plus(8 * 86_400_000 + 1));
     assert.match(second.find(e => e.task.id === idle.id)!.text, /idle: nothing has moved for 8 days/);
 
     // The person moves the idle one: its count resets.
@@ -101,6 +109,40 @@ test("a close proposal closes by itself after the window, stays open when the re
     store.proposeClose(t14.id, "bot", "r", T0);
     store.update(t14.id, { status: "doing" }, "chris", undefined, plus(1));
     assert.equal(store.get(t14.id)?.closeProposal, undefined);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("a nudge nobody received is not counted, and cannot archive the work (INV-530)", () => {
+  const dir = mkdtempSync(join(tmpdir(), "agentbox-tasks-undelivered-"));
+  try {
+    const store = new TaskStore(join(dir, "tasks.jsonl"));
+    // The room it came from is a Feishu group whose address the host could not resolve.
+    const task = store.create({ title: "answer Q1-Q5", requester: "chris", assigneeId: "bot", conversation: "feishu-oc_x-om_y", due: "2026-09-05", now: T0 })!;
+
+    // Six sweeps over twelve days. Every one proposes a nudge; the host delivers none.
+    for (let day = 6; day <= 16; day += 2) {
+      const events = store.age(plus(day * 86_400_000));
+      assert.deepEqual(events.map(e => [e.kind, (e as { nudge?: number }).nudge]), [["nudge", 1]], `day ${day} still proposes the first nudge`);
+    }
+    assert.equal(store.get(task.id)?.status, "open", "undeliverable is not unanswered");
+    assert.equal(store.get(task.id)?.aging, undefined);
+
+    // The room becomes reachable: now it counts, and the ordinary two-then-archive runs.
+    deliver(store, store.age(plus(18 * 86_400_000)), plus(18 * 86_400_000));
+    assert.equal(store.get(task.id)?.aging?.nudges, 1);
+    deliver(store, store.age(plus(20 * 86_400_000)), plus(20 * 86_400_000));
+    assert.equal(store.get(task.id)?.aging?.nudges, 2);
+    assert.deepEqual(store.age(plus(22 * 86_400_000)).map(e => e.kind), ["archived"]);
+    assert.equal(store.get(task.id)?.status, "dropped");
+
+    // A double delivery of the same nudge is one nudge.
+    const other = store.create({ title: "second", requester: "chris", due: "2026-09-05", now: T0 })!;
+    const events = store.age(plus(6 * 86_400_000));
+    deliver(store, events, plus(6 * 86_400_000));
+    deliver(store, events, plus(6 * 86_400_000));
+    assert.equal(store.get(other.id)?.aging?.nudges, 1);
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }

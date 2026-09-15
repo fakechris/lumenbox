@@ -507,6 +507,13 @@ export class TaskStore {
    * its requester nudged — close, downgrade, or continue — at most once per gap; after
    * two nudges with no movement it is archived as dropped, with the history saying why.
    * Movement by anyone resets the count. Run daily by the host; idempotent within a gap.
+   *
+   * A nudge here is a *proposal to say something*, not a fact: the count advances only
+   * when the caller confirms with `recordNudge` that the line reached a person (INV-530).
+   * The first version counted before delivery, and the delivery it counted was routed by
+   * string equality to an address that never matched a Feishu room — so two nudges nobody
+   * received archived the work, silently, which is the exact failure the sweep exists to
+   * prevent. Undeliverable means uncounted; the sweep proposes it again next hour.
    */
   age(now: Date = new Date()): AgingEvent[] {
     const events: AgingEvent[] = [];
@@ -526,17 +533,33 @@ export class TaskStore {
         if (moved !== undefined) events.push({ kind: "archived", task: moved.task, text });
         continue;
       }
-      const at = now.toISOString();
       const text =
         `${task.id} "${task.title}" is ${reason === "overdue" ? `overdue (due ${task.due})` : `idle: nothing has moved for ${Math.round((t - Date.parse(task.updatedAt)) / 86_400_000)} days`}` +
         ` — nudge ${nudges} of ${TASK_NUDGES_BEFORE_ARCHIVE}. ${NUDGE_OPTIONS.join(" / ")}? Move it on the board or answer here; ` +
         `with no answer it is archived after the next nudge.`;
-      const next: Task = { ...task, aging: { nudges, lastNudgedAt: at, reason }, history: [...task.history, { at, by: AGING_ACTOR, note: `nudge ${nudges}/${TASK_NUDGES_BEFORE_ARCHIVE}: ${reason}` }].slice(-HISTORY_LIMIT) };
-      this.tasks.set(task.id, next);
-      this.append({ kind: "task", task: next });
-      events.push({ kind: "nudge", task: this.get(task.id)!, reason, nudge: nudges, text });
+      events.push({ kind: "nudge", task, reason, nudge: nudges, text });
     }
     return events;
+  }
+
+  /**
+   * The nudge reached somebody: count it (INV-530). Called after the line was delivered —
+   * pushed to the chat the task came from, or shown on the board for a task that came
+   * from no chat. Refuses a second count within the gap, so a double delivery is one
+   * nudge, and refuses anything the task has moved past.
+   */
+  recordNudge(id: string, reason: "overdue" | "idle", now: Date = new Date()): Task | undefined {
+    const task = this.tasks.get(id);
+    if (task === undefined || !isLive(task.status)) return undefined;
+    const t = now.getTime();
+    if (task.aging !== undefined && t - Date.parse(task.aging.lastNudgedAt) < TASK_NUDGE_GAP_MS) return undefined;
+    const at = now.toISOString();
+    const nudges = (task.aging?.nudges ?? 0) + 1;
+    const next: Task = { ...task, aging: { nudges, lastNudgedAt: at, reason }, history: [...task.history, { at, by: AGING_ACTOR, note: `nudge ${nudges}/${TASK_NUDGES_BEFORE_ARCHIVE}: ${reason}` }].slice(-HISTORY_LIMIT) };
+    this.tasks.set(id, next);
+    this.append({ kind: "task", task: next });
+    for (const listener of this.listeners) listener(next);
+    return this.get(id)!;
   }
 
   /**

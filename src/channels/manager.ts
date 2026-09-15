@@ -956,19 +956,6 @@ ${input.options.map(option => `· ${option}`).join("\n")}`
   }
 
   /**
-   * One line to whoever last drove this agent from a chat, in the thread they drove it
-   * from. For the host to say what it did on a person's behalf — a question that expired
-   * and went to its default (INV-526). Nothing when the agent was never driven from a chat.
-   */
-  tellAsker(agentId: string, text: string): string | undefined {
-    const asker = this.lastAsker.get(agentId);
-    if (asker === undefined) return undefined;
-    const push = asker.chatKey !== undefined && asker.adapter.sendToChat !== undefined ? asker.adapter.sendToChat(asker.chatKey, text) : asker.adapter.send(asker.identity, text);
-    void push.catch(() => {});
-    return asker.identity;
-  }
-
-  /**
    * Pushes a pending approval to whoever last drove this agent from a chat, and
    * remembers it so a one-word reply from them answers it. Nothing when the agent was
    * not driven from a channel — the web page covers that.
@@ -1093,19 +1080,31 @@ ${input.options.map(option => `· ${option}`).join("\n")}`
   }
 
   pushToChat(chatKey: string, text: string): Promise<void> {
+    return this.tryPushToChat(chatKey, text).then(() => undefined);
+  }
+
+  /**
+   * The same push, with the answer to "did anybody get it" (INV-530).
+   *
+   * `pushToChat` resolves whatever happens — a replaced channel, an unconfigured
+   * adapter, a vendor error are all logged and swallowed, because a digest that cannot
+   * be delivered must not take the process down with it. But a caller that *counts*
+   * deliveries needs the difference: two ageing nudges that went nowhere used to archive
+   * the work as unanswered. Undelivered is not silence.
+   */
+  tryPushToChat(chatKey: string, text: string): Promise<{ delivered: boolean; why?: string }> {
     if ((this.deps.incarnationOf?.(chatKey) ?? 1) !== 1) {
-      this.deps.log(
-        `channel: dead letter for ${chatKey} — its channel was replaced, and an ` +
-          `unstamped address cannot prove it means the current tenant. Dropped.`
-      );
-      return Promise.resolve();
+      const why = `dead letter for ${chatKey} — its channel was replaced, and an unstamped address cannot prove it means the current tenant. Dropped.`;
+      this.deps.log(`channel: ${why}`);
+      return Promise.resolve({ delivered: false, why });
     }
     const adapter = this.adapters.find(a => chatKey.startsWith(`${a.name}:`));
     if (adapter?.sendToChat === undefined) {
       // Not an error to ignore: a digest, a rescue notice or a late answer was addressed
       // to a chat whose channel is no longer configured, and it is going nowhere.
-      this.deps.log(`channel: nothing can send to ${chatKey}; message dropped`);
-      return Promise.resolve();
+      const why = `nothing can send to ${chatKey}; message dropped`;
+      this.deps.log(`channel: ${why}`);
+      return Promise.resolve({ delivered: false, why });
     }
     return adapter
       .sendToChat(chatKey, text)
@@ -1117,11 +1116,11 @@ ${input.options.map(option => `· ${option}`).join("\n")}`
           adapter.sendToChat === undefined ? Promise.resolve() : adapter.sendToChat(chatKey, line)
         )
       )
+      .then(() => ({ delivered: true }))
       .catch((error: unknown) => {
-        this.deps.log(
-          `channel ${adapter.name}: could not send to ${chatKey} — ` +
-            `${error instanceof Error ? error.message : String(error)}`
-        );
+        const why = `could not send to ${chatKey} — ${error instanceof Error ? error.message : String(error)}`;
+        this.deps.log(`channel ${adapter.name}: ${why}`);
+        return { delivered: false, why };
       });
   }
 
