@@ -41,7 +41,7 @@ import { APP_HTML, LOGIN_HTML } from "./app-html.ts";
 import {
   authorize,
   callerOf,
-  COOKIE_NAME,
+  type AuthDecision,
   isLoopback,
   mayDrive,
   parseCookies,
@@ -55,7 +55,6 @@ import {
   SESSION_COOKIE,
   sessionCookie,
   sessionKey,
-  SESSION_MAX_AGE_SECONDS,
 } from "./session.ts";
 
 /**
@@ -2337,6 +2336,29 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
   let sessionSecret = "";
 
   /**
+   * Who may be served at all: the installation token, or a person's own session.
+   *
+   * The token used to be the only answer, which made signing in a way of *getting* the
+   * token: both login paths handed out `agentbox_ui=<token>` beside the session cookie,
+   * so a viewer's browser held the installation's full-power credential and needed only
+   * to send it without the session cookie to be served as the unnamed owner. Roles were
+   * enforced (`refused`) but only on requests that still carried the name.
+   *
+   * Now a session authenticates on its own: signed by a key derived from the token, so
+   * rotating the token still ends every session, and only for an identity the roster
+   * still knows — a person removed from the roster stops being served on their next
+   * request rather than at the end of their cookie's month. The token remains what it
+   * always was for scripts, the CLI and a fresh single-person install.
+   */
+  const admit = (request: { authorization?: string; cookie?: string; query?: string | null }): AuthDecision => {
+    const byToken = authorize({ token, host }, request);
+    if (byToken.allow) return byToken;
+    const who = readSession(parseCookies(request.cookie).get(SESSION_COOKIE), sessionSecret);
+    if (who === undefined || !principals.isKnown(who)) return byToken;
+    return { allow: true, reason: "token" };
+  };
+
+  /**
    * What an outside agent may do here, and nothing more.
    *
    * Narrow on purpose, and the narrowness is the product: a persistent computer with a
@@ -2617,16 +2639,10 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
         log(`web login refused: ${identity} signed in via ${channelId} but is not linked`);
         return;
       }
-      const admit = [
-        ...(token !== undefined && token !== ""
-          ? [
-              `${COOKIE_NAME}=${encodeURIComponent(token)}; Path=/; ` +
-                `Max-Age=${SESSION_MAX_AGE_SECONDS}; HttpOnly; SameSite=Lax`,
-            ]
-          : []),
-        sessionCookie(identity, sessionSecret),
-      ];
-      res.writeHead(302, { "set-cookie": admit, location: pending.next });
+      // The session, and only the session: what this browser gets is a credential issued
+      // to *this person*, not the installation's token (which is what it used to be
+      // handed, full power and all).
+      res.writeHead(302, { "set-cookie": [sessionCookie(identity, sessionSecret)], location: pending.next });
       res.end();
       log(`web login: ${identity} via feishu door ${channelId} (${principals.resolve(identity).name})`);
     } catch (error) {
@@ -2641,14 +2657,11 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
       const url = new URL(req.url ?? "/", "http://localhost");
       const route = `${req.method} ${url.pathname}`;
 
-      const decision = authorize(
-        { token, host },
-        {
-          authorization: req.headers.authorization,
-          cookie: req.headers.cookie,
-          query: url.searchParams.get("token"),
-        }
-      );
+      const decision = admit({
+        authorization: req.headers.authorization,
+        cookie: req.headers.cookie,
+        query: url.searchParams.get("token"),
+      });
       // The door itself is before the gate, and must be: a person holding an invite
       // code has no token yet, and a sign-in page that requires being signed in is a
       // locked door with the key inside. These two routes are the only exemption, and
@@ -3180,15 +3193,7 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
           // browser may reach the installation at all, the session says who it is. The
           // code delivers the first and mints the second; what the person may then *do*
           // is their roster role, checked on every request that changes something.
-          const admit = [
-            ...(token !== undefined
-              ? [
-                  `${COOKIE_NAME}=${encodeURIComponent(token)}; Path=/; ` +
-                    `Max-Age=${SESSION_MAX_AGE_SECONDS}; HttpOnly; SameSite=Lax`,
-                ]
-              : []),
-            sessionCookie(identity, sessionSecret),
-          ];
+          const admit = [sessionCookie(identity, sessionSecret)];
           if (existing !== undefined) {
             // A code made for somebody already known links this browser to them: same
             // human, second surface, one bill.
@@ -5597,10 +5602,7 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
     const [pathname, query] = raw.split("?");
     // The RFB socket carries the screen, so it needs the same check. A browser sends the
     // cookie on an upgrade but cannot set a header, which is why the cookie exists.
-    const upgradeDecision = authorize(
-      { token, host },
-      { authorization: req.headers.authorization, cookie: req.headers.cookie }
-    );
+    const upgradeDecision = admit({ authorization: req.headers.authorization, cookie: req.headers.cookie });
     if (!upgradeDecision.allow) {
       clientSocket.end("HTTP/1.1 401 Unauthorized\r\n\r\n");
       return;
