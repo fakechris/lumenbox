@@ -45,6 +45,7 @@ import {
   consentFallbackText,
   accepted,
   filesSaved,
+  questionTerms,
   questionText,
   steered,
 } from "./strings.ts";
@@ -906,6 +907,9 @@ export class ChannelManager {
     agentName: string;
     question: string;
     options?: string[];
+    /** What the agent does with no answer, and by when — said on the card (INV-533). */
+    fallback?: string;
+    expiresAt?: number;
   }): string | undefined {
     const asker = this.lastAsker.get(input.agentId);
     if (asker === undefined) return undefined;
@@ -914,6 +918,10 @@ export class ChannelManager {
     // fresh card titled with the answer ("附件刚上传完 · 已完成"), which is noise wearing
     // a task's clothes. One-shot: only the immediately next message counts.
     this.awaitingAnswer.set(asker.identity, { question: input.question, at: Date.now() });
+    // What happens if they say nothing, on the card rather than in a design document
+    // (INV-533): a default nobody was told about is not a default they agreed to, and
+    // "answer by when" is the part that makes a question answerable at all.
+    const terms = questionTerms(input.fallback, input.expiresAt);
     // Buttons where the wire has them: the person answers a choice with one tap, and the
     // press goes through the same door as a typed reply. Words keep working either way.
     if (
@@ -926,7 +934,7 @@ export class ChannelManager {
           asker.identity,
           {
             agentName: input.agentName,
-            question: input.question,
+            question: `${input.question}${terms}`,
             options: input.options,
           },
           asker.chatKey
@@ -942,7 +950,7 @@ export class ChannelManager {
 
 ${input.options.map(option => `· ${option}`).join("\n")}`
         : "";
-    const text = questionText(input.agentName, input.question, choices);
+    const text = questionText(input.agentName, `${input.question}${terms}`, choices);
     // Into the thread that asked, where the adapter can address one: a question with
     // no surrounding context is a question about everything at once.
     const push =

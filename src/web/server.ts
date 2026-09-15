@@ -463,7 +463,7 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
   const connectCodes = new ConnectCodeStore(join(agentboxHome(), "connect.json"), registry.box.id);
   // Questions that expire (INV-526): every AskUser is watched; unanswered past its window,
   // the agent is woken to proceed on its default or to decide, and the chat is told.
-  const questions = new QuestionWatch();
+  const questions = new QuestionWatch(join(agentboxHome(), "questions.jsonl"));
 
   // Channel task cards listen here while their ask is in flight: each listener is a
   // narrow filter on (agent, conversation), added before the prompt and removed after
@@ -518,15 +518,20 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
         ...(input.fallback !== undefined ? { fallback: input.fallback } : {}),
         ...(input.conversation !== undefined ? { conversation: input.conversation } : {}),
       });
-      const where = chats?.askQuestion(input);
-      questions.ask({
+      // Watched first, so the card can say what the watch will do and when (INV-533);
+      // then put to the person, under the identity it was put to — only their reply
+      // answers it. A question from the page names nobody, and any voice in that
+      // conversation is the one that was asked.
+      const watched = questions.ask({
         agentId: input.agentId,
         agentName: input.agentName,
         conversation: input.conversation ?? "main",
         question: input.question,
         ...(input.fallback !== undefined ? { fallback: input.fallback } : {}),
         ...(input.expiresInMinutes !== undefined ? { ttlMs: input.expiresInMinutes * 60_000 } : {}),
-      });
+      }).question;
+      const where = chats?.askQuestion({ ...input, expiresAt: watched.expiresAt });
+      if (where !== undefined) questions.setAsker(watched.id, where);
       // The page is always a place an answer can come from, so a question is never
       // undeliverable while somebody could be looking at it.
       return where ?? "in the app";
@@ -1034,6 +1039,11 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
         }
       }
       const principal = principals.resolve(identity).id;
+      // This person speaking is the answer to whatever this agent asked them (INV-533).
+      // Not "somebody spoke in the room": in a group, a colleague's unrelated message
+      // used to clear a question put to someone else, and the agent proceeded as though
+      // it had been answered.
+      questions.noteReply(agent.id, identity);
 
       // Made before the turn, because the prompt states the path as a fact — "its
       // directory on the box is X/" — while the directory was created lazily, on the first
@@ -1703,16 +1713,19 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
   // conversation after the ask (the transcript says); otherwise the agent is woken with
   // the default or the skip, the chat hears one line, and the ledger keeps the verdict.
   const questionTimer = setInterval(() => {
+    // Consulted only for a question nobody was named in: a page question, answered by
+    // whoever is at the page. Everything asked of a person is settled by that person
+    // speaking, which the door reports as it happens (INV-533).
     const answeredSince = (q: { agentId: string; conversation: string; askedAt: number }): boolean => {
       if (!registry.has(q.agentId)) return true;
       const entries = registry.readTranscript(q.agentId, q.conversation === "main" ? undefined : q.conversation) as { role?: string; kind?: string; text?: unknown; at?: string }[];
       return entries.some(entry => entry.role === "user" && entry.kind === undefined && typeof entry.text === "string" && entry.at !== undefined && Date.parse(entry.at) > q.askedAt);
     };
     for (const expiry of questions.sweep(answeredSince)) {
-      if (expiry.verdict === "answered") continue;
+      if (expiry.verdict === "answered" || expiry.verdict === "superseded") continue;
       const { question } = expiry;
       log(`question: ${question.agentName}'s "${question.question.slice(0, 60)}" expired unanswered → ${expiry.verdict}`);
-      appendLine(join(agentboxHome(), "questions.jsonl"), JSON.stringify({ at: new Date().toISOString(), agentId: question.agentId, conversation: question.conversation, question: question.question, askedAt: new Date(question.askedAt).toISOString(), verdict: expiry.verdict, ...(question.fallback !== undefined ? { fallback: question.fallback } : {}) }));
+
       // The line goes back to the room that asked, never to "whoever drove this agent
       // last": a question put in one group and answered by default in another hands one
       // room's decision to a different set of people (INV-530). A question from the web

@@ -123,6 +123,20 @@ export function questionText(agentName: string, question: string, choices: strin
   return `${agentName || TEAM} 有个问题要先问你:\n${question}${choices}\n\n直接在这里回复,它就接着干。`;
 }
 
+/**
+ * 到期会发生什么,写在问题下面 (INV-533)。
+ *
+ * 默认值和截止时间以前只存在宿主内存里:到点之后 bot 说"按默认走了",而被问的人从未
+ * 被告知有这么一个默认、也不知道有个钟在走。事先说好,才谈得上"沉默=按默认"。
+ */
+export function questionTerms(fallback: string | undefined, expiresAt: number | undefined): string {
+  if (expiresAt === undefined) return fallback === undefined ? "" : `\n\n(没回复的话就按这个走:${fallback})`;
+  const when = new Date(expiresAt).toLocaleString("zh-CN", { hour12: false, month: "numeric", day: "numeric", hour: "2-digit", minute: "2-digit" });
+  return fallback === undefined
+    ? `\n\n(${when} 前没回复,它就自己定,并说明是怎么定的)`
+    : `\n\n(${when} 前没回复,就按这个走:${fallback})`;
+}
+
 // ── the running task:停 与改 ──────────────────────────────────────────────────
 
 export const STOPPING = "好,叫停了。当前这一步做完就停。";
