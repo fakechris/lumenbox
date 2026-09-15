@@ -162,3 +162,23 @@ customer — as if it produced the latter.
 - **Interaction with steering.** A person redirects the work mid-task ("只要 Q3"). The
   standard was authored from the original request. What updates it, who, and does an
   amended standard preserve the append-only property or quietly reset it?
+
+
+## The board does not let work sit (INV-527, INV-529 — 2026-09-14)
+
+From the weekly-retro review: four review tasks sat for one to two weeks, and the bot
+left t12 open because closing was "the user's call". Two rules now run on the host, hourly:
+
+- **Ageing.** A task may carry `due` (a date or an instant). A live task past its due
+  date, or with no movement for seven days, gets its requester nudged where the task
+  lives — "close / downgrade / continue?" — at most once per 48 hours; movement by anyone
+  resets the count; two nudges with no movement archive it as `dropped`, with the history
+  saying why, and the chat hears one line. A proposal awaiting commit is never nudged.
+- **Close proposals.** An assignee (a bot included) may propose closing with a reason it
+  can defend; the requester has 48 hours to object, from the board ("Keep open") or by
+  moving the task; silence closes it as `dropped`, and the closing says whose proposal it
+  was. The requester cannot propose — they drop directly.
+
+Both are appends on the same task record and survive a restart. `Tasks` gained `due`
+and `propose_close`; `/api/tasks/update` takes `due`; `/api/tasks/propose-close` and
+`/api/tasks/oppose-close`; the board shows due / overdue / nudged / close-proposed chips.

@@ -1357,12 +1357,14 @@ export function buildTools(
         properties: {
           action: {
             type: "string",
-            enum: ["create", "take", "update", "list"],
+            enum: ["create", "take", "update", "list", "propose_close"],
             description:
               "create a task; take one (assigns it to you, status doing); update one's " +
               "status/note/assignee; list the board.",
           },
-          id: { type: "string", description: "The task id, e.g. \"t12\". For take and update." },
+          id: { type: "string", description: "The task id, e.g. \"t12\". For take, update and propose_close." },
+          due: { type: "string", description: "For create or update: when it is due, as YYYY-MM-DD or an ISO instant. A task past its due date nudges the requester; two nudges with no movement archive it." },
+          reason: { type: "string", description: "For propose_close: why this task should be closed, in one sentence the requester can read. They have two days to object; their silence closes it." },
           title: { type: "string", description: "For create: one line of what is to be done." },
           description: { type: "string", description: "For create: details a stranger would need." },
           status: {
@@ -4144,10 +4146,22 @@ export async function dispatchTool(
           ...(context.conversation !== undefined ? { conversation: context.conversation } : {}),
           ...(contract !== undefined ? { contract } : {}),
           ...(propose ? { proposedBy: context.agent.id } : {}),
+          ...(typeof input.due === "string" && input.due.trim() !== "" ? { due: input.due } : {}),
         });
         if (created === undefined) return { text: "A task needs a title.", isError: true };
         const told = tellAssignee(context, created.id, created.title, assigneeId);
         return { text: `Created ${describeTask(created, nameOf)}.${told}` };
+      }
+
+      if (action === "propose_close") {
+        const proposal = board.proposeClose(String(input.id ?? ""), context.agent.id, String(input.reason ?? ""));
+        if ("refused" in proposal) return { text: proposal.refused, isError: true };
+        const decideBy = proposal.task.closeProposal?.decideBy ?? "";
+        return {
+          text:
+            `Proposed closing ${proposal.task.id}: ${proposal.task.closeProposal?.reason}. ${nameOf(proposal.task.requester)} has until ${decideBy} to object; ` +
+            "with no objection it closes by itself. Do not wait on it and do not ask again.",
+        };
       }
 
       if (action === "take") {
@@ -4202,6 +4216,7 @@ export async function dispatchTool(
           String(input.id ?? ""),
           {
             ...(isTaskStatus(status) ? { status } : {}),
+            ...(typeof input.due === "string" && input.due.trim() !== "" ? { due: input.due } : {}),
             ...(checked.length > 0 ? { checked } : {}),
             ...(typeof input.note === "string" && input.note.trim() !== ""
               ? { note: input.note }
