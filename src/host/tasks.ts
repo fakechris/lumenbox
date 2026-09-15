@@ -142,7 +142,7 @@ export interface Task {
    * An assignee's proposal to close (INV-529): the requester has until `decideBy` to
    * object; silence closes it, and the closing says whose proposal it was.
    */
-  closeProposal?: { by: string; at: string; reason: string; decideBy: string };
+  closeProposal?: { by: string; at: string; reason: string; decideBy: string; saw?: string };
   createdAt: string;
   updatedAt: string;
   history: TaskChange[];
@@ -164,6 +164,19 @@ export type AgingEvent =
   | { kind: "closed"; task: Task; text: string };
 
 export const AGING_ACTOR = "aging";
+
+/** How long a task must have existed before its assignee may put a close clock on it. */
+export const CLOSE_PROPOSAL_MIN_AGE_MS = 24 * 3_600_000;
+
+/** What a close proposal was about: the fields whose change makes it a different question. */
+function fingerprint(task: Task): string {
+  return [task.title, task.status, task.due ?? "", task.assigneeId ?? "", task.reviewerId ?? "", task.description ?? ""].join("\u0000");
+}
+
+function describeAge(ms: number): string {
+  const hours = Math.round(ms / 3_600_000);
+  return hours < 2 ? `${Math.max(1, Math.round(ms / 60_000))} minutes` : `${hours} hours`;
+}
 
 /**
  * How much of the request a task keeps, and what it says when it kept less.
@@ -423,6 +436,16 @@ export class TaskStore {
       coerced =
         `This task names ${task.reviewerId} as its reviewer, so its assignee cannot mark it ` +
         `done. It is now in review instead; ${task.reviewerId} accepting it is what done means.`;
+    } else if (status === "dropped" && by !== task.requester && by !== task.reviewerId && by !== AGING_ACTOR && !HARNESS_ACTORS.has(by)) {
+      // Dropping is ending the work too, and it was never gated (INV-531). docs/51 says
+      // "an agent does not archive; it proposes and the proposal is answerable" — but the
+      // only checked terminal status was `done`, so any agent could drop any task on the
+      // board, including one it had nothing to do with, with no proposal and no window to
+      // object. The assignee's way to end work it believes is moot is `propose_close`.
+      status = undefined;
+      coerced =
+        `Only ${task.requester}${task.reviewerId !== undefined ? ` or ${task.reviewerId}` : ""} can drop this task, so it has not moved. ` +
+        `If you believe it should close, propose it with a reason — ${task.requester} has ${Math.round(CLOSE_PROPOSAL_MS / 3_600_000)} hours to object and silence closes it.`;
     } else if (status === "done" && !belongsToTask) {
       // Rule two, new: somebody the task is not about cannot end it. Found by review —
       // chat acceptance is keyed by *conversation*, so any authorised person in a shared
@@ -572,11 +595,23 @@ export class TaskStore {
     if (task === undefined) return { refused: `No task ${id}.` };
     if (!isLive(task.status)) return { refused: `${id} is already ${task.status}.` };
     if (by === task.requester) return { refused: `${id} is your own request; drop it directly instead of proposing.` };
+    // Only the one doing the work may propose that it stop (INV-531). The first version
+    // refused the requester and nobody else, so any agent on the box could put a 48-hour
+    // clock on somebody else's task and close it by their silence.
+    if (!HARNESS_ACTORS.has(by) && by !== task.assigneeId) {
+      return { refused: `${id} is ${task.assigneeId === undefined ? "nobody's" : `${task.assigneeId}'s`} work; only whoever is doing it can propose closing it.` };
+    }
+    // And not before the requester has plausibly seen it. A card proposed for closing
+    // hours after it was asked for closes on the silence of somebody who has not looked
+    // at the board yet, which is not the silence this rule was written about.
+    if (now.getTime() - Date.parse(task.createdAt) < CLOSE_PROPOSAL_MIN_AGE_MS) {
+      return { refused: `${id} was only asked for ${describeAge(now.getTime() - Date.parse(task.createdAt))} ago; say what you found and let ${task.requester} answer before proposing to close it.` };
+    }
     const why = reason.trim().slice(0, 300);
     if (why === "") return { refused: "A close proposal needs a reason the requester can read." };
     const at = now.toISOString();
     const decideBy = new Date(now.getTime() + CLOSE_PROPOSAL_MS).toISOString();
-    const next: Task = { ...task, closeProposal: { by, at, reason: why, decideBy }, updatedAt: at, history: [...task.history, { at, by, note: `proposed to close: ${why} (closes ${decideBy} unless ${task.requester} objects)` }].slice(-HISTORY_LIMIT) };
+    const next: Task = { ...task, closeProposal: { by, at, reason: why, decideBy, saw: fingerprint(task) }, updatedAt: at, history: [...task.history, { at, by, note: `proposed to close: ${why} (closes ${decideBy} unless ${task.requester} objects)` }].slice(-HISTORY_LIMIT) };
     if (next.aging !== undefined) delete next.aging;
     this.tasks.set(id, next);
     this.append({ kind: "task", task: next });
@@ -605,6 +640,18 @@ export class TaskStore {
     for (const task of [...this.tasks.values()]) {
       const proposal = task.closeProposal;
       if (proposal === undefined || !isLive(task.status) || Date.parse(proposal.decideBy) > now.getTime()) continue;
+      // The proposal was about the task as it stood. Anyone moving the due date, handing
+      // it to somebody else, or rewriting what it is has answered it — by changing the
+      // question (INV-531). Only the requester's edits used to clear a proposal, so a
+      // reviewer pushing the date to next month still had it closed on the old clock.
+      if (proposal.saw !== undefined && proposal.saw !== fingerprint(task)) {
+        const at = now.toISOString();
+        const stale: Task = { ...task, updatedAt: at, history: [...task.history, { at, by: AGING_ACTOR, note: `close proposal dropped: ${task.id} changed after ${proposal.by} proposed it` }].slice(-HISTORY_LIMIT) };
+        delete stale.closeProposal;
+        this.tasks.set(task.id, stale);
+        this.append({ kind: "task", task: stale });
+        continue;
+      }
       const moved = this.update(task.id, { status: "dropped", note: `closed as ${proposal.by} proposed (${proposal.reason}); ${task.requester} did not object by ${proposal.decideBy}` }, AGING_ACTOR, undefined, now);
       if (moved === undefined) continue;
       const settled: Task = { ...moved.task };

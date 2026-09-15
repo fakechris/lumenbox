@@ -80,35 +80,70 @@ test("a close proposal closes by itself after the window, stays open when the re
   const dir = mkdtempSync(join(tmpdir(), "agentbox-tasks-close-"));
   try {
     const store = new TaskStore(join(dir, "tasks.jsonl"));
+    // A day must pass before an assignee may put a 48-hour clock on a request (INV-531).
+    const P = plus(25 * 3_600_000);
+    const after = (ms: number) => new Date(P.getTime() + ms);
     const t12 = store.create({ title: "t12 — old thread", requester: "chris", assigneeId: "bot", now: T0 })!;
     const t13 = store.create({ title: "t13", requester: "chris", assigneeId: "bot", now: T0 })!;
-    assert.deepEqual(store.proposeClose(t12.id, "chris", "done with it", T0), { refused: `${t12.id} is your own request; drop it directly instead of proposing.` });
-    assert.deepEqual(store.proposeClose(t12.id, "bot", "   ", T0), { refused: "A close proposal needs a reason the requester can read." });
-    const proposed = store.proposeClose(t12.id, "bot", "superseded by t77; nothing left to do", T0);
-    assert.ok("task" in proposed && proposed.task.closeProposal?.decideBy === new Date(T0.getTime() + CLOSE_PROPOSAL_MS).toISOString());
+    assert.deepEqual(store.proposeClose(t12.id, "chris", "done with it", P), { refused: `${t12.id} is your own request; drop it directly instead of proposing.` });
+    assert.deepEqual(store.proposeClose(t12.id, "mia", "looks stale to me", P), { refused: `${t12.id} is bot's work; only whoever is doing it can propose closing it.` });
+    assert.deepEqual(store.proposeClose(t12.id, "bot", "superseded", T0), { refused: `${t12.id} was only asked for 1 minutes ago; say what you found and let chris answer before proposing to close it.` });
+    assert.deepEqual(store.proposeClose(t12.id, "bot", "   ", P), { refused: "A close proposal needs a reason the requester can read." });
+    const proposed = store.proposeClose(t12.id, "bot", "superseded by t77; nothing left to do", P);
+    assert.ok("task" in proposed && proposed.task.closeProposal?.decideBy === new Date(P.getTime() + CLOSE_PROPOSAL_MS).toISOString());
     assert.match(store.get(t12.id)!.history.at(-1)!.note ?? "", /proposed to close: superseded by t77/);
-    store.proposeClose(t13.id, "bot", "duplicate of t12", T0);
+    store.proposeClose(t13.id, "bot", "duplicate of t12", P);
 
     // Before the window: nothing closes.
-    assert.deepEqual(store.settleCloseProposals(plus(3_600_000)), []);
+    assert.deepEqual(store.settleCloseProposals(after(3_600_000)), []);
     // The requester objects to t13: it stays, the proposal is gone.
     assert.deepEqual(store.opposeClose(t13.id, "mia"), { refused: "Only chris can object to closing t2." });
-    const kept = store.opposeClose(t13.id, "chris", "still needed", plus(7_200_000));
+    const kept = store.opposeClose(t13.id, "chris", "still needed", after(7_200_000));
     assert.ok("task" in kept && kept.task.closeProposal === undefined && kept.task.status === "open");
     assert.match(store.get(t13.id)!.history.at(-1)!.note ?? "", /objected to closing: still needed/);
 
     // After the window: t12 closes as proposed, and says whose proposal it was.
-    const closed = store.settleCloseProposals(plus(CLOSE_PROPOSAL_MS + 1));
+    const closed = store.settleCloseProposals(after(CLOSE_PROPOSAL_MS + 1));
     assert.deepEqual(closed.map(e => [e.kind, e.task.id]), [["closed", t12.id]]);
     assert.equal(store.get(t12.id)?.status, "dropped");
     assert.equal(store.get(t12.id)?.closeProposal, undefined);
     assert.match(closed[0]!.text, /closed as bot proposed: superseded by t77/);
-    assert.deepEqual(store.settleCloseProposals(plus(CLOSE_PROPOSAL_MS * 2)), [], "nothing closes twice");
+    assert.deepEqual(store.settleCloseProposals(after(CLOSE_PROPOSAL_MS * 2)), [], "nothing closes twice");
     // A move by the requester while a proposal is open is their answer to it.
     const t14 = store.create({ title: "t14", requester: "chris", assigneeId: "bot", now: T0 })!;
-    store.proposeClose(t14.id, "bot", "r", T0);
-    store.update(t14.id, { status: "doing" }, "chris", undefined, plus(1));
+    store.proposeClose(t14.id, "bot", "r", P);
+    store.update(t14.id, { status: "doing" }, "chris", undefined, after(1));
     assert.equal(store.get(t14.id)?.closeProposal, undefined);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("dropping is ending the work: only the requester or reviewer may, and a proposal about a task that changed does not settle (INV-531)", () => {
+  const dir = mkdtempSync(join(tmpdir(), "agentbox-tasks-terminal-"));
+  try {
+    const store = new TaskStore(join(dir, "tasks.jsonl"));
+    const P = plus(25 * 3_600_000);
+    const task = store.create({ title: "ship the delta", requester: "chris", assigneeId: "bot", reviewerId: "mia", now: T0 })!;
+
+    // An agent the task is not about cannot drop it; neither can the one doing it.
+    const byStranger = store.update(task.id, { status: "dropped" }, "enzo", undefined, P);
+    assert.equal(byStranger?.task.status, "open");
+    assert.match(byStranger?.coerced ?? "", /Only chris or mia can drop this task/);
+    assert.match(byStranger?.coerced ?? "", /propose it with a reason/);
+    assert.equal(store.update(task.id, { status: "dropped" }, "bot", undefined, P)?.task.status, "open");
+    // The requester, the reviewer, the board and the ageing sweep may.
+    assert.equal(store.update(task.id, { status: "dropped" }, "mia", undefined, P)?.task.status, "dropped");
+
+    // A proposal is about the task as it stood: a reviewer moving the due date answers it.
+    const other = store.create({ title: "answer Q1-Q5", requester: "chris", assigneeId: "bot", reviewerId: "mia", now: T0 })!;
+    store.proposeClose(other.id, "bot", "nobody replied in four weeks", P);
+    store.update(other.id, { due: "2026-10-31" }, "mia", undefined, new Date(P.getTime() + 3_600_000));
+    assert.ok(store.get(other.id)?.closeProposal !== undefined, "a reviewer's edit does not clear it outright");
+    assert.deepEqual(store.settleCloseProposals(new Date(P.getTime() + CLOSE_PROPOSAL_MS + 1)), [], "but it does not close on the old clock either");
+    assert.equal(store.get(other.id)?.status, "open");
+    assert.equal(store.get(other.id)?.closeProposal, undefined);
+    assert.match(store.get(other.id)!.history.at(-1)!.note ?? "", /close proposal dropped: .* changed after bot proposed it/);
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }

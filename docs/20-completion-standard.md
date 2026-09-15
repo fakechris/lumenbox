@@ -183,6 +183,19 @@ Both are appends on the same task record and survive a restart. `Tasks` gained `
 and `propose_close`; `/api/tasks/update` takes `due`; `/api/tasks/propose-close` and
 `/api/tasks/oppose-close`; the board shows due / overdue / nudged / close-proposed chips.
 
+**Who may end work, and what a proposal was about (INV-531 — 2026-09-14).** `done` was
+gated from the first day; `dropped` never was, so any agent could drop any task on the
+board — no proposal, no window to object, no reviewer. Now dropping is the requester's,
+the reviewer's, the board's or the ageing sweep's; an agent that believes work is moot
+proposes, with a reason, and the refusal says so. A close proposal is the assignee's
+only — the first version refused the requester and nobody else, so an unrelated agent
+could put a 48-hour clock on somebody else's task — and it cannot be put on a task
+younger than 24 hours: silence from a person who has not looked at the board yet is not
+the silence this rule is about. Finally a proposal remembers the task it was about
+(title, status, due, assignee, reviewer, description); if any of that changed before the
+window closes, the proposal is dropped with a history line instead of settling. A
+reviewer pushing the due date to next month used to leave the old clock running.
+
 **A nudge counts only once somebody got it (INV-530 — 2026-09-14).** `age()` proposes;
 `recordNudge` records, and the host calls it after the line was delivered. Two things
 made the first version archive work nobody was ever asked about: a task carries a
