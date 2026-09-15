@@ -1205,16 +1205,25 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
     // its note — a board that loses failed work answers "what needs somebody" wrong.
     // "停" from the chat is the web stop button: recorded, effective at the next round
     // boundary, cleared automatically when the person's next instruction starts a turn.
-    stop: agentName => {
+    stop: (agentName, identity) => {
       let agent: { id: string } | undefined;
       try {
         agent = agentName !== undefined ? registry.resolve(agentName) : registry.list()[0];
       } catch {
         agent = undefined;
       }
-      if (agent === undefined) return false;
+      if (agent === undefined) return "not-running";
+      // Stopping somebody's worker is entering their box (INV-538). The door already
+      // asked whether this person may drive *anything*; this is the other half, and it
+      // was missing — `stop` and `steer` reach the orchestrator without passing the
+      // membership check that `ask` makes, so a driver who is in no box of ours could
+      // halt another box's run from a shared room.
+      if (!mayEnterBox(registry.boxOf(agent.id), principals.resolve(identity).id)) {
+        log(`refused stop: ${identity} is not in ${registry.boxOf(agent.id).name}`);
+        return "refused";
+      }
       orchestrator.policy.stop(agent.id);
-      return true;
+      return "stopped";
     },
     // A mid-task message joins the running turn. Fire-and-forget on purpose: the bus's
     // own race rules (fixed in races.test.ts) make it steering for the running turn or
@@ -1226,7 +1235,12 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
       } catch {
         agent = undefined;
       }
-      if (agent === undefined) return;
+      if (agent === undefined) return "refused";
+      // The same box question as `stop` above: steering a running turn is driving it.
+      if (!mayEnterBox(registry.boxOf(agent.id), principals.resolve(identity).id)) {
+        log(`refused steer: ${identity} is not in ${registry.boxOf(agent.id).name}`);
+        return "refused";
+      }
       void orchestrator
         .prompt(
           agent.id,
@@ -1237,6 +1251,7 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
         .catch(error => {
           log(`steer failed: ${error instanceof Error ? error.message : String(error)}`);
         });
+      return "steered";
     },
     board: {
       open: input => {

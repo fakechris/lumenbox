@@ -1509,10 +1509,13 @@ test("one conversation runs one piece of work: mid-task words steer, 停 stops, 
         return "做完了";
       };
     })(),
-    steer: (_agent, text) => steers.push(text),
+    steer: (_agent, text) => {
+      steers.push(text);
+      return "steered" as const;
+    },
     stop: agentName => {
       stops.push(agentName);
-      return true;
+      return "stopped" as const;
     },
     board: {
       open: input => {
@@ -1571,7 +1574,10 @@ test("a message addressed to a different agent is parallel work, not steering", 
       }
       return "好";
     },
-    steer: (_agent, text) => steers.push(text),
+    steer: (_agent, text) => {
+      steers.push(text);
+      return "steered" as const;
+    },
     board: {
       open: input => {
         opened.push(`${input.agentName ?? "-"}:${input.title}`);
@@ -1977,4 +1983,46 @@ test("the reply streams into the task card on its own clock, and a blocked quest
   await started(second);
   await second.pushQuestionToChat("telegram:oc_9", { agentName: "Ada", question: "t3 stuck: which region?", options: ["us", "eu"] });
   assert.equal(JSON.stringify(questions), JSON.stringify([{ chatKey: "telegram:oc_9", options: ["us", "eu"] }]));
+});
+
+test("a refused stop says it is not yours, not that nothing is running (INV-538 follow-up)", async () => {
+  // Found by the adversarial review of docs/54: `stop` and `steer` never asked whose box
+  // the worker is in, and the manager could only answer STOPPING or NOTHING_RUNNING — so
+  // a refusal read as "you were mistaken, nothing is running", which is a lie about the
+  // state of somebody else's work.
+  const adapter = cardAdapter();
+  let release: () => void = () => {};
+  const manager = new ChannelManager({
+    mayDrive: () => true,
+    ask: (() => {
+      let first = true;
+      return async () => {
+        if (first) {
+          first = false;
+          await new Promise<void>(resolve => {
+            release = resolve;
+          });
+        }
+        return "做完了";
+      };
+    })(),
+    // What the host answers when the person is in no box of this worker's.
+    stop: () => "refused" as const,
+    steer: () => "refused" as const,
+    log: () => {},
+  });
+  manager.register(adapter, true, "test");
+  await started(manager);
+
+  const room = { identity: "feishu:ou_1", chatKey: "feishu:oc_room", senderLabel: "chris" };
+  await adapter.inject({ ...room, messageId: "s1", text: "把三百份报表汇总" });
+  await new Promise(resolve => setTimeout(resolve, 20));
+
+  const stopReply = await adapter.inject({ ...room, messageId: "s2", text: "停" });
+  assert.match(String(stopReply ?? ""), /box/, "the refusal names the box rather than claiming nothing is running");
+  const steerReply = await adapter.inject({ ...room, messageId: "s3", text: "改成只做 Q3" });
+  assert.match(String(steerReply ?? ""), /box/);
+
+  release();
+  await manager.idle();
 });

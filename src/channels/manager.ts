@@ -45,6 +45,7 @@ import {
   consentFallbackText,
   accepted,
   filesSaved,
+  notYours,
   questionTerms,
   questionText,
   steered,
@@ -385,13 +386,18 @@ export interface ChannelManagerDeps {
    * Stops the named agent's running turn at its next round boundary. Returns false when
    * there is nobody to stop. The web stop button's semantics, reachable by saying "停".
    */
-  stop?: (agentName: string | undefined) => boolean;
+  /**
+   * Stops a running turn for whoever asked. Takes the identity, because stopping another
+   * box's worker is entering that box (INV-538): the role gate above answers "may this
+   * person drive anything", and only the host can answer "may they drive *this*".
+   */
+  stop?: (agentName: string | undefined, identity: string) => "stopped" | "not-running" | "refused";
   /**
    * Hands a mid-task message to the running turn as steering, without opening a second
    * task. Fire-and-forget: the bus's own rules make it steering or the next turn,
    * exactly one of the two.
    */
-  steer?: (agentName: string | undefined, text: string, identity: string, conversationKey: string) => void;
+  steer?: (agentName: string | undefined, text: string, identity: string, conversationKey: string) => "steered" | "refused";
   /**
    * Runs one turn and returns what the agent said. `agentName` is undefined for the
    * default agent; unknown names should throw with a message worth relaying.
@@ -1370,12 +1376,14 @@ ${input.options.map(option => `· ${option}`).join("\n")}`
     if (running !== undefined) {
       const sameAgent = agentName === undefined || agentName === running.agentName;
       if (parseStopRequest(text)) {
-        const stopped = this.deps.stop?.(running.agentName) ?? false;
-        return stopped ? STOPPING : NOTHING_RUNNING;
+        const outcome = this.deps.stop?.(running.agentName, message.identity) ?? "not-running";
+        // Three answers, not two: refused is not "nothing is running", and telling
+        // somebody their stop worked when it did not is worse than refusing them.
+        return outcome === "stopped" ? STOPPING : outcome === "refused" ? notYours(running.agentName) : NOTHING_RUNNING;
       }
       if (sameAgent && this.deps.steer !== undefined) {
-        this.deps.steer(running.agentName, text, message.identity, conversationKey);
-        return steered(running.agentName);
+        const outcome = this.deps.steer(running.agentName, text, message.identity, conversationKey);
+        return outcome === "refused" ? notYours(running.agentName) : steered(running.agentName);
       }
     } else if (parseStopRequest(text)) {
       return NOTHING_RUNNING;
