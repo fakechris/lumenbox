@@ -37,6 +37,11 @@ quitting the window keeps the box running.
 
 ## 2. First run: the two things it asks for
 
+*The page also shows a four-step card — a box, your first agent, a door, your first piece
+of work — which disappears when all four are done and comes back from the `?` button. Each
+step names the command that does the same thing, for an installation running on a server
+where there is nothing to click (INV-542).*
+
 The Settings dialog opens by itself with a welcome note. It wants:
 
 1. **A provider and a key.** Pick one, paste the key, Save. Keys live in

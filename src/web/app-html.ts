@@ -1752,7 +1752,7 @@ function renderMemorySummary() {
     .then(function (data) {
       if (!data) return;
       var agents = data.agents || [];
-      if (!agents.length) { $("setmemstate").textContent = "No agents you can open have kept anything yet."; $("setmemsummary").innerHTML = ""; return; }
+      if (!agents.length) { $("setmemstate").textContent = "Nothing kept yet. An agent remembers what it is told to remember — this fills in as they work."; $("setmemsummary").innerHTML = ""; return; }
       $("setmemstate").textContent = "";
       var names = {};
       (data.boxes || []).forEach(function (b) { names[b.id] = b.name; });
@@ -2244,7 +2244,9 @@ function renderBoxes() {
           // Who the box is for, in the words the members set produces (docs/22 §5, INV-538).
           // Not free text: a label somebody types is a label that stops being true.
           '<div class="dim" style="font-size:11.5px;margin:2px 0 8px 16px">' + esc(b.membersLabel || "") + "</div>";
-      }).join("") || '<div class="dim">No boxes.</div>';
+      }).join("") ||
+        '<div class="dim" style="font-size:12.5px">No boxes yet. A box is the computer your agents work on — ' +
+        'create the Docker one with the button above, or <code class="mono">agentbox box up</code> in a terminal.</div>';
     })
     .catch(function () { $("setboxes").innerHTML = '<div class="dim">Could not read the boxes.</div>'; });
 }
@@ -6683,11 +6685,14 @@ function refreshSetup() {
   return fetch("/api/setup").then(function (r) { return r.json(); }).then(function (s) {
     var card = $("setupcard");
     if (!card) return;
+    // Each step also names the command that does the same thing (INV-542): an
+    // installation run on a server has no window to click in, and the person setting it
+    // up over ssh was reading a page that assumed a mouse.
     var steps = [
-      { done: s.box, head: "A computer for the agents", sub: "A box is a computer: desktop, files, shell, engines. Create the Docker box, or attach one.", act: "Set up a box", go: function () { openSettings("boxes"); } },
-      { done: s.agentTurn, head: "Your first agent", sub: "An agent lives in one box. Stamp one from the shelf — 设计 (Team designer) builds a team for you.", act: "Open templates", go: openShelf },
-      { done: s.door, head: "A door (optional)", sub: "Feishu, DingTalk or Telegram reach this box; this page is a door too.", act: "Connect a door", go: function () { openSettings("doors"); } },
-      { done: s.review, head: "First work", sub: "Say it in chat or add a task; it is done when it reaches review.", act: "Open tasks", go: function () { var t = $("tabtasks"); if (t) t.click(); } }
+      { done: s.box, head: "A computer for the agents", sub: "A box is a computer: desktop, files, shell, engines. Create the Docker box, or attach one.", act: "Set up a box", cli: "agentbox box up", go: function () { openSettings("boxes"); } },
+      { done: s.agentTurn, head: "Your first agent", sub: "An agent lives in one box. Stamp one from the shelf — 设计 (Team designer) builds a team for you.", act: "Open templates", cli: "agentbox agent new <name>", go: openShelf },
+      { done: s.door, head: "A door (optional)", sub: "Feishu, DingTalk or Telegram reach this box; this page is a door too.", act: "Connect a door", cli: "Settings → Doors (no CLI yet)", go: function () { openSettings("doors"); } },
+      { done: s.review, head: "First work", sub: "Say it in chat or add a task; it is done when it reaches review.", act: "Open tasks", cli: "agentbox chat <name> \"…\"", go: function () { var t = $("tabtasks"); if (t) t.click(); } }
     ];
     if (steps.every(function (x) { return x.done; }) && !guideForced) { card.style.display = "none"; return; }
     card.style.display = "";
@@ -6696,7 +6701,8 @@ function refreshSetup() {
       steps.map(function (x, i) {
         return '<div style="display:flex;gap:10px;align-items:center;padding:4px 0;font-size:12px">' +
           '<span style="width:16px;color:' + (x.done ? "var(--ok, #3fb950)" : "var(--muted)") + '">' + (x.done ? "✓" : String(i + 1)) + "</span>" +
-          '<div style="flex:1"><b>' + esc(x.head) + "</b> <span class=\"dim\">" + esc(x.sub) + "</span></div>" +
+          '<div style="flex:1"><b>' + esc(x.head) + "</b> <span class=\"dim\">" + esc(x.sub) + "</span>" +
+            (x.cli ? ' <code class="mono dim" style="font-size:11px">' + esc(x.cli) + "</code>" : "") + "</div>" +
           '<button class="btn sm' + (x.done ? " ghost" : "") + '" data-setup="' + i + '">' + esc(x.act) + "</button>" +
         "</div>";
       }).join("") + "</div>";
