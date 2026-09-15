@@ -116,9 +116,12 @@ Electron 壳、MCP face、webhook、模板与 bundle 的装卸、跟进 rails（
 
 1. **首次运行仍是 CLI 与 web 的混合**。docs/37 把路径写清楚了，但装 box、连门、建第一个 agent
    分散在三处，没有一条"下一步做什么"的主线。**这是产品面最贵的一条。**
-2. **没有"我"的视角**。今天的页面是"系统有什么"，不是"我该管什么"。跟进 rails 刚好把数据备齐了：
-   我欠的（我被问的问题、我是 requester 的过期卡、等我裁决的关闭提案）、别人欠我的。
-   一个 `/api/attention?me` 就能渲染——这也是 docs/51 §3.3 缩小后留下的那块。
+2. ~~**没有"我"的视角**~~ **已做（INV-543）**：`GET /api/attention` 按当前 session 的 principal
+   投影出两张表——**waiting on you**（问到我头上的问题、我是 requester 的关闭提案、等我验收的
+   review、我要的卡被敲过）与 **you are waiting on**（我要的、还在别人手上的），按截止时间从近
+   到远排；任务板上方一块面板，每条带 Keep open / Close / Not now / Answer，走的都是已有的路由；
+   两张都空时说"没有挂着的东西"。安装自身的凭证看到全部——它能处理全部。
+   这是 docs/51 §3.3 缩小之后留下的、面向人的那半。
 3. **语言两张皮**：后端对人说中文（`channels/strings.ts`），web UI 是英文。同一个人在飞书里
    看到中文卡片，点进 web 看到英文按钮。Octop 的做法（bundle + domain + locale 解析 + 前后端
    key 对齐测试）是成熟解，抄结构不抄实现。
