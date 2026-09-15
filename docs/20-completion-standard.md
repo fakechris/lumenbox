@@ -183,6 +183,20 @@ Both are appends on the same task record and survive a restart. `Tasks` gained `
 and `propose_close`; `/api/tasks/update` takes `due`; `/api/tasks/propose-close` and
 `/api/tasks/oppose-close`; the board shows due / overdue / nudged / close-proposed chips.
 
+**A question is put to somebody, and outlives the process (INV-533 — 2026-09-14).** The
+first watch called a question answered when *anyone* spoke in that conversation after it
+was asked — so in a group, a colleague's message about lunch answered "which account do
+I bill?", and the agent proceeded as though it had been told. Now a question carries an
+id and the identity it was put to; only that person's reply settles it, reported by the
+door as their message arrives. A question asked from the page names nobody, and there
+any voice in that conversation is the one that was asked. A second question in the same
+conversation supersedes the first with a verdict on the ledger instead of vanishing.
+The ledger (`~/.agentbox/questions.jsonl`) now records the ask as well as the settlement
+and is replayed on start, so a restart no longer loses the question, its default and its
+clock — which is the same silence the watch exists to end. And the card says the terms:
+"若 18:00 前没回复,就按这个走:…", because a default the person was never told about is
+not a default they let stand.
+
 **Waiting is not abandonment (INV-532 — 2026-09-14).** The sweep archived anything that
 had not moved, and "has not moved" is also what a blocked task, a task in somebody's
 review queue, a supplier who answers at month end, and a requester on leave all look
