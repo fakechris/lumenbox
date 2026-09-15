@@ -183,7 +183,15 @@ export interface OrchestratorOptions {
    * `deliver:` is inert, which is what a CLI run and a test want — the automation still
    * runs, it just has nowhere to speak.
    */
-  deliverToChat?: (chatKey: string, text: string) => Promise<void>;
+  /**
+   * A scheduled run's report, into the chat the skill named.
+   *
+   * `fromAgentId` says which worker is speaking, so the host can refuse a delivery into
+   * a chat that belongs to a different box (INV-541): a routine in one box reporting
+   * into another box's room is the cross-box leak Octop closes with an ownership check
+   * on the session (`delivery.py:72-75`), and we had nothing.
+   */
+  deliverToChat?: (chatKey: string, text: string, fromAgentId?: string) => Promise<void>;
 }
 
 /** A newer version of an already-imported template arrived without `update` (INV-411). */
@@ -533,7 +541,7 @@ export class Orchestrator {
       // Silence is not delivered. A skill that had nothing to report should not put an
       // empty message in a room every morning — the absence is the report.
       if (said === "") return;
-      await this.options.deliverToChat?.(deliver, said);
+      await this.options.deliverToChat?.(deliver, said, agentId);
       // Commitments in the report are checked against the board and the scheduler
       // (INV-528): what nothing holds is said in the same chat, and the agent is cued
       // to create the card and the reminder now, in a turn of its own.
@@ -553,12 +561,12 @@ export class Orchestrator {
         return;
       }
       console.error(`[commitments] ${slug}: ${checks.filter(c => c.missing.length > 0).length} of ${checks.length} commitment(s) not held`);
-      await this.options.deliverToChat?.(deliver, gaps.toChat);
+      await this.options.deliverToChat?.(deliver, gaps.toChat, agentId);
       const mark = this.registry.readTranscript(agentId, conversation).length;
       await this.prompt(agent, gaps.cue, undefined, { steerable: false, lane: "background", synthetic: true, conversation });
       await this.settle();
       const created = this.replySince(agentId, mark, conversation).trim();
-      if (created !== "") await this.options.deliverToChat?.(deliver, created);
+      if (created !== "") await this.options.deliverToChat?.(deliver, created, agentId);
       // What the cue actually produced, checked rather than believed (INV-534): the agent
       // saying "created" is a sentence, and the ledger is about what exists. Whatever is
       // still unheld is said once — not cued again, because a second cue that produced
@@ -566,7 +574,7 @@ export class Orchestrator {
       const after = reconcileCommitments(commitments, this.tasks?.list() ?? [], (await this.scheduler.status().catch(() => [])).map(entry => ({ slug: entry.slug, name: entry.name, paused: entry.paused, ...(entry.nextRun !== undefined && entry.kind === "once" ? { at: Date.parse(entry.nextRun) } : {}) })), madeAt, bindings);
       this.commitments.record(this.commitments.withCarried({ at: new Date(madeAt).toISOString(), slug, agentId, commitments, checks: after }, isDone));
       const stillOpen = describeGaps(after);
-      if (stillOpen.toChat !== undefined) await this.options.deliverToChat?.(deliver, `Still nothing holding these after that turn:\n${stillOpen.toChat.split("\n").slice(1).join("\n")}`);
+      if (stillOpen.toChat !== undefined) await this.options.deliverToChat?.(deliver, `Still nothing holding these after that turn:\n${stillOpen.toChat.split("\n").slice(1).join("\n")}`, agentId);
     },
     // A waiting webhook: the same turn, but the caller is told what came of it.
     runAndSay: async (agent, prompt) => {

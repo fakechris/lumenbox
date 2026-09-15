@@ -91,9 +91,13 @@ session；`admit()` 把"有效 session 且 roster 仍认识这个人"当作一�
 - *验收*：同一个 box 里两个 agent 对同一 secret、同一 `RunOnHost` 动作得到**逐字节相同**的决定，
   用矩阵测试钉住；迁移对旧 grant 是 fail-closed（读不懂就重新问）。
 
-**M4 · 投递与例程归属**
-- 例程/定时/webhook 投递前校验：目标会话属于这个 box，且发起人有权驱动它（Octop 那道门的等价物）。
-- *验收*：把一个 box 的例程 deliver 指到另一个 box 的群，启动时报错而不是投出去。
+**M4 · 投递与例程归属（已做，PR 见下）**
+- `deliverToChat` 现在带上是谁在说（`fromAgentId`）：**别的 box 被人驱动过的群，就是别的 box 的房间**，
+  这个 box 的例程报进去会被拒绝并留一行日志。规则刻意比"同 box 或不许"窄：**没人驱动过的群是没有主人的**
+  ——skill 文件里指一个 bot 还没被搭过话的房间是正常配置，不该拦；两个 box 都在的群也不是边界。
+- 这是 Octop `delivery.py:72-75`（`session.user_id != command.user_id` 直接抛错）在我们模型里的等价物。
+- **仍未做**：arm 时（而不是投递时）就报错——需要 schedule 在装载时知道目标房间归谁，等 §3 的
+  chat↔box 绑定有了再做；今天是运行期拒绝 + 日志。
 
 **M5 · 审计与降级**
 - web 侧每个改变状态的动作都带 principal（今天有一部分记成 "web"）。
