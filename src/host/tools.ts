@@ -2940,10 +2940,13 @@ export async function dispatchTool(
           agentId: context.agent.id,
           agentName: context.agent.profile.name,
           ...(context.caller?.userId !== undefined ? { principalId: context.caller.userId } : {}),
-          // The box's bundles grant it (INV-420), or — until migrated — the agent's scope.
-          scopeGrants:
-            context.bundles?.grantsSecret(boxOfAgent(context), secretId) === true ||
-            context.scopes?.grantsSecret(context.agent.profile.scopeId, secretId) === true,
+          // The box's bundles grant it (INV-420/INV-539). An agent's own scope is not
+          // consulted any more: two agents in one box differing in what they could reach
+          // is docs/22 §0 being false in the running system, and the honest migration is
+          // fail-closed — `agentbox bundle migrate` turns scopes into the box's bundles,
+          // and until it has run the secret is refused rather than quietly granted to one
+          // agent and not its neighbour.
+          scopeGrants: context.bundles?.grantsSecret(boxOfAgent(context), secretId) === true,
         });
         if (value === undefined) refusedSecrets.push(secretId);
         else secretEnv[secretId] = value;
@@ -3399,10 +3402,9 @@ export async function dispatchTool(
         agentId: context.agent.id,
         agentName: context.agent.profile.name,
         ...(context.caller?.userId !== undefined ? { principalId: context.caller.userId } : {}),
-        // The box's bundles grant it (INV-420), or — until migrated — the agent's scope.
-        scopeGrants:
-          context.bundles?.grantsSecret(boxOfAgent(context), secretId) === true ||
-          context.scopes?.grantsSecret(context.agent.profile.scopeId, secretId) === true,
+        // The box's bundles grant it (INV-420/INV-539); an agent's own scope is not a
+        // subject of authority any more. See the RunOnHost path for the whole reason.
+        scopeGrants: context.bundles?.grantsSecret(boxOfAgent(context), secretId) === true,
       });
       if (value === undefined) {
         return {

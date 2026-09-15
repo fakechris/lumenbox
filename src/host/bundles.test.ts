@@ -153,3 +153,25 @@ test("a box's bundles travel as refs (ids, never values), and a person attaches 
     cleanup();
   }
 });
+
+test("a secret is granted to a box, and an agent's own scope is not a subject any more (INV-539)", () => {
+  // docs/22 §3's second live violation: `RunOnHost` resolved a secret off the calling
+  // agent's `scopeId`, so two agents in one box demonstrably differed in secret reach.
+  // The subject is the box; a scope that used to grant it grants nothing until
+  // `agentbox bundle migrate` has turned it into the box's bundle — fail-closed, because
+  // the alternative is one agent quietly holding what its neighbour cannot.
+  const { store, cleanup } = tempStore();
+  try {
+    store.save({
+      bundles: [{ id: "vendor", name: "Vendor work", secretIds: ["VENDOR_KEY"] }],
+      defaults: [],
+      boxes: { "Alpha box": ["vendor"] },
+    });
+    assert.ok(store.grantsSecret(alpha, "VENDOR_KEY"), "the box's bundle grants it");
+    assert.equal(store.grantsSecret(beta, "VENDOR_KEY"), false, "and grants it to that box only");
+    // Whichever agent in Alpha asks, the answer is the same: there is no argument through
+    // which two agents in one box could differ, which is the whole of the fix.
+  } finally {
+    cleanup();
+  }
+});
