@@ -124,3 +124,16 @@ test("revocation after binding prevents typing but releases the keys already bor
   assert.deepEqual(bindings, ["keycode 200 = U6C49 U6C49\n", "keycode 200 =\n"]);
   assert.equal(typed, 0);
 });
+
+test("accessibility capture rechecks authority after the preceding action settles", async () => {
+  class Executor extends X11Executor {
+    protected override async executeAction(): Promise<void> {
+      setTimeout(() => { allowed = false; }, 0);
+    }
+  }
+  await assert.rejects(new Executor(config).execute([
+    { action: "click", coordinate: [10, 10] },
+    { action: "list_elements" },
+  ], { authorize }), /revoked/);
+  assert.deepEqual(captures, [], "the revoked call must not launch box-ax or another capture process");
+});

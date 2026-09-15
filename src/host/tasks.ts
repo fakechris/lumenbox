@@ -134,9 +134,57 @@ export interface Task {
    */
   proposedBy?: string;
   conversation?: string;
+  /** When it is due, as an ISO date or instant (INV-527). Absent means no date was given. */
+  due?: string;
+  /**
+   * What this is waiting for, when it is not waiting for us (INV-532): a supplier, a
+   * deploy window, a person on leave. Named, the task is still nudged about — somebody
+   * should know it is still open — but it is never archived for not moving, because not
+   * moving is what waiting looks like.
+   */
+  waitingOn?: string;
+  /** Leave it alone until this instant: the answer to a nudge that is "not now" (INV-532). */
+  snoozeUntil?: string;
+  /** How often the requester has been nudged about an overdue or idle task, and when last. */
+  aging?: { nudges: number; lastNudgedAt: string; reason: "overdue" | "idle" };
+  /**
+   * An assignee's proposal to close (INV-529): the requester has until `decideBy` to
+   * object; silence closes it, and the closing says whose proposal it was.
+   */
+  closeProposal?: { by: string; at: string; reason: string; decideBy: string; saw?: string };
   createdAt: string;
   updatedAt: string;
   history: TaskChange[];
+}
+
+/** Idle this long with no movement, a live task is nudged. */
+export const TASK_IDLE_MS = envNumber("AGENTBOX_TASKS_IDLE_DAYS", 7) * 24 * 3_600_000;
+/** Between nudges, and after the second, before archiving. */
+export const TASK_NUDGE_GAP_MS = envNumber("AGENTBOX_TASKS_NUDGE_HOURS", 48) * 3_600_000;
+export const TASK_NUDGES_BEFORE_ARCHIVE = 2;
+/** How long a requester has to object to an assignee's close proposal. */
+export const CLOSE_PROPOSAL_MS = envNumber("AGENTBOX_TASKS_CLOSE_PROPOSAL_HOURS", 48) * 3_600_000;
+/** What a nudge offers; the answers are ordinary board moves or a reply in the thread. */
+export const NUDGE_OPTIONS = ["close", "downgrade", "continue"] as const;
+
+export type AgingEvent =
+  | { kind: "nudge"; task: Task; reason: "overdue" | "idle"; nudge: number; text: string }
+  | { kind: "archived"; task: Task; text: string }
+  | { kind: "closed"; task: Task; text: string };
+
+export const AGING_ACTOR = "aging";
+
+/** How long a task must have existed before its assignee may put a close clock on it. */
+export const CLOSE_PROPOSAL_MIN_AGE_MS = 24 * 3_600_000;
+
+/** What a close proposal was about: the fields whose change makes it a different question. */
+function fingerprint(task: Task): string {
+  return [task.title, task.status, task.due ?? "", task.assigneeId ?? "", task.reviewerId ?? "", task.description ?? ""].join("\u0000");
+}
+
+function describeAge(ms: number): string {
+  const hours = Math.round(ms / 3_600_000);
+  return hours < 2 ? `${Math.max(1, Math.round(ms / 60_000))} minutes` : `${hours} hours`;
 }
 
 /**
@@ -170,6 +218,14 @@ const HARNESS_ACTORS: ReadonlySet<string> = new Set([
   "web",
   "audit-guard",
 ]);
+
+/** A due date as stored: an ISO instant, from a date or an instant; nothing for anything else. */
+export function dueOf(raw: string | undefined): string | undefined {
+  if (raw === undefined || raw.trim() === "") return undefined;
+  const text = raw.trim();
+  const t = Date.parse(/^\d{4}-\d{2}-\d{2}$/.test(text) ? `${text}T23:59:59Z` : text);
+  return Number.isNaN(t) ? undefined : new Date(t).toISOString();
+}
 
 export function clampDescription(text: string): string {
   const trimmed = text.trim();
@@ -257,6 +313,7 @@ export class TaskStore {
     contract?: TaskContract;
     /** The agent proposing, when a person has yet to commit the work. */
     proposedBy?: string;
+    due?: string;
     now?: Date;
   }): Task | undefined {
     const title = input.title.replace(/\s+/g, " ").trim().slice(0, 200);
@@ -276,6 +333,7 @@ export class TaskStore {
       ...(input.conversation !== undefined ? { conversation: input.conversation } : {}),
       ...(input.contract !== undefined ? { contract: input.contract } : {}),
       ...(input.proposedBy !== undefined ? { proposedBy: input.proposedBy } : {}),
+      ...(dueOf(input.due) !== undefined ? { due: dueOf(input.due)! } : {}),
       createdAt: at,
       updatedAt: at,
       history: [{ at, by: input.requester, status: "open", note: input.proposedBy !== undefined ? "proposed, awaiting a person's commit" : "created" }],
@@ -331,6 +389,12 @@ export class TaskStore {
       options?: string[];
       checked?: string[];
       evidence?: string[];
+      /** A due date, or null to clear it. */
+      due?: string | null;
+      /** What it is waiting for outside this box, or null to say it no longer is. */
+      waitingOn?: string | null;
+      /** Leave it alone until this date or instant, or null to look again now. */
+      snoozeUntil?: string | null;
     },
     by: string,
     run?: string,
@@ -385,6 +449,16 @@ export class TaskStore {
       coerced =
         `This task names ${task.reviewerId} as its reviewer, so its assignee cannot mark it ` +
         `done. It is now in review instead; ${task.reviewerId} accepting it is what done means.`;
+    } else if (status === "dropped" && by !== task.requester && by !== task.reviewerId && by !== AGING_ACTOR && !HARNESS_ACTORS.has(by)) {
+      // Dropping is ending the work too, and it was never gated (INV-531). docs/51 says
+      // "an agent does not archive; it proposes and the proposal is answerable" — but the
+      // only checked terminal status was `done`, so any agent could drop any task on the
+      // board, including one it had nothing to do with, with no proposal and no window to
+      // object. The assignee's way to end work it believes is moot is `propose_close`.
+      status = undefined;
+      coerced =
+        `Only ${task.requester}${task.reviewerId !== undefined ? ` or ${task.reviewerId}` : ""} can drop this task, so it has not moved. ` +
+        `If you believe it should close, propose it with a reason — ${task.requester} has ${Math.round(CLOSE_PROPOSAL_MS / 3_600_000)} hours to object and silence closes it.`;
     } else if (status === "done" && !belongsToTask) {
       // Rule two, new: somebody the task is not about cannot end it. Found by review —
       // chat acceptance is keyed by *conversation*, so any authorised person in a shared
@@ -427,6 +501,12 @@ export class TaskStore {
         : {}),
       ...(run !== undefined ? { run } : {}),
     };
+    if (change.note === undefined) {
+      // A snooze or a waiting-on with nothing else said is still a decision about the
+      // work, and the history is where a person looks to see who decided it (INV-532).
+      if (changes.snoozeUntil !== undefined && changes.snoozeUntil !== null) change.note = `not now: look again after ${dueOf(changes.snoozeUntil) ?? changes.snoozeUntil}`;
+      else if (changes.waitingOn !== undefined && changes.waitingOn !== null && changes.waitingOn.trim() !== "") change.note = `waiting on ${changes.waitingOn.trim().slice(0, 120)}`;
+    }
 
     const updated: Task = {
       ...task,
@@ -447,9 +527,19 @@ export class TaskStore {
           ? { reviewerId: undefined }
           : { reviewerId: changes.reviewerId }
         : {}),
+      ...(changes.due !== undefined ? (changes.due === null ? { due: undefined } : dueOf(changes.due) !== undefined ? { due: dueOf(changes.due)! } : {}) : {}),
+      ...(changes.waitingOn !== undefined ? (changes.waitingOn === null || changes.waitingOn.trim() === "" ? { waitingOn: undefined } : { waitingOn: changes.waitingOn.replace(/\s+/g, " ").trim().slice(0, 120) }) : {}),
+      ...(changes.snoozeUntil !== undefined ? (changes.snoozeUntil === null ? { snoozeUntil: undefined } : dueOf(changes.snoozeUntil) !== undefined ? { snoozeUntil: dueOf(changes.snoozeUntil)! } : {}) : {}),
       updatedAt: at,
       history: [...task.history, change].slice(-HISTORY_LIMIT),
     };
+    // Movement by anyone but the ageing sweep answers the nudge: the count starts over —
+    // and so does the clock (INV-535). Deleting the whole record let a person who typed
+    // "continue" on an overdue card be nudged again an hour later, because the card was
+    // still overdue and nothing remembered that they had just answered.
+    if (by !== AGING_ACTOR && updated.aging !== undefined) updated.aging = { nudges: 0, lastNudgedAt: at, reason: updated.aging.reason };
+    // Any move by the requester while a close is proposed is their answer to it.
+    if (updated.closeProposal !== undefined && by === task.requester) delete updated.closeProposal;
 
     this.tasks.set(id, updated);
     this.append({ kind: "task", task: updated });
@@ -457,6 +547,163 @@ export class TaskStore {
     const result = { task: this.get(id)!, ...(coerced !== undefined ? { coerced } : {}) };
     for (const listener of this.listeners) listener(result.task);
     return result;
+  }
+
+  /**
+   * The ageing sweep (INV-527): a live task past its due date, or idle for a week, gets
+   * its requester nudged — close, downgrade, or continue — at most once per gap; after
+   * two nudges with no movement it is archived as dropped, with the history saying why.
+   * Movement by anyone resets the count. Run daily by the host; idempotent within a gap.
+   *
+   * A nudge here is a *proposal to say something*, not a fact: the count advances only
+   * when the caller confirms with `recordNudge` that the line reached a person (INV-530).
+   * The first version counted before delivery, and the delivery it counted was routed by
+   * string equality to an address that never matched a Feishu room — so two nudges nobody
+   * received archived the work, silently, which is the exact failure the sweep exists to
+   * prevent. Undeliverable means uncounted; the sweep proposes it again next hour.
+   */
+  age(now: Date = new Date()): AgingEvent[] {
+    const events: AgingEvent[] = [];
+    const t = now.getTime();
+    for (const task of [...this.tasks.values()]) {
+      if (!isLive(task.status) || task.proposedBy !== undefined) continue;
+      // Asked to come back later, and told when. Until then there is nothing to say.
+      if (task.snoozeUntil !== undefined && Date.parse(task.snoozeUntil) > t) continue;
+      // A close proposal is already a clock with a person's answer at the end of it;
+      // nudging in parallel asks the same question twice in two voices (INV-532).
+      if (task.closeProposal !== undefined) continue;
+      const overdue = task.due !== undefined && Date.parse(task.due) < t;
+      const idle = t - Date.parse(task.updatedAt) >= TASK_IDLE_MS;
+      if (!overdue && !idle) continue;
+      const since = task.aging === undefined ? Infinity : t - Date.parse(task.aging.lastNudgedAt);
+      if (since < TASK_NUDGE_GAP_MS) continue;
+      const reason: "overdue" | "idle" = overdue ? "overdue" : "idle";
+      const nudges = (task.aging?.nudges ?? 0) + 1;
+      // What may be archived for not moving, and what may only be asked about (INV-532).
+      // `blocked` and `review` are somebody else's turn; `waitingOn` names an outside
+      // party; a date still ahead means nothing is late. Archiving those reads a person's
+      // holiday, a supplier's month-end, or a reviewer's queue as an abandoned request —
+      // which contradicts the rule the sweep is written under: silence is never consent
+      // to close work. They are nudged up to the cap and then go quiet, still open.
+      const archivable =
+        (task.status === "open" || task.status === "doing") &&
+        task.waitingOn === undefined &&
+        (overdue || task.due === undefined);
+      if (nudges > TASK_NUDGES_BEFORE_ARCHIVE && !archivable) continue;
+      if (nudges > TASK_NUDGES_BEFORE_ARCHIVE) {
+        const text = `${task.id} "${task.title}" was archived: ${reason} and no movement after ${TASK_NUDGES_BEFORE_ARCHIVE} nudges. Reopen it on the board if it still matters.`;
+        const moved = this.update(task.id, { status: "dropped", note: `archived by ageing: ${reason}, no answer to ${TASK_NUDGES_BEFORE_ARCHIVE} nudges` }, AGING_ACTOR, undefined, now);
+        if (moved !== undefined) events.push({ kind: "archived", task: moved.task, text });
+        continue;
+      }
+      const waiting = task.waitingOn !== undefined ? ` (waiting on ${task.waitingOn})` : task.status === "blocked" || task.status === "review" ? ` (${task.status})` : "";
+      const text =
+        `${task.id} "${task.title}"${waiting} is ${reason === "overdue" ? `overdue (due ${task.due})` : `idle: nothing has moved for ${Math.round((t - Date.parse(task.updatedAt)) / 86_400_000)} days`}` +
+        ` — nudge ${nudges} of ${TASK_NUDGES_BEFORE_ARCHIVE}. ${NUDGE_OPTIONS.join(" / ")}? Move it on the board or answer here; ` +
+        (archivable
+          ? `with no answer it is archived after the next nudge.`
+          : `it stays open either way — say when to look again and it goes quiet until then.`);
+      events.push({ kind: "nudge", task, reason, nudge: nudges, text });
+    }
+    return events;
+  }
+
+  /**
+   * The nudge reached somebody: count it (INV-530). Called after the line was delivered —
+   * pushed to the chat the task came from, or shown on the board for a task that came
+   * from no chat. Refuses a second count within the gap, so a double delivery is one
+   * nudge, and refuses anything the task has moved past.
+   */
+  recordNudge(id: string, reason: "overdue" | "idle", now: Date = new Date()): Task | undefined {
+    const task = this.tasks.get(id);
+    if (task === undefined || !isLive(task.status)) return undefined;
+    const t = now.getTime();
+    if (task.aging !== undefined && t - Date.parse(task.aging.lastNudgedAt) < TASK_NUDGE_GAP_MS) return undefined;
+    const at = now.toISOString();
+    const nudges = (task.aging?.nudges ?? 0) + 1;
+    const next: Task = { ...task, aging: { nudges, lastNudgedAt: at, reason }, history: [...task.history, { at, by: AGING_ACTOR, note: `nudge ${nudges}/${TASK_NUDGES_BEFORE_ARCHIVE}: ${reason}` }].slice(-HISTORY_LIMIT) };
+    this.tasks.set(id, next);
+    this.append({ kind: "task", task: next });
+    for (const listener of this.listeners) listener(next);
+    return this.get(id)!;
+  }
+
+  /**
+   * An assignee proposes closing (INV-529): the requester has CLOSE_PROPOSAL_MS to object;
+   * their silence closes it. The one who asked for the work is not asked to do the
+   * bookkeeping, and the one who can judge it is not made to wait for a verdict nobody gives.
+   */
+  proposeClose(id: string, by: string, reason: string, now: Date = new Date()): { task: Task } | { refused: string } {
+    const task = this.tasks.get(id);
+    if (task === undefined) return { refused: `No task ${id}.` };
+    if (!isLive(task.status)) return { refused: `${id} is already ${task.status}.` };
+    if (by === task.requester) return { refused: `${id} is your own request; drop it directly instead of proposing.` };
+    // Only the one doing the work may propose that it stop (INV-531). The first version
+    // refused the requester and nobody else, so any agent on the box could put a 48-hour
+    // clock on somebody else's task and close it by their silence.
+    if (!HARNESS_ACTORS.has(by) && by !== task.assigneeId) {
+      return { refused: `${id} is ${task.assigneeId === undefined ? "nobody's" : `${task.assigneeId}'s`} work; only whoever is doing it can propose closing it.` };
+    }
+    // And not before the requester has plausibly seen it. A card proposed for closing
+    // hours after it was asked for closes on the silence of somebody who has not looked
+    // at the board yet, which is not the silence this rule was written about.
+    if (now.getTime() - Date.parse(task.createdAt) < CLOSE_PROPOSAL_MIN_AGE_MS) {
+      return { refused: `${id} was only asked for ${describeAge(now.getTime() - Date.parse(task.createdAt))} ago; say what you found and let ${task.requester} answer before proposing to close it.` };
+    }
+    const why = reason.trim().slice(0, 300);
+    if (why === "") return { refused: "A close proposal needs a reason the requester can read." };
+    const at = now.toISOString();
+    const decideBy = new Date(now.getTime() + CLOSE_PROPOSAL_MS).toISOString();
+    const next: Task = { ...task, closeProposal: { by, at, reason: why, decideBy, saw: fingerprint(task) }, updatedAt: at, history: [...task.history, { at, by, note: `proposed to close: ${why} (closes ${decideBy} unless ${task.requester} objects)` }].slice(-HISTORY_LIMIT) };
+    if (next.aging !== undefined) delete next.aging;
+    this.tasks.set(id, next);
+    this.append({ kind: "task", task: next });
+    for (const listener of this.listeners) listener(next);
+    return { task: this.get(id)! };
+  }
+
+  /** The requester (or a harness actor for them) says no: the proposal is gone, the task stays. */
+  opposeClose(id: string, by: string, note?: string, now: Date = new Date()): { task: Task } | { refused: string } {
+    const task = this.tasks.get(id);
+    if (task === undefined) return { refused: `No task ${id}.` };
+    if (task.closeProposal === undefined) return { refused: `${id} has no close proposal to object to.` };
+    if (by !== task.requester && !HARNESS_ACTORS.has(by) && by !== task.reviewerId) return { refused: `Only ${task.requester}${task.reviewerId !== undefined ? ` or ${task.reviewerId}` : ""} can object to closing ${id}.` };
+    const at = now.toISOString();
+    const next: Task = { ...task, updatedAt: at, history: [...task.history, { at, by, note: `objected to closing${note !== undefined && note.trim() !== "" ? `: ${note.trim().slice(0, 300)}` : ""}` }].slice(-HISTORY_LIMIT) };
+    delete next.closeProposal;
+    this.tasks.set(id, next);
+    this.append({ kind: "task", task: next });
+    for (const listener of this.listeners) listener(next);
+    return { task: this.get(id)! };
+  }
+
+  /** Close proposals whose window passed with no objection: closed as dropped, saying whose proposal it was. */
+  settleCloseProposals(now: Date = new Date()): AgingEvent[] {
+    const events: AgingEvent[] = [];
+    for (const task of [...this.tasks.values()]) {
+      const proposal = task.closeProposal;
+      if (proposal === undefined || !isLive(task.status) || Date.parse(proposal.decideBy) > now.getTime()) continue;
+      // The proposal was about the task as it stood. Anyone moving the due date, handing
+      // it to somebody else, or rewriting what it is has answered it — by changing the
+      // question (INV-531). Only the requester's edits used to clear a proposal, so a
+      // reviewer pushing the date to next month still had it closed on the old clock.
+      if (proposal.saw !== undefined && proposal.saw !== fingerprint(task)) {
+        const at = now.toISOString();
+        const stale: Task = { ...task, updatedAt: at, history: [...task.history, { at, by: AGING_ACTOR, note: `close proposal dropped: ${task.id} changed after ${proposal.by} proposed it` }].slice(-HISTORY_LIMIT) };
+        delete stale.closeProposal;
+        this.tasks.set(task.id, stale);
+        this.append({ kind: "task", task: stale });
+        continue;
+      }
+      const moved = this.update(task.id, { status: "dropped", note: `closed as ${proposal.by} proposed (${proposal.reason}); ${task.requester} did not object by ${proposal.decideBy}` }, AGING_ACTOR, undefined, now);
+      if (moved === undefined) continue;
+      const settled: Task = { ...moved.task };
+      delete settled.closeProposal;
+      this.tasks.set(task.id, settled);
+      this.append({ kind: "task", task: settled });
+      events.push({ kind: "closed", task: this.get(task.id)!, text: `${task.id} "${task.title}" closed as ${proposal.by} proposed: ${proposal.reason}. ${task.requester} did not object in time; reopen it on the board if that was wrong.` });
+    }
+    return events;
   }
 
   private append(line: TaskLine): void {

@@ -1,3 +1,9 @@
+<!-- doc: 26-inbound-reliability
+     title: Inbound reliability: what a message goes through, and what mature harnesses do
+     family: decision
+     status: current
+     updated: 2026-09-01
+-->
 # Inbound reliability: what a message goes through, and what mature harnesses do
 
 Status: **written 2026-09-01, after a question sat unanswered in a group for an

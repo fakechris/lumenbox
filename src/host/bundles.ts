@@ -41,7 +41,7 @@ export interface Bundle {
   skills?: string[];
   /** Names of `config.json` mcpServers entries. Stored; read by INV-439. */
   mcpServers?: string[];
-  /** Connector slugs (docs/37). Stored; read by INV-439. */
+  /** Connector slugs (docs/53). Stored; read by INV-439. */
   connectors?: string[];
   /** Vault secret ids the box's agents may resolve. */
   secretIds: string[];
@@ -247,6 +247,38 @@ export class BundleStore {
   grantsSecret(box: { id: string; name: string } | undefined, secretId: string): boolean {
     if (box === undefined) return false;
     return this.attachedTo(box).some(bundle => bundle.secretIds.includes(secretId));
+  }
+
+  /**
+   * The bundle refs a template packs from this box (INV-421): names and what each
+   * provides — secret ids, never values.
+   */
+  refsFor(box: { id: string; name: string }): { name: string; needs: { connectors?: string[]; secretIds?: string[]; skills?: string[]; mcpServers?: string[]; repositories?: Repository[] } }[] {
+    return this.attachedTo(box).map(bundle => ({
+      name: bundle.name,
+      needs: {
+        ...((bundle.connectors ?? []).length > 0 ? { connectors: [...bundle.connectors!] } : {}),
+        ...(bundle.secretIds.length > 0 ? { secretIds: [...bundle.secretIds] } : {}),
+        ...((bundle.skills ?? []).length > 0 ? { skills: [...bundle.skills!] } : {}),
+        ...((bundle.mcpServers ?? []).length > 0 ? { mcpServers: [...bundle.mcpServers!] } : {}),
+        ...((bundle.repositories ?? []).length > 0 ? { repositories: bundle.repositories!.map(r => ({ ...r })) } : {}),
+      },
+    }));
+  }
+
+  /**
+   * Attaches an existing bundle to a box, idempotently (INV-421 A4): a person binding
+   * grants only what the bundle already holds, and binding twice is one attachment.
+   * False when there is no such bundle — nothing is created from a name.
+   */
+  attach(box: { id: string; name: string }, bundleId: string): boolean {
+    if (!this.bundles.has(bundleId)) return false;
+    const current = this.boxes.get(box.id) ?? [];
+    if (current.includes(bundleId) || (this.boxes.get(box.name) ?? []).includes(bundleId) || this.defaults.includes(bundleId)) return true;
+    const boxes = Object.fromEntries(this.boxes);
+    boxes[box.id] = [...current, bundleId];
+    this.save({ bundles: [...this.bundles.values()], defaults: [...this.defaults], boxes });
+    return true;
   }
 
   save(file: BundlesFile): void {

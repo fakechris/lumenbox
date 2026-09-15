@@ -1,3 +1,9 @@
+<!-- doc: 20-completion-standard
+     title: The standard of completion, written before the work
+     family: decision
+     status: current
+     updated: 2026-09-14
+-->
 # The standard of completion, written before the work
 
 Status: **design awaiting adversarial review** (docs/13 triggers 3, 4 and 5: it changes
@@ -162,3 +168,92 @@ customer — as if it produced the latter.
 - **Interaction with steering.** A person redirects the work mid-task ("只要 Q3"). The
   standard was authored from the original request. What updates it, who, and does an
   amended standard preserve the append-only property or quietly reset it?
+
+
+## The board does not let work sit (INV-527, INV-529 — 2026-09-14)
+
+From the weekly-retro review: four review tasks sat for one to two weeks, and the bot
+left t12 open because closing was "the user's call". Two rules now run on the host, hourly:
+
+- **Ageing.** A task may carry `due` (a date or an instant). A live task past its due
+  date, or with no movement for seven days, gets its requester nudged where the task
+  lives — "close / downgrade / continue?" — at most once per 48 hours; movement by anyone
+  resets the count; two nudges with no movement archive it as `dropped`, with the history
+  saying why, and the chat hears one line. A proposal awaiting commit is never nudged.
+- **Close proposals.** An assignee (a bot included) may propose closing with a reason it
+  can defend; the requester has 48 hours to object, from the board ("Keep open") or by
+  moving the task; silence closes it as `dropped`, and the closing says whose proposal it
+  was. The requester cannot propose — they drop directly.
+
+Both are appends on the same task record and survive a restart. `Tasks` gained `due`
+and `propose_close`; `/api/tasks/update` takes `due`; `/api/tasks/propose-close` and
+`/api/tasks/oppose-close`; the board shows due / overdue / nudged / close-proposed chips.
+
+**How often the host may start a conversation (INV-535 — 2026-09-14).** Each rail was
+written alone and each is quiet alone; five agents with one open question and five stale
+cards produce twenty messages in a day, and a person nudged twenty times reads none —
+the failure the rails exist to fix, arriving by the other door. `src/host/follow-up-budget.ts`
+splits every line into an **ask** (a demand on somebody's attention: "overdue — close /
+downgrade / continue?") and an **act** (the host saying what it already did: went with
+the default, archived after two nudges, closed as proposed). Acts are never held back —
+doing, saying and recording are one thing — only coalesced: everything for one room in
+one sweep is one message. Asks are budgeted: two messages per room per rolling day, five
+items each, the rest counted rather than listed ("and 3 more on the board"), and an ask
+held back is not counted as said, so nothing archives on the strength of a nudge nobody
+got. An act travelling to a room carries any ask with it, because the interruption has
+already happened. The ledger (`~/.agentbox/follow-ups.jsonl`) makes the day survive a
+restart. And answering a nudge now restarts the clock as well as the count: "continue"
+on a still-overdue card used to be followed by the same question an hour later.
+
+**A question is put to somebody, and outlives the process (INV-533 — 2026-09-14).** The
+first watch called a question answered when *anyone* spoke in that conversation after it
+was asked — so in a group, a colleague's message about lunch answered "which account do
+I bill?", and the agent proceeded as though it had been told. Now a question carries an
+id and the identity it was put to; only that person's reply settles it, reported by the
+door as their message arrives. A question asked from the page names nobody, and there
+any voice in that conversation is the one that was asked. A second question in the same
+conversation supersedes the first with a verdict on the ledger instead of vanishing.
+The ledger (`~/.agentbox/questions.jsonl`) now records the ask as well as the settlement
+and is replayed on start, so a restart no longer loses the question, its default and its
+clock — which is the same silence the watch exists to end. And the card says the terms:
+"若 18:00 前没回复,就按这个走:…", because a default the person was never told about is
+not a default they let stand.
+
+**Waiting is not abandonment (INV-532 — 2026-09-14).** The sweep archived anything that
+had not moved, and "has not moved" is also what a blocked task, a task in somebody's
+review queue, a supplier who answers at month end, and a requester on leave all look
+like. Now only `open` and `doing` tasks with no `waitingOn` can be archived for not
+moving, and a date still in the future exempts a task from the idle clock (it is not
+late yet). `blocked`, `review`, and anything with `waitingOn` set are nudged up to the
+cap and then go quiet, still open — somebody is told, nobody's work is closed. Two new
+fields answer a nudge without lying about the state: `waiting_on` ("the supplier, who
+answers at month end") and `snooze_until` ("not now — look again on the 30th"), both on
+the `Tasks` tool, `/api/tasks/update`, and the board as chips. A task with a close
+proposal open is not also nudged: that is one question asked twice in two voices.
+
+**Who may end work, and what a proposal was about (INV-531 — 2026-09-14).** `done` was
+gated from the first day; `dropped` never was, so any agent could drop any task on the
+board — no proposal, no window to object, no reviewer. Now dropping is the requester's,
+the reviewer's, the board's or the ageing sweep's; an agent that believes work is moot
+proposes, with a reason, and the refusal says so. A close proposal is the assignee's
+only — the first version refused the requester and nobody else, so an unrelated agent
+could put a 48-hour clock on somebody else's task — and it cannot be put on a task
+younger than 24 hours: silence from a person who has not looked at the board yet is not
+the silence this rule is about. Finally a proposal remembers the task it was about
+(title, status, due, assignee, reviewer, description); if any of that changed before the
+window closes, the proposal is dropped with a history line instead of settling. A
+reviewer pushing the due date to next month used to leave the old clock running.
+
+**A nudge counts only once somebody got it (INV-530 — 2026-09-14).** `age()` proposes;
+`recordNudge` records, and the host calls it after the line was delivered. Two things
+made the first version archive work nobody was ever asked about: a task carries a
+*conversation id* (the chat key with unsafe characters flattened to `-`), and the sweep
+handed that string straight to `pushToChat`, which matches adapters by a `feishu:`
+prefix — so no Feishu room ever received a nudge; and `pushToChat` swallows every
+delivery failure, so the count advanced anyway. Now the sweep resolves the address
+through the conversation directory, pushes with `tryPushToChat` (the same push, with
+"did anybody get it" as its answer), and counts only on success. A task with no
+conversation is a board task: the board is where it is shown, and it counts there.
+Undeliverable is not silence — an unreachable room is proposed to again next hour, and
+the log says why. The same rule routes an expired question's one line back to the
+conversation that asked it, rather than to whoever last drove the agent from any chat.

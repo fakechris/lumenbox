@@ -30,17 +30,18 @@
     "dist:mac": "electron-builder --mac",
     "dist:win": "electron-builder --win",
     "dist:linux": "electron-builder --linux",
-    "release:check": "npm run check && npm run build && node scripts/release-check.mjs"
+    "release:check": "npm run check && npm run build && node scripts/release-check.mjs && node --experimental-transform-types scripts/scorecard.mjs --checked",
+    "release:scorecard": "node --experimental-transform-types scripts/scorecard.mjs"
   },
   "dependencies": {
-    "@anthropic-ai/sdk": "^0.122.0",
-    "@larksuiteoapi/node-sdk": "^1.73.0",
-    "markdown-it": "^15.0.1"
+    "@anthropic-ai/sdk": "^0.125.0",
+    "@larksuiteoapi/node-sdk": "^1.73.3",
+    "markdown-it": "^15.0.2"
   },
   "devDependencies": {
-    "@biomejs/biome": "^2.5.11",
-    "@types/node": "^26.4.0",
-    "electron": "^44.0.0",
+    "@biomejs/biome": "^2.5.13",
+    "@types/node": "^26.5.1",
+    "electron": "^44.3.0",
     "electron-builder": "^26.15.3",
     "esbuild": "^0.28.2",
     "typescript": "^7.0.2"

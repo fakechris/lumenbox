@@ -12,6 +12,7 @@
  * make — a secret or a person's name in a public file — has to be testable without a box.
  */
 
+import { MAX_LEARNING_CHARS, appendLearning, hostOf, readLearnings } from "./learnings.ts";
 import { type CatalogExpert, CODE_TOOLS, DESK_TOOLS, WEB_TOOLS } from "./catalog.ts";
 import type { MemoryRecord } from "./memory.ts";
 import { scanText } from "./secret-scan.ts";
@@ -85,6 +86,65 @@ export interface TemplateFillIn {
   label: string;
 }
 
+export interface TemplateBundleRef {
+  name: string;
+  /** What the work needed from the bundle. Subsets are fine; an empty needs is a name alone. */
+  needs?: {
+    connectors?: string[];
+    /** Secret *ids*, never values. */
+    secretIds?: string[];
+    skills?: string[];
+    mcpServers?: string[];
+    /** Repository paths with the mode the work used. */
+    repositories?: { path: string; mode: "ro" | "rw" }[];
+  };
+}
+
+export type BundleResolution =
+  | { name: string; status: "resolved" }
+  | { name: string; status: "missing"; needs: string[] }
+  | { name: string; status: "conflict"; lacks: string[] };
+
+/** Renders a needs block as short claims, for cues and conflicts. */
+function needsOf(ref: TemplateBundleRef): string[] {
+  const needs = ref.needs ?? {};
+  return [
+    ...(needs.connectors ?? []).map(c => `connector ${c}`),
+    ...(needs.secretIds ?? []).map(s => `secret ${s}`),
+    ...(needs.skills ?? []).map(s => `skill ${s}`),
+    ...(needs.mcpServers ?? []).map(m => `MCP server ${m}`),
+    ...(needs.repositories ?? []).map(r => `${r.path} ${r.mode}`),
+  ];
+}
+
+/**
+ * Resolves a template's bundle references against what the receiving box actually has
+ * (INV-421). Same name is not the same authorization: a bundle called "github" here may
+ * grant a read-only key where the author's granted a write key, so each need is checked
+ * against the effective bundle's contents, and a shortfall is a conflict left for the
+ * person — never filled in from the template.
+ */
+export function resolveBundleRefs(
+  refs: readonly TemplateBundleRef[] | undefined,
+  effective: { names: string[]; connectors: string[]; secretIds: string[]; skills: string[] | undefined; mcpServers: string[]; repositories: { path: string; mode: "ro" | "rw" }[] } | undefined
+): BundleResolution[] {
+  return (refs ?? []).map(ref => {
+    const attached = effective?.names.includes(ref.name) === true;
+    if (!attached) return { name: ref.name, status: "missing", needs: needsOf(ref) };
+    const needs = ref.needs ?? {};
+    const lacks: string[] = [];
+    for (const c of needs.connectors ?? []) if (!effective!.connectors.includes(c)) lacks.push(`connector ${c}`);
+    for (const s of needs.secretIds ?? []) if (!effective!.secretIds.includes(s)) lacks.push(`secret ${s}`);
+    for (const s of needs.skills ?? []) if (effective!.skills !== undefined && !effective!.skills.includes(s)) lacks.push(`skill ${s}`);
+    for (const m of needs.mcpServers ?? []) if (!effective!.mcpServers.includes(m)) lacks.push(`MCP server ${m}`);
+    for (const r of needs.repositories ?? []) {
+      const have = effective!.repositories.find(repo => repo.path === r.path);
+      if (have === undefined || (r.mode === "rw" && have.mode !== "rw")) lacks.push(`${r.path} ${r.mode}`);
+    }
+    return lacks.length === 0 ? { name: ref.name, status: "resolved" } : { name: ref.name, status: "conflict", lacks };
+  });
+}
+
 export interface TemplateSkill {
   slug: string;
   name: string;
@@ -106,9 +166,29 @@ export interface BotTemplate {
   routines: TemplateRoutine[];
   /** Catalog connector slugs the work needs: `feishu`, `dingtalk`, `browser`, `mcp:<server>`. */
   connectors: string[];
+  /**
+   * The bundles the work was done under, by name and by what they provided (INV-421).
+   * Names and needs only — never a secret's value, never a repository's contents. The
+   * receiver resolves each against its own bundles: a same-named bundle that provides
+   * what is needed is resolved; no such bundle is missing; one that does not cover the
+   * needs is a conflict. Nothing is granted by the name alone.
+   */
+  bundles?: TemplateBundleRef[];
+  /**
+   * Site learnings the work relied on (INV-411): per host, the dated ✅/❌ lines from the
+   * author's `~/.agentbox/learnings`. Notes, never account state; the receiver installs
+   * them into its own learnings so the new bot's first visit already knows the site.
+   */
+  learnings?: TemplateLearning[];
   /** A skill the new bot reads before it speaks. Must name one of `skills`. */
   gettingStarted?: { skill: string };
-  meta?: { createdAt?: string; createdBy?: string; sourceName?: string };
+  meta?: { createdAt?: string; createdBy?: string; sourceName?: string; version?: number };
+}
+
+export interface TemplateLearning {
+  host: string;
+  /** Lines as the learnings file keeps them: `- 2026-09-01 ✅ …`, author included when known. */
+  lines: string[];
 }
 
 // ── validation ───────────────────────────────────────────────────────────────────────
@@ -241,6 +321,42 @@ export function parseTemplate(raw: unknown): { template: BotTemplate } | { probl
     .filter((entry): entry is string => typeof entry === "string" && entry.trim() !== "")
     .map(entry => entry.trim());
 
+  const learnings: TemplateLearning[] = [];
+  for (const entry of Array.isArray(value.learnings) ? value.learnings : []) {
+    if (!isRecord(entry)) continue;
+    const host = hostOf(stringOr(entry.host));
+    if (host === undefined) return { problem: `learnings: "${stringOr(entry.host).slice(0, 40)}" is not a host name.` };
+    const lines = (Array.isArray(entry.lines) ? entry.lines : []).filter((line): line is string => typeof line === "string" && line.trim().startsWith("- "));
+    for (const line of lines) {
+      if (line.length > MAX_LEARNING_CHARS + 80) return { problem: `learnings.${host}: a note is over ${MAX_LEARNING_CHARS} characters.` };
+    }
+    if (lines.length > 0) learnings.push({ host, lines: lines.map(line => line.trim()) });
+  }
+
+  const bundles: TemplateBundleRef[] = [];
+  for (const entry of Array.isArray(value.bundles) ? value.bundles : []) {
+    if (!isRecord(entry)) continue;
+    const name = stringOr(entry.name).trim();
+    if (name === "" || name.length > NAME_MAX) return { problem: `bundles: a bundle reference needs a name (up to ${NAME_MAX} characters).` };
+    const needsRaw = isRecord(entry.needs) ? entry.needs : {};
+    const strings = (v: unknown) => (Array.isArray(v) ? v.filter((x): x is string => typeof x === "string" && x.trim() !== "").map(x => x.trim()) : []);
+    const repositories = (Array.isArray(needsRaw.repositories) ? needsRaw.repositories : [])
+      .filter(isRecord)
+      .map(r => ({ path: stringOr(r.path).trim(), mode: r.mode === "rw" ? ("rw" as const) : ("ro" as const) }))
+      .filter(r => r.path !== "");
+    for (const key of ["secretValues", "values", "token", "tokens"]) {
+      if (key in needsRaw) return { problem: `bundles.${name}.needs.${key}: a template names what a bundle provided, never its values.` };
+    }
+    const needs = {
+      ...(strings(needsRaw.connectors).length > 0 ? { connectors: strings(needsRaw.connectors) } : {}),
+      ...(strings(needsRaw.secretIds).length > 0 ? { secretIds: strings(needsRaw.secretIds) } : {}),
+      ...(strings(needsRaw.skills).length > 0 ? { skills: strings(needsRaw.skills) } : {}),
+      ...(strings(needsRaw.mcpServers).length > 0 ? { mcpServers: strings(needsRaw.mcpServers) } : {}),
+      ...(repositories.length > 0 ? { repositories } : {}),
+    };
+    bundles.push({ name, ...(Object.keys(needs).length > 0 ? { needs } : {}) });
+  }
+
   let gettingStarted: BotTemplate["gettingStarted"];
   if (value.gettingStarted !== undefined) {
     const skill = isRecord(value.gettingStarted) ? stringOr(value.gettingStarted.skill).trim() : "";
@@ -264,6 +380,8 @@ export function parseTemplate(raw: unknown): { template: BotTemplate } | { probl
     skills,
     routines,
     connectors,
+    ...(bundles.length > 0 ? { bundles } : {}),
+    ...(learnings.length > 0 ? { learnings } : {}),
     ...(gettingStarted !== undefined ? { gettingStarted } : {}),
     ...(Object.keys(meta).length > 0 ? { meta } : {}),
   };
@@ -288,7 +406,75 @@ export function secretsIn(template: BotTemplate): { where: string; pattern: stri
   for (const entry of [...template.skills, ...template.routines]) {
     for (const [path, content] of Object.entries(entry.files)) check(`${entry.slug}/${path}`, content);
   }
+  for (const entry of template.learnings ?? []) {
+    for (const [index, line] of entry.lines.entries()) check(`learnings.${entry.host}[${index}]`, line);
+  }
   return hits;
+}
+
+/**
+ * The visible list a person confirms before a template leaves (INV-411 A2): what is in,
+ * by name and version and date, and what is out by rule — so "the package is clean" is
+ * something they read, not something they are told.
+ */
+export function manifestOf(template: BotTemplate, dropped: readonly string[] = []): string[] {
+  const lines: string[] = [];
+  const version = template.meta?.version !== undefined ? ` v${template.meta.version}` : "";
+  lines.push(`Template "${template.profile.name}"${version}${template.meta?.createdBy !== undefined ? ` by ${template.meta.createdBy}` : ""}`);
+  for (const skill of template.skills) lines.push(`  skill ${skill.slug} — ${skill.description.slice(0, 80)} (${Object.keys(skill.files).length} file(s))`);
+  for (const routine of template.routines) {
+    lines.push(`  routine ${routine.slug} — ${routine.description.slice(0, 80)}; starts paused${routine.fillIns.length > 0 ? `; asks for ${routine.fillIns.map(f => f.id).join(", ")}` : ""}`);
+  }
+  if (template.memory.length > 0) lines.push(`  ${template.memory.length} memor${template.memory.length === 1 ? "y" : "ies"} (facts and pitfalls; nothing about a person)`);
+  for (const entry of template.learnings ?? []) {
+    const dates = entry.lines.map(line => /^- (\d{4}-\d{2}-\d{2})/.exec(line)?.[1]).filter((d): d is string => d !== undefined).sort();
+    const authors = new Set(entry.lines.map(line => /\((?:by )?([^)]+)\)\s*$/.exec(line)?.[1]).filter((a): a is string => a !== undefined));
+    lines.push(`  learnings for ${entry.host}: ${entry.lines.length} note(s)${dates.length > 0 ? `, ${dates[0]}${dates.length > 1 ? ` → ${dates[dates.length - 1]}` : ""}` : ""}${authors.size > 0 ? `, by ${[...authors].join(", ")}` : ""}`);
+  }
+  for (const ref of template.bundles ?? []) lines.push(`  needs bundle "${ref.name}"${ref.needs !== undefined ? ` (${needsOf(ref).join(", ")})` : ""}`);
+  if (template.connectors.length > 0) lines.push(`  needs connectors: ${template.connectors.join(", ")}`);
+  lines.push("  excluded by rule: cookies, tokens and secret values, transcripts, recordings, memory about people, private memory not promoted");
+  for (const item of dropped) lines.push(`  left out: ${item}`);
+  return lines;
+}
+
+/**
+ * Installs a template's learnings into this installation's own (INV-411 A1): the new
+ * bot's first visit to the site reads them like any teammate's note. A line already there
+ * is not appended twice, so a re-import is one set of notes, and every line says where
+ * it came from.
+ */
+export function installLearnings(template: BotTemplate, templateIdValue: string, dir: string): { installed: number; skipped: number } {
+  let installed = 0;
+  let skipped = 0;
+  for (const entry of template.learnings ?? []) {
+    const existing = new Set(readLearnings(entry.host, dir, 10_000).map(line => noteTextOf(line)));
+    for (const line of entry.lines) {
+      const text = noteTextOf(line);
+      if (text === "" || existing.has(text)) {
+        skipped += 1;
+        continue;
+      }
+      const date = /^- (\d{4}-\d{2}-\d{2})/.exec(line)?.[1];
+      try {
+        appendLearning(entry.host, { at: date !== undefined ? new Date(`${date}T00:00:00Z`) : new Date(), worked: !line.includes(" ❌ "), text, by: `template:${templateIdValue}` }, dir);
+        existing.add(text);
+        installed += 1;
+      } catch {
+        skipped += 1;
+      }
+    }
+  }
+  return { installed, skipped };
+}
+
+/** The note proper, without its date, mark and author, for comparing two lines. */
+function noteTextOf(line: string): string {
+  return line
+    .replace(/^- \d{4}-\d{2}-\d{2}\s*/, "")
+    .replace(/^[✅❌]\s*/, "")
+    .replace(/\s*\((?:by )?[^)]*\)\s*$/, "")
+    .trim();
 }
 
 // ── frontmatter surgery ─────────────────────────────────────────────────────────────
@@ -560,14 +746,33 @@ export function renderRecipe(template: BotTemplate, options: { self: string }): 
 }
 
 /** What is still on the person, after the bot has installed what it can. */
-export function pendingOf(template: BotTemplate, connected: readonly string[]): { fillIns: TemplateFillIn[]; connectors: string[] } {
+export interface TemplatePending {
+  fillIns: TemplateFillIn[];
+  connectors: string[];
+  /** Bundle references that did not resolve: missing here, or here but not covering the needs. */
+  bundles: BundleResolution[];
+}
+
+export function pendingOf(template: BotTemplate, connected: readonly string[], bundles: readonly BundleResolution[] = []): TemplatePending {
   const fillIns = new Map<string, string>();
   for (const routine of template.routines) for (const fillIn of routine.fillIns) fillIns.set(fillIn.id, fillIn.label);
   const have = new Set(connected.map(name => name.toLowerCase()));
   return {
     fillIns: [...fillIns].map(([id, label]) => ({ id, label })),
     connectors: template.connectors.filter(name => !have.has(name.toLowerCase())),
+    bundles: bundles.filter(resolution => resolution.status !== "resolved"),
   };
+}
+
+/** One sentence per unresolved bundle, for the cue and for the person. */
+export function describeBundleGaps(bundles: readonly BundleResolution[]): string[] {
+  return bundles.flatMap(resolution =>
+    resolution.status === "missing"
+      ? [`bundle "${resolution.name}" is not attached to this box${resolution.needs.length > 0 ? ` (the work used it for: ${resolution.needs.join(", ")})` : ""}`]
+      : resolution.status === "conflict"
+        ? [`bundle "${resolution.name}" is attached but does not provide ${resolution.lacks.join(", ")}`]
+        : []
+  );
 }
 
 /**
@@ -582,7 +787,7 @@ export function templateSetupCue(input: {
   self: string;
   recipePath: string;
   createdBy?: string;
-  pending: { fillIns: TemplateFillIn[]; connectors: string[] };
+  pending: { fillIns: TemplateFillIn[]; connectors: string[]; bundles?: BundleResolution[] };
   /**
    * What the host already knows and the bot must not ask for: the person's timezone (this
    * machine's), and anything else the caller can name. Grok's setup turn never asks for
@@ -625,6 +830,12 @@ export function templateSetupCue(input: {
       : "") +
     (pending.connectors.length > 0
       ? `Not connected here, and not yours to ask about: ${pending.connectors.join(", ")} — mention it in one clause only if a routine depends on it. `
+      : "") +
+    // A bundle is a person's grant, never the template's: the bot says exactly what is
+    // missing, points at Settings, and does not work around it with another tool.
+    ((pending.bundles ?? []).length > 0
+      ? `Capabilities this recipe was made with that this box does not have: ${describeBundleGaps(pending.bundles ?? []).join("; ")}. ` +
+        "Say so in one clause and that a person attaches bundles in Settings → Boxes; do not ask for keys, do not substitute another route, and do not treat a same-named bundle as the same grant. "
       : "") +
     "Never ask for what the box or this cue can tell you (the clock, the files, who you are talking to). ";
   const gettingStarted = template.gettingStarted !== undefined ? ` Read and follow the skill "${template.gettingStarted.skill}" before you speak.` : "";
@@ -718,6 +929,8 @@ export interface PackSelection {
   skills: readonly { slug: string; body?: string; description?: string }[];
   routines: readonly { slug: string; body?: string; description?: string }[];
   connectors: readonly string[];
+  /** Hosts whose learnings travel with the recipe, read from the author's own store. */
+  learnings?: readonly string[];
   gettingStarted?: { skill: string };
 }
 
@@ -731,6 +944,10 @@ export interface PackContext {
   teammates: readonly string[];
   /** This bot's own records, so a memory about a person is refused whatever words it arrives in. */
   memoryRecords: readonly MemoryRecord[];
+  /** The bundles the author's box carries, as names and what they provide (ids, never values). */
+  bundles?: readonly TemplateBundleRef[];
+  /** The author's learnings for a host, as the file keeps them. */
+  learningsFor?: (host: string) => string[];
   createdBy?: string;
   now?: () => string;
 }
@@ -852,6 +1069,21 @@ export async function packTemplate(
   for (const ref of selection.skills) await packOne(ref, false);
   for (const ref of selection.routines) await packOne(ref, true);
 
+  const packedLearnings: TemplateLearning[] = [];
+  for (const wanted of selection.learnings ?? []) {
+    const host = hostOf(wanted);
+    if (host === undefined) {
+      dropped.push(`learnings for "${wanted}": not a host name`);
+      continue;
+    }
+    const lines = context.learningsFor?.(host) ?? [];
+    if (lines.length === 0) {
+      dropped.push(`learnings for ${host}: nothing kept here`);
+      continue;
+    }
+    packedLearnings.push({ host, lines });
+  }
+
   const tools = selection.profile.tools ?? tierOf(context.self.tools);
   const draft: Record<string, unknown> = {
     format: TEMPLATE_FORMAT,
@@ -866,6 +1098,8 @@ export async function packTemplate(
     skills,
     routines,
     connectors: [...new Set(selection.connectors.map(name => name.trim()).filter(name => name !== ""))],
+    ...(context.bundles !== undefined && context.bundles.length > 0 ? { bundles: context.bundles } : {}),
+    ...(packedLearnings.length > 0 ? { learnings: packedLearnings } : {}),
     ...(selection.gettingStarted !== undefined ? { gettingStarted: selection.gettingStarted } : {}),
     meta: {
       createdAt: (context.now ?? (() => new Date().toISOString()))(),

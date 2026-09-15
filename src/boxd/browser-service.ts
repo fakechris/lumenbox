@@ -1444,6 +1444,22 @@ export class BrowserService {
     );
   }
 
+  /**
+   * Drops the cached page for a desktop so the next op re-attaches — and relaunches the
+   * browser if it is gone. The recovery path's one lever (INV-146); pageFor says the
+   * tab was lost when it re-attaches, as it always did.
+   */
+  forget(display: number): void {
+    const page = this.pages.get(display);
+    if (page === undefined) return;
+    this.pages.delete(display);
+    try {
+      page.session.close();
+    } catch {
+      // Already dead, which is why we are here.
+    }
+  }
+
   private async pageFor(display: number, openAt?: string): Promise<BrowserPage> {
     const existing = this.pages.get(display);
     // A live session bound to a target the registry no longer names (unregistered,

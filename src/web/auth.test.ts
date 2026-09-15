@@ -90,51 +90,48 @@ test("identity is read only from a request authentication accepted", () => {
 
   // A box reachable directly — a developer's laptop, a misconfigured publish — would otherwise
   // accept any claimed identity. The token is the proof the request came through the gateway.
-  assert.deepEqual(callerOf(headers, false), { userId: undefined, role: "owner" });
+  assert.deepEqual(callerOf(headers, false), { userId: undefined, role: undefined });
   assert.deepEqual(callerOf(headers, true), { userId: "u1", role: "viewer" });
 });
 
-test("an absent role is owner, an unrecognised one is not", () => {
+test("the gateway's words are translated here and nowhere else; an absent role asserts nothing (INV-537)", () => {
   // Three cases, and conflating the last two is a privilege escalation.
-  assert.equal(callerOf({}, true).role, "owner", "nobody asserting anything: the single-user case");
-  assert.equal(callerOf({ "x-agentbox-role": "member" }, true).role, "member");
+  assert.equal(callerOf({}, true).role, undefined, "nobody asserted anything; the server decides what that means");
+  assert.equal(callerOf({ "x-agentbox-role": "owner" }, true).role, "admin");
+  assert.equal(callerOf({ "x-agentbox-role": "member" }, true).role, "driver");
+  assert.equal(callerOf({ "x-agentbox-role": "viewer" }, true).role, "viewer");
   assert.equal(
     callerOf({ "x-agentbox-role": "superuser" }, true).role,
     "viewer",
     "something upstream is wrong, so the answer is least privilege, not most"
   );
+  // And an unasserted caller — the installation's own credential — still drives.
+  assert.equal(mayDrive(callerOf({}, true)), true);
 });
 
 test("a viewer may watch but not drive, and is told which role would", () => {
   const viewer = callerOf({ "x-agentbox-role": "viewer" }, true);
   const member = callerOf({ "x-agentbox-role": "member" }, true);
 
-  const reason = refusalToDrive(viewer, undefined);
+  const reason = refusalToDrive(viewer);
   assert.ok(reason, "a viewer cannot drive");
-  assert.match(reason, /member or an owner/, "a blank 403 generates a support conversation");
-  assert.equal(refusalToDrive(member, undefined), undefined);
+  assert.match(reason, /driver or an admin/, "a blank 403 generates a support conversation");
+  assert.equal(refusalToDrive(member), undefined);
   assert.equal(mayDrive(viewer), false);
   assert.equal(mayDrive(member), true);
 });
 
-test("a private agent belongs to the person who made it", () => {
+test("driving is not asked about the agent any more: authority lives on the box (INV-540)", () => {
   const alice = callerOf({ "x-agentbox-user": "u-alice", "x-agentbox-role": "member" }, true);
   const bob = callerOf({ "x-agentbox-user": "u-bob", "x-agentbox-role": "member" }, true);
-  const owner = callerOf({ "x-agentbox-user": "u-boss", "x-agentbox-role": "owner" }, true);
+  const viewer = callerOf({ "x-agentbox-user": "u-vic", "x-agentbox-role": "viewer" }, true);
 
-  const shared = { visibility: "shared" as const, ownerUserId: "u-alice" };
-  const secret = { visibility: "private" as const, ownerUserId: "u-alice" };
-
-  // Shared is the default, because the reason a tenant is a team is that agents work together.
-  assert.equal(refusalToDrive(bob, shared), undefined);
-  assert.equal(refusalToDrive(alice, secret), undefined);
-  assert.ok(refusalToDrive(bob, secret), "not Bob's to drive");
-
-  // An owner is not exempt: the point is "whose agent is this", and an owner reaching into someone's
-  // private agent by accident is the same accident. Deliberate access is a shell away, and visible.
-  assert.ok(refusalToDrive(owner, secret), "not even an owner, by accident");
-
-  // An agent from before this existed has no owner and no visibility, and stays drivable.
-  assert.equal(refusalToDrive(bob, {}), undefined);
-  assert.equal(refusalToDrive(bob, undefined), undefined);
+  // Two drivers get the same answer about the same work, whoever created it — docs/22 §0's
+  // uniformity, which the retired per-agent `visibility` check made false in the running
+  // system for weeks. What separates two people now is two boxes with different members
+  // (INV-538, `mayEnterBox`), asked by the same callers right after this.
+  assert.equal(refusalToDrive(alice), undefined);
+  assert.equal(refusalToDrive(bob), undefined);
+  assert.ok(refusalToDrive(viewer), "the role still decides");
 });
+

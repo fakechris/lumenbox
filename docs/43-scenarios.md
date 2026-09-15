@@ -1,3 +1,9 @@
+<!-- doc: 43-scenarios
+     title: Episodes as tests
+     family: decision
+     status: current
+     updated: 2026-09-14
+-->
 # 43 · Episodes as tests
 
 *2026-09-09. Why conduct regressions keep reaching the person first, and the two harnesses that
@@ -43,6 +49,57 @@ When a run goes wrong, the fix is not finished until the episode is a scenario. 
 shape that made it bad, script the model to behave that way, and assert on the scorecard. Two
 lines in `scenario.test.ts` are worth more than a paragraph in a prompt, because the paragraph is
 not checked and the scenario is.
+
+## The release scorecard (INV-130, 2026-09-13)
+
+`npm run release:check` now ends by writing a scorecard (`src/host/scorecard.ts`,
+`scripts/scorecard.mjs`) to `~/.agentbox/scorecards/<time>-<commit>.json`: commit and
+dirty flag, node version, build time, and three sections kept apart — **deterministic**
+(the hermetic suite), **artifact** (`release-check.mjs`), **model** (the live scenarios,
+only from a `--scenario out.json` the operator produced under their own credentials;
+never run here, never PASS when absent — SKIPPED, on the card and in the output).
+
+Verdicts: **PASS** (all three ran clean against a comparable baseline), **FAIL** (a hard
+gate: tests or artifact), **INCOMPLETE** (a section skipped, no baseline, or a baseline
+from another provider/model/fixture version — refused and said), **REVIEW** (a check's
+pass rate fell against a comparable baseline; a named person accepts it with
+`--accept "scenario/check=name"` or the build waits). Exit codes 0/1/2/3;
+`npm run release:scorecard` is the strict standalone gate, and under `release:check` an
+INCOMPLETE card does not fail a developer machine's build. `--inject-failure` proves the
+gate closes (A3) and is exercised by `scorecard.test.ts` through the real script. The
+scenario runner's `--json` now records provider and model so two runs are comparable
+or known not to be.
+
+## The delivery journeys (INV-480, 2026-09-14)
+
+`src/host/journeys.ts` freezes what one person asks for, in three classes — a report from
+several materials, a read-only browser collection, a check of a routine's last result —
+each in three shapes: as asked, with an authorization the rails refuse (no vault for a
+secret fill, a private address the URL guard stops, a host command with no host runner),
+and interrupted then resumed on "continue". Nine variants, each with named checks: the
+artifact says where its numbers came from, nothing from a refused step reaches it, the
+refusal is on record and the person is told, the partial is on disk and says what is
+pending, and a resume never repeats a write. `journeys.test.ts` runs them on the scripted
+model and the memory box (the harness gained `box` overrides and a `display`, so a
+collection journey's browser answers with a fixed page) and prints the report: commit,
+configuration, per-journey rounds / questions / refusals / artifacts, and the two things
+this cannot verify — a real model's conduct (`npm run scenario`) and a person's acceptance
+(no trial participants recruited) — as UNVERIFIED, not inferred.
+
+## The migration trials (INV-481, 2026-09-14)
+
+`src/host/migration-trials.ts` freezes five workflows — four taught by a skill, one by a
+site learning, one of them reaching for a capability the receiver lacks — each with three
+inputs never used to demonstrate it, and runs every input taught and untaught on the
+scripted model (the harness now takes `skills`, and learnings are read from the episode's
+own `AGENTBOX_LEARNINGS`). Each cell records calls, questions, refusals, the artifact, and
+failures classified by stage: extraction (the skill reached the prompt), parameterisation
+(the artifact carries this input's own value), capability-binding (the host command was
+refused, not run, and the person told), environment (the learning was recalled on a page
+it was not written on; the untaught control recalls nothing), execution, verification.
+The report prints the 5×3 matrix taught|untaught with failures by stage, says that the
+call delta is by construction of the scripted model, and lists as UNVERIFIED the same
+matrix on a real model and the two non-author installs the contract asks for.
 
 ## What it is not
 

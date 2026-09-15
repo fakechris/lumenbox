@@ -1,3 +1,9 @@
+<!-- doc: 44-webhook-triggers
+     title: Webhook triggers
+     family: decision
+     status: current
+     updated: 2026-09-14
+-->
 # 44 · Webhook triggers
 
 *2026-09-09. A URL per routine, so anything that can make an HTTP request can set an agent
@@ -120,3 +126,34 @@ spend is gone.
 - **One secret per routine, no second one during rotation.** Rotating breaks anything still using
   the old secret at that instant; two live secrets with an overlap window would make rotation
   free.
+
+
+## Commitments a routine writes down are checked (INV-528, 2026-09-14)
+
+A weekly retro said "send the reminder before 9/11" and did not; the sentence lived in a
+document. Now a delivering routine's report may carry a `## 下周改` / `## Next week`
+block, one item per bullet with a date; when the report is delivered the host reconciles
+each item against the board and the scheduler (`src/host/commitments.ts`): a commitment
+is held by a task card that matches it (shared key words, or its id named) with a due
+date on or before the item's, or by an `@at` routine due by then. What nothing holds is
+said in the same chat and the agent is cued, in a turn of its own, to create the card and
+the reminder now; what it created is delivered too. Every run's commitments and checks go
+to `~/.agentbox/commitments.jsonl`, and the next run of the same routine opens with where
+last time's stand — a commitment repeated without a card is a finding the person reads.
+`SchedulerDeps.run` carries the routine's slug; `priorCommitments(slug)` is the prompt line.
+
+**What a card has to be to count (INV-534, 2026-09-14).** The first reconcile searched
+the whole board by word overlap and took the first hit, whatever state it was in — so a
+weekly retro promising "send the weekly reminder" every week was satisfied by the card it
+had finished, or dropped, weeks ago. A carrier must now be live, or finished after the
+commitment was written (`canCarry`); a card due the 20th no longer satisfies "by the
+19th" (the day of slack is gone; both sides are end-of-day UTC); and each item is bound
+to the task id the last run tied it to, so a repeated commitment keeps meaning the same
+card instead of drifting onto whatever shares the most words today (`bindingsOf`). After
+the fix cue runs, the host reconciles again and records *that* — the agent saying "created
+it" is a sentence, and the ledger is about what exists — and says once what is still
+unheld rather than cueing a second time. A commitment nobody restated this week does not
+disappear: unfinished items are carried forward on the record with the run that made them,
+and the next opening lists them under "Still open from before". `runNow` and webhook runs
+go through the same path as the timer — same slug, same opening, same reconcile — because
+"run it now" being a different code path meant clicking it tested everything except this.

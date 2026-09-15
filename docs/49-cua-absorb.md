@@ -1,3 +1,9 @@
+<!-- doc: 49-cua-absorb
+     title: 吸收四个 CUA 项目：操作有证据、不可逆有门、接管即教学、经验可共享
+     family: decision
+     status: current
+     updated: 2026-09-14
+-->
 # 49. 吸收四个 CUA 项目：操作有证据、不可逆有门、接管即教学、经验可共享
 
 日期：2026-09-10。来源：`research/grokbot/RESEARCH_CUA_FOUR_PROJECTS.md`（browser-use-pi、huashu-chrome、huashu-mac-use、ego-lite 逐个 review 与 feature matrix），以及 Grok Bot 0.30 的 `learn-from-demonstration` 托管 skill。
@@ -38,6 +44,10 @@
 - 结果新增 `effect: confirmed | partial | suspected_noop | unverifiable`，附 diff 比例；`unverifiable` 用于焦点被 grab、窗口被遮挡、截图失败。
 - `suspected_noop` 与 `unverifiable` 时 host 不自动重试，并在工具结果里告诉模型"重新看一眼再决定"。
 - 验收：在 smoke 里构造一个抓住焦点的 `xdotool key --clearmodifiers` 场景，点击报 `unverifiable` 而不是成功；正常 xterm 输入报 `confirmed`；`cua.test.ts` 覆盖邻域裁剪与比例阈值。
+
+### A1b. 桌面控件树：`list_elements` / `click_element`（INV-412，2026-09-11）
+
+镜像装 `at-spi2-core python3-gi gir1.2-atspi-2.0`；`start-display` 每桌面起 `at-spi-bus-launcher`（地址写在 X root 的 `AT_SPI_BUS`，GTK/Qt/Chromium 由此找到总线，不需要 session bus）；`box-chrome` 加 `--force-renderer-accessibility`。`docker/box/box-ax`（python，4s 截止）读活动窗口的可操作控件（角色、名称、状态、屏幕矩形，上限 150），输出 JSON；boxd 的 `list_elements` 把矩形换算到 API 坐标并记住每个 ref 的中心，`click_element(ref)` 在盒内解析成坐标走 `click` 同一条路，所以 A1 的效果证据与 B1 的审查同样生效。没有树（xterm、Electron）时 `elements_note` 说明原因、整批 outcome=unknown，host 把它渲染成 "No control outline: …Work from the screenshot."；有树时渲染成与 browser_snapshot 同形的大纲 `- role "name" [ref=a3] [states] at (x,y)`。smoke：thunar 读到 24 个控件并点中菜单（effect confirmed），xterm 返回 unknown 并附原因；42/42。**增量实测（2026-09-11，arm64）**：镜像 1.88 GB → 1.89 GB（+~10 MB）；`box up --recreate` 到 daemon 就绪 71 s，与此前一轮同量级（未见可测差异）；a11y 总线每桌面一个 `at-spi-bus-launcher` 进程。踩过的坑：boxd 执行器的环境只有 DISPLAY，按名找 box-ax 需要显式 PATH；xfwm4 自己也在总线上且带 ACTIVE 窗口，所以读树必须锚定 X 的活动窗口标题，否则终端会读成"空成功"。
 
 ### A2. `browser_act` 目标范围 diff 与 `expect`
 

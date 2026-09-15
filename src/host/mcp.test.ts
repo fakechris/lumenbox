@@ -275,3 +275,27 @@ test("reload keeps an unchanged server, stops a removed one, and starts a new on
     cleanup();
   }
 });
+
+test("a box sees only the servers its bundles name, and a host-level server's tools are known as such (INV-439)", async () => {
+  const { path, cleanup } = withStub();
+  const manager = new McpManager([
+    { name: "stub", command: process.execPath, args: [path] },
+    { name: "local-kb", command: process.execPath, args: [path], host: true },
+  ]);
+  try {
+    await manager.ready();
+    assert.equal(manager.tools().length, 4);
+    // No bundle names a server: everything, as before.
+    assert.equal(manager.toolsFor(undefined).length, 4);
+    assert.equal(manager.toolsFor([]).length, 4);
+    // A box whose bundles name one server sees that server's tools only.
+    assert.deepEqual(manager.toolsFor(["local-kb"]).map(tool => tool.name), [`local-kb${MCP_SEPARATOR}echo`, `local-kb${MCP_SEPARATOR}boom`]);
+    assert.deepEqual(manager.toolsFor(["nope"]), [], "a name that matches nothing narrows to nothing, loudly");
+    assert.equal(manager.isHostTool(`local-kb${MCP_SEPARATOR}echo`), true);
+    assert.equal(manager.isHostTool(`stub${MCP_SEPARATOR}echo`), false);
+    assert.equal(manager.isHostTool("bash"), false);
+  } finally {
+    manager.stop();
+    cleanup();
+  }
+});

@@ -1,3 +1,9 @@
+<!-- doc: 31-harness-review
+     title: The turn engine, reviewed against the incident and three references
+     family: decision
+     status: current
+     updated: 2026-09-02
+-->
 # 31 — The turn engine, reviewed against the incident and three references
 
 **Status: built 2026-09-02 (`feat/turn-engine`), the same evening the plan was approved.** What

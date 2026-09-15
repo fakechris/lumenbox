@@ -34,7 +34,7 @@ import { hermeticEnv } from "./test-env.mjs";
  * remember to raise is a number that goes stale, so staleness is now itself reported: passing far
  * above the floor prints how to raise it, every run, until somebody does.
  */
-const FLOOR = Number(process.env.AGENTBOX_TEST_FLOOR ?? 1398);
+const FLOOR = Number(process.env.AGENTBOX_TEST_FLOOR ?? 1581);
 /** How far above the floor the suite may sit before the floor is called stale. */
 const STALE_MARGIN = 40;
 
@@ -49,6 +49,9 @@ const child = spawn(
     "--test-reporter=tap",
     "--test-timeout=30000",
     "src/**/*.test.ts",
+    // The documents are checked like the code is: two of them claiming one number, or one
+    // domain, is the same class of defect as two functions claiming one name.
+    "scripts/*.test.mjs",
   ],
   // An allowlisted environment, not this shell's: see scripts/test-env.mjs. The run
   // must not be able to read a credential that happens to be exported here, and must

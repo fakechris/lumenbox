@@ -1,3 +1,11 @@
+<!-- doc: 18-identity-box
+     title: Boxes that say what they are (v4)
+     family: decision
+     status: superseded
+     superseded-by: 22-domain-model
+     why: §4 replaces boxName/config.boxes[name] with ids and incarnations
+     updated: 2026-08-29
+-->
 # Boxes that say what they are (v4)
 
 Status: **design, fourth version.** v1 and v2 were rejected (nine fatals, then eleven,

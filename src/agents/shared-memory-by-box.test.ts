@@ -51,3 +51,34 @@ test("a box's agents read their own box's shared memory, what was promoted, and 
     rmSync(root, { recursive: true, force: true });
   }
 });
+
+// ── a topic inherits the room it opened in (INV-436) ────────────────────────────────
+test("a fresh thread is seeded from the room's recent chatter once, marked as from the room, and never again", () => {
+  const root = mkdtempSync(join(tmpdir(), "agentbox-thread-seed-"));
+  try {
+    const registry = new AgentRegistry(root);
+    const ada = registry.create({ name: "Ada" });
+    const room = "feishu-oc_room";
+    const thread = "feishu-oc_room-om_topic";
+    assert.equal(registry.isFreshConversation(ada.id, thread), true);
+    for (let i = 1; i <= 15; i++) {
+      registry.appendHeard(ada.id, room, { at: `2026-09-11T10:${String(i).padStart(2, "0")}:00.000Z`, sender: "bob", text: `room line ${i}` });
+    }
+    const seeded = registry.seedHeardFrom(ada.id, thread, room);
+    assert.equal(seeded, 12, "bounded to the last dozen lines");
+    const heard = registry.readHeard(ada.id, thread);
+    assert.equal(heard[0]?.text, "[from the room] room line 4");
+    assert.equal(heard[heard.length - 1]?.text, "[from the room] room line 15");
+    assert.equal(registry.isFreshConversation(ada.id, thread), false);
+    // The thread has context now; a second seed does nothing.
+    assert.equal(registry.seedHeardFrom(ada.id, thread, room), 0);
+    assert.equal(registry.readHeard(ada.id, thread).length, 12);
+    // A thread with a transcript but nothing heard is not fresh either.
+    const other = "feishu-oc_room-om_other";
+    registry.appendTranscript(ada.id, { role: "user", text: "hi", at: "2026-09-11T11:00:00.000Z" } as never, other);
+    assert.equal(registry.isFreshConversation(ada.id, other), false);
+    assert.equal(registry.seedHeardFrom(ada.id, other, room), 0);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});

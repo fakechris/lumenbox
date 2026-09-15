@@ -1,3 +1,10 @@
+<!-- doc: 56-teaching-upgrade
+     title: Teaching draft upgrade
+     family: guide
+     status: current
+     updated: 2026-09-15
+-->
+
 # Teaching draft upgrade
 
 Demonstrations now produce reviewable drafts rather than writing a skill during an

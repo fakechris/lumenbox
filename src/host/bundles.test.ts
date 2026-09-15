@@ -127,3 +127,51 @@ test("migrating scopes is a plan: secrets travel, tools stay on the agent, chats
   assert.match(text, /Cy: scope missing does not exist/);
   assert.ok(file.bundles.some(b => b.id === "orphan"), "an unattached scope still becomes a bundle");
 });
+
+test("a box's bundles travel as refs (ids, never values), and a person attaches an existing bundle idempotently — never one made from a name", () => {
+  const { store, cleanup } = tempStore();
+  try {
+    store.save({
+      bundles: [
+        { id: "gh", name: "github", secretIds: ["GITHUB_TOKEN"], connectors: ["mcp:github"], repositories: [{ path: "/repo", mode: "ro" }] },
+        { id: "notes", name: "notes", secretIds: [] },
+      ],
+      boxes: { [alpha.id]: ["gh"] },
+    });
+    assert.deepEqual(store.refsFor(alpha), [{ name: "github", needs: { connectors: ["mcp:github"], secretIds: ["GITHUB_TOKEN"], repositories: [{ path: "/repo", mode: "ro" }] } }]);
+    assert.deepEqual(store.refsFor(beta), []);
+
+    assert.equal(store.attach(beta, "notes"), true);
+    assert.equal(store.attach(beta, "notes"), true, "binding twice is one attachment");
+    assert.deepEqual(store.attachments().boxes[beta.id], ["notes"]);
+    assert.equal(store.attach(beta, "github-from-a-template"), false, "a name is not a bundle");
+    assert.deepEqual(store.forBox(beta)?.names, ["notes"]);
+    // What the box may do is read from the store each time, so a detached bundle is gone at the next look.
+    store.save({ bundles: store.list(), boxes: { [alpha.id]: ["gh"] } });
+    assert.equal(store.forBox(beta), undefined);
+  } finally {
+    cleanup();
+  }
+});
+
+test("a secret is granted to a box, and an agent's own scope is not a subject any more (INV-539)", () => {
+  // docs/22 §3's second live violation: `RunOnHost` resolved a secret off the calling
+  // agent's `scopeId`, so two agents in one box demonstrably differed in secret reach.
+  // The subject is the box; a scope that used to grant it grants nothing until
+  // `agentbox bundle migrate` has turned it into the box's bundle — fail-closed, because
+  // the alternative is one agent quietly holding what its neighbour cannot.
+  const { store, cleanup } = tempStore();
+  try {
+    store.save({
+      bundles: [{ id: "vendor", name: "Vendor work", secretIds: ["VENDOR_KEY"] }],
+      defaults: [],
+      boxes: { "Alpha box": ["vendor"] },
+    });
+    assert.ok(store.grantsSecret(alpha, "VENDOR_KEY"), "the box's bundle grants it");
+    assert.equal(store.grantsSecret(beta, "VENDOR_KEY"), false, "and grants it to that box only");
+    // Whichever agent in Alpha asks, the answer is the same: there is no argument through
+    // which two agents in one box could differ, which is the whole of the fix.
+  } finally {
+    cleanup();
+  }
+});

@@ -41,7 +41,7 @@ import { APP_HTML, LOGIN_HTML } from "./app-html.ts";
 import {
   authorize,
   callerOf,
-  COOKIE_NAME,
+  type AuthDecision,
   isLoopback,
   mayDrive,
   parseCookies,
@@ -55,7 +55,6 @@ import {
   SESSION_COOKIE,
   sessionCookie,
   sessionKey,
-  SESSION_MAX_AGE_SECONDS,
 } from "./session.ts";
 
 /**
@@ -189,11 +188,20 @@ import {
   type McpServerTool,
 } from "./mcp-server.ts";
 import { Vault, type Grant } from "../host/vault.ts";
+import { OAuthGate } from "../host/oauth.ts";
+import { MemoryAdmin } from "../host/memory-admin.ts";
+import { ConnectCodeStore } from "../box/connect-codes.ts";
+import { FollowUpBudget, type FollowUpItem } from "../host/follow-up-budget.ts";
+import { SessionEpochs } from "./session-epochs.ts";
+import { mayEnterBox, membersLabel, refusalToEnter } from "../box/membership.ts";
+import { attentionFor } from "../host/attention.ts";
+import { QuestionWatch } from "../host/question-expiry.ts";
+import { appendLine } from "../host/jsonl.ts";
 import { seedStarterSkills } from "../host/starter-skills.ts";
 import { firstRunCue } from "../host/prompt.ts";
 import { readBoxToken } from "../box/docker.ts";
 import { attachedBox, tokenOf } from "../box/boxes.ts";
-import { catalogTemplate, describeTemplate, parseTemplate, rewriteFrontmatter, templatesEnabled, unresolvedPlaceholders } from "../host/template.ts";
+import { catalogTemplate, describeTemplate, parseTemplate, resolveBundleRefs, rewriteFrontmatter, templatesEnabled, unresolvedPlaceholders } from "../host/template.ts";
 import { SKILLS_DIR, SKILL_FILENAME, slugify } from "../host/skills.ts";
 import { catchUpFloor } from "../channels/ingress.ts";
 import { REPLAY_MAX_AGE_MS } from "../channels/feishu.ts";
@@ -230,6 +238,8 @@ type OutboundEvent =
   | { type: "error"; message: string }
   /** An agent asked the person something; the page shows a card with the answers as buttons. */
   | { type: "question"; agentId: string; agentName: string; question: string; options?: string[]; fallback?: string; conversation?: string }
+  | { type: "question_expired"; agentId: string; agentName: string; question: string; verdict: "default" | "skipped" }
+  | { type: "task_aging"; taskId: string; title: string; kind: "nudge" | "archived" | "closed"; text: string }
   /** One line of docker output while the box is brought up from the page. */
   | { type: "box_setup"; line: string; done?: boolean; ok?: boolean }
   /** An approval was just created; the desktop shell turns this into a notification. */
@@ -446,6 +456,21 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
   // The credential vault. Read fresh on each edit through the routes; the orchestrator
   // holds this one instance, so a granted secret is usable on the next host command.
   const vault = new Vault();
+  // The OAuth gate over it (INV-422): tokens minted and refreshed here, never shown.
+  const oauth = new OAuthGate(vault);
+  // Memory as a person sees and corrects it (INV-426): reads the registry's files, writes
+  // retractions and edits with a version check, audits to memory-audit.jsonl.
+  const memoryAdmin = new MemoryAdmin(registry, join(agentboxHome(), "memory-audit.jsonl"));
+  // Connection codes and runner credentials (INV-434): how a machine elsewhere becomes a
+  // box here. Codes and credentials are stored hashed and never logged.
+  const connectCodes = new ConnectCodeStore(join(agentboxHome(), "connect.json"), registry.box.id);
+  // Questions that expire (INV-526): every AskUser is watched; unanswered past its window,
+  // the agent is woken to proceed on its default or to decide, and the chat is told.
+  const questions = new QuestionWatch(join(agentboxHome(), "questions.jsonl"));
+  // What the host has already said to each room today, so four rails do not each start
+  // their own conversation (INV-535). Kept across a restart: a budget that resets when
+  // the process does is not a budget.
+  const followUps = new FollowUpBudget(join(agentboxHome(), "follow-ups.jsonl"));
 
   // Channel task cards listen here while their ask is in flight: each listener is a
   // narrow filter on (agent, conversation), added before the prompt and removed after
@@ -465,6 +490,7 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
     boxProvisioner: provisioner,
     hostRunner,
     vault,
+    oauth,
     // An agent that cannot proceed without knowing something asks the person who gave
     // it the work — the same routing an approval uses, because the person who asked
     // for it is the one who can say what they meant. It reaches their chat and the
@@ -499,7 +525,20 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
         ...(input.fallback !== undefined ? { fallback: input.fallback } : {}),
         ...(input.conversation !== undefined ? { conversation: input.conversation } : {}),
       });
-      const where = chats?.askQuestion(input);
+      // Watched first, so the card can say what the watch will do and when (INV-533);
+      // then put to the person, under the identity it was put to — only their reply
+      // answers it. A question from the page names nobody, and any voice in that
+      // conversation is the one that was asked.
+      const watched = questions.ask({
+        agentId: input.agentId,
+        agentName: input.agentName,
+        conversation: input.conversation ?? "main",
+        question: input.question,
+        ...(input.fallback !== undefined ? { fallback: input.fallback } : {}),
+        ...(input.expiresInMinutes !== undefined ? { ttlMs: input.expiresInMinutes * 60_000 } : {}),
+      }).question;
+      const where = chats?.askQuestion({ ...input, expiresAt: watched.expiresAt });
+      if (where !== undefined) questions.setAsker(watched.id, where);
       // The page is always a place an answer can come from, so a question is never
       // undeliverable while somebody could be looking at it.
       return where ?? "in the app";
@@ -507,7 +546,27 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
     // A scheduled skill that named a chat reports into it. Without this a morning brief
     // ran every morning into the main conversation, which no chat reads — the automation
     // worked and nobody ever saw it.
-    deliverToChat: async (chatKey, text) => {
+    deliverToChat: async (chatKey, text, fromAgentId) => {
+      // A routine reports into its own box's rooms (INV-541). A chat nobody has driven is
+      // nobody's — a skill file may name a room the bot has never been messaged in, and
+      // that is an ordinary setup, so it is allowed. A chat that *another box's* agents
+      // have been talked to in is that box's room, and a routine over here delivering
+      // into it is the cross-box leak Octop refuses on session ownership and we had no
+      // check for at all.
+      const owner = fromAgentId === undefined ? undefined : registry.tryGet(fromAgentId);
+      if (owner !== undefined) {
+        const myBox = registry.boxOf(owner.id).id;
+        const conversation = conversationIdFor(chatKey);
+        const elsewhere = registry
+          .listBoxes()
+          .filter(box => box.id !== myBox)
+          .some(box => registry.agentsIn(box.id).some(agent => registry.readTranscript(agent.id, conversation).length > 0));
+        const here = registry.agentsIn(myBox).some(agent => registry.readTranscript(agent.id, conversation).length > 0);
+        if (elsewhere && !here) {
+          log(`refused: ${owner.profile.name} (box ${registry.boxOf(owner.id).name}) tried to report into ${chatKey}, which is another box's room`);
+          return;
+        }
+      }
       log(`scheduled report → ${chatKey}`);
       await chats?.pushToChat(chatKey, text);
     },
@@ -992,7 +1051,34 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
       // chat stays the address — replies, files and the outbox still go to the room.
       const conversation = conversationIdFor(threadKey ?? chatKey);
       conversations.record(conversation, threadKey ?? chatKey);
+      // A topic's first direct message materialises its session (INV-436): it inherits
+      // the last lines the room heard, and the room hears that a topic started, so the
+      // agent answering at room level knows work moved into a thread.
+      if (threadKey !== undefined) {
+        const room = conversationIdFor(chatKey);
+        const seeded = registry.seedHeardFrom(agent.id, conversation, room);
+        if (seeded > 0 || registry.readTranscript(agent.id, conversation).length === 0) {
+          registry.appendHeard(agent.id, room, {
+            at: new Date().toISOString(),
+            sender: identity,
+            text: `[in a topic] ${text.slice(0, 200)}`,
+          });
+        }
+      }
       const principal = principals.resolve(identity).id;
+      // The third entrance (INV-538). A message from a chat is somebody entering a box, and
+      // the same members set answers it here as on the web — otherwise membership is a
+      // property of which door you used, which is exactly what docs/22 §0 forbids.
+      const theirBox = registry.boxOf(agent.id);
+      if (!mayEnterBox(theirBox, principal)) {
+        log(`${identity} is not in ${theirBox.name}; refused at the chat door`);
+        return refusalToEnter(theirBox.name, principals.resolve(identity).name);
+      }
+      // This person speaking is the answer to whatever this agent asked them (INV-533).
+      // Not "somebody spoke in the room": in a group, a colleague's unrelated message
+      // used to clear a question put to someone else, and the agent proceeded as though
+      // it had been answered.
+      questions.noteReply(agent.id, identity);
 
       // Made before the turn, because the prompt states the path as a fact — "its
       // directory on the box is X/" — while the directory was created lazily, on the first
@@ -1119,16 +1205,25 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
     // its note — a board that loses failed work answers "what needs somebody" wrong.
     // "停" from the chat is the web stop button: recorded, effective at the next round
     // boundary, cleared automatically when the person's next instruction starts a turn.
-    stop: agentName => {
+    stop: (agentName, identity) => {
       let agent: { id: string } | undefined;
       try {
         agent = agentName !== undefined ? registry.resolve(agentName) : registry.list()[0];
       } catch {
         agent = undefined;
       }
-      if (agent === undefined) return false;
+      if (agent === undefined) return "not-running";
+      // Stopping somebody's worker is entering their box (INV-538). The door already
+      // asked whether this person may drive *anything*; this is the other half, and it
+      // was missing — `stop` and `steer` reach the orchestrator without passing the
+      // membership check that `ask` makes, so a driver who is in no box of ours could
+      // halt another box's run from a shared room.
+      if (!mayEnterBox(registry.boxOf(agent.id), principals.resolve(identity).id)) {
+        log(`refused stop: ${identity} is not in ${registry.boxOf(agent.id).name}`);
+        return "refused";
+      }
       orchestrator.policy.stop(agent.id);
-      return true;
+      return "stopped";
     },
     // A mid-task message joins the running turn. Fire-and-forget on purpose: the bus's
     // own race rules (fixed in races.test.ts) make it steering for the running turn or
@@ -1140,7 +1235,12 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
       } catch {
         agent = undefined;
       }
-      if (agent === undefined) return;
+      if (agent === undefined) return "refused";
+      // The same box question as `stop` above: steering a running turn is driving it.
+      if (!mayEnterBox(registry.boxOf(agent.id), principals.resolve(identity).id)) {
+        log(`refused steer: ${identity} is not in ${registry.boxOf(agent.id).name}`);
+        return "refused";
+      }
       void orchestrator
         .prompt(
           agent.id,
@@ -1151,6 +1251,7 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
         .catch(error => {
           log(`steer failed: ${error instanceof Error ? error.message : String(error)}`);
         });
+      return "steered";
     },
     board: {
       open: input => {
@@ -1658,6 +1759,95 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
   // Said once per transition, not once per check: a warning repeated every ten minutes is
   // one people filter out, including on the occasion it is true.
   const channelState = new Map<string, string>();
+  // Expired questions, once a minute: answered means the person spoke in that
+  // conversation after the ask (the transcript says); otherwise the agent is woken with
+  // the default or the skip, the chat hears one line, and the ledger keeps the verdict.
+  const questionTimer = setInterval(() => {
+    // Consulted only for a question nobody was named in: a page question, answered by
+    // whoever is at the page. Everything asked of a person is settled by that person
+    // speaking, which the door reports as it happens (INV-533).
+    const answeredSince = (q: { agentId: string; conversation: string; askedAt: number }): boolean => {
+      if (!registry.has(q.agentId)) return true;
+      const entries = registry.readTranscript(q.agentId, q.conversation === "main" ? undefined : q.conversation) as { role?: string; kind?: string; text?: unknown; at?: string }[];
+      return entries.some(entry => entry.role === "user" && entry.kind === undefined && typeof entry.text === "string" && entry.at !== undefined && Date.parse(entry.at) > q.askedAt);
+    };
+    for (const expiry of questions.sweep(answeredSince)) {
+      if (expiry.verdict === "answered" || expiry.verdict === "superseded") continue;
+      const { question } = expiry;
+      log(`question: ${question.agentName}'s "${question.question.slice(0, 60)}" expired unanswered → ${expiry.verdict}`);
+
+      // The line goes back to the room that asked, never to "whoever drove this agent
+      // last": a question put in one group and answered by default in another hands one
+      // room's decision to a different set of people (INV-530). A question from the web
+      // has no room; the page and the ledger carry it.
+      const askedIn = question.conversation === "main" ? undefined : conversations.chatKeyFor(question.conversation);
+      // Said whatever the day's budget is — this is the host reporting what it just did
+      // on somebody's behalf, and a silent default is the thing docs/51 forbids. It still
+      // counts against the room's budget, so the nudges know the room was spoken to.
+      if (askedIn !== undefined) void chats?.pushToChat(askedIn, expiry.toChat).then(() => followUps.record(askedIn)).catch((error: unknown) => log(`question: could not tell ${askedIn} (${error instanceof Error ? error.message : String(error)})`));
+      else if (question.conversation !== "main") log(`question: expired in ${question.conversation} but no chat is recorded for it; the ledger has it`);
+      broadcast({ type: "question_expired", agentId: question.agentId, agentName: question.agentName, question: question.question, verdict: expiry.verdict });
+      void orchestrator
+        .prompt(question.agentId, expiry.cue, undefined, { conversation: question.conversation, steerable: false, lane: "background", synthetic: true })
+        .catch(error => log(`question: could not wake ${question.agentName} after expiry (${error instanceof Error ? error.message : String(error)})`));
+    }
+  }, 60_000);
+  questionTimer.unref();
+  // The board's ageing (INV-527) and close proposals (INV-529), hourly: overdue or idle
+  // tasks nudge their requester where the task lives, twice, then are archived; a close
+  // nobody objected to in time closes. Each event is one line where the task came from.
+  const boardTimer = setInterval(() => {
+    const board = orchestrator.tasks;
+    if (board === undefined) return;
+    // One message per room per sweep, inside the room's budget for the day (INV-535).
+    // Four rails each speaking for itself is how a person ends up with twenty notices
+    // and reads none: an ask can wait, an act cannot, and both travel together.
+    const byRoom = new Map<string, FollowUpItem[]>();
+    const reasons = new Map<string, "overdue" | "idle">();
+    for (const event of [...board.age(), ...board.settleCloseProposals()]) {
+      log(`tasks: ${event.text}`);
+      broadcast({ type: "task_aging", taskId: event.task.id, title: event.task.title, kind: event.kind, text: event.text });
+      // A task carries a *conversation id*, not a chatKey — the same distinction that
+      // routed every rescue notice nowhere until the directory was consulted (above).
+      // A nudge counts only once the push lands (INV-530): a room we cannot reach has not
+      // been asked anything, and cannot be said to have not answered.
+      const conversation = event.task.conversation;
+      if (event.kind === "nudge") reasons.set(event.task.id, event.reason);
+      if (conversation === undefined || conversation === "main") {
+        if (event.kind === "nudge") board.recordNudge(event.task.id, event.reason);
+        continue;
+      }
+      const room = byRoom.get(conversation) ?? [];
+      room.push({ kind: event.kind === "nudge" ? "ask" : "act", text: event.text, ref: event.task.id });
+      byRoom.set(conversation, room);
+    }
+    for (const [conversation, items] of byRoom) {
+      const chatKey = conversations.chatKeyFor(conversation);
+      if (chatKey === undefined || chats === undefined) {
+        log(`tasks: ${items.length} notice(s) for ${conversation} have no chat to go to; not counted`);
+        continue;
+      }
+      const message = followUps.compose(chatKey, items);
+      if (message === undefined || message.text === "") {
+        if ((message?.held.length ?? 0) > 0) log(`tasks: ${message!.held.length} nudge(s) for ${chatKey} held: today's follow-ups are spent`);
+        continue;
+      }
+      const target = chats;
+      void target.tryPushToChat(chatKey, message.text).then(result => {
+        if (!result.delivered) {
+          log(`tasks: ${chatKey} was not told (${result.why ?? "no reason given"}); nothing counted`);
+          return;
+        }
+        followUps.record(chatKey);
+        for (const id of message.sent) {
+          const reason = reasons.get(id);
+          if (reason !== undefined) board.recordNudge(id, reason);
+        }
+      });
+    }
+  }, 3_600_000);
+  boardTimer.unref();
+
   const livenessTimer = setInterval(() => {
     void (async () => {
       // Repair before report. The health check tells an operator that a socket looks
@@ -2190,6 +2380,34 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
 
   /** Signs web sessions; set from the resolved UI token before the server listens. */
   let sessionSecret = "";
+  // Which generation of each person's sign-ins is still good (INV-537).
+  const epochs = new SessionEpochs();
+
+  /**
+   * Who may be served at all: the installation token, or a person's own session.
+   *
+   * The token used to be the only answer, which made signing in a way of *getting* the
+   * token: both login paths handed out `agentbox_ui=<token>` beside the session cookie,
+   * so a viewer's browser held the installation's full-power credential and needed only
+   * to send it without the session cookie to be served as the unnamed owner. Roles were
+   * enforced (`refused`) but only on requests that still carried the name.
+   *
+   * Now a session authenticates on its own: signed by a key derived from the token, so
+   * rotating the token still ends every session, and only for an identity the roster
+   * still knows — a person removed from the roster stops being served on their next
+   * request rather than at the end of their cookie's month. The token remains what it
+   * always was for scripts, the CLI and a fresh single-person install.
+   */
+  const admit = (request: { authorization?: string; cookie?: string; query?: string | null }): AuthDecision => {
+    const byToken = authorize({ token, host }, request);
+    if (byToken.allow) return byToken;
+    const session = readSession(parseCookies(request.cookie).get(SESSION_COOKIE), sessionSecret);
+    if (session === undefined || !principals.isKnown(session.identity)) return byToken;
+    // And the generation an admin may have moved on from (INV-537): signing one person out
+    // everywhere must not mean rotating the token and signing out everybody.
+    if (session.epoch < epochs.of(principals.resolve(session.identity).id)) return byToken;
+    return { allow: true, reason: "token" };
+  };
 
   /**
    * What an outside agent may do here, and nothing more.
@@ -2472,16 +2690,10 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
         log(`web login refused: ${identity} signed in via ${channelId} but is not linked`);
         return;
       }
-      const admit = [
-        ...(token !== undefined && token !== ""
-          ? [
-              `${COOKIE_NAME}=${encodeURIComponent(token)}; Path=/; ` +
-                `Max-Age=${SESSION_MAX_AGE_SECONDS}; HttpOnly; SameSite=Lax`,
-            ]
-          : []),
-        sessionCookie(identity, sessionSecret),
-      ];
-      res.writeHead(302, { "set-cookie": admit, location: pending.next });
+      // The session, and only the session: what this browser gets is a credential issued
+      // to *this person*, not the installation's token (which is what it used to be
+      // handed, full power and all).
+      res.writeHead(302, { "set-cookie": [sessionCookie(identity, sessionSecret, epochs.of(principals.resolve(identity).id))], location: pending.next });
       res.end();
       log(`web login: ${identity} via feishu door ${channelId} (${principals.resolve(identity).name})`);
     } catch (error) {
@@ -2496,14 +2708,11 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
       const url = new URL(req.url ?? "/", "http://localhost");
       const route = `${req.method} ${url.pathname}`;
 
-      const decision = authorize(
-        { token, host },
-        {
-          authorization: req.headers.authorization,
-          cookie: req.headers.cookie,
-          query: url.searchParams.get("token"),
-        }
-      );
+      const decision = admit({
+        authorization: req.headers.authorization,
+        cookie: req.headers.cookie,
+        query: url.searchParams.get("token"),
+      });
       // The door itself is before the gate, and must be: a person holding an invite
       // code has no token yet, and a sign-in page that requires being signed in is a
       // locked door with the key inside. These two routes are the only exemption, and
@@ -2556,6 +2765,72 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
         await handleWebhook(req, res, webhookMatch[1]!, url.searchParams);
         return;
       }
+      // A runner registering its boxd (INV-434). Before the UI's token gate, because the
+      // runner holds no UI credential: it holds a one-time code, or after that its own
+      // runner credential. Both are checked here; nothing else on this path is reachable.
+      if (route === "POST /api/boxes/register") {
+        const body = await readJson(req);
+        const name = String(body.name ?? "").trim();
+        const baseUrl = String(body.baseUrl ?? "").trim();
+        const token = typeof body.token === "string" ? body.token.trim() : "";
+        const version = typeof body.version === "string" ? body.version.trim() : undefined;
+        const writeToken = (boxName: string): string => {
+          const dir = join(agentboxHome(), "boxes");
+          mkdirSync(dir, { recursive: true, mode: 0o700 });
+          const tokenFile = join(dir, `${boxName}.token`);
+          writeFileSync(tokenFile, `${token}\n`, { mode: 0o600 });
+          return tokenFile;
+        };
+        if (typeof body.runner === "string" && body.runner.trim() !== "") {
+          // A reconnect: the same registration, idempotent; a new address if it moved.
+          const verdict = connectCodes.verifyRunner(body.runner);
+          if (!verdict.ok) {
+            log(`boxes: a reconnect was refused (${verdict.why})`);
+            send(res, verdict.why === "revoked" ? 403 : 401, { error: verdict.why === "revoked" ? "This box was revoked here; it will not be reconnected." : "Unknown runner credential." });
+            return;
+          }
+          const entry = registry.boxById(verdict.registration.boxId);
+          if (entry === undefined) {
+            send(res, 410, { error: "The box this credential names is no longer registered here." });
+            return;
+          }
+          if (baseUrl !== "" && token !== "") registry.updateBox(entry.id, { endpoint: { baseUrl, tokenFile: writeToken(entry.name) } });
+          connectCodes.seen(entry.id, version);
+          const result = await orchestrator.reconnectBox(registry.boxById(entry.id)!);
+          log(`boxes: ${entry.name} reconnected: ${result.detail}`);
+          send(res, 200, { boxId: entry.id, name: entry.name, ...result, state: connectCodes.stateOf(entry.id, result.connected) });
+          return;
+        }
+        const code = String(body.code ?? "");
+        const redeemed = connectCodes.redeem(code);
+        if (!redeemed.ok) {
+          log(`boxes: a connection code was refused (${redeemed.why})`);
+          const why = { unknown: "Unknown connection code.", expired: "That connection code has expired; mint a new one.", used: "That connection code was already used; a code is one-time.", "wrong-installation": "That code belongs to another installation." }[redeemed.why];
+          send(res, redeemed.why === "wrong-installation" ? 403 : 409, { error: why });
+          return;
+        }
+        const boxName = redeemed.name ?? name;
+        if (boxName === "" || baseUrl === "" || token === "") {
+          send(res, 400, { error: "A registration needs a name, a baseUrl and the daemon token." });
+          return;
+        }
+        let entry: ReturnType<typeof attachedBox>;
+        try {
+          entry = attachedBox({ name: boxName, baseUrl, tokenFile: writeToken(boxName), ...(body.kind === "host" ? { kind: "host" as const } : {}) });
+        } catch (error) {
+          send(res, 400, { error: error instanceof Error ? error.message : String(error) });
+          return;
+        }
+        try {
+          const result = await orchestrator.attachBox(entry);
+          const runner = connectCodes.register({ boxId: entry.id, name: entry.name, ...(version !== undefined ? { version } : {}) });
+          log(`boxes: ${entry.name} (${entry.id}) registered with a connection code: ${result.detail}`);
+          send(res, 200, { boxId: entry.id, name: entry.name, runner, ...result, state: connectCodes.stateOf(entry.id, result.connected) });
+        } catch (error) {
+          send(res, 409, { error: error instanceof Error ? error.message : String(error) });
+        }
+        return;
+      }
       const routeMatch = ROUTE_PATH.exec(url.pathname);
       if (routeMatch !== null) {
         const key = routeMatch[1]!;
@@ -2594,7 +2869,7 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
       // by a key derived from the token that authorised it.
       const gatewayCaller = callerOf(req.headers, decision.allow);
       const webIdentity = decision.allow
-        ? readSession(parseCookies(req.headers.cookie).get(SESSION_COOKIE), sessionSecret)
+        ? readSession(parseCookies(req.headers.cookie).get(SESSION_COOKIE), sessionSecret)?.identity
         : undefined;
       const caller =
         gatewayCaller.userId === undefined && webIdentity !== undefined
@@ -2620,17 +2895,29 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
         // unless a gateway asserted it, in which case the gateway's word is the roster.
         // Identity that arrived through a web session has no header, so authority has
         // to travel with it from here, or a viewer who signed in is a viewer in name only.
+        // One vocabulary now (INV-537): the role on the caller is already the roster's
+        // kind of word, so this is a lookup rather than a translation.
         const known: Caller =
-          !assertedByGateway &&
-          caller.userId !== undefined &&
-          !roleAtLeast(principals.roleOf(caller.userId), "driver")
-            ? { ...caller, role: "viewer" }
+          !assertedByGateway && caller.userId !== undefined
+            ? { ...caller, role: principals.roleOf(caller.userId) }
             : caller;
         const agent = agentId === undefined ? undefined : registry.tryGet(agentId);
-        const reason = refusalToDrive(known, agent?.profile);
-        if (reason === undefined) return false;
-        send(res, 403, { error: reason });
-        return true;
+        const reason = refusalToDrive(known);
+        if (reason !== undefined) {
+          send(res, 403, { error: reason });
+          return true;
+        }
+        // And whether this person is in that box at all (INV-538). Authority lives on the
+        // box, so this is the same question for every agent in it — and the operator's own
+        // credential, which names nobody, is not held to a membership it cannot have.
+        if (agent !== undefined && known.userId !== undefined) {
+          const box = registry.boxOf(agent.id);
+          if (!mayEnterBox(box, principals.resolve(known.userId).id)) {
+            send(res, 403, { error: refusalToEnter(box.name, principals.resolve(known.userId).name) });
+            return true;
+          }
+        }
+        return false;
       };
 
       /**
@@ -2666,13 +2953,14 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
       };
 
       const refusedRole = (need: Role): boolean => {
-        // The gateway's owner runs their tenant; its member drives; its viewer watches.
-        const fromGateway: Record<Caller["role"], Role> = { owner: "admin", member: "driver", viewer: "viewer" };
+        // One vocabulary (INV-537): the gateway's words were translated in `callerOf`, so
+        // what arrives here is already `viewer | driver | admin` — or nothing, which is the
+        // operator holding the installation's own credential.
         const role: Role =
           caller.userId === undefined
             ? "admin"
-            : assertedByGateway
-              ? fromGateway[caller.role]
+            : assertedByGateway && caller.role !== undefined
+              ? caller.role
               : principals.roleOf(caller.userId);
         if (roleAtLeast(role, need)) return false;
         send(res, 403, {
@@ -2756,6 +3044,23 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
 
         // Recording. The video streams through this server for the same reason the
         // desktop does: boxd's port is not something the browser should know about.
+        // Where the provider sends the admin's browser back. The state came from this
+        // process, so a stray visit lands on "unknown"; the code is spent on one exchange.
+        if (route === "GET /oauth/callback") {
+          if (refusedRole("admin")) return;
+          const page = (title: string, text: string) =>
+            `<!doctype html><meta charset="utf-8"><title>${title}</title><body style="font-family:system-ui;padding:2rem"><h2>${title}</h2><p>${text}</p></body>`;
+          try {
+            const done = await oauth.complete(url.searchParams.get("state") ?? "", url.searchParams.get("code") ?? "");
+            log(`connectors: ${done.provider} connected`);
+            send(res, 200, page(`Connected ${done.provider}`, "The token is in this machine's vault. You can close this tab and grant it in Settings → Connected services."), "text/html");
+          } catch (error) {
+            const why = error instanceof Error ? error.message : String(error);
+            send(res, 400, page("Not connected", why.replace(/</g, "&lt;")), "text/html");
+          }
+          return;
+        }
+
         if (route === "GET /recording") {
           const name = url.searchParams.get("name") ?? "";
           await proxyDesktop(
@@ -2952,15 +3257,7 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
           // browser may reach the installation at all, the session says who it is. The
           // code delivers the first and mints the second; what the person may then *do*
           // is their roster role, checked on every request that changes something.
-          const admit = [
-            ...(token !== undefined
-              ? [
-                  `${COOKIE_NAME}=${encodeURIComponent(token)}; Path=/; ` +
-                    `Max-Age=${SESSION_MAX_AGE_SECONDS}; HttpOnly; SameSite=Lax`,
-                ]
-              : []),
-            sessionCookie(identity, sessionSecret),
-          ];
+          const admit = [sessionCookie(identity, sessionSecret, epochs.of(principals.resolve(identity).id))];
           if (existing !== undefined) {
             // A code made for somebody already known links this browser to them: same
             // human, second surface, one bill.
@@ -2997,6 +3294,9 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
           send(res, 200, {
             schedules: await orchestrator.scheduler.status(),
             armed: process.env.AGENTBOX_SCHEDULER !== "0",
+            // The places (INV-430): the view groups routines by the box they live in.
+            boxes: registry.listBoxes().map(box => ({ id: box.id, name: box.name })),
+            defaultBox: registry.box.id,
           });
           return;
         }
@@ -3272,6 +3572,9 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
                 ? { title: body.title }
                 : {}),
               ...(typeof body.description === "string" ? { description: body.description } : {}),
+              ...(typeof body.due === "string" ? { due: body.due.trim() === "" ? null : body.due } : {}),
+              ...(typeof body.waitingOn === "string" ? { waitingOn: body.waitingOn.trim() === "" ? null : body.waitingOn } : {}),
+              ...(typeof body.snoozeUntil === "string" ? { snoozeUntil: body.snoozeUntil.trim() === "" ? null : body.snoozeUntil } : {}),
             },
             caller.userId ?? "web"
           );
@@ -3280,6 +3583,28 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
             return;
           }
           send(res, 200, { task: updated.task, ...(updated.coerced ? { note: updated.coerced } : {}) });
+          return;
+        }
+        // A close proposal (INV-529) and its objection: the assignee's way of not waiting
+        // on a requester who has moved on, and the requester's way of saying no.
+        if (route === "POST /api/tasks/propose-close" || route === "POST /api/tasks/oppose-close") {
+          if (refused()) return;
+          const board = orchestrator.tasks;
+          if (board === undefined) {
+            send(res, 503, { error: "No task board on this installation." });
+            return;
+          }
+          const body = await readJson(req);
+          const who = caller.userId ?? "web";
+          const result =
+            route === "POST /api/tasks/propose-close"
+              ? board.proposeClose(String(body.id ?? ""), who, String(body.reason ?? ""))
+              : board.opposeClose(String(body.id ?? ""), who, typeof body.note === "string" ? body.note : undefined);
+          if ("refused" in result) {
+            send(res, 409, { error: result.refused });
+            return;
+          }
+          send(res, 200, { task: result.task });
           return;
         }
 
@@ -3360,6 +3685,104 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
           });
           log(`vault: saved secret ${id}`);
           send(res, 200, { secrets: vault.list() });
+          return;
+        }
+
+        // Connected services (INV-422): an admin starts an authorization or pastes app
+        // credentials; the token lands in the vault under oauth:<provider>, granted to
+        // whoever the admin named, and is never returned by any route.
+        if (route === "GET /api/connectors") {
+          if (refusedRole("admin")) return;
+          send(res, 200, { providers: oauth.providers(), connected: oauth.connected() });
+          return;
+        }
+
+        if (route === "POST /api/connectors/begin" || route === "POST /api/connectors/connect") {
+          if (refusedRole("admin")) return;
+          const body = await readJson(req);
+          const grants: Grant[] = typeof body.grant === "string" && body.grant.trim() !== "" ? [{ holder: body.grant.trim() }] : [];
+          const input = {
+            provider: String(body.provider ?? ""),
+            clientId: String(body.clientId ?? ""),
+            clientSecret: String(body.clientSecret ?? ""),
+            grants,
+          };
+          try {
+            if (route === "POST /api/connectors/begin") {
+              const proto = String(req.headers["x-forwarded-proto"] ?? "").split(",")[0]?.trim() || "http";
+              const redirectUri = `${proto}://${req.headers.host ?? "localhost"}/oauth/callback`;
+              const scopes = typeof body.scopes === "string" ? body.scopes.split(/[\s,]+/).filter(Boolean) : undefined;
+              const started = oauth.begin({ ...input, redirectUri, ...(scopes !== undefined ? { scopes } : {}) });
+              log(`connectors: ${input.provider} authorization started`);
+              send(res, 200, { url: started.url });
+            } else {
+              const done = await oauth.connect(input);
+              log(`connectors: ${done.provider} connected`);
+              send(res, 200, { connected: oauth.connected() });
+            }
+          } catch (error) {
+            send(res, 400, { error: error instanceof Error ? error.message : String(error) });
+          }
+          return;
+        }
+
+        // ── memory, browsed and corrected (INV-426) ─────────────────────────────
+        // Authorization is the same question every driving route asks — may this
+        // caller act on this agent — applied to the list too, so a summary never names
+        // an agent the caller could not open.
+        if (route === "GET /api/memory") {
+          if (refused()) return;
+          const known: Caller =
+            !assertedByGateway && caller.userId !== undefined && !roleAtLeast(principals.roleOf(caller.userId), "driver")
+              ? { ...caller, role: "viewer" }
+              : caller;
+          // What this caller may open: the role, and then the boxes they are in (INV-540
+          // retired the per-agent check; INV-538 is what replaced it). A summary must
+          // never name an agent the caller could not open.
+          const myBoxes = (agent: { id: string }): boolean =>
+            known.userId === undefined || mayEnterBox(registry.boxOf(agent.id), principals.resolve(known.userId).id);
+          const visible = registry
+            .list()
+            .filter(agent => agent.profile.hidden !== true && refusalToDrive(known) === undefined && myBoxes(agent));
+          const boxes = registry.listBoxes().map(box => ({ id: box.id, name: box.name }));
+          send(res, 200, { boxes, agents: memoryAdmin.summary(visible) });
+          return;
+        }
+        if (route === "GET /api/memory/agent") {
+          const agentId = url.searchParams.get("agent") ?? "";
+          if (!registry.has(agentId)) {
+            send(res, 404, { error: `No agent ${agentId}` });
+            return;
+          }
+          if (refused(agentId)) return;
+          send(res, 200, { agent: agentId, ...memoryAdmin.detail(agentId) });
+          return;
+        }
+        if (route === "POST /api/memory/change") {
+          const body = await readJson(req);
+          const agentId = String(body.agent ?? "");
+          if (!registry.has(agentId)) {
+            send(res, 404, { error: `No agent ${agentId}` });
+            return;
+          }
+          if (refused(agentId)) return;
+          const scope = body.scope === "shared" ? "shared" : "own";
+          const result = memoryAdmin.change({
+            agentId,
+            scope,
+            key: String(body.key ?? ""),
+            version: String(body.version ?? ""),
+            ...(typeof body.text === "string" ? { text: body.text } : {}),
+            by: caller.userId ?? "operator",
+          });
+          if (result.ok) {
+            log(`memory: ${caller.userId ?? "operator"} ${typeof body.text === "string" ? "edited" : "withdrew"} a ${scope} line of ${registry.get(agentId).profile.name}`);
+            send(res, 200, { ok: true, ...(result.version !== undefined ? { version: result.version } : {}), ...memoryAdmin.detail(agentId) });
+          } else if (result.conflict) {
+            send(res, 409, { error: result.why, current: result.current ?? null });
+          } else {
+            send(res, 400, { error: result.why });
+          }
           return;
         }
 
@@ -3759,6 +4182,26 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
           return;
         }
 
+        // Signing one person out of everywhere (INV-537): their generation moves on, and
+        // every browser and tab they left signed in stops being served on its next
+        // request. Nobody else is touched — which is the difference between this and
+        // rotating the token, the only way to do it before, and therefore the reason it
+        // was never done.
+        if (route === "POST /api/principals/logout") {
+          if (refusedRole("admin")) return;
+          const body = await readJson(req);
+          const principalId = String(body.principalId ?? "").trim();
+          const person = principals.list().find(entry => entry.id === principalId);
+          if (person === undefined) {
+            send(res, 404, { error: `No such person: ${principalId}` });
+            return;
+          }
+          const epoch = epochs.bump(person.id);
+          log(`signed out everywhere: ${person.name} (generation ${epoch})`);
+          send(res, 200, { name: person.name, epoch });
+          return;
+        }
+
         // Ending a standing grant. The next identical action asks again.
         if (route === "POST /api/policy/revoke") {
           if (refused()) return;
@@ -4045,9 +4488,13 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
 
         // For the composer's "/" menu. Names and descriptions only — the same index the agent gets,
         // for the same reason.
+        const mayReadTeachingBox = (boxId: string): boolean => {
+          const box = registry.boxById(boxId);
+          return box !== undefined && (caller.userId === undefined || mayEnterBox(box, principals.resolve(caller.userId).id));
+        };
         if (route === "GET /api/teaching-drafts") {
           if (refusedRole("admin")) return;
-          send(res, 200, { drafts: orchestrator.teachDrafts.list() });
+          send(res, 200, { drafts: orchestrator.teachDrafts.list().filter(draft => mayReadTeachingBox(draft.boxId)) });
           return;
         }
         if (route === "POST /api/teaching-drafts/clarify") {
@@ -4058,6 +4505,10 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
             return;
           }
           try {
+            if (!mayReadTeachingBox(orchestrator.teachDrafts.get(body.id).boxId)) {
+              send(res, 403, { error: "This teaching box is not available to this caller" });
+              return;
+            }
             const draft = await orchestrator.clarifyTeachingDraft(body.id, body.digest, body.answer,
               caller.userId ?? "local-operator", caller);
             send(res, 200, { draft });
@@ -4074,6 +4525,10 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
             return;
           }
           try {
+            if (!mayReadTeachingBox(orchestrator.teachDrafts.get(body.id).boxId)) {
+              send(res, 403, { error: "This teaching box is not available to this caller" });
+              return;
+            }
             const draft = route.endsWith("/approve")
               ? await orchestrator.approveTeachingDraft(body.id, body.digest, caller.userId ?? "local-operator")
               : orchestrator.teachDrafts.reject(body.id, body.digest);
@@ -4565,8 +5020,47 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
         }
 
         // ── boxes (docs/30) ─────────────────────────────────────────────────────────
+        // What needs me, and what I am waiting on (INV-543). Per person: the questions
+        // put to them, the closes they have not objected to, the reviews they owe, the
+        // tasks they asked for that have been nudged — and, on the other side, what they
+        // are waiting on somebody else for. The operator's own credential has no person,
+        // so it sees the installation's: everything with a clock on it.
+        if (route === "GET /api/attention") {
+          const me = caller.userId === undefined ? undefined : principals.resolve(caller.userId);
+          const board = orchestrator.tasks;
+          const answer = attentionFor({
+            principalId: me?.id ?? "",
+            identities: me?.identities ?? [],
+            tasks: board === undefined ? [] : board.list(),
+            questions: questions.list(),
+            nameOf: id => registry.tryGet(id)?.profile.name ?? principals.list().find(person => person.id === id)?.name ?? id,
+            ...(me === undefined ? { all: true } : {}),
+          });
+          send(res, 200, { ...answer, who: me?.name ?? "this installation" });
+          return;
+        }
+
         if (route === "GET /api/boxes") {
-          send(res, 200, { boxes: orchestrator.boxStatus(), own: registry.box.id });
+          // Only the boxes this person is in (INV-538). A box somebody is not a member of
+          // is not theirs to see the name of: a list that shows it and refuses to open it
+          // tells them it exists, which is the one thing a members set is for.
+          const mine = (boxId: string): boolean =>
+            caller.userId === undefined ||
+            mayEnterBox(registry.listBoxes().find(entry => entry.id === boxId) ?? { members: "everyone" }, principals.resolve(caller.userId).id);
+          // Registered boxes carry their lifecycle state and version (INV-434).
+          const nameOfPrincipal = (id: string): string => principals.list().find(person => person.id === id)?.name ?? id;
+          const boxes = orchestrator.boxStatus().filter(box => mine(box.id)).map(box => {
+            const entry = registry.listBoxes().find(candidate => candidate.id === box.id);
+            const membership =
+              entry === undefined
+                ? {}
+                : { members: entry.members, membersLabel: membersLabel(entry, nameOfPrincipal) };
+            const registration = connectCodes.registrationOf(box.id);
+            return registration === undefined
+              ? { ...box, ...membership }
+              : { ...box, ...membership, state: connectCodes.stateOf(box.id, box.connected), ...(registration.version !== undefined ? { version: registration.version } : {}), lastSeenAt: registration.lastSeenAt };
+          });
+          send(res, 200, { boxes, own: registry.box.id });
           return;
         }
 
@@ -4602,6 +5096,43 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
         }
 
         // Attaching is an owner's act: it puts another machine's authority in the roster.
+        // Connection codes (INV-434): minted by an admin, one-time, fifteen minutes; the list
+        // shows expiry and who, never a code. Revocation cuts a registered box off.
+        if (route === "POST /api/boxes/connect-codes") {
+          if (refusedRole("admin")) return;
+          const body = await readJson(req);
+          const minted = connectCodes.mint({ by: caller.userId ?? "operator", ...(typeof body.name === "string" && body.name.trim() !== "" ? { name: body.name.trim() } : {}) });
+          log(`boxes: a connection code was minted by ${caller.userId ?? "operator"}, expires ${minted.expiresAt}`);
+          send(res, 200, minted);
+          return;
+        }
+        if (route === "GET /api/boxes/connect-codes") {
+          if (refusedRole("admin")) return;
+          send(res, 200, { pending: connectCodes.listPending() });
+          return;
+        }
+        if (route === "POST /api/boxes/revoke") {
+          if (refusedRole("admin")) return;
+          const body = await readJson(req);
+          const entry = registry.listBoxes().find(candidate => candidate.id === body.box || candidate.name === body.box);
+          if (entry === undefined || entry.id === registry.box.id) {
+            send(res, 404, { error: `No registered box ${String(body.box ?? "")}.` });
+            return;
+          }
+          connectCodes.revoke(entry.id, caller.userId ?? "operator");
+          const cut = orchestrator.revokeBox(entry.id);
+          log(`boxes: ${entry.name} revoked by ${caller.userId ?? "operator"}; ${cut.agentsLiving} agent(s) live there`);
+          send(res, 200, {
+            revoked: entry.id,
+            agentsLiving: cut.agentsLiving,
+            note:
+              `${entry.name} takes no new connections or work from here. ` +
+              (cut.agentsLiving > 0 ? `${cut.agentsLiving} agent(s) live there; anything they were running on that machine is not known to have stopped. ` : "") +
+              "Stop the runner on its own machine to be sure.",
+          });
+          return;
+        }
+
         if (route === "POST /api/boxes/attach") {
           if (refused()) return;
           const body = await readJson(req);
@@ -4657,10 +5188,22 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
               send(res, 404, { error: `No box named ${name}.` });
               return;
             }
+            // Changing who a box is for is an admin's act, and only an admin's (INV-538).
+            const members =
+              body.members === "everyone"
+                ? ("everyone" as const)
+                : Array.isArray(body.members)
+                  ? (body.members as unknown[]).filter((id): id is string => typeof id === "string" && id.trim() !== "")
+                  : undefined;
+            if (members !== undefined && refusedRole("admin")) return;
             const result = await orchestrator.updateBox(name, {
               ...(baseUrl !== "" ? { endpoint: { baseUrl, tokenFile: tokenFile !== "" ? tokenFile : (existing.endpoint?.tokenFile ?? "") } } : {}),
               ...(Number.isInteger(Number(body.displayFloor)) && Number(body.displayFloor) >= 1 ? { displayFloor: Number(body.displayFloor) } : {}),
+              ...(members !== undefined ? { members } : {}),
             });
+            if (members !== undefined) {
+              log(`box ${name} is now for ${members === "everyone" ? "everyone" : members.map(id => principals.list().find(person => person.id === id)?.name ?? id).join(", ")}`);
+            }
             log(`box ${name} moved to ${result.box.endpoint?.baseUrl ?? "(no endpoint)"}: ${result.detail}`);
             send(res, 200, result);
           } catch (error) {
@@ -4706,6 +5249,36 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
           return;
         }
 
+        // Bundles, listed and attached (INV-421 A4): a person binds an existing bundle to a
+        // box, which grants only what that bundle already holds; binding twice is once.
+        if (route === "GET /api/bundles") {
+          if (refusedRole("admin")) return;
+          send(res, 200, {
+            bundles: orchestrator.bundles.list().map(bundle => ({ ...bundle, secretIds: [...bundle.secretIds] })),
+            attachments: orchestrator.bundles.attachments(),
+            dangling: orchestrator.bundles.dangling(),
+            boxes: registry.listBoxes().map(box => ({ id: box.id, name: box.name })),
+          });
+          return;
+        }
+        if (route === "POST /api/bundles/attach") {
+          if (refusedRole("admin")) return;
+          const body = await readJson(req);
+          const box = typeof body.box === "string" ? registry.listBoxes().find(entry => entry.id === body.box || entry.name === body.box) : undefined;
+          if (box === undefined) {
+            send(res, 404, { error: `No box ${String(body.box ?? "")}` });
+            return;
+          }
+          const bundleId = String(body.bundle ?? "");
+          if (!orchestrator.bundles.attach(box, bundleId)) {
+            send(res, 404, { error: `No bundle ${bundleId}; a bundle is defined in bundles.json, never created from a template's name.` });
+            return;
+          }
+          log(`bundles: ${bundleId} attached to box ${box.name}`);
+          send(res, 200, { attachments: orchestrator.bundles.attachments(), effective: orchestrator.bundles.forBox(box) ?? null });
+          return;
+        }
+
         if (route === "POST /api/templates/import") {
           if (refused()) return;
           const body = await readJson(req);
@@ -4741,9 +5314,16 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
             // connector door satisfies; the rest stay pending and the setup turn asks (mcp-connectors.ts)
             ...parsed.template.connectors.filter(connector => connectorSatisfied(connector, orchestrator.mcp.statuses().map(status => status.name))),
           ];
+          // The template's bundle references against the target box's own bundles (INV-421):
+          // resolved, missing, or a same-named bundle that does not cover the needs. Nothing
+          // is attached from a name; the gaps travel to the setup cue and back to the caller.
+          const targetBox = typeof body.boxId === "string" ? registry.boxById(body.boxId) ?? registry.box : registry.box;
+          const bundleResolutions = resolveBundleRefs(parsed.template.bundles, orchestrator.bundles.forBox(targetBox));
           let imported: ReturnType<typeof orchestrator.importTemplate>;
           try {
             imported = orchestrator.importTemplate(parsed.template, {
+              bundleResolutions,
+              ...(body.update === true ? { update: true } : {}),
               caller,
               ...(typeof body.name === "string" && body.name.trim() !== "" ? { name: body.name.trim() } : {}),
               ...(shareId !== undefined ? { shareId } : {}),
@@ -4756,7 +5336,11 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
             return;
           }
           const { agent, pending } = imported;
-          broadcast({ type: "template_import", agentId: agent.id, agentName: agent.profile.name, summary: `Adding ${parsed.template.profile.name}…`, complete: false });
+          if (imported.existing === "same-version") {
+            send(res, 200, { id: agent.id, name: agent.profile.name, templateId: imported.id, pending, existing: true, summary: `${agent.profile.name} already carries this version; nothing was created.` });
+            return;
+          }
+          broadcast({ type: "template_import", agentId: agent.id, agentName: agent.profile.name, summary: imported.existing === "updated" ? `Updating ${agent.profile.name}…` : `Adding ${parsed.template.profile.name}…`, complete: false });
           void imported.settled.then(result => {
             broadcast({
               type: "template_import",
@@ -5203,10 +5787,7 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
     const [pathname, query] = raw.split("?");
     // The RFB socket carries the screen, so it needs the same check. A browser sends the
     // cookie on an upgrade but cannot set a header, which is why the cookie exists.
-    const upgradeDecision = authorize(
-      { token, host },
-      { authorization: req.headers.authorization, cookie: req.headers.cookie }
-    );
+    const upgradeDecision = admit({ authorization: req.headers.authorization, cookie: req.headers.cookie });
     if (!upgradeDecision.allow) {
       clientSocket.end("HTTP/1.1 401 Unauthorized\r\n\r\n");
       return;

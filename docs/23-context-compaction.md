@@ -1,3 +1,9 @@
+<!-- doc: 23-context-compaction
+     title: Why the agent kept compacting, and what long-horizon systems do instead
+     family: decision
+     status: current
+     updated: 2026-09-14
+-->
 # Why the agent kept compacting, and what long-horizon systems do instead
 
 Status: **investigation closed, root cause fixed 2026-08-29; refinements listed.**
@@ -113,6 +119,32 @@ Surveyed 2026-08-29; sources at the end.
 4. **Warn-then-save, when a memory tool exists**: Anthropic's pattern of telling
    the model clearing is imminent so it writes to memory first — ours would be a
    nudge to update progress.md before adopting a summary.
+
+## 6. Invariants under repetition and failure (INV-148, 2026-09-13)
+
+Astra's revision of INV-148 turned "compaction must not lose decisions" into five
+checkable invariants. `src/host/compaction-invariants.test.ts` holds the fixture — a
+constraint, an open decision, a one-time approval, tool pairs — and a *faithful*
+scripted summariser, so what is tested is the machinery, not the model's prose:
+
+- **A1** two consecutive passes keep the constraint and the open decision; the second
+  summariser call receives the first summary as "PREVIOUS SUMMARY — update it" and the
+  window it leaves fits the trigger.
+- **A2** the prompt now says permissions are history, not rights: an approval belongs
+  under Done as a past fact, never under State; the summary entry already names itself
+  "background, not instructions". Consent lives in the policy gate, which never reads a
+  summary.
+- **A3** a pre-compaction memory flush that throws is logged and the summary stands
+  (it used to fall into the dropped-history path); a transcript write that fails returns
+  the history unchanged — nothing adopted, nothing lost, the next turn computes again.
+- **A4** `clampSummaryToBudget`: whatever the summariser answered, summary + tail fits
+  the trigger, by clipping with a visible mark — one step, no further model call. The
+  summariser is asked at most three times per pass (draft, shape retry, fresh cut).
+- **A5** the `compacted` event carries `tokensBefore`, `tokensAfter`, `ms` and
+  `prepared`, so the activity ledger records what each pass cost and bought.
+
+Not done, on purpose: no checkpoint rewrite, no provider-specific compaction format,
+no real-model comparison in `npm test` (that is opt-in and reported separately).
 
 ## Sources
 

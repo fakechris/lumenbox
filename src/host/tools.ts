@@ -18,6 +18,7 @@ import type { Vault } from "./vault.ts";
 import { appendLearning, hostOf, learningsDir, readLearnings, renderLearnings } from "./learnings.ts";
 import type { ScopeStore } from "./scopes.ts";
 import type { BundleStore } from "./bundles.ts";
+import { oauthProvider, scrubToken, type OAuthGate } from "./oauth.ts";
 import type { McpManager } from "./mcp.ts";
 import { delegateEnv, delegateModel, PRESETS, presetNamed, quoteForShell, installCommand, withEnginesPath } from "./presets.ts";
 import { namesControlSurface } from "./control-surfaces.ts";
@@ -54,6 +55,7 @@ import {
   type BrowserRequest,
   type ComputerAction,
   type DisplayInfo,
+  type ElementInfo,
   type Outcome,
 } from "../protocol/index.ts";
 import { skillSlugOf } from "./skill-provenance.ts";
@@ -64,6 +66,7 @@ import {
   describeTemplate,
   packTemplate,
   stampTemplateWrite,
+  manifestOf,
 } from "./template.ts";
 
 export interface ToolContext {
@@ -119,6 +122,8 @@ export interface ToolContext {
     options?: string[];
     /** What the agent does if the person moves on without answering. */
     fallback?: string;
+    /** How long the question is open before the default (or a skip) is applied. */
+    expiresInMinutes?: number;
     conversation?: string;
   }) => Promise<string | undefined>;
   /**
@@ -170,6 +175,8 @@ export interface ToolContext {
    * to resolve it from.
    */
   vault?: Vault;
+  /** The OAuth gate (INV-422): bearers for connected services, minted and refreshed on the host. */
+  oauth?: OAuthGate;
   /**
    * Which conversation this tool call belongs to. The shell session, the plan and the
    * todo list are all keyed on it, so two of an agent's conversations running at once
@@ -216,7 +223,7 @@ export interface ToolContext {
   /** The MCP tool names this turn itself may call — profile ∩ scope ∩ chat scope, as the turn computed them. */
   allowedMcpTools?: readonly string[];
   /** What kind of box the agent's is: an attached one cannot reach the host's loopback. */
-  boxKind?: "docker" | "attached";
+  boxKind?: "docker" | "attached" | "host";
   /**
    * Reads Feishu documents with the bot's own workspace identity. Present only where
    * a Feishu app is configured; absent withholds the tool entirely, so an agent on an
@@ -459,6 +466,8 @@ const actionSchema = {
         "screenshot",
         "cursor_position",
         "list_windows",
+        "list_elements",
+        "click_element",
         "activate_window",
         "close_window",
         "screenshot_window",
@@ -467,6 +476,7 @@ const actionSchema = {
       description: "Which action to perform.",
     },
     coordinate: coordinateSchema,
+    ref: { type: "string", description: "For click_element: a ref from the last list_elements outline, e.g. a3." },
     path: {
       type: "array" as const,
       description: "For drag: the points to move through, starting point first.",
@@ -568,9 +578,33 @@ export function buildTools(
   /** Whether a packed template has somewhere to be staged (docs/29). */
   canPackTemplate = false,
   /** Whether this is a fork child's tool list (docs/32 §2): the withheld set is removed. */
-  fork = false
+  fork = false,
+  /** The connected services this agent may call through the OAuth gate (INV-422), by provider id. */
+  connectors: readonly string[] = []
 ): Anthropic.Tool[] {
   const tools: Anthropic.Tool[] = [];
+
+  if (connectors.length > 0) {
+    tools.push({
+      name: "connector_request",
+      description:
+        `Call a connected service's API as the person who authorized it: ${connectors.join(", ")}. ` +
+        "Name the connector, the HTTP method and the API path (relative to the service's API base, " +
+        "e.g. /user/repos for GitHub, /im/v1/messages for Feishu) and a JSON body when the call " +
+        "takes one. The host attaches the credential and refreshes it when it lapses; you never " +
+        "see it and must not ask for it. Reads are free; a write is reviewed like any outward act.",
+      input_schema: {
+        type: "object",
+        properties: {
+          connector: { type: "string", description: `One of: ${connectors.join(", ")}.` },
+          method: { type: "string", description: "GET, POST, PUT, PATCH or DELETE. Default GET." },
+          path: { type: "string", description: "The API path, starting with /. Query string allowed." },
+          body: { description: "A JSON value sent as the request body, for methods that take one." },
+        },
+        required: ["connector", "path"],
+      },
+    });
+  }
 
   if (hasBox && canUseDesktop) {
     tools.push({
@@ -616,7 +650,12 @@ export function buildTools(
           "nothing responds — a dialog or menu is probably holding the input grab, and " +
           "clicking its close button is swallowed like everything else. `close_window` on " +
           "the offending window (find it with list_windows) closes it through the window " +
-          "manager, which a grab cannot block.",
+          "manager, which a grab cannot block.\n\n" +
+          "Before clicking by coordinates in a desktop app, try `list_elements`: it reads the " +
+          "active window's controls from the accessibility tree — role, name, state and " +
+          "position — and gives each a ref; `click_element` with that ref clicks it exactly, " +
+          "with the same effect evidence as a click. Not every app has a tree (a terminal, " +
+          "an Electron app): then the result says so and the screenshot is what you have.",
         input_schema: {
           type: "object",
           properties: {
@@ -869,7 +908,12 @@ export function buildTools(
               type: "string",
               description:
                 "What you will do if they move on without answering — one sentence. Always " +
-                "give one; a question with no default is a stall.",
+                "give one; a question with no default is a stall. If nobody answers within the " +
+                "window, you are woken to proceed on it.",
+            },
+            expires_in_minutes: {
+              type: "number",
+              description: "How long to wait for an answer before proceeding on the default (or, with none, deciding yourself). Default 240; at most a week.",
             },
           },
           required: ["question"],
@@ -1315,12 +1359,16 @@ export function buildTools(
         properties: {
           action: {
             type: "string",
-            enum: ["create", "take", "update", "list", "read"],
+            enum: ["create", "take", "update", "list", "read", "propose_close"],
             description:
               "create a task; take one (assigns it to you, status doing); update one's " +
               "status/note/assignee; list the board; read current details of your assigned task.",
           },
-          id: { type: "string", description: "The task id, e.g. \"t12\". For read, take and update." },
+          id: { type: "string", description: "The task id, e.g. \"t12\". For read, take, update and propose_close." },
+          due: { type: "string", description: "For create or update: when it is due, as YYYY-MM-DD or an ISO instant. A task past its due date nudges the requester; two nudges with no movement archive it." },
+          waiting_on: { type: "string", description: "For update: who or what this is waiting for outside the box (a supplier, a deploy window, somebody on leave). It is still asked about, but never archived for not moving — waiting is not abandonment. Empty string clears it." },
+          snooze_until: { type: "string", description: "For update: leave it alone until this date or instant (YYYY-MM-DD or ISO). The answer to a nudge that is \"not now\" — the board stays quiet about it until then. Empty string looks again now." },
+          reason: { type: "string", description: "For propose_close: why this task should be closed, in one sentence the requester can read. They have two days to object; their silence closes it." },
           title: { type: "string", description: "For create: one line of what is to be done." },
           description: { type: "string", description: "For create: details a stranger would need." },
           status: {
@@ -1970,6 +2018,26 @@ export function boxErrorOutcome(error: unknown): Outcome | undefined {
 }
 
 /** The box an agent lives in, for bundle lookups; undefined when the registry cannot say. */
+/**
+ * The active window's controls as an outline, in the shape the browser outline uses
+ * (INV-412): one line per control, the ref first so it can be copied into click_element.
+ */
+export function elementsOutline(result: { elements?: readonly ElementInfo[]; elements_note?: string; elements_window?: { title: string; app: string; truncated: boolean } }): string {
+  if (result.elements === undefined) {
+    return `No control outline: ${result.elements_note ?? "the active window exposes no accessibility tree"}. Work from the screenshot.`;
+  }
+  const where = result.elements_window !== undefined ? ` of "${result.elements_window.title}"${result.elements_window.app !== "" ? ` (${result.elements_window.app})` : ""}` : "";
+  const lines = result.elements.map(element => {
+    const name = element.name !== "" ? ` "${element.name}"` : "";
+    const states = element.states.length > 0 ? ` [${element.states.join(", ")}]` : "";
+    return `- ${element.role}${name} [ref=${element.ref}]${states} at (${element.x + Math.round(element.width / 2)},${element.y + Math.round(element.height / 2)})`;
+  });
+  const cap = result.elements_window?.truncated === true ? "\n… (more controls than shown; act on what is here or scroll)" : "";
+  return lines.length > 0
+    ? `Controls${where}:\n${lines.join("\n")}${cap}`
+    : `The active window${where} exposes a tree but no operable controls are showing.`;
+}
+
 function boxOfAgent(context: ToolContext): { id: string; name: string } | undefined {
   try {
     const box = context.registry.boxOf(context.agent.id);
@@ -2265,6 +2333,9 @@ export async function dispatchTool(
         notes.push(
           `Cursor is at (${result.cursor_position.x}, ${result.cursor_position.y}).`
         );
+      }
+      if (result.elements !== undefined || result.elements_note !== undefined) {
+        notes.push(elementsOutline(result));
       }
       if (result.windows) {
         // As text, not as an image: these are ids to be copied into the next call, and a
@@ -2871,10 +2942,13 @@ export async function dispatchTool(
           agentId: context.agent.id,
           agentName: context.agent.profile.name,
           ...(context.caller?.userId !== undefined ? { principalId: context.caller.userId } : {}),
-          // The box's bundles grant it (INV-420), or — until migrated — the agent's scope.
-          scopeGrants:
-            context.bundles?.grantsSecret(boxOfAgent(context), secretId) === true ||
-            context.scopes?.grantsSecret(context.agent.profile.scopeId, secretId) === true,
+          // The box's bundles grant it (INV-420/INV-539). An agent's own scope is not
+          // consulted any more: two agents in one box differing in what they could reach
+          // is docs/22 §0 being false in the running system, and the honest migration is
+          // fail-closed — `agentbox bundle migrate` turns scopes into the box's bundles,
+          // and until it has run the secret is refused rather than quietly granted to one
+          // agent and not its neighbour.
+          scopeGrants: context.bundles?.grantsSecret(boxOfAgent(context), secretId) === true,
         });
         if (value === undefined) refusedSecrets.push(secretId);
         else secretEnv[secretId] = value;
@@ -3072,6 +3146,7 @@ export async function dispatchTool(
         question,
         ...(options !== undefined && options.length > 0 ? { options } : {}),
         ...(fallback !== undefined ? { fallback } : {}),
+        ...(typeof input.expires_in_minutes === "number" && Number.isFinite(input.expires_in_minutes) ? { expiresInMinutes: input.expires_in_minutes } : {}),
         ...(context.conversation !== undefined ? { conversation: context.conversation } : {}),
       });
       if (where === undefined) {
@@ -3266,6 +3341,51 @@ export async function dispatchTool(
       }
     }
 
+    case "connector_request": {
+      const connector = String(input.connector ?? "").trim().toLowerCase();
+      const method = String(input.method ?? "GET").trim().toUpperCase() || "GET";
+      const path = String(input.path ?? "").trim();
+      if (connector === "" || path === "") return { text: outcomeLine("failed", "connector and path are both required"), isError: true };
+      if (!path.startsWith("/") || path.startsWith("//")) return { text: outcomeLine("failed", "path must start with a single /"), isError: true };
+      if (!["GET", "POST", "PUT", "PATCH", "DELETE"].includes(method)) return { text: outcomeLine("failed", `${method} is not a method this tool sends`), isError: true };
+      const provider = oauthProvider(connector);
+      if (provider === undefined || context.oauth === undefined) {
+        return { text: outcomeLine("refused", `${connector} is not a connected service here`), isError: true };
+      }
+      // The bearer is minted, refreshed and audited on the host; the model gets the
+      // reply with the token scrubbed even if the endpoint echoes its own headers.
+      const token = await context.oauth.bearerFor(`oauth:${connector}`, {
+        agentId: context.agent.id,
+        agentName: context.agent.profile.name,
+        ...(context.caller?.userId !== undefined ? { principalId: context.caller.userId } : {}),
+        scopeGrants: context.bundles?.grantsSecret(boxOfAgent(context), `oauth:${connector}`) === true,
+      });
+      if (token === undefined) {
+        return { text: outcomeLine("refused", `${provider.title} is not connected for you, or its token cannot be refreshed. Ask an admin in Settings → Connected services`), isError: true };
+      }
+      const hasBody = input.body !== undefined && input.body !== null && method !== "GET";
+      try {
+        const response = await fetch(`${provider.apiBase}${path}`, {
+          method,
+          headers: {
+            Authorization: `Bearer ${token}`,
+            ...(provider.apiHeaders ?? {}),
+            ...(hasBody ? { "content-type": "application/json; charset=utf-8" } : {}),
+          },
+          ...(hasBody ? { body: typeof input.body === "string" ? input.body : JSON.stringify(input.body) } : {}),
+          signal: AbortSignal.timeout(30_000),
+        });
+        const raw = await response.text();
+        const body = scrubToken(raw.length > 20_000 ? `${raw.slice(0, 20_000)}\n… (${raw.length - 20_000} more characters)` : raw, token);
+        const ok = response.status >= 200 && response.status < 300;
+        return {
+          text: `${outcomeLine(ok ? "ok" : "failed", ok ? undefined : `HTTP ${response.status}`)} ${method} ${path} → ${response.status}\n${body}`,
+          ...(ok ? {} : { isError: true }),
+        };
+      } catch (error) {
+        return { text: outcomeLine("unknown", `${provider.title} did not answer: ${error instanceof Error ? error.message : String(error)}`), isError: true };
+      }
+    }
     case "browser_fill_secret": {
       const box = requireBox(context);
       const ref = String(input.ref ?? "").trim();
@@ -3284,10 +3404,9 @@ export async function dispatchTool(
         agentId: context.agent.id,
         agentName: context.agent.profile.name,
         ...(context.caller?.userId !== undefined ? { principalId: context.caller.userId } : {}),
-        // The box's bundles grant it (INV-420), or — until migrated — the agent's scope.
-        scopeGrants:
-          context.bundles?.grantsSecret(boxOfAgent(context), secretId) === true ||
-          context.scopes?.grantsSecret(context.agent.profile.scopeId, secretId) === true,
+        // The box's bundles grant it (INV-420/INV-539); an agent's own scope is not a
+        // subject of authority any more. See the RunOnHost path for the whole reason.
+        scopeGrants: context.bundles?.grantsSecret(boxOfAgent(context), secretId) === true,
       });
       if (value === undefined) {
         return {
@@ -4049,10 +4168,22 @@ export async function dispatchTool(
           ...(context.conversation !== undefined ? { conversation: context.conversation } : {}),
           ...(contract !== undefined ? { contract } : {}),
           ...(propose ? { proposedBy: context.agent.id } : {}),
+          ...(typeof input.due === "string" && input.due.trim() !== "" ? { due: input.due } : {}),
         });
         if (created === undefined) return { text: "A task needs a title.", isError: true };
         const told = tellAssignee(context, created.id, created.title, assigneeId);
         return { text: `Created ${describeTask(created, nameOf)}.${told}` };
+      }
+
+      if (action === "propose_close") {
+        const proposal = board.proposeClose(String(input.id ?? ""), context.agent.id, String(input.reason ?? ""));
+        if ("refused" in proposal) return { text: proposal.refused, isError: true };
+        const decideBy = proposal.task.closeProposal?.decideBy ?? "";
+        return {
+          text:
+            `Proposed closing ${proposal.task.id}: ${proposal.task.closeProposal?.reason}. ${nameOf(proposal.task.requester)} has until ${decideBy} to object; ` +
+            "with no objection it closes by itself. Do not wait on it and do not ask again.",
+        };
       }
 
       if (action === "take") {
@@ -4113,6 +4244,9 @@ export async function dispatchTool(
           String(input.id ?? ""),
           {
             ...(isTaskStatus(status) ? { status } : {}),
+            ...(typeof input.due === "string" && input.due.trim() !== "" ? { due: input.due } : {}),
+            ...(typeof input.waiting_on === "string" ? { waitingOn: input.waiting_on.trim() === "" ? null : input.waiting_on } : {}),
+            ...(typeof input.snooze_until === "string" ? { snoozeUntil: input.snooze_until.trim() === "" ? null : input.snooze_until } : {}),
             ...(checked.length > 0 ? { checked } : {}),
             ...(typeof input.note === "string" && input.note.trim() !== ""
               ? { note: input.note }
@@ -4282,6 +4416,10 @@ export async function dispatchTool(
           .filter(entry => entry.slug !== "");
       const self = context.agent.profile;
       const teammates = context.registry.list().map(agent => agent.profile.name).filter(name => name !== self.name);
+      // The bundles this box carries travel as names and needs (INV-421): what the
+      // recipe was made with, for the receiver to resolve against its own grants.
+      const ownBox = boxOfAgent(context);
+      const bundleRefs = ownBox !== undefined ? context.bundles?.refsFor(ownBox) ?? [] : [];
       const packed = await packTemplate(
         box,
         {
@@ -4300,6 +4438,7 @@ export async function dispatchTool(
           skills: refs(input.skills),
           routines: refs(input.routines),
           connectors: Array.isArray(input.connectors) ? input.connectors.map(String) : [],
+          ...(Array.isArray(input.learnings) ? { learnings: input.learnings.map(String) } : {}),
           ...(typeof input.getting_started === "string" && input.getting_started.trim() !== "" ? { gettingStarted: { skill: input.getting_started.trim() } } : {}),
         },
         {
@@ -4312,6 +4451,8 @@ export async function dispatchTool(
           teammates,
           memoryRecords: context.registry.readMemoryRecords(context.agent.id),
           ...(context.caller?.userId !== undefined ? { createdBy: context.caller.userId } : {}),
+          ...(bundleRefs.length > 0 ? { bundles: bundleRefs } : {}),
+          learningsFor: host => readLearnings(host, context.learningsDir ?? learningsDir(), 50),
         }
       );
       if ("refused" in packed) return { text: packed.refused, isError: true };
@@ -4320,7 +4461,8 @@ export async function dispatchTool(
       return {
         text:
           `Staged version ${staged.version} of the template "${packed.template.profile.name}" (${describeTemplate(packed.template)}).` +
-          `${dropped} It is not shared until the person publishes or downloads it from the card; say so.`,
+          `${dropped} It is not shared until the person publishes or downloads it from the card; say so.\n\n` +
+          `What is in it, for the person to confirm:\n${manifestOf({ ...packed.template, meta: { ...(packed.template.meta ?? {}), version: staged.version } }, packed.dropped).join("\n")}`,
       };
     }
 

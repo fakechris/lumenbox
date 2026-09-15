@@ -8,7 +8,7 @@
  * A daemon restart retains identity floors but requires a current-boot administrator
  * snapshot before driving managed desktops. No heartbeat interval is prescribed.
  * Unregistered desktops retain the built-in browser path on a fresh installation.
- * See docs/external-desktops.md for authority and recovery boundaries.
+ * See docs/55-external-desktops.md for authority and recovery boundaries.
  */
 
 import { mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";

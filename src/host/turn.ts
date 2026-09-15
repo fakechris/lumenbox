@@ -14,6 +14,7 @@ import type Anthropic from "@anthropic-ai/sdk";
 import type { AgentRecord, AgentRegistry } from "../agents/registry.ts";
 import type { AgentBus, InboundMessage } from "../agents/bus.ts";
 import type { BoxClient } from "../box/client.ts";
+import type { Tracer } from "./trace.ts";
 import type { DisplayLease } from "../box/display-lease.ts";
 import type { PolicyGate } from "./policy.ts";
 import type { Claims } from "./claims.ts";
@@ -70,6 +71,7 @@ import {
   estimateTokens,
   SUMMARY_WORD_CAP,
   summaryEntry,
+  clampSummaryToBudget,
   type HistoryEntry,
   type SummaryEntry,
 } from "./compaction.ts";
@@ -102,6 +104,7 @@ import {
 } from "./tools.ts";
 import type { HostRunner } from "./host-runner.ts";
 import type { Vault } from "./vault.ts";
+import type { OAuthGate } from "./oauth.ts";
 import type { TaskStore } from "./tasks.ts";
 import type { ScopeStore } from "./scopes.ts";
 import { checkpointSummary, type DurableState } from "./durable.ts";
@@ -326,6 +329,26 @@ function truncateOldestResults(
  * the bundles its box carries. Undefined when neither says anything, so the section is
  * simply absent.
  */
+/** The OAuth connections this agent may call: provider ids, by grant, without an audit line. */
+function connectorsFor(deps: { oauth?: OAuthGate; vault?: Vault; bundles?: BundleStore; caller?: { userId?: string } }, agent: { id: string }, registry: AgentRegistry): string[] {
+  if (deps.oauth === undefined || deps.vault === undefined) return [];
+  let box: { id: string; name: string } | undefined;
+  try {
+    const found = registry.boxOf(agent.id);
+    box = { id: found.id, name: found.name };
+  } catch {
+    box = undefined;
+  }
+  const caller = {
+    agentId: agent.id,
+    ...(deps.caller?.userId !== undefined ? { principalId: deps.caller.userId } : {}),
+  };
+  return deps.oauth
+    .connected()
+    .filter(connection => deps.vault!.covers(connection.id, { ...caller, scopeGrants: deps.bundles?.grantsSecret(box, connection.id) === true }))
+    .map(connection => connection.provider);
+}
+
 function placeOf(registry: AgentRegistry, agentId: string, bundles: BundleStore | undefined) {
   const installation = readInstallationInstructions();
   let boxName: string | undefined;
@@ -427,6 +450,8 @@ export interface TurnDeps {
   hostRunner?: HostRunner;
   /** The credential vault, for secrets a host command asks for by grant. */
   vault?: Vault;
+  /** The OAuth gate (INV-422): which connected services this agent may call, and their bearers. */
+  oauth?: OAuthGate;
   /** The team's task board. Absent means no Tasks tool behaviour and no tasks section. */
   tasks?: TaskStore;
   /** The scopes registry, for an agent placed in a scope. Absent means no scoping. */
@@ -497,7 +522,8 @@ export interface TurnDeps {
   /** Told what a compaction summary is about to replace, so memory can keep what matters. */
   onSummarised?: (agentId: string, conversation: string, entries: readonly TranscriptEntry[]) => void;
   /** What kind of box this agent's is, for Delegate's face decision. */
-  boxKind?: "docker" | "attached";
+  /** What kind of box the agent lives in; a host box (INV-438) has no desktop and its writes are reviewed. */
+  boxKind?: "docker" | "attached" | "host";
   /**
    * The ledger handle for this turn, when it is a resumption of an earlier one.
    *
@@ -506,6 +532,12 @@ export interface TurnDeps {
    */
   resumeOf?: { id: string; attempt: number; workId?: string };
   onEvent?: (event: TurnEvent) => void;
+  /**
+   * Where one span per LLM call goes (trace.ts). Absent by default: a box whose
+   * operator configured no collector has no tracer, and the `?.` below is the
+   * entire cost of that.
+   */
+  tracer?: Tracer;
 }
 
 const FULL_CLAUDE: ProviderProfile = {
@@ -866,14 +898,29 @@ async function summarise(
  * tool-free, text-in-text-out request, and paying the agent's own model for it is the most
  * expensive way to do the least interesting work.
  */
-async function compactHistory(options: {
+/** What one compaction pass did, with the numbers a tuning pass needs (INV-148 A5). */
+export interface CompactedEvent {
+  type: "compacted";
+  covers: number;
+  summarised: boolean;
+  detail: string;
+  /** Estimated tokens of the entries replaced, and of what replaced them. */
+  tokensBefore?: number;
+  tokensAfter?: number;
+  /** Wall time of the pass, summariser included. */
+  ms?: number;
+  /** True when the summary came from the background pass. */
+  prepared?: boolean;
+}
+
+export async function compactHistory(options: {
   history: TranscriptEntry[];
   agent: AgentRecord;
   registry: AgentRegistry;
   client: Anthropic;
   provider: ProviderProfile;
   log: (line: string) => void;
-  onCompacted: (event: { type: "compacted"; covers: number; summarised: boolean; detail: string }) => void;
+  onCompacted: (event: CompactedEvent) => void;
   /** The entries a summary is replacing, before it does. */
   onSummarised?: (entries: readonly TranscriptEntry[]) => void;
   conversation: string;
@@ -953,6 +1000,7 @@ async function compactHistory(options: {
   }
 
   log(`compacting history: ${cut.reason}`);
+  const startedAt = Date.now();
 
   let entry: SummaryEntry;
   try {
@@ -1012,16 +1060,41 @@ async function compactHistory(options: {
         entry = bare as typeof entry;
       }
     }
+    // The last bound (INV-148 A4): whatever the summariser answered, the adopted entry
+    // plus the tail it fronts fits the trigger. Clipping, not another model call — the
+    // pass must end, and it ends here.
+    const clamped = clampSummaryToBudget(entry, active.slice(entry.covers), policy);
+    if (clamped !== entry) {
+      log(`the summary was longer than the request can carry; clipped from ${entry.text.length} to ${clamped.text.length} characters`);
+      entry = clamped;
+    }
+    const tokensBefore = estimateTokens(active.slice(0, entry.covers));
+    const tokensAfter = estimateTokens([entry]);
     const detail =
-      `summarised ${entry.covers} entries: about ${estimateTokens(olderEntries)} tokens ` +
-      `became ${estimateTokens([entry])}` +
+      `summarised ${entry.covers} entries: about ${tokensBefore} tokens ` +
+      `became ${tokensAfter}` +
       (ready === undefined ? "" : " (prepared in the background)");
     log(detail);
     // What the summary is about to stand in for goes to the memory extractor first: a
     // decision or a constraint in those entries survives as a record even if the summary
     // loses it (TurnkeyAI's pre-compaction flush; ours reuses the ordinary extractor).
-    onSummarised?.(active.slice(0, entry.covers));
-    onCompacted({ type: "compacted", covers: entry.covers, summarised: true, detail });
+    // In its own guard (INV-148 A3): a flush that throws must not turn a summary that
+    // exists into a dropped-history marker — the flush is insurance, not a gate.
+    try {
+      onSummarised?.(active.slice(0, entry.covers));
+    } catch (flushError) {
+      log(`pre-compaction memory flush failed (${flushError instanceof Error ? flushError.message : String(flushError)}); the summary stands`);
+    }
+    onCompacted({
+      type: "compacted",
+      covers: entry.covers,
+      summarised: true,
+      detail,
+      tokensBefore,
+      tokensAfter,
+      ms: Date.now() - startedAt,
+      prepared: ready !== undefined,
+    });
   } catch (error) {
     const reason = error instanceof Error ? error.message : String(error);
     // A refusing summariser buys a cooldown: asking again in ten seconds costs money
@@ -1036,14 +1109,30 @@ async function compactHistory(options: {
     if (pinnedEntries.length > 0) entry = { ...entry, pinned: pinnedEntries };
     const detail = `could not summarise (${reason}); dropped ${cut.index} entries instead`;
     log(detail);
-    onCompacted({ type: "compacted", covers: cut.index, summarised: false, detail });
+    onCompacted({
+      type: "compacted",
+      covers: cut.index,
+      summarised: false,
+      detail,
+      tokensBefore: estimateTokens(olderEntries),
+      tokensAfter: estimateTokens([entry]),
+      ms: Date.now() - startedAt,
+    });
   } finally {
     // Consumed either way: a summary that was adopted must not be adopted twice, and one that
     // failed must not be retried forever.
     pendingSummaries.delete(summaryKey);
   }
 
-  registry.appendTranscript(agent.id, entry, conversation);
+  // The one write. If it fails, nothing was adopted: the transcript on disk still holds
+  // every entry, the request goes out uncompacted from the unchanged history, and the
+  // next turn computes again (INV-148 A3 — a crash here loses a summary, never history).
+  try {
+    registry.appendTranscript(agent.id, entry, conversation);
+  } catch (error) {
+    log(`could not record the compaction (${error instanceof Error ? error.message : String(error)}); sending uncompacted and trying again next turn`);
+    return history;
+  }
   return [...history, entry as TranscriptEntry];
 }
 
@@ -1458,7 +1547,9 @@ export async function runTurn(
   // The tools other people wrote, narrowed by the same allowlist as ours: an MCP tool
   // is an ordinary tool once it arrives, including in what an agent's profile and its
   // scope are allowed to withhold.
-  const allowedMcp = (deps.templateSetup !== undefined ? [] : (deps.mcp?.tools() ?? [])).filter(
+  // Which servers this agent's box carries (INV-439): named in its bundles, or all.
+  const boxServers = deps.bundles?.forBox(registry.boxOf(agent.id))?.mcpServers;
+  const allowedMcp = (deps.templateSetup !== undefined ? [] : (deps.mcp?.toolsFor(boxServers) ?? [])).filter(
     tool => effectiveTools === undefined || effectiveTools.includes(tool.name)
   );
   // Past a certain number they stop being a list and start being a document that every
@@ -1517,10 +1608,14 @@ export async function runTurn(
     // the operator is watching the team room's, and a side chat driving it would fight
     // for pixels with the room. Side conversations keep shell, files and the rest and
     // do their work headless — which is what lets them run at the same time as the room.
-    conversation === MAIN_CONVERSATION,
+    // And only when the box gave it one: a host box (INV-438) has no desktop at all.
+    conversation === MAIN_CONVERSATION && deps.displayIndex !== undefined,
     deps.docReader !== undefined,
     deps.templates !== undefined,
-    isForkConversation(conversation)
+    isForkConversation(conversation),
+    // Connected services (INV-422): offered only where a live grant covers this agent —
+    // the box's bundles or the secret's own grants — and never to a fork.
+    isForkConversation(conversation) ? [] : connectorsFor(deps, agent, registry)
     // MCP tools are outward channels too — a fork gets none (docs/32 §2).
   ).concat(isForkConversation(conversation) ? [] : mcpTools)
     // Only an agent the person actually talks to may reach them (docs/42 §2). A worker created
@@ -1823,6 +1918,24 @@ export async function runTurn(
     const onOuterAbort = () => attemptControl.abort();
     signal.addEventListener("abort", onOuterAbort, { once: true });
 
+    // One span per attempt, all of a turn's rounds in one trace (traceId is the
+    // turnId). Covers both wires: OpenAIWireClient answers the same messages.stream
+    // shape, so this is the single boundary every LLM call crosses.
+    const span = deps.tracer?.start(
+      "llm.round",
+      {
+        "gen_ai.system": provider.label,
+        "gen_ai.request.model": provider.model,
+        "agentbox.agent_id": agent.id,
+        "agentbox.agent_name": agent.profile.name,
+        "agentbox.work_id": workId,
+        "agentbox.turn_id": turnId,
+        "agentbox.conversation": conversation,
+        "agentbox.round": round,
+        "agentbox.attempt": attempts + 1,
+      },
+      { traceId: turnId }
+    );
     const stream = client.messages.stream(
       {
         model: provider.model,
@@ -1904,6 +2017,9 @@ export async function runTurn(
       // A first-token stall arrives as an abort, because that is how the request was ended. Named
       // properly here so the retry decision and the message a person reads both say what happened.
       const error = stalled ? new FirstTokenStallError(FIRST_TOKEN_DEADLINE_MS) : rawError;
+      // The span ends failed however the round recovers — retried, shed, or given up on:
+      // a retried failure is still a failed call, and that is what the trace should show.
+      span?.end(stalled ? { "agentbox.stalled": true } : {}, error);
       // The outer abort is the only one that means "a person stopped this"; our own deadline abort
       // must not be mistaken for it.
       if (signal.aborted) {
@@ -1993,6 +2109,12 @@ export async function runTurn(
       cacheWriteTokens: response.usage.cache_creation_input_tokens ?? 0,
     };
     emit({ type: "usage", agentId: agent.id, round, ...usage });
+    span?.end({
+      "gen_ai.usage.input_tokens": usage.inputTokens,
+      "gen_ai.usage.output_tokens": usage.outputTokens,
+      "agentbox.usage.cache_read_tokens": usage.cacheReadTokens,
+      "agentbox.usage.cache_write_tokens": usage.cacheWriteTokens,
+    });
     // Learn the real context window while we are here. Providers report it under different names —
     // Anthropic does not report it at all today, several OpenAI-compatible endpoints do — so this
     // reads whatever is present and falls back to the configured constants when nothing is.
@@ -2300,7 +2422,15 @@ export async function runTurn(
       // records the verdict; enforce mode waits for it and hands a BLOCK back to the model as the
       // tool's answer, with the reason, so the agent can ask rather than guess.
       const toolInput = (toolUse.input ?? {}) as Record<string, unknown>;
-      const reviewWhy = deps.autoReview === undefined ? undefined : needsReview(toolUse.name, toolInput);
+      const reviewWhy =
+        deps.autoReview === undefined
+          ? undefined
+          : (needsReview(toolUse.name, toolInput) ??
+            // A host-level MCP server's tools (INV-439) are reviewed like a host command:
+            // they reach the operator's own machine or their own data.
+            (deps.mcp?.isHostTool(toolUse.name) === true ? "calls a host-level MCP server" : undefined) ??
+            // On the person's own machine (INV-438) every write is a host action.
+            (deps.boxKind === "host" && HOST_WRITES.has(toolUse.name) ? "writes on the person's own machine" : undefined));
       let blocked: Verdict | undefined;
       if (reviewWhy !== undefined && deps.autoReview !== undefined && deps.autoReview.mode() !== "off") {
         const reviewInput = reviewInputFor({
@@ -2367,6 +2497,7 @@ export async function runTurn(
             // either lands on "unknown tool" rather than on a person or a credential.
             hostRunner: isForkConversation(conversation) ? undefined : deps.hostRunner,
             vault: deps.vault,
+            oauth: isForkConversation(conversation) ? undefined : deps.oauth,
             tasks: deps.tasks,
             scopes: deps.scopes,
             mcp: isForkConversation(conversation) ? undefined : deps.mcp,
@@ -2599,6 +2730,9 @@ export async function runTurn(
   throw new TurnRoundLimitExceeded(note);
   }
 }
+
+/** Tools that change the machine they run on; on a host box these are reviewed (INV-438). */
+const HOST_WRITES = new Set(["bash", "write_file", "edit_file", "browser_act", "browser_upload", "browser_fill_secret"]);
 
 /** A stopped turn's report, with what was checkpointed appended so the person gets the half. */
 export function withCheckpoints(report: string, state: DurableState): string {

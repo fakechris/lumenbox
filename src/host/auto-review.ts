@@ -72,7 +72,7 @@ export function needsReview(tool: string, input: Record<string, unknown>): strin
       // hand on the desktop, and the same desktop the browser tools are reviewed on.
       const actions = Array.isArray(input.actions) ? (input.actions as { action?: unknown }[]) : [];
       const writes = actions.some(a =>
-        ["click", "click_in_window", "type", "key", "drag", "mouse_down", "mouse_up", "close_window"].includes(String(a?.action))
+        ["click", "click_in_window", "click_element", "type", "key", "drag", "mouse_down", "mouse_up", "close_window"].includes(String(a?.action))
       );
       return writes ? "drives the desktop by coordinates" : undefined;
     }
@@ -80,6 +80,12 @@ export function needsReview(tool: string, input: Record<string, unknown>): strin
       return "uploads a file to a web page";
     case "browser_fill_secret":
       return "fills a credential into a web page";
+    case "connector_request": {
+      // A read of a connected service is a look; anything else changes something there,
+      // under the person's own authorization.
+      const method = String(input.method ?? "GET").toUpperCase();
+      return method === "GET" ? undefined : `${method} on ${String(input.connector ?? "a connected service")} — changes something under the person's authorization`;
+    }
     case "write_file":
     case "edit_file": {
       const path = typeof input.path === "string" ? input.path : "";

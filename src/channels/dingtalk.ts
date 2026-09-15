@@ -939,6 +939,12 @@ export class DingTalkChannel implements ChannelAdapter {
       this.identities.set(identity, payload.conversationId);
     }
 
+    // No sender at all is no identity: dropped and said, never admitted under the
+    // conversation's id as if the room itself had spoken (INV-129).
+    if (payload.senderStaffId === undefined && payload.senderId === undefined) {
+      this.discard(inboundId !== "" ? inboundId : undefined, "no sender identity on the message");
+      return;
+    }
     const messageId = typeof payload.msgId === "string" && payload.msgId !== "" ? payload.msgId : undefined;
     if (messageId !== undefined && this.alreadySeen(messageId)) {
       this.discard(messageId, "delivered more than once");

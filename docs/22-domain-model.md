@@ -1,3 +1,10 @@
+<!-- doc: 22-domain-model
+     title: The domain model: people, doors, workers, rooms
+     family: spec
+     status: current
+     domain: identity-and-authority
+     updated: 2026-09-11
+-->
 # The domain model: people, doors, workers, rooms
 
 Status: **draft, fifth version.** v1 lost its invariant to a set nobody can
@@ -116,32 +123,36 @@ build items 1–4 cannot produce one; see §7.
 
 ## 3. What uniformity retires, and where the holes still are
 
-- **Per-agent `visibility`** ("who may drive this agent") — retired. This
-  **overrides docs/09 §3.2**, which kept it as accident-guard and attribution;
-  that section is superseded, not silently reinterpreted. `ownerUserId` survives
-  only as attribution (whose creation is this), never as a gate. Note the live
-  violation: web authorization **denies today** on `visibility` plus
-  `ownerUserId` (`src/web/auth.ts`), so two Principals in one box already get
-  different drive decisions — retiring the field means removing that check, not
-  just the schema.
-- **Per-agent scope/secret grants** — retired as a design subject. Today
-  `RunOnHost` authorizes secrets off the calling agent's mutable `scopeId`
-  (`src/host/tools.ts`), so two agents in one box demonstrably differ in secret
-  reach: the uniformity principle is **false in the running system** until grant
-  subjects move from agent to box, fail-closed, with a test that every agent in a
-  box gets identical secret decisions.
+- **Per-agent `visibility`** ("who may drive this agent") — retired, and as of
+  2026-09-15 retired *in the code* (INV-540). This **overrides docs/09 §3.2**,
+  which kept it as accident-guard and attribution; that section is superseded,
+  not silently reinterpreted. `ownerUserId` survives only as attribution (whose
+  creation is this), never as a gate. `refusalToDrive` no longer takes an agent;
+  what separates two people is a box's `members` (INV-538, `mayEnterBox`), asked
+  by the same callers immediately after the role check, and the memory listing
+  filters by the same rule. The live violation this paragraph used to record —
+  two Principals in one box getting different drive decisions — is gone, with
+  `auth.test.ts` pinning that two drivers get the same answer about the same
+  work.
+- **Per-agent scope/secret grants** — retired, and as of 2026-09-15 retired in the
+  code (INV-539). `RunOnHost` and `fill_secret` authorize a secret only through the
+  box's bundles (`bundles.ts`, INV-420); the calling agent's `scopeId` is not
+  consulted, so there is no argument through which two agents in one box could
+  differ. Fail-closed on purpose: an installation whose grants are still scopes
+  gets a refusal and `agentbox bundle migrate`, rather than one agent quietly
+  holding what its neighbour cannot.
 - **Per-chat scope bindings** (`scope <name>` on a chatKey) — same shape, one
   layer over: two doors into one box binding different scopes recreates door-level
   authority. Retired with the above; until then, a known hole.
 - **Per-agent `tools`** — kept, as labour shaping under §0's confidentiality rule.
-- **PolicyGate approvals** — the inventory's easy miss: approval fingerprints
-  hash the agent id, and *standing* and *session* grants persist and replay with
-  it (`src/host/policy.ts`), so the same caller's identical `RunOnHost` action
-  can be allowed for agent A and refused for agent B in one box. Decided default:
-  **reusable grants (session, standing) are box-subject** authority and migrate
-  like the rest; a **`once` approval is consent to one action, not authority** —
-  it re-asks per occurrence, so it cannot create standing unequal reach, and the
-  acceptance test proves that by including policy decisions in its matrix.
+- **PolicyGate approvals** — done (INV-539). `fingerprintOf` takes the *subject*,
+  and the orchestrator passes the agent's box, so a standing or session grant
+  given while Ada asked covers Bo in the same box and nothing in another box. A
+  **`once` approval is consent to one action, not authority** — it re-asks per
+  occurrence, so it cannot create standing unequal reach. `policy.test.ts` pins
+  the matrix: asked once, allowed for the box's other agent, still asked in a
+  different box. Grants recorded before this keyed the agent id and simply stop
+  matching, which is the fail-closed direction: the next identical action asks.
 - **Document reading is a box capability, not a door property.** A per-channel
   doc reader authorizes with that app's credentials, so two doors on one box
   would give the same worker different document reach depending on ingress —

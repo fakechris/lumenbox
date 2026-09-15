@@ -1,3 +1,9 @@
+<!-- doc: 38-operators-guide
+     title: The operator's guide (what the README used to be)
+     family: guide
+     status: current
+     updated: 2026-09-07
+-->
 # 38 — The operator's guide (what the README used to be)
 
 The technical reference: how the pieces fit, every command, every environment variable, the

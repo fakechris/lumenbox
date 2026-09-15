@@ -1,3 +1,9 @@
+<!-- doc: 07-review
+     title: Review against the specification
+     family: decision
+     status: current
+     updated: 2026-08-20
+-->
 # Review against the specification
 
 Reviewed against [01-requirements.md](01-requirements.md) through

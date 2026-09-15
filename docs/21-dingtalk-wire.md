@@ -1,3 +1,10 @@
+<!-- doc: 21-dingtalk-wire
+     title: The DingTalk wire
+     family: spec
+     status: current
+     domain: dingtalk-wire
+     updated: 2026-08-28
+-->
 # The DingTalk wire
 
 Stream mode in, three roads out — text, cards, files — and what each costs.

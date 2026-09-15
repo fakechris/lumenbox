@@ -4,6 +4,10 @@
  */
 
 import { test } from "node:test";
+import { mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { readLearnings } from "./learnings.ts";
 import assert from "node:assert/strict";
 import { parseSkillFile } from "./skills.ts";
 import {
@@ -15,6 +19,10 @@ import {
   packTemplate,
   parseTemplate,
   pendingOf,
+  resolveBundleRefs,
+  describeBundleGaps,
+  manifestOf,
+  installLearnings,
   reconcile,
   renderRecipe,
   resolvePlaceholders,
@@ -312,3 +320,108 @@ test("a catalog expert is a template in the same format, with nothing to install
   assert.ok(!TEMPLATE_SETUP_TOOLS.includes("bash") && !TEMPLATE_SETUP_TOOLS.includes("SendToAgent") && TEMPLATE_SETUP_TOOLS.includes("write_file"));
 });
 
+
+// ── bundle references: names and needs, resolved by the receiver (INV-421) ─────────────
+test("a template names the bundles its work used, with needs and never values; the receiver resolves them", () => {
+  const withBundles = parseTemplate({
+    ...fixture(),
+    bundles: [
+      { name: "github", needs: { connectors: ["mcp:github"], secretIds: ["GITHUB_TOKEN"], repositories: [{ path: "/repo", mode: "rw" }] } },
+      { name: "notes" },
+    ],
+  });
+  assert.ok("template" in withBundles);
+  assert.deepEqual(withBundles.template.bundles?.map(b => b.name), ["github", "notes"]);
+  const leaking = parseTemplate({ ...fixture(), bundles: [{ name: "github", needs: { token: "ghp_x" } }] });
+  assert.ok("problem" in leaking && /never its values/.test(leaking.problem));
+
+  const refs = withBundles.template.bundles!;
+  // Nothing attached: both missing, with what the work used them for.
+  const none = resolveBundleRefs(refs, undefined);
+  assert.deepEqual(none.map(r => r.status), ["missing", "missing"]);
+  assert.match(describeBundleGaps(none)[0]!, /bundle "github" is not attached to this box \(the work used it for: connector mcp:github, secret GITHUB_TOKEN, \/repo rw\)/);
+  // Same name, a read-only grant: a conflict naming what it lacks — never upgraded to match the template.
+  const readonly = resolveBundleRefs(refs, { names: ["github", "notes"], connectors: ["mcp:github"], secretIds: ["GITHUB_TOKEN"], skills: undefined, mcpServers: [], repositories: [{ path: "/repo", mode: "ro" }] });
+  assert.deepEqual(readonly, [{ name: "github", status: "conflict", lacks: ["/repo rw"] }, { name: "notes", status: "resolved" }]);
+  // The same bundle covering the needs: resolved.
+  const full = resolveBundleRefs(refs, { names: ["github", "notes"], connectors: ["mcp:github"], secretIds: ["GITHUB_TOKEN"], skills: undefined, mcpServers: [], repositories: [{ path: "/repo", mode: "rw" }] });
+  assert.deepEqual(full.map(r => r.status), ["resolved", "resolved"]);
+
+  // Pending carries the gaps, and the cue tells the bot to say so and stop — not to ask for keys.
+  const pending = pendingOf(withBundles.template, ["feishu", "browser"], readonly);
+  assert.deepEqual(pending.bundles.map(r => r.name), ["github"]);
+  const cue = templateSetupCue({ template: withBundles.template, self: "Vera", recipePath: "/home/box/work/templates/vera/recipe.md", pending });
+  assert.match(cue, /bundle "github" is attached but does not provide \/repo rw/);
+  assert.match(cue, /a person attaches bundles in Settings → Boxes; do not ask for keys/);
+  assert.match(cue, /do not treat a same-named bundle as the same grant/);
+  const clean = templateSetupCue({ template: withBundles.template, self: "Vera", recipePath: "/x", pending: pendingOf(withBundles.template, ["feishu", "browser"], full) });
+  assert.doesNotMatch(clean, /Capabilities this recipe was made with/);
+});
+
+test("packing carries the author's bundles as names and needs, and nothing when the box has none", async () => {
+  const source = { listDir: async () => ({ entries: [] }), readFile: async () => ({ content: "" }) };
+  const selection = { profile: { description: "A bot." }, memory: [], skills: [], routines: [], connectors: [] };
+  const base = { self: { name: "Ada" }, teammates: [], memoryRecords: [] };
+  const packed = await packTemplate(source, selection, { ...base, bundles: [{ name: "github", needs: { secretIds: ["GITHUB_TOKEN"] } }] });
+  assert.ok("template" in packed);
+  assert.deepEqual(packed.template.bundles, [{ name: "github", needs: { secretIds: ["GITHUB_TOKEN"] } }]);
+  assert.doesNotMatch(JSON.stringify(packed.template), /ghp_|value/);
+  const bare = await packTemplate(source, selection, base);
+  assert.ok("template" in bare && bare.template.bundles === undefined);
+});
+
+// ── learnings travel; the manifest is read, not trusted (INV-411) ───────────────────────
+test("site learnings travel by host as dated lines, are scanned for secrets, and install once into the receiver's own store", () => {
+  const withNotes = parseTemplate({
+    ...fixture(),
+    learnings: [
+      { host: "https://www.shop.test/cart", lines: ["- 2026-09-01 ✅ the coupon field is under Order summary (by Ada)", "- 2026-09-02 ❌ the Apply button ignores Enter; click it", "not a note"] },
+      { host: "nowhere at all", lines: ["- 2026-09-01 ✅ x"] },
+    ],
+  });
+  assert.ok("problem" in withNotes && /not a host name/.test(withNotes.problem));
+  const good = parseTemplate({ ...fixture(), learnings: [{ host: "https://www.shop.test/cart", lines: ["- 2026-09-01 ✅ the coupon field is under Order summary (by Ada)", "- 2026-09-02 ❌ the Apply button ignores Enter; click it", "not a note"] }] });
+  assert.ok("template" in good);
+  assert.deepEqual(good.template.learnings, [{ host: "shop.test", lines: ["- 2026-09-01 ✅ the coupon field is under Order summary (by Ada)", "- 2026-09-02 ❌ the Apply button ignores Enter; click it"] }]);
+
+  const leaking = parseTemplate({ ...fixture(), learnings: [{ host: "shop.test", lines: ["- 2026-09-01 ✅ log in with token ghp_ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789ab"] }] });
+  assert.ok("problem" in leaking && /learnings\.shop\.test\[0\] looks like it holds a credential/.test(leaking.problem), "a canary in a note refuses the whole document, with the place named");
+
+  const traversal = parseTemplate({ ...fixture(), skills: [{ slug: "x", name: "x", description: "d", files: { "SKILL.md": "---\nname: x\n---\n", "../../etc/passwd": "x" } }] });
+  assert.ok("problem" in traversal && /unsafe path/.test(traversal.problem));
+
+  const dir = mkdtempSync(join(tmpdir(), "agentbox-tpl-learn-"));
+  try {
+    const first = installLearnings(good.template, "tpl_1", dir);
+    assert.deepEqual(first, { installed: 2, skipped: 0 });
+    const again = installLearnings(good.template, "tpl_1", dir);
+    assert.deepEqual(again, { installed: 0, skipped: 2 }, "a re-import is one set of notes");
+    const lines = readLearnings("shop.test", dir);
+    assert.equal(lines.length, 2);
+    assert.match(lines[0]!, /^- 2026-09-01 ✅ the coupon field is under Order summary/);
+    assert.match(lines[0]!, /template:tpl_1/, "every installed line says where it came from");
+    assert.match(lines[1]!, /❌ the Apply button ignores Enter/);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+
+  const manifest = manifestOf({ ...good.template, bundles: [{ name: "github", needs: { secretIds: ["GITHUB_TOKEN"] } }], meta: { createdBy: "kin", version: 3 } }, ["private-notes: belongs to Bob, not to you"]);
+  assert.equal(manifest[0], 'Template "下载专家" v3 by kin');
+  assert.ok(manifest.some(l => /skill transcribe —/.test(l)));
+  assert.ok(manifest.some(l => /learnings for shop.test: 2 note\(s\), 2026-09-01 → 2026-09-02, by Ada/.test(l)));
+  assert.ok(manifest.some(l => /needs bundle "github" \(secret GITHUB_TOKEN\)/.test(l)));
+  assert.ok(manifest.some(l => /excluded by rule: cookies, tokens and secret values, transcripts, recordings, memory about people/.test(l)));
+  assert.ok(manifest.some(l => /left out: private-notes: belongs to Bob/.test(l)));
+});
+
+test("packing takes learnings from the author's store by host, and says when there are none", async () => {
+  const source = { listDir: async () => ({ entries: [] }), readFile: async () => ({ content: "" }) };
+  const packed = await packTemplate(
+    source,
+    { profile: { description: "A bot." }, memory: [], skills: [], routines: [], connectors: [], learnings: ["https://shop.test/x", "empty.test", "not a host"] },
+    { self: { name: "Ada" }, teammates: [], memoryRecords: [], learningsFor: host => (host === "shop.test" ? ["- 2026-09-01 ✅ a note (by Ada)"] : []) }
+  );
+  assert.ok("template" in packed);
+  assert.deepEqual(packed.template.learnings, [{ host: "shop.test", lines: ["- 2026-09-01 ✅ a note (by Ada)"] }]);
+  assert.deepEqual(packed.dropped, ["learnings for empty.test: nothing kept here", 'learnings for "not a host": not a host name']);
+});

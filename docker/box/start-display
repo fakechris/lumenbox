@@ -152,6 +152,23 @@ if ! wm_up; then
   repaired+=("xfwm4")
 fi
 
+# ── accessibility bus (INV-412) ──────────────────────────────────────────────────
+# The control tree behind `list_elements`. The launcher registers its address on the
+# X root window (AT_SPI_BUS), which is how GTK, Qt and Chromium find it without a
+# session bus of their own; box-ax reads the same property.
+if ! xprop -root AT_SPI_BUS 2>/dev/null | grep -q "unix:"; then
+  if command -v at-spi-bus-launcher > /dev/null 2>&1 || [ -x /usr/libexec/at-spi-bus-launcher ]; then
+    log "starting accessibility bus"
+    setsid "$(command -v at-spi-bus-launcher || echo /usr/libexec/at-spi-bus-launcher)" --launch-immediately \
+      >> "/tmp/at-spi-${N}.log" 2>&1 &
+    for _ in $(seq 1 20); do
+      xprop -root AT_SPI_BUS 2>/dev/null | grep -q "unix:" && break
+      sleep 0.25
+    done
+    repaired+=("at-spi")
+  fi
+fi
+
 # ── compositor ───────────────────────────────────────────────────────────────────
 # Needed for the dock: without alpha compositing every window owns its pixels on the
 # shared framebuffer, so a translucent dock cannot exist. xrender rather than glx —

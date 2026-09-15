@@ -45,6 +45,8 @@ import {
   consentFallbackText,
   accepted,
   filesSaved,
+  notYours,
+  questionTerms,
   questionText,
   steered,
 } from "./strings.ts";
@@ -384,13 +386,18 @@ export interface ChannelManagerDeps {
    * Stops the named agent's running turn at its next round boundary. Returns false when
    * there is nobody to stop. The web stop button's semantics, reachable by saying "停".
    */
-  stop?: (agentName: string | undefined) => boolean;
+  /**
+   * Stops a running turn for whoever asked. Takes the identity, because stopping another
+   * box's worker is entering that box (INV-538): the role gate above answers "may this
+   * person drive anything", and only the host can answer "may they drive *this*".
+   */
+  stop?: (agentName: string | undefined, identity: string) => "stopped" | "not-running" | "refused";
   /**
    * Hands a mid-task message to the running turn as steering, without opening a second
    * task. Fire-and-forget: the bus's own rules make it steering or the next turn,
    * exactly one of the two.
    */
-  steer?: (agentName: string | undefined, text: string, identity: string, conversationKey: string) => void;
+  steer?: (agentName: string | undefined, text: string, identity: string, conversationKey: string) => "steered" | "refused";
   /**
    * Runs one turn and returns what the agent said. `agentName` is undefined for the
    * default agent; unknown names should throw with a message worth relaying.
@@ -906,6 +913,9 @@ export class ChannelManager {
     agentName: string;
     question: string;
     options?: string[];
+    /** What the agent does with no answer, and by when — said on the card (INV-533). */
+    fallback?: string;
+    expiresAt?: number;
   }): string | undefined {
     const asker = this.lastAsker.get(input.agentId);
     if (asker === undefined) return undefined;
@@ -914,6 +924,10 @@ export class ChannelManager {
     // fresh card titled with the answer ("附件刚上传完 · 已完成"), which is noise wearing
     // a task's clothes. One-shot: only the immediately next message counts.
     this.awaitingAnswer.set(asker.identity, { question: input.question, at: Date.now() });
+    // What happens if they say nothing, on the card rather than in a design document
+    // (INV-533): a default nobody was told about is not a default they agreed to, and
+    // "answer by when" is the part that makes a question answerable at all.
+    const terms = questionTerms(input.fallback, input.expiresAt);
     // Buttons where the wire has them: the person answers a choice with one tap, and the
     // press goes through the same door as a typed reply. Words keep working either way.
     if (
@@ -926,7 +940,7 @@ export class ChannelManager {
           asker.identity,
           {
             agentName: input.agentName,
-            question: input.question,
+            question: `${input.question}${terms}`,
             options: input.options,
           },
           asker.chatKey
@@ -942,7 +956,7 @@ export class ChannelManager {
 
 ${input.options.map(option => `· ${option}`).join("\n")}`
         : "";
-    const text = questionText(input.agentName, input.question, choices);
+    const text = questionText(input.agentName, `${input.question}${terms}`, choices);
     // Into the thread that asked, where the adapter can address one: a question with
     // no surrounding context is a question about everything at once.
     const push =
@@ -1080,19 +1094,31 @@ ${input.options.map(option => `· ${option}`).join("\n")}`
   }
 
   pushToChat(chatKey: string, text: string): Promise<void> {
+    return this.tryPushToChat(chatKey, text).then(() => undefined);
+  }
+
+  /**
+   * The same push, with the answer to "did anybody get it" (INV-530).
+   *
+   * `pushToChat` resolves whatever happens — a replaced channel, an unconfigured
+   * adapter, a vendor error are all logged and swallowed, because a digest that cannot
+   * be delivered must not take the process down with it. But a caller that *counts*
+   * deliveries needs the difference: two ageing nudges that went nowhere used to archive
+   * the work as unanswered. Undelivered is not silence.
+   */
+  tryPushToChat(chatKey: string, text: string): Promise<{ delivered: boolean; why?: string }> {
     if ((this.deps.incarnationOf?.(chatKey) ?? 1) !== 1) {
-      this.deps.log(
-        `channel: dead letter for ${chatKey} — its channel was replaced, and an ` +
-          `unstamped address cannot prove it means the current tenant. Dropped.`
-      );
-      return Promise.resolve();
+      const why = `dead letter for ${chatKey} — its channel was replaced, and an unstamped address cannot prove it means the current tenant. Dropped.`;
+      this.deps.log(`channel: ${why}`);
+      return Promise.resolve({ delivered: false, why });
     }
     const adapter = this.adapters.find(a => chatKey.startsWith(`${a.name}:`));
     if (adapter?.sendToChat === undefined) {
       // Not an error to ignore: a digest, a rescue notice or a late answer was addressed
       // to a chat whose channel is no longer configured, and it is going nowhere.
-      this.deps.log(`channel: nothing can send to ${chatKey}; message dropped`);
-      return Promise.resolve();
+      const why = `nothing can send to ${chatKey}; message dropped`;
+      this.deps.log(`channel: ${why}`);
+      return Promise.resolve({ delivered: false, why });
     }
     return adapter
       .sendToChat(chatKey, text)
@@ -1104,11 +1130,11 @@ ${input.options.map(option => `· ${option}`).join("\n")}`
           adapter.sendToChat === undefined ? Promise.resolve() : adapter.sendToChat(chatKey, line)
         )
       )
+      .then(() => ({ delivered: true }))
       .catch((error: unknown) => {
-        this.deps.log(
-          `channel ${adapter.name}: could not send to ${chatKey} — ` +
-            `${error instanceof Error ? error.message : String(error)}`
-        );
+        const why = `could not send to ${chatKey} — ${error instanceof Error ? error.message : String(error)}`;
+        this.deps.log(`channel ${adapter.name}: ${why}`);
+        return { delivered: false, why };
       });
   }
 
@@ -1350,12 +1376,14 @@ ${input.options.map(option => `· ${option}`).join("\n")}`
     if (running !== undefined) {
       const sameAgent = agentName === undefined || agentName === running.agentName;
       if (parseStopRequest(text)) {
-        const stopped = this.deps.stop?.(running.agentName) ?? false;
-        return stopped ? STOPPING : NOTHING_RUNNING;
+        const outcome = this.deps.stop?.(running.agentName, message.identity) ?? "not-running";
+        // Three answers, not two: refused is not "nothing is running", and telling
+        // somebody their stop worked when it did not is worse than refusing them.
+        return outcome === "stopped" ? STOPPING : outcome === "refused" ? notYours(running.agentName) : NOTHING_RUNNING;
       }
       if (sameAgent && this.deps.steer !== undefined) {
-        this.deps.steer(running.agentName, text, message.identity, conversationKey);
-        return steered(running.agentName);
+        const outcome = this.deps.steer(running.agentName, text, message.identity, conversationKey);
+        return outcome === "refused" ? notYours(running.agentName) : steered(running.agentName);
       }
     } else if (parseStopRequest(text)) {
       return NOTHING_RUNNING;

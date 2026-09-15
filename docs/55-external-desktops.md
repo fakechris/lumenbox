@@ -1,3 +1,10 @@
+<!-- doc: 55-external-desktops
+     title: External browsers and desktop control
+     family: guide
+     status: current
+     updated: 2026-09-15
+-->
+
 # External browsers and desktop control
 
 These are box execution capabilities, not an application workflow engine. They do

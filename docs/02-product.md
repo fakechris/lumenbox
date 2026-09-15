@@ -1,3 +1,10 @@
+<!-- doc: 02-product
+     title: Product
+     family: spec
+     status: current
+     domain: product
+     updated: 2026-08-19
+-->
 # Product
 
 ## 1. What it is

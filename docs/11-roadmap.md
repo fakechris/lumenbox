@@ -1,3 +1,10 @@
+<!-- doc: 11-roadmap
+     title: Roadmap and backlog
+     family: spec
+     status: current
+     domain: roadmap
+     updated: 2026-09-14
+-->
 # Roadmap and backlog
 
 Everything deferred on purpose, in one place, ranked. The ranking lens is the one used
@@ -1276,6 +1283,37 @@ conduct numbers, the prompt floor, the pre-launch security list): R8's rider and
 R26's search path, then R25. R4, R16, R30, R29 wait for their designs; R17 and R27 wait for a
 week of memory numbers. docs/30 Stage C (`TransferFile`) is paused at Chris's call.
 
+## What to do next, as of 2026-09-14 — after the Astra contracts landed
+
+Merged to main since the 09-11 note: Tier 0 round two (INV-405, 406, 410, 425, 427, 435),
+Tier 1 (INV-436, 438, 439, 422, 430, 433, 412, 146), the Astra-revised set (INV-148, 147,
+129, 130, 426, 421, 411, 434), the two acceptance packages (INV-480, 481) and the Feishu
+silent-socket fix (INV-523, #130). main is 1459/1459 at 5f460e0; the box image and the
+App are rebuilt from it; `release:check` writes a scorecard that says the model section is
+SKIPPED until somebody runs `npm run scenario -- --json` under their own credentials.
+
+**Tier 0 — next round (p4).** What closes an open milestone with no external dependency:
+INV-429 door name rules and the guest switch (the last of docs/50 I); INV-135 host-side
+wedge detection and a standing alert collector (the Feishu incident's lesson generalised:
+a dead socket, a wedged sweep, a box that stops answering, all said out loud on one
+surface); INV-156 approvals that stand by principal for an action class, on top of the
+INV-427 rules; INV-525 tool idempotency declarations (a candidate — the protocol half of
+INV-440 that can be built without a caller). Operator-side, not code: one real-model
+scorecard baseline, and trial participants for INV-480/481.
+
+**Tier 1 (p3).** INV-136 tenant-level central audit table (the export is the file; this is
+the table); INV-134 session replay; INV-138 security S-2..S-7; INV-155 self-serve
+"link another account" (identity-adjacent, but does not need INV-153's directory).
+
+**Tier 2 (p2).** INV-139 multi-user direction (a decision before code), INV-149 voice,
+INV-150 long-tail connectors, INV-110–112, 115, 116, 119–121.
+
+**Waiting, not ranked.** INV-128 real channel payloads and INV-153 the enterprise identity
+anchor both need data you authorise; INV-157 follows 153; INV-440 waits for a real
+cross-installation caller (M4). None of these move by ranking.
+
+Rule kept: Involute `priority` is the ranking; this section is the why.
+
 ## What to do next, as of 2026-09-11 — after Tier 0 and Tier 1 landed
 
 Merged to main today, all accepted in Involute: docs/49 A1–A3, B1–B3, C1, D1, D2, E1 (INV-398,
@@ -1293,7 +1331,7 @@ duplicated turn is the failure a person notices first.
 
 **Tier 1 (p3).** INV-436 direct/ambient attention; the local environment decision: INV-438
 host box, INV-439 MCP by bundle; INV-422 OAuth connectors; audit views: INV-430, INV-433;
-INV-412 AT-SPI; INV-146 retry/degrade (its explicit-failure half is done); INV-157 identity
+INV-412 AT-SPI (PR #127); INV-146 retry/degrade (explicit-failure half done; retry/degrade built 2026-09-11 in `src/boxd/browser-recovery.ts`: reads retried once after re-attach, writes never repeated → unknown, `open` degrades to a headless fetch said as such); INV-157 identity
 migration (other agent's chain); memory quality INV-147, INV-148.
 
 **Tier 2 (p2).** 421, 426, 429, 434, 440, 411, 134, 135, 136, 138 (S-2..S-7 remain), 139,

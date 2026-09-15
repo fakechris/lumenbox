@@ -1,3 +1,9 @@
+<!-- doc: 15-secrets-in-the-record
+     title: R7: secrets an agent reads land in the record in clear
+     family: decision
+     status: current
+     updated: 2026-08-25
+-->
 # R7: secrets an agent reads land in the record in clear
 
 **Status: design, not built.** Written to be attacked. Per [docs/13](13-design-review.md)

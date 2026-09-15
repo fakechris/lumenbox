@@ -275,6 +275,14 @@ export interface PolicyGateOptions {
   /** Spend since a moment for one agent, for its own allowance. */
   spentSinceAgent?: (sinceMs: number, agentId: string) => number;
   /**
+   * The box an agent lives in, which is what a reusable approval belongs to (INV-539).
+   *
+   * Absent — a unit test, a harness with no registry — falls back to the agent's own id,
+   * which is the old behaviour and cannot widen anything: a subject of one is a subject
+   * of one.
+   */
+  boxOf?: (agentId: string) => string;
+  /**
    * Why spend cannot be measured right now, when it cannot.
    *
    * Separate from `spentSince` because "unknown" is not a number, and the two used to share one:
@@ -304,6 +312,8 @@ export class PolicyGate {
   private readonly spentSinceAgent: (sinceMs: number, agentId: string) => number;
   private readonly spendUnavailable: () => string | undefined;
   private readonly rules: RuleStore | undefined;
+  /** What a reusable grant belongs to: the box (INV-539). */
+  private readonly subjectOf: (agentId: string) => string;
 
   /**
    * Called the moment a new approval is created, with what a notifier needs.
@@ -342,6 +352,9 @@ export class PolicyGate {
     this.spentSincePrincipal = options.spentSincePrincipal ?? (() => 0);
     this.spentSinceAgent = options.spentSinceAgent ?? (() => 0);
     this.rules = options.rules;
+    // What a reusable grant belongs to (INV-539). The box, once the orchestrator can say
+    // which; the agent's own id when nobody wired it, which is what a unit test is.
+    this.subjectOf = options.boxOf ?? ((agentId: string) => agentId);
     this.replay();
   }
 
@@ -546,7 +559,7 @@ export class PolicyGate {
     const tooLarge = tooLargeToApprove(description);
     if (tooLarge !== undefined) return { decision: { allow: false, reason: tooLarge } };
 
-    const fingerprint = fingerprintOf(request.agentId, description);
+    const fingerprint = fingerprintOf(this.subjectOf(request.agentId), description);
 
     // A standing or session grant covers this exact action without being consumed.
     // Each use still writes an approval-used row, so the audit trail says every time

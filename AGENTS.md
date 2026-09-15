@@ -75,7 +75,40 @@ from an MCP face, and from webhook routines.
 - `src/box/`, `src/boxd/` — the box client and the daemon inside the box.
 - `src/web/` — the server and the single-page app (`app-html.ts`).
 - `src/control/` — the multi-tenant control plane and the Kubernetes allocator.
-- `docs/` — the design record. `docs/11-roadmap.md` is the running one; read it before planning.
+- `docs/` — the design record. `docs/INDEX.md` says what each document is and whether it
+  still stands; `docs/11-roadmap.md` is the running one. Read the index before citing
+  anything: three documents were superseded in prose nobody greps, and two pairs each
+  claimed one number.
+
+## How the documents work (`scripts/docs-lint.mjs`, checked by `npm test`)
+
+Every file in `docs/` opens with a header block naming what it is:
+
+```
+<!-- doc: 22-domain-model
+     title: The domain model: people, doors, workers, rooms
+     family: spec
+     status: current
+     domain: identity-and-authority
+     updated: 2026-09-11
+-->
+```
+
+- **`family: spec`** — normative and current; **exactly one current spec owns each
+  `domain:`**, which is the rule that stops two documents legislating the same thing.
+  **`decision`** — a dated record of why something was decided: never rewritten, only
+  superseded. **`guide`** — how to do something, kept current. **`handoff`** — what was
+  true at the end of a session.
+- **Supersession is a field, not a sentence.** `status: superseded` +
+  `superseded-by: <slug>` + `why:` one line. The check refuses a target that does not
+  exist or is itself superseded, because a chain is a chain a reader gets wrong.
+- **A number is a name.** The code cites `docs/22` 47 times; two current documents may not
+  share a number. A renumbering updates the citations in the same commit.
+- **New document?** Take the next free number, write the header, run the suite — it
+  regenerates nothing for you, but it tells you what is inconsistent, and `docs/INDEX.md`
+  is generated from the headers.
+- **Archive is for abandoned subjects only.** A superseded document stays where it is with
+  a pointer: the reasoning is why the successor says what it says.
 
 ## House rules that outrank convenience
 

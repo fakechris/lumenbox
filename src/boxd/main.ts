@@ -71,6 +71,7 @@ import { DisplayManager, DisplayOwnershipError, DisplayGuardError, UserInControl
 import { CdpError } from "./cdp.ts";
 import { TeachService, TeachBindingConflict, defaultInputSpawner } from "./teach-service.ts";
 import { copyTeachBinding } from "../protocol/index.ts";
+import { HEADLESS_NOTE, headlessFetch, withRecovery } from "./browser-recovery.ts";
 import { detectDisplay, getDisplay, parseDisplayNum } from "../cua/display.ts";
 import { readClipboard, writeClipboard } from "./clipboard-service.ts";
 import { startEgressProxy } from "../egress/proxy.ts";
@@ -79,7 +80,8 @@ import { AGENT_NICE, reapSpool, runShell, withoutBoxToken } from "./shell-servic
 import { JobService } from "./job-service.ts";
 import { BrowserService, StaleSnapshotError, IrreversibleActionError } from "./browser-service.ts";
 import { BrowserEndpointRegistry, EndpointConflictError } from "./browser-endpoints.ts";
-import { downloadFile, listDir, readFile, uploadFile, writeFile } from "./fs-service.ts";
+import { currentRoots, downloadFile, listDir, readFile, uploadFile, writeFile } from "./fs-service.ts";
+import { headlessRefusal } from "./headless.ts";
 import { XWatchdogService } from "./xwatchdog-service.ts";
 
 const VERSION = "0.1.0";
@@ -88,6 +90,8 @@ const startedAt = Date.now();
 
 const display = getDisplay();
 const token = process.env.BOXD_TOKEN ?? "";
+/** A box with no desktop by design (INV-438): nothing that needs X is started or served. */
+const HEADLESS = process.env.BOXD_HEADLESS === "1";
 
 const displays = new DisplayManager(line => log(line));
 const recorder = new RecordService(line => log(line));
@@ -191,7 +195,7 @@ async function handleHealth(): Promise<HealthResult> {
   // restart the desktop is up and an agent's, and "no display" would be a claim about this
   // process's bookkeeping presented as a fact about the screen.
   let resolution = primary?.resolution;
-  if (resolution === undefined) {
+  if (resolution === undefined && !HEADLESS) {
     try {
       resolution = (await detectDisplay(display)).resolution;
     } catch {
@@ -204,6 +208,8 @@ async function handleHealth(): Promise<HealthResult> {
     ...(imageContract() !== undefined ? { contract: imageContract()! } : {}),
     protocol: BOXD_PROTOCOL,
     display,
+    ...(HEADLESS ? { headless: true } : {}),
+    ...(currentRoots().restricted ? { repositories: currentRoots().list() } : {}),
     resolution,
     refresh_rate: undefined,
     uptime_seconds: Math.round((Date.now() - startedAt) / 1000),
@@ -234,7 +240,7 @@ async function handleComputer(body: ComputerRequest): Promise<ComputerResult> {
   const authorize = () => {
     displays.assertControl(index, body);
     displays.assertOwner(index, body.owner);
-    if (body.actions.some(action => !["screenshot", "cursor_position", "list_windows", "screenshot_window", "wait"].includes(action.action))) {
+    if (body.actions.some(action => !["screenshot", "cursor_position", "list_windows", "list_elements", "screenshot_window", "wait"].includes(action.action))) {
       displays.assertAgentControls(index);
     }
   };
@@ -252,14 +258,19 @@ async function handleComputer(body: ComputerRequest): Promise<ComputerResult> {
     return {
       // Ran, but nothing to show for it, is not "ok": the capture is the only evidence
       // the host has that the screen is in the state the actions were meant to leave it.
+      // An outline that was asked for and could not be read is the same: the model has
+      // to know it is working from the screenshot alone (INV-412).
       outcome:
-        result.screenshot === "" || result.effect === "unverifiable" ? "unknown" : "ok",
+        result.screenshot === "" || result.effect === "unverifiable" || result.elementsNote !== undefined ? "unknown" : "ok",
       ...(result.effect !== undefined
         ? { effect: result.effect, effect_detail: result.effectDetail }
         : {}),
       success: result.success,
       screenshot: result.screenshot,
       windows: result.windows,
+      ...(result.elements !== undefined ? { elements: result.elements } : {}),
+      ...(result.elementsNote !== undefined ? { elements_note: result.elementsNote } : {}),
+      ...(result.elementsWindow !== undefined ? { elements_window: result.elementsWindow } : {}),
       cursor_position: result.cursorPosition,
       action_count: result.actionCount,
       duration_ms: result.durationMs,
@@ -501,11 +512,17 @@ const routes: Record<string, Handler> = {
   // someone else's desktop is driving their screen, whichever protocol it goes over.
   "POST /browser": async (body: BrowserRequest): Promise<BrowserResponse> => {
     const display = body.display ?? defaultDisplayIndex;
-    displays.assertControl(display, body);
-    displays.assertOwner(display, body.owner);
-    // Reading the page is fine while a person holds the desktop; acting on it is not.
-    if (!["snapshot", "read", "wait", "check"].includes(body.op)) displays.assertAgentControls(display);
+    const authorize = () => {
+      displays.assertControl(display, body);
+      displays.assertOwner(display, body.owner);
+      if (!["snapshot", "read", "wait", "check"].includes(body.op)) displays.assertAgentControls(display);
+    };
+    authorize();
     await displays.ensure(display);
+    const localRecovery = endpoints.resolve(display).kind === "local";
+    const browserOp = async (): Promise<BrowserResponse> => {
+    authorize();
+    if (localRecovery && endpoints.resolve(display).kind !== "local") throw new HttpError(409, "Desktop attachment changed during recovery");
     switch (body.op) {
       case "open":
         return browser.open(display, String(body.url ?? "about:blank"), body.page);
@@ -552,6 +569,46 @@ const routes: Record<string, Handler> = {
       default:
         throw new Error(`Unknown browser op ${body.op}`);
     }
+    };
+    // Recovery policy for externally owned applications belongs to their controller.
+    if (!localRecovery) {
+      const result = await browserOp();
+      authorize();
+      return result;
+    }
+    // Retry and degrade (INV-146): a read that lost the browser is retried once after
+    // re-attaching; a write is never repeated and comes back unknown; a browser that
+    // stays down degrades `open` to a fetch without a browser, said as such.
+    const recovered = await withRecovery(body.op, browserOp, { forget: () => { if (endpoints.resolve(display).kind === "local") browser.forget(display); }, log });
+    authorize();
+    if (recovered.kind === "ok") {
+      if (recovered.recovered === undefined) return recovered.result;
+      const said =
+        recovered.recovered === "connection"
+          ? "The browser connection had dropped; it was re-attached and this is a fresh read."
+          : "The page was still loading on the first try; this is the second.";
+      return { ...recovered.result, note: [recovered.result.note, said].filter(Boolean).join(" ") };
+    }
+    if (recovered.kind === "unknown") {
+      return {
+        url: "",
+        title: "",
+        snapshot: "",
+        outcome: "unknown",
+        note:
+          `The browser connection failed while ${body.op} was in flight (${recovered.error.message}). ` +
+          "It may or may not have happened: take a snapshot and look before repeating it.",
+      };
+    }
+    const url = String(body.url ?? "");
+    if (body.op === "open" && /^https?:\/\//.test(url) && endpoints.resolve(display).kind === "local") {
+      log(`browser open: browser unavailable, degrading to a headless fetch of ${url}`);
+      const page = await headlessFetch(url);
+      authorize();
+      if (endpoints.resolve(display).kind !== "local") throw new HttpError(409, "Desktop attachment changed during fallback");
+      return { url: page.url, title: page.title, snapshot: "", text: page.text, outcome: "unknown", note: `${HEADLESS_NOTE} (${recovered.error.message})` };
+    }
+    throw recovered.error;
   },
   "GET /displays": async (): Promise<DisplayInfo[]> => displays.list(),
   "POST /displays": async (): Promise<DisplayInfo[]> => displays.list(),
@@ -837,6 +894,11 @@ const server = createServer((req, res) => {
         return;
       }
 
+      const refusedHeadless = HEADLESS ? headlessRefusal(route) : undefined;
+      if (refusedHeadless !== undefined) {
+        send(res, 409, { error: refusedHeadless });
+        return;
+      }
       const handler = routes[route];
       if (!handler) {
         send(res, 404, { error: `No route for ${route}` });
@@ -902,6 +964,10 @@ if (token.length < 16) {
  * itself. What is being authenticated here is the hop, not the human.
  */
 server.on("upgrade", (req, clientSocket: Socket, head: Buffer) => {
+  if (HEADLESS) {
+    clientSocket.end("HTTP/1.1 409 Conflict\r\n\r\n");
+    return;
+  }
   if (!authorized(req)) {
     clientSocket.end("HTTP/1.1 401 Unauthorized\r\n\r\n");
     return;
@@ -998,6 +1064,10 @@ server.listen(listenPort, listenHost, () => {
   // touched: ensuring it without that agent's token would only be refused, and the agent
   // registers it again on its next call. Everything else about it — the components, the
   // supervisor — resumes then.
+  if (HEADLESS) {
+    log(`headless: no desktop on this box; ${currentRoots().restricted ? `files limited to ${currentRoots().list().map(r => `${r.path} (${r.mode})`).join(", ")}` : "files unrestricted"}`);
+    return;
+  }
   if (displays.isClaimed(defaultDisplayIndex)) {
     log(`default desktop ${defaultDisplayIndex} is an agent's; leaving it to them`);
   } else {

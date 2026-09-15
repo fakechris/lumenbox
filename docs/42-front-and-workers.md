@@ -1,3 +1,9 @@
+<!-- doc: 42-front-and-workers
+     title: One front, invisible workers
+     family: decision
+     status: current
+     updated: 2026-09-08
+-->
 # 42 · One front, invisible workers
 
 *2026-09-08. Why our multi-agent chat feels worse than Grok Bot's, traced to the harness rather

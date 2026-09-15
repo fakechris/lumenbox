@@ -6,6 +6,8 @@
  * orchestration you see at runtime is emergent, not encoded.
  */
 
+import { bindingsOf, CommitmentLedger, describeGaps, parseCommitments, priorCommitmentsPrompt, reconcileCommitments } from "./commitments.ts";
+import { learningsDir } from "./learnings.ts";
 import type Anthropic from "@anthropic-ai/sdk";
 import { AgentBus, type BusEvent, type InboundMessage, type Lane } from "../agents/bus.ts";
 import { Inbox, inboxPath } from "../agents/inbox.ts";
@@ -40,6 +42,12 @@ import {
   type TemplateFillIn,
   describeTemplate,
   pendingOf,
+  describeBundleGaps,
+  installLearnings,
+  TEMPLATE_CUE,
+  resolveBundleRefs,
+  type BundleResolution,
+  type TemplatePending,
   recipeDirFor,
   reconcile,
   renderRecipe,
@@ -72,12 +80,14 @@ import { RuleStore } from "./rules.ts";
 import { MAIN_CONVERSATION, conversationIdFor } from "../agents/registry.ts";
 import type { HostRunner } from "./host-runner.ts";
 import type { Vault } from "./vault.ts";
+import type { OAuthGate } from "./oauth.ts";
 import { Rememberer, summariseExchange } from "./remember.ts";
 import { memoryRef } from "./memory.ts";
 import type { PitfallSource } from "./pitfalls.ts";
 import { SkillCache } from "./skills.ts";
 import { Scheduler } from "./schedule.ts";
 import { UsageLog } from "./usage.ts";
+import { tracerFromEnv, type Tracer } from "./trace.ts";
 import {
   createClient,
   summaryRuntimeFor,
@@ -109,6 +119,11 @@ export interface OrchestratorOptions {
   /** A client for an attached box, instead of dialling its endpoint. For tests with two fake boxes. */
   boxClientFor?: (entry: BoxEntry) => BoxClient | undefined;
   onTurnEvent?: (event: TurnEvent) => void;
+  /**
+   * Where LLM-call spans go. `null` keeps none even when AGENTBOX_TRACE_URL is set;
+   * omitted reads the environment, which unset means no tracing at all.
+   */
+  tracer?: Tracer | null;
   onBusEvent?: (event: BusEvent) => void;
   /**
    * Where accepted-but-unstarted work is recorded, so a restart does not lose a request that was
@@ -139,6 +154,8 @@ export interface OrchestratorOptions {
   hostRunner?: HostRunner;
   /** The credential vault, for secrets a host command may ask for by grant. */
   vault?: Vault;
+  /** The OAuth gate (INV-422), when the web server built one over the vault. */
+  oauth?: OAuthGate;
   /** The team's task board. `null` keeps none, which a test that must not touch the state directory wants. */
   tasks?: TaskStore | null;
   /** The scopes registry. `null` keeps none. */
@@ -167,8 +184,19 @@ export interface OrchestratorOptions {
    * `deliver:` is inert, which is what a CLI run and a test want — the automation still
    * runs, it just has nowhere to speak.
    */
-  deliverToChat?: (chatKey: string, text: string) => Promise<void>;
+  /**
+   * A scheduled run's report, into the chat the skill named.
+   *
+   * `fromAgentId` says which worker is speaking, so the host can refuse a delivery into
+   * a chat that belongs to a different box (INV-541): a routine in one box reporting
+   * into another box's room is the cross-box leak Octop closes with an ownership check
+   * on the session (`delivery.py:72-75`), and we had nothing.
+   */
+  deliverToChat?: (chatKey: string, text: string, fromAgentId?: string) => Promise<void>;
 }
+
+/** A newer version of an already-imported template arrived without `update` (INV-411). */
+export class TemplateVersionConflict extends Error {}
 
 export class Orchestrator {
   readonly registry: AgentRegistry;
@@ -222,6 +250,15 @@ export class Orchestrator {
    * estimate.
    */
   readonly policy = new PolicyGate({
+    // A reusable approval belongs to the box, not to whichever agent happened to ask
+    // (INV-539, docs/22 §3): two agents in one box must get the same answer.
+    boxOf: agentId => {
+      try {
+        return this.registry.boxOf(agentId).id;
+      } catch {
+        return agentId;
+      }
+    },
     spendUnavailable: () => this.usage.unavailable(),
     spentSince: sinceMs => {
       const totals = this.usage.totalsSince(sinceMs);
@@ -250,6 +287,8 @@ export class Orchestrator {
   });
 
   readonly provider: ProviderProfile;
+  /** Where LLM-call spans go (trace.ts); undefined when no collector is configured. */
+  private readonly tracer: Tracer | undefined;
 
   /**
    * The team's task board. One per process, like the usage log: its file is
@@ -260,6 +299,8 @@ export class Orchestrator {
   /** Bundles attached to boxes (INV-420). */
   readonly bundles: BundleStore;
   readonly teachDrafts = new TeachDrafts(join(agentboxHome(), "skills-drafts"));
+  /** What routines committed to and whether anything holds it (INV-528). */
+  readonly commitments = new CommitmentLedger(join(agentboxHome(), "commitments.jsonl"));
   /** Turns a queued demonstration into a teaching turn (INV-406). */
   private readonly teachRunner = new TeachRunner({
     agentById: (boxId, agentId) => {
@@ -477,7 +518,9 @@ export class Orchestrator {
     // A delivering run happens *in* the chat's conversation, so what it says is read from
     // the same place a person's turn is read from and lands in the room's own history —
     // rather than in the main conversation, which no chat has ever read.
-    run: async (agent, prompt, deliver) => {
+    // Last time's commitments open the next run of the same routine (INV-528).
+    priorCommitments: slug => priorCommitmentsPrompt(this.commitments.lastFor(slug), this.tasks?.list() ?? []),
+    run: async (agent, prompt, deliver, slug) => {
       if (deliver === undefined) {
         await this.prompt(agent, prompt, undefined, { steerable: false, lane: "background", synthetic: true });
         return;
@@ -499,7 +542,40 @@ export class Orchestrator {
       // Silence is not delivered. A skill that had nothing to report should not put an
       // empty message in a room every morning — the absence is the report.
       if (said === "") return;
-      await this.options.deliverToChat?.(deliver, said);
+      await this.options.deliverToChat?.(deliver, said, agentId);
+      // Commitments in the report are checked against the board and the scheduler
+      // (INV-528): what nothing holds is said in the same chat, and the agent is cued
+      // to create the card and the reminder now, in a turn of its own.
+      if (slug === undefined) return;
+      const commitments = parseCommitments(said);
+      if (commitments.length === 0) return;
+      const routines = (await this.scheduler.status().catch(() => [])).map(entry => ({ slug: entry.slug, name: entry.name, paused: entry.paused, ...(entry.nextRun !== undefined && entry.kind === "once" ? { at: Date.parse(entry.nextRun) } : {}) }));
+      // Made now, so a card finished last month cannot be what carries it, and bound to
+      // whatever the last run tied each item to — an id rather than a word match (INV-534).
+      const madeAt = Date.now();
+      const bindings = bindingsOf(this.commitments.lastFor(slug));
+      const checks = reconcileCommitments(commitments, this.tasks?.list() ?? [], routines, madeAt, bindings);
+      const isDone = (taskId: string | undefined): boolean => taskId !== undefined && this.tasks?.get(taskId)?.status === "done";
+      const gaps = describeGaps(checks);
+      if (gaps.toChat === undefined || gaps.cue === undefined) {
+        this.commitments.record(this.commitments.withCarried({ at: new Date(madeAt).toISOString(), slug, agentId, commitments, checks }, isDone));
+        return;
+      }
+      console.error(`[commitments] ${slug}: ${checks.filter(c => c.missing.length > 0).length} of ${checks.length} commitment(s) not held`);
+      await this.options.deliverToChat?.(deliver, gaps.toChat, agentId);
+      const mark = this.registry.readTranscript(agentId, conversation).length;
+      await this.prompt(agent, gaps.cue, undefined, { steerable: false, lane: "background", synthetic: true, conversation });
+      await this.settle();
+      const created = this.replySince(agentId, mark, conversation).trim();
+      if (created !== "") await this.options.deliverToChat?.(deliver, created, agentId);
+      // What the cue actually produced, checked rather than believed (INV-534): the agent
+      // saying "created" is a sentence, and the ledger is about what exists. Whatever is
+      // still unheld is said once — not cued again, because a second cue that produced
+      // nothing the first time is a loop, and the next run opens with it anyway.
+      const after = reconcileCommitments(commitments, this.tasks?.list() ?? [], (await this.scheduler.status().catch(() => [])).map(entry => ({ slug: entry.slug, name: entry.name, paused: entry.paused, ...(entry.nextRun !== undefined && entry.kind === "once" ? { at: Date.parse(entry.nextRun) } : {}) })), madeAt, bindings);
+      this.commitments.record(this.commitments.withCarried({ at: new Date(madeAt).toISOString(), slug, agentId, commitments, checks: after }, isDone));
+      const stillOpen = describeGaps(after);
+      if (stillOpen.toChat !== undefined) await this.options.deliverToChat?.(deliver, `Still nothing holding these after that turn:\n${stillOpen.toChat.split("\n").slice(1).join("\n")}`, agentId);
     },
     // A waiting webhook: the same turn, but the caller is told what came of it.
     runAndSay: async (agent, prompt) => {
@@ -727,6 +803,9 @@ export class Orchestrator {
       void this.memoryMirror.sync(agentId);
     };
     this.provider = options.provider ?? resolveProvider();
+    // `null` is how a test says "no tracer even if the environment names one";
+    // omitted reads AGENTBOX_TRACE_URL, which unset means the feature does not exist.
+    this.tracer = options.tracer === null ? undefined : (options.tracer ?? tracerFromEnv());
     this.client = options.client ?? createClient(this.provider);
     // The Rememberer gets the *paired* summary runtime — the same review finding as
     // compaction: a profile naming another provider must not ride the primary client.
@@ -876,6 +955,34 @@ export class Orchestrator {
   /** Attaches a box now: the record is written, the connection tried, the outcome returned. */
   async attachBox(entry: BoxEntry): Promise<{ connected: boolean; detail: string }> {
     this.registry.attachBox(entry);
+    return this.connectAttached(entry);
+  }
+
+  /** Boxes an admin cut off (INV-434): no client, no reconnect, no new work routed there. */
+  private readonly revokedBoxes = new Set<string>();
+
+  /**
+   * Cuts a registered box off: its client is dropped so every tool on it answers "the box
+   * is not running", and a reconnect is refused. What was running on that machine is not
+   * stopped from here and is not claimed to be; the count of agents living there is the
+   * honest measure of what may still be in flight.
+   */
+  revokeBox(boxId: string): { agentsLiving: number; wasConnected: boolean } {
+    const wasConnected = this.boxClients.has(boxId);
+    this.revokedBoxes.add(boxId);
+    this.boxClients.delete(boxId);
+    this.skillCaches.delete(boxId);
+    this.forgetDesktopsOf(boxId);
+    return { agentsLiving: this.registry.agentsIn(boxId).length, wasConnected };
+  }
+
+  isBoxRevoked(boxId: string): boolean {
+    return this.revokedBoxes.has(boxId);
+  }
+
+  /** A reconnect for a registered box: the same id, possibly a new address; refused when revoked. */
+  async reconnectBox(entry: BoxEntry): Promise<{ connected: boolean; detail: string }> {
+    if (this.revokedBoxes.has(entry.id)) return { connected: false, detail: `${entry.name}: revoked; a reconnect is refused` };
     return this.connectAttached(entry);
   }
 
@@ -1034,7 +1141,10 @@ export class Orchestrator {
     const box = this.boxFor(agent.id);
     if (!box) return undefined;
 
-    const boxId = this.registry.boxOf(agent.id).id;
+    const entry = this.registry.boxOf(agent.id);
+    // A host box has no desktop by design (INV-438): nothing to start, nothing to report.
+    if (entry.kind === "host") return undefined;
+    const boxId = entry.id;
     const index = this.registry.displayIndexFor(agent.id);
     const key = `${boxId}:${index}`;
     if (this.readyDisplays.has(key)) return index;
@@ -1111,8 +1221,12 @@ export class Orchestrator {
       }
       const version = this.stagedTemplates(agentId).length + 1;
       const path = join(dir, `v${version}.json`);
-      writeFileSync(path, `${JSON.stringify(template, null, 2)}\n`);
-      this.onTemplateStaged?.({ agentId, id, version, template });
+      // The version travels inside the document (INV-411 A3): a receiver that already has
+      // this template at this version does not create a second bot, and one that has an
+      // older version is told, not silently overwritten.
+      const stamped: BotTemplate = { ...template, meta: { ...(template.meta ?? {}), version } };
+      writeFileSync(path, `${JSON.stringify(stamped, null, 2)}\n`);
+      this.onTemplateStaged?.({ agentId, id, version, template: stamped });
       return { id, version, path };
     },
   };
@@ -1180,6 +1294,16 @@ export class Orchestrator {
       name?: string;
       /** Connector names this installation has, so the cue asks only about the missing ones. */
       connected?: readonly string[];
+      /** How the template's bundle references resolved against the target box (INV-421). */
+      bundleResolutions?: readonly BundleResolution[];
+      /**
+       * A newer version of a template already imported here (INV-411 A3): with this, the
+       * existing bot is asked to update its recipe instead of a second bot being created,
+       * and told not to overwrite what it or a person changed locally.
+       */
+      update?: boolean;
+      /** Where this installation keeps site learnings; the template's are installed there. */
+      learningsDir?: string;
       /** The importing person's tool set, which the new agent may not exceed. */
       creatorTools?: readonly string[];
       /** Where the template came from, for the profile's `importedFrom`. */
@@ -1188,10 +1312,65 @@ export class Orchestrator {
       boxId?: string;
       log?: (line: string) => void;
     } = {}
-  ): { agent: AgentRecord; id: string; pending: { fillIns: TemplateFillIn[]; connectors: string[] }; settled: Promise<ReconcileResult | undefined> } {
+  ): { agent: AgentRecord; id: string; pending: TemplatePending; settled: Promise<ReconcileResult | undefined>; existing?: "same-version" | "updated" } {
     const log = options.log ?? ((line: string) => console.error(`[template] ${line}`));
     const id = options.shareId ?? templateId();
     const name = options.name?.trim() || template.profile.name;
+    // The same share, again (INV-411 A3): the version says whether this is the same
+    // recipe — one bot, not two — or a newer one, which is the existing bot's to take up
+    // on request, never a second install and never a silent overwrite.
+    const already = options.shareId !== undefined ? this.registry.list().find(agent => agent.profile.importedFrom?.id === options.shareId) : undefined;
+    if (already !== undefined) {
+      const have = already.profile.importedFrom?.version;
+      const incoming = template.meta?.version;
+      if (have === incoming || incoming === undefined) {
+        log(`import ${id}: ${already.profile.name} already carries this template${have !== undefined ? ` (v${have})` : ""}; nothing created`);
+        return { agent: already, id, pending: pendingOf(template, options.connected ?? [], options.bundleResolutions ?? []), settled: Promise.resolve(undefined), existing: "same-version" };
+      }
+      if (options.update !== true) {
+        throw new TemplateVersionConflict(
+          `${already.profile.name} was imported from this template at v${have ?? "?"}; this is v${incoming}. Import again with update to have ${already.profile.name} take up the new version — nothing is overwritten without that.`
+        );
+      }
+      const learned = installLearnings(template, id, options.learningsDir ?? learningsDir());
+      const pending = pendingOf(template, options.connected ?? [], options.bundleResolutions ?? []);
+      const settled = (async (): Promise<ReconcileResult | undefined> => {
+        const box = this.boxFor(already.id);
+        if (box === undefined) return undefined;
+        const dir = recipeDirFor(already.profile.name);
+        const recipePath = `${dir}/recipe.md`;
+        try {
+          await box.exec(`mkdir -p ${dir}`, { timeoutMs: 15_000, actor: "host:template" });
+          await box.writeFile(recipePath, renderRecipe(template, { self: already.profile.name }));
+          await box.writeFile(`${dir}/recipe.json`, `${JSON.stringify(template, null, 2)}\n`);
+        } catch (error) {
+          log(`import ${id}: could not place the updated recipe: ${error instanceof Error ? error.message : String(error)}`);
+          return undefined;
+        }
+        this.registry.update(already.id, { importedFrom: { ...(already.profile.importedFrom ?? { id, name: template.profile.name, at: new Date().toISOString() }), version: incoming } });
+        this.templateSetups.set(already.id, id);
+        try {
+          await this.prompt(
+            already.id,
+            `${TEMPLATE_CUE} The template you were created from, "${template.profile.name}", has a new version (v${incoming}, you have v${have ?? "?"}). ` +
+              `Its recipe is at ${recipePath}. Update what came from the template: skills and routines whose file says authored_by: template:${id}, in place. ` +
+              "Do not overwrite a file you or a person changed here (any file without that stamp, or whose body you edited); say which ones you left as they are. " +
+              "Routines you write stay paused. Then one line on what changed; do not recite the recipe." +
+              (pending.bundles.length > 0 ? ` Capabilities this version expects that this box lacks: ${describeBundleGaps(pending.bundles).join("; ")}.` : ""),
+            options.caller,
+            { steerable: false, lane: "background" }
+          );
+        } catch (error) {
+          log(`import ${id}: update turn failed: ${error instanceof Error ? error.message : String(error)}`);
+        } finally {
+          this.templateSetups.delete(already.id);
+        }
+        const result = await this.reconcileTemplate(template, already.id, id, box);
+        appendLine(join(agentboxHome(), "template-imports.jsonl"), JSON.stringify({ at: new Date().toISOString(), id, agentId: already.id, update: true, learned, ...result }));
+        return result;
+      })();
+      return { agent: already, id, pending, settled, existing: "updated" };
+    }
     if (this.registry.list().some(agent => agent.profile.name === name)) {
       throw new Error(`An agent named ${name} already exists here; pass another name.`);
     }
@@ -1210,10 +1389,16 @@ export class Orchestrator {
         id,
         name: template.profile.name,
         ...(template.meta?.createdBy !== undefined ? { createdBy: template.meta.createdBy } : {}),
+        ...(template.meta?.version !== undefined ? { version: template.meta.version } : {}),
         at: new Date().toISOString(),
       },
     });
-    const pending = pendingOf(template, options.connected ?? []);
+    const pending = pendingOf(template, options.connected ?? [], options.bundleResolutions ?? []);
+    // The site notes come first and land host-side (INV-411 A1): the new bot's first
+    // browser_open reads them with everyone else's, before it has taken a single turn.
+    const learned = installLearnings(template, id, options.learningsDir ?? learningsDir());
+    if (learned.installed > 0 || learned.skipped > 0) log(`import ${id}: ${learned.installed} site note(s) installed, ${learned.skipped} already here`);
+    if (pending.bundles.length > 0) log(`import ${id}: ${describeBundleGaps(pending.bundles).join("; ")}`);
     log(`import ${id}: created ${agent.profile.name} (${agent.id}) from "${template.profile.name}"`);
 
     const settled = (async (): Promise<ReconcileResult | undefined> => {
@@ -1352,6 +1537,7 @@ export class Orchestrator {
       ...(this.boxAccesses.get(agentBoxId) !== undefined ? { boxAccess: this.boxAccesses.get(agentBoxId)! } : {}),
       hostRunner: this.options.hostRunner,
       vault: this.options.vault,
+      oauth: this.options.oauth,
       tasks: this.tasks,
       scopes: this.scopes,
       bundles: this.bundles,
@@ -1364,6 +1550,7 @@ export class Orchestrator {
       conversation,
       provider: runtime.provider,
       effort: this.options.effort,
+      ...(this.tracer !== undefined ? { tracer: this.tracer } : {}),
       turns: this.turns,
       ...(this.pendingWork !== undefined ? { pendingWork: this.pendingWork } : {}),
       mcpFace: this.mcpFace,
@@ -1935,7 +2122,7 @@ export const STARTER_TEAM: readonly {
 ];
 
 /** The MCP server list as config.json spells it, in the manager's shape. */
-function mcpServersFrom(config: { mcpServers?: Record<string, { command?: string; args?: string[]; env?: Record<string, string>; url?: string; headers?: Record<string, string> }> }) {
+function mcpServersFrom(config: { mcpServers?: Record<string, { command?: string; args?: string[]; env?: Record<string, string>; url?: string; headers?: Record<string, string>; host?: boolean }> }) {
   // The connector doors (mcp-connectors.ts) sit under the operator's entries: a config.json
   // line with the same name overrides a door's default, an env credential turns a door on,
   // and either may exist without the other.

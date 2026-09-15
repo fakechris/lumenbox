@@ -941,6 +941,10 @@ export const APP_HTML = String.raw`<!doctype html>
       <select id="taskassign" style="height:28px;border-radius:var(--radius-input);border:1px solid var(--border-strong);background:var(--surface);color:var(--text);font-size:12px"></select>
       <button class="btn sm" id="taskadd">Add</button>
     </div>
+    <!-- What needs me, before what the board has (INV-543). Two lists and their clocks:
+         the page a person opens to answer "is anything waiting on me?" without reading
+         everybody's board. -->
+    <div id="attention" style="display:none;border-bottom:1px solid var(--border);padding:10px 16px"></div>
     <div class="scroll" id="tasklist"></div>
   </div>
   <!-- What runs without anyone asking. The page a person checks when they want to know
@@ -1092,6 +1096,7 @@ export const APP_HTML = String.raw`<!doctype html>
       <a href="#" class="tab" data-settab="doors">Doors</a>
       <a href="#" class="tab" data-settab="team">Team</a>
       <a href="#" class="tab" data-settab="mine">Mine</a>
+      <a href="#" class="tab" data-settab="memory">Memory</a>
     </div>
     <div class="fieldnote" id="setwelcome" style="display:none;border:1px solid var(--border);border-radius:var(--radius-md);padding:10px 12px;color:var(--text-soft)">
       Welcome. LumenBox needs two things before agents can work: a model provider with a
@@ -1119,6 +1124,19 @@ export const APP_HTML = String.raw`<!doctype html>
     <div class="fieldnote">Saved to ~/.agentbox/config.json on this machine, mode 0600. A key stored
       here is used only when the environment does not already provide one, and is never placed
       inside the box. Changes take effect when the server restarts.</div>
+    <div class="field" data-tier="installation" data-settab="memory">
+      <label>Memory</label>
+      <div class="fieldnote" style="margin:0">What each agent has kept, by box. Open an agent to read the lines, withdraw one, or
+        correct it. A correction is an append — the old line is withdrawn and the new one kept — with a version check,
+        so two people cannot silently overwrite each other; every change is audited in ~/.agentbox/memory-audit.jsonl and
+        recalled by the next turn.</div>
+      <div id="setmemstate" class="fieldnote" style="margin:4px 0 0"></div>
+      <div id="setmemsummary" style="display:flex;flex-direction:column;gap:6px"></div>
+      <div id="setmemdetail" style="display:none;margin-top:8px;border:1px solid var(--border);border-radius:var(--radius-md);padding:8px 10px">
+        <div style="display:flex;gap:8px;align-items:baseline"><strong id="setmemtitle" style="flex:1"></strong><a href="#" id="setmemback" class="dim" style="font-size:12px">back</a></div>
+        <div id="setmemlines" style="display:flex;flex-direction:column;gap:6px;margin-top:6px;max-height:320px;overflow:auto"></div>
+      </div>
+    </div>
     <div class="field" data-tier="installation" id="setboxwrap" data-settab="boxes">
       <label>Box</label>
       <div class="fieldnote" id="setboxstate" style="margin:0"></div>
@@ -1185,6 +1203,23 @@ export const APP_HTML = String.raw`<!doctype html>
         never written into the box. The agent uses it by name and never sees the value. Every use
         is audited in ~/.agentbox/vault-audit.jsonl.</div>
       <div class="fieldnote" id="setsecstatus"></div>
+    </div>
+    <div class="field" data-tier="installation" data-settab="doors">
+      <label>Connected services</label>
+      <div id="setconns" style="display:flex;flex-direction:column;gap:6px"></div>
+      <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
+        <select id="setconnprov" style="min-width:120px"></select>
+        <input id="setconnid" placeholder="client id / app id" spellcheck="false" autocomplete="off" style="flex:1;min-width:110px">
+        <input id="setconnsecret" type="password" placeholder="client secret / app secret" spellcheck="false" autocomplete="off" style="flex:1;min-width:110px">
+        <input id="setconngrant" placeholder="* or agent:id or principal:id" spellcheck="false" style="flex:1.2;min-width:130px;font-family:var(--font-sans);font-size:12px">
+        <button class="btn sm" id="setconnadd">Connect</button>
+      </div>
+      <div class="fieldnote" id="setconnsetup"></div>
+      <div class="fieldnote">An OAuth authorization or an app credential, finished on this machine. The
+        token lives in the vault as oauth:&lt;provider&gt;, is refreshed here when it lapses, and is
+        attached by the host to every connector_request an agent makes — the agent never sees it, and
+        a box's bundles or the grant above decide who may call. Writes are reviewed like any outward act.</div>
+      <div class="fieldnote" id="setconnstatus"></div>
     </div>
     <div class="field" data-tier="installation" data-settab="doors">
       <label>Channels</label>
@@ -1527,7 +1562,8 @@ function openSettings(tab) {
       renderStandingGrants();
       renderBoxSection();
       renderChannels();
-      renderSecrets();
+      renderSecrets(); renderConnectors();
+      renderMemorySummary();
       renderScopes();
       $("settingswrap").style.display = "flex";
     })
@@ -1665,6 +1701,165 @@ document.getElementById("setsecrets").addEventListener("click", function (event)
   if (!s) return;
   fetch("/api/vault/remove", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ id: s.id }) })
     .then(renderSecrets);
+});
+
+/** Connected services (INV-422): providers to connect, connections that exist, never a token. */
+var connProviders = [];
+
+function renderConnectors() {
+  fetch("/api/connectors")
+    .then(function (r) { if (r.status === 403) { $("setconns").innerHTML = ""; return null; } return r.json(); })
+    .then(function (data) {
+      if (!data) return;
+      connProviders = data.providers || [];
+      var select = $("setconnprov");
+      if (!select.options.length) {
+        select.innerHTML = connProviders.map(function (p) { return '<option value="' + esc(p.id) + '">' + esc(p.title) + "</option>"; }).join("");
+        select.onchange = function () {
+          var p = connProviders.filter(function (x) { return x.id === select.value; })[0];
+          $("setconnsetup").textContent = p ? p.setup : "";
+        };
+        select.onchange();
+      }
+      var connected = data.connected || [];
+      $("setconns").innerHTML = connected.length
+        ? connected.map(function (c) {
+            var who = (c.grants || []).map(function (g) { return g.holder; }).join(", ") || "nobody yet";
+            var until = c.expiresAt ? " · until " + c.expiresAt.slice(0, 16).replace("T", " ") : "";
+            return '<div style="display:flex;gap:8px;align-items:center;font-size:13px">' +
+              '<span class="mono" style="min-width:110px;font-weight:600">' + esc(c.provider) + "</span>" +
+              '<span class="dim" style="flex:1;font-size:12px;overflow:hidden;text-overflow:ellipsis">' + esc(who + until) + "</span>" +
+              '<a href="#" data-connrm="' + esc(c.id) + '" style="color:var(--danger);font-size:12px">Disconnect</a></div>';
+          }).join("")
+        : '<div class="fieldnote" style="margin:0">Nothing connected yet.</div>';
+    })
+    .catch(function () {});
+}
+
+$("setconnadd").onclick = function () {
+  var provider = $("setconnprov").value;
+  var p = connProviders.filter(function (x) { return x.id === provider; })[0];
+  var body = { provider: provider, clientId: $("setconnid").value.trim(), clientSecret: $("setconnsecret").value, grant: $("setconngrant").value.trim() };
+  if (!body.clientId || !body.clientSecret) { $("setconnstatus").textContent = "Both the id and the secret are needed."; return; }
+  var code = p && p.kind === "authorization_code";
+  $("setconnstatus").textContent = code ? "Opening the provider…" : "Connecting…";
+  fetch(code ? "/api/connectors/begin" : "/api/connectors/connect", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body) })
+    .then(function (r) { return r.json().then(function (d) { if (!r.ok) throw new Error(d.error || "failed"); return d; }); })
+    .then(function (d) {
+      $("setconnsecret").value = "";
+      if (d.url) { window.open(d.url, "_blank"); $("setconnstatus").textContent = "Finish the authorization in the new tab, then this list updates."; }
+      else { $("setconnstatus").textContent = "Connected."; }
+      renderConnectors();
+    })
+    .catch(function (error) { $("setconnstatus").textContent = error.message; });
+};
+
+document.getElementById("setconns").addEventListener("click", function (event) {
+  var id = event.target.getAttribute && event.target.getAttribute("data-connrm");
+  if (!id) return;
+  event.preventDefault();
+  fetch("/api/vault/remove", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ id: id }) })
+    .then(function () { renderConnectors(); renderSecrets(); });
+});
+
+/** Memory, browsed and corrected (INV-426): summary by box, detail by agent, withdraw and edit with a version. */
+var memAgent = null;
+
+function renderMemorySummary() {
+  $("setmemstate").textContent = "Loading…";
+  $("setmemdetail").style.display = "none";
+  fetch("/api/memory")
+    .then(function (r) {
+      if (r.status === 403) { $("setmemstate").textContent = "This account can watch but not open memory."; $("setmemsummary").innerHTML = ""; return null; }
+      if (!r.ok) throw new Error("HTTP " + r.status);
+      return r.json();
+    })
+    .then(function (data) {
+      if (!data) return;
+      var agents = data.agents || [];
+      if (!agents.length) { $("setmemstate").textContent = "Nothing kept yet. An agent remembers what it is told to remember — this fills in as they work."; $("setmemsummary").innerHTML = ""; return; }
+      $("setmemstate").textContent = "";
+      var names = {};
+      (data.boxes || []).forEach(function (b) { names[b.id] = b.name; });
+      var byBox = {};
+      agents.forEach(function (a) { (byBox[a.boxId] = byBox[a.boxId] || []).push(a); });
+      $("setmemsummary").innerHTML = Object.keys(byBox).map(function (boxId) {
+        return '<div style="font-size:12px;font-weight:600;margin-top:4px">' + esc(names[boxId] || boxId) + "</div>" +
+          byBox[boxId].map(function (a) {
+            var kinds = Object.keys(a.byKind || {}).map(function (k) { return a.byKind[k] + " " + k; }).join(", ") || "nothing live";
+            return '<div style="display:flex;gap:8px;align-items:center;font-size:13px">' +
+              '<a href="#" data-memagent="' + esc(a.agentId) + '" style="min-width:110px;font-weight:500">' + esc(a.agentName) + "</a>" +
+              '<span class="dim" style="flex:1;font-size:12px">' + esc(kinds) + (a.retracted ? " · " + a.retracted + " withdrawn" : "") + (a.lastAt ? " · last " + esc(a.lastAt.slice(0, 10)) : "") + "</span></div>";
+          }).join("");
+      }).join("");
+    })
+    .catch(function (error) { $("setmemstate").textContent = "Could not read memory: " + error.message; });
+}
+
+function renderMemoryDetail(agentId) {
+  memAgent = agentId;
+  $("setmemdetail").style.display = "";
+  $("setmemlines").innerHTML = '<div class="dim" style="font-size:12px">Loading…</div>';
+  fetch("/api/memory/agent?agent=" + encodeURIComponent(agentId))
+    .then(function (r) { if (!r.ok) throw new Error(r.status === 403 ? "not yours to open" : "HTTP " + r.status); return r.json(); })
+    .then(function (data) {
+      var lines = [];
+      var row = function (v, scope) {
+        var live = v.status === "live";
+        return '<div data-memkey="' + esc(v.key) + '" data-memver="' + esc(v.version) + '" data-memscope="' + scope + '" style="display:flex;gap:8px;align-items:flex-start;font-size:12px' + (live ? "" : ";opacity:.55") + '">' +
+          '<span class="mono dim" style="min-width:76px">' + esc(v.at.slice(0, 10)) + "</span>" +
+          '<span class="dim" style="min-width:56px">' + esc(v.kind) + (scope === "shared" ? " · team" : "") + "</span>" +
+          '<span style="flex:1;white-space:pre-wrap" class="memtext">' + esc(v.text) + (live ? "" : ' <span class="dim">(withdrawn' + (v.retractedBy ? " — " + esc(v.retractedBy) : "") + ")</span>") + "</span>" +
+          (live ? '<a href="#" data-memedit="1" class="dim" style="font-size:11px">Edit</a><a href="#" data-memdrop="1" style="color:var(--danger);font-size:11px">Withdraw</a>' : "") +
+          "</div>";
+      };
+      (data.own || []).forEach(function (v) { lines.push(row(v, "own")); });
+      (data.shared || []).forEach(function (v) { lines.push(row(v, "shared")); });
+      $("setmemlines").innerHTML = lines.length ? lines.join("") : '<div class="dim" style="font-size:12px">Nothing kept yet.</div>';
+    })
+    .catch(function (error) { $("setmemlines").innerHTML = '<div style="color:var(--danger);font-size:12px">' + esc(error.message) + "</div>"; });
+}
+
+function changeMemory(rowEl, text) {
+  var body = { agent: memAgent, scope: rowEl.getAttribute("data-memscope"), key: rowEl.getAttribute("data-memkey"), version: rowEl.getAttribute("data-memver") };
+  if (text !== undefined) body.text = text;
+  return fetch("/api/memory/change", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body) })
+    .then(function (r) { return r.json().then(function (d) { return { status: r.status, data: d }; }); })
+    .then(function (out) {
+      if (out.status === 409) {
+        alert("That line changed since you saw it" + (out.data.current ? ":\n\n" + out.data.current.text : " and is no longer live.") + "\n\nThe list is refreshed; decide again.");
+      } else if (out.status !== 200) {
+        alert(out.data.error || ("HTTP " + out.status));
+      }
+      renderMemoryDetail(memAgent);
+      renderMemorySummary();
+    });
+}
+
+document.getElementById("setmemsummary").addEventListener("click", function (event) {
+  var id = event.target.getAttribute && event.target.getAttribute("data-memagent");
+  if (!id) return;
+  event.preventDefault();
+  $("setmemtitle").textContent = event.target.textContent;
+  renderMemoryDetail(id);
+});
+document.getElementById("setmemback").onclick = function (event) { event.preventDefault(); $("setmemdetail").style.display = "none"; memAgent = null; };
+document.getElementById("setmemlines").addEventListener("click", function (event) {
+  var t = event.target;
+  if (!t.getAttribute) return;
+  var rowEl = t.closest("[data-memkey]");
+  if (!rowEl) return;
+  if (t.getAttribute("data-memdrop")) {
+    event.preventDefault();
+    if (!confirm("Withdraw this line? It stays on record as withdrawn; the agent stops recalling it.")) return;
+    changeMemory(rowEl);
+  } else if (t.getAttribute("data-memedit")) {
+    event.preventDefault();
+    var current = rowEl.querySelector(".memtext").textContent;
+    var next = prompt("Correct this line. The old one is withdrawn and this is kept in its place:", current);
+    if (next === null || next.trim() === "" || next.trim() === current.trim()) return;
+    changeMemory(rowEl, next.trim());
+  }
 });
 
 /** The people list: one row per identity, grouped nowhere — flat and editable. */
@@ -2068,12 +2263,54 @@ function renderBoxes() {
           '<span class="dot" style="width:8px;height:8px;background:' + (b.connected ? "var(--ok, #3fb950)" : "var(--warn)") + '"></span>' +
           '<b>' + esc(b.name) + "</b>" + (i === 0 ? ' <span class="dim">(own)</span>' : "") +
           '<span class="dim" style="flex:1">' + where + " · displays from :" + esc(b.displayFloor) + " · " + esc(b.agents) + " agent" + (b.agents === 1 ? "" : "s") + (b.connected ? "" : " · not connected") + "</span>" +
+          (myRole === "admin" ? '<button class="btn sm ghost" data-members-box="' + esc(b.name) + '" title="' + esc(b.membersLabel || "") + '">Members</button>' : "") +
           (i === 0 ? "" : '<button class="btn sm ghost" data-detach-box="' + esc(b.name) + '"' + (b.agents > 0 ? ' disabled title="delete its agents first"' : "") + ">Detach</button>") +
-          "</div>";
-      }).join("") || '<div class="dim">No boxes.</div>';
+          "</div>" +
+          // Who the box is for, in the words the members set produces (docs/22 §5, INV-538).
+          // Not free text: a label somebody types is a label that stops being true.
+          '<div class="dim" style="font-size:11.5px;margin:2px 0 8px 16px">' + esc(b.membersLabel || "") + "</div>";
+      }).join("") ||
+        '<div class="dim" style="font-size:12.5px">No boxes yet. A box is the computer your agents work on — ' +
+        'create the Docker one with the button above, or <code class="mono">agentbox box up</code> in a terminal.</div>';
     })
     .catch(function () { $("setboxes").innerHTML = '<div class="dim">Could not read the boxes.</div>'; });
 }
+
+document.addEventListener("click", function (event) {
+  var button = event.target && event.target.closest ? event.target.closest("[data-members-box]") : null;
+  if (!button) return;
+  event.preventDefault();
+  var name = button.getAttribute("data-members-box");
+  fetch("/api/channels")
+    .then(function (r) { return r.json(); })
+    .then(function (data) {
+      var people = data.principals || [];
+      var current = (button.getAttribute("title") || "");
+      var typed = window.prompt(
+        "Who is " + name + " for?\n\nType names separated by commas, or the word everyone.\nKnown people: " + people.map(function (p) { return p.name; }).join(", ") + "\n\nNow: " + current,
+        ""
+      );
+      if (typed === null) return;
+      var wanted = typed.trim();
+      var members;
+      if (wanted === "" || wanted.toLowerCase() === "everyone") members = "everyone";
+      else {
+        members = [];
+        var missing = [];
+        wanted.split(/[,，]/).forEach(function (piece) {
+          var want = piece.trim().toLowerCase();
+          if (!want) return;
+          var found = people.filter(function (p) { return (p.name || "").toLowerCase() === want; })[0];
+          if (found) members.push(found.id); else missing.push(piece.trim());
+        });
+        if (missing.length) { $("setboxesstatus").textContent = "Nobody on the roster is called " + missing.join(", ") + "."; return; }
+      }
+      return fetch("/api/boxes/update", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ name: name, members: members }) })
+        .then(function (r) { return r.json().then(function (d) { if (!r.ok) throw new Error(d.error || "could not change the members"); return d; }); })
+        .then(function () { $("setboxesstatus").textContent = name + " updated."; return renderBoxes(); });
+    })
+    .catch(function (err) { $("setboxesstatus").textContent = String(err.message || err); });
+});
 
 $("setboxattach").onclick = function () {
   var body = {
@@ -4492,6 +4729,34 @@ function stopAudit() {
  * and a render that reads a shared object gets whichever state the other call left behind. That
  * is why the URL was missing until you pressed refresh.
  */
+/**
+ * By place, then by kind (INV-430): a box's recurring routines, its one-time tasks, and what
+ * runs on call. A one-time task in the recurring list read as a schedule that fires forever.
+ */
+function automationGroups(list, rows, boxes, defaultBox) {
+  var names = {};
+  boxes.forEach(function (b) { names[b.id] = b.name; });
+  var byBox = {};
+  var order = [];
+  list.forEach(function (s) {
+    var id = s.boxId || defaultBox || "";
+    if (!byBox[id]) { byBox[id] = []; order.push(id); }
+    byBox[id].push(s);
+  });
+  var kinds = [["schedule", "Recurring"], ["once", "One-time"], ["webhook", "On call"]];
+  return order.map(function (id) {
+    var head = boxes.length > 1
+      ? '<div style="padding:8px 16px 2px;font-size:12px;font-weight:600">' + esc(names[id] || id || "this box") + "</div>"
+      : "";
+    return head + kinds.map(function (kind) {
+      var items = byBox[id].filter(function (s) { return (s.kind || "schedule") === kind[0]; });
+      if (!items.length) return "";
+      return '<div class="dim" style="padding:6px 16px 0;font-size:10.5px;text-transform:uppercase;letter-spacing:.04em">' + kind[1] + "</div>" +
+        items.map(function (entry) { return automationRow(entry, rows); }).join("");
+    }).join("");
+  }).join("");
+}
+
 function automationRow(s, rows) {
   var when = esc(s.described) + (s.timezone ? ' <span class="dim">(' + esc(s.timezone) + ")</span>" : "");
   var last = s.running
@@ -4499,6 +4764,9 @@ function automationRow(s, rows) {
     : s.lastRun
       ? "last ran " + esc(new Date(s.lastRun).toLocaleString())
       : '<span style="color:var(--warn)">never run</span>';
+  // Next, by the tick's own rules — the one line a person cannot compute from a cron string.
+  if (s.nextRun && !s.running) last += " · next " + esc(new Date(s.nextRun).toLocaleString());
+  else if (s.kind === "once" && s.lastRun) last += " · done";
   // Where it reports is the line that matters most: a skill with no deliver runs and
   // says nothing in any chat, which is right for a tidy-up and looks broken for a brief.
   var where = s.deliver
@@ -4585,7 +4853,7 @@ function refreshAutomations() {
           (Object.keys(rows).length > 0 ? " · " + Object.keys(rows).length + " with a webhook URL" : "")
         : '<span style="color:var(--warn)">The scheduler is off (AGENTBOX_SCHEDULER=0) — nothing below will fire.</span>');
       $("autolist").innerHTML = list.length
-        ? list.map(function (entry) { return automationRow(entry, rows); }).join("")
+        ? automationGroups(list, rows, data.schedules.boxes || [], data.schedules.defaultBox)
         : '<div class="dim" style="padding:12px 16px;font-size:13px">Nothing runs by itself. A skill becomes an automation by adding <span class="mono">schedule:</span> (a timer), <span class="mono">trigger: webhook</span> (a URL anything can call) or <span class="mono">trigger: message</span> to its frontmatter — plus <span class="mono">timezone:</span> if the time was agreed in someone else’s zone, and <span class="mono">deliver:</span> for the chat that should receive the report.</div>';
     })
     .catch(function () {
@@ -4885,7 +5153,79 @@ function taskDetail(t) {
   "</div>";
 }
 
+/** Relative, because "in 3 hours" is the thing a person acts on; absolute dates read as decoration. */
+function whenOf(iso) {
+  if (!iso) return "";
+  var ms = Date.parse(iso) - Date.now();
+  var past = ms < 0;
+  var minutes = Math.round(Math.abs(ms) / 60000);
+  var text = minutes < 90 ? minutes + "m" : minutes < 2160 ? Math.round(minutes / 60) + "h" : Math.round(minutes / 1440) + "d";
+  return past ? text + " ago" : "in " + text;
+}
+
+function renderAttention() {
+  return fetch("/api/attention")
+    .then(function (r) { return r.json(); })
+    .then(function (data) {
+      var mine = data.mine || [];
+      var theirs = data.theirs || [];
+      if (!mine.length && !theirs.length) {
+        $("attention").style.display = "";
+        $("attention").innerHTML = '<div class="dim" style="font-size:12.5px">Nothing is waiting on you, and nothing you asked for is outstanding.</div>';
+        return;
+      }
+      var row = function (item, owed) {
+        var act =
+          item.kind === "close-proposal" ? '<button class="btn sm ghost" data-att-keep="' + esc(item.ref) + '">Keep open</button>' :
+          item.kind === "nudged" ? '<button class="btn sm ghost" data-att-drop="' + esc(item.ref) + '">Close</button><button class="btn sm ghost" data-att-snooze="' + esc(item.ref) + '">Not now</button>' :
+          item.kind === "question" ? '<button class="btn sm ghost" data-att-open="' + esc(item.ref) + '">Answer</button>' :
+          '<button class="btn sm ghost" data-att-task="' + esc(item.ref) + '">Open</button>';
+        return '<div style="display:flex;gap:8px;align-items:baseline;padding:3px 0;font-size:12.5px">' +
+          '<span class="dim mono" style="font-size:11px;min-width:58px">' + esc(item.deadline ? whenOf(item.deadline) : "") + "</span>" +
+          '<span style="flex:1">' + esc(item.title) + ' <span class="dim">' + esc(item.detail) + "</span></span>" +
+          (owed ? act : "") +
+          "</div>";
+      };
+      $("attention").style.display = "";
+      $("attention").innerHTML =
+        (mine.length ? '<div style="font-size:11px;letter-spacing:.04em;text-transform:uppercase;color:var(--muted);margin-bottom:4px">Waiting on you</div>' + mine.map(function (i) { return row(i, true); }).join("") : "") +
+        (theirs.length ? '<div style="font-size:11px;letter-spacing:.04em;text-transform:uppercase;color:var(--muted);margin:8px 0 4px">You are waiting on</div>' + theirs.map(function (i) { return row(i, false); }).join("") : "");
+    })
+    .catch(function () { $("attention").style.display = "none"; });
+}
+
+// The actions, each one an existing route: keeping a task open, closing it, asking to be
+// left alone until a date, or opening the thread a question was asked in.
+document.addEventListener("click", function (event) {
+  var target = event.target && event.target.closest ? event.target : null;
+  if (!target) return;
+  var keep = target.closest("[data-att-keep]");
+  var drop = target.closest("[data-att-drop]");
+  var snooze = target.closest("[data-att-snooze]");
+  var open = target.closest("[data-att-open]") || target.closest("[data-att-task]");
+  if (!keep && !drop && !snooze && !open) return;
+  event.preventDefault();
+  var done = function () { return renderAttention().then(refreshTasks); };
+  if (keep) {
+    fetch("/api/tasks/oppose-close", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ id: keep.getAttribute("data-att-keep") }) }).then(done);
+  } else if (drop) {
+    fetch("/api/tasks/update", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ id: drop.getAttribute("data-att-drop"), status: "dropped" }) }).then(done);
+  } else if (snooze) {
+    var until = window.prompt("Look again after which date? (YYYY-MM-DD)", "");
+    if (!until) return;
+    fetch("/api/tasks/update", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ id: snooze.getAttribute("data-att-snooze"), snoozeUntil: until.trim() }) }).then(done);
+  } else if (open) {
+    // A question is answered where it was asked: the same conversation, in the chat
+    // column. A task opens its card on the board beside this panel.
+    var conversation = open.getAttribute("data-att-open");
+    if (conversation) select(current, conversation);
+    else { openTask = open.getAttribute("data-att-task"); taskScrolled = true; refreshTasks(); }
+  }
+});
+
 function refreshTasks() {
+  // What needs me, above the board (INV-543).
+  renderAttention();
   // The assignee picker doubles as the roster; refreshed with the board.
   $("taskassign").innerHTML = '<option value="">unassigned</option>' +
     agents.map(function (a) { return '<option value="' + esc(a.id) + '">' + esc(a.name) + "</option>"; }).join("");
@@ -4912,6 +5252,21 @@ function refreshTasks() {
           ? ' <span class="chip" style="font-size:10px">proposed</span>' +
             ' <button class="btn sm accent" data-commit="' + esc(t.id) + '" title="Make this proposal real work: agents may take it after you commit">Commit</button>'
           : "";
+        // Due, ageing and a pending close (INV-527/529): said on the row, so an overdue or
+        // idle task is not one more line that looks like every other.
+        var live = t.status !== "done" && t.status !== "dropped";
+        var overdue = live && t.due && Date.parse(t.due) < Date.now();
+        var dueChip = t.due ? ' <span class="chip" style="font-size:10px' + (overdue ? ';color:var(--danger)' : '') + '" title="due">' + (overdue ? "overdue " : "due ") + esc(String(t.due).slice(0, 10)) + "</span>" : "";
+        var agingChip = live && t.aging ? ' <span class="chip" style="font-size:10px;color:var(--warn)" title="nudged ' + t.aging.nudges + ' time(s), ' + esc(t.aging.reason) + '">nudged ' + t.aging.nudges + "/2</span>" : "";
+        var closeChip = live && t.closeProposal
+          ? ' <span class="chip" style="font-size:10px;color:var(--warn)" title="' + esc(t.closeProposal.reason) + '">close proposed by ' + esc(nameOf(t.closeProposal.by)) + ", closes " + esc(String(t.closeProposal.decideBy).slice(0, 16).replace("T", " ")) + "</span>" +
+            ' <button class="btn ghost sm" data-oppose="' + esc(t.id) + '">Keep open</button>'
+          : "";
+        // Waiting on somebody, or asked to come back later (INV-532): both say why this
+        // one is not late, which is what a person reading a row of overdue chips needs.
+        var waitingChip = live && t.waitingOn ? ' <span class="chip" style="font-size:10px" title="waiting on somebody outside this box: asked about, never archived">waiting on ' + esc(String(t.waitingOn).slice(0, 40)) + "</span>" : "";
+        var snoozeChip = live && t.snoozeUntil && Date.parse(t.snoozeUntil) > Date.now() ? ' <span class="chip" style="font-size:10px;color:var(--muted)" title="quiet until then">not until ' + esc(String(t.snoozeUntil).slice(0, 10)) + "</span>" : "";
+        proposed += dueChip + waitingChip + snoozeChip + agingChip + closeChip;
         return '<div style="padding:10px 16px;border-bottom:1px solid var(--border)' +
             (open ? ";background:var(--surface)" : "") + '">' +
           '<div style="display:flex;gap:9px;align-items:baseline">' +
@@ -4935,6 +5290,16 @@ function refreshTasks() {
     })
     .catch(function () {});
 }
+
+document.getElementById("tasklist").addEventListener("click", function (event) {
+  var id = event.target.getAttribute && event.target.getAttribute("data-oppose");
+  if (!id) return;
+  event.preventDefault();
+  fetch("/api/tasks/oppose-close", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ id: id, note: "kept open from the board" }) })
+    .then(function (r) { return r.json(); })
+    .then(function (d) { if (d.error) alert(d.error); renderTasks(); })
+    .catch(function () {});
+});
 
 $("taskadd").onclick = function () {
   var title = $("tasknew").value.trim();
@@ -6414,11 +6779,14 @@ function refreshSetup() {
   return fetch("/api/setup").then(function (r) { return r.json(); }).then(function (s) {
     var card = $("setupcard");
     if (!card) return;
+    // Each step also names the command that does the same thing (INV-542): an
+    // installation run on a server has no window to click in, and the person setting it
+    // up over ssh was reading a page that assumed a mouse.
     var steps = [
-      { done: s.box, head: "A computer for the agents", sub: "A box is a computer: desktop, files, shell, engines. Create the Docker box, or attach one.", act: "Set up a box", go: function () { openSettings("boxes"); } },
-      { done: s.agentTurn, head: "Your first agent", sub: "An agent lives in one box. Stamp one from the shelf — 设计 (Team designer) builds a team for you.", act: "Open templates", go: openShelf },
-      { done: s.door, head: "A door (optional)", sub: "Feishu, DingTalk or Telegram reach this box; this page is a door too.", act: "Connect a door", go: function () { openSettings("doors"); } },
-      { done: s.review, head: "First work", sub: "Say it in chat or add a task; it is done when it reaches review.", act: "Open tasks", go: function () { var t = $("tabtasks"); if (t) t.click(); } }
+      { done: s.box, head: "A computer for the agents", sub: "A box is a computer: desktop, files, shell, engines. Create the Docker box, or attach one.", act: "Set up a box", cli: "agentbox box up", go: function () { openSettings("boxes"); } },
+      { done: s.agentTurn, head: "Your first agent", sub: "An agent lives in one box. Stamp one from the shelf — 设计 (Team designer) builds a team for you.", act: "Open templates", cli: "agentbox agent new <name>", go: openShelf },
+      { done: s.door, head: "A door (optional)", sub: "Feishu, DingTalk or Telegram reach this box; this page is a door too.", act: "Connect a door", cli: "Settings → Doors (no CLI yet)", go: function () { openSettings("doors"); } },
+      { done: s.review, head: "First work", sub: "Say it in chat or add a task; it is done when it reaches review.", act: "Open tasks", cli: "agentbox chat <name> \"…\"", go: function () { var t = $("tabtasks"); if (t) t.click(); } }
     ];
     if (steps.every(function (x) { return x.done; }) && !guideForced) { card.style.display = "none"; return; }
     card.style.display = "";
@@ -6427,7 +6795,8 @@ function refreshSetup() {
       steps.map(function (x, i) {
         return '<div style="display:flex;gap:10px;align-items:center;padding:4px 0;font-size:12px">' +
           '<span style="width:16px;color:' + (x.done ? "var(--ok, #3fb950)" : "var(--muted)") + '">' + (x.done ? "✓" : String(i + 1)) + "</span>" +
-          '<div style="flex:1"><b>' + esc(x.head) + "</b> <span class=\"dim\">" + esc(x.sub) + "</span></div>" +
+          '<div style="flex:1"><b>' + esc(x.head) + "</b> <span class=\"dim\">" + esc(x.sub) + "</span>" +
+            (x.cli ? ' <code class="mono dim" style="font-size:11px">' + esc(x.cli) + "</code>" : "") + "</div>" +
           '<button class="btn sm' + (x.done ? " ghost" : "") + '" data-setup="' + i + '">' + esc(x.act) + "</button>" +
         "</div>";
       }).join("") + "</div>";

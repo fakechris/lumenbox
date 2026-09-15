@@ -306,6 +306,11 @@ export interface ControlStore {
   audit(entry: AuditEntry): void;
   recentAudit(limit?: number): AuditRow[];
 
+  /** Deployment-level settings, absent key means "not configured" (never an empty string). */
+  getSetting(key: string): string | undefined;
+  putSetting(key: string, value: string): void;
+  deleteSetting(key: string): void;
+
   close(): void;
 }
 
@@ -502,6 +507,13 @@ create table if not exists template_version (
   description text not null,
   created_at  text not null,
   primary key (share_id, version)
+);
+
+-- Operator-level key/value settings (the trace exporter URL is the first). Not per-tenant:
+-- these are the deployment's own knobs, so quota_json — which is a tenant's — is the wrong home.
+create table if not exists setting (
+  key    text primary key,
+  value  text not null
 );
 `;
 
@@ -1121,6 +1133,26 @@ export class SqliteControlStore implements ControlStore {
       at: row.at!,
       detail: row.detail_json === null ? undefined : parseJson(row.detail_json!, undefined),
     }));
+  }
+
+  getSetting(key: string): string | undefined {
+    const row = this.db.prepare("select value from setting where key = ?").get(key) as
+      | { value: string }
+      | undefined;
+    return row?.value;
+  }
+
+  putSetting(key: string, value: string): void {
+    this.db
+      .prepare(
+        `insert into setting (key, value) values (?, ?)
+         on conflict(key) do update set value = excluded.value`
+      )
+      .run(key, value);
+  }
+
+  deleteSetting(key: string): void {
+    this.db.prepare("delete from setting where key = ?").run(key);
   }
 
   close(): void {

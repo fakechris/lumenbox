@@ -48,6 +48,8 @@ export const PROFILE_FILENAME = "profile.json";
 export const TRANSCRIPT_FILENAME = "conversation.jsonl";
 /** How many heard lines a room keeps, and how often the file is trimmed back to them. */
 const HEARD_KEEP = 40;
+/** How much of the room a new topic inherits: enough to know what it is about, not the room's history. */
+const HEARD_BOOTSTRAP = 12;
 const HEARD_COMPACT_EVERY = 200;
 /**
  * The conversation every agent always has: the one the web page, teammates and the
@@ -146,19 +148,20 @@ export interface AgentProfile {
   /**
    * The person who created it, when the box was told who that was.
    *
-   * Undefined for an agent made before this existed, or by an automation, or on a box driven
-   * directly with no gateway in front. Absent means shared, which is the right default: the reason a
-   * tenant is a team is that agents work together, and defaulting to private would mean every
-   * collaboration starts with a permissions change.
+   * Attribution, never a gate (INV-540): "whose creation is this", shown on the card and
+   * used for nothing else. Undefined for an agent made before this existed, by an
+   * automation, or on a box driven directly with no gateway in front.
    */
   ownerUserId?: string;
   /**
-   * Who may drive it.
+   * Kept, and no longer a gate (INV-540).
    *
-   * **Not a security boundary**, and the code says so where the check is made. Everyone in a tenant
-   * shares a filesystem and passwordless sudo, so a determined member can read another member's
-   * transcript from a shell. This prevents accidents and answers "whose agent is this" — see
-   * docs/09-tenancy.md §3.2.
+   * It was "who may drive this agent", which docs/22 §3 retired: authority lives on the
+   * box, and every agent in a box is equal. The web check that still read it is gone, and
+   * a box's `members` is what separates two people now (INV-538). The field survives
+   * because installations have it written in their agent records and because a card may
+   * still say "private", meaning *made for one person* — a label about intent, not a
+   * permission.
    */
   visibility?: "shared" | "private";
   /**
@@ -203,7 +206,7 @@ export interface AgentProfile {
    * The template this agent was created from, when it was (docs/29). Bound at creation like
    * the box: a record of origin, not a link — the copy is this installation's from then on.
    */
-  importedFrom?: { id: string; name: string; createdBy?: string; at: string };
+  importedFrom?: { id: string; name: string; createdBy?: string; at: string; version?: number };
   createdAt: string;
   updatedAt: string;
 }
@@ -342,7 +345,7 @@ export class AgentRegistry {
    * name stay: agents are stamped with the id, and a box that moved (a tunnel to a tailnet
    * address, a new port) is the same box.
    */
-  updateBox(nameOrId: string, changes: { endpoint?: { baseUrl: string; tokenFile: string }; displayFloor?: number; workDir?: string }): BoxEntry {
+  updateBox(nameOrId: string, changes: { endpoint?: { baseUrl: string; tokenFile: string }; displayFloor?: number; workDir?: string; members?: "everyone" | string[] }): BoxEntry {
     const entry = this.boxByName(nameOrId);
     if (entry === undefined) throw new Error(`No box named ${nameOrId}.`);
     if (entry.id === this.box.id && changes.endpoint !== undefined) throw new Error("The installation's own box has no endpoint to change.");
@@ -351,6 +354,11 @@ export class AgentRegistry {
       ...(changes.endpoint !== undefined ? { endpoint: { baseUrl: changes.endpoint.baseUrl.replace(/\/+$/, ""), tokenFile: changes.endpoint.tokenFile } } : {}),
       ...(changes.displayFloor !== undefined && changes.displayFloor >= 1 ? { displayFloor: Math.floor(changes.displayFloor) } : {}),
       ...(changes.workDir !== undefined && changes.workDir !== "" ? { workDir: changes.workDir } : {}),
+      // Who the box is for (INV-538). A set, deduplicated and ordered, so the file reads
+      // the same whoever wrote it and a diff shows a membership change rather than a shuffle.
+      ...(changes.members !== undefined
+        ? { members: changes.members === "everyone" ? "everyone" : [...new Set(changes.members)].sort() }
+        : {}),
     };
     this.boxes = this.boxes.map(existing => (existing.id === entry.id ? updated : existing));
     saveBoxes(join(this.root, BOXES_FILENAME), this.boxes);
@@ -455,6 +463,32 @@ export class AgentRegistry {
   }
 
   private readonly heardAppends = new Map<string, number>();
+
+  /**
+   * Whether a conversation has been seen at all: no transcript, nothing heard (INV-436).
+   * The moment a topic's first direct message arrives is the moment it is materialised.
+   */
+  isFreshConversation(agentId: string, conversation: string): boolean {
+    return (
+      !existsSync(this.heardPathFor(agentId, conversation)) &&
+      this.readTranscript(agentId, conversation).length === 0
+    );
+  }
+
+  /**
+   * Seeds a new thread's room context from its parent chat (INV-436, opentag's thread
+   * sessions): the last lines the room heard, marked as such, so the first @ inside a
+   * topic reads the screen the person was looking at rather than starting blind.
+   * Bounded, and only ever once — a thread that has anything is left alone.
+   */
+  seedHeardFrom(agentId: string, thread: string, parent: string, limit = HEARD_BOOTSTRAP): number {
+    if (!this.isFreshConversation(agentId, thread)) return 0;
+    const lines = this.readHeard(agentId, parent, limit);
+    for (const line of lines) {
+      this.appendHeard(agentId, thread, { ...line, text: `[from the room] ${line.text}` });
+    }
+    return lines.length;
+  }
 
   memoryPathFor(agentId: string): string {
     return join(this.dirFor(agentId), MEMORY_FILENAME);
@@ -595,7 +629,7 @@ export class AgentRegistry {
     provider?: string;
     model?: string;
     /** The template it is being created from, when it is. */
-    importedFrom?: { id: string; name: string; createdBy?: string; at: string };
+    importedFrom?: { id: string; name: string; createdBy?: string; at: string; version?: number };
     /**
      * The teams it belongs to. Set at birth by whatever made it — a crew stamps its own name
      * here — so a batch of five is findable together without anyone tidying up afterwards.
@@ -673,6 +707,8 @@ export class AgentRegistry {
       model?: string | null;
       /** The teams it belongs to. An empty array removes it from all of them. */
       tags?: readonly string[];
+      /** The template this agent carries, revised when it takes up a newer version (INV-411). */
+      importedFrom?: AgentProfile["importedFrom"];
     }
   ): AgentRecord {
     const existing = this.get(agentId);
@@ -696,6 +732,7 @@ export class AgentRegistry {
     if (changes.title !== undefined) profile.title = clampLine(changes.title, 64);
     if (changes.avatarColor !== undefined) profile.avatarColor = changes.avatarColor;
     if (changes.hidden !== undefined) profile.hidden = changes.hidden;
+    if (changes.importedFrom !== undefined) profile.importedFrom = { ...changes.importedFrom };
     if (changes.tools !== undefined) {
       if (changes.tools === null) delete profile.tools;
       else profile.tools = [...changes.tools];

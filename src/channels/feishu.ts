@@ -968,304 +968,7 @@ export class FeishuChannel implements ChannelAdapter {
       domain,
     }) as unknown as FeishuChannel["apiClient"];
 
-    // Named rather than inline, because the socket is not the only way a message
-    // reaches us: the catch-up sweep replays what the socket missed through this exact
-    // function, so a recovered message is admitted, deduped, logged and answered by the
-    // same code that would have handled it live.
-    const receiveMessage = (data: {
-        sender?: { sender_id?: { open_id?: string } };
-        message?: {
-          message_id?: string;
-          chat_id?: string;
-          message_type?: string;
-          content?: string;
-          mentions?: unknown[];
-          /**
-           * Which topic or reply chain this belongs to.
-           *
-           * Feishu has sent these all along — its own SDK types declare them — and we
-           * read none of them, so every message in a group landed in one unbounded
-           * conversation. Recorded before deciding anything, so the choice of what to key
-           * a conversation on is made against how this installation is actually used
-           * rather than against a guess.
-           */
-          thread_id?: string;
-          root_id?: string;
-          parent_id?: string;
-          chat_type?: string;
-          create_time?: string;
-        };
-      }) => {
-        const openId = data.sender?.sender_id?.open_id ?? "unknown";
-        const chatId = data.message?.chat_id ?? "";
-        const messageType = data.message?.message_type;
-        // Logged before anything can drop it. A message that arrives and is discarded —
-        // no chat id, a duplicate, an unhandled type — left no trace at all, so "the bot
-        // is not answering" and "the connection is delivering nothing" looked identical
-        // from the log, and the only way to tell them apart was to add this and ask
-        // somebody to type again.
-        const arrivedId = data.message?.message_id;
-        // Asked before the arrival is written, because after it the ledger would answer
-        // "yes, me". The in-memory seen set below is empty in a process that has just
-        // started, which is exactly when the vendor redelivers what it could not hand
-        // over during the restart — so the durable record is what stops one message
-        // being answered twice across a restart, and the memory set stops it within one.
-        if (arrivedId !== undefined && this.alreadyHandled?.(arrivedId) === true) {
-          this.log(`channel ${this.name}: ${arrivedId} was already handled before a restart`);
-          return {};
-        }
-        if (arrivedId !== undefined) {
-          this.ingress?.arrived({
-            id: arrivedId,
-            channel: this.name,
-            identity: `${this.name}:${openId}`,
-            chatKey: `${this.name}:${chatId}`,
-            kind: messageType ?? "unknown",
-            chars: String(data.message?.content ?? "").length,
-            ...(data.message?.thread_id !== undefined ? { threadId: data.message.thread_id } : {}),
-            ...(data.message?.root_id !== undefined ? { rootId: data.message.root_id } : {}),
-            ...(data.message?.chat_type !== undefined ? { chatType: data.message.chat_type } : {}),
-            at: new Date().toISOString(),
-            ...(Number.isFinite(Number(data.message?.create_time)) && Number(data.message?.create_time) > 0
-              ? { sentAt: new Date(Number(data.message?.create_time)).toISOString() }
-              : {}),
-          });
-        }
-        if (chatId === "" || data.message === undefined) return {};
-        const messageId = data.message.message_id;
-        if (messageId !== undefined) {
-          const seen = this.alreadySeen(messageId, data.message.content ?? "");
-          if (seen === "different") {
-            this.discard(messageId, "delivered again with different content — same id, so not a second turn");
-            return {};
-          }
-          if (seen === "same") {
-            this.discard(messageId, "delivered more than once");
-            return {};
-          }
-        }
-
-        // A file or an image is bytes to fetch, then an ordinary inbound message that
-        // carries them. The download happens here because the wire (key, resource
-        // API, quirks) is this adapter's business and nobody else's.
-        if ((messageType === "file" || messageType === "image") && messageId !== undefined) {
-          let parsed: { file_key?: string; image_key?: string; file_name?: string } = {};
-          try {
-            parsed = JSON.parse(data.message.content ?? "{}") as typeof parsed;
-          } catch {
-            return {};
-          }
-          const fileKey = parsed.file_key ?? parsed.image_key;
-          if (fileKey === undefined) return {};
-          const name = parsed.file_name ?? `image-${messageId.slice(-8)}.png`;
-          const identity = `${this.name}:${openId}`;
-          this.chats.set(identity, chatId);
-          void this.downloadResource(messageId, fileKey, messageType)
-            .then(async base64 => {
-              if (base64 === undefined) return;
-              const senderLabel = await this.labelFor(openId, chatId);
-              const reply = await onMessage({
-                identity,
-                chatKey: `${this.name}:${chatId}`,
-                threadKey: this.conversationKeyFor(data.message ?? {}),
-                messageId,
-                senderLabel,
-                text: "",
-                files: [{ name, base64 }],
-              });
-              // Anchored under the message it answers. `send(identity)` posts at the chat
-              // root, which inside a topic reads as the bot talking to itself somewhere
-              // else — the person who said "停" watched the answer land outside their
-              // thread and could not tell whether the mechanism had heard them.
-              if (reply !== undefined && reply !== "") {
-                await this.sendToChat(`${this.name}:${chatId}`, reply, { replyTo: messageId });
-              }
-            })
-            .catch((error: unknown) => {
-              const detail = error instanceof Error ? error.message : String(error);
-              this.log(`channel ${this.name}: file receive failed (${detail})`);
-              // The person is told, in the thread of the file they sent. Before this, the
-              // failure was a host-side log line and the chat heard nothing — the agent
-              // then looked at an empty inbox and guessed out loud.
-              const code = (error as { response?: { data?: { code?: number } } })?.response
-                ?.data?.code;
-              void this.sendToChat(`${this.name}:${chatId}`, fileFetchFailed(name, code), {
-                replyTo: messageId,
-              }).catch(() => {});
-            });
-          return {};
-        }
-
-        // A meeting invitation arriving as a *message* — observed 2026-08-29: inviting
-        // the bot to a call delivered a `video_chat` message, not (only) the VC event,
-        // and the drop path swallowed it. The content shape is the vendor's and only
-        // half-documented, so it is parsed defensively and, when a meeting number is
-        // found, fed through the same R37 bridge as the event. When it is not found,
-        // the content's keys are logged — the next occurrence teaches us the schema
-        // instead of repeating the silence.
-        if (messageType === "video_chat") {
-          const raw = data.message.content ?? "{}";
-          let meetingNo = "";
-          let topic = "";
-          try {
-            const parsed = JSON.parse(raw) as Record<string, unknown>;
-            const pick = (value: unknown): string =>
-              typeof value === "string" ? value : typeof value === "number" ? String(value) : "";
-            // `meet_number` is the field the vendor actually sends — learned from the
-            // diagnostic log on 2026-08-29, raw:
-            // {"topic":"宋cs的视频会议","meet_number":"289762676","start_time":…}
-            meetingNo =
-              pick(parsed.meet_number) ||
-              pick(parsed.meeting_no) ||
-              pick(parsed.meetingNo) ||
-              pick(parsed.number);
-            topic = pick(parsed.topic) || pick(parsed.title);
-            if (meetingNo === "") {
-              this.log(
-                `channel ${this.name}: video_chat message carried no meeting number; ` +
-                  `content keys: ${Object.keys(parsed).join(", ")} — raw: ${raw.slice(0, 300)}`
-              );
-            }
-          } catch {
-            this.log(`channel ${this.name}: video_chat content did not parse: ${raw.slice(0, 200)}`);
-          }
-          if (meetingNo === "") {
-            this.discard(messageId, "video_chat message without a readable meeting number");
-            return {};
-          }
-          const invite: MeetingInvite = {
-            inviterOpenId: openId,
-            inviterName: this.names.get(openId) ?? "",
-            meetingNo,
-            topic,
-            meetingId: meetingNo,
-          };
-          const inviteIdentity = `${this.name}:${openId}`;
-          this.log(`channel ${this.name}: meeting invite ${meetingNo} via video_chat message`);
-          void onMessage({
-            identity: inviteIdentity,
-            ...(chatId !== "" ? { chatKey: `${this.name}:${chatId}` } : {}),
-            messageId,
-            senderLabel: invite.inviterName !== "" ? invite.inviterName : inviteIdentity,
-            text: meetingInvitePrompt(invite, { allowRemoteControl: this.meetingRemoteControl }),
-          })
-            .then(reply =>
-              reply !== undefined && reply !== "" && chatId !== ""
-                ? this.sendToChat(`${this.name}:${chatId}`, reply, { replyTo: messageId })
-                : undefined
-            )
-            .catch((error: unknown) => {
-              const detail = error instanceof Error ? error.message : String(error);
-              this.log(`channel ${this.name}: video_chat invite handling failed (${detail})`);
-            });
-          return {};
-        }
-
-        if (messageType !== "text" && messageType !== "post") {
-          this.discard(messageId, `unhandled message type ${messageType ?? "?"}`);
-          return {};
-        }
-        let text = "";
-        let postImages: string[] = [];
-        try {
-          const parsed = JSON.parse(data.message.content ?? "{}") as {
-            text?: string;
-            title?: string;
-            content?: unknown;
-          };
-          // Rich text arrives as `post`, not `text`, and was being dropped whole. Anything
-          // pasted with a link, a line break or an emoji is a post — which is most of what
-          // a person actually sends — so the bot appeared to ignore them at random.
-          //
-          // The shape is paragraphs of runs: [[{tag:"text",text}, {tag:"a",text,href}, …]].
-          // Flattened here rather than anywhere else, because the wire format is this
-          // adapter's business and everything downstream wants a string.
-          if (messageType === "post") {
-            const rendered = this.renderPostBody(parsed.title, parsed.content);
-            text = rendered.text;
-            postImages = rendered.imageKeys;
-          } else {
-            text = String(parsed.text ?? "");
-          }
-          text = text
-            // Mention tokens read as noise in an instruction; the bot being mentioned
-            // is how the message reached us at all.
-            .replace(/@_user_\d+/g, "")
-            .trim();
-        } catch {
-          this.discard(messageId, "content did not parse");
-          return {};
-        }
-        if (text === "") {
-          // A bare mention is a person addressing you, not an empty message. Dropping it
-          // silently is the worst possible answer: they get nothing back and reasonably
-          // conclude the bot is broken, which is exactly what happened — "@bot" with no
-          // other words went nowhere and looked like an outage.
-          //
-          // Passed on as a real message saying what it was, so the agent answers it as
-          // being spoken to rather than being handed an empty string.
-          const mentionOnly = /@_user_\d+/.test(String(data.message.content ?? ""));
-          if (!mentionOnly) {
-            this.discard(
-              messageId,
-              `no usable text; raw=${String(data.message.content ?? "").slice(0, 100)}`
-            );
-            return {};
-          }
-          text =
-            "(They mentioned you with no other words — they are getting your attention. " +
-            "Say briefly that you are here and what you are in the middle of, if anything.)";
-        }
-        const identity = `${this.name}:${openId}`;
-        this.chats.set(identity, chatId);
-        void this.labelFor(openId, chatId)
-          .then(async senderLabel => {
-            // Pictures pasted into rich text are fetched like a standalone image message,
-            // because to the person who sent it there is no difference — they put a
-            // screenshot in the message and expect it to be looked at.
-            const files: { name: string; base64: string }[] = [];
-            for (const [index, key] of postImages.entries()) {
-              const base64 = await this.downloadResource(messageId ?? "", key, "image").catch(
-                () => undefined
-              );
-              if (base64 === undefined) {
-                this.log(`channel ${this.name}: image ${index + 1} in ${messageId ?? "?"} could not be fetched`);
-                continue;
-              }
-              files.push({ name: `image-${index + 1}.png`, base64 });
-            }
-            const addressed = isAddressed(
-              data.message ?? {},
-              await this.ownOpenId(),
-              id => this.sentRoots?.chatKeyFor(id) !== undefined
-            );
-            return onMessage({
-              identity,
-              chatKey: `${this.name}:${chatId}`,
-              threadKey: this.conversationKeyFor(data.message ?? {}),
-              ...(messageId !== undefined ? { messageId } : {}),
-              senderLabel,
-              text,
-              ...(files.length > 0 ? { files } : {}),
-              ...(addressed !== undefined ? { addressed } : {}),
-            });
-          })
-          .then(reply =>
-            // Anchored under the message it answers, or it lands at the chat root —
-            // which inside a topic thread reads as an unrelated announcement, and the
-            // person cannot tell their "停" was heard.
-            reply
-              ? messageId !== undefined
-                ? this.sendToChat(`${this.name}:${chatId}`, reply, { replyTo: messageId })
-                : this.send(identity, reply)
-              : undefined
-          )
-          .catch((error: unknown) => {
-            const detail = error instanceof Error ? error.message : String(error);
-            this.log(`channel ${this.name}: reply failed (${detail})`);
-          });
-        return {};
-    };
+    const receiveMessage = this.receiverFor(onMessage);
     this.receiveMessage = receiveMessage;
 
     const dispatcher = new lark.EventDispatcher({}).register({
@@ -1566,6 +1269,317 @@ export class FeishuChannel implements ChannelAdapter {
       openSocket();
     };
     openSocket();
+  }
+
+  /**
+   * The inbound seam: one function from a vendor event to the bus, named rather than
+   * inline because the socket is not the only way a message reaches us — the catch-up
+   * sweep replays what the socket missed through this exact function, and the adapter
+   * contract (contract.ts, INV-129) drives it without a socket at all. A recovered or
+   * synthetic message is admitted, deduped, logged and answered by the same code.
+   */
+  receiverFor(onMessage: (message: InboundMessage) => Promise<string | undefined>) {
+    const receiveMessage = (data: {
+        sender?: { sender_id?: { open_id?: string } };
+        message?: {
+          message_id?: string;
+          chat_id?: string;
+          message_type?: string;
+          content?: string;
+          mentions?: unknown[];
+          /**
+           * Which topic or reply chain this belongs to.
+           *
+           * Feishu has sent these all along — its own SDK types declare them — and we
+           * read none of them, so every message in a group landed in one unbounded
+           * conversation. Recorded before deciding anything, so the choice of what to key
+           * a conversation on is made against how this installation is actually used
+           * rather than against a guess.
+           */
+          thread_id?: string;
+          root_id?: string;
+          parent_id?: string;
+          chat_type?: string;
+          create_time?: string;
+        };
+      }) => {
+        const openId = data.sender?.sender_id?.open_id ?? "unknown";
+        const chatId = data.message?.chat_id ?? "";
+        const messageType = data.message?.message_type;
+        // Logged before anything can drop it. A message that arrives and is discarded —
+        // no chat id, a duplicate, an unhandled type — left no trace at all, so "the bot
+        // is not answering" and "the connection is delivering nothing" looked identical
+        // from the log, and the only way to tell them apart was to add this and ask
+        // somebody to type again.
+        const arrivedId = data.message?.message_id;
+        // Asked before the arrival is written, because after it the ledger would answer
+        // "yes, me". The in-memory seen set below is empty in a process that has just
+        // started, which is exactly when the vendor redelivers what it could not hand
+        // over during the restart — so the durable record is what stops one message
+        // being answered twice across a restart, and the memory set stops it within one.
+        if (arrivedId !== undefined && this.alreadyHandled?.(arrivedId) === true) {
+          this.log(`channel ${this.name}: ${arrivedId} was already handled before a restart`);
+          return {};
+        }
+        if (arrivedId !== undefined) {
+          this.ingress?.arrived({
+            id: arrivedId,
+            channel: this.name,
+            identity: `${this.name}:${openId}`,
+            chatKey: `${this.name}:${chatId}`,
+            kind: messageType ?? "unknown",
+            chars: String(data.message?.content ?? "").length,
+            ...(data.message?.thread_id !== undefined ? { threadId: data.message.thread_id } : {}),
+            ...(data.message?.root_id !== undefined ? { rootId: data.message.root_id } : {}),
+            ...(data.message?.chat_type !== undefined ? { chatType: data.message.chat_type } : {}),
+            at: new Date().toISOString(),
+            ...(Number.isFinite(Number(data.message?.create_time)) && Number(data.message?.create_time) > 0
+              ? { sentAt: new Date(Number(data.message?.create_time)).toISOString() }
+              : {}),
+          });
+        }
+        if (chatId === "" || data.message === undefined) return {};
+        // No sender is no identity: nothing downstream can decide who may drive, so
+        // it is dropped and said, not admitted as "feishu:unknown" (INV-129).
+        if (data.sender?.sender_id?.open_id === undefined) {
+          this.discard(data.message.message_id, "no sender identity on the event");
+          return {};
+        }
+        const messageId = data.message.message_id;
+        if (messageId !== undefined) {
+          const seen = this.alreadySeen(messageId, data.message.content ?? "");
+          if (seen === "different") {
+            this.discard(messageId, "delivered again with different content — same id, so not a second turn");
+            return {};
+          }
+          if (seen === "same") {
+            this.discard(messageId, "delivered more than once");
+            return {};
+          }
+        }
+
+        // A file or an image is bytes to fetch, then an ordinary inbound message that
+        // carries them. The download happens here because the wire (key, resource
+        // API, quirks) is this adapter's business and nobody else's.
+        if ((messageType === "file" || messageType === "image") && messageId !== undefined) {
+          let parsed: { file_key?: string; image_key?: string; file_name?: string } = {};
+          try {
+            parsed = JSON.parse(data.message.content ?? "{}") as typeof parsed;
+          } catch {
+            return {};
+          }
+          const fileKey = parsed.file_key ?? parsed.image_key;
+          if (fileKey === undefined) return {};
+          const name = parsed.file_name ?? `image-${messageId.slice(-8)}.png`;
+          const identity = `${this.name}:${openId}`;
+          this.chats.set(identity, chatId);
+          void this.downloadResource(messageId, fileKey, messageType)
+            .then(async base64 => {
+              if (base64 === undefined) return;
+              const senderLabel = await this.labelFor(openId, chatId);
+              const reply = await onMessage({
+                identity,
+                chatKey: `${this.name}:${chatId}`,
+                threadKey: this.conversationKeyFor(data.message ?? {}),
+                messageId,
+                senderLabel,
+                text: "",
+                files: [{ name, base64 }],
+              });
+              // Anchored under the message it answers. `send(identity)` posts at the chat
+              // root, which inside a topic reads as the bot talking to itself somewhere
+              // else — the person who said "停" watched the answer land outside their
+              // thread and could not tell whether the mechanism had heard them.
+              if (reply !== undefined && reply !== "") {
+                await this.sendToChat(`${this.name}:${chatId}`, reply, { replyTo: messageId });
+              }
+            })
+            .catch((error: unknown) => {
+              const detail = error instanceof Error ? error.message : String(error);
+              this.log(`channel ${this.name}: file receive failed (${detail})`);
+              // The person is told, in the thread of the file they sent. Before this, the
+              // failure was a host-side log line and the chat heard nothing — the agent
+              // then looked at an empty inbox and guessed out loud.
+              const code = (error as { response?: { data?: { code?: number } } })?.response
+                ?.data?.code;
+              void this.sendToChat(`${this.name}:${chatId}`, fileFetchFailed(name, code), {
+                replyTo: messageId,
+              }).catch(() => {});
+            });
+          return {};
+        }
+
+        // A meeting invitation arriving as a *message* — observed 2026-08-29: inviting
+        // the bot to a call delivered a `video_chat` message, not (only) the VC event,
+        // and the drop path swallowed it. The content shape is the vendor's and only
+        // half-documented, so it is parsed defensively and, when a meeting number is
+        // found, fed through the same R37 bridge as the event. When it is not found,
+        // the content's keys are logged — the next occurrence teaches us the schema
+        // instead of repeating the silence.
+        if (messageType === "video_chat") {
+          const raw = data.message.content ?? "{}";
+          let meetingNo = "";
+          let topic = "";
+          try {
+            const parsed = JSON.parse(raw) as Record<string, unknown>;
+            const pick = (value: unknown): string =>
+              typeof value === "string" ? value : typeof value === "number" ? String(value) : "";
+            // `meet_number` is the field the vendor actually sends — learned from the
+            // diagnostic log on 2026-08-29, raw:
+            // {"topic":"宋cs的视频会议","meet_number":"289762676","start_time":…}
+            meetingNo =
+              pick(parsed.meet_number) ||
+              pick(parsed.meeting_no) ||
+              pick(parsed.meetingNo) ||
+              pick(parsed.number);
+            topic = pick(parsed.topic) || pick(parsed.title);
+            if (meetingNo === "") {
+              this.log(
+                `channel ${this.name}: video_chat message carried no meeting number; ` +
+                  `content keys: ${Object.keys(parsed).join(", ")} — raw: ${raw.slice(0, 300)}`
+              );
+            }
+          } catch {
+            this.log(`channel ${this.name}: video_chat content did not parse: ${raw.slice(0, 200)}`);
+          }
+          if (meetingNo === "") {
+            this.discard(messageId, "video_chat message without a readable meeting number");
+            return {};
+          }
+          const invite: MeetingInvite = {
+            inviterOpenId: openId,
+            inviterName: this.names.get(openId) ?? "",
+            meetingNo,
+            topic,
+            meetingId: meetingNo,
+          };
+          const inviteIdentity = `${this.name}:${openId}`;
+          this.log(`channel ${this.name}: meeting invite ${meetingNo} via video_chat message`);
+          void onMessage({
+            identity: inviteIdentity,
+            ...(chatId !== "" ? { chatKey: `${this.name}:${chatId}` } : {}),
+            messageId,
+            senderLabel: invite.inviterName !== "" ? invite.inviterName : inviteIdentity,
+            text: meetingInvitePrompt(invite, { allowRemoteControl: this.meetingRemoteControl }),
+          })
+            .then(reply =>
+              reply !== undefined && reply !== "" && chatId !== ""
+                ? this.sendToChat(`${this.name}:${chatId}`, reply, { replyTo: messageId })
+                : undefined
+            )
+            .catch((error: unknown) => {
+              const detail = error instanceof Error ? error.message : String(error);
+              this.log(`channel ${this.name}: video_chat invite handling failed (${detail})`);
+            });
+          return {};
+        }
+
+        if (messageType !== "text" && messageType !== "post") {
+          this.discard(messageId, `unhandled message type ${messageType ?? "?"}`);
+          return {};
+        }
+        let text = "";
+        let postImages: string[] = [];
+        try {
+          const parsed = JSON.parse(data.message.content ?? "{}") as {
+            text?: string;
+            title?: string;
+            content?: unknown;
+          };
+          // Rich text arrives as `post`, not `text`, and was being dropped whole. Anything
+          // pasted with a link, a line break or an emoji is a post — which is most of what
+          // a person actually sends — so the bot appeared to ignore them at random.
+          //
+          // The shape is paragraphs of runs: [[{tag:"text",text}, {tag:"a",text,href}, …]].
+          // Flattened here rather than anywhere else, because the wire format is this
+          // adapter's business and everything downstream wants a string.
+          if (messageType === "post") {
+            const rendered = this.renderPostBody(parsed.title, parsed.content);
+            text = rendered.text;
+            postImages = rendered.imageKeys;
+          } else {
+            text = String(parsed.text ?? "");
+          }
+          text = text
+            // Mention tokens read as noise in an instruction; the bot being mentioned
+            // is how the message reached us at all.
+            .replace(/@_user_\d+/g, "")
+            .trim();
+        } catch {
+          this.discard(messageId, "content did not parse");
+          return {};
+        }
+        if (text === "") {
+          // A bare mention is a person addressing you, not an empty message. Dropping it
+          // silently is the worst possible answer: they get nothing back and reasonably
+          // conclude the bot is broken, which is exactly what happened — "@bot" with no
+          // other words went nowhere and looked like an outage.
+          //
+          // Passed on as a real message saying what it was, so the agent answers it as
+          // being spoken to rather than being handed an empty string.
+          const mentionOnly = /@_user_\d+/.test(String(data.message.content ?? ""));
+          if (!mentionOnly) {
+            this.discard(
+              messageId,
+              `no usable text; raw=${String(data.message.content ?? "").slice(0, 100)}`
+            );
+            return {};
+          }
+          text =
+            "(They mentioned you with no other words — they are getting your attention. " +
+            "Say briefly that you are here and what you are in the middle of, if anything.)";
+        }
+        const identity = `${this.name}:${openId}`;
+        this.chats.set(identity, chatId);
+        void this.labelFor(openId, chatId)
+          .then(async senderLabel => {
+            // Pictures pasted into rich text are fetched like a standalone image message,
+            // because to the person who sent it there is no difference — they put a
+            // screenshot in the message and expect it to be looked at.
+            const files: { name: string; base64: string }[] = [];
+            for (const [index, key] of postImages.entries()) {
+              const base64 = await this.downloadResource(messageId ?? "", key, "image").catch(
+                () => undefined
+              );
+              if (base64 === undefined) {
+                this.log(`channel ${this.name}: image ${index + 1} in ${messageId ?? "?"} could not be fetched`);
+                continue;
+              }
+              files.push({ name: `image-${index + 1}.png`, base64 });
+            }
+            const addressed = isAddressed(
+              data.message ?? {},
+              await this.ownOpenId(),
+              id => this.sentRoots?.chatKeyFor(id) !== undefined
+            );
+            return onMessage({
+              identity,
+              chatKey: `${this.name}:${chatId}`,
+              threadKey: this.conversationKeyFor(data.message ?? {}),
+              ...(messageId !== undefined ? { messageId } : {}),
+              senderLabel,
+              text,
+              ...(files.length > 0 ? { files } : {}),
+              ...(addressed !== undefined ? { addressed } : {}),
+            });
+          })
+          .then(reply =>
+            // Anchored under the message it answers, or it lands at the chat root —
+            // which inside a topic thread reads as an unrelated announcement, and the
+            // person cannot tell their "停" was heard.
+            reply
+              ? messageId !== undefined
+                ? this.sendToChat(`${this.name}:${chatId}`, reply, { replyTo: messageId })
+                : this.send(identity, reply)
+              : undefined
+          )
+          .catch((error: unknown) => {
+            const detail = error instanceof Error ? error.message : String(error);
+            this.log(`channel ${this.name}: reply failed (${detail})`);
+          });
+        return {};
+    };
+    return receiveMessage;
   }
 
   stop(): void {

@@ -1,3 +1,9 @@
+<!-- doc: 19-pitfalls
+     title: Pitfalls: remembering how things went wrong
+     family: guide
+     status: current
+     updated: 2026-08-28
+-->
 # Pitfalls: remembering how things went wrong
 
 Status: **design, small enough to build without review** — it adds a memory kind and one

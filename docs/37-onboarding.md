@@ -1,3 +1,9 @@
+<!-- doc: 37-onboarding
+     title: Getting started, every way in
+     family: guide
+     status: current
+     updated: 2026-09-05
+-->
 # 37 — Getting started, every way in
 
 What a person does on day one, path by path. The README says the short version; this is the
@@ -30,6 +36,11 @@ Then open it normally. It shows a window on `http://127.0.0.1:7777` and sits in 
 quitting the window keeps the box running.
 
 ## 2. First run: the two things it asks for
+
+*The page also shows a four-step card — a box, your first agent, a door, your first piece
+of work — which disappears when all four are done and comes back from the `?` button. Each
+step names the command that does the same thing, for an installation running on a server
+where there is nothing to click (INV-542).*
 
 The Settings dialog opens by itself with a welcome note. It wants:
 

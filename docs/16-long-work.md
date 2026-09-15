@@ -1,3 +1,9 @@
+<!-- doc: 16-long-work
+     title: Finishing long work: the protocol, the cost, and the stop
+     family: decision
+     status: current
+     updated: 2026-08-26
+-->
 # Finishing long work: the protocol, the cost, and the stop
 
 **Status: the design in section 1 was reviewed and did not survive.** Second hostile review,

@@ -1,3 +1,9 @@
+<!-- doc: 35-grok-onboarding
+     title: Onboarding a Grok Bot box: the bot prepares its own box, the person connects from the laptop
+     family: decision
+     status: current
+     updated: 2026-09-03
+-->
 # 35 — Onboarding a Grok Bot box: the bot prepares its own box, the person connects from the laptop
 
 **Status: built 2026-09-03; published 2026-09-04 as https://x.ai/bot/U8xEPyVxQHL_JznVhVotB

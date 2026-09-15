@@ -19,6 +19,7 @@
  */
 
 import { timingSafeEqual } from "node:crypto";
+import { roleAtLeast, type Role } from "../host/principals.ts";
 
 export const COOKIE_NAME = "agentbox_ui";
 
@@ -38,22 +39,33 @@ export const COOKIE_NAME = "agentbox_ui";
 export const USER_HEADER = "x-agentbox-user";
 export const ROLE_HEADER = "x-agentbox-role";
 
-export type Role = "owner" | "member" | "viewer";
+/**
+ * The control plane's wire vocabulary (`src/control/store.ts`), which is not ours.
+ *
+ * One vocabulary, one meaning (INV-537). The box used to carry a second role type —
+ * `owner | member | viewer` — beside the roster's `viewer | driver | admin`, bridged by a
+ * paragraph of ad-hoc downgrading in the server. Two words for one thing is how a
+ * permission ends up meaning something different two files apart, so the wire words are
+ * now translated here, at the edge, and nothing past this file knows them.
+ */
+export type GatewayRole = "owner" | "member" | "viewer";
+
+const GATEWAY_ROLES: Record<GatewayRole, Role> = { owner: "admin", member: "driver", viewer: "viewer" };
 
 export interface Caller {
   /** Opaque; the box never learns a name or a tenant, and does not need to. */
   userId: string | undefined;
   /**
-   * What this person may do.
+   * What this person may do — or `undefined` when nobody asserted anything.
    *
-   * `owner` when nothing was asserted, which is the single-user case: a box driven directly by whoever
-   * holds its token has always been able to do everything, and inventing a lesser role for them here
-   * would break every existing deployment. A box behind a gateway always gets a header.
+   * Absent is not "everything" (INV-537). It used to be `owner`, and that conflated two
+   * different callers: the operator holding the installation token, who is indeed an
+   * admin, and a request that simply carried no header, which is a fact about the request.
+   * The server decides what an unasserted caller may do; this function reports what was
+   * asserted.
    */
-  role: Role;
+  role: Role | undefined;
 }
-
-const ROLE_VALUES: readonly string[] = ["owner", "member", "viewer"];
 
 /**
  * The caller, from headers that only count when the request was authorised by token.
@@ -65,58 +77,63 @@ export function callerOf(
   headers: { [key: string]: string | string[] | undefined },
   allowedByToken: boolean
 ): Caller {
-  if (!allowedByToken) return { userId: undefined, role: "owner" };
+  if (!allowedByToken) return { userId: undefined, role: undefined };
   const first = (name: string): string | undefined => {
     const value = headers[name];
     return Array.isArray(value) ? value[0] : value;
   };
   const claimedRole = first(ROLE_HEADER);
-  // Three cases, and conflating the last two is a privilege escalation. Absent means nobody is
-  // asserting anything, which is the direct single-user case and has always been able to do
-  // everything. Present and recognised is what the gateway sends. Present and *unrecognised* means
-  // something upstream is wrong, and the answer there is the least privilege, not the most — a typo
-  // in a header must not become an accidental owner.
-  const role: Role =
+  // Three cases, and conflating the last two is a privilege escalation. Absent means nobody
+  // is asserting anything — reported as `undefined`, for the caller to decide about.
+  // Present and recognised is what the gateway sends, translated into our vocabulary.
+  // Present and *unrecognised* means something upstream is wrong, and the answer there is
+  // the least privilege, not the most — a typo in a header must not become an admin.
+  const role: Role | undefined =
     claimedRole === undefined
-      ? "owner"
-      : ROLE_VALUES.includes(claimedRole)
-        ? (claimedRole as Role)
-        : "viewer";
+      ? undefined
+      : (GATEWAY_ROLES[claimedRole as GatewayRole] ?? "viewer");
   return { userId: first(USER_HEADER), role };
 }
 
-/** Whether this caller may change things, as opposed to watching them. */
+/**
+ * Whether this caller may change things, as opposed to watching them.
+ *
+ * An unasserted caller may: that is the operator holding the installation's own
+ * credential — the CLI, a script, a single-person install — and it is what this has
+ * always meant. Everyone the roster or a gateway names is held to their role.
+ */
 export function mayDrive(caller: Caller): boolean {
-  return caller.role === "owner" || caller.role === "member";
+  return caller.role === undefined || roleAtLeast(caller.role, "driver");
 }
 
 /**
- * Whether this caller may drive this particular agent, and why not if not.
+ * Whether this caller may drive at all, and why not if not.
  *
- * One function, called from every route that changes something, rather than a check per handler —
- * which is how one handler ends up missing it. A refusal names the role that would be needed,
- * because a permission system returning a blank 403 generates a support conversation every time.
+ * One function, called from every route that changes something, rather than a check per
+ * handler — which is how one handler ends up missing it. A refusal names the role that
+ * would be needed, because a permission system returning a blank 403 generates a support
+ * conversation every time.
  *
- * **This is accident prevention, not a security boundary.** Everyone in a tenant shares a box, a
- * filesystem and passwordless sudo inside it, so a member who wants another member's transcript can
- * read it from a shell. What this buys is that ordinary use does not cross wires, and that "whose
- * agent is this" has an answer. A real boundary between two people is two tenants and two boxes.
+ * **It no longer asks about the agent** (INV-540). Per-agent `visibility` was retired by
+ * docs/22 §3 — authority lives on the box and every agent in a box is equal — but the
+ * check stayed here for weeks, so two principals in one box got different answers about
+ * the same box's work, which is the thing the model forbids. What replaced it is real:
+ * `mayEnterBox` (INV-538), asked by the same callers straight after this. `ownerUserId`
+ * survives as attribution — whose creation this is, shown on the card — and never as a
+ * gate.
+ *
+ * **This is accident prevention, not a security boundary.** Everyone in a box shares a
+ * filesystem and passwordless sudo inside it, so a member who wants another member's
+ * transcript can read it from a shell. What this buys is that ordinary use does not cross
+ * wires. A real boundary between two people is two boxes with different members.
  */
-export function refusalToDrive(
-  caller: Caller,
-  agent: { ownerUserId?: string; visibility?: "shared" | "private" } | undefined
-): string | undefined {
+export function refusalToDrive(caller: Caller): string | undefined {
   if (!mayDrive(caller)) {
-    return "This account can watch but not drive. A member or an owner can act on this.";
+    return "This account can watch but not drive. A driver or an admin can act on this.";
   }
-  if (agent === undefined) return undefined;
-  const isPrivate = agent.visibility === "private";
-  if (!isPrivate) return undefined;
-  // An owner is not exempt: the point is "whose agent is this", and an owner reaching into a private
-  // agent by accident is the same accident. Deliberate access is a shell away, and visible.
-  if (agent.ownerUserId !== undefined && agent.ownerUserId === caller.userId) return undefined;
-  return "That agent is private to the person who created it.";
+  return undefined;
 }
+
 
 export interface AuthConfig {
   /** Undefined means no token was configured. */

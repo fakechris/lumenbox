@@ -1,3 +1,9 @@
+<!-- doc: 10-security-backlog
+     title: Security backlog
+     family: decision
+     status: current
+     updated: 2026-09-03
+-->
 # Security backlog
 
 Deferred on purpose, in favour of correctness and long-task success. Written down so the deferral is

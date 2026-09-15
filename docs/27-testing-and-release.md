@@ -1,3 +1,10 @@
+<!-- doc: 27-testing-and-release
+     title: Testing and release stability: ours, against OpenClaw and Hermes
+     family: spec
+     status: current
+     domain: testing-and-release
+     updated: 2026-09-01
+-->
 # Testing and release stability: ours, against OpenClaw and Hermes
 
 Status: **written 2026-09-01**, after the owner asked how mature products build
