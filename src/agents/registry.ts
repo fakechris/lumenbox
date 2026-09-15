@@ -344,7 +344,7 @@ export class AgentRegistry {
    * name stay: agents are stamped with the id, and a box that moved (a tunnel to a tailnet
    * address, a new port) is the same box.
    */
-  updateBox(nameOrId: string, changes: { endpoint?: { baseUrl: string; tokenFile: string }; displayFloor?: number; workDir?: string }): BoxEntry {
+  updateBox(nameOrId: string, changes: { endpoint?: { baseUrl: string; tokenFile: string }; displayFloor?: number; workDir?: string; members?: "everyone" | string[] }): BoxEntry {
     const entry = this.boxByName(nameOrId);
     if (entry === undefined) throw new Error(`No box named ${nameOrId}.`);
     if (entry.id === this.box.id && changes.endpoint !== undefined) throw new Error("The installation's own box has no endpoint to change.");
@@ -353,6 +353,11 @@ export class AgentRegistry {
       ...(changes.endpoint !== undefined ? { endpoint: { baseUrl: changes.endpoint.baseUrl.replace(/\/+$/, ""), tokenFile: changes.endpoint.tokenFile } } : {}),
       ...(changes.displayFloor !== undefined && changes.displayFloor >= 1 ? { displayFloor: Math.floor(changes.displayFloor) } : {}),
       ...(changes.workDir !== undefined && changes.workDir !== "" ? { workDir: changes.workDir } : {}),
+      // Who the box is for (INV-538). A set, deduplicated and ordered, so the file reads
+      // the same whoever wrote it and a diff shows a membership change rather than a shuffle.
+      ...(changes.members !== undefined
+        ? { members: changes.members === "everyone" ? "everyone" : [...new Set(changes.members)].sort() }
+        : {}),
     };
     this.boxes = this.boxes.map(existing => (existing.id === entry.id ? updated : existing));
     saveBoxes(join(this.root, BOXES_FILENAME), this.boxes);
