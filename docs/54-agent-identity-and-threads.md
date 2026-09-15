@@ -173,6 +173,25 @@ decision receipt
 **顺序的理由**：P4 的卡片看起来最"协议化"，但**没有 P1 的账本，卡片只是装饰**；
 而 P1 没有 P0 的身份与 receipt，答出来的东西不可信。
 
+## 4. 核过的三条（读 `~/workspace/Involute` 源码，2026-09-15）
+
+上一版里"待核"的三件，现在有答案，其中第一条改变了 P0 的成本估计：
+
+- **AGENT 能不能作为评论作者：能，而且零开发。** `User.actorKind`
+  （`packages/server/prisma/schema.prisma:143`）、`Comment.userId → User`（`:280`）、
+  `commentCreate` 用 `requireAuthentication` 并把 `viewer.id` 写成作者
+  （`packages/server/src/schema.ts:2359-2369`）。**今天看起来"都一样"，只是因为凭证挂在
+  `Admin`（HUMAN）这个 User 上。** 而且 `AgentCredential.userId` 是多对一（`:163-177`）：
+  **换 token 不换作者身份**，正是 §B1 要的。
+- **thread / parent：没有。** `Comment` 只有 id/body/时间/issueId/userId/attachments
+  （`:273-286`）。§C 的"一条工作项上多条并行追问互不串线"压在加 `parentCommentId` 这一条上。
+- **事件基础设施：现成。** `event-outbox.ts` 已有 HMAC 签名、60 秒认领租约、五次退避、
+  死信与自动停用；新事件只是往 `WORK_EVENT_TYPES`（`:8`）加两行 + 在写评论的事务里投递。
+- 仍待核：评论长度上限与限流契约。
+
+落地工单（谁做什么、按什么顺序、验收是什么）见
+[handoff-2026-09-15-involute-agent-threads](handoff-2026-09-15-involute-agent-threads.md)。
+
 ## 7. 每一版被推翻了什么
 
 - **v1 → v2（codex 红队）**：换 token ≠ 隔离；跟进 rails 不能白拿（`question-expiry` 是

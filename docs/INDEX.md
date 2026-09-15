@@ -93,4 +93,5 @@ this file and the headers disagree. Edit the header, not this table.
 | [handoff-2026-08-30](handoff-2026-08-30.md) | Handoff — 2026-08-30, end of session | current | 2026-08-30 |
 | [handoff-2026-09-01](handoff-2026-09-01.md) | Handoff — 2026-09-01 | current | 2026-09-01 |
 | [handoff-2026-09-02](handoff-2026-09-02.md) | Handoff, 2026-09-02 | current | 2026-09-02 |
+| [handoff-2026-09-15-involute-agent-threads](handoff-2026-09-15-involute-agent-threads.md) | Handoff — Involute 侧：agent 身份与工作项上的对话 | current | 2026-09-15 |
 
