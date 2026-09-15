@@ -39,6 +39,7 @@ import {
 import { buildSystemPrompt } from "./prompt.ts";
 import { PolicyGate, type PolicyLimits } from "./policy.ts";
 import { UsageLog } from "./usage.ts";
+import type { Tracer } from "./trace.ts";
 import { buildTools, dispatchTool } from "./tools.ts";
 
 interface Capture {
@@ -3290,6 +3291,93 @@ test("a background fork returns at once and its findings arrive in the parent as
     // The child ran in its fork conversation, and its findings came back to main as a system message.
     assert.ok(woken.some(line => /^fork\//.test(line)), `fork ran: ${woken.join(" | ")}`);
     assert.ok(woken.some(line => /^main:system:.*A fork you started has finished/.test(line)), `reported: ${woken.join(" | ")}`);
+  } finally {
+    cleanup();
+  }
+});
+
+test("a turn traces each LLM call: one span, the turn's trace id, token usage on success", async () => {
+  const { registry, cleanup } = fixture();
+  try {
+    const ada = registry.create({ name: "Ada" });
+    const bus = new AgentBus(registry, async () => {});
+    const capture: Capture = { params: [] };
+    const { client } = stubClient([message([textBlock("done")])], capture);
+
+    const ended: {
+      name: string;
+      traceId?: string;
+      attrs: Record<string, unknown>;
+      error?: unknown;
+    }[] = [];
+    const tracer: Tracer = {
+      start(name, attrs, opts) {
+        return {
+          end(extra, error) {
+            ended.push({ name, traceId: opts?.traceId, attrs: { ...attrs, ...extra }, error });
+          },
+        };
+      },
+      async flush() {},
+    };
+
+    await runTurn(
+      ada,
+      [{ id: "m-trace", fromId: "user", fromName: "user", text: "hi", priority: false, receivedAt: "" }],
+      new AbortController().signal,
+      { client, registry, bus, box: undefined, resolution: undefined, tracer }
+    );
+
+    assert.equal(ended.length, 1, "one LLM call, one span");
+    const [span] = ended;
+    assert.equal(span!.name, "llm.round");
+    assert.equal(span!.error, undefined, "a clean round ends clean");
+    assert.match(span!.traceId!, /^[0-9a-f-]{36}$/, "the trace id is the turnId, a uuid");
+    assert.equal(span!.attrs["gen_ai.request.model"], "claude-opus-5");
+    assert.equal(span!.attrs["gen_ai.system"], "Anthropic");
+    assert.equal(span!.attrs["gen_ai.usage.input_tokens"], 10);
+    assert.equal(span!.attrs["gen_ai.usage.output_tokens"], 5);
+    assert.equal(span!.attrs["agentbox.round"], 0);
+    assert.equal(span!.attrs["agentbox.agent_name"], "Ada");
+  } finally {
+    cleanup();
+  }
+});
+
+test("a failed LLM call still ends its span, marked with the error", async () => {
+  const { registry, cleanup } = fixture();
+  try {
+    const ada = registry.create({ name: "Ada" });
+    const bus = new AgentBus(registry, async () => {});
+    // An unrecognised failure is not retried (decideRetry), so this is exactly one span.
+    const client = {
+      messages: {
+        stream: () => ({
+          on() {},
+          async finalMessage(): Promise<never> {
+            throw new Error("boom: provider exploded");
+          },
+        }),
+      },
+    } as unknown as Anthropic;
+
+    const ended: { error?: unknown }[] = [];
+    const tracer: Tracer = {
+      start: () => ({ end: (_extra, error) => ended.push({ error }) }),
+      async flush() {},
+    };
+
+    await assert.rejects(
+      runTurn(
+        ada,
+        [{ id: "m-fail", fromId: "user", fromName: "user", text: "hi", priority: false, receivedAt: "" }],
+        new AbortController().signal,
+        { client, registry, bus, box: undefined, resolution: undefined, tracer }
+      ),
+      /boom/
+    );
+    assert.equal(ended.length, 1, "the failed call's span was ended, not leaked");
+    assert.match(String(ended[0]!.error), /boom/);
   } finally {
     cleanup();
   }
