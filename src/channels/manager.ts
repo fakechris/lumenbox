@@ -956,6 +956,19 @@ ${input.options.map(option => `· ${option}`).join("\n")}`
   }
 
   /**
+   * One line to whoever last drove this agent from a chat, in the thread they drove it
+   * from. For the host to say what it did on a person's behalf — a question that expired
+   * and went to its default (INV-526). Nothing when the agent was never driven from a chat.
+   */
+  tellAsker(agentId: string, text: string): string | undefined {
+    const asker = this.lastAsker.get(agentId);
+    if (asker === undefined) return undefined;
+    const push = asker.chatKey !== undefined && asker.adapter.sendToChat !== undefined ? asker.adapter.sendToChat(asker.chatKey, text) : asker.adapter.send(asker.identity, text);
+    void push.catch(() => {});
+    return asker.identity;
+  }
+
+  /**
    * Pushes a pending approval to whoever last drove this agent from a chat, and
    * remembers it so a one-word reply from them answers it. Nothing when the agent was
    * not driven from a channel — the web page covers that.
