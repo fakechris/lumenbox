@@ -192,6 +192,33 @@ decision receipt
 落地工单（谁做什么、按什么顺序、验收是什么）见
 [handoff-2026-09-15-involute-agent-threads](handoff-2026-09-15-involute-agent-threads.md)。
 
+## 5. 我们这侧落地了什么（2026-09-15）
+
+**W2（INV-553）消费者已建**，`src/host/involute-inbox.ts`：
+
+```
+agent_inbox → agent_request_claim → 一个回合 → agent_request_answer
+```
+
+四条不显然的规则，每条都来自 review：
+
+- **先认领再决定**，包括决定拒绝：账本拒绝一个不持有 claim 的调用来答复，而**拒绝本身也是一种答复**。
+- **每个 agent 每轮只处理一条**。一个人一早上可以 @ 同一个 agent 二十次；在预算（INV-554）之前，
+  队列就是 inbox，剩下的留在 `submitted` 下一轮再领。
+- **跑不出东西要说出来**，报 `failed` 加一句原因，而不是放着等它超时——看着线程的人不该靠等一个
+  deadline 才知道什么都没发生。
+- **反问是 `input-required` 而不是失败**：那一轮里 agent 自己开了问题（INV-526 的 watch 看得到），
+  请求保住位置。
+
+配置在 `config.involute`：每个 agent 一条 `{agentId, handle, secretId}`——**secretId 指向 vault 里
+那个 agent 自己的凭证**，不是安装的；三者缺一不可（缺了就退回进程手里的那把 token，正是要终结的
+共享身份）。`askers` 是可以问的 Involute actor 白名单：docs/54 §3.6 的粗暴第一版，把他们的 actor
+映射到本安装的 principal、再到 role 与 box，是另一件事，**在它存在之前，"能评论的人"不等于
+"能在这里开一个回合的人"**。
+
+轮询而不是 webhook：这台机器在多数网络里没有入站端口，而两边看的是同一份账本——webhook 也只是
+叫我们过去取而已。
+
 ## 7. 每一版被推翻了什么
 
 - **v1 → v2（codex 红队）**：换 token ≠ 隔离；跟进 rails 不能白拿（`question-expiry` 是
