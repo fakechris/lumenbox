@@ -5119,7 +5119,11 @@ function refreshTasks() {
           ? ' <span class="chip" style="font-size:10px;color:var(--warn)" title="' + esc(t.closeProposal.reason) + '">close proposed by ' + esc(nameOf(t.closeProposal.by)) + ", closes " + esc(String(t.closeProposal.decideBy).slice(0, 16).replace("T", " ")) + "</span>" +
             ' <button class="btn ghost sm" data-oppose="' + esc(t.id) + '">Keep open</button>'
           : "";
-        proposed += dueChip + agingChip + closeChip;
+        // Waiting on somebody, or asked to come back later (INV-532): both say why this
+        // one is not late, which is what a person reading a row of overdue chips needs.
+        var waitingChip = live && t.waitingOn ? ' <span class="chip" style="font-size:10px" title="waiting on somebody outside this box: asked about, never archived">waiting on ' + esc(String(t.waitingOn).slice(0, 40)) + "</span>" : "";
+        var snoozeChip = live && t.snoozeUntil && Date.parse(t.snoozeUntil) > Date.now() ? ' <span class="chip" style="font-size:10px;color:var(--muted)" title="quiet until then">not until ' + esc(String(t.snoozeUntil).slice(0, 10)) + "</span>" : "";
+        proposed += dueChip + waitingChip + snoozeChip + agingChip + closeChip;
         return '<div style="padding:10px 16px;border-bottom:1px solid var(--border)' +
             (open ? ";background:var(--surface)" : "") + '">' +
           '<div style="display:flex;gap:9px;align-items:baseline">' +

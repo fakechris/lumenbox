@@ -182,3 +182,37 @@ test("a nudge nobody received is not counted, and cannot archive the work (INV-5
     rmSync(dir, { recursive: true, force: true });
   }
 });
+
+test("waiting is not abandonment: blocked, in review, waiting on somebody, or snoozed, a task is asked about but never archived (INV-532)", () => {
+  const dir = mkdtempSync(join(tmpdir(), "agentbox-tasks-waiting-"));
+  try {
+    const store = new TaskStore(join(dir, "tasks.jsonl"));
+    const blocked = store.create({ title: "invoice approval", requester: "chris", assigneeId: "bot", due: "2026-09-05", now: T0 })!;
+    store.update(blocked.id, { status: "blocked", note: "waiting for finance" }, "bot", undefined, T0);
+    const inReview = store.create({ title: "the delta", requester: "chris", assigneeId: "bot", reviewerId: "mia", due: "2026-09-05", now: T0 })!;
+    store.update(inReview.id, { status: "review" }, "bot", undefined, T0);
+    const waiting = store.create({ title: "supplier quote", requester: "chris", assigneeId: "bot", due: "2026-09-05", now: T0 })!;
+    store.update(waiting.id, { waitingOn: "the supplier, who answers at month end" }, "bot", undefined, T0);
+    const later = store.create({ title: "next month's migration", requester: "chris", assigneeId: "bot", due: "2026-10-31", now: T0 })!;
+    const ordinary = store.create({ title: "answer Q1-Q5", requester: "chris", assigneeId: "bot", due: "2026-09-05", now: T0 })!;
+
+    // Six sweeps, every delivery landing. The ordinary one runs its course; the rest do not.
+    for (let day = 6; day <= 16; day += 2) deliver(store, store.age(plus(day * 86_400_000)), plus(day * 86_400_000));
+    assert.equal(store.get(ordinary.id)?.status, "dropped");
+    for (const task of [blocked, inReview, waiting, later]) {
+      assert.notEqual(store.get(task.id)?.status, "dropped", `${store.get(task.id)?.title} was archived`);
+      assert.equal(store.get(task.id)?.aging?.nudges, 2, "asked about twice, then quiet");
+    }
+    assert.match(store.get(waiting.id)!.history.find(h => h.note?.startsWith("waiting on"))?.note ?? "", /waiting on the supplier/);
+
+    // A snooze answers the nudge with a date, and the board goes quiet until it.
+    const snoozed = store.create({ title: "the thing chris is away for", requester: "chris", assigneeId: "bot", due: "2026-09-05", now: T0 })!;
+    store.update(snoozed.id, { snoozeUntil: "2026-09-30" }, "chris", undefined, plus(6 * 86_400_000));
+    for (let day = 8; day <= 20; day += 2) assert.deepEqual(store.age(plus(day * 86_400_000)).filter(e => e.task.id === snoozed.id), [], `day ${day} is inside the snooze`);
+    assert.equal(store.get(snoozed.id)?.status, "open");
+    const awake = store.age(new Date(Date.parse("2026-10-02T09:00:00Z")));
+    assert.deepEqual(awake.filter(e => e.task.id === snoozed.id).map(e => e.kind), ["nudge"], "and speaks again after it");
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});

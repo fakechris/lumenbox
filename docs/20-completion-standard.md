@@ -183,6 +183,18 @@ Both are appends on the same task record and survive a restart. `Tasks` gained `
 and `propose_close`; `/api/tasks/update` takes `due`; `/api/tasks/propose-close` and
 `/api/tasks/oppose-close`; the board shows due / overdue / nudged / close-proposed chips.
 
+**Waiting is not abandonment (INV-532 — 2026-09-14).** The sweep archived anything that
+had not moved, and "has not moved" is also what a blocked task, a task in somebody's
+review queue, a supplier who answers at month end, and a requester on leave all look
+like. Now only `open` and `doing` tasks with no `waitingOn` can be archived for not
+moving, and a date still in the future exempts a task from the idle clock (it is not
+late yet). `blocked`, `review`, and anything with `waitingOn` set are nudged up to the
+cap and then go quiet, still open — somebody is told, nobody's work is closed. Two new
+fields answer a nudge without lying about the state: `waiting_on` ("the supplier, who
+answers at month end") and `snooze_until` ("not now — look again on the 30th"), both on
+the `Tasks` tool, `/api/tasks/update`, and the board as chips. A task with a close
+proposal open is not also nudged: that is one question asked twice in two voices.
+
 **Who may end work, and what a proposal was about (INV-531 — 2026-09-14).** `done` was
 gated from the first day; `dropped` never was, so any agent could drop any task on the
 board — no proposal, no window to object, no reviewer. Now dropping is the requester's,
