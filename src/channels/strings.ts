@@ -143,6 +143,11 @@ export const STOPPING = "好,叫停了。当前这一步做完就停。";
 
 export const NOTHING_RUNNING = "现在没有正在做的事。";
 
+/** 不是"没在跑",是"这个不归你管" (INV-538)。含糊其辞会让人以为自己按错了。 */
+export function notYours(who: string | undefined): string {
+  return `${who ?? "它"}在你不在的那个 box 里,所以这条没有生效。让管理员把你加进去,或者找那个 box 里的人。`;
+}
+
 export function steered(who: string | undefined): string {
   // No name is better than a wrong one: without an @-address the manager does not know
   // which agent is on it, and "团队接着做" read as if a committee had the file.
