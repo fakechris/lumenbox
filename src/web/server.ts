@@ -546,7 +546,27 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
     // A scheduled skill that named a chat reports into it. Without this a morning brief
     // ran every morning into the main conversation, which no chat reads — the automation
     // worked and nobody ever saw it.
-    deliverToChat: async (chatKey, text) => {
+    deliverToChat: async (chatKey, text, fromAgentId) => {
+      // A routine reports into its own box's rooms (INV-541). A chat nobody has driven is
+      // nobody's — a skill file may name a room the bot has never been messaged in, and
+      // that is an ordinary setup, so it is allowed. A chat that *another box's* agents
+      // have been talked to in is that box's room, and a routine over here delivering
+      // into it is the cross-box leak Octop refuses on session ownership and we had no
+      // check for at all.
+      const owner = fromAgentId === undefined ? undefined : registry.tryGet(fromAgentId);
+      if (owner !== undefined) {
+        const myBox = registry.boxOf(owner.id).id;
+        const conversation = conversationIdFor(chatKey);
+        const elsewhere = registry
+          .listBoxes()
+          .filter(box => box.id !== myBox)
+          .some(box => registry.agentsIn(box.id).some(agent => registry.readTranscript(agent.id, conversation).length > 0));
+        const here = registry.agentsIn(myBox).some(agent => registry.readTranscript(agent.id, conversation).length > 0);
+        if (elsewhere && !here) {
+          log(`refused: ${owner.profile.name} (box ${registry.boxOf(owner.id).name}) tried to report into ${chatKey}, which is another box's room`);
+          return;
+        }
+      }
       log(`scheduled report → ${chatKey}`);
       await chats?.pushToChat(chatKey, text);
     },
