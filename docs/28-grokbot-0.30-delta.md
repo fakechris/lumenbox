@@ -1,3 +1,9 @@
+<!-- doc: 28-grokbot-0.30-delta
+     title: What Grok Bot 0.30.0 changed, and what it says we should change
+     family: decision
+     status: current
+     updated: 2026-09-01
+-->
 # What Grok Bot 0.30.0 changed, and what it says we should change
 
 Status: **written 2026-09-01** from a source-level re-analysis of the installed app and

@@ -1,3 +1,10 @@
+<!-- doc: 04-design
+     title: Design
+     family: spec
+     status: current
+     domain: mechanisms
+     updated: 2026-08-22
+-->
 # Design
 
 The mechanisms, in enough detail to change them safely. Each section says what the thing does,

@@ -1,3 +1,9 @@
+<!-- doc: 14-from-outside-reading
+     title: Ideas taken from outside reading
+     family: decision
+     status: current
+     updated: 2026-08-26
+-->
 # Ideas taken from outside reading
 
 A running record of things worth building that came from somewhere other than this

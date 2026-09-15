@@ -1,3 +1,9 @@
+<!-- doc: 30-multi-box
+     title: Many boxes, one host: the multi-box mode
+     family: decision
+     status: current
+     updated: 2026-09-14
+-->
 # Many boxes, one host: the multi-box mode
 
 Status: **design, first version, 2026-09-02**, written the day the second box appeared.

@@ -1,3 +1,9 @@
+<!-- doc: 13-design-review
+     title: What goes to adversarial review before it is built
+     family: guide
+     status: current
+     updated: 2026-08-25
+-->
 # What goes to adversarial review before it is built
 
 Written after a single day in which one decision — what identifies a conversation — was

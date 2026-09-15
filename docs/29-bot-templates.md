@@ -1,3 +1,9 @@
+<!-- doc: 29-bot-templates
+     title: Bot templates: the bot packs itself, the new bot installs itself
+     family: decision
+     status: current
+     updated: 2026-09-14
+-->
 # Bot templates: the bot packs itself, the new bot installs itself
 
 Status: **design, second version, 2026-09-02.** v1 (same day) put a checkbox picker and a

@@ -1,3 +1,9 @@
+<!-- doc: 40-chat-area
+     title: The chat area: what a person can do with a message
+     family: decision
+     status: current
+     updated: 2026-09-08
+-->
 # The chat area: what a person can do with a message
 
 Status: **design + first slice, 2026-09-08.** Chris: "the chat in the middle has no copy or

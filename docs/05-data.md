@@ -1,3 +1,10 @@
+<!-- doc: 05-data
+     title: Data
+     family: spec
+     status: current
+     domain: storage
+     updated: 2026-09-01
+-->
 # Data
 
 There is no database. The data model is the filesystem, and that is a decision with real

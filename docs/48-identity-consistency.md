@@ -1,3 +1,9 @@
+<!-- doc: 48-identity-consistency
+     title: One person across channels
+     family: decision
+     status: current
+     updated: 2026-09-10
+-->
 # 48 · One person across channels
 
 *2026-09-09. Making a person's DingTalk, Feishu and web identities resolve to one person, so

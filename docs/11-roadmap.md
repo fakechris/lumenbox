@@ -1,3 +1,10 @@
+<!-- doc: 11-roadmap
+     title: Roadmap and backlog
+     family: spec
+     status: current
+     domain: roadmap
+     updated: 2026-09-14
+-->
 # Roadmap and backlog
 
 Everything deferred on purpose, in one place, ranked. The ranking lens is the one used

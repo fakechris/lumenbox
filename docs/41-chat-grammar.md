@@ -1,3 +1,9 @@
+<!-- doc: 41-chat-grammar
+     title: The chat column, rebuilt: one grammar for everything that appears in it
+     family: decision
+     status: current
+     updated: 2026-09-08
+-->
 # The chat column, rebuilt: one grammar for everything that appears in it
 
 Status: **design + stage one, 2026-09-08.** Chris, with three screenshots: a finished plan

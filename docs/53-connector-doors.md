@@ -1,4 +1,10 @@
-# 36 — Connector doors: the SaaS integrations a third-party template names, on by credential
+<!-- doc: 53-connector-doors
+     title: Connector doors: the SaaS integrations a third-party template names, on by credential
+     family: decision
+     status: current
+     updated: 2026-09-14
+-->
+# 53 — Connector doors: the SaaS integrations a third-party template names, on by credential
 
 **Status: built, 2026-09-06.** `src/host/mcp-connectors.ts` (the catalog, env gating, merge,
 `connectorSatisfied`), `src/host/mcp.ts` `RemoteMcpServer` (Streamable HTTP — the transport

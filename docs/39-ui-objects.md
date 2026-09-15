@@ -1,3 +1,9 @@
+<!-- doc: 39-ui-objects
+     title: The objects a person can see: box, agent, template
+     family: decision
+     status: current
+     updated: 2026-09-07
+-->
 # The objects a person can see: box, agent, template
 
 Status: **design, first version, 2026-09-08.** Written after two days of watching Grok Bot's

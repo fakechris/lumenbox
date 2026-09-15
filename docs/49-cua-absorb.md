@@ -1,3 +1,9 @@
+<!-- doc: 49-cua-absorb
+     title: 吸收四个 CUA 项目：操作有证据、不可逆有门、接管即教学、经验可共享
+     family: decision
+     status: current
+     updated: 2026-09-14
+-->
 # 49. 吸收四个 CUA 项目：操作有证据、不可逆有门、接管即教学、经验可共享
 
 日期：2026-09-10。来源：`research/grokbot/RESEARCH_CUA_FOUR_PROJECTS.md`（browser-use-pi、huashu-chrome、huashu-mac-use、ego-lite 逐个 review 与 feature matrix），以及 Grok Bot 0.30 的 `learn-from-demonstration` 托管 skill。

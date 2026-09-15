@@ -1,3 +1,9 @@
+<!-- doc: 47-jumpbox-audit
+     title: Jump-box behaviour audit
+     family: decision
+     status: current
+     updated: 2026-09-11
+-->
 # 47 · Jump-box behaviour audit
 
 *2026-09-09. A disclosed audit trail for a company operations jump box, and the line between that

@@ -1,3 +1,9 @@
+<!-- doc: 36-enterprise
+     title: The enterprise use case, and the editions that share one core
+     family: decision
+     status: current
+     updated: 2026-09-11
+-->
 # The enterprise use case, and the editions that share one core
 
 Status: **design, first version, 2026-09-03.** The owner's directive, twice

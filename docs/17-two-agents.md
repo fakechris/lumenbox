@@ -1,3 +1,9 @@
+<!-- doc: 17-two-agents
+     title: Two agents on one repository
+     family: guide
+     status: current
+     updated: 2026-08-26
+-->
 # Two agents on one repository
 
 Written because there are already two, and the conflict is not hypothetical: on
