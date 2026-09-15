@@ -122,6 +122,8 @@ export interface ToolContext {
     options?: string[];
     /** What the agent does if the person moves on without answering. */
     fallback?: string;
+    /** How long the question is open before the default (or a skip) is applied. */
+    expiresInMinutes?: number;
     conversation?: string;
   }) => Promise<string | undefined>;
   /**
@@ -906,7 +908,12 @@ export function buildTools(
               type: "string",
               description:
                 "What you will do if they move on without answering — one sentence. Always " +
-                "give one; a question with no default is a stall.",
+                "give one; a question with no default is a stall. If nobody answers within the " +
+                "window, you are woken to proceed on it.",
+            },
+            expires_in_minutes: {
+              type: "number",
+              description: "How long to wait for an answer before proceeding on the default (or, with none, deciding yourself). Default 240; at most a week.",
             },
           },
           required: ["question"],
@@ -3130,6 +3137,7 @@ export async function dispatchTool(
         question,
         ...(options !== undefined && options.length > 0 ? { options } : {}),
         ...(fallback !== undefined ? { fallback } : {}),
+        ...(typeof input.expires_in_minutes === "number" && Number.isFinite(input.expires_in_minutes) ? { expiresInMinutes: input.expires_in_minutes } : {}),
         ...(context.conversation !== undefined ? { conversation: context.conversation } : {}),
       });
       if (where === undefined) {

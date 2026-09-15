@@ -192,6 +192,8 @@ import { Vault, type Grant } from "../host/vault.ts";
 import { OAuthGate } from "../host/oauth.ts";
 import { MemoryAdmin } from "../host/memory-admin.ts";
 import { ConnectCodeStore } from "../box/connect-codes.ts";
+import { QuestionWatch } from "../host/question-expiry.ts";
+import { appendLine } from "../host/jsonl.ts";
 import { seedStarterSkills } from "../host/starter-skills.ts";
 import { firstRunCue } from "../host/prompt.ts";
 import { readBoxToken } from "../box/docker.ts";
@@ -233,6 +235,7 @@ type OutboundEvent =
   | { type: "error"; message: string }
   /** An agent asked the person something; the page shows a card with the answers as buttons. */
   | { type: "question"; agentId: string; agentName: string; question: string; options?: string[]; fallback?: string; conversation?: string }
+  | { type: "question_expired"; agentId: string; agentName: string; question: string; verdict: "default" | "skipped" }
   /** One line of docker output while the box is brought up from the page. */
   | { type: "box_setup"; line: string; done?: boolean; ok?: boolean }
   /** An approval was just created; the desktop shell turns this into a notification. */
@@ -457,6 +460,9 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
   // Connection codes and runner credentials (INV-434): how a machine elsewhere becomes a
   // box here. Codes and credentials are stored hashed and never logged.
   const connectCodes = new ConnectCodeStore(join(agentboxHome(), "connect.json"), registry.box.id);
+  // Questions that expire (INV-526): every AskUser is watched; unanswered past its window,
+  // the agent is woken to proceed on its default or to decide, and the chat is told.
+  const questions = new QuestionWatch();
 
   // Channel task cards listen here while their ask is in flight: each listener is a
   // narrow filter on (agent, conversation), added before the prompt and removed after
@@ -512,6 +518,14 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
         ...(input.conversation !== undefined ? { conversation: input.conversation } : {}),
       });
       const where = chats?.askQuestion(input);
+      questions.ask({
+        agentId: input.agentId,
+        agentName: input.agentName,
+        conversation: input.conversation ?? "main",
+        question: input.question,
+        ...(input.fallback !== undefined ? { fallback: input.fallback } : {}),
+        ...(input.expiresInMinutes !== undefined ? { ttlMs: input.expiresInMinutes * 60_000 } : {}),
+      });
       // The page is always a place an answer can come from, so a question is never
       // undeliverable while somebody could be looking at it.
       return where ?? "in the app";
@@ -1684,6 +1698,29 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
   // Said once per transition, not once per check: a warning repeated every ten minutes is
   // one people filter out, including on the occasion it is true.
   const channelState = new Map<string, string>();
+  // Expired questions, once a minute: answered means the person spoke in that
+  // conversation after the ask (the transcript says); otherwise the agent is woken with
+  // the default or the skip, the chat hears one line, and the ledger keeps the verdict.
+  const questionTimer = setInterval(() => {
+    const answeredSince = (q: { agentId: string; conversation: string; askedAt: number }): boolean => {
+      if (!registry.has(q.agentId)) return true;
+      const entries = registry.readTranscript(q.agentId, q.conversation === "main" ? undefined : q.conversation) as { role?: string; kind?: string; text?: unknown; at?: string }[];
+      return entries.some(entry => entry.role === "user" && entry.kind === undefined && typeof entry.text === "string" && entry.at !== undefined && Date.parse(entry.at) > q.askedAt);
+    };
+    for (const expiry of questions.sweep(answeredSince)) {
+      if (expiry.verdict === "answered") continue;
+      const { question } = expiry;
+      log(`question: ${question.agentName}'s "${question.question.slice(0, 60)}" expired unanswered → ${expiry.verdict}`);
+      appendLine(join(agentboxHome(), "questions.jsonl"), JSON.stringify({ at: new Date().toISOString(), agentId: question.agentId, conversation: question.conversation, question: question.question, askedAt: new Date(question.askedAt).toISOString(), verdict: expiry.verdict, ...(question.fallback !== undefined ? { fallback: question.fallback } : {}) }));
+      chats?.tellAsker(question.agentId, expiry.toChat);
+      broadcast({ type: "question_expired", agentId: question.agentId, agentName: question.agentName, question: question.question, verdict: expiry.verdict });
+      void orchestrator
+        .prompt(question.agentId, expiry.cue, undefined, { conversation: question.conversation, steerable: false, lane: "background", synthetic: true })
+        .catch(error => log(`question: could not wake ${question.agentName} after expiry (${error instanceof Error ? error.message : String(error)})`));
+    }
+  }, 60_000);
+  questionTimer.unref();
+
   const livenessTimer = setInterval(() => {
     void (async () => {
       // Repair before report. The health check tells an operator that a socket looks
