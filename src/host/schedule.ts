@@ -570,7 +570,12 @@ export interface SchedulerDeps {
    * hands it over rather than resolving it, because which conversation a chatKey means
    * and how a reply reaches it are the caller's business, not the clock's.
    */
-  run: (agent: string, prompt: string, deliver?: string) => Promise<void>;
+  run: (agent: string, prompt: string, deliver?: string, slug?: string) => Promise<void>;
+  /**
+   * What a routine committed to last time and where it stands (INV-528), prepended to
+   * its prompt so a retro opens with its own previous "next week" rather than a blank.
+   */
+  priorCommitments?: (slug: string) => string | undefined;
   /** Who a schedule wakes when it names nobody. */
   /** The agent a skill runs as when its file names none: the box's first, or the installation's. */
   defaultAgent: (boxId?: string) => string | undefined;
@@ -803,11 +808,13 @@ export class Scheduler {
       this.record(skill.slug, "started", { agent });
       this.log(`${skill.name}: firing (${describeSchedule(skill.schedule)})`);
 
+      const prior = this.deps.priorCommitments?.(skill.slug);
       void this.deps
         .run(
           agent,
-          triggerPrompt(skill.name, skill.path, describeSchedule(skill.schedule), skill.deliver),
-          skill.deliver
+          triggerPrompt(skill.name, skill.path, describeSchedule(skill.schedule), skill.deliver) + (prior !== undefined ? `\n\n${prior}` : ""),
+          skill.deliver,
+          skill.slug
         )
         .catch(error => {
           // Reported and dropped. A scheduled run that failed will come round again, and retrying
