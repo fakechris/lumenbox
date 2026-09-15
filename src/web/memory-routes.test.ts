@@ -1,7 +1,9 @@
 /**
- * The memory routes (INV-426) through the real server: a driver sees the agents they
- * may drive and not a private one; a viewer sees the summary and cannot change; a stale
- * version is a 409 with the current line; and a change is recalled by the next read.
+ * The memory routes (INV-426) through the real server: a driver sees the agents in the
+ * boxes they are in — and not one in a box they are not, which is what replaced the
+ * retired per-agent `visibility` (INV-540, docs/22 §3); a viewer cannot read what agents
+ * remember about people at all; a stale version is a 409 with the current line; and a
+ * change is recalled by the next read.
  */
 
 import { test } from "node:test";
@@ -23,7 +25,18 @@ test("memory is browsed by what the caller may drive, changed with a version, re
   try {
     const registry = new AgentRegistry(join(home, "agents"));
     const ada = registry.create({ name: "Ada", boxId: registry.box.id }).id;
-    const secret = registry.create({ name: "Secret", boxId: registry.box.id, visibility: "private", ownerUserId: "someone-else" }).id;
+    // In a box of its own, whose members will not include Dana: the box is the boundary.
+    const other = registry.attachBox({
+      id: "box-other",
+      name: "finance",
+      kind: "attached",
+      endpoint: { baseUrl: "http://127.0.0.1:1", tokenFile: join(home, "unused.token") },
+      displayFloor: 1,
+      workDir: "/home/box/work",
+      members: ["nobody-here"],
+      createdAt: "2026-09-01T00:00:00.000Z",
+    });
+    const secret = registry.create({ name: "Secret", boxId: other.id }).id;
     registry.appendMemoryRecords(ada, [{ at: "2026-09-01T00:00:00.000Z", kind: "fact", text: "the deploy region is eu-west-1" }]);
     registry.appendMemoryRecords(secret, [{ at: "2026-09-01T00:00:00.000Z", kind: "fact", text: "a private thing" }]);
 
@@ -39,7 +52,9 @@ test("memory is browsed by what the caller may drive, changed with a version, re
     const call = async (path: string, jar: string, body?: unknown) =>
       fetch(`${BASE}${path}`, { method: body === undefined ? "GET" : "POST", headers: { "content-type": "application/json", cookie: jar }, ...(body !== undefined ? { body: JSON.stringify(body) } : {}) });
 
-    // A1: the private agent is not in Dana's summary, and not openable by name.
+    // A1: an agent in a box Dana is not a member of is not in her summary, and not
+    // openable by name. Before INV-540 this was a per-agent flag; authority lives on the
+    // box, so the box answers it.
     const summary = (await (await call("/api/memory", dana)).json()) as { agents: { agentId: string; live: number }[] };
     assert.deepEqual(summary.agents.map(a => a.agentId), [ada]);
     assert.equal(summary.agents[0]?.live, 1);

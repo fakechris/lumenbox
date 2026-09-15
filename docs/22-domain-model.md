@@ -123,14 +123,17 @@ build items 1–4 cannot produce one; see §7.
 
 ## 3. What uniformity retires, and where the holes still are
 
-- **Per-agent `visibility`** ("who may drive this agent") — retired. This
-  **overrides docs/09 §3.2**, which kept it as accident-guard and attribution;
-  that section is superseded, not silently reinterpreted. `ownerUserId` survives
-  only as attribution (whose creation is this), never as a gate. Note the live
-  violation: web authorization **denies today** on `visibility` plus
-  `ownerUserId` (`src/web/auth.ts`), so two Principals in one box already get
-  different drive decisions — retiring the field means removing that check, not
-  just the schema.
+- **Per-agent `visibility`** ("who may drive this agent") — retired, and as of
+  2026-09-15 retired *in the code* (INV-540). This **overrides docs/09 §3.2**,
+  which kept it as accident-guard and attribution; that section is superseded,
+  not silently reinterpreted. `ownerUserId` survives only as attribution (whose
+  creation is this), never as a gate. `refusalToDrive` no longer takes an agent;
+  what separates two people is a box's `members` (INV-538, `mayEnterBox`), asked
+  by the same callers immediately after the role check, and the memory listing
+  filters by the same rule. The live violation this paragraph used to record —
+  two Principals in one box getting different drive decisions — is gone, with
+  `auth.test.ts` pinning that two drivers get the same answer about the same
+  work.
 - **Per-agent scope/secret grants** — retired as a design subject. Today
   `RunOnHost` authorizes secrets off the calling agent's mutable `scopeId`
   (`src/host/tools.ts`), so two agents in one box demonstrably differ in secret

@@ -148,19 +148,20 @@ export interface AgentProfile {
   /**
    * The person who created it, when the box was told who that was.
    *
-   * Undefined for an agent made before this existed, or by an automation, or on a box driven
-   * directly with no gateway in front. Absent means shared, which is the right default: the reason a
-   * tenant is a team is that agents work together, and defaulting to private would mean every
-   * collaboration starts with a permissions change.
+   * Attribution, never a gate (INV-540): "whose creation is this", shown on the card and
+   * used for nothing else. Undefined for an agent made before this existed, by an
+   * automation, or on a box driven directly with no gateway in front.
    */
   ownerUserId?: string;
   /**
-   * Who may drive it.
+   * Kept, and no longer a gate (INV-540).
    *
-   * **Not a security boundary**, and the code says so where the check is made. Everyone in a tenant
-   * shares a filesystem and passwordless sudo, so a determined member can read another member's
-   * transcript from a shell. This prevents accidents and answers "whose agent is this" — see
-   * docs/09-tenancy.md §3.2.
+   * It was "who may drive this agent", which docs/22 §3 retired: authority lives on the
+   * box, and every agent in a box is equal. The web check that still read it is gone, and
+   * a box's `members` is what separates two people now (INV-538). The field survives
+   * because installations have it written in their agent records and because a card may
+   * still say "private", meaning *made for one person* — a label about intent, not a
+   * permission.
    */
   visibility?: "shared" | "private";
   /**
