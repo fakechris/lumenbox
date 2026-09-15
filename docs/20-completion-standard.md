@@ -1,3 +1,9 @@
+<!-- doc: 20-completion-standard
+     title: The standard of completion, written before the work
+     family: decision
+     status: current
+     updated: 2026-09-14
+-->
 # The standard of completion, written before the work
 
 Status: **design awaiting adversarial review** (docs/13 triggers 3, 4 and 5: it changes

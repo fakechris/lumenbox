@@ -1,3 +1,9 @@
+<!-- doc: 12-upgrades
+     title: Upgrading somebody's box
+     family: guide
+     status: current
+     updated: 2026-08-24
+-->
 # Upgrading somebody's box
 
 An upgrade here is not a package update. The image is rebuilt and the container is

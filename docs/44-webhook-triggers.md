@@ -1,3 +1,9 @@
+<!-- doc: 44-webhook-triggers
+     title: Webhook triggers
+     family: decision
+     status: current
+     updated: 2026-09-14
+-->
 # 44 · Webhook triggers
 
 *2026-09-09. A URL per routine, so anything that can make an HTTP request can set an agent

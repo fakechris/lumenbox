@@ -1,3 +1,11 @@
+<!-- doc: 09-tenancy
+     title: Tenancy: teams, users, and who may drive which agent
+     family: decision
+     status: superseded
+     superseded-by: 22-domain-model
+     why: §3 retires per-agent visibility; §0 sets uniformity
+     updated: 2026-08-19
+-->
 # Tenancy: teams, users, and who may drive which agent
 
 Written before it is built, and marked where it is a design claim rather than a measured one.

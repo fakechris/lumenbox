@@ -1,3 +1,9 @@
+<!-- doc: 24-context-memory
+     title: Context, memory and compaction: ours, against Hermes and OpenClaw
+     family: decision
+     status: current
+     updated: 2026-09-14
+-->
 # Context, memory and compaction: ours, against Hermes and OpenClaw
 
 Status: **third version — ranking re-attacked after absorbing Codex + Grok-1**

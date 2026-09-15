@@ -1,3 +1,9 @@
+<!-- doc: 34-extensions
+     title: Extensions: the edges you can edit without restarting the core (R36)
+     family: decision
+     status: current
+     updated: 2026-09-03
+-->
 # 34 — Extensions: the edges you can edit without restarting the core (R36)
 
 **Status: built 2026-09-03.** The third and last seam R36 asked for, after hooks (Claude Code's

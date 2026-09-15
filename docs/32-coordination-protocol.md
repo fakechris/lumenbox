@@ -1,3 +1,9 @@
+<!-- doc: 32-coordination-protocol
+     title: Coordination as protocol, slice one: a fork ledger that survives restarts, and fenced children
+     family: decision
+     status: current
+     updated: 2026-09-03
+-->
 # 32 — Coordination as protocol, slice one: a fork ledger that survives restarts, and fenced children
 
 **Status: v2 after hostile review, 2026-09-03 — built the same day (`feat/r30-ledger`).**

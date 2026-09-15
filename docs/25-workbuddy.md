@@ -1,3 +1,9 @@
+<!-- doc: 25-workbuddy
+     title: Workbuddy: skills, presets, delegated engines — the hands-on program
+     family: decision
+     status: current
+     updated: 2026-09-03
+-->
 # Workbuddy: skills, presets, delegated engines — the hands-on program
 
 Status: **charter + recon, 2026-08-29 end of session.** The owner's directive:

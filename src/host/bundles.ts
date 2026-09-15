@@ -41,7 +41,7 @@ export interface Bundle {
   skills?: string[];
   /** Names of `config.json` mcpServers entries. Stored; read by INV-439. */
   mcpServers?: string[];
-  /** Connector slugs (docs/37). Stored; read by INV-439. */
+  /** Connector slugs (docs/53). Stored; read by INV-439. */
   connectors?: string[];
   /** Vault secret ids the box's agents may resolve. */
   secretIds: string[];

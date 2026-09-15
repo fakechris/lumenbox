@@ -1,3 +1,9 @@
+<!-- doc: 43-scenarios
+     title: Episodes as tests
+     family: decision
+     status: current
+     updated: 2026-09-14
+-->
 # 43 · Episodes as tests
 
 *2026-09-09. Why conduct regressions keep reaching the person first, and the two harnesses that

@@ -1,3 +1,9 @@
+<!-- doc: 33-mcp-face
+     title: The box gets an MCP face: a per-job route on the host, never a credential in the box
+     family: decision
+     status: current
+     updated: 2026-09-03
+-->
 # 33 — The box gets an MCP face: a per-job route on the host, never a credential in the box
 
 **Status: v2 after hostile review, 2026-09-03 (R29, docs/11 "needed" #2) — built the same day

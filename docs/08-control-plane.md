@@ -1,3 +1,10 @@
+<!-- doc: 08-control-plane
+     title: Control plane
+     family: spec
+     status: current
+     domain: control-plane
+     updated: 2026-09-12
+-->
 # Control plane
 
 Design for the multi-user system: many people, each with a box allocated on demand. Written

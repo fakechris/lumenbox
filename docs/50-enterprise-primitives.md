@@ -1,3 +1,9 @@
+<!-- doc: 50-enterprise-primitives
+     title: 企业级 agent 的高层规划：原语、数据、控制、记忆、审计、运行时
+     family: decision
+     status: current
+     updated: 2026-09-14
+-->
 # 50. 企业级 agent 的高层规划：原语、数据、控制、记忆、审计、运行时
 
 日期：2026-09-10。输入：白宦成《Claude Tag 产品分析》（ixiqin.com，2026-09-10）、first-tree-ai/opentag 源码深读（/tmp/cua-review/opentag，Apache-2.0，41 个 migration、334 个测试文件、单 squash commit）、我们自己 docs/08、09、22、24、35、36、37、45、47 与 src 的盘点。
@@ -45,7 +51,7 @@ opentag 是"Claude Code in Slack"而不是 Claude Tag：Slack/Lark 事件路由�
 | Repositories | 无一等对象；Scope.filesRoot 声明未强制 | src/host/scopes.ts | 缺 | 我们给整台机器，不给 repo 授权 |
 | Domains | egress relay 的全局 allow 列表；Scope.egressHosts 声明未强制 | src/egress/relay.ts | 部分 | 按 relay 不按 box/租户（docs/10 S-8） |
 | Plugins | skills + MCP + connector doors + extensions + hooks | docs/26、34、37 | 已有 | installation 级，按 agent 收窄；没有挂在地方上的 bundle |
-| Credentials | connector door = 一个 MCP server 由 env var 门控；vault secrets 按 agent/principal 授予，只经 RunOnHost | src/host/mcp-connectors.ts、vault.ts、docs/37 | 已有 | **无 OAuth 流程**，凭据是运营者的 env var |
+| Credentials | connector door = 一个 MCP server 由 env var 门控；vault secrets 按 agent/principal 授予，只经 RunOnHost | src/host/mcp-connectors.ts、vault.ts、docs/53 | 已有 | **无 OAuth 流程**，凭据是运营者的 env var |
 | Access Bundle | Scope（tools、secretIds、egressHosts、filesRoot、chats） | src/host/scopes.ts、docs/11 R4 | 部分 | 扁平、无继承无并集；docs/22 §3 已把 agent/chat 绑定 scope 判为建模错误 |
 | Custom Instructions | agent persona 四段 + base/conduct/front/box/profile | src/host/prompt.ts | 仅 per-agent | 指令挂在工人上，不挂在房间或门上 |
 | Memory | per-agent 类型化 JSONL + installation 级 shared shards + `about:<principal>` 标签；镜像进 box 为 profile.md；R17 project tier 仅设计 | src/host/memory.ts、docs/24 | 已有 | scope 是 agent / installation / 人，不是 workspace / channel；shared memory 没有 box 过滤；无浏览编辑 UI |
@@ -87,7 +93,7 @@ Claude Tag 的 Workspace 是一个权限文件夹加一个运行环境，Channel
 
 - G1 **Bundle 对象与两级挂载**：`bundles/<name>.json` = {skills, mcpServers, connectors, secretIds, egressHosts, instructions}；installation 级默认 bundle + box 级 bundle 列表；agent 生效能力 = box 并集 ∩ agent.tools 收窄；docs/22 §3 的 Scope 迁移到 bundle。验收：同一 skill 在两个 box 分别启停；agent 看到的工具集随 box 变化；scope 文件全部迁完。
 - G2 **Bundle 叠加与模板引用**：一个 box 可挂多个 bundle 并集生效；docs/29 模板导出时只写 bundle 名，导入方按名匹配或提示缺失（延续"agent 自己判断"的原则）。
-- G3 **Connector 的 OAuth 门**：docs/37 的 connector door 增加 OAuth authorization-code 与 client-credentials 两种授权，token 存 vault，按 bundle 授予；agent 得到的是预制的请求方式而不是 token（与 CUA 计划的 fill_secret 同一原则）。验收：GitHub 与飞书任一走完授权后 agent 能调用；transcript 无 token。
+- G3 **Connector 的 OAuth 门**：docs/53 的 connector door 增加 OAuth authorization-code 与 client-credentials 两种授权，token 存 vault，按 bundle 授予；agent 得到的是预制的请求方式而不是 token（与 CUA 计划的 fill_secret 同一原则）。验收：GitHub 与飞书任一走完授权后 agent 能调用；transcript 无 token。
 - G4 **Egress domains 按 box**：relay 的 allow 列表从全局改为按 box 生效（docs/10 S-8），bundle 的 egressHosts 真正强制；被拒请求产生事件供 J3 消费。
 - G5 **本地 host environment**：用户的 Mac 作为一种没有桌面的 box（exec、文件、本地 Chrome 的 CDP；没有 Xvfb 与 computer 工具），实现上是 boxd 的 macOS 精简形态或 RunOnHost 执行面的升格。"本地 project" 不是新原语，就是 Claude Tag 的 Repositories：一条目录授权挂在该 environment 的 bundle 里。两个环境对应两个 agent，云端 agent 需要本地材料时给本地 agent 派任务（Tasks + team），不做目录同步。策略上本地 environment 是 host 级：写操作默认审批，规则放行只读与指定目录。验收：在 Mac 上注册本地 environment，建一个人格的本地实例，它只能在授权目录内读写，越界被拒且进审计；云端 agent 经任务板让本地 agent 读一份本地文件并回报。
 - G6 **MCP 条目按 bundle 分配并带 host 级标记**：`config.json mcpServers` 的条目可被 bundle 引用而只对某些 box 可见；本地 stdio 的 MCP（如用户自己维护的知识库 bot）标为 host 级，写类工具走审批或 I1 规则。验收：同一本地 MCP 对一个 box 可见对另一个不可见；其写工具触发审批，读工具经规则放行。

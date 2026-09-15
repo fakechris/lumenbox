@@ -1,3 +1,9 @@
+<!-- doc: 45-teams
+     title: Teams
+     family: decision
+     status: current
+     updated: 2026-09-09
+-->
 # 45 · Teams
 
 *2026-09-09. Grouping agents once there are too many to scan. Companion to docs/39 (objects a

@@ -1,3 +1,9 @@
+<!-- doc: 51-follow-through
+     title: 跟进（follow-through）：问题、承诺与挂着的工作如何不再无声
+     family: decision
+     status: current
+     updated: 2026-09-15
+-->
 # 51 · 跟进（follow-through）：问题、承诺与挂着的工作如何不再无声
 
 *2026-09-14。起因是线上一份周报：Q1–Q5 挂了四周没人答，"9/11 前发 reminder"写了没发，t12 该关没关，review 队列四条挂一两周。本文给出我们自己的高层方案，先说别的系统怎么做，再说已经落地的东西，最后是把这些拧成一个模型的设计。*

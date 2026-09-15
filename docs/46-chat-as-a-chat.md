@@ -1,3 +1,9 @@
+<!-- doc: 46-chat-as-a-chat
+     title: The chat is a chat
+     family: decision
+     status: current
+     updated: 2026-09-09
+-->
 # 46 · The chat is a chat
 
 *2026-09-09. Why the conversation read as a web page, and the three things every chat people

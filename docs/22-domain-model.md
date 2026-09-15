@@ -1,3 +1,10 @@
+<!-- doc: 22-domain-model
+     title: The domain model: people, doors, workers, rooms
+     family: spec
+     status: current
+     domain: identity-and-authority
+     updated: 2026-09-11
+-->
 # The domain model: people, doors, workers, rooms
 
 Status: **draft, fifth version.** v1 lost its invariant to a set nobody can

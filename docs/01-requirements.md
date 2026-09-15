@@ -1,3 +1,10 @@
+<!-- doc: 01-requirements
+     title: Requirements
+     family: spec
+     status: current
+     domain: requirements
+     updated: 2026-08-22
+-->
 # Requirements
 
 Written from what the system is for, not from what it currently does. Where the two differ,

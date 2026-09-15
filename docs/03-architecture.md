@@ -1,3 +1,10 @@
+<!-- doc: 03-architecture
+     title: Architecture
+     family: spec
+     status: current
+     domain: architecture
+     updated: 2026-09-07
+-->
 # Architecture
 
 ## 1. Shape

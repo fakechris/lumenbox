@@ -1,3 +1,9 @@
+<!-- doc: 23-context-compaction
+     title: Why the agent kept compacting, and what long-horizon systems do instead
+     family: decision
+     status: current
+     updated: 2026-09-14
+-->
 # Why the agent kept compacting, and what long-horizon systems do instead
 
 Status: **investigation closed, root cause fixed 2026-08-29; refinements listed.**

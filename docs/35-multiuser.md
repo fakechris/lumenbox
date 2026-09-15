@@ -1,3 +1,11 @@
+<!-- doc: 35-multiuser
+     title: Multiuser: doors as login, the org as the roster, boxes as the boundary
+     family: decision
+     status: superseded
+     superseded-by: 36-enterprise
+     why: §4 revises the stage plan; §0 answers the edition question
+     updated: 2026-09-03
+-->
 # Multiuser: doors as login, the org as the roster, boxes as the boundary
 
 Status: **charter + design, first version, 2026-09-03.** This is the workstream

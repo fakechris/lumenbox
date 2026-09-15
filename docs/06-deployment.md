@@ -1,3 +1,9 @@
+<!-- doc: 06-deployment
+     title: Deployment
+     family: guide
+     status: current
+     updated: 2026-09-07
+-->
 # Deployment
 
 ## 1. Requirements

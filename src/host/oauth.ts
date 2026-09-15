@@ -15,7 +15,7 @@
  * from an echoing endpoint. A token whose `expiresAt` has passed is refreshed before
  * it is handed to a request; the model never learns a token was ever stale.
  *
- * The gate keeps the values in the vault (docs/37 §4), so grants, audit and the
+ * The gate keeps the values in the vault (docs/53 §4), so grants, audit and the
  * bundle rule (a box's bundles grant a secret, INV-420) apply to a token exactly as to
  * a pasted key. What the gate adds is the minting and the re-minting.
  */

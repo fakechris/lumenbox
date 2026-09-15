@@ -1,3 +1,9 @@
+<!-- doc: 52-multiuser-and-product
+     title: 多用户与产品面：一次对账与打磨
+     family: decision
+     status: current
+     updated: 2026-09-14
+-->
 # 52 · 多用户与产品面：一次对账与打磨
 
 *2026-09-15。起因：读完 Octop（TencentCloud 的自托管多用户 assistant）之后，Chris 说

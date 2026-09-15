@@ -1,3 +1,9 @@
+<!-- doc: 37-onboarding
+     title: Getting started, every way in
+     family: guide
+     status: current
+     updated: 2026-09-05
+-->
 # 37 — Getting started, every way in
 
 What a person does on day one, path by path. The README says the short version; this is the
