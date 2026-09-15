@@ -5109,6 +5109,17 @@ function refreshTasks() {
           ? ' <span class="chip" style="font-size:10px">proposed</span>' +
             ' <button class="btn sm accent" data-commit="' + esc(t.id) + '" title="Make this proposal real work: agents may take it after you commit">Commit</button>'
           : "";
+        // Due, ageing and a pending close (INV-527/529): said on the row, so an overdue or
+        // idle task is not one more line that looks like every other.
+        var live = t.status !== "done" && t.status !== "dropped";
+        var overdue = live && t.due && Date.parse(t.due) < Date.now();
+        var dueChip = t.due ? ' <span class="chip" style="font-size:10px' + (overdue ? ';color:var(--danger)' : '') + '" title="due">' + (overdue ? "overdue " : "due ") + esc(String(t.due).slice(0, 10)) + "</span>" : "";
+        var agingChip = live && t.aging ? ' <span class="chip" style="font-size:10px;color:var(--warn)" title="nudged ' + t.aging.nudges + ' time(s), ' + esc(t.aging.reason) + '">nudged ' + t.aging.nudges + "/2</span>" : "";
+        var closeChip = live && t.closeProposal
+          ? ' <span class="chip" style="font-size:10px;color:var(--warn)" title="' + esc(t.closeProposal.reason) + '">close proposed by ' + esc(nameOf(t.closeProposal.by)) + ", closes " + esc(String(t.closeProposal.decideBy).slice(0, 16).replace("T", " ")) + "</span>" +
+            ' <button class="btn ghost sm" data-oppose="' + esc(t.id) + '">Keep open</button>'
+          : "";
+        proposed += dueChip + agingChip + closeChip;
         return '<div style="padding:10px 16px;border-bottom:1px solid var(--border)' +
             (open ? ";background:var(--surface)" : "") + '">' +
           '<div style="display:flex;gap:9px;align-items:baseline">' +
@@ -5132,6 +5143,16 @@ function refreshTasks() {
     })
     .catch(function () {});
 }
+
+document.getElementById("tasklist").addEventListener("click", function (event) {
+  var id = event.target.getAttribute && event.target.getAttribute("data-oppose");
+  if (!id) return;
+  event.preventDefault();
+  fetch("/api/tasks/oppose-close", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ id: id, note: "kept open from the board" }) })
+    .then(function (r) { return r.json(); })
+    .then(function (d) { if (d.error) alert(d.error); renderTasks(); })
+    .catch(function () {});
+});
 
 $("taskadd").onclick = function () {
   var title = $("tasknew").value.trim();

@@ -236,6 +236,7 @@ type OutboundEvent =
   /** An agent asked the person something; the page shows a card with the answers as buttons. */
   | { type: "question"; agentId: string; agentName: string; question: string; options?: string[]; fallback?: string; conversation?: string }
   | { type: "question_expired"; agentId: string; agentName: string; question: string; verdict: "default" | "skipped" }
+  | { type: "task_aging"; taskId: string; title: string; kind: "nudge" | "archived" | "closed"; text: string }
   /** One line of docker output while the box is brought up from the page. */
   | { type: "box_setup"; line: string; done?: boolean; ok?: boolean }
   /** An approval was just created; the desktop shell turns this into a notification. */
@@ -1720,6 +1721,20 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
     }
   }, 60_000);
   questionTimer.unref();
+  // The board's ageing (INV-527) and close proposals (INV-529), hourly: overdue or idle
+  // tasks nudge their requester where the task lives, twice, then are archived; a close
+  // nobody objected to in time closes. Each event is one line where the task came from.
+  const boardTimer = setInterval(() => {
+    const board = orchestrator.tasks;
+    if (board === undefined) return;
+    for (const event of [...board.age(), ...board.settleCloseProposals()]) {
+      log(`tasks: ${event.text}`);
+      const conversation = event.task.conversation;
+      if (conversation !== undefined && conversation.includes(":") && chats !== undefined) void chats.pushToChat(conversation, event.text).catch(() => {});
+      broadcast({ type: "task_aging", taskId: event.task.id, title: event.task.title, kind: event.kind, text: event.text });
+    }
+  }, 3_600_000);
+  boardTimer.unref();
 
   const livenessTimer = setInterval(() => {
     void (async () => {
@@ -3421,6 +3436,7 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
                 ? { title: body.title }
                 : {}),
               ...(typeof body.description === "string" ? { description: body.description } : {}),
+              ...(typeof body.due === "string" ? { due: body.due.trim() === "" ? null : body.due } : {}),
             },
             caller.userId ?? "web"
           );
@@ -3429,6 +3445,28 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
             return;
           }
           send(res, 200, { task: updated.task, ...(updated.coerced ? { note: updated.coerced } : {}) });
+          return;
+        }
+        // A close proposal (INV-529) and its objection: the assignee's way of not waiting
+        // on a requester who has moved on, and the requester's way of saying no.
+        if (route === "POST /api/tasks/propose-close" || route === "POST /api/tasks/oppose-close") {
+          if (refused()) return;
+          const board = orchestrator.tasks;
+          if (board === undefined) {
+            send(res, 503, { error: "No task board on this installation." });
+            return;
+          }
+          const body = await readJson(req);
+          const who = caller.userId ?? "web";
+          const result =
+            route === "POST /api/tasks/propose-close"
+              ? board.proposeClose(String(body.id ?? ""), who, String(body.reason ?? ""))
+              : board.opposeClose(String(body.id ?? ""), who, typeof body.note === "string" ? body.note : undefined);
+          if ("refused" in result) {
+            send(res, 409, { error: result.refused });
+            return;
+          }
+          send(res, 200, { task: result.task });
           return;
         }
 

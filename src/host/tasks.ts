@@ -134,10 +134,36 @@ export interface Task {
    */
   proposedBy?: string;
   conversation?: string;
+  /** When it is due, as an ISO date or instant (INV-527). Absent means no date was given. */
+  due?: string;
+  /** How often the requester has been nudged about an overdue or idle task, and when last. */
+  aging?: { nudges: number; lastNudgedAt: string; reason: "overdue" | "idle" };
+  /**
+   * An assignee's proposal to close (INV-529): the requester has until `decideBy` to
+   * object; silence closes it, and the closing says whose proposal it was.
+   */
+  closeProposal?: { by: string; at: string; reason: string; decideBy: string };
   createdAt: string;
   updatedAt: string;
   history: TaskChange[];
 }
+
+/** Idle this long with no movement, a live task is nudged. */
+export const TASK_IDLE_MS = envNumber("AGENTBOX_TASKS_IDLE_DAYS", 7) * 24 * 3_600_000;
+/** Between nudges, and after the second, before archiving. */
+export const TASK_NUDGE_GAP_MS = envNumber("AGENTBOX_TASKS_NUDGE_HOURS", 48) * 3_600_000;
+export const TASK_NUDGES_BEFORE_ARCHIVE = 2;
+/** How long a requester has to object to an assignee's close proposal. */
+export const CLOSE_PROPOSAL_MS = envNumber("AGENTBOX_TASKS_CLOSE_PROPOSAL_HOURS", 48) * 3_600_000;
+/** What a nudge offers; the answers are ordinary board moves or a reply in the thread. */
+export const NUDGE_OPTIONS = ["close", "downgrade", "continue"] as const;
+
+export type AgingEvent =
+  | { kind: "nudge"; task: Task; reason: "overdue" | "idle"; nudge: number; text: string }
+  | { kind: "archived"; task: Task; text: string }
+  | { kind: "closed"; task: Task; text: string };
+
+export const AGING_ACTOR = "aging";
 
 /**
  * How much of the request a task keeps, and what it says when it kept less.
@@ -170,6 +196,14 @@ const HARNESS_ACTORS: ReadonlySet<string> = new Set([
   "web",
   "audit-guard",
 ]);
+
+/** A due date as stored: an ISO instant, from a date or an instant; nothing for anything else. */
+export function dueOf(raw: string | undefined): string | undefined {
+  if (raw === undefined || raw.trim() === "") return undefined;
+  const text = raw.trim();
+  const t = Date.parse(/^\d{4}-\d{2}-\d{2}$/.test(text) ? `${text}T23:59:59Z` : text);
+  return Number.isNaN(t) ? undefined : new Date(t).toISOString();
+}
 
 export function clampDescription(text: string): string {
   const trimmed = text.trim();
@@ -257,6 +291,7 @@ export class TaskStore {
     contract?: TaskContract;
     /** The agent proposing, when a person has yet to commit the work. */
     proposedBy?: string;
+    due?: string;
     now?: Date;
   }): Task | undefined {
     const title = input.title.replace(/\s+/g, " ").trim().slice(0, 200);
@@ -276,6 +311,7 @@ export class TaskStore {
       ...(input.conversation !== undefined ? { conversation: input.conversation } : {}),
       ...(input.contract !== undefined ? { contract: input.contract } : {}),
       ...(input.proposedBy !== undefined ? { proposedBy: input.proposedBy } : {}),
+      ...(dueOf(input.due) !== undefined ? { due: dueOf(input.due)! } : {}),
       createdAt: at,
       updatedAt: at,
       history: [{ at, by: input.requester, status: "open", note: input.proposedBy !== undefined ? "proposed, awaiting a person's commit" : "created" }],
@@ -331,6 +367,8 @@ export class TaskStore {
       options?: string[];
       checked?: string[];
       evidence?: string[];
+      /** A due date, or null to clear it. */
+      due?: string | null;
     },
     by: string,
     run?: string,
@@ -447,9 +485,14 @@ export class TaskStore {
           ? { reviewerId: undefined }
           : { reviewerId: changes.reviewerId }
         : {}),
+      ...(changes.due !== undefined ? (changes.due === null ? { due: undefined } : dueOf(changes.due) !== undefined ? { due: dueOf(changes.due)! } : {}) : {}),
       updatedAt: at,
       history: [...task.history, change].slice(-HISTORY_LIMIT),
     };
+    // Movement by anyone but the ageing sweep answers the nudge: the count starts over.
+    if (by !== AGING_ACTOR && updated.aging !== undefined) delete updated.aging;
+    // Any move by the requester while a close is proposed is their answer to it.
+    if (updated.closeProposal !== undefined && by === task.requester) delete updated.closeProposal;
 
     this.tasks.set(id, updated);
     this.append({ kind: "task", task: updated });
@@ -457,6 +500,97 @@ export class TaskStore {
     const result = { task: this.get(id)!, ...(coerced !== undefined ? { coerced } : {}) };
     for (const listener of this.listeners) listener(result.task);
     return result;
+  }
+
+  /**
+   * The ageing sweep (INV-527): a live task past its due date, or idle for a week, gets
+   * its requester nudged — close, downgrade, or continue — at most once per gap; after
+   * two nudges with no movement it is archived as dropped, with the history saying why.
+   * Movement by anyone resets the count. Run daily by the host; idempotent within a gap.
+   */
+  age(now: Date = new Date()): AgingEvent[] {
+    const events: AgingEvent[] = [];
+    const t = now.getTime();
+    for (const task of [...this.tasks.values()]) {
+      if (!isLive(task.status) || task.proposedBy !== undefined) continue;
+      const overdue = task.due !== undefined && Date.parse(task.due) < t;
+      const idle = t - Date.parse(task.updatedAt) >= TASK_IDLE_MS;
+      if (!overdue && !idle) continue;
+      const since = task.aging === undefined ? Infinity : t - Date.parse(task.aging.lastNudgedAt);
+      if (since < TASK_NUDGE_GAP_MS) continue;
+      const reason: "overdue" | "idle" = overdue ? "overdue" : "idle";
+      const nudges = (task.aging?.nudges ?? 0) + 1;
+      if (nudges > TASK_NUDGES_BEFORE_ARCHIVE) {
+        const text = `${task.id} "${task.title}" was archived: ${reason} and no movement after ${TASK_NUDGES_BEFORE_ARCHIVE} nudges. Reopen it on the board if it still matters.`;
+        const moved = this.update(task.id, { status: "dropped", note: `archived by ageing: ${reason}, no answer to ${TASK_NUDGES_BEFORE_ARCHIVE} nudges` }, AGING_ACTOR, undefined, now);
+        if (moved !== undefined) events.push({ kind: "archived", task: moved.task, text });
+        continue;
+      }
+      const at = now.toISOString();
+      const text =
+        `${task.id} "${task.title}" is ${reason === "overdue" ? `overdue (due ${task.due})` : `idle: nothing has moved for ${Math.round((t - Date.parse(task.updatedAt)) / 86_400_000)} days`}` +
+        ` — nudge ${nudges} of ${TASK_NUDGES_BEFORE_ARCHIVE}. ${NUDGE_OPTIONS.join(" / ")}? Move it on the board or answer here; ` +
+        `with no answer it is archived after the next nudge.`;
+      const next: Task = { ...task, aging: { nudges, lastNudgedAt: at, reason }, history: [...task.history, { at, by: AGING_ACTOR, note: `nudge ${nudges}/${TASK_NUDGES_BEFORE_ARCHIVE}: ${reason}` }].slice(-HISTORY_LIMIT) };
+      this.tasks.set(task.id, next);
+      this.append({ kind: "task", task: next });
+      events.push({ kind: "nudge", task: this.get(task.id)!, reason, nudge: nudges, text });
+    }
+    return events;
+  }
+
+  /**
+   * An assignee proposes closing (INV-529): the requester has CLOSE_PROPOSAL_MS to object;
+   * their silence closes it. The one who asked for the work is not asked to do the
+   * bookkeeping, and the one who can judge it is not made to wait for a verdict nobody gives.
+   */
+  proposeClose(id: string, by: string, reason: string, now: Date = new Date()): { task: Task } | { refused: string } {
+    const task = this.tasks.get(id);
+    if (task === undefined) return { refused: `No task ${id}.` };
+    if (!isLive(task.status)) return { refused: `${id} is already ${task.status}.` };
+    if (by === task.requester) return { refused: `${id} is your own request; drop it directly instead of proposing.` };
+    const why = reason.trim().slice(0, 300);
+    if (why === "") return { refused: "A close proposal needs a reason the requester can read." };
+    const at = now.toISOString();
+    const decideBy = new Date(now.getTime() + CLOSE_PROPOSAL_MS).toISOString();
+    const next: Task = { ...task, closeProposal: { by, at, reason: why, decideBy }, updatedAt: at, history: [...task.history, { at, by, note: `proposed to close: ${why} (closes ${decideBy} unless ${task.requester} objects)` }].slice(-HISTORY_LIMIT) };
+    if (next.aging !== undefined) delete next.aging;
+    this.tasks.set(id, next);
+    this.append({ kind: "task", task: next });
+    for (const listener of this.listeners) listener(next);
+    return { task: this.get(id)! };
+  }
+
+  /** The requester (or a harness actor for them) says no: the proposal is gone, the task stays. */
+  opposeClose(id: string, by: string, note?: string, now: Date = new Date()): { task: Task } | { refused: string } {
+    const task = this.tasks.get(id);
+    if (task === undefined) return { refused: `No task ${id}.` };
+    if (task.closeProposal === undefined) return { refused: `${id} has no close proposal to object to.` };
+    if (by !== task.requester && !HARNESS_ACTORS.has(by) && by !== task.reviewerId) return { refused: `Only ${task.requester}${task.reviewerId !== undefined ? ` or ${task.reviewerId}` : ""} can object to closing ${id}.` };
+    const at = now.toISOString();
+    const next: Task = { ...task, updatedAt: at, history: [...task.history, { at, by, note: `objected to closing${note !== undefined && note.trim() !== "" ? `: ${note.trim().slice(0, 300)}` : ""}` }].slice(-HISTORY_LIMIT) };
+    delete next.closeProposal;
+    this.tasks.set(id, next);
+    this.append({ kind: "task", task: next });
+    for (const listener of this.listeners) listener(next);
+    return { task: this.get(id)! };
+  }
+
+  /** Close proposals whose window passed with no objection: closed as dropped, saying whose proposal it was. */
+  settleCloseProposals(now: Date = new Date()): AgingEvent[] {
+    const events: AgingEvent[] = [];
+    for (const task of [...this.tasks.values()]) {
+      const proposal = task.closeProposal;
+      if (proposal === undefined || !isLive(task.status) || Date.parse(proposal.decideBy) > now.getTime()) continue;
+      const moved = this.update(task.id, { status: "dropped", note: `closed as ${proposal.by} proposed (${proposal.reason}); ${task.requester} did not object by ${proposal.decideBy}` }, AGING_ACTOR, undefined, now);
+      if (moved === undefined) continue;
+      const settled: Task = { ...moved.task };
+      delete settled.closeProposal;
+      this.tasks.set(task.id, settled);
+      this.append({ kind: "task", task: settled });
+      events.push({ kind: "closed", task: this.get(task.id)!, text: `${task.id} "${task.title}" closed as ${proposal.by} proposed: ${proposal.reason}. ${task.requester} did not object in time; reopen it on the board if that was wrong.` });
+    }
+    return events;
   }
 
   private append(line: TaskLine): void {
