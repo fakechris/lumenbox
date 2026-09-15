@@ -6,6 +6,7 @@
  * orchestration you see at runtime is emergent, not encoded.
  */
 
+import { CommitmentLedger, describeGaps, parseCommitments, priorCommitmentsPrompt, reconcileCommitments } from "./commitments.ts";
 import { learningsDir } from "./learnings.ts";
 import type Anthropic from "@anthropic-ai/sdk";
 import { AgentBus, type BusEvent, type InboundMessage, type Lane } from "../agents/bus.ts";
@@ -271,6 +272,8 @@ export class Orchestrator {
   readonly scopes: ScopeStore | undefined;
   /** Bundles attached to boxes (INV-420). */
   readonly bundles: BundleStore;
+  /** What routines committed to and whether anything holds it (INV-528). */
+  readonly commitments = new CommitmentLedger(join(agentboxHome(), "commitments.jsonl"));
   /** Turns a queued demonstration into a teaching turn (INV-406). */
   private readonly teachRunner = new TeachRunner({
     agentOnDisplay: (boxId, display) => {
@@ -489,7 +492,9 @@ export class Orchestrator {
     // A delivering run happens *in* the chat's conversation, so what it says is read from
     // the same place a person's turn is read from and lands in the room's own history —
     // rather than in the main conversation, which no chat has ever read.
-    run: async (agent, prompt, deliver) => {
+    // Last time's commitments open the next run of the same routine (INV-528).
+    priorCommitments: slug => priorCommitmentsPrompt(this.commitments.lastFor(slug), this.tasks?.list() ?? []),
+    run: async (agent, prompt, deliver, slug) => {
       if (deliver === undefined) {
         await this.prompt(agent, prompt, undefined, { steerable: false, lane: "background", synthetic: true });
         return;
@@ -512,6 +517,24 @@ export class Orchestrator {
       // empty message in a room every morning — the absence is the report.
       if (said === "") return;
       await this.options.deliverToChat?.(deliver, said);
+      // Commitments in the report are checked against the board and the scheduler
+      // (INV-528): what nothing holds is said in the same chat, and the agent is cued
+      // to create the card and the reminder now, in a turn of its own.
+      if (slug === undefined) return;
+      const commitments = parseCommitments(said);
+      if (commitments.length === 0) return;
+      const routines = (await this.scheduler.status().catch(() => [])).map(entry => ({ slug: entry.slug, name: entry.name, paused: entry.paused, ...(entry.nextRun !== undefined && entry.kind === "once" ? { at: Date.parse(entry.nextRun) } : {}) }));
+      const checks = reconcileCommitments(commitments, this.tasks?.list() ?? [], routines);
+      this.commitments.record({ at: new Date().toISOString(), slug, agentId, commitments, checks });
+      const gaps = describeGaps(checks);
+      if (gaps.toChat === undefined || gaps.cue === undefined) return;
+      console.error(`[commitments] ${slug}: ${checks.filter(c => c.missing.length > 0).length} of ${checks.length} commitment(s) not held`);
+      await this.options.deliverToChat?.(deliver, gaps.toChat);
+      const mark = this.registry.readTranscript(agentId, conversation).length;
+      await this.prompt(agent, gaps.cue, undefined, { steerable: false, lane: "background", synthetic: true, conversation });
+      await this.settle();
+      const created = this.replySince(agentId, mark, conversation).trim();
+      if (created !== "") await this.options.deliverToChat?.(deliver, created);
     },
     // A waiting webhook: the same turn, but the caller is told what came of it.
     runAndSay: async (agent, prompt) => {

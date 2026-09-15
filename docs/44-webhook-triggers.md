@@ -120,3 +120,18 @@ spend is gone.
 - **One secret per routine, no second one during rotation.** Rotating breaks anything still using
   the old secret at that instant; two live secrets with an overlap window would make rotation
   free.
+
+
+## Commitments a routine writes down are checked (INV-528, 2026-09-14)
+
+A weekly retro said "send the reminder before 9/11" and did not; the sentence lived in a
+document. Now a delivering routine's report may carry a `## 下周改` / `## Next week`
+block, one item per bullet with a date; when the report is delivered the host reconciles
+each item against the board and the scheduler (`src/host/commitments.ts`): a commitment
+is held by a task card that matches it (shared key words, or its id named) with a due
+date on or before the item's, or by an `@at` routine due by then. What nothing holds is
+said in the same chat and the agent is cued, in a turn of its own, to create the card and
+the reminder now; what it created is delivered too. Every run's commitments and checks go
+to `~/.agentbox/commitments.jsonl`, and the next run of the same routine opens with where
+last time's stand — a commitment repeated without a card is a finding the person reads.
+`SchedulerDeps.run` carries the routine's slug; `priorCommitments(slug)` is the prompt line.
