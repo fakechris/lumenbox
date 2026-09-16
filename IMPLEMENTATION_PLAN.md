@@ -337,6 +337,14 @@ Stage 29's own list.
 B1–B3; INV-552 overlaps its INV-560 (the request ledger belongs on the Involute side) and
 should be re-scoped to this side's consumer state or marked a duplicate.
 
+## Stage 32: Stage 29 closed, and what the ledger does not know (2026-09-16)
+**Goal**: Finish the round that needed nobody else, and make the queue tell the truth.
+**Success Criteria**: INV-156, INV-429, INV-525, INV-135, INV-138, INV-544 merged; the
+security backlog triaged against the tree with the three remaining items proposed; the
+bookkeeping gap named — INV-545/546/547/548/549/565 are delivered in #169 and carry no run.
+**Status**: Complete for the code (2026-09-16): #179–#184 merged, main 1624/1624, floor 1624.
+Open, and not this actor's to close: the six items above need runs from whoever authored them.
+
 ## Stage 29: Next round (planned 2026-09-14)
 **Goal**: Close the last open pieces that need no external data, and make the operator-side evidence possible.
 **Success Criteria**: I3 door rules (INV-429) merged; host-side wedge detection (INV-135); standing approvals by principal (INV-156, on top of INV-427 rules); tool idempotency declaration (INV-525, once committed); a real-model scorecard baseline produced under authorised credentials and compared once; security S-2..S-7 (INV-138) triaged.
