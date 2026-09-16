@@ -25,6 +25,14 @@ kubectl apply -f deploy/kubernetes/rbac.yaml
 kubectl -n agentbox create secret generic agentbox-control-users \
   --from-literal=AGENTBOX_CONTROL_USERS="admin:$(openssl rand -hex 8):default"
 
+# 4. The key the stored box tokens are encrypted with, kept out of the PVC that holds the
+#    database. Without it the control plane mints a key onto /state and a snapshot of that
+#    volume carries both halves — so the Deployment requires this Secret rather than starting
+#    without it. Mint it before the first start: changing it later makes the tokens already in
+#    the store unreadable.
+kubectl -n agentbox create secret generic agentbox-control-key \
+  --from-literal=AGENTBOX_CONTROL_KEY="$(openssl rand -hex 32)"
+
 kubectl apply -f deploy/kubernetes/control-plane.yaml
 ```
 

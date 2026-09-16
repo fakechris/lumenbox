@@ -30,7 +30,7 @@ import { type KubeApi, kubeApiFromEnvironment } from "./kube-client.ts";
 import { DEFAULT_NAMESPACE, KubernetesAllocator } from "./kubernetes.ts";
 import { HealthNotifier, webhookDelivery } from "./notify.ts";
 import { staticPolicy } from "./policy.ts";
-import { type ControlStore, SqliteControlStore } from "./store.ts";
+import { type ControlStore, SqliteControlStore, keyWarning } from "./store.ts";
 
 export interface ControlPlaneOptions {
   /** Where the gateway listens. */
@@ -311,6 +311,10 @@ export async function startControlPlane(
   out(`control plane on ${url}`);
   out(`  allocator  ${allocator.kind}${options.allocator === "static" ? "" : ` (${options.image})`}`);
   out(`  store      ${join(home, "control.db")}`);
+  // Encryption of the stored box tokens is only worth what the key's hiding place is worth, so
+  // the deployment is told which one it got rather than left to assume the good one (INV-579).
+  const keyTrouble = keyWarning(store.keySource);
+  out(`  key        ${keyTrouble === undefined ? "AGENTBOX_CONTROL_KEY (not on disk)" : keyTrouble}`);
   out(
     `  health     ${webhook === undefined || webhook.trim() === "" ? "console only (set AGENTBOX_HEALTH_WEBHOOK to send changes somewhere)" : `console and ${webhook}`}`
   );
@@ -355,6 +359,8 @@ export function describeControlPlane(statePath?: string): string[] {
   const store = new SqliteControlStore({ path });
   try {
     const lines: string[] = [`store ${path}`];
+    const keyTrouble = keyWarning(store.keySource);
+    if (keyTrouble !== undefined) lines.push(`warning: ${keyTrouble}`);
     for (const tenant of store.listTenants()) {
       const box = store.boxForTenant(tenant.id);
       const health = box === undefined ? undefined : store.latestHealth(box.id);

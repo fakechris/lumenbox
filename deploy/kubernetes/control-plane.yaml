@@ -89,6 +89,15 @@ spec:
                 name: agentbox-control
             - secretRef:
                 name: agentbox-control
+            # The key the stored box tokens are encrypted with. Deliberately NOT optional, unlike
+            # the users Secret below: when it is unset the control plane mints a key onto /state,
+            # beside the database it encrypts, so a snapshot of that PVC carries both and the
+            # encryption is decoration. And unlike a password it cannot be fixed afterwards —
+            # changing the key makes the tokens already in the store unreadable. A pod that will
+            # not start until the deployer runs one command is the cheaper failure.
+            #   agentbox control key    # prints the key and this exact command
+            - secretRef:
+                name: agentbox-control-key
             # Tenants and passwords, created by the deployer (see README.md) rather than shipped
             # in this file. Optional so a forgotten Secret degrades to a generated password in the
             # pod's log, not a CrashLoopBackOff.

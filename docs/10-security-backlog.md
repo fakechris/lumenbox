@@ -78,6 +78,16 @@ dump but a copy of the *directory* is. `AGENTBOX_CONTROL_KEY` moves it out and i
 a real deployment; the default is chosen so encryption is on rather than being something an operator
 remembers to turn on.
 
+**Done (2026-09-16, INV-579).** The packaged deployment no longer gets the weak default: the
+Kubernetes Deployment pulls `AGENTBOX_CONTROL_KEY` from an `agentbox-control-key` Secret, and that
+`secretRef` is deliberately *not* `optional` — unlike a password, a key cannot be corrected once
+tokens are encrypted with it, so a pod that will not start until one `kubectl create secret` runs is
+the cheaper failure. `agentbox control key` mints one and prints it once with that exact command; it
+writes it nowhere, since a mint-and-save command would re-create the problem. A laptop `control up`
+still mints a file beside the database — that is the right default there — but it now prints which
+key it got on every start (`key  AGENTBOX_CONTROL_KEY (not on disk)` or the warning naming the
+directory), and `control status` repeats the warning.
+
 ## S-7 — A private agent is not a boundary, and the word invites the assumption
 
 Stated where it is checked and in [09-tenancy.md](09-tenancy.md) §3.2: everyone in a tenant shares a
@@ -122,7 +132,7 @@ that landed for other reasons, two changed shape, and four are open with a named
 | **S-3** identity is a password list | **open, unchanged** | `PasswordListIdentity` (`src/control/gateway.ts:67`) still compares plaintext, with no KDF, lockout or rotation. It is the control plane's, not an installation's — an installation signs people in through a door's OAuth or an invite code. Next step: replace it before anybody who is not the operator signs into a *gateway*. |
 | **S-4** the box believes the gateway's headers | **narrowed** | Still believed, still one trust dependency rather than two. What changed (INV-537): an absent role header no longer means owner, the gateway's vocabulary is translated in exactly one function, and a web session's authority comes from the roster rather than from the header. The seam for a signed assertion is where it always was — `callerOf`. |
 | **S-5** budget is enforced inside the box | **open, unchanged** | The policy gate is still the thing being billed. The model relay has route leases and a ceiling on *time* (`model-relay.ts:27`), not on spend. Next step is the same as it was: a hard ceiling at the relay, with the in-box gate kept as the one that can explain itself. |
-| **S-6** control key beside the database | **open, unchanged** | `AGENTBOX_CONTROL_KEY` is the answer and the default is still a file next to the database. Next step: make the packaged deployment set it, so the default an operator gets is the good one. |
+| **S-6** control key beside the database | **closed for the packaged deployment, 2026-09-16 (INV-579)** | The Kubernetes manifest now requires an `agentbox-control-key` Secret — not optional, because a key cannot be corrected after the tokens are encrypted with the wrong one — and `agentbox control key` mints one with the `kubectl` line. A local `control up` still mints a file beside the database, and now **says so on every start** and in `control status` rather than leaving an operator to assume otherwise. |
 | **S-7** "private" invites the wrong assumption | **closed, by removing the word's basis** | Per-agent `visibility` no longer decides anything (INV-540, docs/22 §3), the boundary is a box's `members` (INV-538), and the label a person reads is **derived from that set** rather than typed (`membersLabel`). There is no longer a UI string that could describe an agent as private while the filesystem says otherwise. |
 | **S-8** egress per relay, not per tenant | **closed** | INV-423: the relay's allow-list is per box. |
 | **S-9** `hooks.json` is command execution | **held, deliberately incomplete** | R39's ownership and mode checks stand, and cover `extensions/*` the same way. The remaining path is an agent with `RunOnHost` writing the file, which is the S-1 class (a host command *is* the operator). A signed allow-list of hook commands is still judged not worth its second file except on a shared host — where S-2 and S-3 are the bigger holes anyway. |

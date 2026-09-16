@@ -9,10 +9,10 @@
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync, readFileSync, readdirSync, rmSync, statSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { SqliteControlStore, type UsageRow } from "./store.ts";
+import { SqliteControlStore, keyWarning, resolveEncryptionKey, type UsageRow } from "./store.ts";
 import { StaticAllocator } from "./allocator.ts";
 
 function fixture() {
@@ -455,6 +455,45 @@ test("settings round-trip: absent, written, overwritten, deleted", () => {
     store.deleteSetting("traceUrl"); // deleting what is not there is not an error
   } finally {
     store.close();
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("the store says where its key came from, and says so when it is beside the database (INV-579)", () => {
+  const dir = mkdtempSync(join(tmpdir(), "agentbox-control-"));
+  const previous = process.env.AGENTBOX_CONTROL_KEY;
+  delete process.env.AGENTBOX_CONTROL_KEY;
+  try {
+    // The default: a key minted onto the same disk as the database it encrypts. It works, and a
+    // copy of the directory is still a copy of every token — so the deployment is told.
+    const minted = new SqliteControlStore({ path: join(dir, "control.db") });
+    assert.equal(minted.keySource.source, "minted");
+    assert.equal(minted.keySource.path, join(dir, "control.db.key"));
+    const warning = keyWarning(minted.keySource);
+    assert.match(String(warning), /a copy of that directory is a copy of every stored token/);
+    assert.match(String(warning), /AGENTBOX_CONTROL_KEY/, "and it names the way out");
+    minted.close();
+
+    // Second start reads the same file, and is still worth warning about.
+    const reopened = new SqliteControlStore({ path: join(dir, "control.db") });
+    assert.equal(reopened.keySource.source, "file");
+    assert.notEqual(keyWarning(reopened.keySource), undefined);
+    reopened.close();
+
+    // The good deployment: nothing to warn about, and nothing on disk.
+    process.env.AGENTBOX_CONTROL_KEY = "aa".repeat(32);
+    const fromEnv = resolveEncryptionKey(join(dir, "elsewhere.key"));
+    assert.equal(fromEnv.source, "env");
+    assert.equal(fromEnv.path, undefined);
+    assert.equal(keyWarning(fromEnv), undefined);
+    assert.ok(!existsSync(join(dir, "elsewhere.key")), "a key given in the environment is not also written down");
+
+    // A key that is not 32 bytes is refused rather than padded into something weaker.
+    process.env.AGENTBOX_CONTROL_KEY = "abc123";
+    assert.throws(() => resolveEncryptionKey(join(dir, "elsewhere.key")), /64 hex characters/);
+  } finally {
+    if (previous === undefined) delete process.env.AGENTBOX_CONTROL_KEY;
+    else process.env.AGENTBOX_CONTROL_KEY = previous;
     rmSync(dir, { recursive: true, force: true });
   }
 });

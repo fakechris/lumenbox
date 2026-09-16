@@ -10,7 +10,7 @@
  */
 
 import assert from "node:assert/strict";
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
@@ -119,4 +119,43 @@ test("the namespace defaults when AGENTBOX_K8S_NAMESPACE is unset", async () => 
     const handle = await plane.allocator.allocate(tenant.id, { image: "agentbox/box:test" });
     assert.equal(handle.boxdUrl, `http://${handle.externalId}.${DEFAULT_NAMESPACE}.svc:1337`);
   });
+});
+
+test("the packaged deployment gets its token key from a Secret, and a start says which key it got (INV-579)", async () => {
+  // Part one: the manifest. When AGENTBOX_CONTROL_KEY is unset the control plane mints a key onto
+  // the same PVC as the database, so on Kubernetes the encryption protects nothing a snapshot
+  // does not already carry. This secretRef is not `optional:` on purpose.
+  const manifest = readFileSync(new URL("../../deploy/kubernetes/control-plane.yaml", import.meta.url), "utf8");
+  const ref = manifest.indexOf("name: agentbox-control-key");
+  assert.ok(ref > 0, "control-plane.yaml pulls in the agentbox-control-key Secret");
+  assert.ok(
+    !/name: agentbox-control-key\s*\n\s*optional: true/.test(manifest),
+    "and requires it, unlike the users Secret — a key cannot be fixed after the tokens are encrypted with the wrong one"
+  );
+  const readme = readFileSync(new URL("../../deploy/kubernetes/README.md", import.meta.url), "utf8");
+  assert.ok(readme.includes("create secret generic agentbox-control-key"), "and the README says how to make it");
+
+  // Part two: what a start says. Not silent either way — an operator should be able to read one
+  // line and know whether the tokens' key is on the same disk as the tokens.
+  const home = mkdtempSync(join(tmpdir(), "agentbox-key-"));
+  const previous = process.env.AGENTBOX_CONTROL_KEY;
+  delete process.env.AGENTBOX_CONTROL_KEY;
+  const lines: string[] = [];
+  let running: RunningControlPlane | undefined;
+  try {
+    running = await startControlPlane({ host: "127.0.0.1", port: 0, allocator: "compose", statePath: home, sweepSeconds: 0, out: line => lines.push(line) });
+    assert.ok(lines.some(line => /key .*a copy of that directory is a copy of every stored token/.test(line)), "the default start warns");
+    await running.close();
+    running = undefined;
+
+    lines.length = 0;
+    process.env.AGENTBOX_CONTROL_KEY = "bb".repeat(32);
+    running = await startControlPlane({ host: "127.0.0.1", port: 0, allocator: "compose", statePath: join(home, "env"), sweepSeconds: 0, out: line => lines.push(line) });
+    assert.ok(lines.some(line => line.includes("AGENTBOX_CONTROL_KEY (not on disk)")), "and a configured one is confirmed rather than assumed");
+  } finally {
+    await running?.close();
+    if (previous === undefined) delete process.env.AGENTBOX_CONTROL_KEY;
+    else process.env.AGENTBOX_CONTROL_KEY = previous;
+    rmSync(home, { recursive: true, force: true });
+  }
 });

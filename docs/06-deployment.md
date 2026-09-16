@@ -279,3 +279,20 @@ AGENTBOX_PUBLIC_URL=https://box.example.com
 `AGENTBOX_INSECURE=1` is the deliberate escape for a tailnet, a lab or a laptop demo. It
 starts, and it says so on every start; that repetition is the point.
 
+## The token key belongs outside the directory it protects (INV-579, 2026-09-16)
+
+Box tokens are stored encrypted. Unset, the key is minted `0600` beside `control.db` — encryption
+that is on by default, which is the right trade on a laptop and the wrong one on a volume that gets
+snapshotted, since the snapshot carries both halves.
+
+```
+agentbox control key    # prints a fresh key once, with the kubectl line
+```
+
+`deploy/kubernetes/control-plane.yaml` requires an `agentbox-control-key` Secret. That reference is
+not `optional`: a forgotten password can be reset, a forgotten key cannot — change it after the fact
+and every token already in the store is unreadable, which means re-registering the boxes. Mint it
+before the first start.
+
+`control up` and `control status` both say which key they got, so there is no need to guess.
+
