@@ -175,8 +175,15 @@ export interface ChannelAdapter {
   socketStatus?(): string | undefined;
   /** Closes the inbound socket and builds a new one, saying why. The liveness check's lever. */
   reconnect?(reason: string): void;
-  /** Pushes a line to where this identity's messages come from, if the wire allows it. */
-  send(identity: string, text: string): Promise<void>;
+  /**
+   * Pushes a line to where this identity's messages come from, if the wire allows it.
+   *
+   * Answers with the conversation key a reply to *this* push will arrive under, where the
+   * wire can say — which is what lets the caller record the notice as something the agent
+   * has already said in that conversation. Undefined where it cannot: the push still
+   * happened, and the caller keeps nothing rather than keeping it against a guess.
+   */
+  send(identity: string, text: string): Promise<string | undefined>;
   /**
    * Pushes a line to a chat by its chatKey. Preferred over `send` for task results:
    * `send` routes to wherever the identity last spoke, which may have moved to another
@@ -355,6 +362,8 @@ export interface ChannelManagerDeps {
     senderLabel: string;
     text: string;
     messageId?: string;
+    /** Said by this installation as the agent — a push, not a person in the room. */
+    mine?: boolean;
   }) => void;
   /**
    * The roster, for 「团队」— what this door shows is what it routes (docs/22 §2:
@@ -1042,16 +1051,36 @@ ${input.options.map(option => `· ${option}`).join("\n")}`
   }
 
   /** Pushes a line to an identity through a named adapter. The approve-notification path. */
-  push(adapterName: string, identity: string, text: string): Promise<void> {
+  async push(adapterName: string, identity: string, text: string): Promise<void> {
     const adapter = this.adapters.find(a => a.name === adapterName);
-    if (adapter === undefined) return Promise.resolve();
-    // Said out loud. A reply that never reached the person is the failure they actually
-    // experience, and swallowing it here made it identical to never having been written.
-    return adapter.send(identity, text).catch((error: unknown) => {
+    if (adapter === undefined) return;
+    let conversation: string | undefined;
+    try {
+      conversation = await adapter.send(identity, text);
+    } catch (error: unknown) {
+      // Said out loud. A reply that never reached the person is the failure they actually
+      // experience, and swallowing it here made it identical to never having been written.
       this.deps.log(
         `channel ${adapterName}: could not deliver to ${identity} — ` +
           `${error instanceof Error ? error.message : String(error)}`
       );
+      return;
+    }
+    // This door is the one place the installation speaks *as* an agent without the agent
+    // running: an upgrade question, an approval nudge. Nothing recorded it, so the words
+    // existed on the person's screen and nowhere else, and the reply — "can you backup
+    // these files" — arrived into a conversation whose whole history was that one line
+    // (2026-09-15). Kept as context rather than as a turn, and marked as ours, because a
+    // transcript entry would put an assistant message at the head of a fresh conversation
+    // and the wire refuses a request that does not open with the person.
+    if (conversation === undefined) return;
+    const agentName = this.deps.defaultAgentFor?.(adapterName);
+    this.deps.heard?.({
+      agentName,
+      conversation,
+      senderLabel: agentName ?? adapterName,
+      text,
+      mine: true,
     });
   }
 

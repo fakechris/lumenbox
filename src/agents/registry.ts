@@ -46,6 +46,25 @@ export const AGENT_NAME_MAX_LENGTH = 72;
 export const AGENT_DESCRIPTION_MAX_LENGTH = 12_000;
 export const PROFILE_FILENAME = "profile.json";
 export const TRANSCRIPT_FILENAME = "conversation.jsonl";
+/**
+ * One line a room produced around an agent, kept as context rather than as history.
+ *
+ * `mine` is the exception that makes the rest readable: almost everything here was said
+ * by somebody else and must not be acted on, but an installation also pushes notices
+ * into chats *under the agent's name* without the agent running — an upgrade question,
+ * an approval nudge. Those are the agent's own words to everybody who can see the chat,
+ * and a reply to one is a reply to the agent. Marked, so the prompt can say which is
+ * which instead of presenting the agent's own notice as somebody else's chatter.
+ */
+export interface HeardLine {
+  at: string;
+  sender: string;
+  text: string;
+  messageId?: string;
+  /** Said by this installation as the agent, not by somebody in the room. */
+  mine?: boolean;
+}
+
 /** How many heard lines a room keeps, and how often the file is trimmed back to them. */
 const HEARD_KEEP = 40;
 /** How much of the room a new topic inherits: enough to know what it is about, not the room's history. */
@@ -423,11 +442,7 @@ export class AgentRegistry {
   }
 
   /** A message in the room that was not for this agent. Kept, bounded, never a turn. */
-  appendHeard(
-    agentId: string,
-    conversation: string,
-    entry: { at: string; sender: string; text: string; messageId?: string }
-  ): void {
+  appendHeard(agentId: string, conversation: string, entry: HeardLine): void {
     const path = this.heardPathFor(agentId, conversation);
     mkdirSync(dirname(path), { recursive: true });
     appendLine(path, JSON.stringify(entry));
@@ -449,13 +464,13 @@ export class AgentRegistry {
     agentId: string,
     conversation = MAIN_CONVERSATION,
     limit = HEARD_KEEP
-  ): { at: string; sender: string; text: string; messageId?: string }[] {
+  ): HeardLine[] {
     const path = this.heardPathFor(agentId, conversation);
     if (!existsSync(path)) return [];
     const lines = readFileSync(path, "utf8").split("\n").filter(line => line.trim() !== "");
     return lines.slice(-limit).flatMap(line => {
       try {
-        return [JSON.parse(line) as { at: string; sender: string; text: string; messageId?: string }];
+        return [JSON.parse(line) as HeardLine];
       } catch {
         return [];
       }

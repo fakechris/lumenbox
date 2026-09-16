@@ -99,11 +99,21 @@ export async function preflight(box: BoxClient): Promise<Preflight> {
     // true and useless — a warning that is mostly noise is one nobody reads, and the two
     // files that mattered were sitting in the middle of it.
     //
+    // The reference docs are the image too, and were the worst version of this: the
+    // Dockerfile copies them to /opt/box-reference and the entrypoint re-seeds
+    // /home/box/reference from there on *every start*, so their mtime is always today.
+    // Every box was therefore permanently un-quiet — `decideUpgrade` returned "ask"
+    // forever and no box ever upgraded unattended again — and the question it asked
+    // named four files an upgrade recreates verbatim. Observed 2026-09-15: somebody
+    // read that list, reasonably believed the files were at risk, and asked the agent
+    // to back up copies of the image's own documentation.
+    //
     // Hidden directories go as a class, the same rule the upload guard uses: they hold
     // configuration, not work somebody would miss.
     const find =
       `find /home/box /srv /opt /root -xdev \\( ` +
       `-path /home/box/work -o -path /home/box/.config -o -path /home/box/Desktop ` +
+      `-o -path /home/box/reference -o -path /opt/box-reference ` +
       `-o -path /opt/boxd -o -path /opt/hostd ` +
       `-o \\( -type d -name '.*' \\) -o -name node_modules -o -name .git ` +
       `\\) -prune -o -type f -mtime -${RECENT_DAYS} -print 2>/dev/null | head -${MAX_LISTED + 1}`;

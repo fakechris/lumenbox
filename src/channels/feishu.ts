@@ -635,6 +635,17 @@ export class FeishuChannel implements ChannelAdapter {
     | undefined;
   /** The chat each identity last spoke in, for routing a reply or a notice back. */
   private readonly chats = new Map<string, string>();
+  /**
+   * chatId → the wire's `chat_type`, so a push can name the conversation its reply will
+   * land in. A direct chat is one conversation whatever bubble the reply is typed into
+   * (`conversationKeyFor` checks `p2p` first and returns before any thread reasoning), so
+   * filing a notice under a thread key there would file it where no reply ever arrives.
+   *
+   * Filled from the same event that fills `chats`, which is what makes it safe to read
+   * beside it: an identity is only in `chats` because a message from it was seen, and
+   * that message carried its chat's type.
+   */
+  private readonly chatTypes = new Map<string, string>();
   /** Held while this process is the app's websocket consumer. */
   private releaseLock: (() => void) | undefined;
   /** The Typing reaction placed on each in-progress message, for removal when it lands. */
@@ -1339,6 +1350,9 @@ export class FeishuChannel implements ChannelAdapter {
           });
         }
         if (chatId === "" || data.message === undefined) return {};
+        if (data.message.chat_type !== undefined) {
+          this.chatTypes.set(chatId, data.message.chat_type);
+        }
         // No sender is no identity: nothing downstream can decide who may drive, so
         // it is dropped and said, not admitted as "feishu:unknown" (INV-129).
         if (data.sender?.sender_id?.open_id === undefined) {
@@ -1563,16 +1577,17 @@ export class FeishuChannel implements ChannelAdapter {
               ...(addressed !== undefined ? { addressed } : {}),
             });
           })
-          .then(reply =>
+          .then(async reply => {
             // Anchored under the message it answers, or it lands at the chat root —
             // which inside a topic thread reads as an unrelated announcement, and the
             // person cannot tell their "停" was heard.
-            reply
-              ? messageId !== undefined
-                ? this.sendToChat(`${this.name}:${chatId}`, reply, { replyTo: messageId })
-                : this.send(identity, reply)
-              : undefined
-          )
+            if (!reply) return;
+            if (messageId !== undefined) {
+              await this.sendToChat(`${this.name}:${chatId}`, reply, { replyTo: messageId });
+              return;
+            }
+            await this.send(identity, reply);
+          })
           .catch((error: unknown) => {
             const detail = error instanceof Error ? error.message : String(error);
             this.log(`channel ${this.name}: reply failed (${detail})`);
@@ -1825,13 +1840,34 @@ export class FeishuChannel implements ChannelAdapter {
     }
   }
 
-  async send(identity: string, text: string): Promise<void> {
+  async send(identity: string, text: string): Promise<string | undefined> {
     const chatId = this.chats.get(identity);
-    if (chatId === undefined || this.apiClient === undefined) return;
-    await this.apiClient.im.message.create({
+    if (chatId === undefined || this.apiClient === undefined) return undefined;
+    const response = await this.apiClient.im.message.create({
       params: { receive_id_type: "chat_id" },
       data: { receive_id: chatId, msg_type: "text", content: JSON.stringify({ text }) },
     });
+    // The other half of what `post` does, and the half this door kept skipping. Everything
+    // pushed at a person rather than said inside a conversation leaves here — the upgrade
+    // notice, the approval nudge — and until now none of it was recorded as ours. Two
+    // things broke, and the quiet one is the worse: in a group, `isAddressed` asks whether
+    // the root was sent by us, so a bare 回复 to one of these notices was not addressed to
+    // anybody and was **dropped without a word**. Only someone who also typed `@bot` got
+    // through. (Observed 2026-09-15 on the upgrade notice.)
+    //
+    // In a group, recorded under the thread the notice itself opens rather than under the
+    // room: an authorless push has no conversation behind it, and `${chatId}:${sentId}` is
+    // the key `conversationKeyFor` already mints for a reply under this message, so answers
+    // stay anchored in the topic instead of landing at the bottom of the room. In a direct
+    // chat the room *is* the conversation and the thread key would be one nothing arrives in.
+    const sentId = response?.data?.message_id;
+    if (sentId === undefined || sentId === "") return undefined;
+    const conversation =
+      this.chatTypes.get(chatId) === "p2p"
+        ? `${this.name}:${chatId}`
+        : `${this.name}:${chatId}:${sentId}`;
+    this.sentRoots?.record(sentId, conversation);
+    return conversation;
   }
 
   /**
