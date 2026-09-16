@@ -2270,8 +2270,7 @@ function renderBoxes() {
           // Not free text: a label somebody types is a label that stops being true.
           '<div class="dim" style="font-size:11.5px;margin:2px 0 8px 16px">' + esc(b.membersLabel || "") + "</div>";
       }).join("") ||
-        '<div class="dim" style="font-size:12.5px">No boxes yet. A box is the computer your agents work on — ' +
-        'create the Docker one with the button above, or <code class="mono">agentbox box up</code> in a terminal.</div>';
+        '<div class="dim" style="font-size:12.5px">' + esc(t("ui.boxes.none")) + "</div>";
     })
     .catch(function () { $("setboxes").innerHTML = '<div class="dim">Could not read the boxes.</div>'; });
 }
@@ -5153,6 +5152,25 @@ function taskDetail(t) {
   "</div>";
 }
 
+// The page's words, from the same bundle the chat strings come from (INV-544). Loaded
+// once at boot; until it answers, t() returns the key itself, which is ugly and findable
+// rather than blank — the parity test is what stops that ever shipping.
+var MSG = {};
+var MSG_LOCALE = "";
+function t(key, vars) {
+  var text = MSG[key];
+  if (text === undefined) return key;
+  return String(text).replace(/\{(\w+)\}/g, function (whole, name) {
+    return vars && name in vars ? String(vars[name]) : whole;
+  });
+}
+function loadMessages() {
+  return fetch("/api/i18n")
+    .then(function (r) { return r.json(); })
+    .then(function (data) { MSG = data.messages || {}; MSG_LOCALE = data.locale || ""; })
+    .catch(function () { /* the page still works in the words it was written in */ });
+}
+
 /** Relative, because "in 3 hours" is the thing a person acts on; absolute dates read as decoration. */
 function whenOf(iso) {
   if (!iso) return "";
@@ -5171,15 +5189,15 @@ function renderAttention() {
       var theirs = data.theirs || [];
       if (!mine.length && !theirs.length) {
         $("attention").style.display = "";
-        $("attention").innerHTML = '<div class="dim" style="font-size:12.5px">Nothing is waiting on you, and nothing you asked for is outstanding.</div>';
+        $("attention").innerHTML = '<div class="dim" style="font-size:12.5px">' + esc(t("ui.attention.empty")) + "</div>";
         return;
       }
       var row = function (item, owed) {
         var act =
-          item.kind === "close-proposal" ? '<button class="btn sm ghost" data-att-keep="' + esc(item.ref) + '">Keep open</button>' :
-          item.kind === "nudged" ? '<button class="btn sm ghost" data-att-drop="' + esc(item.ref) + '">Close</button><button class="btn sm ghost" data-att-snooze="' + esc(item.ref) + '">Not now</button>' :
-          item.kind === "question" ? '<button class="btn sm ghost" data-att-open="' + esc(item.ref) + '">Answer</button>' :
-          '<button class="btn sm ghost" data-att-task="' + esc(item.ref) + '">Open</button>';
+          item.kind === "close-proposal" ? '<button class="btn sm ghost" data-att-keep="' + esc(item.ref) + '">' + esc(t("ui.attention.keepOpen")) + "</button>" :
+          item.kind === "nudged" ? '<button class="btn sm ghost" data-att-drop="' + esc(item.ref) + '">' + esc(t("ui.attention.close")) + '</button><button class="btn sm ghost" data-att-snooze="' + esc(item.ref) + '">' + esc(t("ui.attention.notNow")) + "</button>" :
+          item.kind === "question" ? '<button class="btn sm ghost" data-att-open="' + esc(item.ref) + '">' + esc(t("ui.attention.answer")) + "</button>" :
+          '<button class="btn sm ghost" data-att-task="' + esc(item.ref) + '">' + esc(t("ui.attention.open")) + "</button>";
         return '<div style="display:flex;gap:8px;align-items:baseline;padding:3px 0;font-size:12.5px">' +
           '<span class="dim mono" style="font-size:11px;min-width:58px">' + esc(item.deadline ? whenOf(item.deadline) : "") + "</span>" +
           '<span style="flex:1">' + esc(item.title) + ' <span class="dim">' + esc(item.detail) + "</span></span>" +
@@ -5188,8 +5206,8 @@ function renderAttention() {
       };
       $("attention").style.display = "";
       $("attention").innerHTML =
-        (mine.length ? '<div style="font-size:11px;letter-spacing:.04em;text-transform:uppercase;color:var(--muted);margin-bottom:4px">Waiting on you</div>' + mine.map(function (i) { return row(i, true); }).join("") : "") +
-        (theirs.length ? '<div style="font-size:11px;letter-spacing:.04em;text-transform:uppercase;color:var(--muted);margin:8px 0 4px">You are waiting on</div>' + theirs.map(function (i) { return row(i, false); }).join("") : "");
+        (mine.length ? '<div style="font-size:11px;letter-spacing:.04em;text-transform:uppercase;color:var(--muted);margin-bottom:4px">' + esc(t("ui.attention.mine")) + "</div>" + mine.map(function (i) { return row(i, true); }).join("") : "") +
+        (theirs.length ? '<div style="font-size:11px;letter-spacing:.04em;text-transform:uppercase;color:var(--muted);margin:8px 0 4px">' + esc(t("ui.attention.theirs")) + "</div>" + theirs.map(function (i) { return row(i, false); }).join("") : "");
     })
     .catch(function () { $("attention").style.display = "none"; });
 }
@@ -6783,15 +6801,15 @@ function refreshSetup() {
     // installation run on a server has no window to click in, and the person setting it
     // up over ssh was reading a page that assumed a mouse.
     var steps = [
-      { done: s.box, head: "A computer for the agents", sub: "A box is a computer: desktop, files, shell, engines. Create the Docker box, or attach one.", act: "Set up a box", cli: "agentbox box up", go: function () { openSettings("boxes"); } },
-      { done: s.agentTurn, head: "Your first agent", sub: "An agent lives in one box. Stamp one from the shelf — 设计 (Team designer) builds a team for you.", act: "Open templates", cli: "agentbox agent new <name>", go: openShelf },
-      { done: s.door, head: "A door (optional)", sub: "Feishu, DingTalk or Telegram reach this box; this page is a door too.", act: "Connect a door", cli: "Settings → Doors (no CLI yet)", go: function () { openSettings("doors"); } },
-      { done: s.review, head: "First work", sub: "Say it in chat or add a task; it is done when it reaches review.", act: "Open tasks", cli: "agentbox chat <name> \"…\"", go: function () { var t = $("tabtasks"); if (t) t.click(); } }
+      { done: s.box, head: t("ui.setup.box"), sub: t("ui.setup.boxWhy"), act: t("ui.setup.boxAct"), cli: "agentbox box up", go: function () { openSettings("boxes"); } },
+      { done: s.agentTurn, head: t("ui.setup.agent"), sub: t("ui.setup.agentWhy"), act: t("ui.setup.agentAct"), cli: "agentbox agent new <name>", go: openShelf },
+      { done: s.door, head: t("ui.setup.door"), sub: t("ui.setup.doorWhy"), act: t("ui.setup.doorAct"), cli: "Settings → Doors (no CLI yet)", go: function () { openSettings("doors"); } },
+      { done: s.review, head: t("ui.setup.work"), sub: t("ui.setup.workWhy"), act: t("ui.setup.workAct"), cli: "agentbox chat <name> \"…\"", go: function () { var tab = $("tabtasks"); if (tab) tab.click(); } }
     ];
     if (steps.every(function (x) { return x.done; }) && !guideForced) { card.style.display = "none"; return; }
     card.style.display = "";
     card.innerHTML = '<div style="margin:10px 16px 0;padding:10px 14px;border:1px solid var(--border-strong);border-radius:var(--radius-card);background:var(--surface)">' +
-      '<div class="eyebrow" style="margin-bottom:6px;display:flex;justify-content:space-between"><span>Set up</span><a href="#" data-setup-close="1" style="text-transform:none;letter-spacing:0">close</a></div>' +
+      '<div class="eyebrow" style="margin-bottom:6px;display:flex;justify-content:space-between"><span>' + esc(t("ui.setup.title")) + '</span><a href="#" data-setup-close="1" style="text-transform:none;letter-spacing:0">' + esc(t("ui.setup.close")) + "</a></div>" +
       steps.map(function (x, i) {
         return '<div style="display:flex;gap:10px;align-items:center;padding:4px 0;font-size:12px">' +
           '<span style="width:16px;color:' + (x.done ? "var(--ok, #3fb950)" : "var(--muted)") + '">' + (x.done ? "✓" : String(i + 1)) + "</span>" +
@@ -6807,7 +6825,7 @@ function refreshSetup() {
     };
   }).catch(function () {});
 }
-refreshSetup();
+loadMessages().then(refreshSetup);
 setInterval(refreshSetup, 30000);
 $("guidebtn").onclick = function () { guideForced = true; refreshSetup(); };
 
