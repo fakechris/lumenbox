@@ -53,6 +53,13 @@ export type PolicyRequest =
       tool: string;
       input: Record<string, unknown>;
       /**
+       * Who this turn is running for, when anybody (INV-156). Carried so an operator rule
+       * can be written about one person's routine work, and so the audit row says whose
+       * standing intent allowed it.
+       */
+      principalId?: string;
+      principalName?: string;
+      /**
        * Set when a delegated engine, not the agent, is calling through an MCP route (docs/33).
        * Two consequences, both fail-closed: the log records the tool and the input's size and
        * never the input (the engine's arguments may carry what a tool returned last time), and
@@ -518,7 +525,10 @@ export class PolicyGate {
     // forces the approval below with the rule on the card; allow lifts only the
     // operator's own approval lists — never a host command, never the box's
     // irreversible finding, which are not the operator's to lift.
-    const rule = this.rules?.decide(request.tool, request.input);
+    const rule = this.rules?.decide(request.tool, request.input, {
+      ...(request.principalId !== undefined ? { id: request.principalId } : {}),
+      ...(request.principalName !== undefined ? { name: request.principalName } : {}),
+    });
     if (rule !== undefined) {
       this.lastRule = rule.id;
       if (rule.effect === "deny") {

@@ -107,6 +107,7 @@ Claude Tag 的 Workspace 是一个权限文件夹加一个运行环境，Channel
 ### I. 控制：规则、门、指令
 
 - I1 **用户可写的 auto-mode 规则**：PolicyGate 新增 `rules/*.md` 由管理员书写（"读只读的 API 不问、写 Jira 评论不问、任何删除必问"），auto-review 分类器把规则作为判据；与 CUA 计划 B1 的确定性门互补。验收：规则命中的调用不弹审批且留痕；规则文件变更进审计。
+  - **按人的规则（INV-156，2026-09-15 落地）**：frontmatter 增加 `principal:`（写名字或 id），规则只在**为这个人跑的回合里**生效——他的常驻意图跟着人走，从任何一道门驱动都算数，不必按渠道各批一次。**无人归属的回合（定时、webhook、重启）不继承任何按人规则**，这是 fail-closed 的方向：人给出的放行不该被机器自己动作时捡走。审阅行会写出"(allow for Chris)"，因为"某人的 allow"和"所有人的 allow"是两条不同的常驻指令。`RunOnHost` 与不可逆动作仍然一律要问——它们不是操作者能豁免的（docs/08、INV-401）。
 - I2 **指令按地方拼接**：installation 级与 box 级 instructions 段按 org → box → agent 顺序拼进 system prompt；bundle 的 instructions 随 bundle 生效。
 - I3 **门的名称规则与 guest 开关**：door 级 `autoJoin: {allow: [...], deny: [...]}` 按群名前缀自动加入或拒绝（docs/35 U2 目录自动链接的一部分）；door 级 `guest: on|off` 决定未链接身份能否敲门。
 

@@ -430,6 +430,8 @@ export interface TurnDeps {
   operatorRules?: () => readonly string[];
   /** Who is driving, threaded through so a memory kept this turn records who it is about. */
   caller?: { userId?: string };
+  /** That person's name, for an operator rule written about them by name (INV-156). */
+  callerName?: string;
   /**
    * Skills, already read from the box.
    *
@@ -1436,6 +1438,7 @@ export async function runTurn(
           files: deps.files,
           claims: deps.claims,
           caller: deps.caller,
+          ...(deps.callerName !== undefined ? { callerName: deps.callerName } : {}),
           displayIndex: deps.displayIndex,
           boxOwner: deps.boxOwner,
           tasks: deps.tasks,
@@ -2490,6 +2493,7 @@ export async function runTurn(
             claims: deps.claims,
             policy: deps.policy,
             caller: deps.caller,
+          ...(deps.callerName !== undefined ? { callerName: deps.callerName } : {}),
             display: deps.display,
             displayIndex: deps.displayIndex,
             boxOwner: deps.boxOwner,

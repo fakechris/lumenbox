@@ -78,3 +78,51 @@ test("the store reads a directory, reports what it ignored, and tells its listen
     rmSync(dir, { recursive: true, force: true });
   }
 });
+
+test("a rule can be written about one person, and an unattributed turn never inherits it (INV-156)", () => {
+  // The scene: Chris pre-authorises his own routine push. Mia's identical command still
+  // asks, and the nightly routine — which nobody drove — asks too, because a standing
+  // allowance a person gave is not the machine's to pick up when it acts on its own.
+  const { rule: mine } = parseRuleFile("chris-push", [
+    "---",
+    "name: chris pushes his own branches",
+    "effect: allow",
+    "tool: bash",
+    "command: git push",
+    "principal: Chris",
+    "---",
+    "Chris pushes feature branches all day; asking each time teaches him to click yes without reading.",
+  ].join("\n"));
+  assert.ok(mine);
+  assert.deepEqual(mine.principals, ["Chris"]);
+
+  const input = { command: "git push origin HEAD" };
+  assert.equal(ruleMatches(mine, "bash", input, { name: "Chris" }), true);
+  assert.equal(ruleMatches(mine, "bash", input, { id: "p-chris", name: "chris" }), true, "the name matches whatever its case");
+  assert.equal(ruleMatches(mine, "bash", input, { name: "Mia" }), false, "somebody else's identical command still asks");
+  assert.equal(ruleMatches(mine, "bash", input, undefined), false, "a schedule, a webhook or a restart inherits nothing");
+  assert.equal(ruleMatches(mine, "bash", { command: "git tag v1" }, { name: "Chris" }), false, "and it is still about the command");
+
+  // Matching by id, for a rule written where names are not stable.
+  const { rule: byId } = parseRuleFile("by-id", ["---", "effect: allow", "tool: bash", "principal: p-chris", "---", "The same, keyed by id."].join("\n"));
+  assert.ok(byId);
+  assert.equal(ruleMatches(byId, "bash", input, { id: "p-chris" }), true);
+  assert.equal(ruleMatches(byId, "bash", input, { id: "p-mia", name: "Mia" }), false);
+
+  // A rule with nobody named is everyone's, as every rule written before this was.
+  const { rule: everyones } = parseRuleFile("everyone", ["---", "effect: allow", "tool: bash", "command: git push", "---", "Anyone here may push."].join("\n"));
+  assert.ok(everyones);
+  assert.deepEqual(everyones.principals, []);
+  assert.equal(ruleMatches(everyones, "bash", input, undefined), true);
+  assert.equal(ruleMatches(everyones, "bash", input, { name: "Mia" }), true);
+
+  // Severity still decides between two matching rules, and the reviewer's line says whose.
+  const { rule: refuse } = parseRuleFile("never-force", ["---", "effect: deny", "tool: bash", "command: git push --force", "---", "Never force-push here."].join("\n"));
+  assert.ok(refuse);
+  const chosen = decidingRule([mine, refuse], "bash", { command: "git push --force origin main" }, { name: "Chris" });
+  assert.equal(chosen?.id, "never-force", "a deny outranks a person's own allowance");
+  assert.deepEqual(renderRulesForReview([mine, everyones]), [
+    "[chris-push] (allow for Chris) Chris pushes feature branches all day; asking each time teaches him to click yes without reading.",
+    "[everyone] (allow) Anyone here may push.",
+  ]);
+});
