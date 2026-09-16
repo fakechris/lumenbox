@@ -193,3 +193,20 @@
 | E3 经验进模板与分享 | INV-411 | INV-397 |
 
 INV-145「无障碍树执行器」浏览器部分已由 R11 落地，2026-09-10 以 RUN-189 推进到 In Review（证据：commit 236c132、browser-service.test.ts、docs/11 R11）。桌面端 AT-SPI 另提 **INV-412**（INV-141 下，DERIVED_FROM INV-145）：`list_elements` / `click_element`，无树时 outcome=unknown 回落截图。所有候选 repository 均为 fakechris/lumenbox。
+
+## 工具幂等声明（INV-525，2026-09-15）
+
+docs/49 A3 的四态结果里，`unknown` 是模型最不会自己推断的一态——"没有回音"在任何以顺利路径
+训练出来的东西看来都等于"没发生"。所以把"答案丢了之后能不能再发一次"做成**调用之前就声明好**的
+协议字段（`src/protocol/idempotency.ts`）：
+
+- `read` 无副作用可复制，随便重试；`idempotent` 跑两次落到同一状态，**但必须这次调用真的带上
+  让它幂等的那个字段**（id / key / 目标），重试一次；`unsafe` 跑两次就做两次，永不重试。
+- **没人声明的工具一律 `unsafe`。** 不是因为它多半是，而是两种错误代价不对称：多一句"重复前先确认"
+  是一句话，重复一次付款是一次付款。
+- connector 这道门用 HTTP 自己的语义：GET/HEAD 是读，PUT/DELETE 幂等，POST/PATCH 不幂等——
+  除非调用方送了 `Idempotency-Key`，那是服务自己给出的相反说法。工具 schema 里因此多了 `headers`。
+- MCP 服务器自报的 `readOnlyHint` / `idempotentHint` 被采信；**没有提示不等于提示安全**。
+- 明确不做：这不是 exactly-once 承诺，没有去重存储，也不保证重试打到同一台服务器。
+  它只是"答案丢了的时候，调用方可以做什么"，以及**拒绝去猜**。
+
