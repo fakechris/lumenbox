@@ -203,6 +203,7 @@ import { SessionEpochs } from "./session-epochs.ts";
 import { mayEnterBox, membersLabel, refusalToEnter } from "../box/membership.ts";
 import { attentionFor } from "../host/attention.ts";
 import { InvoluteConsumer } from "../host/involute-inbox.ts";
+import { describeQueues } from "../host/actor-queue.ts";
 import { describeReceipts } from "../host/receipts.ts";
 import { resolveLocale } from "../i18n/locale.ts";
 import { MESSAGES } from "../i18n/messages.ts";
@@ -1998,6 +1999,11 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
             return { ok: true };
           },
           askedBack: ({ agentId, conversation }) => questions.list().some(open => open.agentId === agentId && open.conversation === conversation),
+          // How many questions an agent takes at once before it turns the next one down in
+          // words (INV-554). `mayAfford` is left unset on purpose: the ceiling it would ask
+          // lives at the relay and arrives with INV-580 — a gate wired to a number nobody
+          // sets would refuse nothing while looking like it refused something.
+          capacity: involuteConfig.capacity ?? 8,
           // What was written down about this item when the decisions were made (INV-551).
           receiptsFor: subject => describeReceipts(orchestrator.receipts.forSubject(subject)),
           log: line => log(line),
@@ -2006,7 +2012,14 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
     involuteConsumer === undefined
       ? undefined
       : setInterval(() => {
-          void involuteConsumer.poll().catch((error: unknown) => log(`involute: poll failed — ${error instanceof Error ? error.message : String(error)}`));
+          void involuteConsumer
+            .poll()
+            .then(outcome => {
+              // A queue nobody can see is indistinguishable from being ignored, which is the
+              // complaint the queue exists to prevent.
+              for (const line of describeQueues(outcome.queues)) log(`involute: ${line}`);
+            })
+            .catch((error: unknown) => log(`involute: poll failed — ${error instanceof Error ? error.message : String(error)}`));
         }, (involuteConfig?.pollSeconds ?? 60) * 1000);
   involuteTimer?.unref();
   if (involuteConsumer !== undefined) log(`involute: answering for ${involuteConfig?.agents.map(a => `@${a.handle}`).join(", ")} every ${involuteConfig?.pollSeconds ?? 60}s`);

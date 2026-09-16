@@ -88,6 +88,9 @@ Linear 是同一个形状：webhook 打到你的服务，你怎么跑模型它�
 - **一致性自检**：任何 runtime 都能跑的 conformance 脚本（认领前不答、不重复答、尊重 deadline、
   拿不出依据就说拿不出）。目前只有我们自己的 hermetic 测试。
 - **successor 接手**（INV-556）：会话型 runtime 永远不再运行时，谁来答、怎么署名。
+- **付款方与硬预算**（INV-580）：队列已经在执行前问"这一轮谁付、付得起吗"（`mayAfford`），
+  但那个上限住在 relay 里，还没有人设它。先留接缝而不先接一个没人设的数字：一个连着空值的
+  闸门，什么都拦不住，看上去却像拦住了。
 - **谁能问**（INV-575）：把提问者解析成本安装的 Principal，用 role 与 box 成员回答，
   而不是 `config.involute.askers` 里那串 UUID。
 
