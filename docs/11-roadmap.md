@@ -1283,6 +1283,47 @@ conduct numbers, the prompt floor, the pre-launch security list): R8's rider and
 R26's search path, then R25. R4, R16, R30, R29 wait for their designs; R17 and R27 wait for a
 week of memory numbers. docs/30 Stage C (`TransferFile`) is paused at Chris's call.
 
+## What to do next, as of 2026-09-16 — after the follow-through, multiuser and Stage 29 rounds
+
+Merged since the 09-14 note: the six red-team fixes on the follow-through rails (INV-530…535),
+multiuser M1–M4 (INV-537, 538, 539, 540, 541) with per-agent `visibility` retired and authority's
+subject moved to the box, the product half (INV-542 setup commands, INV-543 the attention panel),
+the session-credential fix, the documents' own header/index/check, the Involute answering loop
+(INV-550 credentials, INV-553 the consumer, INV-551 decision receipts), and Stage 29 in full
+(INV-156 rules by principal, INV-429 room rules and the guest switch, INV-525 idempotency
+declarations, INV-135 wedge detection, INV-138 the security triage, INV-544 the i18n bundle).
+main is 1624/1624; the App runs from it.
+
+**Bookkeeping first, and it is not optional.** INV-545, 546, 547, 548, 549 and 565 describe work
+that PR #169 already merged (teaching drafts with human review, external desktop demos, the
+shared hostd login, `Tasks` read, delegated native desktop) — and they carry no run and no
+evidence, so `work_list_ready` still offers them. The next agent to take the queue seriously
+will rebuild something that shipped. Whoever authored them should report the runs; nobody else
+should, because a run is an attempt and attributing somebody's delivery to another actor is how
+a ledger stops being evidence.
+
+**Tier 0 — next round.** INV-572 the desktop app's web and the box's web share one `ui-token`
+(one secret, two doors, and rotating either kicks the other out); INV-578 and INV-579, the two
+security items that are deployment defaults rather than design — refuse a non-loopback bind
+without https, and ship a control key that is not beside its database; INV-556 successor handover
+with provenance and INV-554 a bounded queue per actor, which finish the answering loop this round
+started; INV-580 the spend ceiling at the relay, which is the one real piece of engineering left
+on the security list.
+
+**Tier 1.** INV-575 whose questions we take, answered by the roster instead of a list of actor
+ids (it removes the last placeholder in the Involute loop); INV-557 the A2A agent card; the UI
+cluster that is one product round rather than eight items — INV-97 chat surface with INV-110
+jump to a day, 111 unread and reactions, 112 diffs, 119–121 teams; INV-136 the tenant audit
+table; INV-134 session replay.
+
+**Waiting on data or people, not on ranking.** INV-128 real channel payloads; INV-153/157 the
+identity anchor and the namespace migration that follows it; INV-440 a real cross-installation
+caller; INV-480/481 trial participants; and the one thing only Chris can start — a real-model
+scorecard baseline under authorised credentials, which is what turns `release:check`'s model
+section from SKIPPED into a number.
+
+Rule kept: Involute `priority` is the ranking; this section is the why.
+
 ## What to do next, as of 2026-09-14 — after the Astra contracts landed
 
 Merged to main since the 09-11 note: Tier 0 round two (INV-405, 406, 410, 425, 427, 435),
