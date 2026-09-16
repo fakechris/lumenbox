@@ -767,3 +767,29 @@ test("a second dingtalk door mints its own namespace", () => {
   assert.deepEqual(parseChatKey("dingtalk-work:cidXYZ"), { conversationId: "cidXYZ" });
   assert.deepEqual(parseChatKey("dingtalk:cidXYZ"), { conversationId: "cidXYZ" });
 });
+
+test("a notice pushed at a person names the conversation their reply arrives in", async () => {
+  // The half of the upgrade-notice fix this door was missing. `push` records what it
+  // pushed as something the agent has already said, keyed on the conversation the reply
+  // will land in — and on Feishu that needed the sent message's own id, because a reply
+  // there opens a thread under it. Here it needs no id at all: with no threads on this
+  // wire a reply is an ordinary message in the same conversation, and `dispatch` keys it
+  // on this very chatKey. The absence of threads, for once, makes something simpler.
+  const state = harness();
+  (state.adapter as unknown as { identities: Map<string, string> }).identities.set(
+    "dingtalk:staff-1",
+    "cid-room"
+  );
+
+  assert.equal(
+    await state.adapter.send("dingtalk:staff-1", "Your box has an upgrade waiting."),
+    "dingtalk:cid-room"
+  );
+  assert.equal(state.pushes.length, 1, "and the notice still goes out");
+  assert.deepEqual(parseChatKey("dingtalk:cid-room"), { conversationId: "cid-room" });
+
+  // Nobody on record: the push leaves by the direct route addressed at a user id, and the
+  // conversation their reply opens is one this process has never seen. Filing the notice
+  // under a guessed key would put it where no reply can arrive.
+  assert.equal(await state.adapter.send("dingtalk:staff-unknown", "…"), undefined);
+});
