@@ -58,6 +58,7 @@ import {
   type ElementInfo,
   type Outcome,
 } from "../protocol/index.ts";
+import { afterTimeout, idempotencyOfHttp } from "../protocol/idempotency.ts";
 import { skillSlugOf } from "./skill-provenance.ts";
 import { SKILL_FILENAME } from "./skills.ts";
 import {
@@ -602,6 +603,13 @@ export function buildTools(
           method: { type: "string", description: "GET, POST, PUT, PATCH or DELETE. Default GET." },
           path: { type: "string", description: "The API path, starting with /. Query string allowed." },
           body: { description: "A JSON value sent as the request body, for methods that take one." },
+          headers: {
+            type: "object",
+            description:
+              "Extra request headers. Send `Idempotency-Key` on a POST that must not be done twice: " +
+              "with it, a call whose answer is lost is sent again once; without it, a lost answer is " +
+              "reported as unknown and left for you to check (INV-525).",
+          },
         },
         required: ["connector", "path"],
       },
@@ -3370,26 +3378,45 @@ export async function dispatchTool(
         return { text: outcomeLine("refused", `${provider.title} is not connected for you, or its token cannot be refreshed. Ask an admin in Settings → Connected services`), isError: true };
       }
       const hasBody = input.body !== undefined && input.body !== null && method !== "GET";
-      try {
-        const response = await fetch(`${provider.apiBase}${path}`, {
+      const extraHeaders = (typeof input.headers === "object" && input.headers !== null ? input.headers : {}) as Record<string, unknown>;
+      // What the caller may do if the answer is lost, decided before the call and by the
+      // method's own meaning (INV-525): GET reads, PUT and DELETE land the same state
+      // twice, POST and PATCH do it twice — unless the caller sent an idempotency key,
+      // which is the service's own way of saying otherwise.
+      const declaration = idempotencyOfHttp(method, extraHeaders);
+      const send = () =>
+        fetch(`${provider.apiBase}${path}`, {
           method,
           headers: {
             Authorization: `Bearer ${token}`,
             ...(provider.apiHeaders ?? {}),
             ...(hasBody ? { "content-type": "application/json; charset=utf-8" } : {}),
+            ...Object.fromEntries(Object.entries(extraHeaders).filter(([, value]) => typeof value === "string")),
           },
           ...(hasBody ? { body: typeof input.body === "string" ? input.body : JSON.stringify(input.body) } : {}),
           signal: AbortSignal.timeout(30_000),
         });
-        const raw = await response.text();
-        const body = scrubToken(raw.length > 20_000 ? `${raw.slice(0, 20_000)}\n… (${raw.length - 20_000} more characters)` : raw, token);
-        const ok = response.status >= 200 && response.status < 300;
-        return {
-          text: `${outcomeLine(ok ? "ok" : "failed", ok ? undefined : `HTTP ${response.status}`)} ${method} ${path} → ${response.status}\n${body}`,
-          ...(ok ? {} : { isError: true }),
-        };
-      } catch (error) {
-        return { text: outcomeLine("unknown", `${provider.title} did not answer: ${error instanceof Error ? error.message : String(error)}`), isError: true };
+      for (let attempt = 1; ; attempt += 1) {
+        try {
+          const response = await send();
+          const raw = await response.text();
+          const body = scrubToken(raw.length > 20_000 ? `${raw.slice(0, 20_000)}\n… (${raw.length - 20_000} more characters)` : raw, token);
+          const ok = response.status >= 200 && response.status < 300;
+          return {
+            text: `${outcomeLine(ok ? "ok" : "failed", ok ? undefined : `HTTP ${response.status}`)} ${method} ${path} → ${response.status}\n${body}`,
+            ...(ok ? {} : { isError: true }),
+          };
+        } catch (error) {
+          const detail = error instanceof Error ? error.message : String(error);
+          const plan = afterTimeout(declaration, { method, ...extraHeaders }, attempt);
+          if (plan.retry) {
+            continue;
+          }
+          return {
+            text: outcomeLine("unknown", `${provider.title} did not answer: ${detail}${plan.note === undefined ? "" : ` — ${plan.note}`}`),
+            isError: true,
+          };
+        }
       }
     }
     case "browser_fill_secret": {
