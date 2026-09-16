@@ -345,6 +345,24 @@ bookkeeping gap named — INV-545/546/547/548/549/565 are delivered in #169 and 
 **Status**: Complete for the code (2026-09-16): #179–#184 merged, main 1624/1624, floor 1624.
 Open, and not this actor's to close: the six items above need runs from whoever authored them.
 
+## Stage 33: The deployment defaults, and the ledger's own hard edges (2026-09-16)
+**Goal**: The group after Stage 32 — two credentials that were one, the two deployment
+defaults an operator gets by accident, and the three pieces the agent-request loop was
+missing.
+**Success Criteria**: INV-572 this machine's UI token and the box's are separate files;
+INV-578 a non-loopback bind without https refuses to start and the session cookie carries
+`Secure`; INV-579 the packaged deployment takes its token key from a Secret and a start
+says which key it got; INV-554 one bounded queue per actor with an explicit refusal past
+capacity; INV-556 a stand-in answers under its own name, never through the other one's
+credential; INV-580 a spend ceiling enforced at the relay, before the request is forwarded.
+**Status**: Complete (2026-09-16): #186, #187, #188, #189 (a typecheck break of my own on
+main), #190, #191, #192 merged; main 1654/1654, floor 1654; typecheck clean. docs/10's S-2,
+S-5 and S-6 are closed with what was done and what was deliberately left as the laptop
+default. One gap is named rather than papered over: the ledger has no primitive letting a
+declared successor claim a request addressed to another actor, so the stand-in's claim is
+attempted, refused, and reported — never worked around with the original's credential.
+Proposed as INV-582 (candidate).
+
 ## Stage 29: Next round (planned 2026-09-14)
 **Goal**: Close the last open pieces that need no external data, and make the operator-side evidence possible.
 **Success Criteria**: I3 door rules (INV-429) merged; host-side wedge detection (INV-135); standing approvals by principal (INV-156, on top of INV-427 rules); tool idempotency declaration (INV-525, once committed); a real-model scorecard baseline produced under authorised credentials and compared once; security S-2..S-7 (INV-138) triaged.
