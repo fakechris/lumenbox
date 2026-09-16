@@ -254,3 +254,28 @@ The document reader (`ReadFeishuDoc`) needs two read-only scopes the scan-create
 does not start with: `docx:document:readonly` and `wiki:wiki:readonly`. Same no-console
 path: `node scripts/feishu-enable-docs.mjs`, scan, confirm the two scopes, no restart.
 Until they are granted, reads fail with the permission advice the tool relays.
+
+## TLS is required for anything not on loopback (INV-578, 2026-09-16)
+
+A published installation over plain HTTP hands somebody's session to anyone on the path.
+Since 2026-09-15 a sign-in issues a per-person session rather than the installation's token,
+so it is no longer *the* credential — but a person's session is that person's work.
+
+The server therefore **refuses to start** when it binds a non-loopback address and
+`AGENTBOX_PUBLIC_URL` is not `https://…`. Put a terminator in front — Caddy, nginx, or a
+tunnel that terminates for you — and point `AGENTBOX_PUBLIC_URL` at it:
+
+```
+# Caddyfile
+box.example.com {
+  reverse_proxy 127.0.0.1:7777
+}
+```
+
+```
+AGENTBOX_PUBLIC_URL=https://box.example.com
+```
+
+`AGENTBOX_INSECURE=1` is the deliberate escape for a tailnet, a lab or a laptop demo. It
+starts, and it says so on every start; that repetition is the point.
+

@@ -8,6 +8,9 @@
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import {
 COOKIE_NAME, authorize, isLoopback, parseCookies,
   callerOf,
@@ -135,3 +138,35 @@ test("driving is not asked about the agent any more: authority lives on the box 
   assert.ok(refusalToDrive(viewer), "the role still decides");
 });
 
+
+test("a published installation refuses plain HTTP unless somebody says they mean it (INV-578)", async () => {
+  // docs/10 S-2 said "use TLS" for months, which is the kind of advice that is read after
+  // the incident. A person's session is a person's work, and anybody on the path has it.
+  const { startWebServer } = await import("./server.ts");
+  const home = mkdtempSync(join(tmpdir(), "agentbox-https-"));
+  const previous = { home: process.env.AGENTBOX_HOME, url: process.env.AGENTBOX_PUBLIC_URL, insecure: process.env.AGENTBOX_INSECURE };
+  process.env.AGENTBOX_HOME = home;
+  delete process.env.AGENTBOX_PUBLIC_URL;
+  delete process.env.AGENTBOX_INSECURE;
+  let stop: (() => void) | undefined;
+  try {
+    await assert.rejects(
+      () => startWebServer({ port: 7951, host: "0.0.0.0", token: "t0k", useBox: false, onLog: () => {} }),
+      /Refusing to serve .* without TLS/,
+      "a non-loopback bind with no https address does not start"
+    );
+
+    // The deliberate escape, which says so on every start rather than once.
+    process.env.AGENTBOX_INSECURE = "1";
+    const lines: string[] = [];
+    stop = await startWebServer({ port: 7951, host: "0.0.0.0", token: "t0k", useBox: false, onLog: line => lines.push(line) });
+    assert.ok(lines.some(line => /without TLS because AGENTBOX_INSECURE=1/.test(line)), "and it says it out loud");
+  } finally {
+    stop?.();
+    for (const [key, value] of Object.entries({ AGENTBOX_HOME: previous.home, AGENTBOX_PUBLIC_URL: previous.url, AGENTBOX_INSECURE: previous.insecure })) {
+      if (value === undefined) delete process.env[key];
+      else process.env[key] = value;
+    }
+    rmSync(home, { recursive: true, force: true });
+  }
+});

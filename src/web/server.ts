@@ -2586,6 +2586,8 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
 
   /** Signs web sessions; set from the resolved UI token before the server listens. */
   let sessionSecret = "";
+  /** Whether this installation is reached over TLS, so cookies can say Secure (INV-578). */
+  let secureCookies = false;
   // Which generation of each person's sign-ins is still good (INV-537).
   const epochs = new SessionEpochs();
 
@@ -2899,7 +2901,7 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
       // The session, and only the session: what this browser gets is a credential issued
       // to *this person*, not the installation's token (which is what it used to be
       // handed, full power and all).
-      res.writeHead(302, { "set-cookie": [sessionCookie(identity, sessionSecret, epochs.of(principals.resolve(identity).id))], location: pending.next });
+      res.writeHead(302, { "set-cookie": [sessionCookie(identity, sessionSecret, epochs.of(principals.resolve(identity).id), secureCookies)], location: pending.next });
       res.end();
       log(`web login: ${identity} via feishu door ${channelId} (${principals.resolve(identity).name})`);
     } catch (error) {
@@ -3463,7 +3465,7 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
           // browser may reach the installation at all, the session says who it is. The
           // code delivers the first and mints the second; what the person may then *do*
           // is their roster role, checked on every request that changes something.
-          const admit = [sessionCookie(identity, sessionSecret, epochs.of(principals.resolve(identity).id))];
+          const admit = [sessionCookie(identity, sessionSecret, epochs.of(principals.resolve(identity).id), secureCookies)];
           if (existing !== undefined) {
             // A code made for somebody already known links this browser to them: same
             // human, second surface, one bill.
@@ -6090,12 +6092,39 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
     log(`bound to ${host} with no token configured; generated one`);
     log(`open: http://${host}:${options.port}/?token=${token}`);
   }
+  /**
+   * A published installation over plain HTTP (docs/10 S-2, INV-578).
+   *
+   * Anyone on the path between a person and this port has their session — not the whole
+   * installation any more (a sign-in issues its own session since 2026-09-15), but a
+   * person's session is a person's work. The documentation has said "use TLS" for months,
+   * which is the kind of advice that gets read after the incident.
+   *
+   * So it refuses, and names the two ways forward. `AGENTBOX_INSECURE=1` is the deliberate
+   * one — a lab, a tailnet, a demo — and it says so on every start rather than once, because
+   * a warning nobody sees again is a warning nobody acted on.
+   */
+  const publicUrl = process.env.AGENTBOX_PUBLIC_URL?.trim() ?? "";
+  const overHttps = publicUrl.startsWith("https://");
+  if (!isLoopback(host) && !overHttps) {
+    if (process.env.AGENTBOX_INSECURE !== "1") {
+      throw new Error(
+        `Refusing to serve ${host}:${options.port} without TLS. Anyone on the path has ` +
+          `somebody's session. Put a terminator in front (Caddy, nginx, a tunnel) and set ` +
+          `AGENTBOX_PUBLIC_URL=https://…, or set AGENTBOX_INSECURE=1 if you mean it — a ` +
+          `tailnet or a laptop demo — and this will say so every time it starts.`
+      );
+    }
+    log(`serving ${host}:${options.port} without TLS because AGENTBOX_INSECURE=1: anybody on the path has somebody's session`);
+  }
   if (!token) {
     log("no UI token: anything that can reach this port can drive the agents");
   }
   // Derived, so rotating the token ends every web session with it — and so there is no
   // second secret to store. Assigned before anything can serve a request.
   sessionSecret = sessionKey(token);
+  // Under TLS the cookie says so, and a browser stops sending it over plain HTTP.
+  if (overHttps) secureCookies = true;
   await new Promise<void>(resolve => server.listen(options.port, host, resolve));
   // Where a job in the box reaches this server (docs/33 §1), and the lease renewal that ends a
   // route when its job is gone.
