@@ -286,3 +286,132 @@ test("a question that cannot be paid for is refused before the turn runs, not af
   assert.deepEqual(outcome.failed, ["q1"]);
   assert.match(store[0]!.answers[0]!.body, /chris is over the month's budget for me/, "and the person is told which principal pays and why it stopped");
 });
+
+test("a stand-in answers under its own name, from the record, with the relation stated (INV-556 A1)", async () => {
+  const { store, call } = ledger([{ id: "q1" }]);
+  const prompts: string[] = [];
+  const consumer = new InvoluteConsumer({
+    agents: () => [
+      { agentId: "a1", agentName: "Ada", handle: "ada", call: call("ada") },
+      { agentId: "a2", agentName: "Iris", handle: "iris", call: call("iris") },
+    ],
+    successorFor: handle => (handle === "ada" ? { kind: "agent", handle: "iris" } : undefined),
+    // Ada is the one that was asked, and its runtime is gone — the case the whole thing is
+    // for. Nothing is claimed in Ada's name, so the stand-in can take it.
+    canRun: agentId => agentId !== "a1",
+    runTurn: async input => {
+      prompts.push(input.prompt);
+      return "记录里写的是 2026-09-10 选了轮询，理由是这台机器没有入站端口（见 PR#475）。";
+    },
+    mayAnswer: () => ({ ok: true }),
+    receiptsFor: () => "What was written down at the time:\n- 2026-09-10 Ada: chose polling — no inbound port",
+    log: () => {},
+  });
+
+  const outcome = await consumer.poll();
+  assert.deepEqual(outcome.stoodIn, ["q1"]);
+  assert.deepEqual(outcome.unanswered, [], "a question that got answered is not also reported as unanswered");
+
+  // The ledger's author is the stand-in, not the agent that was asked. That is the whole point.
+  assert.equal(store[0]!.claimed_by, "iris");
+  const posted = store[0]!.answers[0]!;
+  assert.equal(posted.state, "completed");
+  assert.match(posted.body, /Iris \(@iris\), standing in for @ada/);
+  assert.match(posted.body, /Based on what is written down on this item/);
+
+  // And it was told, in the same breath as the question, not to invent Ada's reasons.
+  const standInPrompt = prompts.find(prompt => prompt.includes("@iris"))!;
+  assert.match(standInPrompt, /did not answer within the deadline, and you are its declared stand-in/);
+  assert.match(standInPrompt, /Open by saying you are not Ada/);
+  assert.match(standInPrompt, /You were not there/);
+  assert.match(standInPrompt, /Do not guess why Ada did not answer/);
+  assert.match(standInPrompt, /2026-09-10 Ada: chose polling/, "with the receipts it is supposed to answer from");
+});
+
+test("a stand-in is never posted through the agent that was asked (INV-556 A2)", async () => {
+  // The ledger refuses a claim the stand-in cannot hold. The tempting repair — post it with
+  // the original agent's credential, which does hold one — is the one thing that must not
+  // happen: the record would say Ada answered when Ada did not.
+  const { store, call } = ledger([{ id: "q1" }]);
+  const lines: string[] = [];
+  const consumer = new InvoluteConsumer({
+    agents: () => [
+      { agentId: "a1", agentName: "Ada", handle: "ada", call: call("ada") },
+      {
+        agentId: "a2",
+        agentName: "Iris",
+        handle: "iris",
+        call: async (tool: string) => {
+          if (tool === "agent_request_claim") throw new Error("this request is addressed to another actor");
+          throw new Error(`unexpected ${tool}`);
+        },
+      },
+    ],
+    successorFor: () => ({ kind: "agent", handle: "iris" }),
+    runTurn: async input => (input.agentId === "a1" ? Promise.reject(new Error("the box is down")) : "I can answer this."),
+    mayAnswer: () => ({ ok: true }),
+    log: line => lines.push(line),
+  });
+
+  const outcome = await consumer.poll();
+  assert.deepEqual(outcome.stoodIn, []);
+  assert.equal(store[0]!.answers.length, 1, "exactly one answer, and it is Ada's own account of itself");
+  assert.match(store[0]!.answers[0]!.body, /Ada gave no answer within the deadline/);
+  assert.match(store[0]!.answers[0]!.body, /@iris is its stand-in and could not answer either/);
+  assert.ok(
+    lines.some(line => /did not let iris answer for ada/.test(line) && /rather than posting in ada's name/.test(line)),
+    "and the refusal is reported, not worked around"
+  );
+});
+
+test("with no stand-in, silence is reported as silence and says who to ask (INV-556 A4)", async () => {
+  const { store, call } = ledger([{ id: "q1" }, { id: "q2" }]);
+  const consumer = new InvoluteConsumer({
+    agents: () => [agentOf(call)],
+    // A person, not an agent: nobody can be made to answer, but a name is a next step.
+    successorFor: () => ({ kind: "person", name: "Chris" }),
+    runTurn: async () => {
+      throw new Error("the box is down");
+    },
+    mayAnswer: () => ({ ok: true }),
+    log: () => {},
+  });
+
+  const outcome = await consumer.poll();
+  assert.equal(outcome.unanswered.length, 1);
+  assert.equal(outcome.unanswered[0]!.work, "INV-999");
+  assert.match(outcome.unanswered[0]!.detail, /Ask Chris, who is named as its stand-in/);
+  const body = store[0]!.answers[0]!.body;
+  assert.match(body, /gave no answer within the deadline/);
+  assert.match(body, /From this side: I could not finish looking into this: the box is down/, "what we saw is reported");
+  assert.doesNotMatch(body, /not running|offline|crashed|gave up/, "what the silence means is not guessed at");
+});
+
+test("the agent that was asked comes back later, and the answered request is not reopened (INV-556 A3)", async () => {
+  const { store, call } = ledger([{ id: "q1" }]);
+  let adaIsBack = false;
+  const consumer = new InvoluteConsumer({
+    agents: () => [
+      { agentId: "a1", agentName: "Ada", handle: "ada", call: call("ada") },
+      { agentId: "a2", agentName: "Iris", handle: "iris", call: call("iris") },
+    ],
+    successorFor: () => ({ kind: "agent", handle: "iris" }),
+    canRun: agentId => agentId !== "a1" || adaIsBack,
+    runTurn: async () => (adaIsBack ? "Actually, here is the full story." : "Iris answers from the record."),
+    mayAnswer: () => ({ ok: true }),
+    log: () => {},
+  });
+
+  await consumer.poll();
+  assert.deepEqual(store[0]!.answers.length, 1);
+
+  // Ada is back and would now have plenty to say. The request is closed; whatever it has to
+  // add belongs in the thread as a new comment, not as a second answer to one question.
+  adaIsBack = true;
+  store[0]!.state = "completed";
+  const second = await consumer.poll();
+  assert.deepEqual(second.answered, []);
+  assert.deepEqual(second.stoodIn, []);
+  assert.equal(store[0]!.answers.length, 1, "still one answer");
+  assert.equal(store[0]!.answers[0]!.body.includes("Iris"), true, "and it is the one that was given at the time");
+});

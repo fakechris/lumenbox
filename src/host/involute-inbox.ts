@@ -28,6 +28,7 @@
 
 import { conversationIdFor } from "../agents/registry.ts";
 import { ActorQueues, type QueueView } from "./actor-queue.ts";
+import { type StandIn, type Successor, standInAttribution, standInCheck, standInPrompt, unansweredDetail } from "./successor.ts";
 
 /** A row as `agent_inbox` returns it. */
 export interface InboxRequest {
@@ -76,6 +77,19 @@ export interface ConsumerDeps {
   mayAfford?: (input: { agentId: string; payer: string | undefined }) => { ok: true } | { ok: false; why: string };
   /** How many questions may wait per agent before the next is refused. Default 8. */
   capacity?: number;
+  /**
+   * Who answers when this agent cannot (INV-556). An agent on this installation stands in
+   * under its own name; a person is a name to go and ask, which is what turns silence into
+   * a next step.
+   */
+  successorFor?: (handle: string) => Successor | undefined;
+  /**
+   * Whether this agent could take a turn at all right now — its record is still here, its
+   * box answers. When it cannot, the request is **not claimed in its name**: claiming is
+   * saying "I am doing this", and a consumer that says that for an agent it knows cannot
+   * work has taken the question away from whoever could have answered it.
+   */
+  canRun?: (agentId: string) => boolean;
   log: (line: string) => void;
   now?: () => Date;
 }
@@ -87,6 +101,10 @@ export interface PollOutcome {
   skipped: string[];
   /** Turned down because the agent already had a queue full of them (INV-554). */
   refused: string[];
+  /** Answered by a declared stand-in, under its own name (INV-556). */
+  stoodIn: string[];
+  /** Nobody answered, and this is who to ask. The attention projection reads these. */
+  unanswered: { id: string; work: string; agent: string; detail: string }[];
   /** What is waiting, per agent, so a queue is something a person can see. */
   queues: QueueView[];
 }
@@ -169,7 +187,7 @@ export class InvoluteConsumer {
 
   /** One pass: every agent's inbox into its queue, then the one turn its queue allows. */
   async poll(): Promise<PollOutcome> {
-    const outcome: PollOutcome = { answered: [], asked: [], failed: [], skipped: [], refused: [], queues: [] };
+    const outcome: PollOutcome = { answered: [], asked: [], failed: [], skipped: [], refused: [], stoodIn: [], unanswered: [], queues: [] };
     for (const agent of this.deps.agents()) {
       try {
         await this.pollOne(agent, outcome);
@@ -256,6 +274,14 @@ export class InvoluteConsumer {
   }
 
   private async runOne(agent: InvoluteAgent, request: InboxRequest, outcome: PollOutcome): Promise<void> {
+    // Known not to be able to answer — its record is gone, its box does not respond. Straight
+    // to the stand-in, and deliberately *without* claiming first: a claim held by an agent
+    // that cannot work is a question taken away from whoever could have answered it.
+    if (this.deps.canRun?.(agent.agentId) === false) {
+      this.deps.log(`involute: ${agent.handle} cannot take a turn; handing ${request.id} to its stand-in`);
+      await this.handOver(agent, request, outcome, { work: "", receipts: "" }, `${agent.agentName} is not able to run here at the moment`, false);
+      return;
+    }
     // Claimed before anything else, including before deciding to refuse: holding the claim
     // is what gives the right to answer at all (the ledger refuses an answer from a caller
     // that does not hold it), and a refusal is an answer.
@@ -302,19 +328,107 @@ export class InvoluteConsumer {
         })
       ).trim();
     } catch (error) {
-      await this.answer(agent, request, `I could not finish looking into this: ${message(error)}`, "failed");
-      outcome.failed.push(request.id);
+      this.deps.log(`involute: ${agent.handle} could not answer ${request.id} — ${message(error)}`);
+      await this.handOver(agent, request, outcome, { work, receipts }, `I could not finish looking into this: ${message(error)}`);
       return;
     }
     if (said === "") {
-      await this.answer(agent, request, "I ran and produced nothing worth posting — ask me again with more to go on.", "failed");
-      outcome.failed.push(request.id);
+      this.deps.log(`involute: ${agent.handle} produced nothing for ${request.id}`);
+      await this.handOver(agent, request, outcome, { work, receipts }, "I ran and produced nothing worth posting");
       return;
     }
     const askedBack = this.deps.askedBack?.({ agentId: agent.agentId, conversation }) === true;
     await this.answer(agent, request, said, askedBack ? "input-required" : "completed");
     (askedBack ? outcome.asked : outcome.answered).push(request.id);
     this.deps.log(`involute: ${agent.handle} answered ${request.work_identifier ?? request.work_id} (${request.id})`);
+  }
+
+  /**
+   * The agent that was asked could not answer. Its declared stand-in answers instead — under
+   * its own name, from the record, with the relation stated (INV-556).
+   *
+   * Never through the original's credential. The author of an answer is what people trust in
+   * a ledger, and a stand-in signing the missing agent's name is worse than no answer: it
+   * produces a record that says the agent answered when it did not.
+   */
+  private async handOver(
+    agent: InvoluteAgent,
+    request: InboxRequest,
+    outcome: PollOutcome,
+    context: { work: string; receipts: string },
+    /** What this installation saw, which is fair to report; not what the silence means. */
+    because?: string,
+    /** Whether the original agent already holds the claim. */
+    claimed = true
+  ): Promise<void> {
+    const work = request.work_identifier ?? request.work_id;
+    const successor = this.deps.successorFor?.(agent.handle);
+    const stand =
+      successor?.kind === "agent" ? this.deps.agents().find(other => other.handle === successor.handle) : undefined;
+
+    if (successor?.kind === "agent" && stand !== undefined && context.work === "") {
+      // The original never got as far as reading the item, so the stand-in reads it with its
+      // own credential — the material is the point of a stand-in, not the session.
+      try {
+        context = { ...context, work: describeWork(await stand.call("work_get_context", { id: work })) };
+      } catch (error) {
+        this.deps.log(`involute: ${stand.handle} could not read ${work} (${message(error)})`);
+      }
+      context = { ...context, receipts: context.receipts !== "" ? context.receipts : (this.deps.receiptsFor?.(`inv:${work}`) ?? "") };
+    }
+    if (successor?.kind === "agent" && stand !== undefined) {
+      const standIn: StandIn = { originalHandle: agent.handle, originalName: agent.agentName, handle: stand.handle, name: stand.agentName };
+      const guard = standInCheck({ postingAs: stand.handle, standIn });
+      if (!guard.ok) {
+        // Unreachable by construction, and checked anyway: the day this becomes reachable is
+        // the day a refactor has quietly made impersonation possible.
+        this.deps.log(`involute: ${guard.why}`);
+      } else {
+        let said = "";
+        try {
+          said = (
+            await this.deps.runTurn({
+              agentId: stand.agentId,
+              prompt: standInPrompt({ body: request.body, work }, standIn, { item: context.work, receipts: context.receipts }),
+              conversation: conversationFor(request),
+            })
+          ).trim();
+        } catch (error) {
+          this.deps.log(`involute: ${stand.handle} could not stand in for ${agent.handle} on ${request.id} — ${message(error)}`);
+        }
+        if (said !== "") {
+          const body = `${said}\n\n${standInAttribution(standIn, context.receipts !== "" ? "what is written down on this item" : undefined)}`;
+          try {
+            // The stand-in's own credential, and its own claim: the ledger decides whether a
+            // declared stand-in may take a request addressed to somebody else, and if it says
+            // no, that refusal is reported rather than worked around.
+            await stand.call("agent_request_claim", { id: request.id });
+            await stand.call("agent_request_answer", { id: request.id, body, state: "completed" });
+            outcome.stoodIn.push(request.id);
+            this.deps.log(`involute: ${stand.handle} answered ${work} (${request.id}) standing in for ${agent.handle}`);
+            return;
+          } catch (error) {
+            this.deps.log(
+              `involute: the ledger did not let ${stand.handle} answer for ${agent.handle} on ${request.id} (${message(error)}); ` +
+                `saying so rather than posting in ${agent.handle}'s name`
+            );
+          }
+        }
+      }
+    }
+
+    // Nobody stood in. Reported as what it is — no answer arrived — and with who to ask.
+    // Not "the agent is not running": that is a guess about somebody else's machine.
+    const detail = unansweredDetail({ originalName: agent.agentName, successor, ...(because !== undefined ? { because } : {}) });
+    // Its own account of itself, which needs its own claim — this is the one thing the
+    // original's credential may still say here.
+    if (!claimed && !(await this.claim(agent, request, outcome))) {
+      outcome.unanswered.push({ id: request.id, work, agent: agent.agentName, detail });
+      return;
+    }
+    await this.answer(agent, request, detail, "failed");
+    outcome.failed.push(request.id);
+    outcome.unanswered.push({ id: request.id, work, agent: agent.agentName, detail });
   }
 
   private async answer(agent: InvoluteAgent, request: InboxRequest, body: string, state: "completed" | "failed" | "input-required"): Promise<void> {
