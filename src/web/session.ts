@@ -96,9 +96,13 @@ export function readSession(value: string | undefined, key: string): Session | u
 export const SESSION_MAX_AGE_SECONDS = 30 * 24 * 3_600;
 
 /** The Set-Cookie line for a fresh session. HttpOnly: nothing in the page reads it. */
-export function sessionCookie(identity: string, key: string, epoch = 0): string {
+export function sessionCookie(identity: string, key: string, epoch = 0, secure = false): string {
   return (
     `${SESSION_COOKIE}=${encodeURIComponent(makeSession(identity, key, epoch))}; Path=/; ` +
+    // Under TLS the cookie says so, and the browser stops offering it over plain HTTP —
+    // which is the case this flag exists for (INV-578). Not set on a loopback or an
+    // explicitly insecure publish, where marking it Secure would stop it being stored.
+    (secure ? "Secure; " : "") +
     `Max-Age=${SESSION_MAX_AGE_SECONDS}; HttpOnly; SameSite=Lax`
   );
 }
