@@ -260,3 +260,26 @@ every 30s`。在 INV-553 上以 Admin(HUMAN) 身份 `@iris` 提问，59 秒后�
 引用：Involute `GET /docs/api.md`、`protocol_get_guide`（2026-09-15 取）、Involute 侧 agent 的 sidecar 方案（2026-09-15）、
 Linear 开发者文档（agents / agent-interaction / agent-best-practices / coding-sessions changelog）、
 A2A Protocol v0.2.5 与 1.0 说明（Linux Foundation）、docs/51 §3、docs/52、docs/22、docs/20。
+
+## 接手与出处（INV-556，2026-09-16）
+
+调研结论（2026-09-15）先说清楚：**能回答问题的是记录，不是进程**。Linear 没有"把活着的 session
+转交给另一个 agent"这个原语——不响应就换 delegate、开新 session，上下文由评论与 `promptContext`
+重建；生态里的 in-place harness swap 也明确不迁移 transcript，只做语义交接加仓库里的持久事实。
+
+所以接手不是"恢复会话"，是**另一个 agent 读同一份记录、署自己的名回答**。落地的三条：
+
+1. **声明**：`config.involute.agents[].successor`——`@handle` 是本安装的另一个 agent，其他文本是人。
+2. **不替它认领**：被问的 agent 跑不了时（`canRun` 为假），请求不会以它的名义 claim。认领是"这件事
+   我在做"的意思；替一个做不了的 agent 说这句话，等于把问题从能答的人手里拿走。
+3. **署自己的名**：接手人用自己的凭证 claim + answer，正文开头先说"我不是 X"，结尾带
+   `— Iris (@iris), standing in for @ada. Based on …`。`standInCheck` 是结构性的拒绝而不是约定：
+   发帖的凭证必须属于答复署名的那一位。
+
+没人接手时：**"期限内没有答复"** 是事实，**"它没在运行"** 是对别人机器的猜测，只写前者；再加一句
+该找谁。这条会留在 attention 页上（`kind: "unanswered"`），因为日志会滚走，而那头有个人在等。
+
+**服务端还缺一块**：request 是发给某个 actor 的，接手人的 claim 会被账本拒绝。我们照样去 claim，
+被拒绝就如实记录并退回"没人答 + 该找谁"，绝不改用原 agent 的凭证代发。需要的原语是：被声明的
+successor 可以认领/答复发给另一个 actor 的 request。
+

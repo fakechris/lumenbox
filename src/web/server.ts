@@ -204,6 +204,7 @@ import { mayEnterBox, membersLabel, refusalToEnter } from "../box/membership.ts"
 import { attentionFor } from "../host/attention.ts";
 import { InvoluteConsumer } from "../host/involute-inbox.ts";
 import { describeQueues } from "../host/actor-queue.ts";
+import { parseSuccessor } from "../host/successor.ts";
 import { describeReceipts } from "../host/receipts.ts";
 import { resolveLocale } from "../i18n/locale.ts";
 import { MESSAGES } from "../i18n/messages.ts";
@@ -1955,6 +1956,8 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
    * same one either way.
    */
   const involuteConfig = loadConfig().involute;
+  /** Questions to our agents that nobody answered, for the attention page (INV-556 A4). */
+  const involuteUnanswered: { work: string; agent: string; detail: string }[] = [];
   const involuteConsumer =
     involuteConfig === undefined || involuteConfig.agents.length === 0
       ? undefined
@@ -2004,6 +2007,12 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
           // lives at the relay and arrives with INV-580 — a gate wired to a number nobody
           // sets would refuse nothing while looking like it refused something.
           capacity: involuteConfig.capacity ?? 8,
+          // Who answers when one of ours cannot (INV-556). An agent here stands in under its
+          // own name; anything else is a person to go and ask.
+          successorFor: handle => parseSuccessor(involuteConfig.agents.find(entry => entry.handle === handle)?.successor),
+          // An agent whose record is gone cannot take a turn, and a request is not claimed in
+          // its name: claiming says "I am doing this".
+          canRun: agentId => registry.tryGet(agentId) !== undefined,
           // What was written down about this item when the decisions were made (INV-551).
           receiptsFor: subject => describeReceipts(orchestrator.receipts.forSubject(subject)),
           log: line => log(line),
@@ -2018,6 +2027,15 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
               // A queue nobody can see is indistinguishable from being ignored, which is the
               // complaint the queue exists to prevent.
               for (const line of describeQueues(outcome.queues)) log(`involute: ${line}`);
+              // Questions nobody answered stay on the attention page until they are dealt
+              // with — a failure in a log line scrolls away, and this one has a person on
+              // the other end of it (INV-556 A4).
+              for (const entry of outcome.unanswered) {
+                if (involuteUnanswered.some(known => known.work === entry.work && known.agent === entry.agent)) continue;
+                involuteUnanswered.push({ work: entry.work, agent: entry.agent, detail: entry.detail });
+                log(`involute: ${entry.detail}`);
+              }
+              while (involuteUnanswered.length > 50) involuteUnanswered.shift();
             })
             .catch((error: unknown) => log(`involute: poll failed — ${error instanceof Error ? error.message : String(error)}`));
         }, (involuteConfig?.pollSeconds ?? 60) * 1000);
@@ -5268,6 +5286,7 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
             tasks: board === undefined ? [] : board.list(),
             questions: questions.list(),
             nameOf: id => registry.tryGet(id)?.profile.name ?? principals.list().find(person => person.id === id)?.name ?? id,
+            unanswered: involuteUnanswered,
             ...(me === undefined ? { all: true } : {}),
           });
           send(res, 200, { ...answer, who: me?.name ?? "this installation" });

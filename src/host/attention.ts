@@ -23,7 +23,7 @@ import type { Task } from "./tasks.ts";
 import type { WatchedQuestion } from "./question-expiry.ts";
 
 export interface AttentionItem {
-  kind: "question" | "close-proposal" | "review" | "nudged" | "waiting";
+  kind: "question" | "close-proposal" | "review" | "nudged" | "waiting" | "unanswered";
   /** What to open: a task id, or the conversation a question was asked in. */
   ref: string;
   title: string;
@@ -49,6 +49,14 @@ export interface AttentionInput {
   tasks: readonly Task[];
   questions: readonly WatchedQuestion[];
   nameOf: (id: string) => string;
+  /**
+   * Questions put to one of our agents on a work item that got no answer (INV-556). Shown
+   * to the operator only: the person who asked is an actor over there, and mapping them
+   * onto a principal here is INV-575. Until then, "somebody asked and nobody answered" is
+   * the installation's problem, and hiding it from the one caller who can act on it would
+   * be a strange kind of privacy.
+   */
+  unanswered?: readonly { work: string; agent: string; detail: string; deadline?: string }[];
   /**
    * No person: the installation's own credential, which is the operator. They get
    * everything with a clock on it rather than nothing — an empty page for the one caller
@@ -81,6 +89,17 @@ export function attentionFor(input: AttentionInput): Attention {
           : `${question.agentName} is waiting; with no answer it decides and says which way`,
       deadline: new Date(question.expiresAt).toISOString(),
       with: question.agentName,
+    });
+  }
+
+  for (const entry of input.all === true ? (input.unanswered ?? []) : []) {
+    mine.push({
+      kind: "unanswered",
+      ref: entry.work,
+      title: `${entry.work}: nobody answered`,
+      detail: entry.detail,
+      ...(entry.deadline !== undefined ? { deadline: entry.deadline } : {}),
+      with: entry.agent,
     });
   }
 

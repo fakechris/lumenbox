@@ -127,7 +127,7 @@ export interface AgentboxConfig {
    */
   involute?: {
     url: string;
-    agents: { agentId: string; handle: string; secretId: string }[];
+    agents: { agentId: string; handle: string; secretId: string; successor?: string }[];
     askers?: string[];
     /** Seconds between inbox polls. Absent means 60. */
     pollSeconds?: number;
@@ -335,7 +335,10 @@ function readInvolute(value: unknown, warn: (message: string) => void): Agentbox
       warn(`config: involute.agents entry needs agentId, handle and secretId; ignoring ${agentId || handle || "it"}`);
       continue;
     }
-    agents.push({ agentId, handle, secretId });
+    // Who answers when this one cannot (INV-556): `@handle` for another agent here, any
+    // other text for a person to go and ask.
+    const successor = typeof row.successor === "string" && row.successor.trim() !== "" ? row.successor.trim() : undefined;
+    agents.push({ agentId, handle, secretId, ...(successor !== undefined ? { successor } : {}) });
   }
   const askers = Array.isArray(raw.askers) ? raw.askers.filter((id): id is string => typeof id === "string" && id.trim() !== "") : undefined;
   const pollSeconds = typeof raw.pollSeconds === "number" && Number.isFinite(raw.pollSeconds) ? Math.max(15, Math.floor(raw.pollSeconds)) : undefined;
