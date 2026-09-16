@@ -35,6 +35,7 @@
 import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { appendLine } from "./jsonl.ts";
+import { Receipts } from "./receipts.ts";
 import { agentboxHome, envNumber } from "../config.ts";
 
 export function tasksPath(): string {
@@ -279,7 +280,15 @@ export class TaskStore {
 
   constructor(
     private readonly path: string | null = tasksPath(),
-    private readonly onWarn: (message: string) => void = () => {}
+    private readonly onWarn: (message: string) => void = () => {},
+    /**
+     * Where a judgement about a task is written down when it is made (INV-551).
+     *
+     * The board's own history is capped at the last changes and shaped for reading a
+     * story; "why was this closed" has to survive past that, and has to be findable by
+     * subject rather than by scrolling.
+     */
+    private readonly receipts: Receipts = new Receipts(null)
   ) {
     this.replay();
   }
@@ -593,7 +602,17 @@ export class TaskStore {
       if (nudges > TASK_NUDGES_BEFORE_ARCHIVE) {
         const text = `${task.id} "${task.title}" was archived: ${reason} and no movement after ${TASK_NUDGES_BEFORE_ARCHIVE} nudges. Reopen it on the board if it still matters.`;
         const moved = this.update(task.id, { status: "dropped", note: `archived by ageing: ${reason}, no answer to ${TASK_NUDGES_BEFORE_ARCHIVE} nudges` }, AGING_ACTOR, undefined, now);
-        if (moved !== undefined) events.push({ kind: "archived", task: moved.task, text });
+        if (moved !== undefined) {
+          events.push({ kind: "archived", task: moved.task, text });
+          this.receipts.write({
+            at: now.toISOString(),
+            by: AGING_ACTOR,
+            subject: `task:${task.id}`,
+            decision: `archived "${task.title}"`,
+            because: `${reason} and no movement after ${TASK_NUDGES_BEFORE_ARCHIVE} delivered nudges`,
+            evidence: [`requester:${task.requester}`, ...(task.due !== undefined ? [`due:${task.due}`] : [])],
+          });
+        }
         continue;
       }
       const waiting = task.waitingOn !== undefined ? ` (waiting on ${task.waitingOn})` : task.status === "blocked" || task.status === "review" ? ` (${task.status})` : "";
@@ -658,6 +677,14 @@ export class TaskStore {
     if (next.aging !== undefined) delete next.aging;
     this.tasks.set(id, next);
     this.append({ kind: "task", task: next });
+    this.receipts.write({
+      at,
+      by,
+      subject: `task:${id}`,
+      decision: `proposed to close "${task.title}"`,
+      because: why,
+      evidence: [`decideBy:${decideBy}`, `requester:${task.requester}`],
+    });
     for (const listener of this.listeners) listener(next);
     return { task: this.get(id)! };
   }
@@ -702,6 +729,14 @@ export class TaskStore {
       this.tasks.set(task.id, settled);
       this.append({ kind: "task", task: settled });
       events.push({ kind: "closed", task: this.get(task.id)!, text: `${task.id} "${task.title}" closed as ${proposal.by} proposed: ${proposal.reason}. ${task.requester} did not object in time; reopen it on the board if that was wrong.` });
+      this.receipts.write({
+        at: now.toISOString(),
+        by: AGING_ACTOR,
+        subject: `task:${task.id}`,
+        decision: `closed "${task.title}" on ${proposal.by}'s proposal`,
+        because: `${proposal.reason}; ${task.requester} did not object by ${proposal.decideBy}`,
+        evidence: [`proposedBy:${proposal.by}`, `decideBy:${proposal.decideBy}`],
+      });
     }
     return events;
   }

@@ -29,6 +29,9 @@ function ledger(rows: Partial<Row>[]) {
     answers: [],
   }));
   const call = (holder: string) => async (tool: string, args: Record<string, unknown>): Promise<unknown> => {
+    if (tool === "work_get_context") {
+      return { work: { title: "the consumer", state: { name: "In Review" }, acceptance: "A1 claimed and answered" }, runs: [{ status: "completed", summary: "PR #170" }] };
+    }
     if (tool === "agent_inbox") {
       return { requests: store.filter(row => row.state === "submitted" || row.state === "working") };
     }
@@ -68,6 +71,7 @@ test("a question is claimed, answered in its own thread, and the answer is the a
       return "因为 RUN-245 当时是 blocked，见 PR#475。";
     },
     mayAnswer: () => ({ ok: true }),
+    receiptsFor: subject => (subject === "inv:INV-999" ? "What was written down at the time:\n- 2026-09-10 Ada: chose polling — no inbound port on this machine" : ""),
     log: () => {},
   });
 
@@ -78,8 +82,13 @@ test("a question is claimed, answered in its own thread, and the answer is the a
   // One conversation per thread, not per work item: two questions on one item never cross.
   assert.equal(turns[0]!.conversation, conversationFor({ work_identifier: "INV-999", work_id: "w1", root_comment_id: "c1" }));
   assert.notEqual(conversationFor({ work_identifier: "INV-999", work_id: "w1", root_comment_id: "c2" }), turns[0]!.conversation);
-  // The prompt carries the rule that stops a fluent invention.
+  // The prompt carries the rule that stops a fluent invention — and, now, the material
+  // that makes an honest answer possible: the item itself and what was written down.
   assert.match(turns[0]!.prompt, /the record does not show it/);
+  assert.match(turns[0]!.prompt, /You are @ada on Involute/);
+  assert.match(turns[0]!.prompt, /acceptance: A1 claimed and answered/);
+  assert.match(turns[0]!.prompt, /recent runs: completed PR #170/);
+  assert.match(turns[0]!.prompt, /2026-09-10 Ada: chose polling — no inbound port/);
 });
 
 test("losing the claim race is normal, and the second consumer says nothing", async () => {
@@ -175,5 +184,5 @@ test("one request per agent per pass, and a request past its deadline is the ser
   assert.deepEqual(store.find(row => row.id === "q3")!.answers, [], "the overdue one belongs to the server's sweep");
 
   // And the prompt names the work item, so the agent knows where it is.
-  assert.match(promptFor({ id: "x", work_id: "w1", work_identifier: "INV-999", body: "why", state: "submitted" }, "Ada"), /INV-999/);
+  assert.match(promptFor({ id: "x", work_id: "w1", work_identifier: "INV-999", body: "why", state: "submitted" }, "Ada", "ada"), /INV-999/);
 });
