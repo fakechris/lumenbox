@@ -51,10 +51,12 @@ export class TelegramChannel implements ChannelAdapter {
     this.stopped = true;
   }
 
-  async send(identity: string, text: string): Promise<void> {
+  /** Undefined: this wire answers nothing a reply to the push could be keyed on. */
+  async send(identity: string, text: string): Promise<string | undefined> {
     const chatId = Number(identity.split(":")[1]);
-    if (!Number.isFinite(chatId)) return;
+    if (!Number.isFinite(chatId)) return undefined;
     await this.reply(chatId, text);
+    return undefined;
   }
 
   private async loop(

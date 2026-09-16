@@ -20,6 +20,16 @@ const boxWith = (jobs: unknown[], found: string) =>
     exec: async () => ({ stdout: found, stderr: "", exit_code: 0 }),
   }) as never;
 
+/** The same, but keeping the command it was asked to run. */
+const boxRecording = (asked: string[]) =>
+  ({
+    jobs: async () => ({ jobs: [] }),
+    exec: async (command: string) => {
+      asked.push(command);
+      return { stdout: "", stderr: "", exit_code: 0 };
+    },
+  }) as never;
+
 test("a box with nothing to lose is quiet, and says nothing", async () => {
   const findings = await preflight(boxWith([], ""));
   assert.equal(isQuiet(findings), true);
@@ -54,6 +64,18 @@ test("files outside the volumes are named, and say why they matter", async () =>
   assert.match(described, /report\.md/);
   // Naming the two directories that do survive turns the warning into an instruction.
   assert.match(described, /\/home\/box\/work/);
+});
+
+test("the image's own reference docs are not offered as work about to be lost", async () => {
+  // The entrypoint re-seeds /home/box/reference from /opt/box-reference on every start,
+  // so without this prune every box is permanently un-quiet: decideUpgrade answers "ask"
+  // forever, nothing upgrades unattended, and the question names files the upgrade
+  // recreates byte for byte. Asserted on the command because the prune is the fix —
+  // filtering the output afterwards would still pay for walking them.
+  const asked: string[] = [];
+  await preflight(boxRecording(asked));
+  assert.match(asked[0] ?? "", /-path \/home\/box\/reference/);
+  assert.match(asked[0] ?? "", /-path \/opt\/box-reference/);
 });
 
 test("a long list is cut, and says it was cut", async () => {

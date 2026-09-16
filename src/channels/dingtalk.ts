@@ -1062,10 +1062,15 @@ export class DingTalkChannel implements ChannelAdapter {
     }
   }
 
-  async send(identity: string, text: string): Promise<void> {
+  async send(identity: string, text: string): Promise<string | undefined> {
     // Plain conversational lines — refusals, approval prompts, questions. Formatted
     // results travel through sendToChat's markdown verdict instead, mirroring how
     // `send` and `sendToChat` split everywhere else.
+    //
+    // Answers `undefined` rather than a conversation key: `transmit` does not hand back
+    // an id for what it posted, and threads do not exist between a person and a DingTalk
+    // bot anyway (see `sendToChat` below). A guessed key would file the notice under a
+    // conversation no reply can ever arrive in, which is worse than filing it nowhere.
     const conversationId = this.identities.get(identity);
     await this.transmit(
       {
@@ -1084,6 +1089,7 @@ export class DingTalkChannel implements ChannelAdapter {
       "text",
       text
     );
+    return undefined;
   }
 
   /**

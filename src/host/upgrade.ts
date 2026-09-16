@@ -27,7 +27,13 @@ import { describePreflight, isQuiet } from "../box/preflight.ts";
  */
 export const STALE_WAIT_HOURS = 24 * 7;
 
-/** How long people get between being told and the box going down. */
+/**
+ * How long people get between being told and the box going down.
+ *
+ * Carried on the decision and deliberately not quoted in the announcement: nothing that
+ * sends an announcement also performs an upgrade, so a countdown in the text would be a
+ * clock nobody is running. It is here for whatever eventually honours it.
+ */
 export const ANNOUNCE_MINUTES = 10;
 
 export interface UpgradeSituation {
@@ -142,6 +148,14 @@ export function decideUpgrade(situation: UpgradeSituation): UpgradeDecision {
  * Written here rather than at each channel so every route says the same thing, and so the
  * wording is testable. It names what the upgrade costs before what it offers: a person
  * deciding needs the cost, and a person who only skims should still see it.
+ *
+ * **It may not offer anything nothing implements.** The first version ended `Reply
+ * "upgrade" to go ahead` and `Reply "wait" to postpone it`, and no such handler existed
+ * anywhere — replying did nothing, in silence. The cost of that is not one wasted reply:
+ * somebody read "reply to go ahead", reasonably concluded the bot could act on the box,
+ * and asked the agent in the chat to back the listed files up (2026-09-15). A button that
+ * is not wired is worse than no button, because the next real notice is not believed
+ * either. Say what actually performs the upgrade instead, until something here does.
  */
 export function upgradeMessage(decision: UpgradeDecision, boxName: string): string {
   switch (decision.action) {
@@ -149,14 +163,18 @@ export function upgradeMessage(decision: UpgradeDecision, boxName: string): stri
       return (
         `${boxName} has an upgrade waiting, and it needs you to decide.\n\n` +
         `${decision.why}\n\n${decision.detail}\n\n` +
-        `Reply "upgrade" to go ahead, or leave it and nothing happens.`
+        `Replying here does not start it — nothing reading this chat can upgrade a box. ` +
+        `Run \`agentbox box upgrade --yes\` on the host once you have decided, ` +
+        `or leave it and nothing happens.`
       );
     case "announce":
       return (
-        `${boxName} is upgrading in ${decision.minutes} minutes.\n\n` +
+        `${boxName} has an upgrade waiting, and taking it will interrupt you.\n\n` +
         `${decision.why} Open browser tabs and anything running in a shell will be lost; ` +
         `saved work and browser logins are kept.\n\n` +
-        `Reply "wait" to postpone it.`
+        `This is a warning, not a countdown: it happens when somebody runs ` +
+        `\`agentbox box upgrade\`. Replying here does not postpone it — finish what is on ` +
+        `the screen, or say so to whoever runs it.`
       );
     case "repair":
       return `${boxName} is being upgraded now: ${decision.why}`;

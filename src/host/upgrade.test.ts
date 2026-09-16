@@ -57,7 +57,30 @@ test("people who are here are told and can stop it, rather than asked for permis
   const message = upgradeMessage(decision, "the box");
   assert.match(message, /lost/);
   assert.match(message, /logins are kept/);
-  assert.match(message, /"wait"/);
+  // And it offers nothing nothing implements. It used to end `Reply "wait" to postpone
+  // it` with no handler for the word anywhere — the reply went in and was answered by
+  // silence, which is how the next notice stops being believed too.
+  assert.doesNotMatch(message, /Reply "/);
+  assert.match(message, /does not postpone it/);
+  assert.match(message, /agentbox box upgrade/);
+});
+
+test("the ask names what actually performs the upgrade, and denies that replying does", () => {
+  // The other half of the same rule, and the one that cost something: `Reply "upgrade" to
+  // go ahead` was read as "the bot can do this", and the next message in the chat asked
+  // the agent to back up the files the notice had listed (2026-09-15).
+  const decision = decideUpgrade({
+    preflight: { runningJobs: [], strayFiles: ["/home/box/report.md"], moreStrayFiles: false },
+    watching: 0,
+    hour: 4,
+  });
+  assert.equal(decision.action, "ask");
+  const message = upgradeMessage(decision, "Your box");
+  assert.doesNotMatch(message, /Reply "/);
+  assert.match(message, /does not start it/);
+  assert.match(message, /agentbox box upgrade --yes/);
+  // The file still has to be named, or the person has nothing to decide with.
+  assert.match(message, /report\.md/);
 });
 
 test("a protocol change is always asked about, because it can break the caller too", () => {

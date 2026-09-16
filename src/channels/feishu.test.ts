@@ -6,7 +6,7 @@
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { FeishuChannel, SOCKET_RETRY_MS, classifySocketLine, withDeadline, meetingInvitePrompt, parseMeetingInvite, looksLikeMarkdown, markdownPost, renderApprovalCard, renderCard, renderQuestionCard, splitChatKey } from "./feishu.ts";
+import { FeishuChannel, SOCKET_RETRY_MS, classifySocketLine, conversationKeyFor, isAddressed, withDeadline, meetingInvitePrompt, parseMeetingInvite, looksLikeMarkdown, markdownPost, renderApprovalCard, renderCard, renderQuestionCard, splitChatKey } from "./feishu.ts";
 import type { TaskCardState } from "./manager.ts";
 
 interface CardShape {
@@ -300,6 +300,70 @@ test("a file sent into a topic is anchored to that topic", async () => {
     { chatId: "oc_room", type: "file", replyTo: "om_topic" },
     { chatId: "oc_room", type: "image", replyTo: "om_topic" },
   ]);
+});
+
+test("a notice pushed at a person is recorded as ours, so a reply to it is not dropped", async () => {
+  // `post` recorded its sends and `send` did not, and everything the host pushes at a
+  // person without a conversation behind it — the upgrade notice, an approval nudge —
+  // leaves through `send`. In a group that made a 回复 under one of them addressed to
+  // nobody, so it was dropped in silence; only someone who also typed `@bot` got through.
+  const recorded: { id: string; chatKey: string }[] = [];
+  const ledger = {
+    record: (id: string, chatKey: string) => void recorded.push({ id, chatKey }),
+    chatKeyFor: (id: string) => recorded.find(entry => entry.id === id)?.chatKey,
+  };
+  const adapter = new FeishuChannel("a", "b", () => {}, undefined, "feishu", ledger);
+  (adapter as unknown as { chats: Map<string, string> }).chats.set("feishu:ou_admin", "oc_room");
+  (adapter as unknown as { apiClient: unknown }).apiClient = {
+    im: { message: { create: async () => ({ data: { message_id: "om_notice" } }) } },
+  };
+
+  (adapter as unknown as { chatTypes: Map<string, string> }).chatTypes.set("oc_room", "group");
+
+  assert.equal(
+    await adapter.send("feishu:ou_admin", "Your box has an upgrade waiting."),
+    "feishu:oc_room:om_notice",
+    "the push says where a reply to it will arrive"
+  );
+  assert.deepEqual(recorded, [{ id: "om_notice", chatKey: "feishu:oc_room:om_notice" }]);
+
+  const reply = { chat_type: "group", chat_id: "oc_room", root_id: "om_notice", message_id: "om_reply" };
+  assert.equal(isAddressed(reply, "ou_bot", id => ledger.chatKeyFor(id) !== undefined), true);
+  // Under the notice's own thread, not the room: an authorless push has no conversation
+  // behind it, and keying it to the room would answer at the bottom of the chat instead
+  // of inside the topic the person is reading.
+  assert.equal(
+    conversationKeyFor(reply, "feishu", id => ledger.chatKeyFor(id)),
+    "feishu:oc_room:om_notice"
+  );
+});
+
+test("a notice pushed into a direct chat is filed where a reply to it actually arrives", async () => {
+  // The thread key is right in a group and wrong in a 1:1: `conversationKeyFor` checks
+  // `p2p` first and returns the chat before any thread reasoning, so a notice filed under
+  // `chat:sentId` there would sit in a conversation no reply ever opens — the failure this
+  // whole path exists to stop, reintroduced one branch lower down.
+  const recorded: { id: string; chatKey: string }[] = [];
+  const ledger = {
+    record: (id: string, chatKey: string) => void recorded.push({ id, chatKey }),
+    chatKeyFor: (id: string) => recorded.find(entry => entry.id === id)?.chatKey,
+  };
+  const adapter = new FeishuChannel("a", "b", () => {}, undefined, "feishu", ledger);
+  (adapter as unknown as { chats: Map<string, string> }).chats.set("feishu:ou_admin", "oc_dm");
+  (adapter as unknown as { chatTypes: Map<string, string> }).chatTypes.set("oc_dm", "p2p");
+  (adapter as unknown as { apiClient: unknown }).apiClient = {
+    im: { message: { create: async () => ({ data: { message_id: "om_notice" } }) } },
+  };
+
+  assert.equal(await adapter.send("feishu:ou_admin", "Your box has an upgrade waiting."), "feishu:oc_dm");
+  assert.equal(
+    conversationKeyFor(
+      { chat_type: "p2p", chat_id: "oc_dm", root_id: "om_notice", message_id: "om_reply" },
+      "feishu",
+      id => ledger.chatKeyFor(id)
+    ),
+    "feishu:oc_dm"
+  );
 });
 
 test("a task waiting on a person does not read as finished", () => {

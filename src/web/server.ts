@@ -871,6 +871,7 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
         sender: input.senderLabel,
         text: input.text,
         ...(input.messageId !== undefined ? { messageId: input.messageId } : {}),
+        ...(input.mine === true ? { mine: true } : {}),
       });
     },
     // The live desktop, phone-shaped: the same noVNC page the web's Take over

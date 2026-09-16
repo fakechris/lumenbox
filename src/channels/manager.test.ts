@@ -42,7 +42,9 @@ function testAdapter(): ChannelAdapter & {
     stop() {},
     send(identity, text) {
       sent.push({ identity, text });
-      return Promise.resolve();
+      // A wire that cannot name where a reply to this push will arrive, which is the
+      // honest default: the conversation-recording path must cope with not knowing.
+      return Promise.resolve(undefined);
     },
     inject(message) {
       if (handler === undefined) throw new Error("not started");
@@ -1939,6 +1941,55 @@ test("on a door that answers only when addressed, a group message that names nob
   await new Promise(resolve => setTimeout(resolve, 20));
   assert.equal(asked.length, 2, "ran, because the door's rule is all");
   assert.equal(heard.length, 1);
+});
+
+test("a notice pushed under the agent's name is kept as something it has already said", async () => {
+  // The gap this closes. `push` is the one door the installation speaks through *as* an
+  // agent without the agent running — the upgrade question, the approval nudge — and
+  // nothing recorded a word of it. The person replied to the notice and the turn opened
+  // on a conversation whose entire history was their reply, so the agent answered "I
+  // don't see files in this message" to a question about four paths it had itself just
+  // listed (2026-09-15).
+  const kept = [] as { conversation: string; text: string; sender: string; mine?: boolean }[];
+  const deps = {
+    mayDrive: () => true,
+    ask: async () => "",
+    defaultAgentFor: () => "Bob",
+    heard: (input: { conversation: string; text: string; senderLabel: string; mine?: boolean }) =>
+      kept.push({
+        conversation: input.conversation,
+        text: input.text,
+        sender: input.senderLabel,
+        ...(input.mine !== undefined ? { mine: input.mine } : {}),
+      }),
+    log: () => {},
+  };
+
+  const speaking = testAdapter();
+  (speaking as unknown as { send: unknown }).send = (identity: string, text: string) => {
+    speaking.sent.push({ identity, text });
+    return Promise.resolve("telegram:room:om_notice");
+  };
+  const manager = new ChannelManager(deps as never);
+  manager.register(speaking, true, "test");
+  await manager.push("telegram", "telegram:7", "Your box has an upgrade waiting.");
+
+  assert.equal(speaking.sent.length, 1, "the notice still goes out");
+  assert.deepEqual(kept, [
+    {
+      conversation: "telegram:room:om_notice",
+      text: "Your box has an upgrade waiting.",
+      sender: "Bob",
+      mine: true,
+    },
+  ]);
+
+  // A wire that cannot say where a reply will arrive keeps nothing, rather than filing
+  // the notice under a guessed key no reply ever lands in.
+  const mute = new ChannelManager(deps as never);
+  mute.register(testAdapter(), true, "test");
+  await mute.push("telegram", "telegram:7", "Your box has an upgrade waiting.");
+  assert.equal(kept.length, 1, "nothing kept against a conversation nobody can reach");
 });
 
 test("the reply streams into the task card on its own clock, and a blocked question goes out as a card", async () => {
