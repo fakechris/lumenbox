@@ -10,7 +10,13 @@
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { adminRecipients, decideUpgrade, STALE_WAIT_HOURS, upgradeMessage } from "./upgrade.ts";
+import {
+  adminRecipients,
+  decideUpgrade,
+  STALE_WAIT_HOURS,
+  UPGRADE_WORD,
+  upgradeMessage,
+} from "./upgrade.ts";
 import type { Preflight } from "../box/preflight.ts";
 
 const quiet: Preflight = { runningJobs: [], strayFiles: [], moreStrayFiles: false };
@@ -65,22 +71,67 @@ test("people who are here are told and can stop it, rather than asked for permis
   assert.match(message, /agentbox box upgrade/);
 });
 
-test("the ask names what actually performs the upgrade, and denies that replying does", () => {
-  // The other half of the same rule, and the one that cost something: `Reply "upgrade" to
-  // go ahead` was read as "the bot can do this", and the next message in the chat asked
-  // the agent to back up the files the notice had listed (2026-09-15).
-  const decision = decideUpgrade({
-    preflight: { runningJobs: [], strayFiles: ["/home/box/report.md"], moreStrayFiles: false },
-    watching: 0,
-    hour: 4,
-  });
+const risky = {
+  runningJobs: [],
+  strayFiles: ["/home/box/report.md"],
+  moreStrayFiles: false,
+} satisfies Preflight;
+
+test("the ask offers the word that is actually wired, and says what it does not do", () => {
+  // The rule this file exists to hold: the message may not offer anything nothing
+  // implements. `Reply "upgrade" to go ahead` had no handler anywhere, which is how
+  // somebody concluded the bot could act on the box and asked it to back up the files
+  // the notice had listed (2026-09-15). The word is wired now — see the manager test
+  // that parses this very constant — and what it does is stated exactly.
+  const decision = decideUpgrade({ preflight: risky, watching: 0, hour: 4 });
   assert.equal(decision.action, "ask");
   const message = upgradeMessage(decision, "Your box");
-  assert.doesNotMatch(message, /Reply "/);
-  assert.match(message, /does not start it/);
-  assert.match(message, /agentbox box upgrade --yes/);
+  assert.match(message, new RegExp(`Reply "${UPGRADE_WORD}"`));
+  assert.match(message, /records your decision and nothing else/);
+  // Still not a promise to upgrade now: the box is recreated by the run that reads the
+  // decision, and a message that blurred those two would be the same lie in a new place.
+  assert.match(message, /recreated by the next upgrade run/);
   // The file still has to be named, or the person has nothing to decide with.
   assert.match(message, /report\.md/);
+  // "wait" remains unimplemented, and so remains unoffered.
+  assert.doesNotMatch(upgradeMessage(decideUpgrade({ preflight: quiet, watching: 2, hour: 14 }), "the box"), /"wait"/);
+});
+
+test("a question already answered is not asked again, and the reason says so", () => {
+  const asked = decideUpgrade({ preflight: risky, watching: 0, hour: 4 });
+  assert.equal(asked.action, "ask", "without a decision, it asks");
+
+  const answered = decideUpgrade({ preflight: risky, watching: 0, hour: 4, approved: true });
+  assert.equal(answered.action, "go");
+  // The reason has to be the true one. "Nothing would be lost" is what makes an
+  // unattended upgrade defensible and it is false here — something will be lost, and a
+  // person looked at the list and accepted it. That line is what explains the missing
+  // file afterwards.
+  assert.match(answered.why, /approved it/);
+  assert.doesNotMatch(answered.why, /nothing would be lost/i);
+
+  // The other two asks are answered too: a box that could not be inspected, and a
+  // protocol change. Somebody was shown each of those and said yes.
+  assert.equal(
+    decideUpgrade({ preflight: { ...quiet, unknown: "connection refused" }, watching: 0, hour: 4, approved: true }).action,
+    "go"
+  );
+  assert.equal(
+    decideUpgrade({ preflight: quiet, watching: 0, hour: 4, protocolChanges: true, approved: true }).action,
+    "go"
+  );
+});
+
+test("an approval authorises the loss, not the moment", () => {
+  // What they agreed to was destroying those files. They said nothing about interrupting
+  // the two people currently watching, so that rule still runs — an approval that
+  // silenced it would turn "yes, take the files" into "yes, close their tabs now".
+  const watched = decideUpgrade({ preflight: risky, watching: 2, hour: 14, approved: true });
+  assert.equal(watched.action, "announce");
+
+  // And the quiet window still holds it: the timing was never the question.
+  const early = decideUpgrade({ preflight: risky, watching: 0, hour: 14, quietHour: 4, approved: true });
+  assert.equal(early.action, "wait");
 });
 
 test("a protocol change is always asked about, because it can break the caller too", () => {

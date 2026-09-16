@@ -35,8 +35,10 @@ import {
   CONSENT_GONE,
   EMPTY_REPLY_NOTE,
   NO_BOX_FOR_FILES,
+  NO_UPGRADE_WAITING,
   SAY_WHAT_YOU_NEED,
   SCOPE_IS_ADMIN_CALL,
+  UPGRADE_IS_ADMIN_CALL,
   TEAM,
   NOTHING_RUNNING,
   STOPPING,
@@ -477,6 +479,19 @@ export interface ChannelManagerDeps {
    */
   mayAdmin?: (identity: string) => boolean;
   /**
+   * The upgrade this box has asked a person about, and the answer coming back.
+   *
+   * Absent on a door with no box behind it. `waiting` is what makes the verb a decision
+   * on a specific question rather than a bare word that destroys things: with nothing
+   * pending, "upgrade" is somebody talking about upgrading.
+   */
+  upgrade?: {
+    /** The image waiting on a decision, or undefined when nothing is. */
+    waiting: () => string | undefined;
+    /** Records this person's approval of the waiting image. Returns the line the chat sees. */
+    approve: (identity: string) => string;
+  };
+  /**
    * This chat's scope binding: what bounds every task the chat drives. Each returns
    * the line the chat sees. Bind and unbind are admin verbs, checked by the manager.
    */
@@ -701,6 +716,19 @@ export function parseScopeRequest(text: string): ScopeRequest | undefined {
   const bind = /^scope\s+([\p{L}\p{N}._-]{1,60})$/iu.exec(t);
   if (bind !== null) return { kind: "bind", name: bind[1]! };
   return undefined;
+}
+
+/**
+ * A whole message approving the upgrade the box has asked about.
+ *
+ * Whole-message like every verb here, and for a sharper reason than most: this one
+ * authorises destroying a box, so "upgrade the deploy script" must never be read as
+ * consent. The English word is the one the notice itself prints (`UPGRADE_WORD`), and a
+ * test holds the two together.
+ */
+export function parseUpgradeApproval(text: string): boolean {
+  const t = text.trim().toLowerCase().replace(/[.!?。!?~]+$/, "");
+  return ["upgrade", "/upgrade", "升级", "确认升级", "同意升级"].includes(t);
 }
 
 /**
@@ -1321,6 +1349,18 @@ ${input.options.map(option => `· ${option}`).join("\n")}`
             "or the turn moved on. Send the request again if it still needs doing."
         );
       }
+    }
+
+    // The one verb that authorises destroying something. Three gates, in this order:
+    // there has to be a question pending (otherwise the word is somebody talking about
+    // upgrading, not answering), the person has to be an admin (a driver commands agents
+    // inside the rules; replacing the machine they run on is changing the rules), and
+    // only then is the decision recorded. Checked before the running-work routing, like
+    // every other verb, so answering while a task runs is not read as steering it.
+    if (parseUpgradeApproval(message.text) && this.deps.upgrade !== undefined) {
+      if (this.deps.upgrade.waiting() === undefined) return NO_UPGRADE_WAITING;
+      if (this.deps.mayAdmin?.(message.identity) !== true) return UPGRADE_IS_ADMIN_CALL;
+      return this.deps.upgrade.approve(message.identity);
     }
 
     // The scope verbs change what every task in this chat may do: reading is open,

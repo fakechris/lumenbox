@@ -215,3 +215,23 @@ export function accepted(taskId: string): string {
 // ── refusals ───────────────────────────────────────────────────────────────────
 
 export const SCOPE_IS_ADMIN_CALL = "绑定 scope 会改变这个群里每件任务的权限,这要管理员来定。";
+
+export const UPGRADE_IS_ADMIN_CALL =
+  "升级会重建这台工作机,上面没存进卷里的东西都会没,这要管理员来定。";
+
+/**
+ * Said when the word arrives with no question behind it.
+ *
+ * Not silence and not a refusal: with nothing pending, "升级" is almost always somebody
+ * talking about upgrading something else, and answering as though they had tried to
+ * destroy a box would be both wrong and alarming.
+ */
+export const NO_UPGRADE_WAITING = "现在没有在等确认的升级。";
+
+/** Said when a decision has just been recorded — exactly what it did and did not do. */
+export function upgradeApproved(image: string, who: string): string {
+  return (
+    `好,记下了:${who} 批准升级到 ${image}。\n` +
+    `这只是记录决定——工作机会在下一次升级运行时重建,那次不会再问。现在什么都还没动。`
+  );
+}

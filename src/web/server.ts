@@ -162,17 +162,24 @@ import { randomUUID } from "node:crypto";
 import { describeTask, isLive, isTaskStatus } from "../host/tasks.ts";
 import { connectorSatisfied } from "../host/mcp-connectors.ts";
 import { adminRecipients, decideUpgrade, upgradeMessage } from "../host/upgrade.ts";
+import {
+  lossesFingerprint,
+  recordUpgradeConsent,
+  upgradeConsentPath,
+} from "../host/upgrade-consent.ts";
 import { PRESET_MODELS, providerNames, resolveProvider, testProvider } from "../host/provider.ts";
 import { Principals, roleAtLeast, type Principal, type Role } from "../host/principals.ts";
 import { blockedAnnouncement, boardView } from "../channels/board-view.ts";
 import {
   DESKTOP_NOT_PUBLIC,
   NO_SCHEDULES,
+  NO_UPGRADE_WAITING,
   SCHEDULES_DISARMED,
   desktopLink,
   rosterText,
   scheduleLine,
   unknownAgent,
+  upgradeApproved,
 } from "../channels/strings.ts";
 import { CardLedger } from "../channels/card-ledger.ts";
 import { FeishuDocReader } from "../channels/feishu-docs.ts";
@@ -845,6 +852,13 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
   // running card at 进行中 and an acceptance typed later can still turn one green.
   const cards = new CardLedger(undefined, line => log(line));
 
+  // The upgrade this box has asked its admins about, if it has. Held in memory on
+  // purpose: a question is only live while the notice that asked it is the current
+  // situation, and after a restart the timer re-derives it from the box rather than
+  // resurrecting somebody's unanswered prompt from a file. The *answer* is what is
+  // durable, and it lives in the consent ledger.
+  let upgradeWaiting: { image: string; losses: string } | undefined;
+
   const channels = new ChannelManager({
     ingress,
     listeners: message => {
@@ -942,6 +956,29 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
     },
     mayDrive: identity => roleAtLeast(principals.roleOf(identity), "driver"),
     mayAdmin: identity => roleAtLeast(principals.roleOf(identity), "admin"),
+    // The answer to the upgrade notice, coming back the way it was asked. Recorded,
+    // not acted on: the destructive sequence — back up the volumes, recreate, verify,
+    // roll back if the box does not return — exists once, in `agentbox box upgrade`,
+    // and docs/12 §5 is explicit that a web server must not be the second copy of it.
+    // So the box is recreated by the next upgrade run, which reads this and stops
+    // asking. Approving twice is harmless; the ledger is append-only and the newest
+    // matching record wins.
+    upgrade: {
+      waiting: () => upgradeWaiting?.image,
+      approve: identity => {
+        const waiting = upgradeWaiting;
+        if (waiting === undefined) return NO_UPGRADE_WAITING;
+        recordUpgradeConsent(upgradeConsentPath(agentboxHome()), {
+          image: waiting.image,
+          losses: waiting.losses,
+          by: identity,
+          at: new Date().toISOString(),
+        });
+        log(`upgrade approved: ${waiting.image} by ${identity}`);
+        const who = principals.list().find(person => person.identities.includes(identity));
+        return upgradeApproved(waiting.image, who?.name ?? identity);
+      },
+    },
     // One scope per chat: binding moves the chat, it does not accumulate. The scope
     // itself is created and given tools in Settings; the chat only chooses which one
     // bounds it.
@@ -2027,6 +2064,13 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
         // here a person needs to read, and saying it anyway is how notices get ignored.
         if (decision.action !== "ask" && decision.action !== "announce") return;
 
+        // What the "upgrade" verb is an answer *to*. Held with the fingerprint of what the
+        // person is about to read, not just the image id: their yes is to this image losing
+        // exactly these files, and `consentFor` refuses to match it to anything else.
+        upgradeWaiting =
+          decision.action === "ask" && availability.built !== undefined
+            ? { image: availability.built, losses: lossesFingerprint(decision.detail) }
+            : undefined;
         upgradeToldAbout = availability.built;
         const text = upgradeMessage(decision, "Your box");
         broadcast({ type: "error", message: text });
