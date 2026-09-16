@@ -24,6 +24,7 @@
  * config file's env map — never as constructor literals.
  */
 
+import { roomDecision } from "./identity.ts";
 import type { Ingress } from "./ingress.ts";
 import { channelHealth, type ChannelHealth } from "./liveness.ts";
 import { boxPathsNamed, undelivered } from "../host/named-files.ts";
@@ -47,6 +48,7 @@ import {
   consentFallbackText,
   accepted,
   filesSaved,
+  guestsClosed,
   notYours,
   questionTerms,
   questionText,
@@ -76,6 +78,11 @@ export interface InboundMessage {
    * (a Telegram chat id already is one).
    */
   chatKey?: string;
+  /**
+   * The room's own name, when the adapter knows it — what a door's room rules match on
+   * (INV-429). Absent is normal for a direct message and for platforms that do not say.
+   */
+  chatName?: string;
   /**
    * The wire's own id for this message, when it has one. It is what a reply anchors
    * to and what a status reaction attaches to. One rule downstream: everything a task
@@ -354,6 +361,9 @@ export interface ChannelManagerDeps {
   defaultAgentFor?: (adapterName: string) => string | undefined;
   /** The door's group-message rule (identity.ts `groupMessages`). Absent means `all`. */
   groupMessagesFor?: (adapterName: string) => "all" | "addressed" | undefined;
+  /** The door's room rules and guest switch (INV-429), by adapter name. */
+  roomRulesFor?: (adapterName: string) => { allow: string[]; deny: string[] } | undefined;
+  guestFor?: (adapterName: string) => "on" | "off" | undefined;
   /**
    * Keeps a message the room said around the agent without addressing it, for the
    * agent that would have answered it, in the conversation it would have run in.
@@ -1283,6 +1293,19 @@ ${input.options.map(option => `· ${option}`).join("\n")}`
       return this.deps.bind(code, message.identity, message.senderLabel);
     }
 
+    // Which rooms this door answers in (INV-429). Before identity, before the knock:
+    // a room the operator kept out is not a place to explain oneself in.
+    const room = roomDecision(this.deps.roomRulesFor?.(adapter.name), message.chatName);
+    if (room !== "answer" && message.chatKey !== undefined) {
+      if (message.messageId !== undefined) this.deps.ingress?.decided(message.messageId, "refused", message.identity);
+      this.deps.log(
+        room === "refuse"
+          ? `channel ${adapter.name}: not answering in ${message.chatName ?? message.chatKey} — the door's room rules exclude it`
+          : `channel ${adapter.name}: ${message.chatKey} has an allowlist and no readable name; staying out of it`
+      );
+      return undefined;
+    }
+
     if (!this.deps.mayDrive(message.identity)) {
       if (message.messageId !== undefined) {
         this.deps.ingress?.decided(message.messageId, "refused", message.identity);
@@ -1290,6 +1313,12 @@ ${input.options.map(option => `· ${option}`).join("\n")}`
       this.deps.log(
         `channel ${adapter.name}: refused ${message.identity} (${message.senderLabel})`
       );
+      // A door with guests turned off does not collect knocks: in a room of strangers every
+      // knock is noise for whoever would have to triage it (INV-429).
+      if (this.deps.guestFor?.(adapter.name) === "off") {
+        this.deps.log(`channel ${adapter.name}: ${message.identity} is unknown and this door takes no guests`);
+        return guestsClosed();
+      }
       if (this.deps.knock !== undefined) {
         this.deps.knock({
           identity: message.identity,

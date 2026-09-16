@@ -143,6 +143,11 @@ export const STOPPING = "好,叫停了。当前这一步做完就停。";
 
 export const NOTHING_RUNNING = "现在没有正在做的事。";
 
+/** 这道门不收访客 (INV-429)：说清楚是规则，不是故障,也不是在排队等人批。 */
+export function guestsClosed(): string {
+  return "这道门只对已经登记过的人开放,不收新的申请。要用的话,请让管理员先把你加进来。";
+}
+
 /** 不是"没在跑",是"这个不归你管" (INV-538)。含糊其辞会让人以为自己按错了。 */
 export function notYours(who: string | undefined): string {
   return `${who ?? "它"}在你不在的那个 box 里,所以这条没有生效。让管理员把你加进去,或者找那个 box 里的人。`;

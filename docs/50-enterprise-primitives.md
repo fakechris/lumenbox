@@ -110,6 +110,7 @@ Claude Tag 的 Workspace 是一个权限文件夹加一个运行环境，Channel
   - **按人的规则（INV-156，2026-09-15 落地）**：frontmatter 增加 `principal:`（写名字或 id），规则只在**为这个人跑的回合里**生效——他的常驻意图跟着人走，从任何一道门驱动都算数，不必按渠道各批一次。**无人归属的回合（定时、webhook、重启）不继承任何按人规则**，这是 fail-closed 的方向：人给出的放行不该被机器自己动作时捡走。审阅行会写出"(allow for Chris)"，因为"某人的 allow"和"所有人的 allow"是两条不同的常驻指令。`RunOnHost` 与不可逆动作仍然一律要问——它们不是操作者能豁免的（docs/08、INV-401）。
 - I2 **指令按地方拼接**：installation 级与 box 级 instructions 段按 org → box → agent 顺序拼进 system prompt；bundle 的 instructions 随 bundle 生效。
 - I3 **门的名称规则与 guest 开关**：door 级 `autoJoin: {allow: [...], deny: [...]}` 按群名前缀自动加入或拒绝（docs/35 U2 目录自动链接的一部分）；door 级 `guest: on|off` 决定未链接身份能否敲门。
+  - **落地（INV-429，2026-09-15）**：door 记录上加 `autoJoin: {allow, deny}` 与 `guest: on|off`。`deny` 绝对优先（写 never 的那条列表是针对某次具体事故写的）；`allow` 非空时这道门变成白名单，只在名字命中的房间和私聊里应答；**看不到名字的房间，在有白名单时一律不进**（fail-closed，否则白名单恰好在它为之而写的那些房间上失效），并留一行日志说明为什么安静。`guest: off` 的门对未链接身份**直接拒绝而不收 knock**——一屋子陌生人的门，每一次敲门都是要人分诊的噪音。房间名由飞书的 catch-up 清扫顺带缓存，不额外调 API。
 
 ### J. 审计按地方切
 
