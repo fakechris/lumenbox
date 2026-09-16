@@ -15,10 +15,10 @@
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { BACKUP_EXCLUDES, BoxManager, boxTokenPath, loadBoxToken, networkNameFor, readBoxToken } from "./docker.ts";
+import { BACKUP_EXCLUDES, BoxManager, boxTokenPath, boxUiToken, loadBoxToken, networkNameFor, readBoxToken, uiToken } from "./docker.ts";
 import { SPILL_AT_BYTES, SPOOL_DIR } from "../boxd/shell-service.ts";
 import { DURABLE_RESULT_CHARS } from "../protocol/index.ts";
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -175,5 +175,36 @@ test("the box running right now keeps working, and only it may read the old shar
     else process.env.AGENTBOX_HOME = home;
     if (explicit !== undefined) process.env.AGENTBOX_TOKEN = explicit;
     rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("the machine's web and the box's web hold different secrets (INV-572)", () => {
+  const home = mkdtempSync(join(tmpdir(), "agentbox-tokens-"));
+  const previous = process.env.AGENTBOX_HOME;
+  process.env.AGENTBOX_HOME = home;
+  try {
+    const mine = uiToken();
+    const box = boxUiToken();
+    assert.notEqual(mine, box, "one secret behind two doors means one leak is two doors");
+    assert.ok(mine.length >= 16 && box.length >= 16);
+
+    // Both stable across calls: a restart must not invalidate an open tab.
+    assert.equal(uiToken(), mine);
+    assert.equal(boxUiToken(), box);
+
+    // Both private, because either one drives everything behind its own door.
+    for (const name of ["ui-token", "box-ui-token"]) {
+      assert.equal(statSync(join(home, name)).mode & 0o777, 0o600, `${name} is readable by others`);
+    }
+
+    // An installation that only ever had the old file keeps it, and gains the new one.
+    rmSync(join(home, "box-ui-token"));
+    const minted = boxUiToken();
+    assert.notEqual(minted, box, "a fresh mint, not a derivation of the one it is separating from");
+    assert.equal(uiToken(), mine, "and the machine's own is untouched");
+  } finally {
+    if (previous === undefined) delete process.env.AGENTBOX_HOME;
+    else process.env.AGENTBOX_HOME = previous;
+    rmSync(home, { recursive: true, force: true });
   }
 });
