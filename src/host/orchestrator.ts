@@ -71,6 +71,7 @@ import { McpManager } from "./mcp.ts";
 import { mergeServers } from "./mcp-connectors.ts";
 import { PolicyGate } from "./policy.ts";
 import { TaskStore, type Task } from "./tasks.ts";
+import { Receipts } from "./receipts.ts";
 import { buildAuditPrompt, manifestDiff, MANIFEST_COMMAND, parseManifest } from "./audit.ts";
 import { ScopeStore } from "./scopes.ts";
 import { BundleStore } from "./bundles.ts";
@@ -301,6 +302,14 @@ export class Orchestrator {
   readonly teachDrafts = new TeachDrafts(join(agentboxHome(), "skills-drafts"));
   /** What routines committed to and whether anything holds it (INV-528). */
   readonly commitments = new CommitmentLedger(join(agentboxHome(), "commitments.jsonl"));
+  /**
+   * What was decided, written when it was decided (INV-551).
+   *
+   * Read back when somebody asks an agent why — on a work item, in a chat, months later.
+   * Its own file because transcripts are compacted and task history is capped, and a
+   * receipt has to outlive both.
+   */
+  readonly receipts = new Receipts(join(agentboxHome(), "receipts.jsonl"));
   /** Turns a queued demonstration into a teaching turn (INV-406). */
   private readonly teachRunner = new TeachRunner({
     agentById: (boxId, agentId) => {
@@ -742,7 +751,7 @@ export class Orchestrator {
     this.tasks =
       options.tasks === null
         ? undefined
-        : (options.tasks ?? new TaskStore(undefined, line => console.error(`[tasks] ${line}`)));
+        : (options.tasks ?? new TaskStore(undefined, line => console.error(`[tasks] ${line}`), this.receipts));
     if (this.tasks !== undefined) this.tasks.onChange(task => this.maybeAudit(task));
     if (this.tasks !== undefined) this.tasks.onChange(task => this.maybeLearnFrom(task));
     this.scopes = options.scopes === null ? undefined : (options.scopes ?? new ScopeStore());

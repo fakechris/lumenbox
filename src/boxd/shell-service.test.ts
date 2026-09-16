@@ -184,6 +184,12 @@ test("a descendant that escapes the kill does not wedge the request", async () =
   // measured in a real container, `setsid sh -c "sleep 30"` held /exec open for the full thirty
   // seconds after a kill at 1.5s.
   const started = Date.now();
+  // An empty HOME, because the service runs a *login* shell (`bash -lc`) — right in the
+  // box, where the agent should get the box's environment, and wrong here: on a
+  // developer's machine it sources their profile, and this test then asserts against a
+  // stderr full of somebody's unrelated shell errors. Cost three runs on 2026-09-15
+  // before it was worth fixing.
+  const quietHome = mkdtempSync(join(tmpdir(), "agentbox-shell-home-"));
   const result = await runShell({
     // A detached child inheriting stdout: `detached` is setsid, so it leaves the process group and
     // keeps the pipe open after the group is killed. Written through node because `setsid` as a
@@ -191,7 +197,12 @@ test("a descendant that escapes the kill does not wedge the request", async () =
     command:
       `node -e "require('child_process').spawn('sleep',['30'],` +
       `{detached:true,stdio:['ignore','inherit','inherit']}).unref()"; sleep 30`,
-    timeout_ms: 600,
+    // Long enough for node to have started the grandchild before the kill lands. At 600ms
+    // this raced its own setup under a loaded machine: node had not spawned yet, nothing
+    // inherited the pipes, and the run ended as an ordinary timeout with no escapee — the
+    // test then failed for the one reason it is not about.
+    timeout_ms: 2_500,
+    env: { HOME: quietHome },
   });
   const took = Date.now() - started;
 
@@ -200,6 +211,7 @@ test("a descendant that escapes the kill does not wedge the request", async () =
   // And says so, because "timed out" alone would suggest everything it started is gone.
   assert.match(result.stderr, /left the process group and is still running/);
   assert.match(result.stderr, /it was not stopped/);
+  rmSync(quietHome, { recursive: true, force: true });
 });
 
 test("output too big to show is kept on disk, and the notice says where", async () => {

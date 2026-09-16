@@ -219,6 +219,29 @@ agent_inbox → agent_request_claim → 一个回合 → agent_request_answer
 轮询而不是 webhook：这台机器在多数网络里没有入站端口，而两边看的是同一份账本——webhook 也只是
 叫我们过去取而已。
 
+## 6. 现场验证与 decision receipt（2026-09-15 晚）
+
+**端到端跑通了。** Iris 与 Enzo 各拿到自己的 `inv_agent_*`（handle `@iris` / `@enzo`，scope 含
+`answer`，token 进 vault），`config.involute` 配好，宿主日志 `involute: answering for @iris, @enzo
+every 30s`。在 INV-553 上以 Admin(HUMAN) 身份 `@iris` 提问，59 秒后线程里出现了
+**Iris(AGENT@iris)** 的回复，账本 `state: completed`，`answeredCommentId` 已写。
+
+**这次测试最有价值的结果是那条回答本身**：Iris 说它手上没有 INV-553 的任何记录、也拿不到这条
+工作项，所以**拒绝凭印象回答**，列出了需要什么（链接 / PR / run id / 指明是哪个集成）才能给出
+带出处的答复。规则起作用了——**而它暴露的正是 §3.1 第 2 条**：当时没人写下来，所以现在读不回来。
+
+于是 **INV-551 落地为 `src/host/receipts.ts`**：
+
+- 一条 receipt = `subject`（`task:t12` / `inv:INV-553` / `question:q3` 这种**可查的键**）+
+  `decision`（一句话）+ `because`（**当时写下的理由**）+ `evidence`（还能解析的指针）。
+- **`because` 缺失本身是事实**：`describeReceipts` 会打印"（当时没有写下理由）"，
+  而不是把它省略掉——"有理由"和"没记理由"的区别，就是"答案"和"猜测"的区别。
+- 自己的 append-only 文件：transcript 会被压缩、任务 history 有上限，**receipt 必须比两者活得久**。
+- 已接上的判断点：close proposal（理由就是当时写的那句）、老化归档（理由是触发的规则）、
+  沉默关闭（提案 + 谁没反对）、问题到期（按默认走了什么，或自己决定了）。
+- 回答那一侧也补齐了：消费者在跑回合之前，**用 agent 自己的凭证读 `work_get_context`**，
+  把合同、验收与最近的 run 连同 receipts 一起放进 prompt，并告诉它"你在 Involute 上就是 @handle"。
+
 ## 7. 每一版被推翻了什么
 
 - **v1 → v2（codex 红队）**：换 token ≠ 隔离；跟进 rails 不能白拿（`question-expiry` 是

@@ -51,6 +51,14 @@ export interface InvoluteAgent {
 
 export interface ConsumerDeps {
   agents: () => readonly InvoluteAgent[];
+  /**
+   * What was written down about this work item when the decisions were made (INV-551).
+   *
+   * Without it, "why did you decide X" can only be answered from an impression. The live
+   * test that proved the loop also proved this: the agent answered, correctly, that it
+   * had nothing to go on — which is the right answer and a useless one.
+   */
+  receiptsFor?: (subject: string) => string;
   /** Runs one turn in the thread's own conversation and returns what the agent said. */
   runTurn: (input: { agentId: string; prompt: string; conversation: string }) => Promise<string>;
   /** Whether this agent may answer this person at all (docs/54 §3.6). */
@@ -83,10 +91,18 @@ export function conversationFor(request: Pick<InboxRequest, "work_identifier" | 
  * nothing stops it. What stops it is being told, in the same breath, that an answer with
  * no citation must say so (docs/54 §3.6, docs/20).
  */
-export function promptFor(request: InboxRequest, agentName: string): string {
+export function promptFor(
+  request: InboxRequest,
+  agentName: string,
+  handle: string,
+  context?: { work?: string; receipts?: string }
+): string {
   const work = request.work_identifier ?? request.work_id;
   return (
-    `[involute ${work}] Somebody asked you this on the work item:\n\n${request.body}\n\n` +
+    `[involute ${work}] You are @${handle} on Involute, the work tracker. Somebody asked you ` +
+    `this on the work item:\n\n${request.body}\n\n` +
+    (context?.work !== undefined && context.work !== "" ? `The work item, as it stands:\n${context.work}\n\n` : "") +
+    (context?.receipts !== undefined && context.receipts !== "" ? `${context.receipts}\n\n` : "") +
     `Answer them in a few sentences, as ${agentName}. Rules for this answer:\n` +
     `- Cite what it rests on — a run, a PR, a test, a line in the record — and link it.\n` +
     `- If the record does not show why it was decided, say "the record does not show it" and ` +
@@ -94,6 +110,31 @@ export function promptFor(request: InboxRequest, agentName: string): string {
     `- If you need something from them before you can answer, ask it plainly; the question goes back to them.\n` +
     `- No status theatre: they can read the board. Answer the question they asked.`
   );
+}
+
+/** The contract as one readable block: enough to answer from, short enough to be read. */
+export function describeWork(context: unknown): string {
+  if (context === null || typeof context !== "object") return "";
+  const work = ((context as Record<string, unknown>).work ?? context) as Record<string, unknown>;
+  const lines: string[] = [];
+  const say = (label: string, value: unknown) => {
+    if (typeof value === "string" && value.trim() !== "") lines.push(`${label}: ${value.trim().slice(0, 600)}`);
+  };
+  say("title", work.title);
+  say("state", typeof work.state === "object" && work.state !== null ? (work.state as Record<string, unknown>).name : work.state);
+  say("outcome", work.outcome);
+  say("acceptance", work.acceptance);
+  say("verification", work.verification);
+  say("description", work.description);
+  const runs = (context as Record<string, unknown>).runs;
+  if (Array.isArray(runs) && runs.length > 0) {
+    const recent = runs.slice(-3).map(run => {
+      const row = run as Record<string, unknown>;
+      return `${String(row.status ?? "?")} ${String(row.summary ?? "").slice(0, 200)}`;
+    });
+    lines.push(`recent runs: ${recent.join(" | ")}`);
+  }
+  return lines.join("\n");
 }
 
 export class InvoluteConsumer {
@@ -153,9 +194,25 @@ export class InvoluteConsumer {
       }
 
       const conversation = conversationFor(request);
+      // Read the item with the agent's own credential before answering about it, and put
+      // what was written down at the time beside it. An agent asked "why" with neither is
+      // being invited to invent (INV-551).
+      let work = "";
+      try {
+        work = describeWork(await agent.call("work_get_context", { id: request.work_identifier ?? request.work_id }));
+      } catch (error) {
+        this.deps.log(`involute: ${agent.handle} could not read ${request.work_identifier ?? request.work_id} (${message(error)})`);
+      }
+      const receipts = this.deps.receiptsFor?.(`inv:${request.work_identifier ?? request.work_id}`) ?? "";
       let said = "";
       try {
-        said = (await this.deps.runTurn({ agentId: agent.agentId, prompt: promptFor(request, agent.agentName), conversation })).trim();
+        said = (
+          await this.deps.runTurn({
+            agentId: agent.agentId,
+            prompt: promptFor(request, agent.agentName, agent.handle, { work, receipts }),
+            conversation,
+          })
+        ).trim();
       } catch (error) {
         await this.answer(agent, request, `I could not finish looking into this: ${message(error)}`, "failed");
         outcome.failed.push(request.id);

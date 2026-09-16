@@ -196,6 +196,7 @@ import { SessionEpochs } from "./session-epochs.ts";
 import { mayEnterBox, membersLabel, refusalToEnter } from "../box/membership.ts";
 import { attentionFor } from "../host/attention.ts";
 import { InvoluteConsumer } from "../host/involute-inbox.ts";
+import { describeReceipts } from "../host/receipts.ts";
 import { QuestionWatch } from "../host/question-expiry.ts";
 import { appendLine } from "../host/jsonl.ts";
 import { seedStarterSkills } from "../host/starter-skills.ts";
@@ -1824,6 +1825,18 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
       if (askedIn !== undefined) void chats?.pushToChat(askedIn, expiry.toChat).then(() => followUps.record(askedIn)).catch((error: unknown) => log(`question: could not tell ${askedIn} (${error instanceof Error ? error.message : String(error)})`));
       else if (question.conversation !== "main") log(`question: expired in ${question.conversation} but no chat is recorded for it; the ledger has it`);
       broadcast({ type: "question_expired", agentId: question.agentId, agentName: question.agentName, question: question.question, verdict: expiry.verdict });
+      // What the host did on a person's behalf, recorded where it can be asked about
+      // later (INV-551): the default it took, or that it decided without one.
+      orchestrator.receipts.write({
+        at: new Date().toISOString(),
+        by: question.agentId,
+        byName: question.agentName,
+        subject: `question:${question.id}`,
+        decision: expiry.verdict === "default" ? `took the stated default: ${question.fallback}` : "decided without an answer and said which way",
+        because: `no reply from ${question.asker ?? "the conversation"} before the window closed`,
+        evidence: [`conversation:${question.conversation}`, `asked:${new Date(question.askedAt).toISOString()}`],
+        conversation: question.conversation,
+      });
       void orchestrator
         .prompt(question.agentId, expiry.cue, undefined, { conversation: question.conversation, steerable: false, lane: "background", synthetic: true })
         .catch(error => log(`question: could not wake ${question.agentName} after expiry (${error instanceof Error ? error.message : String(error)})`));
@@ -1938,6 +1951,8 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
             return { ok: true };
           },
           askedBack: ({ agentId, conversation }) => questions.list().some(open => open.agentId === agentId && open.conversation === conversation),
+          // What was written down about this item when the decisions were made (INV-551).
+          receiptsFor: subject => describeReceipts(orchestrator.receipts.forSubject(subject)),
           log: line => log(line),
         });
   const involuteTimer =
