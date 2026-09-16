@@ -20,6 +20,7 @@ import {
   type RelayUsage,
   type Upstream,
 } from "./server.ts";
+import { SpendCeilings } from "./ceiling.ts";
 
 /** A stand-in provider that reports what it was sent and can answer either shape. */
 async function fakeProvider(options: {
@@ -80,7 +81,8 @@ async function fakeProvider(options: {
 
 async function relayFor(
   upstream: Upstream,
-  tokens: Record<string, { tenantId: string; boxId: string }>
+  tokens: Record<string, { tenantId: string; boxId: string }>,
+  maySpend?: (client: RelayClient) => { ok: true } | { ok: false; refusal: { reason: string } }
 ): Promise<{ url: string; usage: RelayUsage[]; close: () => void }> {
   const usage: RelayUsage[] = [];
   const server = startRelay({
@@ -90,6 +92,7 @@ async function relayFor(
       return found === undefined ? undefined : { token, ...found, upstream };
     },
     onUsage: entry => usage.push(entry),
+    ...(maySpend !== undefined ? { maySpend } : {}),
   });
   await new Promise<void>(resolve => {
     if (server.listening) resolve();
@@ -324,6 +327,69 @@ test("a provider error passes through with its status and body", async () => {
     assert.equal(response.status, 400);
     assert.match(JSON.stringify(await response.json()), /invalid_request_error/);
     assert.equal(relay.usage.length, 0, "a rejected request is not billed");
+  } finally {
+    relay.close();
+    provider.close();
+  }
+});
+
+test("a box past its spend ceiling is refused here, where it cannot edit the check (INV-580 A1, A2)", async () => {
+  // The in-box policy gate runs inside the thing being billed, next to a shell with sudo. This
+  // one is outside it, and a refused request never reaches the provider — so it costs nothing
+  // and cannot be worked around by rewriting anything in the box.
+  const provider = await fakeProvider();
+  const upstream: Upstream = { label: "anthropic", baseUrl: provider.url, key: "sk-real", auth: "x-api-key" };
+  const meter = new SpendCeilings({
+    ceilingFor: () => ({ limitTokens: 1000 }),
+    now: () => new Date("2026-09-16T12:00:00Z"),
+  });
+  meter.record({
+    at: "2026-09-16T11:00:00Z",
+    tenantId: "t1",
+    boxId: "b1",
+    provider: "anthropic",
+    model: "claude-x",
+    inputTokens: 2000,
+    outputTokens: 0,
+    cacheReadTokens: 0,
+    cacheWriteTokens: 0,
+  });
+  const relay = await relayFor(upstream, { "box-token": { tenantId: "t1", boxId: "b1" } }, client =>
+    meter.check({ boxId: client.boxId, tenantId: client.tenantId })
+  );
+  try {
+    const response = await fetch(`${relay.url}/v1/messages`, {
+      method: "POST",
+      headers: { "x-api-key": "box-token", "content-type": "application/json" },
+      body: JSON.stringify({ model: "claude-x", messages: [] }),
+    });
+    assert.equal(response.status, 403, "not 429: this is not a rate limit and an SDK must not retry it into a hot loop");
+    const body = (await response.json()) as { error: { type: string; message: string } };
+    assert.equal(body.error.type, "permission_error");
+    // Readable by the agent that hit it, which is the point: it has to tell its person something.
+    assert.match(body.error.message, /used 2,000 tokens in the last 24 hours, which is its limit \(1,000\)/);
+    assert.match(body.error.message, /set by whoever runs this deployment/);
+    assert.deepEqual(provider.seen, [], "and the provider never saw the request, so the refusal cost nothing");
+  } finally {
+    relay.close();
+    provider.close();
+  }
+});
+
+test("with no ceiling the relay forwards exactly as before (INV-580 A3)", async () => {
+  const provider = await fakeProvider();
+  const upstream: Upstream = { label: "anthropic", baseUrl: provider.url, key: "sk-real", auth: "x-api-key" };
+  const relay = await relayFor(upstream, { "box-token": { tenantId: "t1", boxId: "b1" } });
+  try {
+    const response = await fetch(`${relay.url}/v1/messages`, {
+      method: "POST",
+      headers: { "x-api-key": "box-token", "content-type": "application/json" },
+      body: JSON.stringify({ model: "claude-x", messages: [] }),
+    });
+    assert.equal(response.status, 200);
+    await response.json();
+    assert.equal(provider.seen.length, 1);
+    assert.equal(provider.seen[0]!.apiKey, "sk-real", "and the box's token is still swapped for the real one");
   } finally {
     relay.close();
     provider.close();

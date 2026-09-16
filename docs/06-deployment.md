@@ -296,3 +296,29 @@ before the first start.
 
 `control up` and `control status` both say which key they got, so there is no need to guess.
 
+## A spend ceiling that the box cannot edit (INV-580, 2026-09-16)
+
+The in-box policy gate explains a budget to an agent, which is what it is good at, and it runs
+inside the thing being billed next to a shell with sudo. The relay is outside the box, holds the
+credential, and already measures every request where it passes.
+
+```
+# deployment-wide
+AGENTBOX_RELAY_LIMIT_USD=25
+AGENTBOX_RELAY_WINDOW_HOURS=24
+AGENTBOX_RATES='{"claude-opus-5":{"inputPerM":15,"outputPerM":75}}'
+
+# or per tenant, in its quota
+{"relay": {"limitTokens": 5000000, "windowHours": 168}}
+```
+
+Absent, nothing changes: no ceiling is imposed on a deployment that did not ask for one. Past the
+ceiling the relay answers `403 permission_error` before forwarding — the refusal costs nothing and
+the provider never sees the request — and the message says what the limit is, what has been spent,
+when the allowance starts coming back, and that the operator sets it.
+
+A money ceiling needs a rate for every model used. When one is missing the spend is a floor rather
+than a total, so the relay **refuses and names the model**: a limit that cannot be measured is not a
+limit, and an unpriced model would otherwise walk straight through it. A token ceiling needs no
+rates at all, which is the one to reach for when the rate table is not kept up to date.
+

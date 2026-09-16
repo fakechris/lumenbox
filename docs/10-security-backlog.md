@@ -71,6 +71,17 @@ holds the credential. It measures spend already; it does not yet refuse on it. T
 and the right place for a hard ceiling — the in-box gate stays as the one that can explain itself to
 the agent.
 
+**Done (2026-09-16, INV-580).** `src/relay/ceiling.ts` meters what the relay already measured and
+refuses before forwarding: `403 permission_error` (not 429 — this is not a rate limit, and an SDK
+must not retry it into a hot loop) with a message the agent on the other end can repeat to its
+person: what the limit is, what has been spent, when the allowance starts coming back as the oldest
+requests fall out of the rolling window, and that the operator sets it. Refusals go to the audit as
+`spend.refused`. Three honesty rules: no ceiling configured changes nothing; a rolling window is
+described as a rolling window rather than promised as a reset; and a money ceiling with an unpriced
+model in the window **fails closed** and says which model — a ceiling that cannot be measured is not
+a ceiling. Counters are replayed from the store on start, so a restart is not a fresh allowance.
+
+
 ## S-6 — The control plane's encryption key sits beside its database
 
 `control.db.key` is minted 0600 next to `control.db`, so a copy of the *file* is not a credential
@@ -131,7 +142,7 @@ that landed for other reasons, two changed shape, and four are open with a named
 | **S-2** no TLS, cookie is the session | **closed in code, 2026-09-16 (INV-578)** | Unchanged in code, and the installation's own web changed underneath it: a sign-in now issues a per-person session rather than handing out the installation token (2026-09-15), so the cookie is no longer *the* credential — but on a plain-HTTP path it is still somebody's session. **Done**: a non-loopback bind with no `https://` public URL refuses to start and names the two ways forward; `AGENTBOX_INSECURE=1` is the deliberate escape and says so **on every start**, because a warning nobody sees again is a warning nobody acted on; the session cookie carries `Secure` when the address is https. |
 | **S-3** identity is a password list | **open, unchanged** | `PasswordListIdentity` (`src/control/gateway.ts:67`) still compares plaintext, with no KDF, lockout or rotation. It is the control plane's, not an installation's — an installation signs people in through a door's OAuth or an invite code. Next step: replace it before anybody who is not the operator signs into a *gateway*. |
 | **S-4** the box believes the gateway's headers | **narrowed** | Still believed, still one trust dependency rather than two. What changed (INV-537): an absent role header no longer means owner, the gateway's vocabulary is translated in exactly one function, and a web session's authority comes from the roster rather than from the header. The seam for a signed assertion is where it always was — `callerOf`. |
-| **S-5** budget is enforced inside the box | **open, unchanged** | The policy gate is still the thing being billed. The model relay has route leases and a ceiling on *time* (`model-relay.ts:27`), not on spend. Next step is the same as it was: a hard ceiling at the relay, with the in-box gate kept as the one that can explain itself. |
+| **S-5** budget is enforced inside the box | **closed, 2026-09-16 (INV-580)** | The relay now refuses past a configured ceiling, before the request is forwarded — so the refusal costs nothing and the provider never sees it. The in-box gate is kept as the one that can explain itself to an agent. Money or tokens, per tenant (`quota.relay`) or deployment-wide (`AGENTBOX_RELAY_LIMIT_*`); absent means unchanged behaviour; an unpriced model fails a money ceiling **closed** and names the model, because otherwise it is a hole straight through it. |
 | **S-6** control key beside the database | **closed for the packaged deployment, 2026-09-16 (INV-579)** | The Kubernetes manifest now requires an `agentbox-control-key` Secret — not optional, because a key cannot be corrected after the tokens are encrypted with the wrong one — and `agentbox control key` mints one with the `kubectl` line. A local `control up` still mints a file beside the database, and now **says so on every start** and in `control status` rather than leaving an operator to assume otherwise. |
 | **S-7** "private" invites the wrong assumption | **closed, by removing the word's basis** | Per-agent `visibility` no longer decides anything (INV-540, docs/22 §3), the boundary is a box's `members` (INV-538), and the label a person reads is **derived from that set** rather than typed (`membersLabel`). There is no longer a UI string that could describe an agent as private while the filesystem says otherwise. |
 | **S-8** egress per relay, not per tenant | **closed** | INV-423: the relay's allow-list is per box. |

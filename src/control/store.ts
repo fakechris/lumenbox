@@ -289,6 +289,11 @@ export interface ControlStore {
 
   /** One row per request the relay forwarded, measured as it passed. */
   appendRelayUsage(row: Omit<RelayUsageRow, "id">): void;
+  /**
+   * The rows since a moment, oldest first. Read on start so a restart does not hand every box
+   * a fresh allowance — a ceiling that resets with uptime is not a ceiling (INV-580).
+   */
+  relayUsageSince(since: string): RelayUsageRow[];
   relayTotals(tenantId: string, since?: string): UsageTotals;
   /**
    * Whether this tenant has relay-measured usage in a period, which decides which series to bill.
@@ -1060,6 +1065,28 @@ export class SqliteControlStore implements ControlStore {
         row.cacheReadTokens,
         row.cacheWriteTokens
       );
+  }
+
+  relayUsageSince(since: string): RelayUsageRow[] {
+    const rows = this.db
+      .prepare(
+        `select id, box_id, tenant_id, at, provider, model,
+                input_tokens, output_tokens, cache_read_tokens, cache_write_tokens
+         from relay_usage where at >= ? order by at asc`
+      )
+      .all(since) as Record<string, string | number>[];
+    return rows.map(row => ({
+      id: Number(row.id),
+      boxId: String(row.box_id),
+      tenantId: String(row.tenant_id),
+      at: String(row.at),
+      provider: String(row.provider),
+      model: String(row.model),
+      inputTokens: Number(row.input_tokens),
+      outputTokens: Number(row.output_tokens),
+      cacheReadTokens: Number(row.cache_read_tokens),
+      cacheWriteTokens: Number(row.cache_write_tokens),
+    }));
   }
 
   relayTotals(tenantId: string, since?: string): UsageTotals {

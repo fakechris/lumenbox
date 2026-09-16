@@ -1538,6 +1538,12 @@ Environment:
                             beside the database when unset — which means a
                             backup of that directory holds both, and \`control
                             up\` says so on every start. \`control key\` mints one.
+  AGENTBOX_RELAY_LIMIT_USD  Hard spend ceiling per box, enforced at the relay.
+  AGENTBOX_RELAY_LIMIT_TOKENS  The same in tokens, which needs no rate table.
+  AGENTBOX_RELAY_WINDOW_HOURS  How far the ceiling looks back (default 24).
+  AGENTBOX_RATES            {"model": {"inputPerM": n, "outputPerM": n}} — without
+                            it a money ceiling fails closed and says which model
+                            it could not price.
   AGENTBOX_SESSION_SECRET   Shared by two gateways so sessions survive either
   AGENTBOX_SECURE_COOKIES   1 when TLS terminates in front of the gateway
   AGENTBOX_K8S_NAMESPACE    Namespace for kubernetes allocator boxes (default agentbox)

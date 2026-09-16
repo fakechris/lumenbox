@@ -32,6 +32,11 @@
  *
  * **Failing closed.** No token, an unknown token, or a path not on the list is refused. A relay that
  * forwarded an unauthenticated request with the operator's key would be worse than no relay.
+ *
+ * **And spending stops here, if it stops anywhere** (INV-580). The in-box policy gate is the right
+ * place to explain a budget to an agent and the wrong place to impose one: the party being billed
+ * is the party running the check, with a shell. `maySpend` refuses before the request is forwarded,
+ * so a refusal costs nothing and the provider never sees it.
  */
 
 import { createServer, request as httpRequest, type IncomingMessage, type Server, type ServerResponse } from "node:http";
@@ -87,6 +92,14 @@ export interface RelayOptions {
   resolve: (token: string) => RelayClient | undefined;
   /** Where measured usage goes. Never allowed to throw into the request path. */
   onUsage?: (usage: RelayUsage) => void;
+  /**
+   * Whether this box may spend anything more (INV-580).
+   *
+   * Here rather than in the box because the box is the party being billed: a gate inside it
+   * can explain a limit to an agent, and an agent with a shell can edit it. Absent means no
+   * ceiling, which is the default deployment.
+   */
+  maySpend?: (client: RelayClient) => { ok: true } | { ok: false; refusal: { reason: string } };
   log?: (line: string) => void;
 }
 
@@ -271,6 +284,18 @@ export function startRelay(options: RelayOptions): Server {
           error: { type: "authentication_error", message: "This relay token is not valid." },
         })
       );
+      return;
+    }
+
+    // Before anything is forwarded, so a refused request costs nothing and the provider never
+    // sees it. Shaped like a provider error because the SDK inside the box knows how to read
+    // that; 403 rather than 429 because this is not a rate limit and must not be retried into
+    // a hot loop. What the agent does about it is the in-box gate's job to explain.
+    const allowed = options.maySpend?.(client) ?? { ok: true as const };
+    if (!allowed.ok) {
+      log(`refused ${client.boxId}: ${allowed.refusal.reason}`);
+      res.writeHead(403, { "content-type": "application/json" });
+      res.end(JSON.stringify({ error: { type: "permission_error", message: allowed.refusal.reason } }));
       return;
     }
 
