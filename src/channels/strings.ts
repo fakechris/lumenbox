@@ -9,118 +9,136 @@
  * of the meaning.
  *
  * One module rather than strings scattered through two adapters and a manager, so the
- * whole user-facing vocabulary is on one page and a future locale switch has exactly one
- * seam. Deliberately not an i18n framework: that is a cost the product has not earned yet.
+ * whole user-facing vocabulary is on one page and a locale switch has exactly one seam.
+ *
+ * **That switch is now taken (INV-544).** The words live in `src/i18n/messages.ts`, in both
+ * languages, and every function here takes an optional locale — absent means the
+ * installation's default, which is what every call site meant before this existed, so
+ * nothing had to change at once. The page reads the same bundle, which is the point: the
+ * same person was reading Chinese cards in Feishu and English buttons on the web.
  *
  * Two kinds of text stay out of scope here: what the model says (it answers in the
  * person's language already), and technical action descriptions inside consent requests
  * (they name commands and paths, and translating those would blur what is being approved).
  */
 
+import { DEFAULT_LOCALE, type Locale } from "../i18n/locale.ts";
+import { tr } from "../i18n/messages.ts";
+
 /** The people-words for an unnamed agent or the whole team. */
-export const TEAM = "团队";
+export const TEAM = tr("team", DEFAULT_LOCALE);
+
+export const teamWord = (locale: Locale = DEFAULT_LOCALE): string => tr("team", locale);
 
 // ── task card ──────────────────────────────────────────────────────────────────
 
 export const CARD_STATUS = {
-  queued: (ahead?: number) => (ahead !== undefined ? `排队中 — 前面还有 ${ahead} 件` : "排队中"),
-  working: "进行中",
-  review: "待你验收",
-  done: "已完成",
-  failed: "失败了",
+  queued: (ahead?: number, locale: Locale = DEFAULT_LOCALE) =>
+    ahead !== undefined ? tr("card.queued.ahead", locale, { ahead }) : tr("card.queued", locale),
+  working: tr("card.working", DEFAULT_LOCALE),
+  review: tr("card.review", DEFAULT_LOCALE),
+  done: tr("card.done", DEFAULT_LOCALE),
+  failed: tr("card.failed", DEFAULT_LOCALE),
 } as const;
 
-export const OPEN_WORKSHOP = "在工作台打开";
+/** The same statuses in a chosen language, for a card rendered for one person. */
+export const cardStatus = (status: "working" | "review" | "done" | "failed", locale: Locale = DEFAULT_LOCALE): string =>
+  tr(`card.${status}`, locale);
+
+export const OPEN_WORKSHOP = tr("card.open", DEFAULT_LOCALE);
+export const openWorkshop = (locale: Locale = DEFAULT_LOCALE): string => tr("card.open", locale);
 
 /** The card footnote: which task, for whom. */
-export function cardFootnote(taskId: string | undefined, requesterLabel: string): string {
-  return `${taskId !== undefined ? `${taskId} · ` : ""}来自 ${requesterLabel}`;
+export function cardFootnote(taskId: string | undefined, requesterLabel: string, locale: Locale = DEFAULT_LOCALE): string {
+  return `${taskId !== undefined ? `${taskId} · ` : ""}${tr("card.footnote", locale, { requester: requesterLabel })}`;
 }
 
 // ── acknowledgements ───────────────────────────────────────────────────────────
 
-export function ackQueued(who: string, ahead: number): string {
-  return `收到 — ${who}前面还有 ${ahead} 件事。做完会发在这里。`;
+export function ackQueued(who: string, ahead: number, locale: Locale = DEFAULT_LOCALE): string {
+  return tr("ack.queued", locale, { who, ahead });
 }
 
-export function ackWorking(who: string): string {
-  return `${who}开工了。可能要一会儿,结果会发在这里。`;
+export function ackWorking(who: string, locale: Locale = DEFAULT_LOCALE): string {
+  return tr("ack.working", locale, { who });
 }
 
-export const EMPTY_REPLY_NOTE = "做完了。(它没有留下说明。)";
+export const EMPTY_REPLY_NOTE = tr("reply.empty", DEFAULT_LOCALE);
 
 // ── files ──────────────────────────────────────────────────────────────────────
 
-export const NO_BOX_FOR_FILES = "现在没有开着的工作机,文件存不进去。";
+export const NO_BOX_FOR_FILES = tr("files.noBox", DEFAULT_LOCALE);
 
 /** The receipt for a wordless drop. Basenames, not box paths — the person sent names. */
-export function filesSaved(saved: readonly string[]): string {
+export function filesSaved(saved: readonly string[], locale: Locale = DEFAULT_LOCALE): string {
   const names = saved.map(path => path.split("/").pop() ?? path);
-  const shown = names.length > 3 ? `${names.slice(0, 3).join("、")} 等 ${names.length} 个` : names.join("、");
-  return `收到:${shown}。我先看一眼——你也可以直接说要做什么。`;
+  const shown =
+    names.length > 3
+      ? tr("files.more", locale, { first: names.slice(0, 3).join("、"), count: names.length })
+      : names.join("、");
+  return tr("files.saved", locale, { names: shown });
 }
 
-export const SAY_WHAT_YOU_NEED = "说一句要做什么就开工;想指定谁来做,开头@它的名字。";
+export const SAY_WHAT_YOU_NEED = tr("say.whatYouNeed", DEFAULT_LOCALE);
 
 /** The roster, for the chat that asked 「团队」. One line per worker, the door's default marked. */
 export function rosterText(
-  agents: readonly { name: string; title?: string; isDefault: boolean }[]
+  agents: readonly { name: string; title?: string; isDefault: boolean }[],
+  locale: Locale = DEFAULT_LOCALE
 ): string {
-  if (agents.length === 0) return "这里还没有任何成员。";
+  if (agents.length === 0) return tr("roster.empty", locale);
   const lines = agents.map(agent => {
     const role = agent.title ? ` — ${agent.title}` : "";
-    return `${agent.name}${role}${agent.isDefault ? "(不@人时由它接手)" : ""}`;
+    return `${agent.name}${role}${agent.isDefault ? tr("roster.default", locale) : ""}`;
   });
-  return `${lines.join("\n")}\n@名字 指定谁来做;不指定就交给默认的那位。`;
+  return `${lines.join("\n")}\n${tr("roster.footer", locale)}`;
 }
 
 /** The desktop, opened from a phone: the link, plus what opening it means. */
-export function desktopLink(agentName: string, url: string): string {
-  return (
-    `${agentName} 的桌面(实时,可操作):\n${url}\n` +
-    "在飞书里点开就是网页版的那块屏幕。注意:拿到这个链接的人都能看,共享箱子的提醒在页面顶上。"
-  );
+export function desktopLink(agentName: string, url: string, locale: Locale = DEFAULT_LOCALE): string {
+  return tr("desktop.link", locale, { agent: agentName, url });
 }
 
-export const DESKTOP_NOT_PUBLIC =
-  "还没配置从手机能访问的地址。在启动 web 的环境里设置 AGENTBOX_PUBLIC_URL " +
-  "(比如 Tailscale 的地址),桌面链接、任务卡片的「在工作台打开」按钮就都能点了。" +
-  "先用「屏幕」可以拿一张当前截图。";
+export const DESKTOP_NOT_PUBLIC = tr("desktop.notPublic", DEFAULT_LOCALE);
 
 /** A wrong @ answered with the way in, not just the way it failed. */
-export function unknownAgent(asked: string, names: readonly string[]): string {
-  const roster = names.length > 0 ? names.join("、") : "(还没有成员)";
-  return `没有叫"${asked}"的。这里能找到的是:${roster}。用 @名字 重新说一遍就行。`;
+export function unknownAgent(asked: string, names: readonly string[], locale: Locale = DEFAULT_LOCALE): string {
+  const roster = names.length > 0 ? names.join("、") : tr("agent.none", locale);
+  return tr("agent.unknown", locale, { asked, roster });
 }
 
 // ── consent(安全确认)────────────────────────────────────────────────────────
 
-export const APPROVAL_STAKES =
-  "在有人回复之前,这一步是停着的。拒绝可以随时反悔:它会跳过这一步,继续做别的。";
+export const APPROVAL_STAKES = tr("consent.stakes", DEFAULT_LOCALE);
 
-export function consentTitle(agentName: string): string {
-  return `${agentName || TEAM} 请你确认`;
+export function consentTitle(agentName: string, locale: Locale = DEFAULT_LOCALE): string {
+  return tr("consent.title", locale, { agent: agentName || tr("team", locale) });
 }
 
-export const CONSENT_BUTTONS = { once: "允许这一次", always: "一直允许", deny: "拒绝" } as const;
+export const CONSENT_BUTTONS = {
+  once: tr("consent.once", DEFAULT_LOCALE),
+  always: tr("consent.always", DEFAULT_LOCALE),
+  deny: tr("consent.deny", DEFAULT_LOCALE),
+} as const;
 
-export function consentFallbackText(agentName: string, description: string): string {
-  return (
-    `${agentName || TEAM} 请你确认:\n${description}\n\n` +
-    `回复"允许"只批这一次,"一直允许"以后不再问,"拒绝"就不做。${APPROVAL_STAKES}`
-  );
+export function consentFallbackText(agentName: string, description: string, locale: Locale = DEFAULT_LOCALE): string {
+  return tr("consent.fallback", locale, {
+    agent: agentName || tr("team", locale),
+    description,
+    stakes: tr("consent.stakes", locale),
+  });
 }
 
-export const CONSENT_GONE = "这条确认已经不在等了——可能已经在别处回复过,或者那件事已经走完了。";
+export const CONSENT_GONE = tr("consent.gone", DEFAULT_LOCALE);
 
 // ── questions from the agent ───────────────────────────────────────────────────
 
-export function questionTitle(agentName: string): string {
-  return `${agentName || TEAM} 有个问题要先问你`;
+export function questionTitle(agentName: string, locale: Locale = DEFAULT_LOCALE): string {
+  return tr("question.title", locale, { agent: agentName || tr("team", locale) });
 }
 
-export function questionText(agentName: string, question: string, choices: string): string {
-  return `${agentName || TEAM} 有个问题要先问你:\n${question}${choices}\n\n直接在这里回复,它就接着干。`;
+export function questionText(agentName: string, question: string, choices: string, locale: Locale = DEFAULT_LOCALE): string {
+  return tr("question.text", locale, { agent: agentName || tr("team", locale), question, choices });
 }
 
 /**
@@ -129,34 +147,39 @@ export function questionText(agentName: string, question: string, choices: strin
  * 默认值和截止时间以前只存在宿主内存里:到点之后 bot 说"按默认走了",而被问的人从未
  * 被告知有这么一个默认、也不知道有个钟在走。事先说好,才谈得上"沉默=按默认"。
  */
-export function questionTerms(fallback: string | undefined, expiresAt: number | undefined): string {
-  if (expiresAt === undefined) return fallback === undefined ? "" : `\n\n(没回复的话就按这个走:${fallback})`;
-  const when = new Date(expiresAt).toLocaleString("zh-CN", { hour12: false, month: "numeric", day: "numeric", hour: "2-digit", minute: "2-digit" });
+export function questionTerms(fallback: string | undefined, expiresAt: number | undefined, locale: Locale = DEFAULT_LOCALE): string {
+  if (expiresAt === undefined) return fallback === undefined ? "" : tr("question.terms.default", locale, { fallback });
+  const when = new Date(expiresAt).toLocaleString(locale === "en" ? "en-GB" : "zh-CN", {
+    hour12: false,
+    month: "numeric",
+    day: "numeric",
+    hour: "2-digit",
+    minute: "2-digit",
+  });
   return fallback === undefined
-    ? `\n\n(${when} 前没回复,它就自己定,并说明是怎么定的)`
-    : `\n\n(${when} 前没回复,就按这个走:${fallback})`;
+    ? tr("question.terms.byDecide", locale, { when })
+    : tr("question.terms.byDefault", locale, { when, fallback });
 }
 
 // ── the running task:停 与改 ──────────────────────────────────────────────────
 
-export const STOPPING = "好,叫停了。当前这一步做完就停。";
-
-export const NOTHING_RUNNING = "现在没有正在做的事。";
+export const STOPPING = tr("run.stopping", DEFAULT_LOCALE);
+export const NOTHING_RUNNING = tr("run.nothing", DEFAULT_LOCALE);
 
 /** 这道门不收访客 (INV-429)：说清楚是规则，不是故障,也不是在排队等人批。 */
-export function guestsClosed(): string {
-  return "这道门只对已经登记过的人开放,不收新的申请。要用的话,请让管理员先把你加进来。";
+export function guestsClosed(locale: Locale = DEFAULT_LOCALE): string {
+  return tr("guests.closed", locale);
 }
 
 /** 不是"没在跑",是"这个不归你管" (INV-538)。含糊其辞会让人以为自己按错了。 */
-export function notYours(who: string | undefined): string {
-  return `${who ?? "它"}在你不在的那个 box 里,所以这条没有生效。让管理员把你加进去,或者找那个 box 里的人。`;
+export function notYours(who: string | undefined, locale: Locale = DEFAULT_LOCALE): string {
+  return tr("run.notYours", locale, { who: who ?? tr("run.it", locale) });
 }
 
-export function steered(who: string | undefined): string {
+export function steered(who: string | undefined, locale: Locale = DEFAULT_LOCALE): string {
   // No name is better than a wrong one: without an @-address the manager does not know
   // which agent is on it, and "团队接着做" read as if a committee had the file.
-  return who !== undefined ? `带到了,${who}接着做。` : "带到了,接着做。";
+  return who !== undefined ? tr("run.steered", locale, { who }) : tr("run.steeredAnon", locale);
 }
 
 // ── file fetch failures ────────────────────────────────────────────────────────
@@ -168,19 +191,15 @@ export function steered(who: string | undefined): string {
  * chat heard nothing — the agent then looked at an empty inbox and guessed out loud. The
  * failure of a delivery must land where the delivery was attempted.
  */
-export function fileFetchFailed(name: string, code: number | undefined): string {
-  if (code === 234037) {
-    return `「${name}」太大,飞书不让机器人下载这个尺寸的附件。压缩一下、拆小一点再发,或者换个格式。`;
-  }
-  return `「${name}」我没拿下来(飞书下载接口报错${code !== undefined ? ` ${code}` : ""})。再发一次试试,或换个发法。`;
+export function fileFetchFailed(name: string, code: number | undefined, locale: Locale = DEFAULT_LOCALE): string {
+  if (code === 234037) return tr("file.tooBig", locale, { name });
+  return tr("file.failed", locale, { name, code: code !== undefined ? ` ${code}` : "" });
 }
 
 // ── 定时(automations)─────────────────────────────────────────────────────────
 
-export const NO_SCHEDULES =
-  "现在没有自动运行的任务。要加一个,让 agent 在 skill 的开头写上 schedule,比如每天早上 6:30 报一次。";
-
-export const SCHEDULES_DISARMED = "(定时器当前是关的,下面这些不会自动跑。)";
+export const NO_SCHEDULES = tr("schedules.none", DEFAULT_LOCALE);
+export const SCHEDULES_DISARMED = tr("schedules.disarmed", DEFAULT_LOCALE);
 
 /**
  * One automation, as the chat shows it.
@@ -189,40 +208,42 @@ export const SCHEDULES_DISARMED = "(定时器当前是关的,下面这些不会�
  * "runs quietly" is the one thing a person cannot guess and the one that made scheduled
  * skills look broken — they ran for weeks into a conversation no chat reads.
  */
-export function scheduleLine(entry: {
-  name: string;
-  described: string;
-  agent?: string;
-  timezone?: string;
-  deliver?: string;
-  lastRun?: string;
-  running: boolean;
-  here: boolean;
-}): string {
+export function scheduleLine(
+  entry: {
+    name: string;
+    described: string;
+    agent?: string;
+    timezone?: string;
+    deliver?: string;
+    lastRun?: string;
+    running: boolean;
+    here: boolean;
+  },
+  locale: Locale = DEFAULT_LOCALE
+): string {
   const when = entry.timezone !== undefined ? `${entry.described}(${entry.timezone})` : entry.described;
   const who = entry.agent !== undefined ? ` · ${entry.agent}` : "";
-  const where = entry.deliver === undefined ? " · 只写文件" : entry.here ? " · 报到本群" : " · 报到别的群";
-  const last =
+  const where = ` · ${entry.deliver === undefined ? tr("schedule.filesOnly", locale) : entry.here ? tr("schedule.here", locale) : tr("schedule.elsewhere", locale)}`;
+  const last = ` · ${
     entry.running
-      ? " · 正在跑"
+      ? tr("schedule.running", locale)
       : entry.lastRun !== undefined
-        ? ` · 上次 ${entry.lastRun.slice(5, 16).replace("T", " ")}`
-        : " · 还没跑过";
+        ? tr("schedule.lastRun", locale, { when: entry.lastRun.slice(5, 16).replace("T", " ") })
+        : tr("schedule.never", locale)
+  }`;
   return `· ${entry.name} — ${when}${who}${where}${last}`;
 }
 
 // ── acceptance(验收)─────────────────────────────────────────────────────────
 
-export function accepted(taskId: string): string {
-  return `好,${taskId} 算完成了。`;
+export function accepted(taskId: string, locale: Locale = DEFAULT_LOCALE): string {
+  return tr("task.accepted", locale, { task: taskId });
 }
 
 // ── refusals ───────────────────────────────────────────────────────────────────
 
-export const SCOPE_IS_ADMIN_CALL = "绑定 scope 会改变这个群里每件任务的权限,这要管理员来定。";
-
-export const UPGRADE_IS_ADMIN_CALL =
-  "升级会重建这台工作机,上面没存进卷里的东西都会没,这要管理员来定。";
+export const SCOPE_IS_ADMIN_CALL = tr("refuse.scopeIsAdmin", DEFAULT_LOCALE);
+export const UPGRADE_IS_ADMIN_CALL = tr("refuse.upgradeIsAdmin", DEFAULT_LOCALE);
 
 /**
  * Said when the word arrives with no question behind it.
@@ -231,12 +252,9 @@ export const UPGRADE_IS_ADMIN_CALL =
  * talking about upgrading something else, and answering as though they had tried to
  * destroy a box would be both wrong and alarming.
  */
-export const NO_UPGRADE_WAITING = "现在没有在等确认的升级。";
+export const NO_UPGRADE_WAITING = tr("upgrade.noneWaiting", DEFAULT_LOCALE);
 
 /** Said when a decision has just been recorded — exactly what it did and did not do. */
-export function upgradeApproved(image: string, who: string): string {
-  return (
-    `好,记下了:${who} 批准升级到 ${image}。\n` +
-    `这只是记录决定——工作机会在下一次升级运行时重建,那次不会再问。现在什么都还没动。`
-  );
+export function upgradeApproved(image: string, who: string, locale: Locale = DEFAULT_LOCALE): string {
+  return tr("upgrade.approved", locale, { image, who });
 }

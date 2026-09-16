@@ -204,6 +204,8 @@ import { mayEnterBox, membersLabel, refusalToEnter } from "../box/membership.ts"
 import { attentionFor } from "../host/attention.ts";
 import { InvoluteConsumer } from "../host/involute-inbox.ts";
 import { describeReceipts } from "../host/receipts.ts";
+import { resolveLocale } from "../i18n/locale.ts";
+import { MESSAGES } from "../i18n/messages.ts";
 import { QuestionWatch } from "../host/question-expiry.ts";
 import { appendLine } from "../host/jsonl.ts";
 import { seedStarterSkills } from "../host/starter-skills.ts";
@@ -5229,6 +5231,19 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
         // tasks they asked for that have been nudged — and, on the other side, what they
         // are waiting on somebody else for. The operator's own credential has no person,
         // so it sees the installation's: everything with a clock on it.
+        // The page's words, in the language this person reads (INV-544). One bundle with
+        // the chat strings, so the same installation stops speaking Chinese in Feishu and
+        // English on the page. `?lang=` is the override a person can use before there is
+        // anywhere to store a preference.
+        if (route === "GET /api/i18n") {
+          const locale = resolveLocale({
+            ...(url.searchParams.get("lang") !== null ? { preference: url.searchParams.get("lang")! } : {}),
+            ...(typeof req.headers["accept-language"] === "string" ? { acceptLanguage: req.headers["accept-language"] } : {}),
+          });
+          send(res, 200, { locale, messages: MESSAGES[locale] });
+          return;
+        }
+
         if (route === "GET /api/attention") {
           const me = caller.userId === undefined ? undefined : principals.resolve(caller.userId);
           const board = orchestrator.tasks;

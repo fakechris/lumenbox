@@ -1,0 +1,201 @@
+/**
+ * One bundle for everything a person reads from this installation (INV-544).
+ *
+ * The chat strings were Chinese in `channels/strings.ts`; the page was English in
+ * `web/app-html.ts`. Same person, same installation, two languages — and the tests pinned
+ * the words, which is how it survived every UI pass.
+ *
+ * Flat dotted keys, not nested objects: a key is grep-able from either language's file
+ * and from the call site, and a missing one is caught by the parity test rather than by
+ * a person reading a screen with a raw key on it.
+ *
+ * `{name}` placeholders are filled by `tr`. Anything conditional — plurals, a clause that
+ * only appears sometimes — is composed at the call site from two keys rather than encoded
+ * in the string, because a message with branches inside it is a message a translator
+ * cannot check.
+ *
+ * Only what a *person* reads. Not model output (it already answers in their language) and
+ * not the technical body of a consent request, where translating a command or a path
+ * would blur what is being approved.
+ */
+
+import { DEFAULT_LOCALE, type Locale } from "./locale.ts";
+
+export const MESSAGES: Record<Locale, Record<string, string>> = {
+  zh: {
+    "team": "团队",
+    "card.queued": "排队中",
+    "card.queued.ahead": "排队中 — 前面还有 {ahead} 件",
+    "card.working": "进行中",
+    "card.review": "待你验收",
+    "card.done": "已完成",
+    "card.failed": "失败了",
+    "card.open": "在工作台打开",
+    "card.footnote": "来自 {requester}",
+    "ack.queued": "收到 — {who}前面还有 {ahead} 件事。做完会发在这里。",
+    "ack.working": "{who}开工了。可能要一会儿,结果会发在这里。",
+    "reply.empty": "做完了。(它没有留下说明。)",
+    "files.noBox": "现在没有开着的工作机,文件存不进去。",
+    "files.saved": "收到:{names}。我先看一眼——你也可以直接说要做什么。",
+    "files.more": "{first} 等 {count} 个",
+    "say.whatYouNeed": "说一句要做什么就开工;想指定谁来做,开头@它的名字。",
+    "roster.empty": "这里还没有任何成员。",
+    "roster.default": "(不@人时由它接手)",
+    "roster.footer": "@名字 指定谁来做;不指定就交给默认的那位。",
+    "desktop.link": "{agent} 的桌面(实时,可操作):\n{url}\n在飞书里点开就是网页版的那块屏幕。注意:拿到这个链接的人都能看,共享箱子的提醒在页面顶上。",
+    "desktop.notPublic": "还没配置从手机能访问的地址。在启动 web 的环境里设置 AGENTBOX_PUBLIC_URL (比如 Tailscale 的地址),桌面链接、任务卡片的「在工作台打开」按钮就都能点了。先用「屏幕」可以拿一张当前截图。",
+    "agent.unknown": "没有叫\"{asked}\"的。这里能找到的是:{roster}。用 @名字 重新说一遍就行。",
+    "agent.none": "(还没有成员)",
+    "consent.stakes": "在有人回复之前,这一步是停着的。拒绝可以随时反悔:它会跳过这一步,继续做别的。",
+    "consent.title": "{agent} 请你确认",
+    "consent.once": "允许这一次",
+    "consent.always": "一直允许",
+    "consent.deny": "拒绝",
+    "consent.fallback": "{agent} 请你确认:\n{description}\n\n回复\"允许\"只批这一次,\"一直允许\"以后不再问,\"拒绝\"就不做。{stakes}",
+    "consent.gone": "这条确认已经不在等了——可能已经在别处回复过,或者那件事已经走完了。",
+    "question.title": "{agent} 有个问题要先问你",
+    "question.text": "{agent} 有个问题要先问你:\n{question}{choices}\n\n直接在这里回复,它就接着干。",
+    "question.terms.default": "\n\n(没回复的话就按这个走:{fallback})",
+    "question.terms.byDefault": "\n\n({when} 前没回复,就按这个走:{fallback})",
+    "question.terms.byDecide": "\n\n({when} 前没回复,它就自己定,并说明是怎么定的)",
+    "run.stopping": "好,叫停了。当前这一步做完就停。",
+    "run.nothing": "现在没有正在做的事。",
+    "run.notYours": "{who}在你不在的那个 box 里,所以这条没有生效。让管理员把你加进去,或者找那个 box 里的人。",
+    "run.it": "它",
+    "run.steered": "带到了,{who}接着做。",
+    "run.steeredAnon": "带到了,接着做。",
+    "guests.closed": "这道门只对已经登记过的人开放,不收新的申请。要用的话,请让管理员先把你加进来。",
+    "file.tooBig": "「{name}」太大,飞书不让机器人下载这个尺寸的附件。压缩一下、拆小一点再发,或者换个格式。",
+    "file.failed": "「{name}」我没拿下来(飞书下载接口报错{code})。再发一次试试,或换个发法。",
+    "schedules.none": "现在没有自动运行的任务。要加一个,让 agent 在 skill 的开头写上 schedule,比如每天早上 6:30 报一次。",
+    "schedules.disarmed": "(定时器当前是关的,下面这些不会自动跑。)",
+    "schedule.filesOnly": "只写文件",
+    "schedule.here": "报到本群",
+    "schedule.elsewhere": "报到别的群",
+    "schedule.running": "正在跑",
+    "schedule.lastRun": "上次 {when}",
+    "schedule.never": "还没跑过",
+    "task.accepted": "好,{task} 算完成了。",
+    "refuse.scopeIsAdmin": "绑定 scope 会改变这个群里每件任务的权限,这要管理员来定。",
+    "refuse.upgradeIsAdmin": "升级会重建这台工作机,上面没存进卷里的东西都会没,这要管理员来定。",
+    "upgrade.noneWaiting": "现在没有在等确认的升级。",
+    "upgrade.approved": "好,记下了:{who} 批准升级到 {image}。\n这只是记录决定——工作机会在下一次升级运行时重建,那次不会再问。现在什么都还没动。",
+    "ui.attention.mine": "等你处理",
+    "ui.attention.theirs": "你在等别人",
+    "ui.attention.empty": "没有等你的事,你要的事也都没有卡住。",
+    "ui.attention.keepOpen": "保持打开",
+    "ui.attention.close": "关掉",
+    "ui.attention.notNow": "现在不看",
+    "ui.attention.answer": "去回答",
+    "ui.attention.open": "打开",
+    "ui.setup.title": "开始使用",
+    "ui.setup.close": "收起",
+    "ui.setup.box": "给 agent 一台电脑",
+    "ui.setup.boxWhy": "box 就是一台电脑:桌面、文件、命令行、引擎。可以新建 Docker 的,也可以接一台现成的。",
+    "ui.setup.boxAct": "设置一台 box",
+    "ui.setup.agent": "你的第一个 agent",
+    "ui.setup.agentWhy": "agent 住在某一台 box 里。从货架上盖一个——「设计」会帮你搭一整队。",
+    "ui.setup.agentAct": "打开模板",
+    "ui.setup.door": "一道门(可选)",
+    "ui.setup.doorWhy": "飞书、钉钉或 Telegram 都能通到这台 box;这个网页本身也是一道门。",
+    "ui.setup.doorAct": "连一道门",
+    "ui.setup.work": "第一件活",
+    "ui.setup.workWhy": "在聊天里说一句,或者加一张任务卡;进到待验收就算做完了。",
+    "ui.setup.workAct": "打开任务板",
+    "ui.boxes.none": "还没有 box。box 是 agent 干活的那台电脑——用上面的按钮建一台 Docker 的,或者在终端里跑 agentbox box up。",
+  },
+  en: {
+    "team": "the team",
+    "card.queued": "queued",
+    "card.queued.ahead": "queued — {ahead} ahead of it",
+    "card.working": "working",
+    "card.review": "waiting on you",
+    "card.done": "done",
+    "card.failed": "failed",
+    "card.open": "Open in the workshop",
+    "card.footnote": "for {requester}",
+    "ack.queued": "Got it — {who} has {ahead} thing(s) ahead of this. The result lands here.",
+    "ack.working": "{who} is on it. It may take a while; the result lands here.",
+    "reply.empty": "Done. (It left no note.)",
+    "files.noBox": "No box is running, so there is nowhere to put the files.",
+    "files.saved": "Got {names}. I will take a look — or just say what you need done with them.",
+    "files.more": "{first} and {count} others",
+    "say.whatYouNeed": "Say what you need and it starts; to pick who does it, open with @their name.",
+    "roster.empty": "Nobody works here yet.",
+    "roster.default": " (takes anything addressed to nobody)",
+    "roster.footer": "@name picks who does it; without one it goes to the default.",
+    "desktop.link": "{agent}'s desktop (live, and you can drive it):\n{url}\nOpening it in the chat shows the same screen the page does. Anyone with this link can watch; the shared-box notice is at the top of the page.",
+    "desktop.notPublic": "No address a phone could reach is configured. Set AGENTBOX_PUBLIC_URL where the web server runs (a Tailscale address, say) and the desktop link and the card's \"Open in the workshop\" button both work. Meanwhile \"screen\" gets you a screenshot.",
+    "agent.unknown": "There is nobody called \"{asked}\" here. You can reach: {roster}. Say it again with @their name.",
+    "agent.none": "(nobody yet)",
+    "consent.stakes": "This step is stopped until somebody answers. Refusing is not final: it skips this step and carries on with the rest.",
+    "consent.title": "{agent} needs your say-so",
+    "consent.once": "Allow once",
+    "consent.always": "Always allow",
+    "consent.deny": "Refuse",
+    "consent.fallback": "{agent} needs your say-so:\n{description}\n\nReply \"allow\" for this once, \"always allow\" to stop being asked, \"refuse\" to skip it. {stakes}",
+    "consent.gone": "That request is no longer waiting — it was answered somewhere else, or the work it belonged to has moved on.",
+    "question.title": "{agent} has a question first",
+    "question.text": "{agent} has a question first:\n{question}{choices}\n\nAnswer here and it carries on.",
+    "question.terms.default": "\n\n(With no answer it goes with: {fallback})",
+    "question.terms.byDefault": "\n\n(No answer by {when} and it goes with: {fallback})",
+    "question.terms.byDecide": "\n\n(No answer by {when} and it decides itself, saying which way it went)",
+    "run.stopping": "Stopping. It finishes the step it is on and stops there.",
+    "run.nothing": "Nothing is running.",
+    "run.notYours": "{who} is in a box you are not in, so that did not take effect. Ask an admin to add you, or ask somebody who is in it.",
+    "run.it": "it",
+    "run.steered": "Passed on — {who} carries on with it.",
+    "run.steeredAnon": "Passed on; carrying on.",
+    "guests.closed": "This door is open only to people who are already registered, and takes no new requests. Ask an admin to add you first.",
+    "file.tooBig": "\"{name}\" is too large — Feishu will not let a bot download an attachment that size. Compress it, split it, or send another format.",
+    "file.failed": "I could not fetch \"{name}\" (the download API returned{code}). Send it again, or another way.",
+    "schedules.none": "Nothing runs on its own here. To add one, have an agent write a schedule at the top of a skill — a 06:30 brief, say.",
+    "schedules.disarmed": "(The timer is off, so none of these will fire.)",
+    "schedule.filesOnly": "writes files only",
+    "schedule.here": "reports here",
+    "schedule.elsewhere": "reports to another room",
+    "schedule.running": "running now",
+    "schedule.lastRun": "last {when}",
+    "schedule.never": "never run",
+    "task.accepted": "Right, {task} counts as done.",
+    "refuse.scopeIsAdmin": "Binding a scope changes what every task in this room may do; that is an admin's call.",
+    "refuse.upgradeIsAdmin": "An upgrade rebuilds this box, and anything not in a volume is lost; that is an admin's call.",
+    "upgrade.noneWaiting": "No upgrade is waiting for an answer.",
+    "upgrade.approved": "Recorded: {who} approved the upgrade to {image}.\nThat records the decision — the box is rebuilt at the next upgrade run, which will not ask again. Nothing has changed yet.",
+    "ui.attention.mine": "Waiting on you",
+    "ui.attention.theirs": "You are waiting on",
+    "ui.attention.empty": "Nothing is waiting on you, and nothing you asked for is outstanding.",
+    "ui.attention.keepOpen": "Keep open",
+    "ui.attention.close": "Close",
+    "ui.attention.notNow": "Not now",
+    "ui.attention.answer": "Answer",
+    "ui.attention.open": "Open",
+    "ui.setup.title": "Set up",
+    "ui.setup.close": "close",
+    "ui.setup.box": "A computer for the agents",
+    "ui.setup.boxWhy": "A box is a computer: desktop, files, shell, engines. Create the Docker box, or attach one.",
+    "ui.setup.boxAct": "Set up a box",
+    "ui.setup.agent": "Your first agent",
+    "ui.setup.agentWhy": "An agent lives in one box. Stamp one from the shelf — 设计 (Team designer) builds a team for you.",
+    "ui.setup.agentAct": "Open templates",
+    "ui.setup.door": "A door (optional)",
+    "ui.setup.doorWhy": "Feishu, DingTalk or Telegram reach this box; this page is a door too.",
+    "ui.setup.doorAct": "Connect a door",
+    "ui.setup.work": "First work",
+    "ui.setup.workWhy": "Say it in chat or add a task; it is done when it reaches review.",
+    "ui.setup.workAct": "Open tasks",
+    "ui.boxes.none": "No boxes yet. A box is the computer your agents work on — create the Docker one with the button above, or run agentbox box up in a terminal.",
+  },
+};
+
+/**
+ * One message, in one language, with `{name}` filled.
+ *
+ * A key with no message falls back to the default locale and then to the key itself: a
+ * screen with a raw key on it is bad, and a screen with nothing on it is worse. The parity
+ * test is what keeps that path from being reached.
+ */
+export function tr(key: string, locale: Locale = DEFAULT_LOCALE, vars: Record<string, string | number> = {}): string {
+  const text = MESSAGES[locale]?.[key] ?? MESSAGES[DEFAULT_LOCALE][key] ?? key;
+  return text.replace(/\{(\w+)\}/g, (whole, name: string) => (name in vars ? String(vars[name]) : whole));
+}
