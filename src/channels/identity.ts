@@ -60,7 +60,57 @@ export interface ChannelRecord {
    * line in a busy room is a bot people mute.
    */
   groupMessages?: "all" | "addressed";
+  /**
+   * Which rooms this door answers in, by the room's own name (INV-429).
+   *
+   * `deny` wins and is absolute: a prefix here means the door never answers there,
+   * whatever else says. A non-empty `allow` makes the door an allowlist: it answers in a
+   * room whose name starts with one of these, in a direct message, and nowhere else.
+   * Both empty is today's behaviour — every room this bot was added to.
+   *
+   * **Names, because that is what a person writing the rule can see.** The cost is that a
+   * renamed room changes side, and a room whose name we could not read is refused while
+   * an allowlist exists — fail-closed, since the alternative is answering in a room the
+   * operator meant to keep out.
+   */
+  autoJoin?: { allow: string[]; deny: string[] };
+  /**
+   * Whether an identity nobody has linked may knock here (INV-429).
+   *
+   * `on` (the default, and what every door did before this) records the knock and tells
+   * them to wait for an admin. `off` refuses flatly: no knock, no record, no card for
+   * somebody to approve — a door into a room of strangers, where every knock would be
+   * noise, is better closed than triaged.
+   */
+  guest?: "on" | "off";
   createdAt: string;
+}
+
+/**
+ * Whether this door answers in a room, by the room's name (INV-429).
+ *
+ * Three answers, and the third is the one that matters: `unknown` means an allowlist is in
+ * force and we could not read the room's name. Answering anyway would make the allowlist
+ * decorative on exactly the rooms it was written for, so the caller refuses — and says so,
+ * because a door that goes quiet without a reason reads as a broken bot.
+ */
+export function roomDecision(
+  rules: { allow: string[]; deny: string[] } | undefined,
+  roomName: string | undefined
+): "answer" | "refuse" | "unknown" {
+  if (rules === undefined) return "answer";
+  const deny = rules.deny ?? [];
+  const allow = rules.allow ?? [];
+  if (deny.length === 0 && allow.length === 0) return "answer";
+  const name = roomName?.trim();
+  if (name === undefined || name === "") return allow.length > 0 ? "unknown" : "answer";
+  const starts = (prefixes: readonly string[]): boolean =>
+    prefixes.some(prefix => prefix.trim() !== "" && name.toLowerCase().startsWith(prefix.trim().toLowerCase()));
+  // Deny is absolute and checked first: a room named on both lists is denied, because the
+  // list that says "never" is the one somebody wrote about a specific mistake.
+  if (starts(deny)) return "refuse";
+  if (allow.length === 0) return "answer";
+  return starts(allow) ? "answer" : "refuse";
 }
 
 export const CHANNEL_RECORDS_FILENAME = "channels.json";
@@ -135,6 +185,8 @@ export function upsertChannelRecord(
     name?: string;
     defaultAgent?: string | null;
     groupMessages?: "all" | "addressed";
+    autoJoin?: { allow: string[]; deny: string[] };
+    guest?: "on" | "off";
   },
   boxId: string
 ): ChannelRecord[] {
@@ -168,6 +220,8 @@ export function upsertChannelRecord(
                 ? { defaultAgent: input.defaultAgent }
                 : { defaultAgent: record.defaultAgent }),
             ...(input.groupMessages !== undefined ? { groupMessages: input.groupMessages } : {}),
+            ...(input.autoJoin !== undefined ? { autoJoin: input.autoJoin } : {}),
+            ...(input.guest !== undefined ? { guest: input.guest } : {}),
           }
     );
   } else {

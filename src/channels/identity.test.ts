@@ -14,7 +14,7 @@ import assert from "node:assert/strict";
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { ensureChannelRecords, GRANDFATHERED_TYPES, removeChannelRecord, upsertChannelRecord } from "./identity.ts";
+import { GRANDFATHERED_TYPES, ensureChannelRecords, removeChannelRecord, roomDecision, upsertChannelRecord } from "./identity.ts";
 
 function tempPath(): { path: string; cleanup: () => void } {
   const dir = mkdtempSync(join(tmpdir(), "agentbox-channel-identity-"));
@@ -135,4 +135,32 @@ test("a custom door can be removed; the grandfathered ones cannot", () => {
   } finally {
     cleanup();
   }
+});
+
+test("a door answers in the rooms its rules name, and stays out of the rest (INV-429)", () => {
+  // [Support] is auto-joined, [Internal] never, and a room nobody can name is refused
+  // while an allowlist is in force — the case that decides whether an allowlist means
+  // anything on the rooms it was written for.
+  const rules = { allow: ["[Support]", "客服"], deny: ["[Internal]"] };
+  assert.equal(roomDecision(rules, "[Support] billing"), "answer");
+  assert.equal(roomDecision(rules, "客服 · 一线"), "answer");
+  assert.equal(roomDecision(rules, "[support] lowercase is the same room"), "answer");
+  assert.equal(roomDecision(rules, "[Internal] leadership"), "refuse");
+  assert.equal(roomDecision(rules, "random chat"), "refuse", "an allowlist excludes what it does not name");
+  assert.equal(roomDecision(rules, undefined), "unknown", "and a room we cannot name is not quietly admitted");
+
+  // Deny wins over allow, because the list that says "never" was written about a mistake.
+  assert.equal(roomDecision({ allow: ["[Internal] ok"], deny: ["[Internal]"] }, "[Internal] ok"), "refuse");
+
+  // Deny only: everything else is answered, including rooms we cannot name.
+  const denyOnly = { allow: [], deny: ["[Internal]"] };
+  assert.equal(roomDecision(denyOnly, "[Internal] leadership"), "refuse");
+  assert.equal(roomDecision(denyOnly, "anything else"), "answer");
+  assert.equal(roomDecision(denyOnly, undefined), "answer");
+
+  // No rules at all is what every door did before this existed.
+  assert.equal(roomDecision(undefined, "[Internal] leadership"), "answer");
+  assert.equal(roomDecision({ allow: [], deny: [] }, undefined), "answer");
+  // Blank entries are typos, not rules: they must not match everything.
+  assert.equal(roomDecision({ allow: ["  "], deny: [] }, "anything"), "refuse");
 });

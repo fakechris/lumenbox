@@ -2141,3 +2141,42 @@ test("a refused stop says it is not yours, not that nothing is running (INV-538 
   release();
   await manager.idle();
 });
+
+test("a door stays out of the rooms its rules exclude, and takes no guests when guests are off (INV-429)", async () => {
+  const adapter = cardAdapter();
+  const asked: string[] = [];
+  const knocks: string[] = [];
+  const manager = new ChannelManager({
+    mayDrive: identity => identity === "feishu:ou_known",
+    ask: async (_agent, text) => {
+      asked.push(text);
+      return "好";
+    },
+    knock: request => knocks.push(request.identity),
+    roomRulesFor: () => ({ allow: ["[Support]"], deny: ["[Internal]"] }),
+    guestFor: () => "off",
+    log: () => {},
+  });
+  manager.register(adapter, true, "test");
+  await started(manager);
+
+  // A room on the deny list: nothing runs, nothing is said back into it.
+  const denied = await adapter.inject({ identity: "feishu:ou_known", chatKey: "feishu:oc_internal", chatName: "[Internal] leadership", senderLabel: "chris", messageId: "r1", text: "汇总一下" });
+  assert.equal(denied, undefined);
+  assert.deepEqual(asked, []);
+
+  // A room with no readable name, while an allowlist is in force: also stays out.
+  const unnamed = await adapter.inject({ identity: "feishu:ou_known", chatKey: "feishu:oc_unknown", senderLabel: "chris", messageId: "r2", text: "在吗" });
+  assert.equal(unnamed, undefined);
+  assert.deepEqual(asked, []);
+
+  // The room it was let into: ordinary work.
+  await adapter.inject({ identity: "feishu:ou_known", chatKey: "feishu:oc_support", chatName: "[Support] billing", senderLabel: "chris", messageId: "r3", text: "帮我看一下这张单" });
+  await manager.idle();
+  assert.equal(asked.length, 1);
+
+  // A stranger in the allowed room: refused flatly, and no knock is collected.
+  const stranger = await adapter.inject({ identity: "feishu:ou_stranger", chatKey: "feishu:oc_support", chatName: "[Support] billing", senderLabel: "somebody", messageId: "r4", text: "你好" });
+  assert.match(String(stranger ?? ""), /不收新的申请/);
+  assert.deepEqual(knocks, [], "guests off means nobody has a knock to triage");
+});

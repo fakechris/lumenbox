@@ -611,7 +611,7 @@ export class FeishuChannel implements ChannelAdapter {
             list: (options: {
               params: { page_size?: number };
             }) => Promise<
-              | { data?: { items?: { chat_id?: string }[] }; items?: { chat_id?: string }[] }
+              | { data?: { items?: { chat_id?: string; name?: string }[] }; items?: { chat_id?: string; name?: string }[] }
               | undefined
             >;
           };
@@ -679,6 +679,13 @@ export class FeishuChannel implements ChannelAdapter {
    * that message carried its chat's type.
    */
   private readonly chatTypes = new Map<string, string>();
+  /**
+   * chat_id → the room's own name, for the door's room rules (INV-429). Filled by the
+   * catch-up sweep, which lists every chat this bot is in anyway. A room whose name is
+   * not here yet is reported as unnamed, and an allowlisted door stays out of it rather
+   * than guessing — fail-closed, and self-correcting on the next sweep.
+   */
+  private readonly chatNames = new Map<string, string>();
   /** Held while this process is the app's websocket consumer. */
   private releaseLock: (() => void) | undefined;
   /** The Typing reaction placed on each in-progress message, for removal when it lands. */
@@ -1603,6 +1610,10 @@ export class FeishuChannel implements ChannelAdapter {
             return onMessage({
               identity,
               chatKey: `${this.name}:${chatId}`,
+              // The room's name when the sweep has seen it, for the door's room rules
+              // (INV-429). Absent is honest: an allowlisted door stays out rather than
+              // guessing, and the next sweep fills it in.
+              ...(this.chatNames.get(chatId) !== undefined ? { chatName: this.chatNames.get(chatId)! } : {}),
               threadKey: this.conversationKeyFor(data.message ?? {}),
               ...(messageId !== undefined ? { messageId } : {}),
               senderLabel,
@@ -1785,7 +1796,7 @@ export class FeishuChannel implements ChannelAdapter {
       return collected.reverse();
     };
     try {
-      const items: { chat_id?: string }[] = [];
+      const items: { chat_id?: string; name?: string }[] = [];
       let chatPage: string | undefined;
       for (let page = 0; page < 5; page++) {
         const chats = await withDeadline(
@@ -1795,10 +1806,16 @@ export class FeishuChannel implements ChannelAdapter {
           CATCH_UP_CALL_TIMEOUT_MS,
           "listing chats"
         );
-        const data = (chats?.data ?? chats) as { items?: { chat_id?: string }[]; has_more?: boolean; page_token?: string } | undefined;
+        const data = (chats?.data ?? chats) as { items?: { chat_id?: string; name?: string }[]; has_more?: boolean; page_token?: string } | undefined;
         items.push(...(data?.items ?? []));
         if (data?.has_more !== true || data.page_token === undefined) break;
         chatPage = data.page_token;
+      }
+      // The room names this bot can see, kept for the door's room rules (INV-429). The
+      // sweep already lists every chat; remembering the name costs nothing and saves an
+      // API call per unknown room on the hot path.
+      for (const chat of items) {
+        if (chat.chat_id !== undefined && chat.name !== undefined && chat.name !== "") this.chatNames.set(chat.chat_id, chat.name);
       }
       const chatOf = new Map<string, string>();
       const found: { message: FeishuHistoryMessage; chatId: string }[] = [];

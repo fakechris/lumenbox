@@ -873,6 +873,10 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
     incarnationOf,
     defaultAgentFor: adapterName =>
       channelRecords.find(record => record.id === adapterName)?.defaultAgent,
+    // The door's room rules and guest switch (INV-429), read per message so an edit in
+    // Settings takes effect without a restart — the same rule the roster follows.
+    roomRulesFor: adapterName => channelRecords.find(record => record.id === adapterName)?.autoJoin,
+    guestFor: adapterName => channelRecords.find(record => record.id === adapterName)?.guest,
     groupMessagesFor: adapterName =>
       channelRecords.find(record => record.id === adapterName)?.groupMessages,
     heard: input => {
