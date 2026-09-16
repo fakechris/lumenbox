@@ -143,14 +143,14 @@ test("the packaged deployment gets its token key from a Secret, and a start says
   const lines: string[] = [];
   let running: RunningControlPlane | undefined;
   try {
-    running = await startControlPlane({ host: "127.0.0.1", port: 0, allocator: "compose", statePath: home, sweepSeconds: 0, out: line => lines.push(line) });
+    running = await startControlPlane({ host: "127.0.0.1", port: 0, allocator: "compose", image: "agentbox/box:latest", statePath: home, sweepSeconds: 0, out: line => lines.push(line) });
     assert.ok(lines.some(line => /key .*a copy of that directory is a copy of every stored token/.test(line)), "the default start warns");
     await running.close();
     running = undefined;
 
     lines.length = 0;
     process.env.AGENTBOX_CONTROL_KEY = "bb".repeat(32);
-    running = await startControlPlane({ host: "127.0.0.1", port: 0, allocator: "compose", statePath: join(home, "env"), sweepSeconds: 0, out: line => lines.push(line) });
+    running = await startControlPlane({ host: "127.0.0.1", port: 0, allocator: "compose", image: "agentbox/box:latest", statePath: join(home, "env"), sweepSeconds: 0, out: line => lines.push(line) });
     assert.ok(lines.some(line => line.includes("AGENTBOX_CONTROL_KEY (not on disk)")), "and a configured one is confirmed rather than assumed");
   } finally {
     await running?.close();
