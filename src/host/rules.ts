@@ -18,8 +18,16 @@
  *     tool: bash, RunOnHost    # optional; names, or * for any
  *     command: jira comment    # optional; the command must start with one of these
  *     host: *.atlassian.net    # optional; for browser_open / WebFetch, the URL's host
+ *     principal: Chris         # optional; only when the turn runs for this person (INV-156)
  *     ---
  *     Commenting on a Jira issue is routine work here. Creating or transitioning one is not.
+ *
+ * `principal:` is how a person pre-authorises their own routine work (INV-156): the rule
+ * applies only while a turn is running for them, from whichever door they drove it —
+ * their standing intent travels with them instead of being re-asked per channel. A turn
+ * nobody is attributed to (a schedule, a webhook, a restart) matches no such rule, which
+ * is the fail-closed direction: an allowance given by a person is not inherited by the
+ * machine acting on its own.
  *
  * What an `allow` may and may not do is the whole design: it lifts the operator's *own*
  * configured approval lists and tells the reviewer the operator's standing intent. It
@@ -45,6 +53,16 @@ export interface Rule {
   commands: string[];
   /** Hosts, exact or `*.example.com`, for tools whose input carries a URL. */
   hosts: string[];
+  /**
+   * Whose work this rule is about, by principal id or name (INV-156).
+   *
+   * Empty means anyone's — the ordinary case, and what every rule written before this
+   * meant. Named, the rule applies **only** when the turn is running for one of these
+   * people, and a turn nobody is attributed to never matches: a standing allowance that
+   * a scheduled run or an unattributed harness turn could pick up would be the opposite
+   * of "this person pre-authorised it".
+   */
+  principals: string[];
   /** The standing instruction, as the reviewer reads it. */
   text: string;
 }
@@ -78,6 +96,7 @@ export function parseRuleFile(id: string, content: string): { rule?: Rule; probl
       tools: list(meta.tool ?? meta.tools),
       commands: list(meta.command ?? meta.commands),
       hosts: list(meta.host ?? meta.hosts).map(host => host.toLowerCase()),
+      principals: list(meta.principal ?? meta.principals),
       text,
     },
   };
@@ -102,8 +121,27 @@ function hostOfInput(input: Record<string, unknown>): string | undefined {
  * Whether a rule's structured matchers cover a call. A rule with no matchers covers nothing
  * here — its text still reaches the reviewer — and every matcher a rule states must hold.
  */
-export function ruleMatches(rule: Rule, tool: string, input: Record<string, unknown>): boolean {
-  if (rule.tools.length === 0 && rule.commands.length === 0 && rule.hosts.length === 0) return false;
+/** Who the turn is running for, when anybody: the person a rule can be written about. */
+export interface RuleCaller {
+  id?: string;
+  name?: string;
+}
+
+export function ruleMatches(
+  rule: Rule,
+  tool: string,
+  input: Record<string, unknown>,
+  caller?: RuleCaller
+): boolean {
+  if (rule.tools.length === 0 && rule.commands.length === 0 && rule.hosts.length === 0 && rule.principals.length === 0) return false;
+  if (rule.principals.length > 0) {
+    // Fail closed on an unattributed turn: a schedule, a webhook and a restart all arrive
+    // with nobody attached, and a person's standing allowance is not theirs to inherit.
+    const named = [caller?.id, caller?.name].filter((value): value is string => value !== undefined && value !== "");
+    if (named.length === 0) return false;
+    const wanted = rule.principals.map(value => value.toLowerCase());
+    if (!named.some(value => wanted.includes(value.toLowerCase()))) return false;
+  }
   if (rule.tools.length > 0 && !rule.tools.includes("*") && !rule.tools.includes(tool)) return false;
   if (rule.commands.length > 0) {
     const command = typeof input.command === "string" ? input.command.trim() : "";
@@ -119,10 +157,15 @@ export function ruleMatches(rule: Rule, tool: string, input: Record<string, unkn
 const SEVERITY: Record<RuleEffect, number> = { deny: 3, ask: 2, allow: 1 };
 
 /** The rule that decides a call: the strictest of those that match. */
-export function decidingRule(rules: readonly Rule[], tool: string, input: Record<string, unknown>): Rule | undefined {
+export function decidingRule(
+  rules: readonly Rule[],
+  tool: string,
+  input: Record<string, unknown>,
+  caller?: RuleCaller
+): Rule | undefined {
   let chosen: Rule | undefined;
   for (const rule of rules) {
-    if (!ruleMatches(rule, tool, input)) continue;
+    if (!ruleMatches(rule, tool, input, caller)) continue;
     if (chosen === undefined || SEVERITY[rule.effect] > SEVERITY[chosen.effect]) chosen = rule;
   }
   return chosen;
@@ -130,7 +173,13 @@ export function decidingRule(rules: readonly Rule[], tool: string, input: Record
 
 /** The rules as the reviewer reads them: a numbered list of standing instructions. */
 export function renderRulesForReview(rules: readonly Rule[]): string[] {
-  return rules.map(rule => `[${rule.id}] (${rule.effect}) ${rule.text}`);
+  // Whose rule it is, said in the line a reviewer reads (INV-156): "allow" under one
+  // person's name and "allow" for everybody are different standing instructions, and a
+  // reviewer shown only the second would mark an ordinary refusal as a rule violation.
+  return rules.map(rule => {
+    const whose = rule.principals.length > 0 ? ` for ${rule.principals.join(", ")}` : "";
+    return `[${rule.id}] (${rule.effect}${whose}) ${rule.text}`;
+  });
 }
 
 export class RuleStore {
@@ -183,8 +232,8 @@ export class RuleStore {
     return [...this.problems];
   }
 
-  decide(tool: string, input: Record<string, unknown>): Rule | undefined {
-    return decidingRule(this.rules, tool, input);
+  decide(tool: string, input: Record<string, unknown>, caller?: RuleCaller): Rule | undefined {
+    return decidingRule(this.rules, tool, input, caller);
   }
 
   forReview(): string[] {

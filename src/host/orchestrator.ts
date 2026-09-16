@@ -194,6 +194,11 @@ export interface OrchestratorOptions {
    * on the session (`delivery.py:72-75`), and we had nothing.
    */
   deliverToChat?: (chatKey: string, text: string, fromAgentId?: string) => Promise<void>;
+  /**
+   * A principal id as the roster shows it, so an operator rule can be written about a
+   * person by name (INV-156). Absent leaves rules id-only, which still works.
+   */
+  principalName?: (principalId: string) => string | undefined;
 }
 
 /** A newer version of an already-imported template arrived without `update` (INV-411). */
@@ -1534,6 +1539,11 @@ export class Orchestrator {
       usage: this.usage,
       policy: this.policy,
       caller: this.callers.get(agent.id),
+      // The name as the roster shows it, so a rule can be written "principal: Chris"
+      // rather than with a uuid nobody can read (INV-156).
+      ...(this.options.principalName !== undefined && this.callers.get(agent.id)?.userId !== undefined
+        ? { callerName: this.options.principalName(this.callers.get(agent.id)!.userId!) }
+        : {}),
       skills,
       client: runtime.client,
       registry: this.registry,

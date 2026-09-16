@@ -78,6 +78,8 @@ export interface ToolContext {
    * case and where "about whom" has one answer.
    */
   caller?: { userId?: string };
+  /** The person's name, for a rule written with a name rather than an id (INV-156). */
+  callerName?: string;
   /**
    * Asked whether an action may happen, before it happens.
    *
@@ -2227,6 +2229,10 @@ export async function dispatchTool(
     agentName: context.agent.profile.name,
     tool: name,
     input,
+    // Whose turn this is, so a rule a person wrote about their own routine work applies
+    // from whichever door they drove it (INV-156).
+    ...(context.caller?.userId !== undefined ? { principalId: context.caller.userId } : {}),
+    ...(context.callerName !== undefined ? { principalName: context.callerName } : {}),
   });
   if (decision !== undefined && !decision.allow) {
     return { text: decision.reason, isError: true };
