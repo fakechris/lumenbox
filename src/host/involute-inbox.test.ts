@@ -186,3 +186,103 @@ test("one request per agent per pass, and a request past its deadline is the ser
   // And the prompt names the work item, so the agent knows where it is.
   assert.match(promptFor({ id: "x", work_id: "w1", work_identifier: "INV-999", body: "why", state: "submitted" }, "Ada", "ada"), /INV-999/);
 });
+
+test("twenty questions at once run one at a time, and the wait is visible (INV-554 A1)", async () => {
+  // A normal morning, not an attack. Without a queue this starts twenty turns for one
+  // person, each paying, and the twentieth is as late as the first.
+  const { store, call } = ledger(Array.from({ length: 20 }, (_, i) => ({ id: `q${i + 1}`, work_identifier: `INV-${600 + i}` })));
+  let running = 0;
+  let mostAtOnce = 0;
+  const consumer = new InvoluteConsumer({
+    agents: () => [agentOf(call)],
+    capacity: 25,
+    runTurn: async () => {
+      running += 1;
+      mostAtOnce = Math.max(mostAtOnce, running);
+      await new Promise(resolve => setTimeout(resolve, 1));
+      running -= 1;
+      return "answered";
+    },
+    mayAnswer: () => ({ ok: true }),
+    log: () => {},
+  });
+
+  const first = await consumer.poll();
+  assert.deepEqual(first.answered, ["q1"], "one turn on the first pass");
+  assert.equal(first.queues[0]!.waiting.length, 19, "and nineteen visibly waiting");
+  assert.equal(first.queues[0]!.waiting[0]!.subject, "INV-601", "in the order they arrived, named by the item they are about");
+  assert.equal(first.queues[0]!.waiting[0]!.position, 1);
+
+  for (let pass = 0; pass < 19; pass += 1) await consumer.poll();
+  assert.equal(mostAtOnce, 1, "never two turns at once for one agent");
+  assert.equal(store.filter(row => row.answers.length === 1).length, 20, "and all twenty are answered in the end");
+  assert.deepEqual(consumer.queueView(), [], "with nothing left waiting");
+});
+
+test("past capacity a question is turned down in words, not queued behind nineteen others (INV-554 A2)", async () => {
+  const { store, call } = ledger(Array.from({ length: 5 }, (_, i) => ({ id: `q${i + 1}` })));
+  const consumer = new InvoluteConsumer({
+    agents: () => [agentOf(call)],
+    capacity: 2,
+    runTurn: async () => "answered",
+    mayAnswer: () => ({ ok: true }),
+    log: () => {},
+  });
+
+  const outcome = await consumer.poll();
+  assert.deepEqual(outcome.refused, ["q3", "q4", "q5"], "two wait, the rest are refused");
+  for (const id of ["q3", "q4", "q5"]) {
+    const row = store.find(entry => entry.id === id)!;
+    assert.equal(row.state, "failed", "a refusal is an answer: the request is closed, not left to time out");
+    assert.match(row.answers[0]!.body, /as many as I take at once/);
+    assert.match(row.answers[0]!.body, /ask somebody who is free/, "and it says what to do instead");
+  }
+});
+
+test("a withdrawn question is not revived by the next poll pass (INV-554 A3)", async () => {
+  const { store, call } = ledger([{ id: "q1" }, { id: "q2" }]);
+  const consumer = new InvoluteConsumer({
+    agents: () => [agentOf(call)],
+    runTurn: async () => "answered",
+    mayAnswer: () => ({ ok: true }),
+    log: () => {},
+  });
+
+  await consumer.poll();
+  assert.deepEqual(store[0]!.answers.length, 1, "the first is answered");
+  assert.equal(consumer.queueView()[0]!.waiting[0]!.id, "q2", "the second is waiting");
+
+  // Withdrawn. A cancellation does not arrive as an event — the request simply stops being
+  // in the inbox, which is the only signal there is.
+  store[1]!.state = "canceled";
+  const second = await consumer.poll();
+  assert.deepEqual(second.answered, []);
+  assert.deepEqual(consumer.queueView(), [], "it is dropped rather than held for a deadline nobody is waiting on");
+
+  // And now the same id is offered again: a redelivery, a restart, an ordinary retry.
+  store[1]!.state = "submitted";
+  const third = await consumer.poll();
+  assert.deepEqual(third.answered, [], "a question that was taken back does not get answered late");
+  assert.deepEqual(store[1]!.answers, []);
+});
+
+test("a question that cannot be paid for is refused before the turn runs, not after (INV-554 A4)", async () => {
+  const { store, call } = ledger([{ id: "q1" }]);
+  let ran = false;
+  const consumer = new InvoluteConsumer({
+    agents: () => [agentOf(call)],
+    runTurn: async () => {
+      ran = true;
+      return "answered";
+    },
+    mayAnswer: () => ({ ok: true }),
+    // The policy gate reads what has been spent; this is asked before anything is.
+    mayAfford: ({ payer }) => ({ ok: false, why: `${payer ?? "whoever asked"} is over the month's budget for me` }),
+    log: () => {},
+  });
+
+  const outcome = await consumer.poll();
+  assert.equal(ran, false, "no tokens are spent finding out we could not afford it");
+  assert.deepEqual(outcome.failed, ["q1"]);
+  assert.match(store[0]!.answers[0]!.body, /chris is over the month's budget for me/, "and the person is told which principal pays and why it stopped");
+});

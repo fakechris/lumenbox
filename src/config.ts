@@ -131,6 +131,13 @@ export interface AgentboxConfig {
     askers?: string[];
     /** Seconds between inbox polls. Absent means 60. */
     pollSeconds?: number;
+    /**
+     * How many questions one agent takes at once before it turns the next one down in
+     * words (INV-554). Absent means 8. Higher is not kinder: past this the honest answer
+     * is "ask me later or ask somebody else", not a place in a queue that will miss its
+     * deadline quietly.
+     */
+    capacity?: number;
   };
   /**
    * Chats that asked for a daily digest, chatKey → local hour (0–23). Written by the
@@ -332,11 +339,13 @@ function readInvolute(value: unknown, warn: (message: string) => void): Agentbox
   }
   const askers = Array.isArray(raw.askers) ? raw.askers.filter((id): id is string => typeof id === "string" && id.trim() !== "") : undefined;
   const pollSeconds = typeof raw.pollSeconds === "number" && Number.isFinite(raw.pollSeconds) ? Math.max(15, Math.floor(raw.pollSeconds)) : undefined;
+  const capacity = typeof raw.capacity === "number" && Number.isFinite(raw.capacity) ? Math.max(1, Math.floor(raw.capacity)) : undefined;
   return {
     url,
     agents,
     ...(askers !== undefined ? { askers } : {}),
     ...(pollSeconds !== undefined ? { pollSeconds } : {}),
+    ...(capacity !== undefined ? { capacity } : {}),
   };
 }
 
