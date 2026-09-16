@@ -283,9 +283,113 @@ string is accepted once to bootstrap the cookie, and the WebSocket upgrade carry
 is checked the same way. `AGENTBOX_UI_TOKEN` or `web --token` set it for the topologies the CLI
 does not start.
 
-There is one secret and no users: whoever holds the token can drive every agent. That is the
-right shape for one person's box and the wrong shape for a shared deployment, which needs
-identities — the seam is here, not the implementation.
+**That token is now the machine's, not a person's** (2026-09-15). Signing in — through a
+Feishu door or an invite code — issues a *session* for that person and never hands over the
+installation token; the session is signed with a key derived from it, so rotating the token
+still ends every session, and a person removed from the roster stops being served on their
+next request. What they may then do is their roster role (`viewer` / `driver` / `admin`) and
+the `members` set of the box they are reaching into: a box lists only for its members, a
+non-member is refused by name, and stopping or steering somebody's running turn asks the same
+question. The token remains what it always was for the CLI, for scripts, and for a
+single-person installation with an empty roster.
+
+## Answering questions people ask on a work item
+
+The use case, end to end: somebody reading a work item in Involute wants to know why an agent
+judged something. They type `@iris 为什么当时用轮询?` in a comment. A minute later the answer is
+in that thread, posted by Iris — not by "the bot", not by whoever's token the process holds.
+
+### What happens, in order
+
+1. **Involute resolves the `@`** to an actor server-side and, because the author is a human,
+   opens a **request** in its ledger: target actor, deadline, and a state machine borrowed from
+   A2A (`submitted → working → input-required → completed | failed | canceled`).
+2. **This host polls** `agent_inbox` every 30 seconds **with that agent's own credential**, so
+   the inbox it sees is only what was addressed to it.
+3. **It claims the request** — a single-statement compare-and-set with a 60-second lease on
+   Involute's side, so a second consumer (a Codex session, another installation) cannot answer
+   the same question twice. Losing the race is normal and silent.
+4. **It reads the work item** with the same credential (`work_get_context`) and looks up what
+   was written down about it here (`receipts.jsonl`, INV-551), then runs **one turn** in a
+   conversation of that thread's own — two questions on one item never cross.
+5. **It answers** as the agent: the reply becomes a comment authored by that actor, in the
+   thread, and the request reaches `completed`. A turn that produced nothing reports `failed`
+   with a reason rather than being left to time out; a turn that ended by asking the person
+   something reports `input-required` and keeps its place.
+
+### Setting it up
+
+1. **One credential per agent, on Involute** (team owner or admin):
+
+   ```graphql
+   mutation { agentCredentialCreate(input: {
+     team: "INV", name: "Iris",
+     scopes: ["read","propose","claim","report","update","link","answer"]
+   }) { token credential { user { id handle } } } }
+   ```
+
+   The token is shown **once**. The handle is derived from the name (`Iris` → `@iris`) and is
+   what people type. `answer` is a scope of its own: reporting your own run is not the same
+   right as speaking for an actor on a thread.
+
+2. **Put the token in this installation's vault**, never in a config file:
+   Settings → Vault, or `POST /api/vault` with `{id: "INVOLUTE_IRIS", value: "<token>",
+   grants: [{holder: "agent:<agentId>"}]}`.
+
+3. **Name the pairing** in `~/.agentbox/config.json`:
+
+   ```json
+   "involute": {
+     "url": "http://<involute-host>:4200/mcp",
+     "agents": [{ "agentId": "<our agent id>", "handle": "iris", "secretId": "INVOLUTE_IRIS" }],
+     "askers": ["<involute actor id>"],
+     "pollSeconds": 30
+   }
+   ```
+
+   All three of `agentId`, `handle` and `secretId` or the entry is ignored — falling back to
+   whatever token the process holds is the shared-identity failure this exists to end.
+
+4. **Restart.** The log says `involute: answering for @iris, @enzo every 30s` when it is on.
+   Absent that line, the section is missing, has no usable entries, or the secret is not
+   resolvable.
+
+### `askers`: who may ask, and why it is a list of ids today
+
+`askers` is the allowlist of **Involute actor ids** whose questions are taken. It is a raw list
+of UUIDs in the config file, with no interface, and that is a placeholder rather than a design:
+
+- Being able to comment on a work item is not the same as being able to start a turn on this
+  machine. Without a check, Involute's comment box would be a way around this installation's
+  roles and box membership entirely (docs/54 §3.6).
+- The right answer is to resolve an Involute actor to a **Principal here**, and then ask the
+  ordinary questions — role, and membership of the box the agent lives in. That needs a link
+  between the two directories, which does not exist yet.
+
+So until it does: an id on the list is taken, anything else is **refused out loud** — the person
+gets a comment saying they are not on this installation's list, rather than silence. Find an id
+with `query { agentCredentials(teamId: "INV") { user { id name } } }` for agents, or from the
+Involute admin for people; `viewer { id }` shows your own.
+
+### Verifying and debugging
+
+- `involute: answering for …` at startup; `involute: @iris answered INV-553 (…)` per answer.
+- `involute: @iris did not get <id> (…)` — another consumer holds it. Normal.
+- `involute: @iris could not post its answer to <id>` — the answer never landed; the request
+  returns to the queue when the lease lapses.
+- On the Involute side, a request carries its own state: `issue { agentRequests { state
+  answeredCommentId targetActor { handle } } }`.
+- Nothing arrives at all: check that the mention names a *handle* (`@iris`), that the comment's
+  author is a human (an agent mentioning an agent posts an ordinary comment on purpose), and
+  that the request has not already passed its deadline — expiry is the server's, and it says
+  only that no answer arrived, never why.
+
+### What it deliberately does not do
+
+One request per agent per polling pass (twenty mentions in a morning do not become twenty
+simultaneous turns); no webhook receiver (this machine usually has no inbound port, and the
+ledger is the same either way); no agent-to-agent questions in the first version (an agent
+mentioning an agent is the echo risk, and a human stays at the head of every chain).
 
 ## Where the box comes from
 
