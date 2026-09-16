@@ -2041,6 +2041,42 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
   }, 5 * 60_000);
   livenessTimer.unref();
 
+  /**
+   * The collector that notices a box which is up and stuck, with nobody watching (INV-135).
+   *
+   * The health surface we had told an operator who opened the page; a box that wedges at
+   * 02:00 was found at 09:00 (docs/47). This asks every connected box the cheapest
+   * question there is, on its own timer, and says something when the answer stops coming
+   * — once when it becomes true, once when it is over, and never in between.
+   */
+  const wedgeStates = new Map<string, "ok" | "slow" | "wedged" | "quiet">();
+  const wedgeTimer = setInterval(() => {
+    void (async () => {
+      await orchestrator.probeBoxes().catch(() => {
+        // Probing is the thing that must not take the server down with it.
+      });
+      for (const verdict of orchestrator.wedge.changed(wedgeStates)) {
+        log(`box health: ${verdict.detail}`);
+        broadcast({ type: "error", message: verdict.detail });
+        // An act, not an ask (INV-535): the host is reporting what it found, so it is
+        // said whatever the day's budget is — and to the people who can restart a box.
+        if (verdict.state === "wedged") {
+          orchestrator.receipts.write({
+            at: new Date().toISOString(),
+            by: "host",
+            subject: `box:${verdict.boxId}`,
+            decision: `reported ${verdict.name} as wedged`,
+            because: `asked and unanswered for ${Math.round(verdict.silentFor / 60_000)} minutes while its client was still connected`,
+          });
+          for (const { adapter, identity } of adminRecipients(principals.list())) {
+            void channels.push(adapter, identity, verdict.detail);
+          }
+        }
+      }
+    })();
+  }, 60_000);
+  wedgeTimer.unref();
+
   // An upgrade nobody knows about is an upgrade that does not happen. This tells the
   // people who may decide, and deliberately does not act: a web server that recreates the
   // box underneath the people using it is a worse surprise than an out-of-date image.

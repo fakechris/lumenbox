@@ -34,6 +34,8 @@ export interface BoxClientOptions {
   token: string;
   /** Default per-request timeout. Computer actions get a longer one. */
   timeoutMs?: number;
+  /** Told when a call goes out and when one comes back (INV-135). */
+  watch?: { asked?: () => void; answered?: () => void };
 }
 
 /**
@@ -100,11 +102,18 @@ export class BoxClient {
   private readonly baseUrl: string;
   private readonly token: string;
   private readonly timeoutMs: number;
+  /**
+   * Told when a call goes out and when one comes back, so the host can tell a busy box
+   * from a wedged one (INV-135). Every call reports, including the ones that fail: an
+   * error is an answer, and the state worth alerting on is *no* answer at all.
+   */
+  private readonly watch: { asked?: () => void; answered?: () => void };
 
   constructor(options: BoxClientOptions) {
     this.baseUrl = options.baseUrl.replace(/\/+$/, "");
     this.token = options.token;
     this.timeoutMs = options.timeoutMs ?? DEFAULT_TIMEOUT_MS;
+    this.watch = options.watch ?? {};
   }
 
   private async post<T>(
@@ -114,6 +123,7 @@ export class BoxClient {
   ): Promise<T> {
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), timeoutMs);
+    this.watch.asked?.();
     try {
       const response = await fetch(`${this.baseUrl}${path}`, {
         method: "POST",
@@ -125,6 +135,9 @@ export class BoxClient {
         signal: controller.signal,
       });
 
+      // It answered. Not "it succeeded" — an error status is an answer too, and the
+      // state this watch exists for is the one where nothing comes back at all.
+      this.watch.answered?.();
       const text = await response.text();
       let parsed: unknown;
       try {

@@ -71,7 +71,9 @@ import { McpManager } from "./mcp.ts";
 import { mergeServers } from "./mcp-connectors.ts";
 import { PolicyGate } from "./policy.ts";
 import { TaskStore, type Task } from "./tasks.ts";
+import { BoxError } from "../box/client.ts";
 import { Receipts } from "./receipts.ts";
+import { WedgeWatch } from "./wedge.ts";
 import { buildAuditPrompt, manifestDiff, MANIFEST_COMMAND, parseManifest } from "./audit.ts";
 import { ScopeStore } from "./scopes.ts";
 import { BundleStore } from "./bundles.ts";
@@ -315,6 +317,8 @@ export class Orchestrator {
    * receipt has to outlive both.
    */
   readonly receipts = new Receipts(join(agentboxHome(), "receipts.jsonl"));
+  /** Which boxes are answering, and which are up but stuck (INV-135). */
+  readonly wedge = new WedgeWatch();
   /** Turns a queued demonstration into a teaching turn (INV-406). */
   private readonly teachRunner = new TeachRunner({
     agentById: (boxId, agentId) => {
@@ -1064,6 +1068,38 @@ export class Orchestrator {
     for (const key of [...this.readyDisplays]) {
       if (key.startsWith(`${boxId}:`)) this.readyDisplays.delete(key);
     }
+  }
+
+  /**
+   * Asks every connected box whether it is there (INV-135).
+   *
+   * `health` and not a real call on purpose: it is the cheapest thing a daemon answers,
+   * so a box that cannot answer *this* is not busy — it is stuck. Failures count as
+   * answers; the state this is looking for is silence.
+   */
+  async probeBoxes(timeoutMs = 5_000): Promise<void> {
+    await Promise.all(
+      this.registry.listBoxes().map(async entry => {
+        const client = this.boxClients.get(entry.id);
+        if (client === undefined) {
+          this.wedge.forget(entry.id);
+          return;
+        }
+        this.wedge.asked(entry.id, entry.name);
+        try {
+          await client.health(timeoutMs);
+        } catch (error) {
+          // An error with a body is an answer: the box spoke, and what it said is
+          // somebody else's problem. A timeout, an abort or an unreachable address is
+          // *not* an answer, and counting it as one would defeat the whole watch — the
+          // wedged box is exactly the one whose calls never come back.
+          const kind = error instanceof BoxError ? error.kind : "unreachable";
+          if (kind !== "timeout" && kind !== "unreachable" && kind !== "crashed") this.wedge.answered(entry.id);
+          return;
+        }
+        this.wedge.answered(entry.id);
+      })
+    );
   }
 
   /** The box an agent lives in, when it is connected. */
