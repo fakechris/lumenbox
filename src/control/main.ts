@@ -21,6 +21,7 @@ import { join } from "node:path";
 import { defaultBoxConfig, readBoxToken } from "../box/docker.ts";
 import { agentboxHome } from "../config.ts";
 import { startRelay } from "../relay/server.ts";
+import { type Ceiling, SpendCeilings, ceilingFromQuota } from "../relay/ceiling.ts";
 import { availableUpstreams } from "../relay/upstreams.ts";
 import { type BoxAllocator, DEFAULT_RELAY_PROVIDER, StaticAllocator } from "./allocator.ts";
 import { Collector, meterTenants } from "./collector.ts";
@@ -190,6 +191,26 @@ export async function startControlPlane(
         `The relay has no credential for ${wanted}. It can serve: ${[...upstreams.keys()].join(", ")}.`
       );
     }
+    // Ceilings are per tenant, in its quota, with an optional deployment-wide default. Rates
+    // are configuration and never baked in — without them a money ceiling fails closed and
+    // says which model it could not price, rather than letting an unpriced model through.
+    const ceilings = new SpendCeilings({
+      ceilingFor: ({ tenantId }) => ceilingFromQuota(store.listTenants().find(tenant => tenant.id === tenantId)?.quota) ?? defaultCeiling(),
+      rates: relayRates(store),
+      onRefusal: refusal => {
+        out(`  relay: refused ${refusal.boxId} — ${refusal.limit} reached`);
+        store.audit({
+          tenantId: refusal.tenantId,
+          actor: "relay",
+          action: "spend.refused",
+          target: refusal.boxId,
+          detail: { limit: refusal.limit, spentUsd: refusal.spentUsd, spentTokens: refusal.spentTokens, resetsAt: refusal.resetsAt, reason: refusal.reason },
+        });
+      },
+    });
+    // Replayed from what the relay has already measured, so a restart does not hand every box
+    // a fresh allowance — which would make the ceiling a function of uptime.
+    for (const usage of store.relayUsageSince(new Date(Date.now() - 32 * 24 * 3_600_000).toISOString())) ceilings.record(usage);
     relay = startRelay({
       port: options.relayPort ?? 8788,
       // Bound to every interface, because the traffic comes from inside a container and loopback on
@@ -209,7 +230,11 @@ export async function startControlPlane(
         // by the thing being billed. Its own table, because the box's report and the relay's
         // observation are two measurements and a total that summed both would double-count.
         store.appendRelayUsage(usage);
+        ceilings.record(usage);
       },
+      // The hard half of the budget (INV-580). The in-box gate still explains a limit to the
+      // agent; this is the one the box cannot edit, because it is not in the box.
+      maySpend: client => ceilings.check({ boxId: client.boxId, tenantId: client.tenantId }),
       log: line => out(`  relay: ${line}`),
     });
   }
@@ -390,5 +415,39 @@ export function describeControlPlane(statePath?: string): string[] {
     return lines;
   } finally {
     store.close();
+  }
+}
+
+/**
+ * A deployment-wide ceiling, for the common case of "nobody gets more than this".
+ *
+ * Environment rather than a flag: it belongs with the other deployment defaults, and a limit
+ * that has to be remembered on the command line is a limit that is missing after a restart.
+ */
+function defaultCeiling(): Ceiling | undefined {
+  const number = (name: string): number | undefined => {
+    const raw = process.env[name];
+    if (raw === undefined || raw.trim() === "") return undefined;
+    const value = Number(raw);
+    return Number.isFinite(value) && value > 0 ? value : undefined;
+  };
+  const ceiling: Ceiling = {
+    ...(number("AGENTBOX_RELAY_LIMIT_USD") !== undefined ? { limitUsd: number("AGENTBOX_RELAY_LIMIT_USD")! } : {}),
+    ...(number("AGENTBOX_RELAY_LIMIT_TOKENS") !== undefined ? { limitTokens: number("AGENTBOX_RELAY_LIMIT_TOKENS")! } : {}),
+    ...(number("AGENTBOX_RELAY_WINDOW_HOURS") !== undefined ? { windowHours: number("AGENTBOX_RELAY_WINDOW_HOURS")! } : {}),
+  };
+  return ceiling.limitUsd === undefined && ceiling.limitTokens === undefined ? undefined : ceiling;
+}
+
+/** What each model costs, from the deployment's settings — never a table in source. */
+function relayRates(store: Pick<ControlStore, "getSetting">): Record<string, { inputPerM: number; outputPerM: number; cacheReadPerM?: number; cacheWritePerM?: number }> {
+  const raw = store.getSetting("rates") ?? process.env.AGENTBOX_RATES;
+  if (raw === undefined || raw.trim() === "") return {};
+  try {
+    return JSON.parse(raw) as Record<string, { inputPerM: number; outputPerM: number }>;
+  } catch {
+    // A hand-edited rates blob should not take the control plane down. Without rates a money
+    // ceiling fails closed and says so, which is the behaviour a bad blob should produce.
+    return {};
   }
 }

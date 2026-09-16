@@ -39,7 +39,10 @@ export interface Rate {
 export type Rates = Record<string, Rate>;
 
 /** What one call cost, or `undefined` when the model has no rate. */
-export function priceOf(record: UsageRecord, rates: Rates): number | undefined {
+/** Everything pricing a call needs, and nothing else — so the relay can price its own rows. */
+export type Priceable = Pick<UsageRecord, "model" | "inputTokens" | "outputTokens" | "cacheReadTokens" | "cacheWriteTokens">;
+
+export function priceOf(record: Priceable, rates: Rates): number | undefined {
   const rate = rates[record.model];
   if (rate === undefined) return undefined;
   const perMillion = (tokens: number, price: number | undefined) =>
