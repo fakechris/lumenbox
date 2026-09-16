@@ -1132,6 +1132,27 @@ async function cmdChat(argv: string[]): Promise<number> {
  * drives one box for one person; this authenticates people, gives each their own box, and proxies
  * them to it.
  */
+/**
+ * `agentbox control key` — a fresh 32-byte key, printed once.
+ *
+ * Not written anywhere: a command that mints a key and also saves it has re-created the problem
+ * it exists to solve. The two lines after it are the two places a deployment actually puts it.
+ */
+function mintControlKey(): string[] {
+  const key = randomBytes(32).toString("hex");
+  return [
+    key,
+    "",
+    "This is the only time it is printed. Give it to the deployment as AGENTBOX_CONTROL_KEY:",
+    "",
+    `  kubectl create secret generic agentbox-control-key -n agentbox --from-literal=AGENTBOX_CONTROL_KEY=${key}`,
+    `  AGENTBOX_CONTROL_KEY=${key} agentbox control up`,
+    "",
+    "It encrypts the box tokens already in the store, so changing it on an existing deployment",
+    "makes those unreadable: mint one before the first start, or expect to re-register the boxes.",
+  ];
+}
+
 async function cmdControl(argv: string[]): Promise<number> {
   const [sub = "up", ...rest] = argv;
 
@@ -1139,8 +1160,15 @@ async function cmdControl(argv: string[]): Promise<number> {
     for (const line of describeControlPlane()) out(line);
     return 0;
   }
+  if (sub === "key") {
+    // Mints a key and prints it, once, with the two ways to give it to a deployment. The only
+    // command here that puts a secret on a terminal, because that is what it is for: the
+    // alternative is the file beside the database, which is what INV-579 is about.
+    for (const line of mintControlKey()) out(line);
+    return 0;
+  }
   if (sub !== "up") {
-    err(`Unknown control command: ${sub}. Try \`up\` or \`status\`.`);
+    err(`Unknown control command: ${sub}. Try \`up\`, \`status\` or \`key\`.`);
     return 1;
   }
 
@@ -1484,6 +1512,9 @@ Control plane (many people, one box each):
                             --relay-port <n> default 8788
                             --provider <name>  which provider relayed boxes use
   control status            Tenants, their boxes, spend and recent actions
+  control key               Mint a token key and print it once, with the
+                            kubectl line — so it lives in a Secret rather than
+                            beside the database it encrypts
 
   There is no TLS here. The session cookie is the whole session, so put a TLS
   terminator in front of it before anyone signs in over a network.
@@ -1505,7 +1536,8 @@ Environment:
                             (one is generated and printed when unset)
   AGENTBOX_CONTROL_KEY      64 hex chars; encrypts stored box tokens. Minted
                             beside the database when unset — which means a
-                            backup of that directory holds both.
+                            backup of that directory holds both, and \`control
+                            up\` says so on every start. \`control key\` mints one.
   AGENTBOX_SESSION_SECRET   Shared by two gateways so sessions survive either
   AGENTBOX_SECURE_COOKIES   1 when TLS terminates in front of the gateway
   AGENTBOX_K8S_NAMESPACE    Namespace for kubernetes allocator boxes (default agentbox)

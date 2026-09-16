@@ -322,25 +322,49 @@ export interface ControlStore {
  * (64 hex characters) overrides it, which is how a real deployment keeps the key out of the
  * directory it backs up.
  */
-export function loadEncryptionKey(keyPath: string): Buffer {
+export interface ResolvedKey {
+  key: Buffer;
+  /** Where it came from, so a deployment can be told what it actually got (INV-579). */
+  source: "env" | "file" | "minted";
+  /** For `file` and `minted`: where on disk. */
+  path?: string;
+}
+
+export function resolveEncryptionKey(keyPath: string): ResolvedKey {
   const fromEnv = process.env.AGENTBOX_CONTROL_KEY;
   if (fromEnv !== undefined && fromEnv.trim() !== "") {
     const key = Buffer.from(fromEnv.trim(), "hex");
     if (key.length !== 32) {
       throw new Error("AGENTBOX_CONTROL_KEY must be 64 hex characters (32 bytes)");
     }
-    return key;
+    return { key, source: "env" };
   }
   if (existsSync(keyPath)) {
     const key = Buffer.from(readFileSync(keyPath, "utf8").trim(), "hex");
-    if (key.length === 32) return key;
+    if (key.length === 32) return { key, source: "file", path: keyPath };
     throw new Error(`${keyPath} does not contain a 32-byte hex key; move it aside to mint a new one`);
   }
   const key = randomBytes(32);
   mkdirSync(dirname(keyPath), { recursive: true });
   writeFileSync(keyPath, key.toString("hex"), { encoding: "utf8", mode: 0o600 });
   chmodSync(keyPath, 0o600);
-  return key;
+  return { key, source: "minted", path: keyPath };
+}
+
+export function loadEncryptionKey(keyPath: string): Buffer {
+  return resolveEncryptionKey(keyPath).key;
+}
+
+/**
+ * What to say about a key on disk. One sentence on what it means and one on what to do —
+ * an operator reading a log line at 3am does not also read docs/06.
+ */
+export function keyWarning(resolved: ResolvedKey): string | undefined {
+  if (resolved.source === "env") return undefined;
+  return (
+    `the token key is on disk at ${resolved.path}: a copy of that directory is a copy of every stored token. ` +
+    "Set AGENTBOX_CONTROL_KEY instead (`agentbox control key --new` prints one and the kubectl line)."
+  );
 }
 
 /** AES-256-GCM: authenticated, so a tampered row fails loudly instead of decrypting to rubbish. */
@@ -527,6 +551,8 @@ export interface SqliteStoreOptions {
 export class SqliteControlStore implements ControlStore {
   private readonly db: DatabaseSync;
   private readonly key: Buffer;
+  /** Where the key came from — read by `control up` to say so, and to warn when it is a file. */
+  readonly keySource!: ResolvedKey;
 
   constructor(options: SqliteStoreOptions) {
     if (options.path !== ":memory:") mkdirSync(dirname(options.path), { recursive: true });
@@ -547,10 +573,12 @@ export class SqliteControlStore implements ControlStore {
        create unique index if not exists box_one_primary_per_tenant
          on box(tenant_id) where state <> 'gone' and role = 'primary';`
     );
-    this.key = loadEncryptionKey(
+    const resolved = resolveEncryptionKey(
       options.keyPath ??
         (options.path === ":memory:" ? join(process.cwd(), ".control-key") : `${options.path}.key`)
     );
+    this.key = resolved.key;
+    this.keySource = resolved;
   }
 
   // ── tenants ───────────────────────────────────────────────────────────────────────

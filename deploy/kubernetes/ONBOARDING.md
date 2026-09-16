@@ -65,6 +65,12 @@ kubectl apply -f deploy/kubernetes/rbac.yaml
 
 # The gateway's accounts. There is no default password; a forgotten Secret degrades to a
 # generated one printed in the pod log.
+# The key the stored box tokens are encrypted with. Required: unset, the control plane writes a
+# key onto the same PVC as the database, which makes a snapshot of that volume a token dump.
+# Mint it now — changing it later makes the tokens already stored unreadable.
+kubectl -n agentbox create secret generic agentbox-control-key \
+  --from-literal=AGENTBOX_CONTROL_KEY="$(openssl rand -hex 32)"
+
 kubectl -n agentbox create secret generic agentbox-control-users \
   --from-literal=AGENTBOX_CONTROL_USERS="admin:$(openssl rand -hex 8):default"
 ```
