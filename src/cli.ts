@@ -28,6 +28,11 @@ import {
   uiToken,
 } from "./box/docker.ts";
 import { describePreflight, isQuiet, preflight, verifyBox } from "./box/preflight.ts";
+import {
+  consentFor,
+  lossesFingerprint,
+  upgradeConsentPath,
+} from "./host/upgrade-consent.ts";
 import { DockerBoxProvisioner } from "./box/provisioner.ts";
 import { applyConfigEnv, ensureConfigFile, loadConfig } from "./config.ts";
 import { describeControlPlane, startControlPlane } from "./control/main.ts";
@@ -307,6 +312,17 @@ async function cmdBoxUpgrade(argv: string[]): Promise<number> {
   }
 
   const config = loadConfig();
+  // Somebody may already have answered this, in the chat where the box asked them. The
+  // match is deliberately narrow — this image, and these findings — so a yes from
+  // yesterday cannot authorise destroying a day of work that appeared since.
+  const consent =
+    availability.built !== undefined
+      ? consentFor(
+          upgradeConsentPath(agentboxHome()),
+          availability.built,
+          lossesFingerprint(describePreflight(findings))
+        )
+      : undefined;
   const decision = decideUpgrade({
     preflight: findings,
     // Nobody is counted as watching from here: this command is the operator's, and the
@@ -314,8 +330,14 @@ async function cmdBoxUpgrade(argv: string[]): Promise<number> {
     watching: 0,
     ...(failing !== undefined ? { boxFailing: failing } : {}),
     ...(config.upgradeHour !== undefined ? { quietHour: config.upgradeHour } : {}),
+    ...(consent !== undefined ? { approved: true } : {}),
     hour: new Date().getHours(),
   });
+  if (consent !== undefined) {
+    // Named, because this is the line that explains a destroyed file afterwards. An
+    // upgrade that ran "because it was approved" and cannot say by whom is not an audit.
+    out(dim(`Approved by ${consent.by} at ${consent.at}; not asking again.`));
+  }
 
   out("");
   out(`${bold(decision.action)}: ${decision.why}`);

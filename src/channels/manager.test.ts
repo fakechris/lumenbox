@@ -20,11 +20,13 @@ import {
   parseSchedulesRequest,
   parseScreenRequest,
   parseStopRequest,
+  parseUpgradeApproval,
   refusal,
   type ChannelAdapter,
   type InboundMessage,
   type TaskCardState,
 } from "./manager.ts";
+import { NO_UPGRADE_WAITING, UPGRADE_IS_ADMIN_CALL } from "./strings.ts";
 
 function testAdapter(): ChannelAdapter & {
   inject: (message: InboundMessage) => Promise<string | undefined>;
@@ -1941,6 +1943,68 @@ test("on a door that answers only when addressed, a group message that names nob
   await new Promise(resolve => setTimeout(resolve, 20));
   assert.equal(asked.length, 2, "ran, because the door's rule is all");
   assert.equal(heard.length, 1);
+});
+
+test("the word the upgrade notice asks for is the word this manager answers to", async () => {
+  // The guard for the failure that started all of this. A message naming a verb nothing
+  // handles reads exactly like a working feature right up until somebody uses it, and the
+  // two halves live in different files with no compiler relationship — so the test is the
+  // relationship. If either side is reworded, this fails.
+  const { UPGRADE_WORD } = await import("../host/upgrade.ts");
+  assert.equal(parseUpgradeApproval(UPGRADE_WORD), true);
+  assert.equal(parseUpgradeApproval("升级"), true, "and in the language the chat is in");
+  assert.equal(parseUpgradeApproval("  Upgrade.  "), true, "as somebody actually types it");
+
+  // Whole-message, and for a sharper reason than the other verbs: this one authorises
+  // destroying a box, so a sentence *about* upgrading must never be read as consent.
+  assert.equal(parseUpgradeApproval("upgrade the deploy script"), false);
+  assert.equal(parseUpgradeApproval("升级一下文档里的版本号"), false);
+});
+
+test("approving an upgrade needs a question pending and an admin to answer it", async () => {
+  const adapter = testAdapter();
+  const approvals: string[] = [];
+  let waiting: string | undefined;
+  const asked: string[] = [];
+  const manager = new ChannelManager({
+    mayDrive: () => true,
+    mayAdmin: (identity: string) => identity === "telegram:1",
+    ask: async (_agent: string | undefined, text: string) => {
+      asked.push(text);
+      return "done";
+    },
+    upgrade: {
+      waiting: () => waiting,
+      approve: (identity: string) => {
+        approvals.push(identity);
+        return "recorded";
+      },
+    },
+    log: () => {},
+  } as never);
+  manager.register(adapter, true, "test");
+  await started(manager);
+
+  const say = (identity: string) =>
+    adapter.inject({ identity, chatKey: "telegram:room", senderLabel: "who", text: "upgrade" });
+
+  // Nothing pending: the word is somebody talking about upgrading something, not
+  // answering a question nobody asked. Not silence, and not a refusal either.
+  assert.equal(await say("telegram:1"), NO_UPGRADE_WAITING);
+  assert.deepEqual(approvals, []);
+
+  waiting = "0.31";
+
+  // Pending, but a driver is not an admin. A driver commands agents inside the rules;
+  // replacing the machine they run on is changing the rules.
+  assert.equal(await say("telegram:2"), UPGRADE_IS_ADMIN_CALL);
+  assert.deepEqual(approvals, []);
+
+  assert.equal(await say("telegram:1"), "recorded");
+  assert.deepEqual(approvals, ["telegram:1"]);
+
+  // And none of it ever reached an agent as work: a one-word decision is a decision.
+  assert.deepEqual(asked, []);
 });
 
 test("a notice pushed under the agent's name is kept as something it has already said", async () => {

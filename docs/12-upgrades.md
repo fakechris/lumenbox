@@ -167,8 +167,28 @@ rather than waiting forever.
 Steps 2, 5, 6, 7 and 8 exist in code and run on `box up --recreate`:
 `src/box/preflight.ts` for the check before and the verification after,
 `BoxManager.backupVolumes` for the copy, `scripts/build-image.mjs` for the tags that make
-step 8 possible. Steps 1, 3, 4 and 9 — noticing, deciding, announcing and reporting — are
-design, and are what the multi-person work will need to supply.
+step 8 possible. Steps 1 and 4 are the web server's upgrade timer. Step 9 — reporting what
+was lost, afterwards, to the people who were told — is still design.
+
+Step 3, **deciding**, is split across the two halves on purpose, and the split is the
+interesting part. `decideUpgrade` decides everything that can be decided from the
+situation. What it cannot decide is whether a person accepts losing what the preflight
+found, so it answers `ask` — and the answer comes back through `upgrade-consent.ts`:
+
+- The server's timer holds what it just asked about (the image, and a fingerprint of the
+  findings the person is reading).
+- An admin replying `upgrade` in the chat writes a consent record naming both.
+- The next `agentbox box upgrade` matches its own situation against that record and passes
+  `approved` to `decideUpgrade`, which then stops asking.
+
+A consent is deliberately narrow. It names one image, because approving 0.31 says nothing
+about 0.32; it names what the person was shown would be lost, so a day's work that appeared
+since invalidates it rather than riding along on yesterday's yes; and it goes stale after a
+day. It also authorises only the *loss* — the rules about interrupting connected people and
+about the quiet window still run underneath, because nobody spoke to those.
+
+The recording is the whole of the chat's power here. The destructive sequence exists once,
+in the CLI, and the web server still does not perform an upgrade — see below.
 
 ## 5. What is missing before this is safe unattended
 
@@ -186,7 +206,16 @@ All eight rules are implemented.
 - `agentbox box rollback` goes back a version by hand.
 - The web server notices an available upgrade and tells every admin, once per image. It
   deliberately does not perform one — a server that recreates the box underneath the people
-  using it is a worse surprise than an out-of-date image.
+  using it is a worse surprise than an out-of-date image. An admin's `upgrade` reply is
+  *recorded* there, not acted on, for the same reason: one copy of the destructive sequence,
+  and it is the one with the rollback in it.
+- Anything the notice offers must be wired before it is offered. The first version ended
+  `Reply "upgrade" to go ahead` with no handler for the word anywhere. Replying was answered
+  by silence, somebody reasonably concluded the bot could act on the box, and the next
+  message in the chat asked the agent to back up the four files the notice had listed —
+  which were the image's own reference docs, which an upgrade recreates verbatim
+  (2026-09-15). `UPGRADE_WORD` is named once and a test asserts the channel manager parses
+  it, so the message and the handler cannot drift apart again.
 
 ### Where the judgement lives
 
