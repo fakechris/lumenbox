@@ -110,6 +110,29 @@ purpose:** a signed or hashed allow-list of hook commands. It would let an opera
 *which* commands may run, at the price of a second file to keep in step; worth it only for
 a shared host, where S-2/S-3 are the bigger holes.
 
+## Triage, 2026-09-16 (INV-138)
+
+Read against the code as it stands, not against memory. Three of the nine are closed by work
+that landed for other reasons, two changed shape, and four are open with a named next step.
+
+| | State | What is true now |
+|---|---|---|
+| **S-1** secrets in the transcript | **partly closed** | The browser path is gone (INV-402: `browser_fill_secret` types a vault value into a page; the model never sees it). `scan-records` (docs/15) answers "is a value I hold in the records", comparing without printing. **Open:** a `RunOnHost` command whose *output* contains a credential still lands verbatim. The shape stays detection-plus-marker, not silent removal — the transcript's value is that it is unedited. |
+| **S-2** no TLS, cookie is the session | **open, and it is a deployment rule** | Unchanged in code, and the installation's own web changed underneath it: a sign-in now issues a per-person session rather than handing out the installation token (2026-09-15), so the cookie is no longer *the* credential — but on a plain-HTTP path it is still somebody's session. Next step is not code: say **required**, not recommended, in docs/06 and docs/08, and make `agentbox serve` refuse a non-loopback bind without `AGENTBOX_PUBLIC_URL` being https. |
+| **S-3** identity is a password list | **open, unchanged** | `PasswordListIdentity` (`src/control/gateway.ts:67`) still compares plaintext, with no KDF, lockout or rotation. It is the control plane's, not an installation's — an installation signs people in through a door's OAuth or an invite code. Next step: replace it before anybody who is not the operator signs into a *gateway*. |
+| **S-4** the box believes the gateway's headers | **narrowed** | Still believed, still one trust dependency rather than two. What changed (INV-537): an absent role header no longer means owner, the gateway's vocabulary is translated in exactly one function, and a web session's authority comes from the roster rather than from the header. The seam for a signed assertion is where it always was — `callerOf`. |
+| **S-5** budget is enforced inside the box | **open, unchanged** | The policy gate is still the thing being billed. The model relay has route leases and a ceiling on *time* (`model-relay.ts:27`), not on spend. Next step is the same as it was: a hard ceiling at the relay, with the in-box gate kept as the one that can explain itself. |
+| **S-6** control key beside the database | **open, unchanged** | `AGENTBOX_CONTROL_KEY` is the answer and the default is still a file next to the database. Next step: make the packaged deployment set it, so the default an operator gets is the good one. |
+| **S-7** "private" invites the wrong assumption | **closed, by removing the word's basis** | Per-agent `visibility` no longer decides anything (INV-540, docs/22 §3), the boundary is a box's `members` (INV-538), and the label a person reads is **derived from that set** rather than typed (`membersLabel`). There is no longer a UI string that could describe an agent as private while the filesystem says otherwise. |
+| **S-8** egress per relay, not per tenant | **closed** | INV-423: the relay's allow-list is per box. |
+| **S-9** `hooks.json` is command execution | **held, deliberately incomplete** | R39's ownership and mode checks stand, and cover `extensions/*` the same way. The remaining path is an agent with `RunOnHost` writing the file, which is the S-1 class (a host command *is* the operator). A signed allow-list of hook commands is still judged not worth its second file except on a shared host — where S-2 and S-3 are the bigger holes anyway. |
+
+**What this triage changes about the order.** S-2 and S-6 are deployment defaults, and both are
+one commit each in the packaging rather than a design problem — they should go first because they
+are cheap and they are what an operator gets by accident. S-5 is the one real piece of engineering
+left on this list. S-3 belongs to the control plane, which this installation does not run, so it
+waits for a gateway deployment that has somebody other than the operator signing in.
+
 ## Not on this list, and why
 
 - **Container escape.** The box runs a browser and arbitrary agent commands, and the isolation is
