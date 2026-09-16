@@ -127,3 +127,24 @@ audit rather than surveillance.
   someone reading the endpoint; today `at_risk` surfaces on pull and in the host log.
 - A central, tenant-scoped audit table binding events to the enterprise principal for retention.
 - A UI that shows a session red when `at_risk`.
+
+## 卡死的守护，和没人盯着的时候（INV-135，2026-09-15）
+
+以前宿主只知道"有没有这个 box 的客户端"——回答的是"守护是不是被杀了"，仅此而已。真正吃掉一个上午
+的是另一种：**守护活着、socket 开着、每个调用都挂住**。从外面看和一个忙碌的 box 一模一样，唯一的
+信号是有人终于开口问"为什么一早上没动静"。
+
+`src/host/wedge.ts` 记每个 box 两个数：**最后一次被问**和**最后一次答**。判定就是两者的差：
+
+- **ok** — 最近答过；**slow** — 问了两分钟没答，记下来但不出声（这正是忙碌的样子）；
+- **wedged** — 问了十分钟什么都没有。**这一种值得把人叫起来**：重启能修，别的都不能。
+- **quiet** — 没人问过它。这不是关于 box 的判断，**永远不报警**——闲着是大多数 box 的常态。
+
+两个刻意的选择：**报错算"答了"**（box 开口了，它说什么是别人的问题），**超时/连不上不算**
+（否则这套watch 就白做了，卡死的 box 恰恰是调用永远不回来的那个）；**只在状态变化时说**，
+变成 wedged 说一次、恢复说一次，中间不重复——每分钟重复一次的告警是会被人过滤掉的告警，
+包括它成真的那一次。
+
+collector 自己跑在一分钟的定时器上，**不需要有人打开页面**（docs/47 记的那次，02:00 卡住、
+09:00 才被发现），并且按 INV-535 的分类这是 **act 不是 ask**：照说不误，并推给能重启 box 的管理员。
+
