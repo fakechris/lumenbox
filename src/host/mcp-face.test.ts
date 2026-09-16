@@ -113,8 +113,26 @@ test("a route's call runs the gate as delegated (no approval reuse, no input in 
 test("over the wire: the route path, one 401, tools/list is exactly the allow-list, four in flight", async () => {
   let release: () => void = () => {};
   const gate = new Promise<void>(resolve => { release = resolve; });
+  // Waited on instead of sleeping. `route.inFlight` is incremented before the tool is
+  // invoked, so a handler entering IN_FLIGHT_LIMIT times is the exact condition the
+  // refusal below depends on — and the only way to know it has happened.
+  //
+  // A 50ms sleep stood here, and under the parallel runner it was not always enough for
+  // four fetches to reach the handler. The failure was not a wrong assertion: with fewer
+  // than four counted, the fifth call is *accepted*, joins the queue, and waits on a gate
+  // that `release()` two lines below never reaches. The file hit the 30s timeout and took
+  // the whole run with it, roughly one run in three.
+  let entered = 0;
+  let announceFull: () => void = () => {};
+  const allInFlight = new Promise<void>(resolve => { announceFull = resolve; });
   const face = new McpFace({
-    mcp: () => fakeManager(["a__x"], async () => { await gate; return "done"; }),
+    mcp: () =>
+      fakeManager(["a__x"], async () => {
+        entered += 1;
+        if (entered === IN_FLIGHT_LIMIT) announceFull();
+        await gate;
+        return "done";
+      }),
     jobsOf: () => undefined,
     auditPath: null,
   });
@@ -157,7 +175,17 @@ test("over the wire: the route path, one 401, tools/list is exactly the allow-li
 
     const invoke = { jsonrpc: "2.0", id: 2, method: "tools/call", params: { name: "a__x", arguments: {} } };
     const inFlight = Array.from({ length: IN_FLIGHT_LIMIT }, () => call(`/mcp/r/${route.key}`, invoke, route.token));
-    await new Promise(resolve => setTimeout(resolve, 50));
+    // Bounded, and loud: without the bound a premise that stops holding leaves the file
+    // hanging until the runner's timeout, which is the least informative failure there is.
+    await Promise.race([
+      allInFlight,
+      new Promise<never>((_, reject) =>
+        setTimeout(
+          () => reject(new Error(`only ${entered} of ${IN_FLIGHT_LIMIT} calls reached the tool`)),
+          10_000
+        ).unref()
+      ),
+    ]);
     const fifth = await call(`/mcp/r/${route.key}`, invoke, route.token);
     assert.equal(fifth.body.result?.isError, true);
     assert.match(fifth.body.result?.content?.[0]?.text ?? "", /already in flight/);
