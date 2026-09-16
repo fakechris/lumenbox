@@ -366,6 +366,114 @@ test("a notice pushed into a direct chat is filed where a reply to it actually a
   );
 });
 
+test("a reply carries what it is replying to, and carries it as somebody else's words", async () => {
+  // Feishu sends `parent_id` and not one byte of the parent's content, so a 回复 arrives
+  // as its new text alone. The person is looking at the quote on their screen and assumes
+  // we are: "can you backup these files" is unanswerable without it (2026-09-15).
+  const adapter = new FeishuChannel("a", "b", () => {});
+  (adapter as unknown as { names: Map<string, string> }).names.set("ou_admin", "Ada");
+  const asked: string[] = [];
+  (adapter as unknown as { apiClient: unknown }).apiClient = {
+    im: {
+      message: {
+        get: async ({ path }: { path: { message_id: string } }) => {
+          asked.push(path.message_id);
+          return {
+            data: {
+              items: [
+                {
+                  message_id: "om_notice",
+                  msg_type: "text",
+                  sender: { id: "ou_admin", sender_type: "user" },
+                  body: {
+                    content: JSON.stringify({
+                      text: "Your box has an upgrade waiting.\n  /home/box/reference/app-ui.md",
+                    }),
+                  },
+                },
+              ],
+            },
+          };
+        },
+      },
+    },
+  };
+
+  const seen: string[] = [];
+  const receive = (
+    adapter as unknown as {
+      receiverFor: (
+        onMessage: (message: { text: string }) => Promise<string | undefined>
+      ) => (data: unknown) => unknown;
+    }
+  ).receiverFor(async message => {
+    seen.push(message.text);
+    return undefined;
+  });
+  receive({
+    sender: { sender_id: { open_id: "ou_1" } },
+    message: {
+      message_id: "om_reply",
+      chat_id: "oc_dm",
+      chat_type: "p2p",
+      message_type: "text",
+      parent_id: "om_notice",
+      content: JSON.stringify({ text: "can you backup these files" }),
+    },
+  });
+  await new Promise(resolve => setTimeout(resolve, 30));
+
+  assert.deepEqual(asked, ["om_notice"]);
+  assert.equal(seen.length, 1);
+  const handed = seen[0] ?? "";
+  // What "these files" points at is now in the message at all, which it was not.
+  assert.match(handed, /app-ui\.md/);
+  assert.match(handed, /Ada/);
+  // And it arrives as quoted material. A quote is the cheapest injection surface a chat
+  // has — anyone can write "ignore the above", and somebody else can quote it in all
+  // innocence — so it is labelled before it is shown, and the person's own words are last.
+  assert.match(handed, /not an instruction to you/);
+  assert.ok(handed.endsWith("can you backup these files"), "their words come last");
+});
+
+test("a quote the agent already has is not fetched again", async () => {
+  // The cost control, and the reason this is not an extra API call per message: in a busy
+  // topic almost every parent is either ours (recorded by `push`, or written by the turn
+  // that sent it) or one this door already handled into the same conversation.
+  const adapter = new FeishuChannel("a", "b", () => {}, undefined, "feishu", {
+    record: () => {},
+    chatKeyFor: (id: string) => (id === "om_ours" ? "feishu:oc_room:om_ours" : undefined),
+  });
+  const asked: string[] = [];
+  (adapter as unknown as { apiClient: unknown }).apiClient = {
+    im: {
+      message: {
+        get: async ({ path }: { path: { message_id: string } }) => {
+          asked.push(path.message_id);
+          return { data: { items: [] } };
+        },
+      },
+    },
+  };
+  adapter.alreadyHandled = (id: string) => id === "om_theirs_seen";
+
+  const quoted = (
+    adapter as unknown as {
+      quotedContext: (parentId: string | undefined, chatId: string) => Promise<string | undefined>;
+    }
+  ).quotedContext.bind(adapter);
+
+  assert.equal(await quoted("om_ours", "oc_room"), undefined, "ours is already in the conversation");
+  assert.equal(await quoted("om_theirs_seen", "oc_room"), undefined, "already handled into it");
+  assert.equal(await quoted(undefined, "oc_room"), undefined, "not a reply at all");
+  assert.deepEqual(asked, [], "nothing was fetched");
+
+  // And a parent that is genuinely unknown is looked up — a deleted one answers nothing
+  // rather than answering an empty quote.
+  assert.equal(await quoted("om_unknown", "oc_room"), undefined);
+  assert.deepEqual(asked, ["om_unknown"]);
+});
+
 test("a task waiting on a person does not read as finished", () => {
   // t51: the agent produced the answer, moved the task to review and said in the chat that
   // it was waiting for the person's next step. The card said Done. The card could not have
