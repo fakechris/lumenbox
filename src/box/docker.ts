@@ -332,14 +332,34 @@ export interface BoxStatus {
  * behind a relay is what would make that a boundary.
  */
 /**
- * The UI token for an in-box orchestrator.
+ * The UI token this machine's own web is reached with — the desktop app's, and the CLI's.
  *
- * Persisted next to the box token so a recreate keeps the same URL working, rather than
- * invalidating whatever tab the user has open.
+ * Persisted so a restart keeps whatever tab the user has open working, rather than
+ * invalidating it.
  */
 export function uiToken(): string {
+  return tokenFile("ui-token");
+}
+
+/**
+ * The UI token the *box's* own orchestrator is reached with — a different secret (INV-572).
+ *
+ * They were one file. The desktop shell passes it to its child host (`electron/ui-auth.cjs`)
+ * and the provisioner passes the same string into the container, so one leak was two doors
+ * and rotating either kicked the other out — which is a good way to make sure neither is
+ * ever rotated.
+ *
+ * Minted fresh rather than derived: a derivation keeps them linked, and the point is that
+ * they are not. Nothing is forced to change — a container already running keeps the value
+ * it was started with, and takes this one the next time it starts.
+ */
+export function boxUiToken(): string {
+  return tokenFile("box-ui-token");
+}
+
+function tokenFile(name: string): string {
   const home = process.env.AGENTBOX_HOME ?? join(homedir(), ".agentbox");
-  const path = join(home, "ui-token");
+  const path = join(home, name);
   if (existsSync(path)) {
     const existing = readFileSync(path, "utf8").trim();
     if (existing) return existing;
@@ -578,7 +598,7 @@ export class BoxManager {
             // works. Inside the box the UI binds 0.0.0.0 — Docker's publish address is all
             // that keeps it local — so it must not be open.
             "--env",
-            `AGENTBOX_UI_TOKEN=${config.uiToken ?? uiToken()}`,
+            `AGENTBOX_UI_TOKEN=${config.uiToken ?? boxUiToken()}`,
             // Published to loopback only. The UI has no authentication — the assumption
             // has always been that anything able to reach it can already drive the
             // agents — so it must not be reachable from the network.

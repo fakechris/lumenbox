@@ -283,6 +283,15 @@ string is accepted once to bootstrap the cookie, and the WebSocket upgrade carry
 is checked the same way. `AGENTBOX_UI_TOKEN` or `web --token` set it for the topologies the CLI
 does not start.
 
+**Two tokens, not one** (INV-572, 2026-09-16). `~/.agentbox/ui-token` is *this machine's*
+web — the desktop app's child host and the CLI. `~/.agentbox/box-ui-token` is the **box's
+own** orchestrator, the one `box up --with-host` runs inside the container. They used to be
+one file, so a leak was two doors and rotating either kicked the other out — which is a
+good way to ensure neither is ever rotated. The box's is minted fresh rather than derived,
+because the point is that they are not related; nothing is forced to change, since a
+container already running keeps the value it started with and takes the new one the next
+time it starts. Rotating either is deleting its file and restarting what reads it.
+
 **That token is now the machine's, not a person's** (2026-09-15). Signing in — through a
 Feishu door or an invite code — issues a *session* for that person and never hands over the
 installation token; the session is signed with a key derived from it, so rotating the token

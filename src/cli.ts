@@ -25,6 +25,7 @@ import {
   defaultBoxConfig,
   loadBoxToken,
   resolveDockerHostAddress,
+  boxUiToken,
   uiToken,
 } from "./box/docker.ts";
 import { describePreflight, isQuiet, preflight, verifyBox } from "./box/preflight.ts";
@@ -172,7 +173,9 @@ async function cmdBoxUp(argv: string[]): Promise<number> {
   out(`${bold("Box running")} (${status.containerName})`);
   if (status.boxdUrl) out(`  daemon:  ${status.boxdUrl}`);
   if (withHost) {
-    out(`  web UI:  http://127.0.0.1:7777/?token=${uiToken()}`);
+    // The orchestrator here runs *inside* the box, so this is the box's own token, not
+    // this machine's (INV-572). Printing the wrong one gives a URL that 401s.
+    out(`  web UI:  http://127.0.0.1:7777/?token=${boxUiToken()}`);
     out("");
     out("The orchestrator runs inside the box. Nothing here drives it.");
   } else {
