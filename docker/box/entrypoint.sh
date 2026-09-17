@@ -70,6 +70,14 @@ if [[ -d /usr/local/share/agentbox/skel ]]; then
   chown -R box:box /home/box/Desktop /home/box/.config 2>/dev/null || true
 fi
 
+if [[ -f /etc/gtk-3.0/settings.ini ]]; then
+  if [[ ! -f /home/box/.config/gtk-3.0/settings.ini ]] || ! grep -q "gtk-icon-theme-name=Tango" /home/box/.config/gtk-3.0/settings.ini 2>/dev/null; then
+    mkdir -p /home/box/.config/gtk-3.0
+    cp /etc/gtk-3.0/settings.ini /home/box/.config/gtk-3.0/settings.ini 2>/dev/null || true
+    chown -R box:box /home/box/.config/gtk-3.0 2>/dev/null || true
+  fi
+fi
+
 # Delegated engines look for skills under ~/.config, and ~/.config is a volume — so the
 # symlink the image creates is shadowed on every box that has ever booted before. The
 # projection has to be re-made here, where the volume is already mounted. Idempotent,

@@ -138,6 +138,16 @@ async function cmdBoxUp(argv: string[]): Promise<number> {
     }
   }
 
+  if (!recreate) {
+    const availability = await manager.upgradeAvailable().catch(() => ({ available: false, running: undefined, built: undefined }));
+    if (availability.available && availability.running && availability.built) {
+      out("");
+      out(bold(`Notice: container is running ${availability.running}, but image ${availability.built} is available on disk.`));
+      out(dim(`Run \`agentbox box up --recreate\` to upgrade to the latest image.`));
+      out("");
+    }
+  }
+
   let { status } = await manager.up({
     recreate,
     onOutput: line => out(dim(line)),
