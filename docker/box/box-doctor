@@ -137,6 +137,14 @@ else
   fail fonts "no CJK font — Chinese, Japanese and Korean will be empty boxes"
 fi
 
+# ── icon theme ────────────────────────────────────────────────────────────────────
+icon_theme="$(grep -h '^gtk-icon-theme-name' "${HOME:-/home/box}/.config/gtk-3.0/settings.ini" /etc/gtk-3.0/settings.ini 2>/dev/null | head -1 | cut -d= -f2 | tr -d ' ')"
+if [ "${icon_theme}" = "Tango" ] || [ -d "/usr/share/icons/Tango" ]; then
+  pass icon-theme "Tango icon theme active (${icon_theme:-installed})"
+else
+  warn icon-theme "Tango icon theme missing; desktop & dock icons may display as blank or missing"
+fi
+
 # ── clipboard ─────────────────────────────────────────────────────────────────────
 if command -v xclip > /dev/null 2>&1; then
   if pgrep -x autocutsel > /dev/null 2>&1; then

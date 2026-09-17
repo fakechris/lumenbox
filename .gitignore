@@ -33,3 +33,9 @@ deploy/kubernetes/local/
 # Native audit daemon build artifact (docs/47), like hostd.mjs/boxd.cjs
 docker/box/xwatchdog
 src/xwatchdog/xwatchdog
+
+# Runtime scratch space — anything a developer creates while testing locally that
+# should not enter the repo. The TLS feature (src/boxd/main.ts, src/box/client.ts)
+# uses .runtime/tls/ to stage a self-signed cert and key for AGENTBOX_BOXD_TLS_CERT
+# / AGENTBOX_BOXD_TLS_KEY without retyping paths every time.
+/.runtime/

@@ -226,6 +226,7 @@ if command -v dconf > /dev/null 2>&1; then
     dbus-run-session -- sh -c '
       dconf write /org/gtk/settings/file-chooser/window-size "(1100, 680)"
       dconf write /org/gtk/settings/file-chooser/window-position "(90, 60)"
+      dconf write /org/gnome/desktop/interface/icon-theme "'Tango'"
     ' 2>/dev/null || log "could not pre-seed the GTK file chooser size"
   fi
 fi

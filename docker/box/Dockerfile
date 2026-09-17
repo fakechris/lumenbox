@@ -57,17 +57,20 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
       '================================================================' \
       > /etc/motd
 
-# 3. Node.js for the daemon.
-#    Downloaded to a file first, because `curl | bash` reports bash's exit status: on
-#    2026-09-02 a TLS hiccup made curl fail, bash ran nothing, and apt then "installed"
-#    the Node 20 that novnc had already pulled from Debian - an image whose daemon died
-#    on `WebSocket is not defined`. The version assertion makes that a build failure.
-RUN curl -fsSL https://deb.nodesource.com/setup_22.x -o /tmp/nodesource-setup.sh \
-    && bash /tmp/nodesource-setup.sh \
-    && rm -f /tmp/nodesource-setup.sh \
-    && apt-get install -y --no-install-recommends nodejs \
-    && rm -rf /var/lib/apt/lists/* \
-    && node --version | grep -q "^v22\\." \
+# 3. Node.js 22 for the daemon.
+#    Installs official prebuilt binary with mirror fallback — avoids Nodesource GPG / apt flakiness.
+ARG NODE_VERSION=22.18.0
+RUN dpkgArch="$(dpkg --print-architecture)" \
+    && case "${dpkgArch}" in \
+        arm64) nodeArch="arm64" ;; \
+        amd64) nodeArch="x64" ;; \
+        *) echo "unsupported arch: ${dpkgArch}"; exit 1 ;; \
+    esac \
+    && (curl -fsSL --connect-timeout 10 "https://registry.npmmirror.com/-/binary/node/v${NODE_VERSION}/node-v${NODE_VERSION}-linux-${nodeArch}.tar.gz" -o /tmp/node.tar.gz \
+        || curl -fsSL --connect-timeout 10 "https://nodejs.org/dist/v${NODE_VERSION}/node-v${NODE_VERSION}-linux-${nodeArch}.tar.gz" -o /tmp/node.tar.gz) \
+    && tar -xzf /tmp/node.tar.gz -C /usr/local --strip-components=1 --no-same-owner \
+    && rm -f /tmp/node.tar.gz \
+    && node --version | grep -q "^v22\." \
     && node -e "if (typeof WebSocket !== \"function\") { throw new Error(\"no WebSocket global\") }"
 
 # 4. Chromium for browser work. Installed from Debian rather than Google's repo so
@@ -216,9 +219,10 @@ RUN mkdir -p /home/box/Desktop /home/box/.config/pcmanfm/default \
       'Launcher=file:///home/box/Desktop/terminal.desktop' \
       > /home/box/.config/plank/dock1/launchers/terminal.dockitem \
     && chmod +x /home/box/Desktop/*.desktop \
-    && mkdir -p /home/box/.config/gtk-3.0 \
+    && mkdir -p /etc/gtk-3.0 /home/box/.config/gtk-3.0 \
     && printf '%s\n' '[Settings]' 'gtk-icon-theme-name=Tango' 'gtk-theme-name=Adwaita' \
-      > /home/box/.config/gtk-3.0/settings.ini \
+      > /etc/gtk-3.0/settings.ini \
+    && cp /etc/gtk-3.0/settings.ini /home/box/.config/gtk-3.0/settings.ini \
     && chown -R box:box /home/box/Desktop /home/box/.config \
     # A copy the image owns. /home/box/.config is a volume at runtime, so it outlives
     # the image: without re-seeding from here on every start, an old volume would keep

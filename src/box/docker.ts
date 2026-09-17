@@ -643,6 +643,14 @@ export class BoxManager {
       onOutput?.(`removing existing container ${this.config.containerName}`);
       await this.down({ remove: true });
       state = "missing";
+    } else if (state !== "missing") {
+      const upgrade = await this.upgradeAvailable().catch(() => ({ available: false, running: undefined, built: undefined }));
+      if (upgrade.available && upgrade.running && upgrade.built) {
+        onOutput?.(
+          `notice: container ${this.config.containerName} is running image ${upgrade.running}, ` +
+            `but ${this.config.image} (${upgrade.built}) is on disk; run with --recreate to upgrade`
+        );
+      }
     }
 
     if (state === "missing") {
