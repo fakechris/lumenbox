@@ -13,6 +13,8 @@
 
 import { randomBytes } from "node:crypto";
 import { NetworkEventLog, networkEventsPath, summariseEvents } from "../egress/events.ts";
+import { request as httpsRequest } from "node:https";
+import { connect as tlsConnect } from "node:tls";
 import {
   createServer,
   request as httpRequest,
@@ -2346,6 +2348,7 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
     host: string;
     port: number;
     token: string;
+    protocol?: string;
   }
   let cachedOrigin: { value: Origin | undefined; at: number } | undefined;
   const ORIGIN_TTL_MS = 5000;
@@ -2357,7 +2360,7 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
       const token = entry === undefined ? undefined : tokenOf(entry);
       if (entry?.endpoint === undefined || token === undefined) return undefined;
       const url = new URL(entry.endpoint.baseUrl);
-      return { host: url.hostname, port: Number(url.port || (url.protocol === "https:" ? 443 : 80)), token };
+      return { host: url.hostname, port: Number(url.port || (url.protocol === "https:" ? 443 : 80)), token, protocol: url.protocol };
     }
     if (!force && cachedOrigin && Date.now() - cachedOrigin.at < ORIGIN_TTL_MS) {
       return cachedOrigin.value;
@@ -2371,6 +2374,7 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
           host: url.hostname,
           port: Number(url.port || (url.protocol === "https:" ? 443 : 80)),
           token: endpoint.token,
+          protocol: url.protocol,
         };
       }
     } catch {
@@ -2400,12 +2404,14 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
       return;
     }
 
-    const upstream = httpRequest(
+    const requester = origin.protocol === "https:" ? httpsRequest : httpRequest;
+    const upstream = requester(
       {
         host: origin.host,
         port: origin.port,
         method: req.method,
         path,
+        rejectUnauthorized: false,
         headers: {
           ...req.headers,
           host: `${origin.host}:${origin.port}`,
@@ -2946,6 +2952,7 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
     void (async () => {
       const url = new URL(req.url ?? "/", "http://localhost");
       const route = `${req.method} ${url.pathname}`;
+      if (process.env.AGENTBOX_LOG_HTTP === "1") log(`web: ${route} from ${req.socket.remoteAddress}`);
 
       const decision = admit({
         authorization: req.headers.authorization,
@@ -6076,7 +6083,8 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
       return;
     }
 
-    const upstream = netConnect(origin.port, origin.host, () => {
+    const connectUpstream = origin.protocol === "https:" ? (cb: () => void) => tlsConnect({ host: origin.host, port: origin.port, rejectUnauthorized: false }, cb) : (cb: () => void) => netConnect(origin.port, origin.host, cb);
+    const upstream = connectUpstream(() => {
       const headers = Object.entries(req.headers)
         // The browser's own Authorization, if any, is dropped in favour of the box
         // token below: what authorises this hop is being the host, not being the
@@ -6119,7 +6127,9 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
   // generated and announced, rather than being served openly.
   const configured = options.token ?? process.env.AGENTBOX_UI_TOKEN;
   let token = configured;
-  if (!token && !isLoopback(host)) {
+  if (process.env.AGENTBOX_NO_TOKEN === "1") {
+    token = undefined;
+  } else if (!token && !isLoopback(host)) {
     token = randomBytes(16).toString("hex");
     log(`bound to ${host} with no token configured; generated one`);
     log(`open: http://${host}:${options.port}/?token=${token}`);
