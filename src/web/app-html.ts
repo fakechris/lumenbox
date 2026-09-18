@@ -627,6 +627,17 @@ export const APP_HTML = String.raw`<!doctype html>
     display: block; max-width: 100%; margin: 0;
     border-top: 1px solid var(--border);
   }
+  /* An edit_file call reads as a diff: the two marked lines are the change, the rest is
+     where it sits. Whole-line tint, not coloured text, so it survives every theme. */
+  details.tool .diff { padding: 6px 0; }
+  details.tool .diff .ln { display: block; padding: 0 13px; white-space: pre-wrap; word-break: break-word; }
+  details.tool .diff .ln::before { display: inline-block; width: 1.2em; color: var(--muted); }
+  details.tool .diff .ctx::before { content: "\0020"; }
+  details.tool .diff .del { background: color-mix(in srgb, var(--danger) 14%, transparent); }
+  details.tool .diff .del::before { content: "\002d"; color: var(--danger); }
+  details.tool .diff .add { background: color-mix(in srgb, var(--ok, #3c9) 14%, transparent); }
+  details.tool .diff .add::before { content: "\002b"; color: var(--ok, #3c9); }
+  details.tool .diff .path { display: block; padding: 0 13px 4px; color: var(--muted); }
   /* A teammate message is a notification with a hairline, not a bubble: who and which
      direction on the line, the text itself one click in. */
   details.note {
@@ -3901,12 +3912,29 @@ function drawItem(item) {
   return div;
 }
 
+/** The minus/plus lines the server computed for an edit_file call, as a block a person reads like a diff. */
+function diffHtml(diff) {
+  var lines = diff.lines || [];
+  var added = 0, removed = 0;
+  var html = diff.path ? '<span class="path">' + esc(diff.path) + "</span>" : "";
+  for (var i = 0; i < lines.length; i++) {
+    var op = lines[i].op;
+    if (op === "+") added += 1; else if (op === "-") removed += 1;
+    html += '<span class="ln ' + (op === "+" ? "add" : op === "-" ? "del" : "ctx") + '">' + esc(lines[i].text) + "</span>";
+  }
+  return { html: '<div class="diff">' + html + "</div>", summary: "+" + added + " −" + removed };
+}
+
 function drawCall(call) {
   var row = document.createElement("details");
   row.className = "tool " + (call.isError ? "err" : "");
   var oneLine = String(call.detail == null ? "" : call.detail).replace(/\s+/g, " ");
-  row.innerHTML = "<summary>" + '<span class="nm">' + esc(call.name) + "</span> " + esc(oneLine.slice(0, 140)) + '</summary><div class="det"></div>';
-  row.querySelector(".det").textContent = String(call.detail == null ? "" : call.detail) + (call.result ? "\n\n" + String(call.result) : "");
+  var diff = call.diff && call.diff.lines ? diffHtml(call.diff) : null;
+  var summary = diff ? esc((call.diff.path || oneLine).slice(0, 120)) + ' <span class="dim">' + esc(diff.summary) + "</span>" : esc(oneLine.slice(0, 140));
+  row.innerHTML = "<summary>" + '<span class="nm">' + esc(call.name) + "</span> " + summary + "</summary>" + (diff ? diff.html : "") + '<div class="det"></div>';
+  // The diff is the call; the detail box then carries only the result. Without a diff it is the call as text.
+  row.querySelector(".det").textContent = diff ? String(call.result || "") : String(call.detail == null ? "" : call.detail) + (call.result ? "\n\n" + String(call.result) : "");
+  if (diff && !call.result) row.querySelector(".det").style.display = "none";
   if (call.shot) {
     var img = document.createElement("img");
     img.className = "shot";
@@ -5712,7 +5740,7 @@ stream.onmessage = function (raw) {
     if (!inView(e)) return;
     if (openAgent) { openAgent.streaming = false; openAgent.queued = false; redrawItem(openAgent); openAgent = null; }
     if (!openWork) openWork = pushItem({ kind: "work", calls: [], startAt: new Date().toISOString(), done: false });
-    var call = { name: e.tool, detail: toolDetail(e.tool, e.input), result: "", isError: false };
+    var call = { name: e.tool, detail: toolDetail(e.tool, e.input), result: "", isError: false, diff: e.diff || null };
     openWork.calls.push(call);
     redrawItem(openWork);
     openCall.set(e.agentId, { work: openWork, call: call });

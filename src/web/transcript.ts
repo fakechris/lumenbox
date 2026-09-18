@@ -14,6 +14,7 @@
 
 import { parseWakePrompt, type WakeMessage } from "../host/prompt.ts";
 import { optionLabel } from "../host/ask-options.ts";
+import { type EditDiff, editDiffOf } from "./line-diff.ts";
 
 export interface DisplayTool {
   name: string;
@@ -24,6 +25,8 @@ export interface DisplayTool {
   isError?: boolean;
   /** For AskUser: the question and its answers, so the page can draw the card again on reload. */
   question?: { question: string; options?: string[]; fallback?: string };
+  /** For edit_file: what changed, as `-`/`+` lines, so the row reads as a diff rather than two paragraphs (INV-112). */
+  diff?: EditDiff;
 }
 
 /**
@@ -174,6 +177,7 @@ export function toDisplayEntries(
         ...(block.name === "AskUser" && questionOf(block.input) !== undefined
           ? { question: questionOf(block.input)! }
           : {}),
+        ...(editDiffOf(String(block.name ?? ""), block.input) !== undefined ? { diff: editDiffOf(String(block.name ?? ""), block.input)! } : {}),
       }));
       if (tools.length > 0) {
         const entryWithTools = { kind: "tools" as const, tools };
