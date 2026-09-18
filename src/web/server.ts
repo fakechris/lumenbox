@@ -205,6 +205,7 @@ import { SessionEpochs } from "./session-epochs.ts";
 import { mayEnterBox, membersLabel, refusalToEnter } from "../box/membership.ts";
 import { attentionFor } from "../host/attention.ts";
 import { InvoluteConsumer } from "../host/involute-inbox.ts";
+import { mayAnswerFrom } from "../host/involute-askers.ts";
 import { describeQueues } from "../host/actor-queue.ts";
 import { parseSuccessor } from "../host/successor.ts";
 import { describeReceipts } from "../host/receipts.ts";
@@ -1996,17 +1997,26 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
             await orchestrator.settle();
             return orchestrator.replySince(input.agentId, before, input.conversation);
           },
-          // The blunt first version of docs/54 §3.6: an allowlist of actor ids over there.
-          // Mapping their actors onto this installation's principals, and then to a role
-          // and a box, is its own change — and until it exists, "anyone who can comment"
-          // must not mean "anyone who can start a turn here".
-          mayAnswer: ({ requestedByActorId }) => {
-            const allowed = involuteConfig.askers ?? [];
-            if (allowed.length === 0) return { ok: false, why: "this installation has not said whose questions I take; an admin sets involute.askers" };
-            if (requestedByActorId === undefined || !allowed.includes(requestedByActorId)) {
-              return { ok: false, why: "you are not on this installation's list of people I take questions from" };
+          // Who may ask (INV-575, docs/54 §3.6): the actor over there resolves to a person
+          // here through the roster — `involute:<actorId>` is one more identity a Principal
+          // holds — and then the ordinary two questions apply: driver or above, and a member
+          // of the box the agent lives in. The old `askers` list is consulted only for an
+          // actor nobody has linked, and the log names which rule spoke.
+          mayAnswer: ({ agentId, requestedByActorId }) => {
+            const verdict = mayAnswerFrom(
+              {
+                resolve: identity => principals.resolve(identity),
+                isKnown: identity => principals.isKnown(identity),
+                boxOf: id => registry.boxOf(id),
+                ...(involuteConfig.askers !== undefined ? { askers: involuteConfig.askers } : {}),
+              },
+              { agentId, requestedByActorId }
+            );
+            if (verdict.ok) {
+              log(`involute: ${verdict.who} may ask ${registry.tryGet(agentId)?.profile.name ?? agentId} (by ${verdict.via === "principal" ? "the roster" : "the transitional askers list"})`);
+              return { ok: true };
             }
-            return { ok: true };
+            return verdict;
           },
           askedBack: ({ agentId, conversation }) => questions.list().some(open => open.agentId === agentId && open.conversation === conversation),
           // How many questions an agent takes at once before it turns the next one down in
