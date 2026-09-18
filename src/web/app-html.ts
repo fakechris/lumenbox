@@ -461,6 +461,9 @@ export const APP_HTML = String.raw`<!doctype html>
   .question .qdone { font-size: 12px; color: var(--text-soft); }
   .divider::before, .divider::after { content: "\200b"; flex: 1; border-top: 1px solid var(--border); }
   .divider.new { color: var(--accent); }
+  .divider.on { color: var(--accent); }
+  .divider.on::before, .divider.on::after { border-color: var(--accent); }
+  #searchbar input[type="date"] { height: 30px; border-radius: 6px; border: 1px solid var(--border-strong); background: var(--bg); color: var(--text); padding: 0 6px; font-size: 12px; font-family: inherit; }
   .divider.new::before, .divider.new::after { border-color: var(--accent-soft); }
   #jumplatest { position: absolute; bottom: 110px; left: 50%; transform: translateX(-50%); display: none; z-index: 5; }
   #middle { position: relative; }
@@ -636,6 +639,17 @@ export const APP_HTML = String.raw`<!doctype html>
     display: block; max-width: 100%; margin: 0;
     border-top: 1px solid var(--border);
   }
+  /* An edit_file call reads as a diff: the two marked lines are the change, the rest is
+     where it sits. Whole-line tint, not coloured text, so it survives every theme. */
+  details.tool .diff { padding: 6px 0; }
+  details.tool .diff .ln { display: block; padding: 0 13px; white-space: pre-wrap; word-break: break-word; }
+  details.tool .diff .ln::before { display: inline-block; width: 1.2em; color: var(--muted); }
+  details.tool .diff .ctx::before { content: "\0020"; }
+  details.tool .diff .del { background: color-mix(in srgb, var(--danger) 14%, transparent); }
+  details.tool .diff .del::before { content: "\002d"; color: var(--danger); }
+  details.tool .diff .add { background: color-mix(in srgb, var(--ok, #3c9) 14%, transparent); }
+  details.tool .diff .add::before { content: "\002b"; color: var(--ok, #3c9); }
+  details.tool .diff .path { display: block; padding: 0 13px 4px; color: var(--muted); }
   /* A teammate message is a notification with a hairline, not a bubble: who and which
      direction on the line, the text itself one click in. */
   details.note {
@@ -870,6 +884,7 @@ export const APP_HTML = String.raw`<!doctype html>
       <option value="7">last 7 days</option>
       <option value="30">last 30 days</option>
     </select>
+    <input type="date" id="searchday" title="Jump to a day: the thread scrolls to that day's first message">
     <span class="count" id="searchcount"></span>
     <button class="btn ghost sm" id="searchprev" title="Previous match (Shift+Enter)">&uarr;</button>
     <button class="btn ghost sm" id="searchnext" title="Next match (Enter)">&darr;</button>
@@ -3427,6 +3442,7 @@ function stepSearch(by) {
 
 function openSearch(prefill) {
   $("searchbar").className = "on";
+  boundSearchDay();
   if (prefill !== undefined) $("searchq").value = prefill;
   $("searchq").focus();
   $("searchq").select();
@@ -3445,6 +3461,46 @@ $("searchnext").addEventListener("click", function () { stepSearch(1); });
 $("searchprev").addEventListener("click", function () { stepSearch(-1); });
 $("searchwho").addEventListener("change", function () { runSearch(); });
 $("searchwhen").addEventListener("change", function () { runSearch(); });
+
+/** A day as the date input speaks it, in the person's own zone: YYYY-MM-DD. */
+function dayKey(at) {
+  var d = new Date(at);
+  if (isNaN(d.getTime())) return "";
+  var m = d.getMonth() + 1, day = d.getDate();
+  return d.getFullYear() + "-" + (m < 10 ? "0" : "") + m + "-" + (day < 10 ? "0" : "") + day;
+}
+
+/**
+ * Jump to a day (INV-110). The day dividers already mark where each day starts, so the
+ * target is the divider for that day; a day with no messages lands on the first day after
+ * it, and says so, rather than doing nothing — a person picking a Sunday wants Monday's
+ * start, not a dead control.
+ */
+function jumpToDay(wanted) {
+  if (!wanted) return;
+  var dividers = $("chat").querySelectorAll(".divider[data-day]");
+  var target = null, exact = false;
+  for (var i = 0; i < dividers.length; i++) {
+    var day = dividers[i].getAttribute("data-day");
+    if (day === wanted) { target = dividers[i]; exact = true; break; }
+    if (day > wanted && !target) target = dividers[i];
+  }
+  if (!target) { $("searchcount").textContent = "nothing on or after " + wanted; return; }
+  target.scrollIntoView({ block: "start", behavior: "smooth" });
+  target.classList.add("on");
+  setTimeout(function () { target.classList.remove("on"); }, 2500);
+  $("searchcount").textContent = exact ? "" : "nothing on " + wanted + " — showing " + target.getAttribute("data-day");
+}
+
+/** The days the thread spans, as the picker's bounds, so a person is not offered days with nothing in them. */
+function boundSearchDay() {
+  var dividers = $("chat").querySelectorAll(".divider[data-day]");
+  var input = $("searchday");
+  if (dividers.length === 0) { input.removeAttribute("min"); input.removeAttribute("max"); return; }
+  input.min = dividers[0].getAttribute("data-day");
+  input.max = dividers[dividers.length - 1].getAttribute("data-day");
+}
+$("searchday").addEventListener("change", function () { jumpToDay(this.value); });
 $("searchq").addEventListener("input", function () { runSearch(false); });
 $("searchq").addEventListener("keydown", function (event) {
   if (event.key === "Enter") { event.preventDefault(); if (searchHits.length === 0) runSearch(); else stepSearch(event.shiftKey ? -1 : 1); }
@@ -4007,15 +4063,33 @@ function drawItem(item) {
   }
   div.className = "divider" + (item.isNew ? " new" : "");
   div.textContent = item.label || "";
+  if (item.day) div.setAttribute("data-day", item.day);
   return div;
+}
+
+/** The minus/plus lines the server computed for an edit_file call, as a block a person reads like a diff. */
+function diffHtml(diff) {
+  var lines = diff.lines || [];
+  var added = 0, removed = 0;
+  var html = diff.path ? '<span class="path">' + esc(diff.path) + "</span>" : "";
+  for (var i = 0; i < lines.length; i++) {
+    var op = lines[i].op;
+    if (op === "+") added += 1; else if (op === "-") removed += 1;
+    html += '<span class="ln ' + (op === "+" ? "add" : op === "-" ? "del" : "ctx") + '">' + esc(lines[i].text) + "</span>";
+  }
+  return { html: '<div class="diff">' + html + "</div>", summary: "+" + added + " −" + removed };
 }
 
 function drawCall(call) {
   var row = document.createElement("details");
   row.className = "tool " + (call.isError ? "err" : "");
   var oneLine = String(call.detail == null ? "" : call.detail).replace(/\s+/g, " ");
-  row.innerHTML = "<summary>" + '<span class="nm">' + esc(call.name) + "</span> " + esc(oneLine.slice(0, 140)) + '</summary><div class="det"></div>';
-  row.querySelector(".det").textContent = String(call.detail == null ? "" : call.detail) + (call.result ? "\n\n" + String(call.result) : "");
+  var diff = call.diff && call.diff.lines ? diffHtml(call.diff) : null;
+  var summary = diff ? esc((call.diff.path || oneLine).slice(0, 120)) + ' <span class="dim">' + esc(diff.summary) + "</span>" : esc(oneLine.slice(0, 140));
+  row.innerHTML = "<summary>" + '<span class="nm">' + esc(call.name) + "</span> " + summary + "</summary>" + (diff ? diff.html : "") + '<div class="det"></div>';
+  // The diff is the call; the detail box then carries only the result. Without a diff it is the call as text.
+  row.querySelector(".det").textContent = diff ? String(call.result || "") : String(call.detail == null ? "" : call.detail) + (call.result ? "\n\n" + String(call.result) : "");
+  if (diff && !call.result) row.querySelector(".det").style.display = "none";
   if (call.shot) {
     var img = document.createElement("img");
     img.className = "shot";
@@ -4112,7 +4186,7 @@ function select(id, conversation) {
       for (var i = 0; i < entries.length; i++) {
         var e = entries[i];
         var day = e.at ? dayLabel(e.at) : "";
-        if (day && day !== lastDay) { closeOpen(); pushItem({ kind: "divider", label: day }); lastDay = day; }
+        if (day && day !== lastDay) { closeOpen(); pushItem({ kind: "divider", label: day, day: dayKey(e.at) }); lastDay = day; }
         if (!newShown && lastSeen >= 0 && i > lastSeen && e.kind === "text") { closeOpen(); pushItem({ kind: "divider", label: "new", isNew: true }); newShown = true; }
         replayEntry(id, e, i, lastSeen >= 0 && i > lastSeen);
       }
@@ -5827,7 +5901,7 @@ stream.onmessage = function (raw) {
     if (!inView(e)) return;
     if (openAgent) { openAgent.streaming = false; openAgent.queued = false; redrawItem(openAgent); openAgent = null; }
     if (!openWork) openWork = pushItem({ kind: "work", calls: [], startAt: new Date().toISOString(), done: false });
-    var call = { name: e.tool, detail: toolDetail(e.tool, e.input), result: "", isError: false };
+    var call = { name: e.tool, detail: toolDetail(e.tool, e.input), result: "", isError: false, diff: e.diff || null };
     openWork.calls.push(call);
     redrawItem(openWork);
     openCall.set(e.agentId, { work: openWork, call: call });

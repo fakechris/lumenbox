@@ -225,6 +225,7 @@ import { ActivityLog } from "./activity.ts";
 import { vendorPath } from "./markdown.ts";
 import { toDisplayEntries } from "./transcript.ts";
 import { isReactionEmoji, readReactions, setReaction } from "./reactions.ts";
+import { editDiffOf } from "./line-diff.ts";
 
 export interface WebOptions {
   port: number;
@@ -629,7 +630,11 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
       await chats?.pushToChat(chatKey, text);
     },
     onTurnEvent: event => {
-      broadcast(event);
+      // An edit_file call goes to the page with its diff attached, computed here once, so
+      // the live row and the replayed row read the same way (INV-112). The host's event
+      // stays what it is; the diff is the page's view of it.
+      const diff = event.type === "tool_start" ? editDiffOf(event.tool, event.input) : undefined;
+      broadcast(diff === undefined ? event : ({ ...event, diff } as unknown as OutboundEvent));
       for (const listener of channelTurnListeners) listener(event);
     },
     onBusEvent: broadcast,
