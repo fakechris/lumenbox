@@ -253,3 +253,32 @@ test("a webhook, a timer and a restart are labelled, and a person's words are no
   assert.equal((rows[2] as { role: string }).role, "user");
   assert.equal((rows[3] as { role: string }).role, "user");
 });
+
+test("an edit_file call is replayed as a diff, with the path as its one-line detail (INV-112)", () => {
+  const entries = [
+    {
+      role: "assistant",
+      kind: "blocks",
+      blocks: [{ type: "tool_use", id: "c1", name: "edit_file", input: { path: "/home/box/work/a.ts", old: "const a = 1;\nconst b = 2;", new: "const a = 1;\nconst b = 3;" } }],
+    },
+    { role: "user", kind: "blocks", blocks: [{ type: "tool_result", tool_use_id: "c1", content: "ok" }] },
+  ];
+  const [tools] = toDisplayEntries(entries, []);
+  assert.equal(tools?.kind, "tools");
+  const call = (tools as { tools: { name: string; detail: string; diff?: { path: string; lines: { op: string; text: string }[] } }[] }).tools[0]!;
+  assert.equal(call.name, "edit_file");
+  assert.equal(call.detail, "/home/box/work/a.ts");
+  assert.deepEqual(call.diff, {
+    path: "/home/box/work/a.ts",
+    lines: [
+      { op: " ", text: "const a = 1;" },
+      { op: "-", text: "const b = 2;" },
+      { op: "+", text: "const b = 3;" },
+    ],
+  });
+});
+
+test("other tool calls carry no diff", () => {
+  const [tools] = toDisplayEntries([{ role: "assistant", kind: "blocks", blocks: [{ type: "tool_use", id: "c2", name: "bash", input: { command: "ls" } }] }], []);
+  assert.equal("diff" in (tools as unknown as { tools: Record<string, unknown>[] }).tools[0]!, false);
+});
