@@ -1293,7 +1293,7 @@ export const APP_HTML = String.raw`<!doctype html>
         <summary class="fieldnote" style="cursor:pointer;margin:0">Add by id manually…</summary>
         <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-top:6px">
           <input id="setpname" placeholder="Name" spellcheck="false" style="flex:1;min-width:90px;font-family:var(--font-sans)">
-          <input id="setpid" placeholder="telegram:123456" spellcheck="false" style="flex:1.4;min-width:120px">
+          <input id="setpid" placeholder="telegram:123456 or involute:&lt;actor id&gt;" spellcheck="false" style="flex:1.4;min-width:120px">
           <select id="setprole" style="height:38px;border-radius:var(--radius-input);border:1px solid var(--border-strong);background:var(--bg);color:var(--text);padding:0 8px">
             <option value="viewer">viewer</option>
             <option value="driver" selected>driver</option>
@@ -1301,6 +1301,11 @@ export const APP_HTML = String.raw`<!doctype html>
           </select>
           <button class="btn sm" id="setpadd">Add</button>
         </div>
+        <div class="fieldnote" style="margin-top:6px">Someone who @-mentions an agent on Involute is
+          answered only if their Involute identity is linked to a person here: add
+          <span class="mono">involute:&lt;actor id&gt;</span> to that person (the id is in the refusal
+          they received, and on their Involute profile). A driver in the agent's box is answered; a
+          viewer, or somebody outside the box, is told why not. Remove the row to unlink.</div>
       </details>
       <div class="fieldnote" id="setpeoplestatus"></div>
     </div>

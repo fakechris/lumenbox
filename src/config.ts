@@ -128,6 +128,13 @@ export interface AgentboxConfig {
   involute?: {
     url: string;
     agents: { agentId: string; handle: string; secretId: string; successor?: string }[];
+    /**
+     * Transitional (INV-575). The roster decides now: an Involute actor is linked to a
+     * person as the identity `involute:<actorId>` in Settings → People, and that person's
+     * role and box membership answer the question. This list is consulted only for an
+     * actor nobody has linked, so an installation that set it keeps working while its
+     * admin moves the ids onto people.
+     */
     askers?: string[];
     /** Seconds between inbox polls. Absent means 60. */
     pollSeconds?: number;
