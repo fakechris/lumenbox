@@ -416,6 +416,15 @@ export const APP_HTML = String.raw`<!doctype html>
   .mtools button { border: 1px solid var(--border); background: var(--surface); color: var(--muted); font-size: 11px; padding: 1px 7px; border-radius: 6px; cursor: pointer; }
   .mtools button:hover { color: var(--text); border-color: var(--border-strong); }
   .msg.copied .mtools button[data-act="copy"] { color: var(--ok, #3fb950); }
+  /* One emoji per message (INV-111): a chip under the body, and a six-button picker that
+     replaces the tool row while it is open. */
+  .msg .reaction { display: inline-block; margin-top: 4px; padding: 1px 8px; border: 1px solid var(--border); border-radius: 12px; background: var(--surface); font-size: 13px; line-height: 20px; cursor: pointer; }
+  .msg .reaction:hover { border-color: var(--border-strong); }
+  .msg.user .reaction { float: right; }
+  .mtools .picker { display: inline-flex; gap: 2px; }
+  .mtools .picker button { font-size: 14px; padding: 0 6px; }
+  /* Not yet read (INV-111): a dot before the name, cleared once the message has been on screen. */
+  .msg.unread .who::before { content: "\25cf"; color: var(--accent); margin-right: 6px; font-size: 9px; vertical-align: middle; }
   /* Code blocks copy (docs/40 §3). */
   .msg .body pre { position: relative; }
   .msg .body pre .precopy { position: absolute; top: 6px; right: 6px; font-size: 11px; padding: 1px 7px; border-radius: 6px; border: 1px solid var(--border); background: var(--surface); color: var(--muted); cursor: pointer; opacity: 0.35; }
@@ -3222,7 +3231,100 @@ function messageAction(msg, act) {
   if (act === "link") { copyText(messageLink(msg.getAttribute("data-m"))); return "copied"; }
   if (act === "resend") { intoComposer(mdText); return "in the composer"; }
   if (act === "find") { openSearch(msg.querySelector(".body").innerText.trim().split(/\s+/).slice(0, 4).join(" ")); return "searching"; }
+  if (act === "react") { openPicker(msg); return ""; }
   return "";
+}
+
+/* ── reactions and unread (INV-111) ────────────────────────────────────────────────────
+   One emoji per message, kept on the server beside the transcript so every page sees the
+   same thing; and a per-message unread mark, cleared by the message being on screen rather
+   than by the page having been opened. */
+var REACTIONS = ["\ud83d\udc4d", "\u2764\ufe0f", "\ud83d\ude02", "\ud83c\udf89", "\ud83d\udc40", "\u2705"];
+
+function openPicker(msg) {
+  var tools = msg.querySelector(".mtools");
+  if (!tools || tools.querySelector(".picker")) return;
+  var current = msg.querySelector(".reaction");
+  var picker = document.createElement("span");
+  picker.className = "picker";
+  picker.innerHTML = REACTIONS.map(function (e) {
+    return '<button type="button" data-react="' + e + '"' + (current && current.textContent === e ? ' title="Remove"' : "") + ">" + e + "</button>";
+  }).join("") + '<button type="button" data-react="">\u00d7</button>';
+  tools.appendChild(picker);
+}
+
+/** Draws (or removes) the chip. The chip itself is a button: clicking it takes the reaction away. */
+function applyReaction(msg, emoji) {
+  var chip = msg.querySelector(".reaction");
+  if (!emoji) { if (chip) chip.remove(); return; }
+  if (!chip) {
+    chip = document.createElement("span");
+    chip.className = "reaction";
+    chip.title = "Click to remove";
+    var body = msg.querySelector(".body");
+    body.parentNode.insertBefore(chip, body.nextSibling);
+  }
+  chip.textContent = emoji;
+}
+
+function sendReaction(msg, emoji) {
+  var index = msg.getAttribute("data-m");
+  if (index === null) return;
+  var chip = msg.querySelector(".reaction");
+  // Picking the one already there takes it away, like every chat does.
+  var next = chip && chip.textContent === emoji ? null : (emoji || null);
+  applyReaction(msg, next);
+  post("/api/reactions", { agent: current, conversation: currentConversation, index: Number(index), emoji: next })
+    .catch(function () { applyReaction(msg, chip ? chip.textContent : null); feed("could not save the reaction", "err"); });
+}
+
+$("chat").addEventListener("click", function (event) {
+  var pick = event.target.closest(".picker button");
+  if (pick) {
+    event.preventDefault();
+    var msg = pick.closest(".msg");
+    var picker = pick.closest(".picker");
+    sendReaction(msg, pick.getAttribute("data-react"));
+    picker.remove();
+    return;
+  }
+  var chip = event.target.closest(".reaction");
+  if (chip) { event.preventDefault(); sendReaction(chip.closest(".msg"), chip.textContent); }
+});
+
+/** The thread's reactions, fetched beside the transcript and laid onto the bubbles by index. */
+function loadReactions(id, conversation) {
+  return fetch("/api/reactions?agent=" + encodeURIComponent(id) + "&conversation=" + encodeURIComponent(conversation))
+    .then(function (r) { return r.ok ? r.json() : {}; })
+    .then(function (map) {
+      if (id !== current || conversation !== currentConversation) return;
+      Object.keys(map || {}).forEach(function (index) {
+        var msg = $("chat").querySelector('.msg[data-m="' + index + '"]');
+        if (msg) applyReaction(msg, map[index].emoji);
+      });
+    })
+    .catch(function () {});
+}
+
+/** Unread is cleared by being seen, not by the page being open: a message that scrolled past
+    while the person was reading the top of the thread is still unread. */
+var seenObserver = new IntersectionObserver(function (entries) {
+  var advanced = false;
+  for (var i = 0; i < entries.length; i++) {
+    if (!entries[i].isIntersecting) continue;
+    var msg = entries[i].target;
+    msg.classList.remove("unread");
+    seenObserver.unobserve(msg);
+    var index = Number(msg.getAttribute("data-m"));
+    if (isFinite(index) && index > seenIndex) { seenIndex = index; advanced = true; }
+  }
+  if (advanced && seenStoreKey) { try { localStorage.setItem(seenStoreKey, String(seenIndex)); } catch (error) {} }
+}, { root: null, threshold: 0.6 });
+var seenIndex = -1;
+var seenStoreKey = "";
+function watchUnread() {
+  var nodes = $("chat").querySelectorAll(".msg.unread");
+  for (var i = 0; i < nodes.length; i++) seenObserver.observe(nodes[i]);
 }
 
 $("chat").addEventListener("click", function (event) {
@@ -3784,6 +3886,7 @@ function toolsHtml(kind, hasIndex) {
     '<button type="button" data-act="md" title="Copy as Markdown">md</button>' +
     '<button type="button" data-act="quote" title="Quote into the composer">quote</button>' +
     (hasIndex ? '<button type="button" data-act="link" title="Copy a link to this message">link</button>' : "") +
+    (hasIndex ? '<button type="button" data-act="react" title="React to this message">react</button>' : "") +
     (kind === "person" ? '<button type="button" data-act="resend" title="Put this back in the composer">resend</button>' : "") +
     '<button type="button" data-act="find" title="Search this conversation for these words">find</button>' +
     "</div>";
@@ -3797,6 +3900,7 @@ function drawItem(item) {
     if (item.index !== undefined) div.setAttribute("data-m", String(item.index));
     if (item.at) div.setAttribute("data-at", String(item.at));
     if (item.streaming) div.setAttribute("data-partial", "1");
+    if (item.unread) div.classList.add("unread");
     var who = item.kind === "person" ? "you" : item.kind === "teammate" ? item.from : nameOf(current);
     var chips = item.kind === "teammate" ? ["teammate"].concat(item.priority ? ["priority"] : []) : [];
     if (item.kind === "teammate") div.style.setProperty("--peer-colour", colorOfName(item.from));
@@ -4002,7 +4106,7 @@ function closeOpen() {
 }
 
 /** One stored entry from the server, as items. Prose is prose whether or not calls followed it. */
-function replayEntry(id, entry, index) {
+function replayEntry(id, entry, index, unread) {
   if (entry.kind === "peer") {
     closeOpen();
     for (var p = 0; p < entry.messages.length; p++) {
@@ -4036,7 +4140,7 @@ function replayEntry(id, entry, index) {
   }
   if (openWork) { openWork.done = true; openWork.endAt = entry.at || openWork.endAt; redrawItem(openWork); openWork = null; }
   if (openAgent) { openAgent.streaming = false; redrawItem(openAgent); openAgent = null; }
-  pushItem({ kind: entry.role === "user" ? "person" : "agent", text: entry.text, at: entry.at, index: index });
+  pushItem({ kind: entry.role === "user" ? "person" : "agent", text: entry.text, at: entry.at, index: index, unread: !!unread && entry.role !== "user" });
 }
 
 function agentById(id) {
@@ -4084,15 +4188,21 @@ function select(id, conversation) {
         var day = e.at ? dayLabel(e.at) : "";
         if (day && day !== lastDay) { closeOpen(); pushItem({ kind: "divider", label: day, day: dayKey(e.at) }); lastDay = day; }
         if (!newShown && lastSeen >= 0 && i > lastSeen && e.kind === "text") { closeOpen(); pushItem({ kind: "divider", label: "new", isNew: true }); newShown = true; }
-        replayEntry(id, e, i);
+        replayEntry(id, e, i, lastSeen >= 0 && i > lastSeen);
       }
       closeOpen();
+      seenStoreKey = seenKey;
+      seenIndex = lastSeen;
+      watchUnread();
+      loadReactions(id, currentConversation);
       // Opened mid-turn: the start event is past, so say it from the state instead.
       if (busy.has(id) && id === current) showWorking();
       // Whatever is waiting on the person for this agent, drawn from the state — the replay
       // just reset the thread, so any card the first poll drew is gone.
       refreshPolicy();
-      try { localStorage.setItem(seenKey, String(entries.length - 1)); } catch (error) {}
+      // Not marked seen here: the observer marks each message as it comes on screen, so a
+      // long thread opened and left at the top stays unread below the fold.
+      if (lastSeen < 0) { try { localStorage.setItem(seenKey, String(entries.length - 1)); } catch (error) {} }
       $("chat").scrollTop = $("chat").scrollHeight;
       landMessageFromUrl();
       return loadTemplateCardInChat(id);
@@ -5834,6 +5944,13 @@ stream.onmessage = function (raw) {
     settleCard("consent:" + e.id, e.how === "allowed" ? "allowed" + (e.scope === "session" ? " for this session" : e.scope === "always" ? ", standing" : " once") + " · the agent goes on" : "refused");
     return;
   }
+  if (e.type === "reaction") {
+    if (e.agentId !== current || e.conversation !== currentConversation) return;
+    var reacted = $("chat").querySelector('.msg[data-m="' + e.index + '"]');
+    if (reacted) applyReaction(reacted, e.emoji);
+    return;
+  }
+
   if (e.type === "secret_requested") {
     if (e.agentId === current) showCard("secret:" + e.id, { card: "secret", id: e.id, agentId: e.agentId, agentName: e.agentName, description: e.description });
     return;
