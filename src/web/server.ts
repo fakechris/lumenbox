@@ -223,6 +223,7 @@ import { REPLAY_MAX_AGE_MS } from "../channels/feishu.ts";
 import { ActivityLog } from "./activity.ts";
 import { vendorPath } from "./markdown.ts";
 import { toDisplayEntries } from "./transcript.ts";
+import { isReactionEmoji, readReactions, setReaction } from "./reactions.ts";
 
 export interface WebOptions {
   port: number;
@@ -255,6 +256,8 @@ type OutboundEvent =
   | { type: "question"; agentId: string; agentName: string; question: string; options?: string[]; fallback?: string; conversation?: string }
   | { type: "question_expired"; agentId: string; agentName: string; question: string; verdict: "default" | "skipped" }
   | { type: "task_aging"; taskId: string; title: string; kind: "nudge" | "archived" | "closed"; text: string }
+  /** A reaction set or cleared on one message of one thread (INV-111), so every open page shows it. */
+  | { type: "reaction"; agentId: string; conversation: string; index: number; emoji: string | null; by: string }
   /** One line of docker output while the box is brought up from the page. */
   | { type: "box_setup"; line: string; done?: boolean; ok?: boolean }
   /** An approval was just created; the desktop shell turns this into a notification. */
@@ -5232,6 +5235,45 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
             name: record.profile.name,
           }));
           send(res, 200, toDisplayEntries(registry.readTranscript(id, conversation), roster));
+          return;
+        }
+
+        // One emoji per message, kept beside the transcript (INV-111). Read by anyone who
+        // can read the thread; set by anyone who may drive, because a viewer reads and
+        // changes nothing — and a reaction is a change other people see.
+        if (route === "GET /api/reactions") {
+          const id = url.searchParams.get("agent") ?? "";
+          if (!registry.has(id)) {
+            send(res, 404, { error: `No agent ${id}` });
+            return;
+          }
+          const conversation = url.searchParams.get("conversation") ?? MAIN_CONVERSATION;
+          send(res, 200, readReactions(`${registry.transcriptPathFor(id, conversation)}.reactions.json`));
+          return;
+        }
+        if (route === "POST /api/reactions") {
+          if (refused()) return;
+          const body = await readJson(req);
+          const id = String(body.agent ?? "");
+          if (!registry.has(id)) {
+            send(res, 404, { error: `No agent ${id}` });
+            return;
+          }
+          const conversation = typeof body.conversation === "string" && body.conversation !== "" ? body.conversation : MAIN_CONVERSATION;
+          const index = Number(body.index);
+          if (!Number.isInteger(index) || index < 0) {
+            send(res, 400, { error: "index must be a message index" });
+            return;
+          }
+          const emoji = body.emoji === null || body.emoji === "" ? null : body.emoji;
+          if (emoji !== null && !isReactionEmoji(emoji)) {
+            send(res, 400, { error: "not one of the reactions this page offers" });
+            return;
+          }
+          const by = caller.userId ?? "operator";
+          const map = setReaction(`${registry.transcriptPathFor(id, conversation)}.reactions.json`, { index, emoji, by });
+          broadcast({ type: "reaction", agentId: id, conversation, index, emoji, by });
+          send(res, 200, map);
           return;
         }
 
