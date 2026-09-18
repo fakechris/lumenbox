@@ -282,7 +282,24 @@ A2A Protocol v0.2.5 与 1.0 说明（Linux Foundation）、docs/51 §3、docs/52
 没人接手时：**"期限内没有答复"** 是事实，**"它没在运行"** 是对别人机器的猜测，只写前者；再加一句
 该找谁。这条会留在 attention 页上（`kind: "unanswered"`），因为日志会滚走，而那头有个人在等。
 
-**服务端还缺一块**：request 是发给某个 actor 的，接手人的 claim 会被账本拒绝。我们照样去 claim，
-被拒绝就如实记录并退回"没人答 + 该找谁"，绝不改用原 agent 的凭证代发。需要的原语是：被声明的
-successor 可以认领/答复发给另一个 actor 的 request。
+**服务端补上了，但形状和我们猜的不同（INV-589/596，2026-09-17）**，消费侧按它改（INV-582，
+2026-09-18，`src/host/involute-inbox.ts`）：
+
+- **claim 属于一次执行，不属于 actor。** `agent_request_claim` 返回 `claim_token`，答复和续租都必须带它，
+  同一 actor 的另一个会话拿旧 token 会被拒。租约 60 秒，一个回合通常比这长，所以消费者在回合进行中
+  每 25 秒续租一次，`session_id` 一并写进审计。没有这一条，新服务端上每一条答复都会被拒。
+- **交接是账本做的，靶子是新请求。** 到期未答的请求被 `failed`（理由只写"期限内没有答复"），并在
+  同一线程新开一条发给 `successorActorId` 的请求，用 `handedOffFromId`/`rootRequestId` 链起来；
+  跳数上限 3、链总期限一个，越界直接给人。**successor 永远不能认领原请求**——所以我们原先"代答者去
+  claim 别人的请求、被拒就记下"的路径按协议不可能，已删除。
+- **因此"跑不出东西要说出来"改了说法。** 有 successor 时，被问的 agent 用自己的凭证 claim，然后以
+  `input-required` 发一句"这边不会有答复；到期后账本交给 @iris"——`input-required` 会把 claim 交回、
+  请求保持开放，账本到期才有东西可交；若答 `failed`，请求就关了，谁也接不到。没有 successor 时照旧
+  `failed` + 该找谁。
+- **接手人在自己的收件箱里收到交接来的请求**，以自己的名义、从记录出发作答，正文带
+  `standing in for @ada`。账本目前的 `agent_inbox` 行**没有**带 `handed_off_from`，所以交接来的问题在
+  消费侧读起来和新问题一样；消费侧已按可选字段 `handed_off_from_id` / `handed_off_from_handle`
+  实现，等服务端露出这两个字段（已提候选）。
+- `config.involute.agents[].successor` 现在只决定线程里那句话点谁的名；真正交给谁由账本上该 actor 的
+  `successorActorId` 决定，两处应写同一个人。
 

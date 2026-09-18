@@ -379,3 +379,17 @@ TYPESAFE_API_KEY; spike code on its branch).
 **Goal**: Close the last open pieces that need no external data, and make the operator-side evidence possible.
 **Success Criteria**: I3 door rules (INV-429) merged; host-side wedge detection (INV-135); standing approvals by principal (INV-156, on top of INV-427 rules); tool idempotency declaration (INV-525, once committed); a real-model scorecard baseline produced under authorised credentials and compared once; security S-2..S-7 (INV-138) triaged.
 **Status**: Not Started. Waiting on data or people, outside the round: INV-128 real payloads, INV-153/157 identity environment, INV-440 a real cross-installation caller, INV-480/481 trial participants.
+
+## Stage 35: The consumer, under the ledger's own claim and hand-off model (2026-09-18)
+**Goal**: INV-582 — the Involute answering loop keeps working against the ledger that shipped
+INV-589/596, and stand-ins happen the way the ledger does them.
+**Success Criteria**: every answer carries the `claim_token` its claim returned and the 60s
+lease is renewed while a turn runs; an agent that cannot answer leaves the request open in
+words (`input-required`) so the ledger hands it to the declared successor at the deadline,
+and closes it `failed` only when nobody is declared; a request the ledger handed over is
+answered by the successor in its own name with the relation stated; the impossible cross-claim
+path is gone; docs/54 says what the ledger actually does.
+**Status**: Complete for this side (2026-09-18): the consumer rewritten with 21 tests against a
+fake ledger that enforces the token and the target; docs/54 and config updated. Proposed to the
+ledger: `agent_inbox` rows carry `handed_off_from_id` / `handed_off_from_handle`, without
+which a handed-off question reads as a fresh one.
