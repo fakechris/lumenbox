@@ -336,7 +336,9 @@ function readInvolute(value: unknown, warn: (message: string) => void): Agentbox
       continue;
     }
     // Who answers when this one cannot (INV-556): `@handle` for another agent here, any
-    // other text for a person to go and ask.
+    // other text for a person to go and ask. Names who the thread is told to expect; the
+    // hand-off itself is the ledger's, from `successorActorId` on the actor over there, so
+    // the two should name the same one (INV-582).
     const successor = typeof row.successor === "string" && row.successor.trim() !== "" ? row.successor.trim() : undefined;
     agents.push({ agentId, handle, secretId, ...(successor !== undefined ? { successor } : {}) });
   }

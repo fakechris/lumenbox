@@ -34,8 +34,12 @@ export function parseSuccessor(raw: string | undefined): Successor | undefined {
 }
 
 export interface StandIn {
-  /** The agent that was asked, and did not answer. */
-  originalHandle: string;
+  /**
+   * The agent that was asked, and did not answer. Absent when the ledger handed the request
+   * over without saying who was asked first (INV-582): the relation is still stated, without
+   * a name to pin it to.
+   */
+  originalHandle?: string;
   originalName: string;
   /** The one answering instead. */
   handle: string;
@@ -66,9 +70,10 @@ export function standInPrompt(
   standIn: StandIn,
   context?: { item?: string; receipts?: string }
 ): string {
+  const asked = standIn.originalHandle !== undefined ? `@${standIn.originalHandle} (${standIn.originalName})` : standIn.originalName;
   return (
-    `[involute ${input.work}] You are @${standIn.handle} on Involute. @${standIn.originalHandle} ` +
-    `(${standIn.originalName}) was asked this and did not answer within the deadline, and you are its ` +
+    `[involute ${input.work}] You are @${standIn.handle} on Involute. ${asked} ` +
+    `was asked this and did not answer within the deadline, and you are its ` +
     `declared stand-in:\n\n${input.body}\n\n` +
     (context?.item !== undefined && context.item !== "" ? `The work item, as it stands:\n${context.item}\n\n` : "") +
     (context?.receipts !== undefined && context.receipts !== "" ? `${context.receipts}\n\n` : "") +
@@ -84,8 +89,9 @@ export function standInPrompt(
 
 /** The line a stand-in's answer must carry even if the model forgets: stated, not hoped for. */
 export function standInAttribution(standIn: StandIn, evidence: string | undefined): string {
+  const whom = standIn.originalHandle !== undefined ? `@${standIn.originalHandle}` : standIn.originalName;
   return (
-    `— ${standIn.name} (@${standIn.handle}), standing in for @${standIn.originalHandle}. ` +
+    `— ${standIn.name} (@${standIn.handle}), standing in for ${whom}. ` +
     (evidence !== undefined && evidence !== "" ? `Based on ${evidence}.` : "Based on what is written on this item; I did not make this decision.")
   );
 }

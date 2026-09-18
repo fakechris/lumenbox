@@ -13,10 +13,18 @@ import { InvoluteConsumer, conversationFor, promptFor, type InboxRequest } from 
 
 interface Row extends InboxRequest {
   answers: { body: string; state: string }[];
+  /** The token of the execution holding the claim, as the real ledger keeps a hash of it. */
+  token?: string;
+  /** Who the request is addressed to; only they may claim it (the real ledger's targetActorId). */
+  target?: string;
 }
+
+/** Every claim and renewal the fake ledger saw, so a test can assert the lease was kept alive. */
+const claimCalls: { id: string; holder: string; token: string | undefined }[] = [];
 
 function ledger(rows: Partial<Row>[]) {
   const store: Row[] = rows.map((row, index) => ({
+    ...row,
     id: row.id ?? `r${index + 1}`,
     work_id: row.work_id ?? "w1",
     work_identifier: row.work_identifier ?? "INV-999",
@@ -38,15 +46,32 @@ function ledger(rows: Partial<Row>[]) {
     const row = store.find(entry => entry.id === args.id);
     if (row === undefined) throw new Error("no such request");
     if (tool === "agent_request_claim") {
-      if (row.claimed_by !== null && row.claimed_by !== holder) throw new Error("already claimed");
+      claimCalls.push({ id: row.id, holder, token: typeof args.claim_token === "string" ? args.claim_token : undefined });
+      // Addressed to somebody else: the real ledger's CAS matches targetActorId, so this is
+      // simply not claimable by anyone but the target (INV-582: hand-off is a new request).
+      if (row.target !== undefined && row.target !== holder) throw new Error("this request is addressed to another actor");
+      if (typeof args.claim_token === "string") {
+        if (row.claimed_by === holder && row.token === args.claim_token) return { id: row.id, state: row.state, claim_token: row.token };
+        throw new Error("claim superseded");
+      }
+      if (row.claimed_by !== null && row.claimed_by !== undefined && row.claimed_by !== holder) throw new Error("already claimed");
       row.claimed_by = holder;
+      row.token = `t-${holder}-${claimCalls.length}`;
       row.state = "working";
-      return { id: row.id, state: "working" };
+      return { id: row.id, state: "working", claim_token: row.token };
     }
     if (tool === "agent_request_answer") {
-      if (row.claimed_by !== holder) throw new Error("you do not hold this request");
-      row.answers.push({ body: String(args.body), state: String(args.state ?? "completed") });
-      row.state = String(args.state ?? "completed");
+      // The real ledger: the token proves the execution, not just the actor.
+      if (typeof args.claim_token !== "string") throw new Error("claim_token is required");
+      if (row.claimed_by !== holder || row.token !== args.claim_token) throw new Error("you do not hold this request");
+      const state = String(args.state ?? "completed");
+      row.answers.push({ body: String(args.body), state });
+      row.state = state;
+      if (state === "input-required") {
+        // Handing back invalidates the execution's token; the next holder takes a new one.
+        row.claimed_by = null;
+        row.token = undefined;
+      }
       return { id: row.id, state: row.state };
     }
     throw new Error(`unexpected tool ${tool}`);
@@ -287,18 +312,36 @@ test("a question that cannot be paid for is refused before the turn runs, not af
   assert.match(store[0]!.answers[0]!.body, /chris is over the month's budget for me/, "and the person is told which principal pays and why it stopped");
 });
 
-test("a stand-in answers under its own name, from the record, with the relation stated (INV-556 A1)", async () => {
+test("every answer carries the claim token, and a long turn keeps the lease alive (INV-582)", async () => {
+  claimCalls.length = 0;
   const { store, call } = ledger([{ id: "q1" }]);
+  const consumer = new InvoluteConsumer({
+    agents: () => [agentOf(call)],
+    // Longer than two renewal ticks, which is what a real turn is against a 60s lease.
+    runTurn: () => new Promise(resolve => setTimeout(() => resolve("答复"), 70)),
+    mayAnswer: () => ({ ok: true }),
+    renewMs: 20,
+    sessionId: "s-test",
+    log: () => {},
+  });
+  await consumer.poll();
+  assert.equal(store[0]!.answers[0]!.state, "completed", "the answer landed, so it carried the token the claim returned");
+  const take = claimCalls.find(c => c.token === undefined)!;
+  const renewals = claimCalls.filter(c => c.token !== undefined);
+  assert.ok(renewals.length >= 2, `the lease was renewed while the turn ran (${renewals.length} renewals)`);
+  assert.ok(renewals.every(r => r.token === store[0]!.token || r.token === `t-ada-${claimCalls.indexOf(take) + 1}`), "with the same token the claim returned");
+});
+
+test("a request the ledger handed over is answered by the successor in its own name, with the relation stated (INV-582 A1/A4, INV-556 A1)", async () => {
+  // The ledger's hand-off (INV-589): Ada's request expired, and a *new* request q2 was opened
+  // to Iris, linked to the old one. Iris sees q2 in its own inbox.
+  const { store, call } = ledger([
+    { id: "q1", state: "failed", target: "ada" },
+    { id: "q2", target: "iris", handed_off_from_id: "q1", handed_off_from_handle: "ada" },
+  ]);
   const prompts: string[] = [];
   const consumer = new InvoluteConsumer({
-    agents: () => [
-      { agentId: "a1", agentName: "Ada", handle: "ada", call: call("ada") },
-      { agentId: "a2", agentName: "Iris", handle: "iris", call: call("iris") },
-    ],
-    successorFor: handle => (handle === "ada" ? { kind: "agent", handle: "iris" } : undefined),
-    // Ada is the one that was asked, and its runtime is gone — the case the whole thing is
-    // for. Nothing is claimed in Ada's name, so the stand-in can take it.
-    canRun: agentId => agentId !== "a1",
+    agents: () => [{ agentId: "a2", agentName: "Iris", handle: "iris", call: call("iris") }],
     runTurn: async input => {
       prompts.push(input.prompt);
       return "记录里写的是 2026-09-10 选了轮询，理由是这台机器没有入站端口（见 PR#475）。";
@@ -309,109 +352,131 @@ test("a stand-in answers under its own name, from the record, with the relation 
   });
 
   const outcome = await consumer.poll();
-  assert.deepEqual(outcome.stoodIn, ["q1"]);
-  assert.deepEqual(outcome.unanswered, [], "a question that got answered is not also reported as unanswered");
+  assert.deepEqual(outcome.stoodIn, ["q2"]);
+  assert.deepEqual(outcome.answered, []);
+  assert.deepEqual(outcome.unanswered, []);
 
-  // The ledger's author is the stand-in, not the agent that was asked. That is the whole point.
-  assert.equal(store[0]!.claimed_by, "iris");
-  const posted = store[0]!.answers[0]!;
-  assert.equal(posted.state, "completed");
-  assert.match(posted.body, /Iris \(@iris\), standing in for @ada/);
-  assert.match(posted.body, /Based on what is written down on this item/);
+  // The ledger's author is the stand-in, on the request addressed to it. That is the whole point.
+  const handed = store.find(row => row.id === "q2")!;
+  assert.equal(handed.claimed_by, "iris");
+  assert.equal(handed.answers[0]!.state, "completed");
+  assert.match(handed.answers[0]!.body, /Iris \(@iris\), standing in for @ada/);
+  assert.match(handed.answers[0]!.body, /Based on what is written down on this item/);
+  assert.deepEqual(store.find(row => row.id === "q1")!.answers, [], "the closed original is not touched");
 
   // And it was told, in the same breath as the question, not to invent Ada's reasons.
-  const standInPrompt = prompts.find(prompt => prompt.includes("@iris"))!;
-  assert.match(standInPrompt, /did not answer within the deadline, and you are its declared stand-in/);
-  assert.match(standInPrompt, /Open by saying you are not Ada/);
-  assert.match(standInPrompt, /You were not there/);
-  assert.match(standInPrompt, /Do not guess why Ada did not answer/);
-  assert.match(standInPrompt, /2026-09-10 Ada: chose polling/, "with the receipts it is supposed to answer from");
+  assert.equal(prompts.length, 1);
+  assert.match(prompts[0]!, /@ada \(@ada\) was asked this and did not answer within the deadline, and you are its declared stand-in/);
+  assert.match(prompts[0]!, /You were not there/);
+  assert.match(prompts[0]!, /2026-09-10 Ada: chose polling/, "with the receipts it is supposed to answer from");
 });
 
-test("a stand-in is never posted through the agent that was asked (INV-556 A2)", async () => {
-  // The ledger refuses a claim the stand-in cannot hold. The tempting repair — post it with
-  // the original agent's credential, which does hold one — is the one thing that must not
-  // happen: the record would say Ada answered when Ada did not.
-  const { store, call } = ledger([{ id: "q1" }]);
+test("a hand-off the ledger did not name is still answered as a stand-in, without inventing who was asked first", async () => {
+  const { store, call } = ledger([{ id: "q2", target: "iris", handed_off_from_id: "q1" }]);
+  await new InvoluteConsumer({
+    agents: () => [{ agentId: "a2", agentName: "Iris", handle: "iris", call: call("iris") }],
+    runTurn: async () => "From the record: polling, because of the NAT.",
+    mayAnswer: () => ({ ok: true }),
+    log: () => {},
+  }).poll();
+  const body = store[0]!.answers[0]!.body;
+  assert.match(body, /standing in for the agent this was first put to/);
+  assert.doesNotMatch(body, /@undefined|@the agent/);
+});
+
+test("an agent that cannot answer leaves the request open, in words, for the ledger to hand off (INV-582 A2/A3)", async () => {
+  // Ada's runtime is gone. Under the ledger's model nobody else may claim Ada's request, and
+  // a `failed` answer would close it so nobody is handed anything. So Ada — whose credential
+  // this still is — says so and hands the claim back; the ledger's sweep does the rest.
+  const { store, call } = ledger([{ id: "q1", target: "ada" }]);
+  const irisCalls: string[] = [];
   const lines: string[] = [];
   const consumer = new InvoluteConsumer({
     agents: () => [
       { agentId: "a1", agentName: "Ada", handle: "ada", call: call("ada") },
-      {
-        agentId: "a2",
-        agentName: "Iris",
-        handle: "iris",
-        call: async (tool: string) => {
-          if (tool === "agent_request_claim") throw new Error("this request is addressed to another actor");
-          throw new Error(`unexpected ${tool}`);
-        },
-      },
+      { agentId: "a2", agentName: "Iris", handle: "iris", call: async (tool: string, args: Record<string, unknown>) => { irisCalls.push(tool); return call("iris")(tool, args); } },
     ],
-    successorFor: () => ({ kind: "agent", handle: "iris" }),
-    runTurn: async input => (input.agentId === "a1" ? Promise.reject(new Error("the box is down")) : "I can answer this."),
+    successorFor: handle => (handle === "ada" ? { kind: "agent", handle: "iris" } : undefined),
+    canRun: agentId => agentId !== "a1",
+    runTurn: async () => "Iris would answer, but this is not addressed to Iris.",
     mayAnswer: () => ({ ok: true }),
     log: line => lines.push(line),
   });
 
   const outcome = await consumer.poll();
+  assert.deepEqual(outcome.heldForHandoff, ["q1"]);
   assert.deepEqual(outcome.stoodIn, []);
-  assert.equal(store[0]!.answers.length, 1, "exactly one answer, and it is Ada's own account of itself");
-  assert.match(store[0]!.answers[0]!.body, /Ada gave no answer within the deadline/);
-  assert.match(store[0]!.answers[0]!.body, /@iris is its stand-in and could not answer either/);
-  assert.ok(
-    lines.some(line => /did not let iris answer for ada/.test(line) && /rather than posting in ada's name/.test(line)),
-    "and the refusal is reported, not worked around"
-  );
+  assert.deepEqual(outcome.failed, []);
+  assert.equal(store[0]!.answers.length, 1, "exactly one post, and it is Ada's own account of itself");
+  const posted = store[0]!.answers[0]!;
+  assert.equal(posted.state, "input-required", "open, not closed: the ledger only hands off a request that is still open");
+  assert.match(posted.body, /No answer is coming from Ada on this one/);
+  assert.match(posted.body, /Ada is not able to run here at the moment/);
+  assert.match(posted.body, /the ledger hands this to @iris, its declared stand-in/);
+  assert.doesNotMatch(posted.body, /not running|offline|crashed/, "what we saw is reported; what the silence means is not guessed at");
+  assert.equal(store[0]!.claimed_by, null, "the claim was handed back with the words");
+  assert.ok(!irisCalls.includes("agent_request_claim"), "Iris never tries to claim a request addressed to Ada — the ledger would refuse, and the hand-off is its job");
+  assert.equal(outcome.unanswered.length, 1, "and the attention page still shows it as waiting");
 });
 
-test("with no stand-in, silence is reported as silence and says who to ask (INV-556 A4)", async () => {
-  const { store, call } = ledger([{ id: "q1" }, { id: "q2" }]);
-  const consumer = new InvoluteConsumer({
-    agents: () => [agentOf(call)],
-    // A person, not an agent: nobody can be made to answer, but a name is a next step.
+test("with a person as stand-in, the same words name the person; with nobody, the request is closed and says so (INV-556 A4)", async () => {
+  const withPerson = ledger([{ id: "q1" }]);
+  const held = await new InvoluteConsumer({
+    agents: () => [agentOf(withPerson.call)],
     successorFor: () => ({ kind: "person", name: "Chris" }),
     runTurn: async () => {
       throw new Error("the box is down");
     },
     mayAnswer: () => ({ ok: true }),
     log: () => {},
-  });
+  }).poll();
+  assert.deepEqual(held.heldForHandoff, ["q1"]);
+  const note = withPerson.store[0]!.answers[0]!;
+  assert.equal(note.state, "input-required");
+  assert.match(note.body, /From this side: I could not finish looking into this: the box is down/);
+  assert.match(note.body, /the ledger hands this to Chris, who is named as its stand-in/);
 
-  const outcome = await consumer.poll();
-  assert.equal(outcome.unanswered.length, 1);
-  assert.equal(outcome.unanswered[0]!.work, "INV-999");
-  assert.match(outcome.unanswered[0]!.detail, /Ask Chris, who is named as its stand-in/);
-  const body = store[0]!.answers[0]!.body;
-  assert.match(body, /gave no answer within the deadline/);
-  assert.match(body, /From this side: I could not finish looking into this: the box is down/, "what we saw is reported");
-  assert.doesNotMatch(body, /not running|offline|crashed|gave up/, "what the silence means is not guessed at");
+  const nobody = ledger([{ id: "q1" }]);
+  const closed = await new InvoluteConsumer({
+    agents: () => [agentOf(nobody.call)],
+    runTurn: async () => {
+      throw new Error("the box is down");
+    },
+    mayAnswer: () => ({ ok: true }),
+    log: () => {},
+  }).poll();
+  assert.deepEqual(closed.failed, ["q1"]);
+  const detail = nobody.store[0]!.answers[0]!;
+  assert.equal(detail.state, "failed", "nothing to hand off to, so the request is closed rather than left to expire in silence");
+  assert.match(detail.body, /Ada gave no answer within the deadline/);
+  assert.match(detail.body, /Nobody is named as its stand-in/);
+  assert.equal(closed.unanswered[0]!.work, "INV-999");
 });
 
 test("the agent that was asked comes back later, and the answered request is not reopened (INV-556 A3)", async () => {
-  const { store, call } = ledger([{ id: "q1" }]);
+  const { store, call } = ledger([{ id: "q1", target: "iris", handed_off_from_id: "q0", handed_off_from_handle: "ada" }]);
   let adaIsBack = false;
   const consumer = new InvoluteConsumer({
     agents: () => [
       { agentId: "a1", agentName: "Ada", handle: "ada", call: call("ada") },
       { agentId: "a2", agentName: "Iris", handle: "iris", call: call("iris") },
     ],
-    successorFor: () => ({ kind: "agent", handle: "iris" }),
     canRun: agentId => agentId !== "a1" || adaIsBack,
     runTurn: async () => (adaIsBack ? "Actually, here is the full story." : "Iris answers from the record."),
     mayAnswer: () => ({ ok: true }),
     log: () => {},
   });
 
-  await consumer.poll();
-  assert.deepEqual(store[0]!.answers.length, 1);
+  const first = await consumer.poll();
+  assert.deepEqual(first.stoodIn, ["q1"]);
+  assert.equal(store[0]!.answers.length, 1);
 
   // Ada is back and would now have plenty to say. The request is closed; whatever it has to
   // add belongs in the thread as a new comment, not as a second answer to one question.
   adaIsBack = true;
-  store[0]!.state = "completed";
   const second = await consumer.poll();
   assert.deepEqual(second.answered, []);
   assert.deepEqual(second.stoodIn, []);
   assert.equal(store[0]!.answers.length, 1, "still one answer");
-  assert.equal(store[0]!.answers[0]!.body.includes("Iris"), true, "and it is the one that was given at the time");
+  assert.match(store[0]!.answers[0]!.body, /Iris/, "and it is the one that was given at the time");
 });
