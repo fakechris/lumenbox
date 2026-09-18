@@ -2,7 +2,7 @@
      title: Agent 身份与在工作项上的对话
      family: decision
      status: current
-     updated: 2026-09-15
+     updated: 2026-09-18
 -->
 # 54 · Agent 身份与在工作项上的对话
 
@@ -214,9 +214,12 @@ agent_inbox → agent_request_claim → 一个回合 → agent_request_answer
 
 配置在 `config.involute`：每个 agent 一条 `{agentId, handle, secretId}`——**secretId 指向 vault 里
 那个 agent 自己的凭证**，不是安装的；三者缺一不可（缺了就退回进程手里的那把 token，正是要终结的
-共享身份）。`askers` 是可以问的 Involute actor 白名单：docs/54 §3.6 的粗暴第一版，把他们的 actor
-映射到本安装的 principal、再到 role 与 box，是另一件事，**在它存在之前，"能评论的人"不等于
-"能在这里开一个回合的人"**。
+共享身份）。谁可以问，由 roster 回答（INV-575，2026-09-18）：对面的 actor 是本安装一个人的又一个
+身份 `involute:<actorId>`，在 Settings → People 里链接，和 `feishu:`/`telegram:` 同构、同一套
+incarnation 规则；然后问平常那两个问题——role 至少 driver，且是该 agent 所在 box 的成员
+（`src/host/involute-askers.ts`）。拒绝一律说人话：viewer 被告知需要 driver，不在 box 的被指名道姓
+拒绝，没链接的人拿到的是"让管理员把 `involute:<actorId>` 链到你"而不是一串 UUID。`askers` 白名单
+只剩过渡作用：有链接时以人为准（哪怕 id 还在名单上），只对没人链接的 actor 才查名单，日志写明用了哪条。
 
 轮询而不是 webhook：这台机器在多数网络里没有入站端口，而两边看的是同一份账本——webhook 也只是
 叫我们过去取而已。

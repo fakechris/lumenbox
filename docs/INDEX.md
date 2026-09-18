@@ -85,7 +85,7 @@ this file and the headers disagree. Edit the header, not this table.
 | [51-follow-through](51-follow-through.md) | 跟进（follow-through）：问题、承诺与挂着的工作如何不再无声 | current | 2026-09-15 |
 | [52-multiuser-and-product](52-multiuser-and-product.md) | 多用户与产品面：一次对账与打磨 | current | 2026-09-14 |
 | [53-connector-doors](53-connector-doors.md) | Connector doors: the SaaS integrations a third-party template names, on by credential | current | 2026-09-14 |
-| [54-agent-identity-and-threads](54-agent-identity-and-threads.md) | Agent 身份与在工作项上的对话 | current | 2026-09-15 |
+| [54-agent-identity-and-threads](54-agent-identity-and-threads.md) | Agent 身份与在工作项上的对话 | current | 2026-09-18 |
 
 ## handoff
 
