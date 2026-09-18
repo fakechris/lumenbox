@@ -363,6 +363,18 @@ declared successor claim a request addressed to another actor, so the stand-in's
 attempted, refused, and reported — never worked around with the original's credential.
 Proposed as INV-582 (candidate).
 
+## Stage 34: Who may ask, answered by the roster (2026-09-18)
+**Goal**: The last placeholder in the Involute answering loop — a hand-typed list of actor ids —
+replaced by the question this installation asks of everyone else: who is this person here, what
+may they do, are they in this box.
+**Success Criteria**: INV-575 — `involute:<actorId>` is an identity a Principal holds (Settings →
+People, same link and incarnation rules as the channel identities); a mention is answered only when
+the linked person is at least a driver and a member of the agent's box; a viewer, a non-member and
+an unlinked person each get a refusal in words that say what to do next; `askers` remains as a
+transition consulted only for unlinked actors, with the log naming which rule spoke.
+**Status**: In progress (2026-09-18). Deferred in the same round: INV-600 (RUN-318 blocked on a
+TYPESAFE_API_KEY; spike code on its branch).
+
 ## Stage 29: Next round (planned 2026-09-14)
 **Goal**: Close the last open pieces that need no external data, and make the operator-side evidence possible.
 **Success Criteria**: I3 door rules (INV-429) merged; host-side wedge detection (INV-135); standing approvals by principal (INV-156, on top of INV-427 rules); tool idempotency declaration (INV-525, once committed); a real-model scorecard baseline produced under authorised credentials and compared once; security S-2..S-7 (INV-138) triaged.
