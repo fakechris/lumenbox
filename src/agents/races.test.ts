@@ -496,3 +496,41 @@ test("a lane held down too long goes first anyway, and only while it is held dow
   // the bus rather than here, since that is where emptying happens.
   assert.equal(chooseLane([], now, window), undefined);
 });
+
+// ── Kickoffs drain one at a time ─────────────────────────────────────────────────
+//
+// A message flagged steerable:false is one task with its own card; three of them queued
+// behind a running turn are three turns, not one turn with three prompts.
+
+test("kickoffs queued together each get a turn of their own; chat messages still batch", async () => {
+  const { registry, cleanup } = tempRegistry();
+  try {
+    const ada = registry.create({ name: "Ada" });
+    const { turns, runner } = gatedRunner();
+    const bus = new AgentBus(registry, runner);
+
+    bus.sendFromUser(ada.id, "link one", { steerable: false });
+    bus.sendFromUser(ada.id, "link two", { steerable: false });
+    bus.sendFromUser(ada.id, "a thought");
+    bus.sendFromUser(ada.id, "its second line");
+    bus.sendFromUser(ada.id, "link three", { steerable: false });
+    const done = bus.wake(ada.id);
+
+    await until(() => turns.length === 1, "turn 1");
+    assert.deepEqual(turns[0]!.texts, ["link one"], "a kickoff at the head goes alone");
+    turns[0]!.release();
+    await until(() => turns.length === 2, "turn 2");
+    assert.deepEqual(turns[1]!.texts, ["link two"]);
+    turns[1]!.release();
+    await until(() => turns.length === 3, "turn 3");
+    assert.deepEqual(turns[2]!.texts, ["a thought", "its second line"], "chat lines batch up to the next kickoff");
+    turns[2]!.release();
+    await until(() => turns.length === 4, "turn 4");
+    assert.deepEqual(turns[3]!.texts, ["link three"]);
+    turns[3]!.release();
+    await done;
+    assert.equal(bus.pendingCount(ada.id), 0, "nothing lost, nothing left");
+  } finally {
+    cleanup();
+  }
+});
