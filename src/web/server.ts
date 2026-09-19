@@ -1280,7 +1280,12 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
           });
       }, 5_000);
       try {
-        await orchestrator.prompt(agent.id, text, { userId: principal }, { conversation });
+        // Not steerable: this is a task with a card and a board row of its own, and it
+        // must run as its own turn. Left steerable, a task queued behind a running turn
+        // was taken by that turn at its next round boundary, the queued `runExclusive`
+        // drained nothing (races R6a), and the card that said "排队中" flipped to done
+        // showing somebody else's answer. Mid-turn steering has its own door: `steer`.
+        await orchestrator.prompt(agent.id, text, { userId: principal }, { conversation, steerable: false });
         await orchestrator.settle();
       } finally {
         clearInterval(progressPoll);

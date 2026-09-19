@@ -1563,6 +1563,88 @@ test("one conversation runs one piece of work: mid-task words steer, 停 stops, 
   assert.equal(stops.length, 1);
 });
 
+test("a fresh request while work runs queues as its own task, visibly, and runs when the conversation is free", async () => {
+  const adapter = cardAdapter();
+  const steers: string[] = [];
+  const opened: string[] = [];
+  const asked: string[] = [];
+  let inFlight = 0;
+  let release: () => void = () => {};
+  const manager = new ChannelManager({
+    mayDrive: () => true,
+    ask: (() => {
+      let first = true;
+      return async (_agent: string | undefined, text: string) => {
+        asked.push(text);
+        inFlight += 1;
+        try {
+          if (first) {
+            first = false;
+            await new Promise<void>(resolve => {
+              release = resolve;
+            });
+          }
+          return "做完了";
+        } finally {
+          inFlight -= 1;
+        }
+      };
+    })(),
+    steer: (_agent, text) => {
+      steers.push(text);
+      return "steered" as const;
+    },
+    // The running turn counts as one ahead, as the web wiring reports it.
+    ahead: () => inFlight,
+    board: {
+      open: input => {
+        opened.push(input.title);
+        return `t${opened.length}`;
+      },
+      started: () => {},
+      closed: () => "done" as const,
+    },
+    ackAfterMs: 5,
+    log: () => {},
+  });
+  manager.register(adapter, true, "test");
+  await started(manager);
+
+  const room = { identity: "feishu:ou_1", chatKey: "feishu:oc_room", senderLabel: "chris" };
+  await adapter.inject({ ...room, messageId: "m1", text: "1/ Introducing CUA-S1: a family of System One Models" });
+  await new Promise(resolve => setTimeout(resolve, 20)); // let the task start and block
+
+  // The 2026-09-19 shape: a link fired while a turn runs. Not steering — its own row,
+  // its own card, and the card says it is waiting rather than pretending to work.
+  const reply = await adapter.inject({ ...room, messageId: "m2", text: "https://x.com/blanplan/status/2100868243489530158" });
+  await new Promise(resolve => setTimeout(resolve, 20));
+  assert.equal(reply, undefined, "no 带到了: this is not steering");
+  assert.deepEqual(steers, []);
+  assert.equal(opened.length, 2, "the link opened a task of its own");
+  const queued = adapter.cards.find(entry => entry.card.status === "queued");
+  assert.ok(queued !== undefined, "the second card says 排队中");
+  assert.equal(queued.card.ahead, 1);
+
+  // While both are on the books, a correction still steers the running one.
+  const steerReply = await adapter.inject({ ...room, messageId: "m3", text: "改成中文摘要" });
+  assert.match(String(steerReply ?? ""), /带到了/);
+  assert.deepEqual(steers, ["改成中文摘要"]);
+  assert.equal(opened.length, 2);
+
+  release();
+  await manager.idle();
+  assert.deepEqual(asked, [
+    "1/ Introducing CUA-S1: a family of System One Models",
+    "https://x.com/blanplan/status/2100868243489530158",
+  ], "the queued task ran after the first, as its own ask");
+  // The first task's exit did not clear the flag the second one held: a message that
+  // landed between the two was still about running work. Now both are gone.
+  const after = await adapter.inject({ ...room, messageId: "m4", text: "改成中文摘要" });
+  await manager.idle();
+  assert.equal(after, undefined, "with nothing running, a correction is new work");
+  assert.equal(opened.length, 3);
+});
+
 test("a message addressed to a different agent is parallel work, not steering", async () => {
   const adapter = cardAdapter();
   const steers: string[] = [];

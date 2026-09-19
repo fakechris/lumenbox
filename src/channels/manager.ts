@@ -29,6 +29,7 @@ import type { Ingress } from "./ingress.ts";
 import { channelHealth, type ChannelHealth } from "./liveness.ts";
 import { boxPathsNamed, undelivered } from "../host/named-files.ts";
 import { boardText, type BoardView } from "./board-view.ts";
+import { isContinuation } from "./continuation.ts";
 import type { CardRecord } from "./card-ledger.ts";
 
 import {
@@ -1464,13 +1465,18 @@ ${input.options.map(option => `· ${option}`).join("\n")}`
     const { agentName, text } = parseAddress(message.text);
     if (text === "") return SAY_WHAT_YOU_NEED;
 
-    // The dumb routing rule the product plan chose over the correctness engineering it
-    // deferred: one conversation runs one piece of work at a time. While it runs, a plain
-    // message is steering, "停" is the stop button, and neither opens a second task or a
-    // second card. A message addressed to a *different* agent is new work and passes
-    // through — two agents in parallel is the team working, not a routing accident.
+    // One conversation runs one piece of work at a time. While it runs, "停" is the stop
+    // button, and a message that plainly continues the running work — an answer to what
+    // the agent just asked, a correction, an addition — is steering: no second task, no
+    // second card, the words reach the turn. Anything else is new work, and new work
+    // queues *visibly*: a card that says 排队中, a board row, and its own turn when the
+    // conversation is free. The first rule here steered everything, and a stream of
+    // unrelated links fired mid-turn was swallowed into the running turn with nothing to
+    // show for it (2026-09-19, inbox seq 17/18/19). A message addressed to a *different*
+    // agent is new work and passes through — two agents in parallel is the team working,
+    // not a routing accident.
     const conversationKey = message.threadKey ?? message.chatKey ?? message.identity;
-    const running = this.runningWork.get(conversationKey);
+    const running = this.runningWork.get(conversationKey)?.at(-1);
     if (running !== undefined) {
       const sameAgent = agentName === undefined || agentName === running.agentName;
       if (parseStopRequest(text)) {
@@ -1479,7 +1485,16 @@ ${input.options.map(option => `· ${option}`).join("\n")}`
         // somebody their stop worked when it did not is worse than refusing them.
         return outcome === "stopped" ? STOPPING : outcome === "refused" ? notYours(running.agentName) : NOTHING_RUNNING;
       }
-      if (sameAgent && this.deps.steer !== undefined) {
+      const awaiting = this.awaitingAnswer.get(message.identity);
+      if (
+        sameAgent &&
+        this.deps.steer !== undefined &&
+        isContinuation(text, { awaitingAnswer: awaiting !== undefined && Date.now() - awaiting.at <= QUESTION_STALE_MS })
+      ) {
+        // The answer has reached the turn; the question is no longer open. Left in place,
+        // the next message after the turn ended would read as a continuation too and
+        // skip the board.
+        this.awaitingAnswer.delete(message.identity);
         const outcome = this.deps.steer(running.agentName, text, message.identity, conversationKey);
         return outcome === "refused" ? notYours(running.agentName) : steered(running.agentName);
       }
@@ -1580,7 +1595,13 @@ ${input.options.map(option => `· ${option}`).join("\n")}`
   private readonly pendingDrops = new Map<string, { files: string[]; at: number }>();
 
   /** What each conversation is running right now, for the one-at-a-time routing rule. */
-  private readonly runningWork = new Map<string, { agentName: string | undefined }>();
+  /**
+   * What is running or queued in each conversation, oldest first; the last entry is the
+   * one a mid-task message is about. A stack rather than one record, because a queued
+   * task starts its `runTask` while the one ahead of it is still running, and the first
+   * one finishing must not wipe the flag the second still holds.
+   */
+  private readonly runningWork = new Map<string, { agentName: string | undefined }[]>();
 
   /** The conversation's most recent board task — what an acceptance word refers to. */
   private readonly lastTask = new Map<string, string>();
@@ -1812,7 +1833,8 @@ ${input.options.map(option => `· ${option}`).join("\n")}`
     const chatKey = message.chatKey ?? message.identity;
     const runningKey = message.threadKey ?? chatKey;
     const targetChatKey = message.threadKey ?? chatKey;
-    this.runningWork.set(runningKey, { agentName });
+    const runningEntry = { agentName };
+    this.runningWork.set(runningKey, [...(this.runningWork.get(runningKey) ?? []), runningEntry]);
     // What this turn should know it was handed: files in this message, plus any dropped
     // wordlessly in this conversation just before. In the prompt and nowhere else — the
     // card and the board carry the person's own words, not a path listing.
@@ -2055,11 +2077,11 @@ ${input.options.map(option => `· ${option}`).join("\n")}`
       if (taskId !== undefined) this.deps.board?.closed(taskId, "failed", detail);
       await deliver(detail);
     } finally {
-      // Only if it is still this task's entry: a same-conversation task that somehow
-      // started after us must not have its flag wiped by our exit.
-      if (this.runningWork.get(runningKey)?.agentName === agentName) {
-        this.runningWork.delete(runningKey);
-      }
+      // Only this task's own entry: a same-conversation task queued behind us keeps its
+      // flag, so a message arriving after we exit is still about running work.
+      const remaining = (this.runningWork.get(runningKey) ?? []).filter(entry => entry !== runningEntry);
+      if (remaining.length === 0) this.runningWork.delete(runningKey);
+      else this.runningWork.set(runningKey, remaining);
     }
   }
 }
