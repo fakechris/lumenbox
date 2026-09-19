@@ -86,6 +86,10 @@ this file and the headers disagree. Edit the header, not this table.
 | [52-multiuser-and-product](52-multiuser-and-product.md) | 多用户与产品面：一次对账与打磨 | current | 2026-09-14 |
 | [53-connector-doors](53-connector-doors.md) | Connector doors: the SaaS integrations a third-party template names, on by credential | current | 2026-09-14 |
 | [54-agent-identity-and-threads](54-agent-identity-and-threads.md) | Agent 身份与在工作项上的对话 | current | 2026-09-18 |
+| [58-daily-research-digest](58-daily-research-digest.md) | 每日 research 总结：把一天的输入和逐条 research 横向综合，而不是再列一遍 | current | 2026-09-19 |
+| [59-daily-digest-review](59-daily-digest-review.md) | 每日 research 总结的方案 review：参考 OVP 还是结合 OVP | current | 2026-09-19 |
+| [60-ovp-bridge-design](60-ovp-bridge-design.md) | OVP 接入程序（ovp-bridge）详细方案：哪个 vault、什么触发、保证什么 | superseded by [61-ovp-bridge-design-v2](61-ovp-bridge-design-v2.md) — §15 复审后按九项修订重写；第二版一个 id 贯穿、每个对象有终态、对 OVP 只提通用改动 | 2026-09-19 |
+| [61-ovp-bridge-design-v2](61-ovp-bridge-design-v2.md) | OVP 接入程序第二版：一个 id 贯穿、每个输入有终态、对 OVP 只提通用改动 | current | 2026-09-19 |
 
 ## handoff
 
