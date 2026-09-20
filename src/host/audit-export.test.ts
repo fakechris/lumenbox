@@ -100,3 +100,42 @@ test("redaction replaces every copy of a held value and every credential-shaped 
   assert.equal(r.exact, 2);
   assert.equal(r.pattern, 0);
 });
+
+test("fetched pages inside the window travel with the export, redacted, and are listed apart from the ledgers", async () => {
+  const { keepFetchedPage } = await import("./fetched.ts");
+  const { mkdirSync } = await import("node:fs");
+  const { root, registry, ada, bob } = home();
+  try {
+    const page = (agent: { id: string; name: string }, at: string, text: string) =>
+      keepFetchedPage(
+        { url: `https://example.com/${at}`, finalUrl: `https://example.com/${at}`, text, contentType: "text/html", bytes: 1, clipped: false, meta: {}, agent, fetchedAt: new Date(at) },
+        root
+      );
+    page({ id: ada, name: "Ada" }, "2026-09-10T10:05:00.000Z", `the page quoted the password ${PASSWORD} in full`);
+    page({ id: ada, name: "Ada" }, "2026-01-01T00:00:00.000Z", "old page");
+    page({ id: bob, name: "Bob" }, "2026-09-10T10:06:00.000Z", "bob's page, another box");
+    // A kept X post names no agent and is taken by time alone.
+    const xDir = join(root, "fetched", "x", "123");
+    mkdirSync(xDir, { recursive: true });
+    writeFileSync(join(xDir, "post.md"), "---\nfetched_at: 2026-09-10T10:07:00.000Z\n---\n\npost body\n");
+    writeFileSync(join(xDir, "fxtwitter-v2.json"), "{}");
+
+    const out = join(root, "export");
+    const manifest = exportAudit({ home: root, registry, box: registry.box.name, from: "2026-09-01T00:00:00Z", to: "2026-09-30T00:00:00Z", out, held: heldValues(root), now: () => new Date("2026-09-11T00:00:00Z") });
+    const fetched = Object.keys(manifest.fetched ?? {}).sort();
+    assert.equal(fetched.length, 2, JSON.stringify(fetched));
+    assert.ok(fetched.some(f => f.startsWith("fetched/2026-09/")), "Ada's page in the window");
+    assert.ok(fetched.includes("fetched/x/123/post.md"), "the X post by time");
+    const exported = readFileSync(join(out, fetched.find(f => f.startsWith("fetched/2026-09/"))!), "utf8");
+    assert.ok(!exported.includes(PASSWORD), "the held value is gone");
+    assert.match(exported, /<redacted:vault:SHOP_PASSWORD>/);
+    assert.ok(!Object.keys(manifest.files).some(f => f.startsWith("fetched/")), "prose is not listed as a ledger");
+    // And the ledger reader still reads the export back without choking on markdown.
+    const back = readAuditExport(out);
+    assert.equal(back.manifest.fetched?.["fetched/x/123/post.md"], Buffer.byteLength("---\nfetched_at: 2026-09-10T10:07:00.000Z\n---\n\npost body\n", "utf8"));
+    assert.ok(describeExport(manifest, out).some(line => /fetched pages: 2 file\(s\)/.test(line)));
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+

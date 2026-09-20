@@ -1004,3 +1004,52 @@ test("elementsOutline is one line per control in the browser outline's shape, an
   assert.match(elementsOutline({ elements_note: "the active app has none" }), /^No control outline: the active app has none\. Work from the screenshot\./);
   assert.match(elementsOutline({ elements: [], elements_window: { title: "x", app: "", truncated: false } }), /no operable controls are showing/);
 });
+
+test("WebFetch keeps the whole page on the host and ends its result with a pointer the transcript cut carries", async () => {
+  const { mkdtempSync, readFileSync, rmSync } = await import("node:fs");
+  const { tmpdir } = await import("node:os");
+  const { join } = await import("node:path");
+  const { readFrontmatter } = await import("./fetched.ts");
+  const home = mkdtempSync(join(tmpdir(), "agentbox-webfetch-"));
+  try {
+    const long = "word ".repeat(12_000);
+    const context = {
+      agent: { id: "a1", profile: { name: "Nova" } },
+      conversation: "feishu-personal-oc_x",
+      registry: {} as never,
+      bus: {} as never,
+      box: undefined,
+      fetchedHome: home,
+      webFetch: async (url: string) => ({
+        url: `${url}#answered`,
+        title: "A long page",
+        text: `${long.slice(0, 40_000)}\n\n[... rest of page not shown]`,
+        truncated: true,
+        fullText: long,
+        contentType: "text/html",
+        bytes: 65_000,
+        meta: { author: "Ada", published: "2026-09-18", siteName: "Example" },
+      }),
+    } as unknown as Parameters<typeof dispatchTool>[2];
+    const result = await dispatchTool("WebFetch", { url: "https://example.com/long" }, context);
+    assert.ok(!result.isError, result.text);
+    assert.match(result.text, /^# A long page\nSource: https:\/\/example\.com\/long#answered\n/);
+    const pointer = /\[full page kept: (.+)\]$/.exec(result.text);
+    assert.ok(pointer !== null, "the result ends with the pointer");
+    const kept = readFileSync(pointer![1]!, "utf8");
+    const head = readFrontmatter(kept);
+    assert.equal(head.url, "https://example.com/long");
+    assert.equal(head.final_url, "https://example.com/long#answered");
+    assert.equal(head.author, "Ada");
+    assert.equal(head.clipped, "true");
+    assert.equal(head.agent, "Nova");
+    assert.equal(head.conversation, "feishu-personal-oc_x");
+    // The file holds every word; the model saw the slice.
+    assert.equal(head.text_chars, String(long.length));
+    assert.ok(kept.endsWith(`${long}\n`));
+    assert.ok(pointer![1]!.startsWith(join(home, "fetched")));
+  } finally {
+    rmSync(home, { recursive: true, force: true });
+  }
+});
+

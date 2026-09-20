@@ -49,6 +49,19 @@ export interface FetchedPage {
   text: string;
   /** True when the page was longer than we return. */
   truncated: boolean;
+  /** The whole extracted text, for keeping; `text` is what the model is shown. */
+  fullText: string;
+  contentType: string;
+  bytes: number;
+  /** What the page said about itself, when it said anything. */
+  meta: PageMeta;
+}
+
+/** Authorship and date as the page declares them — og:, meta, JSON-LD. Absent means unsaid. */
+export interface PageMeta {
+  author?: string;
+  published?: string;
+  siteName?: string;
 }
 
 export class WebError extends Error {}
@@ -410,6 +423,10 @@ export async function fetchPage(
       ...(extracted.title !== undefined ? { title: extracted.title } : {}),
       text: clipped ? `${extracted.text.slice(0, maxText)}\n\n[... rest of page not shown]` : extracted.text,
       truncated: clipped || response.truncated,
+      fullText: extracted.text,
+      contentType: kind,
+      bytes: response.body.length,
+      meta: isHtml ? htmlMeta(decoded) : {},
     };
   }
   throw new WebError("unreachable");
@@ -441,6 +458,74 @@ function decodeEntities(text: string): string {
     }
     return ENTITIES[body.toLowerCase()] ?? whole;
   });
+}
+
+/** One `<meta>` value by `name` or `property`, in either attribute order. */
+function metaContent(html: string, key: string): string | undefined {
+  const escaped = key.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const patterns = [
+    new RegExp(`<meta\\b[^>]*\\b(?:name|property)\\s*=\\s*["']${escaped}["'][^>]*\\bcontent\\s*=\\s*["']([^"']*)["']`, "i"),
+    new RegExp(`<meta\\b[^>]*\\bcontent\\s*=\\s*["']([^"']*)["'][^>]*\\b(?:name|property)\\s*=\\s*["']${escaped}["']`, "i"),
+  ];
+  for (const pattern of patterns) {
+    const found = pattern.exec(html)?.[1];
+    if (found !== undefined && found.trim() !== "") return decodeEntities(found).trim();
+  }
+  return undefined;
+}
+
+/**
+ * What a page says about its own authorship and date.
+ *
+ * Three places, in the order sites are most likely to be honest in: JSON-LD (written for
+ * search engines, usually generated), Open Graph and the article: properties, then the
+ * classic `<meta name="author">`. A value that is not a string, or an author that is a
+ * URL, is not taken. Nothing is inferred from the prose.
+ */
+export function htmlMeta(html: string): PageMeta {
+  const meta: PageMeta = {};
+  const take = (key: "author" | "published" | "siteName", value: unknown): void => {
+    if (meta[key] !== undefined) return;
+    if (typeof value !== "string") return;
+    const clean = value.replace(/\s+/g, " ").trim();
+    if (clean === "" || (key === "author" && /^https?:\/\//i.test(clean))) return;
+    meta[key] = clean.slice(0, 200);
+  };
+  for (const match of html.matchAll(/<script\b[^>]*type\s*=\s*["']application\/ld\+json["'][^>]*>([\s\S]*?)<\/script>/gi)) {
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(match[1]!.trim());
+    } catch {
+      continue;
+    }
+    const nodes = Array.isArray(parsed) ? parsed : [parsed];
+    for (const node of nodes) {
+      if (typeof node !== "object" || node === null) continue;
+      const record = node as Record<string, unknown>;
+      const graph = Array.isArray(record["@graph"]) ? (record["@graph"] as unknown[]) : [record];
+      for (const item of graph) {
+        if (typeof item !== "object" || item === null) continue;
+        const entry = item as Record<string, unknown>;
+        const author = entry.author;
+        const authors = Array.isArray(author) ? author : [author];
+        for (const candidate of authors) {
+          take("author", typeof candidate === "object" && candidate !== null ? (candidate as Record<string, unknown>).name : candidate);
+        }
+        take("published", entry.datePublished);
+        const publisher = entry.publisher;
+        take("siteName", typeof publisher === "object" && publisher !== null ? (publisher as Record<string, unknown>).name : undefined);
+      }
+    }
+  }
+  take("author", metaContent(html, "article:author"));
+  take("author", metaContent(html, "author"));
+  take("author", metaContent(html, "twitter:creator"));
+  take("published", metaContent(html, "article:published_time"));
+  take("published", metaContent(html, "og:article:published_time"));
+  take("published", metaContent(html, "date"));
+  take("published", metaContent(html, "pubdate"));
+  take("siteName", metaContent(html, "og:site_name"));
+  return meta;
 }
 
 /**
