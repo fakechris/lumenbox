@@ -100,3 +100,32 @@ test("redaction replaces every copy of a held value and every credential-shaped 
   assert.equal(r.exact, 2);
   assert.equal(r.pattern, 0);
 });
+
+test("messages people sent to the box's conversations travel with the export, inside the window, redacted", async () => {
+  const { Messages, messagesPath } = await import("../channels/messages.ts");
+  const { conversationIdFor } = await import("../agents/registry.ts");
+  const { root, registry, ada, bob } = home();
+  try {
+    const roomKey = "feishu:oc_room";
+    const otherKey = "feishu:oc_elsewhere";
+    // Ada (this box) talked in the room; Bob (the other box) elsewhere.
+    registry.appendTranscript(ada, { role: "user", text: "hi", at: "2026-09-10T10:00:00Z" }, conversationIdFor(roomKey));
+    registry.appendTranscript(bob, { role: "user", text: "hi", at: "2026-09-10T10:00:00Z" }, conversationIdFor(otherKey));
+    const messages = new Messages(messagesPath(root));
+    const base = { channel: "feishu", identity: "feishu:ou_x", senderLabel: "Alice", chatKey: roomKey, conversationKey: roomKey };
+    messages.admitted({ ...base, id: "m-in", receivedAt: "2026-09-10T10:00:00Z", text: `the password is ${PASSWORD}` });
+    messages.admitted({ ...base, id: "m-old", receivedAt: "2026-01-01T00:00:00Z", text: "old" });
+    messages.admitted({ ...base, id: "m-other", chatKey: otherKey, conversationKey: otherKey, receivedAt: "2026-09-10T10:00:00Z", text: "not this box" });
+
+    const out = join(root, "export");
+    const manifest = exportAudit({ home: root, registry, box: registry.box.name, from: "2026-09-01T00:00:00Z", to: "2026-09-30T00:00:00Z", out, held: heldValues(root), now: () => new Date("2026-09-11T00:00:00Z") });
+    assert.equal(manifest.files["messages.jsonl"], 1);
+    const exported = readAuditExport(out).records["messages.jsonl"]!;
+    assert.deepEqual(exported.map(record => record.id), ["m-in"]);
+    assert.ok(!String(exported[0]!.text).includes(PASSWORD));
+    assert.match(String(exported[0]!.text), /<redacted:vault:SHOP_PASSWORD>/);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+

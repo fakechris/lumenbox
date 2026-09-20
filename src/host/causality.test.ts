@@ -119,10 +119,34 @@ test("a turn records the messages that caused it", async () => {
       { client, registry, bus, box: undefined, resolution: undefined }
     );
 
-    const opening = (registry.readTranscript(ada.id) as { causedBy?: string[] }[]).find(
-      entry => entry.causedBy !== undefined
-    );
+    const entries = registry.readTranscript(ada.id) as { role: string; causedBy?: string[]; turnId?: string }[];
+    const opening = entries.find(entry => entry.causedBy !== undefined);
     assert.deepEqual(opening?.causedBy, ["msg-1", "msg-2"]);
+    // And every line the turn wrote names the turn, so message → turn → reply walks as ids.
+    assert.match(opening?.turnId ?? "", /^[0-9a-f-]{36}$/, "the opening entry names its turn");
+    const reply = entries.find(entry => entry.role === "assistant");
+    assert.equal(reply?.turnId, opening?.turnId, "the reply names the same turn");
+    for (const entry of entries) assert.equal(entry.turnId, opening?.turnId, `every entry of the turn: ${JSON.stringify(entry).slice(0, 80)}`);
+  } finally {
+    cleanup();
+  }
+});
+
+test("a message that already has an id — one minted at the door — keeps it through the bus", () => {
+  const { registry, cleanup } = fixture();
+  try {
+    const ada = registry.create({ name: "Ada" });
+    const seen: string[] = [];
+    const bus = new AgentBus(registry, async (_agent, inbound) => {
+      for (const message of inbound) seen.push(message.id);
+    });
+    bus.sendFromUser(ada.id, "from the door", { messageId: "11111111-2222-4333-8444-555555555555" });
+    bus.sendFromUser(ada.id, "from anywhere else");
+    return bus.wake(ada.id).then(() => {
+      assert.equal(seen[0], "11111111-2222-4333-8444-555555555555");
+      assert.notEqual(seen[1], seen[0]);
+      assert.match(seen[1] ?? "", /^[0-9a-f-]{36}$/);
+    });
   } finally {
     cleanup();
   }

@@ -149,6 +149,7 @@ import { preflight } from "../box/preflight.ts";
 import { rescueMessage, rescueStuck } from "../host/rescue.ts";
 import { Deliveries, deliveriesPath } from "../host/deliveries.ts";
 import { Ingress, ingressPath } from "../channels/ingress.ts";
+import { Messages, messagesPath } from "../channels/messages.ts";
 import {
   Webhooks,
   webhooksPath,
@@ -801,6 +802,8 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
    * arrived and went nowhere used to leave the same trace as one that never arrived.
    */
   const ingress = new Ingress(ingressPath(agentboxHome()));
+  // The one ledger of what people said that is never compacted (messages.ts, INV-613).
+  const messages = new Messages(messagesPath(agentboxHome()));
   /** One URL and secret per webhook routine (docs/44). */
   const webhooks = new Webhooks(webhooksPath(agentboxHome()));
   /** How often one hook may fire. In memory: a restart forgives, and the budget is the backstop. */
@@ -879,6 +882,7 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
 
   const channels = new ChannelManager({
     ingress,
+    messages,
     listeners: message => {
       void orchestrator.scheduler.heard(message).catch(error => {
         console.error(`[schedule] listeners: ${error instanceof Error ? error.message : String(error)}`);
@@ -1117,7 +1121,7 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
           : "Allowed once. Send the agent a message to have it retry.";
     },
     log: line => log(line),
-    ask: async (agentName, text, identity, chatKey, onProgress, threadKey, taskId, onInterim, onText) => {
+    ask: async (agentName, text, identity, chatKey, onProgress, threadKey, taskId, onInterim, onText, origin) => {
       let agent: ReturnType<typeof registry.resolve> | undefined;
       if (agentName !== undefined) {
         try {
@@ -1285,7 +1289,11 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
         // was taken by that turn at its next round boundary, the queued `runExclusive`
         // drained nothing (races R6a), and the card that said "排队中" flipped to done
         // showing somebody else's answer. Mid-turn steering has its own door: `steer`.
-        await orchestrator.prompt(agent.id, text, { userId: principal }, { conversation, steerable: false });
+        await orchestrator.prompt(agent.id, text, { userId: principal }, {
+          conversation,
+          steerable: false,
+          ...(origin?.messageId !== undefined ? { messageId: origin.messageId } : {}),
+        });
         await orchestrator.settle();
       } finally {
         clearInterval(progressPoll);
@@ -1331,7 +1339,7 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
     // A mid-task message joins the running turn. Fire-and-forget on purpose: the bus's
     // own race rules (fixed in races.test.ts) make it steering for the running turn or
     // the next turn, exactly one of the two — this call must not add a third path.
-    steer: (agentName, text, identity, conversationKey) => {
+    steer: (agentName, text, identity, conversationKey, messageId) => {
       let agent: { id: string } | undefined;
       try {
         agent = agentName !== undefined ? registry.resolve(agentName) : registry.list()[0];
@@ -1349,7 +1357,7 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
           agent.id,
           text,
           { userId: principals.resolve(identity).id },
-          { conversation: conversationIdFor(conversationKey) }
+          { conversation: conversationIdFor(conversationKey), ...(messageId !== undefined ? { messageId } : {}) }
         )
         .catch(error => {
           log(`steer failed: ${error instanceof Error ? error.message : String(error)}`);

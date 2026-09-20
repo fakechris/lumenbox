@@ -26,6 +26,8 @@
 
 import { roomDecision } from "./identity.ts";
 import type { Ingress } from "./ingress.ts";
+import type { Messages } from "./messages.ts";
+import { randomUUID } from "node:crypto";
 import { channelHealth, type ChannelHealth } from "./liveness.ts";
 import { boxPathsNamed, undelivered } from "../host/named-files.ts";
 import { boardText, type BoardView } from "./board-view.ts";
@@ -93,6 +95,12 @@ export interface InboundMessage {
    * reach the turn that is running, not open a parallel one.
    */
   messageId?: string;
+  /**
+   * Ours, minted where the message was admitted and written to `messages.jsonl` at the
+   * same moment (INV-613). Handed down with the message so the inbox and the transcript
+   * carry the same id, and absent until the door has said yes.
+   */
+  id?: string;
   /** For a person reading the activity feed: a name, not an id, where the wire has one. */
   senderLabel: string;
   text: string;
@@ -419,7 +427,7 @@ export interface ChannelManagerDeps {
    * task. Fire-and-forget: the bus's own rules make it steering or the next turn,
    * exactly one of the two.
    */
-  steer?: (agentName: string | undefined, text: string, identity: string, conversationKey: string) => "steered" | "refused";
+  steer?: (agentName: string | undefined, text: string, identity: string, conversationKey: string, messageId?: string) => "steered" | "refused";
   /**
    * Runs one turn and returns what the agent said. `agentName` is undefined for the
    * default agent; unknown names should throw with a message worth relaying.
@@ -457,7 +465,9 @@ export interface ChannelManagerDeps {
      */
     onInterim?: (text: string) => void,
     /** The reply as it is being written — everything so far, each time it grows. */
-    onText?: (soFar: string) => void
+    onText?: (soFar: string) => void,
+    /** The message's own id, when this ask is one message becoming a turn (INV-613). */
+    origin?: { messageId: string }
   ) => Promise<string>;
   /**
    * How many requests are ahead of a new one for this agent and chat. Zero means it
@@ -622,6 +632,12 @@ export interface ChannelManagerDeps {
    * a test that is not about this wants.
    */
   ingress?: Ingress;
+  /**
+   * Every admitted message, as sent, kept for good (messages.ts). Written here, at the
+   * door, because this is the one place that has the channel's id, the text before any
+   * clamp, the sender and the files all at once.
+   */
+  messages?: Messages;
 }
 
 /** After this long, a running task without a card says it is under way. */
@@ -1337,6 +1353,26 @@ ${input.options.map(option => `· ${option}`).join("\n")}`
     if (message.messageId !== undefined) {
       this.deps.ingress?.decided(message.messageId, "admitted");
     }
+    // The record, and the id everything downstream will carry. Minted here rather than
+    // in the bus so that the line in messages.jsonl and the id in the inbox are one id;
+    // written now, whole, because the inbox clamps its copy and the transcript joins
+    // several messages into one prompt.
+    message.id = randomUUID();
+    this.deps.messages?.admitted({
+      id: message.id,
+      channel: adapter.name,
+      ...(message.messageId !== undefined ? { channelMessageId: message.messageId } : {}),
+      chatKey: message.chatKey ?? message.identity,
+      ...(message.threadKey !== undefined ? { threadKey: message.threadKey } : {}),
+      identity: message.identity,
+      senderLabel: message.senderLabel,
+      conversationKey: message.threadKey ?? message.chatKey ?? message.identity,
+      receivedAt: new Date().toISOString(),
+      text: message.text,
+      ...(message.files !== undefined && message.files.length > 0
+        ? { files: message.files.map(file => ({ name: file.name, bytes: Buffer.byteLength(file.base64, "base64") })) }
+        : {}),
+    });
     this.deps.listeners?.({
       text: message.text,
       chatKey: message.chatKey ?? message.identity,
@@ -1495,7 +1531,7 @@ ${input.options.map(option => `· ${option}`).join("\n")}`
         // the next message after the turn ended would read as a continuation too and
         // skip the board.
         this.awaitingAnswer.delete(message.identity);
-        const outcome = this.deps.steer(running.agentName, text, message.identity, conversationKey);
+        const outcome = this.deps.steer(running.agentName, text, message.identity, conversationKey, message.id);
         return outcome === "refused" ? notYours(running.agentName) : steered(running.agentName);
       }
     } else if (parseStopRequest(text)) {
@@ -1755,7 +1791,10 @@ ${input.options.map(option => `· ${option}`).join("\n")}`
         chatKey,
         undefined,
         message.threadKey ?? chatKey,
-        undefined
+        undefined,
+        undefined,
+        undefined,
+        message.id !== undefined ? { messageId: message.id } : undefined
       );
       const targetChatKey = message.threadKey ?? chatKey;
       if (reply.trim() !== "") await this.deliver(adapter, targetChatKey, message.identity, reply, anchor);
@@ -2033,7 +2072,8 @@ ${input.options.map(option => `· ${option}`).join("\n")}`
             );
           });
         },
-        onText
+        onText,
+        message.id !== undefined ? { messageId: message.id } : undefined
       );
       clearTimeout(ackTimer);
       // Asked first, then shown. The board owns what a finished turn means for the work —

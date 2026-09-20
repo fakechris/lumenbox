@@ -18,7 +18,7 @@
 import { existsSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import type { AgentRegistry } from "../agents/registry.ts";
-import { CONVERSATIONS_DIRNAME, TRANSCRIPT_FILENAME } from "../agents/registry.ts";
+import { CONVERSATIONS_DIRNAME, conversationIdFor, TRANSCRIPT_FILENAME } from "../agents/registry.ts";
 import { CREDENTIAL_PATTERNS, MIN_EXACT_LENGTH } from "./secret-scan.ts";
 
 export interface ExportOptions {
@@ -150,6 +150,10 @@ export function exportAudit(options: ExportOptions): ExportManifest {
   write("vault-audit.jsonl", select(readLines(join(options.home, "vault-audit.jsonl")), byAgentId));
   write("network-events.jsonl", select(readLines(join(options.home, "network-events.jsonl")), record => record.box === box.id || record.box === box.name));
   write("turns.jsonl", select(readLines(join(options.home, "turns.jsonl")), byAgentId));
+  // What people said through the doors, as they said it (messages.ts, INV-613). A message
+  // names no agent — the door decides that later — so it is the box's when the
+  // conversation it went into belongs to one of the box's agents.
+  const conversationIds = new Set<string>();
 
   for (const agent of agents) {
     const dir = registry.dirFor(agent.id);
@@ -161,11 +165,30 @@ export function exportAudit(options: ExportOptions): ExportManifest {
       }
     }
     for (const conversation of conversations) {
+      conversationIds.add(conversation.name);
       const lines = select(readLines(conversation.path), () => true);
       if (lines.length === 0 && !existsSync(conversation.path)) continue;
       write(join("transcripts", agent.id, `${conversation.name}.jsonl`), lines);
     }
   }
+  // Dated by `receivedAt`, which is the ledger's own word for it; `select` reads `at`.
+  const messageLines: string[] = [];
+  for (const line of readLines(join(options.home, "messages.jsonl"))) {
+    let record: Record<string, unknown>;
+    try {
+      record = JSON.parse(line) as Record<string, unknown>;
+    } catch {
+      continue;
+    }
+    if (typeof record.conversationKey !== "string" || !conversationIds.has(conversationIdFor(record.conversationKey))) continue;
+    const inside = within(record.receivedAt, from, to);
+    if (inside === undefined) {
+      undated += 1;
+      continue;
+    }
+    if (inside) messageLines.push(line);
+  }
+  write("messages.jsonl", messageLines);
 
   const manifest: ExportManifest = {
     format: "agentbox-audit-export/1",
