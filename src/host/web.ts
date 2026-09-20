@@ -40,7 +40,7 @@ const MAX_REDIRECTS = 5;
  * or a document that wanted downloading rather than reading, and the part worth having
  * is at the top.
  */
-const MAX_TEXT = 40_000;
+export const MAX_TEXT = 40_000;
 
 export interface FetchedPage {
   /** Where the content actually came from, after any redirects. */
@@ -310,8 +310,23 @@ export async function fetchPage(
    * This is not a way around the address check — the check lives inside the default
    * transport, so anything that does not pass its own transport gets it.
    */
-  open: (target: URL) => Promise<RawResponse> = requestOnce
+  open: (target: URL) => Promise<RawResponse> = requestOnce,
+  /**
+   * How much text to return. The default is sized for a page a model reads; a caller
+   * that parses the body itself (an API answer, x-post.ts) asks for all of it.
+   */
+  options: {
+    maxText?: number;
+    /**
+     * Statuses whose body is an answer rather than a failure. An API that says "not
+     * found" as HTTP 404 with a JSON body explaining which kind of not-found is telling
+     * the caller something; the default turns every 4xx into an error, which is right
+     * for a page and wrong for that.
+     */
+    passStatuses?: readonly number[];
+  } = {}
 ): Promise<FetchedPage> {
+  const maxText = options.maxText ?? MAX_TEXT;
   let target: URL;
   try {
     target = new URL(rawUrl);
@@ -346,7 +361,7 @@ export async function fetchPage(
       }
       continue;
     }
-    if (response.status >= 400) {
+    if (response.status >= 400 && !(options.passStatuses ?? []).includes(response.status)) {
       // A bare status code invites the model to reason from it, and it will reason
       // wrongly: an agent read a 401 from a code-hosting site as proof that the
       // repository existed and was merely private, and built a claim on it.
@@ -389,11 +404,11 @@ export async function fetchPage(
       );
     }
 
-    const clipped = extracted.text.length > MAX_TEXT;
+    const clipped = extracted.text.length > maxText;
     return {
       url: target.toString(),
       ...(extracted.title !== undefined ? { title: extracted.title } : {}),
-      text: clipped ? `${extracted.text.slice(0, MAX_TEXT)}\n\n[... rest of page not shown]` : extracted.text,
+      text: clipped ? `${extracted.text.slice(0, maxText)}\n\n[... rest of page not shown]` : extracted.text,
       truncated: clipped || response.truncated,
     };
   }
