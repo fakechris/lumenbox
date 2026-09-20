@@ -770,7 +770,9 @@ export function storableResult(
   // what lets a later ReadHistory walk from a 2,000-character remnant to the whole
   // file. Trimming is not the same as losing, but only if the trail is kept.
   if (whole.length > text.length) {
-    const pointer = whole.slice(text.length).match(/\[[^\]]*full output kept:[^\]]*\]/);
+    // Two writers use the phrase: the box for spilled shell output, the host for a fetched
+    // page it kept (fetched.ts). Both pointers are worth carrying.
+    const pointer = whole.slice(text.length).match(/\[[^\]]*full (?:output|page) kept:[^\]]*\]/);
     if (pointer !== null) text += `\n${pointer[0]}`;
   }
   if (imageCount > 0) {

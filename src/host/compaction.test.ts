@@ -637,6 +637,19 @@ test("the spill pointer survives the transcript's own truncation", async () => {
     "the trail to the whole output is what must not be trimmed away");
 
   // A result that fits is untouched, pointer or not.
+  // The host keeps fetched pages with the same shape of pointer (fetched.ts), and it has
+  // to survive the same cut for the same reason.
+  const page = "x".repeat(5_000) + "\n\n[full page kept: /Users/someone/.agentbox/fetched/2026-09/1a2b3c4d-20260920T130000Z.md]";
+  const keptPage = storableResult({
+    type: "tool_result",
+    tool_use_id: "t2",
+    content: [{ type: "text", text: page }],
+  });
+  const pageText = (keptPage.content as { text: string }[])[0]!.text;
+  assert.ok(pageText.length < 2_200, "still cut");
+  assert.match(pageText, /full page kept: \/Users\/someone\/\.agentbox\/fetched\/2026-09\/1a2b3c4d-20260920T130000Z\.md/,
+    "the kept-page pointer is carried across the cut");
+
   const small = storableResult({
     type: "tool_result",
     tool_use_id: "toolu_2",

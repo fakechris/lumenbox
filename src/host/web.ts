@@ -40,7 +40,7 @@ const MAX_REDIRECTS = 5;
  * or a document that wanted downloading rather than reading, and the part worth having
  * is at the top.
  */
-const MAX_TEXT = 40_000;
+export const MAX_TEXT = 40_000;
 
 export interface FetchedPage {
   /** Where the content actually came from, after any redirects. */
@@ -49,6 +49,19 @@ export interface FetchedPage {
   text: string;
   /** True when the page was longer than we return. */
   truncated: boolean;
+  /** The whole extracted text, for keeping; `text` is what the model is shown. */
+  fullText: string;
+  contentType: string;
+  bytes: number;
+  /** What the page said about itself, when it said anything. */
+  meta: PageMeta;
+}
+
+/** Authorship and date as the page declares them — og:, meta, JSON-LD. Absent means unsaid. */
+export interface PageMeta {
+  author?: string;
+  published?: string;
+  siteName?: string;
 }
 
 export class WebError extends Error {}
@@ -310,8 +323,23 @@ export async function fetchPage(
    * This is not a way around the address check — the check lives inside the default
    * transport, so anything that does not pass its own transport gets it.
    */
-  open: (target: URL) => Promise<RawResponse> = requestOnce
+  open: (target: URL) => Promise<RawResponse> = requestOnce,
+  /**
+   * How much text to return. The default is sized for a page a model reads; a caller
+   * that parses the body itself (an API answer, x-post.ts) asks for all of it.
+   */
+  options: {
+    maxText?: number;
+    /**
+     * Statuses whose body is an answer rather than a failure. An API that says "not
+     * found" as HTTP 404 with a JSON body explaining which kind of not-found is telling
+     * the caller something; the default turns every 4xx into an error, which is right
+     * for a page and wrong for that.
+     */
+    passStatuses?: readonly number[];
+  } = {}
 ): Promise<FetchedPage> {
+  const maxText = options.maxText ?? MAX_TEXT;
   let target: URL;
   try {
     target = new URL(rawUrl);
@@ -346,7 +374,7 @@ export async function fetchPage(
       }
       continue;
     }
-    if (response.status >= 400) {
+    if (response.status >= 400 && !(options.passStatuses ?? []).includes(response.status)) {
       // A bare status code invites the model to reason from it, and it will reason
       // wrongly: an agent read a 401 from a code-hosting site as proof that the
       // repository existed and was merely private, and built a claim on it.
@@ -389,12 +417,16 @@ export async function fetchPage(
       );
     }
 
-    const clipped = extracted.text.length > MAX_TEXT;
+    const clipped = extracted.text.length > maxText;
     return {
       url: target.toString(),
       ...(extracted.title !== undefined ? { title: extracted.title } : {}),
-      text: clipped ? `${extracted.text.slice(0, MAX_TEXT)}\n\n[... rest of page not shown]` : extracted.text,
+      text: clipped ? `${extracted.text.slice(0, maxText)}\n\n[... rest of page not shown]` : extracted.text,
       truncated: clipped || response.truncated,
+      fullText: extracted.text,
+      contentType: kind,
+      bytes: response.body.length,
+      meta: isHtml ? htmlMeta(decoded) : {},
     };
   }
   throw new WebError("unreachable");
@@ -426,6 +458,74 @@ function decodeEntities(text: string): string {
     }
     return ENTITIES[body.toLowerCase()] ?? whole;
   });
+}
+
+/** One `<meta>` value by `name` or `property`, in either attribute order. */
+function metaContent(html: string, key: string): string | undefined {
+  const escaped = key.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const patterns = [
+    new RegExp(`<meta\\b[^>]*\\b(?:name|property)\\s*=\\s*["']${escaped}["'][^>]*\\bcontent\\s*=\\s*["']([^"']*)["']`, "i"),
+    new RegExp(`<meta\\b[^>]*\\bcontent\\s*=\\s*["']([^"']*)["'][^>]*\\b(?:name|property)\\s*=\\s*["']${escaped}["']`, "i"),
+  ];
+  for (const pattern of patterns) {
+    const found = pattern.exec(html)?.[1];
+    if (found !== undefined && found.trim() !== "") return decodeEntities(found).trim();
+  }
+  return undefined;
+}
+
+/**
+ * What a page says about its own authorship and date.
+ *
+ * Three places, in the order sites are most likely to be honest in: JSON-LD (written for
+ * search engines, usually generated), Open Graph and the article: properties, then the
+ * classic `<meta name="author">`. A value that is not a string, or an author that is a
+ * URL, is not taken. Nothing is inferred from the prose.
+ */
+export function htmlMeta(html: string): PageMeta {
+  const meta: PageMeta = {};
+  const take = (key: "author" | "published" | "siteName", value: unknown): void => {
+    if (meta[key] !== undefined) return;
+    if (typeof value !== "string") return;
+    const clean = value.replace(/\s+/g, " ").trim();
+    if (clean === "" || (key === "author" && /^https?:\/\//i.test(clean))) return;
+    meta[key] = clean.slice(0, 200);
+  };
+  for (const match of html.matchAll(/<script\b[^>]*type\s*=\s*["']application\/ld\+json["'][^>]*>([\s\S]*?)<\/script>/gi)) {
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(match[1]!.trim());
+    } catch {
+      continue;
+    }
+    const nodes = Array.isArray(parsed) ? parsed : [parsed];
+    for (const node of nodes) {
+      if (typeof node !== "object" || node === null) continue;
+      const record = node as Record<string, unknown>;
+      const graph = Array.isArray(record["@graph"]) ? (record["@graph"] as unknown[]) : [record];
+      for (const item of graph) {
+        if (typeof item !== "object" || item === null) continue;
+        const entry = item as Record<string, unknown>;
+        const author = entry.author;
+        const authors = Array.isArray(author) ? author : [author];
+        for (const candidate of authors) {
+          take("author", typeof candidate === "object" && candidate !== null ? (candidate as Record<string, unknown>).name : candidate);
+        }
+        take("published", entry.datePublished);
+        const publisher = entry.publisher;
+        take("siteName", typeof publisher === "object" && publisher !== null ? (publisher as Record<string, unknown>).name : undefined);
+      }
+    }
+  }
+  take("author", metaContent(html, "article:author"));
+  take("author", metaContent(html, "author"));
+  take("author", metaContent(html, "twitter:creator"));
+  take("published", metaContent(html, "article:published_time"));
+  take("published", metaContent(html, "og:article:published_time"));
+  take("published", metaContent(html, "date"));
+  take("published", metaContent(html, "pubdate"));
+  take("siteName", metaContent(html, "og:site_name"));
+  return meta;
 }
 
 /**

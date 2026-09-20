@@ -2,7 +2,7 @@
      title: OVP 接入程序第二版：一个 id 贯穿、每个输入有终态、对 OVP 只提通用改动
      family: decision
      status: current
-     updated: 2026-09-19
+     updated: 2026-09-20
 -->
 # 61. OVP 接入程序第二版：一个 id 贯穿、每个输入有终态、对 OVP 只提通用改动
 
@@ -411,3 +411,105 @@ OVP 2.0.1 原样：H1/H2 落地 → bridge 采集与归档 → capture（`annota
    `/digest now` 生成「至今」版（revision 递增）？
 6. staging 切换时不迁移 pack/claim，旧日报的 `@closureHash` 失配是否可接受？
 7. 请再跑一遍 docs/59 §7 的十个输入，这次对照 §2 的状态机逐个给出终态名。
+
+## 16. 修订（2026-09-20）：从信息流本质看，Nova 本身是一个采集入口；前提是先把 X 的正文拿全
+
+### 16.1 看了 session 之后的事实
+
+昨天 Nova 在 feishu-personal 的 transcript：WebSearch 82 次（Brave，只有标题、URL、引擎摘要），
+WebFetch 82 次（host 端 `web.ts` 抓页，只抽 `<title>`，不抽 og:/author/published，正文最多
+40,000 字给模型看；落盘只留 2,000 字残段，`DURABLE_RESULT_CHARS`；WebFetch 不像 bash 那样
+spill 到文件）。其中 X 链接 21 次全部撞登录墙，拿到的只有 `<title>` 里的推文文本。
+
+把昨天出现过的 19 个 X status id 拿 FxTwitter 分类：**18 条是 X Article**（`x.com/i/article/…`），
+正文 3k–28k 字（合计约 16 万字），推文本身只是一个 43 字的 t.co 链接——Nova 对这 18 条看到
+的就是这 43 个字加搜索摘要。立场稿里的「已核完 N 个事实」核的不是原文。这就是「信息质量
+不足以可信」的量化，也是本节前提条件的来源。
+
+结论：Nova **看见过**正文（非 X 页面最多 40k），但工作流只保存了结论；Clippings 那种带
+`source/author/published/tags` 的 frontmatter 它从未产生；X 的正文它根本没拿到。
+
+### 16.2 本质：三段信息流，两边各缺一段
+
+获取（artifact + 来历）→ 落地（原句 + 位置）→ 综合（claim / 立场）。Clippings 与 Pinboard
+进 OVP：获取被动（人剪什么读什么，不知为何读）、落地与综合齐全。Nova：获取主动（82 次
+抓取里读了几十个用户没给的源）、综合强，但获取即用即弃，落地整段跳过。所以结合点不是
+「把用户丢的 URL 投给 OVP」，而是：**Nova 的 research 过程就是一个 clipper**——每次
+WebFetch 是一次 capture，每核一个事实是一次 grounding，立场稿是 crystal 的候选 claim；
+差别只在它没把中间产物写成 OVP 认得的形状。
+
+三种形态（可叠加）：A. Nova 是第三个采集入口——WebFetch 的结果同时写成 capture，带
+Clippings 和 Pinboard 都没有的 provenance（哪条消息、哪个 turn、哪个 query、为核哪个
+事实）；B. Nova 用 OVP 的 reader 做核实，立场稿引用 unit id；C. vault 是 Nova 研究的第一站，
+先查 theme page / claim 再出去搜。合起来：发现（人剪 / 人丢链接 / agent 搜）→ 统一 capture
+（带角色 `user-dropped | agent-read | clipped`）→ 落地 → 综合。对本文的改动：§4 的 capture
+不只来自用户消息的 URL，也来自 Nova 每次抓取（角色 `agent-read`，只有被立场稿引用的才投
+reader，其余只留 capture）；docs/60 §15 第 8 项「回复里六个外部 URL 没进状态机」随之消失。
+
+### 16.3 前提：X 内容解析器（先于 INV-614）
+
+2026-09-20 实测（语料：昨天 19 个 id，原始 JSON 存 `~/workspace/artifacts/x-corpus-2026-09-19/`）：
+
+| 途径 | 全文 | 长推 | 线程 | Article 正文 | 引用 | 不可用原因 | 账号 | 结论 |
+|---|---|---|---|---|---|---|---|---|
+| FxTwitter v2 `GET api.fxtwitter.com/2/thread/{id}` | 是 | 是 | 是（同一调用返回 `thread[]`） | **是**：`status.article.content.blocks`（Draft.js：header/list/blockquote/atomic + entityMap 的 LINK/MEDIA/MARKDOWN 代码块），19/19 全取回，3k–28k 字 | 是 | tombstone `deleted/suspended/private/blocked/unavailable` | 否 | **主** |
+| `cdn.syndication.twimg.com/tweet-result` | 短推 | **否**（`note_tweet` 只有 id 存根） | 否 | **否**（只有 title + preview） | 是 | 否（返回 HTML 错误页） | 否 | 备，必须标 partial |
+| Xquik（OVP 现有路径） | 声称 | 未知 | 未知 | 未知 | 是 | 未知 | 否，付费 | 新厂商无记录；OVP 里只映射了 `text`+`entities.urls`，且本机无 key |
+| X API v2 | 是 | 是 | 7 天窗口 | **不可能**（Articles 只有写接口） | 是 | 是 | 开发者账号，无免费档 | 排除 |
+| twscrape / Playwright 登录 | 是 | 是 | 是 | 部分 | 是 | — | **真实账号，封号风险** | 不做 |
+| Nitter / agent-twitter-client / Google cache / RSS | — | — | — | — | — | — | — | 2026 已死 |
+
+规格（两边共用一份 fixture：上述 19 组 JSON → 期望 markdown；LumenBox 用 TypeScript 实现在
+`web.ts`，OVP 用 Rust 实现在 `ovp-enrich`，同输入同输出）：
+- 输入 status URL → id；主调用 `/2/thread/{id}`；`code ≠ 200` 读 tombstone；网络失败退
+  syndication，并把结果标 `completeness: partial`（`note_tweet` 存在或 `article` 存在即 partial）。
+- 输出 markdown + frontmatter：`source`（原 URL）、`canonical`、`kind ∈ tweet|note|article|reply`、
+  `title`（Article 标题或作者 + 前 60 字）、`author`（handle、name）、`published`（`created_at`）、
+  `fetched_at`、`fetcher ∈ fxtwitter-v2|syndication`、`completeness ∈ full|partial|unavailable`、
+  `unavailable_reason`、`article_id`、`thread_ids[]`、`links[]`（展开后的 URL）、`media[]`（URL + alt）、
+  `community_note`。正文：Article 按 blocks 渲染（h1/h2/h3、有序/无序列表、引用、`MARKDOWN`
+  实体原样、`MEDIA` 实体写 `![alt](url)`、`DIVIDER` 写 `---`）；非 Article 写推文全文，随后
+  线程各贴一节，引用推一节。
+- 原始 JSON 与渲染后的 markdown 一起落盘（证据），frontmatter 记两者的 sha256。
+- 自托管：FxEmbed 是 MIT，可部署到 Cloudflare Workers；先用公共实例（1,000 req/min/IP），
+  配置项 `fxtwitterBase` 可换。ToS 风险：X 在 2026-08/09 对 Nitter 发了 C&D；FxEmbed 体量小但
+  不是零风险，所以备选路径与「partial 必须标出」不可省。
+- 验收：19 条语料 Article 正文 100% 取回且渲染后字数与 `blocks` 文本和一致；tombstone 三种
+  以上 fixture；syndication 退路对同一 id 给出 `partial`；LumenBox 侧 `WebFetch` 对 x.com URL
+  走该解析器后，Nova 看到的是全文而不是 43 字。
+
+**两处实现，一份 fixture，不互相调用。** 需要 X 正文的时刻有两个：Nova 在回合里读链接（LumenBox
+host 的 `WebFetch`，TypeScript，交互式）和 OVP 批处理 needs-content 书签（`ovp-enrich`，Rust，
+离线）。INV-628 改的是前者，是关键路径：agent 行为与 skill 都不变，变的是工具返回全文。
+OVP 侧的 G7（主路径 FxTwitter v2、syndication 为备、Xquik 可选第三、Article 渲染、
+`completeness` 进 index）是**可选的通用改进**，不在关键路径上：bridge 投的 capture 直接带
+LumenBox 已抓到的全文（INV-629 落盘后），正文 ≥ 200 字 OVP 直接 ingest，不会再去抓 X；G7 只
+修 Pinboard / Clipper 进来的 X 书签，那是 OVP 自身今天就坏着的功能，排期由 OVP 定。不让
+LumenBox 调 OVP 抓取：交互式与批处理形状不同、通用工具不能绑在 Mac 上的 ovp2 二进制、
+跨语言进程调用换来的只是省一份两百行解析。两边共用 19 条语料的 fixture 防止漂移。
+
+**实现记录（INV-628，2026-09-20）。** `src/host/x-post.ts`：`xStatusRef` 识别链接、`parseFxThread` /
+`parseSyndication` 解析、`renderArticleBody` 渲染 blocks、`renderXPost` 输出带 frontmatter 的
+markdown、`fetchXPost` 编排（`/2/thread` → 空正文时 `/2/status` 再取一次 → syndication 备路径，
+tombstone 不走备路径）并落盘 `~/.agentbox/fetched/x/<id>/`；`WebFetch` 对 x.com 链接改走它
+（`tools.ts`）；`fetchPage` 加了 `maxText` 与 `passStatuses` 两个选项（API 答复不截断、404 的
+JSON 正文是答案）。fixture 是 19 组 `src/host/fixtures/x-corpus/<id>.{fx2,synd}.json` 加金标
+`<id>.expected.md`，17 个测试。实测两条与文档不同处：FxTwitter 偶发返回「有 article 无 blocks」
+（两条，重抓即齐），已作 partial 加重试处理；不存在的 id 是 HTTP 404 带 JSON 正文，不是 200。
+
+**实现记录（INV-629，2026-09-20）。** `src/host/fetched.ts`：`keepFetchedPage` 把每次 `WebFetch` 的
+全文（不受 40k 上限）连同 frontmatter（url / final_url / title / fetched_at / content_type / bytes /
+text_chars / clipped / sha256 / author / published / site_name / agent_id / agent / conversation）写到
+`~/.agentbox/fetched/<yyyy-mm>/<sha8>-<instant>.md`；`fetchPage` 多返回 `fullText`、`contentType`、
+`bytes`、`meta`，`htmlMeta` 从 JSON-LD、Open Graph、`<meta>` 抽作者、日期、站名；tool result 末尾
+`[full page kept: <path>]`，`storableResult` 的指针正则同时认 `full output kept` 与 `full page kept`；
+保留 `AGENTBOX_FETCHED_RETENTION_DAYS`（默认 90，上限 3650），抓取时最多每小时清一次并记一行；
+`audit-export` 把窗口内的 fetched 文件脱敏后带走，manifest 单列 `fetched`。`turn_id` / `tool_use_id`
+留空，等 INV-613 的 H2 落地后再填。
+
+### 16.4 顺序
+
+X 解析器 → WebFetch 抓取落盘（所有 agent 抓取带元数据写 `~/.agentbox/fetched/`，是形态 A 的
+基础，也终结 2,000 字截断丢证据）→ INV-614 第一段 → 第二段。前两项各提一个候选挂在 INV-612
+下，X 解析器 BLOCKS INV-614，抓取落盘 BLOCKS INV-615。
+

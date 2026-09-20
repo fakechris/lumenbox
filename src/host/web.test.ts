@@ -15,6 +15,7 @@ import {
   fetchPage,
   forbiddenAddress,
   guardUrl,
+  htmlMeta,
   htmlToText,
   isSearchEngine,
   searchWeb,
@@ -300,3 +301,26 @@ test("a provider is chosen by preference, and only a failure falls through", asy
   // An empty string is a key nobody set, which is how it looks in a config file.
   assert.deepEqual(configuredProviders({ KEENABLE_API_KEY: "" }).map(p => p.name), []);
 });
+
+test("a page's own authorship and date are read from JSON-LD, Open Graph and meta, and nothing is invented", () => {
+  const jsonLd = `<html><head><title>T</title>
+    <script type="application/ld+json">{"@context":"https://schema.org","@type":"NewsArticle","headline":"H",
+      "author":[{"@type":"Person","name":"Ada Lovelace"}],"datePublished":"2026-09-18T12:15:26Z","publisher":{"@type":"Organization","name":"The Engine"}}</script>
+    <meta property="og:site_name" content="Ignored, JSON-LD came first"></head><body><p>x</p></body></html>`;
+  assert.deepEqual(htmlMeta(jsonLd), { author: "Ada Lovelace", published: "2026-09-18T12:15:26Z", siteName: "The Engine" });
+
+  const openGraph = `<html><head>
+    <meta content="2026-09-01" property="article:published_time">
+    <meta property="article:author" content="https://example.com/people/ada">
+    <meta name="author" content="  Ada &amp; Co ">
+    <meta property="og:site_name" content="Example"></head><body></body></html>`;
+  // An author that is a URL is a pointer, not a name; the meta name wins.
+  assert.deepEqual(htmlMeta(openGraph), { author: "Ada & Co", published: "2026-09-01", siteName: "Example" });
+
+  const bare = "<html><head><title>Only a title</title></head><body><p>By nobody in particular.</p></body></html>";
+  assert.deepEqual(htmlMeta(bare), {});
+
+  const broken = `<html><head><script type="application/ld+json">{not json</script><meta name="date" content="2025-01-02"></head></html>`;
+  assert.deepEqual(htmlMeta(broken), { published: "2025-01-02" });
+});
+

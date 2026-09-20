@@ -15,8 +15,9 @@
  * counts what it redacted, so a clean export says so with a number, not a promise.
  */
 
-import { existsSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
+import { existsSync, mkdirSync, readFileSync, readdirSync, statSync, writeFileSync } from "node:fs";
+import { join, relative as relativeTo } from "node:path";
+import { FETCHED_DIRNAME, readFrontmatter } from "./fetched.ts";
 import type { AgentRegistry } from "../agents/registry.ts";
 import { CONVERSATIONS_DIRNAME, conversationIdFor, TRANSCRIPT_FILENAME } from "../agents/registry.ts";
 import { CREDENTIAL_PATTERNS, MIN_EXACT_LENGTH } from "./secret-scan.ts";
@@ -49,6 +50,12 @@ export interface ExportManifest {
   /** Lines that carried no readable `at` and so could not be placed in the window. */
   undated: number;
   redactions: { exact: number; pattern: number };
+  /**
+   * Pages the box's agents fetched inside the window (fetched.ts), by export-relative
+   * path, with the byte count written. Markdown, not records — listed apart from `files`
+   * so a reader of the ledgers does not try to parse prose as JSON.
+   */
+  fetched?: Record<string, number>;
 }
 
 function readLines(path: string): string[] {
@@ -190,6 +197,65 @@ export function exportAudit(options: ExportOptions): ExportManifest {
   }
   write("messages.jsonl", messageLines);
 
+  // What the agents read. A fetched page is evidence for what was said about it, and it
+  // is kept with the same window and the same redaction as everything else here.
+  const fetched: Record<string, number> = {};
+  const fetchedRoot = join(options.home, FETCHED_DIRNAME);
+  const walkFetched = (dir: string): void => {
+    let names: string[];
+    try {
+      names = readdirSync(dir);
+    } catch {
+      return;
+    }
+    for (const name of names) {
+      const path = join(dir, name);
+      let isDir = false;
+      try {
+        isDir = statSync(path).isDirectory();
+      } catch {
+        continue;
+      }
+      if (isDir) {
+        walkFetched(path);
+        continue;
+      }
+      if (!name.endsWith(".md")) continue;
+      let text: string;
+      try {
+        text = readFileSync(path, "utf8");
+      } catch {
+        continue;
+      }
+      const head = readFrontmatter(text);
+      // Ours: written for one of this box's agents. A kept X post names no agent (it is
+      // shared by whoever fetched it) and is taken by time alone.
+      const owner = head.agent_id;
+      if (owner !== undefined && !agentIds.has(owner)) continue;
+      const at = head.fetched_at;
+      if (at === undefined) {
+        undated += 1;
+        continue;
+      }
+      const inWindow = within(at, from, to);
+      if (inWindow !== true) continue;
+      const relative = join("fetched", relativeTo(fetchedRoot, path));
+      const outPath = join(options.out, relative);
+      mkdirSync(join(outPath, ".."), { recursive: true });
+      const out: string[] = [];
+      for (const line of text.split("\n")) {
+        const redacted = redactLine(line, held);
+        redactions.exact += redacted.exact;
+        redactions.pattern += redacted.pattern;
+        out.push(redacted.text);
+      }
+      const body = out.join("\n");
+      writeFileSync(outPath, body, { mode: 0o600 });
+      fetched[relative] = Buffer.byteLength(body, "utf8");
+    }
+  };
+  walkFetched(fetchedRoot);
+
   const manifest: ExportManifest = {
     format: "agentbox-audit-export/1",
     generatedAt: (options.now ?? (() => new Date()))().toISOString(),
@@ -200,6 +266,7 @@ export function exportAudit(options: ExportOptions): ExportManifest {
     files,
     undated,
     redactions,
+    ...(Object.keys(fetched).length > 0 ? { fetched } : {}),
   };
   writeFileSync(join(options.out, "manifest.json"), `${JSON.stringify(manifest, null, 2)}\n`, { mode: 0o600 });
   return manifest;
@@ -227,6 +294,8 @@ export function describeExport(manifest: ExportManifest, out: string): string[] 
   for (const [file, count] of Object.entries(manifest.files)) if (!file.startsWith("transcripts/")) lines.push(`  ${file}: ${count}`);
   const transcripts = Object.entries(manifest.files).filter(([file]) => file.startsWith("transcripts/"));
   if (transcripts.length > 0) lines.push(`  transcripts: ${transcripts.reduce((sum, [, n]) => sum + n, 0)} entries in ${transcripts.length} file(s)`);
+  const fetchedFiles = Object.keys(manifest.fetched ?? {});
+  if (fetchedFiles.length > 0) lines.push(`  fetched pages: ${fetchedFiles.length} file(s)`);
   lines.push(`  redacted: ${manifest.redactions.exact} held value(s), ${manifest.redactions.pattern} credential-shaped string(s)`);
   if (manifest.undated > 0) lines.push(`  ${manifest.undated} line(s) had no readable time and were left out`);
   return lines;
