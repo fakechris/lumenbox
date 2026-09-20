@@ -295,6 +295,17 @@ Read once at startup, written with defaults on first start so the settings are d
 an editor. Read defensively: a mistyped value falls back and says so, an out-of-range one is
 clamped, unknown keys are ignored so a config from a later version still loads.
 
+### 2.6 `fetched/x/<id>/`
+
+What the host read when an agent asked for a post on X (`src/host/x-post.ts`, INV-628): the
+raw answer as it came (`fxtwitter-v2.json` or, on fallback, `syndication.json`) and the
+rendering the agent was given (`post.md`, markdown with frontmatter naming `completeness`,
+`fetcher`, the author, the date, the thread ids, and the sha256 of both files). Kept because
+the tool result is cut to `DURABLE_RESULT_CHARS` in the transcript (docs/24) and the text an
+agent cited would otherwise be gone. Written once per fetch, never rewritten; a second fetch
+of the same id overwrites with the newer answer. `AGENTBOX_FXTWITTER_BASE` and
+`AGENTBOX_X_SYNDICATION_BASE` point the reader at a self-hosted FxEmbed or a mirror.
+
 ## 3. Box state
 
 ### 3.1 `work` volume — `/home/box/work`

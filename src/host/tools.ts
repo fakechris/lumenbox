@@ -24,7 +24,8 @@ import { delegateEnv, delegateModel, PRESETS, presetNamed, quoteForShell, instal
 import { namesControlSurface } from "./control-surfaces.ts";
 import { catalogMenu, intersectTools, profilesFor } from "./catalog.ts";
 import { describeHistory, readHistory } from "./history.ts";
-import { canSearch, fetchPage, guardUrl, isSearchEngine, searchWeb, WebError } from "./web.ts";
+import { canSearch, fetchPage, guardUrl, isSearchEngine, MAX_TEXT, searchWeb, WebError } from "./web.ts";
+import { fetchXPost, xStatusRef } from "./x-post.ts";
 import { describeEnvShape, envShape, looksLikeEnvFile } from "./env-shape.ts";
 import { guardShellCommand } from "./ui-automation-guard.ts";
 import { dedupe, dedupeKey, describeFrom, memoryRef, validateRecord } from "./memory.ts";
@@ -3802,6 +3803,22 @@ export async function dispatchTool(
                 "browser is a real browser and searches normally."),
           isError: true,
         };
+      }
+      // A post on X is read through FxTwitter, not the site: the site serves a login wall
+      // with the first line of the post in its <title>, and an agent that read that for a
+      // day cited eighteen articles it had seen forty-three characters of (x-post.ts).
+      if (xStatusRef(target) !== undefined) {
+        try {
+          const { markdown, kept } = await fetchXPost(target);
+          if (markdown.length <= MAX_TEXT) return { text: markdown };
+          const where = kept !== undefined ? ` The whole post is kept at ${kept.markdown}.` : "";
+          return { text: `${markdown.slice(0, MAX_TEXT)}\n\n[... rest of post not shown.${where}]` };
+        } catch (error) {
+          return {
+            text: error instanceof WebError ? error.message : `Could not read that post: ${error}`,
+            isError: true,
+          };
+        }
       }
       try {
         const page = await fetchPage(target);
