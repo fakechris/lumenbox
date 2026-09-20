@@ -497,6 +497,16 @@ JSON 正文是答案）。fixture 是 19 组 `src/host/fixtures/x-corpus/<id>.{f
 `<id>.expected.md`，17 个测试。实测两条与文档不同处：FxTwitter 偶发返回「有 article 无 blocks」
 （两条，重抓即齐），已作 partial 加重试处理；不存在的 id 是 HTTP 404 带 JSON 正文，不是 200。
 
+**实现记录（INV-629，2026-09-20）。** `src/host/fetched.ts`：`keepFetchedPage` 把每次 `WebFetch` 的
+全文（不受 40k 上限）连同 frontmatter（url / final_url / title / fetched_at / content_type / bytes /
+text_chars / clipped / sha256 / author / published / site_name / agent_id / agent / conversation）写到
+`~/.agentbox/fetched/<yyyy-mm>/<sha8>-<instant>.md`；`fetchPage` 多返回 `fullText`、`contentType`、
+`bytes`、`meta`，`htmlMeta` 从 JSON-LD、Open Graph、`<meta>` 抽作者、日期、站名；tool result 末尾
+`[full page kept: <path>]`，`storableResult` 的指针正则同时认 `full output kept` 与 `full page kept`；
+保留 `AGENTBOX_FETCHED_RETENTION_DAYS`（默认 90，上限 3650），抓取时最多每小时清一次并记一行；
+`audit-export` 把窗口内的 fetched 文件脱敏后带走，manifest 单列 `fetched`。`turn_id` / `tool_use_id`
+留空，等 INV-613 的 H2 落地后再填。
+
 ### 16.4 顺序
 
 X 解析器 → WebFetch 抓取落盘（所有 agent 抓取带元数据写 `~/.agentbox/fetched/`，是形态 A 的

@@ -295,16 +295,31 @@ Read once at startup, written with defaults on first start so the settings are d
 an editor. Read defensively: a mistyped value falls back and says so, an out-of-range one is
 clamped, unknown keys are ignored so a config from a later version still loads.
 
-### 2.6 `fetched/x/<id>/`
+### 2.6 `fetched/`
 
-What the host read when an agent asked for a post on X (`src/host/x-post.ts`, INV-628): the
-raw answer as it came (`fxtwitter-v2.json` or, on fallback, `syndication.json`) and the
-rendering the agent was given (`post.md`, markdown with frontmatter naming `completeness`,
-`fetcher`, the author, the date, the thread ids, and the sha256 of both files). Kept because
-the tool result is cut to `DURABLE_RESULT_CHARS` in the transcript (docs/24) and the text an
-agent cited would otherwise be gone. Written once per fetch, never rewritten; a second fetch
-of the same id overwrites with the newer answer. `AGENTBOX_FXTWITTER_BASE` and
-`AGENTBOX_X_SYNDICATION_BASE` point the reader at a self-hosted FxEmbed or a mirror.
+What the host read on the web for an agent, kept (`src/host/fetched.ts`, INV-629; the X part
+`src/host/x-post.ts`, INV-628). The tool result an agent sees is cut to `DURABLE_RESULT_CHARS`
+in the transcript (docs/24), so without this the text an agent cited was gone by the time
+anyone asked what it had been verified against.
+
+- `fetched/<yyyy-mm>/<sha8-of-url>-<fetched_at>.md` — one file per `WebFetch`: a frontmatter
+  (`schema: lumenbox.fetched/v1`, `url`, `final_url`, `title`, `fetched_at`, `content_type`,
+  `bytes`, `text_chars`, `clipped`, `sha256` of the body, and `author` / `published` /
+  `site_name` when the page declared them in JSON-LD, Open Graph or `<meta>`, then
+  `agent_id`, `agent`, `conversation`) over the **whole** extracted text, not the 40,000-
+  character slice the model was shown. Never overwritten: the instant is in the name.
+- `fetched/x/<id>/` — a post on X: the raw answer (`fxtwitter-v2.json`, or `syndication.json`
+  on fallback) beside `post.md`, markdown whose frontmatter names `completeness`, `fetcher`,
+  the author, the date, the thread ids and both sha256s. A second fetch of the same id
+  overwrites with the newer answer.
+
+The tool result ends with `[full page kept: <path>]`, the same shape as the box's spill
+pointer, and `storableResult` carries it across the transcript's cut. Kept for
+`AGENTBOX_FETCHED_RETENTION_DAYS` days (default 90, at most 3650): a prune runs on the way
+past a fetch at most once an hour and logs one line when it removed anything. The audit
+export (docs/50 J4) takes the files inside its window, redacted, listed under `fetched` in
+the manifest apart from the ledgers. `AGENTBOX_FXTWITTER_BASE` and
+`AGENTBOX_X_SYNDICATION_BASE` point the X reader at a self-hosted FxEmbed or a mirror.
 
 ## 3. Box state
 

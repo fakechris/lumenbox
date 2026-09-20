@@ -24,8 +24,10 @@ import { delegateEnv, delegateModel, PRESETS, presetNamed, quoteForShell, instal
 import { namesControlSurface } from "./control-surfaces.ts";
 import { catalogMenu, intersectTools, profilesFor } from "./catalog.ts";
 import { describeHistory, readHistory } from "./history.ts";
-import { canSearch, fetchPage, guardUrl, isSearchEngine, MAX_TEXT, searchWeb, WebError } from "./web.ts";
+import { canSearch, fetchPage, type FetchedPage, guardUrl, isSearchEngine, MAX_TEXT, searchWeb, WebError } from "./web.ts";
 import { fetchXPost, xStatusRef } from "./x-post.ts";
+import { join } from "node:path";
+import { keepFetchedPage, KEPT_MARKER, pruneOccasionally } from "./fetched.ts";
 import { describeEnvShape, envShape, looksLikeEnvFile } from "./env-shape.ts";
 import { guardShellCommand } from "./ui-automation-guard.ts";
 import { dedupe, dedupeKey, describeFrom, memoryRef, validateRecord } from "./memory.ts";
@@ -73,6 +75,13 @@ import {
 
 export interface ToolContext {
   agent: AgentRecord;
+  /**
+   * How WebFetch reads a page. Replaced only by tests, which cannot reach the web and
+   * must not; the default is the guarded fetch in web.ts.
+   */
+  webFetch?: (url: string) => Promise<FetchedPage>;
+  /** Where fetched pages are kept. Tests point it at a temp dir; the default is ~/.agentbox. */
+  fetchedHome?: string;
   /**
    * Who is driving, when the box was told.
    *
@@ -3809,10 +3818,15 @@ export async function dispatchTool(
       // day cited eighteen articles it had seen forty-three characters of (x-post.ts).
       if (xStatusRef(target) !== undefined) {
         try {
-          const { markdown, kept } = await fetchXPost(target);
-          if (markdown.length <= MAX_TEXT) return { text: markdown };
-          const where = kept !== undefined ? ` The whole post is kept at ${kept.markdown}.` : "";
-          return { text: `${markdown.slice(0, MAX_TEXT)}\n\n[... rest of post not shown.${where}]` };
+          const { markdown, kept } = await fetchXPost(
+            target,
+            context.fetchedHome !== undefined ? { keepUnder: join(context.fetchedHome, "fetched", "x") } : {}
+          );
+          // The pointer is the last line for the same reason the box's spill pointer is:
+          // storableResult carries it across the transcript's cut (turn.ts).
+          const pointer = kept !== undefined ? `\n\n[${KEPT_MARKER} ${kept.markdown}]` : "";
+          if (markdown.length <= MAX_TEXT) return { text: `${markdown}${pointer}` };
+          return { text: `${markdown.slice(0, MAX_TEXT)}\n\n[... rest of post not shown]${pointer}` };
         } catch (error) {
           return {
             text: error instanceof WebError ? error.message : `Could not read that post: ${error}`,
@@ -3821,7 +3835,7 @@ export async function dispatchTool(
         }
       }
       try {
-        const page = await fetchPage(target);
+        const page = await (context.webFetch ?? fetchPage)(target);
         const heading = [
           page.title !== undefined ? `# ${page.title}` : undefined,
           // The URL that answered, not the one asked for — a redirect means the agent is
@@ -3830,7 +3844,32 @@ export async function dispatchTool(
         ]
           .filter(Boolean)
           .join("\n");
-        return { text: `${heading}\n\n${page.text}` };
+        // Kept whole, whatever the model is shown, so what the agent cites can be read
+        // again later (fetched.ts). A failure to keep is said, not allowed to fail the read.
+        let pointer = "";
+        try {
+          const kept = keepFetchedPage(
+            {
+              url: target,
+              finalUrl: page.url,
+              ...(page.title !== undefined ? { title: page.title } : {}),
+              text: page.fullText,
+              contentType: page.contentType,
+              bytes: page.bytes,
+              clipped: page.truncated,
+              meta: page.meta,
+              agent: { id: context.agent.id, name: context.agent.profile.name },
+              ...(context.conversation !== undefined ? { conversation: context.conversation } : {}),
+              fetchedAt: new Date(),
+            },
+            context.fetchedHome
+          );
+          pointer = `\n\n[${KEPT_MARKER} ${kept.path}]`;
+          pruneOccasionally(line => console.error(line), context.fetchedHome);
+        } catch (error) {
+          pointer = `\n\n[could not keep a copy of this page: ${error instanceof Error ? error.message : error}]`;
+        }
+        return { text: `${heading}\n\n${page.text}${pointer}` };
       } catch (error) {
         // A refused address is a normal answer to a bad request, not a crash: the model
         // is told plainly so it stops rather than retrying the same host another way.
