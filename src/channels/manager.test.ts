@@ -2262,3 +2262,61 @@ test("a door stays out of the rooms its rules exclude, and takes no guests when 
   assert.match(String(stranger ?? ""), /不收新的申请/);
   assert.deepEqual(knocks, [], "guests off means nobody has a knock to triage");
 });
+
+test("an admitted message is written to the message ledger with the id the turn then receives; a refused one is not", async () => {
+  const adapter = testAdapter();
+  const written = [] as { id: string; channelMessageId?: string; text: string; conversationKey: string; files?: { name: string; bytes: number }[] }[];
+  const origins = [] as (string | undefined)[];
+  const steered = [] as (string | undefined)[];
+  const manager = new ChannelManager({
+    mayDrive: identity => identity !== "telegram:stranger",
+    ask: async (_agent, _text, _identity, _chatKey, _onProgress, _threadKey, _taskId, _onInterim, _onText, origin) => {
+      origins.push(origin?.messageId);
+      return "done";
+    },
+    messages: { admitted: (record: (typeof written)[number]) => written.push(record) } as never,
+    log: () => {},
+  });
+  manager.register(adapter, true, "test");
+  await started(manager);
+
+  await adapter.inject({
+    identity: "telegram:7",
+    chatKey: "telegram:room",
+    threadKey: "telegram:room/t1",
+    messageId: "om_1",
+    senderLabel: "Alice",
+    text: "look at https://example.com/a and tell me",
+  });
+  await new Promise(resolve => setTimeout(resolve, 20));
+  assert.equal(written.length, 1);
+  const record = written[0]!;
+  assert.match(record.id, /^[0-9a-f-]{36}$/);
+  assert.equal(record.channelMessageId, "om_1");
+  assert.equal(record.text, "look at https://example.com/a and tell me");
+  assert.equal(record.conversationKey, "telegram:room/t1");
+  assert.equal(record.files, undefined);
+  // The same id reached the turn.
+  assert.deepEqual(origins, [record.id]);
+
+  // Files are recorded by name and size, never by content; the bytes live in the box.
+  await adapter.inject({
+    identity: "telegram:7",
+    chatKey: "telegram:room",
+    messageId: "om_1b",
+    senderLabel: "Alice",
+    text: "and this file",
+    files: [{ name: "a.txt", base64: Buffer.from("hello").toString("base64") }],
+  });
+  await new Promise(resolve => setTimeout(resolve, 20));
+  assert.equal(written.length, 2);
+  assert.deepEqual(written[1]!.files, [{ name: "a.txt", bytes: 5 }]);
+
+  // A stranger is refused at the door and leaves no record.
+  await adapter.inject({ identity: "telegram:stranger", messageId: "om_2", senderLabel: "Nobody", text: "hi" });
+  await new Promise(resolve => setTimeout(resolve, 20));
+  assert.equal(written.length, 2);
+  assert.equal(origins.length, 1);
+  void steered;
+});
+

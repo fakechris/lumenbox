@@ -687,15 +687,23 @@ export type TranscriptEntry =
        * them (docs/42 §2) — a worker nobody has spoken to has no chat anyone is reading.
        */
       fromPerson?: true;
+      /**
+       * The turn that wrote this line — the id `turns.jsonl` records — so a message, the
+       * turn it caused and the reply that turn gave can be walked as ids rather than
+       * matched by time (INV-613). Absent on entries written before this existed and on
+       * the compaction summary, which belongs to no one turn.
+       */
+      turnId?: string;
     }
   /** An assistant turn that called tools; carries text and tool_use blocks. */
-  | { role: "assistant"; kind: "blocks"; blocks: Anthropic.ContentBlockParam[]; at: string }
+  | { role: "assistant"; kind: "blocks"; blocks: Anthropic.ContentBlockParam[]; at: string; turnId?: string }
   /** The matching results. Must immediately follow its `blocks` entry. */
   | {
       role: "user";
       kind: "results";
       blocks: Anthropic.ToolResultBlockParam[];
       at: string;
+      turnId?: string;
     }
   /** Stands in for the entries before it when the history outgrew the context window. */
   | {
@@ -1467,6 +1475,7 @@ export async function runTurn(
           kind: "results",
           blocks: replayed,
           at: new Date().toISOString(),
+          turnId,
         } satisfies TranscriptEntry;
         registry.appendTranscript(agent.id, entry, conversation);
         history = [...history, entry];
@@ -1528,6 +1537,7 @@ export async function runTurn(
     // not be walked backwards however precisely everything was timed.
     causedBy: inbound.map(message => message.id),
     ...(personOpened ? { fromPerson: true as const } : {}),
+    turnId,
   } satisfies TranscriptEntry, conversation);
 
   // Narrowed by this agent's profile. Withheld, not refused: a tool it may not use is not in its
@@ -1708,6 +1718,7 @@ export async function runTurn(
         role: "user",
         text: outcome.continueWith,
         at: new Date().toISOString(),
+        turnId,
       } satisfies TranscriptEntry, conversation);
 
       // Reassembled from the transcript, and compacted on the way, which is what the comment above
@@ -1810,7 +1821,7 @@ export async function runTurn(
         "[last round] You have one response left in this turn and no tools. Reply now with what " +
         "you have: the result so far, marked partial where it is, and what is left. Anything you " +
         "checkpointed is already safe; do not repeat it, point at it.";
-      registry.appendTranscript(agent.id, { role: "user", text: lastCall, at: new Date().toISOString() } satisfies TranscriptEntry, conversation);
+      registry.appendTranscript(agent.id, { role: "user", text: lastCall, at: new Date().toISOString(), turnId } satisfies TranscriptEntry, conversation);
       messages.push({ role: "user", content: lastCall });
       forceTools = { type: "none" };
     }
@@ -1822,6 +1833,7 @@ export async function runTurn(
         text: steerText,
         at: new Date().toISOString(),
         causedBy: steered.map(message => message.id),
+        turnId,
       } satisfies TranscriptEntry, conversation);
       messages.push({ role: "user", content: steerText });
     }
@@ -1840,6 +1852,7 @@ export async function runTurn(
         role: "assistant",
         text: permitted.reason,
         at: new Date().toISOString(),
+        turnId,
       } satisfies TranscriptEntry, conversation);
       emit({
         type: "text",
@@ -2227,6 +2240,7 @@ export async function runTurn(
         role: "assistant",
         text: note,
         at: new Date().toISOString(),
+        turnId,
       } satisfies TranscriptEntry, conversation);
       emit({ type: "text", agentId: agent.id, agentName: agent.profile.name, delta: note });
       return;
@@ -2286,6 +2300,7 @@ export async function runTurn(
           kind: "blocks",
           blocks: response.content.filter((block): block is Anthropic.TextBlock => block.type === "text"),
           at: new Date().toISOString(),
+          turnId,
         } satisfies TranscriptEntry, conversation);
         messages.push({ role: "user", content: nudgeFor(reason, chinese) });
         // A verdict or an offer is answered with a demand for a tool call, which is what the
@@ -2311,6 +2326,7 @@ export async function runTurn(
           role: "assistant",
           text: finalText,
           at: new Date().toISOString(),
+          turnId,
         } satisfies TranscriptEntry, conversation);
         // A Stop hook may send the model back once: its reason becomes the next user message,
         // and `stop_hook_active` tells the hook it already did so, which is how a hook avoids
@@ -2349,6 +2365,7 @@ export async function runTurn(
         role: "assistant",
         text: silent,
         at: new Date().toISOString(),
+        turnId,
       } satisfies TranscriptEntry, conversation);
       emit({ type: "text", agentId: agent.id, agentName: agent.profile.name, delta: silent });
       console.error(`[turn] ${agent.profile.name}: ended with no text on round ${round}`);
@@ -2625,12 +2642,14 @@ export async function runTurn(
           (block.type === "text" && !filedAnswer) || block.type === "tool_use"
       ),
       at: requestedAt,
+      turnId,
     } satisfies TranscriptEntry, conversation);
     registry.appendTranscript(agent.id, {
       role: "user",
       kind: "results",
       blocks: results.map(block => storableResult(block, withheld.get(block.tool_use_id))),
       at: new Date().toISOString(),
+      turnId,
     } satisfies TranscriptEntry, conversation);
     // Only now are a fork's findings durably the parent's (docs/32 §1): the results entry is
     // on disk. Committing inside the tool would record `done` for findings a crash could

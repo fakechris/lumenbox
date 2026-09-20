@@ -81,6 +81,13 @@ Append-only, one JSON object per line, four shapes:
 { "role": "user",      "kind": "summary", "covers": 127, "text": "…", "at": "…" }  // stands in for the first 127
 ```
 
+Two fields ride on entries and are for whoever reconstructs what happened, never for the
+model: `causedBy` (the ids of the messages that opened or steered the turn — the same ids
+`messages.jsonl` and the inbox carry) and `turnId` (the id `turns.jsonl` records for the turn
+that wrote the line, on every entry a turn writes; absent on the compaction summary and on
+entries from before INV-613).
+
+
 Invariants:
 
 - A `results` entry immediately follows its `blocks` entry. Replay trims orphans at the edges,
@@ -265,6 +272,23 @@ Append-only records of feed-worthy events, each with the time it happened. Bound
 Copy-then-truncate rather than rename, because the writer holds it open.
 
 Not a record of the run. The transcripts are. Deleting this file clears the feed.
+
+### 2.3a `messages.jsonl`
+
+Every message a person sent through a door, kept once, as sent, for good (`src/channels/messages.ts`,
+INV-613). One line per admitted message: `schema: lumenbox.message/v1`, `id` (minted at the door — the
+id the inbox record and the transcript's `causedBy` then carry), `channel`, `channelMessageId` (the
+wire's own id, e.g. Feishu's `om_…`), `chatKey`, `threadKey`, `identity`, `senderLabel`,
+`conversationKey` (the thread if any, else the chat — `conversationIdFor` turns it into the
+transcript's conversation name), `receivedAt`, `text` (whole, before the inbox's 8,000-character
+clamp), `textChars`, `files[] {name, bytes}`.
+
+Why a fifth ledger: `ingress.jsonl`, `inbox.jsonl`, `turns.jsonl` and `deliveries.jsonl` all empty
+themselves once nothing is pending, which is right for a queue and wrong for a record, and the
+transcript joins several messages into one prompt. This file never compacts. Refused messages are
+not in it (ingress says they were refused); it is not scanned for secrets on the way in — the
+audit export redacts on the way out — because a record that edits what a person said is not a
+record of what they said.
 
 ### 2.4 `usage.jsonl`
 

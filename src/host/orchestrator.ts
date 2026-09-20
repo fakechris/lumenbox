@@ -1870,7 +1870,14 @@ export class Orchestrator {
     agentIdOrName: string,
     text: string,
     caller?: { userId?: string },
-    options: { conversation?: string; steerable?: boolean; lane?: Lane; synthetic?: boolean } = {}
+    options: {
+      conversation?: string;
+      steerable?: boolean;
+      lane?: Lane;
+      synthetic?: boolean;
+      /** The message's id from the door it came through (INV-613); see `AgentBus.sendFromUser`. */
+      messageId?: string;
+    } = {}
   ): Promise<void> {
     const agent = this.registry.resolve(agentIdOrName);
     const conversation = options.conversation ?? MAIN_CONVERSATION;
@@ -1890,6 +1897,7 @@ export class Orchestrator {
       conversation,
       ...(options.steerable === false ? { steerable: false } : {}),
       ...(options.lane !== undefined ? { lane: options.lane } : {}),
+      ...(options.messageId !== undefined ? { messageId: options.messageId } : {}),
     });
     const before = this.registry.readTranscript(agent.id, conversation).length;
     await this.bus.runExclusive(agent.id, { userDriven: true, conversation });
