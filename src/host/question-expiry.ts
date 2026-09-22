@@ -131,10 +131,14 @@ export class QuestionWatch {
    * through, with the identity it came from; questions put to somebody else in the same
    * room are untouched.
    */
-  noteReply(agentId: string, identity: string): WatchedQuestion[] {
+  noteReply(agentId: string, identity: string, questionId: string, conversation: string, now = Date.now()): WatchedQuestion[] {
     const hit: WatchedQuestion[] = [];
     for (const question of this.pending.values()) {
-      if (question.agentId !== agentId || question.asker !== identity) continue;
+      if (question.agentId !== agentId || question.asker !== identity || question.id !== questionId || question.conversation !== conversation || question.expiresAt <= now) continue;
+      if (this.answered.has(question.id)) continue;
+      // Persist acceptance now: a restart before the periodic sweep must not apply the
+      // fallback after the person's answer was already admitted.
+      this.append({ kind: "settled", id: question.id, at: new Date(now).toISOString(), verdict: "answered" });
       this.answered.add(question.id);
       hit.push({ ...question });
     }

@@ -510,7 +510,26 @@ test("a question card carries each answer as a button that speaks the answer", (
     [{ ask: "跳过并标注" }, { ask: "停下来" }]
   );
   const note = card.elements.find(element => element.tag === "note");
-  assert.match(note!.elements![0]!.content, /直接把答案打在下面/);
+  assert.match(note!.elements![0]!.content, /单独发送新的请求/);
+});
+
+test("Feishu never silently succeeds without a destination, client or message receipt", async () => {
+  const adapter = new FeishuChannel("a", "b", () => {});
+  await assert.rejects(adapter.sendToChat("feishu:room", "result"), /missing API client/);
+  await assert.rejects(adapter.sendFile("feishu:room", "result.md", "eA=="), /missing chat or API client/);
+  await assert.rejects(adapter.sendImage("feishu:room", "eA=="), /missing chat or API client/);
+  await assert.rejects(adapter.sendToChat("feishu:", "result"), /empty chat/);
+  let creates = 0;
+  let replies = 0;
+  (adapter as unknown as { apiClient: unknown }).apiClient = { im: { message: {
+    create: async () => { creates++; return {}; },
+    reply: async () => { replies++; throw new Error("timeout after vendor may have accepted"); },
+  } } };
+  await assert.rejects(adapter.sendToChat("feishu:room", "result"), /no message id/);
+  assert.equal(creates, 1, "an unknown send is not blindly retried");
+  await assert.rejects(adapter.sendToChat("feishu:room:thread", "result"), /timeout/);
+  assert.equal(replies, 1);
+  assert.equal(creates, 1, "an unknown reply is not duplicated as a new post");
 });
 
 test("a question card carries thread chatKey in each button value so clicks stay in thread", () => {
@@ -518,6 +537,7 @@ test("a question card carries thread chatKey in each button value so clicks stay
     {
       agentName: "Ada",
       question: "有 12 份报表缺'成本'列。跳过并在总表标注,还是停下来等你?",
+      questionId: "q123",
       options: ["跳过并标注", "停下来"],
     },
     "feishu:oc_room123:omt_root456"
@@ -529,8 +549,8 @@ test("a question card carries thread chatKey in each button value so clicks stay
   assert.deepEqual(
     actions.map(action => action.value),
     [
-      { ask: "跳过并标注", chatKey: "feishu:oc_room123:omt_root456" },
-      { ask: "停下来", chatKey: "feishu:oc_room123:omt_root456" },
+      { ask: "跳过并标注", questionId: "q123", chatKey: "feishu:oc_room123:omt_root456" },
+      { ask: "停下来", questionId: "q123", chatKey: "feishu:oc_room123:omt_root456" },
     ]
   );
 });

@@ -102,3 +102,4 @@ this file and the headers disagree. Edit the header, not this table.
 | [handoff-2026-09-02](handoff-2026-09-02.md) | Handoff, 2026-09-02 | current | 2026-09-02 |
 | [handoff-2026-09-15-involute-agent-threads](handoff-2026-09-15-involute-agent-threads.md) | Handoff — Involute 侧：agent 身份与工作项上的对话 | current | 2026-09-15 |
 | [handoff-2026-09-22-nova-incident](handoff-2026-09-22-nova-incident.md) | Handoff — Nova 请求混入旧任务与研究叙述复播的运行调查 | current | 2026-09-22 |
+| [handoff-2026-09-22-request-ownership-fix](handoff-2026-09-22-request-ownership-fix.md) | Handoff — 吞单边界修复与 INV 合同校正 | current | 2026-09-22 |
