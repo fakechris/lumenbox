@@ -3,7 +3,7 @@
      family: spec
      status: current
      domain: storage
-     updated: 2026-09-01
+     updated: 2026-09-22
 -->
 # Data
 
@@ -218,10 +218,14 @@ A separate "profile" tier next to a "recent" one was rejected: that classificati
 from somewhere, and a tier nobody can populate correctly is worse than one list scored honestly.
 
 What reaches the prompt is a **character budget, not a count** — fifty short facts and five long ones
-cost the same, and one of those sets is worth more. Selection is by score; rendering is chronological,
+cost the same, and one of those sets is worth more. Relevance admits records first, then score
+and a strict body budget select among only those admitted; rendering is chronological,
 because a model reading facts benefits from knowing which came after which. Omissions are stated
 (`N older or weaker memories are not shown`) so an agent does not read a truncated list as everything
-it knows.
+it knows. The index may contain only admitted records omitted from the body, never records rejected
+by relevance. Excluded counts are separate from budget omissions; an empty projection does not mean
+the agent has no stored memories. Low-level `recall` still supports score-only storage/evaluation
+views; prompt assembly must use `chooseRelevant` or the conservative `recallRelevant` fallback.
 
 Deduplication is applied **on read, not on write**: the file stays a faithful log of what was
 believed when, and the view is deduplicated — which is why an over-eager merge is recoverable. A
@@ -664,12 +668,20 @@ Honestly, since these are the findings a review should raise:
   trigger stands: roughly 500 records where word overlap demonstrably misses something, with a
   specific example rather than an impression.
 
-  What changed is narrower. When the character budget forces memories to be *dropped*, a cheap model
-  call decides which ones survive, because "memories are being left out" is a measurement rather
-  than an impression, and it is the only moment when the choice can be wrong. Below the budget
-  nothing is dropped, nothing is chosen, and no call is made — which is almost always. The selector
-  is an improvement to which memories are discarded and never a reason a turn does not happen: any
-  failure, or an answer that cannot be read, falls back to the score.
+  Personal and shared memory are screened for relevance even when everything fits. Empty selection
+  means no memories, and a subset never refills spare space with rejected records. With no query,
+  none are injected. Selector failure/unavailability falls back only to lexically related `fact`
+  records after resolving retractions, not automatic notes or episodes and not a scored default.
+  This is conservative: lexical recall can miss relevant facts and `fact` is not proof of truth.
+  Non-empty memory now costs a selection call per tier per turn when a selector is configured;
+  projections remain fixed through continuations. No vector store or provider change is implied.
+
+  The turn ledger's optional `memoryProjection` records separate personal/shared selection methods,
+  SHA-256 record identifiers for body/index candidates, and relevance exclusion counts. It stores
+  no additional memory text; hashes are diagnostic identifiers, not secret anonymisation. Old ledger
+  records without this field remain readable. This manifests memory projection only, not every
+  possible context source. Explicit Recall/history/mirror access remains available in normal turns;
+  this relevance filter is not a clean-session isolation boundary.
 - **Unbounded growth on disk, for the transcript only.** Requests are bounded by compaction
   (§2.2.1) and the transcript file still grows forever — deliberately, because the record is the
   product's provenance claim. Memory no longer shares that property: `memory.jsonl` was the one

@@ -237,6 +237,10 @@ test("a begin record says which model, which build and which prompt produced the
   const root = mkdtempSync(join(tmpdir(), "agentbox-resume-stamp-"));
   try {
     const path = join(root, "turns.jsonl");
+    const memoryProjection = {
+      personal: { method: "model", body: ["a".repeat(64)], index: [], excluded: 2 },
+      shared: { method: "empty", body: [], index: [], excluded: 0 },
+    };
     new TurnLedger(path).begin({
       id: "t-stamp",
       agentId: "a1",
@@ -244,11 +248,13 @@ test("a begin record says which model, which build and which prompt produced the
       model: "MiniMax-M3",
       build: { version: "0.31.0", commit: "abc1234" },
       promptHash: "0123456789abcdef",
+      memoryProjection,
     });
     const record = JSON.parse(readFileSync(path, "utf8").trim()) as Record<string, unknown>;
     assert.equal(record.model, "MiniMax-M3");
     assert.deepEqual(record.build, { version: "0.31.0", commit: "abc1234" });
     assert.equal(record.promptHash, "0123456789abcdef");
+    assert.deepEqual(record.memoryProjection, memoryProjection);
     // Still an open turn to the resumer, which ignores the stamp.
     assert.equal(new TurnLedger(path).interrupted().length, 1);
   } finally {

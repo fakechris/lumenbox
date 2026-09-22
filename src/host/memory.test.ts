@@ -425,11 +425,7 @@ test("a retraction withdraws what came before it, not what comes after", () => {
 
 const factAt = (at: string, text: string): MemoryRecord => ({ at, kind: "fact", text });
 
-test("nothing is dropped, so nothing is asked", async () => {
-  // The gate, and the whole reason this is allowed to exist at all. docs/05-data.md §7 says lexical
-  // recall stays until there is evidence it is failing; "memories are being left out" is that
-  // evidence. When everything fits there is nothing to choose between, and a model call would be
-  // pure cost on every turn forever.
+test("relevance is checked even when every memory fits", async () => {
   let asked = 0;
   const result = await chooseRelevant({
     records: [factAt("2026-08-01T00:00:00Z", "they prefer short answers")],
@@ -439,7 +435,7 @@ test("nothing is dropped, so nothing is asked", async () => {
       return '{"selected": [1]}';
     },
   });
-  assert.equal(asked, 0);
+  assert.equal(asked, 1);
   assert.equal(result.records.length, 1);
 });
 
@@ -467,14 +463,14 @@ test("when the budget forces a choice, the chosen memories are the ones kept", a
     result.records.some(record => record.text.includes("eu-west-1")),
     `the chosen memory should have survived; got ${JSON.stringify(result.records.map(r => r.text))}`
   );
-  assert.ok(result.omitted > 0, "and it still says how many did not fit");
+  assert.equal(result.excluded, 20, "rejected memories are counted separately from budget omissions");
+  assert.equal(result.omittedRecords, undefined, "rejected memories cannot leak into the index");
 });
 
-test("a selector that fails, or answers nonsense, changes nothing", async () => {
+test("a selector that fails, or answers nonsense, never restores unrelated scored memories", async () => {
   const records = Array.from({ length: 30 }, (_, index) =>
     factAt(`2026-08-${String((index % 28) + 1).padStart(2, "0")}T00:00:00Z`, `fact ${index} with some words`)
   );
-  const scored = recall(records, 200);
 
   for (const ask of [
     async () => {
@@ -486,8 +482,8 @@ test("a selector that fails, or answers nonsense, changes nothing", async () => 
     const result = await chooseRelevant({ records, query: "anything", budget: 200, ask });
     assert.deepEqual(
       result.records.map(record => record.text),
-      scored.records.map(record => record.text),
-      "a failure improves nothing and breaks nothing"
+      [],
+      "a failed selector is not permission to inject unrelated memories"
     );
   }
 });
@@ -513,7 +509,7 @@ test("the selection prompt says that choosing nothing is allowed", () => {
   // Without this a model pads to look useful, and an irrelevant memory in front of an agent is
   // worse than a missing one because it will be treated as relevant.
   assert.match(prompt, /do not pad the list to look useful/);
-  assert.match(prompt, /kept; you are not/);
+  assert.match(prompt, /Only selected memories will be shown/);
   assert.match(prompt, /a fact/);
 });
 
