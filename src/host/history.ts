@@ -35,7 +35,7 @@ type Entry =
   | { role: "user"; kind: "summary"; covers: number; text: string; at: string };
 
 /** How much of any one entry is shown. Enough to recognise it, not enough to re-fill the context. */
-const ENTRY_CHARS = 600;
+export const ENTRY_CHARS = 600;
 
 /** The most entries one call returns, so a wide search cannot undo a compaction. */
 export const MAX_ENTRIES = 25;

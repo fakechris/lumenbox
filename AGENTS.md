@@ -9,8 +9,8 @@ agent inside a LumenBox box — not for a person, though a person should be able
 |---|---|
 | Involute PROJECT | **INV-96** — `fakechris/lumenbox` (`2ea544a1-f7cd-46c5-98b9-3f3da2993ada`) |
 | Team key | `INV` |
-| Server | `http://100.114.30.43:4200/mcp` (MCP, bearer `inv_agent_…`) |
-| Web UI | `http://100.114.30.43:4201/` |
+| Server | `https://involute.lumenopen.com/mcp` (MCP, bearer `inv_agent_…`) |
+| Web UI | `https://involute.lumenopen.com/` |
 
 Everything below INV-96 is a MILESTONE (a delivery phase) or an ISSUE (one independently
 acceptable piece of work), linked with `CONTAINS`.

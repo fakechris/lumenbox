@@ -328,14 +328,32 @@ anyone asked what it had been verified against.
 
 - `fetched/<yyyy-mm>/<sha8-of-url>-<fetched_at>.md` — one file per `WebFetch`: a frontmatter
   (`schema: lumenbox.fetched/v1`, `url`, `final_url`, `title`, `fetched_at`, `content_type`,
-  `bytes`, `text_chars`, `clipped`, `sha256` of the body, and `author` / `published` /
-  `site_name` when the page declared them in JSON-LD, Open Graph or `<meta>`, then
-  `agent_id`, `agent`, `conversation`) over the **whole** extracted text, not the 40,000-
-  character slice the model was shown. Never overwritten: the instant is in the name.
+  `bytes`, `text_chars`, `clipped`, `completeness`, `prose_blocks`, `links`, `sha256` of the
+  body, and `author` / `published` / `site_name` when the page declared them in JSON-LD, Open
+  Graph or `<meta>`, then `agent_id`, `agent`, `conversation`) over the **whole** extracted
+  text, not the 40,000-character slice the model was shown. Never overwritten: the instant is
+  in the name. The last three are the same measurement the tool result leads with (§2.6.1),
+  so the file and the transcript can be compared without re-reading the body.
 - `fetched/x/<id>/` — a post on X: the raw answer (`fxtwitter-v2.json`, or `syndication.json`
   on fallback) beside `post.md`, markdown whose frontmatter names `completeness`, `fetcher`,
   the author, the date, the thread ids and both sha256s. A second fetch of the same id
   overwrites with the newer answer.
+
+#### 2.6.1 The line every read leads with
+
+Six tools read something into a turn — `WebFetch`, `WebSearch`, `ReadFeishuDoc`, `read_file`,
+`ReadHistory`, `browser_read` — and each writes the same first line (`src/host/read-outcome.ts`,
+INV-632):
+
+```
+[read: clipped — 40,000 of 61,606 chars, 57 prose blocks, 576 links; open it with browser_open]
+```
+
+First, not last, because the transcript keeps a result's **head**: the old end-of-result
+notices were the first thing the cut removed. `completeness` is one of `full`, `clipped`,
+`blocked`, `unavailable`, `summary` — `clipped` means we cut it, `summary` means search
+results rather than a document. It reports counts and never grades them; the measurement that
+killed the grading idea is docs/69 §2.4, kept as a test over three real pages.
 
 The tool result ends with `[full page kept: <path>]`, the same shape as the box's spill
 pointer, and `storableResult` carries it across the transcript's cut. Kept for

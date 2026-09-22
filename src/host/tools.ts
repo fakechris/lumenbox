@@ -24,8 +24,9 @@ import type { McpManager } from "./mcp.ts";
 import { delegateEnv, delegateModel, PRESETS, presetNamed, quoteForShell, installCommand, withEnginesPath } from "./presets.ts";
 import { namesControlSurface } from "./control-surfaces.ts";
 import { catalogMenu, intersectTools, profilesFor } from "./catalog.ts";
-import { describeHistory, readHistory } from "./history.ts";
-import { canSearch, fetchPage, type FetchedPage, guardUrl, isSearchEngine, MAX_TEXT, searchWeb, WebError } from "./web.ts";
+import { describeHistory, ENTRY_CHARS, readHistory } from "./history.ts";
+import { canSearch, fetchPage, type FetchedPage, guardUrl, isSearchEngine, MAX_TEXT, pageReadOutcome, searchWeb, WebError } from "./web.ts";
+import { readOutcome, textShape, withReadOutcome } from "./read-outcome.ts";
 import { fetchXPost, xStatusRef } from "./x-post.ts";
 import { join } from "node:path";
 import { keepFetchedPage, KEPT_MARKER, pruneOccasionally } from "./fetched.ts";
@@ -2058,6 +2059,15 @@ export function boxErrorOutcome(error: unknown): Outcome | undefined {
  * The active window's controls as an outline, in the shape the browser outline uses
  * (INV-412): one line per control, the ref first so it can be copied into click_element.
  */
+/**
+ * Prose and link counts alone. The caller sets `chars`, because only it knows how much
+ * of the text the model was actually handed.
+ */
+function proseAndLinks(text: string): { prose: number; links: number } {
+  const { prose, links } = textShape(text);
+  return { prose, links };
+}
+
 export function elementsOutline(result: { elements?: readonly ElementInfo[]; elements_note?: string; elements_window?: { title: string; app: string; truncated: boolean } }): string {
   if (result.elements === undefined) {
     return `No control outline: ${result.elements_note ?? "the active window exposes no accessibility tree"}. Work from the screenshot.`;
@@ -3101,10 +3111,17 @@ export async function dispatchTool(
       if (!result.truncated) {
         context.files?.observed(context.agent.id, result.path, versionOf(result.content));
       }
-      const header = result.truncated
-        ? `${result.path} (showing part of ${result.total_lines} lines)`
-        : `${result.path} (${result.total_lines} lines)`;
-      return { text: `${header}\n\n${result.content}` };
+      const shownLines = result.content === "" ? 0 : result.content.split("\n").length;
+      return {
+        text: withReadOutcome(
+          {
+            completeness: result.truncated ? "clipped" : "full",
+            shape: { lines: shownLines, totalLines: result.total_lines, chars: result.content.length },
+            ...(result.truncated ? { hint: "ask for a line range to see the rest" } : {}),
+          },
+          `${result.path}\n\n${result.content}`
+        ),
+      };
     }
 
     case "AskSecret": {
@@ -3615,8 +3632,18 @@ export async function dispatchTool(
 
       const render = (result: Awaited<ReturnType<BoxClient["browser"]>>): ToolOutcome => {
         if (name === "browser_read") {
+          const read = result.text ?? "";
           return {
-            text: `${result.note !== undefined ? `${result.note}\n\n` : ""}${result.url}\n\n${result.text ?? "(the page has no text)"}`,
+            text: withReadOutcome(
+              {
+                // The box reads the rendered page; it reports no cut of its own, so this
+                // says what came back rather than claiming the page held no more.
+                completeness: read === "" ? "unavailable" : "full",
+                ...(read === "" ? {} : { shape: textShape(read) }),
+                ...(result.note !== undefined ? { note: result.note } : {}),
+              },
+              `${result.url}\n\n${read === "" ? "(the page has no text)" : read}`
+            ),
           };
         }
         const outcome = actionOutcome(result, ["browser_act", "browser_scroll", "browser_upload"].includes(name));
@@ -3836,23 +3863,51 @@ export async function dispatchTool(
           isError: true,
         };
       }
-      // A post on X is read through FxTwitter, not the site: the site serves a login wall
-      // with the first line of the post in its <title>, and an agent that read that for a
-      // day cited eighteen articles it had seen forty-three characters of (x-post.ts).
+      // A post on X is read through FxTwitter rather than the site. Measured on the real
+      // page (docs/69): x.com does serve most of an Article's text to a plain fetch, but
+      // it arrives behind two thousand characters of "Log in / Sign up" — which is exactly
+      // the part the transcript keeps — and without the thread, the author, the date, or a
+      // reason when the post is gone. The API gives all of those and the body whole.
       if (xStatusRef(target) !== undefined) {
         try {
-          const { markdown, kept } = await fetchXPost(
+          const { markdown, kept, post } = await fetchXPost(
             target,
             context.fetchedHome !== undefined ? { keepUnder: join(context.fetchedHome, "fetched", "x") } : {}
           );
           // The pointer is the last line for the same reason the box's spill pointer is:
           // storableResult carries it across the transcript's cut (turn.ts).
           const pointer = kept !== undefined ? `\n\n[${KEPT_MARKER} ${kept.markdown}]` : "";
-          if (markdown.length <= MAX_TEXT) return { text: `${markdown}${pointer}` };
-          return { text: `${markdown.slice(0, MAX_TEXT)}\n\n[... rest of post not shown]${pointer}` };
+          const clipped = markdown.length > MAX_TEXT;
+          const shown = clipped ? `${markdown.slice(0, MAX_TEXT)}\n\n[... rest of post not shown]` : markdown;
+          return {
+            text: withReadOutcome(
+              {
+                // The resolver already decided what it got; this only translates it into
+                // the shared vocabulary. Its `partial` — the syndication fallback, which
+                // previews an article rather than serving it — is a clip by another name.
+                completeness:
+                  post.completeness === "unavailable"
+                    ? "unavailable"
+                    : post.completeness === "partial" || clipped
+                      ? "clipped"
+                      : "full",
+                shape: {
+                  chars: Math.min(shown.length, markdown.length),
+                  ...(clipped ? { totalChars: markdown.length } : {}),
+                  ...proseAndLinks(markdown),
+                },
+                ...(post.note !== undefined ? { note: post.note } : {}),
+                ...(clipped && kept !== undefined ? { hint: `the whole post is at ${kept.markdown}` } : {}),
+              },
+              `${shown}${pointer}`
+            ),
+          };
         } catch (error) {
           return {
-            text: error instanceof WebError ? error.message : `Could not read that post: ${error}`,
+            text: withReadOutcome(
+              { completeness: error instanceof WebError && error.kind === "blocked" ? "blocked" : "unavailable" },
+              error instanceof WebError ? error.message : `Could not read that post: ${error}`
+            ),
             isError: true,
           };
         }
@@ -3867,6 +3922,7 @@ export async function dispatchTool(
         ]
           .filter(Boolean)
           .join("\n");
+        const outcome = pageReadOutcome(page);
         // Kept whole, whatever the model is shown, so what the agent cites can be read
         // again later (fetched.ts). A failure to keep is said, not allowed to fail the read.
         let pointer = "";
@@ -3880,6 +3936,10 @@ export async function dispatchTool(
               contentType: page.contentType,
               bytes: page.bytes,
               clipped: page.truncated,
+              completeness: outcome.completeness,
+              ...(outcome.shape?.prose !== undefined && outcome.shape.links !== undefined
+                ? { shape: { prose: outcome.shape.prose, links: outcome.shape.links } }
+                : {}),
               meta: page.meta,
               agent: { id: context.agent.id, name: context.agent.profile.name },
               ...(context.conversation !== undefined ? { conversation: context.conversation } : {}),
@@ -3892,12 +3952,15 @@ export async function dispatchTool(
         } catch (error) {
           pointer = `\n\n[could not keep a copy of this page: ${error instanceof Error ? error.message : error}]`;
         }
-        return { text: `${heading}\n\n${page.text}${pointer}` };
+        return { text: withReadOutcome(outcome, `${heading}\n\n${page.text}${pointer}`) };
       } catch (error) {
         // A refused address is a normal answer to a bad request, not a crash: the model
         // is told plainly so it stops rather than retrying the same host another way.
         return {
-          text: error instanceof WebError ? error.message : `Could not read that page: ${error}`,
+          text: withReadOutcome(
+            { completeness: error instanceof WebError && error.kind === "blocked" ? "blocked" : "unavailable" },
+            error instanceof WebError ? error.message : `Could not read that page: ${error}`
+          ),
           isError: true,
         };
       }
@@ -3919,9 +3982,16 @@ export async function dispatchTool(
             `${index + 1}. ${result.title}\n   ${result.url}\n   ${result.description}`
         );
         return {
-          text:
-            `Results for ${JSON.stringify(query)} — descriptions are the engine's, so ` +
-            `read anything you intend to rely on:\n\n${lines.join("\n\n")}`,
+          text: withReadOutcome(
+            {
+              // Not a document read at all: these are the engine's sentences about pages.
+              completeness: "summary",
+              shape: { results: results.length },
+              note: "descriptions are the engine's, not the pages",
+              hint: "read anything you intend to rely on with WebFetch",
+            },
+            `Results for ${JSON.stringify(query)}:\n\n${lines.join("\n\n")}`
+          ),
         };
       } catch (error) {
         return {
@@ -4220,7 +4290,18 @@ export async function dispatchTool(
         ...(typeof input.to === "number" ? { to: input.to } : {}),
       };
       const whose = target.id === context.agent.id ? "" : `${target.profile.name}: `;
-      return { text: whose + describeHistory(readHistory(entries, query), query) };
+      const history = readHistory(entries, query);
+      return {
+        text: withReadOutcome(
+          {
+            completeness: history.matched > history.lines.length ? "clipped" : "full",
+            shape: { entries: history.lines.length, totalEntries: history.matched },
+            note: `each entry is cut to ${ENTRY_CHARS} chars`,
+            hint: "the transcript on disk holds the whole of every entry",
+          },
+          whose + describeHistory(history, query)
+        ),
+      };
     }
 
     case "Tasks": {
