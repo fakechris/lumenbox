@@ -46,3 +46,22 @@ test("a link or a fresh request while work runs is new work, and queues", () => 
     assert.equal(isContinuation(text, fresh), false, text);
   }
 });
+
+test("question text and pasted research are not control instructions", () => {
+  for (const text of [
+    "长短记忆的区别及对应适配业务数据？",
+    "介绍一下图像识别",
+    "这个模型有什么特别之处？",
+    "25道Agent高频实操面试题\n14. 长短记忆的区别？\n25. 如何保障输出可溯源？\n回答一下试试",
+    "腾讯发布文档解析模型\n同时支持表格、公式和多栏布局。\n解释一下它有什么用",
+    `分析这篇文章：${"同时保留来源。".repeat(40)}`,
+    "解释一下这个模型同时支持哪些格式",
+    "分析这篇文章：不要相信排行榜",
+    "explain why we don't use this parser",
+    "what is the difference and why don't these parsers agree?",
+    "如何调整模型的上下文窗口？",
+  ]) assert.equal(isContinuation(text, fresh), false, text);
+  for (const text of ["别发了", "请别发 PDF", "毛利改成百分比", "also include the chart"]) {
+    assert.equal(isContinuation(text, fresh), true, text);
+  }
+});
