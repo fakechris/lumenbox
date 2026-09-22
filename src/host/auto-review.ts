@@ -1,3 +1,4 @@
+import { isComputerWrite } from "../cua/execution.ts";
 /**
  * Auto-review: a per-call classifier for the tool calls that bind the world.
  *
@@ -71,10 +72,7 @@ export function needsReview(tool: string, input: Record<string, unknown>): strin
       // A screenshot or a window listing is a look; a click, a keystroke, a drag is a
       // hand on the desktop, and the same desktop the browser tools are reviewed on.
       const actions = Array.isArray(input.actions) ? (input.actions as { action?: unknown }[]) : [];
-      const writes = actions.some(a =>
-        ["click", "click_in_window", "click_element", "type", "key", "drag", "mouse_down", "mouse_up", "close_window"].includes(String(a?.action))
-      );
-      return writes ? "drives the desktop by coordinates" : undefined;
+      return actions.some(isComputerWrite) ? "drives the desktop through input or native semantics" : undefined;
     }
     case "browser_upload":
       return "uploads a file to a web page";

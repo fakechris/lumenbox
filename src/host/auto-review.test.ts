@@ -23,11 +23,14 @@ test("the reviewed class is the calls that bind the world, not the reads", () =>
     ["bash", { command: "curl -X POST https://api.example.com/pay -d '{}'" }],
     ["bash", { command: "rm -rf ~/work" }],
     ["browser_act", { action: "click", target: "Pay now" }],
+    ["computer", { actions: [{ action: "invoke_element", ref: "observation:button" }] }],
+    ["computer", { actions: [{ action: "set_value", ref: "observation:entry", value: "text" }] }],
   ];
   for (const [tool, input] of reviewed) {
     assert.ok(needsReview(tool, input) !== undefined, `${tool} ${JSON.stringify(input)} is reviewed`);
   }
   const notReviewed: [string, Record<string, unknown>][] = [
+    ["computer", { actions: [{ action: "list_elements" }] }],
     ["read_file", { path: "/etc/passwd" }],
     ["write_file", { path: "/home/box/work/notes.md", content: "" }],
     ["edit_file", { path: "~/work/a.ts" }],
