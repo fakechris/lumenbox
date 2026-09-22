@@ -27,7 +27,7 @@ import { catalogMenu, intersectTools, profilesFor } from "./catalog.ts";
 import { describeHistory, ENTRY_CHARS, readHistory } from "./history.ts";
 import { canSearch, fetchPage, type FetchedPage, guardUrl, isSearchEngine, MAX_TEXT, pageReadOutcome, searchWeb, WebError } from "./web.ts";
 import { readOutcome, textShape, withReadOutcome } from "./read-outcome.ts";
-import { fetchXPost, xStatusRef } from "./x-post.ts";
+import { fetchXPost, XResolversUnavailable, xStatusRef } from "./x-post.ts";
 import { join } from "node:path";
 import { keepFetchedPage, keptPointer, KEPT_MARKER, pruneOccasionally } from "./fetched.ts";
 import { describeEnvShape, envShape, looksLikeEnvFile } from "./env-shape.ts";
@@ -84,6 +84,12 @@ export interface ToolContext {
    * must not; the default is the guarded fetch in web.ts.
    */
   webFetch?: (url: string) => Promise<FetchedPage>;
+  /**
+   * How WebFetch reads a post on X. Replaced only by tests, for the same reason as
+   * `webFetch`: the three routes a post can arrive by are exactly what needs testing, and
+   * none of them may be reached from a test.
+   */
+  xFetch?: typeof fetchXPost;
   /** Where fetched pages are kept. Tests point it at a temp dir; the default is ~/.agentbox. */
   fetchedHome?: string;
   /**
@@ -3863,6 +3869,9 @@ export async function dispatchTool(
           isError: true,
         };
       }
+      // Set when the X resolvers were tried and could not be reached, so the plain fetch
+      // below can say why it is the one answering.
+      let xFallbackReason: string | undefined;
       // A post on X is read through FxTwitter rather than the site. Measured on the real
       // page (docs/69): x.com does serve most of an Article's text to a plain fetch, but
       // it arrives behind two thousand characters of "Log in / Sign up" — which is exactly
@@ -3870,7 +3879,7 @@ export async function dispatchTool(
       // reason when the post is gone. The API gives all of those and the body whole.
       if (xStatusRef(target) !== undefined) {
         try {
-          const { markdown, kept, post } = await fetchXPost(
+          const { markdown, kept, post } = await (context.xFetch ?? fetchXPost)(
             target,
             context.fetchedHome !== undefined ? { keepUnder: join(context.fetchedHome, "fetched", "x") } : {}
           );
@@ -3912,13 +3921,22 @@ export async function dispatchTool(
             ),
           };
         } catch (error) {
-          return {
-            text: withReadOutcome(
-              { completeness: error instanceof WebError && error.kind === "blocked" ? "blocked" : "unavailable" },
-              error instanceof WebError ? error.message : `Could not read that post: ${error}`
-            ),
-            isError: true,
-          };
+          // Both APIs unreachable is not the same as the post being gone, and it used to
+          // report the same word. The page itself still carries most of an article's body
+          // behind its sign-in furniture (docs/69 §2.2), so fall through to a plain fetch
+          // rather than telling the model there is nothing to read. A tombstone does not
+          // come through here at all — it returns normally, above, with its reason.
+          if (error instanceof XResolversUnavailable) {
+            xFallbackReason = error.message;
+          } else {
+            return {
+              text: withReadOutcome(
+                { completeness: error instanceof WebError && error.kind === "blocked" ? "blocked" : "unavailable" },
+                error instanceof WebError ? error.message : `Could not read that post: ${error}`
+              ),
+              isError: true,
+            };
+          }
         }
       }
       try {
@@ -3948,6 +3966,7 @@ export async function dispatchTool(
               contentType: page.contentType,
               bytes: page.bytes,
               clipped: page.truncated,
+              ...(xFallbackReason !== undefined ? { fetcher: "web-fetch" } : {}),
               completeness: outcome.completeness,
               ...(outcome.shape?.prose !== undefined && outcome.shape.links !== undefined
                 ? { shape: { prose: outcome.shape.prose, links: outcome.shape.links } }
@@ -3970,14 +3989,31 @@ export async function dispatchTool(
         } catch (error) {
           pointer = `\n\n[could not keep a copy of this page: ${error instanceof Error ? error.message : error}]`;
         }
-        return { text: withReadOutcome(outcome, `${heading}\n\n${page.text}${pointer}`) };
+        // A page fetched only because the X resolvers were down is never `full`, whatever
+        // its shape says. We know what is missing from it — the thread, the author, the
+        // date, the reason a gone post is gone — and we know the body arrives behind the
+        // sign-in furniture. Saying `full` here would be the same kind of false precision
+        // the read contract exists to remove.
+        const answered =
+          xFallbackReason === undefined
+            ? outcome
+            : {
+                ...outcome,
+                completeness: "clipped" as const,
+                note: "read from the page itself because neither X resolver could be reached, so there is no thread, author or date, and the body sits behind the sign-in prompt",
+                hint: "open it with browser_open if the thread or the author matters",
+              };
+        return { text: withReadOutcome(answered, `${heading}\n\n${page.text}${pointer}`) };
       } catch (error) {
         // A refused address is a normal answer to a bad request, not a crash: the model
         // is told plainly so it stops rather than retrying the same host another way.
+        const said = error instanceof WebError ? error.message : `Could not read that page: ${error}`;
         return {
           text: withReadOutcome(
             { completeness: error instanceof WebError && error.kind === "blocked" ? "blocked" : "unavailable" },
-            error instanceof WebError ? error.message : `Could not read that page: ${error}`
+            // Three routes were tried, not one. A message naming only the last of them
+            // would send someone looking in the wrong place.
+            xFallbackReason === undefined ? said : `${xFallbackReason}\nThe page itself did not answer either: ${said}`
           ),
           isError: true,
         };

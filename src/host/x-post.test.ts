@@ -24,6 +24,7 @@ import {
   sha256,
   syndicationToken,
   xStatusRef,
+  XResolversUnavailable,
   type XStatusRef,
 } from "./x-post.ts";
 
@@ -308,7 +309,11 @@ test("a tombstone from FxTwitter is final: the fallback is not asked", async () 
   assert.match(result.markdown, /deleted, never existed/);
 });
 
-test("when neither source answers, the refusal names both and points at the browser", async () => {
+test("when neither source answers it is its own error, naming both and the post", async () => {
+  // Deliberately not the same error as "this post does not exist" (INV-663). Two APIs we
+  // do not run being unreachable says nothing about whether the post is there, and the
+  // caller has a third route to try — so this no longer suggests the browser, because
+  // suggesting it here would stop the caller from taking that route.
   const transport = transportFrom({});
   await assert.rejects(
     fetchXPost("https://x.com/nobody/status/2101146387736142138", {
@@ -317,8 +322,14 @@ test("when neither source answers, the refusal names both and points at the brow
       syndicationBase: "https://synd.test",
       keepUnder: null,
     }),
-    (error: unknown) =>
-      error instanceof WebError && /fxtwitter:/.test(error.message) && /syndication:/.test(error.message) && /browser_open/.test(error.message)
+    (error: unknown) => {
+      assert.ok(error instanceof XResolversUnavailable, `got ${String(error)}`);
+      assert.match(error.message, /fxtwitter:/);
+      assert.match(error.message, /syndication:/);
+      assert.equal(error.ref.id, "2101146387736142138");
+      assert.doesNotMatch(error.message, /browser_open/);
+      return true;
+    }
   );
 });
 

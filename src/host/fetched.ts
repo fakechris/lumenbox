@@ -72,6 +72,15 @@ export interface KeepPageInput {
    */
   completeness?: string;
   shape?: { prose: number; links: number };
+  /**
+   * Which route answered, when more than one could have.
+   *
+   * Only written when it is not the obvious one. An x.com page kept under `fetched/<month>/`
+   * rather than `fetched/x/<id>/` was read from the page because both resolvers were
+   * unreachable (INV-663), and a year later that is the difference between "the API said
+   * this" and "this is what the login wall was showing".
+   */
+  fetcher?: string;
   meta: PageMeta;
   agent: { id: string; name: string };
   conversation?: string;
@@ -160,6 +169,7 @@ export function fetchedFrontmatter(input: KeepPageInput, bodySha256: string): st
     `bytes: ${input.bytes}`,
     `text_chars: ${input.text.length}`,
     `clipped: ${input.clipped}`,
+    ...(input.fetcher !== undefined ? [`fetcher: ${quote(input.fetcher)}`] : []),
     ...(input.completeness !== undefined ? [`completeness: ${input.completeness}`] : []),
     ...(input.shape !== undefined
       ? [`prose_blocks: ${input.shape.prose}`, `links: ${input.shape.links}`]

@@ -432,7 +432,7 @@ Processor **已关闭**从未发货。**大载荷没有 OTEP。**
 | 2 | 没有任何东西把一句主张连到一段字节 | 逐字引文核对闸门（约 40 行，没人建过）；**不要**先上蕴含判断 | **INV-660** |
 | 3 | 被裁掉的东西 agent 拿不回来 | 宿主中介、只读、留痕的按 id 回读 | **INV-661** |
 | 4 | 摘要不指回它替换的区间；证据指针上限 10 条 | OpenHands 的 `forgotten_event_ids` + `summary_offset` | **INV-662** |
-| 5 | 两个第三方都死时谎称 `unavailable` | 退回普通抓取，报 `clipped` 并说明缺什么 | **INV-663** |
+| 5 | ~~两个第三方都死时谎称 `unavailable`~~ **已交付** | 退回普通抓取，报 `clipped` 并说明缺什么 | **INV-663** ✅ |
 | 6 | 抓的是抽取文本不是响应；没有状态码、无重定向链、不可回放 | WARC 请求/响应对 + `WARC-Payload-Digest`；或 WACZ 1.1.1 | 未开 |
 | 7 | 同一页抓十次写十份 | `revisit` + `identical-payload-digest` | 未开 |
 | 8 | 无防篡改、无校验巡检 | 先做校验巡检；再考虑哈希链 + `tlog-checkpoint` 形状的检查点 | 部分在 INV-659 |
