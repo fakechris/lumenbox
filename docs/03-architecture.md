@@ -3,7 +3,7 @@
      family: spec
      status: current
      domain: architecture
-     updated: 2026-09-07
+     updated: 2026-09-22
 -->
 # Architecture
 
@@ -198,3 +198,41 @@ distinguishable from zero.
 **The agent's work runs behind the desktop.** One CPU allowance, two workloads: the desktop's
 latency is felt directly, the agent's throughput is not. A nice value costs nothing while the
 box is idle.
+
+
+## Desktop execution contract (INV-636, INV-637)
+
+The host owns intent, policy and desktop authority; boxd owns observation, native dispatch
+and bounded readback. Each desktop serializes computer/browser operations while authority
+revocation remains immediate. Native element refs are opaque, single-observation tokens,
+invalidated by newer/failed observations, input or authority changes. Validate native window
+and element identity before input; never resolve an old ordinal against a new tree.
+
+A result separates `progress` (completed prefix and dispatch), `effect` (pixel/DOM changes),
+and `verification` (a requested postcondition read back from native/DOM state). Interface
+change alone is `observed_change`, not task success. A sent write without a verified
+postcondition is `unknown`; a checked mismatch is `failed` with dispatch still `sent`.
+Neither authorizes replay of an already completed prefix. `success` remains an executor
+compatibility field. Host and daemon share the protocol's outcome projection, including
+conservative handling of legacy `confirmed` change signals. Reads may succeed without a
+write postcondition. A native expectation names an exact active-window title and/or one
+role/name/state target; ambiguous or unreadable targets yield unknown. This verifies only
+the stated condition at readback, never an unstated remote transaction.
+
+A browser ref requires its snapshot ID; callers without one refresh or use a current `find`.
+Browser target read failure is not proof of disappearance. Returned image metadata identifies
+the coordinate space and action boundary. Tree/image coherence uses bounded repeated reads,
+not a claim that the OS supplies an atomic screen/tree transaction.
+
+`DesktopDriver` is the boxd-facing execution boundary. The shipped implementation remains
+X11 plus AT-SPI; its capability manifest declares Linux, foreground-only semantics and
+snapshot refs. Element observations advertise only operations the particular native object
+supports. `invoke_element` calls an AT-SPI Action; `set_value` uses EditableText and reads
+back the actual text without returning it. Numeric spin controls and password fields do not
+advertise this text operation. Neither semantic action falls back to coordinates.
+
+Native accessibility runs in a disposable helper process, outside the Node daemon. A helper
+revalidates window/object identity before dispatch, receives values only through stdin, and
+is killed on deadline, output overflow or authority revocation. A timeout/crash after input
+starts is uncertain delivery, not permission to repeat. No cross-platform backend or second
+session/authority registry is introduced.

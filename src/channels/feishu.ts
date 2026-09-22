@@ -103,6 +103,7 @@ export function renderQuestionCard(card: QuestionCardState, chatKey?: string): o
     type: "default",
     value: {
       ask: option,
+      ...(card.questionId !== undefined ? { questionId: card.questionId } : {}),
       ...(chatKey !== undefined ? { chatKey } : {}),
     },
   });
@@ -119,7 +120,7 @@ export function renderQuestionCard(card: QuestionCardState, chatKey?: string): o
       { tag: "action", actions: card.options.slice(0, 6).map(button) },
       {
         tag: "note",
-        elements: [{ tag: "plain_text", content: "点一个按钮,或者直接把答案打在下面。" }],
+        elements: [{ tag: "plain_text", content: card.questionId !== undefined ? `点按钮，或回复 /answer ${card.questionId} 你的答案。` : "这是旧问题卡；请单独发送新的请求。" }],
       },
     ],
   };
@@ -179,7 +180,7 @@ export function renderCard(card: TaskCardState): object {
         elements: [
           {
             tag: "plain_text",
-            content: cardFootnote(card.taskId, card.requesterLabel),
+            content: cardFootnote(card.taskId, card.requesterLabel) + (card.status === "working" && card.taskId !== undefined ? ` · 追加：/continue ${card.taskId} 内容` : ""),
           },
         ],
       },
@@ -1076,7 +1077,7 @@ export class FeishuChannel implements ChannelAdapter {
       // ordinary message — the SDK's own response to the event is just the ack.
       "card.action.trigger": (data: {
         operator?: { open_id?: string };
-        action?: { value?: { approval?: string; reply?: string; ask?: string; chatKey?: string } };
+        action?: { value?: { approval?: string; reply?: string; ask?: string; chatKey?: string; questionId?: string } };
         context?: { open_chat_id?: string; open_message_id?: string };
         open_message_id?: string;
       }) => {
@@ -1095,7 +1096,7 @@ export class FeishuChannel implements ChannelAdapter {
           const { chatId: targetChatId, rootId } = resolvedChatKey
             ? splitChatKey(resolvedChatKey)
             : { chatId: chatId ?? "", rootId: undefined };
-          const threadKey = rootId
+          const threadKey = buttonChatKey !== undefined ? buttonChatKey : rootId
             ? resolvedChatKey
             : cardMessageId !== undefined && targetChatId !== ""
               ? `${this.name}:${targetChatId}:${cardMessageId}`
@@ -1109,6 +1110,7 @@ export class FeishuChannel implements ChannelAdapter {
                 ...(cardMessageId !== undefined ? { messageId: cardMessageId } : {}),
                 senderLabel,
                 text: chosen,
+                ...(data.action?.value?.questionId !== undefined ? { questionId: data.action.value.questionId } : {}),
               })
             )
             .then(line =>
@@ -1893,7 +1895,7 @@ export class FeishuChannel implements ChannelAdapter {
 
   async send(identity: string, text: string): Promise<string | undefined> {
     const chatId = this.chats.get(identity);
-    if (chatId === undefined || this.apiClient === undefined) return undefined;
+    if (chatId === undefined || this.apiClient === undefined) throw new Error("feishu delivery unavailable: missing chat or API client");
     const response = await this.apiClient.im.message.create({
       params: { receive_id_type: "chat_id" },
       data: { receive_id: chatId, msg_type: "text", content: JSON.stringify({ text }) },
@@ -1912,7 +1914,7 @@ export class FeishuChannel implements ChannelAdapter {
     // stay anchored in the topic instead of landing at the bottom of the room. In a direct
     // chat the room *is* the conversation and the thread key would be one nothing arrives in.
     const sentId = response?.data?.message_id;
-    if (sentId === undefined || sentId === "") return undefined;
+    if (sentId === undefined || sentId === "") throw new Error("feishu delivery unconfirmed: no message id; check before retrying");
     const conversation =
       this.chatTypes.get(chatId) === "p2p"
         ? `${this.name}:${chatId}`
@@ -2056,9 +2058,8 @@ export class FeishuChannel implements ChannelAdapter {
    * One message out: a threaded reply when there is an anchor, a chat post when not.
    *
    * The reply carries `reply_in_thread`, so under a topic it stays there and on a
-   * plain chat message it opens one — which is the whole task-thread choreography in
-   * a single rule. A failed reply (anchor withdrawn, unreachable) degrades to a loose
-   * chat post: that cannot create a stray topic, so it is safe where a reply was not.
+   * plain chat message it opens one. A failed/unknown send is reported, not retried or
+   * degraded into a second post that may duplicate the first.
    */
   private async post(
     chatId: string,
@@ -2067,44 +2068,27 @@ export class FeishuChannel implements ChannelAdapter {
     replyTo?: string,
     owner?: string
   ): Promise<string | undefined> {
-    if (this.apiClient === undefined) return undefined;
+    if (this.apiClient === undefined) throw new Error("feishu delivery unavailable: missing API client");
     if (replyTo !== undefined) {
-      try {
-        const response = await this.apiClient.im.message.reply({
-          path: { message_id: replyTo },
-          data: { content, msg_type: msgType, reply_in_thread: true },
-        });
-        return response?.data?.message_id ?? response?.message_id;
-      } catch (error) {
-        const detail = error instanceof Error ? error.message : String(error);
-        this.log(`channel ${this.name}: reply failed, posting to chat (${detail})`);
-      }
+      const response = await this.apiClient.im.message.reply({
+        path: { message_id: replyTo },
+        data: { content, msg_type: msgType, reply_in_thread: true },
+      });
+      const sentId = response?.data?.message_id ?? response?.message_id;
+      if (!sentId) throw new Error("feishu delivery unconfirmed: no message id; check before retrying");
+      return sentId;
     }
-    // Only the plain create retries: a failed *reply* is usually a withdrawn anchor,
-    // which three attempts will not un-withdraw, while a failed create is usually the
-    // network having a moment.
-    let last: unknown;
-    for (let attempt = 0; attempt < 3; attempt++) {
-      try {
-        const response = await this.apiClient.im.message.create({
-          params: { receive_id_type: "chat_id" },
-          data: { receive_id: chatId, msg_type: msgType, content },
-        });
-        const sentId = response?.data?.message_id;
-        // A create is a new topic root with a vendor-minted id nothing has ever seen.
-        // Recorded against the conversation that authored it — the addressed chatKey,
-        // thread part included when a failed reply degraded here — so a person's reply
-        // under it continues that conversation instead of opening an empty one.
-        if (sentId !== undefined && owner !== undefined) {
-          this.sentRoots?.record(sentId, owner);
-        }
-        return sentId;
-      } catch (error) {
-        last = error;
-        if (attempt < 2) await new Promise(resolve => setTimeout(resolve, 1000 * 2 ** attempt));
-      }
-    }
-    throw last;
+    // A timeout may follow a successful vendor send. Never blindly retry or change
+    // reply to create without a durable receipt/idempotency key.
+    const response = await this.apiClient.im.message.create({
+      params: { receive_id_type: "chat_id" },
+      data: { receive_id: chatId, msg_type: msgType, content },
+    });
+    const sentId = response?.data?.message_id;
+    if (!sentId) throw new Error("feishu delivery unconfirmed: no message id; check before retrying");
+    // A reply under the new root stays with the conversation that authored it.
+    if (owner !== undefined) this.sentRoots?.record(sentId, owner);
+    return sentId;
   }
 
   /** Feishu renders very long texts poorly and refuses truly long ones; split like a person would. */
@@ -2124,7 +2108,7 @@ export class FeishuChannel implements ChannelAdapter {
     // rather than at the bottom of the room. An explicit replyTo still wins: it is a
     // more precise anchor inside the same thread.
     const { chatId, rootId } = splitChatKey(chatKey);
-    if (chatId === "") return;
+    if (chatId === "") throw new Error("feishu delivery unavailable: empty chat");
     const anchor = options?.replyTo ?? rootId;
     // Markdown or plain is decided once for the whole message: per-chunk decisions
     // would render a long message's plain halves with literal ** markers.
@@ -2276,7 +2260,7 @@ export class FeishuChannel implements ChannelAdapter {
     options?: PushOptions
   ): Promise<void> {
     const { chatId, rootId } = splitChatKey(chatKey);
-    if (chatId === "" || this.apiClient === undefined) return;
+    if (chatId === "" || this.apiClient === undefined) throw new Error("feishu delivery unavailable: missing chat or API client");
     const extension = name.toLowerCase().split(".").pop() ?? "";
     const fileType = ["pdf", "doc", "docx", "xls", "xlsx", "ppt", "pptx", "mp4", "opus"].includes(
       extension
@@ -2306,7 +2290,7 @@ export class FeishuChannel implements ChannelAdapter {
   /** Upload, then reference: Feishu takes bytes first and a key in the message. */
   async sendImage(chatKey: string, base64: string, options?: PushOptions): Promise<void> {
     const { chatId, rootId } = splitChatKey(chatKey);
-    if (chatId === "" || this.apiClient === undefined) return;
+    if (chatId === "" || this.apiClient === undefined) throw new Error("feishu delivery unavailable: missing chat or API client");
     const uploaded = await this.apiClient.im.image.create({
       data: { image_type: "message", image: Buffer.from(base64, "base64") },
     });

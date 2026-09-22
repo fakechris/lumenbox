@@ -64,6 +64,7 @@ import {
   calibratedTokens,
   CompactionGuard,
   choosePinnedEntries,
+  sanitizePinnedEntry,
   droppedEntry,
   estimateRequestTokens,
   extractAnchors,
@@ -1211,7 +1212,8 @@ function historyToMessages(
         // The verbatim survivors ride between summary and tail: the pinned ask, and
         // one successful call/result pair per tool the tail no longer demonstrates —
         // the in-context examples a weak model imitates schemas from (docs/24 v3).
-        for (const kept of entry.pinned ?? []) {
+        for (const pinned of entry.pinned ?? []) {
+          const kept = sanitizePinnedEntry(pinned);
           if (!("kind" in kept)) {
             if (kept.text.trim() !== "") messages.push({ role: kept.role, content: kept.text });
           } else if (kept.kind === "blocks" || kept.kind === "results") {

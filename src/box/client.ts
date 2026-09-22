@@ -219,6 +219,7 @@ export class BoxClient {
     options: {
       display?: number;
       bindUnmappedCharacters?: boolean;
+      expect?: import("../protocol/index.ts").DesktopExpectation;
       /** Proof that this desktop is the caller's. Refused if it belongs to someone else. */
       owner?: string;
     } = {}
@@ -227,6 +228,7 @@ export class BoxClient {
       "/computer",
       {
         actions,
+        expect: options.expect,
         display: options.display,
         owner: options.owner,
         bind_unmapped_characters: options.bindUnmappedCharacters ?? true,

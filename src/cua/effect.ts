@@ -81,13 +81,13 @@ export function regionDiff(before: Buffer, after: Buffer, channels = 3, threshol
   return changed / pixels;
 }
 
-/** A taken click repaints at least a button's worth of the neighbourhood. */
-export const CONFIRMED_FRACTION = 0.02;
+/** A visible change threshold; animations and unrelated repainting can also cross it. */
+export const CHANGE_FRACTION = 0.02;
 /** Below this, what changed is a caret or a hover ring, not a taken action. */
 export const PARTIAL_FRACTION = 0.002;
 
 export function effectOf(changedFraction: number): Effect {
-  if (changedFraction >= CONFIRMED_FRACTION) return "confirmed";
+  if (changedFraction >= CHANGE_FRACTION) return "observed_change";
   if (changedFraction >= PARTIAL_FRACTION) return "partial";
   return "suspected_noop";
 }
@@ -97,6 +97,7 @@ const SEVERITY: Record<Effect, number> = {
   suspected_noop: 1,
   partial: 2,
   confirmed: 3,
+  observed_change: 3,
 };
 
 /** The batch's effect is its weakest write: one swallowed click spoils a batch. */

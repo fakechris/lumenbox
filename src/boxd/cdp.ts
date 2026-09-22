@@ -1,3 +1,21 @@
+import { AsyncLocalStorage } from "node:async_hooks";
+
+const cdpAuthority = new AsyncLocalStorage<{ authorize: () => void; backgroundAuthorize: () => void; active: boolean }>();
+export async function withCdpAuthority<T>(authorize: () => void, operation: () => Promise<T>, backgroundAuthorize = authorize): Promise<T> {
+  const scope = { authorize, backgroundAuthorize, active: true };
+  return cdpAuthority.run(scope, async () => {
+    try { authorize(); return await operation(); }
+    finally { scope.active = false; }
+  });
+}
+function authorizeCdp(method?: string, params?: Record<string, unknown>): void {
+  // Release input already held by this operation even after authority changes.
+  if ((method === "Input.dispatchKeyEvent" && params?.type === "keyUp") ||
+      (method === "Input.dispatchMouseEvent" && params?.type === "mouseReleased")) return;
+  const scope = cdpAuthority.getStore();
+  if (scope?.active) scope.authorize();
+}
+
 /**
  * Talking to the box's own Chromium over the DevTools protocol.
  *
@@ -60,6 +78,7 @@ export async function listTargets(port: number, host = "127.0.0.1"): Promise<Cdp
 
 /** Opens a new tab and returns it, so a fresh task does not disturb what is already open. */
 export async function openTarget(port: number, url: string, host = "127.0.0.1"): Promise<CdpTarget> {
+  authorizeCdp();
   const response = await fetch(
     `http://${host}:${port}/json/new?${encodeURIComponent(url)}`,
     { method: "PUT", signal: AbortSignal.timeout(10_000) }
@@ -73,6 +92,7 @@ export async function openTarget(port: number, url: string, host = "127.0.0.1"):
  * Closes a tab. Best effort: a tab that has already gone is the outcome we wanted.
  */
 export async function closeTarget(port: number, targetId: string, host = "127.0.0.1"): Promise<void> {
+  authorizeCdp();
   await fetch(`http://${host}:${port}/json/close/${targetId}`, {
     signal: AbortSignal.timeout(5000),
   }).catch(() => {});
@@ -91,6 +111,7 @@ export class CdpSession {
   private readonly pending = new Map<number, Pending>();
   private readonly listeners = new Map<string, ((params: Record<string, unknown>) => void)[]>();
   private closed = false;
+  private backgroundAuthorize: (() => void) | undefined;
 
   private constructor(readonly targetId: string) {}
 
@@ -186,6 +207,17 @@ export class CdpSession {
   }
 
   send(method: string, params: Record<string, unknown> = {}, timeoutMs = COMMAND_TIMEOUT_MS): Promise<Record<string, unknown>> {
+    try {
+      authorizeCdp(method, params);
+      const scope = cdpAuthority.getStore();
+      if (scope?.active) this.backgroundAuthorize = scope.backgroundAuthorize;
+      if (method === "Page.handleJavaScriptDialog") {
+        // WebSocket listeners outlive their creating request's async scope. Keep
+        // the latest caller's authority for automatic input after that scope ends.
+        if (!this.backgroundAuthorize) throw new CdpError("No authority to answer this dialog");
+        this.backgroundAuthorize();
+      }
+    } catch (error) { return Promise.reject(error); }
     if (this.closed || this.socket === undefined || this.socket.readyState !== WebSocket.OPEN) {
       return Promise.reject(new CdpError("The browser connection is not open."));
     }

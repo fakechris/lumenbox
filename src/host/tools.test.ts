@@ -594,9 +594,10 @@ test("a computer result carries its measured effect after the verdict (INV-398)"
     }),
   });
   const result = await dispatchTool("computer", { actions: [{ action: "click", coordinate: [400, 300] }] }, swallowed);
-  assert.match(result.text, /^Outcome: ok\. Effect: suspected_noop \(click@\(400,300\) suspected_noop 0\.0%\)/);
+  assert.match(result.text, /^Outcome: unknown\./);
+  assert.match(result.text, /Effect: suspected_noop/);
   assert.match(result.text, /Do not assume it took/);
-  assert.equal(result.isError, false);
+  assert.equal(result.isError, true);
 
   const blind = boxContext({
     computer: async () => ({ success: true, screenshot: "UklGR", action_count: 1, duration_ms: 12, effect: "unverifiable" }),
@@ -623,7 +624,8 @@ test("browser_act sends the outline id and find with the request, and shows the 
   );
   assert.equal(requests[0]?.snapshot, "s3");
   assert.deepEqual(requests[0]?.find, { role: "button", name: "Delete", nth: 2 });
-  assert.match(result.text, /^Outcome: ok\.\n\nSnapshot s3: X — https:\/\/x\.test\//);
+  assert.match(result.text, /^Outcome: unknown\./);
+  assert.match(result.text, /Snapshot s3: X/);
 
   // An older boxd sends no id; the header simply has none.
   const old = boxContext({ browser: async () => ({ url: "https://x.test/", title: "X", snapshot: "-" }) });
@@ -690,7 +692,8 @@ test("an irreversible click waits for a person, and runs confirmed once one has 
   // The person approved; the same call goes through, confirmed on the way to the box.
   allow = true;
   const done = await dispatchTool("browser_act", { action: "click", ref: "e2b", snapshot: "s3" }, context);
-  assert.match(done.text, /^Outcome: ok\.\n\nSnapshot s4: Pay/);
+  assert.match(done.text, /^Outcome: unknown\./);
+  assert.match(done.text, /Snapshot s4: Pay/);
   assert.equal(requests[2]?.confirmed, true);
   assert.equal(requests[1]?.confirmed, undefined, "the first attempt was never confirmed");
 });
@@ -758,13 +761,15 @@ test("browser_act sends expect and renders the measured effect after the verdict
     context
   );
   assert.deepEqual(requests[0]?.expect, { value: "hello", appears: "Saved" }, "only well-typed expectations travel");
-  assert.match(result.text, /^Outcome: ok\. Effect: confirmed \(changed: value, focus\)\./);
+  assert.match(result.text, /^Outcome: unknown\./);
+  assert.match(result.text, /legacy change signal/);
 
   const noop = boxContext({
     browser: async () => ({ url: "https://x.test/", title: "X", snapshot: "-", effect: "suspected_noop", changed: [] }),
   });
   const swallowed = await dispatchTool("browser_act", { action: "click", ref: "e1" }, noop);
-  assert.match(swallowed.text, /^Outcome: ok\. Effect: suspected_noop — nothing near the point changed/);
+  assert.match(swallowed.text, /^Outcome: unknown\./);
+  assert.match(swallowed.text, /Effect: suspected_noop/);
 });
 
 // ── a secret is typed without being seen (INV-402) ────────────────────────────────
@@ -792,7 +797,8 @@ test("browser_fill_secret resolves through the vault, sends the value only to th
   assert.equal(requests[0]?.op, "fill_secret");
   assert.equal(requests[0]?.secret_value, "hunter2-very-secret", "the box gets the value");
   assert.deepEqual(requests[0]?.domains, ["*.shop.test"]);
-  assert.match(filled.text, /^Outcome: ok\. SHOP_PASSWORD was filled into e2; the outline shows it redacted/);
+  assert.match(filled.text, /^Outcome: unknown\./);
+  assert.match(filled.text, /Secret fill for SHOP_PASSWORD into e2 was requested/);
   assert.doesNotMatch(filled.text, /hunter2/, "the model never sees the value");
   assert.deepEqual(audits, ["a1:SHOP_PASSWORD"], "every resolution is audited by the vault");
 
