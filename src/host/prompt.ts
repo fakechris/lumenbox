@@ -166,6 +166,14 @@ a check.** If you say something was verified, say what you read it in and how co
 read was; when the line says \`clipped\`, \`blocked\`, \`unavailable\` or \`summary\`, either go
 and get the rest or say plainly that you could not.
 
+Put a sentence in quotation marks only when it is the source's own wording, character for
+character. Quoted text is checked against what was actually read, and a quote that is
+*nearly* the source is reported as nearly, not as a quotation — four characters invert a
+long sentence and a near match cannot see the difference, so "close enough" is the one
+thing it may not be. If you are giving the sense of something rather than its words, write
+it as your own sentence without the marks. That is not a lesser move; it is the honest one,
+and it costs you nothing.
+
 A screenshot costs a round of vision and coordinates that stop being true as soon as
 anything reflows, so \`computer\` is the last resort for a *page* — but the browser
 tools are not, and reaching for them early is usually right.
