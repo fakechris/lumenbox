@@ -1046,8 +1046,9 @@ test("WebFetch keeps the whole page on the host and ends its result with a point
     assert.ok(!result.isError, result.text);
     assert.match(result.text, /^\[read: clipped — /, "the shape of the read is the first line");
     assert.match(result.text, /\n\n# A long page\nSource: https:\/\/example\.com\/long#answered\n/);
-    const pointer = /\[full page kept: (.+)\]$/.exec(result.text);
-    assert.ok(pointer !== null, "the result ends with the pointer");
+    const pointer = /\[full page kept: (\S+) — /.exec(result.text);
+    assert.ok(pointer !== null, "the result ends with a self-describing pointer");
+    assert.match(result.text, /sha256 [0-9a-f]{64}, kept \d{4}-\d{2}-\d{2}T[^\]]*\]$/);
     const kept = readFileSync(pointer![1]!, "utf8");
     const head = readFrontmatter(kept);
     assert.equal(head.url, "https://example.com/long");

@@ -29,7 +29,7 @@ import { canSearch, fetchPage, type FetchedPage, guardUrl, isSearchEngine, MAX_T
 import { readOutcome, textShape, withReadOutcome } from "./read-outcome.ts";
 import { fetchXPost, xStatusRef } from "./x-post.ts";
 import { join } from "node:path";
-import { keepFetchedPage, KEPT_MARKER, pruneOccasionally } from "./fetched.ts";
+import { keepFetchedPage, keptPointer, KEPT_MARKER, pruneOccasionally } from "./fetched.ts";
 import { describeEnvShape, envShape, looksLikeEnvFile } from "./env-shape.ts";
 import { guardShellCommand } from "./ui-automation-guard.ts";
 import { dedupe, dedupeKey, describeFrom, memoryRef, validateRecord } from "./memory.ts";
@@ -3876,7 +3876,16 @@ export async function dispatchTool(
           );
           // The pointer is the last line for the same reason the box's spill pointer is:
           // storableResult carries it across the transcript's cut (turn.ts).
-          const pointer = kept !== undefined ? `\n\n[${KEPT_MARKER} ${kept.markdown}]` : "";
+          const pointer =
+            kept !== undefined
+              ? `\n\n${keptPointer({
+                  marker: KEPT_MARKER,
+                  path: kept.markdown,
+                  sha256: kept.sha256,
+                  chars: markdown.length,
+                  at: new Date(kept.at),
+                })}`
+              : "";
           const clipped = markdown.length > MAX_TEXT;
           const shown = clipped ? `${markdown.slice(0, MAX_TEXT)}\n\n[... rest of post not shown]` : markdown;
           return {
@@ -3923,6 +3932,9 @@ export async function dispatchTool(
           .filter(Boolean)
           .join("\n");
         const outcome = pageReadOutcome(page);
+        // One instant for the file's own frontmatter and for the pointer that describes
+        // it, so the two never disagree about when this was read.
+        const keptAt = new Date();
         // Kept whole, whatever the model is shown, so what the agent cites can be read
         // again later (fetched.ts). A failure to keep is said, not allowed to fail the read.
         let pointer = "";
@@ -3943,11 +3955,17 @@ export async function dispatchTool(
               meta: page.meta,
               agent: { id: context.agent.id, name: context.agent.profile.name },
               ...(context.conversation !== undefined ? { conversation: context.conversation } : {}),
-              fetchedAt: new Date(),
+              fetchedAt: keptAt,
             },
             context.fetchedHome
           );
-          pointer = `\n\n[${KEPT_MARKER} ${kept.path}]`;
+          pointer = `\n\n${keptPointer({
+            marker: KEPT_MARKER,
+            path: kept.path,
+            sha256: kept.sha256,
+            chars: page.fullText.length,
+            at: keptAt,
+          })}`;
           pruneOccasionally(line => console.error(line), context.fetchedHome);
         } catch (error) {
           pointer = `\n\n[could not keep a copy of this page: ${error instanceof Error ? error.message : error}]`;

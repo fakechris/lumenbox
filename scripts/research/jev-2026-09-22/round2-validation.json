@@ -1,0 +1,31 @@
+{
+  "date": "2026-09-22",
+  "baseline": "cc71f8223138a010b70c2e211cf739fa3a7ac57c",
+  "npm_test": {
+    "exit_code": 0,
+    "tests": 1731,
+    "passed": 1731,
+    "failed": 0,
+    "skipped": 0
+  },
+  "memory_dry_exit_code": 0,
+  "memory_live_exit_code": 0,
+  "memory_replay_exit_code": 0,
+  "api_requests": 108,
+  "valid_responses": 108,
+  "api_errors": 0,
+  "replay_identical": true,
+  "docs_index": "passed",
+  "git_diff_check": "passed",
+  "actual_credential_scan": "passed",
+  "product_code_changes": false,
+  "online_ab_enabled": false,
+  "comparison_with_current_llm_selector": false,
+  "real_commands_50_acceptance_complete": false,
+  "artifact_sha256": {
+    "memory-eval.mjs": "444a62f5a398c545aea74b80b2f2ab41271503f3bea2292bb4b395165cc6ec33",
+    "memory-results.json": "7bd2653edc3f764ca3bacf7c6663f559f2ff8c0a52e8d0d477e0d57fdcb5d276",
+    "audit-inventory.json": "3ebec3ce9c3c8372fab6c1a2c3567dccae533f629fb5a436cdc30eefb8b27365",
+    "round2-provenance.json": "714070ef95cde8e499826610924dcbcc1b87d20b0fd79d712f1f6b577fbe5e47"
+  }
+}

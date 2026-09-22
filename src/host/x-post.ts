@@ -658,8 +658,12 @@ export interface XFetchDeps {
 export interface XFetchResult {
   post: XPost;
   markdown: string;
-  /** Where the raw answer and the rendering were written, when they were. */
-  kept?: { dir: string; raw: string; markdown: string };
+  /**
+   * Where the raw answer and the rendering were written, when they were, and a digest of
+   * the rendering — so the pointer in the transcript can describe its own target after the
+   * target is pruned (fetched.ts, INV-659).
+   */
+  kept?: { dir: string; raw: string; markdown: string; sha256: string; at: string };
 }
 
 async function fetchJson(url: string, open: XFetchDeps["open"]): Promise<{ raw: string; parsed: unknown }> {
@@ -743,5 +747,9 @@ export async function fetchXPost(rawUrl: string, deps: XFetchDeps = {}): Promise
   const markdown = renderXPost(post, { fetchedAt, rawSha256: rawSha, keptIn: dir });
   writeFileSync(rawPath, raw, "utf8");
   writeFileSync(markdownPath, markdown, "utf8");
-  return { post, markdown, kept: { dir, raw: rawPath, markdown: markdownPath } };
+  return {
+    post,
+    markdown,
+    kept: { dir, raw: rawPath, markdown: markdownPath, sha256: sha256(markdown), at: fetchedAt },
+  };
 }

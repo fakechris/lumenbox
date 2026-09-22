@@ -384,8 +384,26 @@ notices were the first thing the cut removed. `completeness` is one of `full`, `
 results rather than a document. It reports counts and never grades them; the measurement that
 killed the grading idea is docs/69 §2.4, kept as a test over three real pages.
 
-The tool result ends with `[full page kept: <path>]`, the same shape as the box's spill
-pointer, and `storableResult` carries it across the transcript's cut. Kept for
+The tool result ends with a pointer that **describes its own target** (INV-659):
+
+```
+[full page kept: /…/fetched/2026-09/1a2b3c4d-20260922T100000Z.md — 61,606 chars, sha256 <64 hex>, kept 2026-09-22T10:00:00.000Z]
+```
+
+Same shape as the box's spill pointer, and `storableResult` carries it across the
+transcript's cut. The digest is out here rather than only inside the file because the file
+is pruned at ninety days and the digest used to be pruned with it: the record held a path
+to something that no longer existed and could not say what had been there. Now an expired
+artefact degrades from "here it is" to "this is what it was". One regex reads either
+pointer (`KEPT_POINTER_PATTERN`), the path is still the first token after the marker, and
+the line never contains a `]`, because three consumers already depend on both of those.
+
+`verifyKept()` re-reads the kept files and checks each body against its own frontmatter
+digest; `verifyPointer()` does the same for one pointer and distinguishes `verified`,
+`mismatched` and `missing`. The audit export runs the first on the way out and puts
+`verified` / `mismatched` / the failing paths in the manifest under `evidence`, because an
+export that carries a quietly corrupted page out as evidence is worse than one that
+carries nothing. Kept for
 `AGENTBOX_FETCHED_RETENTION_DAYS` days (default 90, at most 3650): a prune runs on the way
 past a fetch or a kept result, at most once an hour, over both directories at once, and
 logs one line when it removed anything. The audit
@@ -417,12 +435,18 @@ the same defect once per tool, so now the cut keeps what it cuts.
 - A failure to write is said in place of the pointer and never thrown. A turn is not lost
   over a full disk.
 
-The pointer is `[full output kept: <path> — all N characters]`, the box's own phrase, so
-`storableResult`, `extractAnchors` and the system prompt all already know it. The path is
+The pointer is the same self-describing shape as a kept page's, written with the box's own
+phrase, so `storableResult`, `extractAnchors` and the system prompt all already know it. The path is
 on the host, outside the box, so an agent cannot read it back with `read_file` — the same
 as a kept page. It is for the person who asks later what a call actually returned. Same
 retention as `fetched/`, taken by the same pass; the audit export carries the files inside
 its window, redacted, listed under `results` in the manifest.
+
+Both stores declare `KEPT_KIND = "feed"` (`src/host/fetched.ts`), honestly: they prune, and
+a `record` may not. That is only defensible because the pointer keeps the digest. What is
+deliberately not built, so nobody assumes it: retention keyed to the work the evidence
+supported rather than to when it was read. Evidence almost always wants the former, and we
+have no link from an artefact to the work that cited it. That link is the prerequisite.
 
 ### 3.1 `work` volume — `/home/box/work`
 

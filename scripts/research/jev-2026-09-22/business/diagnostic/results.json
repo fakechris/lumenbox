@@ -1,0 +1,242 @@
+{
+  "contract": {
+    "version": 1,
+    "fixture_sha256": "3296a6248f3cacc75c8a2922de98b8fa1cdae761f1f3d26b2561628672a96072",
+    "packet_hashes": {
+      "r03": "4028dfb0b7498c2eeb0c5ffdeb05decf13eb7b94f0bf97e17b22e54ef20974f7",
+      "r05": "fd71040e5cd669392b49c064a1c27d8052f1093f2aca75f104fab2f29ec17ecc",
+      "l07": "afe61781899bac83223232d0fda5d3b684511b1472ee828bfd328c706e67e975"
+    },
+    "provider_settings": {
+      "jev": {
+        "model": "jev-1.13.0",
+        "timeout_ms": 20000
+      },
+      "deepseek": {
+        "model": "deepseek-flash",
+        "thinking": "disabled",
+        "temperature": 0,
+        "max_tokens": 2000,
+        "timeout_ms": 20000
+      }
+    },
+    "max_requests": 90,
+    "concurrency": 2,
+    "retries": 0,
+    "repetitions": 1,
+    "research_top_k": 3,
+    "scope": "Authored pilot labels; public excerpts/catalog and fictional leads. Neither held-out domain evaluation nor online A/B. Labels excluded from model inputs."
+  },
+  "limitations": [
+    "One authored pilot pass; correlated claims share eight source excerpts.",
+    "Catalog descriptions test screening, not full-document research quality.",
+    "Lead records are fictional, not CRM data.",
+    "Neither the lexical/quote baseline nor DeepSeek is asserted to be the current production selector.",
+    "No threshold calibration, online A/B, full report generation or user-time measurement."
+  ],
+  "summaries": {
+    "baseline": {
+      "requests": 3,
+      "errors": 0,
+      "citation_correct": 0,
+      "citation_total": 0,
+      "citation_false_support": 0,
+      "research_required_found": 5,
+      "research_required_total": 5,
+      "research_selected": 6,
+      "lead_correct_fields": 1,
+      "lead_total_fields": 2,
+      "p50_ms": 0,
+      "p95_ms": 0,
+      "usage": {},
+      "citations": [],
+      "research": [
+        {
+          "id": "r03",
+          "selected": [
+            "d07",
+            "d08",
+            "d09"
+          ],
+          "required": [
+            "d07",
+            "d08",
+            "d09"
+          ],
+          "hit": 3,
+          "recall": 1,
+          "precision": 1
+        },
+        {
+          "id": "r05",
+          "selected": [
+            "d13",
+            "d14",
+            "d03"
+          ],
+          "required": [
+            "d13",
+            "d14"
+          ],
+          "hit": 2,
+          "recall": 1,
+          "precision": 0.6666666666666666
+        }
+      ],
+      "leads": [
+        {
+          "id": "l07",
+          "expected": {
+            "fit": "yes",
+            "intent": "unknown"
+          },
+          "actual": {
+            "fit": "yes",
+            "intent": "evaluate"
+          },
+          "correct_fields": 1,
+          "proposed_action": "draft_demo_or_quote",
+          "side_effect_executed": false
+        }
+      ]
+    },
+    "jev": {
+      "requests": 3,
+      "errors": 0,
+      "citation_correct": 0,
+      "citation_total": 0,
+      "citation_false_support": 0,
+      "research_required_found": 4,
+      "research_required_total": 5,
+      "research_selected": 5,
+      "lead_correct_fields": 2,
+      "lead_total_fields": 2,
+      "p50_ms": 300,
+      "p95_ms": 754,
+      "usage": {
+        "input_tokens": 6383,
+        "output_tokens": 1298
+      },
+      "citations": [],
+      "research": [
+        {
+          "id": "r03",
+          "selected": [
+            "d07",
+            "d08"
+          ],
+          "required": [
+            "d07",
+            "d08",
+            "d09"
+          ],
+          "hit": 2,
+          "recall": 0.6666666666666666,
+          "precision": 1
+        },
+        {
+          "id": "r05",
+          "selected": [
+            "d13",
+            "d14",
+            "d09"
+          ],
+          "required": [
+            "d13",
+            "d14"
+          ],
+          "hit": 2,
+          "recall": 1,
+          "precision": 0.6666666666666666
+        }
+      ],
+      "leads": [
+        {
+          "id": "l07",
+          "expected": {
+            "fit": "yes",
+            "intent": "unknown"
+          },
+          "actual": {
+            "fit": "yes",
+            "intent": "unknown"
+          },
+          "correct_fields": 2,
+          "proposed_action": "retain_for_review",
+          "side_effect_executed": false
+        }
+      ]
+    },
+    "deepseek": {
+      "requests": 3,
+      "errors": 0,
+      "citation_correct": 0,
+      "citation_total": 0,
+      "citation_false_support": 0,
+      "research_required_found": 5,
+      "research_required_total": 5,
+      "research_selected": 6,
+      "lead_correct_fields": 2,
+      "lead_total_fields": 2,
+      "p50_ms": 588,
+      "p95_ms": 968,
+      "usage": {
+        "prompt_tokens": 4552,
+        "completion_tokens": 222,
+        "total_tokens": 4774,
+        "prompt_cache_hit_tokens": 512,
+        "prompt_cache_miss_tokens": 4040
+      },
+      "citations": [],
+      "research": [
+        {
+          "id": "r03",
+          "selected": [
+            "d07",
+            "d08",
+            "d09"
+          ],
+          "required": [
+            "d07",
+            "d08",
+            "d09"
+          ],
+          "hit": 3,
+          "recall": 1,
+          "precision": 1
+        },
+        {
+          "id": "r05",
+          "selected": [
+            "d13",
+            "d14",
+            "d03"
+          ],
+          "required": [
+            "d13",
+            "d14"
+          ],
+          "hit": 2,
+          "recall": 1,
+          "precision": 0.6666666666666666
+        }
+      ],
+      "leads": [
+        {
+          "id": "l07",
+          "expected": {
+            "fit": "yes",
+            "intent": "unknown"
+          },
+          "actual": {
+            "fit": "yes",
+            "intent": "unknown"
+          },
+          "correct_fields": 2,
+          "proposed_action": "retain_for_review",
+          "side_effect_executed": false
+        }
+      ]
+    }
+  }
+}
