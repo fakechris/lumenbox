@@ -100,6 +100,7 @@ this file and the headers disagree. Edit the header, not this table.
 | [68-jev-report-audit](68-jev-report-audit.md) | Jev 研究报告复核：证据边界与只读引用审查合同 | current | 2026-09-22 |
 | [69-fidelity-and-evidence-root-causes](69-fidelity-and-evidence-root-causes.md) | 采集失真与证据蒸发：两类问题的根因、复发路径与卡口 | current | 2026-09-22 |
 | [71-evidence-provenance-practice](71-evidence-provenance-practice.md) | 证据与溯源的业界实践（2025–2026）：我们领先在哪、缺在哪 | current | 2026-09-22 |
+| [72-laya-vs-jev-language-evaluation](72-laya-vs-jev-language-evaluation.md) | laya 与 Jev 的中英文对比实测：差距在任务类型，不在语言 | current | 2026-09-23 |
 
 ## handoff
 
