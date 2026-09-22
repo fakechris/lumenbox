@@ -1,3 +1,4 @@
+import { isComputerWrite } from "../cua/execution.ts";
 /**
  * Tool definitions and dispatch.
  *
@@ -55,6 +56,8 @@ import {
 import {
   computerOutcome,
   effectLine,
+  actionOutcome,
+  verificationLine,
   outcomeLine,
   type BrowserRequest,
   type ComputerAction,
@@ -130,6 +133,7 @@ export interface ToolContext {
     conversation?: string;
   }) => string | undefined;
   askUser?: (input: {
+    principalId?: string;
     agentId: string;
     agentName: string;
     question: string;
@@ -482,6 +486,8 @@ const actionSchema = {
         "list_windows",
         "list_elements",
         "click_element",
+        "invoke_element",
+        "set_value",
         "activate_window",
         "close_window",
         "screenshot_window",
@@ -490,7 +496,9 @@ const actionSchema = {
       description: "Which action to perform.",
     },
     coordinate: coordinateSchema,
-    ref: { type: "string", description: "For click_element: a ref from the last list_elements outline, e.g. a3." },
+    value: { type: "string", description: "For set_value: replace an editable native control with this text. Values travel to the isolated native helper." },
+    ref: { type: "string", description: "For element actions: copy the complete opaque ref from the latest list_elements. Never shorten or reuse it after a write." },
+    observation_id: { type: "string", description: "For element actions: the elements observation id returned with the outline, when available." },
     path: {
       type: "array" as const,
       description: "For drag: the points to move through, starting point first.",
@@ -674,12 +682,20 @@ export function buildTools(
           "manager, which a grab cannot block.\n\n" +
           "Before clicking by coordinates in a desktop app, try `list_elements`: it reads the " +
           "active window's controls from the accessibility tree — role, name, state and " +
-          "position — and gives each a ref; `click_element` with that ref clicks it exactly, " +
-          "with the same effect evidence as a click. Not every app has a tree (a terminal, " +
+          "position — and gives each a ref plus supported operations. Prefer `invoke_element` or " +
+          "`set_value` when supported: these use native AT-SPI actions. `click_element` explicitly uses " +
+          "coordinates; unsupported semantics never fall back to clicks. Refresh refs after every write. Not every app has a tree (a terminal, " +
           "an Electron app): then the result says so and the screenshot is what you have.",
         input_schema: {
           type: "object",
           properties: {
+            expect: {
+              type: "object", description: "Optional state to verify after the batch. Image change alone is not success.",
+              properties: {
+                window_title: { type: "string" },
+                element: { type: "object", properties: { role: { type: "string" }, name: { type: "string" }, states: { type: "array", items: { type: "string" } } }, required: ["role", "name"] },
+              },
+            },
             actions: {
               type: "array",
               description: "The actions to perform, in order.",
@@ -2060,7 +2076,8 @@ export function elementsOutline(result: { elements?: readonly ElementInfo[]; ele
   const lines = result.elements.map(element => {
     const name = element.name !== "" ? ` "${element.name}"` : "";
     const states = element.states.length > 0 ? ` [${element.states.join(", ")}]` : "";
-    return `- ${element.role}${name} [ref=${element.ref}]${states} at (${element.x + Math.round(element.width / 2)},${element.y + Math.round(element.height / 2)})`;
+    const operations = element.operations?.length ? ` operations=${element.operations.join(",")}` : "";
+    return `- ${element.role}${name} [ref=${element.ref}]${states}${operations} at (${element.x + Math.round(element.width / 2)},${element.y + Math.round(element.height / 2)})`;
   });
   const cap = result.elements_window?.truncated === true ? "\n… (more controls than shown; act on what is here or scroll)" : "";
   return lines.length > 0
@@ -2342,6 +2359,7 @@ export async function dispatchTool(
         result = await box.computer(actions, {
           display: context.displayIndex,
           owner: context.boxOwner,
+          expect: input.expect as import("../protocol/index.ts").DesktopExpectation | undefined,
         });
       } catch (error) {
         // The box said no, or said nothing. Those are different answers and the model
@@ -2354,11 +2372,14 @@ export async function dispatchTool(
         return { text: outcomeLine(outcome, message), isError: true };
       }
 
-      const outcome = computerOutcome(result);
+      const outcome = computerOutcome(result, actions.some(isComputerWrite));
       const notes: string[] = [outcomeLine(outcome, result.error)];
-      // The verdict says the batch ran; the effect says whether its writes took. Both,
-      // because "ok" with "suspected_noop" is the exact case this exists for: xdotool
-      // succeeded and the screen did not care.
+      if (result.progress) notes.push(`Completed ${result.progress.executed_count} action(s); dispatch=${result.progress.dispatch}.` +
+        (result.progress.failed_at === undefined ? "" : ` Stopped at action ${result.progress.failed_at + 1}; do not replay the completed prefix.`));
+      if (result.elements_observation_id) notes.push(`Elements observation: ${result.elements_observation_id}.`);
+      if (result.observation) notes.push(`Image observation ${result.observation.id}: ${result.observation.coordinate_space} coordinates${result.observation.window_id ? ` for window ${result.observation.window_id}` : ""}, after action ${result.observation.after_action}.`);
+      if (result.verification) notes.push(verificationLine(result.verification));
+      // Change evidence and requested postconditions remain separate.
       if (result.effect !== undefined) notes.push(effectLine(result.effect, result.effect_detail));
       if (!result.error) {
         notes.push(`Ran ${result.action_count} action(s) in ${result.duration_ms}ms.`);
@@ -3182,6 +3203,7 @@ export async function dispatchTool(
         };
       }
       const where = await context.askUser({
+        ...(context.caller?.userId !== undefined ? { principalId: context.caller.userId } : {}),
         agentId: context.agent.id,
         agentName: context.agent.profile.name,
         question,
@@ -3485,10 +3507,11 @@ export async function dispatchTool(
           domains,
           ...(typeof input.snapshot === "string" && input.snapshot !== "" ? { snapshot: input.snapshot } : {}),
         });
-        const outcome: Outcome = result.outcome ?? "ok";
+        const outcome = actionOutcome(result, true);
         return {
+          isError: outcome !== "ok",
           text: [
-            `${outcomeLine(outcome)} ${secretId} was filled into ${ref}; the outline shows it redacted.`,
+            `${outcomeLine(outcome)} Secret fill for ${secretId} into ${ref} was requested; inspect the redacted field before continuing.`,
             `${result.snapshot_id !== undefined ? `Snapshot ${result.snapshot_id}: ` : ""}${result.title || "(untitled)"} — ${result.url}`,
             ...(result.note !== undefined ? [result.note] : []),
             result.snapshot,
@@ -3623,8 +3646,7 @@ export async function dispatchTool(
             ),
           };
         }
-        // The verdict first. An older boxd sends none, and for it "it answered" is ok.
-        const outcome: Outcome = result.outcome ?? "ok";
+        const outcome = actionOutcome(result, ["browser_act", "browser_scroll", "browser_upload"].includes(name));
         const parts = [
           name === "browser_wait_for" && result.wait !== undefined
             ? `${outcomeLine(outcome)} Wait: ${result.wait}.`
@@ -3633,6 +3655,7 @@ export async function dispatchTool(
               : outcomeLine(outcome),
           `${result.snapshot_id !== undefined ? `Snapshot ${result.snapshot_id}: ` : ""}${result.title || "(untitled)"} — ${result.url}`,
         ];
+        if (result.verification) parts.push(verificationLine(result.verification));
         // What happened to the page comes before the page. A tab that opened under the
         // agent, or a wait that ran out, changes how the outline below should be read.
         if (result.note !== undefined) parts.push(result.note);

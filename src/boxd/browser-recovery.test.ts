@@ -28,7 +28,7 @@ test("failure shapes are classified: connection, transient, or the browser's own
   assert.equal(classifyFailure("Execution context was destroyed."), "transient");
   assert.equal(classifyFailure("Cannot find context with specified id"), "transient");
   assert.equal(classifyFailure('"e9" is not in the last snapshot; take a fresh one.'), undefined);
-  assert.ok(isReadOnlyOp("snapshot") && isReadOnlyOp("open") && !isReadOnlyOp("act") && !isReadOnlyOp("fill_secret"));
+  assert.ok(isReadOnlyOp("snapshot") && !isReadOnlyOp("open") && !isReadOnlyOp("act") && !isReadOnlyOp("fill_secret"));
 });
 
 test("a read that lost its connection is retried once after forgetting the page, and the reply says it recovered", async () => {
@@ -58,7 +58,7 @@ test("a write is never repeated: it comes back unknown with the reason", async (
 
 test("a browser that fails twice on the connection is unavailable; a second answer of another kind passes through", async () => {
   const twice = failing(["The browser connection closed.", "The browser did not start on desktop 1 within 20s. Try box-doctor."]);
-  const result = await withRecovery("open", twice.run, { forget: () => {}, delay: async () => {} });
+  const result = await withRecovery("snapshot", twice.run, { forget: () => {}, delay: async () => {} });
   assert.equal(result.kind, "unavailable");
   const stale = failing(["The browser connection closed.", '"e1" is not a ref.']);
   await assert.rejects(withRecovery("snapshot", stale.run, { forget: () => {}, delay: async () => {} }), /is not a ref/);
@@ -74,4 +74,14 @@ test("the headless floor: a page's text without a browser, said as such", async 
   assert.deepEqual(page, { url: "https://example.test/x/", title: "T", text: "body" });
   await assert.rejects(headlessFetch("https://example.test/gone", async () => ({ ok: false, status: 404, url: "", text: async () => "" })), /HTTP 404/);
   assert.match(HEADLESS_NOTE, /no login state/);
+});
+
+
+test("navigation, scrolling and tab switching are not replayed after an uncertain dispatch", async () => {
+  for (const name of ["open", "switch", "scroll", "upload", "fill_secret"]) {
+    const op = failing(["The browser connection closed."]);
+    const result = await withRecovery(name, op.run, { forget: () => assert.fail("write cannot be retried") });
+    assert.equal(result.kind, "unknown");
+    assert.equal(op.calls(), 1);
+  }
 });

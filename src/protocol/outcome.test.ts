@@ -35,9 +35,21 @@ test("the verdict line says the one thing the model must do with it", () => {
 
 test("a batch whose effect could not be measured is unknown, and the effect line says what to do", () => {
   assert.equal(computerOutcome({ success: true, screenshot: "UklGR", effect: "unverifiable" }), "unknown");
-  assert.equal(computerOutcome({ success: true, screenshot: "UklGR", effect: "suspected_noop" }), "ok");
+  assert.equal(computerOutcome({ success: true, screenshot: "UklGR", effect: "suspected_noop" }), "unknown");
   assert.match(effectLine("suspected_noop", "click@(1,2) suspected_noop 0.0%"), /^Effect: suspected_noop \(click@\(1,2\) suspected_noop 0\.0%\) — nothing near the point changed/);
   assert.match(effectLine("suspected_noop"), /before clicking again/);
-  assert.equal(effectLine("confirmed"), "Effect: confirmed.");
+  assert.match(effectLine("confirmed"), /legacy change signal/);
   assert.match(effectLine("unverifiable"), /no evidence either way/);
+});
+
+test("dispatch, change and verification never collapse into task success", () => {
+  const base = { outcome: "ok" as const, success: true, screenshot: "image", progress: { executed_count: 1, dispatch: "sent" as const } };
+  for (const effect of ["confirmed", "observed_change", "partial", "suspected_noop", "unverifiable"] as const) {
+    assert.equal(computerOutcome({ ...base, effect }), "unknown", `change-only ${effect}`);
+  }
+  const verification = { status: "satisfied" as const, source: "native" as const, detail: "checked state" };
+  assert.equal(computerOutcome({ ...base, verification }), "ok");
+  assert.equal(computerOutcome({ ...base, verification: { ...verification, status: "unsatisfied" } }), "failed");
+  assert.equal(computerOutcome({ ...base, verification, progress: { executed_count: 1, failed_at: 1, dispatch: "partial" } }), "unknown");
+  assert.equal(computerOutcome({ success: true, screenshot: "image" }, true), "unknown", "older daemon cannot verify writes by success=true");
 });

@@ -60,9 +60,26 @@ test("only the person who was asked answers it (INV-533)", () => {
   assert.equal(watch.list().length, 1);
 
   // Their own reply is.
-  assert.deepEqual(watch.noteReply("a1", "feishu:ou_mia").length, 0, "a reply from the wrong person changes nothing");
-  assert.deepEqual(watch.noteReply("a1", "feishu:ou_chris").map(q => q.id), [asked.id]);
+  assert.deepEqual(watch.noteReply("a1", "feishu:ou_mia", asked.id, asked.conversation, T0 + 1).length, 0, "a reply from the wrong person changes nothing");
+  assert.deepEqual(watch.noteReply("a1", "feishu:ou_chris", "wrong", asked.conversation, T0 + 1), []);
+  assert.deepEqual(watch.noteReply("a1", "feishu:ou_chris", asked.id, "another-room", T0 + 1), []);
+  assert.deepEqual(watch.noteReply("a1", "feishu:ou_chris", asked.id, asked.conversation, T0 + QUESTION_TTL_MS), []);
+  assert.deepEqual(watch.noteReply("a1", "feishu:ou_chris", asked.id, asked.conversation, T0 + 1).map(q => q.id), [asked.id]);
   assert.deepEqual(watch.sweep(() => false, T0 + 60_000).map(e => e.verdict), ["answered"]);
+});
+
+test("an explicitly answered question cannot apply its default after restart before the sweep", () => {
+  const dir = mkdtempSync(join(tmpdir(), "agentbox-answered-"));
+  try {
+    const path = join(dir, "questions.jsonl");
+    const first = new QuestionWatch(path);
+    const q = first.ask({ agentId: "a1", agentName: "Ada", conversation: "room", question: "Which?", asker: "one", fallback: "us", now: T0 }).question;
+    assert.equal(first.noteReply("a1", "one", q.id, "room", T0 + 1).length, 1);
+    assert.equal(first.noteReply("a1", "one", q.id, "room", T0 + 2).length, 0);
+    const restored = new QuestionWatch(path);
+    assert.deepEqual(restored.list(), []);
+    assert.deepEqual(restored.sweep(() => false, T0 + QUESTION_TTL_MS), []);
+  } finally { rmSync(dir, { recursive: true, force: true }); }
 });
 
 test("a pending question survives a restart, with its default and its clock (INV-533)", () => {

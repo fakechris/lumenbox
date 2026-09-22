@@ -110,7 +110,7 @@ import { staleReason } from "./browser-service.ts";
 
 test("a ref is refused when its outline is not the latest, or the page moved past it", () => {
   // A caller that names no outline is an older host and is trusted as before.
-  assert.equal(staleReason(undefined, "s3", 999), undefined);
+  assert.match(staleReason(undefined, "s3", 999) ?? "", /requires its snapshot id/);
   // The happy path: the id the agent holds is the current one and little has changed.
   assert.equal(staleReason("s3", "s3", 4), undefined);
   // Three refusals, each naming its own cause.
@@ -159,17 +159,17 @@ const state = (over: Partial<TargetState> = {}): TargetState => ({
   ...over,
 });
 
-test("a target that changed is confirmed; only focus moving is partial; nothing is a suspected no-op; gone is confirmed", () => {
-  assert.deepEqual(judgeEffect(state(), state({ value: "hello" }), false), { effect: "confirmed", changed: ["value"] });
+test("a target that changed is observed_change; only focus moving is partial; nothing is a suspected no-op; gone is observed_change", () => {
+  assert.deepEqual(judgeEffect(state(), state({ value: "hello" }), false), { effect: "observed_change", changed: ["value"] });
   assert.deepEqual(judgeEffect(state(), state({ focused: true }), false), { effect: "partial", changed: ["focus"] });
   // The React case: the screen painted the text, the framework's state did not take it —
-  // value unchanged in the DOM the app re-rendered, focus moved. Partial, not confirmed.
+  // value unchanged in the DOM the app re-rendered, focus moved. Partial, not observed_change.
   assert.equal(judgeEffect(state(), state({ focused: true }), false).effect, "partial");
   assert.deepEqual(judgeEffect(state(), state(), false), { effect: "suspected_noop", changed: [] });
-  assert.deepEqual(judgeEffect(state(), undefined, false), { effect: "confirmed", changed: ["gone"] });
-  assert.deepEqual(judgeEffect(state(), state(), true), { effect: "confirmed", changed: ["navigated"] });
-  // The button looks the same and the list it refreshed re-rendered: confirmed by the page.
-  assert.deepEqual(judgeEffect(state(), state({ focused: true }), false, true), { effect: "confirmed", changed: ["page", "focus"] });
+  assert.deepEqual(judgeEffect(state(), undefined, false), { effect: "observed_change", changed: ["gone"] });
+  assert.deepEqual(judgeEffect(state(), state(), true), { effect: "observed_change", changed: ["navigated"] });
+  // The button looks the same and the list it refreshed re-rendered: observed_change by the page.
+  assert.deepEqual(judgeEffect(state(), state({ focused: true }), false, true), { effect: "observed_change", changed: ["page", "focus"] });
   assert.deepEqual(judgeEffect(state(), state({ aria: "x", disabled: true }), false).changed, ["aria", "disabled"]);
 });
 
@@ -334,4 +334,15 @@ test("generation regression: a late attach from a replaced incarnation is refuse
   } finally {
     bindingRm(dir, { recursive: true, force: true });
   }
+});
+
+import { verifyBrowserExpectation } from "./browser-service.ts";
+
+test("browser verification requires requested state and treats unreadable targets as unknown", () => {
+  assert.equal(verifyBrowserExpectation(undefined, state({ value: "changed" }), "Saved").status, "unknown");
+  assert.equal(verifyBrowserExpectation({}, state(), "Saved").status, "unknown");
+  assert.equal(verifyBrowserExpectation({ value: "hello" }, state({ value: "hello" }), "").status, "satisfied");
+  assert.equal(verifyBrowserExpectation({ value: "hello" }, state({ value: "other" }), "").status, "unsatisfied");
+  assert.equal(verifyBrowserExpectation({ gone: true }, undefined, "").status, "unknown", "read failure cannot prove disappearance");
+  assert.equal(verifyBrowserExpectation({ appears: "Saved" }, undefined, "Saved successfully").status, "satisfied");
 });
