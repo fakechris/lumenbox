@@ -358,12 +358,42 @@ killed the grading idea is docs/69 §2.4, kept as a test over three real pages.
 The tool result ends with `[full page kept: <path>]`, the same shape as the box's spill
 pointer, and `storableResult` carries it across the transcript's cut. Kept for
 `AGENTBOX_FETCHED_RETENTION_DAYS` days (default 90, at most 3650): a prune runs on the way
-past a fetch at most once an hour and logs one line when it removed anything. The audit
+past a fetch or a kept result, at most once an hour, over both directories at once, and
+logs one line when it removed anything. The audit
 export (docs/50 J4) takes the files inside its window, redacted, listed under `fetched` in
 the manifest apart from the ledgers. `AGENTBOX_FXTWITTER_BASE` and
 `AGENTBOX_X_SYNDICATION_BASE` point the X reader at a self-hosted FxEmbed or a mirror.
 
 ## 3. Box state
+
+### 2.7 `results/`
+
+Whatever a tool said, kept by whoever cut it (`src/host/results.ts`, INV-633).
+
+A tool result is trimmed to `DURABLE_RESULT_CHARS` before the transcript stores it
+(`storableResult`, docs/24). Three producers thought to spill on their own — the box for
+shell output, `WebFetch` for a page, the X reader for a post — and every other tool's
+overflow was gone the moment the turn ended: a long `browser_read`, a long document, a
+file read, anything an MCP server returns. Asking each producer to remember is asking for
+the same defect once per tool, so now the cut keeps what it cuts.
+
+- `results/<yyyy-mm>/<turnId>-<toolUseId>.txt` — one file per call that was too long, with
+  a frontmatter (`schema: lumenbox.result/v1`, `tool`, `tool_use_id`, `turn_id`, `at`,
+  `text_chars`, `is_error` when the call failed, `sha256` of the body, `agent_id`, `agent`,
+  `conversation`) over the whole result. Keyed by turn and call rather than by a digest, so
+  two calls that returned the same bytes stay two records.
+- Not written when the result already carries a pointer of its own, and not written for a
+  result the tool asked to record differently (`ToolOutcome.recordAs`, a vault secret): the
+  secret was the reason for withholding it.
+- A failure to write is said in place of the pointer and never thrown. A turn is not lost
+  over a full disk.
+
+The pointer is `[full output kept: <path> — all N characters]`, the box's own phrase, so
+`storableResult`, `extractAnchors` and the system prompt all already know it. The path is
+on the host, outside the box, so an agent cannot read it back with `read_file` — the same
+as a kept page. It is for the person who asks later what a call actually returned. Same
+retention as `fetched/`, taken by the same pass; the audit export carries the files inside
+its window, redacted, listed under `results` in the manifest.
 
 ### 3.1 `work` volume — `/home/box/work`
 

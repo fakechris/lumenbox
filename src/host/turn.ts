@@ -76,6 +76,7 @@ import {
   type SummaryEntry,
 } from "./compaction.ts";
 import { DURABLE_RESULT_CHARS, type ResolutionConfig } from "../protocol/index.ts";
+import { keepToolResult, RESULT_KEPT_MARKER } from "./results.ts";
 import type { BoxClass } from "../box/access.ts";
 import { emptySectionFaults, buildSystemPromptParts, buildTurnPrompt,
   turnReminderFor,
@@ -720,6 +721,17 @@ export type TranscriptEntry =
 /** Shared with the box, which spills to a file before this cut loses anything. */
 const REPLAYED_RESULT_LIMIT = DURABLE_RESULT_CHARS;
 
+/** What `storableResult` needs in order to file a result it had to cut (results.ts). */
+export interface KeepContext {
+  turnId: string;
+  agent: { id: string; name: string };
+  tool?: string;
+  conversation?: string;
+  /** The box's home. Left to the default in production; set by tests. */
+  home?: string;
+  at?: Date;
+}
+
 /**
  * Strips a tool result down for storage.
  *
@@ -734,7 +746,13 @@ export function storableResult(
    * What to store instead, when a tool said the record and the model must see different
    * things. Only `RunOnHost` with vault secrets does — see `ToolOutcome.recordAs`.
    */
-  recordAs?: string
+  recordAs?: string,
+  /**
+   * Who and when, so the cut can keep what it cuts (results.ts). Absent means do not
+   * keep — the tests that only care about the trimming pass nothing, and so does any
+   * caller that has no turn to file the text under.
+   */
+  keep?: KeepContext
 ): Anthropic.ToolResultBlockParam {
   if (recordAs !== undefined) {
     // Not truncated and not scanned for a spill pointer: this text was written to be
@@ -774,6 +792,31 @@ export function storableResult(
     // page it kept (fetched.ts). Both pointers are worth carrying.
     const pointer = whole.slice(text.length).match(/\[[^\]]*full (?:output|page) kept:[^\]]*\]/);
     if (pointer !== null) text += `\n${pointer[0]}`;
+    // Nobody kept it, so the cut does. Everything without a spill of its own used to end
+    // here — the whole of a long browser read, a long document, an MCP server's answer —
+    // and the record kept the first two thousand characters of it with nothing saying
+    // there had been more. A failure to file is said in place of the pointer rather than
+    // thrown: the turn happened either way, and a turn is not lost over a full disk.
+    else if (keep !== undefined) {
+      try {
+        const kept = keepToolResult(
+          {
+            text: whole,
+            turnId: keep.turnId,
+            toolUseId: block.tool_use_id,
+            ...(keep.tool !== undefined ? { tool: keep.tool } : {}),
+            agent: keep.agent,
+            ...(keep.conversation !== undefined ? { conversation: keep.conversation } : {}),
+            ...(block.is_error === true ? { isError: true } : {}),
+            at: keep.at ?? new Date(),
+          },
+          keep.home
+        );
+        text += `\n[${RESULT_KEPT_MARKER} ${kept.path} — all ${whole.length} characters]`;
+      } catch (error) {
+        text += `\n[could not keep the whole result: ${error instanceof Error ? error.message : error}]`;
+      }
+    }
   }
   if (imageCount > 0) {
     text += `\n[${imageCount} screenshot(s) were attached and shown at the time]`;
@@ -2622,6 +2665,9 @@ export async function runTurn(
       });
       at = until;
     }
+    // Which call was which, so a kept result says what produced it. The block carries the
+    // id and not the name; the name is only here, in the calls that were made.
+    const toolNames = new Map(toolUses.map(use => [use.id, use.name] as const));
     for (const entry of done) {
       if (entry === undefined) continue;
       results.push(entry.block);
@@ -2647,7 +2693,14 @@ export async function runTurn(
     registry.appendTranscript(agent.id, {
       role: "user",
       kind: "results",
-      blocks: results.map(block => storableResult(block, withheld.get(block.tool_use_id))),
+      blocks: results.map(block =>
+        storableResult(block, withheld.get(block.tool_use_id), {
+          turnId,
+          agent: { id: agent.id, name: agent.profile.name },
+          ...(toolNames.get(block.tool_use_id) !== undefined ? { tool: toolNames.get(block.tool_use_id)! } : {}),
+          ...(conversation !== undefined ? { conversation } : {}),
+        })
+      ),
       at: new Date().toISOString(),
       turnId,
     } satisfies TranscriptEntry, conversation);
