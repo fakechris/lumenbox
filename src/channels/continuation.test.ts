@@ -49,6 +49,7 @@ test("a link or a fresh request while work runs is new work, and queues", () => 
 
 test("question text and pasted research are not control instructions", () => {
   for (const text of [
+    "我想知道毛利改成百分比会怎样？",
     "长短记忆的区别及对应适配业务数据？",
     "介绍一下图像识别",
     "这个模型有什么特别之处？",

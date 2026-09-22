@@ -58,7 +58,7 @@ export function isContinuation(text: string, context: ContinuationContext): bool
   // into a running Jev lookup. Ambiguous, long or multi-line requests wait their
   // own turn; only short direct instructions qualify for lexical steering.
   if (trimmed.length > 200 || /[\r\n]/u.test(trimmed)) return false;
-  if (/^(?:请问|为什么|为何|如何|什么|怎么|是否|能否|what\b|why\b|how\b|can\b|could\b)/iu.test(trimmed)) return false;
+  if (/^(?:请问|我想知道|为什么|为何|如何|什么|怎么|是否|能否|what\b|why\b|how\b|can\b|could\b)/iu.test(trimmed)) return false;
   // “别” is an imperative only at the start, never inside 区别 / 识别 / 特别.
   if (/^(?:请)?别(?!的)/u.test(trimmed)) return true;
   if (CUE_PATTERN.test(trimmed) || SUBJECT_EDIT_PATTERN.test(trimmed) || ENGLISH_CUE_PATTERN.test(trimmed)) return true;
