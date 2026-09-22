@@ -542,11 +542,11 @@ class BrowserPage {
 
   private async answerDialog(params: { message?: string; type?: string }): Promise<void> {
     const { accept, note } = dialogAnswer(params.type ?? "confirm", params.message ?? "");
-    this.lastDialog = note;
     try {
       await this.session.send("Page.handleJavaScriptDialog", { accept });
+      this.lastDialog = note;
     } catch {
-      // The dialog may have gone on its own; nothing useful to do about it.
+      this.lastDialog = "The page opened a dialog; it was not answered.";
     }
   }
 

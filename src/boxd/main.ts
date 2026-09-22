@@ -597,7 +597,7 @@ const routes: Record<string, Handler> = {
         return { url: "", title: "", snapshot: "", progress, outcome: "unknown", note: "Desktop authority changed after dispatch. Input may have been sent; do not replay." };
       }
       return { ...result, progress, outcome: actionOutcome({ ...result, progress }, writes) };
-    });
+    }, () => { authorize(); displays.assertAgentControls(display); });
     // Recovery policy for externally owned applications belongs to their controller.
     if (!localRecovery) {
       return browserOp();

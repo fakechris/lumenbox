@@ -1,8 +1,8 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 
-const cdpAuthority = new AsyncLocalStorage<{ authorize: () => void; active: boolean }>();
-export async function withCdpAuthority<T>(authorize: () => void, operation: () => Promise<T>): Promise<T> {
-  const scope = { authorize, active: true };
+const cdpAuthority = new AsyncLocalStorage<{ authorize: () => void; backgroundAuthorize: () => void; active: boolean }>();
+export async function withCdpAuthority<T>(authorize: () => void, operation: () => Promise<T>, backgroundAuthorize = authorize): Promise<T> {
+  const scope = { authorize, backgroundAuthorize, active: true };
   return cdpAuthority.run(scope, async () => {
     try { authorize(); return await operation(); }
     finally { scope.active = false; }
@@ -111,6 +111,7 @@ export class CdpSession {
   private readonly pending = new Map<number, Pending>();
   private readonly listeners = new Map<string, ((params: Record<string, unknown>) => void)[]>();
   private closed = false;
+  private backgroundAuthorize: (() => void) | undefined;
 
   private constructor(readonly targetId: string) {}
 
@@ -206,7 +207,17 @@ export class CdpSession {
   }
 
   send(method: string, params: Record<string, unknown> = {}, timeoutMs = COMMAND_TIMEOUT_MS): Promise<Record<string, unknown>> {
-    try { authorizeCdp(method, params); } catch (error) { return Promise.reject(error); }
+    try {
+      authorizeCdp(method, params);
+      const scope = cdpAuthority.getStore();
+      if (scope?.active) this.backgroundAuthorize = scope.backgroundAuthorize;
+      if (method === "Page.handleJavaScriptDialog") {
+        // WebSocket listeners outlive their creating request's async scope. Keep
+        // the latest caller's authority for automatic input after that scope ends.
+        if (!this.backgroundAuthorize) throw new CdpError("No authority to answer this dialog");
+        this.backgroundAuthorize();
+      }
+    } catch (error) { return Promise.reject(error); }
     if (this.closed || this.socket === undefined || this.socket.readyState !== WebSocket.OPEN) {
       return Promise.reject(new CdpError("The browser connection is not open."));
     }

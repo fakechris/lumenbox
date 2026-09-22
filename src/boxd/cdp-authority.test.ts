@@ -22,5 +22,16 @@ test("CDP rechecks authority between commands, permits release, and keeps concur
     await withCdpAuthority(() => {}, () => session.send("Runtime.evaluate", { expression: "1" }));
     await assert.rejects(session.send("Runtime.evaluate"), /revoked/);
   });
-  assert.deepEqual(sent, ["Input.dispatchKeyEvent:keyDown", "Input.dispatchKeyEvent:keyUp", "Runtime.evaluate:"]);
+  allowed = true;
+  await withCdpAuthority(() => { if (!allowed) throw new Error("revoked"); }, () => session.send("Runtime.evaluate"));
+  allowed = false;
+  // A callback can arrive after the request that attached this socket has ended.
+  await assert.rejects(session.send("Page.handleJavaScriptDialog", {accept:true}), /revoked/);
+  // A screenshot during human control may read, but cannot grant background input.
+  await withCdpAuthority(() => {}, async () => {
+    await session.send("Runtime.evaluate", {expression:"1"});
+    await assert.rejects(session.send("Page.handleJavaScriptDialog", {accept:true}), /human control/);
+  }, () => { throw new Error("human control"); });
+  await assert.rejects(session.send("Page.handleJavaScriptDialog", {accept:true}), /human control/);
+  assert.deepEqual(sent, ["Input.dispatchKeyEvent:keyDown", "Input.dispatchKeyEvent:keyUp", "Runtime.evaluate:", "Runtime.evaluate:", "Runtime.evaluate:"]);
 });

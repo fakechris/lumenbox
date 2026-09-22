@@ -136,8 +136,8 @@ test("the trajectory fixture is balanced and every case is in the reviewed class
 test("a computer batch that writes to the desktop is reviewed; a look is not (INV-401)", () => {
   assert.equal(needsReview("computer", { actions: [{ action: "screenshot" }] }), undefined);
   assert.equal(needsReview("computer", { actions: [{ action: "list_windows" }, { action: "cursor_position" }] }), undefined);
-  assert.equal(needsReview("computer", { actions: [{ action: "screenshot" }, { action: "click", coordinate: [1, 2] }] }), "drives the desktop by coordinates");
-  assert.equal(needsReview("computer", { actions: [{ action: "type", text: "hi" }] }), "drives the desktop by coordinates");
+  assert.equal(needsReview("computer", { actions: [{ action: "screenshot" }, { action: "click", coordinate: [1, 2] }] }), "drives the desktop through input or native semantics");
+  assert.equal(needsReview("computer", { actions: [{ action: "type", text: "hi" }] }), "drives the desktop through input or native semantics");
   assert.equal(needsReview("computer", { actions: "nonsense" }), undefined);
 });
 
