@@ -503,6 +503,12 @@ export class DisplayManager {
     partialAfter: boolean
   ): void {
     const committed = new Map(candidate);
+    for (const [index, state] of committed) {
+      const previous = this.control.get(index);
+      if (previous?.epoch !== state.epoch || previous?.opToken !== state.opToken || previous?.revoked !== state.revoked) {
+        this.desktops.get(index)?.executor?.invalidateElements();
+      }
+    }
     this.control.clear();
     for (const [index, state] of committed) this.control.set(index, state);
     // The human lease belongs to the revoked authority too. Clear it only after
@@ -907,6 +913,7 @@ export class DisplayManager {
     const now = Date.now();
     const since = desktop.userControl !== undefined && desktop.userControl.until > now ? desktop.userControl.since : now;
     desktop.userControl = { since, until: now + Math.max(1_000, ttlMs) };
+    desktop.executor?.invalidateElements();
     this.log(`desktop ${index}: a person took over (until ${new Date(desktop.userControl.until).toISOString()})`);
     return desktop.userControl;
   }
@@ -915,6 +922,7 @@ export class DisplayManager {
   handBack(index: number): void {
     const desktop = this.desktops.get(index);
     if (desktop?.userControl === undefined) return;
+    desktop.executor?.invalidateElements();
     delete desktop.userControl;
     this.log(`desktop ${index}: handed back to the agent`);
   }
@@ -924,6 +932,7 @@ export class DisplayManager {
     const desktop = this.desktops.get(index);
     if (desktop?.userControl === undefined) return undefined;
     if (desktop.userControl.until <= Date.now()) {
+      desktop.executor?.invalidateElements();
       delete desktop.userControl;
       return undefined;
     }
@@ -1033,6 +1042,7 @@ export class DisplayManager {
               `${Math.round(OWNER_TTL_MS / 60_000)} minutes; handing it over`
           );
         }
+        existing.executor?.invalidateElements();
         existing.owner = owner;
       }
       // Renewed on every ensure by the owner, for the same reason.

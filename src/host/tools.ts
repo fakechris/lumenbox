@@ -489,7 +489,8 @@ const actionSchema = {
       description: "Which action to perform.",
     },
     coordinate: coordinateSchema,
-    ref: { type: "string", description: "For click_element: a ref from the last list_elements outline, e.g. a3." },
+    ref: { type: "string", description: "For click_element: copy the complete opaque ref from the latest list_elements. Never shorten or reuse it after a write." },
+    observation_id: { type: "string", description: "For click_element: the elements observation id returned with the outline, when available." },
     path: {
       type: "array" as const,
       description: "For drag: the points to move through, starting point first.",
@@ -2346,6 +2347,10 @@ export async function dispatchTool(
 
       const outcome = computerOutcome(result);
       const notes: string[] = [outcomeLine(outcome, result.error)];
+      if (result.progress) notes.push(`Completed ${result.progress.executed_count} action(s); dispatch=${result.progress.dispatch}.` +
+        (result.progress.failed_at === undefined ? "" : ` Stopped at action ${result.progress.failed_at + 1}; do not replay the completed prefix.`));
+      if (result.elements_observation_id) notes.push(`Elements observation: ${result.elements_observation_id}.`);
+      if (result.observation) notes.push(`Image observation ${result.observation.id}: ${result.observation.coordinate_space} coordinates${result.observation.window_id ? ` for window ${result.observation.window_id}` : ""}, after action ${result.observation.after_action}.`);
       // The verdict says the batch ran; the effect says whether its writes took. Both,
       // because "ok" with "suspected_noop" is the exact case this exists for: xdotool
       // succeeded and the screen did not care.

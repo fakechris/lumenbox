@@ -6,6 +6,8 @@
  */
 
 import { AsyncLocalStorage } from "node:async_hooks";
+import { randomUUID } from "node:crypto";
+import { ComputerExecutionError, DesktopTargetError, isComputerWrite } from "./execution.ts";
 import { envNumber } from "../config.ts";
 import { execFile } from "node:child_process";
 import { readFileSync, unlinkSync } from "node:fs";
@@ -19,6 +21,8 @@ import type {
   WindowInfo,
   ElementInfo,
   Effect,
+  DesktopObservation,
+  ComputerProgress,
 } from "../protocol/index.ts";
 import { CoordinateScaler } from "./scaling.ts";
 import { exec, execBuffer, execWithInput, sleep } from "./shell.ts";
@@ -327,8 +331,8 @@ export function patchWebpHeader(buffer: Buffer): Buffer {
 
 /** What box-ax prints: the tree it read, or why it could not. */
 export interface AxOutput {
-  window: { title: string; app: string; truncated: boolean };
-  elements: { ref: string; role: string; name: string; x: number; y: number; width: number; height: number; states: string[] }[];
+  window: { title: string; app: string; truncated: boolean; identity?: string; id?: string };
+  elements: { ref: string; identity?: string; role: string; name: string; x: number; y: number; width: number; height: number; states: string[] }[];
 }
 
 export function parseAxOutput(text: string): AxOutput | { error: string } | undefined {
@@ -348,11 +352,14 @@ export function parseAxOutput(text: string): AxOutput | { error: string } | unde
       title: typeof window.title === "string" ? window.title : "",
       app: typeof window.app === "string" ? window.app : "",
       truncated: parsed.truncated === true,
+      identity: typeof window.identity === "string" ? window.identity : undefined,
+      id: typeof window.id === "string" ? window.id : undefined,
     },
     elements: (parsed.elements as Record<string, unknown>[])
       .filter(e => typeof e.ref === "string" && typeof e.role === "string")
       .map(e => ({
         ref: e.ref as string,
+        identity: typeof e.identity === "string" ? e.identity : undefined,
         role: e.role as string,
         name: typeof e.name === "string" ? e.name : "",
         x: Number(e.x ?? 0),
@@ -392,6 +399,9 @@ export interface TypingOptions {
 }
 
 export interface X11ExecutionResult {
+  observation?: DesktopObservation;
+  elementsObservationId?: string;
+  progress?: ComputerProgress;
   success: boolean;
   screenshot: string;
   /** The weakest measured effect among the batch's writes; absent when nothing was measured. */
@@ -417,6 +427,19 @@ export class X11Executor {
   private readonly env: Record<string, string>;
   /** The controls of the last list_elements, by ref, at display resolution — what click_element resolves against. */
   private elementCentres = new Map<string, Point>();
+  private elementTargets = new Map<string, AxOutput["elements"][number]>();
+  private elementWindow: AxOutput["window"] | undefined;
+  private elementsObservationId: string | undefined;
+  private observationGeneration = 0;
+
+  /** Authority/lifecycle changes and writes invalidate references synchronously. */
+  invalidateElements(): void {
+    this.observationGeneration++;
+    this.elementCentres.clear();
+    this.elementTargets.clear();
+    this.elementWindow = undefined;
+    this.elementsObservationId = undefined;
+  }
 
   constructor(config: X11Config) {
     this.config = {
@@ -435,7 +458,7 @@ export class X11Executor {
   private elementCentre(ref: string): Point {
     const centre = this.elementCentres.get(ref.trim());
     if (centre === undefined) {
-      throw new Error(`no element ${ref} in the last list_elements outline; list_elements again and use a ref from it`);
+      throw new DesktopTargetError(`no element ${ref} in the last list_elements outline`);
     }
     return centre;
   }
@@ -460,7 +483,7 @@ export class X11Executor {
    * (INV-412). An app with no tree — a terminal, an Electron app — is an `error`, said in
    * words, never an empty list: the model must fall back to the screenshot knowingly.
    */
-  protected async listElements(): Promise<{ elements: ElementInfo[]; window: { title: string; app: string; truncated: boolean } } | { error: string }> {
+  protected async readElements(): Promise<AxOutput | { error: string }> {
     let stdout: string;
     authorizeOperation();
     try {
@@ -481,19 +504,56 @@ export class X11Executor {
     const parsed = parseAxOutput(stdout);
     if (parsed === undefined) return { error: "the accessibility reader answered with something unreadable" };
     if ("error" in parsed) return parsed;
-    return this.adoptElements(parsed);
+    return parsed;
+  }
+
+  protected async listElements(): Promise<{ elements: ElementInfo[]; window: AxOutput["window"] } | { error: string }> {
+    const generation = this.observationGeneration;
+    const read = await this.readElements();
+    authorizeOperation();
+    if (generation !== this.observationGeneration) throw new DesktopTargetError("control changed during observation");
+    return "error" in read ? read : this.adoptElements(read);
+  }
+
+  /** Re-read immediately before dispatch; no cached geometry can silently move the target. */
+  protected async validateElement(ref: string, observationId?: string): Promise<Point> {
+    const target = this.elementTargets.get(ref);
+    const window = this.elementWindow;
+    const generation = this.observationGeneration;
+    if (!target || !window || !this.elementsObservationId ||
+        (observationId !== undefined && observationId !== this.elementsObservationId)) {
+      throw new DesktopTargetError("element is not bound to the current observation");
+    }
+    if (!window.identity || !target.identity) throw new DesktopTargetError("reader cannot prove native target identity; upgrade the box helper");
+    const read = await this.readElements();
+    authorizeOperation();
+    if (generation !== this.observationGeneration || "error" in read || read.window.identity !== window.identity) {
+      throw new DesktopTargetError("the observed window is no longer current or readable");
+    }
+    const matches = read.elements.filter(element => element.identity === target.identity);
+    const current = matches[0];
+    if (matches.length !== 1 || !current || current.role !== target.role || current.name !== target.name ||
+        current.x !== target.x || current.y !== target.y || current.width !== target.width || current.height !== target.height ||
+        current.states.includes("disabled")) {
+      throw new DesktopTargetError("the target moved, changed, disappeared or is disabled");
+    }
+    return this.elementCentre(ref);
   }
 
   /** Scales the tree's screen rectangles to API space and remembers the centres for click_element. */
   protected adoptElements(read: AxOutput): { elements: ElementInfo[]; window: { title: string; app: string; truncated: boolean } } {
-    this.elementCentres = new Map();
+    this.invalidateElements();
+    this.elementsObservationId = randomUUID();
+    this.elementWindow = read.window;
     const elements: ElementInfo[] = [];
     for (const raw of read.elements) {
-      this.elementCentres.set(raw.ref, { x: Math.round(raw.x + raw.width / 2), y: Math.round(raw.y + raw.height / 2) });
+      const ref = `${this.elementsObservationId}:${raw.ref}`;
+      this.elementCentres.set(ref, { x: Math.round(raw.x + raw.width / 2), y: Math.round(raw.y + raw.height / 2) });
+      this.elementTargets.set(ref, raw);
       const origin = this.apiPoint({ x: raw.x, y: raw.y });
       const far = this.apiPoint({ x: raw.x + raw.width, y: raw.y + raw.height });
       elements.push({
-        ref: raw.ref,
+        ref,
         role: raw.role,
         name: raw.name,
         x: Math.round(origin.x),
@@ -547,25 +607,50 @@ export class X11Executor {
     let elementsWindow: { title: string; app: string; truncated: boolean } | undefined;
     let screenshotTaken = false;
     let settleNeeded = false;
+    let executedCount = 0;
+    let attemptedWrite = false;
+    let failedAt: number | undefined;
+    let observation: DesktopObservation | undefined;
+    const capture = async (windowId?: string): Promise<string> => {
+      authorizeOperation();
+      const captureStart = Date.now();
+      const geometry = windowId === undefined ? undefined : await this.windowGeometry(assertWindowId(windowId));
+      const result = windowId === undefined ? await this.takeScreenshot() : await this.screenshotWindow(windowId);
+      observation = {
+        id: randomUUID(), display: this.config.display,
+        captured_start_ms: captureStart, captured_end_ms: Date.now(), after_action: executedCount,
+        coordinate_space: windowId === undefined ? "screen" : "window",
+        ...(windowId === undefined ? {} : { window_id: windowId }),
+        resolution: geometry === undefined ? this.config.resolution : {
+          display: { width: geometry.width, height: geometry.height },
+          api: { width: geometry.width, height: geometry.height },
+        },
+      };
+      return result;
+    };
     // What each write did to the pixels around it (docs/49 A1). The last one is kept
     // whole so a slow repaint can be re-judged after the batch settles.
     const measured: { action: string; point?: Point; effect: Effect; fraction?: number }[] = [];
     let pending: { region: Region; before: Buffer; index: number } | undefined;
 
+    try {
     for (const action of actions) {
+      failedAt = executedCount;
       authorizeOperation();
       if (action.action === "screenshot") {
         if (settleNeeded) {
           await sleep(this.config.screenshotDelayMs);
           settleNeeded = false;
         }
-        lastScreenshot = await this.takeScreenshot();
+        lastScreenshot = await capture();
         screenshotTaken = true;
       } else if (action.action === "cursor_position") {
         cursorPosition = await this.readCursorPosition();
       } else if (action.action === "list_windows") {
         windows = await this.listWindows();
       } else if (action.action === "list_elements") {
+        screenshotTaken = false;
+        this.invalidateElements();
         if (settleNeeded) {
           await sleep(this.config.screenshotDelayMs);
           settleNeeded = false;
@@ -586,21 +671,33 @@ export class X11Executor {
           await sleep(this.config.screenshotDelayMs);
           settleNeeded = false;
         }
-        lastScreenshot = await this.screenshotWindow(action.window_id);
+        lastScreenshot = await capture(action.window_id);
         screenshotTaken = true;
       } else {
+        // A wait can let the application repaint even without synthetic input.
+        if (action.action === "wait") screenshotTaken = false;
+        if (isComputerWrite(action)) {
+          screenshotTaken = false;
+          elements = undefined;
+          elementsWindow = undefined;
+          // Validate before starting any native mutation. Tokens are consumed below even on failure.
+          if (action.action === "click_element") await this.validateElement(action.ref, action.observation_id);
+        }
         const anchor = this.config.measureEffect ? await this.anchorOf(action) : undefined;
         // "before" is taken now, not at the batch's start: an earlier action in the same
         // batch may have changed this very region, and that change is not this write's.
         const region = anchor !== undefined ? this.neighbourhood(anchor) : undefined;
         const before = region !== undefined ? await this.grabQuietly(region) : undefined;
         authorizeOperation();
-        await this.executeAction(action, options);
+        if (isComputerWrite(action)) attemptedWrite = true;
+        try { await this.executeAction(action, options); }
+        finally { if (isComputerWrite(action)) this.invalidateElements(); }
         if (actionRequiresSettle(action)) settleNeeded = true;
         if (anchor !== undefined) {
           if (region === undefined || before === undefined) {
             measured.push({ action: action.action, point: this.apiPoint(anchor), effect: "unverifiable" });
             pending = undefined;
+            executedCount++;
             continue;
           }
           await sleep(this.config.effectSettleMs);
@@ -611,7 +708,9 @@ export class X11Executor {
           pending = { region, before, index: measured.length - 1 };
         }
       }
+      executedCount++;
     }
+    failedAt = undefined;
 
     // Always hand back a screenshot, so the model never has to ask for one.
     if (!screenshotTaken) {
@@ -628,13 +727,34 @@ export class X11Executor {
           last.fraction = fraction;
         }
       }
-      lastScreenshot = await this.takeScreenshot();
+      lastScreenshot = await capture();
     }
     authorizeOperation();
+
+    if (elements !== undefined) {
+      const generation = this.observationGeneration;
+      const current = await this.readElements();
+      authorizeOperation();
+      const unchanged = generation === this.observationGeneration && !("error" in current) &&
+        current.window.identity !== undefined && current.window.identity === this.elementWindow?.identity &&
+        JSON.stringify(current.elements) === JSON.stringify([...this.elementTargets.values()]);
+      if (!unchanged) {
+        this.invalidateElements();
+        elements = undefined;
+        elementsWindow = undefined;
+        elementsNote = "the window or controls changed while the image was captured; list_elements again";
+      } else if (observation) {
+        observation.id = this.elementsObservationId!;
+        observation.window_id = this.elementWindow?.id;
+      }
+    }
 
     const effect = worstEffect(measured.map(m => m.effect));
     return {
       success: true,
+      observation,
+      elementsObservationId: elements === undefined ? undefined : this.elementsObservationId,
+      progress: { executed_count: executedCount, dispatch: attemptedWrite ? "sent" : "not_started" },
       screenshot: lastScreenshot ?? "",
       ...(effect !== undefined
         ? {
@@ -652,6 +772,13 @@ export class X11Executor {
       actionCount: actions.length,
       durationMs: Date.now() - start,
     };
+    } catch (error) {
+      this.invalidateElements();
+      throw new ComputerExecutionError(error, {
+        executed_count: executedCount, failed_at: failedAt,
+        dispatch: attemptedWrite ? (failedAt === undefined ? "sent" : "partial") : "not_started",
+      });
+    }
   }
 
   /**

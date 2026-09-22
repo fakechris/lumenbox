@@ -83,6 +83,8 @@ import { BrowserEndpointRegistry, EndpointConflictError } from "./browser-endpoi
 import { currentRoots, downloadFile, listDir, readFile, uploadFile, writeFile } from "./fs-service.ts";
 import { headlessRefusal } from "./headless.ts";
 import { XWatchdogService } from "./xwatchdog-service.ts";
+import { DesktopOperations } from "./desktop-operations.ts";
+import { ComputerExecutionError, DesktopTargetError, isComputerWrite } from "../cua/execution.ts";
 
 const VERSION = "0.1.0";
 const MAX_BODY_BYTES = 32 * 1024 * 1024;
@@ -94,6 +96,7 @@ const token = process.env.BOXD_TOKEN ?? "";
 const HEADLESS = process.env.BOXD_HEADLESS === "1";
 
 const displays = new DisplayManager(line => log(line));
+const desktopOperations = new DesktopOperations();
 const recorder = new RecordService(line => log(line));
 const xwatchdog = new XWatchdogService();
 
@@ -207,6 +210,7 @@ async function handleHealth(): Promise<HealthResult> {
     version: VERSION,
     ...(imageContract() !== undefined ? { contract: imageContract()! } : {}),
     protocol: BOXD_PROTOCOL,
+    ...(!HEADLESS ? { desktop_contract: { version: 1 as const, snapshot_refs: true as const, final_observation: true as const, batch_progress: true as const } } : {}),
     display,
     ...(HEADLESS ? { headless: true } : {}),
     ...(currentRoots().restricted ? { repositories: currentRoots().list() } : {}),
@@ -240,7 +244,7 @@ async function handleComputer(body: ComputerRequest): Promise<ComputerResult> {
   const authorize = () => {
     displays.assertControl(index, body);
     displays.assertOwner(index, body.owner);
-    if (body.actions.some(action => !["screenshot", "cursor_position", "list_windows", "list_elements", "screenshot_window", "wait"].includes(action.action))) {
+    if (body.actions.some(isComputerWrite)) {
       displays.assertAgentControls(index);
     }
   };
@@ -266,6 +270,9 @@ async function handleComputer(body: ComputerRequest): Promise<ComputerResult> {
         ? { effect: result.effect, effect_detail: result.effectDetail }
         : {}),
       success: result.success,
+      observation: result.observation,
+      elements_observation_id: result.elementsObservationId,
+      progress: result.progress,
       screenshot: result.screenshot,
       windows: result.windows,
       ...(result.elements !== undefined ? { elements: result.elements } : {}),
@@ -277,7 +284,9 @@ async function handleComputer(body: ComputerRequest): Promise<ComputerResult> {
       error: result.error,
     };
   } catch (error) {
-    if (error instanceof DisplayGuardError || error instanceof DisplayOwnershipError || error instanceof UserInControlError) throw error;
+    const original = error instanceof ComputerExecutionError ? error.original : error;
+    const progress = error instanceof ComputerExecutionError ? error.progress : { executed_count: 0, dispatch: "not_started" as const };
+    const refused = original instanceof DisplayGuardError || original instanceof DisplayOwnershipError || original instanceof UserInControlError || original instanceof DesktopTargetError;
     // A failed action is exactly when the model most needs to see the screen:
     // it has to work out what state the desktop is actually in before retrying.
     // Returning only an error string leaves it guessing, so settle and capture
@@ -294,10 +303,12 @@ async function handleComputer(body: ComputerRequest): Promise<ComputerResult> {
     }
 
     return {
-      outcome: "failed",
+      outcome: progress.dispatch !== "not_started" ? "unknown" : refused ? "refused" : "failed",
       success: false,
+      progress,
+      ...(original instanceof DesktopTargetError ? { refusal_code: original.code } : {}),
       screenshot,
-      action_count: body.actions.length,
+      action_count: progress.executed_count,
       duration_ms: Date.now() - started,
       error: describe(error),
     };
@@ -466,7 +477,7 @@ setInterval(() => {
 }, 5_000).unref();
 
 const routes: Record<string, Handler> = {
-  "POST /computer": (body: ComputerRequest) => handleComputer(body),
+  "POST /computer": (body: ComputerRequest) => desktopOperations.run(body.display ?? defaultDisplayIndex, () => handleComputer(body)),
   "POST /exec": async (body: ExecRequest): Promise<ExecResult | JobStartedResult> => {
     // A shell on someone else's desktop can do everything computer-use can — start a
     // window on it, type with xdotool — so it is gated the same way.
@@ -510,7 +521,7 @@ const routes: Record<string, Handler> = {
   },
   // Gated on desktop ownership exactly as /exec and /computer are: driving the browser on
   // someone else's desktop is driving their screen, whichever protocol it goes over.
-  "POST /browser": async (body: BrowserRequest): Promise<BrowserResponse> => {
+  "POST /browser": async (body: BrowserRequest): Promise<BrowserResponse> => desktopOperations.run(body.display ?? defaultDisplayIndex, async () => {
     const display = body.display ?? defaultDisplayIndex;
     const authorize = () => {
       displays.assertControl(display, body);
@@ -518,7 +529,8 @@ const routes: Record<string, Handler> = {
       if (!["snapshot", "read", "wait", "check"].includes(body.op)) displays.assertAgentControls(display);
     };
     authorize();
-    await displays.ensure(display);
+    const desktop = await displays.ensure(display);
+    if (!["snapshot", "read", "wait", "check", "pages"].includes(body.op)) desktop.executor.invalidateElements();
     const localRecovery = endpoints.resolve(display).kind === "local";
     const browserOp = async (): Promise<BrowserResponse> => {
     authorize();
@@ -609,7 +621,7 @@ const routes: Record<string, Handler> = {
       return { url: page.url, title: page.title, snapshot: "", text: page.text, outcome: "unknown", note: `${HEADLESS_NOTE} (${recovered.error.message})` };
     }
     throw recovered.error;
-  },
+  }),
   "GET /displays": async (): Promise<DisplayInfo[]> => displays.list(),
   "POST /displays": async (): Promise<DisplayInfo[]> => displays.list(),
   // A person takes a desktop over, or hands it back (INV-404). Not gated on the agent's

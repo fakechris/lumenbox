@@ -69,7 +69,7 @@ export type ComputerAction =
    */
   | { action: "list_elements" }
   /** Clicks a control by the ref `list_elements` gave it; resolved to coordinates in the box. */
-  | { action: "click_element"; ref: string; button?: MouseButton; count?: number; modifiers?: string }
+  | { action: "click_element"; ref: string; observation_id?: string; button?: MouseButton; count?: number; modifiers?: string }
   /**
    * Raises a window and gives it focus.
    *
@@ -128,7 +128,7 @@ export interface ComputerRequest extends DisplayGuardProjection {
 
 /** One operable control of the active window, as the accessibility tree describes it. */
 export interface ElementInfo {
-  /** `a1`, `a2`, … — what click_element takes. Valid until the next list_elements. */
+  /** Opaque snapshot-bound token. Copy verbatim; invalid after any write or new observation. */
   ref: string;
   role: string;
   name: string;
@@ -139,6 +139,25 @@ export interface ElementInfo {
   height: number;
   /** checked, selected, expanded, focused, pressed, editable, disabled. */
   states: readonly string[];
+}
+
+/** A published observation describes its time, target and coordinate space, not authorization. */
+export interface DesktopObservation {
+  id: string;
+  display: string;
+  captured_start_ms: number;
+  captured_end_ms: number;
+  after_action: number;
+  coordinate_space: "screen" | "window";
+  window_id?: string;
+  resolution: ResolutionConfig;
+}
+
+export interface ComputerProgress {
+  /** Number of actions whose executor returned; does not imply their effects were verified. */
+  executed_count: number;
+  failed_at?: number;
+  dispatch: "not_started" | "sent" | "partial";
 }
 
 export interface WindowInfo {
@@ -259,6 +278,10 @@ export function outcomeLine(outcome: Outcome, reason?: string): string {
 }
 
 export interface ComputerResult {
+  observation?: DesktopObservation;
+  elements_observation_id?: string;
+  progress?: ComputerProgress;
+  refusal_code?: string;
   /** Present from boxd versions that know it; `computerOutcome` derives it otherwise. */
   outcome?: Outcome;
   /** The worst measured effect among the batch's writes; absent when the batch wrote nothing. */
@@ -452,6 +475,8 @@ export interface ListDirResult {
 }
 
 export interface HealthResult {
+  /** Explicit opt-in contract discovery; absence identifies legacy desktop behavior. */
+  desktop_contract?: { version: 1; snapshot_refs: true; final_observation: true; batch_progress: true };
   ok: boolean;
   version: string;
   /**

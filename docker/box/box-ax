@@ -79,47 +79,40 @@ def rect_of(accessible):
         return None
 
 
-def x_active_title():
-    """What X says is the active window, so the answer is about the window the person
-    sees on top — not whichever GTK window happens to be on the bus."""
-    try:
-        import subprocess
-        out = subprocess.run(["xdotool", "getactivewindow", "getwindowname"], capture_output=True, text=True, timeout=2)
-        return out.stdout.strip() if out.returncode == 0 else None
-    except Exception:  # noqa: BLE001
-        return None
+def x_active_window():
+    """Bind X identity and process lifetime, never title alone."""
+    import subprocess
+    def query(*args):
+        result = subprocess.run(["xdotool", *args], capture_output=True, text=True, timeout=2)
+        if result.returncode != 0:
+            raise RuntimeError("active X window identity unavailable")
+        return result.stdout.strip()
+    xid = query("getactivewindow")
+    pid = int(query("getwindowpid", xid))
+    with open("/proc/%d/stat" % pid, encoding="utf-8") as stat:
+        # comm may contain spaces and parentheses; field 22 is starttime.
+        started = stat.read().rsplit(")", 1)[1].split()[19]
+    return {"id": hex(int(xid)), "pid": pid, "started": started,
+            "title": query("getwindowname", xid)}
 
 
-def candidate_windows(active_title):
-    """The bus window that is X's active window (by ACTIVE state or by title); with no
-    readable active title, the ACTIVE ones, then the showing ones."""
+def candidate_windows(target):
     desktop = Atspi.get_desktop(0)
-    active, named, showing = [], [], []
+    matches = []
     for i in range(desktop.get_child_count()):
         app = desktop.get_child_at_index(i)
-        if app is None:
+        if app is None or app.get_process_id() != target["pid"]:
             continue
         for j in range(app.get_child_count()):
             window = app.get_child_at_index(j)
-            if window is None:
-                continue
-            states = state_names(window)
-            try:
-                name = window.get_name() or ""
-            except Exception:  # noqa: BLE001
-                name = ""
-            if active_title and name == active_title:
-                named.append((app, window))
-            elif "active" in states:
-                active.append((app, window))
-            elif "showing" in states:
-                showing.append((app, window))
-    # With a known active title, only that window counts: the window manager itself sits
-    # on the bus with an ACTIVE window of its own, and answering from it would turn "no
-    # tree" into an empty success.
-    if active_title:
-        return named
-    return active + showing
+            if window is not None and (window.get_name() or "") == target["title"]:
+                matches.append((app, window))
+    return matches
+
+
+def native_identity(node):
+    # Unique D-Bus connection + object path; never a traversal ordinal.
+    return "%s:%s" % (node.app.bus_name, node.path)
 
 
 def walk(window):
@@ -146,6 +139,7 @@ def walk(window):
                 except Exception:  # noqa: BLE001
                     name = ""
                 out.append({
+                    "identity": native_identity(node),
                     "role": role,
                     "name": name[:120],
                     "x": rect[0], "y": rect[1], "width": rect[2], "height": rect[3],
@@ -170,20 +164,23 @@ def walk(window):
 def main():
     if not os.environ.get("DISPLAY"):
         fail("no DISPLAY")
-    active_title = x_active_title()
     try:
-        candidates = candidate_windows(active_title)
-    except Exception as error:  # noqa: BLE001
-        fail("the accessibility bus is not reachable: %s" % error)
+        target = x_active_window()
+        candidates = candidate_windows(target)
+    except Exception as error:
+        fail("the active window or accessibility bus is not reachable: %s" % error)
     if not candidates:
-        if active_title:
-            fail('the active window "%s" exposes no accessibility tree (a terminal, or an Electron app)' % active_title[:80])
-        fail("no window on the accessibility bus exposes a tree (the active app has none: a terminal, or an Electron app)")
-    app, window, elements, truncated = None, None, [], False
-    for app, window in candidates:
-        elements, truncated = walk(window)
-        if elements:
-            break
+        fail("the active window exposes no accessibility tree")
+    if len(candidates) != 1:
+        fail("ambiguous accessibility window: same process has multiple windows with this title")
+    app, window = candidates[0]
+    elements, truncated = walk(window)
+    try:
+        if x_active_window() != target:
+            fail("the active window changed during observation")
+        identity = "%s:%s:%s:%s" % (target["id"], target["pid"], target["started"], native_identity(window))
+    except Exception as error:
+        fail("could not validate the observed window: %s" % error)
     for index, element in enumerate(elements):
         element["ref"] = "a%d" % (index + 1)
     try:
@@ -191,7 +188,7 @@ def main():
         application = app.get_name() or "" if app is not None else ""
     except Exception:  # noqa: BLE001
         title, application = "", ""
-    print(json.dumps({"window": {"title": title, "app": application}, "elements": elements, "truncated": truncated}))
+    print(json.dumps({"window": {"title": title, "app": application, "id": target["id"], "identity": identity}, "elements": elements, "truncated": truncated}))
 
 
 main()

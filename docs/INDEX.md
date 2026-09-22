@@ -90,6 +90,7 @@ this file and the headers disagree. Edit the header, not this table.
 | [59-daily-digest-review](59-daily-digest-review.md) | 每日 research 总结的方案 review：参考 OVP 还是结合 OVP | current | 2026-09-19 |
 | [60-ovp-bridge-design](60-ovp-bridge-design.md) | OVP 接入程序（ovp-bridge）详细方案：哪个 vault、什么触发、保证什么 | superseded by [61-ovp-bridge-design-v2](61-ovp-bridge-design-v2.md) — §15 复审后按九项修订重写；第二版一个 id 贯穿、每个对象有终态、对 OVP 只提通用改动 | 2026-09-19 |
 | [61-ovp-bridge-design-v2](61-ovp-bridge-design-v2.md) | OVP 接入程序第二版：一个 id 贯穿、每个输入有终态、对 OVP 只提通用改动 | current | 2026-09-20 |
+| [62-cua-driver-research](62-cua-driver-research.md) | CUA 三方研究：执行合同、依赖取舍与渐进改造 | current | 2026-09-22 |
 
 ## handoff
 
@@ -101,4 +102,5 @@ this file and the headers disagree. Edit the header, not this table.
 | [handoff-2026-09-01](handoff-2026-09-01.md) | Handoff — 2026-09-01 | current | 2026-09-01 |
 | [handoff-2026-09-02](handoff-2026-09-02.md) | Handoff, 2026-09-02 | current | 2026-09-02 |
 | [handoff-2026-09-15-involute-agent-threads](handoff-2026-09-15-involute-agent-threads.md) | Handoff — Involute 侧：agent 身份与工作项上的对话 | current | 2026-09-15 |
+| [handoff-2026-09-22-cua-fixes](handoff-2026-09-22-cua-fixes.md) | CUA 修复实施与验收记录 | current | 2026-09-22 |
 | [handoff-2026-09-22-nova-incident](handoff-2026-09-22-nova-incident.md) | Handoff — Nova 请求混入旧任务与研究叙述复播的运行调查 | current | 2026-09-22 |

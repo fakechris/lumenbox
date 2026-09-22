@@ -1,3 +1,4 @@
+import { ComputerExecutionError } from "./execution.ts";
 /**
  * Tests for the CUA logic that has no X server dependency.
  *
@@ -402,14 +403,14 @@ test("a revoked computer batch stops before its next action and capture", async 
 });
 
 // ── the control tree behind list_elements / click_element (INV-412) ─────────────────
-import { parseAxOutput } from "./x11-executor.ts";
+import { type AxOutput, parseAxOutput } from "./x11-executor.ts";
 
 const AX_SAMPLE = JSON.stringify({
-  window: { title: "Documents - Thunar", app: "thunar", truncated: false },
+  window: { title: "Documents - Thunar", app: "thunar", truncated: false, identity: "fixture-window:1", id: "0x1" },
   elements: [
-    { ref: "a1", role: "menu", name: "File", x: 10, y: 40, width: 40, height: 20, states: [] },
-    { ref: "a2", role: "push button", name: "Back", x: 100, y: 80, width: 60, height: 30, states: ["disabled"] },
-    { ref: "a3", role: "entry", name: "Location", x: 200, y: 80, width: 800, height: 30, states: ["editable", "focused"] },
+    { ref: "a1", identity: "native:1", role: "menu", name: "File", x: 10, y: 40, width: 40, height: 20, states: [] },
+    { ref: "a2", identity: "native:2", role: "push button", name: "Back", x: 100, y: 80, width: 60, height: 30, states: ["disabled"] },
+    { ref: "a3", identity: "native:3", role: "entry", name: "Location", x: 200, y: 80, width: 800, height: 30, states: ["editable", "focused"] },
   ],
 });
 
@@ -424,11 +425,11 @@ test("box-ax output is read: a tree, an error, or nothing readable — never an 
 class TreeExecutor extends ScriptedExecutor {
   tree: string | undefined = AX_SAMPLE;
   readonly clicks: { action: string; ref?: string }[] = [];
-  protected override async listElements() {
+  protected override async readElements() {
     const parsed = this.tree === undefined ? undefined : parseAxOutput(this.tree);
     if (parsed === undefined) return { error: "the accessibility reader is not available (no box-ax)" };
     if ("error" in parsed) return parsed;
-    return this.adoptElements(parsed);
+    return parsed;
   }
   protected override async executeAction(action: ComputerAction): Promise<void> {
     this.ran.push(action.action);
@@ -445,7 +446,7 @@ test("list_elements scales the tree to API space and remembers where each contro
   const listed = await executor.execute([{ action: "list_elements" }]);
   assert.equal(listed.elementsNote, undefined);
   assert.equal(listed.elementsWindow?.title, "Documents - Thunar");
-  assert.deepEqual(listed.elements?.map(e => `${e.ref} ${e.role} ${e.name} @${e.x},${e.y} ${e.width}x${e.height} [${e.states.join(",")}]`), [
+  assert.deepEqual(listed.elements?.map(e => `${e.ref.split(":").at(-1)} ${e.role} ${e.name} @${e.x},${e.y} ${e.width}x${e.height} [${e.states.join(",")}]`), [
     "a1 menu File @5,20 20x10 []",
     "a2 push button Back @50,40 30x15 [disabled]",
     "a3 entry Location @100,40 400x15 [editable,focused]",
@@ -453,13 +454,14 @@ test("list_elements scales the tree to API space and remembers where each contro
 
   // The click measures its effect at the control's centre, like any click.
   executor.frames = [flat(10), flat(90), flat(90)];
-  const clicked = await executor.execute([{ action: "click_element", ref: "a3" }]);
-  assert.deepEqual(executor.clicks, [{ action: "click_element", ref: "a3" }]);
+  const ref = listed.elements![2]!.ref;
+  const clicked = await executor.execute([{ action: "click_element", ref }]);
+  assert.deepEqual(executor.clicks, [{ action: "click_element", ref }]);
   assert.equal(clicked.effect, "confirmed");
   assert.match(clicked.effectDetail ?? "", /click_element@\(300,48\)/, "measured at the entry's centre, in API space");
 
   // A ref from nowhere is a failure that names the fix, not a click somewhere.
-  await assert.rejects(executor.execute([{ action: "click_element", ref: "a9" }]), /no element a9 in the last list_elements outline/);
+  await assert.rejects(executor.execute([{ action: "click_element", ref: "a9" }]), /STALE_OBSERVATION/);
 });
 
 test("an app with no tree is said in words, and the batch is unknown, not an empty success", async () => {
@@ -471,4 +473,83 @@ test("an app with no tree is said in words, and the batch is unknown, not an emp
   executor.tree = undefined;
   const missing = await executor.execute([{ action: "list_elements" }]);
   assert.match(missing.elementsNote ?? "", /not available/);
+});
+
+test("failed/new observations cannot reuse an earlier element token", async () => {
+  const executor = new TreeExecutor({ measureEffect: false });
+  const first = await executor.execute([{ action: "list_elements" }]);
+  const oldRef = first.elements![0]!.ref;
+  const second = await executor.execute([{ action: "list_elements" }]);
+  assert.notEqual(second.elements![0]!.ref, oldRef);
+  await assert.rejects(executor.execute([{ action: "click_element", ref: oldRef }]), /STALE_OBSERVATION/);
+  const fresh = await executor.execute([{ action: "list_elements" }]);
+  executor.tree = undefined;
+  await executor.execute([{ action: "list_elements" }]);
+  await assert.rejects(executor.execute([{ action: "click_element", ref: fresh.elements![0]!.ref }]), /STALE_OBSERVATION/);
+  assert.equal(executor.clicks.length, 0);
+});
+
+test("a moved, disabled or replaced native target refuses before input", async () => {
+  for (const mutate of [
+    (tree: AxOutput) => { tree.window.identity = "replacement-window"; },
+    (tree: AxOutput) => { tree.elements[0]!.x += 100; },
+    (tree: AxOutput) => { tree.elements[0]!.identity = "replacement-control"; },
+    (tree: AxOutput) => { tree.elements[0]!.states = ["disabled"]; },
+  ]) {
+    const executor = new TreeExecutor({ measureEffect: false });
+    const listed = await executor.execute([{ action: "list_elements" }]);
+    const tree = JSON.parse(AX_SAMPLE);
+    mutate(tree);
+    executor.tree = JSON.stringify(tree);
+    await assert.rejects(executor.execute([{ action: "click_element", ref: listed.elements![0]!.ref }]), /STALE_OBSERVATION/);
+    assert.equal(executor.clicks.length, 0);
+  }
+});
+
+test("a write consumes element references, including a delayed second click", async () => {
+  const executor = new TreeExecutor({ measureEffect: false });
+  const listed = await executor.execute([{ action: "list_elements" }]);
+  const ref = listed.elements![0]!.ref;
+  await executor.execute([{ action: "click_element", ref }]);
+  await assert.rejects(executor.execute([{ action: "click_element", ref }]), /STALE_OBSERVATION/);
+  assert.equal(executor.clicks.length, 1);
+});
+
+test("a screenshot before input is replaced with the final state and frame metadata", async () => {
+  class Frames extends ScriptedExecutor {
+    override async takeScreenshot() { return `frame-${this.ran.length}`; }
+  }
+  const executor = new Frames({ measureEffect: false });
+  const result = await executor.execute([{ action: "screenshot" }, { action: "click", coordinate: [1, 1] }]);
+  assert.equal(result.screenshot, "frame-1");
+  assert.equal(result.observation?.after_action, 2);
+  assert.equal(result.observation?.coordinate_space, "screen");
+});
+
+test("an interrupted batch carries its completed prefix instead of the requested count", async () => {
+  class Interrupt extends ScriptedExecutor {
+    protected override async executeAction(action: ComputerAction) {
+      if (action.action === "type") throw new Error("fixture delivery lost");
+      await super.executeAction(action);
+    }
+  }
+  const executor = new Interrupt({ measureEffect: false });
+  await assert.rejects(executor.execute([
+    { action: "click", coordinate: [1, 1] }, { action: "type", text: "abc" }, { action: "key", key: "Return" },
+  ]), (error: unknown) => {
+    assert.ok(error instanceof ComputerExecutionError);
+    assert.deepEqual(error.progress, { executed_count: 1, failed_at: 1, dispatch: "partial" });
+    return /fixture delivery lost/.test(error.message);
+  });
+  assert.deepEqual(executor.ran, ["click"]);
+});
+
+
+test("a screenshot before waiting is refreshed after the wait", async () => {
+  class Frames extends ScriptedExecutor {
+    override async takeScreenshot() { return `frame-${this.ran.length}`; }
+  }
+  const result = await new Frames().execute([{ action: "screenshot" }, { action: "wait", duration_ms: 1 }]);
+  assert.equal(result.screenshot, "frame-1");
+  assert.equal(result.observation?.after_action, 2);
 });
