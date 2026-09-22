@@ -887,12 +887,17 @@ test("browser_pages lists tabs with the current one marked, and browser_open can
   assert.equal(requests[2]?.page, "new");
 });
 
-test("a read carries the drift banner before the text", async () => {
+test("a read carries the drift banner in the line it leads with, before the text", async () => {
   const context = boxContext({
     browser: async () => ({ url: "https://a.test/login", title: "", snapshot: "", text: "Sign in", note: "The page moved since you last looked: you were on https://a.test/app and it is now https://a.test/login." }),
   });
   const read = await dispatchTool("browser_read", {}, context);
-  assert.match(read.text, /^The page moved since you last looked[^\n]*\n\nhttps:\/\/a\.test\/login\n\nSign in$/);
+  // The banner is now the note of the read line rather than a paragraph above it, so a
+  // transcript keeping only the head of the result keeps the warning too (INV-632).
+  assert.match(
+    read.text,
+    /^\[read: full — 7 chars, 0 prose blocks, 0 links; The page moved since you last looked[^\]]*\]\n\nhttps:\/\/a\.test\/login\n\nSign in$/
+  );
 });
 
 // ── site learnings: kept by a tool, shown on open (INV-409) ─────────────────────────
@@ -1033,7 +1038,8 @@ test("WebFetch keeps the whole page on the host and ends its result with a point
     } as unknown as Parameters<typeof dispatchTool>[2];
     const result = await dispatchTool("WebFetch", { url: "https://example.com/long" }, context);
     assert.ok(!result.isError, result.text);
-    assert.match(result.text, /^# A long page\nSource: https:\/\/example\.com\/long#answered\n/);
+    assert.match(result.text, /^\[read: clipped — /, "the shape of the read is the first line");
+    assert.match(result.text, /\n\n# A long page\nSource: https:\/\/example\.com\/long#answered\n/);
     const pointer = /\[full page kept: (.+)\]$/.exec(result.text);
     assert.ok(pointer !== null, "the result ends with the pointer");
     const kept = readFileSync(pointer![1]!, "utf8");

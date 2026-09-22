@@ -45,6 +45,13 @@ export interface KeepPageInput {
   bytes: number;
   /** Whether the model was shown less than this. */
   clipped: boolean;
+  /**
+   * What the read got, in the shared vocabulary (read-outcome.ts), and the counts behind
+   * it. Kept because "the agent read this page" and "the agent was handed a tenth of this
+   * page" are different facts, and only the second one explains a thin answer later.
+   */
+  completeness?: string;
+  shape?: { prose: number; links: number };
   meta: PageMeta;
   agent: { id: string; name: string };
   conversation?: string;
@@ -85,6 +92,10 @@ export function fetchedFrontmatter(input: KeepPageInput, bodySha256: string): st
     `bytes: ${input.bytes}`,
     `text_chars: ${input.text.length}`,
     `clipped: ${input.clipped}`,
+    ...(input.completeness !== undefined ? [`completeness: ${input.completeness}`] : []),
+    ...(input.shape !== undefined
+      ? [`prose_blocks: ${input.shape.prose}`, `links: ${input.shape.links}`]
+      : []),
     `sha256: ${bodySha256}`,
     ...(input.meta.author !== undefined ? [`author: ${quote(input.meta.author)}`] : []),
     ...(input.meta.published !== undefined ? [`published: ${quote(input.meta.published)}`] : []),

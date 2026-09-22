@@ -40,6 +40,24 @@ test("ledgers append through jsonl.ts, which syncs; raw appends stay where they 
   assert.deepEqual(offenders, [], "a new raw appendFileSync: use appendLine from jsonl.ts");
 });
 
+test("a reader that cuts what it read says so through read-outcome.ts, not in its own prose", () => {
+  // Six readers used to each describe a cut in their own words, at the end of the result —
+  // where the transcript's 2,000-character cut throws it away first (docs/69). The wording
+  // now lives in one place and goes first. A seventh phrasing is a regression, so the
+  // build refuses it.
+  const phrases = /rest of (?:the )?(?:page|post|document) not shown|showing part of|已截断|the \d+ most recent are above/;
+  const offenders = sources()
+    .filter(file => file.path.startsWith("host/") || file.path.startsWith("channels/"))
+    .filter(file => phrases.test(file.text))
+    .filter(file => !/read-outcome|withReadOutcome|readOutcome/.test(file.text))
+    .map(file => file.path);
+  assert.deepEqual(
+    offenders,
+    [],
+    "a truncation notice written by hand: build it with readOutcome() from read-outcome.ts and put it first"
+  );
+});
+
 test("the policy gate is asked from the few places that act, and nowhere else", () => {
   // The orchestrator also makes the tool-free teaching proposal call: it must ask
   // the same stop/budget gate even though no ordinary tool-enabled turn is started.

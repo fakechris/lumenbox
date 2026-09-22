@@ -26,6 +26,7 @@ import { request as httpsRequest } from "node:https";
 import { lookup as dnsLookup } from "node:dns";
 import type { LookupAddress } from "node:dns";
 import { isIP, type LookupFunction } from "node:net";
+import { type ReadOutcomeInput, textShape } from "./read-outcome.ts";
 
 /** How long one request may take before it is abandoned. */
 const TIMEOUT_MS = 30_000;
@@ -49,6 +50,13 @@ export interface FetchedPage {
   text: string;
   /** True when the page was longer than we return. */
   truncated: boolean;
+  /**
+   * What the read got, for the outcome line (read-outcome.ts). `clipped` only ever means
+   * *we* cut it; nothing here judges whether the content is the document you wanted.
+   */
+  completeness: "full" | "clipped";
+  /** Counted on the whole extracted text, not on the slice the model sees. */
+  shape: { chars: number; prose: number; links: number };
   /** The whole extracted text, for keeping; `text` is what the model is shown. */
   fullText: string;
   contentType: string;
@@ -64,7 +72,22 @@ export interface PageMeta {
   siteName?: string;
 }
 
-export class WebError extends Error {}
+/**
+ * A read that did not happen, and which kind of not-happening it was.
+ *
+ * `kind` exists so a caller can report the outcome (read-outcome.ts) without matching on
+ * the message text: "the site served a consent wall" and "the address does not resolve"
+ * are different facts, and an agent that cannot tell them apart reports that a thing does
+ * not exist (see `blockedBy` below).
+ */
+export class WebError extends Error {
+  constructor(
+    message: string,
+    readonly kind: "blocked" | "unavailable" = "unavailable"
+  ) {
+    super(message);
+  }
+}
 
 /**
  * Whether an IP is one an agent must not be able to reach, and why.
@@ -413,7 +436,8 @@ export async function fetchPage(
         `${target.hostname} did not serve the page — it answered with a block or consent ` +
           `screen ("${blocked.trim()}"). This says nothing about whether the information ` +
           `exists. Open it with browser_open instead: the box's browser is a real browser ` +
-          `and usually gets through where a plain fetch does not.`
+          `and usually gets through where a plain fetch does not.`,
+        "blocked"
       );
     }
 
@@ -423,6 +447,8 @@ export async function fetchPage(
       ...(extracted.title !== undefined ? { title: extracted.title } : {}),
       text: clipped ? `${extracted.text.slice(0, maxText)}\n\n[... rest of page not shown]` : extracted.text,
       truncated: clipped || response.truncated,
+      completeness: clipped ? ("clipped" as const) : ("full" as const),
+      shape: textShape(extracted.text),
       fullText: extracted.text,
       contentType: kind,
       bytes: response.body.length,
@@ -430,6 +456,33 @@ export async function fetchPage(
     };
   }
   throw new WebError("unreachable");
+}
+
+/**
+ * The read's shape, as the outcome line wants it (read-outcome.ts).
+ *
+ * `chars` is what the model was handed; `totalChars` only appears when the page had more
+ * and this cut it. Nothing here says the content is the document that was asked for —
+ * that is not knowable from structure, and pretending otherwise is what docs/69 records.
+ */
+export function pageReadOutcome(page: FetchedPage): ReadOutcomeInput {
+  // `fetchPage` always fills both, but the fetcher is an injectable seam (ToolContext.webFetch)
+  // and a read must not fail because a caller predates these two fields.
+  const shape = page.shape ?? textShape(page.fullText ?? page.text);
+  const completeness = page.completeness ?? (page.truncated ? "clipped" : "full");
+  const clipped = completeness === "clipped";
+  return {
+    completeness,
+    shape: {
+      chars: Math.min(page.text.length, shape.chars),
+      ...(clipped ? { totalChars: shape.chars } : {}),
+      prose: shape.prose,
+      links: shape.links,
+    },
+    ...(clipped
+      ? { hint: "ask for a narrower page, or open it with browser_open, to see the rest" }
+      : {}),
+  };
 }
 
 const ENTITIES: Record<string, string> = {
