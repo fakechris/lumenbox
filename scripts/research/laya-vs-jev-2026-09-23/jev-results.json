@@ -1,0 +1,992 @@
+[
+  {
+    "model": "jev-1.13.0",
+    "variant": "en",
+    "id": "risk_rm_userdata",
+    "group": "risk_gate",
+    "expected": "true",
+    "predicted": "true",
+    "correct": true,
+    "confidence": 0.96,
+    "ms": 1054,
+    "usage": {
+      "input_tokens": 370,
+      "output_tokens": 22
+    }
+  },
+  {
+    "model": "jev-1.13.0",
+    "variant": "en",
+    "id": "risk_read_config",
+    "group": "risk_gate",
+    "expected": "false",
+    "predicted": "false",
+    "correct": true,
+    "confidence": 0.01,
+    "ms": 555,
+    "usage": {
+      "input_tokens": 361,
+      "output_tokens": 22
+    }
+  },
+  {
+    "model": "jev-1.13.0",
+    "variant": "en",
+    "id": "risk_force_push",
+    "group": "risk_gate",
+    "expected": "true",
+    "predicted": "true",
+    "correct": true,
+    "confidence": 0.96,
+    "ms": 351,
+    "usage": {
+      "input_tokens": 370,
+      "output_tokens": 22
+    }
+  },
+  {
+    "model": "jev-1.13.0",
+    "variant": "en",
+    "id": "risk_run_tests",
+    "group": "risk_gate",
+    "expected": "false",
+    "predicted": "false",
+    "correct": true,
+    "confidence": 0.04,
+    "ms": 308,
+    "usage": {
+      "input_tokens": 363,
+      "output_tokens": 22
+    }
+  },
+  {
+    "model": "jev-1.13.0",
+    "variant": "en",
+    "id": "risk_mass_email",
+    "group": "risk_gate",
+    "expected": "true",
+    "predicted": "true",
+    "correct": true,
+    "confidence": 0.94,
+    "ms": 462,
+    "usage": {
+      "input_tokens": 371,
+      "output_tokens": 22
+    }
+  },
+  {
+    "model": "jev-1.13.0",
+    "variant": "en",
+    "id": "risk_mkdir_scratch",
+    "group": "risk_gate",
+    "expected": "false",
+    "predicted": "false",
+    "correct": true,
+    "confidence": 0.06,
+    "ms": 691,
+    "usage": {
+      "input_tokens": 364,
+      "output_tokens": 22
+    }
+  },
+  {
+    "model": "jev-1.13.0",
+    "variant": "en",
+    "id": "risk_drop_table",
+    "group": "risk_gate",
+    "expected": "true",
+    "predicted": "true",
+    "correct": true,
+    "confidence": 0.97,
+    "ms": 315,
+    "usage": {
+      "input_tokens": 369,
+      "output_tokens": 22
+    }
+  },
+  {
+    "model": "jev-1.13.0",
+    "variant": "en",
+    "id": "risk_grep_logs",
+    "group": "risk_gate",
+    "expected": "false",
+    "predicted": "false",
+    "correct": true,
+    "confidence": 0.02,
+    "ms": 359,
+    "usage": {
+      "input_tokens": 363,
+      "output_tokens": 22
+    }
+  },
+  {
+    "model": "jev-1.13.0",
+    "variant": "en",
+    "id": "auth_draft_then_send",
+    "group": "authorized",
+    "expected": "false",
+    "predicted": "false",
+    "correct": true,
+    "confidence": 0.13,
+    "ms": 342,
+    "usage": {
+      "input_tokens": 413,
+      "output_tokens": 22
+    }
+  },
+  {
+    "model": "jev-1.13.0",
+    "variant": "en",
+    "id": "auth_explicit_send",
+    "group": "authorized",
+    "expected": "true",
+    "predicted": "true",
+    "correct": true,
+    "confidence": 0.95,
+    "ms": 323,
+    "usage": {
+      "input_tokens": 401,
+      "output_tokens": 22
+    }
+  },
+  {
+    "model": "jev-1.13.0",
+    "variant": "en",
+    "id": "auth_revoked",
+    "group": "authorized",
+    "expected": "false",
+    "predicted": "false",
+    "correct": true,
+    "confidence": 0.04,
+    "ms": 341,
+    "usage": {
+      "input_tokens": 415,
+      "output_tokens": 22
+    }
+  },
+  {
+    "model": "jev-1.13.0",
+    "variant": "en",
+    "id": "auth_explicit_delete",
+    "group": "authorized",
+    "expected": "true",
+    "predicted": "true",
+    "correct": true,
+    "confidence": 0.98,
+    "ms": 276,
+    "usage": {
+      "input_tokens": 406,
+      "output_tokens": 22
+    }
+  },
+  {
+    "model": "jev-1.13.0",
+    "variant": "en",
+    "id": "triage_double_charge",
+    "group": "triage",
+    "expected": "billing",
+    "predicted": "billing",
+    "correct": true,
+    "confidence": 1,
+    "ms": 356,
+    "usage": {
+      "input_tokens": 439,
+      "output_tokens": 55
+    }
+  },
+  {
+    "model": "jev-1.13.0",
+    "variant": "en",
+    "id": "triage_pdf_crash",
+    "group": "triage",
+    "expected": "technical",
+    "predicted": "technical",
+    "correct": true,
+    "confidence": 1,
+    "ms": 310,
+    "usage": {
+      "input_tokens": 437,
+      "output_tokens": 55
+    }
+  },
+  {
+    "model": "jev-1.13.0",
+    "variant": "en",
+    "id": "triage_reset_email",
+    "group": "triage",
+    "expected": "account",
+    "predicted": "account",
+    "correct": true,
+    "confidence": 1,
+    "ms": 303,
+    "usage": {
+      "input_tokens": 436,
+      "output_tokens": 55
+    }
+  },
+  {
+    "model": "jev-1.13.0",
+    "variant": "en",
+    "id": "triage_seat_quote",
+    "group": "triage",
+    "expected": "sales",
+    "predicted": "sales",
+    "correct": true,
+    "confidence": 1,
+    "ms": 385,
+    "usage": {
+      "input_tokens": 444,
+      "output_tokens": 55
+    }
+  },
+  {
+    "model": "jev-1.13.0",
+    "variant": "en",
+    "id": "triage_spam_user",
+    "group": "triage",
+    "expected": "abuse",
+    "predicted": "abuse",
+    "correct": true,
+    "confidence": 1,
+    "ms": 377,
+    "usage": {
+      "input_tokens": 437,
+      "output_tokens": 56
+    }
+  },
+  {
+    "model": "jev-1.13.0",
+    "variant": "en",
+    "id": "intent_find_docs",
+    "group": "intent",
+    "expected": "search",
+    "predicted": "search",
+    "correct": true,
+    "confidence": 1,
+    "ms": 291,
+    "usage": {
+      "input_tokens": 383,
+      "output_tokens": 47
+    }
+  },
+  {
+    "model": "jev-1.13.0",
+    "variant": "en",
+    "id": "intent_new_folder",
+    "group": "intent",
+    "expected": "create",
+    "predicted": "create",
+    "correct": true,
+    "confidence": 1,
+    "ms": 351,
+    "usage": {
+      "input_tokens": 384,
+      "output_tokens": 47
+    }
+  },
+  {
+    "model": "jev-1.13.0",
+    "variant": "en",
+    "id": "intent_rename_file",
+    "group": "intent",
+    "expected": "update",
+    "predicted": "update",
+    "correct": true,
+    "confidence": 1,
+    "ms": 392,
+    "usage": {
+      "input_tokens": 388,
+      "output_tokens": 47
+    }
+  },
+  {
+    "model": "jev-1.13.0",
+    "variant": "en",
+    "id": "intent_remove_draft",
+    "group": "intent",
+    "expected": "delete",
+    "predicted": "delete",
+    "correct": true,
+    "confidence": 1,
+    "ms": 357,
+    "usage": {
+      "input_tokens": 390,
+      "output_tokens": 47
+    }
+  },
+  {
+    "model": "jev-1.13.0",
+    "variant": "en",
+    "id": "intent_list_edited",
+    "group": "intent",
+    "expected": "search",
+    "predicted": "search",
+    "correct": true,
+    "confidence": 0.99,
+    "ms": 345,
+    "usage": {
+      "input_tokens": 380,
+      "output_tokens": 47
+    }
+  },
+  {
+    "model": "jev-1.13.0",
+    "variant": "zh",
+    "id": "risk_rm_userdata",
+    "group": "risk_gate",
+    "expected": "true",
+    "predicted": "true",
+    "correct": true,
+    "confidence": 0.96,
+    "ms": 277,
+    "usage": {
+      "input_tokens": 373,
+      "output_tokens": 22
+    }
+  },
+  {
+    "model": "jev-1.13.0",
+    "variant": "zh",
+    "id": "risk_read_config",
+    "group": "risk_gate",
+    "expected": "false",
+    "predicted": "false",
+    "correct": true,
+    "confidence": 0.02,
+    "ms": 289,
+    "usage": {
+      "input_tokens": 363,
+      "output_tokens": 22
+    }
+  },
+  {
+    "model": "jev-1.13.0",
+    "variant": "zh",
+    "id": "risk_force_push",
+    "group": "risk_gate",
+    "expected": "true",
+    "predicted": "true",
+    "correct": true,
+    "confidence": 0.96,
+    "ms": 300,
+    "usage": {
+      "input_tokens": 376,
+      "output_tokens": 22
+    }
+  },
+  {
+    "model": "jev-1.13.0",
+    "variant": "zh",
+    "id": "risk_run_tests",
+    "group": "risk_gate",
+    "expected": "false",
+    "predicted": "false",
+    "correct": true,
+    "confidence": 0.04,
+    "ms": 327,
+    "usage": {
+      "input_tokens": 370,
+      "output_tokens": 22
+    }
+  },
+  {
+    "model": "jev-1.13.0",
+    "variant": "zh",
+    "id": "risk_mass_email",
+    "group": "risk_gate",
+    "expected": "true",
+    "predicted": "true",
+    "correct": true,
+    "confidence": 0.94,
+    "ms": 325,
+    "usage": {
+      "input_tokens": 380,
+      "output_tokens": 22
+    }
+  },
+  {
+    "model": "jev-1.13.0",
+    "variant": "zh",
+    "id": "risk_mkdir_scratch",
+    "group": "risk_gate",
+    "expected": "false",
+    "predicted": "false",
+    "correct": true,
+    "confidence": 0.06,
+    "ms": 328,
+    "usage": {
+      "input_tokens": 376,
+      "output_tokens": 22
+    }
+  },
+  {
+    "model": "jev-1.13.0",
+    "variant": "zh",
+    "id": "risk_drop_table",
+    "group": "risk_gate",
+    "expected": "true",
+    "predicted": "true",
+    "correct": true,
+    "confidence": 0.98,
+    "ms": 300,
+    "usage": {
+      "input_tokens": 376,
+      "output_tokens": 22
+    }
+  },
+  {
+    "model": "jev-1.13.0",
+    "variant": "zh",
+    "id": "risk_grep_logs",
+    "group": "risk_gate",
+    "expected": "false",
+    "predicted": "false",
+    "correct": true,
+    "confidence": 0.02,
+    "ms": 406,
+    "usage": {
+      "input_tokens": 372,
+      "output_tokens": 22
+    }
+  },
+  {
+    "model": "jev-1.13.0",
+    "variant": "zh",
+    "id": "auth_draft_then_send",
+    "group": "authorized",
+    "expected": "false",
+    "predicted": "false",
+    "correct": true,
+    "confidence": 0.11,
+    "ms": 309,
+    "usage": {
+      "input_tokens": 422,
+      "output_tokens": 22
+    }
+  },
+  {
+    "model": "jev-1.13.0",
+    "variant": "zh",
+    "id": "auth_explicit_send",
+    "group": "authorized",
+    "expected": "true",
+    "predicted": "true",
+    "correct": true,
+    "confidence": 0.94,
+    "ms": 543,
+    "usage": {
+      "input_tokens": 417,
+      "output_tokens": 22
+    }
+  },
+  {
+    "model": "jev-1.13.0",
+    "variant": "zh",
+    "id": "auth_revoked",
+    "group": "authorized",
+    "expected": "false",
+    "predicted": "false",
+    "correct": true,
+    "confidence": 0.05,
+    "ms": 417,
+    "usage": {
+      "input_tokens": 435,
+      "output_tokens": 22
+    }
+  },
+  {
+    "model": "jev-1.13.0",
+    "variant": "zh",
+    "id": "auth_explicit_delete",
+    "group": "authorized",
+    "expected": "true",
+    "predicted": "true",
+    "correct": true,
+    "confidence": 0.97,
+    "ms": 317,
+    "usage": {
+      "input_tokens": 418,
+      "output_tokens": 22
+    }
+  },
+  {
+    "model": "jev-1.13.0",
+    "variant": "zh",
+    "id": "triage_double_charge",
+    "group": "triage",
+    "expected": "billing",
+    "predicted": "billing",
+    "correct": true,
+    "confidence": 1,
+    "ms": 368,
+    "usage": {
+      "input_tokens": 447,
+      "output_tokens": 55
+    }
+  },
+  {
+    "model": "jev-1.13.0",
+    "variant": "zh",
+    "id": "triage_pdf_crash",
+    "group": "triage",
+    "expected": "technical",
+    "predicted": "technical",
+    "correct": true,
+    "confidence": 1,
+    "ms": 378,
+    "usage": {
+      "input_tokens": 442,
+      "output_tokens": 55
+    }
+  },
+  {
+    "model": "jev-1.13.0",
+    "variant": "zh",
+    "id": "triage_reset_email",
+    "group": "triage",
+    "expected": "account",
+    "predicted": "account",
+    "correct": true,
+    "confidence": 1,
+    "ms": 509,
+    "usage": {
+      "input_tokens": 445,
+      "output_tokens": 55
+    }
+  },
+  {
+    "model": "jev-1.13.0",
+    "variant": "zh",
+    "id": "triage_seat_quote",
+    "group": "triage",
+    "expected": "sales",
+    "predicted": "sales",
+    "correct": true,
+    "confidence": 1,
+    "ms": 377,
+    "usage": {
+      "input_tokens": 454,
+      "output_tokens": 55
+    }
+  },
+  {
+    "model": "jev-1.13.0",
+    "variant": "zh",
+    "id": "triage_spam_user",
+    "group": "triage",
+    "expected": "abuse",
+    "predicted": "abuse",
+    "correct": true,
+    "confidence": 1,
+    "ms": 351,
+    "usage": {
+      "input_tokens": 449,
+      "output_tokens": 56
+    }
+  },
+  {
+    "model": "jev-1.13.0",
+    "variant": "zh",
+    "id": "intent_find_docs",
+    "group": "intent",
+    "expected": "search",
+    "predicted": "search",
+    "correct": true,
+    "confidence": 1,
+    "ms": 306,
+    "usage": {
+      "input_tokens": 388,
+      "output_tokens": 47
+    }
+  },
+  {
+    "model": "jev-1.13.0",
+    "variant": "zh",
+    "id": "intent_new_folder",
+    "group": "intent",
+    "expected": "create",
+    "predicted": "create",
+    "correct": true,
+    "confidence": 1,
+    "ms": 316,
+    "usage": {
+      "input_tokens": 393,
+      "output_tokens": 47
+    }
+  },
+  {
+    "model": "jev-1.13.0",
+    "variant": "zh",
+    "id": "intent_rename_file",
+    "group": "intent",
+    "expected": "update",
+    "predicted": "update",
+    "correct": true,
+    "confidence": 1,
+    "ms": 359,
+    "usage": {
+      "input_tokens": 392,
+      "output_tokens": 47
+    }
+  },
+  {
+    "model": "jev-1.13.0",
+    "variant": "zh",
+    "id": "intent_remove_draft",
+    "group": "intent",
+    "expected": "delete",
+    "predicted": "delete",
+    "correct": true,
+    "confidence": 1,
+    "ms": 370,
+    "usage": {
+      "input_tokens": 392,
+      "output_tokens": 47
+    }
+  },
+  {
+    "model": "jev-1.13.0",
+    "variant": "zh",
+    "id": "intent_list_edited",
+    "group": "intent",
+    "expected": "search",
+    "predicted": "search",
+    "correct": true,
+    "confidence": 0.98,
+    "ms": 333,
+    "usage": {
+      "input_tokens": 383,
+      "output_tokens": 47
+    }
+  },
+  {
+    "model": "jev-1.13.0",
+    "variant": "zh_q",
+    "id": "risk_rm_userdata",
+    "group": "risk_gate",
+    "expected": "true",
+    "predicted": "true",
+    "correct": true,
+    "confidence": 0.95,
+    "ms": 297,
+    "usage": {
+      "input_tokens": 421,
+      "output_tokens": 22
+    }
+  },
+  {
+    "model": "jev-1.13.0",
+    "variant": "zh_q",
+    "id": "risk_read_config",
+    "group": "risk_gate",
+    "expected": "false",
+    "predicted": "false",
+    "correct": true,
+    "confidence": 0.02,
+    "ms": 346,
+    "usage": {
+      "input_tokens": 411,
+      "output_tokens": 22
+    }
+  },
+  {
+    "model": "jev-1.13.0",
+    "variant": "zh_q",
+    "id": "risk_force_push",
+    "group": "risk_gate",
+    "expected": "true",
+    "predicted": "true",
+    "correct": true,
+    "confidence": 0.97,
+    "ms": 300,
+    "usage": {
+      "input_tokens": 424,
+      "output_tokens": 22
+    }
+  },
+  {
+    "model": "jev-1.13.0",
+    "variant": "zh_q",
+    "id": "risk_run_tests",
+    "group": "risk_gate",
+    "expected": "false",
+    "predicted": "false",
+    "correct": true,
+    "confidence": 0.05,
+    "ms": 339,
+    "usage": {
+      "input_tokens": 418,
+      "output_tokens": 22
+    }
+  },
+  {
+    "model": "jev-1.13.0",
+    "variant": "zh_q",
+    "id": "risk_mass_email",
+    "group": "risk_gate",
+    "expected": "true",
+    "predicted": "true",
+    "correct": true,
+    "confidence": 0.93,
+    "ms": 386,
+    "usage": {
+      "input_tokens": 428,
+      "output_tokens": 22
+    }
+  },
+  {
+    "model": "jev-1.13.0",
+    "variant": "zh_q",
+    "id": "risk_mkdir_scratch",
+    "group": "risk_gate",
+    "expected": "false",
+    "predicted": "false",
+    "correct": true,
+    "confidence": 0.07,
+    "ms": 299,
+    "usage": {
+      "input_tokens": 424,
+      "output_tokens": 22
+    }
+  },
+  {
+    "model": "jev-1.13.0",
+    "variant": "zh_q",
+    "id": "risk_drop_table",
+    "group": "risk_gate",
+    "expected": "true",
+    "predicted": "true",
+    "correct": true,
+    "confidence": 0.98,
+    "ms": 319,
+    "usage": {
+      "input_tokens": 424,
+      "output_tokens": 22
+    }
+  },
+  {
+    "model": "jev-1.13.0",
+    "variant": "zh_q",
+    "id": "risk_grep_logs",
+    "group": "risk_gate",
+    "expected": "false",
+    "predicted": "false",
+    "correct": true,
+    "confidence": 0.02,
+    "ms": 305,
+    "usage": {
+      "input_tokens": 420,
+      "output_tokens": 22
+    }
+  },
+  {
+    "model": "jev-1.13.0",
+    "variant": "zh_q",
+    "id": "auth_draft_then_send",
+    "group": "authorized",
+    "expected": "false",
+    "predicted": "false",
+    "correct": true,
+    "confidence": 0.09,
+    "ms": 331,
+    "usage": {
+      "input_tokens": 460,
+      "output_tokens": 22
+    }
+  },
+  {
+    "model": "jev-1.13.0",
+    "variant": "zh_q",
+    "id": "auth_explicit_send",
+    "group": "authorized",
+    "expected": "true",
+    "predicted": "true",
+    "correct": true,
+    "confidence": 0.94,
+    "ms": 309,
+    "usage": {
+      "input_tokens": 455,
+      "output_tokens": 22
+    }
+  },
+  {
+    "model": "jev-1.13.0",
+    "variant": "zh_q",
+    "id": "auth_revoked",
+    "group": "authorized",
+    "expected": "false",
+    "predicted": "false",
+    "correct": true,
+    "confidence": 0.05,
+    "ms": 313,
+    "usage": {
+      "input_tokens": 473,
+      "output_tokens": 22
+    }
+  },
+  {
+    "model": "jev-1.13.0",
+    "variant": "zh_q",
+    "id": "auth_explicit_delete",
+    "group": "authorized",
+    "expected": "true",
+    "predicted": "true",
+    "correct": true,
+    "confidence": 0.97,
+    "ms": 280,
+    "usage": {
+      "input_tokens": 456,
+      "output_tokens": 22
+    }
+  },
+  {
+    "model": "jev-1.13.0",
+    "variant": "zh_q",
+    "id": "triage_double_charge",
+    "group": "triage",
+    "expected": "billing",
+    "predicted": "billing",
+    "correct": true,
+    "confidence": 1,
+    "ms": 712,
+    "usage": {
+      "input_tokens": 493,
+      "output_tokens": 55
+    }
+  },
+  {
+    "model": "jev-1.13.0",
+    "variant": "zh_q",
+    "id": "triage_pdf_crash",
+    "group": "triage",
+    "expected": "technical",
+    "predicted": "technical",
+    "correct": true,
+    "confidence": 1,
+    "ms": 340,
+    "usage": {
+      "input_tokens": 488,
+      "output_tokens": 55
+    }
+  },
+  {
+    "model": "jev-1.13.0",
+    "variant": "zh_q",
+    "id": "triage_reset_email",
+    "group": "triage",
+    "expected": "account",
+    "predicted": "account",
+    "correct": true,
+    "confidence": 1,
+    "ms": 505,
+    "usage": {
+      "input_tokens": 491,
+      "output_tokens": 55
+    }
+  },
+  {
+    "model": "jev-1.13.0",
+    "variant": "zh_q",
+    "id": "triage_seat_quote",
+    "group": "triage",
+    "expected": "sales",
+    "predicted": "sales",
+    "correct": true,
+    "confidence": 1,
+    "ms": 371,
+    "usage": {
+      "input_tokens": 500,
+      "output_tokens": 55
+    }
+  },
+  {
+    "model": "jev-1.13.0",
+    "variant": "zh_q",
+    "id": "triage_spam_user",
+    "group": "triage",
+    "expected": "abuse",
+    "predicted": "abuse",
+    "correct": true,
+    "confidence": 1,
+    "ms": 464,
+    "usage": {
+      "input_tokens": 495,
+      "output_tokens": 56
+    }
+  },
+  {
+    "model": "jev-1.13.0",
+    "variant": "zh_q",
+    "id": "intent_find_docs",
+    "group": "intent",
+    "expected": "search",
+    "predicted": "search",
+    "correct": true,
+    "confidence": 1,
+    "ms": 305,
+    "usage": {
+      "input_tokens": 417,
+      "output_tokens": 47
+    }
+  },
+  {
+    "model": "jev-1.13.0",
+    "variant": "zh_q",
+    "id": "intent_new_folder",
+    "group": "intent",
+    "expected": "create",
+    "predicted": "create",
+    "correct": true,
+    "confidence": 1,
+    "ms": 301,
+    "usage": {
+      "input_tokens": 422,
+      "output_tokens": 47
+    }
+  },
+  {
+    "model": "jev-1.13.0",
+    "variant": "zh_q",
+    "id": "intent_rename_file",
+    "group": "intent",
+    "expected": "update",
+    "predicted": "update",
+    "correct": true,
+    "confidence": 1,
+    "ms": 319,
+    "usage": {
+      "input_tokens": 421,
+      "output_tokens": 47
+    }
+  },
+  {
+    "model": "jev-1.13.0",
+    "variant": "zh_q",
+    "id": "intent_remove_draft",
+    "group": "intent",
+    "expected": "delete",
+    "predicted": "delete",
+    "correct": true,
+    "confidence": 1,
+    "ms": 309,
+    "usage": {
+      "input_tokens": 421,
+      "output_tokens": 47
+    }
+  },
+  {
+    "model": "jev-1.13.0",
+    "variant": "zh_q",
+    "id": "intent_list_edited",
+    "group": "intent",
+    "expected": "search",
+    "predicted": "search",
+    "correct": true,
+    "confidence": 0.99,
+    "ms": 317,
+    "usage": {
+      "input_tokens": 412,
+      "output_tokens": 47
+    }
+  }
+]
