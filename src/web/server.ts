@@ -849,10 +849,10 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
    *
    * Not "is it in the ledger": an arrival with no fate is one we crashed underneath,
    * and re-offering it is the entire point of the sweep. Settled ones are what must
-   * not be answered twice.
+   * not be answered twice — including the ones compaction has moved to an archive, which
+   * before INV-634 read back as never decided.
    */
-  const handledAlready = (messageId: string): boolean =>
-    ingress.list().some(record => record.id === messageId && record.fate !== undefined);
+  const handledAlready = (messageId: string): boolean => ingress.decidedAlready(messageId);
   // Which chat each conversation came from — written here because the channel path is
   // where both halves are last seen together, read by the console-interjection path
   // where only the conversation id survives.

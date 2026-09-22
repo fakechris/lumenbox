@@ -143,3 +143,69 @@ test("only the two places that cut a tool result may know how long a stored one 
     "cut a tool result in storableResult, which keeps the whole of it, or do not cut it"
   );
 });
+
+test("a ledger that compacts says what kind of thing it is, and a record archives", () => {
+  // The defect of 2026-09 (INV-634): eight files compacted and none of them said which of
+  // four things it was, so each `compact()` was written by copying whichever neighbour was
+  // open. Two that described themselves in prose as records of what happened — every
+  // arrival at a door and its fate, the life of every turn — were compacted as queues, and
+  // lost everything settled. Both losses were silent and both were total.
+  //
+  // So the kind is declared where the file is written, and `record` binds compaction to
+  // archive rather than drop.
+  const ledgers = sources().filter(file => /\n\s*private compact\(/.test(file.text));
+  assert.ok(ledgers.length >= 9, `expected to find the ledgers, found ${ledgers.length}`);
+
+  const undeclared = ledgers
+    .filter(file => !/export const LEDGER_KIND: LedgerKind = "(record|queue|state|feed)"/.test(file.text))
+    .map(file => file.path);
+  assert.deepEqual(
+    undeclared,
+    [],
+    'a file with compact() must declare export const LEDGER_KIND: LedgerKind = "record" | "queue" | "state" | "feed" (jsonl.ts)'
+  );
+
+  // A record's compact() must hand its settled lines to the archive. Checked on the body
+  // of the method rather than on the file, so calling archiveSettled somewhere else does
+  // not satisfy it.
+  const droppers: string[] = [];
+  for (const file of ledgers) {
+    if (!/LEDGER_KIND: LedgerKind = "record"/.test(file.text)) continue;
+    const at = file.text.search(/\n\s*private compact\(/);
+    let depth = 0;
+    let end = file.text.indexOf("{", at);
+    const start = end;
+    for (; end < file.text.length; end += 1) {
+      const ch = file.text[end];
+      if (ch === "{") depth += 1;
+      else if (ch === "}") {
+        depth -= 1;
+        if (depth === 0) break;
+      }
+    }
+    if (!file.text.slice(start, end).includes("archiveSettled(")) droppers.push(file.path);
+  }
+  assert.deepEqual(droppers, [], "a record's compact() must call archiveSettled — a record may move a line, never lose one");
+});
+
+test("a message's id is minted at the door, or inherited — never invented downstream", () => {
+  // The defect INV-613 fixed, kept fixed. The channel manager mints the id the moment a
+  // message is admitted and writes it to messages.jsonl; the bus takes that id and only
+  // mints one when there was no door (the web, a routine, a teammate). A third minting
+  // site means two ids for one message, which is how the chain from what a person said to
+  // the turn it caused came apart the first time.
+  //
+  // Scoped to the two layers a message travels through. Elsewhere a uuid is a box id, a
+  // job id, a session token — none of them a message.
+  const allowed = new Set([
+    "channels/manager.ts", // at admission, beside the messages.jsonl line
+    "agents/bus.ts", // sendFromUser's fallback, for messages that came through no door
+    "agents/registry.ts", // agent ids, which are not messages
+  ]);
+  const offenders = sources()
+    .filter(file => file.path.startsWith("channels/") || file.path.startsWith("agents/"))
+    .filter(file => !allowed.has(file.path))
+    .filter(file => /\brandomUUID\b/.test(file.text))
+    .map(file => file.path);
+  assert.deepEqual(offenders, [], "carry the id the door minted; do not mint a second one for the same message");
+});

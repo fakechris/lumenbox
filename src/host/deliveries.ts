@@ -23,7 +23,10 @@
 
 import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
-import { appendLine } from "./jsonl.ts";
+import { appendLine, type LedgerKind } from "./jsonl.ts";
+
+/** What is still owed to a person. A delivered message has done its job and may go. */
+export const LEDGER_KIND: LedgerKind = "queue";
 
 /** Rewrite the file once the settled entries outnumber this. */
 const COMPACT_AT = 200;

@@ -193,8 +193,19 @@ teammate 的 `SendToAgent`（bus.send 已有 id，但 transcript 只记 `causedB
   `record` 类的 `compact()` 体内不得出现「只写 open/pending/owed」的模式（用一个必须调用的
   `archiveSettled()` 助手来表达，测试检查调用存在）。新账本不声明就编译不过。
 - 进门身份：`bus.sendFromUser` 若被渠道路径调用而没有 `messageId`，`manager` 的测试已断言；
-  再加一条架构规则：`manager.ts` 之外不得 `import { randomUUID }` 用于消息 id（把铸造点钉在
-  进门）。
+  再加一条架构规则：`channels/` 与 `agents/` 两层内，除 `manager.ts`（进门铸造）、`bus.ts`
+  （无门来源的兜底）、`registry.ts`（agent id 不是消息）外不得出现 `randomUUID`。
+
+> **2026-09-22 已交付（INV-634，PR #213）。** 实际发现的账本是 **12 个**而不是 8 个——
+> `claims`、`tasks`、`policy` 三个是本次枚举才露出来的。分类落定为：`record` 2 个（ingress、
+> turns）、`queue` 2 个、`state` 5 个、`feed` 3 个。两处真实损失被证实并修好：① 补抓扫描问
+> 「这条消息决定过没有」，压缩后对所有旧消息一律答「没有」，也就是**一条一周前的消息被供应商
+> 重放时会被回答两次**；② `turns.jsonl` 是「一个 turn 花了多少、跑了多久、哪个模型哪个 prompt、
+> 怎么结束的」的唯一记录，5,000 个 turn 之后整份清空，连审计导出正在查的那个月也一起没了。
+> **`policy` 标为 `feed` 是有保留的**：一次性授权用过即弃在 20,000 条之后就没了，而常驻授权
+> 之所以被重述，正是因为丢了会改变行为——这条同样的论证也可以用来说明其余事件也该算记录。
+> 本次不改（契约只点名 ingress 与 turns），但在代码注释与 docs/05 §2.4.1 里写明，让下一个人
+> 是在「决定」而不是在「继承」。
 
 ### 4.4 不做
 

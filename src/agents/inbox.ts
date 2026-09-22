@@ -21,7 +21,7 @@
 
 import { envNumber } from "../config.ts";
 import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
-import { appendLine } from "../host/jsonl.ts";
+import { appendLine, type LedgerKind } from "../host/jsonl.ts";
 import { dirname, join } from "node:path";
 import { agentboxHome } from "../config.ts";
 
@@ -29,6 +29,12 @@ import { agentboxHome } from "../config.ts";
 export function inboxPath(): string {
   return process.env.AGENTBOX_INBOX_LOG ?? join(agentboxHome(), "inbox.jsonl");
 }
+
+/**
+ * What is outstanding for an agent. Emptied when nothing is — which is what a queue is
+ * for, and is why the message a person actually sent is now kept elsewhere (messages.ts).
+ */
+export const LEDGER_KIND: LedgerKind = "queue";
 
 /**
  * Rewritten once it passes this many lines *and* nothing is outstanding.

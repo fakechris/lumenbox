@@ -25,7 +25,7 @@
  */
 
 import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
-import { appendLine } from "./jsonl.ts";
+import { appendLine, archiveSettled, type LedgerKind } from "./jsonl.ts";
 import { dirname, join } from "node:path";
 import { agentboxHome, envNumber } from "../config.ts";
 
@@ -43,6 +43,14 @@ export function turnLedgerPath(): string {
  * "this turn is what kills it".
  */
 export const MAX_RESUMES = envNumber("AGENTBOX_MAX_RESUMES", 2);
+
+/**
+ * The life of every turn, and it is not a queue either.
+ *
+ * Emptying this file is emptying the only place that says what a turn cost, how long it
+ * ran, which model and prompt produced it, and how it ended. See `compact()`.
+ */
+export const LEDGER_KIND: LedgerKind = "record";
 
 /** Rewritten past this many lines, keeping only what is unfinished. */
 const COMPACT_AT = envNumber("AGENTBOX_TURN_LEDGER_COMPACT_AT", 5_000);
@@ -274,6 +282,16 @@ export class TurnLedger {
     }
   }
 
+  /** The live file's lines, as written. What `compact()` hands to the archive. */
+  private readLines(): string[] {
+    if (this.path === undefined || !existsSync(this.path)) return [];
+    try {
+      return readFileSync(this.path, "utf8").split("\n").filter(line => line.trim() !== "");
+    } catch {
+      return [];
+    }
+  }
+
   private read(): LedgerRecord[] {
     if (this.path === undefined || !existsSync(this.path)) return [];
     try {
@@ -299,10 +317,22 @@ export class TurnLedger {
     }
   }
 
-  /** Rewrites the file empty. Only called with nothing outstanding, so nothing is being discarded. */
+  /**
+   * Moves the file to an archive and starts a fresh one.
+   *
+   * It used to write the file empty on the reasoning that nothing outstanding means
+   * nothing is being discarded — true of *resumption*, which is what this ledger was
+   * built for, and false of everything else that reads it. This is the only record of
+   * what a turn cost, how long it took, which model and which prompt produced it, and how
+   * it ended; after five thousand turns all of that went, and the audit export for last
+   * month exported a file that had been emptied since.
+   *
+   * Only called with nothing outstanding, so every line being moved is a settled one.
+   */
   private compact(): void {
     if (this.path === undefined) return;
     try {
+      archiveSettled(this.path, this.readLines());
       const temp = `${this.path}.${process.pid}.tmp`;
       writeFileSync(temp, "", "utf8");
       renameSync(temp, this.path);

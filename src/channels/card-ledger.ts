@@ -16,9 +16,12 @@
 
 import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
-import { appendLine } from "../host/jsonl.ts";
+import { appendLine, type LedgerKind } from "../host/jsonl.ts";
 import { agentboxHome, envNumber } from "../config.ts";
 import type { TaskCardState } from "./manager.ts";
+
+/** Which card is showing for each live task, now. Superseded lines are noise. */
+export const LEDGER_KIND: LedgerKind = "state";
 
 export function cardLedgerPath(): string {
   return process.env.AGENTBOX_CARDS_LOG ?? join(agentboxHome(), "cards.jsonl");

@@ -19,6 +19,7 @@ import { existsSync, mkdirSync, readFileSync, readdirSync, statSync, writeFileSy
 import { join, relative as relativeTo } from "node:path";
 import { FETCHED_DIRNAME, readFrontmatter } from "./fetched.ts";
 import { RESULTS_DIRNAME } from "./results.ts";
+import { archivedLines } from "./jsonl.ts";
 import type { AgentRegistry } from "../agents/registry.ts";
 import { CONVERSATIONS_DIRNAME, conversationIdFor, TRANSCRIPT_FILENAME } from "../agents/registry.ts";
 import { CREDENTIAL_PATTERNS, MIN_EXACT_LENGTH } from "./secret-scan.ts";
@@ -75,6 +76,17 @@ function readLines(path: string): string[] {
   } catch {
     return [];
   }
+}
+
+/**
+ * A `record` ledger's lines, archives first, then the live file (jsonl.ts).
+ *
+ * A record's compaction moves settled lines aside rather than dropping them, so the live
+ * file alone is only the recent tail — and an export asked for last month would have found
+ * exactly the lines a compaction had already moved.
+ */
+function readRecord(path: string): string[] {
+  return [...archivedLines(path), ...readLines(path)];
 }
 
 /** Replaces every held value and every credential-shaped string; counts what it replaced. */
@@ -164,7 +176,12 @@ export function exportAudit(options: ExportOptions): ExportManifest {
   write("auto-review.jsonl", select(readLines(join(options.home, "auto-review.jsonl")), record => byAgentId(record) || (typeof record.agent === "string" && (agentIds.has(record.agent) || agentNames.has(record.agent)))));
   write("vault-audit.jsonl", select(readLines(join(options.home, "vault-audit.jsonl")), byAgentId));
   write("network-events.jsonl", select(readLines(join(options.home, "network-events.jsonl")), record => record.box === box.id || record.box === box.name));
-  write("turns.jsonl", select(readLines(join(options.home, "turns.jsonl")), byAgentId));
+  write("turns.jsonl", select(readRecord(join(options.home, "turns.jsonl")), byAgentId));
+  // Every arrival at a door and what became of it (ingress.ts). Taken by time alone: an
+  // arrival names no agent, because which agent it reaches is decided after it is written.
+  // Both of these are `record` ledgers, so their archives are read as well as their live
+  // files — before INV-634 a compaction had already emptied the month being exported.
+  write("ingress.jsonl", select(readRecord(join(options.home, "ingress.jsonl")), () => true));
   // What people said through the doors, as they said it (messages.ts, INV-613). A message
   // names no agent — the door decides that later — so it is the box's when the
   // conversation it went into belongs to one of the box's agents.

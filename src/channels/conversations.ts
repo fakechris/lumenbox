@@ -22,7 +22,10 @@
 
 import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
-import { appendLine } from "../host/jsonl.ts";
+import { appendLine, type LedgerKind } from "../host/jsonl.ts";
+
+/** Which chat each conversation is in, now. An older line for the same id is noise. */
+export const LEDGER_KIND: LedgerKind = "state";
 
 /** Duplicate lines beyond this and the file is rewritten as one line per conversation. */
 const COMPACT_AT = 500;

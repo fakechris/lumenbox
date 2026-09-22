@@ -16,6 +16,7 @@
  * complete. This is the view someone glances at to see what has been happening.
  */
 
+import type { LedgerKind } from "../host/jsonl.ts";
 import { appendFileSync, existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import { dirname } from "node:path";
 
@@ -28,6 +29,9 @@ export interface ActivityLogOptions {
   now?: () => string;
   onWarn?: (message: string) => void;
 }
+
+/** A window on what is happening, for a screen. Old events fall off the back on purpose. */
+export const LEDGER_KIND: LedgerKind = "feed";
 
 /** Rewrite once the file holds this much more than the limit. */
 const COMPACT_FACTOR = 3;
