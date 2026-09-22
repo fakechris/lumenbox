@@ -158,6 +158,77 @@ announced when they finish, and a missed window is skipped, never replayed.
 `,
   },
   {
+    slug: "daily-research-digest",
+    content: `---
+name: daily-research-digest
+description: Read one day's package and write one synthesis across it, organised by what the day was about rather than by what arrived.
+scope: global
+---
+
+# Daily research digest
+
+A day's package is on the host at \`~/.agentbox/digest/<runKey>/package/\`, assembled by
+\`agentbox day <YYYY-MM-DD>\`. It holds every message whole, every turn, every source that
+was read, and every reply. Your job is the one thing the package cannot do for itself.
+
+**Write a synthesis, not a list.** The day's items are the input, never the outline. If a
+reader can tell from your headings what order things arrived in, you have written the wrong
+document, and \`agentbox digest validate\` will say so and refuse it.
+
+## Before you write
+
+1. Read \`manifest.json\`. If \`gaps\` is not empty, **the first line of the digest says what
+   is missing and why** — a thin day and a day nobody could see look identical otherwise.
+2. Read every message. All of them, not a sample: the point of the package is that it is
+   complete.
+3. Read the sources under \`sources/\`. They are what was actually read, at the time, with
+   their completeness recorded. A source marked \`expired\` has only its row left; say so
+   rather than guessing at what it said.
+
+## The synthesis, in three passes
+
+**Themes.** Propose candidate themes first. Then write down what would put a message *in*
+each one. Then go back over **every** message and place it. Grouping as you read produces
+the order you read in, which is the failure this whole document exists to avoid. A theme
+needs **at least two different sources** — two messages about the same link is one source,
+not two. A theme with one source is an observation; put it under the main thread instead.
+
+**Tensions, as a separate pass.** Go through the day again looking only for places the
+material pulls against itself: two sources disagreeing, a claim that weakened, something
+the day's own evidence does not support. This has to be its own pass. Tensions noticed in
+passing never get written down.
+
+**What changed.** Only against a real baseline: the previous day's \`themes.json\`. Mark a
+theme \`NEW\`, \`STRENGTHENED\` or \`CONTRADICTED\` only if you can point at yesterday's entry.
+No baseline means no verbs — say "first day with a baseline" and move on.
+
+## Citations
+
+Every sentence that makes a claim carries at least one:
+
+- \`[msg:<id8>]\` — a person said this
+- \`[source:<sha8>]\` — this was read, and the bytes are in the package
+- \`[turn:<id8>]\` — your own analysis, and it **must** be in a sentence that also carries a
+  \`[msg:]\` or a \`[source:]\`. Your own reasoning is not the evidence for your own reasoning.
+
+Quote only when the wording is the source's, character for character. A near quotation is
+reported as near, not as a quotation.
+
+## Output
+
+1. \`draft.md\` in the package directory: the full digest.
+2. \`themes.json\` beside it: this day's theme names, for tomorrow's baseline.
+3. Run \`agentbox digest validate <runKey>\`. Fix what it names and run it once more. If it
+   still refuses, **say so in the first line** rather than delivering quietly.
+4. Reply with the short version, **600 characters at most**: the main thread, the theme
+   names, the tensions, what changed. The appendix is an index and not the text — one line
+   per message, and the reader opens the package if they want more.
+
+A day with one real thing in it gets a short digest about that thing. Padding a thin day
+into the shape of a full one is worse than saying it was thin.
+`,
+  },
+  {
     slug: "weekly-retro",
     content: `---
 name: weekly-retro

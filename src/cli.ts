@@ -2032,6 +2032,46 @@ async function main(): Promise<number> {
       }
     }
 
+    case "digest": {
+      // Checks a written digest against the package it came from (INV-670). Mechanical
+      // only: citations resolve, the agent's own turn is not its own evidence, the short
+      // version is short, and the digest is not the list it was asked not to be.
+      if (rest[0] !== "validate" || rest[1] === undefined) {
+        err("usage: agentbox digest validate <runKey>");
+        return 2;
+      }
+      const runKey = rest[1];
+      const { validateDigest, describeValidation } = await import("./host/day-package/validate.ts");
+      const { findPackage, previousDate } = await import("./host/day-package/assemble.ts");
+      type DayManifest = Parameters<typeof validateDigest>[0]["manifest"];
+      const dir = join(agentboxHome(), "digest", runKey, "package");
+      try {
+        const manifest = JSON.parse(readFileSync(join(dir, "manifest.json"), "utf8")) as DayManifest;
+        const draft = readFileSync(join(dir, "draft.md"), "utf8");
+        // Yesterday's themes, when there was a yesterday. A delta verb without a baseline
+        // is a guess wearing the clothes of a measurement, so the baseline is looked up by
+        // asking the packages what day they are rather than guessing at a run key.
+        let previousThemes: string[] | undefined;
+        const yesterday = findPackage(agentboxHome(), previousDate(manifest.window.date), manifest.chatKey);
+        if (yesterday !== undefined) {
+          try {
+            const previous = JSON.parse(readFileSync(join(yesterday.dir, "themes.json"), "utf8")) as {
+              themes?: unknown;
+            };
+            if (Array.isArray(previous.themes)) previousThemes = previous.themes as string[];
+          } catch {
+            previousThemes = undefined;
+          }
+        }
+        const report = validateDigest({ draft, manifest, ...(previousThemes !== undefined ? { previousThemes } : {}) });
+        for (const line of describeValidation(report)) out(line);
+        return report.ok ? 0 : 1;
+      } catch (error) {
+        err(`digest validate: ${error instanceof Error ? error.message : String(error)}`);
+        return 1;
+      }
+    }
+
     case "audit": {
       // One box, one range, every ledger — as files (INV-433). The export is the
       // compliance copy; the app's audit pages are the live view of the same ledgers.
