@@ -334,12 +334,12 @@ test("a click whose neighbourhood did not change is reported as a suspected no-o
   assert.deepEqual(executor.ran, ["click"]);
 });
 
-test("a click that repainted its neighbourhood is confirmed, and one that failed to capture is unverifiable", async () => {
+test("a click that repainted its neighbourhood is observed_change, and one that failed to capture is unverifiable", async () => {
   const executor = new ScriptedExecutor();
   executor.frames = [flat(10), flat(200)];
   const taken = await executor.execute([{ action: "click", coordinate: [400, 300] }]);
-  assert.equal(taken.effect, "confirmed");
-  assert.match(taken.effectDetail ?? "", /confirmed 100\.0%/);
+  assert.equal(taken.effect, "observed_change");
+  assert.match(taken.effectDetail ?? "", /observed_change 100\.0%/);
 
   const blind = new ScriptedExecutor();
   blind.frames = [null];
@@ -355,7 +355,7 @@ test("a slow repaint gets a second look after the batch settles", async () => {
   const executor = new ScriptedExecutor();
   executor.frames = [flat(10), flat(10), flat(250)];
   const result = await executor.execute([{ action: "click", coordinate: [400, 300] }]);
-  assert.equal(result.effect, "confirmed");
+  assert.equal(result.effect, "observed_change");
 });
 
 test("a batch is judged by its weakest write, and reads and moves are not measured", async () => {
@@ -369,7 +369,7 @@ test("a batch is judged by its weakest write, and reads and moves are not measur
     { action: "wait", duration_ms: 0 },
   ]);
   assert.equal(result.effect, "suspected_noop");
-  assert.match(result.effectDetail ?? "", /^click@\(400,300\) confirmed 100\.0%; type@\(100,100\) suspected_noop 0\.0%$/);
+  assert.match(result.effectDetail ?? "", /^click@\(400,300\) observed_change 100\.0%; type@\(100,100\) suspected_noop 0\.0%$/);
   assert.equal(result.actionCount, 4);
 });
 
@@ -457,7 +457,7 @@ test("list_elements scales the tree to API space and remembers where each contro
   const ref = listed.elements![2]!.ref;
   const clicked = await executor.execute([{ action: "click_element", ref }]);
   assert.deepEqual(executor.clicks, [{ action: "click_element", ref }]);
-  assert.equal(clicked.effect, "confirmed");
+  assert.equal(clicked.effect, "observed_change");
   assert.match(clicked.effectDetail ?? "", /click_element@\(300,48\)/, "measured at the entry's centre, in API space");
 
   // A ref from nowhere is a failure that names the fix, not a click somewhere.
@@ -552,4 +552,23 @@ test("a screenshot before waiting is refreshed after the wait", async () => {
   const result = await new Frames().execute([{ action: "screenshot" }, { action: "wait", duration_ms: 1 }]);
   assert.equal(result.screenshot, "frame-1");
   assert.equal(result.observation?.after_action, 2);
+});
+
+test("native postconditions distinguish matching, missing, ambiguous and unreadable state", async () => {
+  const executor = new TreeExecutor({ measureEffect: false });
+  const read = await executor.execute([{ action: "list_elements" }]);
+  const element = read.elements![0]!;
+  const expect = { element: { role: element.role, name: element.name, states: [...element.states] } };
+  const matched = await executor.execute([{ action: "click_element", ref: element.ref }], { expect });
+  assert.equal(matched.verification?.status, "satisfied");
+  const missing = await executor.execute([{ action: "screenshot" }], { expect: { element: { role: "button", name: "does not exist" } } });
+  assert.equal(missing.verification?.status, "unsatisfied");
+  const empty = await executor.execute([{ action: "screenshot" }], { expect: {} });
+  assert.equal(empty.verification?.status, "unknown");
+  const raw = JSON.parse(AX_SAMPLE) as AxOutput;
+  raw.elements = [raw.elements[0]!, raw.elements[0]!];
+  executor.tree = JSON.stringify(raw);
+  assert.equal((await executor.execute([{ action: "screenshot" }], { expect })).verification?.status, "unknown");
+  executor.tree = undefined;
+  assert.equal((await executor.execute([{ action: "screenshot" }], { expect })).verification?.status, "unknown");
 });

@@ -105,6 +105,7 @@ export type ComputerAction =
 
 export interface ComputerRequest extends DisplayGuardProjection {
   actions: readonly ComputerAction[];
+  expect?: DesktopExpectation;
   /**
    * Proof that the caller owns this desktop.
    *
@@ -200,28 +201,49 @@ export type Outcome = "ok" | "failed" | "refused" | "unknown";
 /** What a wait answers with: the condition held, it never held, or we could not tell. */
 export type WaitOutcome = "satisfied" | "unsatisfied" | "unknown";
 
-/**
- * Whether a write to the screen — a click, a keystroke, a drag — visibly did anything.
- *
- * Measured, not inferred: the box captures the neighbourhood of the point before and
- * after, and compares. A click that a window manager's grab swallowed, a keystroke
- * delivered to a window that had lost focus, a button under an invisible overlay — all
- * returned "success" before this, because xdotool had run without complaint.
- *
- * - `confirmed` — the neighbourhood changed the way a taken click changes things.
- * - `partial` — something changed, but little: a hover highlight, a caret.
- * - `suspected_noop` — nothing near the point changed. Not proof of nothing (a page can
- *   change elsewhere), but the model must look before repeating a write.
- * - `unverifiable` — a capture failed; there is no evidence either way.
+/** Pixel/DOM change is evidence, never proof that the requested postcondition holds.
+ * `confirmed` is retained for older peers; new drivers use `observed_change`.
  */
-export type Effect = "confirmed" | "partial" | "suspected_noop" | "unverifiable";
+export type Effect = "confirmed" | "observed_change" | "partial" | "suspected_noop" | "unverifiable";
+
+export interface ActionVerification {
+  status: "satisfied" | "unsatisfied" | "unknown";
+  source: "native" | "dom" | "none";
+  detail: string;
+}
+
+export interface DesktopExpectation {
+  /** Exact active-window title after the batch. */
+  window_title?: string;
+  /** Exactly one operable element with this role/name must exist in the active window. */
+  element?: { role: string; name: string; states?: string[] };
+}
+
+/** One projection for browser, computer and older peers. Dispatch is not verification. */
+export function actionOutcome(result: {
+  outcome?: Outcome; effect?: Effect; progress?: ComputerProgress; verification?: ActionVerification;
+}, writes = false): Outcome {
+  if (result.progress?.dispatch === "partial") return "unknown";
+  if (result.outcome === "refused" || result.outcome === "failed" || result.outcome === "unknown") return result.outcome;
+  if (result.verification?.status === "satisfied") return "ok";
+  if (result.verification?.status === "unsatisfied") return "failed";
+  if (result.verification?.status === "unknown" || writes || result.progress?.dispatch === "sent" || result.effect !== undefined) return "unknown";
+  return result.outcome ?? "ok";
+}
+
+export function verificationLine(value: ActionVerification): string {
+  return `Verification: ${value.status} (${value.source}) — ${value.detail}.` +
+    " Input already sent must not be replayed; inspect current state before any new write.";
+}
 
 /** The line after the verdict, for a result that measured its own effect. */
 export function effectLine(effect: Effect, detail?: string): string {
   const which = detail !== undefined && detail !== "" ? ` (${detail})` : "";
   switch (effect) {
     case "confirmed":
-      return `Effect: confirmed${which}.`;
+      return `Effect: confirmed${which} (legacy change signal; not a verified postcondition).`;
+    case "observed_change":
+      return `Effect: observed_change${which} — the interface changed; this does not prove the requested state.`;
     case "partial":
       return `Effect: partial${which} — something near the point changed, but little; check the screenshot for what.`;
     case "suspected_noop":
@@ -242,18 +264,15 @@ export function effectLine(effect: Effect, detail?: string): string {
  * derivation here is the one boxd itself applies, so the two agree.
  */
 export function computerOutcome(result: {
-  outcome?: Outcome;
-  success: boolean;
-  screenshot: string;
-  error?: string;
-  effect?: Effect;
-}): Outcome {
-  if (result.outcome !== undefined) return result.outcome;
-  if (result.error !== undefined || !result.success) return "failed";
-  // Ran, but there is no picture of what it did: that is not the same as ran and worked.
-  if (result.screenshot === "") return "unknown";
-  // Ran, and the evidence for its effect could not be gathered: same answer.
-  return result.effect === "unverifiable" ? "unknown" : "ok";
+  outcome?: Outcome; success: boolean; screenshot: string; error?: string;
+  effect?: Effect; progress?: ComputerProgress; verification?: ActionVerification;
+  elements_note?: string;
+}, writes = false): Outcome {
+  if (result.progress?.dispatch === "partial") return "unknown";
+  if (result.outcome === "refused" || result.outcome === "failed" || result.outcome === "unknown") return result.outcome;
+  if (result.error !== undefined || !result.success) return result.progress?.dispatch === "sent" ? "unknown" : "failed";
+  if (result.screenshot === "" || result.elements_note !== undefined) return "unknown";
+  return actionOutcome(result, writes);
 }
 
 /** The first line of a tool result, so the model reads the verdict before the detail. */
@@ -278,6 +297,7 @@ export function outcomeLine(outcome: Outcome, reason?: string): string {
 }
 
 export interface ComputerResult {
+  verification?: ActionVerification;
   observation?: DesktopObservation;
   elements_observation_id?: string;
   progress?: ComputerProgress;
@@ -931,6 +951,8 @@ export interface ActExpectation {
 }
 
 export interface BrowserResponse {
+  progress?: ComputerProgress;
+  verification?: ActionVerification;
   url: string;
   title: string;
   /** The page as an outline, with a ref on everything actionable. */

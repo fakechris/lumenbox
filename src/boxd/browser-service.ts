@@ -21,7 +21,8 @@
  * Verified against the box's own Chromium rather than assumed.
  */
 
-import type { Outcome, WaitOutcome, ActExpectation, Effect, PageInfo } from "../protocol/index.ts";
+import { actionOutcome } from "../protocol/index.ts";
+import type { ActionVerification, ComputerProgress, Outcome, WaitOutcome, ActExpectation, Effect, PageInfo } from "../protocol/index.ts";
 import { spawn } from "node:child_process";
 import { realpathSync, statSync } from "node:fs";
 import { CdpError, CdpSession, closeTarget, listTargets, openTarget, type CdpTarget } from "./cdp.ts";
@@ -169,7 +170,7 @@ export function staleReason(
   current: string | undefined,
   mutations: number
 ): string | undefined {
-  if (claimed === undefined) return undefined;
+  if (claimed === undefined) return "STALE_SNAPSHOT: a ref requires its snapshot id. Take a browser_snapshot or use find.";
   if (current === undefined) {
     return `STALE_SNAPSHOT: no outline has been taken of this page yet, so ${claimed} cannot be from it. Take a browser_snapshot first.`;
   }
@@ -272,7 +273,7 @@ export function judgeEffect(
   if (pageChanged) changed.push("page");
   if (after === undefined) {
     changed.push("gone");
-    return { effect: "confirmed", changed };
+    return { effect: "observed_change", changed };
   }
   if (before.value !== after.value) changed.push("value");
   if (before.checked !== after.checked) changed.push("checked");
@@ -282,7 +283,7 @@ export function judgeEffect(
   if (before.subtree !== after.subtree) changed.push("subtree");
   if (before.focused !== after.focused) changed.push("focus");
   const substantive = changed.filter(what => what !== "focus");
-  if (substantive.length > 0) return { effect: "confirmed", changed };
+  if (substantive.length > 0) return { effect: "observed_change", changed };
   if (changed.length > 0) return { effect: "partial", changed };
   return { effect: "suspected_noop", changed };
 }
@@ -315,6 +316,14 @@ export function unmetExpectation(
     return `expected ${JSON.stringify(expect.appears)} to appear on the page, and it did not`;
   }
   return undefined;
+}
+
+export function verifyBrowserExpectation(expect: ActExpectation | undefined, after: TargetState | undefined, pageText: string): ActionVerification {
+  if (expect === undefined || Object.values(expect).every(value => value === undefined)) return { status: "unknown", source: "none", detail: "no postcondition was requested" };
+  const targetExpected = expect.value !== undefined || expect.text !== undefined || expect.checked !== undefined || expect.gone !== undefined;
+  if (targetExpected && after === undefined) return { status: "unknown", source: "dom", detail: "target could not be read; absence is not proven" };
+  const unmet = unmetExpectation(expect, after, pageText);
+  return { status: unmet === undefined ? "satisfied" : "unsatisfied", source: "dom", detail: unmet === undefined ? "requested DOM postcondition holds at readback" : "requested DOM postcondition does not hold" };
 }
 
 /**
@@ -367,6 +376,8 @@ export function pageBudgetReason(open: number, budget = PAGE_BUDGET): string | u
 }
 
 export interface BrowserResult {
+  progress?: ComputerProgress;
+  verification?: ActionVerification;
   url: string;
   title: string;
   snapshot: string;
@@ -1176,10 +1187,9 @@ class BrowserPage {
    * A ref is derived from what an element is, so it survives a re-render *when the
    * element does* — and quietly lands on the wrong one when a list re-sorted or a modal
    * replaced the page. The snapshot id plus the mutation count since it are what tell
-   * those apart; a caller that names no id (an older host) is trusted as before.
+   * those apart; a caller that names no id must refresh or use find.
    */
   async assertFresh(claimed: string | undefined): Promise<void> {
-    if (claimed === undefined) return;
     let mutations = 0;
     if (this.snapshotId !== undefined && claimed === this.snapshotId) {
       const counted = (await this.session.send("Runtime.evaluate", {
@@ -1672,6 +1682,9 @@ export class BrowserService {
     const before = needsRef && ref !== undefined ? await page.targetStateAfter(ref) : undefined;
     const navigationsBefore = page.navigations;
     const mutationsBefore = before === undefined ? 0 : await page.mutationsSinceSnapshot();
+    if (!["click", "type", "key", "hover"].includes(action)) throw new CdpError("Unsupported browser action");
+    let executed = false;
+    try {
     switch (action) {
       case "click":
         await page.click(ref!, options.confirmed === true);
@@ -1688,6 +1701,7 @@ export class BrowserService {
       default:
         throw new CdpError(`${action} is not something this does: click, type, key or hover.`);
     }
+    executed = true;
     // Settle first and read the page's own change counter before the outline resets it:
     // a click whose whole effect is elsewhere on the page — a list re-rendered, a panel
     // opened — is a change, even when the button itself looks the same afterwards.
@@ -1699,20 +1713,21 @@ export class BrowserService {
     const result = await this.settled(display, await page.report());
     // Judged after the settle, which is when a navigation the click started has begun.
     const navigated = page.navigations > navigationsBefore;
-    if (before === undefined || ref === undefined) {
-      if (options.expect !== undefined) {
-        const unmet = unmetExpectation(options.expect, undefined, await page.visibleText());
-        if (unmet !== undefined && options.expect.appears !== undefined) throw new CdpError(`The page is not what you expected: ${unmet}.`);
-      }
-      return result;
+    const after = ref === undefined ? undefined : await page.targetStateAfter(ref);
+    const judged = before === undefined ? { effect: "unverifiable" as const, changed: [] } : judgeEffect(before, after, navigated, pageChanged);
+    const verification = verifyBrowserExpectation(options.expect, after, options.expect?.appears !== undefined ? await page.visibleText() : "");
+    const progress: ComputerProgress = { executed_count: 1, dispatch: "sent" };
+    return { ...result, ...judged, progress, verification, outcome: actionOutcome({ progress, verification }) };
+    } catch (error) {
+      // The irreversible gate runs before dispatch and still goes through host policy.
+      if (error instanceof IrreversibleActionError || error instanceof StaleSnapshotError) throw error;
+      return {
+        url: "", title: "", snapshot: "", outcome: "unknown",
+        progress: { executed_count: executed ? 1 : 0, dispatch: executed ? "sent" : "partial", ...(executed ? {} : { failed_at: 0 }) },
+        verification: { status: "unknown", source: "dom", detail: "dispatch or readback failed; inspect before any new input" },
+        note: "The action may have been sent. Its dispatch or final observation failed; do not replay it.",
+      };
     }
-    const after = await page.targetStateAfter(ref);
-    const judged = judgeEffect(before, after, navigated, pageChanged);
-    const unmet = unmetExpectation(options.expect, after, options.expect?.appears !== undefined ? await page.visibleText() : "");
-    if (unmet !== undefined) {
-      throw new CdpError(`The page is not what you expected: ${unmet}. (Effect: ${judged.effect}${judged.changed.length > 0 ? `, changed ${judged.changed.join(", ")}` : ""}.)`);
-    }
-    return { ...result, effect: judged.effect, changed: judged.changed };
   }
 
   /** Fills a vault secret into a field (INV-402). The value is never in the result. */

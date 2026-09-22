@@ -1,3 +1,4 @@
+import { withCdpAuthority } from "./cdp.ts";
 /**
  * boxd — the in-box daemon.
  *
@@ -23,6 +24,8 @@ import { join } from "node:path";
 import { resolveRange } from "./range.ts";
 import { timingSafeEqual } from "node:crypto";
 import {
+  computerOutcome,
+  actionOutcome,
   BOXD_PORT,
   BOXD_PROTOCOL,
   type ClipboardReadRequest,
@@ -257,6 +260,7 @@ async function handleComputer(body: ComputerRequest): Promise<ComputerResult> {
   try {
     const result = await x11.execute(body.actions, {
       bindUnmappedCharacters: body.bind_unmapped_characters ?? true,
+      expect: body.expect,
       authorize,
     });
     return {
@@ -264,8 +268,8 @@ async function handleComputer(body: ComputerRequest): Promise<ComputerResult> {
       // the host has that the screen is in the state the actions were meant to leave it.
       // An outline that was asked for and could not be read is the same: the model has
       // to know it is working from the screenshot alone (INV-412).
-      outcome:
-        result.screenshot === "" || result.effect === "unverifiable" || result.elementsNote !== undefined ? "unknown" : "ok",
+      outcome: computerOutcome({ ...result, elements_note: result.elementsNote }),
+      verification: result.verification,
       ...(result.effect !== undefined
         ? { effect: result.effect, effect_detail: result.effectDetail }
         : {}),
@@ -532,7 +536,7 @@ const routes: Record<string, Handler> = {
     const desktop = await displays.ensure(display);
     if (!["snapshot", "read", "wait", "check", "pages"].includes(body.op)) desktop.executor.invalidateElements();
     const localRecovery = endpoints.resolve(display).kind === "local";
-    const browserOp = async (): Promise<BrowserResponse> => {
+    const executeBrowserOp = async (): Promise<BrowserResponse> => {
     authorize();
     if (localRecovery && endpoints.resolve(display).kind !== "local") throw new HttpError(409, "Desktop attachment changed during recovery");
     switch (body.op) {
@@ -582,17 +586,25 @@ const routes: Record<string, Handler> = {
         throw new Error(`Unknown browser op ${body.op}`);
     }
     };
+    const browserOp = async (): Promise<BrowserResponse> => withCdpAuthority(authorize, async () => {
+      const result = await executeBrowserOp();
+      const writes = !["snapshot", "read", "wait", "check", "pages"].includes(body.op);
+      const progress = result.progress ?? (writes ? { executed_count: 1, dispatch: "sent" as const } : undefined);
+            try { authorize(); }
+      catch (error) {
+        if (!writes) throw error;
+        return { url: "", title: "", snapshot: "", progress, outcome: "unknown", note: "Desktop authority changed after dispatch. Input may have been sent; do not replay." };
+      }
+      return { ...result, progress, outcome: actionOutcome({ ...result, progress }, writes) };
+    });
     // Recovery policy for externally owned applications belongs to their controller.
     if (!localRecovery) {
-      const result = await browserOp();
-      authorize();
-      return result;
+      return browserOp();
     }
     // Retry and degrade (INV-146): a read that lost the browser is retried once after
     // re-attaching; a write is never repeated and comes back unknown; a browser that
     // stays down degrades `open` to a fetch without a browser, said as such.
     const recovered = await withRecovery(body.op, browserOp, { forget: () => { if (endpoints.resolve(display).kind === "local") browser.forget(display); }, log });
-    authorize();
     if (recovered.kind === "ok") {
       if (recovered.recovered === undefined) return recovered.result;
       const said =

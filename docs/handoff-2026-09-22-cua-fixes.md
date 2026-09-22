@@ -28,3 +28,13 @@ GUI 用应用自己的计数文件作为 oracle：原生树定位、换快照、
 ## INV 同步障碍
 
 INV-636—640 已由人提交为 COMMITTED。本会话尝试 `work_claim` 与不带 `run_id` 的 `run_report(running)`，均返回 `Claiming work requires an authenticated actor`。当前连接可读写合同，但无 agent actor，故没有伪造 claim/run，也没有标记 Done。实现证据可写入各项 verification，run 记录需要具备 actor 的连接才能补录。
+
+## INV-637：派发、变化和后置条件分离
+
+- 原生像素差和 DOM 变化只返回 `observed_change`；保留 legacy `confirmed` 的解析能力，但 host 不再将它视为验证成功。
+- protocol 中唯一的 `actionOutcome/computerOutcome` 投影供 boxd/host 共用。无后置条件的已发出输入为 unknown；明确回读不匹配为 failed，同时保留 sent，不能由此重放。
+- computer 新增可选 expect（精确窗口标题/唯一控件 role/name/states）；browser 的现有 expect 返回结构化 verification，而非丢掉派发状态后抛错。目标读失败不证明 gone，空 expect 不算验证。
+- 请求过期 ref 的浏览器调用必须提供 snapshot，或改用当前 find。scroll/open/switch 不再归为可自动重试的读取；CDP 每次发送重验权限，撤销后只允许释放本次已按下的键/鼠标。
+- 两个真实 stack 的 scripted agent episode 验证模型看到 unknown、已完成前缀和先观察指引。它们验证合同传达，不代表真实模型行为成功率。
+
+`npm run release:check` 退出 0，1,736 tests + 产物启动检查通过；日志 `/tmp/lumenbox-cua-research/637-release.log`。原始五项 research probe 全部 reproduced=false。GUI 10/10，镜像 `agentbox/cua-fixes:f522c557d1de`，测试层 digest `sha256:4d4a5fbfd47eb3659ec94fad774227cb8f5248989317423443c0b0f25292beff`；日志 `/tmp/lumenbox-cua-research/637-gui.log`。这次已回归 INV-636 最后两个补丁。最后追加的 browser recovery/CDP authority 改动经过新增单测和全套检查，下一轮 GUI 镜像一并验证。真实模型 scorecard 未执行。

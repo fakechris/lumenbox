@@ -1,3 +1,4 @@
+import { isComputerWrite } from "../cua/execution.ts";
 /**
  * Tool definitions and dispatch.
  *
@@ -54,6 +55,8 @@ import {
 import {
   computerOutcome,
   effectLine,
+  actionOutcome,
+  verificationLine,
   outcomeLine,
   type BrowserRequest,
   type ComputerAction,
@@ -680,6 +683,13 @@ export function buildTools(
         input_schema: {
           type: "object",
           properties: {
+            expect: {
+              type: "object", description: "Optional state to verify after the batch. Image change alone is not success.",
+              properties: {
+                window_title: { type: "string" },
+                element: { type: "object", properties: { role: { type: "string" }, name: { type: "string" }, states: { type: "array", items: { type: "string" } } }, required: ["role", "name"] },
+              },
+            },
             actions: {
               type: "array",
               description: "The actions to perform, in order.",
@@ -2333,6 +2343,7 @@ export async function dispatchTool(
         result = await box.computer(actions, {
           display: context.displayIndex,
           owner: context.boxOwner,
+          expect: input.expect as import("../protocol/index.ts").DesktopExpectation | undefined,
         });
       } catch (error) {
         // The box said no, or said nothing. Those are different answers and the model
@@ -2345,15 +2356,14 @@ export async function dispatchTool(
         return { text: outcomeLine(outcome, message), isError: true };
       }
 
-      const outcome = computerOutcome(result);
+      const outcome = computerOutcome(result, actions.some(isComputerWrite));
       const notes: string[] = [outcomeLine(outcome, result.error)];
       if (result.progress) notes.push(`Completed ${result.progress.executed_count} action(s); dispatch=${result.progress.dispatch}.` +
         (result.progress.failed_at === undefined ? "" : ` Stopped at action ${result.progress.failed_at + 1}; do not replay the completed prefix.`));
       if (result.elements_observation_id) notes.push(`Elements observation: ${result.elements_observation_id}.`);
       if (result.observation) notes.push(`Image observation ${result.observation.id}: ${result.observation.coordinate_space} coordinates${result.observation.window_id ? ` for window ${result.observation.window_id}` : ""}, after action ${result.observation.after_action}.`);
-      // The verdict says the batch ran; the effect says whether its writes took. Both,
-      // because "ok" with "suspected_noop" is the exact case this exists for: xdotool
-      // succeeded and the screen did not care.
+      if (result.verification) notes.push(verificationLine(result.verification));
+      // Change evidence and requested postconditions remain separate.
       if (result.effect !== undefined) notes.push(effectLine(result.effect, result.effect_detail));
       if (!result.error) {
         notes.push(`Ran ${result.action_count} action(s) in ${result.duration_ms}ms.`);
@@ -3473,10 +3483,11 @@ export async function dispatchTool(
           domains,
           ...(typeof input.snapshot === "string" && input.snapshot !== "" ? { snapshot: input.snapshot } : {}),
         });
-        const outcome: Outcome = result.outcome ?? "ok";
+        const outcome = actionOutcome(result, true);
         return {
+          isError: outcome !== "ok",
           text: [
-            `${outcomeLine(outcome)} ${secretId} was filled into ${ref}; the outline shows it redacted.`,
+            `${outcomeLine(outcome)} Secret fill for ${secretId} into ${ref} was requested; inspect the redacted field before continuing.`,
             `${result.snapshot_id !== undefined ? `Snapshot ${result.snapshot_id}: ` : ""}${result.title || "(untitled)"} — ${result.url}`,
             ...(result.note !== undefined ? [result.note] : []),
             result.snapshot,
@@ -3601,8 +3612,7 @@ export async function dispatchTool(
             text: `${result.note !== undefined ? `${result.note}\n\n` : ""}${result.url}\n\n${result.text ?? "(the page has no text)"}`,
           };
         }
-        // The verdict first. An older boxd sends none, and for it "it answered" is ok.
-        const outcome: Outcome = result.outcome ?? "ok";
+        const outcome = actionOutcome(result, ["browser_act", "browser_scroll", "browser_upload"].includes(name));
         const parts = [
           name === "browser_wait_for" && result.wait !== undefined
             ? `${outcomeLine(outcome)} Wait: ${result.wait}.`
@@ -3611,6 +3621,7 @@ export async function dispatchTool(
               : outcomeLine(outcome),
           `${result.snapshot_id !== undefined ? `Snapshot ${result.snapshot_id}: ` : ""}${result.title || "(untitled)"} — ${result.url}`,
         ];
+        if (result.verification) parts.push(verificationLine(result.verification));
         // What happened to the page comes before the page. A tab that opened under the
         // agent, or a wait that ran out, changes how the outline below should be read.
         if (result.note !== undefined) parts.push(result.note);

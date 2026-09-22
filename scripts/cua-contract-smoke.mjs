@@ -94,6 +94,8 @@ try {
     const before = await state();
     const clicked = await box.computer([{ action: "click_element", ref: button.ref, observation_id: read.elements_observation_id }]);
     assert.equal(clicked.success, true, clicked.error);
+    assert.equal(clicked.outcome, "unknown", "delivered input without a postcondition is not verified success");
+    assert.notEqual(clicked.effect, "confirmed");
     assert.equal((await state()).clicks, before.clicks + 1);
     const replay = await box.computer([{ action: "click_element", ref: button.ref }]);
     assert.equal(replay.outcome, "refused");
@@ -173,6 +175,23 @@ try {
     const result = await box.computer([{ action: "click_element", ref: button.ref }], { display: 2 });
     assert.equal(result.outcome, "refused");
     assert.equal((await state()).clicks, before.clicks);
+  });
+  await check("native_postconditions_match_and_mismatch_without_replay", async () => {
+    const button = target(await list());
+    const before = await state();
+    const matched = await box.computer([{ action: "click_element", ref: button.ref }], {
+      expect: { window_title: "CUA Contract Fixture", element: { role: button.role, name: button.name } },
+    });
+    assert.equal(matched.outcome, "ok");
+    assert.equal(matched.verification.status, "satisfied");
+    const next = target(await list());
+    const missed = await box.computer([{ action: "click_element", ref: next.ref }], {
+      expect: { window_title: "A title that does not exist" },
+    });
+    assert.equal(missed.outcome, "failed");
+    assert.equal(missed.progress.dispatch, "sent");
+    assert.equal(missed.verification.status, "unsatisfied");
+    assert.equal((await state()).clicks, before.clicks + 2, "neither mismatch nor unknown triggers replay");
   });
   await check("same_pid_same_title_windows_refuse_ambiguous_tree", async () => {
     const read = await list();

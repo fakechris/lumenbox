@@ -23,6 +23,8 @@ import type {
   Effect,
   DesktopObservation,
   ComputerProgress,
+  ActionVerification,
+  DesktopExpectation,
 } from "../protocol/index.ts";
 import { CoordinateScaler } from "./scaling.ts";
 import { exec, execBuffer, execWithInput, sleep } from "./shell.ts";
@@ -388,6 +390,7 @@ export interface X11Config {
 }
 
 export interface TypingOptions {
+  expect?: DesktopExpectation;
   /** Rechecked after waits and before each new native input operation. */
   authorize?: () => void;
   /**
@@ -399,6 +402,7 @@ export interface TypingOptions {
 }
 
 export interface X11ExecutionResult {
+  verification?: ActionVerification;
   observation?: DesktopObservation;
   elementsObservationId?: string;
   progress?: ComputerProgress;
@@ -564,6 +568,21 @@ export class X11Executor {
       });
     }
     return { elements, window: read.window };
+  }
+
+  protected async verifyExpectation(expect: DesktopExpectation): Promise<ActionVerification> {
+    if (expect.window_title === undefined && expect.element === undefined) return { status: "unknown", source: "none", detail: "empty postcondition" };
+    const read = await this.readElements();
+    authorizeOperation();
+    if ("error" in read) return { status: "unknown", source: "native", detail: "native state could not be read" };
+    if (expect.window_title !== undefined && read.window.title !== expect.window_title) return { status: "unsatisfied", source: "native", detail: "active-window title does not match" };
+    if (expect.element !== undefined) {
+      const target = expect.element;
+      const matches = read.elements.filter(e => e.role === target.role && e.name === target.name);
+      if (matches.length > 1 || (matches.length === 0 && read.window.truncated)) return { status: "unknown", source: "native", detail: "postcondition target is ambiguous or the tree is truncated" };
+      if (matches.length === 0 || target.states?.some(state => !matches[0]!.states.includes(state))) return { status: "unsatisfied", source: "native", detail: "expected control or state was not found" };
+    }
+    return { status: "satisfied", source: "native", detail: "requested native postcondition holds at readback" };
   }
 
   private xdotool(args: string): Promise<string> {
@@ -750,8 +769,12 @@ export class X11Executor {
     }
 
     const effect = worstEffect(measured.map(m => m.effect));
+    const verification = options.expect !== undefined ? await this.verifyExpectation(options.expect) :
+      attemptedWrite ? { status: "unknown" as const, source: "none" as const, detail: "no postcondition was requested" } : undefined;
+    authorizeOperation();
     return {
       success: true,
+      verification,
       observation,
       elementsObservationId: elements === undefined ? undefined : this.elementsObservationId,
       progress: { executed_count: executedCount, dispatch: attemptedWrite ? "sent" : "not_started" },

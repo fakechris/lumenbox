@@ -381,3 +381,45 @@ test("a teammate's teams are in the roster the agent reads", async () => {
     episode.cleanup();
   }
 });
+
+// INV-637: a changed image and success=true used to let the agent declare a write
+// complete. Exercise the real tool renderer and next model round, including a
+// partially delivered batch. The scripted model must see uncertainty and read first.
+for (const partial of [false, true]) {
+  test(`computer episode preserves uncertain dispatch and reads before continuing (partial=${partial})`, async () => {
+    let writes = 0;
+    let reads = 0;
+    const episode = await runEpisode({
+      team: [{ name: "Nova" }], says: ["点击一次保存，然后检查当前状态。"],
+      box: {
+        computer: async actions => {
+          if (actions.some(action => action.action === "click")) {
+            writes++;
+            return { success: !partial, screenshot: "UklGR", action_count: 1, duration_ms: 1,
+              outcome: partial ? "unknown" : "ok", effect: "observed_change",
+              progress: { executed_count: 1, dispatch: partial ? "partial" : "sent", ...(partial ? { failed_at: 1 } : {}) },
+            };
+          }
+          reads++;
+          return { success: true, screenshot: "UklGR", action_count: 1, duration_ms: 1 };
+        },
+      },
+      script: ({ round, messages }) => {
+        if (round === 0) return { call: "computer", input: { actions: [{ action: "click", coordinate: [40, 30] }, ...(partial ? [{ action: "key", key: "Return" }] : [])] } };
+        if (round === 1) {
+          const seen = JSON.stringify(messages);
+          assert.match(seen, /Outcome: unknown/);
+          assert.match(seen, /do not repeat a write/);
+          if (partial) assert.match(seen, /do not replay the completed prefix/);
+          return { call: "computer", input: { actions: [{ action: "screenshot" }] } };
+        }
+        return { say: "输入可能已发送；已重新查看，尚未取得保存成功的状态证据。" };
+      },
+    });
+    try {
+      assert.equal(writes, 1);
+      assert.equal(reads, 1);
+      assert.equal(episode.score.turns, 1);
+    } finally { episode.cleanup(); }
+  });
+}

@@ -24,7 +24,7 @@
 export type BrowserFailure = "connection" | "transient";
 
 /** The ops that may be repeated without changing anything on the page. */
-const READ_ONLY_OPS = new Set(["open", "snapshot", "read", "wait", "pages", "check", "switch", "scroll"]);
+const READ_ONLY_OPS = new Set(["snapshot", "read", "wait", "pages", "check"]);
 
 const CONNECTION = /connection (closed|was closed|is not open)|did not answer within|refused the debugger connection|HTTP \d+ listing targets|did not start on desktop|ECONNREFUSED|socket hang up/i;
 const TRANSIENT = /Execution context was destroyed|Cannot find context with specified id|Inspected target navigated or closed|target closed|Session with given id not found/i;
