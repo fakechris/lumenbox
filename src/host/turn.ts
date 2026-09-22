@@ -74,6 +74,7 @@ import {
   summaryEntry,
   clampSummaryToBudget,
   type HistoryEntry,
+  replacedRange,
   type SummaryEntry,
 } from "./compaction.ts";
 import { DURABLE_RESULT_CHARS, type ResolutionConfig } from "../protocol/index.ts";
@@ -940,7 +941,7 @@ async function summarise(
   if (anchors.length > 0) {
     text += `\n\n**Exact references (mechanically extracted — trust these over the prose above):**\n${anchors.join("\n")}`;
   }
-  return summaryEntry(text, covers);
+  return summaryEntry(text, covers, new Date(), replacedRange(entries, 0));
 }
 
 /**
@@ -1168,6 +1169,9 @@ export async function compactHistory(options: {
     // Loud, and told to the model: the alternative was a request that cannot fit, and the
     // alternative to that was dropping history with no trace of it having happened.
     entry = droppedEntry(cut.index, reason);
+    // Even a failed summarisation says what it stood in for. "These entries were dropped"
+    // is a poor record; "entries 0 to 340 of turns … were dropped" is a usable one.
+    entry = { ...entry, replaced: replacedRange(history.slice(0, cut.index), 0) };
     // Insurance matters *more* when the summary failed: the dropped marker carries the
     // pinned ask and tool exemplars even though it carries no narrative.
     const pinnedEntries = choosePinnedEntries(olderEntries, active.slice(cut.index));
