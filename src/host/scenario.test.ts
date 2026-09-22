@@ -423,8 +423,9 @@ test("a teammate's teams are in the roster the agent reads", async () => {
 // INV-637: a changed image and success=true used to let the agent declare a write
 // complete. Exercise the real tool renderer and next model round, including a
 // partially delivered batch. The scripted model must see uncertainty and read first.
-for (const partial of [false, true]) {
-  test(`computer episode preserves uncertain dispatch and reads before continuing (partial=${partial})`, async () => {
+for (const receipt of ["changed", "partial", "legacy_failed"]) {
+  const partial = receipt === "partial";
+  test(`computer episode preserves uncertain dispatch and reads before continuing (${receipt})`, async () => {
     let writes = 0;
     let reads = 0;
     const episode = await runEpisode({
@@ -433,6 +434,8 @@ for (const partial of [false, true]) {
         computer: async actions => {
           if (actions.some(action => action.action === "click")) {
             writes++;
+            if (receipt === "legacy_failed") return { success: false, screenshot: "UklGR", action_count: 0, duration_ms: 1,
+              outcome: "failed", error: "unknown second action after first click" };
             return { success: !partial, screenshot: "UklGR", action_count: 1, duration_ms: 1,
               outcome: partial ? "unknown" : "ok", effect: "observed_change",
               progress: { executed_count: 1, dispatch: partial ? "partial" : "sent", ...(partial ? { failed_at: 1 } : {}) },

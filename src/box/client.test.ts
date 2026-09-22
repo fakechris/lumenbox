@@ -11,6 +11,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { createServer, type Server } from "node:http";
 import { BoxClient, BoxError } from "./client.ts";
+import { BOXD_PROTOCOL } from "../protocol/index.ts";
 
 function serve(
   handler: (path: string, respond: (status: number, body: string) => void) => void
@@ -132,4 +133,45 @@ test("who asked rides with the command, and changes nothing about it", async () 
   } finally {
     captured.server.close();
   }
+});
+
+test("legacy desktop capability discovery refuses an entire mixed write batch before dispatch", async () => {
+  let posts = 0;
+  const { server, url } = await serve((path, respond) => {
+    if (path === "/health") respond(200, JSON.stringify({ protocol: BOXD_PROTOCOL }));
+    else { posts++; respond(200, JSON.stringify({ success: false, screenshot: "image", error: "unknown native action" })); }
+  });
+  try {
+    const client = new BoxClient({ baseUrl: url, token: "fixture" });
+    const error = await failureOf(client.computer([{ action: "click", coordinate: [1, 2] }, { action: "invoke_element", ref: "old:a1" }]));
+    assert.equal(error.kind, "refused");
+    assert.match(error.message, /before dispatch/);
+    assert.equal(posts, 0, "the first click must never reach the legacy daemon");
+    await client.computer([{ action: "screenshot" }]);
+    assert.equal(posts, 1, "legacy read-only inspection remains available");
+  } finally { server.close(); }
+});
+
+test("desktop preflight rechecks a replaced daemon and rejects missing native capabilities", async () => {
+  let current = true, native = true, healthy = true, posts = 0;
+  const { server, url } = await serve((path, respond) => {
+    if (path === "/health") respond(healthy ? 200 : 503, JSON.stringify({ protocol: BOXD_PROTOCOL,
+      ...(current ? { desktop_contract: { version: 1, snapshot_refs: true, final_observation: true, batch_progress: true } } : {}),
+      ...(native ? { desktop_driver: { semantic_actions: ["invoke", "set_value"] } } : {}),
+    }));
+    else { posts++; respond(200, JSON.stringify({ success: true, screenshot: "image" })); }
+  });
+  try {
+    const client = new BoxClient({ baseUrl: url, token: "fixture" });
+    await client.computer([{ action: "invoke_element", ref: "snapshot:a1" }]);
+    assert.equal(posts, 1);
+    native = false;
+    assert.equal((await failureOf(client.computer([{ action: "set_value", ref: "snapshot:a1", value: "text" }]))).kind, "refused");
+    current = false;
+    assert.equal((await failureOf(client.computer([{ action: "click", coordinate: [1, 2] }]))).kind, "refused");
+    assert.equal((await failureOf(client.computer([{ action: "screenshot" }], { expect: { window_title: "Expected" } }))).kind, "refused");
+    healthy = false;
+    assert.equal((await failureOf(client.computer([{ action: "click", coordinate: [1, 2] }]))).kind, "refused");
+    assert.equal(posts, 1, "unsupported or undiscoverable batches must not be dispatched");
+  } finally { server.close(); }
 });

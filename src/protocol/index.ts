@@ -235,6 +235,9 @@ export interface DesktopExpectation {
 export function actionOutcome(result: {
   outcome?: Outcome; effect?: Effect; progress?: ComputerProgress; verification?: ActionVerification;
 }, writes = false): Outcome {
+  // Legacy errors/outcome=failed may hide an already executed prefix. A recorded
+  // write without dispatch evidence cannot establish that nothing was delivered.
+  if (writes && result.progress === undefined) return result.outcome === "refused" ? "refused" : "unknown";
   if (result.progress?.dispatch === "partial") return "unknown";
   if (result.outcome === "refused" || result.outcome === "failed" || result.outcome === "unknown") return result.outcome;
   if (result.verification?.status === "satisfied") return "ok";
@@ -280,6 +283,7 @@ export function computerOutcome(result: {
   effect?: Effect; progress?: ComputerProgress; verification?: ActionVerification;
   elements_note?: string;
 }, writes = false): Outcome {
+  if (writes && result.progress === undefined) return actionOutcome(result, writes);
   if (result.progress?.dispatch === "partial") return "unknown";
   if (result.outcome === "refused" || result.outcome === "failed" || result.outcome === "unknown") return result.outcome;
   if (result.error !== undefined || !result.success) return result.progress?.dispatch === "sent" ? "unknown" : "failed";
