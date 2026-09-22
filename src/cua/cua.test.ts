@@ -1,3 +1,4 @@
+import { ComputerExecutionError } from "./execution.ts";
 /**
  * Tests for the CUA logic that has no X server dependency.
  *
@@ -333,12 +334,12 @@ test("a click whose neighbourhood did not change is reported as a suspected no-o
   assert.deepEqual(executor.ran, ["click"]);
 });
 
-test("a click that repainted its neighbourhood is confirmed, and one that failed to capture is unverifiable", async () => {
+test("a click that repainted its neighbourhood is observed_change, and one that failed to capture is unverifiable", async () => {
   const executor = new ScriptedExecutor();
   executor.frames = [flat(10), flat(200)];
   const taken = await executor.execute([{ action: "click", coordinate: [400, 300] }]);
-  assert.equal(taken.effect, "confirmed");
-  assert.match(taken.effectDetail ?? "", /confirmed 100\.0%/);
+  assert.equal(taken.effect, "observed_change");
+  assert.match(taken.effectDetail ?? "", /observed_change 100\.0%/);
 
   const blind = new ScriptedExecutor();
   blind.frames = [null];
@@ -354,7 +355,7 @@ test("a slow repaint gets a second look after the batch settles", async () => {
   const executor = new ScriptedExecutor();
   executor.frames = [flat(10), flat(10), flat(250)];
   const result = await executor.execute([{ action: "click", coordinate: [400, 300] }]);
-  assert.equal(result.effect, "confirmed");
+  assert.equal(result.effect, "observed_change");
 });
 
 test("a batch is judged by its weakest write, and reads and moves are not measured", async () => {
@@ -368,7 +369,7 @@ test("a batch is judged by its weakest write, and reads and moves are not measur
     { action: "wait", duration_ms: 0 },
   ]);
   assert.equal(result.effect, "suspected_noop");
-  assert.match(result.effectDetail ?? "", /^click@\(400,300\) confirmed 100\.0%; type@\(100,100\) suspected_noop 0\.0%$/);
+  assert.match(result.effectDetail ?? "", /^click@\(400,300\) observed_change 100\.0%; type@\(100,100\) suspected_noop 0\.0%$/);
   assert.equal(result.actionCount, 4);
 });
 
@@ -402,14 +403,14 @@ test("a revoked computer batch stops before its next action and capture", async 
 });
 
 // ── the control tree behind list_elements / click_element (INV-412) ─────────────────
-import { parseAxOutput } from "./x11-executor.ts";
+import { type AxOutput, parseAxOutput } from "./x11-executor.ts";
 
 const AX_SAMPLE = JSON.stringify({
-  window: { title: "Documents - Thunar", app: "thunar", truncated: false },
+  window: { title: "Documents - Thunar", app: "thunar", truncated: false, identity: "fixture-window:1", id: "0x1" },
   elements: [
-    { ref: "a1", role: "menu", name: "File", x: 10, y: 40, width: 40, height: 20, states: [] },
-    { ref: "a2", role: "push button", name: "Back", x: 100, y: 80, width: 60, height: 30, states: ["disabled"] },
-    { ref: "a3", role: "entry", name: "Location", x: 200, y: 80, width: 800, height: 30, states: ["editable", "focused"] },
+    { ref: "a1", identity: "native:1", role: "menu", name: "File", x: 10, y: 40, width: 40, height: 20, states: [] },
+    { ref: "a2", identity: "native:2", role: "push button", name: "Back", x: 100, y: 80, width: 60, height: 30, states: ["disabled"] },
+    { ref: "a3", identity: "native:3", role: "entry", name: "Location", x: 200, y: 80, width: 800, height: 30, states: ["editable", "focused"] },
   ],
 });
 
@@ -424,11 +425,11 @@ test("box-ax output is read: a tree, an error, or nothing readable — never an 
 class TreeExecutor extends ScriptedExecutor {
   tree: string | undefined = AX_SAMPLE;
   readonly clicks: { action: string; ref?: string }[] = [];
-  protected override async listElements() {
+  protected override async readElements() {
     const parsed = this.tree === undefined ? undefined : parseAxOutput(this.tree);
     if (parsed === undefined) return { error: "the accessibility reader is not available (no box-ax)" };
     if ("error" in parsed) return parsed;
-    return this.adoptElements(parsed);
+    return parsed;
   }
   protected override async executeAction(action: ComputerAction): Promise<void> {
     this.ran.push(action.action);
@@ -445,7 +446,7 @@ test("list_elements scales the tree to API space and remembers where each contro
   const listed = await executor.execute([{ action: "list_elements" }]);
   assert.equal(listed.elementsNote, undefined);
   assert.equal(listed.elementsWindow?.title, "Documents - Thunar");
-  assert.deepEqual(listed.elements?.map(e => `${e.ref} ${e.role} ${e.name} @${e.x},${e.y} ${e.width}x${e.height} [${e.states.join(",")}]`), [
+  assert.deepEqual(listed.elements?.map(e => `${e.ref.split(":").at(-1)} ${e.role} ${e.name} @${e.x},${e.y} ${e.width}x${e.height} [${e.states.join(",")}]`), [
     "a1 menu File @5,20 20x10 []",
     "a2 push button Back @50,40 30x15 [disabled]",
     "a3 entry Location @100,40 400x15 [editable,focused]",
@@ -453,13 +454,14 @@ test("list_elements scales the tree to API space and remembers where each contro
 
   // The click measures its effect at the control's centre, like any click.
   executor.frames = [flat(10), flat(90), flat(90)];
-  const clicked = await executor.execute([{ action: "click_element", ref: "a3" }]);
-  assert.deepEqual(executor.clicks, [{ action: "click_element", ref: "a3" }]);
-  assert.equal(clicked.effect, "confirmed");
+  const ref = listed.elements![2]!.ref;
+  const clicked = await executor.execute([{ action: "click_element", ref }]);
+  assert.deepEqual(executor.clicks, [{ action: "click_element", ref }]);
+  assert.equal(clicked.effect, "observed_change");
   assert.match(clicked.effectDetail ?? "", /click_element@\(300,48\)/, "measured at the entry's centre, in API space");
 
   // A ref from nowhere is a failure that names the fix, not a click somewhere.
-  await assert.rejects(executor.execute([{ action: "click_element", ref: "a9" }]), /no element a9 in the last list_elements outline/);
+  await assert.rejects(executor.execute([{ action: "click_element", ref: "a9" }]), /STALE_OBSERVATION/);
 });
 
 test("an app with no tree is said in words, and the batch is unknown, not an empty success", async () => {
@@ -471,4 +473,127 @@ test("an app with no tree is said in words, and the batch is unknown, not an emp
   executor.tree = undefined;
   const missing = await executor.execute([{ action: "list_elements" }]);
   assert.match(missing.elementsNote ?? "", /not available/);
+});
+
+test("failed/new observations cannot reuse an earlier element token", async () => {
+  const executor = new TreeExecutor({ measureEffect: false });
+  const first = await executor.execute([{ action: "list_elements" }]);
+  const oldRef = first.elements![0]!.ref;
+  const second = await executor.execute([{ action: "list_elements" }]);
+  assert.notEqual(second.elements![0]!.ref, oldRef);
+  await assert.rejects(executor.execute([{ action: "click_element", ref: oldRef }]), /STALE_OBSERVATION/);
+  const fresh = await executor.execute([{ action: "list_elements" }]);
+  executor.tree = undefined;
+  await executor.execute([{ action: "list_elements" }]);
+  await assert.rejects(executor.execute([{ action: "click_element", ref: fresh.elements![0]!.ref }]), /STALE_OBSERVATION/);
+  assert.equal(executor.clicks.length, 0);
+});
+
+test("a moved, disabled or replaced native target refuses before input", async () => {
+  for (const mutate of [
+    (tree: AxOutput) => { tree.window.identity = "replacement-window"; },
+    (tree: AxOutput) => { tree.elements[0]!.x += 100; },
+    (tree: AxOutput) => { tree.elements[0]!.identity = "replacement-control"; },
+    (tree: AxOutput) => { tree.elements[0]!.states = ["disabled"]; },
+  ]) {
+    const executor = new TreeExecutor({ measureEffect: false });
+    const listed = await executor.execute([{ action: "list_elements" }]);
+    const tree = JSON.parse(AX_SAMPLE);
+    mutate(tree);
+    executor.tree = JSON.stringify(tree);
+    await assert.rejects(executor.execute([{ action: "click_element", ref: listed.elements![0]!.ref }]), /STALE_OBSERVATION/);
+    assert.equal(executor.clicks.length, 0);
+  }
+});
+
+test("a write consumes element references, including a delayed second click", async () => {
+  const executor = new TreeExecutor({ measureEffect: false });
+  const listed = await executor.execute([{ action: "list_elements" }]);
+  const ref = listed.elements![0]!.ref;
+  await executor.execute([{ action: "click_element", ref }]);
+  await assert.rejects(executor.execute([{ action: "click_element", ref }]), /STALE_OBSERVATION/);
+  assert.equal(executor.clicks.length, 1);
+});
+
+test("a screenshot before input is replaced with the final state and frame metadata", async () => {
+  class Frames extends ScriptedExecutor {
+    override async takeScreenshot() { return `frame-${this.ran.length}`; }
+  }
+  const executor = new Frames({ measureEffect: false });
+  const result = await executor.execute([{ action: "screenshot" }, { action: "click", coordinate: [1, 1] }]);
+  assert.equal(result.screenshot, "frame-1");
+  assert.equal(result.observation?.after_action, 2);
+  assert.equal(result.observation?.coordinate_space, "screen");
+});
+
+test("an interrupted batch carries its completed prefix instead of the requested count", async () => {
+  class Interrupt extends ScriptedExecutor {
+    protected override async executeAction(action: ComputerAction) {
+      if (action.action === "type") throw new Error("fixture delivery lost");
+      await super.executeAction(action);
+    }
+  }
+  const executor = new Interrupt({ measureEffect: false });
+  await assert.rejects(executor.execute([
+    { action: "click", coordinate: [1, 1] }, { action: "type", text: "abc" }, { action: "key", key: "Return" },
+  ]), (error: unknown) => {
+    assert.ok(error instanceof ComputerExecutionError);
+    assert.deepEqual(error.progress, { executed_count: 1, failed_at: 1, dispatch: "partial" });
+    return /fixture delivery lost/.test(error.message);
+  });
+  assert.deepEqual(executor.ran, ["click"]);
+});
+
+
+test("a screenshot before waiting is refreshed after the wait", async () => {
+  class Frames extends ScriptedExecutor {
+    override async takeScreenshot() { return `frame-${this.ran.length}`; }
+  }
+  const result = await new Frames().execute([{ action: "screenshot" }, { action: "wait", duration_ms: 1 }]);
+  assert.equal(result.screenshot, "frame-1");
+  assert.equal(result.observation?.after_action, 2);
+});
+
+test("native postconditions distinguish matching, missing, ambiguous and unreadable state", async () => {
+  const executor = new TreeExecutor({ measureEffect: false });
+  const read = await executor.execute([{ action: "list_elements" }]);
+  const element = read.elements![0]!;
+  const expect = { element: { role: element.role, name: element.name, states: [...element.states] } };
+  const matched = await executor.execute([{ action: "click_element", ref: element.ref }], { expect });
+  assert.equal(matched.verification?.status, "satisfied");
+  const missing = await executor.execute([{ action: "screenshot" }], { expect: { element: { role: "button", name: "does not exist" } } });
+  assert.equal(missing.verification?.status, "unsatisfied");
+  const empty = await executor.execute([{ action: "screenshot" }], { expect: {} });
+  assert.equal(empty.verification?.status, "unknown");
+  const raw = JSON.parse(AX_SAMPLE) as AxOutput;
+  raw.elements = [raw.elements[0]!, raw.elements[0]!];
+  executor.tree = JSON.stringify(raw);
+  assert.equal((await executor.execute([{ action: "screenshot" }], { expect })).verification?.status, "unknown");
+  executor.tree = undefined;
+  assert.equal((await executor.execute([{ action: "screenshot" }], { expect })).verification?.status, "unknown");
+});
+
+test("native semantics require an advertised capability, never click as a fallback, and consume refs", async () => {
+  class Semantic extends TreeExecutor {
+    calls = 0;
+    protected override async executeSemantic(): Promise<import("../protocol/index.ts").ActionVerification> {
+      this.calls++;
+      return { status: "satisfied", source: "native", detail: "fixture readback" };
+    }
+  }
+  const executor = new Semantic({ measureEffect: false });
+  let listed = await executor.execute([{ action: "list_elements" }]);
+  await assert.rejects(executor.execute([{ action: "invoke_element", ref: listed.elements![0]!.ref }]), /UNSUPPORTED_ACTION/);
+  assert.equal(executor.calls, 0);
+  assert.equal(executor.clicks.length, 0);
+  const raw = JSON.parse(AX_SAMPLE) as AxOutput;
+  raw.elements[0]!.operations = ["set_value"];
+  executor.tree = JSON.stringify(raw);
+  listed = await executor.execute([{ action: "list_elements" }]);
+  const ref = listed.elements![0]!.ref;
+  const result = await executor.execute([{ action: "set_value", ref, value: "new value" }]);
+  assert.equal(result.verification?.status, "satisfied");
+  assert.equal(executor.calls, 1);
+  assert.equal(executor.clicks.length, 0);
+  await assert.rejects(executor.execute([{ action: "set_value", ref, value: "again" }]), /STALE_OBSERVATION/);
 });
