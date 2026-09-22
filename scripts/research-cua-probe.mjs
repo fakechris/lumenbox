@@ -18,13 +18,13 @@ class Probe extends X11Executor {
       display: { width: 1280, height: 800 }, api: { width: 1280, height: 800 },
     }, screenshotDelayMs: 0, effectSettleMs: 0, measureEffect: false });
   }
-  async listElements() {
+  async readElements() {
     if (this.unavailable) return { error: "fixture accessibility read unavailable" };
-    return this.adoptElements({
-      window: { title: "Fixture", app: "fixture", truncated: false },
-      elements: [{ ref: "a1", role: "button", name: "Save", x: this.targetX,
+    return {
+      window: { title: "Fixture", app: "fixture", truncated: false, identity: "fixture-window" },
+      elements: [{ ref: "a1", identity: "fixture-control", role: "button", name: "Save", x: this.targetX,
         y: 10, width: 20, height: 20, states: [] }],
-    });
+    };
   }
   async executeAction(action) {
     if (action.action === "click_element") this.clicks.push(this.elementCentre(action.ref));
@@ -34,18 +34,20 @@ class Probe extends X11Executor {
 }
 
 const afterReadFailure = new Probe();
-await afterReadFailure.execute([{ action: "list_elements" }]);
+const firstRead = await afterReadFailure.execute([{ action: "list_elements" }]);
 afterReadFailure.unavailable = true;
 await afterReadFailure.execute([{ action: "list_elements" }]);
 let staleError;
-try { await afterReadFailure.execute([{ action: "click_element", ref: "a1" }]); }
+try { await afterReadFailure.execute([{ action: "click_element", ref: firstRead.elements[0].ref }]); }
 catch (error) { staleError = error.message; }
 
 const reuse = new Probe();
-await reuse.execute([{ action: "list_elements" }]);
+const oldRead = await reuse.execute([{ action: "list_elements" }]);
 reuse.targetX = 700;
 await reuse.execute([{ action: "list_elements" }]);
-await reuse.execute([{ action: "click_element", ref: "a1" }]);
+let reuseError;
+try { await reuse.execute([{ action: "click_element", ref: oldRead.elements[0].ref }]); }
+catch (error) { reuseError = error.message; }
 
 const batch = new Probe();
 const batchResult = await batch.execute([
@@ -64,7 +66,7 @@ console.log(JSON.stringify({
   },
   refReusedAcrossSnapshots: {
     reproduced: reuse.clicks[0]?.x === 710,
-    oldRef: "a1", resolvesAfterNewObservation: reuse.clicks,
+    oldRef: oldRead.elements[0].ref, resolvesAfterNewObservation: reuse.clicks, refusal: reuseError ?? null,
   },
   screenshotBeforeWriteReturnedAsFinal: {
     reproduced: batchResult.screenshot !== `fixture-frame-${batch.frame}`,

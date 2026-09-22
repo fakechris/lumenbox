@@ -33,6 +33,8 @@ const COMPACT_AT = 200;
 
 export interface Delivery {
   id: string;
+  /** New records recover by causal identity; before is only the legacy fallback. */
+  messageId?: string;
   /** Where the answer goes. */
   /** The chat *or thread* the answer belongs to: a thread key when the request came from a topic. */
   chatKey: string;

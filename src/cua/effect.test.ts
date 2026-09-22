@@ -41,8 +41,8 @@ test("the diff counts pixels, not channels, and refuses frames of different size
 });
 
 test("the thresholds: a button repaint confirms, a caret is partial, nothing is a no-op", () => {
-  assert.equal(effectOf(0.5), "confirmed");
-  assert.equal(effectOf(0.02), "confirmed");
+  assert.equal(effectOf(0.5), "observed_change");
+  assert.equal(effectOf(0.02), "observed_change");
   assert.equal(effectOf(0.01), "partial");
   assert.equal(effectOf(0.002), "partial");
   assert.equal(effectOf(0.001), "suspected_noop");
@@ -51,13 +51,13 @@ test("the thresholds: a button repaint confirms, a caret is partial, nothing is 
 
 test("a batch is as good as its weakest write", () => {
   assert.equal(worstEffect([]), undefined);
-  assert.equal(worstEffect(["confirmed", "confirmed"]), "confirmed");
-  assert.equal(worstEffect(["confirmed", "partial"]), "partial");
-  assert.equal(worstEffect(["confirmed", "suspected_noop", "partial"]), "suspected_noop");
+  assert.equal(worstEffect(["observed_change", "observed_change"]), "observed_change");
+  assert.equal(worstEffect(["observed_change", "partial"]), "partial");
+  assert.equal(worstEffect(["observed_change", "suspected_noop", "partial"]), "suspected_noop");
   assert.equal(worstEffect(["suspected_noop", "unverifiable"]), "unverifiable");
 });
 
 test("a measurement reads as one short line", () => {
-  assert.equal(describeMeasurement("click", { x: 400.4, y: 300 }, "confirmed", 0.081), "click@(400,300) confirmed 8.1%");
+  assert.equal(describeMeasurement("click", { x: 400.4, y: 300 }, "observed_change", 0.081), "click@(400,300) observed_change 8.1%");
   assert.equal(describeMeasurement("key", undefined, "unverifiable"), "key unverifiable");
 });

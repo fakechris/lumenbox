@@ -29,6 +29,7 @@ import { AgentBus } from "../agents/bus.ts";
 import { runTurn } from "./turn.ts";
 import { fakeModel } from "./testing/fake-model.ts";
 import type { BoxClient } from "../box/client.ts";
+import type { HistoryEntry } from "./compaction.ts";
 
 /** One model reply, in the shape the script writes it. */
 export type ScriptedReply =
@@ -46,10 +47,12 @@ export interface ScriptContext {
   opened: string;
   /** Which tools were offered this call, by name. */
   offered: string[];
+  /** The actual model-visible context, for replay/compaction regressions. */
+  messages: Anthropic.MessageParam[];
 }
 
 /** What the script does at each model call. Returning undefined ends the turn silently. */
-export type Script = (context: ScriptContext) => ScriptedReply | undefined;
+export type Script = (context: ScriptContext) => ScriptedReply | undefined | Promise<ScriptedReply | undefined>;
 
 export interface Observation {
   at: number;
@@ -167,6 +170,10 @@ export interface EpisodeOptions {
   display?: number;
   /** Skills the agents are offered, as the prompt would list them (INV-481). */
   skills?: readonly Skill[];
+  /** Persisted history before the episode, including legacy compaction records. */
+  history?: readonly HistoryEntry[];
+  /** Drive concurrent channel arrivals through the real bus instead of sequential says. */
+  drive?: (context: { bus: AgentBus; registry: AgentRegistry; frontId: string }) => Promise<void>;
 }
 
 /**
@@ -196,8 +203,9 @@ export async function runEpisode(options: EpisodeOptions): Promise<EpisodeResult
     });
   }
   const front = registry.list()[0]!;
+  for (const entry of options.history ?? []) registry.appendTranscript(front.id, entry);
 
-  const client = fakeModel(({ params }) => {
+  const client = fakeModel(async ({ params }) => {
     calls += 1;
     if (calls > maxRounds) return message([{ type: "text", text: "(scenario cut: too many rounds)" } as Anthropic.ContentBlock], "end_turn");
     const system =
@@ -217,7 +225,7 @@ export async function runEpisode(options: EpisodeOptions): Promise<EpisodeResult
     const first = params.messages[0];
     const opened = typeof first?.content === "string" ? first.content : "";
     const offered = (params.tools ?? []).map(tool => ("name" in tool ? String(tool.name) : ""));
-    const reply = options.script({ agent, system, round, opened, offered });
+    const reply = await options.script({ agent, system, round, opened, offered, messages: params.messages });
     if (reply === undefined) return message([{ type: "text", text: "" } as Anthropic.ContentBlock], "end_turn");
     if ("say" in reply) {
       observations.push({ at: clock++, agent, kind: "say", text: reply.say });
@@ -259,6 +267,7 @@ export async function runEpisode(options: EpisodeOptions): Promise<EpisodeResult
     } as never);
   });
 
+  if (options.drive !== undefined) await options.drive({ bus, registry, frontId: front.id });
   for (const line of options.says) {
     bus.sendFromUser(front.id, line);
     await bus.wake(front.id);

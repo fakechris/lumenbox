@@ -707,6 +707,26 @@ test("pinned entries: the ask and one successful pair per undemonstrated tool", 
   assert.ok(estimateTokens([carrying]) > estimateTokens([bare]));
 });
 
+test("tool exemplars do not pin the research monologue beside a successful call", () => {
+  const at = "2026-09-20T00:38:55Z";
+  const narration = "事实链全部 1:1 核完，5 维 cross-comparison。".repeat(80);
+  const original: HistoryEntry = {
+    role: "assistant", kind: "blocks", at,
+    blocks: [
+      { type: "text", text: narration },
+      { type: "tool_use", id: "lookup", name: "WebFetch", input: { url: "https://example.test/source" } },
+    ],
+  };
+  const pinned = choosePinnedEntries([original, {
+    role: "user", kind: "results", at,
+    blocks: [{ type: "tool_result", tool_use_id: "lookup", content: "source text" }],
+  }], []);
+  assert.equal(pinned.length, 2, "the call/result exemplar still survives");
+  assert.doesNotMatch(JSON.stringify(pinned), /cross-comparison|事实链/);
+  assert.match(JSON.stringify(pinned), /example.test\/source/);
+  assert.match(JSON.stringify(original), /cross-comparison/, "the durable original is not edited");
+});
+
 test("anchors are harvested from full blocks, deduped, and bounded", () => {
   // docs/24 v3 P0 #3: a model paraphrases; the regex does not. Harvest runs on the
   // raw blocks, so a path past any rendering clip still survives.

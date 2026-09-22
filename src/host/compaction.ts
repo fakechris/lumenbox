@@ -371,6 +371,20 @@ export function trimInputLeaves(value: unknown): unknown {
 }
 /** An exemplar's result is trimmed to this: the value is the *call's* shape, not the output. */
 export const PINNED_RESULT_CHARS = 200;
+
+/** Tool exemplars preserve call shape, not an old answer's prose or reasoning.
+ * Also applied on replay so already-persisted summaries do not keep resurrecting
+ * the same research narration. The original transcript remains untouched.
+ */
+export function sanitizePinnedEntry(entry: HistoryEntry): HistoryEntry {
+  if (!("kind" in entry) || entry.kind !== "blocks") return entry;
+  return {
+    ...entry,
+    blocks: entry.blocks
+      .filter((block): block is Anthropic.ToolUseBlockParam => block.type === "tool_use")
+      .map(block => ({ ...block, input: trimInputLeaves(block.input) })),
+  };
+}
 /** A pinned user message is clamped: the ask matters, a pasted specification does not. */
 export const PINNED_USER_CHARS = 2_000;
 
@@ -456,13 +470,8 @@ export function choosePinnedEntries(
         },
       ],
     }));
-    const trimmedCalls = entry.blocks.map(block =>
-      (block as { type?: string }).type === "tool_use"
-        ? { ...(block as Anthropic.ToolUseBlockParam), input: trimInputLeaves((block as Anthropic.ToolUseBlockParam).input) }
-        : block
-    );
     pairs.push([
-      { role: "assistant", kind: "blocks", blocks: trimmedCalls as Anthropic.ContentBlockParam[], at: (entry as { at: string }).at },
+      sanitizePinnedEntry(entry),
       { role: "user", kind: "results", blocks: trimmedResults, at: (next as { at: string }).at },
     ]);
     for (const name of names) chosen.add(name);
