@@ -6,7 +6,7 @@
 -->
 # CUA 修复实施与验收记录
 
-工作树：`/Users/chris/workspace/lumenbox-cua-fixes`，分支 `fix/cua-observation-contract`，基线 `23f51fd`。研究与依赖取舍见 [62-cua-driver-research](62-cua-driver-research.md)；研究记录保留当时事实，本文件记录后续实现。
+工作树：`/Users/chris/workspace/lumenbox-cua-fixes`，初始分支 `fix/cua-observation-contract`（领取 INV 后改用服务器签发的 `feat/inv-636-cua`），基线 `23f51fd`。研究与依赖取舍见 [62-cua-driver-research](62-cua-driver-research.md)；研究记录保留当时事实，本文件记录后续实现。
 
 ## INV-636：观测与目标一致性
 
@@ -25,9 +25,9 @@ GUI 用应用自己的计数文件作为 oracle：原生树定位、换快照、
 
 限制：观测是有时间范围的双重读取，不是 OS 级原子快照；人和 shell 可在两次 native 调用之间改变桌面。窗口/控件不可辨别时拒绝，不能宣称杜绝所有瞬时竞态。
 
-## INV 同步障碍
+## INV 初始同步障碍（已解决）
 
-INV-636—640 已由人提交为 COMMITTED。本会话尝试 `work_claim` 与不带 `run_id` 的 `run_report(running)`，均返回 `Claiming work requires an authenticated actor`。当前连接可读写合同，但无 agent actor，故没有伪造 claim/run，也没有标记 Done。实现证据可写入各项 verification，run 记录需要具备 actor 的连接才能补录。
+INV-636—640 已由人提交为 COMMITTED。本会话尝试 `work_claim` 与不带 `run_id` 的 `run_report(running)`，均返回 `Claiming work requires an authenticated actor`。当时连接可读写合同，但无 agent actor，故没有伪造 claim/run，也没有标记 Done。实现证据可写入各项 verification，run 记录需要具备 actor 的连接才能补录。
 
 ## INV-637：派发、变化和后置条件分离
 
@@ -76,4 +76,13 @@ INV-636—640 已由人提交为 COMMITTED。本会话尝试 `work_claim` 与不
 
 最后补上长寿命 CDP 对话框回调的权限：请求结束后仍使用最新调用者的 owner/epoch 与桌面控制权检查；人工接管期间的只读观察不能授予后台输入权限，未答复不能报成已答复。hermetic 回归覆盖撤销后回调、只读观察与新授权。包含该补丁的最终镜像再次跑完整 17 项，全部通过：[最终 GUI 报告](evidence/cua-linux-final-2026-09-22.json)。前一份含延迟的报告保留作为测量记录，不混淆两个镜像 digest。
 
-所有测试容器均已删除；工作树内生产代码和可复现测试按 INV 分项提交。没有合并或改写主工作树，也没有更换在用盒子。INV 合同 verification 已写入可审查证据，claim/run 的 actor 身份障碍仍存在，因此未伪造 run/evidence_attach 或标记 Done。
+所有测试容器均已删除；工作树内生产代码和可复现测试按 INV 分项提交。没有合并或改写主工作树，也没有更换在用盒子。INV 合同 verification 已写入可审查证据；初次收口时 actor 身份障碍尚在，后续解决过程如下。
+
+
+### PR 集成与 INV 认证修复
+
+[PR #208](https://github.com/fakechris/lumenbox/pull/208) 汇总 INV-636—639 的分项提交。无冲突合入 main `cc71f82` 后，`npm run release:check` 再次退出 0，1,750 tests / 0 fail / 0 skip，类型、lint、构建及制品启动通过；日志 `/tmp/lumenbox-cua-research/pr-release.log`。GUI 证据仍对应上文所列的实际镜像，未冒称该轮重新运行模型或 GUI 测试。
+
+用户配置的新 agent token 有效，位于 macOS launchctl 的 `CODEX_INVOLUTE_AGENT_TOKEN`；当前会话继承的旧环境缺少该变量，已有 MCP 连接仍使用旧身份。直接读取已配置凭据调用同一 MCP 后，actor 认证通过；未打印或保存凭据。INV-636/637/639 分别登记 RUN-342/343/344，附上 PR 与固定 commit 的 GUI 原始报告后 completed，进入 In Review。
+
+INV-638 的代码已包含在 PR，工程验证已通过；但 INV 要求其依赖 INV-636/637 先经人工验收，故领取返回 `Work is not ready to be claimed`，run_report 也要求有效 claim。没有删除依赖或代替人标 Done。其描述已附交付证据，并提交 In Review；领取与 run 补录等待依赖人工验收。新 agent 身份不允许改写已承诺的 verification 合同字段，旧字段中的认证错误保留为历史，最新描述与 runs/evidence 已明确更正。
