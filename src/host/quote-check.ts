@@ -444,3 +444,26 @@ export function quoteReportLine(report: QuoteReport): string | undefined {
   });
   return `[quotes: ${report.exact} exact, ${report.near} near, ${report.notLocated} not found]\n${lines.join("\n")}`;
 }
+
+/**
+ * How near two short strings are, 0 to 1, with no minimum length.
+ *
+ * `locateQuote` refuses anything under `MIN_QUOTE_CHARS` because finding a short string in
+ * a long source proves nothing — any source would contain it. That guard is right for its
+ * job and wrong for comparing one short label against one other short label, where there
+ * is no corpus for a coincidence to hide in. A ten-character Chinese heading is a real
+ * heading, and the day it was refused for being short the enumeration detector let a list
+ * through (INV-670).
+ *
+ * Symmetric by taking the better direction, so a label that is a prefix of the other
+ * scores the same whichever way round it is asked.
+ */
+export function similarity(a: string, b: string): number {
+  const left = fold(a).text;
+  const right = fold(b).text;
+  if (left === "" || right === "") return 0;
+  if (left === right) return 1;
+  const one = (needle: string, haystack: string): number =>
+    1 - nearestSubstring(needle, haystack).distance / needle.length;
+  return Math.max(one(left, right), one(right, left));
+}

@@ -510,6 +510,25 @@ saw — `No turn recorded what it read … the host on this day ran a build befo
 "we could not know". Messages fall back from `messages.jsonl` to the transcript the same
 way, and say so.
 
+
+**Checking it: `agentbox digest validate <runKey>`.** Whether `draft.md` stands up
+mechanically: citations resolve against the package, a sentence citing the agent's own turn
+carries something else too, the short version is short, and **the digest is not the list it
+was asked not to be**.
+
+That last rule asks its question two ways, because the obvious way is easy to slip past.
+**By citation, which needs no threshold**: a list has one section per message, section *k*
+citing message *k* and nothing else. Exact, and rewording the headings does not touch it.
+**By heading, approximately**: a section named after a message is named after it even when
+the naming was paraphrased. Measured, reworded headings score 0.61 to 0.71 against the
+messages they were named after, so the heading test alone is a threshold fight against
+whoever is rewording and the citation test carries what it misses. A *run* of consecutive
+sections rather than a count, because a day with one big thing in it legitimately gets one
+section about one message. What a synthesis may not do is march.
+
+No semantic judgement. That ceiling is 77% balanced accuracy on the public leaderboard,
+with 0.4B and 405B models both inside 71.8 to 77.4, and a judgement wrong one time in four
+cannot gate delivery (docs/71 §2). Semantics are for the gold days and a person's eye.
 ### 3.1 `work` volume — `/home/box/work`
 
 The agents' output. Whatever they make, plus `recordings/*.mp4`. Owned by `box`.

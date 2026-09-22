@@ -629,3 +629,44 @@ export function describeDay(manifest: DayManifest, dir: string): string[] {
   }
   return lines;
 }
+
+/**
+ * Finds the package for a day, by asking the packages rather than guessing at their names.
+ *
+ * A run key carries a hash of the day and the chat, so yesterday's key cannot be derived
+ * from today's — and it should not be, because two chats can have two packages for the
+ * same day. Reading the manifests is a directory listing and a handful of small files.
+ */
+export function findPackage(
+  home: string,
+  date: string,
+  chatKey?: string
+): { dir: string; manifest: DayManifest } | undefined {
+  let runKeys: string[];
+  try {
+    runKeys = readdirSync(join(home, DIGEST_DIRNAME));
+  } catch {
+    return undefined;
+  }
+  for (const runKey of runKeys.sort()) {
+    const dir = join(home, DIGEST_DIRNAME, runKey, "package");
+    let manifest: DayManifest;
+    try {
+      manifest = JSON.parse(readFileSync(join(dir, "manifest.json"), "utf8")) as DayManifest;
+    } catch {
+      continue;
+    }
+    if (manifest.window?.date !== date) continue;
+    if (chatKey !== undefined && manifest.chatKey !== chatKey) continue;
+    return { dir, manifest };
+  }
+  return undefined;
+}
+
+/** The day before, as a date string. */
+export function previousDate(date: string): string {
+  const [year, month, day] = date.split("-").map(Number);
+  const before = new Date(year!, month! - 1, day! - 1);
+  const pad = (n: number) => String(n).padStart(2, "0");
+  return `${before.getFullYear()}-${pad(before.getMonth() + 1)}-${pad(before.getDate())}`;
+}
