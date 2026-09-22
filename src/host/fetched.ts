@@ -161,14 +161,18 @@ export interface PruneResult {
  * Removes kept files older than the retention, and the month directories they empty.
  *
  * By the file's own modification time, which is when it was written: the name carries
- * the same instant, but a name is a claim and an mtime is a fact. Nothing but `.md` and
- * `.json` files under the directory is touched.
+ * the same instant, but a name is a claim and an mtime is a fact. Nothing but `.md`,
+ * `.json` and `.txt` files under the given roots is touched.
+ *
+ * Takes roots rather than one directory because kept tool results (results.ts) live under
+ * the same retention and should not need a second pass, a second setting and a second
+ * clock to say the same thing.
  */
 export function pruneFetched(
   home = agentboxHome(),
-  options: { retentionDays?: number; now?: Date } = {}
+  options: { retentionDays?: number; now?: Date; roots?: readonly string[] } = {}
 ): PruneResult {
-  const root = fetchedDir(home);
+  const roots = options.roots ?? [fetchedDir(home)];
   const days = options.retentionDays ?? retentionDays();
   const cutoff = (options.now ?? new Date()).getTime() - days * 86_400_000;
   const result: PruneResult = { removed: 0, kept: 0 };
@@ -196,7 +200,7 @@ export function pruneFetched(
         }
         continue;
       }
-      if (!/\.(md|json)$/.test(name)) continue;
+      if (!/\.(md|json|txt)$/.test(name)) continue;
       if (stat.mtimeMs < cutoff) {
         rmSync(path, { force: true });
         result.removed += 1;
@@ -205,7 +209,7 @@ export function pruneFetched(
       }
     }
   };
-  walk(root);
+  for (const root of roots) walk(root);
   return result;
 }
 
@@ -219,12 +223,18 @@ let lastPruneAt = 0;
  * Called from the fetch path rather than a timer so an installation that never fetches
  * never pays for it, and one that does keeps the directory bounded without a scheduler.
  */
-export function pruneOccasionally(log: (line: string) => void, home = agentboxHome(), now = new Date()): void {
+export function pruneOccasionally(
+  log: (line: string) => void,
+  home = agentboxHome(),
+  now = new Date(),
+  /** Directories to take in the same pass — kept tool results, when the caller has them. */
+  extraRoots: readonly string[] = []
+): void {
   if (now.getTime() - lastPruneAt < PRUNE_EVERY_MS) return;
   lastPruneAt = now.getTime();
   try {
     const days = retentionDays();
-    const result = pruneFetched(home, { retentionDays: days, now });
+    const result = pruneFetched(home, { retentionDays: days, now, roots: [fetchedDir(home), ...extraRoots] });
     if (result.removed > 0) log(`[fetched] removed ${result.removed} kept page(s) older than ${days} days; ${result.kept} kept`);
   } catch (error) {
     log(`[fetched] prune failed: ${error instanceof Error ? error.message : error}`);

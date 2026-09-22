@@ -118,3 +118,28 @@ test("an agent is created into a named box, or beside its creator — never by d
   }
   assert.deepEqual(offenders, [], "a registry.create with no box: pass boxId, or beside: <creator id>");
 });
+
+test("only the two places that cut a tool result may know how long a stored one may be", () => {
+  // The defect of 2026-09-22 (INV-633): the trim to DURABLE_RESULT_CHARS happens in one
+  // place, `storableResult`, and that is now also the place that keeps what it trims
+  // (results.ts). A third file importing the constant would either be trimming a result
+  // without keeping it — the same silent loss again, one tool at a time — or building a
+  // second, divergent idea of how much survives.
+  //
+  // By import rather than by mention: a comment explaining the limit is how the reasoning
+  // travels, and forbidding the words would only teach people to paraphrase them.
+  const allowed = new Set([
+    "protocol/index.ts", // declares it
+    "host/turn.ts", // storableResult: cuts, and keeps what it cut
+    "boxd/shell-service.ts", // the box spills at the same threshold, before the host sees it
+  ]);
+  const offenders = sources()
+    .filter(file => !allowed.has(file.path))
+    .filter(file => /^\s*import[^;]*\bDURABLE_RESULT_CHARS\b/m.test(file.text))
+    .map(file => file.path);
+  assert.deepEqual(
+    offenders,
+    [],
+    "cut a tool result in storableResult, which keeps the whole of it, or do not cut it"
+  );
+});

@@ -166,3 +166,28 @@ test("messages people sent to the box's conversations travel with the export, in
     rmSync(root, { recursive: true, force: true });
   }
 });
+
+test("kept tool results travel with the export too, redacted, and by the same window and owner", async () => {
+  const { keepToolResult } = await import("./results.ts");
+  const { root, registry, ada, bob } = home();
+  try {
+    const kept = (agent: { id: string; name: string }, at: string, text: string, id: string) =>
+      keepToolResult({ text, turnId: "t1", toolUseId: id, tool: "browser_read", agent, at: new Date(at) }, root);
+    kept({ id: ada, name: "Ada" }, "2026-09-10T10:05:00.000Z", `the page showed ${PASSWORD} in a form`, "u1");
+    kept({ id: ada, name: "Ada" }, "2026-01-01T00:00:00.000Z", "an old call", "u2");
+    kept({ id: bob, name: "Bob" }, "2026-09-10T10:06:00.000Z", "another box's call", "u3");
+
+    const out = join(root, "export");
+    const manifest = exportAudit({ home: root, registry, box: registry.box.name, from: "2026-09-01T00:00:00Z", to: "2026-09-30T00:00:00Z", out, held: heldValues(root), now: () => new Date("2026-09-11T00:00:00Z") });
+    const results = Object.keys(manifest.results ?? {});
+    assert.deepEqual(results, ["results/2026-09/t1-u1.txt"], JSON.stringify(results));
+    const exported = readFileSync(join(out, results[0]!), "utf8");
+    assert.ok(!exported.includes(PASSWORD), "the held value is gone");
+    assert.match(exported, /<redacted:vault:SHOP_PASSWORD>/);
+    assert.match(exported, /schema: lumenbox\.result\/v1/, "the head travels, so a reader knows what this is");
+    assert.ok(!Object.keys(manifest.files).some(f => f.startsWith("results/")), "prose is not listed as a ledger");
+    assert.ok(describeExport(manifest, out).some(line => /kept tool results: 1 file\(s\)/.test(line)));
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});

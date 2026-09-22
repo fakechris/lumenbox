@@ -174,8 +174,14 @@ teammate 的 `SendToAgent`（bus.send 已有 id，但 transcript 只记 `causedB
   `[full output kept: <path>]`。裁剪者负责保全，生产者不用自觉；bash 与 WebFetch 已有的指针
   照旧优先。保留期与 `fetched/` 共用 `AGENTBOX_FETCHED_RETENTION_DAYS`；审计导出带走。
 - **守卫**：`storableResult` 的单测断言「任何超限结果都带指针」；架构测试断言
-  `DURABLE_RESULT_CHARS` 只在 `storableResult` 与 boxd 的 spill 两处被引用，别处不得自行裁剪
-  tool result。
+  `DURABLE_RESULT_CHARS` 只在 `storableResult` 与 boxd 的 spill 两处被 **import**（按导入而非
+  按提及，因为解释这条限制的注释正是这份推理传下去的方式），别处不得自行裁剪 tool result。
+
+> **2026-09-22 已交付（INV-633，PR #210）。** 实现时被 `agentboxHome()` 的测试守卫逮到一个
+> 真实错误：第一版把保留期清理放在 turn 里、用全局 home 解析目录。在测试下它直接抛出（守卫
+> 的本意），而在生产里它会去删「调用者从未指定的那个 box」的文件。改为由写入方按自己拿到的
+> home 触发，一次覆盖 `fetched/` 与 `results/` 两个目录。这条本身就是本文 §4 的例证：**边界上
+> 的默认值不该是「自己去猜一个全局值」**。
 
 ### 4.3 账本声明性质（治证据蒸发之二）
 
