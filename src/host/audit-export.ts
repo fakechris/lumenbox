@@ -17,7 +17,7 @@
 
 import { existsSync, mkdirSync, readFileSync, readdirSync, statSync, writeFileSync } from "node:fs";
 import { join, relative as relativeTo } from "node:path";
-import { FETCHED_DIRNAME, readFrontmatter } from "./fetched.ts";
+import { FETCHED_DIRNAME, readFrontmatter, verifyKept } from "./fetched.ts";
 import { RESULTS_DIRNAME } from "./results.ts";
 import { archivedLines } from "./jsonl.ts";
 import type { AgentRegistry } from "../agents/registry.ts";
@@ -65,6 +65,14 @@ export interface ExportManifest {
    * characters.
    */
   results?: Record<string, number>;
+  /**
+   * Whether the evidence in this export is still what it said it was (INV-659).
+   *
+   * Every kept file carries a digest of its own body, and until now nothing read it back.
+   * An export that carries a quietly corrupted page out as evidence is worse than one that
+   * carries nothing, so the check runs and its result travels with the files.
+   */
+  evidence?: { verified: number; mismatched: number; failures: string[] };
 }
 
 function readLines(path: string): string[] {
@@ -301,6 +309,11 @@ export function exportAudit(options: ExportOptions): ExportManifest {
     results
   );
 
+  // Checked on the way out, over the same two stores the export just walked. A mismatch is
+  // reported rather than thrown: an operator asking for an audit needs the export *and* the
+  // bad news, not an error instead of both.
+  const evidence = verifyKept(options.home);
+
   const manifest: ExportManifest = {
     format: "agentbox-audit-export/1",
     generatedAt: (options.now ?? (() => new Date()))().toISOString(),
@@ -313,6 +326,15 @@ export function exportAudit(options: ExportOptions): ExportManifest {
     redactions,
     ...(Object.keys(fetched).length > 0 ? { fetched } : {}),
     ...(Object.keys(results).length > 0 ? { results } : {}),
+    ...(evidence.verified + evidence.mismatched > 0
+      ? {
+          evidence: {
+            verified: evidence.verified,
+            mismatched: evidence.mismatched,
+            failures: evidence.failures.map(failure => relativeTo(options.home, failure.path)),
+          },
+        }
+      : {}),
   };
   writeFileSync(join(options.out, "manifest.json"), `${JSON.stringify(manifest, null, 2)}\n`, { mode: 0o600 });
   return manifest;
@@ -344,6 +366,13 @@ export function describeExport(manifest: ExportManifest, out: string): string[] 
   if (fetchedFiles.length > 0) lines.push(`  fetched pages: ${fetchedFiles.length} file(s)`);
   const resultFiles = Object.keys(manifest.results ?? {});
   if (resultFiles.length > 0) lines.push(`  kept tool results: ${resultFiles.length} file(s)`);
+  if (manifest.evidence !== undefined) {
+    lines.push(
+      manifest.evidence.mismatched === 0
+        ? `  evidence: ${manifest.evidence.verified} file(s) still match their digest`
+        : `  evidence: ${manifest.evidence.mismatched} of ${manifest.evidence.verified + manifest.evidence.mismatched} file(s) DO NOT match their digest: ${manifest.evidence.failures.join(", ")}`
+    );
+  }
   lines.push(`  redacted: ${manifest.redactions.exact} held value(s), ${manifest.redactions.pattern} credential-shaped string(s)`);
   if (manifest.undated > 0) lines.push(`  ${manifest.undated} line(s) had no readable time and were left out`);
   return lines;

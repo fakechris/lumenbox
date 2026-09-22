@@ -1,0 +1,36 @@
+{
+  "date": "2026-09-22",
+  "local_head": "cc71f8223138a010b70c2e211cf739fa3a7ac57c",
+  "npm_test": {
+    "exit_code": 0,
+    "passed": 1731,
+    "failed": 0,
+    "skipped": 0
+  },
+  "offline_main_replay": "passed",
+  "offline_diagnostic_replay": "passed",
+  "input_boundary_self_check": "passed",
+  "credential_value_scan": "passed; no values stored or printed",
+  "git_diff_check": "passed",
+  "docs_index": "passed",
+  "new_live_calls": 90,
+  "live_errors": 0,
+  "product_changes": false,
+  "production_switches_enabled": false,
+  "real_CRM_data_used": false,
+  "independent_gold_labels": false,
+  "original_INV600_50_real_commands_complete": false,
+  "sha256": {
+    "scripts/research/jev-2026-09-22/business/frozen-contract.json": "6ece8134e67b977011c3861862812dd3d52ab141ebb089e24bd1c78da7a4ddf5",
+    "scripts/research/jev-2026-09-22/business/observations.jsonl": "12b7af0d0e4501f7836516da75040ab5783da32f28107dc1fc75a1dc011756e5",
+    "scripts/research/jev-2026-09-22/business/results.json": "4c3d2c20ec43e9ec1ac05632c8d3a5f01d754055218e4bf5a8fe984c96dad9fd",
+    "scripts/research/jev-2026-09-22/business/README.md": "ebc17ea201cea12a1c0dd98da9d3f240392180a98f48fa64e32eb39ea3476bc1",
+    "scripts/research/jev-2026-09-22/business/fixtures.json": "f8a2a7e17ab04716cb824533235e26982483a7e06954924820022ad0d5654a01",
+    "scripts/research/jev-2026-09-22/business/evaluate.mjs": "4c786b91a4a3ee63702e2137e39d64f0656c12903a574b5d50f9d08c51ed1045",
+    "scripts/research/jev-2026-09-22/business/diagnostic/frozen-contract.json": "7992f36ec955218ff2b3c5c9e52bbeaa34d737bf233060c5c6751bc422860f78",
+    "scripts/research/jev-2026-09-22/business/diagnostic/observations.jsonl": "ae484bd084b762547e816fa0ab1dd60fbb706815dc02176e3c348879adc6f840",
+    "scripts/research/jev-2026-09-22/business/diagnostic/results.json": "ad5218ebcaec42e74f36e82877b0317e7e1b733be6a1a28fa5b6f010fea7a933",
+    "scripts/research/jev-2026-09-22/business/diagnostic/fixtures.json": "3296a6248f3cacc75c8a2922de98b8fa1cdae761f1f3d26b2561628672a96072",
+    "docs/67-jev-business-pilot.md": "f8889027717d39ac37adcad4a45a50251e88bb4ac0ea634831fe17672fd95384"
+  }
+}

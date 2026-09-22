@@ -13,7 +13,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { storableResult } from "./turn.ts";
 import { keepToolResult, keptResultPath, resetKeptPruneClock, RESULT_KEPT_MARKER, resultsDir } from "./results.ts";
-import { readFrontmatter, pruneFetched, sha256 } from "./fetched.ts";
+import { parseKeptPointer, readFrontmatter, pruneFetched, sha256 } from "./fetched.ts";
 import { DURABLE_RESULT_CHARS } from "../protocol/index.ts";
 
 function home(): { path: string; cleanup: () => void } {
@@ -43,15 +43,19 @@ test("a long result from a tool that never spills is kept whole, and the pointer
     const stored = storableResult(block(whole), undefined, keep(path));
     const text = (stored.content as { text: string }[])[0]!.text;
 
-    const pointer = new RegExp(`\\[${RESULT_KEPT_MARKER} (\\S+) — all (\\d+) characters\\]`).exec(text);
-    assert.ok(pointer !== null, text.slice(-200));
-    assert.equal(Number(pointer[2]), whole.length);
+    // The pointer describes its own target now (INV-659), so it survives the target.
+    const pointer = parseKeptPointer(text);
+    assert.ok(pointer !== undefined, text.slice(-300));
+    assert.equal(pointer.chars, whole.length);
+    assert.equal(pointer.sha256, sha256(whole));
 
-    // The replayed head is still bounded: keeping is not the same as showing.
-    assert.ok(text.length <= DURABLE_RESULT_CHARS + 200, `stored ${text.length} chars`);
+    // The replayed head is still bounded: keeping is not the same as showing. The pointer
+    // is the only thing added, and it grew by a digest when it became self-describing
+    // (INV-659) — 64 hex characters is the whole cost of a record that outlives its file.
+    assert.ok(text.length <= DURABLE_RESULT_CHARS + 300, `stored ${text.length} chars`);
     assert.ok(text.startsWith(whole.slice(0, DURABLE_RESULT_CHARS)));
 
-    const kept = readFileSync(pointer[1]!, "utf8");
+    const kept = readFileSync(pointer.path, "utf8");
     const head = readFrontmatter(kept);
     assert.equal(head.schema, "lumenbox.result/v1");
     assert.equal(head.tool, "browser_read");

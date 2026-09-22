@@ -78,6 +78,7 @@ import {
 } from "./compaction.ts";
 import { DURABLE_RESULT_CHARS, type ResolutionConfig } from "../protocol/index.ts";
 import { keepToolResult, RESULT_KEPT_MARKER } from "./results.ts";
+import { keptPointer } from "./fetched.ts";
 import type { BoxClass } from "../box/access.ts";
 import { emptySectionFaults, buildSystemPromptParts, buildTurnPrompt,
   turnReminderFor,
@@ -799,6 +800,8 @@ export function storableResult(
     // there had been more. A failure to file is said in place of the pointer rather than
     // thrown: the turn happened either way, and a turn is not lost over a full disk.
     else if (keep !== undefined) {
+      // One instant for the file's frontmatter and for the pointer describing it.
+      const keptAt = keep.at ?? new Date();
       try {
         const kept = keepToolResult(
           {
@@ -809,11 +812,17 @@ export function storableResult(
             agent: keep.agent,
             ...(keep.conversation !== undefined ? { conversation: keep.conversation } : {}),
             ...(block.is_error === true ? { isError: true } : {}),
-            at: keep.at ?? new Date(),
+            at: keptAt,
           },
           keep.home
         );
-        text += `\n[${RESULT_KEPT_MARKER} ${kept.path} — all ${whole.length} characters]`;
+        text += `\n${keptPointer({
+          marker: RESULT_KEPT_MARKER,
+          path: kept.path,
+          sha256: kept.sha256,
+          chars: whole.length,
+          at: keptAt,
+        })}`;
       } catch (error) {
         text += `\n[could not keep the whole result: ${error instanceof Error ? error.message : error}]`;
       }

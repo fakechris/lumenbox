@@ -191,3 +191,41 @@ test("kept tool results travel with the export too, redacted, and by the same wi
     rmSync(root, { recursive: true, force: true });
   }
 });
+
+test("the export checks the evidence it is carrying, and says so when a file no longer matches", async () => {
+  const { keepFetchedPage } = await import("./fetched.ts");
+  const { root, registry, ada } = home();
+  try {
+    const keep = (at: string, text: string) =>
+      keepFetchedPage(
+        { url: `https://example.com/${at}`, finalUrl: `https://example.com/${at}`, text, contentType: "text/html", bytes: 1, clipped: false, meta: {}, agent: { id: ada, name: "Ada" }, fetchedAt: new Date(at) },
+        root
+      );
+    const good = keep("2026-09-10T10:05:00.000Z", "an intact page, as it was read");
+    const tampered = keep("2026-09-10T10:06:00.000Z", "a page somebody edited afterwards");
+
+    const out = join(root, "export");
+    const clean = exportAudit({ home: root, registry, box: registry.box.name, from: "2026-09-01T00:00:00Z", to: "2026-09-30T00:00:00Z", out, held: heldValues(root), now: () => new Date("2026-09-11T00:00:00Z") });
+    assert.deepEqual(clean.evidence, { verified: 2, mismatched: 0, failures: [] });
+    assert.ok(describeExport(clean, out).some(line => /evidence: 2 file\(s\) still match their digest/.test(line)));
+
+    // One character changed in the body, nothing else touched. The digest was being
+    // written and never read until INV-659, so this looked exactly like an intact page.
+    const text = readFileSync(tampered.path, "utf8");
+    writeFileSync(tampered.path, text.replace("edited", "edlted"));
+
+    const dirty = exportAudit({ home: root, registry, box: registry.box.name, from: "2026-09-01T00:00:00Z", to: "2026-09-30T00:00:00Z", out: join(root, "export2"), held: heldValues(root), now: () => new Date("2026-09-11T00:00:00Z") });
+    assert.equal(dirty.evidence?.verified, 1);
+    assert.equal(dirty.evidence?.mismatched, 1);
+    assert.deepEqual(dirty.evidence?.failures.map(f => f.split("/").pop()), [tampered.path.split("/").pop()]);
+    assert.ok(
+      describeExport(dirty, join(root, "export2")).some(line => /DO NOT match their digest/.test(line)),
+      "and the human-readable report leads with the bad news"
+    );
+    // The export still happens. An operator asking for an audit needs both.
+    assert.ok(Object.keys(dirty.fetched ?? {}).length >= 2);
+    assert.ok(good.sha256.length === 64);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
