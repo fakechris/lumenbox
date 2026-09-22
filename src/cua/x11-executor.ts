@@ -1,3 +1,8 @@
+import type { DesktopDriver, DesktopExecutionOptions, DesktopExecutionResult } from "./driver.ts";
+export type { DesktopExecutionOptions as TypingOptions, DesktopExecutionResult as X11ExecutionResult } from "./driver.ts";
+import { nativeHelper } from "./native-helper.ts";
+type TypingOptions = DesktopExecutionOptions;
+type X11ExecutionResult = DesktopExecutionResult;
 /**
  * X11 computer-use executor: translates model actions into synthetic input via
  * xdotool, and captures the screen via ffmpeg.
@@ -6,6 +11,8 @@
  */
 
 import { AsyncLocalStorage } from "node:async_hooks";
+import { randomUUID } from "node:crypto";
+import { ComputerExecutionError, DesktopTargetError, isComputerWrite } from "./execution.ts";
 import { envNumber } from "../config.ts";
 import { execFile } from "node:child_process";
 import { readFileSync, unlinkSync } from "node:fs";
@@ -19,6 +26,9 @@ import type {
   WindowInfo,
   ElementInfo,
   Effect,
+  DesktopObservation,
+  ActionVerification,
+  DesktopExpectation,
 } from "../protocol/index.ts";
 import { CoordinateScaler } from "./scaling.ts";
 import { exec, execBuffer, execWithInput, sleep } from "./shell.ts";
@@ -292,6 +302,8 @@ export function actionRequiresSettle(action: ComputerAction): boolean {
       return /[\r\n]/.test(action.text);
     case "activate_window":
     case "click_in_window":
+    case "invoke_element":
+    case "set_value":
     case "click_element":
     case "close_window":
       // Raising, focusing and closing repaint, and a window manager animates them.
@@ -327,8 +339,8 @@ export function patchWebpHeader(buffer: Buffer): Buffer {
 
 /** What box-ax prints: the tree it read, or why it could not. */
 export interface AxOutput {
-  window: { title: string; app: string; truncated: boolean };
-  elements: { ref: string; role: string; name: string; x: number; y: number; width: number; height: number; states: string[] }[];
+  window: { title: string; app: string; truncated: boolean; identity?: string; id?: string };
+  elements: { ref: string; identity?: string; role: string; name: string; x: number; y: number; width: number; height: number; states: string[]; operations?: string[] }[];
 }
 
 export function parseAxOutput(text: string): AxOutput | { error: string } | undefined {
@@ -348,11 +360,15 @@ export function parseAxOutput(text: string): AxOutput | { error: string } | unde
       title: typeof window.title === "string" ? window.title : "",
       app: typeof window.app === "string" ? window.app : "",
       truncated: parsed.truncated === true,
+      identity: typeof window.identity === "string" ? window.identity : undefined,
+      id: typeof window.id === "string" ? window.id : undefined,
     },
     elements: (parsed.elements as Record<string, unknown>[])
       .filter(e => typeof e.ref === "string" && typeof e.role === "string")
       .map(e => ({
         ref: e.ref as string,
+        identity: typeof e.identity === "string" ? e.identity : undefined,
+        operations: Array.isArray(e.operations) ? e.operations.filter((op): op is string => op === "invoke" || op === "set_value") : [],
         role: e.role as string,
         name: typeof e.name === "string" ? e.name : "",
         x: Number(e.x ?? 0),
@@ -380,43 +396,28 @@ export interface X11Config {
   effectSettleMs?: number;
 }
 
-export interface TypingOptions {
-  /** Rechecked after waits and before each new native input operation. */
-  authorize?: () => void;
-  /**
-   * Bind a keycode for each character with no key before typing it, rather than
-   * letting `xdotool type` remap one per character and lose it. See
-   * `typeWithBorrowedKeys`.
-   */
-  bindUnmappedCharacters?: boolean;
-}
+export const X11_DESKTOP_CAPABILITIES = { backend: "x11-atspi", platform: "linux", semantic_actions: ["invoke", "set_value"], background_semantic: false, observation_refs: true } as const;
 
-export interface X11ExecutionResult {
-  success: boolean;
-  screenshot: string;
-  /** The weakest measured effect among the batch's writes; absent when nothing was measured. */
-  effect?: Effect;
-  /** One line per measured write. */
-  effectDetail?: string;
-  cursorPosition?: { x: number; y: number };
-  /** Present when the batch included list_windows. */
-  windows?: readonly WindowInfo[];
-  /** Present when list_elements found a tree (INV-412). */
-  elements?: readonly ElementInfo[];
-  /** Why there are none, when list_elements was asked and there was no tree. */
-  elementsNote?: string;
-  elementsWindow?: { title: string; app: string; truncated: boolean };
-  actionCount: number;
-  durationMs: number;
-  error?: string;
-}
-
-export class X11Executor {
+export class X11Executor implements DesktopDriver {
+  readonly capabilities = X11_DESKTOP_CAPABILITIES;
   private readonly config: Required<X11Config>;
   private readonly scaler: CoordinateScaler;
   private readonly env: Record<string, string>;
   /** The controls of the last list_elements, by ref, at display resolution — what click_element resolves against. */
   private elementCentres = new Map<string, Point>();
+  private elementTargets = new Map<string, AxOutput["elements"][number]>();
+  private elementWindow: AxOutput["window"] | undefined;
+  private elementsObservationId: string | undefined;
+  private observationGeneration = 0;
+
+  /** Authority/lifecycle changes and writes invalidate references synchronously. */
+  invalidateElements(): void {
+    this.observationGeneration++;
+    this.elementCentres.clear();
+    this.elementTargets.clear();
+    this.elementWindow = undefined;
+    this.elementsObservationId = undefined;
+  }
 
   constructor(config: X11Config) {
     this.config = {
@@ -435,7 +436,7 @@ export class X11Executor {
   private elementCentre(ref: string): Point {
     const centre = this.elementCentres.get(ref.trim());
     if (centre === undefined) {
-      throw new Error(`no element ${ref} in the last list_elements outline; list_elements again and use a ref from it`);
+      throw new DesktopTargetError(`no element ${ref} in the last list_elements outline`);
     }
     return centre;
   }
@@ -460,18 +461,15 @@ export class X11Executor {
    * (INV-412). An app with no tree — a terminal, an Electron app — is an `error`, said in
    * words, never an empty list: the model must fall back to the screenshot knowingly.
    */
-  protected async listElements(): Promise<{ elements: ElementInfo[]; window: { title: string; app: string; truncated: boolean } } | { error: string }> {
+  protected async readElements(): Promise<AxOutput | { error: string }> {
     let stdout: string;
     authorizeOperation();
     try {
       // The executor's environment is DISPLAY alone; a lookup by name needs a PATH, and
       // the daemon's own is the one the image set.
-      const result = await execFileAsync("box-ax", [], {
-        env: { ...this.env, PATH: process.env.PATH ?? "/usr/local/bin:/usr/bin:/bin" },
-        timeout: 6000,
-        maxBuffer: 4 * 1024 * 1024,
+      stdout = await nativeHelper("box-ax", [], {}, {
+        env: this.env, authorize: authorizeOperation, allowReadRefusal: true,
       });
-      stdout = result.stdout;
     } catch (error) {
       const failed = error as { stdout?: string; killed?: boolean; code?: unknown };
       const said = parseAxOutput(failed.stdout ?? "");
@@ -481,19 +479,56 @@ export class X11Executor {
     const parsed = parseAxOutput(stdout);
     if (parsed === undefined) return { error: "the accessibility reader answered with something unreadable" };
     if ("error" in parsed) return parsed;
-    return this.adoptElements(parsed);
+    return parsed;
+  }
+
+  protected async listElements(): Promise<{ elements: ElementInfo[]; window: AxOutput["window"] } | { error: string }> {
+    const generation = this.observationGeneration;
+    const read = await this.readElements();
+    authorizeOperation();
+    if (generation !== this.observationGeneration) throw new DesktopTargetError("control changed during observation");
+    return "error" in read ? read : this.adoptElements(read);
+  }
+
+  /** Re-read immediately before dispatch; no cached geometry can silently move the target. */
+  protected async validateElement(ref: string, observationId?: string): Promise<Point> {
+    const target = this.elementTargets.get(ref);
+    const window = this.elementWindow;
+    const generation = this.observationGeneration;
+    if (!target || !window || !this.elementsObservationId ||
+        (observationId !== undefined && observationId !== this.elementsObservationId)) {
+      throw new DesktopTargetError("element is not bound to the current observation");
+    }
+    if (!window.identity || !target.identity) throw new DesktopTargetError("reader cannot prove native target identity; upgrade the box helper");
+    const read = await this.readElements();
+    authorizeOperation();
+    if (generation !== this.observationGeneration || "error" in read || read.window.identity !== window.identity) {
+      throw new DesktopTargetError("the observed window is no longer current or readable");
+    }
+    const matches = read.elements.filter(element => element.identity === target.identity);
+    const current = matches[0];
+    if (matches.length !== 1 || !current || current.role !== target.role || current.name !== target.name ||
+        current.x !== target.x || current.y !== target.y || current.width !== target.width || current.height !== target.height ||
+        current.states.includes("disabled")) {
+      throw new DesktopTargetError("the target moved, changed, disappeared or is disabled");
+    }
+    return this.elementCentre(ref);
   }
 
   /** Scales the tree's screen rectangles to API space and remembers the centres for click_element. */
   protected adoptElements(read: AxOutput): { elements: ElementInfo[]; window: { title: string; app: string; truncated: boolean } } {
-    this.elementCentres = new Map();
+    this.invalidateElements();
+    this.elementsObservationId = randomUUID();
+    this.elementWindow = read.window;
     const elements: ElementInfo[] = [];
     for (const raw of read.elements) {
-      this.elementCentres.set(raw.ref, { x: Math.round(raw.x + raw.width / 2), y: Math.round(raw.y + raw.height / 2) });
+      const ref = `${this.elementsObservationId}:${raw.ref}`;
+      this.elementCentres.set(ref, { x: Math.round(raw.x + raw.width / 2), y: Math.round(raw.y + raw.height / 2) });
+      this.elementTargets.set(ref, raw);
       const origin = this.apiPoint({ x: raw.x, y: raw.y });
       const far = this.apiPoint({ x: raw.x + raw.width, y: raw.y + raw.height });
       elements.push({
-        ref: raw.ref,
+        ref,
         role: raw.role,
         name: raw.name,
         x: Math.round(origin.x),
@@ -501,9 +536,40 @@ export class X11Executor {
         width: Math.max(1, Math.round(far.x - origin.x)),
         height: Math.max(1, Math.round(far.y - origin.y)),
         states: raw.states,
+        operations: raw.operations,
       });
     }
     return { elements, window: read.window };
+  }
+
+  protected async executeSemantic(action: Extract<ComputerAction, { action: "invoke_element" | "set_value" }>): Promise<ActionVerification> {
+    const target = this.elementTargets.get(action.ref);
+    const window = this.elementWindow;
+    if (!target || !window?.identity) throw new DesktopTargetError("native target expired");
+    const output = await nativeHelper("box-ax", ["--perform"], {
+      operation: action.action === "invoke_element" ? "invoke" : "set_value",
+      window_identity: window.identity, target,
+      ...(action.action === "set_value" ? { value: action.value } : {}),
+    }, { env: this.env, authorize: authorizeOperation });
+    const receipt = JSON.parse(output) as { dispatch?: string; error?: string; verification?: ActionVerification };
+    if (receipt.dispatch === "not_started") throw new DesktopTargetError(receipt.error ?? "native operation refused", "NATIVE_REFUSED");
+    if (receipt.dispatch !== "sent" || !receipt.verification) throw new Error(`${receipt.error ?? "native dispatch is unknown"}; do not retry`);
+    return receipt.verification;
+  }
+
+  protected async verifyExpectation(expect: DesktopExpectation): Promise<ActionVerification> {
+    if (expect.window_title === undefined && expect.element === undefined) return { status: "unknown", source: "none", detail: "empty postcondition" };
+    const read = await this.readElements();
+    authorizeOperation();
+    if ("error" in read) return { status: "unknown", source: "native", detail: "native state could not be read" };
+    if (expect.window_title !== undefined && read.window.title !== expect.window_title) return { status: "unsatisfied", source: "native", detail: "active-window title does not match" };
+    if (expect.element !== undefined) {
+      const target = expect.element;
+      const matches = read.elements.filter(e => e.role === target.role && e.name === target.name);
+      if (matches.length > 1 || (matches.length === 0 && read.window.truncated)) return { status: "unknown", source: "native", detail: "postcondition target is ambiguous or the tree is truncated" };
+      if (matches.length === 0 || target.states?.some(state => !matches[0]!.states.includes(state))) return { status: "unsatisfied", source: "native", detail: "expected control or state was not found" };
+    }
+    return { status: "satisfied", source: "native", detail: "requested native postcondition holds at readback" };
   }
 
   private xdotool(args: string): Promise<string> {
@@ -547,25 +613,51 @@ export class X11Executor {
     let elementsWindow: { title: string; app: string; truncated: boolean } | undefined;
     let screenshotTaken = false;
     let settleNeeded = false;
+    let executedCount = 0;
+    let attemptedWrite = false;
+    const nativeVerifications: (ActionVerification | undefined)[] = [];
+    let failedAt: number | undefined;
+    let observation: DesktopObservation | undefined;
+    const capture = async (windowId?: string): Promise<string> => {
+      authorizeOperation();
+      const captureStart = Date.now();
+      const geometry = windowId === undefined ? undefined : await this.windowGeometry(assertWindowId(windowId));
+      const result = windowId === undefined ? await this.takeScreenshot() : await this.screenshotWindow(windowId);
+      observation = {
+        id: randomUUID(), display: this.config.display,
+        captured_start_ms: captureStart, captured_end_ms: Date.now(), after_action: executedCount,
+        coordinate_space: windowId === undefined ? "screen" : "window",
+        ...(windowId === undefined ? {} : { window_id: windowId }),
+        resolution: geometry === undefined ? this.config.resolution : {
+          display: { width: geometry.width, height: geometry.height },
+          api: { width: geometry.width, height: geometry.height },
+        },
+      };
+      return result;
+    };
     // What each write did to the pixels around it (docs/49 A1). The last one is kept
     // whole so a slow repaint can be re-judged after the batch settles.
     const measured: { action: string; point?: Point; effect: Effect; fraction?: number }[] = [];
     let pending: { region: Region; before: Buffer; index: number } | undefined;
 
+    try {
     for (const action of actions) {
+      failedAt = executedCount;
       authorizeOperation();
       if (action.action === "screenshot") {
         if (settleNeeded) {
           await sleep(this.config.screenshotDelayMs);
           settleNeeded = false;
         }
-        lastScreenshot = await this.takeScreenshot();
+        lastScreenshot = await capture();
         screenshotTaken = true;
       } else if (action.action === "cursor_position") {
         cursorPosition = await this.readCursorPosition();
       } else if (action.action === "list_windows") {
         windows = await this.listWindows();
       } else if (action.action === "list_elements") {
+        screenshotTaken = false;
+        this.invalidateElements();
         if (settleNeeded) {
           await sleep(this.config.screenshotDelayMs);
           settleNeeded = false;
@@ -586,21 +678,48 @@ export class X11Executor {
           await sleep(this.config.screenshotDelayMs);
           settleNeeded = false;
         }
-        lastScreenshot = await this.screenshotWindow(action.window_id);
+        lastScreenshot = await capture(action.window_id);
         screenshotTaken = true;
       } else {
+        // A wait can let the application repaint even without synthetic input.
+        if (action.action === "wait") screenshotTaken = false;
+        if (isComputerWrite(action)) {
+          screenshotTaken = false;
+          elements = undefined;
+          elementsWindow = undefined;
+          // Validate before starting any native mutation. Tokens are consumed below even on failure.
+          if (["click_element", "invoke_element", "set_value"].includes(action.action) && "ref" in action) {
+            await this.validateElement(action.ref, action.observation_id);
+            if (action.action === "invoke_element" || action.action === "set_value") {
+              const operation = action.action === "invoke_element" ? "invoke" : "set_value";
+              if (!this.elementTargets.get(action.ref)?.operations?.includes(operation)) throw new DesktopTargetError(`target does not support ${operation}; no coordinate fallback`, "UNSUPPORTED_ACTION");
+            }
+          }
+        }
         const anchor = this.config.measureEffect ? await this.anchorOf(action) : undefined;
         // "before" is taken now, not at the batch's start: an earlier action in the same
         // batch may have changed this very region, and that change is not this write's.
         const region = anchor !== undefined ? this.neighbourhood(anchor) : undefined;
         const before = region !== undefined ? await this.grabQuietly(region) : undefined;
         authorizeOperation();
-        await this.executeAction(action, options);
+        const alreadyAttempted = attemptedWrite;
+        if (isComputerWrite(action)) attemptedWrite = true;
+        try {
+          if (action.action === "invoke_element" || action.action === "set_value") {
+            try { nativeVerifications.push(await this.executeSemantic(action)); }
+            catch (error) { if (error instanceof DesktopTargetError) attemptedWrite = alreadyAttempted; throw error; }
+          } else {
+            await this.executeAction(action, options);
+            if (isComputerWrite(action)) nativeVerifications.push(undefined);
+          }
+        }
+        finally { if (isComputerWrite(action)) this.invalidateElements(); }
         if (actionRequiresSettle(action)) settleNeeded = true;
         if (anchor !== undefined) {
           if (region === undefined || before === undefined) {
             measured.push({ action: action.action, point: this.apiPoint(anchor), effect: "unverifiable" });
             pending = undefined;
+            executedCount++;
             continue;
           }
           await sleep(this.config.effectSettleMs);
@@ -611,7 +730,9 @@ export class X11Executor {
           pending = { region, before, index: measured.length - 1 };
         }
       }
+      executedCount++;
     }
+    failedAt = undefined;
 
     // Always hand back a screenshot, so the model never has to ask for one.
     if (!screenshotTaken) {
@@ -628,13 +749,40 @@ export class X11Executor {
           last.fraction = fraction;
         }
       }
-      lastScreenshot = await this.takeScreenshot();
+      lastScreenshot = await capture();
     }
     authorizeOperation();
 
+    if (elements !== undefined) {
+      const generation = this.observationGeneration;
+      const current = await this.readElements();
+      authorizeOperation();
+      const unchanged = generation === this.observationGeneration && !("error" in current) &&
+        current.window.identity !== undefined && current.window.identity === this.elementWindow?.identity &&
+        JSON.stringify(current.elements) === JSON.stringify([...this.elementTargets.values()]);
+      if (!unchanged) {
+        this.invalidateElements();
+        elements = undefined;
+        elementsWindow = undefined;
+        elementsNote = "the window or controls changed while the image was captured; list_elements again";
+      } else if (observation) {
+        observation.id = this.elementsObservationId!;
+        observation.window_id = this.elementWindow?.id;
+      }
+    }
+
     const effect = worstEffect(measured.map(m => m.effect));
+    const verification = options.expect !== undefined ? await this.verifyExpectation(options.expect) :
+      attemptedWrite ? (nativeVerifications.length > 0 && nativeVerifications.every(v => v !== undefined && v.status !== "unknown") ?
+        { status: nativeVerifications.some(v => v?.status === "unsatisfied") ? "unsatisfied" as const : "satisfied" as const, source: "native" as const, detail: "native value readbacks completed" } :
+        { status: "unknown" as const, source: "none" as const, detail: "no batch postcondition was verified" }) : undefined;
+    authorizeOperation();
     return {
       success: true,
+      verification,
+      observation,
+      elementsObservationId: elements === undefined ? undefined : this.elementsObservationId,
+      progress: { executed_count: executedCount, dispatch: attemptedWrite ? "sent" : "not_started" },
       screenshot: lastScreenshot ?? "",
       ...(effect !== undefined
         ? {
@@ -652,6 +800,13 @@ export class X11Executor {
       actionCount: actions.length,
       durationMs: Date.now() - start,
     };
+    } catch (error) {
+      this.invalidateElements();
+      throw new ComputerExecutionError(error, {
+        executed_count: executedCount, failed_at: failedAt,
+        dispatch: attemptedWrite ? (failedAt === undefined ? "sent" : "partial") : "not_started",
+      });
+    }
   }
 
   /**

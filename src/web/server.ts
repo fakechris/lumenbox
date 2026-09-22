@@ -594,7 +594,7 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
         ...(input.fallback !== undefined ? { fallback: input.fallback } : {}),
         ...(input.expiresInMinutes !== undefined ? { ttlMs: input.expiresInMinutes * 60_000 } : {}),
       }).question;
-      const where = chats?.askQuestion({ ...input, expiresAt: watched.expiresAt });
+      const where = chats?.askQuestion({ ...input, questionId: watched.id, expiresAt: watched.expiresAt });
       if (where !== undefined) questions.setAsker(watched.id, where);
       // The page is always a place an answer can come from, so a question is never
       // undeliverable while somebody could be looking at it.
@@ -1142,7 +1142,9 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
       }
       // The thread rides along, so a later question or approval from this work goes
       // back into the topic that asked instead of loose at the bottom of the room.
-      channels.remember(agent.id, identity.split(":")[0] ?? "", identity, threadKey ?? chatKey);
+      channels.remember(agent.id, identity.split(":")[0] ?? "", identity, threadKey ?? chatKey, {
+        conversation: conversationIdFor(threadKey ?? chatKey), principalId: principals.resolve(identity).id,
+      });
       // Each outside chat is its own conversation thread: two groups talking to the
       // same agent never read each other's context. Permission stays with the person
       // (identity); context stays with the room (chatKey); spend is billed to the
@@ -1176,11 +1178,8 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
         log(`${identity} is not in ${theirBox.name}; refused at the chat door`);
         return refusalToEnter(theirBox.name, principals.resolve(identity).name);
       }
-      // This person speaking is the answer to whatever this agent asked them (INV-533).
-      // Not "somebody spoke in the room": in a group, a colleague's unrelated message
-      // used to clear a question put to someone else, and the agent proceeded as though
-      // it had been answered.
-      questions.noteReply(agent.id, identity);
+      // Only an explicitly bound answer can settle a question. New requests do not.
+      if (origin?.questionId !== undefined) questions.noteReply(agent.id, identity, origin.questionId, conversation);
 
       // Made before the turn, because the prompt states the path as a fact — "its
       // directory on the box is X/" — while the directory was created lazily, on the first
@@ -1207,6 +1206,7 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
       const owed = randomUUID();
       deliveries.open({
         id: owed,
+        ...(origin?.messageId !== undefined ? { messageId: origin.messageId } : {}),
         // The thread when there is one. The room key here sent a recovered answer to the
         // bottom of the group while the question sat inside a topic (2026-09-02, "接
         // ipad/android"): the sweep pushes to whatever this says, and a thread key rides
@@ -1288,7 +1288,7 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
         // must run as its own turn. Left steerable, a task queued behind a running turn
         // was taken by that turn at its next round boundary, the queued `runExclusive`
         // drained nothing (races R6a), and the card that said "排队中" flipped to done
-        // showing somebody else's answer. Mid-turn steering has its own door: `steer`.
+        // showing somebody else's answer. Even explicit channel additions use this path.
         await orchestrator.prompt(agent.id, text, { userId: principal }, {
           conversation,
           steerable: false,
@@ -1304,7 +1304,9 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
         deliveries.close(owed);
         throw new Error(stuck);
       }
-      const reply = orchestrator.replySince(agent.id, before, conversation);
+      const reply = origin?.messageId !== undefined
+        ? orchestrator.replyForMessage(agent.id, origin.messageId, conversation)
+        : orchestrator.replySince(agent.id, before, conversation);
       // Closed here rather than after the channel's send: the channel is about to deliver
       // it in this same tick, and a send that fails leaves the message in the outbox
       // rather than needing this queue as a second retry mechanism.
@@ -1335,34 +1337,6 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
       }
       orchestrator.policy.stop(agent.id);
       return "stopped";
-    },
-    // A mid-task message joins the running turn. Fire-and-forget on purpose: the bus's
-    // own race rules (fixed in races.test.ts) make it steering for the running turn or
-    // the next turn, exactly one of the two — this call must not add a third path.
-    steer: (agentName, text, identity, conversationKey, messageId) => {
-      let agent: { id: string } | undefined;
-      try {
-        agent = agentName !== undefined ? registry.resolve(agentName) : registry.list()[0];
-      } catch {
-        agent = undefined;
-      }
-      if (agent === undefined) return "refused";
-      // The same box question as `stop` above: steering a running turn is driving it.
-      if (!mayEnterBox(registry.boxOf(agent.id), principals.resolve(identity).id)) {
-        log(`refused steer: ${identity} is not in ${registry.boxOf(agent.id).name}`);
-        return "refused";
-      }
-      void orchestrator
-        .prompt(
-          agent.id,
-          text,
-          { userId: principals.resolve(identity).id },
-          { conversation: conversationIdFor(conversationKey), ...(messageId !== undefined ? { messageId } : {}) }
-        )
-        .catch(error => {
-          log(`steer failed: ${error instanceof Error ? error.message : String(error)}`);
-        });
-      return "steered";
     },
     board: {
       open: input => {
@@ -1751,7 +1725,9 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
       if (orchestrator.hasOpenTurn(owed.agentId, owed.conversation)) continue;
       let reply = "";
       try {
-        reply = orchestrator.replySince(owed.agentId, owed.before, owed.conversation).trim();
+        reply = (owed.messageId !== undefined
+          ? orchestrator.replyForMessage(owed.agentId, owed.messageId, owed.conversation)
+          : orchestrator.replySince(owed.agentId, owed.before, owed.conversation)).trim();
       } catch {
         // A transcript that cannot be read is a delivery that cannot be recovered; it
         // falls through to the stuck-task rescue rather than holding up the others.

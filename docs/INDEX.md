@@ -20,7 +20,7 @@ this file and the headers disagree. Edit the header, not this table.
 |---|---|---|---|
 | [01-requirements](01-requirements.md) | Requirements | current | 2026-08-22 |
 | [02-product](02-product.md) | Product | current | 2026-08-19 |
-| [03-architecture](03-architecture.md) | Architecture | current | 2026-09-07 |
+| [03-architecture](03-architecture.md) | Architecture | current | 2026-09-22 |
 | [04-design](04-design.md) | Design | current | 2026-08-22 |
 | [05-data](05-data.md) | Data | current | 2026-09-01 |
 | [08-control-plane](08-control-plane.md) | Control plane | current | 2026-09-12 |
@@ -43,6 +43,7 @@ this file and the headers disagree. Edit the header, not this table.
 | [38-operators-guide](38-operators-guide.md) | The operator's guide (what the README used to be) | current | 2026-09-07 |
 | [55-external-desktops](55-external-desktops.md) | External browsers and desktop control | current | 2026-09-15 |
 | [56-teaching-upgrade](56-teaching-upgrade.md) | Teaching draft upgrade | current | 2026-09-15 |
+| [70-cua-linux-validation](70-cua-linux-validation.md) | Linux CUA 回归矩阵与状态验收 | current | 2026-09-22 |
 
 ## decision
 
@@ -109,6 +110,8 @@ this file and the headers disagree. Edit the header, not this table.
 | [handoff-2026-09-01](handoff-2026-09-01.md) | Handoff — 2026-09-01 | current | 2026-09-01 |
 | [handoff-2026-09-02](handoff-2026-09-02.md) | Handoff, 2026-09-02 | current | 2026-09-02 |
 | [handoff-2026-09-15-involute-agent-threads](handoff-2026-09-15-involute-agent-threads.md) | Handoff — Involute 侧：agent 身份与工作项上的对话 | current | 2026-09-15 |
+| [handoff-2026-09-22-cua-fixes](handoff-2026-09-22-cua-fixes.md) | CUA 修复实施与验收记录 | current | 2026-09-22 |
 | [handoff-2026-09-22-deployment-queue-review](handoff-2026-09-22-deployment-queue-review.md) | Handoff — Nova 修复部署与 INV 队列复发风险审查 | current | 2026-09-22 |
+| [handoff-2026-09-22-nova-incident](handoff-2026-09-22-nova-incident.md) | Handoff — Nova 请求混入旧任务与研究叙述复播的运行调查 | current | 2026-09-22 |
 | [handoff-2026-09-22-post207-answer-quality-review](handoff-2026-09-22-post207-answer-quality-review.md) | Handoff — PR 207 部署后回答质量复审与防复发方案 | current | 2026-09-22 |
-
+| [handoff-2026-09-22-request-ownership-fix](handoff-2026-09-22-request-ownership-fix.md) | Handoff — 吞单边界修复与 INV 合同校正 | current | 2026-09-22 |

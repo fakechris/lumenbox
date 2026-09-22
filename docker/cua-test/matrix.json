@@ -1,0 +1,175 @@
+{
+  "version": "linux-cua-2026-09-22-v1",
+  "cases": [
+    {
+      "id": "native_tree_and_bound_target",
+      "platform": "linux/x11",
+      "toolkit": "gtk3",
+      "backend": "x11-atspi",
+      "addressing": "snapshot-ref",
+      "delivery": "coordinate",
+      "oracle": "application state file + dispatch receipt",
+      "expected": "requested mutation exactly once or explicit refusal with unchanged application state"
+    },
+    {
+      "id": "new_snapshot_refuses_old_token",
+      "platform": "linux/x11",
+      "toolkit": "gtk3",
+      "backend": "x11-atspi",
+      "addressing": "snapshot-ref",
+      "delivery": "coordinate",
+      "oracle": "application state file + dispatch receipt",
+      "expected": "requested mutation exactly once or explicit refusal with unchanged application state"
+    },
+    {
+      "id": "unreadable_tree_invalidates_previous_reference",
+      "platform": "linux/x11",
+      "toolkit": "xterm/no-tree",
+      "backend": "x11-atspi",
+      "addressing": "snapshot-ref",
+      "delivery": "coordinate",
+      "oracle": "application state file + dispatch receipt",
+      "expected": "requested mutation exactly once or explicit refusal with unchanged application state"
+    },
+    {
+      "id": "window_move_refuses_stored_geometry",
+      "platform": "linux/x11",
+      "toolkit": "gtk3",
+      "backend": "x11-atspi",
+      "addressing": "snapshot-ref",
+      "delivery": "coordinate",
+      "oracle": "application state file + dispatch receipt",
+      "expected": "requested mutation exactly once or explicit refusal with unchanged application state"
+    },
+    {
+      "id": "screenshot_before_click_returns_post_action_image",
+      "platform": "linux/x11",
+      "toolkit": "gtk3",
+      "backend": "x11-atspi",
+      "addressing": "snapshot-ref",
+      "delivery": "coordinate",
+      "oracle": "application state file + dispatch receipt",
+      "expected": "requested mutation exactly once or explicit refusal with unchanged application state"
+    },
+    {
+      "id": "partial_batch_reports_prefix_without_replay",
+      "platform": "linux/x11",
+      "toolkit": "gtk3",
+      "backend": "x11-atspi",
+      "addressing": "snapshot-ref",
+      "delivery": "coordinate",
+      "oracle": "application state file + dispatch receipt",
+      "expected": "requested mutation exactly once or explicit refusal with unchanged application state"
+    },
+    {
+      "id": "takeover_during_wait_stops_input_and_invalidates_tokens",
+      "platform": "linux/x11",
+      "toolkit": "gtk3",
+      "backend": "x11-atspi",
+      "addressing": "snapshot-ref",
+      "delivery": "coordinate",
+      "oracle": "application state file + dispatch receipt",
+      "expected": "requested mutation exactly once or explicit refusal with unchanged application state"
+    },
+    {
+      "id": "element_tokens_do_not_cross_desktops",
+      "platform": "linux/x11",
+      "toolkit": "gtk3",
+      "backend": "x11-atspi",
+      "addressing": "snapshot-ref",
+      "delivery": "coordinate",
+      "oracle": "application state file + dispatch receipt",
+      "expected": "requested mutation exactly once or explicit refusal with unchanged application state"
+    },
+    {
+      "id": "native_postconditions_match_and_mismatch_without_replay",
+      "platform": "linux/x11",
+      "toolkit": "gtk3",
+      "backend": "x11-atspi",
+      "addressing": "snapshot-ref",
+      "delivery": "coordinate",
+      "oracle": "application state file + dispatch receipt",
+      "expected": "requested mutation exactly once or explicit refusal with unchanged application state"
+    },
+    {
+      "id": "semantic_invoke_changes_application_without_moving_pointer",
+      "platform": "linux/x11",
+      "toolkit": "gtk3",
+      "backend": "x11-atspi",
+      "addressing": "snapshot-ref",
+      "delivery": "native",
+      "oracle": "application state file + dispatch receipt",
+      "expected": "requested mutation exactly once or explicit refusal with unchanged application state"
+    },
+    {
+      "id": "semantic_set_value_uses_native_readback_and_application_state",
+      "platform": "linux/x11",
+      "toolkit": "gtk3",
+      "backend": "x11-atspi",
+      "addressing": "snapshot-ref",
+      "delivery": "native",
+      "oracle": "application state file + dispatch receipt",
+      "expected": "requested mutation exactly once or explicit refusal with unchanged application state"
+    },
+    {
+      "id": "disabled_native_control_never_falls_back_to_coordinates",
+      "platform": "linux/x11",
+      "toolkit": "gtk3",
+      "backend": "x11-atspi",
+      "addressing": "snapshot-ref",
+      "delivery": "native",
+      "oracle": "application state file + dispatch receipt",
+      "expected": "requested mutation exactly once or explicit refusal with unchanged application state"
+    },
+    {
+      "id": "same_pid_same_title_windows_refuse_ambiguous_tree",
+      "platform": "linux/x11",
+      "toolkit": "gtk3",
+      "backend": "x11-atspi",
+      "addressing": "snapshot-ref",
+      "delivery": "coordinate",
+      "oracle": "application state file + dispatch receipt",
+      "expected": "requested mutation exactly once or explicit refusal with unchanged application state"
+    },
+    {
+      "id": "qt_native_invoke_and_value",
+      "platform": "linux/x11",
+      "toolkit": "qt5",
+      "backend": "x11-atspi",
+      "addressing": "snapshot-ref",
+      "delivery": "native",
+      "oracle": "application callback or local HTTP server state file",
+      "expected": "readback and independent application state agree; no duplicate delivery"
+    },
+    {
+      "id": "chromium_dom_verification_and_noop",
+      "platform": "linux/x11",
+      "toolkit": "chromium",
+      "backend": "cdp",
+      "addressing": "snapshot/find",
+      "delivery": "cdp-input",
+      "oracle": "application callback or local HTTP server state file",
+      "expected": "readback and independent application state agree; no duplicate delivery"
+    },
+    {
+      "id": "chromium_old_snapshot_refused",
+      "platform": "linux/x11",
+      "toolkit": "chromium",
+      "backend": "cdp",
+      "addressing": "snapshot-ref",
+      "delivery": "none",
+      "oracle": "application callback or local HTTP server state file",
+      "expected": "readback and independent application state agree; no duplicate delivery"
+    },
+    {
+      "id": "electron_dom_verification",
+      "platform": "linux/x11",
+      "toolkit": "electron",
+      "backend": "cdp",
+      "addressing": "find",
+      "delivery": "cdp-input",
+      "oracle": "application callback or local HTTP server state file",
+      "expected": "readback and independent application state agree; no duplicate delivery"
+    }
+  ]
+}

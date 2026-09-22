@@ -8,6 +8,7 @@
 
 import { bindingsOf, CommitmentLedger, describeGaps, parseCommitments, priorCommitmentsPrompt, reconcileCommitments } from "./commitments.ts";
 import { learningsDir } from "./learnings.ts";
+import { replyForMessage } from "./reply.ts";
 import type Anthropic from "@anthropic-ai/sdk";
 import { AgentBus, type BusEvent, type InboundMessage, type Lane } from "../agents/bus.ts";
 import { Inbox, inboxPath } from "../agents/inbox.ts";
@@ -1905,7 +1906,9 @@ export class Orchestrator {
     // After the turn, and not awaited: a person waiting on an answer should not also wait on
     // bookkeeping. What the agent said is read back from the transcript rather than threaded through
     // the turn loop, which keeps the loop unaware that any of this exists.
-    const said = this.replySince(agent.id, before, conversation);
+    const said = options.messageId !== undefined
+      ? this.replyForMessage(agent.id, options.messageId, conversation)
+      : this.replySince(agent.id, before, conversation);
     if (said !== "") {
       // Where this exchange sits, for anything remembered from it to cite: the conversation
       // and the time the reply was read back, which is how a person finds it again in the
@@ -1978,6 +1981,10 @@ export class Orchestrator {
       .filter(entry => entry.role === "assistant" && entry.kind === undefined && entry.text)
       .map(entry => entry.text as string)
       .join("\n\n");
+  }
+
+  replyForMessage(agentId: string, messageId: string, conversation: string = MAIN_CONVERSATION): string {
+    return replyForMessage(this.registry.readTranscript(agentId, conversation), messageId);
   }
 
   /**
