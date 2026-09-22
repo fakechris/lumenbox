@@ -1997,6 +1997,41 @@ async function main(): Promise<number> {
       return 0;
     }
 
+    case "day": {
+      // One day, assembled from what is already kept (INV-669). The material half of the
+      // daily research digest: no prose, no vault, no network — just everything that
+      // happened, in one place, with every gap named.
+      const date = rest[0];
+      if (date === undefined || !/^\d{4}-\d{2}-\d{2}$/.test(date)) {
+        err("usage: agentbox day <YYYY-MM-DD> [--chat <chatKey>]");
+        return 2;
+      }
+      const flags = new Map<string, string>();
+      for (let i = 1; i < rest.length; i += 2) {
+        const key = rest[i] ?? "";
+        if (!key.startsWith("--") || rest[i + 1] === undefined) {
+          err(`day: ${key || "(nothing)"} needs a value`);
+          return 2;
+        }
+        flags.set(key.slice(2), rest[i + 1]!);
+      }
+      const { assembleDay, describeDay } = await import("./host/day-package/assemble.ts");
+      const { heldValues } = await import("./host/audit-export.ts");
+      try {
+        const chat = flags.get("chat");
+        const { manifest, dir } = assembleDay(date, {
+          home: agentboxHome(),
+          held: heldValues(agentboxHome()),
+          ...(chat !== undefined ? { chatKey: chat } : {}),
+        });
+        for (const line of describeDay(manifest, dir)) out(line);
+        return 0;
+      } catch (error) {
+        err(`day: ${error instanceof Error ? error.message : String(error)}`);
+        return 1;
+      }
+    }
+
     case "audit": {
       // One box, one range, every ledger — as files (INV-433). The export is the
       // compliance copy; the app's audit pages are the live view of the same ledgers.

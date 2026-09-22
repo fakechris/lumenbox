@@ -477,6 +477,39 @@ deliberately not built, so nobody assumes it: retention keyed to the work the ev
 supported rather than to when it was read. Evidence almost always wants the former, and we
 have no link from an artefact to the work that cited it. That link is the prerequisite.
 
+### 2.8 `digest/<runKey>/package/`
+
+One day, assembled from what is already kept (`src/host/day-package/`, INV-669). The
+material half of the daily research digest: no prose, no vault, no network. `agentbox day
+<YYYY-MM-DD> [--chat <chatKey>]`.
+
+- `manifest.json` — the window as a local day with its UTC offset, every message (whole,
+  as sent, with its attachments listed), every turn (model, build, how it ended), every
+  source read (url, completeness, digest, which turn read it), every reply, and `gaps`.
+- `sources/<sha8>.md` — the body of each kept source, redacted. A source the retention has
+  already taken keeps its row with `state: expired` and loses only its body, which is what
+  the self-describing pointer (§2.6) was for.
+- `turns/<turnId>/reply.md` — what the agent finally said.
+- `READY` — a generation timestamp on a comment line, then the sha256 of every other file.
+  Written last, so its absence is how an unfinished package is told from a thin day.
+
+Two properties do the work.
+
+**Deterministic.** Every hashed file, the manifest included, is a pure function of the
+day's material; the generation instant lives in `READY` rather than in the manifest so it
+cannot poison that. Two runs over an unchanged day give identical hashes, which makes "did
+anything about this day change" two numbers compared rather than a diff read. WACZ splits
+its datapackage from its digest for the same reason.
+
+**`gaps` is the honest part.** A day assembled from a host running an older build is
+missing whole categories of material and looks exactly like a quiet day. Measured on this
+installation on 2026-09-23: the host was 43 commits behind, so `results/` was empty and no
+turn carried its evidence. So every degradation is named with its reason and the commit it
+saw — `No turn recorded what it read … the host on this day ran a build before INV-665
+(saw cc71f82)` — and a reader who sees an empty section can tell "nothing happened" from
+"we could not know". Messages fall back from `messages.jsonl` to the transcript the same
+way, and say so.
+
 ### 3.1 `work` volume — `/home/box/work`
 
 The agents' output. Whatever they make, plus `recordings/*.mp4`. Owned by `box`.
