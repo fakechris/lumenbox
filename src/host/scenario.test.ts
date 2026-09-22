@@ -15,6 +15,7 @@ import assert from "node:assert/strict";
 import { runEpisode, type Script } from "./scenario.ts";
 import { ChannelManager, type ChannelAdapter, type InboundMessage as ChannelMessage } from "../channels/manager.ts";
 import { choosePinnedEntries, type HistoryEntry } from "./compaction.ts";
+import { replyForMessage } from "./reply.ts";
 
 // 2026-09-20: a question containing 区别 and a pasted parser announcement were
 // absorbed into a running lookup. Exercise the channel -> bus -> real turn path;
@@ -22,6 +23,10 @@ import { choosePinnedEntries, type HistoryEntry } from "./compaction.ts";
 for (const request of [
   "25道Agent高频实操面试题\n14. 长短记忆的区别？\n25. 如何保障输出可溯源？\n回答一下试试",
   "腾讯发布文档解析模型\n输入文档页面图，模型一次输出完整页面，不需要先把标题、正文、表格和公式分别裁出来。\n解释它有什么用",
+  "另外介绍一下一个无关的新模型",
+  "同时支持哪些格式？",
+  "https://example.test/new-request",
+  "好",
 ]) {
   test(`fresh research has its own turn and reply: ${request.split("\n")[0]}`, { timeout: 15_000 }, async () => {
     let markEntered!: () => void;
@@ -42,7 +47,7 @@ for (const request of [
         }
         const seen = JSON.stringify(messages);
         if (round === 1) {
-          assert.ok(!seen.includes("25道") && !seen.includes("腾讯发布"), "new work never enters the old model round");
+          assert.ok(!seen.includes(request.split("\n")[0]!), "new work never enters the old model round");
           return { say: "旧研究结果。" };
         }
         assert.ok(seen.includes(request.split("\n")[0]!));
@@ -57,16 +62,10 @@ for (const request of [
         };
         const manager = new ChannelManager({
           mayDrive: () => true, log: () => {},
-          ask: async (_agent, text) => {
-            bus.sendFromUser(frontId, text, { steerable: false });
+          ask: async (_agent, text, _identity, _chat, _progress, _thread, _task, _interim, _stream, origin) => {
+            bus.sendFromUser(frontId, text, { steerable: false, messageId: origin!.messageId });
             await bus.runExclusive(frontId, { userDriven: true });
-            const entries = registry.readTranscript(frontId) as { role?: string; text?: string }[];
-            return entries.filter(entry => entry.role === "assistant" && entry.text).at(-1)?.text ?? "";
-          },
-          steer: (_agent, text) => {
-            steers += 1;
-            bus.sendFromUser(frontId, text);
-            return "steered";
+            return replyForMessage(registry.readTranscript(frontId), origin!.messageId);
           },
           board: {
             open: input => { tasks.push(input.description ?? input.title); return `t${tasks.length}`; },
@@ -80,6 +79,8 @@ for (const request of [
         try {
           await receive({ ...room, messageId: "old", text: "研究这篇旧文章" });
           await entered;
+          manager.remember(frontId, adapter.name, room.identity, room.chatKey);
+          manager.askQuestion({ agentId: frontId, agentName: "Nova", question: "哪个地区？", questionId: "pending-region" });
           const ack = await receive({ ...room, messageId: "new", text: request });
           assert.equal(ack, undefined, "not a 带到了 steering acknowledgement");
         } finally {
@@ -97,6 +98,43 @@ for (const request of [
     } finally { episode.cleanup(); }
   });
 }
+
+test("a real turn with an undeliverable reply leaves a failed task, never a success", async () => {
+  const states: string[] = [];
+  let attempts = 0;
+  const episode = await runEpisode({
+    team: [{ name: "Nova" }], says: [], script: () => ({ say: "这是最终答案。" }),
+    drive: async ({ bus, registry, frontId }) => {
+      let receive!: (message: ChannelMessage) => Promise<string | undefined>;
+      const adapter: ChannelAdapter = {
+        name: "feishu", start: async handler => { receive = handler; }, stop() {},
+        send: async () => { throw new Error("disconnected"); },
+        sendToChat: async () => { attempts++; throw new Error("disconnected"); },
+      };
+      const manager = new ChannelManager({
+        mayDrive: () => true, log() {},
+        ask: async (_agent, text) => {
+          bus.sendFromUser(frontId, text, { steerable: false });
+          await bus.runExclusive(frontId, { userDriven: true });
+          const entries = registry.readTranscript(frontId) as { role?: string; text?: string }[];
+          return entries.filter(entry => entry.role === "assistant" && entry.text).at(-1)?.text ?? "";
+        },
+        board: { open: () => "t1", started() {}, closed: (_id, status) => { states.push(status); return status; } },
+      });
+      manager.register(adapter, true, "test"); manager.start();
+      await new Promise(resolve => setImmediate(resolve));
+      try {
+        await receive({ identity: "feishu:test", chatKey: "feishu:room", senderLabel: "test", text: "回答这个问题" });
+        await manager.idle();
+      } finally { manager.stop(); }
+    },
+  });
+  try {
+    assert.equal(episode.score.turns, 1);
+    assert.deepEqual(states, ["failed"]);
+    assert.equal(attempts, 2, "one answer attempt and one failure notice, no false success");
+  } finally { episode.cleanup(); }
+});
 
 test("legacy research narration is not replayed as a pinned tool exemplar", async () => {
   const at = "2026-09-20T00:38:55Z";
