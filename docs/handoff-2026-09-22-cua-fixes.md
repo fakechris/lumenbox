@@ -60,7 +60,7 @@ INV-636—640 已由人提交为 COMMITTED。本会话尝试 `work_claim` 与不
 
 ## INV-639：Linux GUI oracle 矩阵
 
-版本化清单 `docker/cua-test/matrix.json`，runner `npm run test:cua`，复现指南 [63-cua-linux-validation](63-cua-linux-validation.md)。GTK/Qt 原生调用、Chromium/Electron CDP，以及无树 xterm，最终 17/17；应用回调/本机 HTTP server 写出的状态文件是 oracle。结果区分 pass/fail/environment_error/not_run，漏执行或环境失败不能通过，单项诊断也不能伪装成全矩阵通过。
+版本化清单 `docker/cua-test/matrix.json`，runner `npm run test:cua`，复现指南 [70-cua-linux-validation](70-cua-linux-validation.md)。GTK/Qt 原生调用、Chromium/Electron CDP，以及无树 xterm，最终 17/17；应用回调/本机 HTTP server 写出的状态文件是 oracle。结果区分 pass/fail/environment_error/not_run，漏执行或环境失败不能通过，单项诊断也不能伪装成全矩阵通过。
 
 持久原始报告 [evidence/cua-linux-2026-09-22.json](evidence/cua-linux-2026-09-22.json) 同时记录 digest、fixture 内容 hash、toolkit 版本、10 次 cold/warm-session 端到端样本。首次读树 312 ms，热读树 P50/P95=313/330 ms，invoke=2340/2357 ms，set_value=2339/2351 ms；每次 helper 都重新启动。生产制品较第一轮观测修复增加 16,646 bytes，测试 toolkit 依赖只进入测试层。
 
