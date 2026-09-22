@@ -57,3 +57,23 @@ INV-636—640 已由人提交为 COMMITTED。本会话尝试 `work_claim` 与不
 ## INV-640：用户调整范围
 
 用户明确选择「暂不扩原生平台，先完成 Linux 盒内方案」。不实施 Mac/Windows 试点，不安装 Cua Driver，不将两个上游设为默认依赖；已将该范围同步到 INV-640。
+
+## INV-639：Linux GUI oracle 矩阵
+
+版本化清单 `docker/cua-test/matrix.json`，runner `npm run test:cua`，复现指南 [63-cua-linux-validation](63-cua-linux-validation.md)。GTK/Qt 原生调用、Chromium/Electron CDP，以及无树 xterm，最终 17/17；应用回调/本机 HTTP server 写出的状态文件是 oracle。结果区分 pass/fail/environment_error/not_run，漏执行或环境失败不能通过，单项诊断也不能伪装成全矩阵通过。
+
+持久原始报告 [evidence/cua-linux-2026-09-22.json](evidence/cua-linux-2026-09-22.json) 同时记录 digest、fixture 内容 hash、toolkit 版本、10 次 cold/warm-session 端到端样本。首次读树 312 ms，热读树 P50/P95=313/330 ms，invoke=2340/2357 ms，set_value=2339/2351 ms；每次 helper 都重新启动。生产制品较第一轮观测修复增加 16,646 bytes，测试 toolkit 依赖只进入测试层。
+
+工程层已验证；20 任务×5次的真实模型层没有运行，不把 scripted episode 或 GUI fixture 当成真实模型的成功率。未来模型评测应按 docs/62 的同模型/prompt/初态/版本约束另行执行。
+
+额外边界核对：native invoke/set_value 与坐标输入共用 host 的写操作分类，均进入已有 auto-review；新动作没有另开权限通道。后续 `59865d7` 与最终断言更新补齐该项。
+
+原有 smoke 脚本同步采用 observed_change 语义；同时修正两处测试问题：xclip 所有者继承输出管道造成无界等待（将裸 xclip 的清理对照限制为 1.5 秒，独立复制场景重定向输出、读取有界）；VNC 修复测试改为观察端口 owner PID 被替换，不再要求在 supervisor 修复之前必须看到端口暂时 down。二者都是测试 oracle/生命周期修正，没有修改 clipboard 或 supervisor 产品实现。
+
+### 最终收口
+
+`npm run release:check` 退出 0：1,740 tests，0 failed，构建与产物启动检查通过；日志 `/tmp/lumenbox-cua-research/final-release.log`。独立干净盒上的原有 `scripts/smoke.mjs` 报告 42 passed / 0 failed，日志 `/tmp/lumenbox-cua-research/639-standard-smoke-complete.log`；其中 egress relay 未配置，该条件项没有实际覆盖，不把它算成外网中继验证。
+
+最后补上长寿命 CDP 对话框回调的权限：请求结束后仍使用最新调用者的 owner/epoch 与桌面控制权检查；人工接管期间的只读观察不能授予后台输入权限，未答复不能报成已答复。hermetic 回归覆盖撤销后回调、只读观察与新授权。包含该补丁的最终镜像再次跑完整 17 项，全部通过：[最终 GUI 报告](evidence/cua-linux-final-2026-09-22.json)。前一份含延迟的报告保留作为测量记录，不混淆两个镜像 digest。
+
+所有测试容器均已删除；工作树内生产代码和可复现测试按 INV 分项提交。没有合并或改写主工作树，也没有更换在用盒子。INV 合同 verification 已写入可审查证据，claim/run 的 actor 身份障碍仍存在，因此未伪造 run/evidence_attach 或标记 Done。

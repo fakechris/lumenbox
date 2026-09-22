@@ -43,6 +43,7 @@ this file and the headers disagree. Edit the header, not this table.
 | [38-operators-guide](38-operators-guide.md) | The operator's guide (what the README used to be) | current | 2026-09-07 |
 | [55-external-desktops](55-external-desktops.md) | External browsers and desktop control | current | 2026-09-15 |
 | [56-teaching-upgrade](56-teaching-upgrade.md) | Teaching draft upgrade | current | 2026-09-15 |
+| [63-cua-linux-validation](63-cua-linux-validation.md) | Linux CUA 回归矩阵与状态验收 | current | 2026-09-22 |
 
 ## decision
 

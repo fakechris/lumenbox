@@ -3,21 +3,37 @@
  * Run: node --experimental-transform-types scripts/cua-contract-smoke.mjs
  */
 import { execFileSync } from "node:child_process";
-import { randomBytes } from "node:crypto";
+import { randomBytes, createHash } from "node:crypto";
+import { readFileSync, writeFileSync, mkdirSync } from "node:fs";
+import { dirname } from "node:path";
+import { matrixReport } from "./cua-matrix.mjs";
 import assert from "node:assert/strict";
 import { BoxClient } from "../src/box/client.ts";
 
-const image = process.env.CUA_TEST_IMAGE ?? "agentbox/cua-fixes-test:latest";
+const image = process.env.CUA_TEST_IMAGE ?? "agentbox/cua-platform-test:latest";
 const name = `lumenbox-cua-test-${process.pid}`;
 const credential = randomBytes(32).toString("hex");
 const docker = args => execFileSync("docker", args, { encoding: "utf8", env: { ...process.env, BOXD_TOKEN: credential }, stdio: ["ignore", "pipe", "pipe"] }).trim();
 const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
 const rows = [];
+const matrix = JSON.parse(readFileSync(new URL('../docker/cua-test/matrix.json', import.meta.url), 'utf8'));
+const reportPath = process.env.CUA_TEST_REPORT ?? '.runtime/cua-matrix.json';
+let digest;
+let environmentError;
+let runtime;
+let latency;
+const fixtureFiles = ['scripts/cua-contract-smoke.mjs', 'scripts/cua-matrix.mjs', 'docker/cua-test/matrix.json', 'docker/cua-test/qt-fixture.py', 'docker/cua-test/web-fixture.mjs', 'docker/cua-test/electron-fixture.cjs', 'docker/cua-test/platform.Dockerfile'];
+const fixtureHash = createHash('sha256');
+for (const file of fixtureFiles) fixtureHash.update(file).update(readFileSync(file));
+const source = { commit: execFileSync('git', ['rev-parse', 'HEAD'], {encoding:'utf8'}).trim(), fixtures_sha256: fixtureHash.digest('hex') };
 let box;
 let request;
+const selected = process.env.CUA_CASES ? new Set(process.env.CUA_CASES.split(",")) : undefined;
 const check = async (id, fn) => {
-  try { await fn(); rows.push({ id, status: "pass" }); console.log(`PASS ${id}`); }
-  catch (error) { rows.push({ id, status: "fail", error: error.message }); console.log(`FAIL ${id}: ${error.message}`); }
+  if (selected && !selected.has(id)) return;
+  const started = Date.now();
+  try { await fn(); rows.push({ id, status: "pass", duration_ms: Date.now() - started }); console.log(`PASS ${id}`); }
+  catch (error) { rows.push({ id, status: error.code === 'ERR_ASSERTION' ? 'fail' : 'environment_error', duration_ms: Date.now() - started, error: error.message }); console.log(`FAIL ${id}: ${error.message}`); }
 };
 const fixture = `import gi, json
 gi.require_version('Gtk', '3.0')
@@ -62,8 +78,13 @@ Gtk.main()
 `;
 
 try {
-  const digest = docker(["image", "inspect", "--format", "{{.Id}}", image]);
+  digest = docker(["image", "inspect", "--format", "{{.Id}}", image]);
   docker(["run", "-d", "--name", name, "--shm-size=1g", "-p", "127.0.0.1::1337", "-e", "BOXD_TOKEN", image]);
+  runtime = {
+    platform: docker(['image', 'inspect', '--format', '{{.Os}}/{{.Architecture}}', image]),
+    packages: docker(['exec', name, 'dpkg-query', '-W', 'chromium', 'python3-pyqt5', 'libgtk-3-0t64']),
+    electron: docker(['exec', name, 'node', '-p', "require('/opt/cua-electron/node_modules/electron/package.json').version"]),
+  };
   const port = docker(["port", name, "1337/tcp"]).split(":").at(-1);
   box = new BoxClient({ baseUrl: `http://127.0.0.1:${port}`, token: credential, timeoutMs: 60000 });
   request = async (path, body) => {
@@ -93,6 +114,35 @@ try {
     assert.ok(button, result.elements_note ?? "fixture control missing");
     return button;
   };
+  const samples = Math.min(20, Math.max(0, Number(process.env.CUA_BENCHMARK_SAMPLES ?? 0)));
+  if (samples > 0) {
+    const quantiles = values => {
+      const sorted = [...values].sort((a, b) => a - b);
+      return { samples_ms: values, p50_ms: sorted[Math.ceil(values.length * .5) - 1], p95_ms: sorted[Math.ceil(values.length * .95) - 1] };
+    };
+    const measured = async operation => { const start = Date.now(); await operation(); return Date.now() - start; };
+    const cold = await measured(async () => { target(await list()); });
+    const reads = [], invokes = [], values = [];
+    for (let i = 0; i < samples; i++) {
+      reads.push(await measured(async () => { target(await list()); }));
+      const button = target(await list());
+      const before = await state();
+      invokes.push(await measured(async () => {
+        const result = await box.computer([{ action: 'invoke_element', ref: button.ref }]);
+        assert.equal(result.progress?.dispatch, 'sent');
+      }));
+      assert.equal((await state()).clicks, before.clicks + 1);
+      const entry = (await list()).elements?.find(e => e.operations?.includes('set_value'));
+      assert.ok(entry);
+      const value = `Benchmark value ${i}`;
+      values.push(await measured(async () => {
+        const result = await box.computer([{ action: 'set_value', ref: entry.ref, value }]);
+        assert.equal(result.verification?.status, 'satisfied');
+      }));
+      assert.equal((await state()).text, value);
+    }
+    latency = { scope: 'end-to-end RPC includes capture and configured settle; first tree is cold session, later samples warm application; helper process is always fresh', cold_observation_ms: cold, warm_observation: quantiles(reads), native_invoke: quantiles(invokes), native_set_value: quantiles(values) };
+  }
   await check("native_tree_and_bound_target", async () => {
     const read = await list();
     const button = target(read);
@@ -243,8 +293,68 @@ try {
     const ambiguous = await list();
     assert.match(ambiguous.elements_note ?? "", /ambiguous accessibility window/);
   });
-  console.log(JSON.stringify({ image, digest, platform: "linux/x11/gtk3", rows }, null, 2));
-  if (rows.some(row => row.status !== "pass")) process.exitCode = 1;
+  await check("qt_native_invoke_and_value", async () => {
+    await box.exec("DISPLAY=:1 QT_LINUX_ACCESSIBILITY_ALWAYS_ON=1 python3 /opt/cua-fixtures/qt-fixture.py >/tmp/cua-qt.log 2>&1 &");
+    await sleep(1000);
+    await box.exec("DISPLAY=:1 wmctrl -a 'CUA Qt Fixture'");
+    const read = await list();
+    const button = read.elements?.find(e => e.name === 'Increment Qt fixture');
+    assert.ok(button, read.elements_note ?? 'Qt fixture control missing');
+    assert.ok(button.operations?.includes('invoke'));
+    await box.computer([{ action: 'invoke_element', ref: button.ref }]);
+    assert.equal(JSON.parse((await box.exec('cat /tmp/cua-qt-state.json')).stdout).clicks, 1);
+    const entry = (await list()).elements?.find(e => e.name === 'Qt fixture value');
+    assert.ok(entry?.operations?.includes('set_value'), 'Qt text control must advertise set_value');
+    const result = await box.computer([{ action: 'set_value', ref: entry.ref, value: 'Qt 原生 42' }]);
+    assert.equal(result.verification?.status, 'satisfied', result.error);
+    assert.equal(JSON.parse((await box.exec('cat /tmp/cua-qt-state.json')).stdout).text, 'Qt 原生 42');
+  });
+  await box.exec('node /opt/cua-fixtures/web-fixture.mjs >/tmp/cua-web.log 2>&1 &');
+  await sleep(300);
+  const webState = async client => JSON.parse((await box.exec('cat /tmp/cua-web-state.json')).stdout)[client];
+  const browserCase = async (display, client) => {
+    const opened = await box.browser(client === 'electron' ? { op: 'snapshot', display } : { op: 'open', display, url: `http://127.0.0.1:17880/?client=${client}` });
+    assert.ok(opened.snapshot, opened.note ?? 'no browser snapshot');
+    const clicked = await box.browser({ op: 'act', display, action: 'click', find: { role: 'button', name: 'Increment fixture' }, expect: { appears: 'Delivered clicks: 1' } });
+    assert.equal(clicked.verification?.status, 'satisfied', clicked.note);
+    assert.equal(clicked.outcome, 'ok');
+    assert.equal((await webState(client)).clicks, 1);
+    const typed = await box.browser({ op: 'act', display, action: 'type', find: { role: 'textbox', name: 'Fixture value' }, text: 'Verified 42', expect: { value: 'Verified 42' } });
+    assert.equal(typed.verification?.status, 'satisfied', typed.note);
+    assert.equal((await webState(client)).text, 'Verified 42');
+    const hovered = await box.browser({ op: 'act', display, action: 'hover', find: { role: 'button', name: 'Increment fixture' } });
+    assert.equal(hovered.outcome, 'unknown', 'background animation is not proof of a click');
+    assert.equal((await webState(client)).clicks, 1);
+  };
+  await check('chromium_dom_verification_and_noop', () => browserCase(1, 'chromium'));
+  await check('chromium_old_snapshot_refused', async () => {
+    const old = await box.browser({ op: 'snapshot', display: 1 });
+    const ref = /\[ref=([^\]]+)\]/.exec(old.snapshot)?.[1];
+    assert.ok(ref, 'snapshot needs a ref');
+    await box.browser({ op: 'snapshot', display: 1 });
+    await assert.rejects(box.browser({ op: 'act', display: 1, action: 'click', ref, snapshot: old.snapshot_id }), /STALE_SNAPSHOT/);
+    assert.equal((await webState('chromium')).clicks, 1);
+  });
+  await check('electron_dom_verification', async () => {
+    await box.ensureDisplay(2);
+    await box.exec('DISPLAY=:2 /opt/cua-electron/node_modules/.bin/electron --no-sandbox --remote-debugging-port=9224 /opt/cua-fixtures/electron-fixture.cjs >/tmp/cua-electron.log 2>&1 &');
+    let ready = false;
+    for (let i = 0; i < 20; i++) {
+      const probe = await box.exec('curl -fsS http://127.0.0.1:9224/json/list');
+      if (probe.exit_code === 0 && JSON.parse(probe.stdout).some(target => target.type === 'page' && target.url.includes('client=electron'))) { ready = true; break; }
+      await sleep(500);
+    }
+    if (!ready) throw new Error('Electron fixture did not expose its CDP endpoint: ' + (await box.exec('head -n 24 /tmp/cua-electron.log')).stdout);
+    await browserCase(2, 'electron');
+  });
+} catch (error) {
+  environmentError = error.message;
+  process.exitCode = 1;
 } finally {
   try { docker(["rm", "-f", name]); } catch {}
+  const report = matrixReport(matrix, rows, { image, digest, runtime, latency, source, environment_error: environmentError, completed_at: new Date().toISOString() });
+  if (environmentError || !report.passed) process.exitCode = 1;
+  mkdirSync(dirname(reportPath), {recursive:true});
+  writeFileSync(reportPath, JSON.stringify(report, null, 2) + '\n');
+  console.log(JSON.stringify(report, null, 2));
 }

@@ -413,11 +413,11 @@ await check("the clipboard can be written and read from outside the box", async 
 });
 
 await check("box-clip survives the shell tool's process-group cleanup", async () => {
-  // A bare `xclip` copy from the shell tool is empty a second later: the selection
-  // belongs to xclip, and the tool kills its process group when the command returns.
-  // Both halves are asserted, because the difference is the whole reason box-clip exists.
-  await box.exec("DISPLAY=:1 sh -c 'printf raw-xclip | xclip -selection clipboard'");
-  const afterRaw = await box.exec("DISPLAY=:1 xclip -selection clipboard -o 2>/dev/null || true");
+  // Bare xclip retains the output pipe and selection. Exercise bounded shell cleanup
+  // without waiting for the default two-minute deadline; redirected xclip is a
+  // different lifetime and is not the control case for this test.
+  await box.exec("DISPLAY=:1 sh -c 'printf raw-xclip | xclip -selection clipboard'", { timeoutMs: 1500 });
+  const afterRaw = await box.exec("DISPLAY=:1 timeout 8 xclip -selection clipboard -o 2>/dev/null || true");
   assert(
     afterRaw.stdout.trim() !== "raw-xclip",
     "a bare xclip copy survived, so this test no longer measures anything"
@@ -436,8 +436,8 @@ await check("the clipboard is one clipboard", async () => {
   // One command: xclip owns the selection only while it lives, and a separate exec ends
   // its process group — which is why splitting this in two reported an empty PRIMARY.
   const both = await box.exec(
-    "DISPLAY=:1 sh -c 'printf clip-sync-ok | xclip -selection clipboard; sleep 2; " +
-      "xclip -o -selection clipboard; echo; xclip -o -selection primary'"
+    "DISPLAY=:1 sh -c 'printf clip-sync-ok | xclip -selection clipboard >/dev/null 2>&1; sleep 2; " +
+      "timeout 8 xclip -o -selection clipboard; echo; timeout 8 xclip -o -selection primary'"
   );
   const [clipboard = "", primary = ""] = both.stdout.trim().split("\n");
   assert(clipboard.trim() === "clip-sync-ok", `CLIPBOARD holds ${clipboard}`);
@@ -461,7 +461,7 @@ await check("the control tree is read for a GTK app and refused in words for a t
   assert(menu, `no menu among ${tree.elements.slice(0, 8).map(e => `${e.role}:${e.name}`).join(", ")}`);
   const clicked = await box.computer([{ action: "click_element", ref: menu.ref }], { display: 1, owner: owner() });
   assert(clicked.success, clicked.error ?? "click_element failed");
-  assert(clicked.effect === "confirmed" || clicked.effect === "partial", `menu click effect was ${clicked.effect}`);
+  assert(clicked.effect === "observed_change" || clicked.effect === "confirmed" || clicked.effect === "partial", `menu click effect was ${clicked.effect}`);
   await box.computer([{ action: "key", key: "Escape" }], { display: 1, owner: owner() });
   await box.exec("pkill -x thunar || true");
 
@@ -655,23 +655,19 @@ await check("the desktop can be recorded", async () => {
 });
 
 await check("boxd repairs a desktop component that died", async () => {
-  // Invisible from the agent's side: x11vnc dying leaves X and the agent working while
-  // the user's screen goes dead for good. Killed by port owner rather than by pattern —
-  // a pkill -f whose pattern appears in the killing command's own cmdline kills its own
-  // shell first, which is how this test silently measured nothing on the first attempt.
-  const before = await box.exec("pgrep -cx x11vnc");
-  assert(Number(before.stdout.trim()) > 0, "x11vnc was not running to begin with");
-
-  await box.exec("fuser -k -n tcp 5901 2>/dev/null; sleep 1; true");
-  const dead = await box.exec("(fuser -n tcp 5901 2>/dev/null && echo up) || echo down");
-  assert(dead.stdout.includes("down"), "x11vnc survived the kill; nothing is being measured");
-
-  // Wait for boxd's own supervision tick, rather than calling the repair path here:
-  // the timer firing is the thing that was added.
+  // Capture the port owner's identity. A fast supervision tick can already have
+  // repaired it by the next read, so requiring an observed downtime races success.
+  const before = await box.exec("fuser -n tcp 5901 2>/dev/null");
+  const originalPid = before.stdout.trim();
+  assert(/^\d+$/.test(originalPid), "x11vnc was not the sole port owner to begin with");
+  const killed = await box.exec(`kill -KILL ${originalPid}`);
+  assert(killed.exit_code === 0, "could not kill the captured x11vnc process");
+  // Wait for boxd's own supervision tick, without calling the repair path here.
   let restored = false;
   for (let attempt = 0; attempt < 15; attempt++) {
-    const check = await box.exec("(fuser -n tcp 5901 2>/dev/null && echo up) || echo down");
-    if (check.stdout.includes("up")) {
+    const check = await box.exec("fuser -n tcp 5901 2>/dev/null || true");
+    const replacementPid = check.stdout.trim();
+    if (/^\d+$/.test(replacementPid) && replacementPid !== originalPid) {
       restored = true;
       break;
     }
