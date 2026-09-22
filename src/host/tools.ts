@@ -129,6 +129,7 @@ export interface ToolContext {
     conversation?: string;
   }) => string | undefined;
   askUser?: (input: {
+    principalId?: string;
     agentId: string;
     agentName: string;
     question: string;
@@ -3165,6 +3166,7 @@ export async function dispatchTool(
         };
       }
       const where = await context.askUser({
+        ...(context.caller?.userId !== undefined ? { principalId: context.caller.userId } : {}),
         agentId: context.agent.id,
         agentName: context.agent.profile.name,
         question,

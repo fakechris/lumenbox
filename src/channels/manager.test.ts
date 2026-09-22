@@ -112,6 +112,33 @@ async function started(manager: ChannelManager): Promise<void> {
 
 const sleep = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
 
+test("unbound new requests never answer a pending question or steer a running task", async () => {
+  const adapter = cardAdapter();
+  const opened: string[] = [];
+  const steers: string[] = [];
+  let release!: () => void;
+  const held = new Promise<void>(resolve => { release = resolve; });
+  const manager = new ChannelManager({
+    mayDrive: () => true,
+    ask: async (_agent, text) => { if (text === "old") await held; return `answer: ${text}`; },
+    board: { open: input => { opened.push(input.title); return `t${opened.length}`; }, started() {}, closed: () => "done" },
+    log() {},
+  });
+  manager.register(adapter, true, "test");
+  await started(manager);
+  const room = { identity: "telegram:7", chatKey: "telegram:room", senderLabel: "Chris" };
+  manager.remember("a1", adapter.name, room.identity, room.chatKey);
+  try {
+    await adapter.inject({ ...room, text: "old" });
+    manager.askQuestion({ agentId: "a1", agentName: "Ada", question: "哪个地区？" });
+    for (const text of ["https://example.test/new", "另外介绍一下一个无关的新模型", "同时支持哪些格式？", "好"]) {
+      await adapter.inject({ ...room, text });
+    }
+    assert.equal(opened.length, 5);
+    assert.deepEqual(steers, []);
+  } finally { release(); await manager.idle(); manager.stop(); }
+});
+
 test("@Name addresses an agent; anything else is the default", () => {
   assert.deepEqual(parseAddress("@Bob check the release"), {
     agentName: "Bob",
@@ -1114,6 +1141,36 @@ test("a folder drop gets one look, not one per file", async () => {
   assert.match(asked[0]!, /q3\.xlsx/);
 });
 
+test("failed text or attachment delivery never closes the task as done", async () => {
+  for (const failure of ["text", "file", "interim"] as const) {
+    const adapter = cardAdapter();
+    const closed: string[] = [];
+    const delivered: string[] = [];
+    let fileAttempts = 0;
+    adapter.sendToChat = async (_chat, text) => {
+      if (failure === "text" || (failure === "interim" && text === "same final")) throw new Error("unconfirmed send");
+    };
+    adapter.sendFile = async () => { fileAttempts++; throw new Error("timeout after possible send"); };
+    const manager = new ChannelManager({
+      mayDrive: () => true, log() {},
+      ask: async (_agent, _text, _identity, _chat, _progress, _thread, _task, onInterim) => {
+        if (failure === "interim") { onInterim?.("same final"); return "same final"; }
+        return "result";
+      },
+      collectOutbox: async () => [{ name: "report.md", base64: "eA==" }],
+      outboxDelivered: async (_chat, names) => { delivered.push(...names); },
+      board: { open: () => "t1", started() {}, closed: (_task, status) => { closed.push(status); return status; } },
+    });
+    manager.register(adapter, true, "test"); await started(manager);
+    await adapter.inject({ identity: "feishu:one", chatKey: "feishu:room", senderLabel: "one", text: "make report" });
+    await manager.idle();
+    assert.deepEqual(closed, ["failed"], failure);
+    assert.deepEqual(delivered, [], "unconfirmed files stay in the outbox");
+    assert.equal(fileAttempts, failure === "file" ? 1 : 0);
+    manager.stop();
+  }
+});
+
 test("a finished task ships the outbox — images as images, files as files, delivered once", async () => {
   const adapter = cardAdapter();
   const delivered: string[][] = [];
@@ -1491,7 +1548,7 @@ test("a question with choices becomes a card where the wire has cards, words els
   assert.ok(adapter.sent.some(entry => /有个问题要先问你/.test(entry.text)));
 });
 
-test("one conversation runs one piece of work: mid-task words steer, 停 stops, neither opens a card", async () => {
+test("explicit additions get tracked follow-up tasks; 停 remains a control command", async () => {
   const adapter = cardAdapter();
   const steers: string[] = [];
   const stops: (string | undefined)[] = [];
@@ -1513,10 +1570,6 @@ test("one conversation runs one piece of work: mid-task words steer, 停 stops, 
         return "做完了";
       };
     })(),
-    steer: (_agent, text) => {
-      steers.push(text);
-      return "steered" as const;
-    },
     stop: agentName => {
       stops.push(agentName);
       return "stopped" as const;
@@ -1538,24 +1591,24 @@ test("one conversation runs one piece of work: mid-task words steer, 停 stops, 
   await adapter.inject({ ...room, messageId: "m1", text: "把三百份报表汇总" });
   await new Promise(resolve => setTimeout(resolve, 20)); // let the task start and block
 
-  // Steering: no second task, no second card, the words reach the turn.
-  const steerReply = await adapter.inject({ ...room, messageId: "m2", text: "毛利改成百分比" });
-  assert.equal(opened.length, 1, "steering does not open a second task");
-  assert.deepEqual(steers, ["毛利改成百分比"]);
-  assert.match(String(steerReply ?? ""), /带到了/);
+  // Explicit addition: a tracked follow-up, never a fire-and-forget acknowledgement.
+  const steerReply = await adapter.inject({ ...room, messageId: "m2", text: "/continue t1 毛利改成百分比" });
+  assert.equal(opened.length, 2, "explicit additions have their own tracked turn");
+  assert.deepEqual(steers, []);
+  assert.equal(steerReply, undefined);
 
   // The stop verb: the stop dep fires, still no new task.
   const stopReply = await adapter.inject({ ...room, messageId: "m3", text: "停" });
   assert.equal(stops.length, 1);
   assert.match(String(stopReply ?? ""), /叫停/);
-  assert.equal(opened.length, 1);
+  assert.equal(opened.length, 2);
 
   // Work finished: the conversation is free again, and the next message is new work.
   release();
   await manager.idle();
   await adapter.inject({ ...room, messageId: "m4", text: "再出一版周报" });
   await manager.idle();
-  assert.equal(opened.length, 2, "a finished conversation takes new work");
+  assert.equal(opened.length, 3, "a finished conversation takes new work");
 
   // 停 with nothing running is answered honestly, and stop is not fired.
   const idleStop = await adapter.inject({ ...room, messageId: "m5", text: "停" });
@@ -1590,10 +1643,6 @@ test("a fresh request while work runs queues as its own task, visibly, and runs 
         }
       };
     })(),
-    steer: (_agent, text) => {
-      steers.push(text);
-      return "steered" as const;
-    },
     // The running turn counts as one ahead, as the web wiring reports it.
     ahead: () => inFlight,
     board: {
@@ -1625,24 +1674,25 @@ test("a fresh request while work runs queues as its own task, visibly, and runs 
   assert.ok(queued !== undefined, "the second card says 排队中");
   assert.equal(queued.card.ahead, 1);
 
-  // While both are on the books, a correction still steers the running one.
-  const steerReply = await adapter.inject({ ...room, messageId: "m3", text: "改成中文摘要" });
-  assert.match(String(steerReply ?? ""), /带到了/);
-  assert.deepEqual(steers, ["改成中文摘要"]);
-  assert.equal(opened.length, 2);
+  // An explicit correction also gets a tracked turn instead of being silently merged.
+  const steerReply = await adapter.inject({ ...room, messageId: "m3", text: "/continue t1 改成中文摘要" });
+  assert.equal(steerReply, undefined);
+  assert.deepEqual(steers, []);
+  assert.equal(opened.length, 3);
 
   release();
   await manager.idle();
   assert.deepEqual(asked, [
     "1/ Introducing CUA-S1: a family of System One Models",
     "https://x.com/blanplan/status/2100868243489530158",
+    "[Additional instruction for task t1; handle after the current turn]\n\n改成中文摘要",
   ], "the queued task ran after the first, as its own ask");
   // The first task's exit did not clear the flag the second one held: a message that
   // landed between the two was still about running work. Now both are gone.
   const after = await adapter.inject({ ...room, messageId: "m4", text: "改成中文摘要" });
   await manager.idle();
   assert.equal(after, undefined, "with nothing running, a correction is new work");
-  assert.equal(opened.length, 3);
+  assert.equal(opened.length, 4);
 });
 
 test("a message addressed to a different agent is parallel work, not steering", async () => {
@@ -1659,10 +1709,6 @@ test("a message addressed to a different agent is parallel work, not steering", 
         });
       }
       return "好";
-    },
-    steer: (_agent, text) => {
-      steers.push(text);
-      return "steered" as const;
     },
     board: {
       open: input => {
@@ -1737,7 +1783,83 @@ test("可以 closes the task waiting on this person; with nothing waiting it is 
   assert.equal(accepts.length, 1);
 });
 
-test("answering the agent's question continues the work — no new task, no new card", async () => {
+test("explicit task additions reject wrong owners, rooms, agents and queued or finished targets", async () => {
+  const adapter = cardAdapter();
+  let release!: () => void;
+  const held = new Promise<void>(resolve => { release = resolve; });
+  const asks: string[] = [];
+  const manager = new ChannelManager({ mayDrive: () => true, log() {},
+    ask: async (_agent, text) => { asks.push(text); await held; return "done"; },
+    board: { open: () => `t${asks.length + 1}`, started() {}, closed: () => "done" },
+  });
+  manager.register(adapter, true, "test"); await started(manager);
+  const room = { identity: "feishu:one", chatKey: "feishu:room", senderLabel: "owner" };
+  try {
+    await adapter.inject({ ...room, text: "@Ada old" });
+    await adapter.inject({ ...room, text: "@Ada queued" });
+    for (const message of [
+      { ...room, identity: "feishu:other", text: "/continue t1 extra" },
+      { ...room, chatKey: "feishu:other-room", text: "/continue t1 extra" },
+      { ...room, text: "@Bob /continue t1 extra" },
+      { ...room, text: "/continue t2 extra" },
+      { ...room, text: "/continue missing extra" },
+    ]) assert.match(String(await adapter.inject(message)), /没有找到/);
+    assert.deepEqual(asks, ["old", "queued"]);
+  } finally { release(); await manager.idle(); }
+  assert.match(String(await adapter.inject({ ...room, text: "/continue t1 extra" })), /没有找到/);
+  manager.stop();
+});
+
+test("question ownership checks identity, room, agent, expiry and one-shot consumption", async () => {
+  const adapter = cardAdapter();
+  const asks: { agent?: string; text: string; questionId?: string }[] = [];
+  const manager = new ChannelManager({ mayDrive: () => true, log() {},
+    ask: async (agent, text, _identity, _chat, _progress, _thread, _task, _interim, _stream, origin) => {
+      asks.push({ agent, text, questionId: origin?.questionId }); return "answered";
+    },
+  });
+  manager.register(adapter, true, "test");
+  await started(manager);
+  const room = { identity: "feishu:ou_1", chatKey: "feishu:room", senderLabel: "owner" };
+  manager.remember("a1", adapter.name, room.identity, room.chatKey);
+  manager.askQuestion({ agentId: "a1", agentName: "Ada", questionId: "q1", question: "Which region?" });
+  for (const message of [
+    { ...room, identity: "feishu:ou_other", text: "/answer q1 us" },
+    { ...room, chatKey: "feishu:elsewhere", text: "/answer q1 us" },
+    { ...room, threadKey: "feishu:room:other-thread", text: "/answer q1 us" },
+    { ...room, text: "@Bob /answer q1 us" },
+    { ...room, text: "/answer nonexistent us" },
+  ]) assert.match(String(await adapter.inject(message)), /已失效/);
+  assert.equal(asks.length, 0);
+  await adapter.inject({ ...room, text: "另外介绍一个新模型" });
+  await manager.idle();
+  assert.equal(asks[0]?.questionId, undefined, "unrelated input must not clear the pending question");
+  await adapter.inject({ ...room, text: "us", questionId: "q1" });
+  await manager.idle();
+  assert.equal(asks[1]?.agent, "Ada");
+  assert.equal(asks[1]?.questionId, "q1");
+  assert.match(asks[1]!.text, /Which region/);
+  assert.match(String(await adapter.inject({ ...room, text: "/answer q1 again" })), /已失效/);
+  manager.askQuestion({ agentId: "a1", agentName: "Ada", questionId: "expired", question: "Old?", expiresAt: Date.now() - 1 });
+  assert.match(String(await adapter.inject({ ...room, text: "/answer expired us" })), /已失效/);
+  assert.equal(asks.length, 2);
+  manager.stop();
+});
+
+test("questions use the originating principal and conversation, not the agent's last asker", async () => {
+  const adapter = cardAdapter();
+  const manager = new ChannelManager({ mayDrive: () => true, ask: async () => "ok", log() {} });
+  manager.register(adapter, true, "test"); await started(manager);
+  manager.remember("a1", adapter.name, "feishu:one", "feishu:room1", { conversation: "c1", principalId: "p1" });
+  manager.remember("a1", adapter.name, "feishu:two", "feishu:room2", { conversation: "c2", principalId: "p2" });
+  const input = { agentId: "a1", agentName: "Ada", question: "Which?", conversation: "c1", principalId: "p1" };
+  assert.equal(manager.askQuestion(input), "feishu:one");
+  assert.equal(manager.askQuestion({ ...input, principalId: "p2" }), undefined);
+  assert.equal(manager.askQuestion({ ...input, conversation: "missing" }), undefined);
+  manager.stop();
+});
+
+test("an explicitly bound answer has a visible turn and original question context", async () => {
   const adapter = cardAdapter();
   const asked: string[] = [];
   const opened: string[] = [];
@@ -1764,20 +1886,21 @@ test("answering the agent's question continues the work — no new task, no new 
   await started(manager);
   manager.remember("a1", adapter.name, "feishu:ou_1");
 
-  // The agent asks; the person's next message is the answer.
-  manager.askQuestion({ agentId: "a1", agentName: "Ada", question: "附件到了吗?" });
+  manager.remember("a1", adapter.name, "feishu:ou_1", "feishu:oc_room");
+  manager.askQuestion({ questionId: "qtest", agentId: "a1", agentName: "Ada", question: "附件到了吗?" });
   const room = { identity: "feishu:ou_1", chatKey: "feishu:oc_room", senderLabel: "chris" };
-  await adapter.inject({ ...room, messageId: "m1", text: "附件刚上传完" });
+  await adapter.inject({ ...room, messageId: "m1", text: "/answer qtest 附件刚上传完" });
   await manager.idle();
 
-  assert.deepEqual(asked, ["附件刚上传完"], "the answer reaches the agent");
-  assert.deepEqual(opened, [], "an answer is a continuation, not new work — observed as noise card t56");
-  assert.equal(adapter.cards.length, 0, "and no card is posted for it");
+  assert.deepEqual(asked, ["[Answer to question qtest: 附件到了吗?]\n\n附件刚上传完"]);
+  assert.equal(opened.length, 1, "a queued answer must not disappear from the board");
+  assert.ok(adapter.cards.length > 0);
 
   // One-shot: the message after the answer is ordinary work again.
   await adapter.inject({ ...room, messageId: "m2", text: "再出一版周报" });
   await manager.idle();
-  assert.deepEqual(opened, ["再出一版周报"]);
+  assert.equal(opened.length, 2);
+  assert.equal(opened[1], "再出一版周报");
 });
 
 test("the door's defaultAgent answers unaddressed messages; @Name still overrides", async () => {
@@ -2204,8 +2327,8 @@ test("a refused stop says it is not yours, not that nothing is running (INV-538 
       };
     })(),
     // What the host answers when the person is in no box of this worker's.
+    board: { open: () => "s1", started() {}, closed: () => "done" },
     stop: () => "refused" as const,
-    steer: () => "refused" as const,
     log: () => {},
   });
   manager.register(adapter, true, "test");
@@ -2217,8 +2340,6 @@ test("a refused stop says it is not yours, not that nothing is running (INV-538 
 
   const stopReply = await adapter.inject({ ...room, messageId: "s2", text: "停" });
   assert.match(String(stopReply ?? ""), /box/, "the refusal names the box rather than claiming nothing is running");
-  const steerReply = await adapter.inject({ ...room, messageId: "s3", text: "改成只做 Q3" });
-  assert.match(String(steerReply ?? ""), /box/);
 
   release();
   await manager.idle();
@@ -2319,4 +2440,3 @@ test("an admitted message is written to the message ledger with the id the turn 
   assert.equal(origins.length, 1);
   void steered;
 });
-

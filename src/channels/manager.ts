@@ -31,7 +31,7 @@ import { randomUUID } from "node:crypto";
 import { channelHealth, type ChannelHealth } from "./liveness.ts";
 import { boxPathsNamed, undelivered } from "../host/named-files.ts";
 import { boardText, type BoardView } from "./board-view.ts";
-import { isContinuation } from "./continuation.ts";
+import { parseContinuation } from "./continuation.ts";
 import type { CardRecord } from "./card-ledger.ts";
 
 import {
@@ -55,7 +55,6 @@ import {
   notYours,
   questionTerms,
   questionText,
-  steered,
 } from "./strings.ts";
 
 export interface InboundMessage {
@@ -73,6 +72,8 @@ export interface InboundMessage {
    * for any platform without threads.
    */
   threadKey?: string;
+  /** An explicit answer button; validated against its owner and conversation. */
+  questionId?: string;
   /**
    * Which chat the message came from, when that is not the same thing as who sent
    * it — a Feishu group's id, a DingTalk conversation. This is what the agent's
@@ -262,9 +263,10 @@ export interface ChannelAdapter {
 
 /** A pending consent, as a card with buttons renders it. */
 export interface QuestionCardState {
+  questionId?: string;
   agentName: string;
   question: string;
-  /** The answers the agent can act on. Buttons where the wire has them; words always work. */
+  /** Buttons carry questionId; typed answers must name it with /answer. */
   options: string[];
 }
 
@@ -423,12 +425,6 @@ export interface ChannelManagerDeps {
    */
   stop?: (agentName: string | undefined, identity: string) => "stopped" | "not-running" | "refused";
   /**
-   * Hands a mid-task message to the running turn as steering, without opening a second
-   * task. Fire-and-forget: the bus's own rules make it steering or the next turn,
-   * exactly one of the two.
-   */
-  steer?: (agentName: string | undefined, text: string, identity: string, conversationKey: string, messageId?: string) => "steered" | "refused";
-  /**
    * Runs one turn and returns what the agent said. `agentName` is undefined for the
    * default agent; unknown names should throw with a message worth relaying.
    * `chatKey` names the chat, for the conversation thread the turn runs in.
@@ -467,7 +463,7 @@ export interface ChannelManagerDeps {
     /** The reply as it is being written — everything so far, each time it grows. */
     onText?: (soFar: string) => void,
     /** The message's own id, when this ask is one message becoming a turn (INV-613). */
-    origin?: { messageId: string }
+    origin?: { messageId: string; questionId?: string }
   ) => Promise<string>;
   /**
    * How many requests are ahead of a new one for this agent and chat. Zero means it
@@ -809,6 +805,7 @@ export class ChannelManager {
     string,
     { adapter: ChannelAdapter; identity: string; chatKey?: string }
   >();
+  private readonly questionAskers = new Map<string, { adapter: ChannelAdapter; identity: string; chatKey?: string }>();
   /**
    * The approval each channel person can answer right now, keyed by their identity.
    *
@@ -953,7 +950,7 @@ export class ChannelManager {
   }
 
   /** Remembers who to notify for an agent — and, when known, the thread they spoke in. */
-  remember(agentId: string, adapterName: string, identity: string, chatKey?: string): void {
+  remember(agentId: string, adapterName: string, identity: string, chatKey?: string, context?: { conversation: string; principalId: string }): void {
     const adapter = this.adapters.find(a => a.name === adapterName);
     if (adapter !== undefined) {
       this.lastAsker.set(agentId, {
@@ -961,6 +958,7 @@ export class ChannelManager {
         identity,
         ...(chatKey !== undefined ? { chatKey } : {}),
       });
+      if (context !== undefined) this.questionAskers.set(JSON.stringify([agentId, context.conversation, context.principalId]), this.lastAsker.get(agentId)!);
     }
   }
 
@@ -973,6 +971,9 @@ export class ChannelManager {
    * the agent to decide for itself rather than to wait for an answer nobody will give.
    */
   askQuestion(input: {
+    questionId?: string;
+    conversation?: string;
+    principalId?: string;
     agentId: string;
     agentName: string;
     question: string;
@@ -981,13 +982,20 @@ export class ChannelManager {
     fallback?: string;
     expiresAt?: number;
   }): string | undefined {
-    const asker = this.lastAsker.get(input.agentId);
+    const asker = input.conversation !== undefined
+      ? this.questionAskers.get(JSON.stringify([input.agentId, input.conversation, input.principalId]))
+      : this.lastAsker.get(input.agentId);
     if (asker === undefined) return undefined;
-    // Their next message is the answer to this, and an answer is a continuation of the
-    // work that asked — not new work. Without this, answering opened a fresh task and a
-    // fresh card titled with the answer ("附件刚上传完 · 已完成"), which is noise wearing
-    // a task's clothes. One-shot: only the immediately next message counts.
-    this.awaitingAnswer.set(asker.identity, { question: input.question, at: Date.now() });
+    const questionId = input.questionId ?? randomUUID();
+    const conversationKey = asker.chatKey ?? asker.identity;
+    for (const [id, pending] of this.awaitingAnswer) {
+      if (pending.expiresAt <= Date.now() || (pending.agentId === input.agentId && pending.conversationKey === conversationKey)) this.awaitingAnswer.delete(id);
+    }
+    this.awaitingAnswer.set(questionId, {
+      agentId: input.agentId, agentName: input.agentName, identity: asker.identity,
+      adapterName: asker.adapter.name, conversationKey, question: input.question,
+      expiresAt: input.expiresAt ?? Date.now() + QUESTION_STALE_MS,
+    });
     // What happens if they say nothing, on the card rather than in a design document
     // (INV-533): a default nobody was told about is not a default they agreed to, and
     // "answer by when" is the part that makes a question answerable at all.
@@ -1003,6 +1011,7 @@ export class ChannelManager {
         .postQuestionCard(
           asker.identity,
           {
+            questionId,
             agentName: input.agentName,
             question: `${input.question}${terms}`,
             options: input.options,
@@ -1020,7 +1029,7 @@ export class ChannelManager {
 
 ${input.options.map(option => `· ${option}`).join("\n")}`
         : "";
-    const text = questionText(input.agentName, `${input.question}${terms}`, choices);
+    const text = questionText(input.agentName, `${input.question}${terms}`, choices) + `\n\n回复：/answer ${questionId} 你的答案`;
     // Into the thread that asked, where the adapter can address one: a question with
     // no surrounding context is a question about everything at once.
     const push =
@@ -1239,6 +1248,7 @@ ${input.options.map(option => `· ${option}`).join("\n")}`
     sayInChat: (line: string) => Promise<void>
   ): Promise<void> {
     if (this.deps.collectOutbox === undefined) return;
+    const failed: string[] = [];
     try {
       const files = await this.deps.collectOutbox(outboxKey);
       const delivered: string[] = [];
@@ -1251,10 +1261,12 @@ ${input.options.map(option => `· ${option}`).join("\n")}`
             await adapter.sendFile(chatKey, file.name, file.base64, anchor);
           } else {
             await sayInChat(`(${file.name} is ready on the box; this channel cannot carry files.)`);
+            failed.push(file.name);
             continue;
           }
           delivered.push(file.name);
         } catch (error) {
+          failed.push(file.name);
           const detail = error instanceof Error ? error.message : String(error);
           this.deps.log(`channel ${adapter.name}: file push failed for ${file.name} (${detail})`);
         }
@@ -1269,10 +1281,12 @@ ${input.options.map(option => `· ${option}`).join("\n")}`
       // reading it in a chat — they had to ask for it again. The outbox convention is
       // in the prompt and was not followed, and whether it was is a path comparison
       // rather than a judgement, so the harness checks rather than asks harder.
-      const named = undelivered(boxPathsNamed(text), delivered);
+      // Never retry an ambiguous failed send via the named-path fallback in this turn.
+      const named = undelivered(boxPathsNamed(text), files.map(file => file.name));
       for (const path of named.slice(0, 3)) {
         const file = await this.deps.readBoxFile?.(path).catch(() => undefined);
         if (file === undefined) {
+          failed.push(path);
           // Said out loud: the silent skip here is why a missing named file used to
           // be indistinguishable from the mechanism not running at all.
           this.deps.log(`channel ${adapter.name}: named file ${path} could not be read; not sent`);
@@ -1284,9 +1298,13 @@ ${input.options.map(option => `· ${option}`).join("\n")}`
             await adapter.sendImage(chatKey, file.base64, anchor);
           } else if (adapter.sendFile !== undefined) {
             await adapter.sendFile(chatKey, file.name, file.base64, anchor);
-          } else continue;
+          } else {
+            failed.push(file.name);
+            continue;
+          }
           this.deps.log(`channel ${adapter.name}: sent ${file.name}, which the reply only named`);
         } catch (error) {
+          failed.push(file.name);
           const detail = error instanceof Error ? error.message : String(error);
           this.deps.log(`channel ${adapter.name}: could not send named file ${path} (${detail})`);
         }
@@ -1294,13 +1312,17 @@ ${input.options.map(option => `· ${option}`).join("\n")}`
     } catch (error) {
       const detail = error instanceof Error ? error.message : String(error);
       this.deps.log(`channel ${adapter.name}: outbox failed (${detail})`);
+      throw new Error("附件投递未确认；文件保留在 box，请检查后再补发。", { cause: error });
     }
+    if (failed.length > 0) throw new Error(`${failed.length} 个附件未确认投递，不能标记交付完成；请检查后再补发。`);
   }
 
   private async handle(
     adapter: ChannelAdapter,
     message: InboundMessage
   ): Promise<string | undefined> {
+    // Button labels are data, not commands such as "停" or "桌面".
+    if (message.questionId !== undefined) message = { ...message, text: `/answer ${message.questionId} ${message.text}` };
     // An invite code is checked before the allow list: the sender not being on it yet
     // is the whole reason codes exist. A non-code message from a stranger still knocks.
     const code = parseBind(message.text);
@@ -1490,8 +1512,10 @@ ${input.options.map(option => `· ${option}`).join("\n")}`
     // message it is work starting. The first version treated every message carrying files
     // as a delivery and ignored its text — the person had just said what they wanted, and
     // was told to say what they wanted. Walkthrough step zero, broken at the first second.
-    if (message.files !== undefined && message.files.length > 0) {
-      const drop = this.runDrop(adapter, message).finally(() => {
+    if (message.files !== undefined && message.files.length > 0 && parseContinuation(parseAddress(message.text).text) === undefined) {
+      const drop = this.runDrop(adapter, message).catch(error => {
+        this.deps.log(`channel ${adapter.name}: file request failed (${error instanceof Error ? error.message : String(error)})`);
+      }).finally(() => {
         this.inflight.delete(drop);
       });
       this.inflight.add(drop);
@@ -1501,42 +1525,49 @@ ${input.options.map(option => `· ${option}`).join("\n")}`
     const { agentName, text } = parseAddress(message.text);
     if (text === "") return SAY_WHAT_YOU_NEED;
 
-    // One conversation runs one piece of work at a time. While it runs, "停" is the stop
-    // button, and a message that plainly continues the running work — an answer to what
-    // the agent just asked, a correction, an addition — is steering: no second task, no
-    // second card, the words reach the turn. Anything else is new work, and new work
-    // queues *visibly*: a card that says 排队中, a board row, and its own turn when the
-    // conversation is free. The first rule here steered everything, and a stream of
-    // unrelated links fired mid-turn was swallowed into the running turn with nothing to
-    // show for it (2026-09-19, inbox seq 17/18/19). A message addressed to a *different*
-    // agent is new work and passes through — two agents in parallel is the team working,
-    // not a routing accident.
+    // New requests always have their own task. Intent words and a pending question are
+    // not ownership. Explicit references bind context, but still get a tracked turn;
+    // no channel request uses fire-and-forget steering (INV-611/630).
     const conversationKey = message.threadKey ?? message.chatKey ?? message.identity;
-    const running = this.runningWork.get(conversationKey)?.at(-1);
+    const entries = this.runningWork.get(conversationKey) ?? [];
+    const running = entries.find(entry => agentName === undefined || entry.agentName === agentName);
+    const reference = parseContinuation(text);
+    const questionId = message.questionId ?? (reference?.kind === "answer" ? reference.id : undefined);
+    let answering: { agentName: string; question: string; text: string; id: string } | undefined;
+    let addition: { agentName: string | undefined; text: string } | undefined;
+    if (questionId !== undefined) {
+      const question = this.awaitingAnswer.get(questionId);
+      if (question === undefined || question.expiresAt <= Date.now() ||
+          question.identity !== message.identity || question.adapterName !== adapter.name ||
+          question.conversationKey !== conversationKey ||
+          (agentName !== undefined && agentName !== question.agentName)) {
+        return "这个问题已失效，或不属于你、当前会话和指定的 agent。请重新发起请求。";
+      }
+      this.awaitingAnswer.delete(questionId);
+      answering = { agentName: question.agentName, question: question.question, text: reference?.kind === "answer" ? reference.text : text, id: questionId };
+    } else if (reference?.kind === "continue") {
+      const target = entries.find(entry => entry.taskId === reference.id);
+      if (target === undefined || target.identity !== message.identity || target.adapterName !== adapter.name ||
+          (agentName !== undefined && target.agentName !== agentName) ||
+          entries.find(entry => entry.agentName === target.agentName) !== target) {
+        return "没有找到你在当前会话中正在执行的这个任务；排队中和已结束的任务不能追加。请单独发送新请求。";
+      }
+      // Even an explicit addition gets a tracked turn. Fire-and-forget steering can
+      // race the old turn's exit and acknowledge words no later reply ever delivers.
+      addition = { agentName: target.agentName, text: `[Additional instruction for task ${reference.id}; handle after the current turn]\n\n${reference.text}` };
+    } else if (/^\/(?:answer|continue)(?:\s|$)/u.test(text)) {
+      return "请使用 /answer 问题编号 答案，或 /continue 任务编号 追加内容。";
+    }
     if (running !== undefined) {
-      const sameAgent = agentName === undefined || agentName === running.agentName;
-      if (parseStopRequest(text)) {
+      if (answering === undefined && parseStopRequest(text)) {
         const outcome = this.deps.stop?.(running.agentName, message.identity) ?? "not-running";
         // Three answers, not two: refused is not "nothing is running", and telling
         // somebody their stop worked when it did not is worse than refusing them.
         return outcome === "stopped" ? STOPPING : outcome === "refused" ? notYours(running.agentName) : NOTHING_RUNNING;
       }
-      const awaiting = this.awaitingAnswer.get(message.identity);
-      if (
-        sameAgent &&
-        this.deps.steer !== undefined &&
-        isContinuation(text, { awaitingAnswer: awaiting !== undefined && Date.now() - awaiting.at <= QUESTION_STALE_MS })
-      ) {
-        // The answer has reached the turn; the question is no longer open. Left in place,
-        // the next message after the turn ended would read as a continuation too and
-        // skip the board.
-        this.awaitingAnswer.delete(message.identity);
-        const outcome = this.deps.steer(running.agentName, text, message.identity, conversationKey, message.id);
-        return outcome === "refused" ? notYours(running.agentName) : steered(running.agentName);
-      }
-    } else if (parseStopRequest(text)) {
+    } else if (answering === undefined && parseStopRequest(text)) {
       return NOTHING_RUNNING;
-    } else if (parseAcceptance(text)) {
+    } else if (answering === undefined && parseAcceptance(text)) {
       // "可以" with a task waiting on this person closes it as their word. With nothing
       // waiting, the same word is ordinary chat and falls through to the agent.
       const waiting = this.lastTask.get(conversationKey);
@@ -1549,28 +1580,8 @@ ${input.options.map(option => `· ${option}`).join("\n")}`
       }
     }
 
-    // An answer to the question the agent just asked continues that work — no new board
-    // row, no new card. Consumed exactly once, so the message after the answer is
-    // ordinary again.
-    const awaited = this.awaitingAnswer.get(message.identity);
-    this.awaitingAnswer.delete(message.identity);
-    const answering = awaited !== undefined;
-    // A question the person walked away from is not answered by whatever they say next:
-    // an hour later "帮我看看邮件" is new work, and reading it as the answer to "which
-    // region?" sends the agent down the wrong road with a straight face. Said to the
-    // agent, so it decides; the message is still a continuation of that work.
-    const staleQuestion =
-      awaited !== undefined && Date.now() - awaited.at > QUESTION_STALE_MS
-        ? `[Earlier you asked: "${awaited.question.slice(0, 160)}" and the person moved on without answering ` +
-          `(${Math.round((Date.now() - awaited.at) / 60_000)} minutes ago). Treat that question as skipped ` +
-          `unless what follows plainly answers it.]\n\n`
-        : "";
-
-    // The door's own default (docs/22 §2): a message that names nobody goes to this
-    // adapter's defaultAgent. Applied here, to *new* work only — the steering and
-    // stop decisions above deliberately used the raw address, because a plain
-    // message while something runs is a reply to that work, whoever is doing it.
-    const addressed = agentName ?? this.deps.defaultAgentFor?.(adapter.name);
+    // Explicit references retain their agent; otherwise the door owns the default.
+    const addressed = answering?.agentName ?? addition?.agentName ?? agentName ?? this.deps.defaultAgentFor?.(adapter.name);
 
     // 「桌面」 is a link to the live screen, answered on the wire — the phone-sized
     // version of the web page's Take over.
@@ -1585,17 +1596,23 @@ ${input.options.map(option => `· ${option}`).join("\n")}`
       joinNo !== undefined
         ? (this.deps.meetingJoinPrompt?.(joinNo, adapter.name) ?? text)
         : text;
-    const textForTurn = staleQuestion === "" ? finalText : `${staleQuestion}${finalText}`;
+    const textForTurn = answering === undefined ? addition?.text ?? finalText : `[Answer to question ${answering.id}: ${answering.question}]\n\n${answering.text}`;
 
     // "屏幕" is a look, not a task: no turn runs, the desktop is captured as it is.
     const work =
       parseScreenRequest(text) && this.deps.screenshot !== undefined
         ? this.runScreenshot(adapter, message, addressed)
-        : this.runTask(adapter, message, addressed, textForTurn, undefined, { continuation: answering });
+        : (async () => {
+            const files = message.files?.length ? await this.storeFiles(adapter, message) : undefined;
+            if (message.files?.length && files === undefined) return;
+            await this.runTask(adapter, message, addressed, textForTurn, files, { questionId: answering?.id });
+          })();
 
     // The work runs behind this return; the decisions above stay synchronous because
     // a refusal or an approval answer *is* the whole response.
-    const task = work.finally(() => {
+    const task = work.catch(error => {
+      this.deps.log(`channel ${adapter.name}: request failed (${error instanceof Error ? error.message : String(error)})`);
+    }).finally(() => {
       this.inflight.delete(task);
     });
     this.inflight.add(task);
@@ -1616,6 +1633,7 @@ ${input.options.map(option => `· ${option}`).join("\n")}`
     } catch (error) {
       const detail = error instanceof Error ? error.message : String(error);
       this.deps.log(`channel ${adapter.name}: push failed (${detail})`);
+      throw error;
     }
   }
 
@@ -1632,18 +1650,17 @@ ${input.options.map(option => `· ${option}`).join("\n")}`
 
   /** What each conversation is running right now, for the one-at-a-time routing rule. */
   /**
-   * What is running or queued in each conversation, oldest first; the last entry is the
-   * one a mid-task message is about. A stack rather than one record, because a queued
+   * What is running or queued in each conversation, oldest first. A list because a queued
    * task starts its `runTask` while the one ahead of it is still running, and the first
    * one finishing must not wipe the flag the second still holds.
    */
-  private readonly runningWork = new Map<string, { agentName: string | undefined }[]>();
+  private readonly runningWork = new Map<string, { agentName: string | undefined; identity: string; adapterName: string; taskId?: string }[]>();
 
   /** The conversation's most recent board task — what an acceptance word refers to. */
   private readonly lastTask = new Map<string, string>();
 
-  /** Who owes an answer to an open question. Their next message continues, not begins. */
-  private readonly awaitingAnswer = new Map<string, { question: string; at: number }>();
+  /** Explicit question bindings. Ordinary messages neither consume nor answer them. */
+  private readonly awaitingAnswer = new Map<string, { agentId: string; agentName: string; identity: string; adapterName: string; conversationKey: string; question: string; expiresAt: number }>();
 
   /** How long a wordless drop waits for its instruction. */
   private static readonly DROP_WINDOW_MS = 10 * 60 * 1000;
@@ -1701,7 +1718,9 @@ ${input.options.map(option => `· ${option}`).join("\n")}`
           this.lookTimers.delete(conversationKey);
           const pending = this.pendingDrops.get(conversationKey);
           if (pending === undefined || pending.files.length === 0) return;
-          const look = this.runLook(adapter, message, pending.files).finally(() => {
+          const look = this.runLook(adapter, message, pending.files).catch(error => {
+            this.deps.log(`channel ${adapter.name}: file preview failed (${error instanceof Error ? error.message : String(error)})`);
+          }).finally(() => {
             this.inflight.delete(look);
           });
           this.inflight.add(look);
@@ -1857,9 +1876,8 @@ ${input.options.map(option => `· ${option}`).join("\n")}`
    *
    * Everything here degrades by capability: a card where the adapter has one, a line
    * where it does not; a chat-addressed push where the wire distinguishes chats from
-   * senders, an identity-addressed one where it does not. Failures to *deliver* are
-   * logged and swallowed — the turn itself already ran, and its record is the
-   * transcript, not the chat.
+   * senders, an identity-addressed one where it does not. Delivery failure settles the
+   * task as failed, even when generation succeeded; the transcript retains the answer.
    */
   private async runTask(
     adapter: ChannelAdapter,
@@ -1867,12 +1885,12 @@ ${input.options.map(option => `· ${option}`).join("\n")}`
     agentName: string | undefined,
     text: string,
     droppedFiles?: readonly string[],
-    options?: { continuation?: boolean }
+    options?: { questionId?: string }
   ): Promise<void> {
     const chatKey = message.chatKey ?? message.identity;
     const runningKey = message.threadKey ?? chatKey;
     const targetChatKey = message.threadKey ?? chatKey;
-    const runningEntry = { agentName };
+    const runningEntry: { agentName: string | undefined; identity: string; adapterName: string; taskId?: string } = { agentName, identity: message.identity, adapterName: adapter.name, taskId: message.id ?? message.messageId };
     this.runningWork.set(runningKey, [...(this.runningWork.get(runningKey) ?? []), runningEntry]);
     // What this turn should know it was handed: files in this message, plus any dropped
     // wordlessly in this conversation just before. In the prompt and nowhere else — the
@@ -1892,10 +1910,8 @@ ${input.options.map(option => `· ${option}`).join("\n")}`
     };
     mark("working");
 
-    const ahead = this.deps.ahead?.(agentName, chatKey) ?? 0;
-    const taskId = options?.continuation === true
-      ? undefined
-      : this.deps.board?.open({
+    const ahead = this.deps.ahead?.(agentName, runningKey) ?? 0;
+    const taskId = this.deps.board?.open({
       title: firstLine(text),
       // The person's whole message rides on the task, so a later title rewrite never
       // costs the board what was actually said.
@@ -1911,7 +1927,10 @@ ${input.options.map(option => `· ${option}`).join("\n")}`
       // a task with the wrong conversation looks exactly like a task with a quiet one.
       threadKey: message.threadKey ?? chatKey,
     });
-    if (taskId !== undefined) this.lastTask.set(runningKey, taskId);
+    if (taskId !== undefined) {
+      this.lastTask.set(runningKey, taskId);
+      runningEntry.taskId = taskId;
+    }
     const card: TaskCardState = {
       title: firstLine(text),
       agentName: agentName ?? "",
@@ -1959,12 +1978,11 @@ ${input.options.map(option => `· ${option}`).join("\n")}`
       await deliver(ackLine(card));
     };
 
+    const acknowledgeSafely = () => acknowledge().catch(() => this.deps.log(`channel ${adapter.name}: acknowledgement could not be delivered`));
     const ackTimer = setTimeout(() => {
-      // A continuation answers a question the person just asked; a card titled with
-      // their own answer is noise wearing a task's clothes. The typing mark suffices.
-      if (options?.continuation !== true) void acknowledge();
+      void acknowledgeSafely();
     }, this.deps.ackAfterMs ?? ACK_AFTER_MS);
-    if (ahead > 0 && options?.continuation !== true) void acknowledge();
+    if (ahead > 0) void acknowledgeSafely();
 
     // Progress rewrites the card, rate-limited; without a card it goes nowhere, on
     // purpose — a plain chat told "tool call #14" fourteen times is spam, not progress.
@@ -2052,6 +2070,7 @@ ${input.options.map(option => `· ${option}`).join("\n")}`
       // 一下" while the search runs instead of silence until it ends. Remembered so the
       // final reply is not the same sentence twice when a model repeats itself.
       let interim: string | undefined;
+      let interimDelivery: Promise<void> | undefined;
       const reply = await this.deps.ask(
         agentName,
         handedFiles.length > 0
@@ -2065,7 +2084,8 @@ ${input.options.map(option => `· ${option}`).join("\n")}`
         line => {
           if (interim !== undefined || line.trim() === "") return;
           interim = line.trim();
-          void deliver(interim).catch((error: unknown) => {
+          interimDelivery = deliver(interim);
+          void interimDelivery.catch((error: unknown) => {
             this.deps.log(
               `channel ${adapter.name}: interim line failed — ` +
                 `${error instanceof Error ? error.message : String(error)}`
@@ -2073,24 +2093,22 @@ ${input.options.map(option => `· ${option}`).join("\n")}`
           });
         },
         onText,
-        message.id !== undefined ? { messageId: message.id } : undefined
+        message.id !== undefined ? { messageId: message.id, ...(options?.questionId !== undefined ? { questionId: options.questionId } : {}) } : undefined
       );
       clearTimeout(ackTimer);
-      // Asked first, then shown. The board owns what a finished turn means for the work —
-      // it may be review, and saying Done over that is the contradiction t51 produced.
-      const settled = taskId !== undefined ? this.deps.board?.closed(taskId, "done") : undefined;
-      finishCard(settled === "review" ? "review" : "done");
-      // The reaction is about the *message*, which has been answered either way.
-      mark("done");
       if (reply.trim() !== interim) {
         await deliver(reply.trim() === "" ? EMPTY_REPLY_NOTE : reply);
-      }
+      } else await interimDelivery;
       // Whatever the turn left in the chat's outbox follows the reply — images shown
       // as images, everything else as a file. What was pushed is marked delivered;
       // what failed stays in the outbox for the next task rather than vanishing.
       await this.deliverFiles(adapter, targetChatKey, message.threadKey ?? chatKey, reply, anchor, line =>
         deliver(line)
       );
+      // A generated answer is not yet a delivered answer. Settle only after text/files.
+      const settled = taskId !== undefined ? this.deps.board?.closed(taskId, "done") : undefined;
+      finishCard(settled === "review" ? "review" : "done");
+      mark("done");
       // The desk as the task left it: evidence at a glance — but only when the turn
       // actually used the desktop (a poster of an untouched desk is noise), only for
       // work long enough to have been acknowledged — a quick answer does not need a
@@ -2115,7 +2133,8 @@ ${input.options.map(option => `· ${option}`).join("\n")}`
       mark("failed");
       const detail = error instanceof Error ? error.message : String(error);
       if (taskId !== undefined) this.deps.board?.closed(taskId, "failed", detail);
-      await deliver(detail);
+      this.deps.log(`channel ${adapter.name}: task failed — ${detail}`);
+      await deliver(detail).catch(() => this.deps.log(`channel ${adapter.name}: failure notice could not be delivered`));
     } finally {
       // Only this task's own entry: a same-conversation task queued behind us keeps its
       // flag, so a message arriving after we exit is still about running work.
