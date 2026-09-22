@@ -248,10 +248,27 @@ export interface PruneResult {
  */
 export function pruneFetched(
   home = agentboxHome(),
-  options: { retentionDays?: number; now?: Date; roots?: readonly string[] } = {}
+  options: {
+    retentionDays?: number;
+    now?: Date;
+    roots?: readonly string[];
+    /**
+     * Paths some live record still points at. Kept past their age (INV-665).
+     *
+     * Deleting a file a live record refers to turns that record into a claim about
+     * something nobody can look at. The digest in the pointer means the reference does not
+     * dangle either way, but "the record still says this is here" and "the record says what
+     * used to be here" are different promises, and the first is cheap to keep.
+     *
+     * A retention floor that only moves one way, which is CMIS's rule for the same reason:
+     * a repository must prevent a client from shortening a retention (docs/71 §0).
+     */
+    referenced?: ReadonlySet<string>;
+  } = {}
 ): PruneResult {
   const roots = options.roots ?? [fetchedDir(home)];
   const days = options.retentionDays ?? retentionDays();
+  const referenced = options.referenced ?? new Set<string>();
   const cutoff = (options.now ?? new Date()).getTime() - days * 86_400_000;
   const result: PruneResult = { removed: 0, kept: 0 };
   const walk = (dir: string): void => {
@@ -279,6 +296,12 @@ export function pruneFetched(
         continue;
       }
       if (!/\.(md|json|txt)$/.test(name)) continue;
+      if (referenced.has(path)) {
+        // Still cited by a turn that has not aged out itself. Counted as kept rather than
+        // as skipped: from the directory's point of view it is simply still here.
+        result.kept += 1;
+        continue;
+      }
       if (stat.mtimeMs < cutoff) {
         rmSync(path, { force: true });
         result.removed += 1;

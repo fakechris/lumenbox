@@ -398,6 +398,18 @@ artefact degrades from "here it is" to "this is what it was". One regex reads ei
 pointer (`KEPT_POINTER_PATTERN`), the path is still the first token after the marker, and
 the line never contains a `]`, because three consumers already depend on both of those.
 
+**Which turn read what (INV-665).** The `end` record in `turns.jsonl` carries `evidence`:
+the pointers this turn produced, as they were written. The link only went one way before —
+a kept file names the turn that read it, so file to turn resolved, and nothing answered
+turn to files except walking every month of the store filtering on a field. It lives in
+`turns.jsonl` rather than a new ledger because that file is a `record` since INV-634: it
+archives instead of emptying, which is what an edge between a turn and its evidence needs.
+
+Two things use the edge. The quote gate runs over a turn's own sources before the answer
+is delivered. And the retention pass keeps a file a live turn still points at, past its
+age: `referencedKeptPaths()` reads the live ledger, and a retention floor that only moves
+one way is CMIS's rule for the same reason.
+
 `verifyKept()` re-reads the kept files and checks each body against its own frontmatter
 digest; `verifyPointer()` does the same for one pointer and distinguishes `verified`,
 `mismatched` and `missing`. The audit export runs the first on the way out and puts
