@@ -13,6 +13,118 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { runEpisode, type Script } from "./scenario.ts";
+import { ChannelManager, type ChannelAdapter, type InboundMessage as ChannelMessage } from "../channels/manager.ts";
+import { choosePinnedEntries, type HistoryEntry } from "./compaction.ts";
+
+// 2026-09-20: a question containing 区别 and a pasted parser announcement were
+// absorbed into a running lookup. Exercise the channel -> bus -> real turn path;
+// the scripted model tests routing/delivery, not the quality of generated prose.
+for (const request of [
+  "25道Agent高频实操面试题\n14. 长短记忆的区别？\n25. 如何保障输出可溯源？\n回答一下试试",
+  "腾讯发布文档解析模型\n输入文档页面图，模型一次输出完整页面，不需要先把标题、正文、表格和公式分别裁出来。\n解释它有什么用",
+]) {
+  test(`fresh research has its own turn and reply: ${request.split("\n")[0]}`, { timeout: 15_000 }, async () => {
+    let markEntered!: () => void;
+    const entered = new Promise<void>(resolve => { markEntered = resolve; });
+    let release!: () => void;
+    const released = new Promise<void>(resolve => { release = resolve; });
+    const pushed: { text: string; replyTo?: string }[] = [];
+    const tasks: string[] = [];
+    let steers = 0;
+    const answer = "这是新问题的独立答复。";
+    const episode = await runEpisode({
+      team: [{ name: "Nova" }], says: [],
+      script: async ({ round, messages }) => {
+        if (round === 0) {
+          markEntered();
+          await released;
+          return { call: "SetTodos", input: { todos: [{ text: "旧研究", status: "done" }] } };
+        }
+        const seen = JSON.stringify(messages);
+        if (round === 1) {
+          assert.ok(!seen.includes("25道") && !seen.includes("腾讯发布"), "new work never enters the old model round");
+          return { say: "旧研究结果。" };
+        }
+        assert.ok(seen.includes(request.split("\n")[0]!));
+        return { say: answer };
+      },
+      drive: async ({ bus, registry, frontId }) => {
+        let receive!: (message: ChannelMessage) => Promise<string | undefined>;
+        const adapter: ChannelAdapter = {
+          name: "feishu", start: async handler => { receive = handler; }, stop() {},
+          send: async (_identity, text) => { pushed.push({ text }); return undefined; },
+          sendToChat: async (_chat, text, options) => { pushed.push({ text, replyTo: options?.replyTo }); },
+        };
+        const manager = new ChannelManager({
+          mayDrive: () => true, log: () => {},
+          ask: async (_agent, text) => {
+            bus.sendFromUser(frontId, text, { steerable: false });
+            await bus.runExclusive(frontId, { userDriven: true });
+            const entries = registry.readTranscript(frontId) as { role?: string; text?: string }[];
+            return entries.filter(entry => entry.role === "assistant" && entry.text).at(-1)?.text ?? "";
+          },
+          steer: (_agent, text) => {
+            steers += 1;
+            bus.sendFromUser(frontId, text);
+            return "steered";
+          },
+          board: {
+            open: input => { tasks.push(input.description ?? input.title); return `t${tasks.length}`; },
+            started: () => {}, closed: () => "done",
+          },
+        });
+        manager.register(adapter, true, "test");
+        manager.start();
+        await new Promise(resolve => setImmediate(resolve));
+        const room = { identity: "feishu:test", chatKey: "feishu:room", senderLabel: "test user" };
+        try {
+          await receive({ ...room, messageId: "old", text: "研究这篇旧文章" });
+          await entered;
+          const ack = await receive({ ...room, messageId: "new", text: request });
+          assert.equal(ack, undefined, "not a 带到了 steering acknowledgement");
+        } finally {
+          release();
+          await manager.idle();
+          manager.stop();
+        }
+      },
+    });
+    try {
+      assert.equal(steers, 0);
+      assert.equal(tasks.length, 2);
+      assert.equal(episode.score.turns, 2);
+      assert.ok(pushed.some(p => p.text === answer && p.replyTo === "new"), "result goes back to the new request");
+    } finally { episode.cleanup(); }
+  });
+}
+
+test("legacy research narration is not replayed as a pinned tool exemplar", async () => {
+  const at = "2026-09-20T00:38:55Z";
+  const narration = "17 个核心事实，1:1 核完，5 维 cross-comparison。".repeat(60);
+  const old: HistoryEntry[] = [
+    { role: "assistant", kind: "blocks", at, blocks: [
+      { type: "text", text: narration },
+      { type: "tool_use", id: "fetch", name: "WebFetch", input: { url: "https://example.test/parser" } },
+    ] },
+    { role: "user", kind: "results", at, blocks: [{ type: "tool_result", tool_use_id: "fetch", content: "a parser source" }] },
+  ];
+  // Existing records must benefit without rewriting the operator's transcript.
+  const legacy: HistoryEntry = { role: "user", kind: "summary", at, covers: 2, text: "Earlier parser research finished.", pinned: old };
+  const fresh = choosePinnedEntries(old, []);
+  assert.doesNotMatch(JSON.stringify(fresh), /cross-comparison/);
+  const episode = await runEpisode({
+    team: [{ name: "Nova" }], says: ["这个解析器有什么用？"], history: [...old, legacy],
+    script: ({ messages }) => {
+      assert.doesNotMatch(JSON.stringify(messages), /cross-comparison/);
+      assert.match(JSON.stringify(messages), /example.test\/parser/);
+      return { say: "它把文档中的文字和表格转成程序可处理的内容。" };
+    },
+  });
+  try {
+    assert.equal(episode.score.turns, 1);
+    assert.match(JSON.stringify(episode.registry.readTranscript(episode.registry.list()[0]!.id)), /cross-comparison/);
+  } finally { episode.cleanup(); }
+});
 
 // ── 2026-09-09, "build the team from this post" ───────────────────────────────────────────
 //

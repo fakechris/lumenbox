@@ -20,10 +20,13 @@
 
 /** Words that mark a correction or an addition to what is already being done. */
 const CUE_PATTERN =
-  /改成|改为|改一下|改回|换成|换个|不要|不用|别(?!的)|去掉|删掉|加上|加个|补充|另外|顺便|还有|再加|等等|等一下|等下|稍等|重来|重新|不对|错了|不是这个|也要|同时|记得|对了|然后|先别|算上|漏了|改动|调整/u;
+  /^(?:请)?(?:改成|改为|改一下|改回|换成|换个|不要|不用|去掉|删掉|加上|加个|补充|另外|顺便|还有|再加|等等|等一下|等下|稍等|重来|重新|不对|错了|不是这个|也要|同时|记得|对了|然后|先别|算上|漏了|改动|调整)/u;
+
+/** A short named target followed by an edit, e.g. 毛利改成百分比. */
+const SUBJECT_EDIT_PATTERN = /^[^\s。！？?!：:“”「」<>]{1,24}(?:改成|改为|改一下|改回|换成|去掉|删掉|加上)/u;
 
 const ENGLISH_CUE_PATTERN =
-  /\b(also|actually|wait|instead|don't|dont|do not|rather|make it|change (it|that|the)|use the|add the|remove the|skip the|forget the|oh and|and also|one more|plus|never ?mind|hold on|scratch that)\b/i;
+  /^(also|actually|wait|instead|don't|dont|do not|rather|make it|change (it|that|the)|use the|add the|remove the|skip the|forget the|oh and|and also|one more|plus|never ?mind|hold on|scratch that)\b/i;
 
 /** A whole message that only acknowledges: 好, 可以, ok — an answer, not a request. */
 const ACKNOWLEDGEMENTS = new Set([
@@ -50,6 +53,14 @@ export function isContinuation(text: string, context: ContinuationContext): bool
   // A message that names a reply option by number — "2", "第二个" — is an answer to
   // the question card that offered it, whether or not the card's own bookkeeping saw it.
   if (/^(第?[一二三四五六七八九十\d]+个?|[a-d])$/iu.test(bare)) return true;
-  if (CUE_PATTERN.test(trimmed) || ENGLISH_CUE_PATTERN.test(trimmed)) return true;
+  // A pasted article/question set is new work, even when its contents mention a
+  // correction word. On 2026-09-20 “区别” in question 14 swallowed all 25 questions
+  // into a running Jev lookup. Ambiguous, long or multi-line requests wait their
+  // own turn; only short direct instructions qualify for lexical steering.
+  if (trimmed.length > 200 || /[\r\n]/u.test(trimmed)) return false;
+  if (/^(?:请问|我想知道|为什么|为何|如何|什么|怎么|是否|能否|what\b|why\b|how\b|can\b|could\b)/iu.test(trimmed)) return false;
+  // “别” is an imperative only at the start, never inside 区别 / 识别 / 特别.
+  if (/^(?:请)?别(?!的)/u.test(trimmed)) return true;
+  if (CUE_PATTERN.test(trimmed) || SUBJECT_EDIT_PATTERN.test(trimmed) || ENGLISH_CUE_PATTERN.test(trimmed)) return true;
   return false;
 }
