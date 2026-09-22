@@ -1,3 +1,4 @@
+import { X11_DESKTOP_CAPABILITIES } from "../cua/x11-executor.ts";
 import { withCdpAuthority } from "./cdp.ts";
 /**
  * boxd — the in-box daemon.
@@ -213,7 +214,7 @@ async function handleHealth(): Promise<HealthResult> {
     version: VERSION,
     ...(imageContract() !== undefined ? { contract: imageContract()! } : {}),
     protocol: BOXD_PROTOCOL,
-    ...(!HEADLESS ? { desktop_contract: { version: 1 as const, snapshot_refs: true as const, final_observation: true as const, batch_progress: true as const } } : {}),
+    ...(!HEADLESS ? { desktop_driver: X11_DESKTOP_CAPABILITIES, desktop_contract: { version: 1 as const, snapshot_refs: true as const, final_observation: true as const, batch_progress: true as const } } : {}),
     display,
     ...(HEADLESS ? { headless: true } : {}),
     ...(currentRoots().restricted ? { repositories: currentRoots().list() } : {}),

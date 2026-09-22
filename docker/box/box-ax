@@ -19,6 +19,8 @@ import os
 import signal
 import sys
 
+PERFORM = "--perform" in sys.argv
+ATTEMPTED = False
 LIMIT = 150
 DEADLINE_S = 4
 
@@ -31,6 +33,9 @@ OPERABLE = {
 
 
 def fail(reason):
+    if PERFORM:
+        print(json.dumps({"error": reason, "dispatch": "partial" if ATTEMPTED else "not_started"}))
+        sys.exit(0)
     print(json.dumps({"error": reason}))
     sys.exit(1)
 
@@ -115,7 +120,35 @@ def native_identity(node):
     return "%s:%s" % (node.app.bus_name, node.path)
 
 
-def walk(window):
+def invoke_index(node):
+    try:
+        action = node.get_action_iface()
+        if action is None:
+            return None
+        for i in range(action.get_n_actions()):
+            if action.get_action_name(i).lower() in ("click", "press", "activate", "toggle"):
+                return i
+    except Exception:
+        pass
+    return None
+
+
+def operations_of(node, role, states):
+    if "enabled" not in states and "sensitive" not in states:
+        return []
+    try:
+        interfaces = {str(i).rsplit(".", 1)[-1] for i in node.get_interfaces()}
+    except Exception:
+        return []
+    operations = []
+    if "Action" in interfaces and invoke_index(node) is not None:
+        operations.append("invoke")
+    if "EditableText" in interfaces and "editable" in states and role in ("entry", "text", "editable text", "search box"):
+        operations.append("set_value")
+    return operations
+
+
+def walk(window, nodes=None):
     out = []
     truncated = False
     stack = [window]
@@ -138,8 +171,12 @@ def walk(window):
                     name = node.get_name() or ""
                 except Exception:  # noqa: BLE001
                     name = ""
+                identity = native_identity(node)
+                if nodes is not None:
+                    nodes[identity] = node
                 out.append({
-                    "identity": native_identity(node),
+                    "identity": identity,
+                    "operations": operations_of(node, role, states),
                     "role": role,
                     "name": name[:120],
                     "x": rect[0], "y": rect[1], "width": rect[2], "height": rect[3],
@@ -161,6 +198,53 @@ def walk(window):
     return out, truncated
 
 
+def perform(window_identity, xwindow, elements, nodes):
+    global ATTEMPTED
+    try:
+        payload = sys.stdin.buffer.read(65537)
+        if len(payload) > 65536:
+            fail("native request exceeds its size bound")
+        request = json.loads(payload)
+        target = request.get("target", {})
+        if request.get("window_identity") != window_identity:
+            fail("native window identity changed")
+        matches = [e for e in elements if e["identity"] == target.get("identity")]
+        if len(matches) != 1:
+            fail("native target is unavailable or ambiguous")
+        current = matches[0]
+        if any(current.get(key) != target.get(key) for key in ("role", "name", "x", "y", "width", "height")):
+            fail("native target changed since observation")
+        operation = request.get("operation")
+        if operation not in current["operations"]:
+            fail("native operation is unsupported; no coordinate fallback")
+        node = nodes[current["identity"]]
+        if x_active_window() != xwindow:
+            fail("active window changed before native dispatch")
+        if operation == "invoke":
+            index = invoke_index(node)
+            if index is None:
+                fail("native action disappeared")
+            ATTEMPTED = True
+            accepted = node.get_action_iface().do_action(index)
+            verification = {"status": "unknown", "source": "none", "detail": "native invoke sent; no postcondition was requested"}
+        elif operation == "set_value":
+            value = request.get("value")
+            if not isinstance(value, str):
+                fail("set_value requires a string")
+            ATTEMPTED = True
+            accepted = node.get_editable_text_iface().set_text_contents(value)
+            matches_value = Atspi.Text.get_text(node, 0, node.get_character_count()) == value
+            verification = {"status": "satisfied" if matches_value else "unsatisfied", "source": "native", "detail": "native value readback matches" if matches_value else "native value readback differs"}
+        else:
+            fail("unsupported native operation")
+        if not accepted:
+            fail("native API did not acknowledge the input; inspect before retrying")
+        print(json.dumps({"dispatch": "sent", "verification": verification}))
+    except Exception as error:
+        # Only the exception class is safe; never values or exception messages.
+        fail("native operation or readback failed (%s)" % type(error).__name__)
+
+
 def main():
     if not os.environ.get("DISPLAY"):
         fail("no DISPLAY")
@@ -174,13 +258,17 @@ def main():
     if len(candidates) != 1:
         fail("ambiguous accessibility window: same process has multiple windows with this title")
     app, window = candidates[0]
-    elements, truncated = walk(window)
+    nodes = {} if PERFORM else None
+    elements, truncated = walk(window, nodes)
     try:
         if x_active_window() != target:
             fail("the active window changed during observation")
         identity = "%s:%s:%s:%s" % (target["id"], target["pid"], target["started"], native_identity(window))
     except Exception as error:
         fail("could not validate the observed window: %s" % error)
+    if PERFORM:
+        perform(identity, target, elements, nodes)
+        return
     for index, element in enumerate(elements):
         element["ref"] = "a%d" % (index + 1)
     try:

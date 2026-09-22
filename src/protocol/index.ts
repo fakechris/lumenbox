@@ -70,6 +70,8 @@ export type ComputerAction =
   | { action: "list_elements" }
   /** Clicks a control by the ref `list_elements` gave it; resolved to coordinates in the box. */
   | { action: "click_element"; ref: string; observation_id?: string; button?: MouseButton; count?: number; modifiers?: string }
+  | { action: "invoke_element"; ref: string; observation_id?: string }
+  | { action: "set_value"; ref: string; observation_id?: string; value: string }
   /**
    * Raises a window and gives it focus.
    *
@@ -140,9 +142,19 @@ export interface ElementInfo {
   height: number;
   /** checked, selected, expanded, focused, pressed, editable, disabled. */
   states: readonly string[];
+  /** Supported semantic operations; absent means coordinates only. */
+  operations?: readonly string[];
 }
 
 /** A published observation describes its time, target and coordinate space, not authorization. */
+export interface DesktopCapabilities {
+  backend: "x11-atspi";
+  platform: "linux";
+  semantic_actions: readonly ["invoke", "set_value"];
+  background_semantic: false;
+  observation_refs: true;
+}
+
 export interface DesktopObservation {
   id: string;
   display: string;
@@ -496,6 +508,7 @@ export interface ListDirResult {
 
 export interface HealthResult {
   /** Explicit opt-in contract discovery; absence identifies legacy desktop behavior. */
+  desktop_driver?: DesktopCapabilities;
   desktop_contract?: { version: 1; snapshot_refs: true; final_observation: true; batch_progress: true };
   ok: boolean;
   version: string;

@@ -223,3 +223,16 @@ A browser ref requires its snapshot ID; callers without one refresh or use a cur
 Browser target read failure is not proof of disappearance. Returned image metadata identifies
 the coordinate space and action boundary. Tree/image coherence uses bounded repeated reads,
 not a claim that the OS supplies an atomic screen/tree transaction.
+
+`DesktopDriver` is the boxd-facing execution boundary. The shipped implementation remains
+X11 plus AT-SPI; its capability manifest declares Linux, foreground-only semantics and
+snapshot refs. Element observations advertise only operations the particular native object
+supports. `invoke_element` calls an AT-SPI Action; `set_value` uses EditableText and reads
+back the actual text without returning it. Numeric spin controls and password fields do not
+advertise this text operation. Neither semantic action falls back to coordinates.
+
+Native accessibility runs in a disposable helper process, outside the Node daemon. A helper
+revalidates window/object identity before dispatch, receives values only through stdin, and
+is killed on deadline, output overflow or authority revocation. A timeout/crash after input
+starts is uncertain delivery, not permission to repeat. No cross-platform backend or second
+session/authority registry is introduced.

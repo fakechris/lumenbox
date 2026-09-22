@@ -22,7 +22,7 @@ const check = async (id, fn) => {
 const fixture = `import gi, json
 gi.require_version('Gtk', '3.0')
 from gi.repository import Gtk
-state = {'clicks': 0}
+state = {'clicks': 0, 'text': ''}
 def save():
     with open('/tmp/cua-fixture-state.json', 'w') as f: json.dump(state, f)
 win = Gtk.Window(title='CUA Contract Fixture')
@@ -40,7 +40,14 @@ layout.pack_start(button, True, True, 0)
 layout.pack_start(label, True, True, 0)
 entry = Gtk.Entry()
 entry.set_placeholder_text('Fixture text')
+def text_changed(widget):
+    state['text'] = widget.get_text()
+    save()
+entry.connect('changed', text_changed)
 layout.pack_start(entry, True, True, 0)
+disabled = Gtk.Button(label='Disabled fixture')
+disabled.set_sensitive(False)
+layout.pack_start(disabled, True, True, 0)
 duplicate = Gtk.Button(label='Duplicate title')
 def duplicate_window(_):
     extra = Gtk.Window(title='CUA Contract Fixture')
@@ -192,6 +199,41 @@ try {
     assert.equal(missed.progress.dispatch, "sent");
     assert.equal(missed.verification.status, "unsatisfied");
     assert.equal((await state()).clicks, before.clicks + 2, "neither mismatch nor unknown triggers replay");
+  });
+  await check("semantic_invoke_changes_application_without_moving_pointer", async () => {
+    const read = await list();
+    const button = target(read);
+    assert.ok(button.operations.includes("invoke"));
+    const before = await state();
+    const pointer = (await box.computer([{ action: "cursor_position" }])).cursor_position;
+    const result = await box.computer([{ action: "invoke_element", ref: button.ref }]);
+    assert.equal(result.progress.dispatch, "sent", result.error);
+    assert.equal((await state()).clicks, before.clicks + 1);
+    assert.deepEqual((await box.computer([{ action: "cursor_position" }])).cursor_position, pointer);
+  });
+  await check("semantic_set_value_uses_native_readback_and_application_state", async () => {
+    const read = await list();
+    const entry = read.elements.find(e => e.operations?.includes("set_value"));
+    assert.ok(entry, "editable control must advertise set_value");
+    const value = "Linux 原生文本 42";
+    const result = await box.computer([{ action: "set_value", ref: entry.ref, value }]);
+    assert.equal(result.outcome, "ok", result.error);
+    assert.equal(result.verification.status, "satisfied");
+    assert.equal((await state()).text, value, "GTK changed callback owns this oracle");
+    const replay = await box.computer([{ action: "set_value", ref: entry.ref, value: "must not land" }]);
+    assert.equal(replay.outcome, "refused");
+    assert.equal((await state()).text, value);
+  });
+  await check("disabled_native_control_never_falls_back_to_coordinates", async () => {
+    const read = await list();
+    const target = read.elements.find(e => e.name === "Disabled fixture");
+    assert.ok(target);
+    assert.deepEqual(target.operations, []);
+    const before = await state();
+    const result = await box.computer([{ action: "invoke_element", ref: target.ref }]);
+    assert.equal(result.outcome, "refused");
+    assert.equal(result.progress.dispatch, "not_started");
+    assert.deepEqual(await state(), before);
   });
   await check("same_pid_same_title_windows_refuse_ambiguous_tree", async () => {
     const read = await list();

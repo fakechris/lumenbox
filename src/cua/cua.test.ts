@@ -572,3 +572,28 @@ test("native postconditions distinguish matching, missing, ambiguous and unreada
   executor.tree = undefined;
   assert.equal((await executor.execute([{ action: "screenshot" }], { expect })).verification?.status, "unknown");
 });
+
+test("native semantics require an advertised capability, never click as a fallback, and consume refs", async () => {
+  class Semantic extends TreeExecutor {
+    calls = 0;
+    protected override async executeSemantic(): Promise<import("../protocol/index.ts").ActionVerification> {
+      this.calls++;
+      return { status: "satisfied", source: "native", detail: "fixture readback" };
+    }
+  }
+  const executor = new Semantic({ measureEffect: false });
+  let listed = await executor.execute([{ action: "list_elements" }]);
+  await assert.rejects(executor.execute([{ action: "invoke_element", ref: listed.elements![0]!.ref }]), /UNSUPPORTED_ACTION/);
+  assert.equal(executor.calls, 0);
+  assert.equal(executor.clicks.length, 0);
+  const raw = JSON.parse(AX_SAMPLE) as AxOutput;
+  raw.elements[0]!.operations = ["set_value"];
+  executor.tree = JSON.stringify(raw);
+  listed = await executor.execute([{ action: "list_elements" }]);
+  const ref = listed.elements![0]!.ref;
+  const result = await executor.execute([{ action: "set_value", ref, value: "new value" }]);
+  assert.equal(result.verification?.status, "satisfied");
+  assert.equal(executor.calls, 1);
+  assert.equal(executor.clicks.length, 0);
+  await assert.rejects(executor.execute([{ action: "set_value", ref, value: "again" }]), /STALE_OBSERVATION/);
+});

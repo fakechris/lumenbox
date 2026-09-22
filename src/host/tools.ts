@@ -484,6 +484,8 @@ const actionSchema = {
         "list_windows",
         "list_elements",
         "click_element",
+        "invoke_element",
+        "set_value",
         "activate_window",
         "close_window",
         "screenshot_window",
@@ -492,8 +494,9 @@ const actionSchema = {
       description: "Which action to perform.",
     },
     coordinate: coordinateSchema,
-    ref: { type: "string", description: "For click_element: copy the complete opaque ref from the latest list_elements. Never shorten or reuse it after a write." },
-    observation_id: { type: "string", description: "For click_element: the elements observation id returned with the outline, when available." },
+    value: { type: "string", description: "For set_value: replace an editable native control with this text. Values travel to the isolated native helper." },
+    ref: { type: "string", description: "For element actions: copy the complete opaque ref from the latest list_elements. Never shorten or reuse it after a write." },
+    observation_id: { type: "string", description: "For element actions: the elements observation id returned with the outline, when available." },
     path: {
       type: "array" as const,
       description: "For drag: the points to move through, starting point first.",
@@ -677,8 +680,9 @@ export function buildTools(
           "manager, which a grab cannot block.\n\n" +
           "Before clicking by coordinates in a desktop app, try `list_elements`: it reads the " +
           "active window's controls from the accessibility tree — role, name, state and " +
-          "position — and gives each a ref; `click_element` with that ref clicks it exactly, " +
-          "with the same effect evidence as a click. Not every app has a tree (a terminal, " +
+          "position — and gives each a ref plus supported operations. Prefer `invoke_element` or " +
+          "`set_value` when supported: these use native AT-SPI actions. `click_element` explicitly uses " +
+          "coordinates; unsupported semantics never fall back to clicks. Refresh refs after every write. Not every app has a tree (a terminal, " +
           "an Electron app): then the result says so and the screenshot is what you have.",
         input_schema: {
           type: "object",
@@ -2061,7 +2065,8 @@ export function elementsOutline(result: { elements?: readonly ElementInfo[]; ele
   const lines = result.elements.map(element => {
     const name = element.name !== "" ? ` "${element.name}"` : "";
     const states = element.states.length > 0 ? ` [${element.states.join(", ")}]` : "";
-    return `- ${element.role}${name} [ref=${element.ref}]${states} at (${element.x + Math.round(element.width / 2)},${element.y + Math.round(element.height / 2)})`;
+    const operations = element.operations?.length ? ` operations=${element.operations.join(",")}` : "";
+    return `- ${element.role}${name} [ref=${element.ref}]${states}${operations} at (${element.x + Math.round(element.width / 2)},${element.y + Math.round(element.height / 2)})`;
   });
   const cap = result.elements_window?.truncated === true ? "\n… (more controls than shown; act on what is here or scroll)" : "";
   return lines.length > 0

@@ -1,3 +1,8 @@
+import type { DesktopDriver, DesktopExecutionOptions, DesktopExecutionResult } from "./driver.ts";
+export type { DesktopExecutionOptions as TypingOptions, DesktopExecutionResult as X11ExecutionResult } from "./driver.ts";
+import { nativeHelper } from "./native-helper.ts";
+type TypingOptions = DesktopExecutionOptions;
+type X11ExecutionResult = DesktopExecutionResult;
 /**
  * X11 computer-use executor: translates model actions into synthetic input via
  * xdotool, and captures the screen via ffmpeg.
@@ -22,7 +27,6 @@ import type {
   ElementInfo,
   Effect,
   DesktopObservation,
-  ComputerProgress,
   ActionVerification,
   DesktopExpectation,
 } from "../protocol/index.ts";
@@ -298,6 +302,8 @@ export function actionRequiresSettle(action: ComputerAction): boolean {
       return /[\r\n]/.test(action.text);
     case "activate_window":
     case "click_in_window":
+    case "invoke_element":
+    case "set_value":
     case "click_element":
     case "close_window":
       // Raising, focusing and closing repaint, and a window manager animates them.
@@ -334,7 +340,7 @@ export function patchWebpHeader(buffer: Buffer): Buffer {
 /** What box-ax prints: the tree it read, or why it could not. */
 export interface AxOutput {
   window: { title: string; app: string; truncated: boolean; identity?: string; id?: string };
-  elements: { ref: string; identity?: string; role: string; name: string; x: number; y: number; width: number; height: number; states: string[] }[];
+  elements: { ref: string; identity?: string; role: string; name: string; x: number; y: number; width: number; height: number; states: string[]; operations?: string[] }[];
 }
 
 export function parseAxOutput(text: string): AxOutput | { error: string } | undefined {
@@ -362,6 +368,7 @@ export function parseAxOutput(text: string): AxOutput | { error: string } | unde
       .map(e => ({
         ref: e.ref as string,
         identity: typeof e.identity === "string" ? e.identity : undefined,
+        operations: Array.isArray(e.operations) ? e.operations.filter((op): op is string => op === "invoke" || op === "set_value") : [],
         role: e.role as string,
         name: typeof e.name === "string" ? e.name : "",
         x: Number(e.x ?? 0),
@@ -389,43 +396,10 @@ export interface X11Config {
   effectSettleMs?: number;
 }
 
-export interface TypingOptions {
-  expect?: DesktopExpectation;
-  /** Rechecked after waits and before each new native input operation. */
-  authorize?: () => void;
-  /**
-   * Bind a keycode for each character with no key before typing it, rather than
-   * letting `xdotool type` remap one per character and lose it. See
-   * `typeWithBorrowedKeys`.
-   */
-  bindUnmappedCharacters?: boolean;
-}
+export const X11_DESKTOP_CAPABILITIES = { backend: "x11-atspi", platform: "linux", semantic_actions: ["invoke", "set_value"], background_semantic: false, observation_refs: true } as const;
 
-export interface X11ExecutionResult {
-  verification?: ActionVerification;
-  observation?: DesktopObservation;
-  elementsObservationId?: string;
-  progress?: ComputerProgress;
-  success: boolean;
-  screenshot: string;
-  /** The weakest measured effect among the batch's writes; absent when nothing was measured. */
-  effect?: Effect;
-  /** One line per measured write. */
-  effectDetail?: string;
-  cursorPosition?: { x: number; y: number };
-  /** Present when the batch included list_windows. */
-  windows?: readonly WindowInfo[];
-  /** Present when list_elements found a tree (INV-412). */
-  elements?: readonly ElementInfo[];
-  /** Why there are none, when list_elements was asked and there was no tree. */
-  elementsNote?: string;
-  elementsWindow?: { title: string; app: string; truncated: boolean };
-  actionCount: number;
-  durationMs: number;
-  error?: string;
-}
-
-export class X11Executor {
+export class X11Executor implements DesktopDriver {
+  readonly capabilities = X11_DESKTOP_CAPABILITIES;
   private readonly config: Required<X11Config>;
   private readonly scaler: CoordinateScaler;
   private readonly env: Record<string, string>;
@@ -493,12 +467,9 @@ export class X11Executor {
     try {
       // The executor's environment is DISPLAY alone; a lookup by name needs a PATH, and
       // the daemon's own is the one the image set.
-      const result = await execFileAsync("box-ax", [], {
-        env: { ...this.env, PATH: process.env.PATH ?? "/usr/local/bin:/usr/bin:/bin" },
-        timeout: 6000,
-        maxBuffer: 4 * 1024 * 1024,
+      stdout = await nativeHelper("box-ax", [], {}, {
+        env: this.env, authorize: authorizeOperation, allowReadRefusal: true,
       });
-      stdout = result.stdout;
     } catch (error) {
       const failed = error as { stdout?: string; killed?: boolean; code?: unknown };
       const said = parseAxOutput(failed.stdout ?? "");
@@ -565,9 +536,25 @@ export class X11Executor {
         width: Math.max(1, Math.round(far.x - origin.x)),
         height: Math.max(1, Math.round(far.y - origin.y)),
         states: raw.states,
+        operations: raw.operations,
       });
     }
     return { elements, window: read.window };
+  }
+
+  protected async executeSemantic(action: Extract<ComputerAction, { action: "invoke_element" | "set_value" }>): Promise<ActionVerification> {
+    const target = this.elementTargets.get(action.ref);
+    const window = this.elementWindow;
+    if (!target || !window?.identity) throw new DesktopTargetError("native target expired");
+    const output = await nativeHelper("box-ax", ["--perform"], {
+      operation: action.action === "invoke_element" ? "invoke" : "set_value",
+      window_identity: window.identity, target,
+      ...(action.action === "set_value" ? { value: action.value } : {}),
+    }, { env: this.env, authorize: authorizeOperation });
+    const receipt = JSON.parse(output) as { dispatch?: string; error?: string; verification?: ActionVerification };
+    if (receipt.dispatch === "not_started") throw new DesktopTargetError(receipt.error ?? "native operation refused", "NATIVE_REFUSED");
+    if (receipt.dispatch !== "sent" || !receipt.verification) throw new Error(`${receipt.error ?? "native dispatch is unknown"}; do not retry`);
+    return receipt.verification;
   }
 
   protected async verifyExpectation(expect: DesktopExpectation): Promise<ActionVerification> {
@@ -628,6 +615,7 @@ export class X11Executor {
     let settleNeeded = false;
     let executedCount = 0;
     let attemptedWrite = false;
+    const nativeVerifications: (ActionVerification | undefined)[] = [];
     let failedAt: number | undefined;
     let observation: DesktopObservation | undefined;
     const capture = async (windowId?: string): Promise<string> => {
@@ -700,7 +688,13 @@ export class X11Executor {
           elements = undefined;
           elementsWindow = undefined;
           // Validate before starting any native mutation. Tokens are consumed below even on failure.
-          if (action.action === "click_element") await this.validateElement(action.ref, action.observation_id);
+          if (["click_element", "invoke_element", "set_value"].includes(action.action) && "ref" in action) {
+            await this.validateElement(action.ref, action.observation_id);
+            if (action.action === "invoke_element" || action.action === "set_value") {
+              const operation = action.action === "invoke_element" ? "invoke" : "set_value";
+              if (!this.elementTargets.get(action.ref)?.operations?.includes(operation)) throw new DesktopTargetError(`target does not support ${operation}; no coordinate fallback`, "UNSUPPORTED_ACTION");
+            }
+          }
         }
         const anchor = this.config.measureEffect ? await this.anchorOf(action) : undefined;
         // "before" is taken now, not at the batch's start: an earlier action in the same
@@ -708,8 +702,17 @@ export class X11Executor {
         const region = anchor !== undefined ? this.neighbourhood(anchor) : undefined;
         const before = region !== undefined ? await this.grabQuietly(region) : undefined;
         authorizeOperation();
+        const alreadyAttempted = attemptedWrite;
         if (isComputerWrite(action)) attemptedWrite = true;
-        try { await this.executeAction(action, options); }
+        try {
+          if (action.action === "invoke_element" || action.action === "set_value") {
+            try { nativeVerifications.push(await this.executeSemantic(action)); }
+            catch (error) { if (error instanceof DesktopTargetError) attemptedWrite = alreadyAttempted; throw error; }
+          } else {
+            await this.executeAction(action, options);
+            if (isComputerWrite(action)) nativeVerifications.push(undefined);
+          }
+        }
         finally { if (isComputerWrite(action)) this.invalidateElements(); }
         if (actionRequiresSettle(action)) settleNeeded = true;
         if (anchor !== undefined) {
@@ -770,7 +773,9 @@ export class X11Executor {
 
     const effect = worstEffect(measured.map(m => m.effect));
     const verification = options.expect !== undefined ? await this.verifyExpectation(options.expect) :
-      attemptedWrite ? { status: "unknown" as const, source: "none" as const, detail: "no postcondition was requested" } : undefined;
+      attemptedWrite ? (nativeVerifications.length > 0 && nativeVerifications.every(v => v !== undefined && v.status !== "unknown") ?
+        { status: nativeVerifications.some(v => v?.status === "unsatisfied") ? "unsatisfied" as const : "satisfied" as const, source: "native" as const, detail: "native value readbacks completed" } :
+        { status: "unknown" as const, source: "none" as const, detail: "no batch postcondition was verified" }) : undefined;
     authorizeOperation();
     return {
       success: true,

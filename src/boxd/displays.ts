@@ -28,6 +28,7 @@ import {
   type DisplayInfo,
 } from "../protocol/index.ts";
 import { detectDisplay, type DisplayDetectionResult } from "../cua/display.ts";
+import type { DesktopDriver } from "../cua/driver.ts";
 import { X11Executor } from "../cua/x11-executor.ts";
 import { ComponentHealth, type ComponentStatus } from "./component-health.ts";
 
@@ -113,7 +114,7 @@ const LOG_COMPONENTS = [
 export interface Desktop {
   index: number;
   display: string;
-  executor: X11Executor;
+  executor: DesktopDriver;
   detection: DisplayDetectionResult;
   /** Restart bookkeeping for this desktop's components. */
   health: ComponentHealth;

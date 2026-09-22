@@ -5,8 +5,7 @@ export function isComputerWrite(action: ComputerAction): boolean {
 }
 
 export class DesktopTargetError extends Error {
-  readonly code = "STALE_OBSERVATION";
-  constructor(reason: string) { super(`STALE_OBSERVATION: ${reason}. Take a new list_elements before acting.`); }
+  constructor(reason: string, readonly code = "STALE_OBSERVATION") { super(`${code}: ${reason}. Take a new list_elements before acting.`); }
 }
 
 /** Keeps the executed prefix when an action, capture or authorization check throws. */

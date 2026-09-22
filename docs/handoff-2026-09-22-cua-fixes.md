@@ -38,3 +38,22 @@ INV-636—640 已由人提交为 COMMITTED。本会话尝试 `work_claim` 与不
 - 两个真实 stack 的 scripted agent episode 验证模型看到 unknown、已完成前缀和先观察指引。它们验证合同传达，不代表真实模型行为成功率。
 
 `npm run release:check` 退出 0，1,736 tests + 产物启动检查通过；日志 `/tmp/lumenbox-cua-research/637-release.log`。原始五项 research probe 全部 reproduced=false。GUI 10/10，镜像 `agentbox/cua-fixes:f522c557d1de`，测试层 digest `sha256:4d4a5fbfd47eb3659ec94fad774227cb8f5248989317423443c0b0f25292beff`；日志 `/tmp/lumenbox-cua-research/637-gui.log`。这次已回归 INV-636 最后两个补丁。最后追加的 browser recovery/CDP authority 改动经过新增单测和全套检查，下一轮 GUI 镜像一并验证。真实模型 scorecard 未执行。
+
+## INV-638：原生语义与隔离 driver 边界
+
+- boxd 依赖 `DesktopDriver`；现有 X11/AT-SPI 实现声明平台/前台限制/语义操作能力。native ref 仍由既有观测与权限合同管理，没有第二套业务 session。
+- AT-SPI 树按具体控件返回 operations；`invoke_element` 调用 Action，`set_value` 调用 EditableText 并在 helper 内比较回读值。未声明能力、disabled、旧目标明确拒绝；不隐式降级坐标点击。数字 spin/slider 与密码框不声明文本 set_value。
+- 树读取和原生操作均在独立 helper 中，截止时间、输出大小、撤销时 SIGKILL、下一次干净进程都已验证。值仅走 stdin；回执不包含输入值、stderr 或异常内容。
+- 真实 GTK 测试发现 GI 的 Text 方法名分派不能按对象便利接口猜测；改为显式 `Atspi.Text.get_text` 后，通过中英文文本回读与应用 changed callback 写出的状态文件交叉验证。
+
+`npm run release:check` / 1,739 tests 与构建启动检查通过。GUI 最终 13/13，生产层 `agentbox/cua-fixes:c95faacd900d`，测试层 digest `sha256:ab696f8031ec43d4b6f86345984434faa564ee25c91c2da7577e113711f22551`，日志 `/tmp/lumenbox-cua-research/638-gui-final.log`。新测试证明 native invoke 不移动鼠标且应用计数增加；set_value 的 GTK 状态文件与回读匹配；旧 ref/禁用控件不派发。曾失败的中间镜像不作为通过证据。
+
+### Python helper 与 accessibility-core 的取舍
+
+同源参考固定在 research 的 `f64c0369`：`packages/accessibility-core/src/platform/x11.rs` 的 `do_action` 和 `set_value`。它通过 Rust atspi/zbus/x11rb，支持先尝试数值 Value、再 EditableText；LumenBox 当前 helper 复用镜像已装的 Python GI/AT-SPI，通过进程隔离获得相同的文本语义通路。此次没有复制上游源码或引入 crate/npm 运行时依赖。
+
+选择现有 helper 是部署增量较小、既有窗口/权限合同可直接复用，且所需 vertical slice 已有真实状态证据。没有运行 Rust helper 的同环境性能对照，所以不声称 Python 更快或覆盖更广；Rust 异步总线和更多平台仍是候选。若以后引入，须让它实现相同快照/回执、超时/撤销、未知不重试合同，再在同一 fixture 比较 p50/p95、错误恢复与能力。数值 Value 目前明确不支持，避免把 spin 控件可见文本误判为已提交数值。
+
+## INV-640：用户调整范围
+
+用户明确选择「暂不扩原生平台，先完成 Linux 盒内方案」。不实施 Mac/Windows 试点，不安装 Cua Driver，不将两个上游设为默认依赖；已将该范围同步到 INV-640。
