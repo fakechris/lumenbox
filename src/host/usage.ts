@@ -22,7 +22,7 @@
 
 import { envNumber } from "../config.ts";
 import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
-import { appendLine } from "./jsonl.ts";
+import { appendLine, type LedgerKind } from "./jsonl.ts";
 import { dirname, join } from "node:path";
 import { agentboxHome } from "../config.ts";
 
@@ -35,6 +35,13 @@ export type UsageKind = "turn" | "summarize" | "memory" | "select" | "review" | 
 
 /** What a row with no kind is reported as. Not a kind: the absence of one. */
 export const UNATTRIBUTED = "unattributed";
+
+/**
+ * A window on what was spent. Rows fall off the back by age and by count, on purpose:
+ * the totals a person asks for are recent ones, and the archive of every call ever made
+ * is a cost of its own. Per-turn cost that must survive lives in `turns.jsonl`.
+ */
+export const LEDGER_KIND: LedgerKind = "feed";
 
 export interface UsageRecord {
   /** Monotonic within this file. What a collector remembers instead of a time. */

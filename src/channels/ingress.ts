@@ -22,9 +22,18 @@
 
 import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
-import { appendLine } from "../host/jsonl.ts";
+import { appendLine, archivedLines, archiveSettled, type LedgerKind } from "../host/jsonl.ts";
 
 /** Settled entries beyond this and the file is rewritten as just what is unresolved. */
+/**
+ * What happened at the door, and it is not a queue.
+ *
+ * Declared because `compact()` was written as though it were one: see the method. The
+ * guard in architecture-guard.test.ts requires this line and requires a `record` to
+ * archive (jsonl.ts).
+ */
+export const LEDGER_KIND: LedgerKind = "record";
+
 const COMPACT_AT = 500;
 
 /** What became of a message. */
@@ -110,12 +119,22 @@ export class Ingress {
     if (this.settled >= COMPACT_AT) this.compact();
   }
 
-  /** Everything the ledger knows, newest last. */
-  list(): IngressRecord[] {
+  /**
+   * Everything the live file knows, newest last.
+   *
+   * Live only by default, because every caller here wants the recent picture — the health
+   * check's last-seen time, the sweep's floor, the operator's listing — and paying to
+   * parse months of archive for those would be a good reason to stop keeping them. Ask for
+   * `archived` when the question is historical; `settled()` is the one that always does.
+   */
+  list(options: { archived?: boolean } = {}): IngressRecord[] {
     if (!existsSync(this.path)) return [];
     const byId = new Map<string, IngressRecord>();
     let settled = 0;
-    for (const line of readFileSync(this.path, "utf8").split("\n")) {
+    const lines = options.archived === true
+      ? [...archivedLines(this.path), ...readFileSync(this.path, "utf8").split("\n")]
+      : readFileSync(this.path, "utf8").split("\n");
+    for (const line of lines) {
       if (line.trim() === "") continue;
       let record: {
         event?: string;
@@ -142,8 +161,23 @@ export class Ingress {
         settled += 1;
       }
     }
-    this.settled = settled;
+    // Only live lines drive compaction; an archive that made the file look full would
+    // have it compact for ever.
+    if (options.archived !== true) this.settled = settled;
     return [...byId.values()];
+  }
+
+  /**
+   * Whether this arrival already reached a decision, archives included.
+   *
+   * The one question that must never be answered from the live file alone. A `false` here
+   * means the sweep replays the message, and replaying a message that was answered a month
+   * ago is answering a person twice.
+   */
+  decidedAlready(id: string): boolean {
+    const live = this.list().find(record => record.id === id);
+    if (live !== undefined) return live.fate !== undefined;
+    return this.list({ archived: true }).some(record => record.id === id && record.fate !== undefined);
   }
 
   /**
@@ -157,17 +191,55 @@ export class Ingress {
     return this.list().filter(record => record.fate === undefined);
   }
 
-  /** Keeps the file to what is unresolved; what was settled is of no further interest. */
+  /**
+   * Keeps the live file to what is unresolved, and moves the rest to an archive.
+   *
+   * It used to drop them, on the reasoning that a settled arrival is of no further
+   * interest. Two things were interested. The catch-up sweep asks "was this message
+   * already decided" before replaying it, and after a compaction the answer for every
+   * older message was no — a vendor replaying a week-old message would have been answered
+   * twice. And the question this ledger exists for, "why did nothing come back", stopped
+   * having an answer for anything past the last five hundred arrivals.
+   *
+   * The lines are archived as they were written rather than re-serialised, so replaying an
+   * archive through `list()` reconstructs exactly what was there.
+   */
   private compact(): void {
-    const open = this.unresolved();
+    const openIds = new Set(this.unresolved().map(record => record.id));
+    const live: string[] = [];
+    const settled: string[] = [];
+    for (const line of this.rawLines()) {
+      const id = idOf(line);
+      // An unparseable line is nobody's history; it stays where it is rather than being
+      // filed as a record of something.
+      (id === undefined || openIds.has(id) ? live : settled).push(line);
+    }
+    archiveSettled(this.path, settled);
     const temporary = `${this.path}.tmp`;
-    writeFileSync(
-      temporary,
-      open.map(arrival => `${JSON.stringify({ event: "arrived", arrival })}\n`).join(""),
-      { mode: 0o600 }
-    );
+    writeFileSync(temporary, live.map(line => `${line}\n`).join(""), { mode: 0o600 });
     renameSync(temporary, this.path);
     this.settled = 0;
+  }
+
+  private rawLines(): string[] {
+    if (!existsSync(this.path)) return [];
+    try {
+      return readFileSync(this.path, "utf8").split("\n").filter(line => line.trim() !== "");
+    } catch {
+      return [];
+    }
+  }
+}
+
+/** Which arrival a line is about, whichever kind of line it is. */
+function idOf(line: string): string | undefined {
+  try {
+    const record = JSON.parse(line) as { event?: string; arrival?: { id?: string }; id?: string };
+    if (record.event === "arrived") return record.arrival?.id;
+    if (record.event === "settled") return record.id;
+    return undefined;
+  } catch {
+    return undefined;
   }
 }
 

@@ -1,0 +1,37 @@
+{
+  "scope": "real executor control flow; fake native I/O; no GUI delivery or upstream performance tested",
+  "failedTreeKeepsOldRef": {
+    "reproduced": true,
+    "deliveredToFixture": [
+      {
+        "x": 20,
+        "y": 20
+      }
+    ],
+    "refusal": null
+  },
+  "refReusedAcrossSnapshots": {
+    "reproduced": true,
+    "oldRef": "a1",
+    "resolvesAfterNewObservation": [
+      {
+        "x": 710,
+        "y": 20
+      }
+    ]
+  },
+  "screenshotBeforeWriteReturnedAsFinal": {
+    "reproduced": true,
+    "returned": "fixture-frame-0",
+    "actualFixtureState": "fixture-frame-1"
+  },
+  "pixelsAloneConfirm": {
+    "reproduced": true,
+    "fraction": 1,
+    "effect": "confirmed"
+  },
+  "noopIsOutcomeOk": {
+    "reproduced": true,
+    "outcome": "ok"
+  }
+}

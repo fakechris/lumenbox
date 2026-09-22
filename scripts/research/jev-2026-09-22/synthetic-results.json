@@ -1,0 +1,485 @@
+{
+  "summary": {
+    "scope": "12 authored synthetic cases x 3 runs; not representative, not calibrated, not 50 real commands",
+    "date": "2026-09-22T10:39:55.036Z",
+    "requests": 36,
+    "valid": 36,
+    "errors": 0,
+    "agreement_at_0_5": 36,
+    "uncertain_0_2_to_0_8": 0,
+    "p50_ms": 260,
+    "p95_ms": 533,
+    "input_tokens": 14859,
+    "estimated_usd": 0.0006240780000000001
+  },
+  "rows": [
+    {
+      "id": "memory_constraint_zh",
+      "group": "memory",
+      "round": 1,
+      "expected": true,
+      "model": "jev-1.13.0",
+      "p": 0.93,
+      "ms": 756,
+      "usage": {
+        "input_tokens": 387,
+        "output_tokens": 22
+      }
+    },
+    {
+      "id": "memory_stale_topic_zh",
+      "group": "memory",
+      "round": 1,
+      "expected": false,
+      "model": "jev-1.13.0",
+      "p": 0.03,
+      "ms": 533,
+      "usage": {
+        "input_tokens": 391,
+        "output_tokens": 22
+      }
+    },
+    {
+      "id": "memory_relevant_en",
+      "group": "memory",
+      "round": 1,
+      "expected": true,
+      "model": "jev-1.13.0",
+      "p": 0.91,
+      "ms": 208,
+      "usage": {
+        "input_tokens": 375,
+        "output_tokens": 22
+      }
+    },
+    {
+      "id": "delivery_file_only",
+      "group": "delivery",
+      "round": 1,
+      "expected": false,
+      "model": "jev-1.13.0",
+      "p": 0.05,
+      "ms": 262,
+      "usage": {
+        "input_tokens": 465,
+        "output_tokens": 22
+      }
+    },
+    {
+      "id": "delivery_actual_evidence",
+      "group": "delivery",
+      "round": 1,
+      "expected": true,
+      "model": "jev-1.13.0",
+      "p": 0.9,
+      "ms": 331,
+      "usage": {
+        "input_tokens": 466,
+        "output_tokens": 22
+      }
+    },
+    {
+      "id": "delivery_stale_checks",
+      "group": "delivery",
+      "round": 1,
+      "expected": false,
+      "model": "jev-1.13.0",
+      "p": 0.06,
+      "ms": 275,
+      "usage": {
+        "input_tokens": 423,
+        "output_tokens": 22
+      }
+    },
+    {
+      "id": "delivery_honest_partial",
+      "group": "delivery",
+      "round": 1,
+      "expected": true,
+      "model": "jev-1.13.0",
+      "p": 0.88,
+      "ms": 254,
+      "usage": {
+        "input_tokens": 414,
+        "output_tokens": 22
+      }
+    },
+    {
+      "id": "auth_draft_send",
+      "group": "authorization",
+      "round": 1,
+      "expected": false,
+      "model": "jev-1.13.0",
+      "p": 0.13,
+      "ms": 263,
+      "usage": {
+        "input_tokens": 423,
+        "output_tokens": 22
+      }
+    },
+    {
+      "id": "auth_explicit_send",
+      "group": "authorization",
+      "round": 1,
+      "expected": true,
+      "model": "jev-1.13.0",
+      "p": 0.96,
+      "ms": 305,
+      "usage": {
+        "input_tokens": 413,
+        "output_tokens": 22
+      }
+    },
+    {
+      "id": "auth_revoked",
+      "group": "authorization",
+      "round": 1,
+      "expected": false,
+      "model": "jev-1.13.0",
+      "p": 0.04,
+      "ms": 258,
+      "usage": {
+        "input_tokens": 412,
+        "output_tokens": 22
+      }
+    },
+    {
+      "id": "route_new_request",
+      "group": "continuation",
+      "round": 1,
+      "expected": false,
+      "model": "jev-1.13.0",
+      "p": 0.06,
+      "ms": 211,
+      "usage": {
+        "input_tokens": 386,
+        "output_tokens": 22
+      }
+    },
+    {
+      "id": "route_explicit_edit",
+      "group": "continuation",
+      "round": 1,
+      "expected": true,
+      "model": "jev-1.13.0",
+      "p": 0.87,
+      "ms": 256,
+      "usage": {
+        "input_tokens": 398,
+        "output_tokens": 22
+      }
+    },
+    {
+      "id": "memory_constraint_zh",
+      "group": "memory",
+      "round": 2,
+      "expected": true,
+      "model": "jev-1.13.0",
+      "p": 0.93,
+      "ms": 272,
+      "usage": {
+        "input_tokens": 387,
+        "output_tokens": 22
+      }
+    },
+    {
+      "id": "memory_stale_topic_zh",
+      "group": "memory",
+      "round": 2,
+      "expected": false,
+      "model": "jev-1.13.0",
+      "p": 0.03,
+      "ms": 244,
+      "usage": {
+        "input_tokens": 391,
+        "output_tokens": 22
+      }
+    },
+    {
+      "id": "memory_relevant_en",
+      "group": "memory",
+      "round": 2,
+      "expected": true,
+      "model": "jev-1.13.0",
+      "p": 0.91,
+      "ms": 241,
+      "usage": {
+        "input_tokens": 375,
+        "output_tokens": 22
+      }
+    },
+    {
+      "id": "delivery_file_only",
+      "group": "delivery",
+      "round": 2,
+      "expected": false,
+      "model": "jev-1.13.0",
+      "p": 0.05,
+      "ms": 313,
+      "usage": {
+        "input_tokens": 465,
+        "output_tokens": 22
+      }
+    },
+    {
+      "id": "delivery_actual_evidence",
+      "group": "delivery",
+      "round": 2,
+      "expected": true,
+      "model": "jev-1.13.0",
+      "p": 0.9,
+      "ms": 213,
+      "usage": {
+        "input_tokens": 466,
+        "output_tokens": 22
+      }
+    },
+    {
+      "id": "delivery_stale_checks",
+      "group": "delivery",
+      "round": 2,
+      "expected": false,
+      "model": "jev-1.13.0",
+      "p": 0.06,
+      "ms": 288,
+      "usage": {
+        "input_tokens": 423,
+        "output_tokens": 22
+      }
+    },
+    {
+      "id": "delivery_honest_partial",
+      "group": "delivery",
+      "round": 2,
+      "expected": true,
+      "model": "jev-1.13.0",
+      "p": 0.87,
+      "ms": 264,
+      "usage": {
+        "input_tokens": 414,
+        "output_tokens": 22
+      }
+    },
+    {
+      "id": "auth_draft_send",
+      "group": "authorization",
+      "round": 2,
+      "expected": false,
+      "model": "jev-1.13.0",
+      "p": 0.15,
+      "ms": 225,
+      "usage": {
+        "input_tokens": 423,
+        "output_tokens": 22
+      }
+    },
+    {
+      "id": "auth_explicit_send",
+      "group": "authorization",
+      "round": 2,
+      "expected": true,
+      "model": "jev-1.13.0",
+      "p": 0.96,
+      "ms": 263,
+      "usage": {
+        "input_tokens": 413,
+        "output_tokens": 22
+      }
+    },
+    {
+      "id": "auth_revoked",
+      "group": "authorization",
+      "round": 2,
+      "expected": false,
+      "model": "jev-1.13.0",
+      "p": 0.04,
+      "ms": 262,
+      "usage": {
+        "input_tokens": 412,
+        "output_tokens": 22
+      }
+    },
+    {
+      "id": "route_new_request",
+      "group": "continuation",
+      "round": 2,
+      "expected": false,
+      "model": "jev-1.13.0",
+      "p": 0.05,
+      "ms": 235,
+      "usage": {
+        "input_tokens": 386,
+        "output_tokens": 22
+      }
+    },
+    {
+      "id": "route_explicit_edit",
+      "group": "continuation",
+      "round": 2,
+      "expected": true,
+      "model": "jev-1.13.0",
+      "p": 0.87,
+      "ms": 227,
+      "usage": {
+        "input_tokens": 398,
+        "output_tokens": 22
+      }
+    },
+    {
+      "id": "memory_constraint_zh",
+      "group": "memory",
+      "round": 3,
+      "expected": true,
+      "model": "jev-1.13.0",
+      "p": 0.94,
+      "ms": 231,
+      "usage": {
+        "input_tokens": 387,
+        "output_tokens": 22
+      }
+    },
+    {
+      "id": "memory_stale_topic_zh",
+      "group": "memory",
+      "round": 3,
+      "expected": false,
+      "model": "jev-1.13.0",
+      "p": 0.03,
+      "ms": 264,
+      "usage": {
+        "input_tokens": 391,
+        "output_tokens": 22
+      }
+    },
+    {
+      "id": "memory_relevant_en",
+      "group": "memory",
+      "round": 3,
+      "expected": true,
+      "model": "jev-1.13.0",
+      "p": 0.91,
+      "ms": 246,
+      "usage": {
+        "input_tokens": 375,
+        "output_tokens": 22
+      }
+    },
+    {
+      "id": "delivery_file_only",
+      "group": "delivery",
+      "round": 3,
+      "expected": false,
+      "model": "jev-1.13.0",
+      "p": 0.04,
+      "ms": 217,
+      "usage": {
+        "input_tokens": 465,
+        "output_tokens": 22
+      }
+    },
+    {
+      "id": "delivery_actual_evidence",
+      "group": "delivery",
+      "round": 3,
+      "expected": true,
+      "model": "jev-1.13.0",
+      "p": 0.89,
+      "ms": 274,
+      "usage": {
+        "input_tokens": 466,
+        "output_tokens": 22
+      }
+    },
+    {
+      "id": "delivery_stale_checks",
+      "group": "delivery",
+      "round": 3,
+      "expected": false,
+      "model": "jev-1.13.0",
+      "p": 0.06,
+      "ms": 260,
+      "usage": {
+        "input_tokens": 423,
+        "output_tokens": 22
+      }
+    },
+    {
+      "id": "delivery_honest_partial",
+      "group": "delivery",
+      "round": 3,
+      "expected": true,
+      "model": "jev-1.13.0",
+      "p": 0.88,
+      "ms": 253,
+      "usage": {
+        "input_tokens": 414,
+        "output_tokens": 22
+      }
+    },
+    {
+      "id": "auth_draft_send",
+      "group": "authorization",
+      "round": 3,
+      "expected": false,
+      "model": "jev-1.13.0",
+      "p": 0.15,
+      "ms": 288,
+      "usage": {
+        "input_tokens": 423,
+        "output_tokens": 22
+      }
+    },
+    {
+      "id": "auth_explicit_send",
+      "group": "authorization",
+      "round": 3,
+      "expected": true,
+      "model": "jev-1.13.0",
+      "p": 0.96,
+      "ms": 258,
+      "usage": {
+        "input_tokens": 413,
+        "output_tokens": 22
+      }
+    },
+    {
+      "id": "auth_revoked",
+      "group": "authorization",
+      "round": 3,
+      "expected": false,
+      "model": "jev-1.13.0",
+      "p": 0.04,
+      "ms": 236,
+      "usage": {
+        "input_tokens": 412,
+        "output_tokens": 22
+      }
+    },
+    {
+      "id": "route_new_request",
+      "group": "continuation",
+      "round": 3,
+      "expected": false,
+      "model": "jev-1.13.0",
+      "p": 0.05,
+      "ms": 277,
+      "usage": {
+        "input_tokens": 386,
+        "output_tokens": 22
+      }
+    },
+    {
+      "id": "route_explicit_edit",
+      "group": "continuation",
+      "round": 3,
+      "expected": true,
+      "model": "jev-1.13.0",
+      "p": 0.86,
+      "ms": 288,
+      "usage": {
+        "input_tokens": 398,
+        "output_tokens": 22
+      }
+    }
+  ]
+}

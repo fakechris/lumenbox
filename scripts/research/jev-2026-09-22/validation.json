@@ -1,0 +1,25 @@
+{
+  "date": "2026-09-22",
+  "command": "npm test",
+  "exit_code": 0,
+  "tests": 1721,
+  "passed": 1721,
+  "failed": 0,
+  "skipped": 0,
+  "product_code_changes": false,
+  "docs_headers_index": "passed",
+  "git_diff_check": "passed",
+  "credential_value_scan": "passed",
+  "followup": {
+    "scope": "provider-neutral abstraction, A/B design and INV authentication",
+    "command": "npm test",
+    "exit_code": 0,
+    "tests": 1731,
+    "passed": 1731,
+    "failed": 0,
+    "skipped": 0,
+    "product_code_changes": false,
+    "inv_agent_auth": "claim and new run succeeded",
+    "credential_value_scan": "passed"
+  }
+}

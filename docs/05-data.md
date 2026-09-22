@@ -283,12 +283,41 @@ wire's own id, e.g. Feishu's `om_…`), `chatKey`, `threadKey`, `identity`, `sen
 transcript's conversation name), `receivedAt`, `text` (whole, before the inbox's 8,000-character
 clamp), `textChars`, `files[] {name, bytes}`.
 
-Why a fifth ledger: `ingress.jsonl`, `inbox.jsonl`, `turns.jsonl` and `deliveries.jsonl` all empty
-themselves once nothing is pending, which is right for a queue and wrong for a record, and the
-transcript joins several messages into one prompt. This file never compacts. Refused messages are
-not in it (ingress says they were refused); it is not scanned for secrets on the way in — the
-audit export redacts on the way out — because a record that edits what a person said is not a
-record of what they said.
+Why a fifth ledger: at the time, `ingress.jsonl`, `inbox.jsonl`, `turns.jsonl` and
+`deliveries.jsonl` all emptied themselves once nothing was pending — right for a queue and wrong
+for a record — and the transcript joins several messages into one prompt. Two of those four are
+now declared records and archive instead (§2.4.1); the other two are queues and still empty. This
+file never compacts at all. Refused messages are not in it (ingress says they were refused); it is
+not scanned for secrets on the way in — the audit export redacts on the way out — because a record
+that edits what a person said is not a record of what they said.
+
+#### 2.4.1 Every ledger says what kind of thing it is
+
+Twelve files here compact, and until INV-634 none of them said which of four things it was, so
+each `compact()` was written by copying whichever neighbour was open. Each now declares
+`export const LEDGER_KIND` (`src/host/jsonl.ts`) and an architecture guard fails the build on a
+thirteenth that does not.
+
+| kind | what compaction may do | files |
+|---|---|---|
+| `record` | move a line to an archive, never lose one | `ingress.jsonl`, `turns.jsonl` |
+| `queue` | drop what is settled; that was its job | `inbox.jsonl`, `deliveries.jsonl` |
+| `state` | keep one line per key; older ones are noise | `conversations`, `sent-roots`, `cards`, `claims`, `tasks` |
+| `feed` | let old lines fall off the back | `usage.jsonl`, `activity`, `policy` |
+
+A `record` archives to `<name>.<yyyy-mm>.jsonl` beside itself, append-only and never compacted in
+turn. Two things had been quietly losing history. The catch-up sweep asks whether a message was
+already decided before replaying it, and after a compaction the answer for every older message was
+no, so a vendor replaying a week-old message would have been answered twice. And `turns.jsonl` is
+the only record of what a turn cost, how long it ran, which model and prompt produced it and how it
+ended; after five thousand turns all of it went, including the month an audit export was asking
+about. The archives are read on demand — `Ingress.list({ archived: true })`, `decidedAlready`, and
+the audit export — so ordinary reads stay as cheap as they were.
+
+`policy` is labelled `feed` with a note rather than a verdict: a grant given once and used once is
+an audit fact, and past twenty thousand events it goes. Standing grants are re-stated on compaction
+precisely because losing those would change behaviour, which is the argument for calling the rest a
+record too. Left as it is on purpose, flagged so the next person deciding it is deciding.
 
 ### 2.4 `usage.jsonl`
 

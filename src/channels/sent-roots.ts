@@ -23,7 +23,14 @@
 
 import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
-import { appendLine } from "../host/jsonl.ts";
+import { appendLine, type LedgerKind } from "../host/jsonl.ts";
+
+/**
+ * Which chat each message we sent went to, now — kept to a bound because a reply arrives
+ * soon after or not at all. State with a window, not a record: nobody is owed the root of
+ * a message from four thousand sends ago.
+ */
+export const LEDGER_KIND: LedgerKind = "state";
 
 /** Entries kept on compaction. Replies arrive within days; this is months of sends. */
 const KEEP = 2000;

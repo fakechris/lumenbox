@@ -1,0 +1,28 @@
+{
+  "version": 1,
+  "fixture_sha256": "3296a6248f3cacc75c8a2922de98b8fa1cdae761f1f3d26b2561628672a96072",
+  "packet_hashes": {
+    "r03": "4028dfb0b7498c2eeb0c5ffdeb05decf13eb7b94f0bf97e17b22e54ef20974f7",
+    "r05": "fd71040e5cd669392b49c064a1c27d8052f1093f2aca75f104fab2f29ec17ecc",
+    "l07": "afe61781899bac83223232d0fda5d3b684511b1472ee828bfd328c706e67e975"
+  },
+  "provider_settings": {
+    "jev": {
+      "model": "jev-1.13.0",
+      "timeout_ms": 20000
+    },
+    "deepseek": {
+      "model": "deepseek-flash",
+      "thinking": "disabled",
+      "temperature": 0,
+      "max_tokens": 2000,
+      "timeout_ms": 20000
+    }
+  },
+  "max_requests": 90,
+  "concurrency": 2,
+  "retries": 0,
+  "repetitions": 1,
+  "research_top_k": 3,
+  "scope": "Authored pilot labels; public excerpts/catalog and fictional leads. Neither held-out domain evaluation nor online A/B. Labels excluded from model inputs."
+}
