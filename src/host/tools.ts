@@ -30,6 +30,7 @@ import { readOutcome, textShape, withReadOutcome } from "./read-outcome.ts";
 import { fetchXPost, XResolversUnavailable, xStatusRef } from "./x-post.ts";
 import { join } from "node:path";
 import { keepFetchedPage, keptPointer, KEPT_MARKER, pruneOccasionally } from "./fetched.ts";
+import { findKeptResult } from "./results.ts";
 import { describeEnvShape, envShape, looksLikeEnvFile } from "./env-shape.ts";
 import { guardShellCommand } from "./ui-automation-guard.ts";
 import { dedupe, dedupeKey, describeFrom, memoryRef, validateRecord } from "./memory.ts";
@@ -329,6 +330,7 @@ export const PARALLEL_SAFE_TOOLS: ReadonlySet<string> = new Set([
   "list_dir",
   "Recall",
   "ReadHistory",
+  "ReadKept",
   "OtherThreads",
   "ReadFeishuDoc",
 ]);
@@ -1304,6 +1306,30 @@ export function buildTools(
               "verify their work rather than trusting a summary of it.",
           },
         },
+      },
+    },
+    {
+      name: "ReadKept",
+      description:
+        "Read back the whole of something you already read, when the copy in this conversation " +
+        "was cut. Any result over about two thousand characters is kept whole and replayed short, " +
+        "with a pointer where the rest was; this takes the id of the call that produced it, which " +
+        "is the id you used when you made the call. Reach for it instead of fetching a page again: " +
+        "the page may say something different now, and this is what you actually read. Only your " +
+        "own calls, only in this conversation.",
+      input_schema: {
+        type: "object",
+        properties: {
+          call: {
+            type: "string",
+            description:
+              "The id of the call whose output you want back, as it appears in the pointer the " +
+              "cut left behind.",
+          },
+          from: { type: "number", description: "First character to read. Omit to start at the beginning." },
+          to: { type: "number", description: "One past the last character. Omit to read to the end." },
+        },
+        required: ["call"],
       },
     },
     {
@@ -4315,6 +4341,53 @@ export async function dispatchTool(
       }
       return {
         text: `Updated agent "${updated.profile.name}" (id: ${updated.id}).`,
+      };
+    }
+
+    case "ReadKept": {
+      const call = String(input.call ?? "").trim();
+      if (call === "") return { text: "Which call? Pass the id from the pointer the cut left.", isError: true };
+      const found = findKeptResult(
+        call,
+        { agentId: context.agent.id, ...(context.conversation !== undefined ? { conversation: context.conversation } : {}) },
+        context.fetchedHome
+      );
+      // A result that is someone else's answers exactly as one that is not there. Telling
+      // the two apart would be a way to ask whether another agent made a given call.
+      if (found === undefined) {
+        return {
+          text: withReadOutcome(
+            { completeness: "unavailable" },
+            `No kept output for call ${call} in this conversation. It may have aged out of the ` +
+              "retention window, in which case the pointer where it was cut still says how big it " +
+              "was and what its digest was."
+          ),
+          isError: true,
+        };
+      }
+
+      const from = Math.max(0, typeof input.from === "number" ? Math.floor(input.from) : 0);
+      const to = typeof input.to === "number" ? Math.floor(input.to) : found.chars;
+      const slice = found.text.slice(from, Math.min(to, found.chars));
+      // Cut again if the caller asked for more than a result may show. Being read back does
+      // not exempt it from the limit that cut it in the first place.
+      const clipped = slice.length > MAX_TEXT;
+      const shown = clipped ? slice.slice(0, MAX_TEXT) : slice;
+      const whole = from === 0 && shown.length === found.chars;
+      return {
+        text: withReadOutcome(
+          {
+            completeness: whole ? "full" : "clipped",
+            shape: {
+              chars: shown.length,
+              ...(whole ? {} : { totalChars: found.chars }),
+              ...proseAndLinks(shown),
+            },
+            note: `${found.tool ?? "a tool"} returned this at ${found.at}`,
+            ...(whole ? {} : { hint: "ask for another range with from and to" }),
+          },
+          shown
+        ),
       };
     }
 

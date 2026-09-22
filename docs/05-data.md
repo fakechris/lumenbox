@@ -436,7 +436,24 @@ the same defect once per tool, so now the cut keeps what it cuts.
   over a full disk.
 
 The pointer is the same self-describing shape as a kept page's, written with the box's own
-phrase, so `storableResult`, `extractAnchors` and the system prompt all already know it. The path is
+phrase, so `storableResult`, `extractAnchors` and the system prompt all already know it.
+
+**Getting it back (`ReadKept`, INV-661).** The path is on the host, outside the box, so an
+agent cannot reach it with `read_file` — that is right for an audit trail, and it was the
+one place this design took the lossy side of the rule that you may only remove something
+from context if it can be got back. So the way back is host-mediated: the agent names a
+*call it made*, never a file. Ownership is checked against the agent and the conversation,
+and a result belonging to someone else answers exactly as one that does not exist, because
+telling the two apart would be a way to ask what calls another agent has made. A result
+read back is still subject to the limit that cut it, and comes back under the same
+first-line contract as any other read. A withheld result cannot be read back because it was
+never written; the guarantee comes from the write path, not from a check on the way out.
+
+The record of a read-back is the tool call itself. It is a call like any other, so it lands
+in the transcript with its result and is kept whole if it is long, under the same rules as
+everything else — a second ledger line would be a second record of one event. What that
+does not catch, said plainly: an agent working through many call ids to see which exist
+would look like ordinary use, and nothing counts those. The path is
 on the host, outside the box, so an agent cannot read it back with `read_file` — the same
 as a kept page. It is for the person who asks later what a call actually returned. Same
 retention as `fetched/`, taken by the same pass; the audit export carries the files inside

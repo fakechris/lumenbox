@@ -23,10 +23,10 @@
  * the same pass.
  */
 
-import { mkdirSync, writeFileSync } from "node:fs";
+import { mkdirSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { agentboxHome } from "../config.ts";
-import { fetchedDir, pruneFetched, retentionDays, sha256 } from "./fetched.ts";
+import { fetchedDir, pruneFetched, readFrontmatter, retentionDays, sha256 } from "./fetched.ts";
 
 export const RESULTS_DIRNAME = "results";
 
@@ -154,4 +154,75 @@ export function pruneKeptOccasionally(log: (line: string) => void, home: string,
 /** Only for tests, which need the hour to start over. */
 export function resetKeptPruneClock(): void {
   lastPruneAt = 0;
+}
+
+export interface FoundResult {
+  text: string;
+  path: string;
+  tool?: string;
+  at: string;
+  sha256: string;
+  /** Whole characters in the body, whatever slice the caller asked for. */
+  chars: number;
+}
+
+/**
+ * Finds a kept result by the call that produced it, for the agent that produced it.
+ *
+ * Ownership is checked here rather than by the caller, and a result belonging to someone
+ * else answers exactly as a result that does not exist: `undefined`. The distinction would
+ * be a way to ask whether a given call id exists at all, which is a question no agent has
+ * any business answering about another.
+ *
+ * Searched by walking the month directories rather than by an index, because the name
+ * carries the turn and the call and a directory listing is the index. The window is the
+ * retention window; past it there is nothing to find, and the pointer in the transcript is
+ * what still describes what was there (INV-659).
+ */
+export function findKeptResult(
+  toolUseId: string,
+  owner: { agentId: string; conversation?: string },
+  home = agentboxHome()
+): FoundResult | undefined {
+  const root = resultsDir(home);
+  let months: string[];
+  try {
+    months = readdirSync(root);
+  } catch {
+    return undefined;
+  }
+  const wanted = `-${safe(toolUseId)}.txt`;
+  for (const month of months.sort().reverse()) {
+    let names: string[];
+    try {
+      names = readdirSync(join(root, month));
+    } catch {
+      continue;
+    }
+    for (const name of names) {
+      if (!name.endsWith(wanted)) continue;
+      const path = join(root, month, name);
+      let text: string;
+      try {
+        text = readFileSync(path, "utf8");
+      } catch {
+        continue;
+      }
+      const head = readFrontmatter(text);
+      if (head.agent_id !== owner.agentId) return undefined;
+      // A result from another conversation is another room's, even for the same agent.
+      if (head.conversation !== undefined && head.conversation !== owner.conversation) return undefined;
+      const end = text.indexOf("\n---\n", 4);
+      const body = end === -1 ? "" : text.slice(end + 5).replace(/\n$/, "");
+      return {
+        text: body,
+        path,
+        ...(head.tool !== undefined ? { tool: head.tool } : {}),
+        at: head.at ?? "",
+        sha256: head.sha256 ?? "",
+        chars: body.length,
+      };
+    }
+  }
+  return undefined;
 }
