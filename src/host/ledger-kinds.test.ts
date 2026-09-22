@@ -158,3 +158,32 @@ test("compaction only ever moves a line: nothing is both archived and live, noth
     cleanup();
   }
 });
+
+test("the archived-decision index is rebuilt when an archive grows, not cached into a wrong answer", () => {
+  const { path, cleanup } = dir();
+  try {
+    const ingress = new Ingress(join(path, "ingress.jsonl"));
+    const arrive = (id: string, n: number) =>
+      ingress.arrived({ id, channel: "c", identity: "i", chatKey: "k", kind: "text", chars: 1, at: new Date(Date.UTC(2026, 8, 20, 0, 0, n % 60)).toISOString() });
+
+    for (let n = 0; n < 600; n++) {
+      arrive(`first-${n}`, n);
+      ingress.decided(`first-${n}`, "admitted");
+    }
+    // Reading it once builds the index.
+    assert.equal(ingress.decidedAlready("first-0"), true);
+    assert.equal(ingress.decidedAlready("second-0"), false);
+
+    // A second compaction appends to the same archive. The cached answer for the new ids
+    // was false a moment ago and must not stay false.
+    for (let n = 0; n < 600; n++) {
+      arrive(`second-${n}`, n);
+      ingress.decided(`second-${n}`, "refused", "not a known person");
+    }
+    assert.equal(ingress.decidedAlready("second-0"), true, "the index noticed the archive grew");
+    assert.equal(ingress.decidedAlready("first-0"), true, "and did not forget the first batch");
+    assert.equal(ingress.decidedAlready("never-arrived"), false);
+  } finally {
+    cleanup();
+  }
+});

@@ -20,9 +20,9 @@
  * accepted, which is downstream of every decision that can silently drop one.
  */
 
-import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, renameSync, statSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
-import { appendLine, archivedLines, archiveSettled, type LedgerKind } from "../host/jsonl.ts";
+import { appendLine, archivedLines, archivePaths, archiveSettled, type LedgerKind } from "../host/jsonl.ts";
 
 /** Settled entries beyond this and the file is rewritten as just what is unresolved. */
 /**
@@ -173,12 +173,50 @@ export class Ingress {
    * The one question that must never be answered from the live file alone. A `false` here
    * means the sweep replays the message, and replaying a message that was answered a month
    * ago is answering a person twice.
+   *
+   * The archived half is answered from an index of ids rather than by re-reading, because
+   * the sweep asks this once per message on a page. Measured before the index: fifty
+   * questions against a 4.5 MB archive took 875 ms, and archives only grow. The index is
+   * ids alone, not records — the question is a yes or no.
    */
   decidedAlready(id: string): boolean {
     const live = this.list().find(record => record.id === id);
     if (live !== undefined) return live.fate !== undefined;
-    return this.list({ archived: true }).some(record => record.id === id && record.fate !== undefined);
+    return this.settledInArchives().has(id);
   }
+
+  /**
+   * Ids that reached a decision in an archive.
+   *
+   * Rebuilt when the archives change, which for an append-only set of files means when one
+   * grows or a new month appears. Both are visible in the sizes, so the key is the sizes.
+   */
+  private settledInArchives(): ReadonlySet<string> {
+    const paths = archivePaths(this.path);
+    const key = paths
+      .map(path => {
+        try {
+          return `${path}:${statSync(path).size}`;
+        } catch {
+          return `${path}:gone`;
+        }
+      })
+      .join("|");
+    if (this.archiveIndex?.key === key) return this.archiveIndex.ids;
+    const ids = new Set<string>();
+    for (const line of archivedLines(this.path)) {
+      try {
+        const record = JSON.parse(line) as { event?: string; id?: string };
+        if (record.event === "settled" && record.id !== undefined) ids.add(record.id);
+      } catch {
+        // A torn archive line hides only itself, as everywhere else here.
+      }
+    }
+    this.archiveIndex = { key, ids };
+    return ids;
+  }
+
+  private archiveIndex: { key: string; ids: ReadonlySet<string> } | undefined;
 
   /**
    * Messages that arrived and were never decided about.
