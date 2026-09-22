@@ -27,6 +27,7 @@ import { mkdirSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { agentboxHome } from "../config.ts";
 import { fetchedDir, pruneFetched, readFrontmatter, retentionDays, sha256 } from "./fetched.ts";
+import { TurnLedger } from "./resume.ts";
 
 export const RESULTS_DIRNAME = "results";
 
@@ -120,7 +121,7 @@ export function keepToolResult(input: KeepResultInput, home = agentboxHome()): K
   mkdirSync(join(path, ".."), { recursive: true });
   const digest = sha256(input.text);
   writeFileSync(path, `${resultFrontmatter(input, digest)}${input.text}\n`, { mode: 0o600 });
-  pruneKeptOccasionally(line => console.error(line), home, input.at);
+  pruneKeptOccasionally(line => console.error(line), home, input.at, referencedKeptPaths(home));
   return { path, sha256: digest };
 }
 
@@ -139,16 +140,51 @@ let lastPruneAt = 0;
  * Both roots together because a kept page and a kept result are the same kind of thing
  * under the same setting, and two passes would be two clocks saying one sentence.
  */
-export function pruneKeptOccasionally(log: (line: string) => void, home: string, now = new Date()): void {
+export function pruneKeptOccasionally(
+  log: (line: string) => void,
+  home: string,
+  now = new Date(),
+  /** Paths a live turn still points at; kept past their age (INV-665). */
+  referenced?: ReadonlySet<string>
+): void {
   if (now.getTime() - lastPruneAt < PRUNE_EVERY_MS) return;
   lastPruneAt = now.getTime();
   try {
     const days = retentionDays();
-    const result = pruneFetched(home, { retentionDays: days, now, roots: [fetchedDir(home), resultsDir(home)] });
+    const result = pruneFetched(home, {
+      retentionDays: days,
+      now,
+      roots: [fetchedDir(home), resultsDir(home)],
+      ...(referenced !== undefined ? { referenced } : {}),
+    });
     if (result.removed > 0) log(`[kept] removed ${result.removed} file(s) older than ${days} days; ${result.kept} kept`);
   } catch (error) {
     log(`[kept] prune failed: ${error instanceof Error ? error.message : error}`);
   }
+}
+
+/**
+ * Everything a turn in the live ledger says it read and kept.
+ *
+ * Read from the home the caller was handed, not from the global default, for the reason
+ * INV-633 learned the hard way: a pass that resolves its own home can delete files in a
+ * directory nobody named.
+ *
+ * The live file only. A turn old enough to have been archived is older than the retention
+ * on anything it points at, so scanning months of archive would cost a great deal to
+ * protect nothing.
+ */
+export function referencedKeptPaths(home: string): ReadonlySet<string> {
+  const paths = new Set<string>();
+  try {
+    for (const turn of new TurnLedger(join(home, "turns.jsonl"), () => {}).evidence()) {
+      for (const kept of turn.kept) paths.add(kept.path);
+    }
+  } catch {
+    // No ledger, or an unreadable one. Nothing is protected, which is the behaviour from
+    // before this existed, and is the safe direction: retention still runs.
+  }
+  return paths;
 }
 
 /** Only for tests, which need the hour to start over. */
@@ -225,4 +261,32 @@ export function findKeptResult(
     }
   }
   return undefined;
+}
+
+/**
+ * The text behind a turn's evidence pointers, for anything that needs to read it back.
+ *
+ * Missing files are skipped rather than reported: a pointer to something the retention has
+ * taken is not an error, it is the expected end of an artefact's life, and the pointer
+ * itself still describes what was there (INV-659). A caller that needs to know the
+ * difference asks `verifyPointer`.
+ */
+export function readKeptSources(
+  kept: readonly { path: string; sha256: string }[]
+): { name: string; text: string }[] {
+  const out: { name: string; text: string }[] = [];
+  for (const one of kept) {
+    let text: string;
+    try {
+      text = readFileSync(one.path, "utf8");
+    } catch {
+      continue;
+    }
+    const end = text.indexOf("\n---\n", 4);
+    out.push({
+      name: one.path.split("/").slice(-2).join("/"),
+      text: end === -1 ? text : text.slice(end + 5).replace(/\n$/, ""),
+    });
+  }
+  return out;
 }

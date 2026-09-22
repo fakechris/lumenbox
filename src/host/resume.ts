@@ -101,6 +101,27 @@ interface EndRecord {
   how: string;
   /** The failure class, when `how` is failed (failure-taxonomy.ts). */
   category?: string;
+  /**
+   * What this turn read and kept, as the self-describing pointers say it (INV-659, INV-665).
+   *
+   * The link only went one way. A kept file's frontmatter names the turn that read it, so
+   * *file to turn* resolved; nothing answered *turn to files*, and the only way to ask was
+   * to walk every month of the evidence store filtering on `turn_id` — linear in everything
+   * ever kept, and blind to whatever the retention had already taken.
+   *
+   * It lives here rather than in a new ledger because `turns.jsonl` is a `record` since
+   * INV-634: it archives instead of emptying, which is exactly what an edge between a turn
+   * and its evidence needs. A new ledger would have been a second thing to keep honest.
+   */
+  evidence?: KeptEvidence[];
+}
+
+/** One thing a turn read and kept. The fields a pointer carries, parsed once at write time. */
+export interface KeptEvidence {
+  path: string;
+  sha256: string;
+  chars: number;
+  at: string;
 }
 
 /**
@@ -199,9 +220,35 @@ export class TurnLedger {
   }
 
   /** Records that a turn is over, however it ended. */
-  end(id: string, how: string, now = new Date(), category?: string): void {
-    this.append({ id, event: "end", at: now.toISOString(), how, ...(category !== undefined ? { category } : {}) });
+  end(id: string, how: string, now = new Date(), category?: string, evidence?: readonly KeptEvidence[]): void {
+    this.append({
+      id,
+      event: "end",
+      at: now.toISOString(),
+      how,
+      ...(category !== undefined ? { category } : {}),
+      ...(evidence !== undefined && evidence.length > 0 ? { evidence: [...evidence] } : {}),
+    });
     if (this.lines > COMPACT_AT && this.interrupted().length === 0) this.compact();
+  }
+
+  /**
+   * Everything the turns in this file say they read and kept, newest first.
+   *
+   * Live file only. An archived turn's evidence has almost certainly outlived the retention
+   * on the thing it points at, and the pointer's own digest is what still describes it
+   * (INV-659) — reading months of archive to find references to files that are gone would
+   * cost a great deal to learn nothing.
+   */
+  evidence(): { turnId: string; at: string; kept: KeptEvidence[] }[] {
+    const out: { turnId: string; at: string; kept: KeptEvidence[] }[] = [];
+    for (const record of this.read()) {
+      const kept = (record as EndRecord).evidence;
+      if (record.event === "end" && kept !== undefined && kept.length > 0) {
+        out.push({ turnId: record.id, at: record.at, kept });
+      }
+    }
+    return out.reverse();
   }
 
   /**
