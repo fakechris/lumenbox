@@ -42,7 +42,7 @@ import {
   FIRST_TOKEN_DEADLINE_MS,
 } from "./transient.ts";
 import type { UsageKind, UsageLog } from "./usage.ts";
-import { chooseRelevant } from "./memory.ts";
+import { chooseRelevant, memoryProjectionManifest, SHARED_CHAR_BUDGET } from "./memory.ts";
 import { needsReview, type ReviewInput, type ReviewMode, type Verdict } from "./auto-review.ts";
 import type { HookRunner } from "./hooks.ts";
 import { AGENT_WAKE_CUE } from "../agents/bus.ts";
@@ -1421,19 +1421,19 @@ export async function runTurn(
     deps.turns?.end(turnId, how, new Date(), category, keptThisTurn);
   };
 
-  // Which memories survive the budget, decided by a model only when the budget forces a choice.
-  //
-  // Below the budget nothing is dropped, so there is nothing to choose between and no call is made —
-  // which is almost always. The discipline this respects is in docs/05-data.md §7: lexical recall
-  // stays until there is evidence it is failing, and "memories are being left out" is that evidence
-  // rather than an impression.
+  // Both personal and shared memories pass the same relevance gate, even below budget.
   const ownMemory = registry.readMemoryRecords(agent.id);
-  const memoryRecall = await chooseRelevant({
-    records: ownMemory,
-    query: inbound.map(message => message.text).join(" "),
+  const sharedMemory = registry.readSharedMemory(agent.id);
+  const memoryQuery = inbound.map(message => message.text).join(" ");
+  const selection = {
+    query: memoryQuery,
     ask: deps.selectMemory ?? (async () => undefined),
-    log: line => console.error(`[memory] ${agent.profile.name}: ${line}`),
-  });
+    log: (line: string) => console.error(`[memory] ${agent.profile.name}: ${line}`),
+  };
+  const [memoryRecall, sharedMemoryRecall] = await Promise.all([chooseRelevant({
+    records: ownMemory,
+    ...selection,
+  }), chooseRelevant({ records: sharedMemory, budget: SHARED_CHAR_BUDGET, ...selection })]);
 
   // Built once, and the volatile half rebuilt on every continuation — see `rebuildVolatile`. The
   // stable half never changes for one agent, so it is fixed here.
@@ -1443,7 +1443,9 @@ export async function runTurn(
       teammates: teammatesOf(registry, agent.id),
       memory: registry.readMemoryRecords(agent.id),
       memoryRecall: recallToUse,
-      sharedMemory: registry.readSharedMemory(agent.id),
+      memoryQuery,
+      sharedMemory,
+      sharedMemoryRecall,
       skills: narrowSkills(deps.skills ?? [], deps.bundles?.forBox(registry.boxOf(agent.id))),
       place: placeOf(registry, agent.id, deps.bundles),
       transcript: registry.readTranscript(agent.id, conversation),
@@ -1791,6 +1793,10 @@ export async function runTurn(
     model: provider.model,
     build: buildInfo(),
     promptHash: promptHashOf(promptParts.stable, promptParts.volatile),
+    memoryProjection: {
+      personal: memoryProjectionManifest(memoryRecall),
+      shared: memoryProjectionManifest(sharedMemoryRecall),
+    },
   });
 
   try {

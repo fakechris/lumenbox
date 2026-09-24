@@ -91,6 +91,10 @@ interface BeginRecord {
   model?: string;
   build?: { version: string; commit: string };
   promptHash?: string;
+  memoryProjection?: {
+    personal: import("./memory.ts").MemoryProjectionManifest;
+    shared: import("./memory.ts").MemoryProjectionManifest;
+  };
 }
 
 interface EndRecord {
@@ -199,6 +203,7 @@ export class TurnLedger {
     model?: string;
     build?: { version: string; commit: string };
     promptHash?: string;
+    memoryProjection?: BeginRecord["memoryProjection"];
     now?: Date;
   }): string {
     const record: BeginRecord = {
@@ -214,6 +219,7 @@ export class TurnLedger {
       ...(options.model !== undefined ? { model: options.model } : {}),
       ...(options.build !== undefined ? { build: options.build } : {}),
       ...(options.promptHash !== undefined ? { promptHash: options.promptHash } : {}),
+      ...(options.memoryProjection !== undefined ? { memoryProjection: options.memoryProjection } : {}),
     };
     this.append(record);
     return record.id;

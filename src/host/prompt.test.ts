@@ -27,6 +27,17 @@ import {
 
 // ── the guidance that decides which tool an agent reaches for ──────────────────────────
 
+test("prompt fallback cannot bypass personal or shared relevance filtering", () => {
+  const context = {
+    ...sharedBoxContext(),
+    memoryQuery: "deployment region",
+    memory: [{ at: "2026-09-21T00:00:00Z", kind: "note" as const, text: "UNRELATED_PERSONAL_HABIT" }],
+    sharedMemory: [{ at: "2026-09-21T00:00:00Z", kind: "note" as const, text: "UNRELATED_SHARED_HABIT" }],
+  };
+  assert.doesNotMatch(buildSystemPrompt(context), /UNRELATED_PERSONAL_HABIT|UNRELATED_SHARED_HABIT/);
+  assert.doesNotMatch(buildSystemPromptParts(context).volatile, /UNRELATED_PERSONAL_HABIT|UNRELATED_SHARED_HABIT/);
+});
+
 test("the prompt does not tell the model how to choose between its tools", () => {
   const prompt = buildSystemPrompt({
     agent: { id: "a", profile: { name: "Ada", description: "", createdAt: "", updatedAt: "" } } as never,
@@ -479,6 +490,7 @@ test("AGENTBOX_ABLATE=notes withholds only the notes nobody vouched for, and kee
       { at: "2026-08-30T00:00:00Z", kind: "note" as const, text: "seemed to prefer tables", source: "extracted" },
     ],
   } as Parameters<typeof memorySection.render>[0];
+  context.memoryRecall = { records: [...context.memory], omitted: 0 };
   try {
     delete process.env.AGENTBOX_ABLATE;
     const whole = memorySection.render(context);

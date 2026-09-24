@@ -17,7 +17,7 @@ import { describeTask, type Task } from "./tasks.ts";
 import type { BoxClass } from "../box/access.ts";
 import {
   memoryMirrorDir,
-  recall,
+  recallRelevant,
   renderMemory,
   renderSharedMemory,
   SHARED_CHAR_BUDGET,
@@ -384,13 +384,12 @@ export interface PromptContext {
    */
   memory: readonly MemoryRecord[];
   /**
-   * The memories to show, already chosen, when something better than the score chose them.
-   *
-   * Present only when the budget forced a choice and a selection pass was worth making. Absent
-   * means "score them here", which is what always happened and what happens whenever everything
-   * fits.
+   * Already relevance-filtered memories. Without a projection, use conservative lexical facts
+   * for memoryQuery; never restore the unfiltered score-based default.
    */
   memoryRecall?: MemoryRecall;
+  memoryQuery?: string;
+  sharedMemoryRecall?: MemoryRecall;
   /**
    * What the team has kept, merged across every agent's shard.
    *
@@ -939,7 +938,7 @@ export const VOLATILE_SECTIONS: readonly PromptSection[] = [
     // the notes nobody vouched for, so the auto-extracted layer is measured on its own.
     render: context => {
       if (ablated("memory")) return "";
-      const recalled = context.memoryRecall ?? recall(context.memory);
+      const recalled = context.memoryRecall ?? recallRelevant(context.memory, context.memoryQuery ?? "");
       const shown = ablated("notes")
         ? { ...recalled, records: recalled.records.filter(record => record.kind !== "note") }
         : recalled;
@@ -981,7 +980,7 @@ export const VOLATILE_SECTIONS: readonly PromptSection[] = [
   {
     name: "shared-memory",
     render: context =>
-      renderSharedMemory(recall(context.sharedMemory ?? [], SHARED_CHAR_BUDGET), id =>
+      renderSharedMemory(context.sharedMemoryRecall ?? recallRelevant(context.sharedMemory ?? [], context.memoryQuery ?? "", SHARED_CHAR_BUDGET), id =>
         context.teammates.find(mate => mate.id === id)?.profile.name ?? id
       ),
   },

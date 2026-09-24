@@ -172,6 +172,8 @@ export interface EpisodeOptions {
   skills?: readonly Skill[];
   /** Persisted history before the episode, including legacy compaction records. */
   history?: readonly HistoryEntry[];
+  /** Script only the relevance decision, while retaining the production projection path. */
+  selectMemory?: (prompt: string) => Promise<string | undefined>;
   /** Drive concurrent channel arrivals through the real bus instead of sequential says. */
   drive?: (context: { bus: AgentBus; registry: AgentRegistry; frontId: string }) => Promise<void>;
 }
@@ -257,6 +259,7 @@ export async function runEpisode(options: EpisodeOptions): Promise<EpisodeResult
       bus,
       box,
       resolution: undefined,
+      ...(options.selectMemory !== undefined ? { selectMemory: options.selectMemory } : {}),
       ...(options.display !== undefined ? { displayIndex: options.display } : {}),
       ...(options.skills !== undefined ? { skills: options.skills } : {}),
       conversation,

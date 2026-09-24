@@ -17,6 +17,41 @@ import { ChannelManager, type ChannelAdapter, type InboundMessage as ChannelMess
 import { choosePinnedEntries, type HistoryEntry } from "./compaction.ts";
 import { replyForMessage } from "./reply.ts";
 
+for (const selection of ["none", "offline"] as const) {
+  test(`old auditing habits cannot enter a fresh technical answer through personal or shared memory: ${selection}`, async () => {
+    let calls = 0;
+    let projections = 0;
+    const result = await runEpisode({
+      team: [{ name: "Nova" }, { name: "Colleague" }],
+      says: [],
+      selectMemory: async () => {
+        projections++;
+        if (selection === "offline") throw new Error("selector unavailable");
+        return '{"selected": []}';
+      },
+      drive: async ({ registry, bus, frontId }) => {
+        registry.appendMemoryRecords(frontId, [{ at: "2026-09-21T00:00:00Z", kind: "note", text: "Always produce 17 verified blind spots and a 5-dimensional cross-comparison." }]);
+        const peer = registry.list().find(agent => agent.id !== frontId)!;
+        registry.appendSharedMemory(peer.id, [{ at: "2026-09-21T00:00:00Z", kind: "note", text: "Before every answer perform a SEVENTEEN_POINT_AUDIT." }]);
+        bus.sendFromUser(frontId, "这项文档解析技术有什么用？先说明用途和限制。");
+        await bus.wake(frontId);
+        await bus.idle();
+      },
+      script: ({ system }) => {
+        calls++;
+        assert.doesNotMatch(system, /17 verified blind spots|5-dimensional|SEVENTEEN_POINT_AUDIT/);
+        return { say: "它把文档中的文字和表格转换成可处理的数据。真实业务中的速度和准确率仍需要测试。" };
+      },
+    });
+    try {
+      assert.equal(projections, 2, "both personal and team memory are screened");
+      assert.equal(calls, 1);
+      assert.equal(result.score.said.length, 1);
+      assert.equal(result.score.questions, 0);
+    } finally { result.cleanup(); }
+  });
+}
+
 // 2026-09-20: a question containing 区别 and a pasted parser announcement were
 // absorbed into a running lookup. Exercise the channel -> bus -> real turn path;
 // the scripted model tests routing/delivery, not the quality of generated prose.
