@@ -35,6 +35,7 @@ import { parseContinuation } from "./continuation.ts";
 import { isContextCommand } from "../host/context-recovery.ts";
 import { isRecoveryCommand, parseRecoveryCommand, type RecoverTaskResult } from "../host/task-recovery.ts";
 import { isRetryCommand, type RetryResult } from "../host/retry-recovery.ts";
+import { recoverySuggestion, type AnswerReviewInput, type AnswerReviewMode, type AnswerVerdict } from "../host/answer-review.ts";
 import type { CardRecord } from "./card-ledger.ts";
 
 import {
@@ -354,6 +355,11 @@ export interface ChannelManagerDeps {
   };
   retry?: {
     prepare: (input: { agentName: string | undefined; identity: string; conversationKey: string; operationId: string; privateChat: boolean; blockers: string[] }) => RetryResult;
+  };
+  answerReview?: {
+    mode: () => AnswerReviewMode;
+    sampled: (messageId: string) => boolean;
+    review: (input: AnswerReviewInput) => Promise<AnswerVerdict>;
   };
   /**
    * Told of every admitted message from a person, for routines that listen for a phrase. Fired
@@ -2221,9 +2227,30 @@ ${input.options.map(option => `· ${option}`).join("\n")}`
         message.id !== undefined ? { messageId: message.id, ...(options?.questionId !== undefined ? { questionId: options.questionId } : {}) } : undefined
       );
       clearTimeout(ackTimer);
+      let suggestion: string | undefined;
+      const review = this.deps.answerReview;
+      const reviewable = review !== undefined && message.id !== undefined && (message.files?.length ?? 0) === 0 &&
+        options?.skipTask !== true && options?.recoveryOperationId === undefined && review.sampled(message.id);
+      if (reviewable) {
+        const input = {
+          agentName: agentName ?? this.deps.defaultAgentFor?.(adapter.name) ?? "",
+          messageId: message.id!,
+          conversation: runningKey,
+          request: message.text,
+          answer: reply,
+        };
+        if (review.mode() === "suggest") {
+          try { suggestion = recoverySuggestion(await review.review(input)); }
+          catch { /* Review is advisory: its failure must never withhold the person's answer. */ }
+        }
+        else if (review.mode() === "shadow") void review.review(input).catch(() => {});
+      }
       if (reply.trim() !== interim) {
-        await deliver(reply.trim() === "" ? EMPTY_REPLY_NOTE : reply);
-      } else await interimDelivery;
+        await deliver(`${reply.trim() === "" ? EMPTY_REPLY_NOTE : reply}${suggestion === undefined ? "" : `\n\n${suggestion}`}`);
+      } else {
+        await interimDelivery;
+        if (suggestion !== undefined) await deliver(suggestion);
+      }
       // Whatever the turn left in the chat's outbox follows the reply — images shown
       // as images, everything else as a file. What was pushed is marked delivered;
       // what failed stays in the outbox for the next task rather than vanishing.

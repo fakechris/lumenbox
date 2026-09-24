@@ -20,6 +20,7 @@ import { conversationIdFor } from "../agents/registry.ts";
 import { newContext } from "./context-recovery.ts";
 import { recoverTask } from "./task-recovery.ts";
 import { retryLastAnswer } from "./retry-recovery.ts";
+import { AnswerReviewer } from "./answer-review.ts";
 import { TaskStore } from "./tasks.ts";
 import { Messages } from "../channels/messages.ts";
 import { MemoryAdmin } from "./memory-admin.ts";
@@ -240,6 +241,15 @@ test("/retry redoes the last ordinary request from durable messages without the 
       const key = "telegram:retry-user";
       const conversation = conversationIdFor(key);
       const durableMessages = new Messages(join(registry.root, "messages-retry.jsonl"));
+      const reviewRecords: { category: string }[] = [];
+      const reviewer = new AnswerReviewer({
+        mode: () => "suggest",
+        ask: async prompt => prompt.includes("BAD_AUDIT_REPLY")
+          ? '{"category":"PROCESS_OVER_RESULT","confidence":0.98,"reason":"process narration displaced the answer"}'
+          : '{"category":"PASS","confidence":0.99,"reason":"direct answer"}',
+        record: record => reviewRecords.push(record),
+      });
+      const delivered: string[] = [];
       let receive!: (message: ChannelMessage) => Promise<string | undefined>;
       const manager = new ChannelManager({
         mayDrive: () => true, log: () => {}, messages: durableMessages,
@@ -255,18 +265,21 @@ test("/retry redoes the last ordinary request from durable messages without the 
             identity: input.identity, privateChat: input.privateChat,
           }),
         },
+        answerReview: { mode: () => "suggest", sampled: () => true, review: input => reviewer.review(input) },
         ask: async (_name, text, _identity, _chat, _progress, _thread, _task, _interim, _stream, origin) => {
           bus.sendFromUser(frontId, text, { conversation, steerable: false, messageId: origin!.messageId });
           await bus.runExclusive(frontId, { userDriven: true, conversation });
           return replyForMessage(registry.readTranscript(frontId, conversation), origin!.messageId);
         },
       });
-      manager.register({ name: "telegram", start: async handler => { receive = handler; }, stop() {}, send: async () => undefined }, true, "test");
+      manager.register({ name: "telegram", start: async handler => { receive = handler; }, stop() {}, send: async (_identity, text) => { delivered.push(text); return undefined; } }, true, "test");
       manager.start(); await new Promise(resolve => setImmediate(resolve));
       const room = { identity: "telegram:user", chatKey: key, privateChat: true, senderLabel: "user" };
       try {
         await receive({ ...room, text: "直接回答：这个技术对项目有什么用？", messageId: "ordinary-1" });
         await manager.idle();
+        assert.match(delivered.at(-1) ?? "", /host 提示[\s\S]*\/retry/);
+        assert.deepEqual(reviewRecords.map(record => record.category), ["PROCESS_OVER_RESULT"]);
         assert.match((await receive({ ...room, text: "/retry", messageId: "retry-1" }))!, /无副作用重答/);
         await manager.idle();
         assert.equal(registry.contextMode(frontId, conversation), "recover");

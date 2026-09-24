@@ -973,6 +973,11 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
         });
       },
     },
+    answerReview: {
+      mode: () => orchestrator.answerReviewMode(),
+      sampled: messageId => orchestrator.sampledForAnswerReview(messageId),
+      review: input => orchestrator.reviewAnswer(input),
+    },
     ingress,
     messages,
     listeners: message => {

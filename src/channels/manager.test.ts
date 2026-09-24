@@ -170,6 +170,51 @@ test("retry runs the prepared isolated packet without opening a second task", as
   } finally { manager.stop(); }
 });
 
+test("answer review is non-blocking in shadow and only suggest mode adds a host recovery hint", async () => {
+  const shadowAdapter = testAdapter();
+  const never = new Promise<never>(() => {});
+  const shadow = new ChannelManager({
+    mayDrive: () => true, log: () => {}, ask: async () => "direct answer",
+    answerReview: { mode: () => "shadow", sampled: () => true, review: () => never },
+  });
+  shadow.register(shadowAdapter, true, "test"); await started(shadow);
+  try {
+    await shadowAdapter.inject({ identity: "telegram:1", privateChat: true, senderLabel: "user", messageId: "shadow-1", text: "question" });
+    await shadow.idle();
+    assert.equal(shadowAdapter.sent.at(-1)?.text, "direct answer", "shadow review never delays or changes delivery");
+  } finally { shadow.stop(); }
+
+  const suggestAdapter = testAdapter();
+  const suggest = new ChannelManager({
+    mayDrive: () => true, log: () => {}, ask: async () => "Nova 接着做。",
+    answerReview: {
+      mode: () => "suggest", sampled: () => true,
+      review: async () => ({ category: "NON_ANSWER", confidence: 0.99, reason: "delegated only" }),
+    },
+  });
+  suggest.register(suggestAdapter, true, "test"); await started(suggest);
+  try {
+    await suggestAdapter.inject({ identity: "telegram:1", privateChat: true, senderLabel: "user", messageId: "suggest-1", text: "回答问题" });
+    await suggest.idle();
+    assert.match(suggestAdapter.sent.at(-1)?.text ?? "", /Nova 接着做。[\s\S]*host 提示[\s\S]*\/retry/);
+  } finally { suggest.stop(); }
+
+  const failedAdapter = testAdapter();
+  const failed = new ChannelManager({
+    mayDrive: () => true, log: () => {}, ask: async () => "answer still delivered",
+    answerReview: {
+      mode: () => "suggest", sampled: () => true,
+      review: async () => { throw new Error("reviewer unavailable"); },
+    },
+  });
+  failed.register(failedAdapter, true, "test"); await started(failed);
+  try {
+    await failedAdapter.inject({ identity: "telegram:1", privateChat: true, senderLabel: "user", messageId: "suggest-failed", text: "question" });
+    await failed.idle();
+    assert.equal(failedAdapter.sent.at(-1)?.text, "answer still delivered", "review failure must fail open");
+  } finally { failed.stop(); }
+});
+
 test("clean context rejects later attachments before storage or model work", async () => {
   const adapter = testAdapter();
   let asks = 0;

@@ -537,6 +537,15 @@ included attachments are refused because the message ledger has their metadata, 
 A 👎 reaction is a reliable human signal and points at this command, but does not execute it. The
 host deliberately does not infer “context pollution” from tone or let a model silently erase state.
 
+An answer-review gate watches a deterministic five-percent sample by default, in `shadow` mode. Its
+cheap classifier receives only the current durable request and final visible reply, never the old
+conversation or memory that might have caused the drift. It returns one typed category: direct
+answer, non-answer, process-over-result, context bleed, or unknown. Shadow review is asynchronous,
+changes no reply and writes hashes plus the verdict to `answer-review.jsonl`; a missing or malformed
+verdict fails open. `AGENTBOX_ANSWER_REVIEW=suggest` is an operator rollout decision: only then, and
+only for a sampled failure at confidence 0.85 or higher, the host appends a clearly attributed
+`/retry` suggestion. No verdict executes a recovery action.
+
 The board is advisory like claims, with one enforced exception: **when a task names a
 reviewer, its assignee cannot move it to done** — the attempt lands in `review` with a
 note saying so. A gate the worker can wave itself through is decoration; everything

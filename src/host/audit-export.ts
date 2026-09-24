@@ -182,6 +182,7 @@ export function exportAudit(options: ExportOptions): ExportManifest {
   write("usage.jsonl", select(readLines(join(options.home, "usage.jsonl")), record => byAgentId(record) || record.box === box.id));
   // The reviewer records the agent by name (auto-review.ts): matched either way.
   write("auto-review.jsonl", select(readLines(join(options.home, "auto-review.jsonl")), record => byAgentId(record) || (typeof record.agent === "string" && (agentIds.has(record.agent) || agentNames.has(record.agent)))));
+  write("answer-review.jsonl", select(readLines(join(options.home, "answer-review.jsonl")), record => typeof record.agent === "string" && (agentIds.has(record.agent) || agentNames.has(record.agent))));
   write("vault-audit.jsonl", select(readLines(join(options.home, "vault-audit.jsonl")), byAgentId));
   write("network-events.jsonl", select(readLines(join(options.home, "network-events.jsonl")), record => record.box === box.id || record.box === box.name));
   write("turns.jsonl", select(readRecord(join(options.home, "turns.jsonl")), byAgentId));

@@ -12,6 +12,7 @@ import { replyForMessage } from "./reply.ts";
 import { isContextCommand } from "./context-recovery.ts";
 import { isRecoveryCommand } from "./task-recovery.ts";
 import { isRetryCommand } from "./retry-recovery.ts";
+import { AnswerReviewer, answerReviewMode, sampledForReview, type AnswerReviewInput, type AnswerVerdict } from "./answer-review.ts";
 import type Anthropic from "@anthropic-ai/sdk";
 import { AgentBus, type BusEvent, type InboundMessage, type Lane } from "../agents/bus.ts";
 import { Inbox, inboxPath } from "../agents/inbox.ts";
@@ -1894,6 +1895,22 @@ export class Orchestrator {
     const current = this.tasks.get(taskId);
     if (current === undefined || title === current.title) return;
     this.tasks.update(taskId, { title }, "host");
+  }
+
+  answerReviewMode() { return answerReviewMode(); }
+
+  sampledForAnswerReview(messageId: string): boolean { return sampledForReview(messageId); }
+
+  async reviewAnswer(input: AnswerReviewInput): Promise<AnswerVerdict> {
+    let agent: AgentRecord | undefined;
+    try { agent = input.agentName === "" ? this.registry.list()[0] : this.registry.resolve(input.agentName); }
+    catch { agent = undefined; }
+    if (agent === undefined) return { category: "UNKNOWN", confidence: 0, reason: "agent unavailable" };
+    return new AnswerReviewer({
+      ask: prompt => this.askCheaply(agent!, prompt, "review"),
+      mode: () => answerReviewMode(),
+      record: entry => appendLine(join(agentboxHome(), "answer-review.jsonl"), JSON.stringify(entry)),
+    }).review({ ...input, agentName: agent.profile.name });
   }
 
   /** Sends a user message to an agent and runs its turn to completion. */
