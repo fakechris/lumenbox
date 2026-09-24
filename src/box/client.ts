@@ -5,6 +5,7 @@
  */
 
 import { BOXD_PROTOCOL, type DisplayInfo, type TeachQueueList, type TeachClaimResult, type TeachBinding } from "../protocol/index.ts";
+import { isComputerWrite } from "../cua/execution.ts";
 import type {
   BrowserRequest,
   BrowserResponse,
@@ -214,7 +215,7 @@ export class BoxClient {
     }
   }
 
-  computer(
+  async computer(
     actions: readonly ComputerAction[],
     options: {
       display?: number;
@@ -224,6 +225,26 @@ export class BoxClient {
       owner?: string;
     } = {}
   ): Promise<ComputerResult> {
+    // Older daemons can execute a prefix before rejecting a new action, and cannot
+    // report that prefix reliably. Discover the contract before sending ANY input.
+    // Read-only inspection remains available while the operator upgrades the box.
+    if (options.expect !== undefined || actions.some(isComputerWrite)) {
+      let health: HealthResult;
+      try {
+        health = await this.health();
+        assertCompatible(health, this.baseUrl);
+      } catch {
+        throw new BoxError("Desktop capability check failed before dispatch; no computer actions were sent. Check the box connection and host/box versions.", undefined, "refused");
+      }
+      const contract = health.desktop_contract;
+      const semantic = health.desktop_driver?.semantic_actions;
+      if (contract?.version !== 1 || contract.snapshot_refs !== true ||
+          contract.final_observation !== true || contract.batch_progress !== true ||
+          actions.some(action => (action.action === "invoke_element" && !semantic?.includes("invoke")) ||
+            (action.action === "set_value" && !semantic?.includes("set_value")))) {
+        throw new BoxError("Desktop writes and expectations require the current desktop contract and requested driver capabilities. Refused before dispatch; no computer actions were sent. Rebuild and recreate the box from this host version. Read-only inspection remains available.", undefined, "refused");
+      }
+    }
     return this.post<ComputerResult>(
       "/computer",
       {

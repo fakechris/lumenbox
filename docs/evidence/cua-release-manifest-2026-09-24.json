@@ -1,0 +1,44 @@
+{
+  "version": 1,
+  "production_source_commit": "168168c4c6e3bf01f2f0207b358709e1bc35cb6e",
+  "production_image": "agentbox/cua-release:88ef46b8c7f6",
+  "production_image_id": "sha256:91b43f3b69fcc3ad1bc355156e991db5a7021e6cc75f21e1c75d5650eb1fa296",
+  "gui_image": "agentbox/cua-release-platform:88ef46b8c7f6",
+  "gui_image_id": "sha256:09523327cd06e4cb73e5b9253086d68db446a2c218447609ac4053e854d35478",
+  "checks": {
+    "release_check": {
+      "exit_code": 0,
+      "tests": 1848,
+      "pass": 1848,
+      "fail": 0,
+      "skip": 0
+    },
+    "gui": {
+      "pass": 17,
+      "fail": 0
+    },
+    "standard_smoke": {
+      "reported_pass": 42,
+      "fail": 0,
+      "excluded_coverage": [
+        "unconfigured egress relay"
+      ]
+    },
+    "wire_compatibility": {
+      "pass": 4,
+      "fail": 0,
+      "scope": "BoxClient and outcome projection from exact old source against real daemons; full historical orchestrator/UI and general desktop delivery are not covered"
+    }
+  },
+  "model_evaluation": "not_run_user_deferred",
+  "deployment": "isolated disposable containers only; live box unchanged",
+  "files_sha256": {
+    "docker/box/boxd.cjs": "76be0e364300a478f2b46c7857fce590c080393c3b340512c16a2b008bf3bf31",
+    "docker/box/hostd.mjs": "39fcbdc97ecbfe9a20d6c27b4d3fa855cfd604badc3025fa41c7735e767e57c2",
+    "docker/box/box-ax": "253e41aeaa7097a86b70cfae6e51f2040d802d102317a939333155fd084149a4",
+    "dist/cli.js": "0a4b0752b669eb989642ce7daea10ef0d282ff6724f3b238b4a7a927dddbddf6",
+    "scripts/cua-release-smoke.mjs": "689a5bb40dc85fef933b34b3e66e79b41ffa6a749b62527ad650857f164109eb",
+    "scripts/cua-compat-smoke.mjs": "24847f732c49823dd4c45d3eb7a7215562896b8eeea3d32a13146a04f782dcc2",
+    "scripts/cua-contract-smoke.mjs": "3ce986a2e550f97a3506da7b519028dfdeae35c26fb7ee9c60f723df19fa8e2a"
+  }
+}

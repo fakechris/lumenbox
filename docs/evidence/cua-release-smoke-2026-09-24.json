@@ -1,0 +1,38 @@
+{
+  "version": 1,
+  "started_at": "2026-09-24T06:59:15.391Z",
+  "image": "agentbox/cua-release:88ef46b8c7f6",
+  "source_commit": "168168c4c6e3bf01f2f0207b358709e1bc35cb6e",
+  "source_dirty": false,
+  "status": "pass",
+  "image_id": "sha256:91b43f3b69fcc3ad1bc355156e991db5a7021e6cc75f21e1c75d5650eb1fa296",
+  "health": {
+    "protocol": 1,
+    "desktop_contract": {
+      "version": 1,
+      "snapshot_refs": true,
+      "final_observation": true,
+      "batch_progress": true
+    },
+    "desktop_driver": {
+      "backend": "x11-atspi",
+      "platform": "linux",
+      "semantic_actions": [
+        "invoke",
+        "set_value"
+      ],
+      "background_semantic": false,
+      "observation_refs": true
+    }
+  },
+  "counts": {
+    "passed": 42,
+    "failed": 0
+  },
+  "exit_code": 0,
+  "timed_out": false,
+  "output_limit_exceeded": false,
+  "coverage_note": "Standard smoke has conditional checks; inspect the log. Unconfigured egress relay is not relay coverage.",
+  "container_removed": true,
+  "finished_at": "2026-09-24T07:01:27.787Z"
+}

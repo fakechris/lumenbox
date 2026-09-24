@@ -236,3 +236,13 @@ revalidates window/object identity before dispatch, receives values only through
 is killed on deadline, output overflow or authority revocation. A timeout/crash after input
 starts is uncertain delivery, not permission to repeat. No cross-platform backend or second
 session/authority registry is introduced.
+
+
+Before sending a computer write batch or an expectation, `BoxClient` checks the current
+health response for desktop contract v1 (snapshot refs, final observation, batch progress)
+and any requested native semantic capability. Discovery failure or missing capabilities
+refuses the entire batch before dispatch; old boxes remain available for read-only inspection.
+The check is repeated per call so a previously connected daemon replacement cannot reuse a
+cached capability decision. This is preflight discovery, not an atomic lease across a daemon
+restart. Upgrade host and box together. Historical write receipts without progress remain
+unknown even when a legacy daemon reported failed: its executed prefix is not recoverable.

@@ -53,3 +53,9 @@ test("dispatch, change and verification never collapse into task success", () =>
   assert.equal(computerOutcome({ ...base, verification, progress: { executed_count: 1, failed_at: 1, dispatch: "partial" } }), "unknown");
   assert.equal(computerOutcome({ success: true, screenshot: "image" }, true), "unknown", "older daemon cannot verify writes by success=true");
 });
+
+test("legacy failed writes cannot conceal a possibly delivered prefix", () => {
+  assert.equal(computerOutcome({ success: false, screenshot: "image", outcome: "failed", error: "unknown second action" }, true), "unknown");
+  assert.equal(computerOutcome({ success: false, screenshot: "image", outcome: "refused" }, true), "refused");
+  assert.equal(computerOutcome({ success: false, screenshot: "image", outcome: "failed", progress: { executed_count: 0, failed_at: 0, dispatch: "not_started" } }, true), "failed");
+});
