@@ -21,7 +21,7 @@ this file and the headers disagree. Edit the header, not this table.
 | [01-requirements](01-requirements.md) | Requirements | current | 2026-08-22 |
 | [02-product](02-product.md) | Product | current | 2026-08-19 |
 | [03-architecture](03-architecture.md) | Architecture | current | 2026-09-22 |
-| [04-design](04-design.md) | Design | current | 2026-08-22 |
+| [04-design](04-design.md) | Design | current | 2026-09-24 |
 | [05-data](05-data.md) | Data | current | 2026-09-24 |
 | [08-control-plane](08-control-plane.md) | Control plane | current | 2026-09-12 |
 | [11-roadmap](11-roadmap.md) | Roadmap and backlog | current | 2026-09-14 |
@@ -120,3 +120,4 @@ this file and the headers disagree. Edit the header, not this table.
 | [handoff-2026-09-22-request-ownership-fix](handoff-2026-09-22-request-ownership-fix.md) | Handoff — 吞单边界修复与 INV 合同校正 | current | 2026-09-22 |
 | [handoff-2026-09-24-context-clean](handoff-2026-09-24-context-clean.md) | Handoff — 上下文恢复第三项：严格 /new --clean | current | 2026-09-24 |
 | [handoff-2026-09-24-context-new](handoff-2026-09-24-context-new.md) | Handoff — 上下文恢复第二项：空闲私聊 /new | current | 2026-09-24 |
+| [handoff-2026-09-24-task-recover](handoff-2026-09-24-task-recover.md) | Handoff — 上下文恢复第四项：同任务只读 /recover | current | 2026-09-24 |

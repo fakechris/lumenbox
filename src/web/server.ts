@@ -27,6 +27,7 @@ import { join, posix } from "node:path";
 import { fileURLToPath } from "node:url";
 import { AgentRegistry, MAIN_CONVERSATION, conversationIdFor } from "../agents/registry.ts";
 import { isContextCommand, newContext } from "../host/context-recovery.ts";
+import { recoverTask } from "../host/task-recovery.ts";
 import type { BusEvent } from "../agents/bus.ts";
 import { BoxManager, defaultBoxConfig } from "../box/docker.ts";
 import { resolveBoxProvisioner, type BoxProvisioner } from "../box/provisioner.ts";
@@ -913,6 +914,37 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
         ],
       }, request).text;
     },
+    ...(orchestrator.tasks !== undefined ? { recover: {
+      prepare: input => {
+        let agent: ReturnType<typeof registry.resolve> | undefined;
+        try { agent = input.agentName === undefined ? registry.list()[0] : registry.resolve(input.agentName); }
+        catch { return { status: "refused" as const, text: "找不到目标 agent；没有修改任务。" }; }
+        if (agent === undefined) return { status: "refused" as const, text: "找不到目标 agent；没有修改任务。" };
+        const principal = principals.resolve(input.identity);
+        const conversation = conversationIdFor(input.conversationKey);
+        return recoverTask({
+          registry,
+          tasks: orchestrator.tasks!,
+          message: id => messages.list().find(item => item.id === id),
+          mayRecover: task => task.requester === principal.id && mayEnterBox(registry.boxOf(agent!.id), principal.id),
+          blockers: task => [
+            ...input.blockers,
+            ...orchestrator.contextBlockers(agent!.id, conversation, { excludeTaskId: task.id }),
+            ...questions.list().filter(item => item.agentId === agent!.id && item.conversation === conversation && item.expiresAt > Date.now()).map(item => `问题 ${item.id} 待回答`),
+            ...deliveries.pending().filter(item => item.agentId === agent!.id && item.conversation === conversation).map(item => `投递 ${item.id} 尚未确认`),
+          ],
+        }, {
+          agentId: agent.id,
+          conversation,
+          operationId: input.operationId,
+          principal: principal.id,
+          privateChat: input.privateChat,
+          taskId: input.taskId,
+        });
+      },
+      started: (taskId, operationId) => { orchestrator.tasks?.setRecoveryStatus(taskId, operationId, "running", "channel"); },
+      finished: (taskId, operationId, outcome) => { orchestrator.tasks?.setRecoveryStatus(taskId, operationId, outcome, "channel"); },
+    } } : {}),
     ingress,
     messages,
     listeners: message => {
@@ -1398,6 +1430,7 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
         const task = tasks.create({
           title: input.title,
           ...(input.description !== undefined ? { description: input.description } : {}),
+          ...(input.sourceMessageId !== undefined ? { sourceMessageId: input.sourceMessageId } : {}),
           requester: principals.resolve(input.identity).id,
           ...(assigneeId !== undefined ? { assigneeId } : {}),
           ...(reviewerId !== undefined ? { reviewerId } : {}),

@@ -33,6 +33,7 @@ import { boxPathsNamed, undelivered } from "../host/named-files.ts";
 import { boardText, type BoardView } from "./board-view.ts";
 import { parseContinuation } from "./continuation.ts";
 import { isContextCommand } from "../host/context-recovery.ts";
+import { isRecoveryCommand, parseRecoveryCommand, type RecoverTaskResult } from "../host/task-recovery.ts";
 import type { CardRecord } from "./card-ledger.ts";
 
 import {
@@ -344,7 +345,12 @@ export function parseApprovalReply(text: string): ApprovalReply | undefined {
 
 export interface ChannelManagerDeps {
   newContext?: (input: { agentName: string | undefined; identity: string; conversationKey: string; operationId: string; privateChat: boolean; blockers: string[]; mode: "normal" | "clean" }) => string;
-  contextMode?: (input: { agentName: string | undefined; conversationKey: string }) => "normal" | "clean" | undefined;
+  contextMode?: (input: { agentName: string | undefined; conversationKey: string }) => "normal" | "clean" | "recover" | undefined;
+  recover?: {
+    prepare: (input: { agentName: string | undefined; identity: string; conversationKey: string; operationId: string; privateChat: boolean; blockers: string[]; taskId: string }) => RecoverTaskResult;
+    started: (taskId: string, operationId: string) => void;
+    finished: (taskId: string, operationId: string, outcome: "completed" | "failed") => void;
+  };
   /**
    * Told of every admitted message from a person, for routines that listen for a phrase. Fired
    * beside the ordinary handling, never instead of it; the callee decides what, if anything, runs.
@@ -550,6 +556,7 @@ export interface ChannelManagerDeps {
        * board the words the person actually said.
        */
       description?: string;
+      sourceMessageId?: string;
       identity: string;
       senderLabel: string;
       agentName?: string;
@@ -1400,7 +1407,7 @@ ${input.options.map(option => `· ${option}`).join("\n")}`
         ? { files: message.files.map(file => ({ name: file.name, bytes: Buffer.byteLength(file.base64, "base64") })) }
         : {}),
     });
-    if (!isContextCommand(parseAddress(message.text).text)) this.deps.listeners?.({
+    if (!isContextCommand(parseAddress(message.text).text) && !isRecoveryCommand(parseAddress(message.text).text)) this.deps.listeners?.({
       text: message.text,
       chatKey: message.chatKey ?? message.identity,
       ...(message.threadKey !== undefined ? { threadKey: message.threadKey } : {}),
@@ -1449,6 +1456,40 @@ ${input.options.map(option => `· ${option}`).join("\n")}`
         blockers: blocked ? ["渠道仍有运行中、排队、待回答/审批或待处理附件"] : [],
         mode: command === "/new --clean" ? "clean" : "normal",
       }) ?? "此入口尚未接入安全的上下文切换；本次没有修改会话。";
+    }
+    if (isRecoveryCommand(control.text)) {
+      const taskId = parseRecoveryCommand(control.text);
+      if (taskId === undefined) return "用法：/recover t任务号（例如 /recover t25）。本次没有修改任务。";
+      if (message.files?.length) return "请单独发送 /recover t任务号；附件未作为恢复来源消费。";
+      if (this.deps.recover === undefined) return "此入口尚未接入任务恢复；本次没有修改任务。";
+      const key = message.threadKey ?? message.chatKey ?? message.identity;
+      const busy = this.runningWork.get(key) ?? [];
+      const question = [...this.awaitingAnswer.values()].some(item => item.conversationKey === key && item.expiresAt > Date.now());
+      const blocked = pending !== undefined || busy.length > 0 || question || this.pendingDrops.has(key) || [...this.inflightContexts.values()].includes(key);
+      const operationId = message.messageId === undefined ? "" : JSON.stringify([adapter.name, key, message.identity, message.messageId, "recover", taskId]);
+      const prepared = this.deps.recover.prepare({
+        agentName: control.agentName ?? this.deps.defaultAgentFor?.(adapter.name),
+        identity: message.identity,
+        conversationKey: key,
+        operationId,
+        privateChat: message.privateChat === true,
+        blockers: blocked ? ["渠道仍有运行中、排队、待回答/审批或待处理附件"] : [],
+        taskId,
+      });
+      if (prepared.status !== "ready") return prepared.text;
+      const recovery = this.runTask(adapter, message, control.agentName, prepared.prompt, undefined, {
+        existingTaskId: prepared.taskId,
+        cardTitle: `恢复：${prepared.title}`,
+        recoveryOperationId: prepared.operationId,
+      }).catch(error => {
+        this.deps.log(`channel ${adapter.name}: recovery task failed (${error instanceof Error ? error.message : String(error)})`);
+      }).finally(() => {
+        this.inflight.delete(recovery);
+        this.inflightContexts.delete(recovery);
+      });
+      this.inflight.add(recovery);
+      this.inflightContexts.set(recovery, key);
+      return prepared.text;
     }
     if (pending !== undefined) {
       const reply = parseApprovalReply(message.text);
@@ -1533,14 +1574,15 @@ ${input.options.map(option => `· ${option}`).join("\n")}`
     }
 
     const cleanConversationKey = message.threadKey ?? message.chatKey ?? message.identity;
+    const activeContextMode = this.deps.contextMode?.({
+      agentName: control.agentName ?? this.deps.defaultAgentFor?.(adapter.name),
+      conversationKey: cleanConversationKey,
+    });
     if (
       message.files !== undefined && message.files.length > 0 &&
-      this.deps.contextMode?.({
-        agentName: control.agentName ?? this.deps.defaultAgentFor?.(adapter.name),
-        conversationKey: cleanConversationKey,
-      }) === "clean"
+      activeContextMode !== undefined && activeContextMode !== "normal"
     ) {
-      return "当前是干净上下文，首版只接受文字；附件没有写入或交给模型。请先单独发送 /new 退出干净模式。";
+      return "当前是隔离上下文，首版只接受文字；附件没有写入或交给模型。请先单独发送 /new 退出隔离模式。";
     }
 
     // A dropped file with nothing said is a delivery; with an instruction in the same
@@ -1925,7 +1967,7 @@ ${input.options.map(option => `· ${option}`).join("\n")}`
     agentName: string | undefined,
     text: string,
     droppedFiles?: readonly string[],
-    options?: { questionId?: string }
+    options?: { questionId?: string; existingTaskId?: string; cardTitle?: string; recoveryOperationId?: string }
   ): Promise<void> {
     const chatKey = message.chatKey ?? message.identity;
     const runningKey = message.threadKey ?? chatKey;
@@ -1951,11 +1993,12 @@ ${input.options.map(option => `· ${option}`).join("\n")}`
     mark("working");
 
     const ahead = this.deps.ahead?.(agentName, runningKey) ?? 0;
-    const taskId = this.deps.board?.open({
+    const taskId = options?.existingTaskId ?? this.deps.board?.open({
       title: firstLine(text),
       // The person's whole message rides on the task, so a later title rewrite never
       // costs the board what was actually said.
       description: text,
+      ...(message.id !== undefined ? { sourceMessageId: message.id } : {}),
       identity: message.identity,
       senderLabel: message.senderLabel,
       ...(agentName !== undefined ? { agentName } : {}),
@@ -1972,7 +2015,7 @@ ${input.options.map(option => `· ${option}`).join("\n")}`
       runningEntry.taskId = taskId;
     }
     const card: TaskCardState = {
-      title: firstLine(text),
+      title: options?.cardTitle ?? firstLine(text),
       agentName: agentName ?? "",
       requesterLabel: message.senderLabel,
       status: ahead > 0 ? "queued" : "working",
@@ -2026,7 +2069,7 @@ ${input.options.map(option => `· ${option}`).join("\n")}`
 
     // Progress rewrites the card, rate-limited; without a card it goes nowhere, on
     // purpose — a plain chat told "tool call #14" fourteen times is spam, not progress.
-    let boardStarted = false;
+    let boardStarted = options?.existingTaskId !== undefined;
     // Whether this turn touched the desktop at all. The final screenshot is a poster
     // of the desk the work left behind; a research or calculation turn that never
     // used the desktop would post the same untouched wallpaper every time, which is
@@ -2106,6 +2149,13 @@ ${input.options.map(option => `· ${option}`).join("\n")}`
     };
 
     try {
+      // The attempt is durable before model work starts. Keeping both callbacks inside
+      // the guarded region also means an unexpected board failure settles the attempt
+      // as failed instead of leaving it prepared forever.
+      if (options?.existingTaskId !== undefined) {
+        if (options.recoveryOperationId !== undefined) this.deps.recover?.started(options.existingTaskId, options.recoveryOperationId);
+        this.deps.board?.started(options.existingTaskId);
+      }
       // The opening line goes out the moment the model says it, so the person reads "我先查
       // 一下" while the search runs instead of silence until it ends. Remembered so the
       // final reply is not the same sentence twice when a model repeats itself.
@@ -2147,6 +2197,7 @@ ${input.options.map(option => `· ${option}`).join("\n")}`
       );
       // A generated answer is not yet a delivered answer. Settle only after text/files.
       const settled = taskId !== undefined ? this.deps.board?.closed(taskId, "done") : undefined;
+      if (taskId !== undefined && options?.recoveryOperationId !== undefined) this.deps.recover?.finished(taskId, options.recoveryOperationId, "completed");
       finishCard(settled === "review" ? "review" : "done");
       mark("done");
       // The desk as the task left it: evidence at a glance — but only when the turn
@@ -2173,6 +2224,7 @@ ${input.options.map(option => `· ${option}`).join("\n")}`
       mark("failed");
       const detail = error instanceof Error ? error.message : String(error);
       if (taskId !== undefined) this.deps.board?.closed(taskId, "failed", detail);
+      if (taskId !== undefined && options?.recoveryOperationId !== undefined) this.deps.recover?.finished(taskId, options.recoveryOperationId, "failed");
       this.deps.log(`channel ${adapter.name}: task failed — ${detail}`);
       await deliver(detail).catch(() => this.deps.log(`channel ${adapter.name}: failure notice could not be delivered`));
     } finally {

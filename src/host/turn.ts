@@ -1356,6 +1356,8 @@ async function runContextTurn(agent: AgentRecord, inbound: readonly InboundMessa
   const conversation = deps.conversation ?? MAIN_CONVERSATION;
   const contextMode = registry.contextMode(agent.id, conversation);
   const clean = contextMode === "clean";
+  const recovering = contextMode === "recover";
+  const isolated = clean || recovering;
   // Every event names its conversation, so a page viewing one thread can ignore the
   // stream of another instead of splicing an outside chat's reply into the team room.
   const baseEmit = deps.onEvent ?? (() => {});
@@ -1428,8 +1430,8 @@ async function runContextTurn(agent: AgentRecord, inbound: readonly InboundMessa
   };
 
   // Both personal and shared memories pass the same relevance gate, even below budget.
-  const ownMemory = clean ? [] : registry.readMemoryRecords(agent.id);
-  const sharedMemory = clean ? [] : registry.readSharedMemory(agent.id);
+  const ownMemory = isolated ? [] : registry.readMemoryRecords(agent.id);
+  const sharedMemory = isolated ? [] : registry.readSharedMemory(agent.id);
   const memoryQuery = inbound.map(message => message.text).join(" ");
   const selection = {
     query: memoryQuery,
@@ -1437,7 +1439,7 @@ async function runContextTurn(agent: AgentRecord, inbound: readonly InboundMessa
     log: (line: string) => console.error(`[memory] ${agent.profile.name}: ${line}`),
   };
   const emptyRecall: MemoryRecall = { records: [], omitted: 0, excluded: 0, method: "empty" };
-  const [memoryRecall, sharedMemoryRecall] = clean
+  const [memoryRecall, sharedMemoryRecall] = isolated
     ? [emptyRecall, emptyRecall]
     : await Promise.all([chooseRelevant({ records: ownMemory, ...selection }), chooseRelevant({
         records: sharedMemory, budget: SHARED_CHAR_BUDGET, ...selection,
@@ -1448,33 +1450,33 @@ async function runContextTurn(agent: AgentRecord, inbound: readonly InboundMessa
   const buildParts = (recallToUse: typeof memoryRecall) =>
     buildSystemPromptParts({
       agent,
-      teammates: clean ? [] : teammatesOf(registry, agent.id),
+      teammates: isolated ? [] : teammatesOf(registry, agent.id),
       memory: ownMemory,
       memoryRecall: recallToUse,
       memoryQuery,
       sharedMemory,
       sharedMemoryRecall,
-      skills: clean ? [] : narrowSkills(deps.skills ?? [], deps.bundles?.forBox(registry.boxOf(agent.id))),
+      skills: isolated ? [] : narrowSkills(deps.skills ?? [], deps.bundles?.forBox(registry.boxOf(agent.id))),
       place: placeOf(registry, agent.id, deps.bundles),
       transcript: registry.readTranscript(agent.id, conversation),
-      heard: clean ? [] : registry.readHeard(agent.id, conversation),
+      heard: isolated ? [] : registry.readHeard(agent.id, conversation),
       // Read fresh, which is what makes the plan and the todo list survive a compaction: they are in
       // the prompt rather than in the history a summary replaces.
-      durable: clean ? {} : registry.readDurableState(agent.id, conversation),
-      tasks: clean ? [] : deps.tasks?.forAgent(agent.id).filter(task => registry.contextVersion(agent.id, conversation) === 0 || (task.conversation ?? MAIN_CONVERSATION) === conversation),
+      durable: isolated ? {} : registry.readDurableState(agent.id, conversation),
+      tasks: isolated ? [] : deps.tasks?.forAgent(agent.id).filter(task => registry.contextVersion(agent.id, conversation) === 0 || (task.conversation ?? MAIN_CONVERSATION) === conversation),
       resolution: deps.resolution,
       ...(deps.boxAccess !== undefined ? { boxAccess: deps.boxAccess } : {}),
       agentsRoot: registry.root,
-      hasBox: !clean && box !== undefined,
+      hasBox: !isolated && box !== undefined,
       vision: provider.vision,
       conversation,
-      siblingConversations: clean ? 0 : registry
+      siblingConversations: isolated ? 0 : registry
         .listConversations(agent.id)
         .filter(entry => entry.id !== conversation).length,
     });
   const builtPromptParts = buildParts(memoryRecall);
-  const promptParts = clean ? {
-    stable: `${builtPromptParts.stable}\n\n---\n\n## Clean context\n\nClean context is active. Only the host's safety and authority rules, this agent's configured identity, and messages in this new context are loaded. Earlier conversations, personal and shared long-term memory, learned skills, tasks, plans, heard-room context, and other threads are excluded. No tools are available and nothing in this context may be learned into long-term or shared memory. Messages are still recorded for continuity and audit; this is not incognito mode.`,
+  const promptParts = isolated ? {
+    stable: `${builtPromptParts.stable}\n\n---\n\n## ${clean ? "Clean" : "Recovery"} context\n\n${clean ? "Clean context is active." : "Recovery context is active for one existing task. Treat only the recovery packet in the current conversation as task evidence; do not reconstruct facts from omitted history."} Only the host's safety and authority rules, this agent's configured identity, and messages in this new context are loaded. Earlier conversations, personal and shared long-term memory, learned skills, tasks, plans, heard-room context, and other threads are excluded. No tools are available and nothing in this context may be learned into long-term or shared memory. Messages are still recorded for continuity and audit; this is not incognito mode.`,
     volatile: builtPromptParts.volatile,
   } : builtPromptParts;
 
@@ -1484,12 +1486,12 @@ async function runContextTurn(agent: AgentRecord, inbound: readonly InboundMessa
   // an absence is indistinguishable from "nothing to say" unless something checks.
   for (const fault of emptySectionFaults({
     agent,
-    teammates: clean ? [] : teammatesOf(registry, agent.id),
+    teammates: isolated ? [] : teammatesOf(registry, agent.id),
     memory: [],
     agentsRoot: registry.root,
-    hasBox: !clean && box !== undefined,
+    hasBox: !isolated && box !== undefined,
     conversation,
-    siblingConversations: clean ? 0 : registry
+    siblingConversations: isolated ? 0 : registry
       .listConversations(agent.id)
       .filter(entry => entry.id !== conversation).length,
   })) {
@@ -1529,7 +1531,7 @@ async function runContextTurn(agent: AgentRecord, inbound: readonly InboundMessa
   // call — and a read-only call answered fresh beats a result declared unknown.
   // Everything not declared safe keeps the honest "never recorded" treatment at
   // assembly, and the model is still told to look before redoing those.
-  if (!clean && deps.resumeOf !== undefined && history.length > 0) {
+  if (!isolated && deps.resumeOf !== undefined && history.length > 0) {
     const last = history[history.length - 1]!;
     if ("kind" in last && last.kind === "blocks") {
       const calls = last.blocks.filter(
@@ -1657,7 +1659,7 @@ async function runContextTurn(agent: AgentRecord, inbound: readonly InboundMessa
   // A template setup turn holds files and memory and a way to ask, nothing that reaches out
   // (docs/29 §5.3): the recipe it is installing is third-party text, and installing yourself
   // is not a reason to message anyone. The same narrowing applies when offering and executing tools.
-  const effectiveTools = clean
+  const effectiveTools = isolated
     ? []
     : deps.templateSetup === undefined
       ? narrowed
@@ -2589,7 +2591,7 @@ async function runContextTurn(agent: AgentRecord, inbound: readonly InboundMessa
       // tool's answer, with the reason, so the agent can ask rather than guess.
       const toolInput = (toolUse.input ?? {}) as Record<string, unknown>;
       const reviewWhy =
-        clean || deps.autoReview === undefined
+        isolated || deps.autoReview === undefined
           ? undefined
           : (needsReview(toolUse.name, toolInput) ??
             // A host-level MCP server's tools (INV-439) are reviewed like a host command:
@@ -2621,7 +2623,7 @@ async function runContextTurn(agent: AgentRecord, inbound: readonly InboundMessa
       // PreToolUse hooks, after auto-review: a person's own script gets the same veto, with the
       // same shape of answer to the model.
       let hookBlock: string | undefined;
-      if (!clean && blocked === undefined && deps.hooks?.has("PreToolUse", toolUse.name)) {
+      if (!isolated && blocked === undefined && deps.hooks?.has("PreToolUse", toolUse.name)) {
         const hook = await deps.hooks.run("PreToolUse", {
           session_id: turnId,
           agent_name: agent.profile.name,
@@ -2632,8 +2634,8 @@ async function runContextTurn(agent: AgentRecord, inbound: readonly InboundMessa
       }
 
       let outcome: ToolOutcome;
-      if (clean || (effectiveTools !== undefined && !tools.some(tool => tool.name === toolUse.name))) {
-        outcome = { text: clean ? "Tools are disabled in clean context." : "This tool is unavailable in the current execution context.", isError: true };
+      if (isolated || (effectiveTools !== undefined && !tools.some(tool => tool.name === toolUse.name))) {
+        outcome = { text: isolated ? `Tools are disabled in ${contextMode} context.` : "This tool is unavailable in the current execution context.", isError: true };
       } else if (hookBlock !== undefined) {
         outcome = { text: `Blocked by a PreToolUse hook: ${hookBlock}`, isError: true };
       } else if (blocked !== undefined) {

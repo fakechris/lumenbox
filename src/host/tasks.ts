@@ -123,6 +123,8 @@ export interface Task {
   status: TaskStatus;
   /** Who asked for it. */
   requester: string;
+  /** The immutable admitted-message record containing the original request. */
+  sourceMessageId?: string;
   assigneeId?: string;
   /** Named, "done" means this identity accepted it — the assignee cannot self-accept. */
   reviewerId?: string;
@@ -162,6 +164,16 @@ export interface Task {
   createdAt: string;
   updatedAt: string;
   history: TaskChange[];
+  /** Recovery attempts are part of this task, never replacement tasks. */
+  recoveries?: TaskRecovery[];
+}
+
+export interface TaskRecovery {
+  operationId: string;
+  attempt: number;
+  epoch: number;
+  at: string;
+  status: "prepared" | "running" | "completed" | "failed";
 }
 
 /** Idle this long with no movement, a live task is nudged. */
@@ -308,7 +320,11 @@ export class TaskStore {
 
   get(id: string): Task | undefined {
     const task = this.tasks.get(id);
-    return task === undefined ? undefined : { ...task, history: [...task.history] };
+    return task === undefined ? undefined : {
+      ...task,
+      history: [...task.history],
+      ...(task.recoveries !== undefined ? { recoveries: task.recoveries.map(item => ({ ...item })) } : {}),
+    };
   }
 
   /** The live tasks on an agent's plate, for its prompt. Oldest first: finish before starting. */
@@ -322,6 +338,7 @@ export class TaskStore {
     title: string;
     description?: string;
     requester: string;
+    sourceMessageId?: string;
     assigneeId?: string;
     reviewerId?: string;
     conversation?: string;
@@ -343,6 +360,7 @@ export class TaskStore {
         : {}),
       status: "open",
       requester: input.requester,
+      ...(input.sourceMessageId !== undefined ? { sourceMessageId: input.sourceMessageId } : {}),
       ...(input.assigneeId !== undefined ? { assigneeId: input.assigneeId } : {}),
       ...(input.reviewerId !== undefined ? { reviewerId: input.reviewerId } : {}),
       ...(input.conversation !== undefined ? { conversation: input.conversation } : {}),
@@ -356,6 +374,58 @@ export class TaskStore {
     this.tasks.set(task.id, task);
     this.append({ kind: "task", task });
     return this.get(task.id);
+  }
+
+  /** Prepare one idempotent recovery attempt on the existing task. */
+  prepareRecovery(id: string, operationId: string, epoch: number, by: string, now = new Date()): TaskRecovery | undefined {
+    const task = this.tasks.get(id);
+    if (task === undefined) return undefined;
+    const existing = task.recoveries?.find(item => item.operationId === operationId);
+    if (existing !== undefined) return existing;
+    const recovery: TaskRecovery = {
+      operationId,
+      attempt: (task.recoveries?.at(-1)?.attempt ?? 0) + 1,
+      epoch,
+      at: now.toISOString(),
+      status: "prepared",
+    };
+    const change: TaskChange = { at: recovery.at, by, note: `recovery attempt ${recovery.attempt} prepared in context ${epoch}` };
+    const next: Task = {
+      ...task,
+      recoveries: [...(task.recoveries ?? []), recovery].slice(-20),
+      updatedAt: recovery.at,
+      history: [...task.history, change].slice(-HISTORY_LIMIT),
+    };
+    this.tasks.set(id, next);
+    this.append({ kind: "task", task: next });
+    for (const listener of this.listeners) listener(next);
+    return recovery;
+  }
+
+  setRecoveryStatus(id: string, operationId: string, status: TaskRecovery["status"], by: string, now = new Date()): TaskRecovery | undefined {
+    const task = this.tasks.get(id);
+    const current = task?.recoveries?.find(item => item.operationId === operationId);
+    if (task === undefined || current === undefined) return undefined;
+    if (current.status === status) return current;
+    const allowed = current.status === "prepared"
+      ? status === "running" || status === "failed"
+      : current.status === "running"
+        ? status === "completed" || status === "failed"
+        : false;
+    if (!allowed) return undefined;
+    const at = now.toISOString();
+    const recovery = { ...current, status };
+    const next: Task = {
+      ...task,
+      ...(status === "running" ? { status: "doing" as const } : {}),
+      recoveries: task.recoveries!.map(item => item.operationId === operationId ? recovery : item),
+      updatedAt: at,
+      history: [...task.history, { at, by, ...(status === "running" ? { status: "doing" as const } : {}), note: `recovery attempt ${current.attempt} ${status}` }].slice(-HISTORY_LIMIT),
+    };
+    this.tasks.set(id, next);
+    this.append({ kind: "task", task: next });
+    for (const listener of this.listeners) listener(next);
+    return recovery;
   }
 
   /**

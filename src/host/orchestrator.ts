@@ -10,6 +10,7 @@ import { bindingsOf, CommitmentLedger, describeGaps, parseCommitments, priorComm
 import { learningsDir } from "./learnings.ts";
 import { replyForMessage } from "./reply.ts";
 import { isContextCommand } from "./context-recovery.ts";
+import { isRecoveryCommand } from "./task-recovery.ts";
 import type Anthropic from "@anthropic-ai/sdk";
 import { AgentBus, type BusEvent, type InboundMessage, type Lane } from "../agents/bus.ts";
 import { Inbox, inboxPath } from "../agents/inbox.ts";
@@ -1561,12 +1562,12 @@ export class Orchestrator {
     // not spawn somebody's bridges as a side effect. And kicked off rather than waited
     // on — a turn that blocks until every configured server has finished booting is a
     // turn whose first token is hostage to the slowest thing an operator installed.
-    const clean = this.registry.contextMode(agent.id, conversation) === "clean";
-    if (!clean && this.mcp.configured) this.mcp.warm();
+    const isolated = this.registry.contextMode(agent.id, conversation) !== "normal";
+    if (!isolated && this.mcp.configured) this.mcp.warm();
     // Refreshed before the prompt is built, and never allowed to fail the turn — a box with no
     // skills directory is the normal state of a fresh install.
     const agentBoxId = this.registry.boxOf(agent.id).id;
-    const skills = clean ? [] : (await this.skillsFor(agentBoxId).refresh()).skills;
+    const skills = isolated ? [] : (await this.skillsFor(agentBoxId).refresh()).skills;
 
     // Agent identity and runtime are separate: an agent may name its own provider or
     // model, and gets its own client for it. Absent, it runs on the installation's.
@@ -1615,7 +1616,7 @@ export class Orchestrator {
       modelRelay: this.modelRelay,
       delegateSessions: this.delegateSessions,
       onSummarised: (agentId, conversationId, entries) => {
-        if (this.registry.contextMode(agentId, conversationId) === "clean") return;
+        if (this.registry.contextMode(agentId, conversationId) !== "normal") return;
         // The prose of what the summary replaces, bounded: enough for the extractor to
         // find a decision in, not the whole history it is standing in for.
         const prose = entries
@@ -1698,12 +1699,13 @@ export class Orchestrator {
   }
 
   /** Custody checks for an idle-only context switch. Never clear queues to make this pass. */
-  contextBlockers(agentId: string, conversation: string): string[] {
+  contextBlockers(agentId: string, conversation: string, options: { excludeTaskId?: string } = {}): string[] {
     const blockers: string[] = [];
     if (this.bus.isActive(agentId, conversation) || this.hasOpenTurn(agentId, conversation)) blockers.push("仍有执行中的 turn");
     const queued = this.bus.queuedCount(agentId, conversation);
     if (queued > 0) blockers.push(`${queued} 条请求排队中`);
     for (const task of this.tasks?.forAgent(agentId) ?? []) {
+      if (task.id === options.excludeTaskId) continue;
       if ((task.conversation ?? MAIN_CONVERSATION) === conversation) blockers.push(`任务 ${task.id}：${task.status}`);
     }
     for (const work of this.pendingWork?.open() ?? []) {
@@ -1907,7 +1909,7 @@ export class Orchestrator {
       messageId?: string;
     } = {}
   ): Promise<void> {
-    if (isContextCommand(text)) throw new Error("/new 只能通过已接入的独立私聊控制入口执行；没有让模型模拟清空上下文。");
+    if (isContextCommand(text) || isRecoveryCommand(text)) throw new Error("上下文控制命令只能通过已接入的独立私聊入口执行；不会让模型模拟切换或恢复。");
     const agent = this.registry.resolve(agentIdOrName);
     const conversation = options.conversation ?? MAIN_CONVERSATION;
     return this.registry.withContext(agent.id, conversation, async () => {
@@ -1938,7 +1940,7 @@ export class Orchestrator {
     const said = options.messageId !== undefined
       ? this.replyForMessage(agent.id, options.messageId, conversation)
       : this.replySince(agent.id, before, conversation);
-    if (said !== "" && this.registry.contextMode(agent.id, conversation) !== "clean") {
+    if (said !== "" && this.registry.contextMode(agent.id, conversation) === "normal") {
       // Where this exchange sits, for anything remembered from it to cite: the conversation
       // and the time the reply was read back, which is how a person finds it again in the
       // transcript (the `History` tool searches by conversation and shows times).

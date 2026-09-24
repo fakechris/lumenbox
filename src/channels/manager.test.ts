@@ -144,7 +144,7 @@ test("clean context rejects later attachments before storage or model work", asy
   manager.register(adapter, true, "test"); await started(manager);
   try {
     const result = await adapter.inject({ identity: "telegram:1", privateChat: true, senderLabel: "user", messageId: "f1", text: "分析附件", files: [{ name: "secret.txt", base64: "eA==" }] });
-    assert.match(result!, /干净上下文/);
+    assert.match(result!, /隔离上下文/);
     assert.equal(asks, 0);
   } finally { manager.stop(); }
 });

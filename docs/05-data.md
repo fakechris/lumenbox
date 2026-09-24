@@ -166,6 +166,16 @@ shared memory. Existing memory remains on disk and remains usable by other norma
 An ordinary `/new` from clean advances again in `normal` mode and says that memory and tools have
 been re-enabled under their normal relevance and permission gates.
 
+`/recover <taskId>` advances to a persisted `recover` epoch after the same private-chat,
+permission, idle-custody and operation-id gates. The task board remains the sole task truth: it
+stores the immutable source-message pointer plus bounded recovery-attempt records, while the
+message ledger stores the original request. Prompt assembly excludes the same learned and
+historical inputs as clean mode and accepts only the host-built recovery packet containing that
+request, mechanical task state and unverified evidence pointers. The first slice is text-only and
+tool-free, performs no automatic learning, and never replays side effects. A normal `/new` exits
+either isolated mode. Refusal or duplicate delivery creates neither a second task nor a second
+attempt.
+
 #### 2.2.1 Compaction
 
 Past `AGENTBOX_COMPACT_AT_TOKENS` (default 60,000, estimated at four characters per token) the
