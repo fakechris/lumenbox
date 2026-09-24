@@ -185,6 +185,14 @@ messages in order, opens no task, offers no tools and learns nothing. Redelivery
 channel message id and cannot start a second retry. A negative reaction only suggests `/retry`; it
 is evidence that a person disliked an answer, not authority for automatic deletion or re-execution.
 
+`answer-review.jsonl` is a sampled quality ledger, not another transcript. Each row stores time,
+agent, conversation, source message id, mode, typed category, confidence, reason, latency and
+SHA-256 hashes of the request and reply; it stores neither body. Sampling is a stable hash of the
+message id, so restart and redelivery do not move a case in or out of the cohort. Default mode is
+`shadow` at five percent (`AGENTBOX_ANSWER_REVIEW_PERCENT`); `off` makes no call and `suggest`
+allows a high-confidence failure to add a host-labelled recovery hint. Classifier failure becomes
+`UNKNOWN` and never changes delivery. The ledger follows its box into audit export.
+
 #### 2.2.1 Compaction
 
 Past `AGENTBOX_COMPACT_AT_TOKENS` (default 60,000, estimated at four characters per token) the

@@ -44,6 +44,7 @@ function home(): { root: string; registry: AgentRegistry; ada: string; bob: stri
     line({ seq: 4, agentId: ada, agentName: "Ada", inputTokens: 40 }),
   ].join(""));
   writeFileSync(join(root, "auto-review.jsonl"), line({ at: "2026-09-10T10:01:00Z", agent: "Ada", tool: "bash", verdict: "ALLOW", reason: `curl -H 'Authorization: Bearer ${SECRET}'` }));
+  writeFileSync(join(root, "answer-review.jsonl"), line({ at: "2026-09-10T10:01:30Z", agent: "Ada", messageId: "m1", category: "PASS", reason: "direct" }));
   writeFileSync(join(root, "vault-audit.jsonl"), line({ at: "2026-09-10T10:02:00Z", secretId: "SHOP_PASSWORD", agentId: ada, allowed: true }) + line({ at: "2026-09-10T10:02:00Z", secretId: "X", agentId: bob, allowed: false }));
   writeFileSync(join(root, "network-events.jsonl"), line({ at: "2026-09-10T10:03:00Z", box: registry.box.id, host: "api.github.com", port: 443, allowed: true }) + line({ at: "2026-09-10T10:03:00Z", box: grok.id, host: "x.test", port: 443, allowed: false }));
   writeFileSync(join(root, "turns.jsonl"), line({ id: "t1", event: "begin", agentId: ada, at: "2026-09-10T10:00:00Z", attempt: 1 }));
@@ -69,6 +70,7 @@ test("an export is one box's ledgers inside the window, secrets redacted, and re
     assert.equal(manifest.files["usage.jsonl"], 1, "Bob's, August's and the undated line are out");
     assert.equal(manifest.undated, 1);
     assert.equal(manifest.files["auto-review.jsonl"], 1);
+    assert.equal(manifest.files["answer-review.jsonl"], 1);
     assert.equal(manifest.files["vault-audit.jsonl"], 1);
     assert.equal(manifest.files["network-events.jsonl"], 1);
     assert.equal(manifest.files["turns.jsonl"], 1);
