@@ -137,9 +137,11 @@ per epoch.
 `/new` is a host control action, never text sent to the model. Version one supports only an
 independent private outside-chat conversation. It refuses the team `main`, groups/rooms, forks,
 unknown conversation names and commands without a durable channel message id. It also refuses while
-the scope has a running/open turn, queued request, live task, delegation, pending question/approval,
+the scope has a running/open turn, queued request, an `open`/`doing`/`blocked` task, delegation, pending question/approval,
 unconfirmed delivery, channel work or pending attachment. Refusal changes no queue or task. The
-permission check uses the existing person/box rules.
+permission check uses the existing person/box rules. A task in `review` does not hold execution
+custody: its work is already finished and the durable board keeps it waiting for the person's
+verdict, so it remains visible but does not trap the conversation in its old context.
 
 The turn ledger stamps `contextEpoch`. A restarted turn from an older epoch is ended as
 `context-superseded`, not replayed. In-process turns resolve transcript and durable-state paths from
