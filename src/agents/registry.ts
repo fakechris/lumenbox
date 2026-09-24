@@ -334,7 +334,7 @@ export class AgentRegistry {
   contextWriteGuard(): () => boolean {
     const captured = this.contextScope.getStore();
     return () => captured === undefined || (
-      captured.mode !== "clean" &&
+      captured.mode === "normal" &&
       this.contextStore(captured.agentId, captured.conversation).current().epoch === captured.epoch
     );
   }
@@ -1058,7 +1058,8 @@ export class AgentRegistry {
 
   appendMemoryRecords(agentId: string, records: readonly MemoryRecord[]): void {
     this.assertContextCurrent();
-    if (this.contextScope.getStore()?.mode === "clean") throw new Error("Clean context: refusing to write learned memory");
+    const mode = this.contextScope.getStore()?.mode;
+    if (mode !== undefined && mode !== "normal") throw new Error(`${mode === "clean" ? "Clean" : "Recovery"} context: refusing to write learned memory`);
     if (records.length === 0) return;
     mkdirSync(this.dirFor(agentId), { recursive: true });
     for (const record of records) {
@@ -1180,7 +1181,8 @@ export class AgentRegistry {
   /** Appends to this agent's own shard, which is the only one it may write. */
   appendSharedMemory(agentId: string, records: readonly MemoryRecord[]): void {
     this.assertContextCurrent();
-    if (this.contextScope.getStore()?.mode === "clean") throw new Error("Clean context: refusing to write shared memory");
+    const mode = this.contextScope.getStore()?.mode;
+    if (mode !== undefined && mode !== "normal") throw new Error(`${mode === "clean" ? "Clean" : "Recovery"} context: refusing to write shared memory`);
     if (records.length === 0) return;
     mkdirSync(this.sharedMemoryDir(), { recursive: true });
     // The writer's box, from the roster — not from the record, which the tool built.

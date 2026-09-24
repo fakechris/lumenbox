@@ -84,7 +84,7 @@ test("clean context persists, refuses learning, and an ordinary new context expl
     });
     assert.equal(newContext(deps, { ...f.input, operationId: "clean", mode: "clean" }).status, "replayed");
     const normal = newContext(deps, { ...f.input, operationId: "normal" });
-    assert.match(normal.text, /已退出干净模式/);
+    assert.match(normal.text, /已退出隔离模式/);
     assert.equal(f.registry.contextMode(f.agent.id, f.input.conversation), "normal");
   } finally { f.cleanup(); }
 });

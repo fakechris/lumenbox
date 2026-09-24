@@ -340,3 +340,20 @@ test("a submission for review carries its evidence lines, bounded", () => {
     cleanup();
   }
 });
+
+test("a recovery attempt has one monotonic lifecycle on the original task", () => {
+  const { store, cleanup } = tempStore();
+  try {
+    store.create({ title: "Answer the original request", requester: "web", assigneeId: "ada" });
+    const prepared = store.prepareRecovery("t1", "message-1", 3, "web")!;
+    assert.equal(prepared.attempt, 1);
+    assert.equal(store.prepareRecovery("t1", "message-1", 3, "web")?.attempt, 1, "same command is idempotent");
+    assert.equal(store.setRecoveryStatus("t1", "message-1", "completed", "channel"), undefined, "prepared cannot skip running");
+    assert.equal(store.setRecoveryStatus("t1", "message-1", "running", "channel")?.status, "running");
+    assert.equal(store.setRecoveryStatus("t1", "message-1", "completed", "channel")?.status, "completed");
+    assert.equal(store.setRecoveryStatus("t1", "message-1", "running", "channel"), undefined, "terminal attempts cannot regress");
+    assert.equal(store.get("t1")?.recoveries?.[0]?.status, "completed");
+  } finally {
+    cleanup();
+  }
+});

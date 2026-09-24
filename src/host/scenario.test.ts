@@ -18,6 +18,10 @@ import { choosePinnedEntries, type HistoryEntry } from "./compaction.ts";
 import { replyForMessage } from "./reply.ts";
 import { conversationIdFor } from "../agents/registry.ts";
 import { newContext } from "./context-recovery.ts";
+import { recoverTask } from "./task-recovery.ts";
+import { TaskStore } from "./tasks.ts";
+import { Messages } from "../channels/messages.ts";
+import { join } from "node:path";
 
 test("/new through the chat door drops old narrative and plans, retains relevant facts, and preserves follow-up continuity", async () => {
   let calls = 0;
@@ -125,7 +129,7 @@ test("/new --clean removes learned context and enforces a tool-free boundary unt
         await manager.idle();
         assert.equal(registry.readMemoryRecords(frontId).length, memoriesBefore);
         assert.doesNotMatch(JSON.stringify(registry.readMemoryRecords(frontId)), /CLEAN_ESCAPE/);
-        assert.match((await receive({ ...room, text: "/new", messageId: "normal-2" }))!, /已退出干净模式/);
+        assert.match((await receive({ ...room, text: "/new", messageId: "normal-2" }))!, /已退出隔离模式/);
         await receive({ ...room, text: "OLD_PRIVATE_MEMORY 是什么？", messageId: "normal-question" });
         await manager.idle();
       } finally { manager.stop(); }
@@ -135,6 +139,84 @@ test("/new --clean removes learned context and enforces a tool-free boundary unt
     assert.equal(calls, 3);
     assert.equal(result.score.refusals.length, 1);
     assert.match(result.score.refusals[0]!, /Tools are disabled in clean context/);
+  } finally { result.cleanup(); }
+});
+
+test("/recover redoes the same task from its verbatim request without carrying the bad answer", async () => {
+  let calls = 0;
+  const result = await runEpisode({
+    team: [{ name: "Nova" }], says: [],
+    script: ({ system, messages, offered }) => {
+      calls++;
+      const actual = system + JSON.stringify(messages);
+      if (calls === 1) return { say: "BAD_OLD_ANSWER：统一套用审计框架。" };
+      assert.match(system, /Recovery context is active/);
+      assert.deepEqual(offered, []);
+      assert.match(actual, /回答 25 道题，逐题给出答案/);
+      assert.doesNotMatch(actual, /BAD_OLD_ANSWER|统一套用审计框架/);
+      return { say: "REVISED_ANSWER：已按原要求逐题完成。" };
+    },
+    drive: async ({ registry, bus, frontId }) => {
+      const key = "telegram:recover-user";
+      const conversation = conversationIdFor(key);
+      const tasks = new TaskStore(join(registry.root, "tasks-recovery.jsonl"));
+      const messages = new Messages(join(registry.root, "messages-recovery.jsonl"));
+      let receive!: (message: ChannelMessage) => Promise<string | undefined>;
+      const manager = new ChannelManager({
+        mayDrive: () => true, log: () => {}, messages,
+        contextMode: () => registry.contextMode(frontId, conversation),
+        recover: {
+          prepare: input => recoverTask({
+            registry, tasks,
+            message: id => messages.list().find(item => item.id === id),
+            mayRecover: task => task.requester === "principal-user",
+            blockers: () => [],
+          }, {
+            agentId: frontId, conversation, operationId: input.operationId,
+            principal: "principal-user", privateChat: input.privateChat, taskId: input.taskId,
+          }),
+          started: (taskId, operationId) => { tasks.setRecoveryStatus(taskId, operationId, "running", "channel"); },
+          finished: (taskId, operationId, outcome) => { tasks.setRecoveryStatus(taskId, operationId, outcome, "channel"); },
+        },
+        board: {
+          open: input => tasks.create({
+            title: input.title, description: input.description, requester: "principal-user",
+            sourceMessageId: input.sourceMessageId, assigneeId: frontId, conversation,
+          })?.id,
+          started: taskId => { tasks.update(taskId, { status: "doing" }, "channel"); },
+          closed: (taskId, outcome, note) => {
+            const changed = outcome === "done" ? tasks.turnFinished(taskId) : tasks.update(taskId, { status: "blocked", note }, "channel");
+            return changed?.task.status === "done" ? "done" : changed?.task.status === "review" ? "review" : "failed";
+          },
+        },
+        ask: async (_name, text, _identity, _chat, _progress, _thread, _task, _interim, _stream, origin) => {
+          bus.sendFromUser(frontId, text, { conversation, steerable: false, messageId: origin!.messageId });
+          await bus.runExclusive(frontId, { userDriven: true, conversation });
+          return replyForMessage(registry.readTranscript(frontId, conversation), origin!.messageId);
+        },
+      });
+      manager.register({ name: "telegram", start: async handler => { receive = handler; }, stop() {}, send: async () => undefined }, true, "test");
+      manager.start(); await new Promise(resolve => setImmediate(resolve));
+      const room = { identity: "telegram:user", chatKey: key, privateChat: true, senderLabel: "user" };
+      try {
+        await receive({ ...room, text: "回答 25 道题，逐题给出答案。", messageId: "original" });
+        await manager.idle();
+        assert.equal(tasks.list().length, 1);
+        assert.equal(tasks.get("t1")?.status, "done");
+        const started = await receive({ ...room, text: "/recover t1", messageId: "recover-1" });
+        assert.match(started!, /恢复 attempt 1/);
+        await manager.idle();
+        assert.equal(tasks.list().length, 1, "recovery retains the original task id");
+        assert.equal(tasks.get("t1")?.recoveries?.[0]?.status, "completed");
+        assert.equal(tasks.get("t1")?.status, "done");
+        assert.match((await receive({ ...room, text: "/recover t1", messageId: "recover-1" }))!, /不会重复执行/);
+        await manager.idle();
+      } finally { manager.stop(); }
+    },
+  });
+  try {
+    assert.equal(calls, 2);
+    assert.deepEqual(result.score.said.map(item => item.text), ["BAD_OLD_ANSWER：统一套用审计框架。", "REVISED_ANSWER：已按原要求逐题完成。"]);
   } finally { result.cleanup(); }
 });
 

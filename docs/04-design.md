@@ -3,7 +3,7 @@
      family: spec
      status: current
      domain: mechanisms
-     updated: 2026-08-22
+     updated: 2026-09-24
 -->
 # Design
 
@@ -519,6 +519,15 @@ Work that outlives one reply becomes a Task: title, assignee, status
 which turn — the turn id on every agent-made change is what links a board movement
 back to the transcript that is its evidence. Ids are small numbers people can say in
 chat, and a counter marker survives compaction so an id never means two things.
+
+A task opened from a channel message also keeps that immutable message id. `/recover tN`
+therefore creates a new attempt and context epoch on **the same task**, rather than cloning the
+task or treating its old answer as input. The attempt lifecycle (`prepared` → `running` →
+`completed|failed`) and operation id are stored on the task, making a redelivered command
+idempotent and a prepared crash window resumable. Recovery is limited to the original requester,
+assigned agent and private conversation. Newer tasks read their source verbatim from the message
+ledger; legacy tasks may use only a complete, explicitly labelled description snapshot. A missing,
+truncated or cross-conversation source is refused.
 
 The board is advisory like claims, with one enforced exception: **when a task names a
 reviewer, its assignee cannot move it to done** — the attempt lands in `review` with a

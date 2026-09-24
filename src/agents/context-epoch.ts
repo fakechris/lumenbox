@@ -2,7 +2,7 @@
 import { existsSync, mkdirSync, readFileSync, renameSync, statSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 
-export type ContextMode = "normal" | "clean";
+export type ContextMode = "normal" | "clean" | "recover";
 
 export interface ContextVersion {
   epoch: number;
@@ -127,5 +127,5 @@ export class ContextEpochStore {
 }
 
 function isMode(value: unknown): value is ContextMode {
-  return value === "normal" || value === "clean";
+  return value === "normal" || value === "clean" || value === "recover";
 }

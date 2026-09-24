@@ -92,7 +92,7 @@ interface BeginRecord {
   build?: { version: string; commit: string };
   promptHash?: string;
   contextEpoch?: number;
-  contextMode?: "normal" | "clean";
+  contextMode?: "normal" | "clean" | "recover";
   memoryProjection?: {
     personal: import("./memory.ts").MemoryProjectionManifest;
     shared: import("./memory.ts").MemoryProjectionManifest;
@@ -160,7 +160,7 @@ export interface InterruptedTurn {
   /** The conversation the turn belonged to, absent for the main one. */
   conversation?: string;
   contextEpoch?: number;
-  contextMode?: "normal" | "clean";
+  contextMode?: "normal" | "clean" | "recover";
   /** True when the process exited on purpose under this turn — resume it for free. */
   cleanExit?: boolean;
   /**
@@ -208,7 +208,7 @@ export class TurnLedger {
     build?: { version: string; commit: string };
     promptHash?: string;
     contextEpoch?: number;
-    contextMode?: "normal" | "clean";
+    contextMode?: "normal" | "clean" | "recover";
     memoryProjection?: BeginRecord["memoryProjection"];
     now?: Date;
   }): string {
