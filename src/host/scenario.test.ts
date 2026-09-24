@@ -17,7 +17,7 @@ import { ChannelManager, type ChannelAdapter, type InboundMessage as ChannelMess
 import { choosePinnedEntries, type HistoryEntry } from "./compaction.ts";
 import { replyForMessage } from "./reply.ts";
 import { conversationIdFor } from "../agents/registry.ts";
-import { newContext } from "./context-recovery.ts";
+import { contextTaskBlockers, newContext } from "./context-recovery.ts";
 import { recoverTask } from "./task-recovery.ts";
 import { retryLastAnswer } from "./retry-recovery.ts";
 import { AnswerReviewer } from "./answer-review.ts";
@@ -336,6 +336,38 @@ test("/new with a running answer and two queued requests refuses without swallow
     },
   });
   try { assert.equal(calls, 3); assert.equal(result.score.said.length, 3); }
+  finally { result.cleanup(); }
+});
+
+test("two completed review tasks do not trap a private chat that asks for clean context", async () => {
+  const result = await runEpisode({
+    team: [{ name: "Nova" }], says: [], script: () => ({ say: "unused" }),
+    drive: async ({ registry, frontId }) => {
+      const conversation = conversationIdFor("feishu:private-review");
+      const reviewTasks = [
+        { id: "t11", status: "review" as const, conversation },
+        { id: "t12", status: "review" as const, conversation },
+      ];
+      let receive!: (message: ChannelMessage) => Promise<string | undefined>;
+      const manager = new ChannelManager({
+        mayDrive: () => true, log: () => {}, ask: async () => "unused",
+        newContext: input => newContext({
+          registry,
+          mayReset: () => true,
+          blockers: () => contextTaskBlockers(reviewTasks, conversation),
+        }, { ...input, agentId: frontId, conversation }).text,
+      });
+      manager.register({ name: "feishu", start: async handler => { receive = handler; }, stop() {}, send: async () => undefined }, true, "test");
+      manager.start(); await new Promise(resolve => setImmediate(resolve));
+      try {
+        const reply = await receive({ identity: "feishu:user", chatKey: "feishu:private-review", privateChat: true, senderLabel: "user", text: "/new --clean", messageId: "clean-after-review" });
+        assert.match(reply ?? "", /已进入干净上下文/);
+        assert.equal(registry.contextMode(frontId, conversation), "clean");
+        assert.deepEqual(reviewTasks.map(task => task.status), ["review", "review"], "review tasks remain for human acceptance");
+      } finally { manager.stop(); }
+    },
+  });
+  try { assert.equal(result.score.turns, 0, "the control command never reaches the model"); }
   finally { result.cleanup(); }
 });
 

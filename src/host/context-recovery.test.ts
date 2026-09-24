@@ -4,7 +4,7 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { AgentRegistry } from "../agents/registry.ts";
-import { newContext } from "./context-recovery.ts";
+import { contextTaskBlockers, newContext } from "./context-recovery.ts";
 import { Rememberer, EXTRACT_EVERY } from "./remember.ts";
 
 function fixture() {
@@ -14,6 +14,16 @@ function fixture() {
   const input = { agentId: agent.id, conversation: "feishu-private", operationId: "m1", identity: "user", privateChat: true };
   return { registry, agent, input, cleanup: () => rmSync(root, { recursive: true, force: true }) };
 }
+
+test("review tasks stay on the board but do not trap a finished conversation", () => {
+  const tasks = [
+    { id: "t11", status: "review" as const, conversation: "feishu-private" },
+    { id: "t12", status: "review" as const, conversation: "feishu-private" },
+    { id: "t13", status: "doing" as const, conversation: "another-room" },
+  ];
+  assert.deepEqual(contextTaskBlockers(tasks, "feishu-private"), []);
+  assert.deepEqual(contextTaskBlockers([...tasks, { id: "t14", status: "blocked", conversation: "feishu-private" }], "feishu-private"), ["任务 t14：blocked"]);
+});
 
 test("new context is authorised, private, idle, idempotent and never erases history or memory", () => {
   const f = fixture();

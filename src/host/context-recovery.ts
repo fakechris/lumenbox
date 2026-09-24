@@ -2,6 +2,7 @@
 import type { AgentRegistry } from "../agents/registry.ts";
 import { MAIN_CONVERSATION } from "../agents/registry.ts";
 import type { ContextMode } from "../agents/context-epoch.ts";
+import type { Task } from "./tasks.ts";
 
 export function isContextCommand(text: string): boolean {
   return /^\/new(?:\s|$)/i.test(text.trim());
@@ -21,6 +22,23 @@ export interface ContextRecoveryDeps {
   registry: AgentRegistry;
   mayReset: (input: NewContextInput) => boolean;
   blockers: (input: NewContextInput) => string[];
+}
+
+/**
+ * Work that still owns execution custody blocks a context switch. Review does not: the
+ * agent has finished, the durable board retains the item, and only the person's verdict
+ * remains. Treating review as running made completed work permanently trap a private chat.
+ */
+export function contextTaskBlockers(
+  tasks: readonly Pick<Task, "id" | "status" | "conversation">[],
+  conversation: string,
+  excludeTaskId?: string
+): string[] {
+  return tasks
+    .filter(task => task.id !== excludeTaskId)
+    .filter(task => (task.conversation ?? MAIN_CONVERSATION) === conversation)
+    .filter(task => task.status === "open" || task.status === "doing" || task.status === "blocked")
+    .map(task => `任务 ${task.id}：${task.status}`);
 }
 
 export function newContext(

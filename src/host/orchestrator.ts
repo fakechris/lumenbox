@@ -9,7 +9,7 @@
 import { bindingsOf, CommitmentLedger, describeGaps, parseCommitments, priorCommitmentsPrompt, reconcileCommitments } from "./commitments.ts";
 import { learningsDir } from "./learnings.ts";
 import { replyForMessage } from "./reply.ts";
-import { isContextCommand } from "./context-recovery.ts";
+import { contextTaskBlockers, isContextCommand } from "./context-recovery.ts";
 import { isRecoveryCommand } from "./task-recovery.ts";
 import { isRetryCommand } from "./retry-recovery.ts";
 import { AnswerReviewer, answerReviewMode, sampledForReview, type AnswerReviewInput, type AnswerVerdict } from "./answer-review.ts";
@@ -1706,10 +1706,7 @@ export class Orchestrator {
     if (this.bus.isActive(agentId, conversation) || this.hasOpenTurn(agentId, conversation)) blockers.push("仍有执行中的 turn");
     const queued = this.bus.queuedCount(agentId, conversation);
     if (queued > 0) blockers.push(`${queued} 条请求排队中`);
-    for (const task of this.tasks?.forAgent(agentId) ?? []) {
-      if (task.id === options.excludeTaskId) continue;
-      if ((task.conversation ?? MAIN_CONVERSATION) === conversation) blockers.push(`任务 ${task.id}：${task.status}`);
-    }
+    blockers.push(...contextTaskBlockers(this.tasks?.forAgent(agentId) ?? [], conversation, options.excludeTaskId));
     for (const work of this.pendingWork?.open() ?? []) {
       if (work.agentId === agentId && work.parent === conversation) blockers.push(`委派 ${work.id} 尚未结束`);
     }
