@@ -11,6 +11,7 @@ import { learningsDir } from "./learnings.ts";
 import { replyForMessage } from "./reply.ts";
 import { isContextCommand } from "./context-recovery.ts";
 import { isRecoveryCommand } from "./task-recovery.ts";
+import { isRetryCommand } from "./retry-recovery.ts";
 import type Anthropic from "@anthropic-ai/sdk";
 import { AgentBus, type BusEvent, type InboundMessage, type Lane } from "../agents/bus.ts";
 import { Inbox, inboxPath } from "../agents/inbox.ts";
@@ -1909,7 +1910,7 @@ export class Orchestrator {
       messageId?: string;
     } = {}
   ): Promise<void> {
-    if (isContextCommand(text) || isRecoveryCommand(text)) throw new Error("上下文控制命令只能通过已接入的独立私聊入口执行；不会让模型模拟切换或恢复。");
+    if (isContextCommand(text) || isRecoveryCommand(text) || isRetryCommand(text)) throw new Error("上下文控制命令只能通过已接入的独立私聊入口执行；不会让模型模拟切换或恢复。");
     const agent = this.registry.resolve(agentIdOrName);
     const conversation = options.conversation ?? MAIN_CONVERSATION;
     return this.registry.withContext(agent.id, conversation, async () => {

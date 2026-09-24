@@ -19,6 +19,7 @@ import { replyForMessage } from "./reply.ts";
 import { conversationIdFor } from "../agents/registry.ts";
 import { newContext } from "./context-recovery.ts";
 import { recoverTask } from "./task-recovery.ts";
+import { retryLastAnswer } from "./retry-recovery.ts";
 import { TaskStore } from "./tasks.ts";
 import { Messages } from "../channels/messages.ts";
 import { MemoryAdmin } from "./memory-admin.ts";
@@ -218,6 +219,67 @@ test("/recover redoes the same task from its verbatim request without carrying t
   try {
     assert.equal(calls, 2);
     assert.deepEqual(result.score.said.map(item => item.text), ["BAD_OLD_ANSWER：统一套用审计框架。", "REVISED_ANSWER：已按原要求逐题完成。"]);
+  } finally { result.cleanup(); }
+});
+
+test("/retry redoes the last ordinary request from durable messages without the polluted answer", async () => {
+  let calls = 0;
+  const result = await runEpisode({
+    team: [{ name: "Nova" }], says: [],
+    script: ({ system, messages, offered }) => {
+      calls++;
+      const actual = system + JSON.stringify(messages);
+      if (calls === 1) return { say: "BAD_AUDIT_REPLY：我把问题转给 Nova，继续做五维核验。" };
+      assert.match(system, /Recovery context is active/);
+      assert.deepEqual(offered, []);
+      assert.match(actual, /直接回答：这个技术对项目有什么用/);
+      assert.doesNotMatch(actual, /BAD_AUDIT_REPLY|五维核验/);
+      return { say: "RETRY_ANSWER：它的直接用途是减少重复解析工作。" };
+    },
+    drive: async ({ registry, bus, frontId }) => {
+      const key = "telegram:retry-user";
+      const conversation = conversationIdFor(key);
+      const durableMessages = new Messages(join(registry.root, "messages-retry.jsonl"));
+      let receive!: (message: ChannelMessage) => Promise<string | undefined>;
+      const manager = new ChannelManager({
+        mayDrive: () => true, log: () => {}, messages: durableMessages,
+        contextMode: () => registry.contextMode(frontId, conversation),
+        retry: {
+          prepare: input => retryLastAnswer({
+            registry,
+            message: id => durableMessages.list().find(item => item.id === id),
+            mayRetry: () => true,
+            blockers: () => input.blockers,
+          }, {
+            agentId: frontId, conversation, operationId: input.operationId,
+            identity: input.identity, privateChat: input.privateChat,
+          }),
+        },
+        ask: async (_name, text, _identity, _chat, _progress, _thread, _task, _interim, _stream, origin) => {
+          bus.sendFromUser(frontId, text, { conversation, steerable: false, messageId: origin!.messageId });
+          await bus.runExclusive(frontId, { userDriven: true, conversation });
+          return replyForMessage(registry.readTranscript(frontId, conversation), origin!.messageId);
+        },
+      });
+      manager.register({ name: "telegram", start: async handler => { receive = handler; }, stop() {}, send: async () => undefined }, true, "test");
+      manager.start(); await new Promise(resolve => setImmediate(resolve));
+      const room = { identity: "telegram:user", chatKey: key, privateChat: true, senderLabel: "user" };
+      try {
+        await receive({ ...room, text: "直接回答：这个技术对项目有什么用？", messageId: "ordinary-1" });
+        await manager.idle();
+        assert.match((await receive({ ...room, text: "/retry", messageId: "retry-1" }))!, /无副作用重答/);
+        await manager.idle();
+        assert.equal(registry.contextMode(frontId, conversation), "recover");
+        assert.match((await receive({ ...room, text: "/retry", messageId: "retry-1" }))!, /不会重复执行/);
+      } finally { manager.stop(); }
+    },
+  });
+  try {
+    assert.equal(calls, 2);
+    assert.deepEqual(result.score.said.map(item => item.text), [
+      "BAD_AUDIT_REPLY：我把问题转给 Nova，继续做五维核验。",
+      "RETRY_ANSWER：它的直接用途是减少重复解析工作。",
+    ]);
   } finally { result.cleanup(); }
 });
 

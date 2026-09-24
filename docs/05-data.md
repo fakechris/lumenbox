@@ -176,6 +176,15 @@ tool-free, performs no automatic learning, and never replays side effects. A nor
 either isolated mode. Refusal or duplicate delivery creates neither a second task nor a second
 attempt.
 
+`/retry` is the task-independent sibling. It is allowed only from a normal independent private
+conversation and selects the most recent assistant turn that has a durable `turnId`, a person-opened
+user entry, and `causedBy` message ids. Every id must resolve to a whole message from the same
+identity and conversation; missing, cross-conversation, empty or attachment-bearing sources are
+refused before the epoch changes. A successful retry advances to `recover`, carries the original
+messages in order, opens no task, offers no tools and learns nothing. Redelivery is keyed by the
+channel message id and cannot start a second retry. A negative reaction only suggests `/retry`; it
+is evidence that a person disliked an answer, not authority for automatic deletion or re-execution.
+
 #### 2.2.1 Compaction
 
 Past `AGENTBOX_COMPACT_AT_TOKENS` (default 60,000, estimated at four characters per token) the

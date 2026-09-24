@@ -134,6 +134,42 @@ test("normal and clean new-context commands never fall through to the model or c
   } finally { manager.stop(); }
 });
 
+test("retry runs the prepared isolated packet without opening a second task", async () => {
+  const adapter = testAdapter();
+  const asked: string[] = [];
+  let opened = 0;
+  const manager = new ChannelManager({
+    mayDrive: () => true,
+    log: () => {},
+    ask: async (_agent, text) => { asked.push(text); return "revised answer"; },
+    retry: {
+      prepare: input => ({
+        status: "ready",
+        text: "retry prepared",
+        prompt: "[host retry packet]\noriginal request",
+        operationId: input.operationId,
+        epoch: 2,
+      }),
+    },
+    board: {
+      open: () => { opened++; return "t1"; },
+      started: () => {},
+      closed: () => "done",
+    },
+  });
+  manager.register(adapter, true, "test");
+  await started(manager);
+  try {
+    assert.equal(await adapter.inject({
+      identity: "telegram:1", privateChat: true, senderLabel: "user", messageId: "retry-wire-1", text: "/retry",
+    }), "retry prepared");
+    await manager.idle();
+    assert.deepEqual(asked, ["[host retry packet]\noriginal request"]);
+    assert.equal(opened, 0);
+    assert.equal(adapter.sent.at(-1)?.text, "revised answer");
+  } finally { manager.stop(); }
+});
+
 test("clean context rejects later attachments before storage or model work", async () => {
   const adapter = testAdapter();
   let asks = 0;
