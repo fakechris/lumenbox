@@ -2015,7 +2015,7 @@ async function main(): Promise<number> {
         }
         flags.set(key.slice(2), rest[i + 1]!);
       }
-      const { assembleDay, describeDay } = await import("./host/day-package/assemble.ts");
+      const { assembleDay, deliverPackageToBox, describeDay } = await import("./host/day-package/assemble.ts");
       const { heldValues } = await import("./host/audit-export.ts");
       try {
         const chat = flags.get("chat");
@@ -2025,6 +2025,25 @@ async function main(): Promise<number> {
           ...(chat !== undefined ? { chatKey: chat } : {}),
         });
         for (const line of describeDay(manifest, dir)) out(line);
+
+        // The skill that reads this runs inside the box, which cannot see the host's
+        // directory. Delivering is the default because a package the reader cannot reach
+        // is not a package; `--no-box` is for assembling on a host with no box running.
+        if (flags.get("box") !== "no") {
+          const { defaultBoxConfig } = await import("./box/docker.ts");
+          try {
+            const box = await new DockerBoxProvisioner(defaultBoxConfig()).connect();
+            const sent = await deliverPackageToBox(dir, manifest.runKey, box, err);
+            out(
+              sent.failed.length === 0
+                ? `  delivered ${sent.delivered} file(s) to the box at /home/box/work/digest/${manifest.runKey}/package`
+                : `  delivered ${sent.delivered} file(s) to the box; ${sent.failed.length} failed`
+            );
+          } catch (error) {
+            // Said, not thrown: the package on the host is the record and it is written.
+            out(`  not delivered to a box (${error instanceof Error ? error.message : error})`);
+          }
+        }
         return 0;
       } catch (error) {
         err(`day: ${error instanceof Error ? error.message : String(error)}`);
@@ -2047,7 +2066,19 @@ async function main(): Promise<number> {
       const dir = join(agentboxHome(), "digest", runKey, "package");
       try {
         const manifest = JSON.parse(readFileSync(join(dir, "manifest.json"), "utf8")) as DayManifest;
-        const draft = readFileSync(join(dir, "draft.md"), "utf8");
+        // The draft is written by the skill, inside the box. Read it from there when it is
+        // not on the host, because the writer and the checker live on opposite sides of a
+        // boundary and only one of them can be wrong about where the file is.
+        let draft: string;
+        try {
+          draft = readFileSync(join(dir, "draft.md"), "utf8");
+        } catch {
+          const { defaultBoxConfig } = await import("./box/docker.ts");
+          const { BOX_DIGEST_DIR } = await import("./host/day-package/assemble.ts");
+          const box = await new DockerBoxProvisioner(defaultBoxConfig()).connect();
+          const read = await box.readFile(`${BOX_DIGEST_DIR}/${runKey}/package/draft.md`);
+          draft = read.content;
+        }
         // Yesterday's themes, when there was a yesterday. A delta verb without a baseline
         // is a guess wearing the clothes of a measurement, so the baseline is looked up by
         // asking the packages what day they are rather than guessing at a run key.

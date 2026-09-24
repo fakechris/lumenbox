@@ -167,9 +167,12 @@ scope: global
 
 # Daily research digest
 
-A day's package is on the host at \`~/.agentbox/digest/<runKey>/package/\`, assembled by
-\`agentbox day <YYYY-MM-DD>\`. It holds every message whole, every turn, every source that
-was read, and every reply. Your job is the one thing the package cannot do for itself.
+A day's package is at \`/home/box/work/digest/<runKey>/package/\`. It holds every message
+whole, every turn, every source that was read, and every reply — assembled on the host and
+delivered here, redacted, bounded to one day. Take the newest one with a \`READY\` file beside
+it; without \`READY\` the package is still arriving and is not yours to read yet.
+
+Your job is the one thing the package cannot do for itself.
 
 **Write a synthesis, not a list.** The day's items are the input, never the outline. If a
 reader can tell from your headings what order things arrived in, you have written the wrong
@@ -217,12 +220,15 @@ reported as near, not as a quotation.
 ## Output
 
 1. \`draft.md\` in the package directory: the full digest.
-2. \`themes.json\` beside it: this day's theme names, for tomorrow's baseline.
-3. Run \`agentbox digest validate <runKey>\`. Fix what it names and run it once more. If it
-   still refuses, **say so in the first line** rather than delivering quietly.
-4. Reply with the short version, **600 characters at most**: the main thread, the theme
+2. \`themes.json\` beside it — \`{"themes": ["…"]}\`, this day's theme names, for
+   tomorrow's baseline. Without it tomorrow may not say NEW or STRENGTHENED about anything.
+3. Reply with the short version, **600 characters at most**: the main thread, the theme
    names, the tensions, what changed. The appendix is an index and not the text — one line
    per message, and the reader opens the package if they want more.
+
+The host checks what you wrote — that every citation resolves, that no sentence leans only
+on your own turn, and that the digest is not a list — and sends it back with what to fix
+if it does not hold. You do not run that check yourself; it reads \`draft.md\` from here.
 
 A day with one real thing in it gets a short digest about that thing. Padding a thin day
 into the shape of a full one is worse than saying it was thin.

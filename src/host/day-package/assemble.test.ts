@@ -12,7 +12,14 @@ import assert from "node:assert/strict";
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { assembleDay, dayWindow, describeDay, verifyPackage } from "./assemble.ts";
+import {
+  assembleDay,
+  BOX_DIGEST_DIR,
+  dayWindow,
+  deliverPackageToBox,
+  describeDay,
+  verifyPackage,
+} from "./assemble.ts";
 import { keepFetchedPage } from "../fetched.ts";
 
 function home(): { path: string; cleanup: () => void } {
@@ -276,4 +283,60 @@ test("the window is the local day, and it records the offset so the boundary can
   // they lived through, not a UTC window that cuts their evening in half.
   assert.equal(new Date(window.from).getHours(), 0);
   assert.throws(() => dayWindow("20th September"), /Not a date/);
+});
+
+test("a package is delivered where the reader can reach it, READY last", async () => {
+  const { path, cleanup } = home();
+  try {
+    aDay(path);
+    aSource(path, 0, "a source the digest will cite", 9, "t-1");
+    const { dir, manifest } = assembleDay(DAY, { home: path });
+
+    // The skill runs inside the box, which cannot see the host's directory. Getting this
+    // wrong shipped an unrunnable skill once (INV-670 follow-up), so the delivery is
+    // asserted rather than assumed.
+    const uploaded: string[] = [];
+    await deliverPackageToBox(dir, manifest.runKey, {
+      uploadFile: async (at: string) => {
+        uploaded.push(at);
+      },
+    });
+
+    assert.ok(uploaded.length >= 4, `only ${uploaded.length} files delivered`);
+    for (const at of uploaded) {
+      assert.ok(at.startsWith(`${BOX_DIGEST_DIR}/${manifest.runKey}/package/`), at);
+    }
+    assert.ok(uploaded.some(at => at.endsWith("/manifest.json")));
+    assert.ok(uploaded.some(at => at.includes("/sources/")));
+    assert.ok(uploaded.some(at => at.includes("/turns/t-1/reply.md")), "nested paths survive");
+    // Last, for the same reason it is written last: a half-delivered package that already
+    // claims to be ready is worse than one that has not arrived.
+    assert.ok(uploaded.at(-1)!.endsWith("/READY"), uploaded.at(-1) ?? "nothing was delivered");
+  } finally {
+    cleanup();
+  }
+});
+
+test("a delivery that fails partway says which files, and does not claim the package arrived", async () => {
+  const { path, cleanup } = home();
+  try {
+    aDay(path);
+    const { dir, manifest } = assembleDay(DAY, { home: path });
+    const said: string[] = [];
+    const result = await deliverPackageToBox(
+      dir,
+      manifest.runKey,
+      {
+        uploadFile: async (at: string) => {
+          if (at.endsWith("manifest.json")) throw new Error("box is full");
+        },
+      },
+      line => said.push(line)
+    );
+    assert.deepEqual(result.failed, ["manifest.json"]);
+    assert.ok(result.delivered >= 1);
+    assert.match(said.join("\n"), /could not deliver manifest\.json: box is full/);
+  } finally {
+    cleanup();
+  }
 });
