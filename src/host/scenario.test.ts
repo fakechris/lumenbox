@@ -66,13 +66,76 @@ test("/new through the chat door drops old narrative and plans, retains relevant
         await receive({ ...room, text: "再说一下部署区域", messageId: "question2" });
         await manager.idle();
         assert.match(JSON.stringify(registry.readAllContextTranscripts(frontId, conversation)), /OLD_AUDIT_NARRATIVE/);
-        assert.match((await receive({ ...room, text: "/new --clean", messageId: "clean" }))!, /尚未开放/);
-        assert.equal(registry.contextVersion(frontId, conversation), 1);
       } finally { manager.stop(); }
     },
   });
   try { assert.equal(calls, 2); assert.equal(result.score.said.length, 2); }
   finally { result.cleanup(); }
+});
+
+test("/new --clean removes learned context and enforces a tool-free boundary until ordinary /new", async () => {
+  let calls = 0;
+  const result = await runEpisode({
+    team: [{ name: "Nova" }], says: [],
+    skills: [{ name: "OLD_LEARNED_SKILL", slug: "old", description: "OLD_SKILL_BODY", path: "/skills/old/SKILL.md", scope: "agent", helpers: [] }],
+    script: ({ system, messages, offered }) => {
+      calls++;
+      const actual = system + JSON.stringify(messages);
+      if (calls <= 2) {
+        assert.match(system, /Clean context is active/);
+        assert.doesNotMatch(actual, /OLD_PRIVATE_MEMORY|OLD_SHARED_MEMORY|OLD_PLAN|OLD_CHAT|OLD_LEARNED_SKILL/);
+        assert.deepEqual(offered, []);
+        if (calls === 1) return { call: "RememberFact", input: { fact: "CLEAN_ESCAPE" } };
+        assert.match(actual, /Tools are disabled in clean context/);
+        return { say: "这是干净上下文中的回答。" };
+      }
+      assert.doesNotMatch(system, /Clean context is active/);
+      assert.match(system, /OLD_PRIVATE_MEMORY/);
+      assert.ok(offered.length > 0, "ordinary /new restores normally authorised tools");
+      return { say: "已恢复普通上下文。" };
+    },
+    drive: async ({ registry, bus, frontId }) => {
+      const key = "telegram:clean-user";
+      const conversation = conversationIdFor(key);
+      registry.appendTranscript(frontId, { role: "assistant", text: "OLD_CHAT" }, conversation);
+      registry.writePlan(frontId, "OLD_PLAN", conversation);
+      registry.appendMemoryRecords(frontId, [{ at: new Date().toISOString(), kind: "fact", text: "OLD_PRIVATE_MEMORY" }]);
+      registry.appendSharedMemory(frontId, [{ at: new Date().toISOString(), kind: "fact", text: "OLD_SHARED_MEMORY" }]);
+      const memoriesBefore = registry.readMemoryRecords(frontId).length;
+      let receive!: (message: ChannelMessage) => Promise<string | undefined>;
+      const manager = new ChannelManager({
+        mayDrive: () => true, log: () => {},
+        contextMode: () => registry.contextMode(frontId, conversation),
+        newContext: input => newContext({ registry, mayReset: () => true, blockers: () => input.blockers }, {
+          agentId: frontId, conversation, ...input,
+        }).text,
+        ask: async (_name, text, _identity, _chat, _progress, _thread, _task, _interim, _stream, origin) => {
+          bus.sendFromUser(frontId, text, { conversation, steerable: false, messageId: origin!.messageId });
+          await bus.runExclusive(frontId, { userDriven: true, conversation });
+          return replyForMessage(registry.readTranscript(frontId, conversation), origin!.messageId);
+        },
+      });
+      manager.register({ name: "telegram", start: async handler => { receive = handler; }, stop() {}, send: async () => undefined }, true, "test");
+      manager.start(); await new Promise(resolve => setImmediate(resolve));
+      const room = { identity: "telegram:user", chatKey: key, privateChat: true, senderLabel: "user" };
+      try {
+        assert.match((await receive({ ...room, text: "/new --clean", messageId: "clean-1" }))!, /干净上下文/);
+        assert.equal(registry.contextMode(frontId, conversation), "clean");
+        await receive({ ...room, text: "只根据这条消息回答", messageId: "clean-question" });
+        await manager.idle();
+        assert.equal(registry.readMemoryRecords(frontId).length, memoriesBefore);
+        assert.doesNotMatch(JSON.stringify(registry.readMemoryRecords(frontId)), /CLEAN_ESCAPE/);
+        assert.match((await receive({ ...room, text: "/new", messageId: "normal-2" }))!, /已退出干净模式/);
+        await receive({ ...room, text: "OLD_PRIVATE_MEMORY 是什么？", messageId: "normal-question" });
+        await manager.idle();
+      } finally { manager.stop(); }
+    },
+  });
+  try {
+    assert.equal(calls, 3);
+    assert.equal(result.score.refusals.length, 1);
+    assert.match(result.score.refusals[0]!, /Tools are disabled in clean context/);
+  } finally { result.cleanup(); }
 });
 
 test("/new with a running answer and two queued requests refuses without swallowing any request", { timeout: 15_000 }, async () => {

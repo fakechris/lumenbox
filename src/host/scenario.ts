@@ -282,9 +282,9 @@ export async function runEpisode(options: EpisodeOptions): Promise<EpisodeResult
   const refusals: string[] = [];
   let questionsRefused = 0;
   for (const record of registry.list()) {
-    for (const conversation of [{ id: "main" }, ...registry.listConversations(record.id)]) {
+    for (const conversation of [...new Set(["main", ...registry.listConversations(record.id).map(item => item.id)])]) {
       type ResultsEntry = { kind?: string; blocks?: { is_error?: boolean; content?: unknown }[] };
-      for (const entry of registry.readTranscript(record.id, conversation.id) as ResultsEntry[]) {
+      for (const entry of registry.readAllContextTranscripts(record.id, conversation) as ResultsEntry[]) {
         if (entry.kind !== "results") continue;
         for (const block of entry.blocks ?? []) {
           if (block.is_error !== true) continue;

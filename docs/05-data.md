@@ -3,7 +3,7 @@
      family: spec
      status: current
      domain: storage
-     updated: 2026-09-22
+     updated: 2026-09-24
 -->
 # Data
 
@@ -40,7 +40,7 @@ agents/<agentId>/
   profile.json              identity and persona
   conversation.jsonl        legacy/current transcript until the first explicit context switch
   conversation.jsonl.epochs/
-    state.json              context epoch, schema and idempotent switch operations
+    state.json              context epoch, mode, schema and idempotent switch operations
     0/                      archived legacy transcript/plan/todos/heard/reactions/checkpoints
     <epoch>/                active or historical files for each later context epoch
   conversations/<id>.jsonl[.epochs/]  the same layout for an outside-chat conversation
@@ -148,6 +148,23 @@ memory writes reject a stale epoch. Automatic extraction and episode batching ca
 source exchanges, so an old buffered exchange cannot hitchhike into a later epoch's batch.
 Normal `/new` still permits strictly relevant long-term memory and normal tools; it is not clean
 mode, does not delete memory, and does not revoke standing permissions.
+
+`/new --clean` advances to an epoch whose persisted mode is `clean`. The state transition has the
+same private-chat, permission, idle-custody, crash-recovery, revision and idempotency gates as
+ordinary `/new`; an old schema-1 state without `mode` reads as `normal`. Clean is a context
+isolation boundary, not a factory reset, permission change, provider switch, incognito session or
+deletion operation. It retains host safety/authority policy, configured agent identity and the
+messages recorded inside the new epoch. It excludes personal and shared memory (including omitted
+indexes), skills, tasks, plan/todos, heard-room context and sibling-conversation hints.
+
+The first clean slice is deliberately text-only. Prompt assembly offers zero tools; tool dispatch
+independently rejects even a fabricated call, including `Recall`, `ReadHistory`, memory writes,
+shell, files, desktop, connectors and MCP. Channel attachments are rejected before storage while
+the conversation is clean. Automatic exchange extraction, summary extraction, episode creation and
+pitfall learning are guarded at their write source, so clean content cannot later enter personal or
+shared memory. Existing memory remains on disk and remains usable by other normal conversations.
+An ordinary `/new` from clean advances again in `normal` mode and says that memory and tools have
+been re-enabled under their normal relevance and permission gates.
 
 #### 2.2.1 Compaction
 

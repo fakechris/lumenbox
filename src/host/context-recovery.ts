@@ -1,6 +1,7 @@
 /** Host-owned control action, never a request to the model to forget something. */
 import type { AgentRegistry } from "../agents/registry.ts";
 import { MAIN_CONVERSATION } from "../agents/registry.ts";
+import type { ContextMode } from "../agents/context-epoch.ts";
 
 export function isContextCommand(text: string): boolean {
   return /^\/new(?:\s|$)/i.test(text.trim());
@@ -13,6 +14,7 @@ export interface NewContextInput {
   identity: string;
   /** Supplied only by a channel adapter that knows this is an independent private chat. */
   privateChat: boolean;
+  mode?: ContextMode;
 }
 
 export interface ContextRecoveryDeps {
@@ -53,11 +55,15 @@ export function newContext(
       };
     }
     // No await between the final custody check and durable commit. All callers share this service.
-    const next = store.advance(input.operationId, store.current().epoch);
+    const requestedMode = input.mode ?? "normal";
+    const current = store.current();
+    const next = store.advance(input.operationId, current.epoch, requestedMode);
     return {
       status: "switched",
       epoch: next.epoch,
-      text: `已开始新对话（上下文 ${next.epoch}）。旧聊天、摘要和计划不再自动带入，原记录仍保留；长期记忆仍按相关性使用。这不是干净模式。`,
+      text: requestedMode === "clean"
+        ? `已进入干净上下文（上下文 ${next.epoch}）。不会载入旧聊天、长期/共享记忆、技能、任务或其他会话，也不会提供工具或自动学习；当前消息仍会留在审计记录中，这不是无痕模式。`
+        : `已开始新对话（上下文 ${next.epoch}）。旧聊天、摘要和计划不再自动带入，原记录仍保留；长期记忆仍按相关性使用。${current.mode === "clean" ? "已退出干净模式，长期记忆和工具会按正常权限重新启用。" : "这不是干净模式。"}`,
     };
   } catch {
     return { status: "refused", text: "上下文切换未确认，已停止此控制操作；请检查会话存储状态。不要据此重放原任务。" };

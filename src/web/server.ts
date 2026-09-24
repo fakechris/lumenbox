@@ -882,6 +882,12 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
   let upgradeWaiting: { image: string; losses: string } | undefined;
 
   const channels = new ChannelManager({
+    contextMode: input => {
+      try {
+        const agent = input.agentName === undefined ? registry.list()[0] : registry.resolve(input.agentName);
+        return agent === undefined ? undefined : registry.contextMode(agent.id, conversationIdFor(input.conversationKey));
+      } catch { return undefined; }
+    },
     newContext: input => {
       let agent: ReturnType<typeof registry.resolve> | undefined;
       try { agent = input.agentName === undefined ? registry.list()[0] : registry.resolve(input.agentName); }
@@ -894,6 +900,7 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
         operationId: input.operationId,
         identity: input.identity,
         privateChat: input.privateChat,
+        mode: input.mode,
       };
       return newContext({
         registry,

@@ -1561,11 +1561,12 @@ export class Orchestrator {
     // not spawn somebody's bridges as a side effect. And kicked off rather than waited
     // on — a turn that blocks until every configured server has finished booting is a
     // turn whose first token is hostage to the slowest thing an operator installed.
-    if (this.mcp.configured) this.mcp.warm();
+    const clean = this.registry.contextMode(agent.id, conversation) === "clean";
+    if (!clean && this.mcp.configured) this.mcp.warm();
     // Refreshed before the prompt is built, and never allowed to fail the turn — a box with no
     // skills directory is the normal state of a fresh install.
     const agentBoxId = this.registry.boxOf(agent.id).id;
-    const { skills } = await this.skillsFor(agentBoxId).refresh();
+    const skills = clean ? [] : (await this.skillsFor(agentBoxId).refresh()).skills;
 
     // Agent identity and runtime are separate: an agent may name its own provider or
     // model, and gets its own client for it. Absent, it runs on the installation's.
@@ -1614,6 +1615,7 @@ export class Orchestrator {
       modelRelay: this.modelRelay,
       delegateSessions: this.delegateSessions,
       onSummarised: (agentId, conversationId, entries) => {
+        if (this.registry.contextMode(agentId, conversationId) === "clean") return;
         // The prose of what the summary replaces, bounded: enough for the extractor to
         // find a decision in, not the whole history it is standing in for.
         const prose = entries
@@ -1936,7 +1938,7 @@ export class Orchestrator {
     const said = options.messageId !== undefined
       ? this.replyForMessage(agent.id, options.messageId, conversation)
       : this.replySince(agent.id, before, conversation);
-    if (said !== "") {
+    if (said !== "" && this.registry.contextMode(agent.id, conversation) !== "clean") {
       // Where this exchange sits, for anything remembered from it to cite: the conversation
       // and the time the reply was read back, which is how a person finds it again in the
       // transcript (the `History` tool searches by conversation and shows times).
