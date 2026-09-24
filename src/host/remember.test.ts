@@ -36,6 +36,7 @@ test("a slow older batch cannot land after a newer correction", async () => {
   // thereby outranked — a newer correction. The per-agent write chain serializes.
   const appended: string[] = [];
   const registry = {
+    contextWriteGuard: () => () => true,
     readMemoryRecords: () => [],
     appendMemoryRecords: (_id: string, records: { text: string }[]) => {
       appended.push(...records.map(record => record.text));

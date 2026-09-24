@@ -1612,6 +1612,7 @@ export class FeishuChannel implements ChannelAdapter {
             return onMessage({
               identity,
               chatKey: `${this.name}:${chatId}`,
+              ...(data.message?.chat_type === "p2p" ? { privateChat: true } : {}),
               // The room's name when the sweep has seen it, for the door's room rules
               // (INV-429). Absent is honest: an allowlisted door stays out rather than
               // guessing, and the next sweep fills it in.

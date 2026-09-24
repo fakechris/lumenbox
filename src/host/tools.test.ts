@@ -200,7 +200,7 @@ test("ReadHistory reads the conversation the agent is in, not the team room", as
     registry: {
       tryGet: () => undefined,
       list: () => [],
-      readTranscript: (_id: string, conversation?: string) => {
+      readAllContextTranscripts: (_id: string, conversation?: string) => {
         asked.push(conversation);
         return [];
       },
@@ -1065,4 +1065,3 @@ test("WebFetch keeps the whole page on the host and ends its result with a point
     rmSync(home, { recursive: true, force: true });
   }
 });
-

@@ -248,15 +248,17 @@ test("a begin record says which model, which build and which prompt produced the
       model: "MiniMax-M3",
       build: { version: "0.31.0", commit: "abc1234" },
       promptHash: "0123456789abcdef",
+      contextEpoch: 3,
       memoryProjection,
     });
     const record = JSON.parse(readFileSync(path, "utf8").trim()) as Record<string, unknown>;
     assert.equal(record.model, "MiniMax-M3");
     assert.deepEqual(record.build, { version: "0.31.0", commit: "abc1234" });
     assert.equal(record.promptHash, "0123456789abcdef");
+    assert.equal(record.contextEpoch, 3);
     assert.deepEqual(record.memoryProjection, memoryProjection);
     // Still an open turn to the resumer, which ignores the stamp.
-    assert.equal(new TurnLedger(path).interrupted().length, 1);
+    assert.equal(new TurnLedger(path).interrupted()[0]?.contextEpoch, 3);
   } finally {
     rmSync(root, { recursive: true, force: true });
   }

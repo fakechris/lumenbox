@@ -21,7 +21,7 @@ export interface Update {
   message?: {
     message_id?: number;
     text?: string;
-    chat: { id: number };
+    chat: { id: number; type?: string };
     from?: { first_name?: string; username?: string };
   };
 }
@@ -106,6 +106,7 @@ export class TelegramChannel implements ChannelAdapter {
     const from = update.message.from;
     return {
       identity: `telegram:${chatId}`,
+      ...(update.message.chat.type === "private" ? { privateChat: true } : {}),
       senderLabel: from?.username ?? from?.first_name ?? String(chatId),
       text,
       ...(update.message.message_id !== undefined ? { messageId: String(update.message.message_id) } : {}),

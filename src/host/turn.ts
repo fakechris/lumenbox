@@ -1346,6 +1346,10 @@ export async function runTurn(
   signal: AbortSignal,
   deps: TurnDeps
 ): Promise<void> {
+  return deps.registry.withContext(agent.id, deps.conversation ?? MAIN_CONVERSATION, () => runContextTurn(agent, inbound, signal, deps));
+}
+
+async function runContextTurn(agent: AgentRecord, inbound: readonly InboundMessage[], signal: AbortSignal, deps: TurnDeps): Promise<void> {
   if (inbound.length === 0) return;
 
   const { registry, bus, box, client } = deps;
@@ -1453,7 +1457,7 @@ export async function runTurn(
       // Read fresh, which is what makes the plan and the todo list survive a compaction: they are in
       // the prompt rather than in the history a summary replaces.
       durable: registry.readDurableState(agent.id, conversation),
-      tasks: deps.tasks?.forAgent(agent.id),
+      tasks: deps.tasks?.forAgent(agent.id).filter(task => registry.contextVersion(agent.id, conversation) === 0 || (task.conversation ?? MAIN_CONVERSATION) === conversation),
       resolution: deps.resolution,
       ...(deps.boxAccess !== undefined ? { boxAccess: deps.boxAccess } : {}),
       agentsRoot: registry.root,
@@ -1793,6 +1797,7 @@ export async function runTurn(
     model: provider.model,
     build: buildInfo(),
     promptHash: promptHashOf(promptParts.stable, promptParts.volatile),
+    contextEpoch: registry.contextVersion(agent.id, conversation),
     memoryProjection: {
       personal: memoryProjectionManifest(memoryRecall),
       shared: memoryProjectionManifest(sharedMemoryRecall),

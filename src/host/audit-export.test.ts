@@ -16,6 +16,18 @@ import { describeExport, exportAudit, heldValues, readAuditExport, redactLine } 
 const SECRET = "ghp_ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789ab";
 const PASSWORD = "hunter2-very-long-password";
 
+test("audit export retains both sides of an epoch switch without treating the downgrade fence as a transcript", () => {
+  const { root, registry, ada } = home();
+  try {
+    registry.contextStore(ada, "side-1").advance("new", 0);
+    registry.appendTranscript(ada, { role: "user", text: "new topic", at: "2026-09-10T13:00:00Z" }, "side-1");
+    const out = join(root, "epoch-export");
+    exportAudit({ home: root, registry, box: registry.box.id, from: "2026-09-10T00:00:00Z", to: "2026-09-11T00:00:00Z", out });
+    assert.match(readFileSync(join(out, "transcripts", ada, "side-1.jsonl"), "utf8"), /side work/);
+    assert.match(readFileSync(join(out, "transcripts", ada, "side-1.epoch-1.jsonl"), "utf8"), /new topic/);
+  } finally { rmSync(root, { recursive: true, force: true }); }
+});
+
 function home(): { root: string; registry: AgentRegistry; ada: string; bob: string; grokId: string } {
   const root = mkdtempSync(join(tmpdir(), "agentbox-audit-export-"));
   const registry = new AgentRegistry(join(root, "agents"));

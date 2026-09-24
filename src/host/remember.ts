@@ -120,11 +120,13 @@ export class Rememberer {
   private readonly pendingPayers = new Map<string, (string | undefined)[]>();
   /** Where each pending exchange was, positionally; the numbers the extractor cites. */
   private readonly pendingRefs = new Map<string, (string | undefined)[]>();
+  private readonly pendingGuards = new Map<string, (() => boolean)[]>();
   private readonly extractions = new Map<string, string[]>();
   /** Who each pending extraction batch belonged to, for the episode that condenses them. */
   private readonly extractionPayers = new Map<string, (string | undefined)[]>();
   /** Where each condensed batch's exchanges were, for the episode to cite. */
   private readonly extractionRefs = new Map<string, string[]>();
+  private readonly extractionGuards = new Map<string, (() => boolean)[]>();
   private readonly log: (line: string) => void;
 
   constructor(private readonly deps: RememberDeps) {
@@ -146,7 +148,8 @@ export class Rememberer {
     detail: string;
     principal?: string;
   }): Promise<void> {
-    await this.enqueue(input.agentId, () => this.writePitfall(input));
+    const guard = this.deps.registry.contextWriteGuard();
+    await this.enqueue(input.agentId, () => this.writePitfall(input, guard));
   }
 
   private async writePitfall(input: {
@@ -155,15 +158,16 @@ export class Rememberer {
     attempt: string;
     detail: string;
     principal?: string;
-  }): Promise<void> {
+  }, guard: () => boolean): Promise<void> {
     try {
+      if (!guard()) return;
       const reply = await this.ask(
         input.agentId,
         buildPitfallPrompt({ source: input.source, attempt: input.attempt, detail: input.detail }),
         input.principal
       );
       const record = parsePitfall(reply, input.source);
-      if (record === undefined) return;
+      if (record === undefined || !guard()) return;
       this.deps.registry.appendMemoryRecords(input.agentId, [record]);
       this.log(`kept a pitfall from ${input.source}: ${record.text.slice(0, 80)}`);
     } catch (error) {
@@ -190,13 +194,17 @@ export class Rememberer {
     const refs = this.pendingRefs.get(exchange.agentId) ?? [];
     refs.push(exchange.ref);
     this.pendingRefs.set(exchange.agentId, refs);
+    const guards = this.pendingGuards.get(exchange.agentId) ?? [];
+    guards.push(this.deps.registry.contextWriteGuard());
+    this.pendingGuards.set(exchange.agentId, guards);
     if (batch.length < EXTRACT_EVERY) return;
 
     this.pending.set(exchange.agentId, []);
     this.pendingPayers.set(exchange.agentId, []);
     this.pendingRefs.set(exchange.agentId, []);
+    this.pendingGuards.set(exchange.agentId, []);
     await this.enqueue(exchange.agentId, () =>
-      this.extract(exchange.agentId, batch, payerOf(payers), refs)
+      this.extract(exchange.agentId, batch, payerOf(payers), refs, () => guards.every(guard => guard()))
     );
   }
 
@@ -209,7 +217,8 @@ export class Rememberer {
    */
   async flush(agentId: string, text: string, ref?: string): Promise<void> {
     if (EXTRACT_EVERY <= 0 || text.trim() === "") return;
-    await this.enqueue(agentId, () => this.extract(agentId, [text], undefined, ref !== undefined ? [ref] : []));
+    const guard = this.deps.registry.contextWriteGuard();
+    await this.enqueue(agentId, () => this.extract(agentId, [text], undefined, ref !== undefined ? [ref] : [], guard));
   }
 
   /** Appends work to the agent's write chain. A failed link never breaks the chain. */
@@ -226,8 +235,10 @@ export class Rememberer {
     agentId: string,
     exchanges: readonly string[],
     principal?: string,
-    refs: readonly (string | undefined)[] = []
+    refs: readonly (string | undefined)[] = [],
+    guard: () => boolean = () => true
   ): Promise<void> {
+    if (!guard()) return;
     // Citable only when every exchange has a place: a numbering with holes would let the
     // extractor cite a number that means nothing, and a wrong source is worse than none.
     const citable = refs.length === exchanges.length && refs.every(ref => ref !== undefined)
@@ -259,6 +270,7 @@ export class Rememberer {
       return;
     }
 
+    if (!guard()) return;
     if (records.length > 0) {
       this.deps.registry.appendMemoryRecords(agentId, records);
       this.log(`kept ${records.length} memor${records.length === 1 ? "y" : "ies"} from ${exchanges.length} exchanges`);
@@ -272,28 +284,34 @@ export class Rememberer {
     seenPayers.push(principal);
     const seenRefs = this.extractionRefs.get(agentId) ?? [];
     seenRefs.push(...citable);
+    const seenGuards = this.extractionGuards.get(agentId) ?? [];
+    seenGuards.push(guard);
     if (seen.length < EPISODE_EVERY) {
       this.extractions.set(agentId, seen);
       this.extractionPayers.set(agentId, seenPayers);
       this.extractionRefs.set(agentId, seenRefs);
+      this.extractionGuards.set(agentId, seenGuards);
       return;
     }
     this.extractions.set(agentId, []);
     this.extractionPayers.set(agentId, []);
     this.extractionRefs.set(agentId, []);
-    await this.condense(agentId, seen, payerOf(seenPayers), seenRefs);
+    this.extractionGuards.set(agentId, []);
+    await this.condense(agentId, seen, payerOf(seenPayers), seenRefs, () => seenGuards.every(check => check()));
   }
 
   private async condense(
     agentId: string,
     exchanges: readonly string[],
     principal?: string,
-    refs: readonly string[] = []
+    refs: readonly string[] = [],
+    guard: () => boolean = () => true
   ): Promise<void> {
     try {
+      if (!guard()) return;
       const reply = await this.ask(agentId, buildEpisodePrompt(exchanges), principal);
       const episode = parseEpisode(reply, new Date(), refs);
-      if (episode === undefined) return;
+      if (episode === undefined || !guard()) return;
       this.deps.registry.appendMemoryRecords(agentId, [episode]);
       this.log(`condensed ${exchanges.length} batches into an episode`);
     } catch (error) {

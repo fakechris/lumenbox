@@ -21,7 +21,7 @@ import { FETCHED_DIRNAME, readFrontmatter, verifyKept } from "./fetched.ts";
 import { RESULTS_DIRNAME } from "./results.ts";
 import { archivedLines } from "./jsonl.ts";
 import type { AgentRegistry } from "../agents/registry.ts";
-import { CONVERSATIONS_DIRNAME, conversationIdFor, TRANSCRIPT_FILENAME } from "../agents/registry.ts";
+import { conversationIdFor } from "../agents/registry.ts";
 import { CREDENTIAL_PATTERNS, MIN_EXACT_LENGTH } from "./secret-scan.ts";
 
 export interface ExportOptions {
@@ -196,19 +196,15 @@ export function exportAudit(options: ExportOptions): ExportManifest {
   const conversationIds = new Set<string>();
 
   for (const agent of agents) {
-    const dir = registry.dirFor(agent.id);
-    const conversations: { name: string; path: string }[] = [{ name: "main", path: join(dir, TRANSCRIPT_FILENAME) }];
-    const side = join(dir, CONVERSATIONS_DIRNAME);
-    if (existsSync(side)) {
-      for (const file of readdirSync(side)) {
-        if (file.endsWith(".jsonl") && !file.endsWith(".heard.jsonl")) conversations.push({ name: file.slice(0, -".jsonl".length), path: join(side, file) });
-      }
-    }
+    const conversations = registry.listConversations(agent.id).flatMap(({ id }) => {
+      const store = registry.contextStore(agent.id, id);
+      return store.versions().map(epoch => ({ name: id, epoch, path: store.path("transcript", epoch) }));
+    });
     for (const conversation of conversations) {
       conversationIds.add(conversation.name);
       const lines = select(readLines(conversation.path), () => true);
       if (lines.length === 0 && !existsSync(conversation.path)) continue;
-      write(join("transcripts", agent.id, `${conversation.name}.jsonl`), lines);
+      write(join("transcripts", agent.id, conversation.epoch === 0 ? `${conversation.name}.jsonl` : `${conversation.name}.epoch-${conversation.epoch}.jsonl`), lines);
     }
   }
   // Dated by `receivedAt`, which is the ledger's own word for it; `select` reads `at`.

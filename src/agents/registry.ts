@@ -13,6 +13,8 @@
  */
 
 import { randomBytes, randomUUID } from "node:crypto";
+import { AsyncLocalStorage } from "node:async_hooks";
+import { ContextEpochStore } from "./context-epoch.ts";
 import {
   closeSync,
   mkdirSync,
@@ -280,6 +282,53 @@ export class AgentNotFoundError extends Error {
 }
 
 export class AgentRegistry {
+  private readonly contextScope = new AsyncLocalStorage<{ agentId: string; conversation: string; epoch: number }>();
+
+  /** Capture once per turn/background producer; reads and writes stay in that version. */
+  withContext<T>(agentId: string, conversation: string, run: () => T): T {
+    const inherited = this.contextScope.getStore();
+    const context = inherited?.agentId === agentId && inherited.conversation === conversation
+      ? inherited : { agentId, conversation, epoch: this.contextStore(agentId, conversation).current().epoch };
+    this.assertContextCurrent(context);
+    return this.contextScope.run(context, run);
+  }
+
+  contextStore(agentId: string, conversation = MAIN_CONVERSATION): ContextEpochStore {
+    const dir = this.dirFor(agentId);
+    const main = conversation === MAIN_CONVERSATION;
+    const base = join(dir, CONVERSATIONS_DIRNAME, conversation);
+    const transcript = main ? join(dir, TRANSCRIPT_FILENAME) : `${base}.jsonl`;
+    return new ContextEpochStore({
+      transcript,
+      heard: `${transcript}.heard.jsonl`,
+      plan: main ? join(dir, PLAN_FILENAME) : `${base}.plan.md`,
+      todos: main ? join(dir, TODOS_FILENAME) : `${base}.todos.json`,
+      checkpoints: main ? join(dir, "checkpoints.json") : `${base}.checkpoints.json`,
+      reactions: `${transcript}.reactions.json`,
+    });
+  }
+
+  contextVersion(agentId: string, conversation = MAIN_CONVERSATION): number {
+    const scope = this.contextScope.getStore();
+    return scope?.agentId === agentId && scope.conversation === conversation
+      ? scope.epoch : this.contextStore(agentId, conversation).current().epoch;
+  }
+
+  private contextPath(agentId: string, conversation: string, kind: string): string {
+    return this.contextStore(agentId, conversation).path(kind, this.contextVersion(agentId, conversation));
+  }
+
+  private assertContextCurrent(context = this.contextScope.getStore()): void {
+    if (context !== undefined && this.contextStore(context.agentId, context.conversation).current().epoch !== context.epoch) {
+      throw new Error("Stale context: refusing to publish into current memory");
+    }
+  }
+
+  /** Saved with asynchronous learning inputs, including batches that mix conversations. */
+  contextWriteGuard(): () => boolean {
+    const captured = this.contextScope.getStore();
+    return () => captured === undefined || this.contextStore(captured.agentId, captured.conversation).current().epoch === captured.epoch;
+  }
   /**
    * The box this roster belongs to (docs/22 §7 item 1). Minted on first contact,
    * stable across every later construction — identity only, no authorization:
@@ -430,15 +479,12 @@ export class AgentRegistry {
    * an old install wakes up with its history where it always was.
    */
   transcriptPathFor(agentId: string, conversation = MAIN_CONVERSATION): string {
-    if (conversation === MAIN_CONVERSATION) {
-      return join(this.dirFor(agentId), TRANSCRIPT_FILENAME);
-    }
-    return join(this.dirFor(agentId), CONVERSATIONS_DIRNAME, `${conversation}.jsonl`);
+    return this.contextPath(agentId, conversation, "transcript");
   }
 
   /** Where what a room said around the agent, unaddressed, is kept — beside the transcript. */
   heardPathFor(agentId: string, conversation = MAIN_CONVERSATION): string {
-    return `${this.transcriptPathFor(agentId, conversation)}.heard.jsonl`;
+    return this.contextPath(agentId, conversation, "heard");
   }
 
   /** A message in the room that was not for this agent. Kept, bounded, never a turn. */
@@ -497,6 +543,7 @@ export class AgentRegistry {
    * Bounded, and only ever once — a thread that has anything is left alone.
    */
   seedHeardFrom(agentId: string, thread: string, parent: string, limit = HEARD_BOOTSTRAP): number {
+    if (this.contextVersion(agentId, thread) > 0) return 0;
     if (!this.isFreshConversation(agentId, thread)) return 0;
     const lines = this.readHeard(agentId, parent, limit);
     for (const line of lines) {
@@ -875,13 +922,11 @@ export class AgentRegistry {
    * not overwrite each other's list.
    */
   planPathFor(agentId: string, conversation = MAIN_CONVERSATION): string {
-    if (conversation === MAIN_CONVERSATION) return join(this.dirFor(agentId), PLAN_FILENAME);
-    return join(this.dirFor(agentId), CONVERSATIONS_DIRNAME, `${conversation}.plan.md`);
+    return this.contextPath(agentId, conversation, "plan");
   }
 
   checkpointsPathFor(agentId: string, conversation = MAIN_CONVERSATION): string {
-    if (conversation === MAIN_CONVERSATION) return join(this.dirFor(agentId), "checkpoints.json");
-    return join(this.dirFor(agentId), CONVERSATIONS_DIRNAME, `${conversation}.checkpoints.json`);
+    return this.contextPath(agentId, conversation, "checkpoints");
   }
 
   writeCheckpoints(agentId: string, checkpoints: readonly Checkpoint[], conversation = MAIN_CONVERSATION): void {
@@ -889,8 +934,7 @@ export class AgentRegistry {
   }
 
   todosPathFor(agentId: string, conversation = MAIN_CONVERSATION): string {
-    if (conversation === MAIN_CONVERSATION) return join(this.dirFor(agentId), TODOS_FILENAME);
-    return join(this.dirFor(agentId), CONVERSATIONS_DIRNAME, `${conversation}.todos.json`);
+    return this.contextPath(agentId, conversation, "todos");
   }
 
   /**
@@ -1004,6 +1048,7 @@ export class AgentRegistry {
   onMemoryChanged: ((agentId: string) => void) | undefined;
 
   appendMemoryRecords(agentId: string, records: readonly MemoryRecord[]): void {
+    this.assertContextCurrent();
     if (records.length === 0) return;
     mkdirSync(this.dirFor(agentId), { recursive: true });
     for (const record of records) {
@@ -1124,6 +1169,7 @@ export class AgentRegistry {
 
   /** Appends to this agent's own shard, which is the only one it may write. */
   appendSharedMemory(agentId: string, records: readonly MemoryRecord[]): void {
+    this.assertContextCurrent();
     if (records.length === 0) return;
     mkdirSync(this.sharedMemoryDir(), { recursive: true });
     // The writer's box, from the roster — not from the record, which the tool built.
@@ -1203,6 +1249,16 @@ export class AgentRegistry {
 
   readTranscript(agentId: string, conversation = MAIN_CONVERSATION): unknown[] {
     const path = this.transcriptPathFor(agentId, conversation);
+    return this.readTranscriptFile(path);
+  }
+
+  /** Explicit history/export view. Model prompt assembly must use readTranscript instead. */
+  readAllContextTranscripts(agentId: string, conversation = MAIN_CONVERSATION): unknown[] {
+    const store = this.contextStore(agentId, conversation);
+    return store.versions().flatMap(epoch => this.readTranscriptFile(store.path("transcript", epoch)));
+  }
+
+  private readTranscriptFile(path: string): unknown[] {
     if (!existsSync(path)) return [];
     return readFileSync(path, "utf8")
       .split("\n")
@@ -1231,10 +1287,7 @@ export class AgentRegistry {
    * Reads only the head of the file, because a label must not cost a transcript read.
    */
   conversationFirstLine(agentId: string, conversation: string): string | undefined {
-    const path =
-      conversation === MAIN_CONVERSATION
-        ? this.transcriptPathFor(agentId)
-        : join(this.dirFor(agentId), CONVERSATIONS_DIRNAME, `${conversation}.jsonl`);
+    const path = this.transcriptPathFor(agentId, conversation);
     if (!existsSync(path)) return undefined;
     let head = "";
     try {
@@ -1277,10 +1330,27 @@ export class AgentRegistry {
     const dir = join(this.dirFor(agentId), CONVERSATIONS_DIRNAME);
     if (!existsSync(dir)) return conversations;
     try {
+      const seen = new Set<string>();
       for (const entry of readdirSync(dir, { withFileTypes: true })) {
-        if (!entry.isFile() || !entry.name.endsWith(".jsonl")) continue;
+        const isEpochStore = entry.isDirectory() && entry.name.endsWith(".jsonl.epochs");
+        if (isEpochStore) {
+          const id = entry.name.slice(0, -".jsonl.epochs".length);
+          this.contextStore(agentId, id).current(); // finish a prepared migration before exposing it
+          if (!seen.has(id)) conversations.push({ id, lastAt: statSync(join(dir, entry.name)).mtime.toISOString() });
+          seen.add(id);
+          continue;
+        }
+        const isTranscriptFile = entry.isFile() && entry.name.endsWith(".jsonl");
+        const isDowngradeFence =
+          entry.isDirectory() &&
+          entry.name.endsWith(".jsonl") &&
+          existsSync(join(dir, `${entry.name}.epochs`, "state.json"));
+        if ((!isTranscriptFile && !isDowngradeFence) || entry.name.endsWith(".heard.jsonl")) continue;
+        const id = entry.name.slice(0, -".jsonl".length);
+        if (seen.has(id)) continue;
+        seen.add(id);
         conversations.push({
-          id: entry.name.slice(0, -".jsonl".length),
+          id,
           lastAt: statSync(join(dir, entry.name)).mtime.toISOString(),
         });
       }
