@@ -34,9 +34,15 @@
 
 import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
-import { appendLine } from "./jsonl.ts";
+import { appendLine, type LedgerKind } from "./jsonl.ts";
 import { Receipts } from "./receipts.ts";
 import { agentboxHome, envNumber } from "../config.ts";
+
+/**
+ * What each task is, now, plus a grace period on closed ones so a person asking about
+ * something they just finished still gets an answer. Older closed tasks are not owed.
+ */
+export const LEDGER_KIND: LedgerKind = "state";
 
 export function tasksPath(): string {
   return process.env.AGENTBOX_TASKS_LOG ?? join(agentboxHome(), "tasks.jsonl");

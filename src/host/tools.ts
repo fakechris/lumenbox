@@ -24,11 +24,13 @@ import type { McpManager } from "./mcp.ts";
 import { delegateEnv, delegateModel, PRESETS, presetNamed, quoteForShell, installCommand, withEnginesPath } from "./presets.ts";
 import { namesControlSurface } from "./control-surfaces.ts";
 import { catalogMenu, intersectTools, profilesFor } from "./catalog.ts";
-import { describeHistory, readHistory } from "./history.ts";
-import { canSearch, fetchPage, type FetchedPage, guardUrl, isSearchEngine, MAX_TEXT, searchWeb, WebError } from "./web.ts";
-import { fetchXPost, xStatusRef } from "./x-post.ts";
+import { describeHistory, ENTRY_CHARS, readHistory } from "./history.ts";
+import { canSearch, fetchPage, type FetchedPage, guardUrl, isSearchEngine, MAX_TEXT, pageReadOutcome, searchWeb, WebError } from "./web.ts";
+import { readOutcome, textShape, withReadOutcome } from "./read-outcome.ts";
+import { fetchXPost, XResolversUnavailable, xStatusRef } from "./x-post.ts";
 import { join } from "node:path";
-import { keepFetchedPage, KEPT_MARKER, pruneOccasionally } from "./fetched.ts";
+import { keepFetchedPage, keptPointer, KEPT_MARKER, pruneOccasionally } from "./fetched.ts";
+import { findKeptResult } from "./results.ts";
 import { describeEnvShape, envShape, looksLikeEnvFile } from "./env-shape.ts";
 import { guardShellCommand } from "./ui-automation-guard.ts";
 import { dedupe, dedupeKey, describeFrom, memoryRef, validateRecord } from "./memory.ts";
@@ -83,6 +85,12 @@ export interface ToolContext {
    * must not; the default is the guarded fetch in web.ts.
    */
   webFetch?: (url: string) => Promise<FetchedPage>;
+  /**
+   * How WebFetch reads a post on X. Replaced only by tests, for the same reason as
+   * `webFetch`: the three routes a post can arrive by are exactly what needs testing, and
+   * none of them may be reached from a test.
+   */
+  xFetch?: typeof fetchXPost;
   /** Where fetched pages are kept. Tests point it at a temp dir; the default is ~/.agentbox. */
   fetchedHome?: string;
   /**
@@ -322,6 +330,7 @@ export const PARALLEL_SAFE_TOOLS: ReadonlySet<string> = new Set([
   "list_dir",
   "Recall",
   "ReadHistory",
+  "ReadKept",
   "OtherThreads",
   "ReadFeishuDoc",
 ]);
@@ -1300,6 +1309,30 @@ export function buildTools(
       },
     },
     {
+      name: "ReadKept",
+      description:
+        "Read back the whole of something you already read, when the copy in this conversation " +
+        "was cut. Any result over about two thousand characters is kept whole and replayed short, " +
+        "with a pointer where the rest was; this takes the id of the call that produced it, which " +
+        "is the id you used when you made the call. Reach for it instead of fetching a page again: " +
+        "the page may say something different now, and this is what you actually read. Only your " +
+        "own calls, only in this conversation.",
+      input_schema: {
+        type: "object",
+        properties: {
+          call: {
+            type: "string",
+            description:
+              "The id of the call whose output you want back, as it appears in the pointer the " +
+              "cut left behind.",
+          },
+          from: { type: "number", description: "First character to read. Omit to start at the beginning." },
+          to: { type: "number", description: "One past the last character. Omit to read to the end." },
+        },
+        required: ["call"],
+      },
+    },
+    {
       name: "ClaimWork",
       description:
         "Take a piece of work so a teammate does not take the same one, or hand it back when you " +
@@ -2058,6 +2091,15 @@ export function boxErrorOutcome(error: unknown): Outcome | undefined {
  * The active window's controls as an outline, in the shape the browser outline uses
  * (INV-412): one line per control, the ref first so it can be copied into click_element.
  */
+/**
+ * Prose and link counts alone. The caller sets `chars`, because only it knows how much
+ * of the text the model was actually handed.
+ */
+function proseAndLinks(text: string): { prose: number; links: number } {
+  const { prose, links } = textShape(text);
+  return { prose, links };
+}
+
 export function elementsOutline(result: { elements?: readonly ElementInfo[]; elements_note?: string; elements_window?: { title: string; app: string; truncated: boolean } }): string {
   if (result.elements === undefined) {
     return `No control outline: ${result.elements_note ?? "the active window exposes no accessibility tree"}. Work from the screenshot.`;
@@ -3101,10 +3143,17 @@ export async function dispatchTool(
       if (!result.truncated) {
         context.files?.observed(context.agent.id, result.path, versionOf(result.content));
       }
-      const header = result.truncated
-        ? `${result.path} (showing part of ${result.total_lines} lines)`
-        : `${result.path} (${result.total_lines} lines)`;
-      return { text: `${header}\n\n${result.content}` };
+      const shownLines = result.content === "" ? 0 : result.content.split("\n").length;
+      return {
+        text: withReadOutcome(
+          {
+            completeness: result.truncated ? "clipped" : "full",
+            shape: { lines: shownLines, totalLines: result.total_lines, chars: result.content.length },
+            ...(result.truncated ? { hint: "ask for a line range to see the rest" } : {}),
+          },
+          `${result.path}\n\n${result.content}`
+        ),
+      };
     }
 
     case "AskSecret": {
@@ -3615,8 +3664,18 @@ export async function dispatchTool(
 
       const render = (result: Awaited<ReturnType<BoxClient["browser"]>>): ToolOutcome => {
         if (name === "browser_read") {
+          const read = result.text ?? "";
           return {
-            text: `${result.note !== undefined ? `${result.note}\n\n` : ""}${result.url}\n\n${result.text ?? "(the page has no text)"}`,
+            text: withReadOutcome(
+              {
+                // The box reads the rendered page; it reports no cut of its own, so this
+                // says what came back rather than claiming the page held no more.
+                completeness: read === "" ? "unavailable" : "full",
+                ...(read === "" ? {} : { shape: textShape(read) }),
+                ...(result.note !== undefined ? { note: result.note } : {}),
+              },
+              `${result.url}\n\n${read === "" ? "(the page has no text)" : read}`
+            ),
           };
         }
         const outcome = actionOutcome(result, ["browser_act", "browser_scroll", "browser_upload"].includes(name));
@@ -3836,25 +3895,74 @@ export async function dispatchTool(
           isError: true,
         };
       }
-      // A post on X is read through FxTwitter, not the site: the site serves a login wall
-      // with the first line of the post in its <title>, and an agent that read that for a
-      // day cited eighteen articles it had seen forty-three characters of (x-post.ts).
+      // Set when the X resolvers were tried and could not be reached, so the plain fetch
+      // below can say why it is the one answering.
+      let xFallbackReason: string | undefined;
+      // A post on X is read through FxTwitter rather than the site. Measured on the real
+      // page (docs/69): x.com does serve most of an Article's text to a plain fetch, but
+      // it arrives behind two thousand characters of "Log in / Sign up" — which is exactly
+      // the part the transcript keeps — and without the thread, the author, the date, or a
+      // reason when the post is gone. The API gives all of those and the body whole.
       if (xStatusRef(target) !== undefined) {
         try {
-          const { markdown, kept } = await fetchXPost(
+          const { markdown, kept, post } = await (context.xFetch ?? fetchXPost)(
             target,
             context.fetchedHome !== undefined ? { keepUnder: join(context.fetchedHome, "fetched", "x") } : {}
           );
           // The pointer is the last line for the same reason the box's spill pointer is:
           // storableResult carries it across the transcript's cut (turn.ts).
-          const pointer = kept !== undefined ? `\n\n[${KEPT_MARKER} ${kept.markdown}]` : "";
-          if (markdown.length <= MAX_TEXT) return { text: `${markdown}${pointer}` };
-          return { text: `${markdown.slice(0, MAX_TEXT)}\n\n[... rest of post not shown]${pointer}` };
-        } catch (error) {
+          const pointer =
+            kept !== undefined
+              ? `\n\n${keptPointer({
+                  marker: KEPT_MARKER,
+                  path: kept.markdown,
+                  sha256: kept.sha256,
+                  chars: markdown.length,
+                  at: new Date(kept.at),
+                })}`
+              : "";
+          const clipped = markdown.length > MAX_TEXT;
+          const shown = clipped ? `${markdown.slice(0, MAX_TEXT)}\n\n[... rest of post not shown]` : markdown;
           return {
-            text: error instanceof WebError ? error.message : `Could not read that post: ${error}`,
-            isError: true,
+            text: withReadOutcome(
+              {
+                // The resolver already decided what it got; this only translates it into
+                // the shared vocabulary. Its `partial` — the syndication fallback, which
+                // previews an article rather than serving it — is a clip by another name.
+                completeness:
+                  post.completeness === "unavailable"
+                    ? "unavailable"
+                    : post.completeness === "partial" || clipped
+                      ? "clipped"
+                      : "full",
+                shape: {
+                  chars: Math.min(shown.length, markdown.length),
+                  ...(clipped ? { totalChars: markdown.length } : {}),
+                  ...proseAndLinks(markdown),
+                },
+                ...(post.note !== undefined ? { note: post.note } : {}),
+                ...(clipped && kept !== undefined ? { hint: `the whole post is at ${kept.markdown}` } : {}),
+              },
+              `${shown}${pointer}`
+            ),
           };
+        } catch (error) {
+          // Both APIs unreachable is not the same as the post being gone, and it used to
+          // report the same word. The page itself still carries most of an article's body
+          // behind its sign-in furniture (docs/69 §2.2), so fall through to a plain fetch
+          // rather than telling the model there is nothing to read. A tombstone does not
+          // come through here at all — it returns normally, above, with its reason.
+          if (error instanceof XResolversUnavailable) {
+            xFallbackReason = error.message;
+          } else {
+            return {
+              text: withReadOutcome(
+                { completeness: error instanceof WebError && error.kind === "blocked" ? "blocked" : "unavailable" },
+                error instanceof WebError ? error.message : `Could not read that post: ${error}`
+              ),
+              isError: true,
+            };
+          }
         }
       }
       try {
@@ -3867,6 +3975,10 @@ export async function dispatchTool(
         ]
           .filter(Boolean)
           .join("\n");
+        const outcome = pageReadOutcome(page);
+        // One instant for the file's own frontmatter and for the pointer that describes
+        // it, so the two never disagree about when this was read.
+        const keptAt = new Date();
         // Kept whole, whatever the model is shown, so what the agent cites can be read
         // again later (fetched.ts). A failure to keep is said, not allowed to fail the read.
         let pointer = "";
@@ -3880,24 +3992,55 @@ export async function dispatchTool(
               contentType: page.contentType,
               bytes: page.bytes,
               clipped: page.truncated,
+              ...(xFallbackReason !== undefined ? { fetcher: "web-fetch" } : {}),
+              completeness: outcome.completeness,
+              ...(outcome.shape?.prose !== undefined && outcome.shape.links !== undefined
+                ? { shape: { prose: outcome.shape.prose, links: outcome.shape.links } }
+                : {}),
               meta: page.meta,
               agent: { id: context.agent.id, name: context.agent.profile.name },
               ...(context.conversation !== undefined ? { conversation: context.conversation } : {}),
-              fetchedAt: new Date(),
+              fetchedAt: keptAt,
             },
             context.fetchedHome
           );
-          pointer = `\n\n[${KEPT_MARKER} ${kept.path}]`;
+          pointer = `\n\n${keptPointer({
+            marker: KEPT_MARKER,
+            path: kept.path,
+            sha256: kept.sha256,
+            chars: page.fullText.length,
+            at: keptAt,
+          })}`;
           pruneOccasionally(line => console.error(line), context.fetchedHome);
         } catch (error) {
           pointer = `\n\n[could not keep a copy of this page: ${error instanceof Error ? error.message : error}]`;
         }
-        return { text: `${heading}\n\n${page.text}${pointer}` };
+        // A page fetched only because the X resolvers were down is never `full`, whatever
+        // its shape says. We know what is missing from it — the thread, the author, the
+        // date, the reason a gone post is gone — and we know the body arrives behind the
+        // sign-in furniture. Saying `full` here would be the same kind of false precision
+        // the read contract exists to remove.
+        const answered =
+          xFallbackReason === undefined
+            ? outcome
+            : {
+                ...outcome,
+                completeness: "clipped" as const,
+                note: "read from the page itself because neither X resolver could be reached, so there is no thread, author or date, and the body sits behind the sign-in prompt",
+                hint: "open it with browser_open if the thread or the author matters",
+              };
+        return { text: withReadOutcome(answered, `${heading}\n\n${page.text}${pointer}`) };
       } catch (error) {
         // A refused address is a normal answer to a bad request, not a crash: the model
         // is told plainly so it stops rather than retrying the same host another way.
+        const said = error instanceof WebError ? error.message : `Could not read that page: ${error}`;
         return {
-          text: error instanceof WebError ? error.message : `Could not read that page: ${error}`,
+          text: withReadOutcome(
+            { completeness: error instanceof WebError && error.kind === "blocked" ? "blocked" : "unavailable" },
+            // Three routes were tried, not one. A message naming only the last of them
+            // would send someone looking in the wrong place.
+            xFallbackReason === undefined ? said : `${xFallbackReason}\nThe page itself did not answer either: ${said}`
+          ),
           isError: true,
         };
       }
@@ -3919,9 +4062,16 @@ export async function dispatchTool(
             `${index + 1}. ${result.title}\n   ${result.url}\n   ${result.description}`
         );
         return {
-          text:
-            `Results for ${JSON.stringify(query)} — descriptions are the engine's, so ` +
-            `read anything you intend to rely on:\n\n${lines.join("\n\n")}`,
+          text: withReadOutcome(
+            {
+              // Not a document read at all: these are the engine's sentences about pages.
+              completeness: "summary",
+              shape: { results: results.length },
+              note: "descriptions are the engine's, not the pages",
+              hint: "read anything you intend to rely on with WebFetch",
+            },
+            `Results for ${JSON.stringify(query)}:\n\n${lines.join("\n\n")}`
+          ),
         };
       } catch (error) {
         return {
@@ -4194,6 +4344,53 @@ export async function dispatchTool(
       };
     }
 
+    case "ReadKept": {
+      const call = String(input.call ?? "").trim();
+      if (call === "") return { text: "Which call? Pass the id from the pointer the cut left.", isError: true };
+      const found = findKeptResult(
+        call,
+        { agentId: context.agent.id, ...(context.conversation !== undefined ? { conversation: context.conversation } : {}) },
+        context.fetchedHome
+      );
+      // A result that is someone else's answers exactly as one that is not there. Telling
+      // the two apart would be a way to ask whether another agent made a given call.
+      if (found === undefined) {
+        return {
+          text: withReadOutcome(
+            { completeness: "unavailable" },
+            `No kept output for call ${call} in this conversation. It may have aged out of the ` +
+              "retention window, in which case the pointer where it was cut still says how big it " +
+              "was and what its digest was."
+          ),
+          isError: true,
+        };
+      }
+
+      const from = Math.max(0, typeof input.from === "number" ? Math.floor(input.from) : 0);
+      const to = typeof input.to === "number" ? Math.floor(input.to) : found.chars;
+      const slice = found.text.slice(from, Math.min(to, found.chars));
+      // Cut again if the caller asked for more than a result may show. Being read back does
+      // not exempt it from the limit that cut it in the first place.
+      const clipped = slice.length > MAX_TEXT;
+      const shown = clipped ? slice.slice(0, MAX_TEXT) : slice;
+      const whole = from === 0 && shown.length === found.chars;
+      return {
+        text: withReadOutcome(
+          {
+            completeness: whole ? "full" : "clipped",
+            shape: {
+              chars: shown.length,
+              ...(whole ? {} : { totalChars: found.chars }),
+              ...proseAndLinks(shown),
+            },
+            note: `${found.tool ?? "a tool"} returned this at ${found.at}`,
+            ...(whole ? {} : { hint: "ask for another range with from and to" }),
+          },
+          shown
+        ),
+      };
+    }
+
     case "ReadHistory": {
       const who = String(input.agent ?? "").trim();
       // A teammate's history is readable on purpose: everyone here shares a box and a filesystem
@@ -4220,7 +4417,18 @@ export async function dispatchTool(
         ...(typeof input.to === "number" ? { to: input.to } : {}),
       };
       const whose = target.id === context.agent.id ? "" : `${target.profile.name}: `;
-      return { text: whose + describeHistory(readHistory(entries, query), query) };
+      const history = readHistory(entries, query);
+      return {
+        text: withReadOutcome(
+          {
+            completeness: history.matched > history.lines.length ? "clipped" : "full",
+            shape: { entries: history.lines.length, totalEntries: history.matched },
+            note: `each entry is cut to ${ENTRY_CHARS} chars`,
+            hint: "the transcript on disk holds the whole of every entry",
+          },
+          whose + describeHistory(history, query)
+        ),
+      };
     }
 
     case "Tasks": {

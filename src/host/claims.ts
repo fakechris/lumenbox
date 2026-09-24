@@ -22,9 +22,15 @@
  */
 
 import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
-import { appendLine } from "./jsonl.ts";
+import { appendLine, type LedgerKind } from "./jsonl.ts";
 import { dirname, join } from "node:path";
 import { agentboxHome, envNumber } from "../config.ts";
+
+/**
+ * Who holds what right now. A lease that has expired is not history, it is a gap — the
+ * point of the file is to survive a restart with the current holders intact.
+ */
+export const LEDGER_KIND: LedgerKind = "state";
 
 /** Kept alongside the transcripts: same lifetime, same volume, same backup. */
 export function claimsPath(): string {

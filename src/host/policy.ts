@@ -32,11 +32,23 @@
 import { classifyShell } from "./shell-readonly.ts";
 import { envNumber } from "../config.ts";
 import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
-import { appendLine, appendLineDurably } from "./jsonl.ts";
+import { appendLine, appendLineDurably, type LedgerKind } from "./jsonl.ts";
 import { createHash, randomUUID } from "node:crypto";
 import { dirname, join } from "node:path";
 import { agentboxHome } from "../config.ts";
 import type { RuleStore } from "./rules.ts";
+
+/**
+ * What was asked of the gate, as a window, with standing grants re-stated ahead of it.
+ *
+ * Labelled `feed` because that is what its compaction does, not because the label is
+ * obviously right: a grant given once and used once is an audit fact, and past twenty
+ * thousand events it goes. Standing grants are re-stated precisely because losing *those*
+ * would change behaviour, which is the argument for calling the rest a record too.
+ * Deliberately not changed here (INV-634 converts `ingress` and `turns` only) — flagged so
+ * the next person deciding it is deciding rather than inheriting.
+ */
+export const LEDGER_KIND: LedgerKind = "feed";
 
 // ── what can be asked ─────────────────────────────────────────────────────────────────
 

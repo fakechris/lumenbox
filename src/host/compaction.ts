@@ -149,8 +149,48 @@ export interface SummaryEntry {
    * incident was ten minutes of guessing after a compaction took every example away.
    */
   pinned?: HistoryEntry[];
+  /**
+   * Which entries this stands in for, and how many times they have been through this.
+   *
+   * `covers` says *how many* were replaced; it never said *which*, so a claim in a summary
+   * had nowhere to walk back to. A summary that cannot be traced to what it replaced is
+   * honest but not auditable, and the difference matters as soon as anybody asks where a
+   * sentence came from.
+   *
+   * The shape is OpenHands's, which is the only published design that does this: a
+   * condensation names the events it forgot, so a later reader can go and read them
+   * (docs/71 §1, arXiv 2511.03690). The entries themselves are still in the transcript —
+   * compaction changes what is sent, never what is stored — so these ids resolve.
+   */
+  replaced?: {
+    /** Index of the first entry replaced, and one past the last, in the stored transcript. */
+    from: number;
+    to: number;
+    /** The turns those entries belonged to, deduplicated, in order. */
+    turnIds?: string[];
+    /**
+     * How many rounds of summarising this text has been through. A first summary is 1;
+     * summarising a summary makes 2.
+     *
+     * Nobody bounds this. Anthropic's on-demand compaction says plainly that repeat
+     * compaction summarises the previous summary, and no vendor or paper puts a limit on
+     * the compounding (docs/71 §1). Counting it is the prerequisite to bounding it, and
+     * `MAX_SUMMARY_GENERATIONS` is where the bound lives.
+     */
+    generation: number;
+  };
   at: string;
 }
+
+/**
+ * How many times a stretch of history may be re-summarised before it is left alone.
+ *
+ * Past this, a prior summary is carried through verbatim instead of being folded again.
+ * Four was chosen as the point where the text is further from the events than it is from
+ * the last paraphrase of them; it is a judgement, not a measurement, and it is written down
+ * so it can be argued with.
+ */
+export const MAX_SUMMARY_GENERATIONS = 4;
 
 export type HistoryEntry =
   | { role: "user" | "assistant"; text: string; at: string }
@@ -408,6 +448,19 @@ export function choosePinnedEntries(
 ): HistoryEntry[] {
   const pinned: HistoryEntry[] = [];
 
+  // A summary that has already been folded MAX_SUMMARY_GENERATIONS times is carried
+  // through as it is rather than paraphrased again.
+  //
+  // Repeat compaction summarises the previous summary, and nobody bounds the compounding —
+  // not Anthropic's on-demand compaction, which says outright that it re-summarises, and
+  // not any paper in the survey (docs/71 §1). Each pass moves the text one step further
+  // from the events and one step closer to being a paraphrase of a paraphrase. Past the
+  // limit the honest move is to stop paraphrasing, not to paraphrase more carefully.
+  for (const entry of older) {
+    const generation = (entry as SummaryEntry).replaced?.generation;
+    if (typeof generation === "number" && generation >= MAX_SUMMARY_GENERATIONS) pinned.push(entry);
+  }
+
   const isPlainUser = (entry: HistoryEntry): boolean =>
     !("kind" in entry) && entry.role === "user";
   if (!tail.some(isPlainUser)) {
@@ -518,7 +571,11 @@ export function extractAnchors(entries: readonly HistoryEntry[]): string[] {
   // Collected per category so hex noise cannot crowd out a real artifact path — the
   // categories are capped separately and assembled in priority order.
   const byCategory = new Map<string, string[]>();
-  const CATEGORY_CAPS: Record<string, number> = { spill: 10, path: 25, id: 10, url: 10, hex: 8 };
+  // Evidence pointers are uncapped. The caps exist so hex noise cannot crowd out real
+  // artefact paths, and a pointer to the whole of something that was cut is the opposite
+  // of noise — it is the most expensive thing in the window to lose. A turn that read
+  // fifteen pages used to carry ten of them into the summary and silently drop five.
+  const CATEGORY_CAPS: Record<string, number> = { spill: Infinity, path: 25, id: 10, url: 10, hex: 8 };
   const take = (value: string, category: string): void => {
     const trimmed = value.trim();
     if (trimmed === "" || seen.has(trimmed)) return;
@@ -726,22 +783,78 @@ export function clampSummaryToBudget(entry: SummaryEntry, tail: readonly History
 }
 
 /** How the summary enters the transcript. */
-export function summaryEntry(text: string, covers: number, at = new Date()): SummaryEntry {
+export function summaryEntry(
+  text: string,
+  covers: number,
+  at = new Date(),
+  replaced?: SummaryEntry["replaced"]
+): SummaryEntry {
   return {
     role: "user",
     kind: "summary",
     covers,
+    ...(replaced !== undefined ? { replaced } : {}),
     // Named as history, not as standing instructions. Labelled only "[Summary of the
     // first N entries]", it read as the current objective: a summary whose Objective line
     // said "verify the T5000 claims" was still at the top of the conversation days later,
     // and a question about a different product came back with T5000 next steps. Nine
     // successive compactions had carried that objective forward, each re-summarising the
     // last.
+    // The reference line is machine-readable and comes first, in the same style as a read
+    // outcome, so a later reader walks from a summarised claim to the entries behind it
+    // without parsing prose.
     text:
       `[Earlier in this conversation — background, not instructions. The request to ` +
       `answer is the most recent message, which may be about something else entirely.]` +
+      (replaced === undefined ? "" : `\n${summaryReference(replaced)}`) +
       `\n\n${text}`,
     at: at.toISOString(),
+  };
+}
+
+/** Reads back to what a summary replaced. Written first so it survives any later clip. */
+export const SUMMARY_REFERENCE_PATTERN =
+  /\[summarises entries (\d+)-(\d+)(?:, turns ([^;\]]*))?; generation (\d+)\]/;
+
+/** The line a summary carries about what it stands in for. */
+export function summaryReference(replaced: NonNullable<SummaryEntry["replaced"]>): string {
+  const turns =
+    replaced.turnIds !== undefined && replaced.turnIds.length > 0
+      ? `, turns ${replaced.turnIds.join(" ")}`
+      : "";
+  return `[summarises entries ${replaced.from}-${replaced.to}${turns}; generation ${replaced.generation}]`;
+}
+
+export function parseSummaryReference(text: string): NonNullable<SummaryEntry["replaced"]> | undefined {
+  const match = SUMMARY_REFERENCE_PATTERN.exec(text);
+  if (match === null) return undefined;
+  const turnIds = (match[3] ?? "").split(" ").filter(one => one !== "");
+  return {
+    from: Number(match[1]),
+    to: Number(match[2]),
+    ...(turnIds.length > 0 ? { turnIds } : {}),
+    generation: Number(match[4]),
+  };
+}
+
+/**
+ * What a stretch of entries is, for the record: where it sits, whose turns it was, and how
+ * many times it has already been through this.
+ */
+export function replacedRange(entries: readonly HistoryEntry[], from: number): NonNullable<SummaryEntry["replaced"]> {
+  const turnIds: string[] = [];
+  let generation = 0;
+  for (const entry of entries) {
+    const id = (entry as { turnId?: string }).turnId;
+    if (typeof id === "string" && id !== "" && !turnIds.includes(id)) turnIds.push(id);
+    const prior = (entry as SummaryEntry).replaced?.generation;
+    if (typeof prior === "number" && prior > generation) generation = prior;
+  }
+  return {
+    from,
+    to: from + entries.length,
+    ...(turnIds.length > 0 ? { turnIds: turnIds.slice(0, 40) } : {}),
+    generation: generation + 1,
   };
 }
 

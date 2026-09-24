@@ -1,9 +1,17 @@
 {
   "$schema": "https://biomejs.dev/schemas/2.3.14/schema.json",
   "files": {
-    "includes": ["src/**/*.ts", "scripts/**/*.mjs"]
+    "includes": [
+      "src/**/*.ts",
+      "scripts/**/*.mjs",
+      "!**/.venv/**",
+      "!**/node_modules/**",
+      "!**/site-packages/**"
+    ]
   },
-  "formatter": { "enabled": false },
+  "formatter": {
+    "enabled": false
+  },
   "linter": {
     "enabled": true,
     "rules": {

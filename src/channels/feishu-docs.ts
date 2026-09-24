@@ -15,6 +15,8 @@
  * Same lazy-SDK discipline as the channel: nothing loads until a read is asked for.
  */
 
+import { withReadOutcome } from "../host/read-outcome.ts";
+
 /** What a Feishu URL points at, as much as the URL alone can say. */
 export interface ParsedDocUrl {
   kind: "docx" | "wiki" | "docs" | "sheets" | "base" | "file" | "minutes";
@@ -153,18 +155,27 @@ export class FeishuDocReader {
       ]);
       const content = raw.data?.content ?? "";
       const title = meta?.data?.document?.title;
-      const cut =
-        content.length > DOC_CONTENT_LIMIT
-          ? `${content.slice(0, DOC_CONTENT_LIMIT)}\n\n[文档过长,已截断:共 ${content.length} 字,显示前 ${DOC_CONTENT_LIMIT} 字]`
-          : content;
+      const clipped = content.length > DOC_CONTENT_LIMIT;
+      const cut = clipped ? content.slice(0, DOC_CONTENT_LIMIT) : content;
       const heading = [title !== undefined ? `# ${title}` : undefined, `Source: ${url}`]
         .filter(Boolean)
         .join("\n");
-      return { text: `${heading}\n\n${cut}` };
+      // The shape goes first, in the same words every other reader uses (read-outcome.ts):
+      // a note at the bottom is the first thing the transcript's cut throws away.
+      return {
+        text: withReadOutcome(
+          {
+            completeness: clipped ? "clipped" : "full",
+            shape: { chars: cut.length, ...(clipped ? { totalChars: content.length } : {}) },
+            ...(clipped ? { hint: "export the document and send it as a file to read the rest" } : {}),
+          },
+          `${heading}\n\n${cut}`
+        ),
+      };
     } catch (error) {
       const detail = error instanceof Error ? error.message : String(error);
       return {
-        text: `读取失败:${detail}\n${SHARE_ADVICE}`,
+        text: withReadOutcome({ completeness: "unavailable" }, `读取失败:${detail}\n${SHARE_ADVICE}`),
         isError: true,
       };
     }

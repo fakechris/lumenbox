@@ -25,7 +25,7 @@
  */
 
 import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
-import { appendLine } from "./jsonl.ts";
+import { appendLine, archiveSettled, type LedgerKind } from "./jsonl.ts";
 import { dirname, join } from "node:path";
 import { agentboxHome, envNumber } from "../config.ts";
 
@@ -43,6 +43,14 @@ export function turnLedgerPath(): string {
  * "this turn is what kills it".
  */
 export const MAX_RESUMES = envNumber("AGENTBOX_MAX_RESUMES", 2);
+
+/**
+ * The life of every turn, and it is not a queue either.
+ *
+ * Emptying this file is emptying the only place that says what a turn cost, how long it
+ * ran, which model and prompt produced it, and how it ended. See `compact()`.
+ */
+export const LEDGER_KIND: LedgerKind = "record";
 
 /** Rewritten past this many lines, keeping only what is unfinished. */
 const COMPACT_AT = envNumber("AGENTBOX_TURN_LEDGER_COMPACT_AT", 5_000);
@@ -93,6 +101,27 @@ interface EndRecord {
   how: string;
   /** The failure class, when `how` is failed (failure-taxonomy.ts). */
   category?: string;
+  /**
+   * What this turn read and kept, as the self-describing pointers say it (INV-659, INV-665).
+   *
+   * The link only went one way. A kept file's frontmatter names the turn that read it, so
+   * *file to turn* resolved; nothing answered *turn to files*, and the only way to ask was
+   * to walk every month of the evidence store filtering on `turn_id` — linear in everything
+   * ever kept, and blind to whatever the retention had already taken.
+   *
+   * It lives here rather than in a new ledger because `turns.jsonl` is a `record` since
+   * INV-634: it archives instead of emptying, which is exactly what an edge between a turn
+   * and its evidence needs. A new ledger would have been a second thing to keep honest.
+   */
+  evidence?: KeptEvidence[];
+}
+
+/** One thing a turn read and kept. The fields a pointer carries, parsed once at write time. */
+export interface KeptEvidence {
+  path: string;
+  sha256: string;
+  chars: number;
+  at: string;
 }
 
 /**
@@ -191,9 +220,35 @@ export class TurnLedger {
   }
 
   /** Records that a turn is over, however it ended. */
-  end(id: string, how: string, now = new Date(), category?: string): void {
-    this.append({ id, event: "end", at: now.toISOString(), how, ...(category !== undefined ? { category } : {}) });
+  end(id: string, how: string, now = new Date(), category?: string, evidence?: readonly KeptEvidence[]): void {
+    this.append({
+      id,
+      event: "end",
+      at: now.toISOString(),
+      how,
+      ...(category !== undefined ? { category } : {}),
+      ...(evidence !== undefined && evidence.length > 0 ? { evidence: [...evidence] } : {}),
+    });
     if (this.lines > COMPACT_AT && this.interrupted().length === 0) this.compact();
+  }
+
+  /**
+   * Everything the turns in this file say they read and kept, newest first.
+   *
+   * Live file only. An archived turn's evidence has almost certainly outlived the retention
+   * on the thing it points at, and the pointer's own digest is what still describes it
+   * (INV-659) — reading months of archive to find references to files that are gone would
+   * cost a great deal to learn nothing.
+   */
+  evidence(): { turnId: string; at: string; kept: KeptEvidence[] }[] {
+    const out: { turnId: string; at: string; kept: KeptEvidence[] }[] = [];
+    for (const record of this.read()) {
+      const kept = (record as EndRecord).evidence;
+      if (record.event === "end" && kept !== undefined && kept.length > 0) {
+        out.push({ turnId: record.id, at: record.at, kept });
+      }
+    }
+    return out.reverse();
   }
 
   /**
@@ -274,6 +329,16 @@ export class TurnLedger {
     }
   }
 
+  /** The live file's lines, as written. What `compact()` hands to the archive. */
+  private readLines(): string[] {
+    if (this.path === undefined || !existsSync(this.path)) return [];
+    try {
+      return readFileSync(this.path, "utf8").split("\n").filter(line => line.trim() !== "");
+    } catch {
+      return [];
+    }
+  }
+
   private read(): LedgerRecord[] {
     if (this.path === undefined || !existsSync(this.path)) return [];
     try {
@@ -299,10 +364,22 @@ export class TurnLedger {
     }
   }
 
-  /** Rewrites the file empty. Only called with nothing outstanding, so nothing is being discarded. */
+  /**
+   * Moves the file to an archive and starts a fresh one.
+   *
+   * It used to write the file empty on the reasoning that nothing outstanding means
+   * nothing is being discarded — true of *resumption*, which is what this ledger was
+   * built for, and false of everything else that reads it. This is the only record of
+   * what a turn cost, how long it took, which model and which prompt produced it, and how
+   * it ended; after five thousand turns all of that went, and the audit export for last
+   * month exported a file that had been emptied since.
+   *
+   * Only called with nothing outstanding, so every line being moved is a settled one.
+   */
   private compact(): void {
     if (this.path === undefined) return;
     try {
+      archiveSettled(this.path, this.readLines());
       const temp = `${this.path}.${process.pid}.tmp`;
       writeFileSync(temp, "", "utf8");
       renameSync(temp, this.path);

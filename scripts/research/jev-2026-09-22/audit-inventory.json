@@ -1,0 +1,29 @@
+{
+  "source": "~/.agentbox/policy.jsonl",
+  "sourceSha256": "1b5377a13d1f7734156c24cf98bbbb853bcc67faddedc1c791f60b49b6cd0332",
+  "rows": 494,
+  "toolCounts": {
+    "read_file": 5,
+    "list_dir": 1,
+    "edit_file": 3,
+    "bash": 17,
+    "WebSearch": 82,
+    "WebFetch": 82,
+    "Tasks": 7,
+    "SetTodos": 45,
+    "write_file": 31,
+    "Write": 1
+  },
+  "shellEvents": 17,
+  "uniqueShellCommands": 16,
+  "binaryCounts": {
+    "ls": 13,
+    "grep": 3,
+    "curl": 1
+  },
+  "scope": "single local host policy log; not all boxes or all agent activity",
+  "rawCommandsExported": false,
+  "rawCommandsSentToProvider": false,
+  "humanAdjudicated": false,
+  "satisfies50RealCommands": false
+}

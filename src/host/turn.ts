@@ -74,9 +74,14 @@ import {
   summaryEntry,
   clampSummaryToBudget,
   type HistoryEntry,
+  replacedRange,
   type SummaryEntry,
 } from "./compaction.ts";
 import { DURABLE_RESULT_CHARS, type ResolutionConfig } from "../protocol/index.ts";
+import type { KeptEvidence } from "./resume.ts";
+import { keepToolResult, readKeptSources, RESULT_KEPT_MARKER } from "./results.ts";
+import { keptPointer, parseKeptPointer } from "./fetched.ts";
+import { checkQuotes, quoteReportLine } from "./quote-check.ts";
 import type { BoxClass } from "../box/access.ts";
 import { emptySectionFaults, buildSystemPromptParts, buildTurnPrompt,
   turnReminderFor,
@@ -721,6 +726,17 @@ export type TranscriptEntry =
 /** Shared with the box, which spills to a file before this cut loses anything. */
 const REPLAYED_RESULT_LIMIT = DURABLE_RESULT_CHARS;
 
+/** What `storableResult` needs in order to file a result it had to cut (results.ts). */
+export interface KeepContext {
+  turnId: string;
+  agent: { id: string; name: string };
+  tool?: string;
+  conversation?: string;
+  /** The box's home. Left to the default in production; set by tests. */
+  home?: string;
+  at?: Date;
+}
+
 /**
  * Strips a tool result down for storage.
  *
@@ -735,7 +751,13 @@ export function storableResult(
    * What to store instead, when a tool said the record and the model must see different
    * things. Only `RunOnHost` with vault secrets does — see `ToolOutcome.recordAs`.
    */
-  recordAs?: string
+  recordAs?: string,
+  /**
+   * Who and when, so the cut can keep what it cuts (results.ts). Absent means do not
+   * keep — the tests that only care about the trimming pass nothing, and so does any
+   * caller that has no turn to file the text under.
+   */
+  keep?: KeepContext
 ): Anthropic.ToolResultBlockParam {
   if (recordAs !== undefined) {
     // Not truncated and not scanned for a spill pointer: this text was written to be
@@ -775,6 +797,39 @@ export function storableResult(
     // page it kept (fetched.ts). Both pointers are worth carrying.
     const pointer = whole.slice(text.length).match(/\[[^\]]*full (?:output|page) kept:[^\]]*\]/);
     if (pointer !== null) text += `\n${pointer[0]}`;
+    // Nobody kept it, so the cut does. Everything without a spill of its own used to end
+    // here — the whole of a long browser read, a long document, an MCP server's answer —
+    // and the record kept the first two thousand characters of it with nothing saying
+    // there had been more. A failure to file is said in place of the pointer rather than
+    // thrown: the turn happened either way, and a turn is not lost over a full disk.
+    else if (keep !== undefined) {
+      // One instant for the file's frontmatter and for the pointer describing it.
+      const keptAt = keep.at ?? new Date();
+      try {
+        const kept = keepToolResult(
+          {
+            text: whole,
+            turnId: keep.turnId,
+            toolUseId: block.tool_use_id,
+            ...(keep.tool !== undefined ? { tool: keep.tool } : {}),
+            agent: keep.agent,
+            ...(keep.conversation !== undefined ? { conversation: keep.conversation } : {}),
+            ...(block.is_error === true ? { isError: true } : {}),
+            at: keptAt,
+          },
+          keep.home
+        );
+        text += `\n${keptPointer({
+          marker: RESULT_KEPT_MARKER,
+          path: kept.path,
+          sha256: kept.sha256,
+          chars: whole.length,
+          at: keptAt,
+        })}`;
+      } catch (error) {
+        text += `\n[could not keep the whole result: ${error instanceof Error ? error.message : error}]`;
+      }
+    }
   }
   if (imageCount > 0) {
     text += `\n[${imageCount} screenshot(s) were attached and shown at the time]`;
@@ -888,7 +943,7 @@ async function summarise(
   if (anchors.length > 0) {
     text += `\n\n**Exact references (mechanically extracted — trust these over the prose above):**\n${anchors.join("\n")}`;
   }
-  return summaryEntry(text, covers);
+  return summaryEntry(text, covers, new Date(), replacedRange(entries, 0));
 }
 
 /**
@@ -1116,6 +1171,9 @@ export async function compactHistory(options: {
     // Loud, and told to the model: the alternative was a request that cannot fit, and the
     // alternative to that was dropping history with no trace of it having happened.
     entry = droppedEntry(cut.index, reason);
+    // Even a failed summarisation says what it stood in for. "These entries were dropped"
+    // is a poor record; "entries 0 to 340 of turns … were dropped" is a usable one.
+    entry = { ...entry, replaced: replacedRange(history.slice(0, cut.index), 0) };
     // Insurance matters *more* when the summary failed: the dropped marker carries the
     // pinned ask and tool exemplars even though it carries no narrative.
     const pinnedEntries = choosePinnedEntries(olderEntries, active.slice(cut.index));
@@ -1328,11 +1386,39 @@ export async function runTurn(
       // is that person's cost, and billing it to nobody made per-principal totals read low.
       ...(deps.caller?.userId !== undefined ? { principal: deps.caller.userId } : {}),
     });
+  // What this turn read and kept, gathered as it goes.
+  //
+  // Read off the stored results rather than plumbed out of the tools, because both kinds of
+  // pointer — a kept page and a kept tool result — are already in the text `storableResult`
+  // hands back, in one shape with one parser since INV-659. One place to collect, and no
+  // tool has to know this edge exists.
+  const keptThisTurn: KeptEvidence[] = [];
+  const noteKept = (blocks: readonly Anthropic.ToolResultBlockParam[]): void => {
+    for (const block of blocks) {
+      const content = Array.isArray(block.content) ? block.content : [];
+      for (const part of content) {
+        if (part.type !== "text") continue;
+        const pointer = parseKeptPointer(part.text);
+        if (pointer === undefined) continue;
+        if (keptThisTurn.some(one => one.path === pointer.path)) continue;
+        keptThisTurn.push({
+          path: pointer.path,
+          sha256: pointer.sha256,
+          chars: pointer.chars,
+          at: pointer.at.toISOString(),
+        });
+      }
+    }
+  };
+
+  /** The quote gate fires at most once: it is a check, not a negotiation. */
+  let quotesChecked = false;
+
   let ended = false;
   const finish = (how: string, category?: FailureCategory) => {
     if (ended) return;
     ended = true;
-    deps.turns?.end(turnId, how, new Date(), category);
+    deps.turns?.end(turnId, how, new Date(), category, keptThisTurn);
   };
 
   // Which memories survive the budget, decided by a model only when the budget forces a choice.
@@ -2313,6 +2399,41 @@ export async function runTurn(
         continue;
       }
 
+      // The quote gate (INV-660, wired up here by INV-665): anything this turn put in
+      // quotation marks is checked against what this turn actually read, before the person
+      // sees it. Once per turn, and silent when every quote is the source's own wording —
+      // a gate that speaks on success is a gate people stop reading.
+      //
+      // It runs here rather than after delivery because the useful moment is while the
+      // sentence can still be reworded. What it says is never an accusation: a quote that
+      // is not found may be a paraphrase, a translation, or a quote from something read in
+      // an earlier turn, and the wording says so.
+      if (finalText.trim() && !quotesChecked && keptThisTurn.length > 0) {
+        quotesChecked = true;
+        const report = checkQuotes(finalText, readKeptSources(keptThisTurn));
+        const line = quoteReportLine(report);
+        if (line !== undefined) {
+          console.error(
+            `[conduct] ${agent.profile.name}: quote gate — ${report.exact} exact, ${report.near} near, ${report.notLocated} not found`
+          );
+          registry.appendTranscript(agent.id, {
+            role: "assistant",
+            kind: "blocks",
+            blocks: response.content.filter((block): block is Anthropic.TextBlock => block.type === "text"),
+            at: new Date().toISOString(),
+            turnId,
+          } satisfies TranscriptEntry, conversation);
+          messages.push({
+            role: "user",
+            content:
+              `${line}\n\nFix the quotation marks, not the finding: if a sentence is your wording ` +
+              `rather than the source's, say it without the marks. Then give the answer again.`,
+          });
+          finishing = false;
+          continue;
+        }
+      }
+
       // The closing send (Grok Bot's `turnEndedOnSilentToolCalls`, docs/31 layer 1b): the
       // person saw the opening line, then tools ran, then nothing. Once.
       if (!finalText.trim() && personOpened && interimDelivered && !closingNudged && guardsEnabled()) {
@@ -2624,6 +2745,9 @@ export async function runTurn(
       });
       at = until;
     }
+    // Which call was which, so a kept result says what produced it. The block carries the
+    // id and not the name; the name is only here, in the calls that were made.
+    const toolNames = new Map(toolUses.map(use => [use.id, use.name] as const));
     for (const entry of done) {
       if (entry === undefined) continue;
       results.push(entry.block);
@@ -2646,10 +2770,19 @@ export async function runTurn(
       at: requestedAt,
       turnId,
     } satisfies TranscriptEntry, conversation);
+    const storedResults = results.map(block =>
+      storableResult(block, withheld.get(block.tool_use_id), {
+        turnId,
+        agent: { id: agent.id, name: agent.profile.name },
+        ...(toolNames.get(block.tool_use_id) !== undefined ? { tool: toolNames.get(block.tool_use_id)! } : {}),
+        ...(conversation !== undefined ? { conversation } : {}),
+      })
+    );
+    noteKept(storedResults);
     registry.appendTranscript(agent.id, {
       role: "user",
       kind: "results",
-      blocks: results.map(block => storableResult(block, withheld.get(block.tool_use_id))),
+      blocks: storedResults,
       at: new Date().toISOString(),
       turnId,
     } satisfies TranscriptEntry, conversation);

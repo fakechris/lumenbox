@@ -2120,6 +2120,7 @@ export const ALL_TOOLS: readonly string[] = [
   "SetPlan",
   "SetTodos",
   "ReadHistory",
+  "ReadKept",
   "ClaimWork",
   "RememberFact",
   "Recall",

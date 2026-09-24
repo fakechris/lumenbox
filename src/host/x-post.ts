@@ -655,11 +655,37 @@ export interface XFetchDeps {
   keepUnder?: string | null;
 }
 
+/**
+ * Both resolvers failed. The post may be perfectly fine.
+ *
+ * Its own class because the difference matters to the caller and the old code could not
+ * express it: a tombstone — deleted, suspended, private — is a post that is not there, and
+ * `unavailable` is the right word for it. Two APIs we do not run being unreachable is not
+ * that. It used to report the same word, which made a vendor outage read as "this thing
+ * does not exist", and `unavailable` is only worth having as a word if it is true.
+ *
+ * Measured on the real page (docs/69 §2.2): a plain fetch of an x.com status page returns
+ * 6,434 characters carrying 82% of the linked article, behind the sign-in furniture. So
+ * there is a third route, and the caller is expected to take it.
+ */
+export class XResolversUnavailable extends WebError {
+  constructor(
+    message: string,
+    readonly ref: XStatusRef
+  ) {
+    super(message, "unavailable");
+  }
+}
+
 export interface XFetchResult {
   post: XPost;
   markdown: string;
-  /** Where the raw answer and the rendering were written, when they were. */
-  kept?: { dir: string; raw: string; markdown: string };
+  /**
+   * Where the raw answer and the rendering were written, when they were, and a digest of
+   * the rendering — so the pointer in the transcript can describe its own target after the
+   * target is pruned (fetched.ts, INV-659).
+   */
+  kept?: { dir: string; raw: string; markdown: string; sha256: string; at: string };
 }
 
 async function fetchJson(url: string, open: XFetchDeps["open"]): Promise<{ raw: string; parsed: unknown }> {
@@ -724,9 +750,9 @@ export async function fetchXPost(rawUrl: string, deps: XFetchDeps = {}): Promise
       post = { ...post, note: `${post.note ?? ""} FxTwitter could not be reached: ${failures.join("; ")}`.trim() };
     } catch (error) {
       failures.push(`syndication: ${error instanceof Error ? error.message : error}`);
-      throw new WebError(
-        `Could not read ${ref.canonical} from either source.\n${failures.join("\n")}\n` +
-          "Open it with browser_open if it must be read now; the box's browser may get through."
+      throw new XResolversUnavailable(
+        `Could not read ${ref.canonical} from either source.\n${failures.join("\n")}`,
+        ref
       );
     }
   }
@@ -743,5 +769,9 @@ export async function fetchXPost(rawUrl: string, deps: XFetchDeps = {}): Promise
   const markdown = renderXPost(post, { fetchedAt, rawSha256: rawSha, keptIn: dir });
   writeFileSync(rawPath, raw, "utf8");
   writeFileSync(markdownPath, markdown, "utf8");
-  return { post, markdown, kept: { dir, raw: rawPath, markdown: markdownPath } };
+  return {
+    post,
+    markdown,
+    kept: { dir, raw: rawPath, markdown: markdownPath, sha256: sha256(markdown), at: fetchedAt },
+  };
 }

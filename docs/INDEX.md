@@ -43,7 +43,7 @@ this file and the headers disagree. Edit the header, not this table.
 | [38-operators-guide](38-operators-guide.md) | The operator's guide (what the README used to be) | current | 2026-09-07 |
 | [55-external-desktops](55-external-desktops.md) | External browsers and desktop control | current | 2026-09-15 |
 | [56-teaching-upgrade](56-teaching-upgrade.md) | Teaching draft upgrade | current | 2026-09-15 |
-| [63-cua-linux-validation](63-cua-linux-validation.md) | Linux CUA 回归矩阵与状态验收 | current | 2026-09-22 |
+| [70-cua-linux-validation](70-cua-linux-validation.md) | Linux CUA 回归矩阵与状态验收 | current | 2026-09-22 |
 
 ## decision
 
@@ -92,6 +92,15 @@ this file and the headers disagree. Edit the header, not this table.
 | [60-ovp-bridge-design](60-ovp-bridge-design.md) | OVP 接入程序（ovp-bridge）详细方案：哪个 vault、什么触发、保证什么 | superseded by [61-ovp-bridge-design-v2](61-ovp-bridge-design-v2.md) — §15 复审后按九项修订重写；第二版一个 id 贯穿、每个对象有终态、对 OVP 只提通用改动 | 2026-09-19 |
 | [61-ovp-bridge-design-v2](61-ovp-bridge-design-v2.md) | OVP 接入程序第二版：一个 id 贯穿、每个输入有终态、对 OVP 只提通用改动 | current | 2026-09-20 |
 | [62-cua-driver-research](62-cua-driver-research.md) | CUA 三方研究：执行合同、依赖取舍与渐进改造 | current | 2026-09-22 |
+| [63-jev-integration-research](63-jev-integration-research.md) | Jev 接入研究：先改善记忆与交付判断，再考虑执行加速 | current | 2026-09-22 |
+| [64-jev-memory-evaluation](64-jev-memory-evaluation.md) | Jev 第二轮研究：记忆实测、召回边界与可替换判断接口 | current | 2026-09-22 |
+| [65-context-recovery-design](65-context-recovery-design.md) | 上下文恢复方案（提案）：新会话、干净会话与任务重建 | current | 2026-09-22 |
+| [66-awesome-jev-lumenbox-opportunities](66-awesome-jev-lumenbox-opportunities.md) | Awesome Jev 全域研究：LumenBox 业务角色、运行时与 CUA 的结合点 | current | 2026-09-22 |
+| [67-jev-business-pilot](67-jev-business-pilot.md) | Jev 业务判断实测：引用检查、资料筛选与线索边界 | current | 2026-09-22 |
+| [68-jev-report-audit](68-jev-report-audit.md) | Jev 研究报告复核：证据边界与只读引用审查合同 | current | 2026-09-22 |
+| [69-fidelity-and-evidence-root-causes](69-fidelity-and-evidence-root-causes.md) | 采集失真与证据蒸发：两类问题的根因、复发路径与卡口 | current | 2026-09-22 |
+| [71-evidence-provenance-practice](71-evidence-provenance-practice.md) | 证据与溯源的业界实践（2025–2026）：我们领先在哪、缺在哪 | current | 2026-09-22 |
+| [72-laya-vs-jev-language-evaluation](72-laya-vs-jev-language-evaluation.md) | laya 与 Jev 的中英文对比实测：差距在任务类型，不在语言 | current | 2026-09-23 |
 
 ## handoff
 
@@ -104,5 +113,7 @@ this file and the headers disagree. Edit the header, not this table.
 | [handoff-2026-09-02](handoff-2026-09-02.md) | Handoff, 2026-09-02 | current | 2026-09-02 |
 | [handoff-2026-09-15-involute-agent-threads](handoff-2026-09-15-involute-agent-threads.md) | Handoff — Involute 侧：agent 身份与工作项上的对话 | current | 2026-09-15 |
 | [handoff-2026-09-22-cua-fixes](handoff-2026-09-22-cua-fixes.md) | CUA 修复实施与验收记录 | current | 2026-09-22 |
+| [handoff-2026-09-22-deployment-queue-review](handoff-2026-09-22-deployment-queue-review.md) | Handoff — Nova 修复部署与 INV 队列复发风险审查 | current | 2026-09-22 |
 | [handoff-2026-09-22-nova-incident](handoff-2026-09-22-nova-incident.md) | Handoff — Nova 请求混入旧任务与研究叙述复播的运行调查 | current | 2026-09-22 |
+| [handoff-2026-09-22-post207-answer-quality-review](handoff-2026-09-22-post207-answer-quality-review.md) | Handoff — PR 207 部署后回答质量复审与防复发方案 | current | 2026-09-22 |
 | [handoff-2026-09-22-request-ownership-fix](handoff-2026-09-22-request-ownership-fix.md) | Handoff — 吞单边界修复与 INV 合同校正 | current | 2026-09-22 |

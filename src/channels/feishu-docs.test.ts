@@ -9,6 +9,7 @@
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
+import { parseReadOutcome } from "../host/read-outcome.ts";
 import { FeishuDocReader, parseDocUrl, type DocApiClient } from "./feishu-docs.ts";
 
 test("URLs parse to what they name, and only Feishu documents parse at all", () => {
@@ -48,10 +49,14 @@ function reader(client: DocApiClient): FeishuDocReader {
   return new FeishuDocReader("app", "secret", async () => client);
 }
 
-test("a docx link reads as title, source and content", async () => {
+test("a docx link reads as title, source and content, under the line every read leads with", async () => {
   const result = await reader(fakeClient()).read("https://acme.feishu.cn/docx/AbCd1234EfGh5678");
   assert.equal(result.isError, undefined);
-  assert.match(result.text, /^# Q3 报表说明\nSource: https:\/\/acme\.feishu\.cn\/docx\/AbCd1234EfGh5678\n\n第一行/);
+  assert.equal(parseReadOutcome(result.text)?.completeness, "full");
+  assert.match(
+    result.text,
+    /^\[read: full — 10 chars\]\n\n# Q3 报表说明\nSource: https:\/\/acme\.feishu\.cn\/docx\/AbCd1234EfGh5678\n\n第一行/
+  );
 });
 
 test("a wiki link resolves to the document it wraps", async () => {
@@ -111,12 +116,16 @@ test("an API failure names the fix: share the document with the bot", async () =
   assert.match(result.text, /分享.*机器人|机器人.*协作者/);
 });
 
-test("a long document is cut and says so", async () => {
+test("a long document is cut, and says how much of how much in its first line", async () => {
   const client = fakeClient();
   client.docx.document.rawContent = async () => ({ data: { content: "字".repeat(40_000) } });
   const result = await reader(client).read("https://acme.feishu.cn/docx/AbCd1234EfGh5678");
   assert.ok(result.text.length < 32_000);
-  assert.match(result.text, /已截断/);
+  // Was a Chinese sentence at the end of the result, which is the first thing the
+  // transcript's cut removes (INV-632). Now it is the head, in the shared vocabulary.
+  assert.equal(parseReadOutcome(result.text)?.completeness, "clipped");
+  assert.match(result.text, /^\[read: clipped — 30,000 of 40,000 chars; /);
+  assert.match(result.text, /export the document and send it as a file/);
 });
 
 test("a non-document URL is refused with directions, not fetched", async () => {

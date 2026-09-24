@@ -17,7 +17,9 @@
 
 import { existsSync, mkdirSync, readFileSync, readdirSync, statSync, writeFileSync } from "node:fs";
 import { join, relative as relativeTo } from "node:path";
-import { FETCHED_DIRNAME, readFrontmatter } from "./fetched.ts";
+import { FETCHED_DIRNAME, readFrontmatter, verifyKept } from "./fetched.ts";
+import { RESULTS_DIRNAME } from "./results.ts";
+import { archivedLines } from "./jsonl.ts";
 import type { AgentRegistry } from "../agents/registry.ts";
 import { CONVERSATIONS_DIRNAME, conversationIdFor, TRANSCRIPT_FILENAME } from "../agents/registry.ts";
 import { CREDENTIAL_PATTERNS, MIN_EXACT_LENGTH } from "./secret-scan.ts";
@@ -56,6 +58,21 @@ export interface ExportManifest {
    * so a reader of the ledgers does not try to parse prose as JSON.
    */
   fetched?: Record<string, number>;
+  /**
+   * Tool results too long for the transcript, kept whole at the cut (results.ts), in the
+   * same form and for the same reason as `fetched`. This is where the answer to "what did
+   * that call actually return" lives once the transcript has only its first two thousand
+   * characters.
+   */
+  results?: Record<string, number>;
+  /**
+   * Whether the evidence in this export is still what it said it was (INV-659).
+   *
+   * Every kept file carries a digest of its own body, and until now nothing read it back.
+   * An export that carries a quietly corrupted page out as evidence is worse than one that
+   * carries nothing, so the check runs and its result travels with the files.
+   */
+  evidence?: { verified: number; mismatched: number; failures: string[] };
 }
 
 function readLines(path: string): string[] {
@@ -67,6 +84,17 @@ function readLines(path: string): string[] {
   } catch {
     return [];
   }
+}
+
+/**
+ * A `record` ledger's lines, archives first, then the live file (jsonl.ts).
+ *
+ * A record's compaction moves settled lines aside rather than dropping them, so the live
+ * file alone is only the recent tail — and an export asked for last month would have found
+ * exactly the lines a compaction had already moved.
+ */
+function readRecord(path: string): string[] {
+  return [...archivedLines(path), ...readLines(path)];
 }
 
 /** Replaces every held value and every credential-shaped string; counts what it replaced. */
@@ -156,7 +184,12 @@ export function exportAudit(options: ExportOptions): ExportManifest {
   write("auto-review.jsonl", select(readLines(join(options.home, "auto-review.jsonl")), record => byAgentId(record) || (typeof record.agent === "string" && (agentIds.has(record.agent) || agentNames.has(record.agent)))));
   write("vault-audit.jsonl", select(readLines(join(options.home, "vault-audit.jsonl")), byAgentId));
   write("network-events.jsonl", select(readLines(join(options.home, "network-events.jsonl")), record => record.box === box.id || record.box === box.name));
-  write("turns.jsonl", select(readLines(join(options.home, "turns.jsonl")), byAgentId));
+  write("turns.jsonl", select(readRecord(join(options.home, "turns.jsonl")), byAgentId));
+  // Every arrival at a door and what became of it (ingress.ts). Taken by time alone: an
+  // arrival names no agent, because which agent it reaches is decided after it is written.
+  // Both of these are `record` ledgers, so their archives are read as well as their live
+  // files — before INV-634 a compaction had already emptied the month being exported.
+  write("ingress.jsonl", select(readRecord(join(options.home, "ingress.jsonl")), () => true));
   // What people said through the doors, as they said it (messages.ts, INV-613). A message
   // names no agent — the door decides that later — so it is the box's when the
   // conversation it went into belongs to one of the box's agents.
@@ -197,64 +230,89 @@ export function exportAudit(options: ExportOptions): ExportManifest {
   }
   write("messages.jsonl", messageLines);
 
-  // What the agents read. A fetched page is evidence for what was said about it, and it
-  // is kept with the same window and the same redaction as everything else here.
-  const fetched: Record<string, number> = {};
-  const fetchedRoot = join(options.home, FETCHED_DIRNAME);
-  const walkFetched = (dir: string): void => {
-    let names: string[];
-    try {
-      names = readdirSync(dir);
-    } catch {
-      return;
-    }
-    for (const name of names) {
-      const path = join(dir, name);
-      let isDir = false;
+  // What the agents read, and what the tools said. A fetched page is evidence for what was
+  // said about it; a kept result is evidence for what a call returned once the transcript
+  // has only its head. Both are taken with the same window and the same redaction as
+  // everything else here, and both are listed apart from the ledgers because they are
+  // prose rather than records.
+  const walkKept = (
+    root: string,
+    options_: { prefix: string; extension: string; timeKey: string },
+    into: Record<string, number>
+  ): void => {
+    const walk = (dir: string): void => {
+      let names: string[];
       try {
-        isDir = statSync(path).isDirectory();
+        names = readdirSync(dir);
       } catch {
-        continue;
+        return;
       }
-      if (isDir) {
-        walkFetched(path);
-        continue;
+      for (const name of names) {
+        const path = join(dir, name);
+        let isDir = false;
+        try {
+          isDir = statSync(path).isDirectory();
+        } catch {
+          continue;
+        }
+        if (isDir) {
+          walk(path);
+          continue;
+        }
+        if (!name.endsWith(options_.extension)) continue;
+        let text: string;
+        try {
+          text = readFileSync(path, "utf8");
+        } catch {
+          continue;
+        }
+        const head = readFrontmatter(text);
+        // Ours: written for one of this box's agents. A kept X post names no agent (it is
+        // shared by whoever fetched it) and is taken by time alone.
+        const owner = head.agent_id;
+        if (owner !== undefined && !agentIds.has(owner)) continue;
+        const at = head[options_.timeKey];
+        if (at === undefined) {
+          undated += 1;
+          continue;
+        }
+        const inWindow = within(at, from, to);
+        if (inWindow !== true) continue;
+        const relative = join(options_.prefix, relativeTo(root, path));
+        const outPath = join(options.out, relative);
+        mkdirSync(join(outPath, ".."), { recursive: true });
+        const out: string[] = [];
+        for (const line of text.split("\n")) {
+          const redacted = redactLine(line, held);
+          redactions.exact += redacted.exact;
+          redactions.pattern += redacted.pattern;
+          out.push(redacted.text);
+        }
+        const body = out.join("\n");
+        writeFileSync(outPath, body, { mode: 0o600 });
+        into[relative] = Buffer.byteLength(body, "utf8");
       }
-      if (!name.endsWith(".md")) continue;
-      let text: string;
-      try {
-        text = readFileSync(path, "utf8");
-      } catch {
-        continue;
-      }
-      const head = readFrontmatter(text);
-      // Ours: written for one of this box's agents. A kept X post names no agent (it is
-      // shared by whoever fetched it) and is taken by time alone.
-      const owner = head.agent_id;
-      if (owner !== undefined && !agentIds.has(owner)) continue;
-      const at = head.fetched_at;
-      if (at === undefined) {
-        undated += 1;
-        continue;
-      }
-      const inWindow = within(at, from, to);
-      if (inWindow !== true) continue;
-      const relative = join("fetched", relativeTo(fetchedRoot, path));
-      const outPath = join(options.out, relative);
-      mkdirSync(join(outPath, ".."), { recursive: true });
-      const out: string[] = [];
-      for (const line of text.split("\n")) {
-        const redacted = redactLine(line, held);
-        redactions.exact += redacted.exact;
-        redactions.pattern += redacted.pattern;
-        out.push(redacted.text);
-      }
-      const body = out.join("\n");
-      writeFileSync(outPath, body, { mode: 0o600 });
-      fetched[relative] = Buffer.byteLength(body, "utf8");
-    }
+    };
+    walk(root);
   };
-  walkFetched(fetchedRoot);
+
+  const fetched: Record<string, number> = {};
+  walkKept(
+    join(options.home, FETCHED_DIRNAME),
+    { prefix: "fetched", extension: ".md", timeKey: "fetched_at" },
+    fetched
+  );
+  const results: Record<string, number> = {};
+  walkKept(
+    join(options.home, RESULTS_DIRNAME),
+    { prefix: "results", extension: ".txt", timeKey: "at" },
+    results
+  );
+
+  // Checked on the way out, over the same two stores the export just walked. A mismatch is
+  // reported rather than thrown: an operator asking for an audit needs the export *and* the
+  // bad news, not an error instead of both.
+  const evidence = verifyKept(options.home);
 
   const manifest: ExportManifest = {
     format: "agentbox-audit-export/1",
@@ -267,6 +325,16 @@ export function exportAudit(options: ExportOptions): ExportManifest {
     undated,
     redactions,
     ...(Object.keys(fetched).length > 0 ? { fetched } : {}),
+    ...(Object.keys(results).length > 0 ? { results } : {}),
+    ...(evidence.verified + evidence.mismatched > 0
+      ? {
+          evidence: {
+            verified: evidence.verified,
+            mismatched: evidence.mismatched,
+            failures: evidence.failures.map(failure => relativeTo(options.home, failure.path)),
+          },
+        }
+      : {}),
   };
   writeFileSync(join(options.out, "manifest.json"), `${JSON.stringify(manifest, null, 2)}\n`, { mode: 0o600 });
   return manifest;
@@ -296,6 +364,15 @@ export function describeExport(manifest: ExportManifest, out: string): string[] 
   if (transcripts.length > 0) lines.push(`  transcripts: ${transcripts.reduce((sum, [, n]) => sum + n, 0)} entries in ${transcripts.length} file(s)`);
   const fetchedFiles = Object.keys(manifest.fetched ?? {});
   if (fetchedFiles.length > 0) lines.push(`  fetched pages: ${fetchedFiles.length} file(s)`);
+  const resultFiles = Object.keys(manifest.results ?? {});
+  if (resultFiles.length > 0) lines.push(`  kept tool results: ${resultFiles.length} file(s)`);
+  if (manifest.evidence !== undefined) {
+    lines.push(
+      manifest.evidence.mismatched === 0
+        ? `  evidence: ${manifest.evidence.verified} file(s) still match their digest`
+        : `  evidence: ${manifest.evidence.mismatched} of ${manifest.evidence.verified + manifest.evidence.mismatched} file(s) DO NOT match their digest: ${manifest.evidence.failures.join(", ")}`
+    );
+  }
   lines.push(`  redacted: ${manifest.redactions.exact} held value(s), ${manifest.redactions.pattern} credential-shaped string(s)`);
   if (manifest.undated > 0) lines.push(`  ${manifest.undated} line(s) had no readable time and were left out`);
   return lines;

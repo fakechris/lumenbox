@@ -1,0 +1,27 @@
+{
+  "date": "2026-09-22",
+  "local_head": "cc71f8223138a010b70c2e211cf739fa3a7ac57c",
+  "npm_test": {
+    "exit_code": 0,
+    "passed": 1731,
+    "failed": 0,
+    "skipped": 0
+  },
+  "docs_index": "passed",
+  "git_diff_check": "passed",
+  "credential_value_scan": "passed; values not logged or saved",
+  "probe": "5 existing CUA control-flow gaps reproduced with fake native I/O; no live GUI actions",
+  "new_live_model_calls": 0,
+  "product_code_changed": false,
+  "jev_role_modified": false,
+  "features_or_ab_enabled": false,
+  "original_real_commands_50_acceptance_complete": false,
+  "artifact_sha256": {
+    "docs/66-awesome-jev-lumenbox-opportunities.md": "9333a9a3a9646e4852f9efe1b9cb20f4e32c05975b390ebbc683cc5dda255de4",
+    "docs/INDEX.md": "397d173134e051375323f1699786e710572867c527ea36970dbf6bdc85c9d147",
+    "scripts/research/jev-2026-09-22/README.md": "96617d31d3128debcb9431c452dbfbeb098ad5ef6d26776c973a43116c14a470",
+    "scripts/research/jev-2026-09-22/awesome-projects.json": "20ed3986fdc44bce00ad88efd6df7de2748e23096a31accbff4f1a97a00dbe09",
+    "scripts/research/jev-2026-09-22/awesome-source-review.json": "f1e7cd4e3623d44e40b6170e0894f6a6995f2f39ed9608ae6d07f4f5a08377ac",
+    "scripts/research/jev-2026-09-22/awesome-cua-probe.json": "027dd7e5dedff0119660a1481ea637e74429451032c65629aa3682472e9138a4"
+  }
+}

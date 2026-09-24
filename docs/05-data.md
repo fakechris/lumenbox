@@ -283,12 +283,41 @@ wire's own id, e.g. Feishu's `om_…`), `chatKey`, `threadKey`, `identity`, `sen
 transcript's conversation name), `receivedAt`, `text` (whole, before the inbox's 8,000-character
 clamp), `textChars`, `files[] {name, bytes}`.
 
-Why a fifth ledger: `ingress.jsonl`, `inbox.jsonl`, `turns.jsonl` and `deliveries.jsonl` all empty
-themselves once nothing is pending, which is right for a queue and wrong for a record, and the
-transcript joins several messages into one prompt. This file never compacts. Refused messages are
-not in it (ingress says they were refused); it is not scanned for secrets on the way in — the
-audit export redacts on the way out — because a record that edits what a person said is not a
-record of what they said.
+Why a fifth ledger: at the time, `ingress.jsonl`, `inbox.jsonl`, `turns.jsonl` and
+`deliveries.jsonl` all emptied themselves once nothing was pending — right for a queue and wrong
+for a record — and the transcript joins several messages into one prompt. Two of those four are
+now declared records and archive instead (§2.4.1); the other two are queues and still empty. This
+file never compacts at all. Refused messages are not in it (ingress says they were refused); it is
+not scanned for secrets on the way in — the audit export redacts on the way out — because a record
+that edits what a person said is not a record of what they said.
+
+#### 2.4.1 Every ledger says what kind of thing it is
+
+Twelve files here compact, and until INV-634 none of them said which of four things it was, so
+each `compact()` was written by copying whichever neighbour was open. Each now declares
+`export const LEDGER_KIND` (`src/host/jsonl.ts`) and an architecture guard fails the build on a
+thirteenth that does not.
+
+| kind | what compaction may do | files |
+|---|---|---|
+| `record` | move a line to an archive, never lose one | `ingress.jsonl`, `turns.jsonl` |
+| `queue` | drop what is settled; that was its job | `inbox.jsonl`, `deliveries.jsonl` |
+| `state` | keep one line per key; older ones are noise | `conversations`, `sent-roots`, `cards`, `claims`, `tasks` |
+| `feed` | let old lines fall off the back | `usage.jsonl`, `activity`, `policy` |
+
+A `record` archives to `<name>.<yyyy-mm>.jsonl` beside itself, append-only and never compacted in
+turn. Two things had been quietly losing history. The catch-up sweep asks whether a message was
+already decided before replaying it, and after a compaction the answer for every older message was
+no, so a vendor replaying a week-old message would have been answered twice. And `turns.jsonl` is
+the only record of what a turn cost, how long it ran, which model and prompt produced it and how it
+ended; after five thousand turns all of it went, including the month an audit export was asking
+about. The archives are read on demand — `Ingress.list({ archived: true })`, `decidedAlready`, and
+the audit export — so ordinary reads stay as cheap as they were.
+
+`policy` is labelled `feed` with a note rather than a verdict: a grant given once and used once is
+an audit fact, and past twenty thousand events it goes. Standing grants are re-stated on compaction
+precisely because losing those would change behaviour, which is the argument for calling the rest a
+record too. Left as it is on purpose, flagged so the next person deciding it is deciding.
 
 ### 2.4 `usage.jsonl`
 
@@ -328,25 +357,178 @@ anyone asked what it had been verified against.
 
 - `fetched/<yyyy-mm>/<sha8-of-url>-<fetched_at>.md` — one file per `WebFetch`: a frontmatter
   (`schema: lumenbox.fetched/v1`, `url`, `final_url`, `title`, `fetched_at`, `content_type`,
-  `bytes`, `text_chars`, `clipped`, `sha256` of the body, and `author` / `published` /
-  `site_name` when the page declared them in JSON-LD, Open Graph or `<meta>`, then
-  `agent_id`, `agent`, `conversation`) over the **whole** extracted text, not the 40,000-
-  character slice the model was shown. Never overwritten: the instant is in the name.
+  `bytes`, `text_chars`, `clipped`, `completeness`, `prose_blocks`, `links`, `sha256` of the
+  body, and `author` / `published` / `site_name` when the page declared them in JSON-LD, Open
+  Graph or `<meta>`, then `agent_id`, `agent`, `conversation`) over the **whole** extracted
+  text, not the 40,000-character slice the model was shown. Never overwritten: the instant is
+  in the name. The last three are the same measurement the tool result leads with (§2.6.1),
+  so the file and the transcript can be compared without re-reading the body.
 - `fetched/x/<id>/` — a post on X: the raw answer (`fxtwitter-v2.json`, or `syndication.json`
   on fallback) beside `post.md`, markdown whose frontmatter names `completeness`, `fetcher`,
   the author, the date, the thread ids and both sha256s. A second fetch of the same id
   overwrites with the newer answer.
 
-The tool result ends with `[full page kept: <path>]`, the same shape as the box's spill
-pointer, and `storableResult` carries it across the transcript's cut. Kept for
+#### 2.6.1 The line every read leads with
+
+Six tools read something into a turn — `WebFetch`, `WebSearch`, `ReadFeishuDoc`, `read_file`,
+`ReadHistory`, `browser_read` — and each writes the same first line (`src/host/read-outcome.ts`,
+INV-632):
+
+```
+[read: clipped — 40,000 of 61,606 chars, 57 prose blocks, 576 links; open it with browser_open]
+```
+
+First, not last, because the transcript keeps a result's **head**: the old end-of-result
+notices were the first thing the cut removed. `completeness` is one of `full`, `clipped`,
+`blocked`, `unavailable`, `summary` — `clipped` means we cut it, `summary` means search
+results rather than a document. It reports counts and never grades them; the measurement that
+killed the grading idea is docs/69 §2.4, kept as a test over three real pages.
+
+The tool result ends with a pointer that **describes its own target** (INV-659):
+
+```
+[full page kept: /…/fetched/2026-09/1a2b3c4d-20260922T100000Z.md — 61,606 chars, sha256 <64 hex>, kept 2026-09-22T10:00:00.000Z]
+```
+
+Same shape as the box's spill pointer, and `storableResult` carries it across the
+transcript's cut. The digest is out here rather than only inside the file because the file
+is pruned at ninety days and the digest used to be pruned with it: the record held a path
+to something that no longer existed and could not say what had been there. Now an expired
+artefact degrades from "here it is" to "this is what it was". One regex reads either
+pointer (`KEPT_POINTER_PATTERN`), the path is still the first token after the marker, and
+the line never contains a `]`, because three consumers already depend on both of those.
+
+**Which turn read what (INV-665).** The `end` record in `turns.jsonl` carries `evidence`:
+the pointers this turn produced, as they were written. The link only went one way before —
+a kept file names the turn that read it, so file to turn resolved, and nothing answered
+turn to files except walking every month of the store filtering on a field. It lives in
+`turns.jsonl` rather than a new ledger because that file is a `record` since INV-634: it
+archives instead of emptying, which is what an edge between a turn and its evidence needs.
+
+Two things use the edge. The quote gate runs over a turn's own sources before the answer
+is delivered. And the retention pass keeps a file a live turn still points at, past its
+age: `referencedKeptPaths()` reads the live ledger, and a retention floor that only moves
+one way is CMIS's rule for the same reason.
+
+`verifyKept()` re-reads the kept files and checks each body against its own frontmatter
+digest; `verifyPointer()` does the same for one pointer and distinguishes `verified`,
+`mismatched` and `missing`. The audit export runs the first on the way out and puts
+`verified` / `mismatched` / the failing paths in the manifest under `evidence`, because an
+export that carries a quietly corrupted page out as evidence is worse than one that
+carries nothing. Kept for
 `AGENTBOX_FETCHED_RETENTION_DAYS` days (default 90, at most 3650): a prune runs on the way
-past a fetch at most once an hour and logs one line when it removed anything. The audit
+past a fetch or a kept result, at most once an hour, over both directories at once, and
+logs one line when it removed anything. The audit
 export (docs/50 J4) takes the files inside its window, redacted, listed under `fetched` in
 the manifest apart from the ledgers. `AGENTBOX_FXTWITTER_BASE` and
 `AGENTBOX_X_SYNDICATION_BASE` point the X reader at a self-hosted FxEmbed or a mirror.
 
 ## 3. Box state
 
+### 2.7 `results/`
+
+Whatever a tool said, kept by whoever cut it (`src/host/results.ts`, INV-633).
+
+A tool result is trimmed to `DURABLE_RESULT_CHARS` before the transcript stores it
+(`storableResult`, docs/24). Three producers thought to spill on their own — the box for
+shell output, `WebFetch` for a page, the X reader for a post — and every other tool's
+overflow was gone the moment the turn ended: a long `browser_read`, a long document, a
+file read, anything an MCP server returns. Asking each producer to remember is asking for
+the same defect once per tool, so now the cut keeps what it cuts.
+
+- `results/<yyyy-mm>/<turnId>-<toolUseId>.txt` — one file per call that was too long, with
+  a frontmatter (`schema: lumenbox.result/v1`, `tool`, `tool_use_id`, `turn_id`, `at`,
+  `text_chars`, `is_error` when the call failed, `sha256` of the body, `agent_id`, `agent`,
+  `conversation`) over the whole result. Keyed by turn and call rather than by a digest, so
+  two calls that returned the same bytes stay two records.
+- Not written when the result already carries a pointer of its own, and not written for a
+  result the tool asked to record differently (`ToolOutcome.recordAs`, a vault secret): the
+  secret was the reason for withholding it.
+- A failure to write is said in place of the pointer and never thrown. A turn is not lost
+  over a full disk.
+
+The pointer is the same self-describing shape as a kept page's, written with the box's own
+phrase, so `storableResult`, `extractAnchors` and the system prompt all already know it.
+
+**Getting it back (`ReadKept`, INV-661).** The path is on the host, outside the box, so an
+agent cannot reach it with `read_file` — that is right for an audit trail, and it was the
+one place this design took the lossy side of the rule that you may only remove something
+from context if it can be got back. So the way back is host-mediated: the agent names a
+*call it made*, never a file. Ownership is checked against the agent and the conversation,
+and a result belonging to someone else answers exactly as one that does not exist, because
+telling the two apart would be a way to ask what calls another agent has made. A result
+read back is still subject to the limit that cut it, and comes back under the same
+first-line contract as any other read. A withheld result cannot be read back because it was
+never written; the guarantee comes from the write path, not from a check on the way out.
+
+The record of a read-back is the tool call itself. It is a call like any other, so it lands
+in the transcript with its result and is kept whole if it is long, under the same rules as
+everything else — a second ledger line would be a second record of one event. What that
+does not catch, said plainly: an agent working through many call ids to see which exist
+would look like ordinary use, and nothing counts those. The path is
+on the host, outside the box, so an agent cannot read it back with `read_file` — the same
+as a kept page. It is for the person who asks later what a call actually returned. Same
+retention as `fetched/`, taken by the same pass; the audit export carries the files inside
+its window, redacted, listed under `results` in the manifest.
+
+Both stores declare `KEPT_KIND = "feed"` (`src/host/fetched.ts`), honestly: they prune, and
+a `record` may not. That is only defensible because the pointer keeps the digest. What is
+deliberately not built, so nobody assumes it: retention keyed to the work the evidence
+supported rather than to when it was read. Evidence almost always wants the former, and we
+have no link from an artefact to the work that cited it. That link is the prerequisite.
+
+### 2.8 `digest/<runKey>/package/`
+
+One day, assembled from what is already kept (`src/host/day-package/`, INV-669). The
+material half of the daily research digest: no prose, no vault, no network. `agentbox day
+<YYYY-MM-DD> [--chat <chatKey>]`.
+
+- `manifest.json` — the window as a local day with its UTC offset, every message (whole,
+  as sent, with its attachments listed), every turn (model, build, how it ended), every
+  source read (url, completeness, digest, which turn read it), every reply, and `gaps`.
+- `sources/<sha8>.md` — the body of each kept source, redacted. A source the retention has
+  already taken keeps its row with `state: expired` and loses only its body, which is what
+  the self-describing pointer (§2.6) was for.
+- `turns/<turnId>/reply.md` — what the agent finally said.
+- `READY` — a generation timestamp on a comment line, then the sha256 of every other file.
+  Written last, so its absence is how an unfinished package is told from a thin day.
+
+Two properties do the work.
+
+**Deterministic.** Every hashed file, the manifest included, is a pure function of the
+day's material; the generation instant lives in `READY` rather than in the manifest so it
+cannot poison that. Two runs over an unchanged day give identical hashes, which makes "did
+anything about this day change" two numbers compared rather than a diff read. WACZ splits
+its datapackage from its digest for the same reason.
+
+**`gaps` is the honest part.** A day assembled from a host running an older build is
+missing whole categories of material and looks exactly like a quiet day. Measured on this
+installation on 2026-09-23: the host was 43 commits behind, so `results/` was empty and no
+turn carried its evidence. So every degradation is named with its reason and the commit it
+saw — `No turn recorded what it read … the host on this day ran a build before INV-665
+(saw cc71f82)` — and a reader who sees an empty section can tell "nothing happened" from
+"we could not know". Messages fall back from `messages.jsonl` to the transcript the same
+way, and say so.
+
+
+**Checking it: `agentbox digest validate <runKey>`.** Whether `draft.md` stands up
+mechanically: citations resolve against the package, a sentence citing the agent's own turn
+carries something else too, the short version is short, and **the digest is not the list it
+was asked not to be**.
+
+That last rule asks its question two ways, because the obvious way is easy to slip past.
+**By citation, which needs no threshold**: a list has one section per message, section *k*
+citing message *k* and nothing else. Exact, and rewording the headings does not touch it.
+**By heading, approximately**: a section named after a message is named after it even when
+the naming was paraphrased. Measured, reworded headings score 0.61 to 0.71 against the
+messages they were named after, so the heading test alone is a threshold fight against
+whoever is rewording and the citation test carries what it misses. A *run* of consecutive
+sections rather than a count, because a day with one big thing in it legitimately gets one
+section about one message. What a synthesis may not do is march.
+
+No semantic judgement. That ceiling is 77% balanced accuracy on the public leaderboard,
+with 0.4B and 405B models both inside 71.8 to 77.4, and a judgement wrong one time in four
+cannot gate delivery (docs/71 §2). Semantics are for the gold days and a person's eye.
 ### 3.1 `work` volume — `/home/box/work`
 
 The agents' output. Whatever they make, plus `recordings/*.mp4`. Owned by `box`.

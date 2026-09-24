@@ -1,4 +1,4 @@
-<!-- doc: 63-cua-linux-validation
+<!-- doc: 70-cua-linux-validation
      title: Linux CUA 回归矩阵与状态验收
      family: guide
      status: current
