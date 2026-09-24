@@ -91,6 +91,7 @@ interface BeginRecord {
   model?: string;
   build?: { version: string; commit: string };
   promptHash?: string;
+  contextEpoch?: number;
   memoryProjection?: {
     personal: import("./memory.ts").MemoryProjectionManifest;
     shared: import("./memory.ts").MemoryProjectionManifest;
@@ -157,6 +158,7 @@ export interface InterruptedTurn {
   attempt: number;
   /** The conversation the turn belonged to, absent for the main one. */
   conversation?: string;
+  contextEpoch?: number;
   /** True when the process exited on purpose under this turn — resume it for free. */
   cleanExit?: boolean;
   /**
@@ -203,6 +205,7 @@ export class TurnLedger {
     model?: string;
     build?: { version: string; commit: string };
     promptHash?: string;
+    contextEpoch?: number;
     memoryProjection?: BeginRecord["memoryProjection"];
     now?: Date;
   }): string {
@@ -219,6 +222,7 @@ export class TurnLedger {
       ...(options.model !== undefined ? { model: options.model } : {}),
       ...(options.build !== undefined ? { build: options.build } : {}),
       ...(options.promptHash !== undefined ? { promptHash: options.promptHash } : {}),
+      ...(options.contextEpoch !== undefined ? { contextEpoch: options.contextEpoch } : {}),
       ...(options.memoryProjection !== undefined ? { memoryProjection: options.memoryProjection } : {}),
     };
     this.append(record);
@@ -304,6 +308,7 @@ export class TurnLedger {
           about: record.about,
           attempt: record.attempt,
           ...(record.conversation !== undefined ? { conversation: record.conversation } : {}),
+          ...(record.contextEpoch !== undefined ? { contextEpoch: record.contextEpoch } : {}),
           ...(record.workId !== undefined ? { workId: record.workId } : {}),
         });
       } else if (record.event === "clean") {

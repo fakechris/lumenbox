@@ -16,6 +16,107 @@ import { runEpisode, type Script } from "./scenario.ts";
 import { ChannelManager, type ChannelAdapter, type InboundMessage as ChannelMessage } from "../channels/manager.ts";
 import { choosePinnedEntries, type HistoryEntry } from "./compaction.ts";
 import { replyForMessage } from "./reply.ts";
+import { conversationIdFor } from "../agents/registry.ts";
+import { newContext } from "./context-recovery.ts";
+
+test("/new through the chat door drops old narrative and plans, retains relevant facts, and preserves follow-up continuity", async () => {
+  let calls = 0;
+  const result = await runEpisode({
+    team: [{ name: "Nova" }], says: [],
+    script: ({ system, messages }) => {
+      calls++;
+      const actual = system + JSON.stringify(messages);
+      assert.doesNotMatch(actual, /OLD_AUDIT_NARRATIVE|OLD_PLAN|OLD_SUMMARY|OLD_TODO/);
+      assert.match(system, /部署区域是东京/);
+      if (calls === 2) assert.match(actual, /NEW_ANSWER/);
+      return { say: "NEW_ANSWER：部署区域是东京。" };
+    },
+    drive: async ({ registry, bus, frontId }) => {
+      const key = "feishu:private-user";
+      const conversation = conversationIdFor(key);
+      registry.appendTranscript(frontId, { role: "assistant", text: "OLD_AUDIT_NARRATIVE" }, conversation);
+      registry.appendTranscript(frontId, { kind: "summary", text: "OLD_SUMMARY", covers: 1 }, conversation);
+      registry.writePlan(frontId, "OLD_PLAN", conversation);
+      registry.writeTodos(frontId, [{ text: "OLD_TODO", status: "done" }], conversation);
+      registry.appendMemoryRecords(frontId, [{ at: new Date().toISOString(), kind: "fact", text: "部署区域是东京" }]);
+      let receive!: (message: ChannelMessage) => Promise<string | undefined>;
+      const adapter: ChannelAdapter = { name: "feishu", start: async handler => { receive = handler; }, stop() {}, send: async () => undefined };
+      let listeners = 0;
+      const manager = new ChannelManager({
+        mayDrive: () => true, log: () => {}, listeners: () => { listeners++; },
+        newContext: input => newContext({ registry, mayReset: () => true, blockers: () => input.blockers }, {
+          agentId: frontId, conversation: conversationIdFor(input.conversationKey), ...input,
+        }).text,
+        ask: async (_name, text, _identity, _chat, _progress, _thread, _task, _interim, _stream, origin) => {
+          bus.sendFromUser(frontId, text, { conversation, steerable: false, messageId: origin!.messageId });
+          await bus.runExclusive(frontId, { userDriven: true, conversation });
+          return replyForMessage(registry.readTranscript(frontId, conversation), origin!.messageId);
+        },
+      });
+      manager.register(adapter, true, "test"); manager.start();
+      await new Promise(resolve => setImmediate(resolve));
+      const room = { identity: "feishu:user", chatKey: key, privateChat: true, senderLabel: "user" };
+      try {
+        assert.match((await receive({ ...room, text: "/new", messageId: "reset1" }))!, /已开始新对话/);
+        assert.equal(listeners, 0, "control commands cannot trigger phrase-listener routines");
+        assert.match((await receive({ ...room, text: "/new", messageId: "reset1" }))!, /不会重复/);
+        assert.equal(registry.contextVersion(frontId, conversation), 1);
+        await receive({ ...room, text: "部署区域在哪里？", messageId: "question1" });
+        await manager.idle();
+        await receive({ ...room, text: "再说一下部署区域", messageId: "question2" });
+        await manager.idle();
+        assert.match(JSON.stringify(registry.readAllContextTranscripts(frontId, conversation)), /OLD_AUDIT_NARRATIVE/);
+        assert.match((await receive({ ...room, text: "/new --clean", messageId: "clean" }))!, /尚未开放/);
+        assert.equal(registry.contextVersion(frontId, conversation), 1);
+      } finally { manager.stop(); }
+    },
+  });
+  try { assert.equal(calls, 2); assert.equal(result.score.said.length, 2); }
+  finally { result.cleanup(); }
+});
+
+test("/new with a running answer and two queued requests refuses without swallowing any request", { timeout: 15_000 }, async () => {
+  let entered!: () => void;
+  let release!: () => void;
+  const started = new Promise<void>(resolve => { entered = resolve; });
+  const held = new Promise<void>(resolve => { release = resolve; });
+  let calls = 0;
+  const result = await runEpisode({
+    team: [{ name: "Nova" }], says: [],
+    script: async () => { calls++; if (calls === 1) { entered(); await held; } return { say: `回答 ${calls}` }; },
+    drive: async ({ registry, bus, frontId }) => {
+      const conversation = conversationIdFor("feishu:private");
+      let receive!: (message: ChannelMessage) => Promise<string | undefined>;
+      const manager = new ChannelManager({
+        mayDrive: () => true, log: () => {},
+        newContext: input => newContext({ registry, mayReset: () => true, blockers: () => [
+          ...input.blockers,
+          ...(bus.isActive(frontId, conversation) ? ["running"] : []),
+          ...(bus.queuedCount(frontId, conversation) > 0 ? ["queued"] : []),
+        ] }, { ...input, agentId: frontId, conversation }).text,
+        ask: async (_name, text, _identity, _chat, _progress, _thread, _task, _interim, _stream, origin) => {
+          bus.sendFromUser(frontId, text, { conversation, steerable: false, messageId: origin!.messageId });
+          await bus.runExclusive(frontId, { conversation, userDriven: true });
+          return replyForMessage(registry.readTranscript(frontId, conversation), origin!.messageId);
+        },
+      });
+      manager.register({ name: "feishu", start: async handler => { receive = handler; }, stop() {}, send: async () => undefined }, true, "test");
+      manager.start(); await new Promise(resolve => setImmediate(resolve));
+      const room = { identity: "feishu:user", chatKey: "feishu:private", privateChat: true, senderLabel: "user" };
+      try {
+        await receive({ ...room, text: "回答第一组问题", messageId: "a" });
+        await started;
+        await receive({ ...room, text: "回答第二组问题", messageId: "b" });
+        await receive({ ...room, text: "回答第三组问题", messageId: "c" });
+        const refusal = await receive({ ...room, text: "/new", messageId: "reset" });
+        assert.match(refusal!, /暂未切换/);
+        assert.equal(registry.contextVersion(frontId, conversation), 0);
+      } finally { release(); await manager.idle(); manager.stop(); }
+    },
+  });
+  try { assert.equal(calls, 3); assert.equal(result.score.said.length, 3); }
+  finally { result.cleanup(); }
+});
 
 for (const selection of ["none", "offline"] as const) {
   test(`old auditing habits cannot enter a fresh technical answer through personal or shared memory: ${selection}`, async () => {

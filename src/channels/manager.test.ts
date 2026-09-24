@@ -112,6 +112,28 @@ async function started(manager: ChannelManager): Promise<void> {
 
 const sleep = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
 
+test("new context commands never fall through to the model, including unsupported clean and attachments", async () => {
+  const adapter = testAdapter();
+  let asks = 0;
+  let controls = 0;
+  const manager = new ChannelManager({
+    mayDrive: () => true, log: () => {},
+    ask: async () => { asks++; return "should not run"; },
+    newContext: input => { controls++; assert.equal(input.privateChat, true); assert.ok(input.operationId); return "switched"; },
+  });
+  manager.register(adapter, true, "test"); await started(manager);
+  const base = { identity: "telegram:1", privateChat: true, senderLabel: "user", messageId: "m1" };
+  try {
+    assert.equal(await adapter.inject({ ...base, text: "/new" }), "switched");
+    assert.match((await adapter.inject({ ...base, text: "/new --clean" }))!, /尚未开放/);
+    assert.match((await adapter.inject({ ...base, text: "/new title" }))!, /仅支持/);
+    assert.match((await adapter.inject({ ...base, text: "/new", files: [{ name: "input.txt", base64: "eA==" }] }))!, /单独发送/);
+    await manager.idle();
+    assert.equal(asks, 0);
+    assert.equal(controls, 1);
+  } finally { manager.stop(); }
+});
+
 test("unbound new requests never answer a pending question or steer a running task", async () => {
   const adapter = cardAdapter();
   const opened: string[] = [];

@@ -118,3 +118,4 @@ this file and the headers disagree. Edit the header, not this table.
 | [handoff-2026-09-22-nova-incident](handoff-2026-09-22-nova-incident.md) | Handoff — Nova 请求混入旧任务与研究叙述复播的运行调查 | current | 2026-09-22 |
 | [handoff-2026-09-22-post207-answer-quality-review](handoff-2026-09-22-post207-answer-quality-review.md) | Handoff — PR 207 部署后回答质量复审与防复发方案 | current | 2026-09-22 |
 | [handoff-2026-09-22-request-ownership-fix](handoff-2026-09-22-request-ownership-fix.md) | Handoff — 吞单边界修复与 INV 合同校正 | current | 2026-09-22 |
+| [handoff-2026-09-24-context-new](handoff-2026-09-24-context-new.md) | Handoff — 上下文恢复第二项：空闲私聊 /new | current | 2026-09-24 |

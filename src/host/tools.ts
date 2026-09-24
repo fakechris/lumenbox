@@ -4408,7 +4408,7 @@ export async function dispatchTool(
       // bound chat asking what was said earlier was handed the *team room's* history, which
       // is a different room it may never have been in. Silent, because a wrong history
       // reads exactly like a thin one.
-      const entries = context.registry.readTranscript(target.id, context.conversation);
+      const entries = context.registry.readAllContextTranscripts(target.id, context.conversation);
       const query = {
         ...(typeof input.search === "string" && input.search.trim() !== ""
           ? { search: input.search.trim() }

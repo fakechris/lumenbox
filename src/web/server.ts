@@ -26,6 +26,7 @@ import { connect as netConnect, type Socket } from "node:net";
 import { join, posix } from "node:path";
 import { fileURLToPath } from "node:url";
 import { AgentRegistry, MAIN_CONVERSATION, conversationIdFor } from "../agents/registry.ts";
+import { isContextCommand, newContext } from "../host/context-recovery.ts";
 import type { BusEvent } from "../agents/bus.ts";
 import { BoxManager, defaultBoxConfig } from "../box/docker.ts";
 import { resolveBoxProvisioner, type BoxProvisioner } from "../box/provisioner.ts";
@@ -881,6 +882,30 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
   let upgradeWaiting: { image: string; losses: string } | undefined;
 
   const channels = new ChannelManager({
+    newContext: input => {
+      let agent: ReturnType<typeof registry.resolve> | undefined;
+      try { agent = input.agentName === undefined ? registry.list()[0] : registry.resolve(input.agentName); }
+      catch { return "找不到目标 agent；没有修改上下文。"; }
+      if (agent === undefined) return "找不到目标 agent；没有修改上下文。";
+      const principal = principals.resolve(input.identity);
+      const request = {
+        agentId: agent.id,
+        conversation: conversationIdFor(input.conversationKey),
+        operationId: input.operationId,
+        identity: input.identity,
+        privateChat: input.privateChat,
+      };
+      return newContext({
+        registry,
+        mayReset: () => mayEnterBox(registry.boxOf(agent.id), principal.id),
+        blockers: () => [
+          ...input.blockers,
+          ...orchestrator.contextBlockers(agent.id, request.conversation),
+          ...questions.list().filter(item => item.agentId === agent.id && item.conversation === request.conversation && item.expiresAt > Date.now()).map(item => `问题 ${item.id} 待回答`),
+          ...deliveries.pending().filter(item => item.agentId === agent.id && item.conversation === request.conversation).map(item => `投递 ${item.id} 尚未确认`),
+        ],
+      }, request).text;
+    },
     ingress,
     messages,
     listeners: message => {
@@ -5252,7 +5277,7 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
             return;
           }
           const conversation = url.searchParams.get("conversation") ?? MAIN_CONVERSATION;
-          send(res, 200, readReactions(`${registry.transcriptPathFor(id, conversation)}.reactions.json`));
+          send(res, 200, readReactions(registry.contextStore(id, conversation).path("reactions")));
           return;
         }
         if (route === "POST /api/reactions") {
@@ -5275,7 +5300,7 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
             return;
           }
           const by = caller.userId ?? "operator";
-          const map = setReaction(`${registry.transcriptPathFor(id, conversation)}.reactions.json`, { index, emoji, by });
+          const map = setReaction(registry.contextStore(id, conversation).path("reactions"), { index, emoji, by });
           broadcast({ type: "reaction", agentId: id, conversation, index, emoji, by });
           send(res, 200, map);
           return;
@@ -5972,6 +5997,11 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
           const agentId = String(body.agent ?? "");
           if (refused(agentId)) return;
           const text = String(body.text ?? "").trim();
+
+          if (isContextCommand(text)) {
+            send(res, 409, { error: "控制台主会话还包含团队活动，暂不支持 /new。请在已接入的独立私聊使用；本次没有修改上下文。" });
+            return;
+          }
 
           if (!registry.has(agentId)) {
             send(res, 404, { error: `No agent ${agentId}` });

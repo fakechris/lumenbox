@@ -38,7 +38,12 @@ skill-provenance.jsonl      which agent the host saw write each skill (skill-pro
 hooks.json                  lifecycle hooks in Claude Code's dialect (hooks.ts); read on mtime
 agents/<agentId>/
   profile.json              identity and persona
-  conversation.jsonl        the transcript
+  conversation.jsonl        legacy/current transcript until the first explicit context switch
+  conversation.jsonl.epochs/
+    state.json              context epoch, schema and idempotent switch operations
+    0/                      archived legacy transcript/plan/todos/heard/reactions/checkpoints
+    <epoch>/                active or historical files for each later context epoch
+  conversations/<id>.jsonl[.epochs/]  the same layout for an outside-chat conversation
   memory.md                 legacy: imported once into memory.jsonl, then left alone
   memory.jsonl              what the agent remembers, one record per line
   plan.md                   the agent's plan; rendered into every system prompt
@@ -104,6 +109,45 @@ Invariants:
 
 Observed sizes: a few KB per light conversation, ~180KB after a day of heavy computer use. The file
 still grows without bound; what is bounded is the request built from it (§2.2.1).
+
+#### 2.2.0 Context epochs and `/new`
+
+A conversation has an independent, monotonically increasing **context epoch**. This identifier is
+not a channel incarnation, task attempt, request id or new conversation address: it says which
+transcript/plan/todo view the model is currently allowed to continue. Legacy conversations are
+epoch 0 without metadata. The first successful `/new` creates `<transcript>.epochs/state.json`,
+moves the legacy files without rewriting their bytes into `0/`, and makes epoch 1 current. Later
+epochs live under the same directory. The outside `conversation` id and channel delivery address
+do not change.
+
+`state.json` is schema 1 and contains the current epoch plus the list of committed switch
+operation ids. A switch is written `prepared` and then committed atomically; startup finishes a
+prepared switch. Re-delivery of the same channel message returns the epoch it created, even after
+newer epochs exist, and never clears the newer one. A different operation must compare the current
+revision. Corrupt or unknown state fails closed instead of falling back to epoch 0.
+
+The first migration leaves a directory at the legacy transcript pathname as a **downgrade fence**.
+An older binary therefore fails visibly instead of appending new messages to the archived polluted
+topic. Rollback requires a version that understands epochs or an explicit offline migration. No
+old transcript, summary, plan, todos, heard context, checkpoint or reaction is deleted. Ordinary
+prompt assembly reads only the captured current epoch; explicit history and audit export may read
+all epochs. The web conversation picker continues to list the external conversation once, not once
+per epoch.
+
+`/new` is a host control action, never text sent to the model. Version one supports only an
+independent private outside-chat conversation. It refuses the team `main`, groups/rooms, forks,
+unknown conversation names and commands without a durable channel message id. It also refuses while
+the scope has a running/open turn, queued request, live task, delegation, pending question/approval,
+unconfirmed delivery, channel work or pending attachment. Refusal changes no queue or task. The
+permission check uses the existing person/box rules.
+
+The turn ledger stamps `contextEpoch`. A restarted turn from an older epoch is ended as
+`context-superseded`, not replayed. In-process turns resolve transcript and durable-state paths from
+the epoch captured at their start, so a late old result stays in the old record. Personal/shared
+memory writes reject a stale epoch. Automatic extraction and episode batching carry guards for all
+source exchanges, so an old buffered exchange cannot hitchhike into a later epoch's batch.
+Normal `/new` still permits strictly relevant long-term memory and normal tools; it is not clean
+mode, does not delete memory, and does not revoke standing permissions.
 
 #### 2.2.1 Compaction
 
@@ -698,7 +742,8 @@ Honestly, since these are the findings a review should raise:
 - **No transactions.** Atomic profile writes and append-only transcripts cover the realistic
   cases; a crash between appending a `blocks` entry and its `results` entry leaves an orphan,
   which replay tolerates but which is real.
-- **No schema version.** Nothing in a transcript or profile says which version wrote it. A
+- **No embedded transcript/profile schema version.** Context metadata has schema 1, but nothing in
+  an individual transcript entry or profile says which version wrote it. Such a
   format change has to be backward-compatible by inspection, which is how a format change goes
   wrong quietly.
 - **No backup.** Documented as a directory to copy ([06-deployment.md](06-deployment.md) §6);

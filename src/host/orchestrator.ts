@@ -9,6 +9,7 @@
 import { bindingsOf, CommitmentLedger, describeGaps, parseCommitments, priorCommitmentsPrompt, reconcileCommitments } from "./commitments.ts";
 import { learningsDir } from "./learnings.ts";
 import { replyForMessage } from "./reply.ts";
+import { isContextCommand } from "./context-recovery.ts";
 import type Anthropic from "@anthropic-ai/sdk";
 import { AgentBus, type BusEvent, type InboundMessage, type Lane } from "../agents/bus.ts";
 import { Inbox, inboxPath } from "../agents/inbox.ts";
@@ -1694,6 +1695,23 @@ export class Orchestrator {
     return openTurnFor(this.turns?.interrupted() ?? [], agentId, conversation) !== undefined;
   }
 
+  /** Custody checks for an idle-only context switch. Never clear queues to make this pass. */
+  contextBlockers(agentId: string, conversation: string): string[] {
+    const blockers: string[] = [];
+    if (this.bus.isActive(agentId, conversation) || this.hasOpenTurn(agentId, conversation)) blockers.push("仍有执行中的 turn");
+    const queued = this.bus.queuedCount(agentId, conversation);
+    if (queued > 0) blockers.push(`${queued} 条请求排队中`);
+    for (const task of this.tasks?.forAgent(agentId) ?? []) {
+      if ((task.conversation ?? MAIN_CONVERSATION) === conversation) blockers.push(`任务 ${task.id}：${task.status}`);
+    }
+    for (const work of this.pendingWork?.open() ?? []) {
+      if (work.agentId === agentId && work.parent === conversation) blockers.push(`委派 ${work.id} 尚未结束`);
+    }
+    // Approvals predate per-conversation custody, so conservatively block this agent as a whole.
+    if (this.policy.pending().some(item => item.agentId === agentId)) blockers.push("agent 有待处理审批");
+    return blockers;
+  }
+
   /**
    * Marks every open turn as interrupted on purpose. Called from the shutdown signal
    * handler — synchronous appends only — so the next startup resumes these without
@@ -1716,6 +1734,13 @@ export class Orchestrator {
         // The agent was deleted while it was working. Nothing to resume onto, and nothing lost that
         // deleting the agent had not already discarded.
         this.turns?.end(turn.id, "agent-gone");
+        continue;
+      }
+
+      if ((turn.contextEpoch ?? 0) !== this.registry.contextStore(agent.id, turn.conversation ?? MAIN_CONVERSATION).current().epoch) {
+        this.turns?.end(turn.id, "context-superseded");
+        console.error(`[resume] ${turn.id}: context version changed; old turn not replayed`);
+        abandoned += 1;
         continue;
       }
 
@@ -1880,8 +1905,10 @@ export class Orchestrator {
       messageId?: string;
     } = {}
   ): Promise<void> {
+    if (isContextCommand(text)) throw new Error("/new 只能通过已接入的独立私聊控制入口执行；没有让模型模拟清空上下文。");
     const agent = this.registry.resolve(agentIdOrName);
     const conversation = options.conversation ?? MAIN_CONVERSATION;
+    return this.registry.withContext(agent.id, conversation, async () => {
     // Remembered for the turn, so a memory kept during it records who it is about. Per agent because
     // two people can be driving two agents at once; overwritten on each prompt because the most
     // recent person to speak to *this* agent is the one its memories are about.
@@ -1927,6 +1954,7 @@ export class Orchestrator {
           // Already logged inside; a second report here would be noise on a path nobody is watching.
         });
     }
+    });
   }
 
   /**

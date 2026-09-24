@@ -32,6 +32,7 @@ import { channelHealth, type ChannelHealth } from "./liveness.ts";
 import { boxPathsNamed, undelivered } from "../host/named-files.ts";
 import { boardText, type BoardView } from "./board-view.ts";
 import { parseContinuation } from "./continuation.ts";
+import { isContextCommand } from "../host/context-recovery.ts";
 import type { CardRecord } from "./card-ledger.ts";
 
 import {
@@ -114,6 +115,8 @@ export interface InboundMessage {
    * purpose: a bot that stays silent when spoken to is the worse failure.
    */
   addressed?: boolean;
+  /** Positive evidence from the wire, never inferred from being addressed or authorised. */
+  privateChat?: boolean;
 }
 
 /** Where a push should sit: anchored under a message, or loose in the chat. */
@@ -340,6 +343,7 @@ export function parseApprovalReply(text: string): ApprovalReply | undefined {
 }
 
 export interface ChannelManagerDeps {
+  newContext?: (input: { agentName: string | undefined; identity: string; conversationKey: string; operationId: string; privateChat: boolean; blockers: string[] }) => string;
   /**
    * Told of every admitted message from a person, for routines that listen for a phrase. Fired
    * beside the ordinary handling, never instead of it; the callee decides what, if anything, runs.
@@ -1395,7 +1399,7 @@ ${input.options.map(option => `· ${option}`).join("\n")}`
         ? { files: message.files.map(file => ({ name: file.name, bytes: Buffer.byteLength(file.base64, "base64") })) }
         : {}),
     });
-    this.deps.listeners?.({
+    if (!isContextCommand(parseAddress(message.text).text)) this.deps.listeners?.({
       text: message.text,
       chatKey: message.chatKey ?? message.identity,
       ...(message.threadKey !== undefined ? { threadKey: message.threadKey } : {}),
@@ -1426,6 +1430,23 @@ ${input.options.map(option => `· ${option}`).join("\n")}`
     // new instruction: answer the approval and do not start a turn. Checked before
     // address parsing, so "allow" is never read as a message to an agent named allow.
     const pending = this.awaitingApproval.get(message.identity);
+    const control = parseAddress(message.text);
+    if (isContextCommand(control.text)) {
+      if (control.text.trim().toLowerCase() !== "/new") return "目前仅支持 /new。/new --clean 尚未开放，不会把普通新对话冒充干净模式。";
+      if (message.files?.length) return "请单独发送 /new；附件未作为新任务消费。";
+      const key = message.threadKey ?? message.chatKey ?? message.identity;
+      const busy = this.runningWork.get(key) ?? [];
+      const question = [...this.awaitingAnswer.values()].some(item => item.conversationKey === key && item.expiresAt > Date.now());
+      const blocked = pending !== undefined || busy.length > 0 || question || this.pendingDrops.has(key) || [...this.inflightContexts.values()].includes(key);
+      return this.deps.newContext?.({
+        agentName: control.agentName ?? this.deps.defaultAgentFor?.(adapter.name),
+        identity: message.identity,
+        conversationKey: key,
+        operationId: message.messageId === undefined ? "" : JSON.stringify([adapter.name, key, message.identity, message.messageId]),
+        privateChat: message.privateChat === true,
+        blockers: blocked ? ["渠道仍有运行中、排队、待回答/审批或待处理附件"] : [],
+      }) ?? "此入口尚未接入安全的上下文切换；本次没有修改会话。";
+    }
     if (pending !== undefined) {
       const reply = parseApprovalReply(message.text);
       if (reply !== undefined) {
@@ -1517,8 +1538,10 @@ ${input.options.map(option => `· ${option}`).join("\n")}`
         this.deps.log(`channel ${adapter.name}: file request failed (${error instanceof Error ? error.message : String(error)})`);
       }).finally(() => {
         this.inflight.delete(drop);
+        this.inflightContexts.delete(drop);
       });
       this.inflight.add(drop);
+      this.inflightContexts.set(drop, message.threadKey ?? message.chatKey ?? message.identity);
       return undefined;
     }
 
@@ -1614,8 +1637,10 @@ ${input.options.map(option => `· ${option}`).join("\n")}`
       this.deps.log(`channel ${adapter.name}: request failed (${error instanceof Error ? error.message : String(error)})`);
     }).finally(() => {
       this.inflight.delete(task);
+      this.inflightContexts.delete(task);
     });
     this.inflight.add(task);
+    this.inflightContexts.set(task, conversationKey);
     return undefined;
   }
 
@@ -1647,6 +1672,7 @@ ${input.options.map(option => `· ${option}`).join("\n")}`
    * after the one that used them is about something else.
    */
   private readonly pendingDrops = new Map<string, { files: string[]; at: number }>();
+  private readonly inflightContexts = new Map<Promise<unknown>, string>();
 
   /** What each conversation is running right now, for the one-at-a-time routing rule. */
   /**
