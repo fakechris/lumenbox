@@ -19,7 +19,7 @@
 import { createHash } from "node:crypto";
 import { appendLine } from "./jsonl.ts";
 import type { AgentRecord, AgentRegistry } from "../agents/registry.ts";
-import { dedupeKey, type MemoryRecord } from "./memory.ts";
+import { dedupeKey, recordHasRevokedSource, revokedMemorySources, type MemoryRecord } from "./memory.ts";
 
 export interface MemoryView {
   /** The dedupe key: what a retraction or a re-record is matched on. */
@@ -33,6 +33,7 @@ export interface MemoryView {
   via?: string;
   box?: string;
   audience?: "everyone";
+  from?: string[];
   status: "live" | "retracted";
   /** For a retracted line: when, and by what. */
   retractedAt?: string;
@@ -49,8 +50,8 @@ export interface MemorySummary {
   lastAt?: string;
 }
 
-export function versionOf(record: Pick<MemoryRecord, "at" | "kind" | "text">): string {
-  return createHash("sha256").update(`${record.at}|${record.kind}|${record.text}`).digest("hex").slice(0, 12);
+export function versionOf(record: Pick<MemoryRecord, "at" | "kind" | "text"> & Pick<Partial<MemoryRecord>, "from">): string {
+  return createHash("sha256").update(JSON.stringify([record.at, record.kind, record.text, record.from ?? null])).digest("hex").slice(0, 12);
 }
 
 /**
@@ -62,7 +63,11 @@ export function versionOf(record: Pick<MemoryRecord, "at" | "kind" | "text">): s
 export function memoryView(records: readonly MemoryRecord[]): MemoryView[] {
   const views: MemoryView[] = [];
   const liveByKey = new Map<string, MemoryView>();
+  const revoked = revokedMemorySources(records);
+  const revokedAt = new Map<string, MemoryRecord>();
+  for (const record of records) for (const source of record.revokedSources ?? []) revokedAt.set(source, record);
   for (const record of records) {
+    if (record.revokedSources !== undefined) continue;
     const key = dedupeKey(record.text);
     if (key === "") continue;
     if (record.kind === "retraction") {
@@ -85,8 +90,16 @@ export function memoryView(records: readonly MemoryRecord[]): MemoryView[] {
       ...(record.via !== undefined ? { via: record.via } : {}),
       ...(record.box !== undefined ? { box: record.box } : {}),
       ...(record.audience !== undefined ? { audience: record.audience } : {}),
-      status: "live",
+      ...(record.from !== undefined ? { from: [...record.from] } : {}),
+      status: recordHasRevokedSource(record, revoked) ? "retracted" : "live",
     };
+    if (view.status === "retracted") {
+      const tombstone = record.from?.map(source => revokedAt.get(source)).find(Boolean);
+      view.retractedAt = tombstone?.at;
+      view.retractedBy = tombstone?.source ?? "source withdrawn";
+      views.push(view);
+      continue;
+    }
     const earlier = liveByKey.get(key);
     if (earlier !== undefined) {
       // A fact is never displaced by a note repeating it; anything else, the later wins,
@@ -141,6 +154,13 @@ export interface ChangeRequest {
   by: string;
 }
 
+export interface SourceImpact {
+  source: string;
+  version: string;
+  own: MemoryView[];
+  shared: MemoryView[];
+}
+
 export type ChangeResult =
   | { ok: true; version?: string }
   | { ok: false; conflict: true; current: MemoryView | undefined; why: string }
@@ -165,6 +185,50 @@ export class MemoryAdmin {
     };
   }
 
+  /** Preview the exact live derivatives a source withdrawal would disable. */
+  sourceImpact(agentId: string, source: string): SourceImpact {
+    const matching = (records: readonly MemoryRecord[]) => memoryView(records)
+      .filter(view => view.status === "live" && view.from?.includes(source));
+    const own = matching(this.registry.readMemoryRecords(agentId));
+    const shared = matching(this.registry.readSharedMemory(agentId));
+    const version = createHash("sha256")
+      .update(JSON.stringify([source, ...[...own, ...shared].map(view => view.version).sort()]))
+      .digest("hex").slice(0, 12);
+    return { source, version, own, shared };
+  }
+
+  /** Withdraw every derivative of one source with the preview's optimistic version. */
+  withdrawSource(request: { agentId: string; source: string; version: string; by: string }): ChangeResult {
+    if (this.registry.tryGet(request.agentId) === undefined) return { ok: false, conflict: false, why: `no agent ${request.agentId}` };
+    if (request.source.trim() === "" || request.source.length > 300) return { ok: false, conflict: false, why: "a valid source id is required" };
+    const current = this.sourceImpact(request.agentId, request.source);
+    if (current.version !== request.version) {
+      return { ok: false, conflict: true, current: undefined, why: "the source impact changed since you previewed it; preview again" };
+    }
+    if (current.own.length + current.shared.length === 0) {
+      return { ok: false, conflict: true, current: undefined, why: "that source has no live derived memory" };
+    }
+    const at = this.now().toISOString();
+    const tombstone = (audience?: "everyone"): MemoryRecord => ({
+      at,
+      kind: "retraction",
+      text: `derived memory from ${request.source}`.slice(0, 500),
+      source: `web:${request.by}`,
+      revokedSources: [request.source],
+      ...(audience !== undefined ? { audience } : {}),
+    });
+    // Tombstone both tiers even when only one has a derivative today. Otherwise a
+    // delayed extractor could publish the same withdrawn source into the other tier.
+    this.registry.appendMemoryRecords(request.agentId, [tombstone()]);
+    this.registry.appendSharedMemory(request.agentId, [tombstone(current.shared.some(view => view.audience === "everyone") ? "everyone" : undefined)]);
+    this.audit({
+      at, by: request.by, agentId: request.agentId, scope: "source", action: "withdraw-source",
+      source: request.source, fromVersion: request.version,
+      affected: { own: current.own.map(view => view.version), shared: current.shared.map(view => view.version) },
+    });
+    return { ok: true };
+  }
+
   /** Withdraws or edits one live line, if the version the person saw is still the live one. */
   change(request: ChangeRequest): ChangeResult {
     const agent = this.registry.tryGet(request.agentId);
@@ -181,7 +245,7 @@ export class MemoryAdmin {
     const retraction: MemoryRecord = { at, kind: "retraction", text: current.text, source: `web:${request.by}` };
     const replacement: MemoryRecord | undefined =
       request.text !== undefined && request.text.trim() !== ""
-        ? { at: new Date(this.now().getTime() + 1).toISOString(), kind: current.kind === "note" ? "fact" : current.kind, text: request.text.trim(), source: `web:${request.by}` }
+        ? { at: new Date(this.now().getTime() + 1).toISOString(), kind: current.kind === "note" ? "fact" : current.kind, text: request.text.trim(), source: `web:${request.by}`, ...(current.from !== undefined ? { from: [...current.from] } : {}) }
         : undefined;
     const records = replacement === undefined ? [retraction] : [retraction, replacement];
     if (request.scope === "own") this.registry.appendMemoryRecords(request.agentId, records);

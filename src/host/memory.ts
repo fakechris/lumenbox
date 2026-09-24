@@ -72,6 +72,12 @@ export interface MemoryRecord {
    * guesses a source, because a wrong citation is worse than none.
    */
   from?: string[];
+  /**
+   * A durable source withdrawal. Kept on a retraction record so the append-only memory
+   * ledger remains the only truth. Any derived record naming one of these sources is
+   * inactive, including a record appended after the withdrawal by a late background job.
+   */
+  revokedSources?: string[];
 }
 
 /**
@@ -206,8 +212,11 @@ export function validateRecord(text: string): { reason: string } | undefined {
  * deduplicated. That distinction is why a wrong merge here is recoverable.
  */
 export function dedupe(records: readonly MemoryRecord[]): MemoryRecord[] {
+  const revoked = revokedMemorySources(records);
   const byKey = new Map<string, MemoryRecord>();
   for (const record of records) {
+    if (record.revokedSources !== undefined) continue;
+    if (record.from?.some(source => revoked.has(source))) continue;
     const key = dedupeKey(record.text);
     if (key === "") continue;
     if (record.kind === "retraction") {
@@ -223,6 +232,20 @@ export function dedupe(records: readonly MemoryRecord[]): MemoryRecord[] {
     byKey.set(key, record);
   }
   return [...byKey.values()];
+}
+
+/** Every source disabled by this ledger. Retractions are permanent until an explicit future schema says otherwise. */
+export function revokedMemorySources(records: readonly MemoryRecord[]): ReadonlySet<string> {
+  const revoked = new Set<string>();
+  for (const record of records) {
+    if (record.kind !== "retraction") continue;
+    for (const source of record.revokedSources ?? []) if (source.trim() !== "") revoked.add(source);
+  }
+  return revoked;
+}
+
+export function recordHasRevokedSource(record: MemoryRecord, revoked: ReadonlySet<string>): boolean {
+  return record.revokedSources === undefined && record.from?.some(source => revoked.has(source)) === true;
 }
 
 /**
@@ -273,7 +296,7 @@ export interface MemoryRecall {
 /** Audit identifiers, not another store of memory text. These are not security redaction. */
 export function memoryProjectionManifest(recalled: MemoryRecall) {
   const id = (record: MemoryRecord) => createHash("sha256")
-    .update(JSON.stringify([record.at, record.kind, record.text, record.via ?? null, record.source ?? null]))
+    .update(JSON.stringify([record.at, record.kind, record.text, record.via ?? null, record.source ?? null, record.from ?? null, record.revokedSources ?? null]))
     .digest("hex");
   return {
     method: recalled.method ?? "explicit",
@@ -532,8 +555,8 @@ export function renderMemory(recalled: MemoryRecall, mirrorDir?: string): string
 export const NOTHING_TO_KEEP = "NOTHING";
 
 /** The form a record's `from` entry takes: a conversation and a moment in it. */
-export function memoryRef(conversation: string, at: Date): string {
-  return `${conversation}@${at.toISOString().slice(0, 16)}`;
+export function memoryRef(conversation: string, at: Date, messageId?: string): string {
+  return messageId === undefined ? `${conversation}@${at.toISOString().slice(0, 16)}` : `message:${messageId}`;
 }
 
 /** `from` as a person reads it: "main at 2026-09-06 10:12". */
@@ -938,7 +961,9 @@ export function compactMemoryLines(lines: readonly string[]): string[] | undefin
   const records = parsed.flatMap(entry => (entry.record === undefined ? [] : [entry.record]));
   const live = new Set(dedupe(records));
   const kept = parsed
-    .filter(entry => entry.record !== undefined && live.has(entry.record))
+    // Source withdrawals remain as tombstones even after every current derivative is
+    // gone: a late extractor carrying the same source must not resurrect it.
+    .filter(entry => entry.record !== undefined && (live.has(entry.record) || entry.record.revokedSources !== undefined))
     .map(entry => entry.line);
   return kept.length < lines.length ? kept : undefined;
 }
@@ -988,6 +1013,7 @@ export function compactSharedShardLines(
   }
 
   const keep = (record: MemoryRecord): boolean => {
+    if (record.revokedSources !== undefined) return true;
     if (live.has(record)) return true;
     if (record.kind !== "retraction") return false;
     const times = killable.get(dedupeKey(record.text));

@@ -37,7 +37,7 @@ test("memory is browsed by what the caller may drive, changed with a version, re
       createdAt: "2026-09-01T00:00:00.000Z",
     });
     const secret = registry.create({ name: "Secret", boxId: other.id }).id;
-    registry.appendMemoryRecords(ada, [{ at: "2026-09-01T00:00:00.000Z", kind: "fact", text: "the deploy region is eu-west-1" }]);
+    registry.appendMemoryRecords(ada, [{ at: "2026-09-01T00:00:00.000Z", kind: "fact", text: "the deploy region is eu-west-1", from: ["message:region"] }]);
     registry.appendMemoryRecords(secret, [{ at: "2026-09-01T00:00:00.000Z", kind: "fact", text: "a private thing" }]);
 
     stop = await startWebServer({ port: PORT, host: "127.0.0.1", token: "t0k", useBox: false, onLog: () => {} });
@@ -60,6 +60,7 @@ test("memory is browsed by what the caller may drive, changed with a version, re
     assert.equal(summary.agents[0]?.live, 1);
     assert.equal((await call(`/api/memory/agent?agent=${secret}`, dana)).status, 403);
     assert.equal((await call("/api/memory/change", dana, { agent: secret, scope: "own", key: "private thing", version: "x" })).status, 403);
+    assert.equal((await call("/api/memory/source", dana, { agent: secret, action: "preview", source: "message:region" })).status, 403);
 
     // A viewer can watch the room, not read what agents remember about people: 403 on the summary too.
     assert.equal((await call("/api/memory", vic)).status, 403);
@@ -79,6 +80,14 @@ test("memory is browsed by what the caller may drive, changed with a version, re
     // A4: the next read shows the correction, and the old line as withdrawn — from the registry the turns read.
     const again = (await (await call(`/api/memory/agent?agent=${ada}`, dana)).json()) as { own: { text: string; status: string }[] };
     assert.deepEqual(again.own.map(v => [v.text, v.status]), [["the deploy region is eu-west-1", "retracted"], ["the deploy region is us-east-1", "live"]]);
+    const previewResponse = await call("/api/memory/source", dana, { agent: ada, action: "preview", source: "message:region" });
+    assert.equal(previewResponse.status, 200);
+    const preview = (await previewResponse.json()) as { version: string; own: unknown[]; shared: unknown[] };
+    assert.equal(preview.own.length, 1);
+    assert.equal((await call("/api/memory/source", dana, { agent: ada, action: "withdraw", source: "message:region", version: "stale" })).status, 409);
+    assert.equal((await call("/api/memory/source", dana, { agent: ada, action: "withdraw", source: "message:region", version: preview.version })).status, 200);
+    const sourceGone = (await (await call(`/api/memory/agent?agent=${ada}`, dana)).json()) as { own: { text: string; status: string }[] };
+    assert.equal(sourceGone.own.find(item => /us-east/.test(item.text))?.status, "retracted");
     const missing = await call("/api/memory/agent?agent=nobody", dana);
     assert.equal(missing.status, 404, "A5: a missing agent is distinguishable from an empty one");
   } finally {

@@ -92,6 +92,20 @@ test("unparseable lines are dropped — no reader has ever seen them", () => {
   assert.deepEqual(kept, [lines[0]]);
 });
 
+test("source-withdrawal tombstones survive compaction so late derivatives cannot return", () => {
+  const source = "message:bad-source";
+  const lines = [
+    line({ at: at(1), kind: "note", text: "polluted derived line", from: [source] }),
+    line({ at: at(2), kind: "retraction", text: `derived memory from ${source}`, revokedSources: [source] }),
+    line({ at: at(3), kind: "fact", text: "unrelated line", from: ["message:good"] }),
+  ];
+  const kept = compactMemoryLines(lines);
+  assert.ok(kept);
+  assert.ok(kept.includes(lines[1]!), "the permanent source tombstone stays");
+  assert.ok(kept.includes(lines[2]!));
+  assert.equal(dedupe(kept.map(item => JSON.parse(item) as MemoryRecord)).map(record => record.text).join("|"), "unrelated line");
+});
+
 // ── shared shards: the resurrection hazard ───────────────────────────────────────────
 
 test("a cross-shard retraction is kept until its target is gone, then dropped — never the reverse", () => {

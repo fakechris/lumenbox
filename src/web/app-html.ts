@@ -1835,11 +1835,14 @@ function renderMemoryDetail(agentId) {
       var lines = [];
       var row = function (v, scope) {
         var live = v.status === "live";
+        var sourceActions = live && v.from ? v.from.map(function (source) {
+          return '<a href="#" data-memsource="' + esc(source) + '" style="color:var(--danger);font-size:11px">Withdraw ' + esc(source) + "</a>";
+        }).join("") : "";
         return '<div data-memkey="' + esc(v.key) + '" data-memver="' + esc(v.version) + '" data-memscope="' + scope + '" style="display:flex;gap:8px;align-items:flex-start;font-size:12px' + (live ? "" : ";opacity:.55") + '">' +
           '<span class="mono dim" style="min-width:76px">' + esc(v.at.slice(0, 10)) + "</span>" +
           '<span class="dim" style="min-width:56px">' + esc(v.kind) + (scope === "shared" ? " · team" : "") + "</span>" +
-          '<span style="flex:1;white-space:pre-wrap" class="memtext">' + esc(v.text) + (live ? "" : ' <span class="dim">(withdrawn' + (v.retractedBy ? " — " + esc(v.retractedBy) : "") + ")</span>") + "</span>" +
-          (live ? '<a href="#" data-memedit="1" class="dim" style="font-size:11px">Edit</a><a href="#" data-memdrop="1" style="color:var(--danger);font-size:11px">Withdraw</a>' : "") +
+          '<span style="flex:1;white-space:pre-wrap" class="memtext">' + esc(v.text) + (v.from && v.from.length ? '<br><span class="dim">from ' + esc(v.from.join(", ")) + "</span>" : "") + (live ? "" : ' <span class="dim">(withdrawn' + (v.retractedBy ? " — " + esc(v.retractedBy) : "") + ")</span>") + "</span>" +
+          (live ? '<a href="#" data-memedit="1" class="dim" style="font-size:11px">Edit</a><a href="#" data-memdrop="1" style="color:var(--danger);font-size:11px">Withdraw</a>' + sourceActions : "") +
           "</div>";
       };
       (data.own || []).forEach(function (v) { lines.push(row(v, "own")); });
@@ -1865,6 +1868,24 @@ function changeMemory(rowEl, text) {
     });
 }
 
+function withdrawMemorySource(source) {
+  var request = function (body) { return fetch("/api/memory/source", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body) }); };
+  request({ agent: memAgent, action: "preview", source: source })
+    .then(function (r) { if (!r.ok) throw new Error("HTTP " + r.status); return r.json(); })
+    .then(function (impact) {
+      var count = (impact.own || []).length + (impact.shared || []).length;
+      if (!count) { alert("This source has no live derived memory."); return; }
+      if (!confirm("Withdraw this source and disable " + count + " derived memory line(s)? Original conversations stay on record, and future automatic extraction from this source stays blocked.")) return;
+      return request({ agent: memAgent, action: "withdraw", source: source, version: impact.version })
+        .then(function (r) { return r.json().then(function (d) { return { status: r.status, data: d }; }); })
+        .then(function (out) {
+          if (out.status !== 200) alert(out.data.error || ("HTTP " + out.status));
+          renderMemoryDetail(memAgent); renderMemorySummary();
+        });
+    })
+    .catch(function (error) { alert("Could not withdraw source: " + error.message); });
+}
+
 document.getElementById("setmemsummary").addEventListener("click", function (event) {
   var id = event.target.getAttribute && event.target.getAttribute("data-memagent");
   if (!id) return;
@@ -1882,6 +1903,9 @@ document.getElementById("setmemlines").addEventListener("click", function (event
     event.preventDefault();
     if (!confirm("Withdraw this line? It stays on record as withdrawn; the agent stops recalling it.")) return;
     changeMemory(rowEl);
+  } else if (t.getAttribute("data-memsource")) {
+    event.preventDefault();
+    withdrawMemorySource(t.getAttribute("data-memsource"));
   } else if (t.getAttribute("data-memedit")) {
     event.preventDefault();
     var current = rowEl.querySelector(".memtext").textContent;
