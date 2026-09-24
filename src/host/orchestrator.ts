@@ -1944,7 +1944,7 @@ export class Orchestrator {
       // Where this exchange sits, for anything remembered from it to cite: the conversation
       // and the time the reply was read back, which is how a person finds it again in the
       // transcript (the `History` tool searches by conversation and shows times).
-      const ref = memoryRef(conversation, new Date());
+      const ref = memoryRef(conversation, new Date(), options.messageId);
       void this.rememberer
         .record({
           agentId: agent.id,

@@ -4103,6 +4103,36 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
           }
           return;
         }
+        if (route === "POST /api/memory/source") {
+          const body = await readJson(req);
+          const agentId = String(body.agent ?? "");
+          if (!registry.has(agentId)) {
+            send(res, 404, { error: `No agent ${agentId}` });
+            return;
+          }
+          if (refused(agentId)) return;
+          const source = String(body.source ?? "");
+          if (body.action === "preview") {
+            send(res, 200, memoryAdmin.sourceImpact(agentId, source));
+            return;
+          }
+          if (body.action !== "withdraw") {
+            send(res, 400, { error: "action must be preview or withdraw" });
+            return;
+          }
+          const result = memoryAdmin.withdrawSource({
+            agentId,
+            source,
+            version: String(body.version ?? ""),
+            by: caller.userId ?? "operator",
+          });
+          if (result.ok) {
+            log(`memory: ${caller.userId ?? "operator"} withdrew source ${source} for ${registry.get(agentId).profile.name}`);
+            send(res, 200, { ok: true, ...memoryAdmin.detail(agentId) });
+          } else if (result.conflict) send(res, 409, { error: result.why });
+          else send(res, 400, { error: result.why });
+          return;
+        }
 
         if (route === "POST /api/vault/remove") {
           if (refusedRole("admin")) return;

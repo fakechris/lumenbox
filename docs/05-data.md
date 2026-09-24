@@ -265,7 +265,7 @@ whoever asks next, which in a team is worse than not recording it.
 
 ### 2.2b `memory.jsonl`
 
-Append-only, one record per line: `{ at, kind, text, source? }`.
+Append-only, one record per line: `{ at, kind, text, source?, from?, revokedSources? }`.
 
 This replaced a single markdown file that was pasted whole into every system prompt. That works for a
 week and then becomes a second unbounded context — it only grows, nothing ages out, the same fact
@@ -277,13 +277,15 @@ where matching is needed — no embeddings, no index, no second database. `selec
 seam, so semantic retrieval is a substitution rather than a rewrite if evidence ever calls for one.
 The trigger for reconsidering is written down in §7.
 
-Three kinds, each with an unambiguous source, which is what makes them usable:
+Five kinds, including the two append-only correction records:
 
 | kind | written by | half-life | weight |
 | --- | --- | --- | --- |
 | `fact` | `RememberFact` — a deliberate act, so it is trusted | 365d | 1.0 |
 | `note` | automatic extraction — nobody vouched for it | 30d | 0.5 |
 | `episode` | condensed from several exchanges; stands in for facts that have aged out | 90d | 1.5 |
+| `pitfall` | a durable failure mode learned from an episode | 365d | 2.0 |
+| `retraction` | an append-only correction by record key or source reference | permanent control record | not rendered |
 
 A separate "profile" tier next to a "recent" one was rejected: that classification has to come
 from somewhere, and a tier nobody can populate correctly is worse than one list scored honestly.
@@ -308,6 +310,20 @@ Extraction runs **after a turn and every third exchange**, on the cheap summaris
 allowed to find nothing — the sentinel is explicit and the prompt asks for it first. An extractor that
 must produce output invents something, and a memory of the obvious is worse than none because it is
 read on every future turn. Every fourth extraction condenses into an episode.
+
+New memory records carry provenance in `from`: an inbound message is `message:<message-id>` and a
+template contribution is `template:<template-id>`. A manual `RememberFact` inherits every inbound
+message in the current turn; an automatic extraction names the exact message that triggered it.
+Legacy records without `from` remain readable but are honestly shown as having unknown provenance.
+Editing a record preserves its provenance rather than laundering it into an apparently independent
+fact.
+
+The memory page can preview every currently live personal and shared record derived from one source,
+then withdraw that source with a compare-and-swap version. Withdrawal appends a source tombstone to
+both tiers. A record with several sources is disabled as a whole if any one source is withdrawn; the
+system does not pretend it can separate mixed prose after the fact. The original transcript is never
+deleted. Prompt projection, Recall, the memory page and the box mirror all resolve the same append-only
+view, and the registry rejects a late background or shared write whose source is already withdrawn.
 
 An existing `memory.md` is imported once, as `fact` records with their original dates honoured, and
 the markdown file is left on disk. Losing someone's memory to upgrade the format would be the worst
@@ -763,7 +779,9 @@ Honestly, since these are the findings a review should raise:
   decay are untouched. The cost accepted matches every other log: "what was believed when" is only
   recoverable back to the last compaction. Shared shards compact together, never one at a time — a
   retraction in one agent's shard withdraws a fact in another's, and the rule that keeps every
-  crash point safe is that a retraction is only dropped once nothing it could kill remains on disk.
+  crash point safe is that a record-key retraction is only dropped once nothing it could kill remains
+  on disk. Source tombstones are never dropped: they are the admission guard that prevents a delayed
+  extractor, template migration or shared-memory write from recreating already withdrawn material.
 - **No query.** "Which agent touched this file", "what happened on Tuesday" mean reading every
   file. Fine for one box, not for a fleet.
 - **No transactions.** Atomic profile writes and append-only transcripts cover the realistic

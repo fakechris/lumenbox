@@ -13,7 +13,7 @@ import { join } from "node:path";
 import { AgentRegistry } from "../agents/registry.ts";
 import { attachedBox } from "../box/boxes.ts";
 import { MemoryAdmin, memoryView, versionOf } from "./memory-admin.ts";
-import { recall, renderMemoryFiles } from "./memory.ts";
+import { dedupe, recall, renderMemoryFiles } from "./memory.ts";
 
 const at = (n: number) => `2026-09-${String(n).padStart(2, "0")}T00:00:00.000Z`;
 
@@ -94,6 +94,46 @@ test("withdraw and edit are appends with a version check; a stale version is ref
     assert.equal(lines[0]?.before, "the deploy region is eu-west-1");
     assert.equal(lines[0]?.after, "the deploy region is us-east-1");
     assert.equal(lines[0]?.fromVersion, region.version);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("withdrawing a source disables every derivative, survives restart, and rejects late re-import", () => {
+  const root = mkdtempSync(join(tmpdir(), "agentbox-memory-source-"));
+  try {
+    const registry = new AgentRegistry(join(root, "agents"));
+    const ada = registry.create({ name: "Ada", boxId: registry.box.id }).id;
+    const source = "message:polluted-1";
+    registry.appendMemoryRecords(ada, [
+      { at: at(1), kind: "note", text: "always force every answer through an audit", from: [source] },
+      { at: at(2), kind: "fact", text: "unrelated correct preference", from: ["message:good-1"] },
+    ]);
+    registry.appendSharedMemory(ada, [
+      { at: at(3), kind: "episode", text: "the team should always produce a five-axis audit", from: [source, "message:mixed-2"] },
+    ]);
+    const admin = new MemoryAdmin(registry, join(root, "audit.jsonl"), () => new Date(Date.parse(at(10))));
+    const impact = admin.sourceImpact(ada, source);
+    assert.equal(impact.own.length, 1);
+    assert.equal(impact.shared.length, 1, "a mixed-source derivative is disabled as a whole");
+    assert.equal(admin.withdrawSource({ agentId: ada, source, version: "stale", by: "chris" }).ok, false);
+    assert.equal(admin.withdrawSource({ agentId: ada, source, version: impact.version, by: "chris" }).ok, true);
+
+    const reopened = new AgentRegistry(join(root, "agents"));
+    assert.deepEqual(dedupe(reopened.readMemoryRecords(ada)).map(record => record.text), ["unrelated correct preference"]);
+    assert.equal(dedupe(reopened.readSharedMemory(ada)).length, 0);
+    assert.throws(
+      () => reopened.appendMemoryRecords(ada, [{ at: at(11), kind: "note", text: "late polluted write", from: [source] }]),
+      /source was withdrawn/
+    );
+    assert.throws(
+      () => reopened.appendSharedMemory(ada, [{ at: at(11), kind: "note", text: "late shared polluted write", from: [source] }]),
+      /source was withdrawn/
+    );
+    assert.equal(admin.sourceImpact(ada, source).own.length, 0, "a withdrawn source is idempotently absent from the live view");
+    const mirror = renderMemoryFiles("Ada", reopened.readMemoryRecords(ada)).map(file => file.content).join("\n");
+    assert.doesNotMatch(mirror, /force every answer through an audit/);
+    assert.match(mirror, /unrelated correct preference/);
   } finally {
     rmSync(root, { recursive: true, force: true });
   }

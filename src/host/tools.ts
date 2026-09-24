@@ -208,6 +208,8 @@ export interface ToolContext {
    * keep separate working directories and separate intent. Absent means the main one.
    */
   conversation?: string;
+  /** Durable inbound message ids this turn derives memory from. */
+  memorySources?: readonly string[];
   /** The team's task board. Absent means the Tasks tool answers that there is none. */
   tasks?: TaskStore;
   /** The scopes registry, so a secret granted by the caller's scope resolves. */
@@ -4701,7 +4703,11 @@ export async function dispatchTool(
         ...(context.caller?.userId !== undefined && !fromTemplate ? { about: context.caller.userId } : {}),
         // Where it was decided: the conversation this turn is in, now. A template's facts come
         // from the template, which `source` already says.
-        ...(fromTemplate ? {} : { from: [memoryRef(context.conversation ?? MAIN_CONVERSATION, new Date())] }),
+        from: fromTemplate
+          ? [`${TEMPLATE_SOURCE_PREFIX}${context.templateSetup}`]
+          : context.memorySources !== undefined && context.memorySources.length > 0
+            ? [...new Set(context.memorySources)].slice(-8)
+            : [memoryRef(context.conversation ?? MAIN_CONVERSATION, new Date())],
         // An explicit promotion beyond the box (INV-424). The box itself is stamped by the
         // registry on write, from the roster, so it is not set here.
         ...(shared && String(input.audience ?? "box") === "everyone" ? { audience: "everyone" as const } : {}),

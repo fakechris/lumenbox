@@ -1558,6 +1558,7 @@ async function runContextTurn(agent: AgentRecord, inbound: readonly InboundMessa
           tasks: deps.tasks,
           turnId,
           conversation,
+          memorySources: inbound.map(message => `message:${message.id}`),
         });
         replayed.push({
           type: "tool_result",
@@ -2686,6 +2687,7 @@ async function runContextTurn(agent: AgentRecord, inbound: readonly InboundMessa
             ...(deps.templates !== undefined ? { templates: deps.templates } : {}),
             turnId,
             conversation,
+            memorySources: inbound.map(message => `message:${message.id}`),
             toolsUsedThisTurn,
             callsThisTurn,
           }

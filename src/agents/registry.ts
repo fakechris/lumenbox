@@ -40,6 +40,7 @@ import {
   compactSharedShardLines,
   importMarkdown,
   MEMORY_COMPACT_AT,
+  revokedMemorySources,
   type MemoryRecord,
 } from "../host/memory.ts";
 import { envNumber } from "../config.ts";
@@ -1061,6 +1062,11 @@ export class AgentRegistry {
     const mode = this.contextScope.getStore()?.mode;
     if (mode !== undefined && mode !== "normal") throw new Error(`${mode === "clean" ? "Clean" : "Recovery"} context: refusing to write learned memory`);
     if (records.length === 0) return;
+    const revoked = existsSync(this.memoryRecordsPathFor(agentId))
+      ? revokedMemorySources(this.readMemoryRecords(agentId))
+      : new Set<string>();
+    const blocked = records.find(record => record.revokedSources === undefined && record.from?.some(source => revoked.has(source)));
+    if (blocked !== undefined) throw new Error("Memory source was withdrawn: refusing to re-import its derived record");
     mkdirSync(this.dirFor(agentId), { recursive: true });
     for (const record of records) {
       appendLine(this.memoryRecordsPathFor(agentId), JSON.stringify(record));
@@ -1184,6 +1190,9 @@ export class AgentRegistry {
     const mode = this.contextScope.getStore()?.mode;
     if (mode !== undefined && mode !== "normal") throw new Error(`${mode === "clean" ? "Clean" : "Recovery"} context: refusing to write shared memory`);
     if (records.length === 0) return;
+    const revoked = revokedMemorySources(this.readSharedMemory(agentId));
+    const blocked = records.find(record => record.revokedSources === undefined && record.from?.some(source => revoked.has(source)));
+    if (blocked !== undefined) throw new Error("Memory source was withdrawn: refusing to re-import its shared derivative");
     mkdirSync(this.sharedMemoryDir(), { recursive: true });
     // The writer's box, from the roster — not from the record, which the tool built.
     const box = this.boxOf(agentId).id;

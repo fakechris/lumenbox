@@ -269,13 +269,15 @@ test("a memory kept during a template setup turn is sourced to the template and 
     assert.ok(!kept.isError, kept.text);
     const [record] = registry.readMemoryRecords(vera.id);
     assert.equal(record?.source, "template:tpl1");
+    assert.deepEqual(record?.from, ["template:tpl1"]);
     assert.equal(record?.about, undefined, "the person importing did not say it");
 
-    const later = { ...context, templateSetup: undefined } as unknown as Parameters<typeof dispatchTool>[2];
+    const later = { ...context, templateSetup: undefined, memorySources: ["message:user-1"] } as unknown as Parameters<typeof dispatchTool>[2];
     await dispatchTool("RememberFact", { fact: "Chris wants the digest on Mondays." }, later);
     const [, own] = registry.readMemoryRecords(vera.id);
     assert.equal(own?.source, "RememberFact");
     assert.equal(own?.about, "chris");
+    assert.deepEqual(own?.from, ["message:user-1"]);
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
