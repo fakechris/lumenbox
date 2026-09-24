@@ -16,7 +16,7 @@ import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "
 import { dirname } from "node:path";
 
 /** The set a person may pick from. Small on purpose: a picker with three hundred entries is a search box. */
-export const REACTIONS = ["👍", "❤️", "😂", "🎉", "👀", "✅"] as const;
+export const REACTIONS = ["👍", "👎", "❤️", "😂", "🎉", "👀", "✅"] as const;
 export type ReactionEmoji = (typeof REACTIONS)[number];
 
 export interface Reaction {

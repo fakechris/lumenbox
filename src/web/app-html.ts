@@ -3263,7 +3263,7 @@ function messageAction(msg, act) {
    One emoji per message, kept on the server beside the transcript so every page sees the
    same thing; and a per-message unread mark, cleared by the message being on screen rather
    than by the page having been opened. */
-var REACTIONS = ["\ud83d\udc4d", "\u2764\ufe0f", "\ud83d\ude02", "\ud83c\udf89", "\ud83d\udc40", "\u2705"];
+var REACTIONS = ["\ud83d\udc4d", "\ud83d\udc4e", "\u2764\ufe0f", "\ud83d\ude02", "\ud83c\udf89", "\ud83d\udc40", "\u2705"];
 
 function openPicker(msg) {
   var tools = msg.querySelector(".mtools");
@@ -3299,6 +3299,7 @@ function sendReaction(msg, emoji) {
   var next = chip && chip.textContent === emoji ? null : (emoji || null);
   applyReaction(msg, next);
   post("/api/reactions", { agent: current, conversation: currentConversation, index: Number(index), emoji: next })
+    .then(function () { if (next === "\ud83d\udc4e" && msg.getAttribute("data-role") === "agent") feed("这条回答有问题？在对应私聊发送 /retry，可只按原始请求无副作用重答；系统不会自动清空。", "info"); })
     .catch(function () { applyReaction(msg, chip ? chip.textContent : null); feed("could not save the reaction", "err"); });
 }
 

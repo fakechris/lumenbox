@@ -529,6 +529,14 @@ assigned agent and private conversation. Newer tasks read their source verbatim 
 ledger; legacy tasks may use only a complete, explicitly labelled description snapshot. A missing,
 truncated or cross-conversation source is refused.
 
+Ordinary answers that never became tasks use `/retry`. It finds the latest answered turn in the
+current epoch, follows that turn's `causedBy` ids back to the immutable message ledger, advances to
+a recover epoch and asks again from those verbatim user messages. The previous assistant answer is
+not input. The first retry is tool-free and cannot replay side effects; requests whose source
+included attachments are refused because the message ledger has their metadata, not their bytes.
+A 👎 reaction is a reliable human signal and points at this command, but does not execute it. The
+host deliberately does not infer “context pollution” from tone or let a model silently erase state.
+
 The board is advisory like claims, with one enforced exception: **when a task names a
 reviewer, its assignee cannot move it to done** — the attempt lands in `review` with a
 note saying so. A gate the worker can wave itself through is decoration; everything

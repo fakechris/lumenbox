@@ -27,7 +27,8 @@ import { join, posix } from "node:path";
 import { fileURLToPath } from "node:url";
 import { AgentRegistry, MAIN_CONVERSATION, conversationIdFor } from "../agents/registry.ts";
 import { isContextCommand, newContext } from "../host/context-recovery.ts";
-import { recoverTask } from "../host/task-recovery.ts";
+import { isRecoveryCommand, recoverTask } from "../host/task-recovery.ts";
+import { isRetryCommand, retryLastAnswer } from "../host/retry-recovery.ts";
 import type { BusEvent } from "../agents/bus.ts";
 import { BoxManager, defaultBoxConfig } from "../box/docker.ts";
 import { resolveBoxProvisioner, type BoxProvisioner } from "../box/provisioner.ts";
@@ -945,6 +946,33 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
       started: (taskId, operationId) => { orchestrator.tasks?.setRecoveryStatus(taskId, operationId, "running", "channel"); },
       finished: (taskId, operationId, outcome) => { orchestrator.tasks?.setRecoveryStatus(taskId, operationId, outcome, "channel"); },
     } } : {}),
+    retry: {
+      prepare: input => {
+        let agent: ReturnType<typeof registry.resolve> | undefined;
+        try { agent = input.agentName === undefined ? registry.list()[0] : registry.resolve(input.agentName); }
+        catch { return { status: "refused" as const, text: "找不到目标 agent；没有修改上下文。" }; }
+        if (agent === undefined) return { status: "refused" as const, text: "找不到目标 agent；没有修改上下文。" };
+        const principal = principals.resolve(input.identity);
+        const conversation = conversationIdFor(input.conversationKey);
+        return retryLastAnswer({
+          registry,
+          message: id => messages.list().find(item => item.id === id),
+          mayRetry: () => mayEnterBox(registry.boxOf(agent!.id), principal.id),
+          blockers: () => [
+            ...input.blockers,
+            ...orchestrator.contextBlockers(agent!.id, conversation),
+            ...questions.list().filter(item => item.agentId === agent!.id && item.conversation === conversation && item.expiresAt > Date.now()).map(item => `问题 ${item.id} 待回答`),
+            ...deliveries.pending().filter(item => item.agentId === agent!.id && item.conversation === conversation).map(item => `投递 ${item.id} 尚未确认`),
+          ],
+        }, {
+          agentId: agent.id,
+          conversation,
+          operationId: input.operationId,
+          identity: input.identity,
+          privateChat: input.privateChat,
+        });
+      },
+    },
     ingress,
     messages,
     listeners: message => {
@@ -6068,8 +6096,8 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
           if (refused(agentId)) return;
           const text = String(body.text ?? "").trim();
 
-          if (isContextCommand(text)) {
-            send(res, 409, { error: "控制台主会话还包含团队活动，暂不支持 /new。请在已接入的独立私聊使用；本次没有修改上下文。" });
+          if (isContextCommand(text) || isRecoveryCommand(text) || isRetryCommand(text)) {
+            send(res, 409, { error: "控制台主会话还包含团队活动，暂不支持上下文恢复命令。请在已接入的独立私聊使用；本次没有修改上下文。" });
             return;
           }
 

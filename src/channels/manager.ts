@@ -34,6 +34,7 @@ import { boardText, type BoardView } from "./board-view.ts";
 import { parseContinuation } from "./continuation.ts";
 import { isContextCommand } from "../host/context-recovery.ts";
 import { isRecoveryCommand, parseRecoveryCommand, type RecoverTaskResult } from "../host/task-recovery.ts";
+import { isRetryCommand, type RetryResult } from "../host/retry-recovery.ts";
 import type { CardRecord } from "./card-ledger.ts";
 
 import {
@@ -350,6 +351,9 @@ export interface ChannelManagerDeps {
     prepare: (input: { agentName: string | undefined; identity: string; conversationKey: string; operationId: string; privateChat: boolean; blockers: string[]; taskId: string }) => RecoverTaskResult;
     started: (taskId: string, operationId: string) => void;
     finished: (taskId: string, operationId: string, outcome: "completed" | "failed") => void;
+  };
+  retry?: {
+    prepare: (input: { agentName: string | undefined; identity: string; conversationKey: string; operationId: string; privateChat: boolean; blockers: string[] }) => RetryResult;
   };
   /**
    * Told of every admitted message from a person, for routines that listen for a phrase. Fired
@@ -1407,7 +1411,7 @@ ${input.options.map(option => `· ${option}`).join("\n")}`
         ? { files: message.files.map(file => ({ name: file.name, bytes: Buffer.byteLength(file.base64, "base64") })) }
         : {}),
     });
-    if (!isContextCommand(parseAddress(message.text).text) && !isRecoveryCommand(parseAddress(message.text).text)) this.deps.listeners?.({
+    if (!isContextCommand(parseAddress(message.text).text) && !isRecoveryCommand(parseAddress(message.text).text) && !isRetryCommand(parseAddress(message.text).text)) this.deps.listeners?.({
       text: message.text,
       chatKey: message.chatKey ?? message.identity,
       ...(message.threadKey !== undefined ? { threadKey: message.threadKey } : {}),
@@ -1489,6 +1493,37 @@ ${input.options.map(option => `· ${option}`).join("\n")}`
       });
       this.inflight.add(recovery);
       this.inflightContexts.set(recovery, key);
+      return prepared.text;
+    }
+    if (isRetryCommand(control.text)) {
+      if (control.text.trim().toLowerCase() !== "/retry") return "用法：/retry。本次没有修改上下文。";
+      if (message.files?.length) return "请单独发送 /retry；附件未作为重答来源消费。";
+      if (this.deps.retry === undefined) return "此入口尚未接入安全重答；本次没有修改上下文。";
+      const key = message.threadKey ?? message.chatKey ?? message.identity;
+      const busy = this.runningWork.get(key) ?? [];
+      const question = [...this.awaitingAnswer.values()].some(item => item.conversationKey === key && item.expiresAt > Date.now());
+      const blocked = pending !== undefined || busy.length > 0 || question || this.pendingDrops.has(key) || [...this.inflightContexts.values()].includes(key);
+      const operationId = message.messageId === undefined ? "" : JSON.stringify([adapter.name, key, message.identity, message.messageId, "retry"]);
+      const prepared = this.deps.retry.prepare({
+        agentName: control.agentName ?? this.deps.defaultAgentFor?.(adapter.name),
+        identity: message.identity,
+        conversationKey: key,
+        operationId,
+        privateChat: message.privateChat === true,
+        blockers: blocked ? ["渠道仍有运行中、排队、待回答/审批或待处理附件"] : [],
+      });
+      if (prepared.status !== "ready") return prepared.text;
+      const retry = this.runTask(adapter, message, control.agentName, prepared.prompt, undefined, {
+        cardTitle: "无副作用重答",
+        skipTask: true,
+      }).catch(error => {
+        this.deps.log(`channel ${adapter.name}: retry failed (${error instanceof Error ? error.message : String(error)})`);
+      }).finally(() => {
+        this.inflight.delete(retry);
+        this.inflightContexts.delete(retry);
+      });
+      this.inflight.add(retry);
+      this.inflightContexts.set(retry, key);
       return prepared.text;
     }
     if (pending !== undefined) {
@@ -1967,7 +2002,7 @@ ${input.options.map(option => `· ${option}`).join("\n")}`
     agentName: string | undefined,
     text: string,
     droppedFiles?: readonly string[],
-    options?: { questionId?: string; existingTaskId?: string; cardTitle?: string; recoveryOperationId?: string }
+    options?: { questionId?: string; existingTaskId?: string; cardTitle?: string; recoveryOperationId?: string; skipTask?: boolean }
   ): Promise<void> {
     const chatKey = message.chatKey ?? message.identity;
     const runningKey = message.threadKey ?? chatKey;
@@ -1993,7 +2028,7 @@ ${input.options.map(option => `· ${option}`).join("\n")}`
     mark("working");
 
     const ahead = this.deps.ahead?.(agentName, runningKey) ?? 0;
-    const taskId = options?.existingTaskId ?? this.deps.board?.open({
+    const taskId = options?.skipTask === true ? undefined : options?.existingTaskId ?? this.deps.board?.open({
       title: firstLine(text),
       // The person's whole message rides on the task, so a later title rewrite never
       // costs the board what was actually said.
