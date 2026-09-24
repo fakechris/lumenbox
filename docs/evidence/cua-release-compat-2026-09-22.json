@@ -1,0 +1,50 @@
+{
+  "version": 1,
+  "source_commit": "bbe8729ef553449460f39a4ee06c32fa7ced8bca",
+  "legacy_host_commit": "cc71f8223138a010b70c2e211cf739fa3a7ac57c",
+  "scope": "BoxClient and outcome projection from exact old source against real daemons; full historical orchestrator/UI and general desktop delivery are not covered",
+  "started_at": "2026-09-22T12:19:15.170Z",
+  "cases": [
+    {
+      "host": "legacy",
+      "box": "legacy",
+      "image": "agentbox/box:78bcc14810b0",
+      "image_id": "sha256:f1839bc41d0c9287aeaafb904faa9b1f2f4733f20ed4216792c32453d50f22b1",
+      "read": "pass",
+      "reported_outcome": "ok",
+      "write": "wire_accepted_without_task_success_claim",
+      "status": "pass"
+    },
+    {
+      "host": "current",
+      "box": "legacy",
+      "image": "agentbox/box:78bcc14810b0",
+      "image_id": "sha256:f1839bc41d0c9287aeaafb904faa9b1f2f4733f20ed4216792c32453d50f22b1",
+      "read": "pass",
+      "write": "refused_before_dispatch",
+      "status": "pass"
+    },
+    {
+      "host": "legacy",
+      "box": "current",
+      "image": "agentbox/cua-release:7804bf680a75",
+      "image_id": "sha256:b9064d88531be92ae2b65ae24732c5e511211afc2c5c85ee83a3e37639c94d18",
+      "read": "pass",
+      "reported_outcome": "unknown",
+      "write": "wire_accepted_without_task_success_claim",
+      "status": "pass"
+    },
+    {
+      "host": "current",
+      "box": "current",
+      "image": "agentbox/cua-release:7804bf680a75",
+      "image_id": "sha256:b9064d88531be92ae2b65ae24732c5e511211afc2c5c85ee83a3e37639c94d18",
+      "read": "pass",
+      "reported_outcome": "unknown",
+      "write": "wire_accepted_without_task_success_claim",
+      "status": "pass"
+    }
+  ],
+  "status": "pass",
+  "finished_at": "2026-09-22T12:19:35.989Z"
+}
