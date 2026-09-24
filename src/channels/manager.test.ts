@@ -112,25 +112,40 @@ async function started(manager: ChannelManager): Promise<void> {
 
 const sleep = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
 
-test("new context commands never fall through to the model, including unsupported clean and attachments", async () => {
+test("normal and clean new-context commands never fall through to the model or consume attachments", async () => {
   const adapter = testAdapter();
   let asks = 0;
   let controls = 0;
   const manager = new ChannelManager({
     mayDrive: () => true, log: () => {},
     ask: async () => { asks++; return "should not run"; },
-    newContext: input => { controls++; assert.equal(input.privateChat, true); assert.ok(input.operationId); return "switched"; },
+    newContext: input => { controls++; assert.equal(input.privateChat, true); assert.ok(input.operationId); return `switched:${input.mode}`; },
   });
   manager.register(adapter, true, "test"); await started(manager);
   const base = { identity: "telegram:1", privateChat: true, senderLabel: "user", messageId: "m1" };
   try {
-    assert.equal(await adapter.inject({ ...base, text: "/new" }), "switched");
-    assert.match((await adapter.inject({ ...base, text: "/new --clean" }))!, /尚未开放/);
+    assert.equal(await adapter.inject({ ...base, text: "/new" }), "switched:normal");
+    assert.equal(await adapter.inject({ ...base, text: "/new --clean" }), "switched:clean");
     assert.match((await adapter.inject({ ...base, text: "/new title" }))!, /仅支持/);
     assert.match((await adapter.inject({ ...base, text: "/new", files: [{ name: "input.txt", base64: "eA==" }] }))!, /单独发送/);
     await manager.idle();
     assert.equal(asks, 0);
-    assert.equal(controls, 1);
+    assert.equal(controls, 2);
+  } finally { manager.stop(); }
+});
+
+test("clean context rejects later attachments before storage or model work", async () => {
+  const adapter = testAdapter();
+  let asks = 0;
+  const manager = new ChannelManager({
+    mayDrive: () => true, log: () => {}, contextMode: () => "clean",
+    ask: async () => { asks++; return "should not run"; },
+  });
+  manager.register(adapter, true, "test"); await started(manager);
+  try {
+    const result = await adapter.inject({ identity: "telegram:1", privateChat: true, senderLabel: "user", messageId: "f1", text: "分析附件", files: [{ name: "secret.txt", base64: "eA==" }] });
+    assert.match(result!, /干净上下文/);
+    assert.equal(asks, 0);
   } finally { manager.stop(); }
 });
 

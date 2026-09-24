@@ -42,7 +42,7 @@ import {
   FIRST_TOKEN_DEADLINE_MS,
 } from "./transient.ts";
 import type { UsageKind, UsageLog } from "./usage.ts";
-import { chooseRelevant, memoryProjectionManifest, SHARED_CHAR_BUDGET } from "./memory.ts";
+import { chooseRelevant, memoryProjectionManifest, SHARED_CHAR_BUDGET, type MemoryRecall } from "./memory.ts";
 import { needsReview, type ReviewInput, type ReviewMode, type Verdict } from "./auto-review.ts";
 import type { HookRunner } from "./hooks.ts";
 import { AGENT_WAKE_CUE } from "../agents/bus.ts";
@@ -1354,6 +1354,8 @@ async function runContextTurn(agent: AgentRecord, inbound: readonly InboundMessa
 
   const { registry, bus, box, client } = deps;
   const conversation = deps.conversation ?? MAIN_CONVERSATION;
+  const contextMode = registry.contextMode(agent.id, conversation);
+  const clean = contextMode === "clean";
   // Every event names its conversation, so a page viewing one thread can ignore the
   // stream of another instead of splicing an outside chat's reply into the team room.
   const baseEmit = deps.onEvent ?? (() => {});
@@ -1426,49 +1428,55 @@ async function runContextTurn(agent: AgentRecord, inbound: readonly InboundMessa
   };
 
   // Both personal and shared memories pass the same relevance gate, even below budget.
-  const ownMemory = registry.readMemoryRecords(agent.id);
-  const sharedMemory = registry.readSharedMemory(agent.id);
+  const ownMemory = clean ? [] : registry.readMemoryRecords(agent.id);
+  const sharedMemory = clean ? [] : registry.readSharedMemory(agent.id);
   const memoryQuery = inbound.map(message => message.text).join(" ");
   const selection = {
     query: memoryQuery,
     ask: deps.selectMemory ?? (async () => undefined),
     log: (line: string) => console.error(`[memory] ${agent.profile.name}: ${line}`),
   };
-  const [memoryRecall, sharedMemoryRecall] = await Promise.all([chooseRelevant({
-    records: ownMemory,
-    ...selection,
-  }), chooseRelevant({ records: sharedMemory, budget: SHARED_CHAR_BUDGET, ...selection })]);
+  const emptyRecall: MemoryRecall = { records: [], omitted: 0, excluded: 0, method: "empty" };
+  const [memoryRecall, sharedMemoryRecall] = clean
+    ? [emptyRecall, emptyRecall]
+    : await Promise.all([chooseRelevant({ records: ownMemory, ...selection }), chooseRelevant({
+        records: sharedMemory, budget: SHARED_CHAR_BUDGET, ...selection,
+      })]);
 
   // Built once, and the volatile half rebuilt on every continuation — see `rebuildVolatile`. The
   // stable half never changes for one agent, so it is fixed here.
   const buildParts = (recallToUse: typeof memoryRecall) =>
     buildSystemPromptParts({
       agent,
-      teammates: teammatesOf(registry, agent.id),
-      memory: registry.readMemoryRecords(agent.id),
+      teammates: clean ? [] : teammatesOf(registry, agent.id),
+      memory: ownMemory,
       memoryRecall: recallToUse,
       memoryQuery,
       sharedMemory,
       sharedMemoryRecall,
-      skills: narrowSkills(deps.skills ?? [], deps.bundles?.forBox(registry.boxOf(agent.id))),
+      skills: clean ? [] : narrowSkills(deps.skills ?? [], deps.bundles?.forBox(registry.boxOf(agent.id))),
       place: placeOf(registry, agent.id, deps.bundles),
       transcript: registry.readTranscript(agent.id, conversation),
-      heard: registry.readHeard(agent.id, conversation),
+      heard: clean ? [] : registry.readHeard(agent.id, conversation),
       // Read fresh, which is what makes the plan and the todo list survive a compaction: they are in
       // the prompt rather than in the history a summary replaces.
-      durable: registry.readDurableState(agent.id, conversation),
-      tasks: deps.tasks?.forAgent(agent.id).filter(task => registry.contextVersion(agent.id, conversation) === 0 || (task.conversation ?? MAIN_CONVERSATION) === conversation),
+      durable: clean ? {} : registry.readDurableState(agent.id, conversation),
+      tasks: clean ? [] : deps.tasks?.forAgent(agent.id).filter(task => registry.contextVersion(agent.id, conversation) === 0 || (task.conversation ?? MAIN_CONVERSATION) === conversation),
       resolution: deps.resolution,
       ...(deps.boxAccess !== undefined ? { boxAccess: deps.boxAccess } : {}),
       agentsRoot: registry.root,
-      hasBox: box !== undefined,
+      hasBox: !clean && box !== undefined,
       vision: provider.vision,
       conversation,
-      siblingConversations: registry
+      siblingConversations: clean ? 0 : registry
         .listConversations(agent.id)
         .filter(entry => entry.id !== conversation).length,
     });
-  const promptParts = buildParts(memoryRecall);
+  const builtPromptParts = buildParts(memoryRecall);
+  const promptParts = clean ? {
+    stable: `${builtPromptParts.stable}\n\n---\n\n## Clean context\n\nClean context is active. Only the host's safety and authority rules, this agent's configured identity, and messages in this new context are loaded. Earlier conversations, personal and shared long-term memory, learned skills, tasks, plans, heard-room context, and other threads are excluded. No tools are available and nothing in this context may be learned into long-term or shared memory. Messages are still recorded for continuity and audit; this is not incognito mode.`,
+    volatile: builtPromptParts.volatile,
+  } : builtPromptParts;
 
   // A section that rendered nothing for a suspicious reason says so, once, into the log.
   // Every context bug this week arrived as an absence — a history read from the wrong
@@ -1476,12 +1484,12 @@ async function runContextTurn(agent: AgentRecord, inbound: readonly InboundMessa
   // an absence is indistinguishable from "nothing to say" unless something checks.
   for (const fault of emptySectionFaults({
     agent,
-    teammates: teammatesOf(registry, agent.id),
+    teammates: clean ? [] : teammatesOf(registry, agent.id),
     memory: [],
     agentsRoot: registry.root,
-    hasBox: box !== undefined,
+    hasBox: !clean && box !== undefined,
     conversation,
-    siblingConversations: registry
+    siblingConversations: clean ? 0 : registry
       .listConversations(agent.id)
       .filter(entry => entry.id !== conversation).length,
   })) {
@@ -1521,7 +1529,7 @@ async function runContextTurn(agent: AgentRecord, inbound: readonly InboundMessa
   // call — and a read-only call answered fresh beats a result declared unknown.
   // Everything not declared safe keeps the honest "never recorded" treatment at
   // assembly, and the model is still told to look before redoing those.
-  if (deps.resumeOf !== undefined && history.length > 0) {
+  if (!clean && deps.resumeOf !== undefined && history.length > 0) {
     const last = history[history.length - 1]!;
     if ("kind" in last && last.kind === "blocks") {
       const calls = last.blocks.filter(
@@ -1649,8 +1657,9 @@ async function runContextTurn(agent: AgentRecord, inbound: readonly InboundMessa
   // A template setup turn holds files and memory and a way to ask, nothing that reaches out
   // (docs/29 §5.3): the recipe it is installing is third-party text, and installing yourself
   // is not a reason to message anyone. The same narrowing applies when offering and executing tools.
-  const effectiveTools =
-    deps.templateSetup === undefined
+  const effectiveTools = clean
+    ? []
+    : deps.templateSetup === undefined
       ? narrowed
       : TEMPLATE_SETUP_TOOLS.filter(tool => narrowed === undefined || narrowed.includes(tool));
   // The tools other people wrote, narrowed by the same allowlist as ours: an MCP tool
@@ -1798,6 +1807,7 @@ async function runContextTurn(agent: AgentRecord, inbound: readonly InboundMessa
     build: buildInfo(),
     promptHash: promptHashOf(promptParts.stable, promptParts.volatile),
     contextEpoch: registry.contextVersion(agent.id, conversation),
+    contextMode,
     memoryProjection: {
       personal: memoryProjectionManifest(memoryRecall),
       shared: memoryProjectionManifest(sharedMemoryRecall),
@@ -2579,7 +2589,7 @@ async function runContextTurn(agent: AgentRecord, inbound: readonly InboundMessa
       // tool's answer, with the reason, so the agent can ask rather than guess.
       const toolInput = (toolUse.input ?? {}) as Record<string, unknown>;
       const reviewWhy =
-        deps.autoReview === undefined
+        clean || deps.autoReview === undefined
           ? undefined
           : (needsReview(toolUse.name, toolInput) ??
             // A host-level MCP server's tools (INV-439) are reviewed like a host command:
@@ -2611,7 +2621,7 @@ async function runContextTurn(agent: AgentRecord, inbound: readonly InboundMessa
       // PreToolUse hooks, after auto-review: a person's own script gets the same veto, with the
       // same shape of answer to the model.
       let hookBlock: string | undefined;
-      if (blocked === undefined && deps.hooks?.has("PreToolUse", toolUse.name)) {
+      if (!clean && blocked === undefined && deps.hooks?.has("PreToolUse", toolUse.name)) {
         const hook = await deps.hooks.run("PreToolUse", {
           session_id: turnId,
           agent_name: agent.profile.name,
@@ -2622,8 +2632,8 @@ async function runContextTurn(agent: AgentRecord, inbound: readonly InboundMessa
       }
 
       let outcome: ToolOutcome;
-      if (effectiveTools !== undefined && !tools.some(tool => tool.name === toolUse.name)) {
-        outcome = { text: "This tool is unavailable in the current execution context.", isError: true };
+      if (clean || (effectiveTools !== undefined && !tools.some(tool => tool.name === toolUse.name))) {
+        outcome = { text: clean ? "Tools are disabled in clean context." : "This tool is unavailable in the current execution context.", isError: true };
       } else if (hookBlock !== undefined) {
         outcome = { text: `Blocked by a PreToolUse hook: ${hookBlock}`, isError: true };
       } else if (blocked !== undefined) {

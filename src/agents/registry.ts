@@ -14,7 +14,7 @@
 
 import { randomBytes, randomUUID } from "node:crypto";
 import { AsyncLocalStorage } from "node:async_hooks";
-import { ContextEpochStore } from "./context-epoch.ts";
+import { ContextEpochStore, type ContextMode } from "./context-epoch.ts";
 import {
   closeSync,
   mkdirSync,
@@ -282,13 +282,13 @@ export class AgentNotFoundError extends Error {
 }
 
 export class AgentRegistry {
-  private readonly contextScope = new AsyncLocalStorage<{ agentId: string; conversation: string; epoch: number }>();
+  private readonly contextScope = new AsyncLocalStorage<{ agentId: string; conversation: string; epoch: number; mode: ContextMode }>();
 
   /** Capture once per turn/background producer; reads and writes stay in that version. */
   withContext<T>(agentId: string, conversation: string, run: () => T): T {
     const inherited = this.contextScope.getStore();
     const context = inherited?.agentId === agentId && inherited.conversation === conversation
-      ? inherited : { agentId, conversation, epoch: this.contextStore(agentId, conversation).current().epoch };
+      ? inherited : { agentId, conversation, ...this.contextStore(agentId, conversation).current() };
     this.assertContextCurrent(context);
     return this.contextScope.run(context, run);
   }
@@ -314,6 +314,12 @@ export class AgentRegistry {
       ? scope.epoch : this.contextStore(agentId, conversation).current().epoch;
   }
 
+  contextMode(agentId: string, conversation = MAIN_CONVERSATION): ContextMode {
+    const scope = this.contextScope.getStore();
+    return scope?.agentId === agentId && scope.conversation === conversation
+      ? scope.mode : this.contextStore(agentId, conversation).current().mode;
+  }
+
   private contextPath(agentId: string, conversation: string, kind: string): string {
     return this.contextStore(agentId, conversation).path(kind, this.contextVersion(agentId, conversation));
   }
@@ -327,7 +333,10 @@ export class AgentRegistry {
   /** Saved with asynchronous learning inputs, including batches that mix conversations. */
   contextWriteGuard(): () => boolean {
     const captured = this.contextScope.getStore();
-    return () => captured === undefined || this.contextStore(captured.agentId, captured.conversation).current().epoch === captured.epoch;
+    return () => captured === undefined || (
+      captured.mode !== "clean" &&
+      this.contextStore(captured.agentId, captured.conversation).current().epoch === captured.epoch
+    );
   }
   /**
    * The box this roster belongs to (docs/22 §7 item 1). Minted on first contact,
@@ -1049,6 +1058,7 @@ export class AgentRegistry {
 
   appendMemoryRecords(agentId: string, records: readonly MemoryRecord[]): void {
     this.assertContextCurrent();
+    if (this.contextScope.getStore()?.mode === "clean") throw new Error("Clean context: refusing to write learned memory");
     if (records.length === 0) return;
     mkdirSync(this.dirFor(agentId), { recursive: true });
     for (const record of records) {
@@ -1170,6 +1180,7 @@ export class AgentRegistry {
   /** Appends to this agent's own shard, which is the only one it may write. */
   appendSharedMemory(agentId: string, records: readonly MemoryRecord[]): void {
     this.assertContextCurrent();
+    if (this.contextScope.getStore()?.mode === "clean") throw new Error("Clean context: refusing to write shared memory");
     if (records.length === 0) return;
     mkdirSync(this.sharedMemoryDir(), { recursive: true });
     // The writer's box, from the roster — not from the record, which the tool built.

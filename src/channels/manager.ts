@@ -343,7 +343,8 @@ export function parseApprovalReply(text: string): ApprovalReply | undefined {
 }
 
 export interface ChannelManagerDeps {
-  newContext?: (input: { agentName: string | undefined; identity: string; conversationKey: string; operationId: string; privateChat: boolean; blockers: string[] }) => string;
+  newContext?: (input: { agentName: string | undefined; identity: string; conversationKey: string; operationId: string; privateChat: boolean; blockers: string[]; mode: "normal" | "clean" }) => string;
+  contextMode?: (input: { agentName: string | undefined; conversationKey: string }) => "normal" | "clean" | undefined;
   /**
    * Told of every admitted message from a person, for routines that listen for a phrase. Fired
    * beside the ordinary handling, never instead of it; the callee decides what, if anything, runs.
@@ -1432,7 +1433,8 @@ ${input.options.map(option => `· ${option}`).join("\n")}`
     const pending = this.awaitingApproval.get(message.identity);
     const control = parseAddress(message.text);
     if (isContextCommand(control.text)) {
-      if (control.text.trim().toLowerCase() !== "/new") return "目前仅支持 /new。/new --clean 尚未开放，不会把普通新对话冒充干净模式。";
+      const command = control.text.trim().toLowerCase();
+      if (command !== "/new" && command !== "/new --clean") return "目前仅支持 /new 和 /new --clean；本次没有修改上下文。";
       if (message.files?.length) return "请单独发送 /new；附件未作为新任务消费。";
       const key = message.threadKey ?? message.chatKey ?? message.identity;
       const busy = this.runningWork.get(key) ?? [];
@@ -1445,6 +1447,7 @@ ${input.options.map(option => `· ${option}`).join("\n")}`
         operationId: message.messageId === undefined ? "" : JSON.stringify([adapter.name, key, message.identity, message.messageId]),
         privateChat: message.privateChat === true,
         blockers: blocked ? ["渠道仍有运行中、排队、待回答/审批或待处理附件"] : [],
+        mode: command === "/new --clean" ? "clean" : "normal",
       }) ?? "此入口尚未接入安全的上下文切换；本次没有修改会话。";
     }
     if (pending !== undefined) {
@@ -1527,6 +1530,17 @@ ${input.options.map(option => `· ${option}`).join("\n")}`
       if (digestRequest.kind === "schedule")
         return this.deps.digest.schedule(chatKey, digestRequest.hour);
       return this.deps.digest.off(chatKey);
+    }
+
+    const cleanConversationKey = message.threadKey ?? message.chatKey ?? message.identity;
+    if (
+      message.files !== undefined && message.files.length > 0 &&
+      this.deps.contextMode?.({
+        agentName: control.agentName ?? this.deps.defaultAgentFor?.(adapter.name),
+        conversationKey: cleanConversationKey,
+      }) === "clean"
+    ) {
+      return "当前是干净上下文，首版只接受文字；附件没有写入或交给模型。请先单独发送 /new 退出干净模式。";
     }
 
     // A dropped file with nothing said is a delivery; with an instruction in the same

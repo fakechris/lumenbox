@@ -68,6 +68,27 @@ test("late old producers stay on old transcript and cannot publish personal or s
   } finally { f.cleanup(); }
 });
 
+test("clean context persists, refuses learning, and an ordinary new context explicitly exits it", () => {
+  const f = fixture();
+  try {
+    const deps = { registry: f.registry, mayReset: () => true, blockers: () => [] };
+    const clean = newContext(deps, { ...f.input, operationId: "clean", mode: "clean" });
+    assert.equal(clean.status, "switched");
+    assert.match(clean.text, /干净上下文/);
+    assert.equal(f.registry.contextMode(f.agent.id, f.input.conversation), "clean");
+    f.registry.withContext(f.agent.id, f.input.conversation, () => {
+      const record = { at: new Date().toISOString(), kind: "note" as const, text: "must not escape" };
+      assert.throws(() => f.registry.appendMemoryRecords(f.agent.id, [record]), /Clean context/);
+      assert.throws(() => f.registry.appendSharedMemory(f.agent.id, [record]), /Clean context/);
+      assert.equal(f.registry.contextWriteGuard()(), false);
+    });
+    assert.equal(newContext(deps, { ...f.input, operationId: "clean", mode: "clean" }).status, "replayed");
+    const normal = newContext(deps, { ...f.input, operationId: "normal" });
+    assert.match(normal.text, /已退出干净模式/);
+    assert.equal(f.registry.contextMode(f.agent.id, f.input.conversation), "normal");
+  } finally { f.cleanup(); }
+});
+
 test("an in-flight extraction cannot reintroduce the old context after new", async () => {
   const f = fixture();
   try {

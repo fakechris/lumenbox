@@ -18,9 +18,11 @@ test("new epoch preserves legacy bytes, clears the active view, survives restart
     writeFileSync(f.paths.transcript, 'old transcript\n');
     writeFileSync(f.paths.plan, "old plan");
     assert.equal(f.store.current().epoch, 0);
+    assert.equal(f.store.current().mode, "normal");
     assert.equal(f.store.path("transcript", 0), f.paths.transcript);
     const next = f.store.advance("request-1", 0);
     assert.equal(next.epoch, 1);
+    assert.equal(next.mode, "normal");
     assert.equal(readFileSync(f.store.path("transcript", 0), "utf8"), 'old transcript\n');
     assert.equal(readFileSync(f.store.path("plan", 0), "utf8"), "old plan");
     assert.equal(existsSync(f.store.path("transcript", 1)), false);
@@ -31,6 +33,38 @@ test("new epoch preserves legacy bytes, clears the active view, survives restart
     assert.throws(() => restarted.advance("request-2", 0), /revision/);
     assert.equal(restarted.advance("request-2", 1).epoch, 2);
     assert.equal(restarted.advance("request-1", 0).epoch, 1, "old command cannot reset a newer topic");
+  } finally { f.cleanup(); }
+});
+
+test("clean mode is durable per epoch and old state files default to normal", () => {
+  const f = fixture();
+  try {
+    const clean = f.store.advance("clean-1", 0, "clean");
+    assert.deepEqual(clean, { epoch: 1, mode: "clean" });
+    assert.deepEqual(new ContextEpochStore(f.paths).current(), clean);
+    const normal = new ContextEpochStore(f.paths).advance("normal-2", 1);
+    assert.deepEqual(normal, { epoch: 2, mode: "normal" });
+
+    const oldRoot = join(f.root, "old.jsonl.epochs");
+    mkdirSync(oldRoot, { recursive: true });
+    writeFileSync(join(oldRoot, "state.json"), JSON.stringify({
+      schema: 1, epoch: 1, operations: [{ id: "legacy", epoch: 1 }],
+    }));
+    const old = new ContextEpochStore({ transcript: join(f.root, "old.jsonl") });
+    assert.deepEqual(old.current(), { epoch: 1, mode: "normal" });
+    assert.deepEqual(old.previousOperation("legacy"), { epoch: 1, mode: "normal" });
+  } finally { f.cleanup(); }
+});
+
+test("a state file cannot claim normal mode for an epoch committed as clean", () => {
+  const f = fixture();
+  try {
+    const root = `${f.paths.transcript}.epochs`;
+    mkdirSync(root, { recursive: true });
+    writeFileSync(join(root, "state.json"), JSON.stringify({
+      schema: 1, epoch: 1, mode: "normal", operations: [{ id: "clean", epoch: 1, mode: "clean" }],
+    }));
+    assert.throws(() => f.store.current(), /corrupt context state/);
   } finally { f.cleanup(); }
 });
 

@@ -2,8 +2,11 @@
 import { existsSync, mkdirSync, readFileSync, renameSync, statSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 
+export type ContextMode = "normal" | "clean";
+
 export interface ContextVersion {
   epoch: number;
+  mode: ContextMode;
 }
 interface Operation extends ContextVersion {
   id: string;
@@ -27,17 +30,25 @@ export class ContextEpochStore {
   }
 
   private read(): State {
-    if (!existsSync(this.statePath)) return { schema: 1, epoch: 0, operations: [] };
+    if (!existsSync(this.statePath)) return { schema: 1, epoch: 0, mode: "normal", operations: [] };
     const state = JSON.parse(readFileSync(this.statePath, "utf8")) as State;
+    // Context epochs shipped before clean mode. Their absent mode means normal; this
+    // migration is in-memory until the next atomic state write.
+    state.mode ??= state.operations.at(-1)?.mode ?? "normal";
+    for (const operation of state.operations) operation.mode ??= "normal";
+    if (state.prepared !== undefined) state.prepared.mode ??= "normal";
     if (
       state.schema !== 1 ||
       !Number.isSafeInteger(state.epoch) ||
       state.epoch < 0 ||
       !Array.isArray(state.operations) ||
-      state.operations.some((op, index) => typeof op?.id !== "string" || op.epoch !== index + 1) ||
+      state.operations.some((op, index) => typeof op?.id !== "string" || op.epoch !== index + 1 || !isMode(op.mode)) ||
+      new Set(state.operations.map(op => op.id)).size !== state.operations.length ||
       state.operations.length !== state.epoch ||
+      !isMode(state.mode) ||
+      (state.epoch === 0 ? state.mode !== "normal" : state.operations.at(-1)?.mode !== state.mode) ||
       (state.prepared !== undefined &&
-        (typeof state.prepared.id !== "string" || state.prepared.epoch !== state.epoch + 1))
+        (typeof state.prepared.id !== "string" || state.prepared.epoch !== state.epoch + 1 || !isMode(state.prepared.mode)))
     ) {
       throw new Error("Unsupported or corrupt context state; refusing legacy fallback");
     }
@@ -70,6 +81,7 @@ export class ContextEpochStore {
     const committed: State = {
       schema: 1,
       epoch: prepared.epoch,
+      mode: prepared.mode,
       operations: [...state.operations, prepared],
     };
     this.save(committed);
@@ -77,24 +89,27 @@ export class ContextEpochStore {
   }
 
   current(): ContextVersion {
-    return { epoch: this.read().epoch };
+    const { epoch, mode } = this.read();
+    return { epoch, mode };
   }
 
   previousOperation(id: string): ContextVersion | undefined {
     const found = this.read().operations.find(op => op.id === id);
-    return found === undefined ? undefined : { epoch: found.epoch };
+    return found === undefined ? undefined : { epoch: found.epoch, mode: found.mode };
   }
 
-  advance(id: string, expectedRevision: number): ContextVersion {
+  advance(id: string, expectedRevision: number, mode: ContextMode = "normal"): ContextVersion {
     if (!id.trim()) throw new Error("Context operation id is required");
+    if (!isMode(mode)) throw new Error("Unsupported context mode");
     const state = this.read();
     const previous = state.operations.find(op => op.id === id);
-    if (previous !== undefined) return { epoch: previous.epoch };
+    if (previous !== undefined) return { epoch: previous.epoch, mode: previous.mode };
     if (state.epoch !== expectedRevision) throw new Error("Context revision changed; retry against current state");
-    const prepared: State = { ...state, prepared: { id, epoch: state.epoch + 1 } };
+    const prepared: State = { ...state, prepared: { id, epoch: state.epoch + 1, mode } };
     this.save(prepared);
     this.afterPrepare?.();
-    return { epoch: this.commit(prepared).epoch };
+    const committed = this.commit(prepared);
+    return { epoch: committed.epoch, mode: committed.mode };
   }
 
   path(name: string, epoch?: number): string {
@@ -109,4 +124,8 @@ export class ContextEpochStore {
   versions(): number[] {
     return Array.from({ length: this.read().epoch + 1 }, (_, epoch) => epoch);
   }
+}
+
+function isMode(value: unknown): value is ContextMode {
+  return value === "normal" || value === "clean";
 }
