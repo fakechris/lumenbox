@@ -25,7 +25,7 @@
  */
 
 import { createHash } from "node:crypto";
-import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { agentboxHome } from "../../config.ts";
 import { redactLine } from "../audit-export.ts";
@@ -669,4 +669,78 @@ export function previousDate(date: string): string {
   const before = new Date(year!, month! - 1, day! - 1);
   const pad = (n: number) => String(n).padStart(2, "0");
   return `${before.getFullYear()}-${pad(before.getMonth() + 1)}-${pad(before.getDate())}`;
+}
+
+/** Where a package lives inside the box, as docs/61 §6.2 named it. */
+export const BOX_DIGEST_DIR = "/home/box/work/digest";
+
+/**
+ * Puts a package where the agent that reads it can actually reach it.
+ *
+ * The package is assembled on the host, under `~/.agentbox/digest/`. The skill that turns
+ * it into a digest runs **inside the box**, which cannot see that path — the same boundary
+ * `results.ts` is careful about, and the one this got wrong on the first pass: the skill
+ * was shipped pointing at a host directory and was therefore unrunnable. docs/61 §6.2 had
+ * said `/home/box/work/digest/` all along.
+ *
+ * Copied rather than mounted. A mount would give the box the whole evidence store,
+ * including days and chats this run is not about, and the package exists precisely so that
+ * a bounded, redacted, verifiable subset is what travels.
+ */
+export async function deliverPackageToBox(
+  dir: string,
+  runKey: string,
+  box: {
+    uploadFile: (path: string, base64: string) => Promise<unknown>;
+    /** Optional so a test can supply only the upload; a real box needs the directories. */
+    exec?: (command: string, options?: { timeoutMs?: number; actor?: string }) => Promise<unknown>;
+  },
+  log: (line: string) => void = () => {}
+): Promise<{ delivered: number; failed: string[] }> {
+  const out = { delivered: 0, failed: [] as string[] };
+  const files: string[] = [];
+  const walk = (at: string, prefix: string): void => {
+    for (const name of readdirSync(at)) {
+      const path = join(at, name);
+      if (statSync(path).isDirectory()) walk(path, `${prefix}${name}/`);
+      else files.push(`${prefix}${name}`);
+    }
+  };
+  try {
+    walk(dir, "");
+  } catch {
+    return out;
+  }
+
+  // READY last, for the same reason it is written last: its presence is the only reliable
+  // sign a package is whole, and a half-delivered package that already claims to be ready
+  // is worse than one that has not arrived.
+  const ordered = [...files.filter(name => name !== READY_FILENAME), ...files.filter(name => name === READY_FILENAME)];
+
+  // Upload writes a file and will not invent the directory above it. Making every
+  // directory first is one call; discovering this per file, as the first real delivery
+  // did, is a package that half arrives.
+  const directories = [...new Set(ordered.map(relative => relative.split("/").slice(0, -1).join("/")))];
+  if (box.exec !== undefined) {
+    const targets = directories
+      .map(one => `'${BOX_DIGEST_DIR}/${runKey}/package${one === "" ? "" : `/${one}`}'`)
+      .join(" ");
+    await box
+      .exec(`mkdir -p ${targets}`, { timeoutMs: 15_000, actor: "host:day-package" })
+      .catch((error: unknown) => {
+        log(`  could not make the package directory: ${error instanceof Error ? error.message : error}`);
+      });
+  }
+
+  for (const relative of ordered) {
+    try {
+      const body = readFileSync(join(dir, relative));
+      await box.uploadFile(`${BOX_DIGEST_DIR}/${runKey}/package/${relative}`, body.toString("base64"));
+      out.delivered += 1;
+    } catch (error) {
+      out.failed.push(relative);
+      log(`  could not deliver ${relative}: ${error instanceof Error ? error.message : error}`);
+    }
+  }
+  return out;
 }
