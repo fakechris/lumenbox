@@ -1,0 +1,48 @@
+(node:59280) ExperimentalWarning: Transform Types is an experimental feature and might change at any time
+(Use `node --trace-warnings ...` to show where the warning was created)
+smoke test against attached (http://127.0.0.1:32798)
+
+pass  daemon reports a detected display  1280x800 -> api 1280x800
+pass  daemon runs unprivileged  uid box
+pass  the CUA toolchain is present  xdotool ffmpeg xrandr xmodmap xdpyinfo box-chrome
+pass  CJK text has a font to render with  NotoSansCJK-Regular.ttc
+pass  each desktop gets its own browser profile  one profile per display
+pass  the GTK file chooser fits the screen  1100x680, inside 1280x800
+pass  X advertises the extensions apps look for  GLX, RENDER, RANDR
+pass  a human-usable terminal and file manager are installed  xfce4-terminal, thunar, wallpaper
+pass  the box's traffic can leave through a relay  not configured; start the box with AGENTBOX_EGRESS_RELAY to cover this
+pass  the agent's work runs behind the desktop  agent nice 19, desktop nice 0/0/0
+pass  what a turn cost is written down  sequenced, cursored, survives a restart
+pass  the health check covers what the topology promises  boxd and, when enabled, the orchestrator
+pass  work that must survive has somewhere to go  loose files in the home directory are reported
+pass  the box can diagnose itself  18 checks, passes clean and fails dirty
+pass  an unsupervised process that dies is seen  sh SIGABRT (uid 1000)
+pass  health reports each component, not just ok  degraded=false, 0 component(s) tracked
+pass  a compositor owns the display, so the dock is not a slab  picom owns the selection, plank is up
+pass  VNC still delivers fresh frames under the compositor  fresh: 44032 pixels changed on 1280x800 in 87ms
+pass  Chromium's flag warning is policy-suppressed  managed policy in place
+pass  the clipboard can be written and read from outside the box  round-trips through the X selection
+pass  box-clip survives the shell tool's process-group cleanup  bare xclip is lost, box-clip persists
+pass  the clipboard is one clipboard  PRIMARY and CLIPBOARD agree
+pass  the control tree is read for a GTK app and refused in words for a terminal (INV-412)  24 controls read; xterm: the active window exposes no accessibility tree
+pass  windows can be listed, raised, and read while covered  3 windows, covered capture 3228 bytes
+pass  a point read off a window capture can be clicked  clicked a buried window by its own coordinates
+pass  a desktop refuses input from another agent  owner served, another agent refused
+pass  the desktop can be recorded  h264 1280x800, 56 frames, 16KB
+pass  boxd repairs a desktop component that died  x11vnc restarted by the supervisor
+pass  desktop launchers launch instead of prompting  quick_exec, +x: chromium.desktop files.desktop terminal.desktop
+pass  screenshot decodes as a valid WebP  6194 bytes, sizes patched
+pass  header patch leaves a non-VP8 layout alone  VP8L untouched
+pass  coordinates round-trip through the real X server  api (640,400) -> display (640,400) -> api (640,400)
+pass  a failed action still returns a screenshot  6194 bytes with the error
+pass  an unsafe key name is refused  keysym validation holds
+pass  a valid chord is accepted  ctrl+shift+F5
+pass  shell state persists within a session  cd and export survive
+pass  shell sessions are isolated between agents  no leakage
+pass  a non-zero exit is reported, not thrown  exit 7 with both streams
+pass  a hanging command is killed  killed and reported
+pass  write, read, and list round-trip  write, read, ranged read, list
+pass  a second agent is refused the display  holder served, second refused, handover works
+pass  unicode typing reaches an application  accented and CJK text arrived byte-perfect
+
+42 passed, 0 failed
