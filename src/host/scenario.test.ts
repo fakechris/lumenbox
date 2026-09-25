@@ -889,3 +889,25 @@ for (const receipt of ["changed", "partial", "legacy_failed"]) {
     } finally { episode.cleanup(); }
   });
 }
+
+test("the memory box answers looking around from its files, and anything else as before (INV-693)", async () => {
+  let seen = "";
+  const result = await runEpisode({
+    team: [{ name: "Nova" }], says: ["look"],
+    files: { "/home/box/work/notes/a.txt": "alpha\nbeta\n" },
+    script: ({ round, messages }) => {
+      if (round === 0) return { call: "bash", input: { command: "ls -la /home/box/work/notes 2>&1 && cat /home/box/work/notes/a.txt; wc -l /home/box/work/notes/a.txt" } };
+      if (round === 1) {
+        seen = JSON.stringify(messages.at(-1)?.content);
+        return { call: "bash", input: { command: "npm install left-pad" } };
+      }
+      if (round === 2) seen += JSON.stringify(messages.at(-1)?.content);
+      return { say: "done" };
+    },
+  });
+  try {
+    assert.match(seen, /a\.txt\\nalpha\\nbeta/);
+    assert.match(seen, /2 \/home\/box\/work\/notes\/a\.txt/);
+    assert.match(seen, /\(ran\) npm install left-pad/, "a command that would do something is not simulated");
+  } finally { result.cleanup(); }
+});
