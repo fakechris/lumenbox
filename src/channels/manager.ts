@@ -30,6 +30,7 @@ import type { Messages } from "./messages.ts";
 import { randomUUID } from "node:crypto";
 import { channelHealth, type ChannelHealth } from "./liveness.ts";
 import { boxPathsNamed, undelivered } from "../host/named-files.ts";
+import { checkDeliverable, isBroken } from "../host/deliverables.ts";
 import { boardText, type BoardView } from "./board-view.ts";
 import { parseContinuation } from "./continuation.ts";
 import { isContextCommand } from "../host/context-recovery.ts";
@@ -1278,10 +1279,21 @@ ${input.options.map(option => `· ${option}`).join("\n")}`
   ): Promise<void> {
     if (this.deps.collectOutbox === undefined) return;
     const failed: string[] = [];
+    const held: string[] = [];
     try {
       const files = await this.deps.collectOutbox(outboxKey);
       const delivered: string[] = [];
       for (const file of files) {
+        // A file that cannot be opened as its name says is held, not sent (INV-692): it stays
+        // in the outbox, and the failure below says which and why. The agent was told the same
+        // before its turn ended; this is the backstop for a turn that finished anyway.
+        const unopenable = heldBack(file);
+        if (unopenable !== undefined) {
+          failed.push(file.name);
+          held.push(unopenable);
+          this.deps.log(`channel ${adapter.name}: held ${unopenable}`);
+          continue;
+        }
         try {
           const isImage = /\.(png|jpe?g|webp|gif|bmp)$/i.test(file.name);
           if (isImage && adapter.sendImage !== undefined) {
@@ -1321,6 +1333,13 @@ ${input.options.map(option => `· ${option}`).join("\n")}`
           this.deps.log(`channel ${adapter.name}: named file ${path} could not be read; not sent`);
           continue;
         }
+        const unopenable = heldBack(file);
+        if (unopenable !== undefined) {
+          failed.push(file.name);
+          held.push(unopenable);
+          this.deps.log(`channel ${adapter.name}: held named file ${unopenable}`);
+          continue;
+        }
         try {
           const isImage = /\.(png|jpe?g|webp|gif|bmp)$/i.test(file.name);
           if (isImage && adapter.sendImage !== undefined) {
@@ -1342,6 +1361,12 @@ ${input.options.map(option => `· ${option}`).join("\n")}`
       const detail = error instanceof Error ? error.message : String(error);
       this.deps.log(`channel ${adapter.name}: outbox failed (${detail})`);
       throw new Error("附件投递未确认；文件保留在 box，请检查后再补发。", { cause: error });
+    }
+    if (held.length > 0) {
+      throw new Error(
+        `${held.length} 个附件打不开，没有发送，文件留在 box 里：\n${held.map(line => `· ${line}`).join("\n")}` +
+          (failed.length > held.length ? `\n另有 ${failed.length - held.length} 个附件未确认投递。` : "")
+      );
     }
     if (failed.length > 0) throw new Error(`${failed.length} 个附件未确认投递，不能标记交付完成；请检查后再补发。`);
   }
@@ -2304,6 +2329,20 @@ ${input.options.map(option => `· ${option}`).join("\n")}`
       else this.runningWork.set(runningKey, remaining);
     }
   }
+}
+
+/**
+ * Why a file must not go out, as "name — reason", or undefined when it may.
+ *
+ * Only what cannot be opened is held. A placeholder or a ragged CSV is the agent's to judge
+ * and was put to it before the turn ended; holding those here would stop a template somebody
+ * asked for.
+ */
+function heldBack(file: { name: string; base64: string }): string | undefined {
+  const problems = checkDeliverable(file.name, Buffer.from(file.base64, "base64"));
+  if (!isBroken(problems)) return undefined;
+  const reasons = problems.filter(problem => problem.severity === "broken").map(problem => problem.detail);
+  return `${file.name} — ${reasons.join("; ")}`;
 }
 
 /** The instruction as a card header: its first line, clamped. */

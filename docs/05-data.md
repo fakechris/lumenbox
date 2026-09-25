@@ -747,6 +747,34 @@ distinct from being read and empty. Those mean opposite things: without the dist
 restarting replaces a good list with an empty one, and since the list is in the prompt, that reads as
 "you have no skills" rather than "we could not check".
 
+### 3.1b `chats/<conversation>/outbox/` — checked before it goes (INV-692)
+
+A turn that belongs to an outside chat hands a person files by writing them to
+`/home/box/work/chats/<conversation>/outbox/` (`chatFilesRoot`, `prompt.ts`). When the turn
+ends they are pushed into the chat and moved to `sent/`; a push that fails leaves the file
+where it was.
+
+Before that, the bytes are checked (`checkDeliverable`, `src/host/deliverables.ts`), because
+"the script ran" and "the file opens" are different claims and the second was never checked:
+
+- **broken** — cannot be opened as its extension says: a `.docx` that is markdown, a zip cut
+  off before its directory, an Office package without `[Content_Types].xml` or its main part,
+  a PDF without `%PDF-` or `%%EOF`, an image whose bytes are another format, JSON that does
+  not parse, an empty file.
+- **suspect** — opens, but reads unfinished: `{{placeholder}}`, lorem ipsum, `[插入…]` /
+  `[insert …]` / `[TODO]` slots, a CSV row whose width disagrees with the header (quoted
+  separators understood). A bare "TODO" is not flagged: a task list is a real deliverable.
+
+Unknown extensions and files over 25MB pass unchecked; a check we cannot make is not a reason
+to hold somebody's file.
+
+The check runs in two places. **In the turn**, when the model gives its final answer, the
+outbox is read and any finding goes back to the model once, like the quote gate — at most
+twice per turn, silent when every file is fine. **At delivery**, `deliverFiles` holds back
+whatever is broken: it is not pushed, stays in the outbox, the task does not close as done,
+and the chat is told which file and why. Suspect findings never block delivery; the agent was
+asked about them and may have said the slot is intended.
+
 ### 3.2 `config` volume — `/home/box/.config`
 
 What the box logged into and how the desktop looks: browser profiles per display
