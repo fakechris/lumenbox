@@ -707,6 +707,34 @@ Four answers the phrase "without anyone asking" forces, all of them in `schedule
 - **The turn knows it was a timer.** An agent that believes someone is waiting asks questions nobody
   will answer and hurries, so the prompt says so and says where to leave its output.
 
+**Seeding, and the three answers (INV-688).** `.seeded` records `<slug> <sha8>` per line:
+what has been offered and which version. Three states stay distinct where there used to be
+two.
+
+| in the box | what happens |
+|---|---|
+| never offered | seeded |
+| offered, and the file is still the one we wrote | replaced, if we have a newer one |
+| offered, and the file has been edited | left alone, **and named every run** |
+| offered, then deleted | stays deleted, however new our version is |
+
+The previous marker recorded *that* a skill had been offered and not *which version*, so
+"already there" and "already correct" were one answer. `daily-research-digest` shipped on
+2026-09-24 pointing at a host path its reader cannot see; the fix reached new boxes and
+could never reach the box that already had the broken copy, and nothing said so.
+
+A bare slug, which is every line a pre-INV-688 marker wrote, means offered with the version
+unknown, and the conservative reading of that is "not ours to replace". That alone would
+have left the first box this was built for still holding an unrunnable skill, so a starter
+may also name **its own past versions** (`supersedes`). Matching one is proof the file is
+ours and untouched whatever the marker forgot. An allow-list of exact digests and not a
+heuristic: we claim authority only over bytes we can name, and a version nobody listed
+stays the owner's. A file we could not read is never overwritten either.
+
+Skill-hub packages keep the offer-once rule. We copy them as-is and do not author them, so
+"we fixed it" does not arise the same way, and a package is several files where a starter
+is one.
+
 Read at most every few seconds, and the load reports whether the directory was actually **read** as
 distinct from being read and empty. Those mean opposite things: without the distinction a box
 restarting replaces a good list with an empty one, and since the list is in the prompt, that reads as

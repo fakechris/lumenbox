@@ -20,16 +20,55 @@
  * config-file-overwrite bug wearing a different coat. Hence the marker: a skill is
  * seeded only if it has never been offered — neither present on disk nor recorded in
  * `.seeded` — so a deletion stays deleted and a new starter still arrives.
+ *
+ * That marker aged into a bug of its own, the same shape one turn later. It recorded
+ * *that* a skill had been offered and not *which version*, so "already there" and "already
+ * correct" became the same answer. On 2026-09-24 `daily-research-digest` shipped pointing
+ * at a host path its reader cannot see; the fix reached new boxes and could never reach
+ * the box that already had the broken copy, and nothing said so (INV-688).
+ *
+ * So the marker records a digest per slug, and there are three answers instead of two:
+ * never offered, seed it; offered and untouched since, update it; offered and **changed by
+ * a person**, leave it and say so. The last one is the rule this file has always been
+ * protecting, now stated as a comparison rather than inferred from presence. A digest that
+ * matches what we last wrote means nobody has touched it; anything else is theirs.
+ *
+ * Skill-hub packages are not covered by the update path. We copy them as-is from
+ * `catalog-data/` and do not author them, so "we fixed it" does not arise the same way,
+ * and a package is several files where a starter is one. They keep the offer-once rule.
  */
 
+import { createHash } from "node:crypto";
 import { readdirSync, readFileSync, statSync } from "node:fs";
 import { dirname, join, relative } from "node:path";
 import { SKILLS_DIR } from "./skills.ts";
 import { catalogDataDir, hubSkillSlugs } from "./catalog.ts";
 import { templatesEnabled } from "./template.ts";
 
-/** Records which starters have ever been offered, so deletion and novelty stay distinct. */
+/**
+ * Records what has been offered and which version, so three states stay distinct:
+ * never offered, offered and untouched, offered and edited by a person.
+ *
+ * `<slug> <sha8>` per line. A bare `<slug>`, which is every line a pre-INV-688 marker
+ * wrote, means offered with the version unknown — treated as edited, because the
+ * conservative reading of "we cannot tell" is "leave it alone".
+ */
 export const SEEDED_MARKER = ".seeded";
+
+/** Eight hex characters of the content. Long enough here; this is change detection. */
+export function skillDigest(content: string): string {
+  return createHash("sha256").update(content).digest("hex").slice(0, 8);
+}
+
+/** What the marker says, by slug. `undefined` means offered with no version recorded. */
+export function markerEntries(markerText: string | undefined): Map<string, string | undefined> {
+  const out = new Map<string, string | undefined>();
+  for (const line of (markerText ?? "").split("\n")) {
+    const [slug, digest] = line.trim().split(/\s+/);
+    if (slug !== undefined && slug !== "") out.set(slug, digest);
+  }
+  return out;
+}
 
 /**
  * Which starters to seed: those neither on disk nor ever offered before.
@@ -43,16 +82,120 @@ export function unseededStarters(
   starters: readonly { slug: string }[] = STARTERS
 ): string[] {
   const offered = new Set(existing);
-  for (const line of (markerText ?? "").split("\n")) {
-    const slug = line.trim();
-    if (slug !== "") offered.add(slug);
-  }
+  for (const slug of markerEntries(markerText).keys()) offered.add(slug);
   return starters.map(starter => starter.slug).filter(slug => !offered.has(slug));
+}
+
+/**
+ * Which already-present starters are worth looking inside the box for.
+ *
+ * Only the ones whose content we have changed since we last wrote it. Everything else is
+ * either absent, or identical to what we would write, and reading it would answer a
+ * question nobody asked at the cost of a round trip each.
+ */
+export function needsInspection(
+  markerText: string | undefined,
+  existing: readonly string[],
+  starters: readonly StarterSkill[] = STARTERS
+): string[] {
+  const marker = markerEntries(markerText);
+  const present = new Set(existing);
+  return starters
+    .filter(skill => present.has(skill.slug) && marker.has(skill.slug))
+    .filter(skill => marker.get(skill.slug) !== skillDigest(skill.content))
+    .map(skill => skill.slug);
+  // Note: an entry with no recorded digest is included, which is what lets `supersedes`
+  // recognise a pre-marker copy. That read is the entire cost of the mechanism.
+}
+
+/** The past versions a starter claims, for tests and for anyone auditing the claim. */
+export function starterSupersedes(slug: string): readonly string[] | undefined {
+  return STARTERS.find(skill => skill.slug === slug)?.supersedes;
+}
+
+export interface SeedingPlan {
+  /** Never offered: write it. */
+  seed: string[];
+  /** Offered, untouched since, and we have a newer version: replace it. */
+  update: string[];
+  /**
+   * Offered and edited by somebody. Left alone, and named — a silent skip is as bad as a
+   * silent overwrite, and this is the one case where a person is owed a sentence.
+   */
+  keptLocal: string[];
+}
+
+/**
+ * The three-way decision, as a pure function over what the box said.
+ *
+ * `inBox` is the current `SKILL.md` text for the slugs `needsInspection` asked about.
+ * A slug missing from it is one we could not read, which is treated as edited: we do not
+ * overwrite what we could not look at.
+ */
+export function seedingPlan(input: {
+  markerText?: string;
+  existing: readonly string[];
+  starters?: readonly StarterSkill[];
+  inBox?: ReadonlyMap<string, string>;
+}): SeedingPlan {
+  const starters = input.starters ?? STARTERS;
+  const marker = markerEntries(input.markerText);
+  const present = new Set(input.existing);
+  const plan: SeedingPlan = { seed: [], update: [], keptLocal: [] };
+
+  for (const skill of starters) {
+    const offered = marker.has(skill.slug) || present.has(skill.slug);
+    if (!offered) {
+      plan.seed.push(skill.slug);
+      continue;
+    }
+    // Offered before. Deleted on purpose stays deleted — that is the rule this file has
+    // always protected, and it outranks having a newer version.
+    if (!present.has(skill.slug)) continue;
+    const ours = skillDigest(skill.content);
+    const recorded = marker.get(skill.slug);
+    if (recorded === ours) continue;
+    const current = input.inBox?.get(skill.slug);
+    const currentDigest = current === undefined ? undefined : skillDigest(current);
+    // Untouched since we wrote it, and we have changed it since: ours to update.
+    //
+    // Two ways of knowing it is untouched. The marker, which is the ordinary one; and the
+    // skill naming one of its own past versions, which is how a box seeded before the
+    // marker carried versions still gets a fix.
+    const isOurs =
+      currentDigest !== undefined &&
+      (currentDigest === recorded || (skill.supersedes ?? []).includes(currentDigest));
+    if (recorded !== undefined && currentDigest === recorded) {
+      plan.update.push(skill.slug);
+    } else if (isOurs && currentDigest !== ours) {
+      plan.update.push(skill.slug);
+    } else if (current !== undefined && currentDigest === ours) {
+      // Already what we would write, by whatever route. Nothing to do but record it.
+      continue;
+    } else {
+      plan.keptLocal.push(skill.slug);
+    }
+  }
+  return plan;
 }
 
 interface StarterSkill {
   slug: string;
   content: string;
+  /**
+   * Digests of our own earlier versions of this skill, which we may replace.
+   *
+   * The marker records what we wrote from now on, but every box seeded before that has a
+   * marker of bare slugs and no way to tell our stale copy from somebody's edit. The
+   * conservative reading is "leave it alone", and that would have left the first box this
+   * mechanism was built for holding a skill that cannot run.
+   *
+   * So a starter may name versions it knows are its own. Matching one is proof the file is
+   * ours and untouched, whatever the marker forgot. Deliberately an allow-list of exact
+   * digests and not a heuristic: we claim authority only over bytes we can name, and a
+   * version nobody listed stays the owner's.
+   */
+  supersedes?: readonly string[];
 }
 
 const STARTERS: readonly StarterSkill[] = [
@@ -159,6 +302,10 @@ announced when they finish, and a missed window is skipped, never replayed.
   },
   {
     slug: "daily-research-digest",
+    // The version shipped on 2026-09-24, which told the agent to read a host path the box
+    // cannot see and to run a command the box does not have. Named here so a box already
+    // holding it gets the fix instead of being asked whether it edited a file it did not.
+    supersedes: ["5e8ec37f"],
     content: `---
 name: daily-research-digest
 description: Read one day's package and write one synthesis across it, organised by what the day was about rather than by what arrived.
@@ -430,18 +577,28 @@ without quoting the sensitive part. If nothing was, add nothing.
   },
 ];
 
-/** Uploads whichever starter skills this box has never been offered. */
+export interface SeedingResult extends SeedingPlan {
+  /** Hub packages seeded this run, which follow the offer-once rule. */
+  hub: string[];
+}
+
+/**
+ * Writes whichever starter skills this box has never been offered, and replaces the ones
+ * we have since fixed and nobody has touched.
+ */
 export async function seedStarterSkills(
   box: {
     listDir: (path: string) => Promise<{ entries: { name: string }[] }>;
     uploadFile: (path: string, base64: string) => Promise<unknown>;
+    readFile?: (path: string) => Promise<{ content: string }>;
     exec: (
       command: string,
       options?: { timeoutMs?: number; actor?: string }
     ) => Promise<unknown>;
   },
   log: (line: string) => void
-): Promise<void> {
+): Promise<SeedingResult> {
+  const nothing: SeedingResult = { seed: [], update: [], keptLocal: [], hub: [] };
   try {
     const listing = await box.listDir(SKILLS_DIR).catch(() => undefined);
     const existing = listing?.entries.map(entry => entry.name) ?? [];
@@ -462,46 +619,86 @@ export async function seedStarterSkills(
       ...starters,
       ...hub.map(slug => ({ slug })),
     ]);
-    if (missing.length === 0) return;
+
+    // Look inside the box only for starters we have changed since we last wrote them.
+    // A starter we have not touched needs no round trip to confirm it is still itself.
+    const inBox = new Map<string, string>();
+    for (const slug of needsInspection(markerText, existing, starters)) {
+      const read = await box.readFile?.(`${SKILLS_DIR}/${slug}/SKILL.md`).catch(() => undefined);
+      if (read !== undefined) inBox.set(slug, read.content);
+    }
+    const plan = seedingPlan({ markerText, existing, starters, inBox });
+    const hubMissing = hub.filter(slug => missing.includes(slug));
+    const writing = [...plan.seed, ...plan.update];
+
+    // Said even when there is nothing else to do: a person whose edit is holding back a
+    // fix is owed that sentence every time, not once.
+    for (const slug of plan.keptLocal) {
+      log(
+        `starter skill ${slug} has a newer version, and yours is edited — left alone. ` +
+          `Delete ${SKILLS_DIR}/${slug}/SKILL.md to take ours.`
+      );
+    }
+    if (writing.length === 0 && hubMissing.length === 0) {
+      return { ...plan, hub: [] };
+    }
 
     // Upload refuses a parent that does not exist — the same refusal that stops a
     // stray upload inventing directory trees — so the directories are made first,
     // deliberately, through the shell.
-    const dirs = missing.map(slug => `${SKILLS_DIR}/${slug}`).join(" ");
-    await box.exec(`mkdir -p ${dirs}`, { timeoutMs: 15_000, actor: "host:starter-skills" });
+    const dirs = [...new Set([...writing, ...hubMissing])].map(slug => `${SKILLS_DIR}/${slug}`).join(" ");
+    if (dirs !== "") {
+      await box.exec(`mkdir -p ${dirs}`, { timeoutMs: 15_000, actor: "host:starter-skills" });
+    }
     for (const skill of starters) {
-      if (!missing.includes(skill.slug)) continue;
+      if (!writing.includes(skill.slug)) continue;
       await box.uploadFile(
         `${SKILLS_DIR}/${skill.slug}/SKILL.md`,
         Buffer.from(skill.content, "utf8").toString("base64")
       );
     }
-    for (const slug of hub) {
-      if (!missing.includes(slug)) continue;
-      await seedHubSkill(box, slug);
-    }
+    for (const slug of hubMissing) await seedHubSkill(box, slug);
 
-    // The marker records everything offered as of now: what the marker already said,
-    // what was on disk (a pre-marker install has skills the marker never heard of, and
-    // deleting one of those should also stick), and what was just seeded.
-    const starterSlugs = new Set([...starters.map(skill => skill.slug), ...hub]);
-    const offered = new Set<string>(missing);
-    for (const line of (markerText ?? "").split("\n")) {
-      if (line.trim() !== "") offered.add(line.trim());
-    }
-    for (const name of existing) {
-      if (starterSlugs.has(name)) offered.add(name);
-    }
+    // The marker records everything offered as of now, and which version: what it already
+    // said, what was on disk (a pre-marker install has skills the marker never heard of,
+    // and deleting one of those should also stick), and what was just written.
+    //
+    // A slug we left alone keeps whatever version the marker had, including none. Writing
+    // ours against a file that is not ours would make the next run believe it had been
+    // edited back, and the loop would never settle.
+    const byContent = new Map(starters.map(skill => [skill.slug, skill.content]));
+    const starterSlugs = new Set([...byContent.keys(), ...hub]);
+    const offered = markerEntries(markerText);
+    for (const name of existing) if (starterSlugs.has(name) && !offered.has(name)) offered.set(name, undefined);
+    for (const slug of hubMissing) offered.set(slug, undefined);
+    for (const slug of writing) offered.set(slug, skillDigest(byContent.get(slug) ?? ""));
+
     await box.uploadFile(
       `${SKILLS_DIR}/${SEEDED_MARKER}`,
-      Buffer.from(`${[...offered].sort().join("\n")}\n`, "utf8").toString("base64")
+      Buffer.from(
+        `${[...offered.entries()]
+          .sort(([a], [b]) => a.localeCompare(b))
+          .map(([slug, digest]) => (digest === undefined ? slug : `${slug} ${digest}`))
+          .join("\n")}\n`,
+        "utf8"
+      ).toString("base64")
     );
 
-    log(`seeded ${missing.length} starter skill(s) into ${SKILLS_DIR}: ${missing.join(", ")}`);
+    if (plan.seed.length > 0) {
+      log(`seeded ${plan.seed.length} starter skill(s) into ${SKILLS_DIR}: ${plan.seed.join(", ")}`);
+    }
+    if (hubMissing.length > 0) log(`seeded ${hubMissing.length} skill package(s): ${hubMissing.join(", ")}`);
+    // Named separately from seeding, because replacing a file somebody already has is a
+    // different event from giving them one they never had.
+    if (plan.update.length > 0) {
+      log(`updated ${plan.update.length} unedited starter skill(s): ${plan.update.join(", ")}`);
+    }
+    return { ...plan, hub: hubMissing };
   } catch (error) {
     // A box without starter skills still works; the person just starts from blank.
     const detail = error instanceof Error ? error.message : String(error);
     log(`could not seed starter skills: ${detail}`);
+    return nothing;
   }
 }
 
