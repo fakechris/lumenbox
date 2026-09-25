@@ -36,9 +36,9 @@
 |---|---|---|
 | 包格式 | `SKILL.md` + 可选 `manifest.yaml` / `references/` / `eval/` / `bin/`；别名用符号链接 | `SKILL.md` + 助手文件（`src/host/skills.ts:37`），无 manifest、无 eval 目录 |
 | frontmatter | `name`、`description`、`metadata.includeInPrompt`（常驻 vs 按需）、偶见 `allowed-tools` | 14 个已知键（`skills.ts:141-156`），**`allowed-tools` 被静默忽略**，而 vendored 的 5 个 hub skill 都写了它 |
-| 渐进披露 | 描述常驻，正文与 `references/` 按「任务 → 先读哪个」表按需读；有「重注入后不许重读」的规则防止重启 intake | 只注入名称+描述+路径，12k 上限（`renderSkills`，`skills.ts:375-452`）——**已对齐** |
+| 渐进披露 | 描述常驻，正文与 `references/` 按「任务 → 先读哪个」表按需读；有「重注入后不许重读」的规则防止重启 intake | 只注入索引：名称+描述+路径，按配置附带 helpers、schedule、paused、listener 说明，不注入正文，12k 上限（`renderSkills`，`skills.ts:375-452`）——**已对齐** |
 | description 写法 | 写「做什么 / 何时触发 / **何时不要用**」，并把相邻场景路由到兄弟 skill | 只写做什么；没有写作约定 |
-| 方法级权限 | manifest 的 `actions.<组>.default: allow|ask` + 方法级覆盖 + `approval_phrase`（审批卡片动词短语）+ `commands` 把 ~100 个 CLI 命令归到少数权限键 | `SideEffectScope` 已定义（`tools.ts:2152`）但**生产代码里没有调用方**；审批靠 env 列表与 `rules/*.md`，默认除 RunOnHost 与不可逆点击外全放行 |
+| 方法级权限 | manifest 的 `actions.<组>.default`（allow / ask） + 方法级覆盖 + `approval_phrase`（审批卡片动词短语）+ `commands` 把 ~100 个 CLI 命令归到少数权限键 | `SideEffectScope` 已定义（`tools.ts:2152`）但**生产代码里没有调用方**；审批靠 env 列表与 `rules/*.md`，默认除 RunOnHost 与不可逆点击外全放行 |
 | 分层依据 | **按影响范围与可逆性，不按读/写**：只影响自己的放行，触达他人（发送、带邀请、共享、付款）才问；删除改为进回收站 | 不可逆检测只在浏览器 `act`，按关键词（`boxd/browser-service.ts:225`） |
 | 配额 | `request_quota`，`shadow` 先行再 `enforce`，超限返回「本次终止」要求报告部分进度 | 策略门有模型花费与唤醒限流，没有按连接器方法的配额 |
 | 评测 | 每 skill `eval/*.yaml`：`objective`（模拟用户首句）、`persona`、`world`（预置的假连接器数据）、`tests`（行为断言+禁止项）；类别含 trigger-positive/**negative**、safety、duplicate-protection；**诚实标 N/A** | `scenario.ts` 是整回合脚本化模型评测，很强，但**没有 per-skill 场景、没有触发评测**（roadmap:567 列为未来） |
