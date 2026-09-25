@@ -13,6 +13,9 @@
  *   npm run scenario -- --runs 5         more runs
  *   npm run scenario -- --only team      one scenario
  *   npm run scenario -- --json out.json  the raw numbers, for a diff between builds
+ *   npm run scenario -- --skills         each starter skill's own cases (INV-693): is it opened
+ *                                        when it should be, and left alone when it should not
+ *   npm run scenario -- --skills --only research-brief --runs 1
  *
  * A scratch AGENTBOX_HOME and a scratch box are used, so nothing here touches the live
  * installation's agents, ledgers or spend.
@@ -81,6 +84,10 @@ async function main() {
 
   const runs = Number(flag("--runs") ?? 3);
   const only = flag("--only");
+  if (process.argv.includes("--skills")) {
+    await skillEvals(provider, runs, only);
+    return;
+  }
   const chosen = only ? SCENARIOS.filter(s => s.name === only) : SCENARIOS;
   if (chosen.length === 0) {
     console.error(`No scenario called ${only}. Have: ${SCENARIOS.map(s => s.name).join(", ")}`);
@@ -120,6 +127,115 @@ async function main() {
     // only when they came from the same wire (INV-130), and it has to be able to tell.
     writeFileSync(out, JSON.stringify({ at: new Date().toISOString(), provider: provider.label, model: provider.model, runs, results }, null, 2));
     console.log(`\nRaw numbers: ${out}`);
+  }
+}
+
+/**
+ * Each starter's own cases against the real model (INV-693, src/host/skill-evals.ts).
+ *
+ * The real turn, prompt and skills index, with every starter present at its box path and an
+ * in-memory box — no Docker, nothing live touched. A case is judged on one fact: did the agent
+ * open that skill's SKILL.md. The model is capped at a few calls per case, because the choice to
+ * open a skill comes first and the rest of the work is not what is being measured.
+ */
+async function skillEvals(provider, runs, only) {
+  const { runEpisode } = await import("../src/host/scenario.ts");
+  const { starterSkillsWithEvals } = await import("../src/host/starter-skills.ts");
+  const { parseSkillFile, skillFrom, SKILLS_DIR } = await import("../src/host/skills.ts");
+  const { filesRead, judgeSkillEval } = await import("../src/host/skill-evals.ts");
+  const { fakeModel } = await import("../src/host/testing/fake-model.ts");
+  const { createClient } = await import("../src/host/provider.ts");
+  const real = createClient(provider);
+  const cap = Number(flag("--calls") ?? 4);
+
+  const starters = starterSkillsWithEvals();
+  const skills = starters.map(starter => {
+    const made = skillFrom(starter.slug, parseSkillFile(starter.content));
+    if (!("skill" in made)) throw new Error(`${starter.slug}: ${made.problem}`);
+    return made.skill;
+  });
+  const skillFiles = Object.fromEntries(starters.map(starter => [`${SKILLS_DIR}/${starter.slug}/SKILL.md`, starter.content]));
+  const chosen = only ? starters.filter(starter => starter.slug === only) : starters;
+  if (chosen.length === 0) {
+    console.error(`No starter called ${only}.`);
+    process.exit(1);
+  }
+
+  const rows = [];
+  for (const starter of chosen) {
+    const path = `${SKILLS_DIR}/${starter.slug}/SKILL.md`;
+    for (const one of starter.evals) {
+      const verdicts = [];
+      const opened = new Set();
+      for (let run = 1; run <= runs; run += 1) {
+        if (one.na !== undefined) { verdicts.push("na"); continue; }
+        let calls = 0;
+        // Whether the model answered at all. A run where it never did has not tested the
+        // description, and must not score — least of all as a no-trigger "pass".
+        let answered = false;
+        // The real model behind the fake's stream surface, cut after `cap` calls with a quiet end.
+        const client = fakeModel(async ({ params }) => {
+          calls += 1;
+          if (calls > cap) {
+            return { id: "cut", type: "message", role: "assistant", model: provider.model, content: [{ type: "text", text: "(cut: the choice was already made)" }], stop_reason: "end_turn", stop_sequence: null, usage: { input_tokens: 0, output_tokens: 0 } };
+          }
+          answered = true;
+          // Streamed, as the turn itself does: the SDK refuses a non-streaming request at the
+          // turn's max_tokens.
+          return real.messages.stream(params).finalMessage();
+        });
+        const home = mkdtempSync(join(tmpdir(), `lumenbox-skill-eval-${starter.slug}-`));
+        process.env.AGENTBOX_HOME = home;
+        try {
+          const result = await runEpisode({
+            team: [{ name: "Nova" }],
+            says: [one.says],
+            skills,
+            files: { ...skillFiles, ...(one.files ?? {}) },
+            client,
+            provider,
+          });
+          const front = result.registry.list()[0];
+          const transcript = result.registry.readTranscript(front.id);
+          const read = filesRead(transcript);
+          for (const file of read) if (file.startsWith(`${SKILLS_DIR}/`) && file.endsWith("/SKILL.md")) opened.add(file.split("/").at(-2));
+          const modelSpoke = answered && transcript.some(entry => entry.role === "assistant");
+          if (process.argv.includes("--trail")) {
+            const uses = transcript.flatMap(entry => (entry.kind === "blocks" ? entry.blocks : []))
+              .filter(block => block.type === "tool_use")
+              .map(block => `${block.name}${block.input?.path ? `(${block.input.path})` : block.input?.command ? `(${String(block.input.command).slice(0, 60)})` : ""}`);
+            const last = transcript.filter(entry => entry.role === "assistant" && typeof entry.text === "string").at(-1)?.text ?? "";
+            console.log(`    [${starter.slug} / ${one.name}] ${uses.join(" → ") || "(no tools)"}${last ? ` | said: ${last.slice(0, 120).replace(/\s+/g, " ")}` : ""}`);
+          }
+          verdicts.push(modelSpoke ? judgeSkillEval(one, path, read) : "infra");
+          result.cleanup();
+        } catch (error) {
+          verdicts.push("infra");
+          opened.add(`error: ${error instanceof Error ? error.message.slice(0, 80) : String(error)}`);
+        } finally {
+          rmSync(home, { recursive: true, force: true });
+        }
+      }
+      rows.push({ skill: starter.slug, case: one.name, kind: one.kind, instead: one.instead, verdicts, opened: [...opened] });
+    }
+  }
+
+  console.log(`\n  skill evals — ${runs} run(s) per case, at most ${cap} model calls each\n`);
+  for (const row of rows) {
+    const bar = row.verdicts.map(v => (v === "pass" ? "·" : v === "na" ? "-" : v === "infra" ? "!" : "x")).join("");
+    const passed = row.verdicts.filter(v => v === "pass").length;
+    const also = row.opened.filter(slug => slug !== row.skill);
+    console.log(
+      `  ${row.skill.padEnd(22)} ${row.kind.padEnd(10)} ${String(passed).padStart(2)}/${row.verdicts.length} ${bar.padEnd(5)} ${row.case}` +
+        (also.length > 0 ? `   (opened: ${also.join(", ")})` : "") +
+        (row.instead !== undefined ? `   [belongs to ${row.instead}]` : "")
+    );
+  }
+  console.log("\n  · pass   x fail   - N/A (never a pass)   ! the model never answered [infra] (never a pass).\n  Tag each x [agent] (fix the description) or [infra] (fix the case).\n");
+  const out = flag("--json");
+  if (out !== undefined) {
+    writeFileSync(out, JSON.stringify({ at: new Date().toISOString(), provider: provider.label, model: provider.model, runs, cap, rows }, null, 2));
+    console.log(`Raw: ${out}`);
   }
 }
 

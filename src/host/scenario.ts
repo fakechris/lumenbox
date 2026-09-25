@@ -30,6 +30,7 @@ import { runTurn } from "./turn.ts";
 import { fakeModel } from "./testing/fake-model.ts";
 import type { BoxClient } from "../box/client.ts";
 import type { HistoryEntry } from "./compaction.ts";
+import type { ProviderProfile } from "./provider.ts";
 
 /** One model reply, in the shape the script writes it. */
 export type ScriptedReply =
@@ -113,6 +114,11 @@ function memoryBox(files: Map<string, string>, overrides: Partial<BoxClient> = {
         files.set(redirect[2]!, redirect[1]!);
         return { exit_code: 0, stdout: "", stderr: "" };
       }
+      // Looking around is answered from the files (INV-693): a live model that runs `ls` and gets
+      // "(ran) ls" back looks again, and spent a skill eval's whole budget doing so. Anything that
+      // is not plain looking keeps the old answer, which scripted scenarios rely on.
+      const looked = lookAround(files, command);
+      if (looked !== undefined) return { exit_code: 0, stdout: looked, stderr: "" };
       return { exit_code: 0, stdout: `(ran) ${command}`, stderr: "" };
     },
     writeFile: async (path: string, content: string) => {
@@ -143,6 +149,33 @@ function memoryBox(files: Map<string, string>, overrides: Partial<BoxClient> = {
   }) as unknown as BoxClient;
 }
 
+/**
+ * `ls`, `cat`, `wc -l`, `pwd` and `echo`, chained with `&&` or `;`, answered from the memory box's
+ * files. Undefined for anything else, including any segment it does not recognise, so a command
+ * that would do something is never half-simulated.
+ */
+function lookAround(files: Map<string, string>, command: string): string | undefined {
+  const home = "/home/box/work";
+  const out: string[] = [];
+  for (const raw of command.split(/&&|;/)) {
+    const segment = raw.split("|")[0]!.replace(/\s+2>(&1|\/dev\/null)/g, "").trim();
+    if (segment === "") continue;
+    const [verb, ...rest] = segment.split(/\s+/);
+    const args = rest.filter(arg => !arg.startsWith("-")).map(arg => arg.replace(/^["']|["']$/g, "").replace(/^~/, "/home/box"));
+    if (verb === "pwd") out.push(home);
+    else if (verb === "echo") out.push(args.join(" "));
+    else if (verb === "ls") {
+      const dir = (args[0] ?? home).replace(/\/$/, "");
+      if (files.has(dir)) { out.push(dir.split("/").pop()!); continue; }
+      const children = [...new Set([...files.keys()].filter(path => path.startsWith(`${dir}/`)).map(path => path.slice(dir.length + 1).split("/")[0]!))];
+      out.push(children.length > 0 ? children.sort().join("\n") : `ls: cannot access '${dir}': No such file or directory`);
+    } else if (verb === "cat") out.push(args.map(path => files.get(path) ?? `cat: ${path}: No such file or directory`).join("\n"));
+    else if (verb === "wc") out.push(args.map(path => `${(files.get(path) ?? "").split("\n").length - 1} ${path}`).join("\n"));
+    else return undefined;
+  }
+  return out.join("\n");
+}
+
 function message(content: Anthropic.ContentBlock[], stop: Anthropic.Message["stop_reason"]): Anthropic.Message {
   return {
     id: "msg_scenario",
@@ -161,8 +194,15 @@ export interface EpisodeOptions {
   team: { name: string; description?: string }[];
   /** What the person says, in order. Each is sent to the front agent and awaited. */
   says: string[];
-  /** What the model does. */
-  script: Script;
+  /** What the model does. Unused when `client` is given. */
+  script?: Script;
+  /**
+   * A real model instead of the script (INV-693): the same stack, judged on what a model
+   * actually chose. Used by the live skill evals, never by `npm test`.
+   */
+  client?: Anthropic;
+  /** The provider the turn names in its requests; only meaningful with `client`. */
+  provider?: ProviderProfile;
   /** Files the box starts with. */
   files?: Record<string, string>;
   /** Stops an episode that will not settle. Default 200. */
@@ -213,7 +253,7 @@ export async function runEpisode(options: EpisodeOptions): Promise<EpisodeResult
   const front = registry.list()[0]!;
   for (const entry of options.history ?? []) registry.appendTranscript(front.id, entry);
 
-  const client = fakeModel(async ({ params }) => {
+  const scripted = fakeModel(async ({ params }) => {
     calls += 1;
     if (calls > maxRounds) return message([{ type: "text", text: "(scenario cut: too many rounds)" } as Anthropic.ContentBlock], "end_turn");
     const system =
@@ -233,7 +273,7 @@ export async function runEpisode(options: EpisodeOptions): Promise<EpisodeResult
     const first = params.messages[0];
     const opened = typeof first?.content === "string" ? first.content : "";
     const offered = (params.tools ?? []).map(tool => ("name" in tool ? String(tool.name) : ""));
-    const reply = await options.script({ agent, system, round, opened, offered, messages: params.messages });
+    const reply = await options.script!({ agent, system, round, opened, offered, messages: params.messages });
     if (reply === undefined) return message([{ type: "text", text: "" } as Anthropic.ContentBlock], "end_turn");
     if ("say" in reply) {
       observations.push({ at: clock++, agent, kind: "say", text: reply.say });
@@ -245,6 +285,8 @@ export async function runEpisode(options: EpisodeOptions): Promise<EpisodeResult
       "tool_use"
     );
   });
+  if (options.client === undefined && options.script === undefined) throw new Error("runEpisode needs a script or a client");
+  const client = options.client ?? scripted;
 
   const bus: AgentBus = new AgentBus(registry, async (record, inbound, signal, conversation) => {
     for (const inboundMessage of inbound) {
@@ -261,6 +303,7 @@ export async function runEpisode(options: EpisodeOptions): Promise<EpisodeResult
     observations.push({ at: clock++, agent: record.profile.name, kind: "turn", text: conversation });
     await runTurn(record, inbound, signal, {
       client,
+      ...(options.provider !== undefined ? { provider: options.provider } : {}),
       registry,
       bus,
       box,
