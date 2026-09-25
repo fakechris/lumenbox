@@ -171,7 +171,7 @@ export function approvalVarsFor(card: ApprovalCardState): {
     title: `${card.agentName || "An agent"} needs your consent`,
     // The original action verbatim, then what answering means — an approval that
     // paraphrases either is the injection surface the verbatim rule exists to close.
-    description: `${card.description}\n\n${card.stakes}`,
+    description: `${card.action !== undefined ? `${card.action}\n\n` : ""}${card.description}\n\n${card.stakes}`,
   };
 }
 

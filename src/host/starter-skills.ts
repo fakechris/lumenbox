@@ -535,6 +535,40 @@ Python in the box is allowed for the arithmetic. The brief is the product, not a
 `,
   },
   {
+    // The conduct half of INV-692. The host checks the outbox mechanically (does it open, is it
+    // what its name says, is a template slot left); this is what a mechanical check cannot do.
+    slug: "check-before-delivering",
+    content: `---
+name: check-before-delivering
+description: Before handing a person a file you made (docx, xlsx, pptx, pdf, csv, an image), open the result and check it against the request. Not for plain chat answers with no file.
+scope: global
+---
+
+# Check before delivering
+
+The script that wrote a file ran without an error. That says nothing about whether the
+file is right. Check the file, not the code that made it.
+
+1. **Open what you made, fresh.** Read the file back from disk the way the person will
+   get it: unzip a docx/xlsx/pptx and read the text, open a PDF and read a page, render a
+   chart or slide to PNG and look at it. Do not reason from what the code should have
+   produced.
+2. **Is it the format its name says?** A .docx must be written by something that writes
+   Word files — never markdown with a new extension. Same for .xlsx and .pptx.
+3. **Hold it against the request, point by point.** Every question asked has an answer in
+   the file; every figure the person gave you is there as they gave it; nothing is from a
+   different file or an older draft.
+4. **Nothing unfinished.** No {{name}}, no [插入…], no lorem ipsum, no "TBD" where a
+   value belongs, no empty sheet, no slide with a title and nothing under it. If a slot is
+   meant to stay open (they asked for a template), say so in your reply.
+5. **Then deliver.** Put it in this chat's outbox/ and say in one or two sentences what it
+   is and what is in it.
+
+If the same problem survives three fixes, stop and tell the person what is stuck and what
+you tried. A late honest answer is better than a broken file on time.
+`,
+  },
+  {
     // The conversation that packs a template (docs/29 §4). Served from the host like Grok
     // Bot serves its export skill from the server, so the wording can change without a
     // client release; the tool it ends in is PackTemplate.

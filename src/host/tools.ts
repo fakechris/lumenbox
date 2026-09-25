@@ -2138,46 +2138,7 @@ function requireBox(context: ToolContext): BoxClient {
   return context.box;
 }
 
-/**
- * What each tool does to the world, declared, never inferred from its name.
- *
- * `read` observes; `mutate` changes the box or the board; `publish` sends something to a
- * person or a system outside; `credential` touches a secret or a permission. The
- * vocabulary is for the auto-reviewer and for a person reading an audit line — a reviewer
- * told "publish" reads a message send differently from a file write. Tools absent here
- * are `mutate` by default, because assuming a tool is harmless is how a harmless-looking
- * one gets to act. (TurnkeyAI classified this by regex over the instruction text; the
- * declaration is the part worth keeping, the regex is not.)
- */
-export type SideEffectScope = "read" | "mutate" | "publish" | "credential";
-const SIDE_EFFECT_SCOPE: Record<string, SideEffectScope> = {
-  read_file: "read",
-  list_dir: "read",
-  search_files: "read",
-  screenshot: "read",
-  browser_read: "read",
-  WebFetch: "read",
-  WebSearch: "read",
-  Recall: "read",
-  Teammates: "read",
-  Jobs: "read",
-  History: "read",
-  OtherThreads: "read",
-  ReadFeishuDoc: "read",
-  SendToAgent: "publish",
-  SendToChat: "publish",
-  browser_act: "publish",
-  browser_upload: "publish",
-  Delegate: "mutate",
-  RunOnHost: "credential",
-  CreateAgent: "credential",
-  UpdateAgent: "credential",
-  Vault: "credential",
-};
-export function sideEffectScopeOf(tool: string): SideEffectScope {
-  if (tool.startsWith("ext__") || tool.includes("__")) return "mutate";
-  return SIDE_EFFECT_SCOPE[tool] ?? "mutate";
-}
+// What each tool does to the world is declared in side-effects.ts (INV-691), which the policy gate reads.
 
 /** The caller's teammates, through the registry's one definition; every agent when a test's registry has none. */
 /**

@@ -450,6 +450,8 @@ export interface Scheduled {
   paused?: boolean;
   /** Which box the file lives in (docs/30); the run goes to an agent of that box. */
   boxId?: string;
+  /** The tools the skill says it needs (INV-691); an unattended run is narrowed to them. */
+  allowedTools?: readonly string[];
 }
 
 /** A skill that fires on a matching message. Same runner rules as a schedule. */
@@ -464,6 +466,8 @@ export interface Hooked {
   boxId?: string;
   authoredBy?: string;
   because?: string;
+  /** The tools the skill says it needs (INV-691); an unattended run is narrowed to them. */
+  allowedTools?: readonly string[];
 }
 
 export interface Listening {
@@ -475,6 +479,8 @@ export interface Listening {
   runAs?: string;
   paused?: boolean;
   boxId?: string;
+  /** The tools the skill says it needs (INV-691); an unattended run is narrowed to them. */
+  allowedTools?: readonly string[];
 }
 
 /** Whether a message matches a listener's `match:` — a /regex/flags, or a phrase, case-insensitively. */
@@ -562,7 +568,7 @@ export interface SchedulerDeps {
    * Only a waiting webhook needs this: the caller is holding an HTTP connection open and the
    * point of waiting is to hand back the answer. Everything else fires and forgets.
    */
-  runAndSay?: (agent: string, prompt: string) => Promise<string>;
+  runAndSay?: (agent: string, prompt: string, toolScope?: readonly string[]) => Promise<string>;
   /**
    * Starts a turn. Rejecting is fine: the next window is the retry.
    *
@@ -570,7 +576,7 @@ export interface SchedulerDeps {
    * hands it over rather than resolving it, because which conversation a chatKey means
    * and how a reply reaches it are the caller's business, not the clock's.
    */
-  run: (agent: string, prompt: string, deliver?: string, slug?: string) => Promise<void>;
+  run: (agent: string, prompt: string, deliver?: string, slug?: string, toolScope?: readonly string[]) => Promise<void>;
   /**
    * What a routine committed to last time and where it stands (INV-528), prepended to
    * its prompt so a retro opens with its own previous "next week" rather than a blank.
@@ -749,7 +755,10 @@ export class Scheduler {
             sender: message.senderLabel ?? "someone",
             chatKey: deliver,
           }),
-          deliver
+          deliver,
+          // No slug, as before: a listener run is not reconciled against commitments.
+          undefined,
+          skill.allowedTools
         )
         .catch(error => {
           this.log(`${skill.name}: run failed — ${error instanceof Error ? error.message : String(error)}`);
@@ -814,7 +823,8 @@ export class Scheduler {
           agent,
           triggerPrompt(skill.name, skill.path, describeSchedule(skill.schedule), skill.deliver) + (prior !== undefined ? `\n\n${prior}` : ""),
           skill.deliver,
-          skill.slug
+          skill.slug,
+          skill.allowedTools
         )
         .catch(error => {
           // Reported and dropped. A scheduled run that failed will come round again, and retrying
@@ -1011,7 +1021,7 @@ export class Scheduler {
     // here rather than fired and forgotten, and the bookkeeping is the same either way.
     if (options.wait === true && this.deps.runAndSay !== undefined) {
       try {
-        const said = await this.deps.runAndSay(agent, prompt);
+        const said = await this.deps.runAndSay(agent, prompt, skill.allowedTools);
         return { ok: true, said };
       } catch (error) {
         this.log(`${skill.name}: webhook run failed — ${error instanceof Error ? error.message : String(error)}`);
@@ -1022,7 +1032,7 @@ export class Scheduler {
     }
 
     void this.deps
-      .run(agent, prompt, skill.deliver, skill.slug)
+      .run(agent, prompt, skill.deliver, skill.slug, skill.allowedTools)
       .catch(error => {
         this.log(`${skill.name}: webhook run failed — ${error instanceof Error ? error.message : String(error)}`);
       })
@@ -1052,7 +1062,8 @@ export class Scheduler {
         agent,
         triggerPrompt(skill.name, skill.path, describeSchedule(skill.schedule), skill.deliver) + (priorByHand !== undefined ? `\n\n${priorByHand}` : ""),
         skill.deliver,
-        skill.slug
+        skill.slug,
+        skill.allowedTools
       )
       .catch(error => {
         this.log(

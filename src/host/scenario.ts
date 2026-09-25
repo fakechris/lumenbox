@@ -130,6 +130,12 @@ function memoryBox(files: Map<string, string>, overrides: Partial<BoxClient> = {
       if (content === undefined) throw new Error(`${path} does not exist`);
       return { path, content, total_lines: content.split("\n").length, truncated: false };
     },
+    // What delivery reads: the file exactly, so the delivery gate checks what a person would get.
+    downloadFile: async (path: string) => {
+      const content = files.get(path);
+      if (content === undefined) throw new Error(`${path} does not exist`);
+      return { path, size: Buffer.byteLength(content), media_type: "application/octet-stream", base64: Buffer.from(content).toString("base64") };
+    },
     listDir: async (path: string) => ({
       path,
       entries: [...files.keys()]
@@ -215,7 +221,7 @@ export interface EpisodeOptions {
   /** Script only the relevance decision, while retaining the production projection path. */
   selectMemory?: (prompt: string) => Promise<string | undefined>;
   /** Drive concurrent channel arrivals through the real bus instead of sequential says. */
-  drive?: (context: { bus: AgentBus; registry: AgentRegistry; frontId: string }) => Promise<void>;
+  drive?: (context: { bus: AgentBus; registry: AgentRegistry; frontId: string; files: Map<string, string> }) => Promise<void>;
 }
 
 /**
@@ -313,7 +319,7 @@ export async function runEpisode(options: EpisodeOptions): Promise<EpisodeResult
     } as never);
   });
 
-  if (options.drive !== undefined) await options.drive({ bus, registry, frontId: front.id });
+  if (options.drive !== undefined) await options.drive({ bus, registry, frontId: front.id, files });
   for (const line of options.says) {
     bus.sendFromUser(front.id, line);
     await bus.wake(front.id);

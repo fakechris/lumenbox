@@ -37,6 +37,7 @@ import { createHash, randomUUID } from "node:crypto";
 import { dirname, join } from "node:path";
 import { agentboxHome } from "../config.ts";
 import type { RuleStore } from "./rules.ts";
+import { sideEffectOf, tierAsks, tierGateMode, type SideEffectTier, type TierGateMode } from "./side-effects.ts";
 
 /**
  * What was asked of the gate, as a window, with standing grants re-stated ahead of it.
@@ -122,6 +123,12 @@ export interface PendingApproval {
   agentName: string;
   /** Rendered for a human. This exact text is what the fingerprint covers. */
   description: string;
+  /**
+   * What the tool does, in the host's words (INV-691): "run a command on the person's own
+   * machine". Shown above the verbatim description, never inside it — the fingerprint covers the
+   * description, and a grant must not change meaning because a phrase was reworded.
+   */
+  action?: string;
   requestedAt: string;
 }
 
@@ -172,6 +179,11 @@ export interface PolicyLimits {
    * gets it subtly wrong, and a policy that fails open is worse than none.
    */
   approvalRequiredCommands: readonly string[];
+  /**
+   * The side-effect tier gate (INV-691): `shadow` records what it would have asked and changes
+   * nothing, `enforce` asks, `off` does neither. Absent means shadow. `AGENTBOX_TIER_GATE`.
+   */
+  tierGate?: TierGateMode;
 }
 
 /**
@@ -193,6 +205,7 @@ export function defaultLimits(): PolicyLimits {
     wakeWindowMinutes: envLimit("AGENTBOX_WAKE_WINDOW_MINUTES") ?? 10,
     approvalRequiredTools: envList("AGENTBOX_APPROVAL_TOOLS"),
     approvalRequiredCommands: envList("AGENTBOX_APPROVAL_COMMANDS"),
+    tierGate: tierGateMode(),
   };
 }
 
@@ -228,15 +241,30 @@ function envList(name: string): readonly string[] {
     .filter(entry => entry !== "");
 }
 
+/** How many would-have-asked rows the gate keeps in memory for the summary. */
+const SHADOW_KEEP = 2_000;
+
 // ── the record ────────────────────────────────────────────────────────────────────────
 
 /** One line of the policy log. Append-only, replayed to derive current state. */
 type PolicyEvent =
-  | { at: string; kind: "checked"; request: string; agentId: string; allowed: boolean; reason?: string; rule?: string }
+  | {
+      at: string;
+      kind: "checked";
+      request: string;
+      agentId: string;
+      allowed: boolean;
+      reason?: string;
+      rule?: string;
+      /** A tool call's side-effect tier (INV-691). */
+      tier?: SideEffectTier;
+      /** Allowed, but the tier gate would have asked a person had it been enforcing. The tool is named for the summary. */
+      wouldAsk?: string;
+    }
   | { at: string; kind: "rules-loaded"; hash: string; ids: string[]; problems: { id: string; problem: string }[] }
   | { at: string; kind: "stop"; agentId: string; by: string }
   | { at: string; kind: "resume"; agentId: string; by: string }
-  | { at: string; kind: "approval-requested"; id: string; fingerprint: string; agentId: string; description: string }
+  | { at: string; kind: "approval-requested"; id: string; fingerprint: string; agentId: string; description: string; action?: string }
   | { at: string; kind: "approval-granted"; id: string; by: string }
   | { at: string; kind: "approval-granted-session"; id: string; by: string }
   | {
@@ -360,6 +388,8 @@ export class PolicyGate {
   private readonly always = new Map<string, StandingGrant>();
   /** Wake timestamps per agent, for the rate limit. Rebuilt from the log on start. */
   private readonly wakes = new Map<string, number[]>();
+  /** What the tier gate would have asked about, newest last, bounded. Rebuilt from the log on start. */
+  private readonly shadowAsks: { at: string; tool: string; agentId: string; request: string }[] = [];
 
   constructor(options: PolicyGateOptions = {}) {
     this.path = options.path ?? join(agentboxHome(), "policy.jsonl");
@@ -395,7 +425,12 @@ export class PolicyGate {
       allowed: decision.allow,
       ...(decision.allow ? {} : { reason: decision.reason }),
       ...(request.kind === "tool" && this.lastRule !== undefined ? { rule: this.lastRule } : {}),
+      ...(request.kind === "tool" && this.lastTier !== undefined ? { tier: this.lastTier } : {}),
+      ...(request.kind === "tool" && decision.allow && this.lastWouldAsk ? { wouldAsk: request.tool } : {}),
     });
+    if (request.kind === "tool" && decision.allow && this.lastWouldAsk) {
+      this.noteShadowAsk({ at: this.now().toISOString(), tool: request.tool, agentId: request.agentId, request: describeRequest(request) });
+    }
     // After the decision row, not before it: the log should read as the story it is — we checked, we
     // refused, so we asked a person. Both are written before this returns, so nothing acts on a
     // decision that is not yet on the record.
@@ -530,9 +565,19 @@ export class PolicyGate {
 
   /** The rule that decided the last check, for the audit row. */
   private lastRule: string | undefined;
+  /** The last tool check's tier, and whether the tier gate would have asked where it did not. */
+  private lastTier: SideEffectTier | undefined;
+  private lastWouldAsk = false;
 
   private decideTool(request: Extract<PolicyRequest, { kind: "tool" }>): Outcome {
     this.lastRule = undefined;
+    // What the call does to the world (INV-691). The box's finding outranks the declaration:
+    // a click is `self` until the box says this click pays.
+    const effect = sideEffectOf(request.tool, request.input);
+    const tier: SideEffectTier = request.irreversible !== undefined ? "irreversible" : effect.tier;
+    this.lastTier = tier;
+    this.lastWouldAsk = false;
+    const gate: TierGateMode = this.limits.tierGate ?? "shadow";
     // An operator rule speaks first (INV-427). Deny refuses without asking anyone; ask
     // forces the approval below with the rule on the card; allow lifts only the
     // operator's own approval lists — never a host command, never the box's
@@ -552,10 +597,17 @@ export class PolicyGate {
         };
       }
     }
-    const configuredAsk = this.needsApproval(request);
+    // The tier gate is the operator's list by another name: enforcing, it asks like
+    // AGENTBOX_APPROVAL_TOOLS would, and an operator's allow rule lifts it the same way.
+    const tierWouldAsk = gate !== "off" && tierAsks(tier);
+    const configuredAsk = this.needsApproval(request) || (gate === "enforce" && tierWouldAsk);
     const mustAsk = request.tool === "RunOnHost" || request.irreversible !== undefined;
     const asks = rule?.effect === "ask" || mustAsk || (configuredAsk && rule?.effect !== "allow");
-    if (!asks) return { decision: { allow: true } };
+    if (!asks) {
+      // Shadow: allowed as before, and the row says a person would have been asked.
+      this.lastWouldAsk = gate === "shadow" && tierWouldAsk && rule?.effect !== "allow";
+      return { decision: { allow: true } };
+    }
     if (request.delegated !== undefined && request.delegated.ask !== true) {
       return {
         decision: {
@@ -628,6 +680,7 @@ export class PolicyGate {
       agentId: request.agentId,
       agentName: request.agentName,
       description,
+      ...(effect.action !== undefined ? { action: effect.action } : {}),
       requestedAt: this.now().toISOString(),
     };
     this.awaiting.set(fingerprint, approval);
@@ -646,6 +699,7 @@ export class PolicyGate {
         fingerprint,
         agentId: approval.agentId,
         description,
+        ...(approval.action !== undefined ? { action: approval.action } : {}),
       },
     };
   }
@@ -689,6 +743,33 @@ export class PolicyGate {
 
   isStopped(agentId: string): boolean {
     return this.stopped.has(agentId);
+  }
+
+  /**
+   * What the tier gate would have asked a person about, had it been enforcing (INV-691).
+   *
+   * Counted per tool over a window, with the most recent few actions as they were described, so a
+   * person deciding whether to turn enforcement on can see what it would have cost them: how
+   * often they would have been asked, and about what.
+   */
+  tierShadow(windowDays = 7): { mode: TierGateMode; since: string; total: number; tools: { tool: string; count: number; recent: string[] }[] } {
+    const since = new Date(this.now().getTime() - windowDays * 24 * 60 * 60_000).toISOString();
+    const tools = new Map<string, { count: number; recent: string[] }>();
+    for (const ask of this.shadowAsks) {
+      if (ask.at < since) continue;
+      const entry = tools.get(ask.tool) ?? { count: 0, recent: [] };
+      entry.count += 1;
+      entry.recent = [ask.request, ...entry.recent].slice(0, 3);
+      tools.set(ask.tool, entry);
+    }
+    const list = [...tools.entries()].map(([tool, entry]) => ({ tool, ...entry })).sort((a, b) => b.count - a.count);
+    return { mode: this.limits.tierGate ?? "shadow", since, total: list.reduce((sum, entry) => sum + entry.count, 0), tools: list };
+  }
+
+  private noteShadowAsk(ask: { at: string; tool: string; agentId: string; request: string }): void {
+    this.shadowAsks.push(ask);
+    // Bounded: this is a sample for a decision, not a second log.
+    if (this.shadowAsks.length > SHADOW_KEEP) this.shadowAsks.splice(0, this.shadowAsks.length - SHADOW_KEEP);
   }
 
   /** Everything waiting on a person, newest last. */
@@ -819,6 +900,11 @@ export class PolicyGate {
         continue; // A torn last line costs one event, not the file.
       }
       switch (event.kind) {
+        case "checked":
+          if (event.wouldAsk !== undefined) {
+            this.noteShadowAsk({ at: event.at, tool: event.wouldAsk, agentId: event.agentId, request: event.request });
+          }
+          break;
         case "stop":
           this.stopped.add(event.agentId);
           break;
@@ -832,6 +918,7 @@ export class PolicyGate {
             agentId: event.agentId,
             agentName: "",
             description: event.description,
+            ...(event.action !== undefined ? { action: event.action } : {}),
             requestedAt: event.at,
           };
           byId.set(event.id, approval);

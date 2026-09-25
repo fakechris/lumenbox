@@ -476,3 +476,20 @@ test("the cache hands its roots to every read, so a config edit applies at the n
   clock += 10;
   assert.deepEqual((await cache.refresh()).skills.map(skill => skill.slug), ["deploy"]);
 });
+
+test("allowed-tools is read into our names; unknown names are said, and narrow to nothing extra (INV-691)", async () => {
+  const { allowedToolsFrom } = await import("./skills.ts");
+  const hub = allowedToolsFrom("Read, Write, Glob, WebSearch, Task, AskUserQuestion");
+  assert.deepEqual(hub.tools.sort(), ["AskUser", "Fork", "WebSearch", "list_dir", "read_file", "write_file"]);
+  assert.deepEqual(hub.unknown, []);
+  assert.deepEqual(allowedToolsFrom("mcp__involute__work_search, read_file").tools.sort(), ["involute__work_search", "read_file"]);
+  assert.deepEqual(allowedToolsFrom("[Bash, Grep]").tools.sort(), ["bash", "list_dir", "read_file"], "Grep is not a shell");
+
+  const parsed = skillFrom("research", parseSkillFile("---\ndescription: d\nallowed-tools: Read, Frobnicate\n---\nbody"));
+  assert.ok("skill" in parsed);
+  assert.deepEqual(parsed.skill.allowedTools, ["read_file"]);
+  assert.match(parsed.note ?? "", /Frobnicate, which is not a tool here/);
+
+  const none = skillFrom("plain", parseSkillFile("---\ndescription: d\n---\nbody"));
+  assert.ok("skill" in none && none.skill.allowedTools === undefined, "absent means no narrowing");
+});
