@@ -1347,6 +1347,13 @@ export const APP_HTML = String.raw`<!doctype html>
       <div class="fieldnote">Each covers one exact action until revoked. Revoking makes the next
         identical action ask again.</div>
     </div>
+    <div class="field" data-tier="personal" id="settierwrap" style="display:none" data-settab="mine">
+      <label>Would have asked (last 7 days)</label>
+      <div id="settier" style="display:flex;flex-direction:column;gap:6px"></div>
+      <div class="fieldnote">Actions that reach past the box — an outside service, an upload, a
+        tool we cannot see into — or touch authority. Nothing here was stopped: this is what
+        <code>AGENTBOX_TIER_GATE=enforce</code> would have asked you about.</div>
+    </div>
     <div class="fieldnote" id="setstatus"></div>
     <div class="actions">
       <button class="btn" id="settest">Test connection</button>
@@ -2446,6 +2453,14 @@ function renderStandingGrants() {
   fetch("/api/policy")
     .then(function (r) { return r.json(); })
     .then(function (data) {
+      var tier = data.tierShadow || { total: 0, tools: [] };
+      $("settierwrap").style.display = tier.mode === "shadow" && tier.total > 0 ? "" : "none";
+      $("settier").innerHTML = (tier.tools || []).map(function (entry) {
+        return '<div><b>' + esc(entry.tool) + "</b> &times; " + esc(String(entry.count)) +
+          (entry.recent || []).map(function (line) {
+            return '<code style="display:block;font-family:var(--font-mono);font-size:11px;word-break:break-all">' + esc(line) + "</code>";
+          }).join("") + "</div>";
+      }).join("");
       var grants = data.standing || [];
       $("setgrantswrap").style.display = grants.length ? "" : "none";
       $("setgrants").innerHTML = grants.map(function (grant) {
@@ -3967,6 +3982,8 @@ function drawItem(item) {
       // The exact text the fingerprint was taken over. Not a summary of it: consent is given to
       // what is read here, so anything shortened would be consent to something else.
       html = '<div class="chead"><span class="dot"></span>' + (pending ? "Consent needed &mdash; " + esc(nameOf(current)) + " is waiting" : "Consent") + "</div>" +
+        // What the tool does, in the host's words (INV-691) — above the verbatim action, never in it.
+        (item.action ? '<div class="note" style="font-weight:600">' + esc(item.action) + "</div>" : "") +
         "<code></code>" +
         (pending
           ? '<div class="note">Each button says what it covers: this exact action, once, for this session, or until you revoke it in Settings. This agent only — never another agent, never another command.</div>' +
@@ -4492,7 +4509,7 @@ function reconcileCards(pending, secretRequests, handovers) {
   pending.forEach(function (p) {
     if (p.agentId !== current) return;
     alive["consent:" + p.id] = true;
-    showCard("consent:" + p.id, { card: "consent", id: p.id, agentId: p.agentId, description: p.description, at: p.requestedAt });
+    showCard("consent:" + p.id, { card: "consent", id: p.id, agentId: p.agentId, description: p.description, action: p.action, at: p.requestedAt });
   });
   secretRequests.forEach(function (r) {
     if (r.agentId !== current) return;
@@ -5962,7 +5979,7 @@ stream.onmessage = function (raw) {
   }
 
   if (e.type === "approval_pending") {
-    if (e.agentId === current) showCard("consent:" + e.id, { card: "consent", id: e.id, agentId: e.agentId, description: e.description });
+    if (e.agentId === current) showCard("consent:" + e.id, { card: "consent", id: e.id, agentId: e.agentId, description: e.description, action: e.action });
     return;
   }
   if (e.type === "approval_settled") {

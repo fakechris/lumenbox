@@ -460,6 +460,7 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
     agentId: string;
     agentName: string;
     description: string;
+    action?: string;
   }) => {
     broadcast({
       type: "approval_pending",
@@ -467,6 +468,7 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
       agentId: approval.agentId,
       agentName: approval.agentName,
       description: approval.description,
+      ...(approval.action !== undefined ? { action: approval.action } : {}),
     });
   };
 
@@ -2276,7 +2278,8 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
       approval.agentId,
       approval.id,
       approval.agentName,
-      approval.description
+      approval.description,
+      approval.action
     );
   };
 
@@ -3557,6 +3560,9 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
           send(res, 200, {
             pending: orchestrator.policy.pending(),
             standing: orchestrator.policy.standingGrants(),
+            // What the side-effect tier gate would have asked about this week (INV-691), so a
+            // person can see the cost of enforcing it before choosing to.
+            tierShadow: orchestrator.policy.tierShadow(),
             stopped: orchestrator.registry
               .list()
               .filter(agent => orchestrator.policy.isStopped(agent.id))

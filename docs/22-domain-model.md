@@ -3,7 +3,7 @@
      family: spec
      status: current
      domain: identity-and-authority
-     updated: 2026-09-11
+     updated: 2026-09-25
 -->
 # The domain model: people, doors, workers, rooms
 
@@ -334,6 +334,28 @@ bundle the box lists. An agent's *offered* tool set is that union narrowed by it
 an agent and a secret. Bundles stack; a conflict between two bundles (the same MCP server
 name with different configuration) is an error at load, not a silent override. Instructions
 concatenate installation → box → agent, in that order, as separate prompt sections.
+
+### 8.2a What a call does, and who it reaches (INV-691)
+
+Consent is spent where an action reaches past the box and the person who asked, not where it
+writes. `side-effects.ts` declares every built-in tool once — `observe`, `self` (the box, the
+agent's own records, the board, the team, the requester), `reach` (an outside service, an upload,
+any MCP or extension tool, whose inside we cannot see), `spend`, `credential` (a secret, the
+person's machine, who can act) — and the box's per-call finding (INV-401) raises any call to
+`irreversible`. A click in a page is `self` until the box says that click pays; counting every
+click would bury the few that matter. A guard test holds the declaration to the real tool list in
+both directions, because the table it replaced named a tool that did not exist.
+
+The gate reads it in three modes (`AGENTBOX_TIER_GATE`): **shadow**, the default, changes no
+decision and writes `tier` and `wouldAsk` on the `checked` row, summarised on the settings page;
+**enforce** asks for `reach`/`spend`/`credential`/`irreversible` the way an operator list would, so
+an operator's allow rule lifts it the same way; **off**. RunOnHost and the box's irreversible
+finding ask in every mode, as before.
+
+The consent card carries a short phrase for what the tool does — "run a command on the person's
+own machine" — from the host's declaration only, never from the agent or a skill, and **beside**
+the verbatim description rather than inside it: the fingerprint covers the description, and a
+standing grant must not change meaning because a phrase was reworded.
 
 ### 8.3 What is *not* a place for a bundle
 

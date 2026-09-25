@@ -291,6 +291,12 @@ export interface ApprovalCardState {
    * is stopped until someone answers, and refusing is the reversible direction.
    */
   stakes: string;
+  /**
+   * What the tool does, in the host's words — "run a command on the person's own machine"
+   * (INV-691). Shown above the description, never merged into it: it comes from the host's
+   * own declaration, never from the agent or a skill, for the same reason as `stakes`.
+   */
+  action?: string;
 }
 
 /** The stakes line every consent request carries. One sentence, always the same shape. */
@@ -1070,7 +1076,7 @@ ${input.options.map(option => `· ${option}`).join("\n")}`
    * remembers it so a one-word reply from them answers it. Nothing when the agent was
    * not driven from a channel — the web page covers that.
    */
-  notifyApproval(agentId: string, approvalId: string, agentName: string, description: string): void {
+  notifyApproval(agentId: string, approvalId: string, agentName: string, description: string, action?: string): void {
     const asker = this.lastAsker.get(agentId);
     if (asker === undefined) return;
     this.awaitingApproval.set(asker.identity, { approvalId, description });
@@ -1085,6 +1091,7 @@ ${input.options.map(option => `· ${option}`).join("\n")}`
             agentName,
             description,
             stakes: APPROVAL_STAKES,
+            ...(action !== undefined ? { action } : {}),
           },
           asker.chatKey
         )
@@ -1093,7 +1100,7 @@ ${input.options.map(option => `· ${option}`).join("\n")}`
         });
       return;
     }
-    const message = consentFallbackText(agentName, description);
+    const message = `${action !== undefined ? `${action}\n` : ""}${consentFallbackText(agentName, description)}`;
     // Same thread-first routing as a question, for the same reason.
     const push =
       asker.chatKey !== undefined && asker.adapter.sendToChat !== undefined

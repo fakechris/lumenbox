@@ -951,3 +951,28 @@ test("a broken deliverable is caught before the turn ends, fixed, and only the f
     assert.equal(answered, "已修好，见附件。", "the person hears the answer given after the fix, not the one before it");
   } finally { result.cleanup(); }
 });
+
+test("a routine that declared read-only tools is offered only those; a person's turn is not narrowed (INV-691)", async () => {
+  const offeredBy: { opened: string; offered: string[] }[] = [];
+  const result = await runEpisode({
+    team: [{ name: "Nova" }], says: [],
+    script: ({ messages, offered }) => {
+      // The turn's own message is the last one; `opened` is the conversation's first.
+      const last = messages.at(-1);
+      offeredBy.push({ opened: typeof last?.content === "string" ? last.content : JSON.stringify(last?.content), offered });
+      return { say: "done" };
+    },
+    drive: async ({ bus, frontId }) => {
+      bus.sendFromUser(frontId, "ROUTINE: summarise the inbox", { steerable: false, lane: "background", synthetic: true, toolScope: ["read_file", "list_dir", "SendToAgent-not-offered-here"] });
+      await bus.runExclusive(frontId, { userDriven: true });
+      bus.sendFromUser(frontId, "PERSON: what is in the inbox?");
+      await bus.runExclusive(frontId, { userDriven: true });
+    },
+  });
+  try {
+    const routine = offeredBy.find(turn => turn.opened.includes("ROUTINE"))!;
+    const person = offeredBy.find(turn => turn.opened.includes("PERSON"))!;
+    assert.deepEqual([...routine.offered].sort(), ["list_dir", "read_file"], "only what the agent had and the skill named");
+    assert.ok(person.offered.includes("write_file") && person.offered.includes("bash"), "a person's turn keeps every tool");
+  } finally { result.cleanup(); }
+});

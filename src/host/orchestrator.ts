@@ -501,6 +501,7 @@ export class Orchestrator {
           ...(skill.authoredBy !== undefined ? { authoredBy: skill.authoredBy } : {}),
           ...(skill.because !== undefined ? { because: skill.because } : {}),
           ...(skill.paused === true ? { paused: true } : {}),
+          ...(skill.allowedTools !== undefined ? { allowedTools: skill.allowedTools } : {}),
         })));
     },
     hooked: async () => {
@@ -517,6 +518,7 @@ export class Orchestrator {
           ...(skill.authoredBy !== undefined ? { authoredBy: skill.authoredBy } : {}),
           ...(skill.because !== undefined ? { because: skill.because } : {}),
           ...(skill.paused === true ? { paused: true } : {}),
+          ...(skill.allowedTools !== undefined ? { allowedTools: skill.allowedTools } : {}),
         })));
     },
     listeners: async () => {
@@ -532,6 +534,7 @@ export class Orchestrator {
           ...(skill.listener!.chat !== undefined ? { chat: skill.listener!.chat } : {}),
           ...(skill.runAs !== undefined ? { runAs: skill.runAs } : {}),
           ...(skill.paused === true ? { paused: true } : {}),
+          ...(skill.allowedTools !== undefined ? { allowedTools: skill.allowedTools } : {}),
         })));
     },
     // Through the ordinary prompt path, so a scheduled turn is checked by the policy gate exactly
@@ -543,9 +546,10 @@ export class Orchestrator {
     // rather than in the main conversation, which no chat has ever read.
     // Last time's commitments open the next run of the same routine (INV-528).
     priorCommitments: slug => priorCommitmentsPrompt(this.commitments.lastFor(slug), this.tasks?.list() ?? []),
-    run: async (agent, prompt, deliver, slug) => {
+    run: async (agent, prompt, deliver, slug, toolScope) => {
+      const scope = toolScope !== undefined ? { toolScope } : {};
       if (deliver === undefined) {
-        await this.prompt(agent, prompt, undefined, { steerable: false, lane: "background", synthetic: true });
+        await this.prompt(agent, prompt, undefined, { steerable: false, lane: "background", synthetic: true, ...scope });
         return;
       }
       const conversation = conversationIdFor(deliver);
@@ -559,6 +563,7 @@ export class Orchestrator {
         lane: "background",
         synthetic: true,
         conversation,
+        ...scope,
       });
       await this.settle();
       const said = this.replySince(agentId, before, conversation).trim();
@@ -601,10 +606,10 @@ export class Orchestrator {
       if (stillOpen.toChat !== undefined) await this.options.deliverToChat?.(deliver, `Still nothing holding these after that turn:\n${stillOpen.toChat.split("\n").slice(1).join("\n")}`, agentId);
     },
     // A waiting webhook: the same turn, but the caller is told what came of it.
-    runAndSay: async (agent, prompt) => {
+    runAndSay: async (agent, prompt, toolScope) => {
       const agentId = this.registry.resolve(agent).id;
       const before = this.registry.readTranscript(agentId).length;
-      await this.prompt(agent, prompt, undefined, { steerable: false, lane: "background", synthetic: true });
+      await this.prompt(agent, prompt, undefined, { steerable: false, lane: "background", synthetic: true, ...(toolScope !== undefined ? { toolScope } : {}) });
       await this.settle();
       return this.replySince(agentId, before).trim();
     },
@@ -1922,6 +1927,8 @@ export class Orchestrator {
       synthetic?: boolean;
       /** The message's id from the door it came through (INV-613); see `AgentBus.sendFromUser`. */
       messageId?: string;
+      /** A routine's declared tools (INV-691); see `InboundMessage.toolScope`. */
+      toolScope?: readonly string[];
     } = {}
   ): Promise<void> {
     if (isContextCommand(text) || isRecoveryCommand(text) || isRetryCommand(text)) throw new Error("上下文控制命令只能通过已接入的独立私聊入口执行；不会让模型模拟切换或恢复。");
@@ -1945,6 +1952,7 @@ export class Orchestrator {
       ...(options.steerable === false ? { steerable: false } : {}),
       ...(options.lane !== undefined ? { lane: options.lane } : {}),
       ...(options.messageId !== undefined ? { messageId: options.messageId } : {}),
+      ...(options.toolScope !== undefined ? { toolScope: options.toolScope } : {}),
     });
     const before = this.registry.readTranscript(agent.id, conversation).length;
     await this.bus.runExclusive(agent.id, { userDriven: true, conversation });

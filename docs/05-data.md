@@ -706,6 +706,13 @@ Four answers the phrase "without anyone asking" forces, all of them in `schedule
   replayed. Silently catching up is the behaviour that produces a surprise bill.
 - **The turn knows it was a timer.** An agent that believes someone is waiting asks questions nobody
   will answer and hurries, so the prompt says so and says where to leave its output.
+- **It is held to the tools it named (INV-691).** `allowed-tools:` — comma- or space-separated,
+  in our names or Claude Code's (`Read` → `read_file`, `mcp__srv__tool` → `srv__tool`; `Grep` is
+  `read_file`+`list_dir`, never `bash`) — narrows a scheduled, listener or webhook run to what the
+  agent already had *and* the skill named. It rides on the kickoff message (`toolScope`), so a run
+  resumed after a restart is held to the same list. A turn a person drives is never narrowed, and a
+  name that is not a tool here is reported on the skills page and adds nothing. Only a narrowing:
+  the policy gate and `rules/*.md` still decide every call inside it.
 
 **Seeding, and the three answers (INV-688).** `.seeded` records `<slug> <sha8>` per line:
 what has been offered and which version. Three states stay distinct where there used to be
