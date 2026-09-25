@@ -12,6 +12,7 @@
  * (research/2026-09-02-coordination-mcp-memory.md §二).
  */
 
+import { engineToolNames } from "./engine-tools.ts";
 import { createHash, randomBytes, timingSafeEqual } from "node:crypto";
 import { mkdirSync } from "node:fs";
 import { dirname, join } from "node:path";
@@ -41,12 +42,14 @@ export const PERMISSION_POLL_MS = 1_000;
 /** Claude Code's tool names onto the gate's, where the gate has rules for them. */
 export function mapEngineTool(name: string, input: Record<string, unknown>): string {
   const lower = name.toLowerCase();
-  if (lower === "bash" && typeof input.command === "string") return "bash";
-  if (lower === "write") return "write_file";
-  if (lower === "edit" || lower === "multiedit") return "edit_file";
-  if (lower === "webfetch") return "WebFetch";
-  return `engine:${name}`;
+  // Only these are checked under our own names, so an operator's list or rule about `bash`
+  // or `write_file` covers the engine's too. The names themselves come from the one table.
+  if (!POLICY_MAPPED.has(lower) || (lower === "bash" && typeof input.command !== "string")) return `engine:${name}`;
+  return engineToolNames(lower)?.[0] ?? `engine:${name}`;
 }
+
+/** The engine tools the policy gate sees under our names. */
+const POLICY_MAPPED: ReadonlySet<string> = new Set(["bash", "write", "edit", "multiedit", "webfetch"]);
 
 export function auditPath(): string {
   return process.env.AGENTBOX_DELEGATE_CALLS ?? join(agentboxHome(), "delegate-calls.jsonl");

@@ -871,6 +871,9 @@ const pendingSummaries = new Map<string, PendingSummary>();
 /** One guard per process: pauses are per conversation inside it. */
 const compactionGuard = new CompactionGuard();
 
+/** How MCP tools are offered when there are too many to list: a scope naming any MCP tool keeps these. */
+const MCP_GATEWAY_TOOLS: ReadonlySet<string> = new Set(["FindMcpTool", "UseMcpTool"]);
+
 /**
  * Bills a model call that is not the agent thinking.
  *
@@ -1720,6 +1723,16 @@ async function runContextTurn(agent: AgentRecord, inbound: readonly InboundMessa
         }));
 
 
+  // Narrowed only when every message opening this turn came from a routine that declared its
+  // tools. A person's message carries no scope, so a turn a person drives is never narrowed, and
+  // two routines batched into one turn get only what both named.
+  const routineScope = inbound.every(message => message.toolScope !== undefined)
+    ? new Set(inbound.map(message => message.toolScope!).reduce((kept, scope) => kept.filter(name => scope.includes(name))))
+    : undefined;
+  if (routineScope !== undefined) {
+    console.error(`[tools] ${agent.profile.name}: routine declared its tools; offering only ${[...routineScope].join(", ") || "none"}`);
+  }
+
   const tools = buildTools(
     box !== undefined,
     provider.vision,
@@ -1744,7 +1757,11 @@ async function runContextTurn(agent: AgentRecord, inbound: readonly InboundMessa
     // question would sit there unseen; what it needs decided goes back to the sender instead.
     // The test is the whole conversation, not this turn: the front agent woken by a worker's
     // report is still the person's counterpart, and it is the one that has to be able to ask.
-    .filter(tool => !(!personIsHere && PERSON_FACING_TOOLS.has(tool.name)));
+    .filter(tool => !(!personIsHere && PERSON_FACING_TOOLS.has(tool.name)))
+    // A routine's own skill said what it needs (INV-691). Applied last, as an intersection, so it
+    // can only take away: a name the agent was never offered stays unoffered.
+    .filter(tool => routineScope === undefined || routineScope.has(tool.name) ||
+      (MCP_GATEWAY_TOOLS.has(tool.name) && [...routineScope].some(name => name.includes("__"))));
 
   // One entry per completed round, for the loop and progress judgements. Held out here rather than
   // inside runRounds so a continuation can reset it: a fresh budget deserves a fresh judgement.

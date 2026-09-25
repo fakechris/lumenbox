@@ -66,6 +66,8 @@ export function renderApprovalCard(card: ApprovalCardState, chatKey?: string): o
       template: "orange",
     },
     elements: [
+      // The host's phrase for what this does (INV-691), plain text so nothing in it renders as markup.
+      ...(card.action !== undefined ? [{ tag: "div", text: { tag: "plain_text", content: card.action } }] : []),
       { tag: "div", text: { tag: "lark_md", content: card.description } },
       {
         tag: "action",
