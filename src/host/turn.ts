@@ -82,9 +82,10 @@ import type { KeptEvidence } from "./resume.ts";
 import { keepToolResult, readKeptSources, RESULT_KEPT_MARKER } from "./results.ts";
 import { keptPointer, parseKeptPointer } from "./fetched.ts";
 import { checkQuotes, quoteReportLine } from "./quote-check.ts";
+import { deliverableReport, MAX_DELIVERABLE_NUDGES, outboxFindings } from "./deliverables.ts";
 import type { BoxClass } from "../box/access.ts";
 import { emptySectionFaults, buildSystemPromptParts, buildTurnPrompt,
-  turnReminderFor,
+  chatFilesRoot, turnReminderFor,
 } from "./prompt.ts";
 import {
   closingNudge,
@@ -1787,6 +1788,8 @@ async function runContextTurn(agent: AgentRecord, inbound: readonly InboundMessa
   let guardNudges = 0;
   let guardPending: GuardReason | undefined;
   let closingNudged = false;
+  // The delivery gate (INV-692) sends the model back at most this many times per turn.
+  let deliverableNudges = 0;
   const chinese = readsAsChinese(inbound.map(message => message.text).join("\n"));
 
   // The ledger opens here, not during setup. Its job is to record that a turn was *executing* — a
@@ -2453,6 +2456,30 @@ async function runContextTurn(agent: AgentRecord, inbound: readonly InboundMessa
               `${line}\n\nFix the quotation marks, not the finding: if a sentence is your wording ` +
               `rather than the source's, say it without the marks. Then give the answer again.`,
           });
+          finishing = false;
+          continue;
+        }
+      }
+
+      // The delivery gate (INV-692): whatever sits in this chat's outbox is posted when the turn
+      // ends, so it is checked while it can still be fixed — a .docx that is markdown, a zip cut
+      // off, JSON that does not parse, a template left unfilled. Silent when every file is fine;
+      // twice per turn at most. Delivery holds back what cannot be opened regardless, so this is
+      // the chance to fix it, not the only line of defence.
+      if (finalText.trim() && deliverableNudges < MAX_DELIVERABLE_NUDGES && box !== undefined && !isolated &&
+        conversation !== MAIN_CONVERSATION) {
+        const report = deliverableReport(await outboxFindings(box, chatFilesRoot(conversation)), chinese);
+        if (report !== undefined) {
+          deliverableNudges += 1;
+          console.error(`[conduct] ${agent.profile.name}: delivery gate fired (${deliverableNudges}/${MAX_DELIVERABLE_NUDGES})`);
+          registry.appendTranscript(agent.id, {
+            role: "assistant",
+            kind: "blocks",
+            blocks: response.content.filter((block): block is Anthropic.TextBlock => block.type === "text"),
+            at: new Date().toISOString(),
+            turnId,
+          } satisfies TranscriptEntry, conversation);
+          messages.push({ role: "user", content: report });
           finishing = false;
           continue;
         }
