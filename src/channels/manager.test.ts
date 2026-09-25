@@ -1289,6 +1289,10 @@ test("failed text or attachment delivery never closes the task as done", async (
   }
 });
 
+/** Real enough to pass the delivery check (INV-692): the signature bytes, then anything. */
+const PNG_BYTES = "iVBORw0KGgpwaXhlbHM=";
+const PDF_BYTES = "JVBERi0xLjcKJSVFT0YK";
+
 test("a finished task ships the outbox — images as images, files as files, delivered once", async () => {
   const adapter = cardAdapter();
   const delivered: string[][] = [];
@@ -1298,8 +1302,8 @@ test("a finished task ships the outbox — images as images, files as files, del
     collectOutbox: async chatKey => {
       assert.equal(chatKey, "feishu:oc_room");
       return [
-        { name: "chart.png", base64: "cGl4ZWxz" },
-        { name: "report.pdf", base64: "cGRm" },
+        { name: "chart.png", base64: PNG_BYTES },
+        { name: "report.pdf", base64: PDF_BYTES },
       ];
     },
     outboxDelivered: async (_chatKey, names) => {
@@ -1320,13 +1324,46 @@ test("a finished task ships the outbox — images as images, files as files, del
   await manager.idle();
 
   assert.deepEqual(adapter.images, [
-    { chatKey: "feishu:oc_room", base64: "cGl4ZWxz", replyTo: "om_files" },
+    { chatKey: "feishu:oc_room", base64: PNG_BYTES, replyTo: "om_files" },
   ]);
   assert.deepEqual(
     (adapter as unknown as { sentFiles: { name: string; replyTo?: string }[] }).sentFiles,
     [{ name: "report.pdf", replyTo: "om_files" }]
   );
   assert.deepEqual(delivered, [["chart.png", "report.pdf"]]);
+});
+
+test("a file that cannot be opened is held in the outbox, the good one still goes, and the chat is told why", async () => {
+  const adapter = cardAdapter();
+  const delivered: string[][] = [];
+  const closed: string[] = [];
+  const manager = new ChannelManager({
+    mayDrive: () => true,
+    ask: async () => "报告做好了",
+    collectOutbox: async () => [
+      // Markdown with a Word extension: the failure this exists for.
+      { name: "report.docx", base64: Buffer.from("# 季度报告\n\n- 收入增长\n").toString("base64") },
+      { name: "summary.pdf", base64: PDF_BYTES },
+    ],
+    outboxDelivered: async (_chatKey, names) => {
+      delivered.push(names);
+    },
+    board: { open: () => "t1", started: () => {}, closed: (_id, outcome) => { closed.push(outcome); return outcome; } },
+    log: () => {},
+  });
+  manager.register(adapter, true, "test");
+  await started(manager);
+
+  await adapter.inject({ identity: "feishu:ou_1", chatKey: "feishu:oc_room", messageId: "om_bad", senderLabel: "c", text: "做报告" });
+  await manager.idle();
+
+  const sentFiles = (adapter as unknown as { sentFiles: { name: string }[] }).sentFiles.map(file => file.name);
+  assert.deepEqual(sentFiles, ["summary.pdf"], "the broken file is not sent; the good one is");
+  assert.deepEqual(delivered, [["summary.pdf"]], "only what went out moves to sent/; report.docx stays in the outbox");
+  assert.deepEqual(closed, ["failed"], "a held deliverable is not a finished delivery");
+  const notice = adapter.chatSent.map(sent => sent.text).find(text => text.includes("report.docx")) ?? "";
+  assert.match(notice, /打不开，没有发送/);
+  assert.match(notice, /not a Word document.*markdown/);
 });
 
 test("an approval goes out as a card where the wire has buttons, and a press answers it", async () => {
