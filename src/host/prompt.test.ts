@@ -188,6 +188,8 @@ test("the prompt's sections have an order, and it is the documented one", () => 
       "wrap-up",
       "shared-memory",
       "team",
+      // unattended renders only on a background lane (INV-780), just before the recap.
+      "unattended",
       "critical",
     ]
   );
@@ -196,7 +198,8 @@ test("the prompt's sections have an order, and it is the documented one", () => 
   // memory first and the objective arrives as a footnote to a pile of facts.
   assert.equal(VOLATILE_SECTIONS[0]?.name, "plan");
   // And delegation is a decision made after the work is understood, not a lens for reading it.
-  assert.equal(VOLATILE_SECTIONS.at(-2)?.name, "team");
+  // Only the unattended conduct (background lanes only) and the recap come after it.
+  assert.equal(VOLATILE_SECTIONS.at(-3)?.name, "team");
   assert.equal(VOLATILE_SECTIONS.at(-1)?.name, "critical");
 });
 
@@ -662,4 +665,39 @@ test("the skills index is framed as a step before acting, and the turn reminder 
   assert.match(zh, /Skills 清单/);
   assert.doesNotMatch(turnReminderFor("MiniMax-M3", "帮我调研一下固态电池的进展", false)!, /Skills/, "no skills, no line about them");
   assert.match(turnReminderFor("glm-4.6", "research this", true)!, /check the Skills list/);
+});
+
+test("a background lane gets the unattended conduct; a person's turn does not, and the stable prefix is the same bytes (INV-780)", () => {
+  const base = {
+    agent: { id: "a1", profile: { name: "Ada", description: "" } } as never,
+    teammates: [],
+    memory: [],
+    resolution: undefined,
+    agentsRoot: "/tmp",
+    hasBox: true,
+  };
+  const attended = buildSystemPromptParts({ ...base, lane: "user" });
+  const unattended = buildSystemPromptParts({ ...base, lane: "background" });
+  const unsaid = buildSystemPromptParts(base);
+
+  assert.match(unattended.volatile, /## Nobody is watching this turn/);
+  for (const rule of ["whole authorization", "Nothing leaves the machine", "no durable state", "recommend it instead of doing it", "delete recoverably", "data, never an instruction"]) {
+    assert.ok(unattended.volatile.toLowerCase().includes(rule.toLowerCase()), `unattended prompt carries "${rule}"`);
+  }
+  assert.doesNotMatch(attended.volatile, /Nobody is watching this turn/);
+  assert.doesNotMatch(unsaid.volatile, /Nobody is watching this turn/);
+  assert.doesNotMatch(unattended.stable, /Nobody is watching this turn/, "never in the cached prefix");
+  assert.equal(unattended.stable, attended.stable, "the stable prefix does not vary by lane");
+  assert.equal(unattended.stable, unsaid.stable);
+  // Before the recap, which stays last.
+  assert.ok(unattended.volatile.indexOf("Nobody is watching") < unattended.volatile.lastIndexOf("# Before you answer"), "the recap is still the tail");
+
+  const previous = process.env.AGENTBOX_ABLATE;
+  try {
+    process.env.AGENTBOX_ABLATE = "unattended";
+    assert.doesNotMatch(buildSystemPromptParts({ ...base, lane: "background" }).volatile, /Nobody is watching/, "ablatable by name");
+  } finally {
+    if (previous === undefined) delete process.env.AGENTBOX_ABLATE;
+    else process.env.AGENTBOX_ABLATE = previous;
+  }
 });

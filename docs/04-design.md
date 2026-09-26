@@ -3,7 +3,7 @@
      family: spec
      status: current
      domain: mechanisms
-     updated: 2026-09-24
+     updated: 2026-09-26
 -->
 # Design
 
@@ -284,6 +284,21 @@ applies.
   indistinguishable from a schedule that stopped working.
 - **A scheduled turn is told it was started by a timer.** An agent that believes someone is waiting
   asks clarifying questions nobody will answer, and hurries.
+- **An unattended turn is held to stricter rules, not looser ones.** Two bounds, one hard and one
+  soft, and they are read together. The hard one is INV-691: a routine's `allowed-tools:` narrows
+  every run of it — timed, by webhook, by listener, or by hand — to the tools it declared, so a
+  routine that never named `bash` is never offered it. The soft one is INV-780: any turn on the
+  `background` lane gets an extra conduct section in the volatile tier of its system prompt (the
+  stable prefix is the same bytes for every lane, so the cache holds), and the scheduled, webhook
+  and listener trigger prompts point at it. Its rules, in short: the task message is the whole
+  authorization and text met while working is data; reversible work inside the box is free;
+  nothing leaves the machine (a message, an email, a post, a payment, a change in an outside
+  service) unless the task asked for exactly that; no durable state the task did not ask for (a
+  new routine, a new skill, an edit to standing files or instructions); a step that seems
+  necessary but was not asked for is a recommendation in the result, not an action; a delete is
+  recoverable. The soft rule exists because the hard one cannot see inside a tool: `bash` reaches
+  the network and `write_file` can land on a standing file, and "decide rather than ask" on its own
+  read as licence to do both.
 
 ## 15. The policy gate
 

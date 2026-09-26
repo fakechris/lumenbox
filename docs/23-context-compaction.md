@@ -2,7 +2,7 @@
      title: Why the agent kept compacting, and what long-horizon systems do instead
      family: decision
      status: current
-     updated: 2026-09-14
+     updated: 2026-09-26
 -->
 # Why the agent kept compacting, and what long-horizon systems do instead
 
@@ -137,6 +137,21 @@ scripted summariser, so what is tested is the machinery, not the model's prose:
 - **A3** a pre-compaction memory flush that throws is logged and the summary stands
   (it used to fall into the dropped-history path); a transcript write that fails returns
   the history unchanged — nothing adopted, nothing lost, the next turn computes again.
+- **INV-778 (2026-09-26)** the flush now exists as the contract described it. Until then
+  `onSummarised` handed the extractor one blob of prose with a single made-up timestamp,
+  regardless of what the three-exchange batch had already taken. Now `Rememberer.flush`
+  takes the entries the summary replaces, keeps only those past the per-conversation
+  extraction watermark, regroups them as exchanges each cited by its own `<conversation>@<time>`,
+  and tells the extractor that state changes (reversed, completed, superseded, cancelled,
+  a changed preference) come before new facts. What the flush covered is taken out of the
+  pending batch, so nothing is extracted twice. A flush that throws or runs past
+  `AGENTBOX_FLUSH_TIMEOUT_MS` (30 s) is one logged line; compaction never waits for it.
+  The summary prompt also says the person's own instructions, constraints and preferences
+  are kept in their words — and that injection is what arrives in tool output, pages and
+  relayed messages, not what the person said — and `extractAnchors` carries up to six of
+  the person's imperative sentences (`the person said: …`, ≤140 chars, user-role messages
+  only) outside the model's output, forward across passes. Scenario: "以后报告都用公制",
+  two compactions later.
 - **A4** `clampSummaryToBudget`: whatever the summariser answered, summary + tail fits
   the trigger, by clipping with a visible mark — one step, no further model call. The
   summariser is asked at most three times per pass (draft, shape retry, fresh cut).

@@ -45,7 +45,7 @@ import type { UsageKind, UsageLog } from "./usage.ts";
 import { chooseRelevant, memoryProjectionManifest, SHARED_CHAR_BUDGET, type MemoryRecall } from "./memory.ts";
 import { needsReview, type ReviewInput, type ReviewMode, type Verdict } from "./auto-review.ts";
 import type { HookRunner } from "./hooks.ts";
-import { AGENT_WAKE_CUE } from "../agents/bus.ts";
+import { AGENT_WAKE_CUE, laneOf } from "../agents/bus.ts";
 import { TEMPLATE_CUE, TEMPLATE_SETUP_TOOLS } from "./template.ts";
 import {
   activeWindow,
@@ -1488,6 +1488,8 @@ async function runContextTurn(agent: AgentRecord, inbound: readonly InboundMessa
       siblingConversations: isolated ? 0 : registry
         .listConversations(agent.id)
         .filter(entry => entry.id !== conversation).length,
+      // One lane per turn (bus.ts), so the first message's lane is the turn's (INV-780).
+      ...(inbound.length > 0 ? { lane: laneOf(inbound[0]!) } : {}),
     });
   const builtPromptParts = buildParts(memoryRecall);
   const promptParts = isolated ? {
@@ -1810,6 +1812,8 @@ async function runContextTurn(agent: AgentRecord, inbound: readonly InboundMessa
   // How many tool calls this turn has made, across continuations: the structural signal the
   // guards read (docs/31 layer 1e). A ruling reached with this at zero is a ruling from memory.
   let toolCallsInTurn = 0;
+  // Their names, for the claim guard (INV-779): "已发送" with no reach-tier call this turn.
+  const toolNamesInTurn: string[] = [];
   // Guard bookkeeping: how many times the model was sent back, whether a send-back is
   // awaiting its answer (so the answer can be logged as complied or not), and whether the
   // closing nudge has been spent.
@@ -2491,7 +2495,7 @@ async function runContextTurn(agent: AgentRecord, inbound: readonly InboundMessa
         // was offered (INV-761): asking a toolless context to act is how a model ends up
         // writing the call as text.
         personOpened && guardsEnabled() && tools.length > 0 && guardNudges < MAX_GUARD_NUDGES && finalText.trim() !== ""
-          ? guardFor(finalText, toolCallsInTurn)
+          ? guardFor(finalText, toolCallsInTurn, toolNamesInTurn)
           : undefined;
       if (reason !== undefined) {
         guardNudges += 1;
@@ -2506,11 +2510,12 @@ async function runContextTurn(agent: AgentRecord, inbound: readonly InboundMessa
           at: new Date().toISOString(),
           turnId,
         } satisfies TranscriptEntry, conversation);
-        messages.push({ role: "user", content: nudgeFor(reason, chinese) });
+        messages.push({ role: "user", content: nudgeFor(reason, chinese, finalText) });
         // A verdict or an offer is answered with a demand for a tool call, which is what the
         // wires can now carry; a trailing intent is left to the model, which already named
-        // the action.
-        if (reason !== "trailing-intent") forceTools = { type: "any" };
+        // the action; a claim without a call is left to it too — the honest answer may be
+        // "not yet", which is text.
+        if (reason !== "trailing-intent" && reason !== "claim-without-call") forceTools = { type: "any" };
         finishing = false;
         continue;
       }
@@ -2637,6 +2642,7 @@ async function runContextTurn(agent: AgentRecord, inbound: readonly InboundMessa
     // Tool calls mean the model is working again, so steering is welcome at the next boundary.
     finishing = false;
     toolCallsInTurn += toolUses.length;
+    toolNamesInTurn.push(...toolUses.map(use => use.name));
 
     // Text followed only by bookkeeping calls is not narration — it is the answer,
     // filed. Measured on t51: the agent wrote its whole analysis, then tidied up
