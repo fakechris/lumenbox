@@ -340,6 +340,86 @@ test("/new with a running answer and two queued requests refuses without swallow
   finally { result.cleanup(); }
 });
 
+// INV-761, turn 0c87cb81 on 2026-09-26: the first real request after `/new --clean`. No tool
+// was offered, the prompt still read like a harness full of them, and MiniMax-M3 wrote its
+// search as text and kept writing queries until the 32 000-token cap. The loop delivered all
+// 109 586 characters and the channel marked the task done.
+const LEAKED_CALLS = Array.from({ length: 120 }, (_, i) =>
+  `{"name": "web_search", "arguments": {"query": "agent harness long horizon ${["radiant", "luminous", "brilliant", "dazzling"][i % 4]} ${i}", "top_n": 10, "source": "news"}}`
+);
+const LEAKED_LOOP = `我先动手拉一份评审清单。]<]minimax[>[<tool_call>\n${LEAKED_CALLS.join("\n")}`;
+
+async function cleanEpisode(script: (context: { round: number; offered: string[]; system: string; messages: import("@anthropic-ai/sdk").default.MessageParam[] }) => { say: string; stop?: "max_tokens" }) {
+  return runEpisode({
+    team: [{ name: "Nova" }], says: [], script,
+    drive: async ({ bus, registry, frontId }) => {
+      const store = registry.contextStore(frontId);
+      store.advance("clean-op", store.current().epoch, "clean");
+      bus.sendFromUser(frontId, "是 通用意义上的 goal /task harness，也review一下我们的/goal 做的怎么样", { steerable: false });
+      await bus.runExclusive(frontId, { userDriven: true }).catch(() => undefined);
+    },
+  });
+}
+
+function repliesOf(result: { registry: import("../agents/registry.ts").AgentRegistry }): string[] {
+  const front = result.registry.list()[0]!;
+  return (result.registry.readTranscript(front.id) as { role?: string; kind?: string; text?: string }[])
+    .filter(entry => entry.role === "assistant" && entry.kind === undefined)
+    .map(entry => entry.text ?? "");
+}
+
+test("a clean context that writes its search as text and loops to the cap is asked once more, and only the answer is kept", async () => {
+  const seen: { offered: string[]; system: string; lastUser: string }[] = [];
+  const result = await cleanEpisode(({ round, offered, system, messages }) => {
+    const last = messages[messages.length - 1]!;
+    seen.push({ offered, system, lastUser: typeof last.content === "string" ? last.content : JSON.stringify(last.content) });
+    return round === 0
+      ? { say: LEAKED_LOOP, stop: "max_tokens" }
+      : { say: "干净上下文里没有工具，我没法搜索或看代码；先按通用经验说 goal harness 的难点……要 review 我们的 /goal，发送 /new 回到正常上下文。" };
+  });
+  try {
+    assert.equal(seen.length, 2, "one retry, no more");
+    assert.deepEqual(seen[0]!.offered, [], "a clean context offers no tools");
+    assert.match(seen[0]!.system, /No tool is available here\. Never write a tool call as text/, "the last thing it reads says so");
+    assert.doesNotMatch(seen[0]!.system, /A doubt about a fact is a search/, "and no longer tells it to search");
+    assert.match(seen[1]!.lastUser, /没有任何工具/, "the retry says why, in the person's language");
+    assert.doesNotMatch(seen[1]!.lastUser, /web_search/, "and the discarded loop is not fed back");
+    const replies = repliesOf(result);
+    assert.equal(replies.length, 1);
+    assert.match(replies[0]!, /发送 \/new 回到正常上下文/);
+    assert.equal(replies.some(text => text.includes("<tool_call>")), false, "the leaked call never reaches the record the channel delivers from");
+  } finally { result.cleanup(); }
+});
+
+test("a model that leaks its call again fails the turn instead of delivering the loop", async () => {
+  let calls = 0;
+  const result = await cleanEpisode(() => { calls += 1; return { say: LEAKED_LOOP, stop: "max_tokens" }; });
+  try {
+    assert.equal(calls, 2, "discarded, asked once more, then given up — never a third bill");
+    assert.equal(repliesOf(result).some(text => text.includes("web_search")), false, "nothing of the loop is on record to deliver");
+  } finally { result.cleanup(); }
+});
+
+test("a conversation that already holds a leaked loop recovers without editing the record", async () => {
+  let sent = "";
+  const result = await runEpisode({
+    team: [{ name: "Nova" }],
+    history: [
+      { role: "user", text: "review 一下我们的 /goal", at: "2026-09-26T10:01:43.934Z" },
+      { role: "assistant", text: LEAKED_LOOP, at: "2026-09-26T10:03:06.437Z" },
+    ],
+    says: ["刚才怎么回事？"],
+    script: ({ messages }) => { sent = JSON.stringify(messages); return { say: "上一条没有答成，我重新来。" }; },
+  });
+  try {
+    assert.match(sent, /我先动手拉一份评审清单。/, "what was said before the markup stays");
+    assert.equal(sent.includes("web_search"), false, "the loop is not fed back to be imitated");
+    const front = result.registry.list()[0]!;
+    const stored = result.registry.readTranscript(front.id) as { text?: string }[];
+    assert.ok(stored.some(entry => entry.text === LEAKED_LOOP), "the record on disk is untouched");
+  } finally { result.cleanup(); }
+});
+
 test("two completed review tasks do not trap a private chat that asks for clean context", async () => {
   const result = await runEpisode({
     team: [{ name: "Nova" }], says: [], script: () => ({ say: "unused" }),

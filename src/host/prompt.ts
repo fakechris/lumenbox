@@ -425,6 +425,12 @@ export interface PromptContext {
   resolution?: ResolutionConfig;
   agentsRoot: string;
   hasBox: boolean;
+  /**
+   * No tool is offered this turn (a clean or recovery context). The recap is the last thing
+   * the model reads, and its tool lines told a toolless model to search — which MiniMax-M3
+   * answered by writing the call as text until the cap (INV-761).
+   */
+  toolless?: boolean;
   /** Whether the model can see screenshots. False changes what the box section says. */
   vision?: boolean;
   /**
@@ -738,6 +744,16 @@ const CRITICAL_RECAP = `# Before you answer
 - A doubt about a fact is a search, not a verdict. Only after a tool has checked it may you
   call a claim false — then give the right figure.`;
 
+/** The recap where no tool is offered: the same contract, with the tool lines made true. */
+const TOOLLESS_RECAP = `# Before you answer
+
+- The request is the most recent message. Earlier work in this conversation is background,
+  and may have been about something else entirely.
+- Answer the whole of what was asked, not the easiest part of it.
+- No tool is available here. Never write a tool call as text, in any format: it does not run.
+- What needs a tool to check, say so rather than rule on it from memory, and tell the person
+  that sending /new returns to a normal context where tools are available.`;
+
 
 /**
  * How to conduct a conversation: the part of the prompt that is about the person, not the
@@ -992,7 +1008,7 @@ export const VOLATILE_SECTIONS: readonly PromptSection[] = [
   { name: "team", render: context => teamSection(context) },
   // Last, always. See CRITICAL_RECAP: the tail is where a model reads best, and it was
   // being spent on the roster.
-  { name: "critical", render: () => CRITICAL_RECAP },
+  { name: "critical", render: context => (context.toolless === true ? TOOLLESS_RECAP : CRITICAL_RECAP) },
 ];
 
 /** Which sections actually produced anything, in order. For tests and for inspecting a prompt. */

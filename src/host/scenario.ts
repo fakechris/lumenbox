@@ -36,7 +36,8 @@ import type { McpManager } from "./mcp.ts";
 
 /** One model reply, in the shape the script writes it. */
 export type ScriptedReply =
-  | { say: string }
+  // `stop` replays a reply that ran to the output cap (INV-761); a say ends its turn otherwise.
+  | { say: string; stop?: "max_tokens" }
   | { call: string; input: Record<string, unknown>; then?: ScriptedReply };
 
 export interface ScriptContext {
@@ -365,7 +366,7 @@ export async function runEpisode(options: EpisodeOptions): Promise<EpisodeResult
     if (reply === undefined) return message([{ type: "text", text: "" } as Anthropic.ContentBlock], "end_turn");
     if ("say" in reply) {
       observations.push({ at: clock++, agent, kind: "say", text: reply.say });
-      return message([{ type: "text", text: reply.say } as Anthropic.ContentBlock], "end_turn");
+      return message([{ type: "text", text: reply.say } as Anthropic.ContentBlock], reply.stop ?? "end_turn");
     }
     observations.push({ at: clock++, agent, kind: "call", name: reply.call, input: reply.input });
     return message(

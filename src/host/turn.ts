@@ -96,6 +96,7 @@ import {
   readsAsChinese,
   type GuardReason,
 } from "./guards.ts";
+import { malformedNudge, malformedOutput, sanitizeHistoryText } from "./output-integrity.ts";
 import {
   BOOKKEEPING_TOOLS,
   FORK_PROMPT_LINE,
@@ -151,6 +152,8 @@ const KEEP_IMAGES = envNumber("AGENTBOX_KEEP_IMAGES", 1);
  * strictly more than the last, so three is enough to go from "all screenshots" to "one" to "none".
  */
 const MAX_SHED_ATTEMPTS = envNumber("AGENTBOX_MAX_SHED_ATTEMPTS", 3);
+/** How many malformed replies (INV-761) one turn may discard and ask again for. */
+const MAX_MALFORMED_RETRIES = 1;
 
 /**
  * Below this many characters, text preceding bookkeeping-only tool calls is an aside
@@ -1287,7 +1290,10 @@ function historyToMessages(
       if (entry.blocks.length === 0) continue;
       messages.push({ role: entry.role, content: entry.blocks });
     } else if (entry.text.trim() !== "") {
-      messages.push({ role: entry.role, content: entry.text });
+      // A reply stored before the output gate existed (INV-761) may be a call written as
+      // text; it goes back to the model cut at the markup, so a conversation that already
+      // holds one recovers without anyone editing the record.
+      messages.push({ role: entry.role, content: entry.role === "assistant" ? sanitizeHistoryText(entry.text) : entry.text });
     }
   }
   // Last, over the assembled request rather than over the entries: an unpaired call does not
@@ -1476,6 +1482,7 @@ async function runContextTurn(agent: AgentRecord, inbound: readonly InboundMessa
       ...(deps.boxAccess !== undefined ? { boxAccess: deps.boxAccess } : {}),
       agentsRoot: registry.root,
       hasBox: !isolated && box !== undefined,
+      toolless: isolated,
       vision: provider.vision,
       conversation,
       siblingConversations: isolated ? 0 : registry
@@ -1484,7 +1491,7 @@ async function runContextTurn(agent: AgentRecord, inbound: readonly InboundMessa
     });
   const builtPromptParts = buildParts(memoryRecall);
   const promptParts = isolated ? {
-    stable: `${builtPromptParts.stable}\n\n---\n\n## ${clean ? "Clean" : "Recovery"} context\n\n${clean ? "Clean context is active." : "Recovery context is active for one isolated revision. Treat only the host recovery packet in the current conversation as request evidence; do not reconstruct facts from omitted history."} Only the host's safety and authority rules, this agent's configured identity, and messages in this new context are loaded. Earlier conversations, personal and shared long-term memory, learned skills, tasks, plans, heard-room context, and other threads are excluded. No tools are available and nothing in this context may be learned into long-term or shared memory. Messages are still recorded for continuity and audit; this is not incognito mode.`,
+    stable: `${builtPromptParts.stable}\n\n---\n\n## ${clean ? "Clean" : "Recovery"} context\n\n${clean ? "Clean context is active." : "Recovery context is active for one isolated revision. Treat only the host recovery packet in the current conversation as request evidence; do not reconstruct facts from omitted history."} Only the host's safety and authority rules, this agent's configured identity, and messages in this new context are loaded. Earlier conversations, personal and shared long-term memory, learned skills, tasks, plans, heard-room context, and other threads are excluded. No tools are available and nothing in this context may be learned into long-term or shared memory. Messages are still recorded for continuity and audit; this is not incognito mode.\n\nThis overrides every instruction above about tools, looking things up, forks or background work: none of it applies here. Answer in words from what this conversation holds. A tool call written out as text is never executed and never reaches the person as an answer, so do not write one in any format. When a request needs a search, files, code or anything else only a tool can reach, say so plainly, answer the part you can, and tell the person that sending /new returns to a normal context where tools are available.`,
     volatile: builtPromptParts.volatile,
   } : builtPromptParts;
 
@@ -1811,6 +1818,9 @@ async function runContextTurn(agent: AgentRecord, inbound: readonly InboundMessa
   let closingNudged = false;
   // The delivery gate (INV-692) sends the model back at most this many times per turn.
   let deliverableNudges = 0;
+  // The output gate (INV-761): a reply that is a leaked tool call or a loop at the cap is
+  // discarded and asked for once more; a second one ends the turn as failed.
+  let malformedRetries = 0;
   const chinese = readsAsChinese(inbound.map(message => message.text).join("\n"));
 
   // The ledger opens here, not during setup. Its job is to record that a turn was *executing* — a
@@ -2382,6 +2392,61 @@ async function runContextTurn(agent: AgentRecord, inbound: readonly InboundMessa
       return;
     }
 
+    // The output gate (INV-761): a response with no structured call whose text is a call
+    // written out, or a loop that ran to the cap, is not an answer. Discarded before it
+    // reaches the transcript — which is what the channels deliver from — and before any
+    // guard reads it; asked for once more; a second one fails the turn rather than
+    // delivering it and letting the channel call the task done. Never "continue": that pays
+    // again for more of the loop.
+    if (!response.content.some(block => block.type === "tool_use")) {
+      const malformed = malformedOutput(
+        response.content
+          .filter((block): block is Anthropic.TextBlock => block.type === "text")
+          .map(block => block.text)
+          .join(""),
+        response.stop_reason
+      );
+      if (malformed !== undefined) {
+        const retrying = malformedRetries < MAX_MALFORMED_RETRIES;
+        console.error(
+          `[conduct] ${agent.profile.name}: malformed output — ${malformed.kind} (${malformed.detail}, ` +
+            `${usage.outputTokens} output tokens); ${retrying ? "discarded, asking once more" : "discarded again, failing the turn"}`
+        );
+        emit({
+          type: "retrying",
+          agentId: agent.id,
+          round,
+          attempt: malformedRetries + 1,
+          delayMs: 0,
+          kind: "malformed",
+          discardPartial: outputProduced,
+          detail: `the reply was ${malformed.kind === "degenerate" ? "a repetition loop" : "a tool call written as text"} and was discarded`,
+        });
+        if (!retrying) {
+          throw new Error(
+            malformed.kind === "degenerate"
+              ? "The model's reply fell into a repetition loop twice and was not delivered. Ask again, or ask for less at once."
+              : "The model wrote a tool call as text instead of answering, twice, and nothing was delivered. Ask again."
+          );
+        }
+        malformedRetries += 1;
+        // Nothing of the discarded reply is appended, so the request still ends on the
+        // person's side; the nudge joins that message, because the Anthropic wire rejects
+        // two user messages in a row.
+        const nudge: Anthropic.TextBlockParam = { type: "text", text: malformedNudge(malformed.kind, tools.length > 0, chinese) };
+        const last = messages[messages.length - 1];
+        if (last !== undefined && last.role === "user") {
+          last.content = typeof last.content === "string"
+            ? [{ type: "text", text: last.content }, nudge]
+            : [...last.content, nudge];
+        } else {
+          messages.push({ role: "user", content: [nudge] });
+        }
+        round -= 1; // retry this round rather than consuming one
+        continue;
+      }
+    }
+
     // Append the whole content array, not just text: tool_use blocks and thinking
     // blocks have to be echoed back unchanged for the next round to be valid.
     messages.push({ role: "assistant", content: response.content });
@@ -2422,7 +2487,10 @@ async function runContextTurn(agent: AgentRecord, inbound: readonly InboundMessa
       // the model's text is filed as blocks so the record has it, but it is not a reply
       // (`replySince` would have delivered the wrong verdict beside the corrected one).
       const reason =
-        personOpened && guardsEnabled() && guardNudges < MAX_GUARD_NUDGES && finalText.trim() !== ""
+        // Every guard answers with a demand for a tool call, so none may fire where no tool
+        // was offered (INV-761): asking a toolless context to act is how a model ends up
+        // writing the call as text.
+        personOpened && guardsEnabled() && tools.length > 0 && guardNudges < MAX_GUARD_NUDGES && finalText.trim() !== ""
           ? guardFor(finalText, toolCallsInTurn)
           : undefined;
       if (reason !== undefined) {
@@ -2508,7 +2576,7 @@ async function runContextTurn(agent: AgentRecord, inbound: readonly InboundMessa
 
       // The closing send (Grok Bot's `turnEndedOnSilentToolCalls`, docs/31 layer 1b): the
       // person saw the opening line, then tools ran, then nothing. Once.
-      if (!finalText.trim() && personOpened && interimDelivered && !closingNudged && guardsEnabled()) {
+      if (!finalText.trim() && personOpened && interimDelivered && !closingNudged && guardsEnabled() && tools.length > 0) {
         closingNudged = true;
         console.error(`[conduct] ${agent.profile.name}: closing nudge (acknowledged, ran tools, ended silent)`);
         messages.push({ role: "user", content: closingNudge(chinese) });

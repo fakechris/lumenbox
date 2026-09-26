@@ -168,6 +168,17 @@ shared memory. Existing memory remains on disk and remains usable by other norma
 An ordinary `/new` from clean advances again in `normal` mode and says that memory and tools have
 been re-enabled under their normal relevance and permission gates.
 
+Offering no tools is not enough on its own: the prompt has to stop asking for them (INV-761). The
+first real clean request (2026-09-26) met a prompt still telling it to search, and MiniMax-M3 wrote
+its calls as text until the output cap; the loop was delivered and the task closed as done. So a
+toolless turn renders a recap without the tool lines, the conduct guards — each of which answers
+with a demand for a tool call — do not fire where no tool was offered, and every final answer, in
+any context, passes the output gate (`src/host/output-integrity.ts`): a reply that is call markup
+written as text, or a repetition loop at `max_tokens`, is discarded before it reaches the
+transcript the channels deliver from, asked for once more, and a second one fails the turn instead
+of completing the task. Replies stored before the gate existed go back to the model cut at the
+markup; the record on disk is not edited.
+
 `/recover <taskId>` advances to a persisted `recover` epoch after the same private-chat,
 permission, idle-custody and operation-id gates. The task board remains the sole task truth: it
 stores the immutable source-message pointer plus bounded recovery-attempt records, while the
