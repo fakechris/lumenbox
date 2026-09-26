@@ -19,6 +19,7 @@
 import { createHash } from "node:crypto";
 import { appendLine } from "./jsonl.ts";
 import type { AgentRecord, AgentRegistry } from "../agents/registry.ts";
+import { describeMaintenanceSource } from "./memory-maintenance.ts";
 import { dedupeKey, recordHasRevokedSource, revokedMemorySources, validateRecord, type MemoryRecord } from "./memory.ts";
 
 export interface MemoryView {
@@ -75,7 +76,9 @@ export function memoryView(records: readonly MemoryRecord[]): MemoryView[] {
       if (target !== undefined) {
         target.status = "retracted";
         target.retractedAt = record.at;
-        if (record.source !== undefined) target.retractedBy = record.source;
+        // A maintenance retraction says what replaced the line or when it expired
+        // (INV-781): "superseded by <version>", "retired: expired on <date>".
+        if (record.source !== undefined) target.retractedBy = describeMaintenanceSource(record.source) ?? record.source;
         liveByKey.delete(key);
       }
       continue;
