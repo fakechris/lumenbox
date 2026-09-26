@@ -44,6 +44,7 @@ this file and the headers disagree. Edit the header, not this table.
 | [55-external-desktops](55-external-desktops.md) | External browsers and desktop control | current | 2026-09-15 |
 | [56-teaching-upgrade](56-teaching-upgrade.md) | Teaching draft upgrade | current | 2026-09-15 |
 | [70-cua-linux-validation](70-cua-linux-validation.md) | Linux CUA 回归矩阵与状态验收 | current | 2026-09-22 |
+| [73-outside-research-map](73-outside-research-map.md) | 外部调研全景：读过哪些项目、记在哪、拿走了什么 | current | 2026-09-26 |
 
 ## decision
 
