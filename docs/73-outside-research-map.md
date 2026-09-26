@@ -42,6 +42,7 @@
 | QwenWork | 产品 | 09-03 | [33](33-mcp-face.md) | MCP 走 vsock，凭据不进沙箱 | — |
 | Muse / Hatch | 第三方存档 | 09-25 | [research/…muse-hatch](research/2026-09-25-muse-hatch-skills-and-box.md) | skill 权限声明、per-skill eval、交付前产物验收 | 690–693 |
 | zuse、raft-source、OpenMuse、google/ax、ZCode | 开源 | 09-25 | INV-694 | webhook 投递幂等、投递 outcome_unknown、例程退避暂停、审批有效期、microcompact、唤醒提示伪造转义等 18 条 | 695–712（707 已修，PR #240） |
+| egoist/lorca | 开源（GPL-3.0） | 09-26 | INV-739 | Grok Bot 的单人一周复刻，设计完整的 alpha、E2E 只防中继；记忆写入扫凭据、无人时暂停例程、跨会话近况简报、命令卡住交回 agent | 740–743 |
 | Antigravity Teamwork | 产品 | 08-28? | [19](19-pitfalls.md) | 与答案无关的 pitfall 登记 | — |
 | Kimi K3 AgentENV / 300-agent swarm | 文章 | 08 月 | 14、[16](16-long-work.md) | 测量边界要说清、节点合同 | — |
 
