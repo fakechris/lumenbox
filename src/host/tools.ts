@@ -71,6 +71,7 @@ import {
 } from "../protocol/index.ts";
 import { afterTimeout, idempotencyOfHttp } from "../protocol/idempotency.ts";
 import { skillSlugOf } from "./skill-provenance.ts";
+import { capRefusal, standingFileOf, writeStandingFromAgent } from "./standing.ts";
 import { SKILL_FILENAME } from "./skills.ts";
 import {
   type BotTemplate,
@@ -3399,7 +3400,12 @@ export async function dispatchTool(
           isError: true,
         };
       }
+      // A standing file (INV-777) is capped, and its host copy is written in the same call.
+      const standingEdited = standingFileOf(path, context.agent.profile.name);
+      const editCap = standingEdited === undefined ? undefined : capRefusal(standingEdited, updated);
+      if (editCap !== undefined) return { text: editCap, isError: true };
       await box.writeFile(path, updated);
+      if (standingEdited !== undefined) writeStandingFromAgent(context.registry.dirFor(context.agent.id), context.agent.profile.name, standingEdited, updated);
       // Recorded like any other write, so the next writer still sees a conflict rather
       // than overwriting an edit nobody else knows happened.
       context.files?.observed(context.agent.id, path, versionOf(updated));
@@ -3479,7 +3485,13 @@ export async function dispatchTool(
         };
       }
       const written = templateStamp(context, path, content);
+      // A standing file (INV-777) is capped, and its host copy — the one that counts — is written
+      // in the same call, so the agent's edit is in its next prompt and never reported back to it.
+      const standingWritten = standingFileOf(path, context.agent.profile.name);
+      const writeCap = standingWritten === undefined ? undefined : capRefusal(standingWritten, written);
+      if (writeCap !== undefined) return { text: writeCap, isError: true };
       const result = await box.writeFile(path, written);
+      if (standingWritten !== undefined) writeStandingFromAgent(context.registry.dirFor(context.agent.id), context.agent.profile.name, standingWritten, written);
       // Its own write is the newest thing it has seen, so writing twice in a row is not a conflict
       // with itself.
       context.files?.observed(context.agent.id, result.path, versionOf(written));

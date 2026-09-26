@@ -95,7 +95,8 @@ import type { HistoryEntry } from "./compaction.ts";
 import { memoryRef } from "./memory.ts";
 import type { PitfallSource } from "./pitfalls.ts";
 import { SkillCache } from "./skills.ts";
-import { Scheduler } from "./schedule.ts";
+import { parseSchedule, type Schedule, type Scheduled, Scheduler } from "./schedule.ts";
+import { heartbeatAgentOf, heartbeatItems, heartbeatSlug, readStanding, standingBoxDir } from "./standing.ts";
 import { UsageLog } from "./usage.ts";
 import { tracerFromEnv, type Tracer } from "./trace.ts";
 import {
@@ -215,6 +216,13 @@ export interface OrchestratorOptions {
 /** A newer version of an already-imported template arrived without `update` (INV-411). */
 export class TemplateVersionConflict extends Error {}
 
+/** The heartbeat cadence (INV-777). Parsed once; the text is ours, so a problem is a bug. */
+const HEARTBEAT_SCHEDULE: Schedule = (() => {
+  const parsed = parseSchedule("@every 30m");
+  if ("problem" in parsed) throw new Error(parsed.problem);
+  return parsed.schedule;
+})();
+
 export class Orchestrator {
   readonly registry: AgentRegistry;
   readonly bus: AgentBus;
@@ -231,6 +239,38 @@ export class Orchestrator {
   /** One skills directory per box; the prompt shows an agent its own box's. */
   private readonly skillCaches = new Map<string, SkillCache>();
   private readonly memoryMirror: MemoryMirror;
+
+  /** Pushes an agent's standing files to its box after a person edited them on the host (INV-777). */
+  syncStanding(agentId: string): Promise<unknown> {
+    return this.memoryMirror.sync(agentId);
+  }
+
+  /**
+   * The built-in heartbeat routine per agent (INV-777): every 30 minutes, the checklist in its
+   * HEARTBEAT.md. An agent whose list has no unchecked item is not due at all — an empty
+   * checklist starts no turn, rather than a turn that finds nothing to do.
+   */
+  private heartbeats(): Scheduled[] {
+    const out: Scheduled[] = [];
+    for (const agent of this.registry.list()) {
+      let text: string;
+      try {
+        text = readStanding(this.registry.dirFor(agent.id), agent.profile.name)["HEARTBEAT.md"];
+      } catch {
+        continue;
+      }
+      if (heartbeatItems(text).length === 0) continue;
+      out.push({
+        slug: heartbeatSlug(agent.id),
+        name: `${agent.profile.name}'s heartbeat`,
+        path: `${standingBoxDir(agent.profile.name)}/HEARTBEAT.md`,
+        schedule: HEARTBEAT_SCHEDULE,
+        runAs: agent.id,
+        boxId: this.registry.boxOf(agent.id).id,
+      });
+    }
+    return out;
+  }
   readonly skillProvenance: SkillProvenance;
   readonly hooks: HookRunner | undefined;
   /**
@@ -492,7 +532,7 @@ export class Orchestrator {
     spentSinceAgent: (sinceMs, agentId) => this.usage.spentSinceAgent(sinceMs, agentId),
     due: async () => {
       const everywhere = await this.skillsEverywhere();
-      return everywhere.flatMap(({ boxId, skills }) => skills
+      return [...this.heartbeats(), ...everywhere.flatMap(({ boxId, skills }) => skills
         .filter(skill => skill.schedule !== undefined)
         .map(skill => ({
           boxId,
@@ -507,7 +547,7 @@ export class Orchestrator {
           ...(skill.because !== undefined ? { because: skill.because } : {}),
           ...(skill.paused === true ? { paused: true } : {}),
           ...(skill.allowedTools !== undefined ? { allowedTools: skill.allowedTools } : {}),
-        })));
+        })))];
     },
     hooked: async () => {
       const everywhere = await this.skillsEverywhere();
@@ -622,7 +662,14 @@ export class Orchestrator {
     // first agent only when the box has none (or the skill did not say).
     defaultAgent: boxId =>
       (boxId !== undefined ? this.registry.agentsIn(boxId)[0]?.id : undefined) ?? this.registry.list()[0]?.id,
-    writerOf: slug => this.skillProvenance.writerOf(slug),
+    // A heartbeat is the agent's own routine — its HEARTBEAT.md, in its own directory — so it
+    // runs as that agent the way a skill runs as the agent the host saw write it.
+    writerOf: slug => {
+      const owner = heartbeatAgentOf(slug);
+      if (owner === undefined) return this.skillProvenance.writerOf(slug);
+      const agent = this.registry.tryGet(owner);
+      return agent === undefined ? undefined : { agentId: agent.id, agentName: agent.profile.name };
+    },
     // So the scheduler can tell "agent: Ada" from "agent: <somebody else>" — the gate
     // it applies to a name that came out of a writable file.
     resolveAgent: name => {
@@ -1642,6 +1689,7 @@ export class Orchestrator {
       // show is the least interesting work in the system and should be billed accordingly.
       selectMemory: prompt => this.askCheaply(agent, prompt),
       skillProvenance: this.skillProvenance,
+      syncStanding: agentId => this.memoryMirror.sync(agentId),
       ...(this.templateSetups.has(agent.id) ? { templateSetup: this.templateSetups.get(agent.id)! } : {}),
       templates: this.templates,
       hooks: this.hooks,

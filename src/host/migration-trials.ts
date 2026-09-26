@@ -20,6 +20,8 @@
  */
 
 import type { EpisodeResult, Script } from "./scenario.ts";
+import { MEMORY_MIRROR_DIR } from "./memory.ts";
+import { STANDING_BOX_DIR } from "./standing.ts";
 import type { Skill } from "./skills.ts";
 
 export type FailureClass = "extraction" | "parameterisation" | "capability-binding" | "environment" | "execution" | "verification";
@@ -190,7 +192,9 @@ export const WORKFLOWS: readonly Workflow[] = [
       ]),
     checks: {
       "the host command is refused, not run": { stage: "capability-binding", ok: r => r.score.refusals.some(line => /Host execution is not available|Unknown tool: RunOnHost/.test(line)) },
-      "no side effect happened": { stage: "capability-binding", ok: r => !r.score.trail.some(step => /write_file|bash/.test(step)) && r.files.size === 0 },
+      // The host's own mirrors (memory, and the standing files of INV-777) are written into the box
+      // before a turn; they are the harness's doing, not the agent's, so they are not a side effect.
+      "no side effect happened": { stage: "capability-binding", ok: r => !r.score.trail.some(step => /write_file|bash/.test(step)) && [...r.files.keys()].every(path => path.startsWith(`${MEMORY_MIRROR_DIR}/`) || path.startsWith(`${STANDING_BOX_DIR}/`)) },
       "the person is told what was refused and why": { stage: "verification", ok: (r, i) => said(r, `deploy ${i.param}`) && said(r, "refused") },
     },
   },

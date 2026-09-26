@@ -120,6 +120,7 @@ import type { ScopeStore } from "./scopes.ts";
 import { checkpointSummary, type DurableState } from "./durable.ts";
 import { narrowSkills, type BundleStore } from "./bundles.ts";
 import { readInstallationInstructions } from "./place.ts";
+import { changeNotice, readStanding, takeChanges } from "./standing.ts";
 import type { McpManager } from "./mcp.ts";
 import { TOOL_BUDGET_WARNING } from "./mcp.ts";
 import { narrowTools } from "./scopes.ts";
@@ -503,6 +504,11 @@ export interface TurnDeps {
   autoReview?: { mode(): ReviewMode; review(input: ReviewInput): Promise<Verdict> };
   /** Records which agent wrote into a skill. Absent means no record is kept. */
   skillProvenance?: ToolContext["skillProvenance"];
+  /**
+   * Pushes the agent's standing files to its box before the turn reads them (INV-777), so the
+   * copy it may edit is the copy the prompt carries. Absent means no mirror — tests, or no box.
+   */
+  syncStanding?: (agentId: string) => Promise<unknown>;
   /** The template this turn installs, when it is an imported bot's setup turn (docs/29). */
   templateSetup?: string;
   /** Where a packed template is staged; absent withholds PackTemplate. */
@@ -1461,6 +1467,15 @@ async function runContextTurn(agent: AgentRecord, inbound: readonly InboundMessa
     deps.turns?.end(turnId, how, new Date(), category, keptThisTurn);
   };
 
+  // The standing files (INV-777): mirrored to the box first, so what the agent can edit is what it
+  // is about to read; then read from the host, which is the copy that counts. Changes since the
+  // last injection that this agent did not make are told once, on the message side below.
+  if (!isolated && box !== undefined && deps.syncStanding !== undefined) {
+    await deps.syncStanding(agent.id).catch(() => undefined);
+  }
+  const standing = isolated ? undefined : readStanding(registry.dirFor(agent.id), agent.profile.name);
+  const standingNotice = standing === undefined ? undefined : changeNotice(takeChanges(registry.dirFor(agent.id), standing));
+
   // Both personal and shared memories pass the same relevance gate, even below budget.
   const ownMemory = isolated ? [] : registry.readMemoryRecords(agent.id);
   const sharedMemory = isolated ? [] : registry.readSharedMemory(agent.id);
@@ -1512,6 +1527,7 @@ async function runContextTurn(agent: AgentRecord, inbound: readonly InboundMessa
         .filter(entry => entry.id !== conversation).length,
       // One lane per turn (bus.ts), so the first message's lane is the turn's (INV-780).
       ...(inbound.length > 0 ? { lane: laneOf(inbound[0]!) } : {}),
+      ...(standing !== undefined ? { standing } : {}),
     });
   const builtPromptParts = buildParts(memoryRecall);
   const promptParts = isolated ? {
@@ -1674,9 +1690,11 @@ async function runContextTurn(agent: AgentRecord, inbound: readonly InboundMessa
   const opener = inbound.some(message => message.fromId === "user")
     ? turnReminderFor(provider.model, turnText, visibleSkillCount > 0)
     : undefined;
+  // The standing-file diff rides the API copy too (INV-777): the transcript keeps what the person
+  // said, and a notice is given once, not replayed on every later turn that reads this one.
   const messages: Anthropic.MessageParam[] = [
     ...historyToMessages(history),
-    { role: "user", content: opener === undefined ? turnText : `${turnText}\n\n${opener}` },
+    { role: "user", content: [turnText, standingNotice, opener].filter(part => part !== undefined).join("\n\n") },
   ];
 
   registry.appendTranscript(agent.id, {

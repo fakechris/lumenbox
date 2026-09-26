@@ -1431,6 +1431,19 @@ export const APP_HTML = String.raw`<!doctype html>
       <label>Persona</label>
       <textarea id="agpersona" placeholder="What is this agent for? This becomes its system prompt."></textarea>
     </div>
+    <div class="field" id="agstandingwrap">
+      <label>Standing files</label>
+      <div style="display:flex;gap:8px;align-items:center">
+        <select id="agstandingname" style="font-family:var(--font-mono);font-size:12px">
+          <option>AGENTS.md</option><option>SOUL.md</option><option>USER.md</option><option>HEARTBEAT.md</option>
+        </select>
+        <button type="button" class="ghost" id="agstandingsave">Save file</button>
+        <span id="agstandingstatus" class="fieldnote" style="margin:0"></span>
+      </div>
+      <textarea id="agstandingtext" spellcheck="false" style="font-family:var(--font-mono);font-size:12px;min-height:120px"></textarea>
+      <div class="fieldnote">Read into every turn, editable by you and by the agent (8 KiB each). The agent is
+        told what changed; a SOUL.md change it mentions to you.</div>
+    </div>
     <div class="field">
       <label>Runtime</label>
       <div style="display:flex;gap:8px">
@@ -6708,6 +6721,8 @@ function openAgentModal(mode, agent) {
   $("agrole").value = agent ? String(agent.title || "") : "";
   $("agtags").value = agent && agent.tags ? agent.tags.join(", ") : "";
   $("agpersona").value = agent ? String(agent.description || "") : "";
+  $("agstandingwrap").style.display = agent ? "" : "none";
+  if (agent) loadStanding(agent.id);
   // null means unrestricted — every tool, including ones that do not exist yet.
   var granted = agent && agent.tools ? agent.tools : null;
   agentModal.tools = {};
@@ -6820,6 +6835,40 @@ function renderAgentProvider(selected) {
     })
     .catch(function () { $("agprovider").innerHTML = '<option value="">— default —</option>'; });
 }
+
+/** The standing files (INV-777) of the agent in the modal: one at a time, saved on their own button. */
+var standingFiles = {};
+function loadStanding(agentId) {
+  standingFiles = {};
+  $("agstandingtext").value = "";
+  $("agstandingstatus").textContent = "";
+  fetch("/api/standing?agent=" + encodeURIComponent(agentId))
+    .then(function (r) { return r.ok ? r.json() : null; })
+    .then(function (d) {
+      if (!d) return;
+      standingFiles = d.files || {};
+      showStanding();
+    })
+    .catch(function () {});
+}
+function showStanding() {
+  $("agstandingtext").value = String(standingFiles[$("agstandingname").value] || "");
+}
+$("agstandingname").onchange = showStanding;
+$("agstandingsave").onclick = function () {
+  if (agentModal.mode === "new") return;
+  var name = $("agstandingname").value;
+  var text = $("agstandingtext").value;
+  $("agstandingstatus").textContent = "Saving…";
+  fetch("/api/standing", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ agent: agentModal.id, name: name, text: text })
+  })
+    .then(function (r) { return r.json().then(function (d) { if (!r.ok) throw new Error(d.error || "save failed"); return d; }); })
+    .then(function (d) { standingFiles = d.files || standingFiles; $("agstandingstatus").textContent = "Saved " + name + "."; })
+    .catch(function (error) { $("agstandingstatus").textContent = "Not saved: " + error.message; });
+};
 
 function saveAgentModal() {
   var name = $("agname").value.trim();
