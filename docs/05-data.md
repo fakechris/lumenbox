@@ -412,6 +412,26 @@ file never compacts at all. Refused messages are not in it (ingress says they we
 not scanned for secrets on the way in — the audit export redacts on the way out — because a record
 that edits what a person said is not a record of what they said.
 
+#### 2.4.0 Turn checkpoints: `turn-steps.jsonl` (INV-774)
+
+`turns.jsonl` says *that* a turn did not end; `turn-steps.jsonl` says *which call* it was
+inside. Written by the host, never by the model and never shown to it: `pending {turnId,
+toolUseId, name}` before a call is dispatched, `settled` after its result is in the transcript,
+`awaiting_approval {approvalId}` when the policy gate handed the call to a person, `closed` when
+the turn ends. The `blocks` entry is appended to the transcript *before* any of its calls run, so
+the record of what was asked survives a crash between the ask and the answer. On restart
+`resumeInterrupted` reads this file first. A turn it knows is **continued as itself** — same
+`turnId`, no new user message, no resume prompt: each open call is answered in the transcript as
+a tool result before the model is asked anything (`outcome_unknown` for anything that may have
+run; re-run only when the protocol's own declaration (INV-525: a read, an idempotent write with
+its key, or an `operation_id`) says a second run lands the same state; `not_started` for a call
+that was never dispatched), and the model meets that result as the next observation of the call
+it made. A turn parked on an approval waits for the person's answer, from whichever door, and
+continues from that step with the answer as the call's result. A turn the file never saw — a
+transcript from before it existed — keeps the older path, a new turn opened with `resumePrompt`.
+Settled steps are never re-run; `MAX_RESUMES` and the give-up note apply to both paths. It is a
+`queue`: a settled step is already in the transcript, which is the record.
+
 #### 2.4.1 Every ledger says what kind of thing it is
 
 Twelve files here compact, and until INV-634 none of them said which of four things it was, so
@@ -422,7 +442,7 @@ thirteenth that does not.
 | kind | what compaction may do | files |
 |---|---|---|
 | `record` | move a line to an archive, never lose one | `ingress.jsonl`, `turns.jsonl` |
-| `queue` | drop what is settled; that was its job | `inbox.jsonl`, `deliveries.jsonl` |
+| `queue` | drop what is settled; that was its job | `inbox.jsonl`, `deliveries.jsonl`, `turn-steps.jsonl` |
 | `state` | keep one line per key; older ones are noise | `conversations`, `sent-roots`, `cards`, `claims`, `tasks` |
 | `feed` | let old lines fall off the back | `usage.jsonl`, `activity`, `policy` |
 

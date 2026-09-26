@@ -224,3 +224,368 @@ test("a resumed turn actually runs, not just sits in the queue", async () => {
     cleanup();
   }
 });
+
+// ── turn checkpoints (INV-774): a restart continues the same turn from the pending step ────
+
+import { StepLedger } from "./resume.ts";
+import { fakeModel } from "./testing/fake-model.ts";
+import type { BoxClient } from "../box/client.ts";
+import type Anthropic from "@anthropic-ai/sdk";
+
+function reply(content: Anthropic.ContentBlock[], stop: Anthropic.Message["stop_reason"] = "end_turn"): Anthropic.Message {
+  return {
+    id: "m",
+    type: "message",
+    role: "assistant",
+    model: "scenario",
+    content,
+    stop_reason: stop,
+    stop_sequence: null,
+    usage: { input_tokens: 1, output_tokens: 1, cache_read_input_tokens: 0, cache_creation_input_tokens: 0 },
+  } as unknown as Anthropic.Message;
+}
+const say = (text: string) => reply([{ type: "text", text, citations: [] } as unknown as Anthropic.ContentBlock]);
+const call = (id: string, name: string, input: Record<string, unknown>) =>
+  reply([{ type: "tool_use", id, name, input } as Anthropic.ContentBlock], "tool_use");
+
+/** A box that counts what ran, so "not re-run" is a number rather than a belief. */
+function countingBox(files: Map<string, string>, ran: string[]): BoxClient {
+  const box = {
+    health: async () => ({ ok: true, resolution: undefined }),
+    ensureDisplay: async (index: number) => ({ display: index }),
+    exec: async (command: string) => {
+      ran.push(`bash:${command}`);
+      return { stdout: "", stderr: "", exit_code: 0 };
+    },
+    writeFile: async (path: string, content: string) => {
+      // The host's own memory and standing-file projections are bookkeeping, not steps of the task.
+      if (!path.includes("/memory/") && !path.includes("/standing/")) ran.push(`write:${path}`);
+      files.set(path, content);
+      return { path, bytes_written: content.length };
+    },
+    readFile: async (path: string) => {
+      // `write_file` reads before it writes (the version check); only a file that exists is a read the task made.
+      if (files.has(path)) ran.push(`read:${path}`);
+      const content = files.get(path);
+      if (content === undefined) throw new Error(`${path} does not exist`);
+      return { path, content, total_lines: 1, truncated: false };
+    },
+  };
+  return new Proxy(box, {
+    get: (target, property) => (property in target ? target[property as keyof typeof target] : async () => ({})),
+  }) as unknown as BoxClient;
+}
+
+function stepFixture() {
+  const base = fixture();
+  const stepsPath = join(base.ledgerPath, "..", "turn-steps.jsonl");
+  const files = new Map<string, string>();
+  const ran: string[] = [];
+  const capture: { params: Anthropic.MessageCreateParams[] } = { params: [] };
+  return {
+    ...base,
+    files,
+    ran,
+    capture,
+    steps: () => new StepLedger(stepsPath),
+    /** The process after the restart: a scripted model, a counting box, the same state directory. */
+    restart: async (respond: Parameters<typeof fakeModel>[0]) => {
+      const orch = new Orchestrator({
+        registry: base.registry,
+        useBox: true,
+        boxClient: countingBox(files, ran),
+        inbox: null,
+        turns: new TurnLedger(base.ledgerPath),
+        steps: new StepLedger(stepsPath),
+        client: fakeModel(respond, { capture }),
+      });
+      assert.equal((await orch.connectBox()).connected, true);
+      return orch;
+    },
+  };
+}
+
+/** The transcript as the dying process left it: the turn's opening line, then whatever rounds it wrote. */
+function leave(registry: AgentRegistry, agentId: string, turnId: string, entries: unknown[]): void {
+  registry.appendTranscript(agentId, { role: "user", text: "deploy the release", at: "2026-09-26T09:00:00.000Z", fromPerson: true, turnId });
+  for (const entry of entries) registry.appendTranscript(agentId, entry);
+}
+const blocks = (turnId: string, ...uses: { id: string; name: string; input: Record<string, unknown> }[]) => ({
+  role: "assistant",
+  kind: "blocks",
+  blocks: uses.map(use => ({ type: "tool_use", ...use })),
+  at: "2026-09-26T09:00:01.000Z",
+  turnId,
+});
+const results = (turnId: string, ...pairs: [string, string][]) => ({
+  role: "user",
+  kind: "results",
+  blocks: pairs.map(([id, text]) => ({ type: "tool_result", tool_use_id: id, content: [{ type: "text", text }] })),
+  at: "2026-09-26T09:00:02.000Z",
+  turnId,
+});
+const entriesOf = (registry: AgentRegistry, agentId: string) =>
+  registry.readTranscript(agentId) as { role: string; kind?: string; text?: string; turnId?: string; blocks?: { tool_use_id?: string; content?: { text: string }[] }[] }[];
+const resultText = (registry: AgentRegistry, agentId: string, toolUseId: string) =>
+  entriesOf(registry, agentId)
+    .filter(entry => entry.kind === "results")
+    .flatMap(entry => entry.blocks ?? [])
+    .filter(block => block.tool_use_id === toolUseId)
+    .map(block => block.content?.[0]?.text ?? "")
+    .join("\n");
+
+test("killed after dispatch and before the result: the same turn continues, and the call reads outcome_unknown", async () => {
+  const f = stepFixture();
+  try {
+    const ada = f.registry.create({ name: "Ada" });
+    leave(f.registry, ada.id, "t1", [blocks("t1", { id: "c1", name: "bash", input: { command: "make deploy" } })]);
+    f.ledger().begin({ id: "t1", agentId: ada.id, about: "deploy the release" });
+    f.steps().pending("t1", "c1", "bash");
+
+    const orch = await f.restart(() => say("checked the deploy log; it went out"));
+    assert.deepEqual(orch.resumeInterrupted(), { resumed: 1, abandoned: 0 });
+    void orch.bus.wake(ada.id);
+    await orch.settle();
+
+    assert.match(resultText(f.registry, ada.id, "c1"), /outcome_unknown/);
+    assert.match(resultText(f.registry, ada.id, "c1"), /do not retry blindly/);
+    assert.deepEqual(f.ran, [], "the unsafe call was not re-run");
+    // The model met the unknown result as the next observation of its own call, with no new user message.
+    const last = f.capture.params.at(-1)!.messages;
+    const tail = last.at(-1)!;
+    assert.equal(tail.role, "user");
+    assert.ok(Array.isArray(tail.content) && (tail.content[0] as { type: string }).type === "tool_result");
+    assert.ok(!JSON.stringify(last).includes("[resumed]"));
+    // No resume prompt anywhere in the record either: the wake carried no user text.
+    assert.ok(!entriesOf(f.registry, ada.id).some(entry => entry.text?.includes("[resumed]")));
+    // And the reply belongs to the same turn.
+    const replyEntry = entriesOf(f.registry, ada.id).find(entry => entry.role === "assistant" && entry.text?.includes("went out"));
+    assert.equal(replyEntry?.turnId, "t1");
+    assert.deepEqual(f.ledger().interrupted(), []);
+    assert.deepEqual(f.steps().stepsOf("t1").open, []);
+  } finally {
+    f.cleanup();
+  }
+});
+
+test("settled steps are never re-run; a pending read is answered fresh", async () => {
+  const f = stepFixture();
+  try {
+    const ada = f.registry.create({ name: "Ada" });
+    f.files.set("/home/box/work/a.txt", "A");
+    f.files.set("/home/box/work/b.txt", "B");
+    leave(f.registry, ada.id, "t1", [
+      blocks("t1", { id: "c1", name: "read_file", input: { path: "/home/box/work/a.txt" } }),
+      results("t1", ["c1", "A"]),
+      blocks("t1", { id: "c2", name: "read_file", input: { path: "/home/box/work/b.txt" } }, { id: "c3", name: "bash", input: { command: "rm b" } }),
+    ]);
+    f.ledger().begin({ id: "t1", agentId: ada.id, about: "deploy the release" });
+    const steps = f.steps();
+    steps.pending("t1", "c1", "read_file");
+    steps.settled("t1", "c1");
+    steps.pending("t1", "c2", "read_file");
+    // c3 was never dispatched: the process died between c2 and it.
+
+    const orch = await f.restart(() => say("done"));
+    orch.resumeInterrupted();
+    void orch.bus.wake(ada.id);
+    await orch.settle();
+
+    assert.deepEqual(f.ran, ["read:/home/box/work/b.txt"], "only the interrupted read ran; the settled one did not");
+    assert.match(resultText(f.registry, ada.id, "c2"), /Re-run on resume[\s\S]*B/);
+    assert.match(resultText(f.registry, ada.id, "c3"), /not_started/);
+    assert.equal(resultText(f.registry, ada.id, "c1"), "A", "the settled result stands as written");
+  } finally {
+    f.cleanup();
+  }
+});
+
+test("a call carrying an operation_id (INV-525) is replayed; the same call without one is unknown", async () => {
+  const f = stepFixture();
+  try {
+    const ada = f.registry.create({ name: "Ada" });
+    leave(f.registry, ada.id, "t1", [
+      blocks(
+        "t1",
+        { id: "c1", name: "bash", input: { command: "echo keyed", operation_id: "op-1" } },
+        { id: "c2", name: "bash", input: { command: "echo bare" } }
+      ),
+    ]);
+    f.ledger().begin({ id: "t1", agentId: ada.id, about: "deploy the release" });
+    f.steps().pending("t1", "c1", "bash");
+    f.steps().pending("t1", "c2", "bash");
+
+    const orch = await f.restart(() => say("done"));
+    orch.resumeInterrupted();
+    void orch.bus.wake(ada.id);
+    await orch.settle();
+
+    assert.deepEqual(f.ran, ["bash:echo keyed"]);
+    assert.match(resultText(f.registry, ada.id, "c1"), /Re-run on resume/);
+    assert.match(resultText(f.registry, ada.id, "c2"), /outcome_unknown/);
+  } finally {
+    f.cleanup();
+  }
+});
+
+test("killed while awaiting approval: the turn parks on the answer and continues from that step when it comes", async () => {
+  const f = stepFixture();
+  try {
+    const ada = f.registry.create({ name: "Ada" });
+    // The dying process asked the person; the approval is in policy.jsonl and replays.
+    const before = await f.restart(() => say("unused"));
+    const asked = before.policy.check({ kind: "tool", agentId: ada.id, agentName: "Ada", tool: "bash", input: { command: "rm -rf build" }, irreversible: "deletes the build" });
+    assert.ok(!asked.allow && asked.approval !== undefined);
+    const approvalId = (!asked.allow && asked.approval?.id) as string;
+    leave(f.registry, ada.id, "t1", [blocks("t1", { id: "c1", name: "bash", input: { command: "rm -rf build" } })]);
+    f.ledger().begin({ id: "t1", agentId: ada.id, about: "deploy the release" });
+    f.steps().pending("t1", "c1", "bash");
+    f.steps().awaitingApproval("t1", "c1", approvalId);
+
+    const orch = await f.restart(() => say("carrying on"));
+    assert.deepEqual(orch.resumeInterrupted(), { resumed: 0, abandoned: 0, parked: 1 });
+    assert.equal(orch.bus.pendingCount(ada.id), 0, "nothing runs until the person answers");
+    assert.equal(f.ledger().interrupted().length, 1, "still an open turn: it is waiting, not lost");
+
+    assert.equal(orch.policy.grant(approvalId, "chris"), true);
+    await orch.settle();
+    assert.match(resultText(f.registry, ada.id, "c1"), /allowed this bash call[\s\S]*call it again/);
+    assert.deepEqual(f.ran, [], "the answer re-attaches to the turn; the call itself is the model's to make again");
+    assert.ok(entriesOf(f.registry, ada.id).some(entry => entry.text?.includes("carrying on") && entry.turnId === "t1"));
+    assert.deepEqual(f.ledger().interrupted(), []);
+  } finally {
+    f.cleanup();
+  }
+});
+
+test("a refusal while parked continues the turn with the refusal as the call's result", async () => {
+  const f = stepFixture();
+  try {
+    const ada = f.registry.create({ name: "Ada" });
+    const before = await f.restart(() => say("unused"));
+    const asked = before.policy.check({ kind: "tool", agentId: ada.id, agentName: "Ada", tool: "bash", input: { command: "rm -rf build" }, irreversible: "deletes the build" });
+    const approvalId = (!asked.allow && asked.approval?.id) as string;
+    leave(f.registry, ada.id, "t1", [blocks("t1", { id: "c1", name: "bash", input: { command: "rm -rf build" } })]);
+    f.ledger().begin({ id: "t1", agentId: ada.id, about: "deploy the release" });
+    f.steps().pending("t1", "c1", "bash");
+    f.steps().awaitingApproval("t1", "c1", approvalId);
+
+    const orch = await f.restart(() => say("understood"));
+    assert.equal(orch.resumeInterrupted().parked, 1);
+    assert.equal(orch.policy.deny(approvalId, "chris"), true);
+    await orch.settle();
+    assert.match(resultText(f.registry, ada.id, "c1"), /refused this bash call/);
+  } finally {
+    f.cleanup();
+  }
+});
+
+test("killed mid model stream: the turn continues with no results to invent and no new message", async () => {
+  const f = stepFixture();
+  try {
+    const ada = f.registry.create({ name: "Ada" });
+    leave(f.registry, ada.id, "t1", [
+      blocks("t1", { id: "c1", name: "read_file", input: { path: "/x" } }),
+      results("t1", ["c1", "X"]),
+    ]);
+    f.ledger().begin({ id: "t1", agentId: ada.id, about: "deploy the release" });
+    f.steps().pending("t1", "c1", "read_file");
+    f.steps().settled("t1", "c1");
+
+    const orch = await f.restart(() => say("finished"));
+    assert.deepEqual(orch.resumeInterrupted(), { resumed: 1, abandoned: 0 });
+    void orch.bus.wake(ada.id);
+    await orch.settle();
+
+    const entries = entriesOf(f.registry, ada.id);
+    assert.equal(entries.filter(entry => entry.kind === "results").length, 1, "no results entry was added");
+    assert.ok(!entries.some(entry => entry.text?.includes("[resumed]")));
+    assert.deepEqual(f.ran, []);
+    assert.equal(entries.at(-1)?.text, "finished");
+    assert.equal(entries.at(-1)?.turnId, "t1");
+  } finally {
+    f.cleanup();
+  }
+});
+
+test("a turn the step ledger never saw keeps the resume-prompt path", async () => {
+  const f = stepFixture();
+  try {
+    const ada = f.registry.create({ name: "Ada" });
+    leave(f.registry, ada.id, "t1", [blocks("t1", { id: "c1", name: "bash", input: { command: "make" } })]);
+    f.ledger().begin({ id: "t1", agentId: ada.id, about: "deploy the release" });
+
+    const orch = await f.restart(() => say("ok"));
+    assert.deepEqual(orch.resumeInterrupted(), { resumed: 1, abandoned: 0 });
+    assert.match(orch.bus.drain(ada.id)[0]?.text ?? "", /\[resumed\]/);
+  } finally {
+    f.cleanup();
+  }
+});
+
+test("a checkpointed turn is still given up after MAX_RESUMES, and its steps are closed", async () => {
+  const f = stepFixture();
+  try {
+    const ada = f.registry.create({ name: "Ada" });
+    leave(f.registry, ada.id, "t1", [blocks("t1", { id: "c1", name: "bash", input: { command: "make" } })]);
+    f.ledger().begin({ id: "t1", agentId: ada.id, about: "the thing that kills us", attempt: MAX_RESUMES });
+    f.steps().pending("t1", "c1", "bash");
+
+    const orch = await f.restart(() => say("never"));
+    assert.deepEqual(orch.resumeInterrupted(), { resumed: 0, abandoned: 1 });
+    assert.equal(orch.bus.pendingCount(ada.id), 0);
+    assert.match(JSON.stringify(f.registry.readTranscript(ada.id)), /not being picked up again/);
+    assert.deepEqual(f.steps().stepsOf("t1").open, []);
+  } finally {
+    f.cleanup();
+  }
+});
+
+test("scenario: a three-step task killed at step 2 restarts running only step 3", async () => {
+  // The whole episode on the real stack: a process runs steps 1 and 2 and dies inside 2; the
+  // process that replaces it, over the same state directory, sees step 2 as unknown and the
+  // model's next call is step 3 — and only step 3 runs on the box.
+  const f = stepFixture();
+  try {
+    const ada = f.registry.create({ name: "Ada" });
+    let round = 0;
+    let dying: Promise<never> | undefined;
+    const first = await f.restart(() => {
+      round += 1;
+      if (round === 1) return call("s1", "write_file", { path: "/home/box/work/1.txt", content: "one" });
+      // Step 2 is asked for; the box never answers because the process dies inside it.
+      if (round === 2) return call("s2", "bash", { command: "make step2" });
+      return say("unreachable");
+    });
+    const hang = new Promise<never>(() => {});
+    (first.boxFor(ada.id) as unknown as { exec: unknown }).exec = () => (dying = hang);
+    void first.prompt(ada.id, "run the three steps");
+    await new Promise(resolve => setTimeout(resolve, 100));
+    assert.ok(dying !== undefined, "the process is inside step 2");
+    assert.deepEqual(f.ran, ["write:/home/box/work/1.txt"]);
+    assert.equal(f.ledger().interrupted().length, 1);
+    const turnId = f.ledger().interrupted()[0]!.id;
+    assert.deepEqual(f.steps().stepsOf(turnId).open.map(step => step.name), ["bash"]);
+
+    // The restart. The same model script, now seeing step 2's unknown result, asks for step 3.
+    f.ran.length = 0;
+    let after = 0;
+    const second = await f.restart(() => {
+      after += 1;
+      if (after === 1) return call("s3", "write_file", { path: "/home/box/work/3.txt", content: "three" });
+      return say("steps 1 and 3 done; step 2's outcome is unknown, check before redoing");
+    });
+    assert.deepEqual(second.resumeInterrupted(), { resumed: 1, abandoned: 0 });
+    void second.bus.wake(ada.id);
+    await second.settle();
+
+    assert.deepEqual(f.ran, ["write:/home/box/work/3.txt"], "step 3 ran; steps 1 and 2 did not run again");
+    assert.match(resultText(f.registry, ada.id, "s2"), /outcome_unknown/);
+    assert.equal(f.files.get("/home/box/work/3.txt"), "three");
+    assert.ok(entriesOf(f.registry, ada.id).every(entry => entry.turnId === undefined || entry.turnId === turnId), "one turn, not two");
+    assert.deepEqual(f.ledger().interrupted(), []);
+    assert.deepEqual(f.steps().stepsOf(turnId).open, []);
+  } finally {
+    f.cleanup();
+  }
+});
