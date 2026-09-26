@@ -118,7 +118,7 @@ function memoryBox(files: Map<string, string>, overrides: Partial<BoxClient> = {
       // "(ran) ls" back looks again, and spent a skill eval's whole budget doing so. Anything that
       // is not plain looking keeps the old answer, which scripted scenarios rely on.
       const looked = lookAround(files, command);
-      if (looked !== undefined) return { exit_code: 0, stdout: looked, stderr: "" };
+      if (looked !== undefined) return { exit_code: looked.exit, stdout: looked.stdout, stderr: "" };
       return { exit_code: 0, stdout: `(ran) ${command}`, stderr: "" };
     },
     writeFile: async (path: string, content: string) => {
@@ -150,30 +150,112 @@ function memoryBox(files: Map<string, string>, overrides: Partial<BoxClient> = {
 }
 
 /**
- * `ls`, `cat`, `wc -l`, `pwd` and `echo`, chained with `&&` or `;`, answered from the memory box's
+ * `ls`, `cat`, `head`, `tail`, `wc -l`, `find`, `file`, `pwd`, `date`, `echo`, `cd` and `git` (always "not a
+ * repository"), chained with `&&` or `;`, answered from the memory box's
  * files. Undefined for anything else, including any segment it does not recognise, so a command
  * that would do something is never half-simulated.
  */
-function lookAround(files: Map<string, string>, command: string): string | undefined {
+/** What `date` says in a memory box: fixed, so an episode reads the same every run. */
+const EPISODE_DATE = "Fri Sep 26 09:00:00 UTC 2026";
+
+function lookAround(files: Map<string, string>, command: string): { stdout: string; exit: number } | undefined {
   const home = "/home/box/work";
   const out: string[] = [];
-  for (const raw of command.split(/&&|;/)) {
-    const segment = raw.split("|")[0]!.replace(/\s+2>(&1|\/dev\/null)/g, "").trim();
+  let exit = 0;
+  // Split into segments, keeping the operator that joins each to the next, so `&&` stops after a
+  // failure the way a shell does and `;` carries on.
+  const parts = command.split(/(&&|;)/);
+  for (let index = 0; index < parts.length; index += 2) {
+    const joiner = index === 0 ? ";" : parts[index - 1]!;
+    if (joiner === "&&" && exit !== 0) break;
+    const segment = parts[index]!.split("|")[0]!.replace(/\s+2>(&1|\/dev\/null)/g, "").trim();
     if (segment === "") continue;
-    const [verb, ...rest] = segment.split(/\s+/);
-    const args = rest.filter(arg => !arg.startsWith("-")).map(arg => arg.replace(/^["']|["']$/g, "").replace(/^~/, "/home/box"));
-    if (verb === "pwd") out.push(home);
-    else if (verb === "echo") out.push(args.join(" "));
-    else if (verb === "ls") {
+    const words = segment.split(/\s+/).map(word => word.replace(/^["']|["']$/g, "").replace(/^~/, "/home/box"));
+    const [verb, ...rest] = words;
+    const args = rest.filter(arg => !arg.startsWith("-"));
+    const said = (text: string, code = 0) => { out.push(text); exit = code; };
+    if (verb === "pwd") said(home);
+    else if (verb === "date") said(EPISODE_DATE);
+    else if (verb === "cd") exit = 0;
+    else if (verb === "echo") said(rest.join(" "));
+    // There is no repository in a memory box, and saying so — with git's own status — is the honest answer.
+    else if (verb === "git") said("fatal: not a git repository (or any of the parent directories): .git", 128);
+    else if (verb === "find") {
+      const found = findIn(files, rest, home);
+      if (typeof found === "string") said(found, 1);
+      else said(found.join("\n"));
+    } else if (verb === "file") {
+      const missing = args.filter(path => !files.has(path));
+      said(args.map(path => `${path}: ${files.has(path) ? "data" : "cannot open (No such file or directory)"}`).join("\n"), missing.length > 0 ? 1 : 0);
+    } else if (verb === "head" || verb === "tail") {
+      const count = lineCount(rest);
+      const missing = args.filter(path => !files.has(path));
+      said(
+        args.map(path => {
+          const content = files.get(path);
+          if (content === undefined) return `${verb}: cannot open '${path}' for reading: No such file or directory`;
+          const lines = content.replace(/\n$/, "").split("\n");
+          return (verb === "head" ? lines.slice(0, count) : lines.slice(-count)).join("\n");
+        }).join("\n"),
+        missing.length > 0 ? 1 : 0
+      );
+    } else if (verb === "ls") {
       const dir = (args[0] ?? home).replace(/\/$/, "");
-      if (files.has(dir)) { out.push(dir.split("/").pop()!); continue; }
+      if (files.has(dir)) { said(dir.split("/").pop()!); continue; }
       const children = [...new Set([...files.keys()].filter(path => path.startsWith(`${dir}/`)).map(path => path.slice(dir.length + 1).split("/")[0]!))];
-      out.push(children.length > 0 ? children.sort().join("\n") : `ls: cannot access '${dir}': No such file or directory`);
-    } else if (verb === "cat") out.push(args.map(path => files.get(path) ?? `cat: ${path}: No such file or directory`).join("\n"));
-    else if (verb === "wc") out.push(args.map(path => `${(files.get(path) ?? "").split("\n").length - 1} ${path}`).join("\n"));
+      if (children.length > 0) said(children.sort().join("\n"));
+      else said(`ls: cannot access '${dir}': No such file or directory`, 2);
+    } else if (verb === "cat") {
+      const missing = args.filter(path => !files.has(path));
+      said(args.map(path => files.get(path) ?? `cat: ${path}: No such file or directory`).join("\n"), missing.length > 0 ? 1 : 0);
+    } else if (verb === "wc") said(args.map(path => `${(files.get(path) ?? "").split("\n").length - 1} ${path}`).join("\n"));
     else return undefined;
   }
-  return out.join("\n");
+  return { stdout: out.join("\n"), exit };
+}
+
+/** `-n N`, `-nN` or `-N` for head and tail; ten lines, as the real ones default to. */
+function lineCount(words: readonly string[]): number {
+  for (let index = 0; index < words.length; index++) {
+    const word = words[index]!;
+    if (word === "-n" && words[index + 1] !== undefined) return Math.max(0, Number(words[index + 1]) || 0);
+    const joined = /^-n?(\d+)$/.exec(word);
+    if (joined) return Number(joined[1]);
+  }
+  return 10;
+}
+
+/**
+ * `find` over the memory box's files, honouring `-type f|d`, `-name` and `-maxdepth`. Any other
+ * predicate is refused by name rather than ignored: an unfiltered list for `-mtime -1` would tell a
+ * live model something false about the box. The memory box keeps no file times.
+ */
+function findIn(files: Map<string, string>, words: readonly string[], home: string): string[] | string {
+  const root = (words[0] !== undefined && !words[0].startsWith("-") ? words[0] : home).replace(/\/$/, "");
+  let type: "f" | "d" | undefined;
+  let name: RegExp | undefined;
+  let maxDepth = Number.POSITIVE_INFINITY;
+  for (let index = words[0] === root ? 1 : 0; index < words.length; index++) {
+    const word = words[index]!;
+    if (word === "-type") { const value = words[++index]; if (value !== "f" && value !== "d") return `find: -type ${value ?? ""} is not supported in this box`; type = value; }
+    else if (word === "-name" || word === "-iname") {
+      const glob = words[++index] ?? "*";
+      name = new RegExp(`^${glob.replace(/[.+^${}()|[\]\\]/g, "\\$&").replace(/\*/g, ".*").replace(/\?/g, ".")}$`, word === "-iname" ? "i" : "");
+    } else if (word === "-maxdepth") maxDepth = Number(words[++index] ?? "0");
+    else if (word.startsWith("-")) return `find: ${word} is not supported in this box (it keeps no file times or owners)`;
+  }
+  const under = [...files.keys()].filter(path => path === root || path.startsWith(`${root}/`));
+  const dirs = new Set<string>();
+  for (const path of under) {
+    let parent = path.slice(0, path.lastIndexOf("/"));
+    while (parent.length > root.length) { dirs.add(parent); parent = parent.slice(0, parent.lastIndexOf("/")); }
+  }
+  const entries = [...(type === "d" ? [] : under.map(path => ({ path, kind: "f" as const }))), ...(type === "f" ? [] : [...dirs].map(path => ({ path, kind: "d" as const })))];
+  return entries
+    .filter(entry => entry.path.slice(root.length).split("/").length - 1 <= maxDepth)
+    .filter(entry => name === undefined || name.test(entry.path.split("/").pop()!))
+    .map(entry => entry.path)
+    .sort();
 }
 
 function message(content: Anthropic.ContentBlock[], stop: Anthropic.Message["stop_reason"]): Anthropic.Message {

@@ -1272,16 +1272,21 @@ export function remindsModel(model: string): boolean {
  *
  * Absent for hidden wakes: nobody is waiting, and the lines are about a person.
  */
-export function turnReminderFor(model: string, personText: string): string | undefined {
+export function turnReminderFor(model: string, personText: string, hasSkills = false): string | undefined {
   if (!remindsModel(model)) return undefined;
   const chinese = (personText.match(/[一-鿿]/g) ?? []).length >= 4;
+  // One line about the skills index, beside the message it is about (INV-715): the index sits
+  // in the system prompt, far from the request, and this is what moved the measured rate most.
+  const skillLine = hasSkills;
   return chinese
     ? "<system_reminder>\n" +
+        (skillLine ? "- 动手前先对照系统提示里的 Skills 清单：有匹配这件事的，先 read_file 它的 SKILL.md，再照着做。\n" : "") +
         "- 你不认识的版本号、型号、产品或事件，先当它是真的、是你知识之后发布的：先查再说，不得凭没见过断定它不存在或有水分。\n" +
         "- 你持有的工具不用问要不要用：直接用，然后报告结果。\n" +
         "- 如果你说要去查、去看、去跑，对应的调用必须在这一条回复里。\n" +
         "</system_reminder>"
     : "<system_reminder>\n" +
+        (skillLine ? "- Before you start, check the Skills list in the system prompt: if one matches this request, read_file its SKILL.md first and follow it.\n" : "") +
         "- A version, model, product or event you do not recognise is real and newer than your knowledge until a tool says otherwise: search first; never rule it out for not having seen it.\n" +
         "- Do not ask whether to use a tool you hold: use it, then report.\n" +
         "- If you say you will check, look or run, the call is in this response.\n" +

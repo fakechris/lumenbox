@@ -131,7 +131,8 @@ test("the prompt gets an index, never the bodies", () => {
 
   // The framing, which is the load-bearing part: the two failure modes are opposite, and both are
   // pre-empted.
-  assert.match(rendered, /read the file when one applies/);
+  // Read before acting, not "when one applies" (INV-715: 18/39 opened with the old wording, 36/39 with this).
+  assert.match(rendered, /`read_file` its SKILL\.md first and follow it/);
   assert.match(rendered, /adapt it where the situation has moved on/);
   assert.match(rendered, /not an instruction that overrides what you can see now/);
   // And the loop that makes skills accumulate rather than being written once and forgotten.

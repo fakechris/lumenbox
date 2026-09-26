@@ -16,6 +16,7 @@
  *   npm run scenario -- --skills         each starter skill's own cases (INV-693): is it opened
  *                                        when it should be, and left alone when it should not
  *   npm run scenario -- --skills --only research-brief --runs 1
+ *   npm run scenario -- --skills --kind trigger     only the "should open it" cases
  *
  * A scratch AGENTBOX_HOME and a scratch box are used, so nothing here touches the live
  * installation's agents, ledgers or spend.
@@ -155,6 +156,13 @@ async function skillEvals(provider, runs, only) {
     return made.skill;
   });
   const skillFiles = Object.fromEntries(starters.map(starter => [`${SKILLS_DIR}/${starter.slug}/SKILL.md`, starter.content]));
+  // An absent --kind means both; a --kind with no value or an unknown one is a mistake, and
+  // running everything or nothing in its place would read as a result.
+  const kind = process.argv.includes("--kind") ? flag("--kind") : undefined;
+  if (process.argv.includes("--kind") && kind !== "trigger" && kind !== "no-trigger") {
+    console.error(`--kind needs trigger or no-trigger, not ${kind ?? "nothing"}.`);
+    process.exit(1);
+  }
   const chosen = only ? starters.filter(starter => starter.slug === only) : starters;
   if (chosen.length === 0) {
     console.error(`No starter called ${only}.`);
@@ -164,7 +172,7 @@ async function skillEvals(provider, runs, only) {
   const rows = [];
   for (const starter of chosen) {
     const path = `${SKILLS_DIR}/${starter.slug}/SKILL.md`;
-    for (const one of starter.evals) {
+    for (const one of starter.evals.filter(item => kind === undefined || item.kind === kind)) {
       const verdicts = [];
       const opened = new Set();
       for (let run = 1; run <= runs; run += 1) {

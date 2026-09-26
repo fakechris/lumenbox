@@ -693,7 +693,7 @@ const STARTER_EVALS: Record<string, readonly SkillEval[]> = {
   // For the starter INV-692 adds (PR #237). Keyed by slug, so it waits here until that starter
   // exists, and whichever of the two lands second does not turn the coverage guard red.
   "check-before-delivering": [
-    { name: "a file to hand over", kind: "trigger", says: "把这份季度数据整理成一个 Excel 表格发给我。", files: { "/home/box/work/q3.csv": "region,revenue\nnorth,120\nsouth,95\n" } },
+    { name: "a file to hand over", kind: "trigger", says: "把 /home/box/work/q3.csv 这份季度数据整理成一个 Excel 表格发给我。", files: { "/home/box/work/q3.csv": "region,revenue\nnorth,120\nsouth,95\n" } },
     { name: "a plain answer has no file", kind: "no-trigger", says: "北京今天适合出门跑步吗？一句话回答就行。" },
   ],
   "export-template": [
