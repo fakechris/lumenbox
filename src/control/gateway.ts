@@ -35,7 +35,7 @@
 import { createHmac, randomBytes, timingSafeEqual } from "node:crypto";
 import { request as httpRequest, type IncomingMessage, type ServerResponse } from "node:http";
 import { connect as netConnect, type Socket } from "node:net";
-import { parseCookies } from "../web/auth.ts";
+import { parseCookies, safeNext } from "../web/auth.ts";
 import { adminRouteOf, handleAdmin } from "./admin.ts";
 import type { BoxAllocator, BoxHandle } from "./allocator.ts";
 import { isRole, type ControlStore, type Role } from "./store.ts";
@@ -616,10 +616,4 @@ async function readBody(req: IncomingMessage, limit = 64 * 1024): Promise<string
   return Buffer.concat(chunks).toString("utf8");
 }
 
-/** A `next` that is a path on this origin, or nothing. `//host` and absolute URLs are refused. */
-export function safeNext(value: string | null | undefined): string | undefined {
-  if (value === null || value === undefined || value === "") return undefined;
-  if (!value.startsWith("/") || value.startsWith("//") || value.startsWith("/\\")) return undefined;
-  return value.slice(0, 512);
-}
 

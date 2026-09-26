@@ -228,3 +228,19 @@ test("Claude Code's tool names map to ours in engine-tools.ts only (INV-691)", (
     .map(file => file.path);
   assert.deepEqual(elsewhere, [], "map an engine tool name in src/host/engine-tools.ts");
 });
+
+test("a login's next is checked by safeNext in web/auth.ts and nowhere else (INV-724)", () => {
+  // The box and the control-plane gateway each had their own check, and each missed a different
+  // way a browser leaves the origin (`/\`, then tab). A third hand-rolled `startsWith("//")`
+  // check would be the same bug again.
+  const handRolled = /\.startsWith\(\s*["']\/\/["']\s*\)/;
+  // The pattern has to catch what it is for, or the empty list below proves nothing.
+  assert.ok(handRolled.test(`const next = raw.startsWith("/") && !raw.startsWith("//") ? raw : "/";`));
+  // tools.ts checks a connector_request path, which is appended to a fixed API base after its
+  // host — a leading "/" already ends the authority, so it is not a redirect and cannot leave it.
+  const allowed = new Set(["web/auth.ts", "host/tools.ts"]);
+  const elsewhere = sources()
+    .filter(file => !allowed.has(file.path) && handRolled.test(file.text))
+    .map(file => file.path);
+  assert.deepEqual(elsewhere, [], "check a redirect target with safeNext from src/web/auth.ts");
+});

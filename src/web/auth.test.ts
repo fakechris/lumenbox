@@ -170,3 +170,20 @@ test("a published installation refuses plain HTTP unless somebody says they mean
     rmSync(home, { recursive: true, force: true });
   }
 });
+
+test("a login's next is a path on this origin or nothing, as a browser would resolve it (INV-724)", async () => {
+  const { safeNext } = await import("./auth.ts");
+  for (const ok of ["/", "/ok", "/?import=z7xup0Ax1SBl2K84PELqF", "/agents/ada?tab=chat#bottom"]) {
+    assert.equal(safeNext(ok), ok, ok);
+  }
+  // Each of these reaches another origin in a browser, or is only ever written by an attempt.
+  // `/\` and `/<TAB>/` are the ones the old `startsWith("//")` check let through.
+  for (const bad of [
+    "//evil.example/", "/\\evil.example", "/\\/evil.example", "/\t/evil.example", "/\n/evil.example",
+    "/\r/evil.example", "/x\u007f", "https://evil.example/", "/foo://x", "evil.example", "", "/".padEnd(600, "a"),
+  ]) {
+    assert.equal(safeNext(bad), undefined, JSON.stringify(bad));
+  }
+  assert.equal(safeNext(null), undefined);
+  assert.equal(safeNext(undefined), undefined);
+});
