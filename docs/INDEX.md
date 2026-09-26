@@ -58,8 +58,8 @@ this file and the headers disagree. Edit the header, not this table.
 | [16-long-work](16-long-work.md) | Finishing long work: the protocol, the cost, and the stop | current | 2026-08-26 |
 | [18-identity-box](18-identity-box.md) | Boxes that say what they are (v4) | superseded by [22-domain-model](22-domain-model.md) — §4 replaces boxName/config.boxes[name] with ids and incarnations | 2026-08-29 |
 | [20-completion-standard](20-completion-standard.md) | The standard of completion, written before the work | current | 2026-09-14 |
-| [23-context-compaction](23-context-compaction.md) | Why the agent kept compacting, and what long-horizon systems do instead | current | 2026-09-14 |
-| [24-context-memory](24-context-memory.md) | Context, memory and compaction: ours, against Hermes and OpenClaw | current | 2026-09-14 |
+| [23-context-compaction](23-context-compaction.md) | Why the agent kept compacting, and what long-horizon systems do instead | current | 2026-09-26 |
+| [24-context-memory](24-context-memory.md) | Context, memory and compaction: ours, against Hermes and OpenClaw | current | 2026-09-26 |
 | [25-workbuddy](25-workbuddy.md) | Workbuddy: skills, presets, delegated engines — the hands-on program | current | 2026-09-03 |
 | [26-inbound-reliability](26-inbound-reliability.md) | Inbound reliability: what a message goes through, and what mature harnesses do | current | 2026-09-01 |
 | [28-grokbot-0.30-delta](28-grokbot-0.30-delta.md) | What Grok Bot 0.30.0 changed, and what it says we should change | current | 2026-09-01 |

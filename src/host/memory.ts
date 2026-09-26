@@ -579,7 +579,15 @@ export function describeFrom(from: readonly string[] | undefined): string {
 export function buildExtractionPrompt(
   exchange: string,
   known: readonly MemoryRecord[],
-  exchangeCount = 1
+  exchangeCount = 1,
+  options: {
+    /**
+     * The exchanges are about to be summarised away (INV-778). A summary keeps a sentence per
+     * thread; what it loses first is that something *changed* — so the extractor is told to
+     * put reversals ahead of new facts.
+     */
+    stateChangesFirst?: boolean;
+  } = {}
 ): string {
   const existing =
     known.length === 0
@@ -609,6 +617,15 @@ export function buildExtractionPrompt(
     "",
     "Do not keep: what a tool can tell you again on demand, anything specific to this task, your own",
     "plans, or a restatement of something already listed below.",
+    ...(options.stateChangesFirst === true
+      ? [
+          "",
+          "This part of the conversation is about to be replaced by a summary. A change of state comes",
+          "first: something reversed, completed, superseded or cancelled, a preference or constraint",
+          "they changed. Only after those, a new standing fact. A summary keeps the facts; what it",
+          "loses is that an earlier one stopped being true.",
+        ]
+      : []),
     "",
     "One line each, at most three lines, no numbering, no preamble. Each line must make sense with",
     "none of this conversation around it — write \"they\" rather than \"the user above\".",
