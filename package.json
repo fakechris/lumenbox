@@ -35,14 +35,14 @@
     "release:scorecard": "node --experimental-transform-types scripts/scorecard.mjs"
   },
   "dependencies": {
-    "@anthropic-ai/sdk": "^0.125.0",
-    "@larksuiteoapi/node-sdk": "^1.73.3",
+    "@anthropic-ai/sdk": "^0.127.0",
+    "@larksuiteoapi/node-sdk": "^1.74.0",
     "markdown-it": "^15.0.2"
   },
   "devDependencies": {
-    "@biomejs/biome": "^2.5.13",
-    "@types/node": "^26.5.1",
-    "electron": "^44.3.0",
+    "@biomejs/biome": "^2.5.14",
+    "@types/node": "^26.6.2",
+    "electron": "^44.4.3",
     "electron-builder": "^26.15.3",
     "esbuild": "^0.28.2",
     "typescript": "^7.0.2"
