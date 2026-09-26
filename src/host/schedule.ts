@@ -36,6 +36,7 @@ import { envNumber } from "../config.ts";
 import { webhookPrompt } from "./webhooks.ts";
 import { existsSync, mkdirSync, readFileSync } from "node:fs";
 import { appendLine } from "./jsonl.ts";
+import type { DeliverWhen } from "./routine-resolve.ts";
 import { dirname, join } from "node:path";
 import { agentboxHome } from "../config.ts";
 
@@ -442,6 +443,8 @@ export interface Scheduled {
    * scheduled skill wrote into the main conversation, which no chat reads.
    */
   deliver?: string;
+  /** Whether every run reaches that chat, or only one that changed something (INV-776). */
+  deliverWhen?: DeliverWhen;
   /** The agent that wrote it, when one did. Provenance, not permission — see skills.ts. */
   authoredBy?: string;
   /** Why it exists, in the author's words. */
@@ -462,6 +465,7 @@ export interface Hooked {
   path: string;
   runAs?: string;
   deliver?: string;
+  deliverWhen?: DeliverWhen;
   paused?: boolean;
   boxId?: string;
   authoredBy?: string;
@@ -578,7 +582,7 @@ export interface SchedulerDeps {
    * hands it over rather than resolving it, because which conversation a chatKey means
    * and how a reply reaches it are the caller's business, not the clock's.
    */
-  run: (agent: string, prompt: string, deliver?: string, slug?: string, toolScope?: readonly string[]) => Promise<void>;
+  run: (agent: string, prompt: string, deliver?: string, slug?: string, toolScope?: readonly string[], deliverWhen?: DeliverWhen) => Promise<void>;
   /**
    * What a routine committed to last time and where it stands (INV-528), prepended to
    * its prompt so a retro opens with its own previous "next week" rather than a blank.
@@ -826,7 +830,8 @@ export class Scheduler {
           triggerPrompt(skill.name, skill.path, describeSchedule(skill.schedule), skill.deliver) + (prior !== undefined ? `\n\n${prior}` : ""),
           skill.deliver,
           skill.slug,
-          skill.allowedTools
+          skill.allowedTools,
+          skill.deliverWhen
         )
         .catch(error => {
           // Reported and dropped. A scheduled run that failed will come round again, and retrying
@@ -863,6 +868,7 @@ export class Scheduler {
       agent: string | undefined;
       timezone: string | undefined;
       deliver: string | undefined;
+      deliverWhen: DeliverWhen | undefined;
       authoredBy: string | undefined;
       because: string | undefined;
       lastRun: string | undefined;
@@ -885,6 +891,7 @@ export class Scheduler {
       agent: skill.runAs,
       timezone: skill.timezone,
       deliver: skill.deliver,
+      deliverWhen: skill.deliverWhen,
       authoredBy: skill.authoredBy,
       because: skill.because,
       lastRun: this.lastRun.get(skill.slug)?.toISOString(),
@@ -908,6 +915,7 @@ export class Scheduler {
         agent: skill.runAs,
         timezone: undefined,
         deliver: skill.deliver,
+        deliverWhen: skill.deliverWhen,
         authoredBy: skill.authoredBy,
         because: skill.because,
         lastRun: this.lastRun.get(skill.slug)?.toISOString(),
@@ -1034,7 +1042,7 @@ export class Scheduler {
     }
 
     void this.deps
-      .run(agent, prompt, skill.deliver, skill.slug, skill.allowedTools)
+      .run(agent, prompt, skill.deliver, skill.slug, skill.allowedTools, skill.deliverWhen)
       .catch(error => {
         this.log(`${skill.name}: webhook run failed — ${error instanceof Error ? error.message : String(error)}`);
       })
@@ -1065,7 +1073,8 @@ export class Scheduler {
         triggerPrompt(skill.name, skill.path, describeSchedule(skill.schedule), skill.deliver) + (priorByHand !== undefined ? `\n\n${priorByHand}` : ""),
         skill.deliver,
         skill.slug,
-        skill.allowedTools
+        skill.allowedTools,
+        skill.deliverWhen
       )
       .catch(error => {
         this.log(

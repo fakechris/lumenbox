@@ -188,8 +188,11 @@ test("the prompt's sections have an order, and it is the documented one", () => 
       "wrap-up",
       "shared-memory",
       "team",
-      // unattended renders only on a background lane (INV-780), just before the recap.
+      // unattended renders only on a background lane (INV-780).
       "unattended",
+      // standing renders the four files a person and the agent both edit (INV-777): the last
+      // thing that changes between turns, so a person's edit moves only the tail.
+      "standing",
       "critical",
     ]
   );
@@ -198,8 +201,9 @@ test("the prompt's sections have an order, and it is the documented one", () => 
   // memory first and the objective arrives as a footnote to a pile of facts.
   assert.equal(VOLATILE_SECTIONS[0]?.name, "plan");
   // And delegation is a decision made after the work is understood, not a lens for reading it.
-  // Only the unattended conduct (background lanes only) and the recap come after it.
-  assert.equal(VOLATILE_SECTIONS.at(-3)?.name, "team");
+  // Only the unattended conduct (background lanes only), the standing files and the recap come
+  // after it.
+  assert.equal(VOLATILE_SECTIONS.at(-4)?.name, "team");
   assert.equal(VOLATILE_SECTIONS.at(-1)?.name, "critical");
 });
 

@@ -258,8 +258,8 @@ function countingBox(files: Map<string, string>, ran: string[]): BoxClient {
       return { stdout: "", stderr: "", exit_code: 0 };
     },
     writeFile: async (path: string, content: string) => {
-      // The host's own memory projection is bookkeeping, not a step of the task.
-      if (!path.includes("/memory/")) ran.push(`write:${path}`);
+      // The host's own memory and standing-file projections are bookkeeping, not steps of the task.
+      if (!path.includes("/memory/") && !path.includes("/standing/")) ran.push(`write:${path}`);
       files.set(path, content);
       return { path, bytes_written: content.length };
     },
