@@ -158,6 +158,18 @@ The reminder line reaches only the model families the per-turn reminder already 
 (`REMINDED_MODEL_FAMILIES`); a Claude model gets the section's framing alone, and has not been
 measured here.
 
+### Fan-out coverage (INV-755, 2026-09-26)
+
+A Fork join's first line counts every child by how it ended — done, partial, blocked, unstated,
+**failed** — and names the ones that did not finish ("Not finished: fork 2 (blocked), fork 3
+(failed)"). A child that threw used to be missing from the count, so a report of twelve could
+read eleven as the whole. The `wide-research` starter builds on that line: fixed fields for every
+item, duplicates removed and counted, only the unfinished retried and only once, and a coverage
+line at the top of what the person gets. A scenario holds the rail: three items, one done, one
+blocked, one that fails outright — the parent sees all three counted, retries exactly the two,
+once. Live (MiniMax-M3, three runs): wide-research 3/3 opened for a list of fifteen companies and
+0/3 for a single topic, which went to research-brief; skill-authoring 3/3 and 0/3 likewise.
+
 ## What it is not
 
 The scripted model is not a model. It cannot tell you whether a real one is sensible, only whether

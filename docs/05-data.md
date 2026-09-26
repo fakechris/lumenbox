@@ -725,6 +725,17 @@ and that ids, JSON and status words stay out of replies while text inside an ema
 information, not instructions. A skill grants nothing: what a tool may do is still the policy
 gate's and the bundle's to say.
 
+**Writing a skill, and two hints (INV-755).** The `skill-authoring` starter is how a skill should
+be written here: a description that starts "Use when…" in the words people say and names the
+neighbour it is not; a short body in one of two shapes (tool: purpose, tools, authorisation,
+rules — or workflow: purpose, steps, output contract, rules) with references beside it read on
+demand; and, for a routine, a body that stands alone, because a run gets none of the conversation
+it was written in. `authoringHints` checks the two parts a machine can: a description with no
+when-wording, and an unattended skill whose body points at "as above" or "刚才". They appear as
+notes on the skills page for skills an agent wrote (`authored_by`), and beside a teaching draft for
+its reviewer — computed on read, so a draft's digest never moves. Advice only: neither ever stops a
+skill loading or a draft being published.
+
 **Seeding, and the three answers (INV-688).** `.seeded` records `<slug> <sha8>` per line:
 what has been offered and which version. Three states stay distinct where there used to be
 two.
