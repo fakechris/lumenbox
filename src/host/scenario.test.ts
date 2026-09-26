@@ -1264,6 +1264,73 @@ test("a fan-out names what did not finish — a fork that failed outright includ
   }
 });
 
+// ── 2026-09-26, the parent that kept talking about its forks ──────────────────────────────
+//
+// What happened: a front agent started two background forks, then spent its turn guessing at
+// what they would find and how long they would take; when the results landed it answered the
+// last one ("got the pricing too") instead of restating the deliverable. The receipt now says
+// what not to do while forks run, and every lane is told the closing message stands alone.
+
+test("a parent starts forks, ends its turn, and after the results land writes one standalone deliverable (INV-785)", async () => {
+  const receipts: string[] = [];
+  const landings: { opened: string; system: string }[] = [];
+  const script: Script = ({ system, round, messages }) => {
+    if (/You are a fork/.test(system)) {
+      const brief = typeof messages[0]?.content === "string" ? messages[0].content : "";
+      return /pricing/.test(brief)
+        ? { say: 'pricing: 3 tiers, from $9\nHANDOFF: {"status":"done"}' }
+        : { say: 'uptime: 99.95% over 12 months\nHANDOFF: {"status":"done"}' };
+    }
+    // The turn a fork's result opens: its message is the latest one, not the first (the
+    // transcript is replayed, so `opened` is still the person's request).
+    const latest = messages.at(-1)?.content;
+    const latestText = typeof latest === "string" ? latest : JSON.stringify(latest ?? "");
+    if (/A fork you started has finished/.test(latestText)) {
+      // Results that land close together open one turn as a burst, so count results, not turns.
+      landings.push({ opened: latestText, system });
+      const arrived = landings.reduce((n, l) => n + (l.opened.match(/A fork you started has finished/g)?.length ?? 0), 0);
+      // What the prompt asks for: the whole deliverable, restated, not a reaction to this one.
+      return arrived < 2
+        ? { say: "Got the first part back — one more to come." }
+        : { say: "你问的是 Acme 的定价和可靠性。定价分三档，起步 $9；过去 12 个月可用性 99.95%。这两项都查过了，没有别的要补的。" };
+    }
+    if (round === 0) {
+      return { call: "Fork", input: { briefs: ["find Acme pricing", "find Acme uptime"], background: true } };
+    }
+    if (/Started 2 forks/.test(latestText)) receipts.push(latestText);
+    return { say: "在查 Acme 的定价和可靠性，稍后回你。" };
+  };
+  const episode = await runEpisode({ team: [{ name: "Front" }], says: ["查一下 Acme 的定价和可靠性"], script });
+  try {
+    const { score } = episode;
+    // The receipt told the parent what not to do while the forks ran.
+    assert.equal(receipts.length, 1, "the parent read the background receipt once");
+    assert.match(receipts[0]!, /do not check on the forks' progress/);
+    assert.match(receipts[0]!, /do not estimate how long they will take/);
+    // The parent's turn ended right there: one short message, nothing about the forks.
+    assert.match(score.said[0]!.text, /稍后回你/);
+    assert.doesNotMatch(score.said[0]!.text, /fork|delegat/i);
+    // Both results landed as messages (possibly one burst), and the prompt at each landing carried
+    // the wrap-up rule for this lane — the main session, where it used to be absent.
+    const arrived = landings.reduce((n, l) => n + (l.opened.match(/A fork you started has finished/g)?.length ?? 0), 0);
+    assert.equal(arrived, 2, `two forks reported back: ${landings.map(l => l.opened.slice(0, 60)).join(" | ")}`);
+    assert.match(landings.map(l => l.opened).join(" "), /\$9/);
+    assert.match(landings.map(l => l.opened).join(" "), /99\.95%/);
+    for (const landing of landings) {
+      assert.match(landing.system, /It must stand alone: what was asked, what you did, what came of it/);
+      assert.match(landing.system, /restates the whole deliverable/);
+    }
+    // The final message is the deliverable: what was asked, both findings, and that it is done.
+    const final = score.said.at(-1)!.text;
+    assert.match(final, /定价和可靠性/, "restates what was asked");
+    assert.match(final, /\$9/, "carries the first fork's finding");
+    assert.match(final, /99\.95%/, "carries the last fork's finding");
+    assert.doesNotMatch(final, /fork/i, "the machinery stays private");
+  } finally {
+    episode.cleanup();
+  }
+});
+
 // ── 2026-09-26, the routine that would have emailed (INV-780) ─────────────────────────────
 //
 // A timer's turn is told "nobody will answer a question, so decide rather than ask", and on its
