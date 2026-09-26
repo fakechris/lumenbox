@@ -31,6 +31,8 @@ import { fakeModel } from "./testing/fake-model.ts";
 import type { BoxClient } from "../box/client.ts";
 import type { HistoryEntry } from "./compaction.ts";
 import type { ProviderProfile } from "./provider.ts";
+import type { PolicyGate } from "./policy.ts";
+import type { McpManager } from "./mcp.ts";
 
 /** One model reply, in the shape the script writes it. */
 export type ScriptedReply =
@@ -285,6 +287,10 @@ export interface EpisodeOptions {
   client?: Anthropic;
   /** The provider the turn names in its requests; only meaningful with `client`. */
   provider?: ProviderProfile;
+  /** A policy gate every tool call is checked against (INV-753); absent means allow, as before. */
+  policy?: PolicyGate;
+  /** Connected external tools, as the MCP manager offers them; absent means none. */
+  mcp?: McpManager;
   /** Files the box starts with. */
   files?: Record<string, string>;
   /** Stops an episode that will not settle. Default 200. */
@@ -386,6 +392,8 @@ export async function runEpisode(options: EpisodeOptions): Promise<EpisodeResult
     await runTurn(record, inbound, signal, {
       client,
       ...(options.provider !== undefined ? { provider: options.provider } : {}),
+      ...(options.policy !== undefined ? { policy: options.policy } : {}),
+      ...(options.mcp !== undefined ? { mcp: options.mcp } : {}),
       registry,
       bus,
       box,

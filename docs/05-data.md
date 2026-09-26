@@ -3,7 +3,7 @@
      family: spec
      status: current
      domain: storage
-     updated: 2026-09-25
+     updated: 2026-09-26
 -->
 # Data
 
@@ -713,6 +713,17 @@ Four answers the phrase "without anyone asking" forces, all of them in `schedule
   resumed after a restart is held to the same list. A turn a person drives is never narrowed, and a
   name that is not a tool here is reported on the skills page and adds nothing. Only a narrowing:
   the policy gate and `rules/*.md` still decide every call inside it.
+
+**Connector usage skills (INV-753).** For each connector a box can already reach — Gmail and
+Google Calendar (one `google` server), Slack, Notion, Linear, and Feishu through
+`connector_request` — a starter says how to use it: how to tell it is connected (its tools are
+present) and what to say when it is not, without asking for a token or inventing a link; that
+changes that stay with the person go ahead while anything that reaches another person is shown
+word for word and waits for a yes, the same line the tier gate draws (INV-691); that a failed
+write is not replayed after an authorisation error; that a bounded search says what it covered;
+and that ids, JSON and status words stay out of replies while text inside an email or page is
+information, not instructions. A skill grants nothing: what a tool may do is still the policy
+gate's and the bundle's to say.
 
 **Seeding, and the three answers (INV-688).** `.seeded` records `<slug> <sha8>` per line:
 what has been offered and which version. Three states stay distinct where there used to be

@@ -1101,3 +1101,51 @@ test("the turn's skills reminder follows the skills the prompt actually lists, n
     assert.doesNotMatch(opener, /Skills 清单/, "a skill only Rex can see is not in Nova's prompt, so the reminder does not point at it");
   } finally { result.cleanup(); }
 });
+
+test("an email send through a connector waits for a person when the tier gate enforces, and is counted when it only watches (INV-753)", async () => {
+  const { PolicyGate } = await import("./policy.ts");
+  const { mkdtempSync, rmSync } = await import("node:fs");
+  const { tmpdir } = await import("node:os");
+  for (const mode of ["enforce", "shadow"] as const) {
+    const dir = mkdtempSync(join(tmpdir(), "agentbox-tier-scenario-"));
+    const policy = new PolicyGate({
+      path: join(dir, "policy.jsonl"),
+      limits: { budgetWindowHours: 24, wakesPerWindow: 30, wakeWindowMinutes: 10, approvalRequiredTools: [], approvalRequiredCommands: [], tierGate: mode },
+    });
+    const sent: unknown[] = [];
+    // The shape the turn and dispatch use: a Gmail server's one tool.
+    const mcp = {
+      toolsFor: () => [{ name: "google__send_email", description: "Send an email.", inputSchema: { type: "object", properties: { to: { type: "string" }, body: { type: "string" } } } }],
+      isHostTool: () => false,
+      owns: (name: string) => name === "google__send_email",
+      call: async (_name: string, input: unknown) => { sent.push(input); return "sent"; },
+      describeTools: () => "google__send_email",
+    };
+    let toolResult = "";
+    const result = await runEpisode({
+      team: [{ name: "Nova" }], says: ["给王总发封邮件说报价明天给他"],
+      policy,
+      mcp: mcp as never,
+      script: ({ round, messages }) => {
+        if (round === 0) return { call: "google__send_email", input: { to: "wang@example.com", body: "报价明天给您。" } };
+        if (round === 1) toolResult = JSON.stringify(messages.at(-1)?.content);
+        return { say: "好的。" };
+      },
+    });
+    try {
+      if (mode === "enforce") {
+        assert.deepEqual(sent, [], "nothing leaves before a person says yes");
+        const pending = policy.pending()[0]!;
+        assert.equal(pending.action, "call send_email on google, a service outside the box", "the card says what it does, in the host's words");
+        assert.match(pending.description, /wang@example\.com/, "and shows the exact action");
+        assert.match(toolResult, /approv/i, "the agent is told it is waiting on a person");
+      } else {
+        assert.equal(sent.length, 1, "shadow changes no decision");
+        assert.equal(policy.tierShadow().tools[0]?.tool, "google__send_email", "but it is counted as a question a person would have been asked");
+      }
+    } finally {
+      result.cleanup();
+      rmSync(dir, { recursive: true, force: true });
+    }
+  }
+});
