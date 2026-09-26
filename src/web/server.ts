@@ -612,6 +612,7 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
     // Names for rules written about a person (INV-156): the roster is the one place that
     // knows a principal's name, and an operator should not have to paste a uuid.
     principalName: principalId => principals.list().find(person => person.id === principalId)?.name,
+    principalIdentities: principalId => principals.list().find(person => person.id === principalId)?.identities,
     deliverToChat: async (chatKey, text, fromAgentId) => {
       // A routine reports into its own box's rooms (INV-541). A chat nobody has driven is
       // nobody's — a skill file may name a room the bot has never been messaged in, and

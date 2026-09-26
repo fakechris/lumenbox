@@ -206,6 +206,8 @@ export interface OrchestratorOptions {
    * person by name (INV-156). Absent leaves rules id-only, which still works.
    */
   principalName?: (principalId: string) => string | undefined;
+  /** Every door identity a principal speaks from (INV-754): how a Feishu write can add the person who asked. */
+  principalIdentities?: (principalId: string) => readonly string[] | undefined;
 }
 
 /** A newer version of an already-imported template arrived without `update` (INV-411). */
@@ -1591,6 +1593,9 @@ export class Orchestrator {
       ...(this.options.principalName !== undefined && this.callers.get(agent.id)?.userId !== undefined
         ? { callerName: this.options.principalName(this.callers.get(agent.id)!.userId!) }
         : {}),
+      ...(this.options.principalIdentities !== undefined && this.callers.get(agent.id)?.userId !== undefined
+        ? { callerIdentities: this.options.principalIdentities(this.callers.get(agent.id)!.userId!) ?? [] }
+        : {}),
       skills,
       client: runtime.client,
       registry: this.registry,
@@ -2183,6 +2188,11 @@ export const ALL_TOOLS: readonly string[] = [
   "OtherThreads",
   "Tasks",
   "RunOnHost",
+  // Offered only when a connection exists (INV-422, INV-754) — and until they were listed here, the
+  // starter team never saw them even then: an allowlist withholds what it does not name.
+  "connector_request",
+  "FeishuWrite",
+  "DingTalkWrite",
 ];
 
 /**
