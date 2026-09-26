@@ -3551,6 +3551,52 @@ test("a failed LLM call still ends its span, marked with the error", async () =>
   }
 });
 
+test("a tool call whose connections the relay refused gets one line saying so on its result (INV-784)", async () => {
+  const { registry, cleanup } = fixture();
+  try {
+    const ada = registry.create({ name: "Ada" });
+    const bus = new AgentBus(registry, async () => {});
+    const { box, calls } = stubBox();
+    const capture: Capture = { params: [] };
+    const { client } = stubClient(
+      [
+        message([toolUseBlock("bash", { command: "pip install thing" }, "toolu_refused")], "tool_use"),
+        message([textBlock("done")]),
+      ],
+      capture
+    );
+    const queries: unknown[] = [];
+    await runTurn(
+      ada,
+      [{ id: "m-test", fromId: "user", fromName: "user", text: "install", priority: false, receivedAt: "" }],
+      new AbortController().signal,
+      {
+        client,
+        registry,
+        bus,
+        box,
+        resolution: { display: { width: 1280, height: 800 }, api: { width: 1280, height: 800 } },
+        networkEvents: {
+          query: query => {
+            queries.push(query);
+            const refused = (host: string) => ({ at: "2026-09-26T00:00:00Z", box: "agentbox", host, port: 443, allowed: false, reason: "not allowed" as const, attribution: "call" as const, agentId: ada.id, toolUseId: "toolu_refused" });
+            return { events: [refused("vendor.test"), refused("mirror.test"), refused("vendor.test")], total: 3 };
+          },
+        },
+      }
+    );
+    assert.equal(calls[0]!.kind, "exec");
+    assert.equal((queries[0] as { toolUse: string }).toolUse, "toolu_refused", "the ledger is asked about this call, by its id");
+    const result = (capture.params[1]!.messages.at(-1)!.content as Anthropic.ContentBlockParam[])[0] as Anthropic.ToolResultBlockParam;
+    const text = ((result.content as Anthropic.ContentBlockParam[])[0] as { text: string }).text;
+    const lines = text.split("\n");
+    assert.equal(lines.at(-1), "3 outbound connections refused: vendor.test, mirror.test", "one line, appended last");
+    assert.match(text, /hello from the box/, "the result itself is untouched");
+  } finally {
+    cleanup();
+  }
+});
+
 test("the tools fingerprint is order-blind and moves only when the tool set does (INV-782)", () => {
   const read = { name: "read_file", description: "Read", input_schema: { type: "object", properties: { path: { type: "string" } } } };
   const bash = { name: "bash", description: "Run", input_schema: { properties: { cmd: { type: "string" } }, type: "object" } };

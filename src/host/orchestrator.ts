@@ -38,6 +38,7 @@ import { AutoReviewer } from "./auto-review.ts";
 import { SkillProvenance } from "./skill-provenance.ts";
 import { HookRunner } from "./hooks.ts";
 import { appendLine } from "./jsonl.ts";
+import { NetworkEventLog } from "../egress/events.ts";
 import { agentboxHome } from "../config.ts";
 import { join } from "node:path";
 import { existsSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
@@ -145,6 +146,8 @@ export interface OrchestratorOptions {
    * `null` keeps none.
    */
   turns?: TurnLedger | null;
+  /** The relay's network event log (INV-784), for the refusal line on tool results. `null` for none. */
+  networkEvents?: NetworkEventLog | null;
   /** The fork ledger (docs/32). `null` keeps none; omitted uses the default path. */
   pendingWork?: PendingWork | null;
   /** The extension layer (docs/34). `null` loads none; omitted reads ~/.agentbox/extensions. */
@@ -393,6 +396,7 @@ export class Orchestrator {
 
   /** Begin/end per turn. A begin with no end is a turn the process died underneath. */
   private readonly turns: TurnLedger | undefined;
+  private readonly networkEvents: NetworkEventLog | undefined;
   readonly pendingWork: PendingWork | undefined;
   /** The MCP face (docs/33): per-job routes a delegated engine calls the host's MCP tools through. */
   readonly mcpFace: McpFace;
@@ -796,6 +800,8 @@ export class Orchestrator {
         ? undefined
         : (options.turns ??
           new TurnLedger(turnLedgerPath(), line => console.error(`[turns] ${line}`)));
+    this.networkEvents =
+      options.networkEvents === null ? undefined : (options.networkEvents ?? new NetworkEventLog());
     this.pendingWork =
       options.pendingWork === null
         ? undefined
@@ -1619,6 +1625,7 @@ export class Orchestrator {
       effort: this.options.effort,
       ...(this.tracer !== undefined ? { tracer: this.tracer } : {}),
       turns: this.turns,
+      ...(this.networkEvents !== undefined ? { networkEvents: this.networkEvents } : {}),
       ...(this.pendingWork !== undefined ? { pendingWork: this.pendingWork } : {}),
       mcpFace: this.mcpFace,
       modelRelay: this.modelRelay,
