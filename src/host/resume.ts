@@ -472,3 +472,201 @@ export function giveUpNote(about: string, attempts: number): string {
     `conversation above.`
   );
 }
+
+// ── turn checkpoints (INV-774) ────────────────────────────────────────────────────────────
+
+/** Beside `turns.jsonl`: same lifetime, same volume, same backup. */
+export function stepLedgerPath(): string {
+  return process.env.AGENTBOX_STEP_LEDGER ?? join(agentboxHome(), "turn-steps.jsonl");
+}
+
+/**
+ * What is outstanding inside a turn. Emptied once nothing is, like the inbox: a settled
+ * step is already in the transcript, which is the record; this file only says which
+ * calls were in flight when the process died.
+ */
+export const STEP_LEDGER_KIND: LedgerKind = "queue";
+
+const STEP_COMPACT_AT = envNumber("AGENTBOX_STEP_LEDGER_COMPACT_AT", 5_000);
+
+type StepRecord =
+  | { turnId: string; event: "pending"; toolUseId: string; name: string; at: string }
+  | { turnId: string; event: "settled"; toolUseId: string; at: string }
+  | { turnId: string; event: "awaiting_approval"; toolUseId: string; approvalId: string; at: string }
+  | { turnId: string; event: "closed"; at: string };
+
+/** A call that was dispatched and whose result never reached the transcript. */
+export interface OpenStep {
+  toolUseId: string;
+  name: string;
+  at: string;
+  /** Set when the call was refused pending a person's approval, by that approval's id. */
+  approvalId?: string;
+}
+
+/**
+ * Where a turn's tool calls stood when the process died.
+ *
+ * The turn ledger says *that* a turn did not end; this one says *which call* it was inside,
+ * and is written by the host as each call is dispatched and settled — never by the model,
+ * never shown to it. Its whole use is at startup: a turn with an entry here is continued
+ * in place, as the same turn, with the unfinished call answered `outcome_unknown`; a turn
+ * with none (a transcript from before this file existed) takes the older resume-prompt path.
+ *
+ * `pending` is written before the call runs and `settled` after its result is on disk, so
+ * a crash anywhere between leaves an open step — which is the honest state: the call may
+ * have run. `awaiting_approval` is a pending call the policy gate handed to a person; the
+ * step stays open until they answer, and the turn is parked rather than continued.
+ */
+export class StepLedger {
+  private readonly path: string | undefined;
+  private lines = 0;
+
+  /** `null` means keep no ledger; omitted means the default path (see `TurnLedger`). */
+  constructor(
+    path: string | null = stepLedgerPath(),
+    private readonly onWarn: (message: string) => void = () => {}
+  ) {
+    this.path = path ?? undefined;
+  }
+
+  /** Written before the call is dispatched. */
+  pending(turnId: string, toolUseId: string, name: string, now = new Date()): void {
+    this.append({ turnId, event: "pending", toolUseId, name, at: now.toISOString() });
+  }
+
+  /** Written after the call's result is in the transcript. */
+  settled(turnId: string, toolUseId: string, now = new Date()): void {
+    this.append({ turnId, event: "settled", toolUseId, at: now.toISOString() });
+  }
+
+  /** Written when the policy gate put the call in front of a person instead of running it. */
+  awaitingApproval(turnId: string, toolUseId: string, approvalId: string, now = new Date()): void {
+    this.append({ turnId, event: "awaiting_approval", toolUseId, approvalId, at: now.toISOString() });
+  }
+
+  /** Written when the turn ends, however it ends. */
+  closed(turnId: string, now = new Date()): void {
+    this.append({ turnId, event: "closed", at: now.toISOString() });
+    if (this.lines > STEP_COMPACT_AT) this.compact();
+  }
+
+  /**
+   * What the ledger knows about one turn: whether it was recorded here at all, and which
+   * of its calls are still open. `known: false` is the older transcript's case.
+   */
+  stepsOf(turnId: string): { known: boolean; open: OpenStep[] } {
+    let known = false;
+    const open = new Map<string, OpenStep>();
+    for (const record of this.read()) {
+      if (record.turnId !== turnId) continue;
+      known = true;
+      if (record.event === "pending") {
+        open.set(record.toolUseId, { toolUseId: record.toolUseId, name: record.name, at: record.at });
+      } else if (record.event === "awaiting_approval") {
+        const step = open.get(record.toolUseId);
+        if (step !== undefined) step.approvalId = record.approvalId;
+      } else if (record.event === "settled") {
+        open.delete(record.toolUseId);
+      } else if (record.event === "closed") {
+        open.clear();
+      }
+    }
+    return { known, open: [...open.values()] };
+  }
+
+  private append(record: StepRecord): void {
+    if (this.path === undefined) return;
+    try {
+      mkdirSync(dirname(this.path), { recursive: true });
+      appendLine(this.path, JSON.stringify(record));
+      this.lines += 1;
+    } catch (error) {
+      // Never fail a turn over bookkeeping: what is lost is the ability to continue this
+      // turn in place, and the turn ledger still resumes it the older way.
+      const detail = error instanceof Error ? error.message : String(error);
+      this.onWarn(`turn-steps: cannot write ${this.path} (${detail})`);
+    }
+  }
+
+  private read(): StepRecord[] {
+    if (this.path === undefined || !existsSync(this.path)) return [];
+    try {
+      const records: StepRecord[] = [];
+      let lines = 0;
+      for (const line of readFileSync(this.path, "utf8").split("\n")) {
+        if (line.trim() === "") continue;
+        lines += 1;
+        try {
+          const record = JSON.parse(line) as StepRecord;
+          if (typeof record?.turnId === "string" && typeof record?.event === "string") records.push(record);
+        } catch {
+          // A torn last line is the normal cost of append-only: one step reads as open
+          // rather than settled, which errs on the side of "unknown".
+        }
+      }
+      this.lines = lines;
+      return records;
+    } catch (error) {
+      const detail = error instanceof Error ? error.message : String(error);
+      this.onWarn(`turn-steps: cannot read ${this.path} (${detail})`);
+      return [];
+    }
+  }
+
+  /** Rewrites the file keeping only the turns that have not closed. */
+  private compact(): void {
+    if (this.path === undefined) return;
+    try {
+      const records = this.read();
+      const closed = new Set(records.filter(record => record.event === "closed").map(record => record.turnId));
+      const kept = records.filter(record => !closed.has(record.turnId));
+      const temp = `${this.path}.${process.pid}.tmp`;
+      writeFileSync(temp, kept.map(record => JSON.stringify(record)).join("\n") + (kept.length > 0 ? "\n" : ""), "utf8");
+      renameSync(temp, this.path);
+      this.lines = kept.length;
+    } catch (error) {
+      const detail = error instanceof Error ? error.message : String(error);
+      this.onWarn(`turn-steps: cannot compact ${this.path} (${detail})`);
+    }
+  }
+}
+
+/**
+ * What a continued turn is woken with. Not a message to the model — a continued turn
+ * appends no user text — only the line the bus and the ledger record it under.
+ */
+export function continuationNote(about: string): string {
+  return `[continuing] ${about}`;
+}
+
+/**
+ * The host's result for a call that was dispatched and whose outcome was never recorded.
+ *
+ * Written as a tool result rather than as prose, so the model meets it as the next
+ * observation of the call it made — the same place a real result would have been.
+ */
+export function outcomeUnknownResult(name: string): string {
+  return (
+    `outcome_unknown: the host restarted before this ${name} call's result was recorded. ` +
+    `It may have run in full, in part, or not at all. Treat the outcome as unknown: check the ` +
+    `state it would have changed before repeating it, and do not retry blindly.`
+  );
+}
+
+/** The host's result for a call the model asked for that the host never started. */
+export function notStartedResult(name: string): string {
+  return `not_started: the host restarted before this ${name} call was dispatched. It did not run. Call it again if it is still needed.`;
+}
+
+/** The host's result for a call that was waiting on a person when the host restarted. */
+export function approvalOutcomeResult(name: string, how: "allowed" | "refused" | "gone"): string {
+  switch (how) {
+    case "allowed":
+      return `The person allowed this ${name} call while the host was restarting. It has not run yet: the grant is held, so call it again now, exactly as before.`;
+    case "refused":
+      return `The person refused this ${name} call. Do not retry it; do without, or say what cannot be done.`;
+    default:
+      return `This ${name} call was waiting for a person's approval when the host restarted, and that approval is no longer waiting — it was answered or lost while the host was down. It did not run. Ask again if it is still needed.`;
+  }
+}

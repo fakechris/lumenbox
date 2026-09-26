@@ -309,6 +309,12 @@ export interface ToolOutcome {
    * about.
    */
   recordAs?: string;
+  /**
+   * The approval this call is waiting on, when the policy gate put it in front of a person
+   * instead of running it (INV-774). The step ledger records it, so a restart parks the
+   * turn on the person's answer rather than answering the call `outcome_unknown`.
+   */
+  approval?: { id: string };
 }
 
 /**
@@ -2255,7 +2261,11 @@ export function consecutiveQuestions(context: ToolContext): number {
     return 0;
   }
   let count = 0;
-  for (let index = entries.length - 1; index >= 0; index -= 1) {
+  // A trailing `blocks` entry with no results after it is the batch being run right now — it
+  // is on disk before its tools run (INV-774) — and this call is one of it, not a turn before it.
+  const last = entries[entries.length - 1] as { kind?: string } | undefined;
+  const from = last?.kind === "blocks" ? entries.length - 2 : entries.length - 1;
+  for (let index = from; index >= 0; index -= 1) {
     const entry = entries[index] as { role?: string; kind?: string; blocks?: { type?: string; name?: string }[]; text?: string };
     if (entry.role !== "assistant") continue;
     if (entry.kind === "blocks" && Array.isArray(entry.blocks)) {
@@ -2333,7 +2343,7 @@ export async function dispatchTool(
     ...(context.callerName !== undefined ? { principalName: context.callerName } : {}),
   });
   if (decision !== undefined && !decision.allow) {
-    return { text: decision.reason, isError: true };
+    return { text: decision.reason, isError: true, ...(decision.approval !== undefined ? { approval: { id: decision.approval.id } } : {}) };
   }
   // The fence (docs/32 §2), at dispatch and not only in the offer: a forged or replayed call
   // for a withheld tool is refused here whatever list the model was shown. `Fork` keeps its
@@ -3784,7 +3794,9 @@ export async function dispatchTool(
             input,
             irreversible: finding,
           });
-          if (!decision.allow) return { text: outcomeLine("refused", decision.reason), isError: true };
+          if (!decision.allow) {
+            return { text: outcomeLine("refused", decision.reason), isError: true, ...(decision.approval !== undefined ? { approval: { id: decision.approval.id } } : {}) };
+          }
           try {
             return render(await box.browser({ ...request, confirmed: true }));
           } catch (again) {

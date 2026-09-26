@@ -29,6 +29,10 @@ import {
   resumePrompt,
   TurnLedger,
   turnLedgerPath,
+  StepLedger,
+  stepLedgerPath,
+  continuationNote,
+  type InterruptedTurn,
   openTurnFor,
 } from "./resume.ts";
 import { AgentRegistry, type AgentRecord } from "../agents/registry.ts";
@@ -145,6 +149,11 @@ export interface OrchestratorOptions {
    * `null` keeps none.
    */
   turns?: TurnLedger | null;
+  /**
+   * Where each turn's tool calls are checkpointed as they run (INV-774), so a restart
+   * continues the turn from the call it was inside. `null` keeps none.
+   */
+  steps?: StepLedger | null;
   /** The fork ledger (docs/32). `null` keeps none; omitted uses the default path. */
   pendingWork?: PendingWork | null;
   /** The extension layer (docs/34). `null` loads none; omitted reads ~/.agentbox/extensions. */
@@ -393,6 +402,7 @@ export class Orchestrator {
 
   /** Begin/end per turn. A begin with no end is a turn the process died underneath. */
   private readonly turns: TurnLedger | undefined;
+  private readonly steps: StepLedger | undefined;
   readonly pendingWork: PendingWork | undefined;
   /** The MCP face (docs/33): per-job routes a delegated engine calls the host's MCP tools through. */
   readonly mcpFace: McpFace;
@@ -409,7 +419,15 @@ export class Orchestrator {
    * Without the link, every resumption would start its own chain and a turn that kills the process
    * would be retried forever — the count is the whole of the crash-loop guard.
    */
-  private readonly resuming = new Map<string, { id: string; attempt: number; workId?: string }>();
+  private readonly resuming = new Map<
+    string,
+    { id: string; attempt: number; workId?: string; continues?: true; approval?: { id: string; how: "allowed" | "refused" | "gone" } }
+  >();
+  /**
+   * Turns parked on a person's approval when the process died (INV-774), by approval id.
+   * Continued from that step when the answer arrives, from whichever door it comes.
+   */
+  private readonly parked = new Map<string, InterruptedTurn>();
 
   /**
    * What each agent last saw each shared file as.
@@ -796,6 +814,11 @@ export class Orchestrator {
         ? undefined
         : (options.turns ??
           new TurnLedger(turnLedgerPath(), line => console.error(`[turns] ${line}`)));
+    this.steps =
+      options.steps === null
+        ? undefined
+        : (options.steps ?? new StepLedger(stepLedgerPath(), line => console.error(`[turn-steps] ${line}`)));
+    this.policy.onApprovalSettled = (approval, how) => this.continueParked(approval.id, how);
     this.pendingWork =
       options.pendingWork === null
         ? undefined
@@ -1619,6 +1642,7 @@ export class Orchestrator {
       effort: this.options.effort,
       ...(this.tracer !== undefined ? { tracer: this.tracer } : {}),
       turns: this.turns,
+      ...(this.steps !== undefined ? { steps: this.steps } : {}),
       ...(this.pendingWork !== undefined ? { pendingWork: this.pendingWork } : {}),
       mcpFace: this.mcpFace,
       modelRelay: this.modelRelay,
@@ -1722,10 +1746,11 @@ export class Orchestrator {
     return outstanding.length;
   }
 
-  resumeInterrupted(): { resumed: number; abandoned: number } {
+  resumeInterrupted(): { resumed: number; abandoned: number; parked?: number } {
     const outstanding = this.turns?.interrupted() ?? [];
     let resumed = 0;
     let abandoned = 0;
+    let parked = 0;
 
     for (const turn of outstanding) {
       const agent = this.registry.tryGet(turn.agentId);
@@ -1749,12 +1774,30 @@ export class Orchestrator {
         // the person reading this is the one who can do something about it. A clean exit is
         // exempt: the operator ending the process is not the turn's doing, however many times.
         this.turns?.end(turn.id, "given-up");
+        this.steps?.closed(turn.id);
         this.registry.appendTranscript(agent.id, {
           role: "assistant",
           text: giveUpNote(turn.about, turn.attempt),
           at: new Date().toISOString(),
         });
         abandoned += 1;
+        continue;
+      }
+
+      // A turn the step ledger knows is continued in place (INV-774): same turn, no new
+      // message, the open call answered honestly before the model is asked again. A turn
+      // it does not know — a transcript from before the ledger — is told about itself the
+      // older way. One parked on a person's approval waits for the answer, however long.
+      const steps = this.steps?.stepsOf(turn.id);
+      if (steps?.known === true) {
+        const waiting = steps.open.find(step => step.approvalId !== undefined);
+        if (waiting !== undefined && this.policy.pending().some(item => item.id === waiting.approvalId)) {
+          this.parked.set(waiting.approvalId!, turn);
+          parked += 1;
+          continue;
+        }
+        this.continueTurn(turn, waiting !== undefined ? { id: waiting.approvalId!, how: "gone" } : undefined);
+        resumed += 1;
         continue;
       }
 
@@ -1787,7 +1830,37 @@ export class Orchestrator {
       resumed += 1;
     }
 
-    return { resumed, abandoned };
+    return { resumed, abandoned, ...(parked > 0 ? { parked } : {}) };
+  }
+
+  /** Picks a parked turn back up once the person has answered the approval it waited on. */
+  private continueParked(approvalId: string, how: "allowed" | "refused"): void {
+    const turn = this.parked.get(approvalId);
+    if (turn === undefined) return;
+    this.parked.delete(approvalId);
+    this.continueTurn(turn, { id: approvalId, how });
+  }
+
+  /**
+   * Continues an interrupted turn as itself (INV-774): the ledger record is closed and
+   * reopened under the same id by the turn, the wake carries no user text, and `runTurn`
+   * answers the open step from the transcript before asking the model anything.
+   */
+  private continueTurn(turn: InterruptedTurn, approval?: { id: string; how: "allowed" | "refused" | "gone" }): void {
+    this.turns?.end(turn.id, "continued");
+    this.resuming.set(turn.agentId, {
+      id: turn.id,
+      attempt: turn.cleanExit ? turn.attempt : turn.attempt + 1,
+      ...(turn.workId !== undefined ? { workId: turn.workId } : {}),
+      continues: true,
+      ...(approval !== undefined ? { approval } : {}),
+    });
+    this.bus.sendFromUser(turn.agentId, continuationNote(turn.about), {
+      synthetic: true,
+      ...(turn.conversation !== undefined ? { conversation: turn.conversation } : {}),
+      steerable: false,
+    });
+    void this.bus.wake(turn.agentId);
   }
 
   /**

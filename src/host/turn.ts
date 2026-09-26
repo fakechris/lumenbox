@@ -19,7 +19,9 @@ import type { DisplayLease } from "../box/display-lease.ts";
 import type { PolicyGate } from "./policy.ts";
 import type { Claims } from "./claims.ts";
 import type { FileVersions } from "./files.ts";
-import type { TurnLedger } from "./resume.ts";
+import type { StepLedger, TurnLedger } from "./resume.ts";
+import { approvalOutcomeResult, notStartedResult, outcomeUnknownResult } from "./resume.ts";
+import { idempotencyOf } from "../protocol/idempotency.ts";
 import type { PendingWork } from "./pending-work.ts";
 import type { McpFace } from "./mcp-face.ts";
 import type { ModelRelay } from "./model-relay.ts";
@@ -217,6 +219,20 @@ export function classifyOverflow(error: unknown): Overflow | undefined {
 function safeToReplay(name: string, input: Record<string, unknown>): boolean {
   if (name === "read_file" || name === "list_dir" || name === "ReadHistory") return true;
   if (name === "Tasks" && input.action === "list") return true;
+  return false;
+}
+
+/**
+ * Whether the protocol's own declaration (INV-525) says this call lands the same state
+ * twice: a read, or an idempotent write that carries the key making it so. A call with an
+ * `operation_id` is the box's way of saying the same thing. Everything else is `unsafe`,
+ * and a restart answers it `outcome_unknown` rather than running it again.
+ */
+function replaysToSameState(name: string, input: Record<string, unknown>): boolean {
+  if (typeof input.operation_id === "string" && input.operation_id !== "") return true;
+  const declared = idempotencyOf(name);
+  if (declared.kind === "read") return true;
+  if (declared.kind === "idempotent") return declared.key === undefined || input[declared.key] !== undefined;
   return false;
 }
 
@@ -526,6 +542,8 @@ export interface TurnDeps {
    * that should not touch the state directory wants.
    */
   turns?: TurnLedger;
+  /** Where each tool call is checkpointed as it is dispatched and settled (INV-774). */
+  steps?: StepLedger;
   /** The fork ledger (docs/32): forks are recorded before they start and committed here. */
   pendingWork?: PendingWork;
   /** The MCP face (docs/33), for Delegate. */
@@ -543,7 +561,19 @@ export interface TurnDeps {
    * Threaded in rather than derived, because only the caller doing the resuming knows which turn
    * this continues and how many attempts have gone before.
    */
-  resumeOf?: { id: string; attempt: number; workId?: string };
+  resumeOf?: {
+    id: string;
+    attempt: number;
+    workId?: string;
+    /**
+     * Continue *this* turn rather than open a new one told about it (INV-774): same
+     * turnId, no user message, and the step ledger's open calls answered before the
+     * model is asked again. Only set for turns the step ledger recorded.
+     */
+    continues?: true;
+    /** How the person answered the approval an open step was waiting on, when one was. */
+    approval?: { id: string; how: "allowed" | "refused" | "gone" };
+  };
   onEvent?: (event: TurnEvent) => void;
   /**
    * Where one span per LLM call goes (trace.ts). Absent by default: a box whose
@@ -1391,7 +1421,11 @@ async function runContextTurn(agent: AgentRecord, inbound: readonly InboundMessa
 
   // Recorded before anything else, so a process that dies at any point after this leaves a begin
   // with no end — a fact, rather than a turn that simply stopped existing.
-  const turnId = randomUUID();
+  //
+  // Or, for a turn continued in place (INV-774), the id it already has: the resumed
+  // rounds belong to the turn that began them, not to a second attempt beside it.
+  const continuing = deps.resumeOf?.continues === true;
+  const turnId = continuing ? deps.resumeOf!.id : randomUUID();
   /** Every tool this turn has called so far. The Tasks tool reads it: a reviewer that has
    *  looked at nothing may not accept (Argus's harness makes the same check). */
   const toolsUsedThisTurn = new Set<string>();
@@ -1452,6 +1486,7 @@ async function runContextTurn(agent: AgentRecord, inbound: readonly InboundMessa
     if (ended) return;
     ended = true;
     deps.turns?.end(turnId, how, new Date(), category, keptThisTurn);
+    deps.steps?.closed(turnId);
   };
 
   // Both personal and shared memories pass the same relevance gate, even below budget.
@@ -1563,7 +1598,7 @@ async function runContextTurn(agent: AgentRecord, inbound: readonly InboundMessa
   // call — and a read-only call answered fresh beats a result declared unknown.
   // Everything not declared safe keeps the honest "never recorded" treatment at
   // assembly, and the model is still told to look before redoing those.
-  if (!isolated && deps.resumeOf !== undefined && history.length > 0) {
+  if (!isolated && deps.resumeOf !== undefined && !continuing && history.length > 0) {
     const last = history[history.length - 1]!;
     if ("kind" in last && last.kind === "blocks") {
       const calls = last.blocks.filter(
@@ -1620,6 +1655,84 @@ async function runContextTurn(agent: AgentRecord, inbound: readonly InboundMessa
     }
   }
 
+  // A turn continued in place (INV-774) answers the calls it was inside of before the model
+  // is asked anything. The trailing `blocks` entry is the record of what was asked — it is
+  // written before any call runs — and the step ledger says which of those calls were
+  // dispatched. A dispatched call is re-run only when re-running it changes nothing (a
+  // read, or a write keyed to land the same state); every other one is answered
+  // `outcome_unknown`, which is the truth and the only safe thing to say. A call never
+  // dispatched is answered `not_started`. Settled calls already have their result on disk
+  // and are never touched.
+  if (continuing && history.length > 0) {
+    const last = history[history.length - 1]!;
+    const open = new Map((deps.steps?.stepsOf(turnId).open ?? []).map(step => [step.toolUseId, step] as const));
+    if ("kind" in last && last.kind === "blocks") {
+      const calls = last.blocks.filter(
+        (block): block is Anthropic.ToolUseBlockParam => (block as { type?: string }).type === "tool_use"
+      );
+      const answered: Anthropic.ToolResultBlockParam[] = [];
+      for (const call of calls) {
+        const input = (call.input ?? {}) as Record<string, unknown>;
+        const step = open.get(call.id);
+        let text: string;
+        let isError = true;
+        if (step === undefined) {
+          text = notStartedResult(call.name);
+        } else if (step.approvalId !== undefined) {
+          const how = deps.resumeOf?.approval?.id === step.approvalId ? deps.resumeOf!.approval!.how : "gone";
+          text = approvalOutcomeResult(call.name, how);
+        } else if (safeToReplay(call.name, input) || replaysToSameState(call.name, input)) {
+          // Policy is deliberately not re-consulted: the block's presence in the transcript is
+          // the record that the original call already passed the gate.
+          const outcome = await dispatchTool(call.name, input, {
+            agent,
+            registry,
+            bus,
+            box,
+            files: deps.files,
+            claims: deps.claims,
+            caller: deps.caller,
+            ...(deps.callerName !== undefined ? { callerName: deps.callerName } : {}),
+            displayIndex: deps.displayIndex,
+            boxOwner: deps.boxOwner,
+            tasks: deps.tasks,
+            turnId,
+            conversation,
+            memorySources: inbound.map(message => `message:${message.id}`),
+          });
+          text =
+            "[Re-run on resume: this call was interrupted before its result was recorded, and " +
+            `re-running it changes nothing.]
+
+${outcome.text}`;
+          isError = outcome.isError === true;
+        } else {
+          text = outcomeUnknownResult(call.name);
+        }
+        answered.push({
+          type: "tool_result",
+          tool_use_id: call.id,
+          content: [{ type: "text", text }],
+          ...(isError ? { is_error: true } : {}),
+        });
+      }
+      if (answered.length > 0) {
+        const entry = {
+          role: "user",
+          kind: "results",
+          blocks: answered,
+          at: new Date().toISOString(),
+          turnId,
+        } satisfies TranscriptEntry;
+        registry.appendTranscript(agent.id, entry, conversation);
+        history = [...history, entry];
+      }
+    }
+    // Whatever the transcript now says, these steps are over: either answered above, or
+    // their result was on disk already and only the `settled` line was lost.
+    for (const step of open.values()) deps.steps?.settled(turnId, step.toolUseId);
+  }
+
   // A person, as opposed to the harness wearing the person's shape: a timer, a webhook, a
   // resume and a first run all arrive as `fromId: "user"` because that is what opens a turn.
   const personOpened = inbound.some(message => message.fromId === "user" && message.synthetic !== true);
@@ -1667,12 +1780,21 @@ async function runContextTurn(agent: AgentRecord, inbound: readonly InboundMessa
   const opener = inbound.some(message => message.fromId === "user")
     ? turnReminderFor(provider.model, turnText, visibleSkillCount > 0)
     : undefined;
-  const messages: Anthropic.MessageParam[] = [
-    ...historyToMessages(history),
-    { role: "user", content: opener === undefined ? turnText : `${turnText}\n\n${opener}` },
-  ];
+  const messages: Anthropic.MessageParam[] = continuing
+    ? historyToMessages(history)
+    : [
+        ...historyToMessages(history),
+        { role: "user", content: opener === undefined ? turnText : `${turnText}\n\n${opener}` },
+      ];
+  // A continued turn appends nothing new for the model to answer: the next observation is the
+  // result it was waiting on, already in the history. The one exception is a history that
+  // ends on the model's own words — a filed answer written before the call was — where the
+  // wire needs a user message; a one-line host note is the least that satisfies it.
+  if (continuing && messages[messages.length - 1]?.role !== "user") {
+    messages.push({ role: "user", content: "[The host restarted while you were working. Carry on.]" });
+  }
 
-  registry.appendTranscript(agent.id, {
+  if (!continuing) registry.appendTranscript(agent.id, {
     role: "user",
     text: turnText,
     at: new Date().toISOString(),
@@ -2768,6 +2890,25 @@ async function runContextTurn(agent: AgentRecord, inbound: readonly InboundMessa
     // and a defect that succeeds slowly (a click that took fifteen seconds) invisible to
     // any reading of the transcript.
     const requestedAt = new Date().toISOString();
+    // Persist the calls as blocks *before* any of them runs, and the results after (the
+    // order the API requires: the calling assistant turn, then its results). On disk first
+    // because the block is the durable record of what was asked (INV-774): a restart that
+    // finds it with no results, and the step ledger saying which calls were dispatched,
+    // can answer each one honestly instead of losing the action that was in flight.
+    // Thinking blocks are not kept — they are only valid within the turn that produced
+    // them. Text promoted as a filed answer above is left out here: it already stands as
+    // a plain entry just before this one, and keeping both would replay the same
+    // paragraph twice into every later request.
+    registry.appendTranscript(agent.id, {
+      role: "assistant",
+      kind: "blocks",
+      blocks: response.content.filter(
+        (block): block is Anthropic.TextBlock | Anthropic.ToolUseBlock =>
+          (block.type === "text" && !filedAnswer) || block.type === "tool_use"
+      ),
+      at: requestedAt,
+      turnId,
+    } satisfies TranscriptEntry, conversation);
     const results: Anthropic.ToolResultBlockParam[] = [];
     /** Tool-use ids whose stored text differs from what the model was shown. */
     const withheld = new Map<string, string>();
@@ -2849,6 +2990,10 @@ async function runContextTurn(agent: AgentRecord, inbound: readonly InboundMessa
           isError: true,
         };
       } else try {
+        // Checkpointed before it runs (INV-774): a crash from here until the result is on
+        // disk leaves this call open in the ledger, which is what lets a restart continue
+        // this turn instead of guessing at it.
+        deps.steps?.pending(turnId, toolUse.id, toolUse.name);
         outcome = await dispatchTool(
           toolUse.name,
           (toolUse.input ?? {}) as Record<string, unknown>,
@@ -2900,6 +3045,7 @@ async function runContextTurn(agent: AgentRecord, inbound: readonly InboundMessa
           isError: true,
         };
       }
+      if (outcome.approval !== undefined) deps.steps?.awaitingApproval(turnId, toolUse.id, outcome.approval.id);
 
       emit({
         type: "tool_end",
@@ -2981,22 +3127,6 @@ async function runContextTurn(agent: AgentRecord, inbound: readonly InboundMessa
       if (entry.recordAs !== undefined) withheld.set(entry.block.tool_use_id, entry.recordAs);
     }
 
-    // Persist the exchange as blocks, in the order the API requires: the calling
-    // assistant turn, then its results. Thinking blocks are not kept — they are
-    // only valid within the turn that produced them. Text promoted as a filed answer
-    // above is left out here: it already stands as a plain entry just before this
-    // one, and keeping both would replay the same paragraph twice into every later
-    // request.
-    registry.appendTranscript(agent.id, {
-      role: "assistant",
-      kind: "blocks",
-      blocks: response.content.filter(
-        (block): block is Anthropic.TextBlock | Anthropic.ToolUseBlock =>
-          (block.type === "text" && !filedAnswer) || block.type === "tool_use"
-      ),
-      at: requestedAt,
-      turnId,
-    } satisfies TranscriptEntry, conversation);
     const storedResults = results.map(block =>
       storableResult(block, withheld.get(block.tool_use_id), {
         turnId,
@@ -3013,6 +3143,9 @@ async function runContextTurn(agent: AgentRecord, inbound: readonly InboundMessa
       at: new Date().toISOString(),
       turnId,
     } satisfies TranscriptEntry, conversation);
+    // Settled only now, with the results on disk: a crash before this line leaves the
+    // calls open, and open means "the result may be missing", which is exactly the case.
+    for (const use of toolUses) deps.steps?.settled(turnId, use.id);
     // Only now are a fork's findings durably the parent's (docs/32 §1): the results entry is
     // on disk. Committing inside the tool would record `done` for findings a crash could
     // still lose between the join and this line.
