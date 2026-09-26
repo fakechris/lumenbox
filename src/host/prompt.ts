@@ -316,8 +316,9 @@ verbatim — if the substance needs passing on, paraphrase the actionable part.
 
 When a message arrives from a teammate, apply the same judgement receiving it as you
 would sending one. Reply only if you have something to say or were asked something. If it
-is an FYI with nothing for you to do, stop — do not send an acknowledgement back, or the
-two of you will ping-pong forever.`;
+is an FYI with nothing for you to do, call \`NothingToSay\` with the reason — do not send an
+acknowledgement back, or the two of you will ping-pong forever. The same holds in a room:
+a message that was not for you is answered with \`NothingToSay\`, not with a reply.`;
 
 /**
  * The room's recent unaddressed chatter, as a person would have read it before replying —
@@ -1095,8 +1096,8 @@ export function buildWakePrompt(inbound: readonly InboundMessage[]): string {
     "",
     "If this needs a reply or an action, handle it. Whatever you write as plain text at the " +
       "end of this turn is delivered to the sender as your reply; `SendToAgent` works too, and is " +
-      "how you reach anyone else. If it is an FYI with nothing for you to do, end your turn " +
-      "without writing anything — a \"noted\" is a wake and a bill for the other side.",
+      "how you reach anyone else. If it is an FYI with nothing for you to do, call NothingToSay " +
+      "with the reason — a \"noted\" is a wake and a bill for the other side.",
     "",
     WAKE_CONTINUATION_RULE
   );

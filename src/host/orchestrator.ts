@@ -1925,6 +1925,8 @@ export class Orchestrator {
       steerable?: boolean;
       lane?: Lane;
       synthetic?: boolean;
+      /** False when a room message named nobody (INV-775); see `InboundMessage.addressed`. */
+      addressed?: boolean;
       /** The message's id from the door it came through (INV-613); see `AgentBus.sendFromUser`. */
       messageId?: string;
       /** A routine's declared tools (INV-691); see `InboundMessage.toolScope`. */
@@ -1952,6 +1954,7 @@ export class Orchestrator {
       ...(options.steerable === false ? { steerable: false } : {}),
       ...(options.lane !== undefined ? { lane: options.lane } : {}),
       ...(options.messageId !== undefined ? { messageId: options.messageId } : {}),
+      ...(options.addressed === false ? { addressed: false } : {}),
       ...(options.toolScope !== undefined ? { toolScope: options.toolScope } : {}),
     });
     const before = this.registry.readTranscript(agent.id, conversation).length;
@@ -2031,9 +2034,10 @@ export class Orchestrator {
    * over, and what a chat channel sends back as the reply.
    */
   replySince(agentId: string, from: number, conversation: string = MAIN_CONVERSATION): string {
-    return (this.registry.readTranscript(agentId, conversation) as { role?: string; text?: string; kind?: string }[])
+    // A host-authored line (the empty-output note, INV-775) is for the record, not a reply.
+    return (this.registry.readTranscript(agentId, conversation) as { role?: string; text?: string; kind?: string; host?: true }[])
       .slice(from)
-      .filter(entry => entry.role === "assistant" && entry.kind === undefined && entry.text)
+      .filter(entry => entry.role === "assistant" && entry.kind === undefined && entry.host !== true && entry.text)
       .map(entry => entry.text as string)
       .join("\n\n");
   }
@@ -2141,6 +2145,8 @@ export class Orchestrator {
  */
 export const ALL_TOOLS: readonly string[] = [
   "Checkpoint",
+  // Deliberate silence on a turn nobody is waiting on (INV-775); every role may need it.
+  "NothingToSay",
   "WaitForControl",
   "browser_fill_secret",
   "browser_pages",

@@ -1393,6 +1393,7 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
           conversation,
           steerable: false,
           ...(origin?.messageId !== undefined ? { messageId: origin.messageId } : {}),
+          ...(origin?.addressed === false ? { addressed: false } : {}),
         });
         await orchestrator.settle();
       } finally {

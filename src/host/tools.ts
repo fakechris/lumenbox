@@ -343,6 +343,18 @@ export const PARALLEL_SAFE_TOOLS: ReadonlySet<string> = new Set([
 export const PARALLEL_TOOL_LIMIT = 6;
 
 /**
+ * Deliberate silence, as a call (INV-775).
+ *
+ * Until this existed the only way to say nothing was to say nothing — an empty final
+ * message — and the runtime could not tell "the model decided there is nothing to do" from
+ * "the model produced nothing". The first is a decision worth recording with its reason; the
+ * second is an anomaly worth counting. Offered only on turns nobody is waiting on (a room
+ * wake that did not address this agent, a schedule, a webhook, a listener, a fork landing);
+ * the turn engine withholds it whenever a person opened the turn.
+ */
+export const SILENCE_TOOL = "NothingToSay";
+
+/**
  * What a fork child may not do (docs/32 §2): reach a person or a teammate, change the board,
  * remember for the team, or fan out again. Its one outward channel is its final message,
  * which the turn that forked it reads. Hermes strips the same set from delegated children;
@@ -377,6 +389,8 @@ export const FORK_WITHHELD_TOOLS: ReadonlySet<string> = new Set([
   "AskSecret",
   "HandOverDesktop",
   "OtherThreads",
+  // A fork's one channel is its final message with its handoff line; silence would read as `unstated`.
+  SILENCE_TOOL,
 ]);
 
 /** Whether a conversation name is a fork child's. */
@@ -2033,6 +2047,22 @@ export function buildTools(
     });
   }
 
+  tools.push({
+    name: SILENCE_TOOL,
+    description:
+      "End this turn on purpose with nothing delivered: the message was not for you, the routine " +
+      "does not apply, the fork's result changes nothing you need to say. Give the reason in one " +
+      "short sentence; it goes in the record, never to a person or a chat. Call it instead of " +
+      "replying with an empty message. It is offered only on turns nobody is waiting on.",
+    input_schema: {
+      type: "object",
+      properties: {
+        reason: { type: "string", description: "Why there is nothing to say, in one short sentence." },
+      },
+      required: ["reason"],
+    },
+  });
+
   const offered = withheldFrom(allowed, tools);
   return fork ? offered.filter(tool => !FORK_WITHHELD_TOOLS.has(tool.name)) : offered;
 }
@@ -2318,6 +2348,16 @@ export async function dispatchTool(
   }
 
   switch (name) {
+    // Reached only when the turn engine did not intercept it, which means it was not offered:
+    // a forged or replayed call on a turn a person is waiting on. The engine ends the turn
+    // itself when the tool was offered (turn.ts), so this is the refusal, never the success.
+    case SILENCE_TOOL:
+      return {
+        text:
+          `${SILENCE_TOOL} is not available on this turn: someone is waiting on a reply. ` +
+          `Answer them, even if the answer is that there is nothing to do.`,
+        isError: true,
+      };
     case "WaitForControl": {
       const box = requireBox(context);
       const index = context.displayIndex ?? 1;
@@ -2617,7 +2657,8 @@ export async function dispatchTool(
             const seq = context.bus.deliverSystem(
               context.agent.id,
               `${tag}A fork you started has finished. Fold it into what you tell the person; ` +
-                `they never heard of the fork.\n\n${text}`,
+                `they never heard of the fork. If it changes nothing you need to say, call ` +
+                `${SILENCE_TOOL} with the reason.\n\n${text}`,
               parent
             );
             if (ids[index] !== undefined && (seq !== undefined || context.bus.inboxless)) {
@@ -2689,7 +2730,8 @@ export async function dispatchTool(
           const seq = context.bus.deliverSystem(
             context.agent.id,
             `${tag}A fork you were waiting on when a new instruction arrived has finished. ` +
-              `Fold it into what you already reported if it still matters.\n\n${text}`,
+              `Fold it into what you already reported if it still matters; if it does not, call ` +
+              `${SILENCE_TOOL} with the reason.\n\n${text}`,
             parent
           );
           // Admitted durably is delivered. The tag lets a restart's sweep see the note is

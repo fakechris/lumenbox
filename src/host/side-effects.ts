@@ -56,6 +56,8 @@ const DECLARED: Record<string, SideEffect> = {
   WebSearch: { tier: "observe" },
   ReadFeishuDoc: { tier: "observe" },
   WaitForControl: { tier: "observe" },
+  // Ends the turn with nothing delivered; the reason goes in the record (INV-775).
+  NothingToSay: { tier: "observe" },
   browser_pages: { tier: "observe" },
   browser_snapshot: { tier: "observe" },
   browser_read: { tier: "observe" },

@@ -103,6 +103,7 @@ import {
   isForkConversation,
   PARALLEL_SAFE_TOOLS,
   PERSON_FACING_TOOLS,
+  SILENCE_TOOL,
   PARALLEL_TOOL_LIMIT,
   buildTools,
   dispatchTool,
@@ -704,9 +705,23 @@ export type TranscriptEntry =
        * the compaction summary, which belongs to no one turn.
        */
       turnId?: string;
+      /**
+       * Written by the host, not said by the model (INV-775): the note a turn leaves when the
+       * model produced no text. In the record so a reader sees what happened; excluded from
+       * `replySince`, so it is never delivered as though the agent had said it.
+       */
+      host?: true;
     }
   /** An assistant turn that called tools; carries text and tool_use blocks. */
-  | { role: "assistant"; kind: "blocks"; blocks: Anthropic.ContentBlockParam[]; at: string; turnId?: string }
+  | {
+      role: "assistant";
+      kind: "blocks";
+      blocks: Anthropic.ContentBlockParam[];
+      at: string;
+      turnId?: string;
+      /** The turn ended in deliberate silence — `NothingToSay` was called — and why (INV-775). */
+      silent?: { reason: string };
+    }
   /** The matching results. Must immediately follow its `blocks` entry. */
   | {
       role: "user";
@@ -1612,6 +1627,14 @@ async function runContextTurn(agent: AgentRecord, inbound: readonly InboundMessa
    */
   const personIsHere =
     personOpened || personHasSpoken(registry.readTranscript(agent.id, conversation) as TranscriptEntry[]);
+  /**
+   * Whether this is a turn nobody is waiting on (INV-775): a teammate's wake, a fork landing,
+   * a schedule, a webhook, a listener, or a room message that named nobody. Only then is
+   * `NothingToSay` offered. A person's own turn is never one — nor a resume of one, which
+   * continues work somebody asked for.
+   */
+  const silenceOffered =
+    deps.resumeOf === undefined && (!personOpened || inbound.every(message => message.addressed === false));
 
   const turnText = buildTurnPrompt(inbound);
 
@@ -1770,6 +1793,9 @@ async function runContextTurn(agent: AgentRecord, inbound: readonly InboundMessa
     // The test is the whole conversation, not this turn: the front agent woken by a worker's
     // report is still the person's counterpart, and it is the one that has to be able to ask.
     .filter(tool => !(!personIsHere && PERSON_FACING_TOOLS.has(tool.name)))
+    // Deliberate silence is for turns nobody is waiting on (INV-775): withheld, not refused,
+    // wherever a person opened the turn and is reading for the answer.
+    .filter(tool => silenceOffered || tool.name !== SILENCE_TOOL)
     // A routine's own skill said what it needs (INV-691). Applied last, as an intersection, so it
     // can only take away: a name the agent was never offered stays unoffered.
     .filter(tool => routineScope === undefined || routineScope.has(tool.name) ||
@@ -2475,6 +2501,42 @@ async function runContextTurn(agent: AgentRecord, inbound: readonly InboundMessa
       guardPending = undefined;
     }
 
+    // Deliberate silence (INV-775): the model looked and decided there is nothing to do. The
+    // turn ends here — nothing is delivered, no nudge asks it to say more, and the reason is on
+    // the record beside the call. Anything else requested in the same round is not run: a turn
+    // that has decided to say nothing has no result to act on. Only when it was offered; a
+    // call on a turn someone is waiting on falls through to the tool's own refusal.
+    const silence = silenceOffered ? toolUses.find(use => use.name === SILENCE_TOOL) : undefined;
+    if (silence !== undefined) {
+      const reason = String((silence.input as { reason?: unknown } | null)?.reason ?? "").trim() || "(no reason given)";
+      const at = new Date().toISOString();
+      registry.appendTranscript(agent.id, {
+        role: "assistant",
+        kind: "blocks",
+        blocks: response.content.filter(
+          (block): block is Anthropic.TextBlock | Anthropic.ToolUseBlock => block.type === "text" || block.type === "tool_use"
+        ),
+        at,
+        turnId,
+        silent: { reason },
+      } satisfies TranscriptEntry, conversation);
+      registry.appendTranscript(agent.id, {
+        role: "user",
+        kind: "results",
+        blocks: toolUses.map(use => ({
+          type: "tool_result" as const,
+          tool_use_id: use.id,
+          content: use.id === silence.id ? `Silence recorded: ${reason}` : `Not run: the turn ended with ${SILENCE_TOOL}.`,
+        })),
+        at: new Date().toISOString(),
+        turnId,
+      } satisfies TranscriptEntry, conversation);
+      emit({ type: "tool_start", agentId: agent.id, agentName: agent.profile.name, tool: SILENCE_TOOL, input: silence.input });
+      console.error(`[conduct] ${agent.profile.name}: ${SILENCE_TOOL} — ${reason.slice(0, 120)}`);
+      finish("silent");
+      return;
+    }
+
     if (toolUses.length === 0) {
       const finalText = response.content
         .filter((block): block is Anthropic.TextBlock => block.type === "text")
@@ -2621,6 +2683,11 @@ async function runContextTurn(agent: AgentRecord, inbound: readonly InboundMessa
       // It happens when a final message carries no text: thinking blocks only, an empty content
       // array, a model that stopped for a reason it did not narrate. Rare, and rare is exactly why
       // it is worth a line rather than a shrug.
+      //
+      // Since INV-775 this is an anomaly with a name, `empty_output`: a model that had nothing
+      // to say had `NothingToSay` to say so (where nobody was waiting) or a person to answer
+      // (where somebody was). The note stays, marked as the host's so no door delivers it as
+      // the agent's reply, and the ledger counts it so a model that does this often is visible.
       const silent =
         `The turn ended without anything to report. The model returned no text on its last round, ` +
         `so there is no answer here — not an empty one. Ask again, or ask for what is missing.`;
@@ -2629,9 +2696,22 @@ async function runContextTurn(agent: AgentRecord, inbound: readonly InboundMessa
         text: silent,
         at: new Date().toISOString(),
         turnId,
+        host: true,
       } satisfies TranscriptEntry, conversation);
+      deps.usage?.noteAnomaly({
+        anomaly: "empty_output",
+        agentId: agent.id,
+        agentName: agent.profile.name,
+        provider: deps.provider?.label ?? "unknown",
+        model: deps.provider?.model ?? "unknown",
+        round,
+        workId,
+        turnId,
+        conversation,
+      });
       emit({ type: "text", agentId: agent.id, agentName: agent.profile.name, delta: silent });
-      console.error(`[turn] ${agent.profile.name}: ended with no text on round ${round}`);
+      console.error(`[turn] ${agent.profile.name}: empty_output — ended with no text on round ${round}`);
+      finish("empty_output");
       return;
     }
     // Tool calls mean the model is working again, so steering is welcome at the next boundary.

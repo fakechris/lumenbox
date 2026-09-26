@@ -413,7 +413,7 @@ export function triggerPrompt(
       deliver === undefined
         ? "Nobody is waiting on a reply and no one will answer a question, so do the work and record the result where it can be found later."
         : "Nobody will answer a question, so decide rather than ask — but your reply is delivered to a chat where people will read it, so write it for them."
-    }`,
+    } If there is nothing to do this time, call NothingToSay with the reason.`,
     "",
     `You are running the **${skillName}** skill, scheduled ${described}. Read \`${path}\` and follow it.`,
     "",
@@ -512,7 +512,7 @@ export function listenerPrompt(
     said.text.slice(0, 4_000),
     "",
     "Make your final message the thing itself, short enough to read on a phone. If the routine does not " +
-      "actually apply to this message, say nothing: reply with an empty message.",
+      "actually apply to this message, call NothingToSay with the reason.",
   ].join("\n");
 }
 
