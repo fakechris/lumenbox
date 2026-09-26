@@ -45,7 +45,7 @@ import type { UsageKind, UsageLog } from "./usage.ts";
 import { chooseRelevant, memoryProjectionManifest, SHARED_CHAR_BUDGET, type MemoryRecall } from "./memory.ts";
 import { needsReview, type ReviewInput, type ReviewMode, type Verdict } from "./auto-review.ts";
 import type { HookRunner } from "./hooks.ts";
-import { AGENT_WAKE_CUE } from "../agents/bus.ts";
+import { AGENT_WAKE_CUE, laneOf } from "../agents/bus.ts";
 import { TEMPLATE_CUE, TEMPLATE_SETUP_TOOLS } from "./template.ts";
 import {
   activeWindow,
@@ -1488,6 +1488,8 @@ async function runContextTurn(agent: AgentRecord, inbound: readonly InboundMessa
       siblingConversations: isolated ? 0 : registry
         .listConversations(agent.id)
         .filter(entry => entry.id !== conversation).length,
+      // One lane per turn (bus.ts), so the first message's lane is the turn's (INV-780).
+      ...(inbound.length > 0 ? { lane: laneOf(inbound[0]!) } : {}),
     });
   const builtPromptParts = buildParts(memoryRecall);
   const promptParts = isolated ? {
