@@ -773,6 +773,83 @@ Tool names, ids, JSON, status codes or words like \`not_connected\` — say what
 `,
   },
   {
+    // INV-755.
+    slug: "skill-authoring",
+    content: `---
+name: skill-authoring
+description: Use when you are about to write or rewrite a skill or a routine — a SKILL.md someone will reuse, a schedule, a listener (写个 skill, 把这个做成例程, 保存成技能). How to make it get picked up when it should, stay out when it should not, and still work when it runs alone. Not for running an existing skill.
+scope: global
+---
+
+# Writing a skill
+
+A skill is chosen from one line — its description — and read only when chosen. Write for that.
+
+## The description decides everything
+
+- Start with **Use when …**, then the situations, in the words people actually say, in their language (调研一下, weekly recap, 整理下载).
+- Say what it is **not** for, and name the neighbouring skill that is: "Not for a table — that is data-brief."
+- One or two sentences. Measured here: descriptions that said only what a skill does were skipped; the same skills with "use when" and the person's words were opened.
+
+## The body: short, then the rest on demand
+
+Pick one shape.
+
+- **A tool skill:** what it is for; which tools, and how to tell they are available; what it needs to be authorised; the rules (what to confirm first, what never to do).
+- **A workflow skill:** what it is for; the steps; the **output contract** — exactly what comes back and where; the rules.
+
+Keep the file to what is needed every time it runs. Put long references, examples and templates in files beside it and say when to read each ("read \`pricing.md\` only for a pricing question").
+
+## If it runs by itself
+
+A scheduled, listening or webhook run starts cold: it gets the skill and nothing of the conversation you wrote it in. So:
+
+- Write out every name, path, id and threshold. Never "as above", "the one we discussed", "刚才那个".
+- Before creating anything that lasts — a task, a note, another routine — look for the one you made last time and update it. Name what you make the same way each run.
+- Record what you last reported before telling anyone, so the next run does not tell them again. When nothing changed, say nothing.
+- Say what to do when a source fails, and after how many failures to mention that coverage is thin.
+
+## Before you save it
+
+Read it once as the model that will pick it: would the description make you open it for the request you have in mind, and not for its neighbour's? Then save it, and say in one sentence what it is and when it will be used.
+`,
+  },
+  {
+    // INV-755.
+    slug: "wide-research",
+    content: `---
+name: wide-research
+description: Use when the same research has to be done for many items at once — a list of companies, products, papers, people or URLs to look into one by one and compare (逐个调研, 这 20 家公司各查一下, 批量对比). Splits the list across forks, collects the same fields for each, and reports coverage. Not for one topic — that is research-brief.
+scope: global
+---
+
+# Wide research
+
+For a list of items that each need the same questions answered.
+
+## 1. Settle the list and the fields first
+
+- Write the list down. Remove duplicates and near-duplicates ("OpenAI" and "openai.com") and say how many you removed.
+- Fix the fields every item must come back with — for example: name, what it does, one key number with its source, one risk, sources. The same fields for every item, or the table cannot be read.
+
+## 2. Split it across forks
+
+- Use \`Fork\`, a few items per fork, at most twelve forks. Each brief carries the item names, the exact fields, and "if you cannot find a field, write \`not found\` and why — do not guess".
+- Each fork ends with its handoff line, so you know which finished.
+
+## 3. Collect, retry once, stop
+
+- The fork result says how many finished and names the ones that did not. Retry only those, **once**. Do not retry what finished, and do not retry twice.
+- Anything still missing after the retry stays missing, named.
+
+## 4. Deliver
+
+- One table, one row per item, the fixed fields as columns, sources in the last column.
+- A coverage line at the top: "Covered 17 of 19 (2 duplicates removed); missing: X (site blocked), Y (no public data)."
+- Then two or three sentences on what the table shows across items — the comparison is the point.
+`,
+  },
+  {
     // The conversation that packs a template (docs/29 §4). Served from the host like Grok
     // Bot serves its export skill from the server, so the wording can change without a
     // client release; the tool it ends in is PackTemplate.
@@ -924,6 +1001,14 @@ const STARTER_EVALS: Record<string, readonly SkillEval[]> = {
   feishu: [
     { name: "write to a Feishu doc", kind: "trigger", says: "把这次会议纪要整理进我们团队的飞书文档里。" },
     { name: "a Notion page is notion", kind: "no-trigger", instead: "notion", says: "把这次会议纪要写到 Notion 里「周会」那个页面下面。" },
+  ],
+  "skill-authoring": [
+    { name: "save as a skill", kind: "trigger", says: "把这套流程写成一个 skill，以后每周一早上 9 点自动跑：1）看 A、B、C 三家竞品官网和博客这一周的更新；2）整理成一张对比表；3）发到飞书的产品群。" },
+    { name: "running a skill is not writing one", kind: "no-trigger", instead: "weekly-retro", says: "帮我写一份这周的复盘，一页就行。" },
+  ],
+  "wide-research": [
+    { name: "many companies", kind: "trigger", says: "这 15 家做 AI 编程工具的公司，帮我逐个调研一下：做什么、融了多少钱、主要客户是谁，最后做成对比表。" },
+    { name: "one topic is research-brief", kind: "no-trigger", instead: "research-brief", says: "帮我调研一下固态电池过去一年的进展，给我一份带来源的简报。" },
   ],
   "export-template": [
     { name: "share yourself", kind: "trigger", says: "把你自己打包成一个模板吧，我想分享给同事用。" },

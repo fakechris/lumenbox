@@ -149,6 +149,33 @@ export interface Skill {
 export type SkillScope = "global" | "agent";
 
 
+/**
+ * What a skill's author should hear before relying on it (INV-755). Two mechanical checks, both
+ * measured to matter:
+ *
+ * - A description that says only what the skill does, and never when to use it, is the kind the
+ *   live evals found the model ignoring (docs/43, INV-693).
+ * - A skill that runs unattended — a schedule, a listener, a webhook — reads nothing of the
+ *   conversation it was written in, so a body that points at "the above" points at nothing.
+ *
+ * Advice only: a hint never stops a skill from loading or a draft from being published.
+ */
+export function authoringHints(parsed: ParsedSkill): string[] {
+  const hints: string[] = [];
+  const description = parsed.meta.description ?? "";
+  if (description.trim() !== "" && !WHEN_WORDING.test(description)) {
+    hints.push("the description says what the skill does but not when to use it — start it with \"Use when…\" and name the words people actually say");
+  }
+  const unattended = Boolean(parsed.meta.schedule?.trim() || parsed.meta.trigger?.trim());
+  if (unattended && PRIOR_CONTEXT.test(parsed.body)) {
+    hints.push("it runs unattended but its body refers to earlier conversation (\"as above\", \"刚才\"…); a run sees none of it — write out what it needs");
+  }
+  return hints;
+}
+
+const WHEN_WORDING = /\b(use when|use it when|when (?:someone|the person|you|asked)|for when)\b|何时|什么时候用|当.{0,12}(时|的时候)|用于|适用于/i;
+const PRIOR_CONTEXT = /\bas (?:above|discussed|mentioned)\b|\bearlier in (?:this|the) (?:conversation|chat)\b|\bthe conversation above\b|上文|刚才|前面(?:说|提到)的|如上所述/i;
+
 /** Our own tool names, from the one place every tool is declared. */
 const KNOWN_TOOL_NAMES: ReadonlySet<string> = new Set([...declaredTools(), "connector_request", "FindMcpTool", "UseMcpTool"]);
 
@@ -371,7 +398,10 @@ export function skillFrom(
       ? `${slug}: allowed-tools names ${allowed.unknown.join(", ")}, which ${allowed.unknown.length === 1 ? "is" : "are"} not a tool here; ` +
         `${allowed.unknown.length === 1 ? "it narrows" : "they narrow"} an unattended run to nothing extra.`
       : undefined;
-  const note = [descriptionNote, toolNote].filter((line): line is string => line !== undefined).join("\n") || undefined;
+  // Advice, never refusal (INV-755): shown on the skills page for a skill an agent wrote, where
+  // nobody reviewed the wording before it started deciding whether the skill gets used.
+  const hints = parsed.meta.authored_by ? authoringHints(parsed).map(hint => `${slug}: ${hint}`) : [];
+  const note = [descriptionNote, toolNote, ...hints].filter((line): line is string => line !== undefined).join("\n") || undefined;
 
   // Likewise a delivery target with nothing to deliver: the person meant to schedule it.
   const deliver = parsed.meta.deliver?.trim();
