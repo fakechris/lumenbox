@@ -78,7 +78,8 @@ import { copyTeachBinding } from "../protocol/index.ts";
 import { HEADLESS_NOTE, headlessFetch, withRecovery } from "./browser-recovery.ts";
 import { detectDisplay, getDisplay, parseDisplayNum } from "../cua/display.ts";
 import { readClipboard, writeClipboard } from "./clipboard-service.ts";
-import { startEgressProxy } from "../egress/proxy.ts";
+import { DEFAULT_PORT as EGRESS_PROXY_PORT, startEgressProxy } from "../egress/proxy.ts";
+import { CALL_ENV, CallRegistry, callEnvironment } from "../egress/call.ts";
 import { RecordService, RECORDINGS_DIR } from "./record-service.ts";
 import { AGENT_NICE, reapSpool, runShell, withoutBoxToken } from "./shell-service.ts";
 import { JobService } from "./job-service.ts";
@@ -481,52 +482,20 @@ setInterval(() => {
   void teach.reapLapsed(index => displays.userInControl(index) !== undefined);
 }, 5_000).unref();
 
-const routes: Record<string, Handler> = {
-  "POST /computer": (body: ComputerRequest) => desktopOperations.run(body.display ?? defaultDisplayIndex, () => handleComputer(body)),
-  "POST /exec": async (body: ExecRequest): Promise<ExecResult | JobStartedResult> => {
-    // A shell on someone else's desktop can do everything computer-use can — start a
-    // window on it, type with xdotool — so it is gated the same way.
-    if (body.display !== undefined) {
-      displays.assertControl(body.display, body);
-      displays.assertOwner(body.display, body.owner);
-      // A shell given a display can type into it; while a person holds that display, no.
-      displays.assertAgentControls(body.display);
-    }
-    // Every shell command, with who asked for it. Nothing recorded this before, so the
-    // box could not answer "who ran that" for the one endpoint where the answer matters
-    // most. Truncated because a log is not a transcript; the spool files hold output.
-    log(
-      `exec [${body.actor ?? "unlabelled"}]${body.background === true ? " (background)" : ""}: ` +
-        `${body.command.replace(/\s+/g, " ").slice(0, 200)}`
-    );
-    if (body.background === true) {
-      return jobs.start({
-        command: body.command,
-        ...(body.cwd !== undefined ? { cwd: body.cwd } : {}),
-        ...(body.env !== undefined ? { env: body.env } : {}),
-        ...(body.display !== undefined ? { display: body.display } : {}),
-        ...(body.job_id !== undefined ? { jobId: body.job_id } : {}),
-        nice: AGENT_NICE,
-        scrubbedEnv: withoutBoxToken(process.env),
-      });
-    }
-    return runShell(body);
-  },
-  // Background work, once started, is asked about rather than waited on.
-  "POST /jobs": async (): Promise<{ jobs: JobStatus[] }> => ({ jobs: jobs.list() }),
-  "POST /jobs/wait": async (body: JobWaitRequest): Promise<JobWaitResult> => {
-    const result = await jobs.wait(body);
-    if (result === undefined) throw new Error(`No job ${body.job_id}`);
-    return result;
-  },
-  "POST /jobs/kill": async (body: { job_id: string }): Promise<JobStatus> => {
-    const result = jobs.kill(body.job_id);
-    if (result === undefined) throw new Error(`No job ${body.job_id}`);
-    return result;
-  },
-  // Gated on desktop ownership exactly as /exec and /computer are: driving the browser on
-  // someone else's desktop is driving their screen, whichever protocol it goes over.
-  "POST /browser": async (body: BrowserRequest): Promise<BrowserResponse> => desktopOperations.run(body.display ?? defaultDisplayIndex, async () => {
+/**
+ * The calls this daemon vouches for to the egress proxy (INV-784, egress/call.ts), and the
+ * proxy's port once it is up. A command run for a call gets the token in its environment
+ * and the proxy as its HTTP proxy with the token as credential; without a proxy it gets the
+ * token alone, so `AGENTBOX_CALL` means the same thing wherever the box runs.
+ */
+const calls = new CallRegistry();
+let egressProxyPort: number | undefined;
+function environmentForCall(call: string | undefined): Record<string, string> {
+  if (call === undefined) return {};
+  return egressProxyPort === undefined ? { [CALL_ENV]: call } : callEnvironment(call, egressProxyPort);
+}
+
+const browserRoute = async (body: BrowserRequest): Promise<BrowserResponse> => desktopOperations.run(body.display ?? defaultDisplayIndex, async () => {
     const display = body.display ?? defaultDisplayIndex;
     const authorize = () => {
       displays.assertControl(display, body);
@@ -634,7 +603,77 @@ const routes: Record<string, Handler> = {
       return { url: page.url, title: page.title, snapshot: "", text: page.text, outcome: "unknown", note: `${HEADLESS_NOTE} (${recovered.error.message})` };
     }
     throw recovered.error;
-  }),
+  });
+
+const routes: Record<string, Handler> = {
+  "POST /browser": async (body: BrowserRequest): Promise<BrowserResponse> => {
+    // The browser sends no credential, so its connections are attributed to the one
+    // action in flight (call.ts). Released however the action ends.
+    const release = body.call !== undefined ? calls.beginAmbient(body.call) : () => {};
+    try {
+      return await browserRoute(body);
+    } finally {
+      release();
+    }
+  },
+  "POST /computer": (body: ComputerRequest) => desktopOperations.run(body.display ?? defaultDisplayIndex, () => handleComputer(body)),
+  "POST /exec": async (body: ExecRequest): Promise<ExecResult | JobStartedResult> => {
+    // A shell on someone else's desktop can do everything computer-use can — start a
+    // window on it, type with xdotool — so it is gated the same way.
+    if (body.display !== undefined) {
+      displays.assertControl(body.display, body);
+      displays.assertOwner(body.display, body.owner);
+      // A shell given a display can type into it; while a person holds that display, no.
+      displays.assertAgentControls(body.display);
+    }
+    // Every shell command, with who asked for it. Nothing recorded this before, so the
+    // box could not answer "who ran that" for the one endpoint where the answer matters
+    // most. Truncated because a log is not a transcript; the spool files hold output.
+    log(
+      `exec [${body.actor ?? "unlabelled"}]${body.background === true ? " (background)" : ""}: ` +
+        `${body.command.replace(/\s+/g, " ").slice(0, 200)}`
+    );
+    // Vouched for to the egress proxy for as long as the command runs (INV-784), so the
+    // relay's record says which call opened each connection. A job is vouched for until
+    // it ends, which is when its connections end.
+    const release = body.call !== undefined ? calls.begin(body.call) : () => {};
+    if (body.background === true) {
+      try {
+        return jobs.start({
+          command: body.command,
+          ...(body.cwd !== undefined ? { cwd: body.cwd } : {}),
+          env: { ...body.env, ...environmentForCall(body.call) },
+          ...(body.display !== undefined ? { display: body.display } : {}),
+          ...(body.job_id !== undefined ? { jobId: body.job_id } : {}),
+          nice: AGENT_NICE,
+          scrubbedEnv: withoutBoxToken(process.env),
+          onSettled: release,
+        });
+      } catch (error) {
+        release();
+        throw error;
+      }
+    }
+    try {
+      return await runShell(body, environmentForCall(body.call));
+    } finally {
+      release();
+    }
+  },
+  // Background work, once started, is asked about rather than waited on.
+  "POST /jobs": async (): Promise<{ jobs: JobStatus[] }> => ({ jobs: jobs.list() }),
+  "POST /jobs/wait": async (body: JobWaitRequest): Promise<JobWaitResult> => {
+    const result = await jobs.wait(body);
+    if (result === undefined) throw new Error(`No job ${body.job_id}`);
+    return result;
+  },
+  "POST /jobs/kill": async (body: { job_id: string }): Promise<JobStatus> => {
+    const result = jobs.kill(body.job_id);
+    if (result === undefined) throw new Error(`No job ${body.job_id}`);
+    return result;
+  },
+  // Gated on desktop ownership exactly as /exec and /computer are: driving the browser on
+  // someone else's desktop is driving their screen, whichever protocol it goes over.
   "GET /displays": async (): Promise<DisplayInfo[]> => displays.list(),
   "POST /displays": async (): Promise<DisplayInfo[]> => displays.list(),
   // A person takes a desktop over, or hands it back (INV-404). Not gated on the agent's
@@ -1060,8 +1099,10 @@ if (egressRelay) {
     startEgressProxy({
       relay: egressRelay,
       token: process.env.AGENTBOX_EGRESS_TOKEN ?? token,
+      calls,
       log: line => log(line),
     });
+    egressProxyPort = EGRESS_PROXY_PORT;
   } catch (error) {
     // Not fatal: a box with no egress proxy is a box that browses from its own address, which
     // is what it did before this existed.

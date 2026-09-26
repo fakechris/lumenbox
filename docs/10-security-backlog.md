@@ -2,7 +2,7 @@
      title: Security backlog
      family: decision
      status: current
-     updated: 2026-09-03
+     updated: 2026-09-26
 -->
 # Security backlog
 
@@ -130,6 +130,37 @@ the S-1 class of problem (a host command is the operator), not a new one. **Not 
 purpose:** a signed or hashed allow-list of hook commands. It would let an operator pin
 *which* commands may run, at the price of a second file to keep in step; worth it only for
 a shared host, where S-2/S-3 are the bigger holes.
+
+## S-10 — A network event names a box, not a call
+
+**Closed, 2026-09-26 (INV-784).** The relay's event log (INV-432) said which box opened a
+connection and stopped there: a suspicious host led to a box of several agents and no further.
+Now every box request that runs something — `/exec`, a background job, `/browser` — carries a
+**call token** the host minted for that one tool call (`src/egress/call.ts`: agent id, turn id,
+tool_use id, and the job id when it started one; base64url of the JSON, opaque to the model).
+boxd puts it in the command's environment as `AGENTBOX_CALL`, points `HTTP_PROXY`/`HTTPS_PROXY`
+at the box's egress proxy with the token as the URL credential (loopback stays direct), and
+vouches for the token to the proxy for exactly as long as the call runs. The proxy forwards the
+token to the relay as one more preamble line (`Call:`); the relay decodes it onto the event as
+`attribution: "call"` with `agentId`, `turnId`, `toolUseId`, `jobId`. The browser sends no
+credential, so its connections are attributed to the one browser action in flight — and to
+nothing when two are, because a guess recorded as a fact is worse than a blank.
+
+**Why the model cannot forge it.** The proxy attributes only tokens boxd registered, and boxd
+registers only what arrived on its own authenticated API, which every agent shell has scrubbed
+from its environment. An invented token, or one whose call has ended, lands on
+`attribution: "unattributed"` — never on another agent's call, and never refused: attribution is
+the record, the box token and the allow-list stay the access control. A proxy that predates the
+token, and a relay that predates it, both still work; they just say `unattributed`.
+
+**What it buys.** `agentbox egress events --agent/--turn/--tool-use`, the same keys on
+`GET /api/network-events`, the fields in the audit export (INV-433) — and the model itself is
+told: a tool call whose connections the relay refused gets one line on its result,
+`N outbound connections refused: host1, host2`, so a `pip install` that hung because
+`vendor.test` is not allowed reads as what it was. The one deliberate widening: shell commands
+run for a call now go through the relay, which before this only the browser did (box-chrome's
+`--proxy-server`). That is the point of R4 — egress is a scope's policy, and a policy the shell
+could step around was not one.
 
 ## Triage, 2026-09-16 (INV-138)
 

@@ -161,6 +161,8 @@ export class JobService {
     scrubbedEnv: NodeJS.ProcessEnv;
     /** A caller-minted id; the same id twice returns the running job instead of a second one. */
     jobId?: string;
+    /** Called once when the job has ended, however it ended. Errors in it are the caller's. */
+    onSettled?: () => void;
   }): JobStartedResult {
     mkdirSync(this.dir, { recursive: true });
     if (input.jobId !== undefined) {
@@ -233,6 +235,11 @@ export class JobService {
         status.exit_code = code;
         status.ended_at = new Date().toISOString();
         this.writeExit(status);
+        try {
+          input.onSettled?.();
+        } catch {
+          // The job's record does not depend on whoever asked to hear about its end.
+        }
         if (note !== undefined) log.write(note);
         log.end();
         log.on("finish", () => resolve());

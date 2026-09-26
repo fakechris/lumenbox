@@ -26,6 +26,7 @@ import {
 } from "./memory.ts";
 import { renderSkills, visibleTo, type Skill } from "./skills.ts";
 import { renderPlace, type PlaceInstructions } from "./place.ts";
+import { renderStanding, type StandingSnapshot } from "./standing.ts";
 import { renderHistoryBlock } from "./history.ts";
 import type { ResolutionConfig } from "../protocol/index.ts";
 
@@ -476,6 +477,12 @@ export interface PromptContext {
    * change by a byte.
    */
   lane?: Lane;
+  /**
+   * The agent's standing files (INV-777) as read from the host at turn start. Rendered last in
+   * the volatile tier, before the recap, so a person's edit changes only the tail of the prompt.
+   * Absent renders nothing: an isolated context, or a test that did not set one up.
+   */
+  standing?: StandingSnapshot;
 }
 
 /** One teammate line: name, id, and a clamped description. */
@@ -875,8 +882,12 @@ export const STABLE_SECTIONS: readonly PromptSection[] = [
  *    background and before the roster: it is about how the turn ends, in every lane.
  * 6. **shared-memory** — what colleagues have kept. After its own, because "I learned this" and "a
  *    colleague thought everyone needed this" are different claims and the weaker one goes second.
- * 7. **team** — who else exists. Last, because delegation is a decision made after the work is
- *    understood, not a lens for reading it.
+ * 7. **team** — who else exists. Last of the background, because delegation is a decision made
+ *    after the work is understood, not a lens for reading it.
+ * 8. **unattended** — the stricter conduct, only when nobody is watching.
+ * 9. **standing** — the four files a person and the agent both edit (INV-777). After everything
+ *    else because they change between turns, and a prefix cache is a prefix match.
+ * 10. **critical** — the recap, always last.
  */
 /** The agent's plate, as board rows. Empty renders nothing — no section for no tasks. */
 function renderTasks(context: PromptContext): string {
@@ -1095,6 +1106,9 @@ export const VOLATILE_SECTIONS: readonly PromptSection[] = [
     render: context =>
       context.lane === "background" && !ablated("unattended") ? UNATTENDED_CONDUCT : "",
   },
+  // The standing files (INV-777): the last thing that changes from turn to turn, so an edit to
+  // USER.md invalidates only this and the recap; nothing above it moves by a byte.
+  { name: "standing", render: context => renderStanding(context.standing, context.agent.profile.name) },
   // Last, always. See CRITICAL_RECAP: the tail is where a model reads best, and it was
   // being spent on the roster.
   { name: "critical", render: context => (context.toolless === true ? TOOLLESS_RECAP : CRITICAL_RECAP) },
