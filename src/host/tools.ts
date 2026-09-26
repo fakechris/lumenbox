@@ -2657,14 +2657,23 @@ export async function dispatchTool(
       if (outcome === "done") {
         // The count by outcome, up front, so a parent with twelve findings below knows
         // before reading whether any slice is blocked or unfinished.
-        const tally = (["done", "partial", "blocked", "unstated"] as const)
-          .map(status => [status, handoffs.filter(h => h === status).length] as const)
+        // A fork that threw has no handoff at all; it is counted as failed rather than left out,
+        // which is how a coverage report used to read 11 of 12 as the whole (INV-755).
+        const outcomes = briefs.map((_, index) => (hows[index] === "failed" ? "failed" : handoffs[index] ?? "unstated"));
+        const tally = (["done", "partial", "blocked", "unstated", "failed"] as const)
+          .map(status => [status, outcomes.filter(h => h === status).length] as const)
           .filter(([, n]) => n > 0)
           .map(([status, n]) => `${n} ${status}`)
           .join(", ");
+        const unfinished = outcomes.map((status, index) => [status, index + 1] as const).filter(([status]) => status !== "done");
+        const retry =
+          unfinished.length === 0
+            ? ""
+            : ` Not finished: ${unfinished.map(([status, n]) => `fork ${n} (${status})`).join(", ")} — ` +
+              `retry those once if they matter, and say which are still missing.`;
         return {
           text:
-            `${briefs.length} fork${briefs.length === 1 ? "" : "s"} finished (${tally}). Their findings ` +
+            `${briefs.length} fork${briefs.length === 1 ? "" : "s"} finished (${tally}).${retry} Their findings ` +
             `are below; combining them is yours to do.\n\n${landed.join("\n\n")}`,
           commit: commitFor(briefs.map((_, index) => index)),
         };

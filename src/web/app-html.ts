@@ -1072,6 +1072,7 @@ export const APP_HTML = String.raw`<!doctype html>
   <div id="teachreviewlist"></div>
   <div id="teachreviewdetail" style="display:none">
     <p id="teachreviewsource" class="fieldnote"></p>
+    <div id="teachreviewhints" class="fieldnote" style="display:none;white-space:pre-wrap;margin:6px 0"></div>
     <pre id="teachreviewtext" style="white-space:pre-wrap;overflow-wrap:anywhere;font-size:13px;padding:14px;border:1px solid var(--border)"></pre>
     <details id="teachreviewhistory" style="display:none"><summary>Earlier questions and answers</summary><pre id="teachreviewhistorytext" style="white-space:pre-wrap;overflow-wrap:anywhere"></pre></details>
     <div id="teachreviewclarification" style="display:none;margin:14px 0">
@@ -5644,6 +5645,9 @@ function showTeachingDraft(draft) {
   $("teachreviewdetail").style.display = "block";
   $("teachreviewsource").textContent = draft.status + " · agent " + draft.agentId + " · box " + draft.boxId + " · session " + draft.sessionId + " · trace " + draft.eventsPath + (draft.videoPath ? " · video " + draft.videoPath : "");
   $("teachreviewtext").textContent = draft.skill || draft.question;
+  // Advice on the wording, from the same check the skills page uses; publishing is never blocked by it.
+  $("teachreviewhints").style.display = (draft.hints || []).length ? "block" : "none";
+  $("teachreviewhints").textContent = (draft.hints || []).map(function (hint) { return "Hint: " + hint; }).join("\n");
   $("teachreviewclarification").style.display = !draft.skill && draft.status === "draft" ? "block" : "none";
   $("teachreviewanswer").value = "";
   $("teachreviewclarify").disabled = draft.status !== "draft";

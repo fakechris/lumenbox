@@ -1149,3 +1149,37 @@ test("an email send through a connector waits for a person when the tier gate en
     }
   }
 });
+
+test("a fan-out names what did not finish — a fork that failed outright included — and the parent retries only those, once (INV-755)", async () => {
+  const forkRounds: string[] = [];
+  const parentSaw: string[] = [];
+  let parentCalls = 0;
+  const script: Script = ({ system, messages }) => {
+    const brief = typeof messages[0]?.content === "string" ? messages[0].content : JSON.stringify(messages[0]?.content);
+    if (/You are a fork/.test(system)) {
+      forkRounds.push(brief);
+      if (/alpha/.test(brief)) return { say: 'alpha: found\nHANDOFF: {"status":"done"}' };
+      if (/beta/.test(brief)) return { say: 'beta: site blocked\nHANDOFF: {"status":"blocked","reason":"site blocked"}' };
+      throw new Error("provider went away mid-fork");
+    }
+    parentCalls += 1;
+    const last = JSON.stringify(messages.at(-1)?.content ?? "");
+    if (parentCalls === 1) return { call: "Fork", input: { briefs: ["look up alpha", "look up beta", "look up gamma"] } };
+    parentSaw.push(last);
+    if (parentCalls === 2) {
+      // What wide-research says to do with that line: retry the unfinished ones, once.
+      return { call: "Fork", input: { briefs: ["look up beta", "look up gamma"] } };
+    }
+    return { say: "Covered 1 of 3; missing: beta (site blocked), gamma (failed twice)." };
+  };
+  const episode = await runEpisode({ team: [{ name: "Front" }], says: ["逐个调研 alpha、beta、gamma 三家"], script });
+  try {
+    assert.match(parentSaw[0]!, /3 forks finished \(1 done, 1 blocked, 1 failed\)/, "a fork that threw is counted, not left out");
+    assert.match(parentSaw[0]!, /Not finished: fork 2 \(blocked\), fork 3 \(failed\)/);
+    assert.equal(forkRounds.filter(brief => /alpha/.test(brief)).length, 1, "what finished is not retried");
+    assert.equal(forkRounds.filter(brief => /gamma/.test(brief)).length, 2, "the failure is retried once, and only once");
+    assert.match(parentSaw[1]!, /2 forks finished \(1 blocked, 1 failed\)/);
+  } finally {
+    episode.cleanup();
+  }
+});

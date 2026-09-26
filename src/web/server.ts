@@ -223,7 +223,7 @@ import { firstRunCue } from "../host/prompt.ts";
 import { readBoxToken } from "../box/docker.ts";
 import { attachedBox, tokenOf } from "../box/boxes.ts";
 import { catalogTemplate, describeTemplate, parseTemplate, resolveBundleRefs, rewriteFrontmatter, templatesEnabled, unresolvedPlaceholders } from "../host/template.ts";
-import { SKILLS_DIR, SKILL_FILENAME, slugify } from "../host/skills.ts";
+import { SKILLS_DIR, SKILL_FILENAME, authoringHints, parseSkillFile, slugify } from "../host/skills.ts";
 import { catchUpFloor } from "../channels/ingress.ts";
 import { REPLAY_MAX_AGE_MS } from "../channels/feishu.ts";
 import { ActivityLog } from "./activity.ts";
@@ -4881,7 +4881,13 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
         };
         if (route === "GET /api/teaching-drafts") {
           if (refusedRole("admin")) return;
-          send(res, 200, { drafts: orchestrator.teachDrafts.list().filter(draft => mayReadTeachingBox(draft.boxId)) });
+          // Authoring hints (INV-755) are derived on read, never stored: advice for the reviewer that
+          // must not change a draft's digest or stop it being published.
+          send(res, 200, {
+            drafts: orchestrator.teachDrafts.list()
+              .filter(draft => mayReadTeachingBox(draft.boxId))
+              .map(draft => ({ ...draft, hints: draft.skill ? authoringHints(parseSkillFile(draft.skill)) : [] })),
+          });
           return;
         }
         if (route === "POST /api/teaching-drafts/clarify") {

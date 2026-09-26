@@ -494,3 +494,20 @@ test("allowed-tools is read into our names; unknown names are said, and narrow t
   const none = skillFrom("plain", parseSkillFile("---\ndescription: d\n---\nbody"));
   assert.ok("skill" in none && none.skill.allowedTools === undefined, "absent means no narrowing");
 });
+
+test("authoring hints: a description without when, and an unattended body pointing at a conversation it will not see (INV-755)", async () => {
+  const { authoringHints } = await import("./skills.ts");
+  const hint = (text: string) => authoringHints(parseSkillFile(text));
+  assert.match(hint("---\ndescription: Summarise the inbox.\n---\nbody").join(" "), /not when to use it/);
+  assert.deepEqual(hint("---\ndescription: Use when someone asks for an inbox summary.\n---\nbody"), []);
+  assert.deepEqual(hint("---\ndescription: 当有人要看收件箱摘要时使用。\n---\nbody"), [], "Chinese when-wording counts");
+  assert.match(hint("---\ndescription: Use when asked.\nschedule: \"0 9 * * 1\"\n---\nSend the report as above to the team.").join(" "), /refers to earlier conversation/);
+  assert.deepEqual(hint("---\ndescription: Use when asked.\n---\nSend the report as above."), [], "a skill a person runs can point at the chat it is run in");
+  assert.match(hint("---\ndescription: Use when asked.\ntrigger: message\nmatch: deploy\n---\n按刚才说的格式回复。").join(" "), /refers to earlier conversation/);
+
+  const agentWritten = skillFrom("x", parseSkillFile("---\ndescription: Summarise the inbox.\nauthored_by: Ada\n---\nbody"));
+  assert.ok("skill" in agentWritten);
+  assert.match(agentWritten.note ?? "", /x: the description says what the skill does but not when/);
+  const personWritten = skillFrom("y", parseSkillFile("---\ndescription: Summarise the inbox.\n---\nbody"));
+  assert.ok("skill" in personWritten && personWritten.note === undefined, "hints are for what an agent wrote unreviewed");
+});
