@@ -369,6 +369,11 @@ export interface ChannelManagerDeps {
     review: (input: AnswerReviewInput) => Promise<AnswerVerdict>;
   };
   /**
+   * Routine results waiting to ride along with the next reply in a chat (INV-776,
+   * `attach_next`). Asked once per delivered reply; whatever comes back is appended.
+   */
+  attachToReply?: (chatKey: string) => string | undefined;
+  /**
    * Told of every admitted message from a person, for routines that listen for a phrase. Fired
    * beside the ordinary handling, never instead of it; the callee decides what, if anything, runs.
    */
@@ -2285,11 +2290,15 @@ ${input.options.map(option => `· ${option}`).join("\n")}`
         }
         else if (review.mode() === "shadow") void review.review(input).catch(() => {});
       }
+      // A routine result that was judged not worth an interruption rides along here, under
+      // the reply the person was waiting for anyway (INV-776).
+      const attached = this.deps.attachToReply?.(targetChatKey) ?? this.deps.attachToReply?.(chatKey);
+      const trailer = [suggestion, attached].filter((part): part is string => part !== undefined).join("\n\n");
       if (reply.trim() !== interim) {
-        await deliver(`${reply.trim() === "" ? EMPTY_REPLY_NOTE : reply}${suggestion === undefined ? "" : `\n\n${suggestion}`}`);
+        await deliver(`${reply.trim() === "" ? EMPTY_REPLY_NOTE : reply}${trailer === "" ? "" : `\n\n${trailer}`}`);
       } else {
         await interimDelivery;
-        if (suggestion !== undefined) await deliver(suggestion);
+        if (trailer !== "") await deliver(trailer);
       }
       // Whatever the turn left in the chat's outbox follows the reply — images shown
       // as images, everything else as a file. What was pushed is marked delivered;

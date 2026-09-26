@@ -299,6 +299,24 @@ applies.
   recoverable. The soft rule exists because the hard one cannot see inside a tool: `bash` reaches
   the network and `write_file` can land on a standing file, and "decide rather than ask" on its own
   read as licence to do both.
+- **A routine's run is two steps: execute writes a result, resolve decides whether anyone hears
+  it (INV-776).** Before this the model's final message went to the chat as-is and the only
+  filter was the model's own silence; a model in task context reports, so an hourly check that
+  found the same thing twenty-three times said so twenty-three times. Now every run's final
+  text — including a `NothingToSay` — is written to the results ledger
+  (`routine-results.jsonl`, shown per routine on the automations page and at
+  `/api/schedules/results`) *before* a verdict is asked for. The verdict is `silent`,
+  `attach_next` or `push_now`, with a one-sentence reason on the record. The default judge is a
+  deterministic rule set, in order: nothing said → silent; `deliver_when: always` in the
+  frontmatter → push; the same bytes as the previous run → silent; otherwise push. Behind
+  `AGENTBOX_ROUTINE_RESOLVE=model` the cheap model may turn a push into an attach or a silence
+  and say why; it never re-opens a silence the rules found and falls back to the rules when it
+  cannot answer, since a routine whose delivery depends on an unavailable model is a routine
+  that quietly stops reporting. `attach_next` queues the result under the agent's next reply in
+  that chat rather than interrupting for it. Commitment reconciliation (§INV-528, INV-534)
+  happens inside resolve and only for a result that will be delivered: the cue turn still runs,
+  its reply is not delivered, and what is still unheld afterwards is a note on the same
+  delivery — one message per run, never two.
 
 ## 15. The policy gate
 

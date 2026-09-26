@@ -981,6 +981,7 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
       sampled: messageId => orchestrator.sampledForAnswerReview(messageId),
       review: input => orchestrator.reviewAnswer(input),
     },
+    attachToReply: chatKey => orchestrator.routineAttachments.take(chatKey),
     ingress,
     messages,
     listeners: message => {
@@ -3649,13 +3650,29 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
         // Reading is open like the board; firing one by hand is a driver's call, because
         // it spends money and wakes an agent.
         if (route === "GET /api/schedules") {
+          // Each routine's last result rides along (INV-776): a run that was judged not worth
+          // delivering is still a run, and this is where a person sees what it found.
+          const lastResults = new Map<string, ReturnType<typeof orchestrator.routineResults.list>[number]>();
+          for (const entry of orchestrator.routineResults.list()) if (!lastResults.has(entry.slug)) lastResults.set(entry.slug, entry);
           send(res, 200, {
-            schedules: await orchestrator.scheduler.status(),
+            schedules: (await orchestrator.scheduler.status()).map(entry => {
+              const last = lastResults.get(entry.slug);
+              return last === undefined ? entry : { ...entry, lastResult: { at: last.at, verdict: last.verdict, reason: last.reason, text: last.text.slice(0, 600) } };
+            }),
             armed: process.env.AGENTBOX_SCHEDULER !== "0",
             // The places (INV-430): the view groups routines by the box they live in.
             boxes: registry.listBoxes().map(box => ({ id: box.id, name: box.name })),
             defaultBox: registry.box.id,
           });
+          return;
+        }
+
+        // Every result a routine's runs produced, newest first — delivered or not (INV-776).
+        // Read like the list above: what a routine found is no more secret than that it ran.
+        if (route === "GET /api/schedules/results") {
+          const slug = url.searchParams.get("slug") ?? undefined;
+          const limit = Math.max(1, Math.min(200, Number(url.searchParams.get("limit") ?? 50) || 50));
+          send(res, 200, { results: orchestrator.routineResults.list({ ...(slug !== undefined ? { slug } : {}), limit }) });
           return;
         }
 

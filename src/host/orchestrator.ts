@@ -7,6 +7,7 @@
  */
 
 import { bindingsOf, CommitmentLedger, describeGaps, parseCommitments, priorCommitmentsPrompt, reconcileCommitments } from "./commitments.ts";
+import { finishRoutineRun, PendingAttachments, RoutineResultLedger, routineResolveMode } from "./routine-resolve.ts";
 import { learningsDir } from "./learnings.ts";
 import { replyForMessage } from "./reply.ts";
 import { contextTaskBlockers, isContextCommand } from "./context-recovery.ts";
@@ -315,6 +316,10 @@ export class Orchestrator {
   readonly teachDrafts = new TeachDrafts(join(agentboxHome(), "skills-drafts"));
   /** What routines committed to and whether anything holds it (INV-528). */
   readonly commitments = new CommitmentLedger(join(agentboxHome(), "commitments.jsonl"));
+  /** Every routine run's result, delivered or not (INV-776). */
+  readonly routineResults = new RoutineResultLedger(join(agentboxHome(), "routine-results.jsonl"));
+  /** Results waiting to ride along with the next reply in their chat (`attach_next`, INV-776). */
+  readonly routineAttachments = new PendingAttachments();
   /**
    * What was decided, written when it was decided (INV-551).
    *
@@ -499,6 +504,7 @@ export class Orchestrator {
           ...(skill.runAs !== undefined ? { runAs: skill.runAs } : {}),
           ...(skill.timezone !== undefined ? { timezone: skill.timezone } : {}),
           ...(skill.deliver !== undefined ? { deliver: skill.deliver } : {}),
+          ...(skill.deliverWhen !== undefined ? { deliverWhen: skill.deliverWhen } : {}),
           ...(skill.authoredBy !== undefined ? { authoredBy: skill.authoredBy } : {}),
           ...(skill.because !== undefined ? { because: skill.because } : {}),
           ...(skill.paused === true ? { paused: true } : {}),
@@ -516,6 +522,7 @@ export class Orchestrator {
           path: skill.path,
           ...(skill.runAs !== undefined ? { runAs: skill.runAs } : {}),
           ...(skill.deliver !== undefined ? { deliver: skill.deliver } : {}),
+          ...(skill.deliverWhen !== undefined ? { deliverWhen: skill.deliverWhen } : {}),
           ...(skill.authoredBy !== undefined ? { authoredBy: skill.authoredBy } : {}),
           ...(skill.because !== undefined ? { because: skill.because } : {}),
           ...(skill.paused === true ? { paused: true } : {}),
@@ -547,14 +554,15 @@ export class Orchestrator {
     // rather than in the main conversation, which no chat has ever read.
     // Last time's commitments open the next run of the same routine (INV-528).
     priorCommitments: slug => priorCommitmentsPrompt(this.commitments.lastFor(slug), this.tasks?.list() ?? []),
-    run: async (agent, prompt, deliver, slug, toolScope) => {
+    run: async (agent, prompt, deliver, slug, toolScope, deliverWhen) => {
       const scope = toolScope !== undefined ? { toolScope } : {};
       if (deliver === undefined) {
         await this.prompt(agent, prompt, undefined, { steerable: false, lane: "background", synthetic: true, ...scope });
         return;
       }
       const conversation = conversationIdFor(deliver);
-      const agentId = this.registry.resolve(agent).id;
+      const record = this.registry.resolve(agent);
+      const agentId = record.id;
       // Taken before the turn, because "what it said" is everything past this point —
       // the same mark the channel path uses, and the reason a reply can be recovered at
       // all after a restart.
@@ -568,43 +576,30 @@ export class Orchestrator {
       });
       await this.settle();
       const said = this.replySince(agentId, before, conversation).trim();
-      // Silence is not delivered. A skill that had nothing to report should not put an
-      // empty message in a room every morning — the absence is the report.
-      if (said === "") return;
-      await this.options.deliverToChat?.(deliver, said, agentId);
-      // Commitments in the report are checked against the board and the scheduler
-      // (INV-528): what nothing holds is said in the same chat, and the agent is cued
-      // to create the card and the reminder now, in a turn of its own.
-      if (slug === undefined) return;
-      const commitments = parseCommitments(said);
-      if (commitments.length === 0) return;
-      const routines = (await this.scheduler.status().catch(() => [])).map(entry => ({ slug: entry.slug, name: entry.name, paused: entry.paused, ...(entry.nextRun !== undefined && entry.kind === "once" ? { at: Date.parse(entry.nextRun) } : {}) }));
-      // Made now, so a card finished last month cannot be what carries it, and bound to
-      // whatever the last run tied each item to — an id rather than a word match (INV-534).
-      const madeAt = Date.now();
-      const bindings = bindingsOf(this.commitments.lastFor(slug));
-      const checks = reconcileCommitments(commitments, this.tasks?.list() ?? [], routines, madeAt, bindings);
-      const isDone = (taskId: string | undefined): boolean => taskId !== undefined && this.tasks?.get(taskId)?.status === "done";
-      const gaps = describeGaps(checks);
-      if (gaps.toChat === undefined || gaps.cue === undefined) {
-        this.commitments.record(this.commitments.withCarried({ at: new Date(madeAt).toISOString(), slug, agentId, commitments, checks }, isDone));
-        return;
-      }
-      console.error(`[commitments] ${slug}: ${checks.filter(c => c.missing.length > 0).length} of ${checks.length} commitment(s) not held`);
-      await this.options.deliverToChat?.(deliver, gaps.toChat, agentId);
-      const mark = this.registry.readTranscript(agentId, conversation).length;
-      await this.prompt(agent, gaps.cue, undefined, { steerable: false, lane: "background", synthetic: true, conversation });
-      await this.settle();
-      const created = this.replySince(agentId, mark, conversation).trim();
-      if (created !== "") await this.options.deliverToChat?.(deliver, created, agentId);
-      // What the cue actually produced, checked rather than believed (INV-534): the agent
-      // saying "created" is a sentence, and the ledger is about what exists. Whatever is
-      // still unheld is said once — not cued again, because a second cue that produced
-      // nothing the first time is a loop, and the next run opens with it anyway.
-      const after = reconcileCommitments(commitments, this.tasks?.list() ?? [], (await this.scheduler.status().catch(() => [])).map(entry => ({ slug: entry.slug, name: entry.name, paused: entry.paused, ...(entry.nextRun !== undefined && entry.kind === "once" ? { at: Date.parse(entry.nextRun) } : {}) })), madeAt, bindings);
-      this.commitments.record(this.commitments.withCarried({ at: new Date(madeAt).toISOString(), slug, agentId, commitments, checks: after }, isDone));
-      const stillOpen = describeGaps(after);
-      if (stillOpen.toChat !== undefined) await this.options.deliverToChat?.(deliver, `Still nothing holding these after that turn:\n${stillOpen.toChat.split("\n").slice(1).join("\n")}`, agentId);
+      // Execute is over. What it said is written down and a resolve step decides whether
+      // the chat hears it (INV-776): nothing to say, or the same result as last time, stays
+      // on the ledger; a routine that asked for every run gets every run.
+      await finishRoutineRun(
+        {
+          slug: slug ?? "ad-hoc",
+          agentId,
+          agentName: record.profile.name,
+          deliver,
+          ...(deliverWhen !== undefined ? { deliverWhen } : {}),
+          said,
+          ...(this.silenceSince(agentId, before, conversation) ?? {}),
+        },
+        {
+          ledger: this.routineResults,
+          recentChat: (chatKey, count) => this.recentChatLines(agentId, conversationIdFor(chatKey), count),
+          deliverToChat: async (chatKey, text, fromAgentId) => { await this.options.deliverToChat?.(chatKey, text, fromAgentId); },
+          attachNext: (chatKey, text) => this.routineAttachments.add(chatKey, text),
+          mode: routineResolveMode(),
+          ask: question => this.askCheaply(record, question, "review"),
+          ...(slug !== undefined ? { reconcile: async () => this.reconcileRoutineCommitments(slug, agent, agentId, conversation, said) } : {}),
+          log: line => console.error(`[routine] ${line}`),
+        }
+      );
     },
     // A waiting webhook: the same turn, but the caller is told what came of it.
     runAndSay: async (agent, prompt, toolScope) => {
@@ -2036,6 +2031,58 @@ export class Orchestrator {
       .filter(entry => entry.role === "assistant" && entry.kind === undefined && entry.host !== true && entry.text)
       .map(entry => entry.text as string)
       .join("\n\n");
+  }
+
+  /** Whether the turn since a transcript position ended by calling `NothingToSay` (INV-775), and why. */
+  silenceSince(agentId: string, from: number, conversation: string = MAIN_CONVERSATION): { silent: { reason: string } } | undefined {
+    const entries = this.registry.readTranscript(agentId, conversation) as { role?: string; kind?: string; silent?: { reason: string } }[];
+    for (let i = entries.length - 1; i >= from; i -= 1) {
+      const silent = entries[i]?.silent;
+      if (silent !== undefined) return { silent };
+    }
+    return undefined;
+  }
+
+  /** The last lines a chat's conversation holds, oldest first: what the routine judge reads (INV-776). */
+  recentChatLines(agentId: string, conversation: string, count: number): string[] {
+    return (this.registry.readTranscript(agentId, conversation) as { role?: string; kind?: string; text?: string; host?: true }[])
+      .filter(entry => entry.kind === undefined && entry.host !== true && typeof entry.text === "string" && entry.text.trim() !== "")
+      .slice(-count)
+      .map(entry => `${entry.role === "assistant" ? "assistant" : "person"}: ${(entry.text as string).trim().slice(0, 400)}`);
+  }
+
+  /**
+   * Commitments in a delivered report are checked against the board and the scheduler
+   * (INV-528). Gaps cue the agent to create the card and the reminder now, in a turn of
+   * its own whose reply is not delivered; what is still unheld after that is the note the
+   * caller appends to the one delivery (INV-776) — never a second message.
+   */
+  private async reconcileRoutineCommitments(slug: string, agent: string, agentId: string, conversation: string, said: string): Promise<string | undefined> {
+    const commitments = parseCommitments(said);
+    if (commitments.length === 0) return undefined;
+    const routinesNow = async () => (await this.scheduler.status().catch(() => [])).map(entry => ({ slug: entry.slug, name: entry.name, paused: entry.paused, ...(entry.nextRun !== undefined && entry.kind === "once" ? { at: Date.parse(entry.nextRun) } : {}) }));
+    // Made now, so a card finished last month cannot be what carries it, and bound to
+    // whatever the last run tied each item to — an id rather than a word match (INV-534).
+    const madeAt = Date.now();
+    const bindings = bindingsOf(this.commitments.lastFor(slug));
+    const checks = reconcileCommitments(commitments, this.tasks?.list() ?? [], await routinesNow(), madeAt, bindings);
+    const isDone = (taskId: string | undefined): boolean => taskId !== undefined && this.tasks?.get(taskId)?.status === "done";
+    const gaps = describeGaps(checks);
+    if (gaps.cue === undefined) {
+      this.commitments.record(this.commitments.withCarried({ at: new Date(madeAt).toISOString(), slug, agentId, commitments, checks }, isDone));
+      return undefined;
+    }
+    console.error(`[commitments] ${slug}: ${checks.filter(c => c.missing.length > 0).length} of ${checks.length} commitment(s) not held`);
+    await this.prompt(agent, gaps.cue, undefined, { steerable: false, lane: "background", synthetic: true, conversation });
+    await this.settle();
+    // What the cue actually produced, checked rather than believed (INV-534): the agent
+    // saying "created" is a sentence, and the ledger is about what exists. Whatever is
+    // still unheld is said once, on the delivery itself — not cued again, because a
+    // second cue that produced nothing the first time is a loop, and the next run opens
+    // with it anyway.
+    const after = reconcileCommitments(commitments, this.tasks?.list() ?? [], await routinesNow(), madeAt, bindings);
+    this.commitments.record(this.commitments.withCarried({ at: new Date(madeAt).toISOString(), slug, agentId, commitments, checks: after }, isDone));
+    return describeGaps(after).toChat;
   }
 
   replyForMessage(agentId: string, messageId: string, conversation: string = MAIN_CONVERSATION): string {

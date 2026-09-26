@@ -5003,6 +5003,16 @@ function automationRow(s, rows) {
   var where = s.deliver
     ? "reports to " + esc(s.deliver)
     : '<span class="dim">writes files only — no chat hears it</span>';
+  if (s.deliver && s.deliverWhen === "always") where += ' <span class="dim">(every run)</span>';
+  // The last run's result, delivered or not (INV-776): a run the resolve step kept quiet is
+  // still on the record, and this is the line that says what it found and why it stayed quiet.
+  var lastResult = s.lastResult
+    ? '<div class="dim" style="font-size:11px;margin-top:3px">last result ' + esc(new Date(s.lastResult.at).toLocaleString()) + " \u00b7 " +
+        (s.lastResult.verdict === "silent" ? "not delivered" : s.lastResult.verdict === "attach_next" ? "attached to the next reply" : s.lastResult.verdict === "push_now" ? "delivered" : esc(s.lastResult.verdict)) +
+        (s.lastResult.reason ? " \u2014 " + esc(s.lastResult.reason) : "") +
+        (s.lastResult.text ? '<div class="mono" style="white-space:pre-wrap;margin-top:2px;max-height:6em;overflow:auto">' + esc(s.lastResult.text) + "</div>" : "") +
+      "</div>"
+    : "";
   // Provenance, not permission: an agent may stand up a routine of its own, and what
   // makes that safe is that the standing commitment says where it came from and what it
   // costs — reviewed afterwards rather than approved beforehand.
@@ -5048,6 +5058,7 @@ function automationRow(s, rows) {
       (s.agent ? " · as " + esc(s.agent) : "") + " · " + where + "</div>" +
     '<div class="dim" style="font-size:11px">' + last + ' · <span class="mono">' + esc(s.schedule) + "</span></div>" +
     (s.because ? '<div class="dim" style="font-size:11px;font-style:italic">' + esc(s.because) + "</div>" : "") +
+    lastResult +
     hookBlock +
   "</div>";
 }
