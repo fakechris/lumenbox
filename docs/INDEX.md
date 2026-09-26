@@ -22,7 +22,7 @@ this file and the headers disagree. Edit the header, not this table.
 | [02-product](02-product.md) | Product | current | 2026-08-19 |
 | [03-architecture](03-architecture.md) | Architecture | current | 2026-09-22 |
 | [04-design](04-design.md) | Design | current | 2026-09-24 |
-| [05-data](05-data.md) | Data | current | 2026-09-25 |
+| [05-data](05-data.md) | Data | current | 2026-09-26 |
 | [08-control-plane](08-control-plane.md) | Control plane | current | 2026-09-12 |
 | [11-roadmap](11-roadmap.md) | Roadmap and backlog | current | 2026-09-14 |
 | [21-dingtalk-wire](21-dingtalk-wire.md) | The DingTalk wire | current | 2026-08-28 |
