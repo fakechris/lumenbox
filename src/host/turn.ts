@@ -1540,10 +1540,26 @@ async function runContextTurn(agent: AgentRecord, inbound: readonly InboundMessa
     ? ({ cache_control: { type: "ephemeral" } } as const)
     : {};
   const forkLine = isForkConversation(conversation) ? `\n\n${FORK_PROMPT_LINE}` : "";
-  const system: Anthropic.TextBlockParam[] = [
-    { type: "text", text: promptParts.stable, ...cache },
-    { type: "text", text: promptParts.volatile + forkLine, ...cache },
-  ];
+  // Where the volatile tier rides (INV-767). With breakpoints, the stable block is cached on
+  // its own and the volatile one may sit beside it. An automatic prefix cache has no
+  // breakpoints — MiniMax's matches at message boundaries and treats tools + system + the
+  // first message as one unit — so one changed byte of system (the memory selected for
+  // *this* request, a todo ticked) misses the whole prefix: measured 2026-09-26, 33 of 41
+  // first rounds read exactly 128 tokens, and two turns with a byte-identical system prompt
+  // and no tools still read 128. There the volatile tier goes to the end of the newest
+  // message, which is where MiniMax's own guidance puts dynamic content; the system prompt
+  // and the tools are then the same bytes turn after turn.
+  const volatileInTail = !provider.promptCaching && process.env.AGENTBOX_VOLATILE_TAIL !== "0";
+  const hostContext = (volatile: string): string =>
+    "<host_context>\nAssembled by the host for this turn: the tasks, plan, memory and roster " +
+    "that would otherwise be system text. Not the person's words — the request is the " +
+    `message above.\n\n${volatile}\n</host_context>`;
+  const system: Anthropic.TextBlockParam[] = volatileInTail
+    ? [{ type: "text", text: promptParts.stable }]
+    : [
+        { type: "text", text: promptParts.stable, ...cache },
+        { type: "text", text: promptParts.volatile + forkLine, ...cache },
+      ];
 
   // A stop belongs to the turn that was running. Clearing it as the next turn starts means a
   // person's next instruction is not silently refused — which would read as the agent having broken
@@ -1667,9 +1683,18 @@ async function runContextTurn(agent: AgentRecord, inbound: readonly InboundMessa
   const opener = inbound.some(message => message.fromId === "user")
     ? turnReminderFor(provider.model, turnText, visibleSkillCount > 0)
     : undefined;
+  // The API copy of the turn's message: what was said, then (without breakpoints) the volatile
+  // tier, then the reminder — the reminder last, beside the request, as docs/31 measured.
   const messages: Anthropic.MessageParam[] = [
     ...historyToMessages(history),
-    { role: "user", content: opener === undefined ? turnText : `${turnText}\n\n${opener}` },
+    {
+      role: "user",
+      content: [
+        turnText,
+        ...(volatileInTail ? [hostContext(promptParts.volatile + forkLine)] : []),
+        ...(opener === undefined ? [] : [opener]),
+      ].join("\n\n"),
+    },
   ];
 
   registry.appendTranscript(agent.id, {
@@ -1873,6 +1898,15 @@ async function runContextTurn(agent: AgentRecord, inbound: readonly InboundMessa
     model: provider.model,
     build: buildInfo(),
     promptHash: promptHashOf(promptParts.stable, promptParts.volatile),
+    // Split, so "which part changed between these two turns" is a comparison of two fields
+    // rather than a guess (INV-767): the one hash above differed on 40 of 41 turns and could
+    // not say whether the stable tier — the one a cache depends on — was among them.
+    promptHashes: {
+      stable: promptHashOf(promptParts.stable),
+      volatile: promptHashOf(promptParts.volatile),
+      tools: promptHashOf(JSON.stringify(tools)),
+      volatileInTail,
+    },
     contextEpoch: registry.contextVersion(agent.id, conversation),
     contextMode,
     memoryProjection: {
@@ -1933,7 +1967,16 @@ async function runContextTurn(agent: AgentRecord, inbound: readonly InboundMessa
       // re-running a plain score-based recall here quietly threw that choice away (audit 2026-09-01
       // #6). A fact remembered mid-turn reaches the next turn, not this one — the same freeze Grok
       // Bot applies per compaction epoch, and the reason the memory block stays byte-stable.
-      system[1] = { type: "text", text: buildParts(memoryRecall).volatile + forkLine, ...cache };
+      const rebuilt = buildParts(memoryRecall).volatile + forkLine;
+      if (volatileInTail) {
+        // The continuation prompt is the newest message now; the rebuilt tier rides with it.
+        const last = messages[messages.length - 1];
+        if (last !== undefined && last.role === "user" && typeof last.content === "string") {
+          last.content = `${last.content}\n\n${hostContext(rebuilt)}`;
+        }
+      } else {
+        system[1] = { type: "text", text: rebuilt, ...cache };
+      }
 
       rounds.length = 0; // a fresh budget means a fresh judgement about looping
     }

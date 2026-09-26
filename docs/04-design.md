@@ -3,7 +3,7 @@
      family: spec
      status: current
      domain: mechanisms
-     updated: 2026-09-26
+     updated: 2026-09-27
 -->
 # Design
 
@@ -474,6 +474,18 @@ The system prompt is assembled from named sections in a declared order, split ac
 a cache breakpoint between them. Anything that changes per turn belongs in the volatile tier; put it
 in the stable one and the cached prefix is invalidated every turn, at a cost that is invisible and
 continuous.
+
+The two tiers assume an endpoint with cache breakpoints. Without them (INV-767, 2026-09-26) the
+volatile tier moves: MiniMax's automatic cache has no breakpoints, matches at message boundaries,
+and treats tools + system + the first message as one unit — measured with controlled requests,
+a system prompt changed by one word at its end, or a first message with a reminder appended, read
+128 tokens from cache where an unchanged request read 2944; `cache_control` markers made no
+difference on MiniMax-M3. So for a provider whose profile says `promptCaching: false`, the system
+prompt is the stable tier alone and the volatile tier rides at the end of the newest message,
+inside `<host_context>`, after the person's words and before the per-turn reminder. The turn
+ledger records `promptHashes` — stable, volatile, tools — so which part changed between two turns
+is a comparison, and `scripts/cache-hits.mjs` reads the first round of every turn out of the
+local ledgers. `AGENTBOX_VOLATILE_TAIL=0` keeps the two-block shape everywhere, for comparison.
 
 The order is the part worth writing down, because it is the part that gets changed by accident —
 sections are appended by whoever adds one, and "wherever it landed" is not a reason:

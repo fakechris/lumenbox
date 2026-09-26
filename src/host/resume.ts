@@ -91,6 +91,8 @@ interface BeginRecord {
   model?: string;
   build?: { version: string; commit: string };
   promptHash?: string;
+  /** The same prompt hashed per tier, plus the tool list, and where the volatile tier rode (INV-767). */
+  promptHashes?: { stable: string; volatile: string; tools: string; volatileInTail: boolean };
   contextEpoch?: number;
   contextMode?: "normal" | "clean" | "recover";
   memoryProjection?: {
@@ -207,6 +209,7 @@ export class TurnLedger {
     model?: string;
     build?: { version: string; commit: string };
     promptHash?: string;
+    promptHashes?: BeginRecord["promptHashes"];
     contextEpoch?: number;
     contextMode?: "normal" | "clean" | "recover";
     memoryProjection?: BeginRecord["memoryProjection"];
@@ -225,6 +228,7 @@ export class TurnLedger {
       ...(options.model !== undefined ? { model: options.model } : {}),
       ...(options.build !== undefined ? { build: options.build } : {}),
       ...(options.promptHash !== undefined ? { promptHash: options.promptHash } : {}),
+      ...(options.promptHashes !== undefined ? { promptHashes: options.promptHashes } : {}),
       ...(options.contextEpoch !== undefined ? { contextEpoch: options.contextEpoch } : {}),
       ...(options.contextMode !== undefined ? { contextMode: options.contextMode } : {}),
       ...(options.memoryProjection !== undefined ? { memoryProjection: options.memoryProjection } : {}),
