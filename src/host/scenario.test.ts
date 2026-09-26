@@ -1056,3 +1056,21 @@ test("the memory box answers looking around from its files, and anything else as
     assert.match(seen, /\(ran\) npm install left-pad/, "a command that would do something is not simulated");
   } finally { result.cleanup(); }
 });
+
+test("the memory box also answers find, date, head and git — git honestly, with no repository (INV-715)", async () => {
+  let seen = "";
+  const result = await runEpisode({
+    team: [{ name: "Nova" }], says: ["look"],
+    files: { "/home/box/work/notes/a.txt": "alpha\nbeta\n", "/home/box/work/notes/deep/b.md": "# b\n" },
+    script: ({ round, messages }) => {
+      if (round === 0) return { call: "bash", input: { command: "date; find /home/box/work/notes -type f -mtime -1; cd /home/box/work && git log --oneline -5; head -n 1 /home/box/work/notes/a.txt" } };
+      if (round === 1) seen = JSON.stringify(messages.at(-1)?.content);
+      return { say: "done" };
+    },
+  });
+  try {
+    assert.match(seen, /2026/);
+    assert.match(seen, /notes\/a\.txt\\n\/home\/box\/work\/notes\/deep\/b\.md/);
+    assert.match(seen, /not a git repository/);
+  } finally { result.cleanup(); }
+});

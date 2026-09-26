@@ -2,7 +2,7 @@
      title: Episodes as tests
      family: decision
      status: current
-     updated: 2026-09-25
+     updated: 2026-09-26
 -->
 # 43 · Episodes as tests
 
@@ -132,6 +132,31 @@ folder (fixed; it then failed as [agent]) — and research-brief, data-brief and
 whatever the description says. That is a finding about how the index is framed in the prompt,
 not about any one description, and is the next thing to change. One run per case is noisy:
 the same sentence opened short-video-script in one case and not in another.
+
+### The index, framed as a step (INV-715, 2026-09-26)
+
+The pattern the first rounds left was not about any description: the model acted on the request
+at once and never looked at the index. So the framing was measured, not argued. Four variants,
+13 starters, three runs each, at most four model calls per run, MiniMax-M3; the memory box now
+also answers `find`, `date`, `head`, `file` and `git` (the last as "not a repository"), which
+cleared the [infra] loops.
+
+| framing | should open | should not open |
+|---|---|---|
+| baseline — "Skills you can reuse … read the file when one applies" | 18/39 | 39/39 |
+| check-first — heading and wording say to look before acting; routines under their own heading | 21/39 | — |
+| remind — one line in the per-turn reminder pointing at the index | 32/39 | — |
+| **both** | **36/39** | **39/39** |
+
+The line beside the message did most of it; the section's own wording added the rest. Of the
+three misses under *both*, two were the provider refusing for capacity (`!`, never a pass) and
+one was a case that asked for "this data" without saying where it was — fixed in the case.
+And a side effect worth having: under *both*, a request that belongs to a neighbour now opens
+that neighbour (a table opens data-brief, a pricing survey opens research-brief).
+
+The reminder line reaches only the model families the per-turn reminder already serves
+(`REMINDED_MODEL_FAMILIES`); a Claude model gets the section's framing alone, and has not been
+measured here.
 
 ## What it is not
 

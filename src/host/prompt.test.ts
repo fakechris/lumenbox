@@ -589,3 +589,15 @@ test("house rules land after the box section and before the persona, and vanish 
   assert.doesNotMatch(without, /# House rules/);
   assert.ok(STABLE_SECTIONS.some(section => section.name === "place"));
 });
+
+test("the skills index is framed as a step before acting, and the turn reminder points at it only when there are skills (INV-715)", async () => {
+  const { renderSkills } = await import("./skills.ts");
+  const index = renderSkills([{ name: "research-brief", slug: "research-brief", description: "Use when…", path: "/home/box/work/skills/research-brief/SKILL.md", scope: "global", helpers: [] }]);
+  assert.match(index, /^## Skills — check this list before you start/);
+  assert.match(index, /read_file` its SKILL\.md first/);
+  assert.ok(index.indexOf("research-brief") < index.indexOf("### Writing routines"), "the list comes before the routine guidance");
+  const zh = turnReminderFor("MiniMax-M3", "帮我调研一下固态电池的进展", true)!;
+  assert.match(zh, /Skills 清单/);
+  assert.doesNotMatch(turnReminderFor("MiniMax-M3", "帮我调研一下固态电池的进展", false)!, /Skills/, "no skills, no line about them");
+  assert.match(turnReminderFor("glm-4.6", "research this", true)!, /check the Skills list/);
+});

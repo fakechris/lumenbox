@@ -76,7 +76,7 @@ this file and the headers disagree. Edit the header, not this table.
 | [40-chat-area](40-chat-area.md) | The chat area: what a person can do with a message | current | 2026-09-08 |
 | [41-chat-grammar](41-chat-grammar.md) | The chat column, rebuilt: one grammar for everything that appears in it | current | 2026-09-08 |
 | [42-front-and-workers](42-front-and-workers.md) | One front, invisible workers | current | 2026-09-08 |
-| [43-scenarios](43-scenarios.md) | Episodes as tests | current | 2026-09-25 |
+| [43-scenarios](43-scenarios.md) | Episodes as tests | current | 2026-09-26 |
 | [44-webhook-triggers](44-webhook-triggers.md) | Webhook triggers | current | 2026-09-14 |
 | [45-teams](45-teams.md) | Teams | current | 2026-09-09 |
 | [46-chat-as-a-chat](46-chat-as-a-chat.md) | The chat is a chat | current | 2026-09-09 |

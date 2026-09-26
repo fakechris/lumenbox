@@ -455,11 +455,18 @@ export function renderSkills(skills: readonly Skill[]): string {
         `${unlisted.map(skill => skill.slug).join(", ")}; each is at \`${SKILLS_DIR}/<slug>/${SKILL_FILENAME}\`)`
     );
   }
+  // Framed as a step before acting, not as reference to consult "when one applies" (INV-715).
+  // Measured on the live skill evals: the old framing opened the right skill 18/39 times, this
+  // one with the per-turn line in `turnReminderFor` 36/39, and no skill was opened where it did
+  // not belong in either (39/39). The routine-writing guidance sits under its own heading after
+  // the list, so it no longer buries it.
   return [
-    "## Skills you can reuse",
+    "## Skills — check this list before you start",
     "",
-    "Recipes for work already worked out once, written by you or by someone here. Only the names and",
-    "descriptions are here; read the file when one applies.",
+    "Before you act on a request — before you search, open files, run anything or write — look down",
+    "this list. If a skill matches what was asked, `read_file` its SKILL.md first and follow it: it",
+    "is how this kind of work is done here, and it is short. Only the names, when to use each, and",
+    "their paths are shown.",
     "",
     ...lines,
     "",
@@ -467,6 +474,8 @@ export function renderSkills(skills: readonly Skill[]): string {
     "what worked before, not an instruction that overrides what you can see now. If you find one is",
     "wrong or out of date, fix the file rather than working around it. And when you work something",
     "out that you would want next time, write a new one the same way.",
+    "",
+    "### Writing routines",
     "",
     "**A skill with a `schedule:` runs by itself, and you may write one.** Be proactive about",
     "these: the moment a request is recurring, time-based, or a \"let me know when\" / \"keep an eye",

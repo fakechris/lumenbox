@@ -16,6 +16,7 @@
  *   npm run scenario -- --skills         each starter skill's own cases (INV-693): is it opened
  *                                        when it should be, and left alone when it should not
  *   npm run scenario -- --skills --only research-brief --runs 1
+ *   npm run scenario -- --skills --kind trigger     only the "should open it" cases
  *
  * A scratch AGENTBOX_HOME and a scratch box are used, so nothing here touches the live
  * installation's agents, ledgers or spend.
@@ -164,7 +165,8 @@ async function skillEvals(provider, runs, only) {
   const rows = [];
   for (const starter of chosen) {
     const path = `${SKILLS_DIR}/${starter.slug}/SKILL.md`;
-    for (const one of starter.evals) {
+    const kind = flag("--kind");
+    for (const one of starter.evals.filter(item => kind === undefined || item.kind === kind)) {
       const verdicts = [];
       const opened = new Set();
       for (let run = 1; run <= runs; run += 1) {

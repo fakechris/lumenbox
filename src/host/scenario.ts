@@ -150,10 +150,14 @@ function memoryBox(files: Map<string, string>, overrides: Partial<BoxClient> = {
 }
 
 /**
- * `ls`, `cat`, `wc -l`, `pwd` and `echo`, chained with `&&` or `;`, answered from the memory box's
+ * `ls`, `cat`, `head`, `tail`, `wc -l`, `find`, `file`, `pwd`, `date`, `echo`, `cd` and `git` (always "not a
+ * repository"), chained with `&&` or `;`, answered from the memory box's
  * files. Undefined for anything else, including any segment it does not recognise, so a command
  * that would do something is never half-simulated.
  */
+/** What `date` says in a memory box: fixed, so an episode reads the same every run. */
+const EPISODE_DATE = "Fri Sep 26 09:00:00 UTC 2026";
+
 function lookAround(files: Map<string, string>, command: string): string | undefined {
   const home = "/home/box/work";
   const out: string[] = [];
@@ -163,6 +167,18 @@ function lookAround(files: Map<string, string>, command: string): string | undef
     const [verb, ...rest] = segment.split(/\s+/);
     const args = rest.filter(arg => !arg.startsWith("-")).map(arg => arg.replace(/^["']|["']$/g, "").replace(/^~/, "/home/box"));
     if (verb === "pwd") out.push(home);
+    else if (verb === "date") out.push(EPISODE_DATE);
+    // `find` lists what is under the directory and ignores its predicates: an approximation, but
+    // a live model that gets "(ran) find" back searches the disk until its budget is gone (INV-715).
+    else if (verb === "find") {
+      const dir = (args[0] ?? home).replace(/\/$/, "");
+      out.push([...files.keys()].filter(path => path === dir || path.startsWith(`${dir}/`)).sort().join("\n"));
+    }
+    // There is no repository in a memory box, and saying so is the honest answer.
+    else if (verb === "git") out.push("fatal: not a git repository (or any of the parent directories): .git");
+    else if (verb === "file") out.push(args.map(path => `${path}: ${files.has(path) ? "data" : "cannot open (No such file or directory)"}`).join("\n"));
+    else if (verb === "head" || verb === "tail") out.push(args.map(path => files.get(path) ?? `${verb}: cannot open '${path}' for reading: No such file or directory`).join("\n"));
+    else if (verb === "cd") continue;
     else if (verb === "echo") out.push(args.join(" "));
     else if (verb === "ls") {
       const dir = (args[0] ?? home).replace(/\/$/, "");

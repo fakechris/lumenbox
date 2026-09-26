@@ -1629,7 +1629,7 @@ async function runContextTurn(agent: AgentRecord, inbound: readonly InboundMessa
   // The per-turn reminder rides the API copy of the person's message only (docs/31 layer
   // 2b): the transcript keeps what the person said, and a later replay re-appends nothing.
   const opener = inbound.some(message => message.fromId === "user")
-    ? turnReminderFor(provider.model, turnText)
+    ? turnReminderFor(provider.model, turnText, (deps.skills?.length ?? 0) > 0 && !isolated)
     : undefined;
   const messages: Anthropic.MessageParam[] = [
     ...historyToMessages(history),
