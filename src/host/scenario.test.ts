@@ -1621,3 +1621,54 @@ test("an hourly price check runs 24 times with one change: the chat hears once, 
     assert.ok(runs.every(r => r.verdict !== "pending"), "each run resolved");
   } finally { episode.cleanup(); rmSync(dir, { recursive: true, force: true }); }
 });
+
+test("a person's USER.md edit reaches the next turn as text and as a diff; an agent's AGENTS.md lesson is in the prompt after (INV-777)", async () => {
+  const { readStanding, standingBoxDir, writeStanding } = await import("./standing.ts");
+  const systems: string[] = [];
+  const openers: string[] = [];
+  let calls = 0;
+  const result = await runEpisode({
+    team: [{ name: "Nova" }], says: [],
+    script: ({ system, messages }) => {
+      calls++;
+      systems.push(system);
+      const last = messages[messages.length - 1]!;
+      openers.push(typeof last.content === "string" ? last.content : JSON.stringify(last.content));
+      if (calls === 1) return { say: "Hi there." };
+      if (calls === 2) return { say: "Noticed you changed USER.md — Skipper it is." };
+      if (calls === 3) {
+        return { call: "write_file", input: { path: `${standingBoxDir("Nova")}/AGENTS.md`, content: "## Lessons\n\n- LESSON_FROM_NOVA\n", overwrite: true } };
+      }
+      return { say: "Done." };
+    },
+    drive: async ({ registry, frontId, say, files }) => {
+      // Turn 1: the seeds are in the prompt, mirrored to the box, and nothing has "changed".
+      await say("hello");
+      assert.match(systems[0]!, /# Your standing files/);
+      assert.match(systems[0]!, /## USER\.md\n\n# USER\.md — the person/);
+      assert.ok(files.has(`${standingBoxDir("Nova")}/USER.md`), "the box holds the read-write mirror");
+      assert.doesNotMatch(openers[0]!, /\[file-diff\]/);
+      // A person edits USER.md on the host between turns.
+      const home = registry.dirFor(frontId);
+      writeStanding(home, "Nova", "USER.md", "# USER.md — the person\n\n- Call me: Skipper\n", "person");
+      await say("what should you call me?");
+      assert.match(systems[1]!, /- Call me: Skipper/, "the next turn's prompt carries the new text");
+      assert.match(openers[1]!, /\[file-diff\] USER\.md changed/);
+      assert.match(openers[1]!, /```diff source=file-diff\n[\s\S]*\+- Call me: Skipper/);
+      assert.match(result0(), /Skipper/);
+      // The agent writes a lesson through write_file: host copy updated, no notice about its own edit.
+      await say("keep a lesson");
+      assert.match(readStanding(home, "Nova")["AGENTS.md"], /LESSON_FROM_NOVA/, "the host copy is written in the same call");
+      await say("anything else?");
+      assert.match(systems.at(-1)!, /LESSON_FROM_NOVA/, "a later turn's system prompt contains the lesson");
+      assert.doesNotMatch(openers.at(-1)!, /\[file-diff\]/, "an agent's own write is not reported back to it");
+      function result0(): string {
+        return registry.readTranscript(frontId).filter(e => (e as { role?: string }).role === "assistant").map(e => (e as { text?: string }).text ?? "").join("\n");
+      }
+    },
+  });
+  try {
+    assert.equal(result.score.turns, 4);
+    assert.ok(result.score.said.some(s => /Noticed you changed USER\.md/.test(s.text)));
+  } finally { result.cleanup(); }
+});

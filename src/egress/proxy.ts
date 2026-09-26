@@ -11,6 +11,7 @@
  */
 
 import { createServer, connect as netConnect, type Server, type Socket } from "node:net";
+import { tokenFromProxyAuthorization } from "./call.ts";
 import {
   decodeResponse,
   encodeRequest,
@@ -23,12 +24,22 @@ export interface ProxyOptions {
   relay: string;
   token: string;
   port?: number;
+  /**
+   * Which call a connection belongs to (INV-784, call.ts): the credential in its
+   * `Proxy-Authorization` when boxd vouches for it, or the one browser action in flight
+   * when it carries none. Absent means nothing is attributed, which is what the proxy
+   * did before.
+   */
+  calls?: { resolve(credential: string | undefined): string | undefined };
   log?: (line: string) => void;
 }
 
-const DEFAULT_PORT = 8791;
+/** Where box-chrome expects the proxy (docker/box/box-chrome); docs/06 lists it. */
+export const DEFAULT_PORT = 8791;
 /** A browser opens a lot of these; a stalled relay must not hold them all open forever. */
 const RELAY_TIMEOUT_MS = 20_000;
+/** A request head longer than this is not one. */
+const MAX_HEAD_BYTES = 16_384;
 
 export function startEgressProxy(options: ProxyOptions): Server {
   const log = options.log ?? (() => {});
@@ -40,11 +51,15 @@ export function startEgressProxy(options: ProxyOptions): Server {
 
     const onData = (chunk: Buffer) => {
       head = Buffer.concat([head, chunk]);
-      const lineEnd = head.indexOf("\r\n");
-      if (lineEnd === -1) {
-        if (head.length > 8192) client.destroy();
+      // The whole header block, not just the request line: the credential that says whose
+      // connection this is lives in the headers, and the blank line is the only thing that
+      // says they have all arrived.
+      const headersEnd = head.indexOf("\r\n\r\n");
+      if (headersEnd === -1) {
+        if (head.length > MAX_HEAD_BYTES) client.destroy();
         return;
       }
+      const lineEnd = head.indexOf("\r\n");
 
       const line = head.subarray(0, lineEnd).toString("utf8");
       const target = parseProxyTarget(line);
@@ -56,18 +71,27 @@ export function startEgressProxy(options: ProxyOptions): Server {
       }
 
       client.off("data", onData);
+      const { headers, proxyAuthorization } = splitHeaders(head.subarray(lineEnd + 2, headersEnd));
+      const body = head.subarray(headersEnd + 4);
       const rest = target.connect
         ? // The client sends its own headers after the CONNECT line; they are the proxy's,
           // not the destination's, so everything up to the blank line is dropped.
-          dropHeaders(head.subarray(lineEnd + 2))
+          body
         : Buffer.concat([
             // Rewritten to origin form: an origin server must not receive an absolute URI,
-            // and most reject one.
+            // and most reject one. The proxy's own credential is dropped with it.
             Buffer.from(`${target.method} ${target.path} ${versionOf(line)}\r\n`),
-            head.subarray(lineEnd + 2),
+            Buffer.from(headers.map(header => `${header}\r\n`).join("")),
+            Buffer.from("\r\n"),
+            body,
           ]);
 
-      open({ token: options.token, host: target.host, port: target.port }, target.connect, rest);
+      const call = options.calls?.resolve(tokenFromProxyAuthorization(proxyAuthorization));
+      open(
+        { token: options.token, host: target.host, port: target.port, ...(call !== undefined ? { call } : {}) },
+        target.connect,
+        rest
+      );
     };
 
     const open = (request: StreamRequest, isConnect: boolean, pending: Buffer) => {
@@ -140,10 +164,21 @@ export function startEgressProxy(options: ProxyOptions): Server {
   return server;
 }
 
-/** Everything up to and including the blank line, which belongs to the proxy hop. */
-function dropHeaders(buffer: Buffer): Buffer {
-  const end = buffer.indexOf("\r\n\r\n");
-  return end === -1 ? Buffer.alloc(0) : buffer.subarray(end + 4);
+/** The header lines, minus the ones that belong to this hop, and the credential they carried. */
+function splitHeaders(block: Buffer): { headers: string[]; proxyAuthorization: string | undefined } {
+  const headers: string[] = [];
+  let proxyAuthorization: string | undefined;
+  for (const header of block.toString("utf8").split("\r\n")) {
+    if (header === "") continue;
+    const at = header.indexOf(":");
+    const name = at === -1 ? "" : header.slice(0, at).trim().toLowerCase();
+    if (name === "proxy-authorization") {
+      proxyAuthorization = header.slice(at + 1).trim();
+      continue;
+    }
+    headers.push(header);
+  }
+  return { headers, proxyAuthorization };
 }
 
 function versionOf(requestLine: string): string {

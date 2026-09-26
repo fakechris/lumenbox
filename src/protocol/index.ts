@@ -399,6 +399,13 @@ export interface ExecRequest extends DisplayGuardProjection {
    * same id twice returns the job already running rather than spawning it again.
    */
   job_id?: string;
+  /**
+   * The call this command runs for (INV-784, egress/call.ts): an opaque token the host
+   * minted naming the agent, turn and tool call. boxd puts it in the command's environment
+   * and vouches for it to the egress proxy, so the relay's network events say which call
+   * opened each connection. A label for the record, not a permission.
+   */
+  call?: string;
 }
 
 /** What starting a background job answers with, instead of its output. */
@@ -895,6 +902,8 @@ export interface ClipboardResult {
 export interface BrowserRequest extends DisplayGuardProjection {
   display?: number;
   owner?: string;
+  /** The call this action runs for (INV-784), as on ExecRequest: the browser's connections while it runs are attributed to it. */
+  call?: string;
   /** What to do: open, snapshot, read, act, scroll, upload, wait, fill_secret, pages, switch or close. */
   op: string;
   /** For `open` (which page to open in), `switch` and `close`: a page label from `pages`, e.g. p2 (INV-408). */

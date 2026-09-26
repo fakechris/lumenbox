@@ -1069,12 +1069,17 @@ export function compactSharedShardLines(
  */
 export const MEMORY_MIRROR_DIR = "/home/box/work/memory";
 
-export function memoryMirrorDir(agentName: string): string {
+/** An agent's name as a directory segment: lowercase, dashes, never empty. One home for every mirror path. */
+export function agentSlug(agentName: string): string {
   const slug = agentName
     .toLowerCase()
     .replace(/[^a-z0-9]+/g, "-")
     .replace(/^-+|-+$/g, "");
-  return `${MEMORY_MIRROR_DIR}/${slug === "" ? "agent" : slug}`;
+  return slug === "" ? "agent" : slug;
+}
+
+export function memoryMirrorDir(agentName: string): string {
+  return `${MEMORY_MIRROR_DIR}/${agentSlug(agentName)}`;
 }
 
 export interface MemoryFile {

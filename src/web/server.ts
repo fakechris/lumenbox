@@ -27,6 +27,7 @@ import { join, posix } from "node:path";
 import { fileURLToPath } from "node:url";
 import { AgentRegistry, MAIN_CONVERSATION, conversationIdFor } from "../agents/registry.ts";
 import { isContextCommand, newContext } from "../host/context-recovery.ts";
+import { isStandingName, readStanding, STANDING_BYTE_CAP, STANDING_FILES, writeStanding } from "../host/standing.ts";
 import { isRecoveryCommand, recoverTask } from "../host/task-recovery.ts";
 import { isRetryCommand, retryLastAnswer } from "../host/retry-recovery.ts";
 import type { BusEvent } from "../agents/bus.ts";
@@ -111,21 +112,6 @@ function withinWork(path: string): boolean {
   return normalised === WORK_DIR || normalised.startsWith(`${WORK_DIR}/`);
 }
 
-/**
- * One line of "what is it doing", for a chat task card.
- *
- * The tool name is the truth; the argument shown is the one a person recognises — a
- * command, a path, a URL — clamped hard, because a card is glanced at, not read.
- */
-function actionLine(tool: string, input: unknown): string {
-  const record =
-    typeof input === "object" && input !== null ? (input as Record<string, unknown>) : {};
-  const detail = [record.command, record.path, record.action, record.url].find(
-    (value): value is string => typeof value === "string" && value !== ""
-  );
-  const line = detail === undefined ? tool : `${tool}: ${detail}`;
-  return line.length > 64 ? `${line.slice(0, 63)}…` : line;
-}
 import { agentboxHome, loadConfig, saveConfig, type AgentboxConfig } from "../config.ts";
 
 type AgentboxConfigHostExec = NonNullable<AgentboxConfig["hostExec"]>;
@@ -215,6 +201,7 @@ import { describeQueues } from "../host/actor-queue.ts";
 import { parseSuccessor } from "../host/successor.ts";
 import { describeReceipts } from "../host/receipts.ts";
 import { resolveLocale } from "../i18n/locale.ts";
+import { activityPhrase, activityPhrases } from "../host/activity-phrase.ts";
 import { MESSAGES } from "../i18n/messages.ts";
 import { QuestionWatch } from "../host/question-expiry.ts";
 import { appendLine } from "../host/jsonl.ts";
@@ -641,7 +628,14 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
       // the live row and the replayed row read the same way (INV-112). The host's event
       // stays what it is; the diff is the page's view of it.
       const diff = event.type === "tool_start" ? editDiffOf(event.tool, event.input) : undefined;
-      broadcast(diff === undefined ? event : ({ ...event, diff } as unknown as OutboundEvent));
+      // And the plain-language line, in both languages, so the feed can say "running a
+      // command (python)" in the reader's language rather than `bash` (INV-783).
+      const phrase = event.type === "tool_start" ? activityPhrases(event.tool, event.input) : undefined;
+      broadcast(
+        phrase === undefined
+          ? event
+          : ({ ...event, phrase, ...(diff === undefined ? {} : { diff }) } as unknown as OutboundEvent)
+      );
       for (const listener of channelTurnListeners) listener(event);
     },
     onBusEvent: broadcast,
@@ -1337,6 +1331,9 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
       // card and the board the blocked row, so the loop report is raised as the
       // failure it is for anyone waiting on this work.
       let stuck: string | undefined;
+      // The card's language follows the door: a Feishu room reads Chinese, as its status
+      // strings already do.
+      const cardLocale = resolveLocale({ channelType: identity.split(":")[0] });
       // Batch progress outranks tool chatter: once the script starts reporting 37/300,
       // "bash: python batch.py" is noise and the number is the card. The file convention
       // is in the prompt; reading it is a poll, because the box cannot push.
@@ -1357,8 +1354,10 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
         if (event.type === "tool_start" && streamed !== "" && !streamed.endsWith("\n\n")) {
           streamed = `${streamed.trimEnd()}\n\n`;
         }
+        // The phrase stands in only until the script self-reports: a number the work
+        // wrote outranks a sentence guessed from the tool it is using.
         if (event.type === "tool_start" && batchLine === undefined) {
-          onProgress?.(actionLine(event.tool, event.input), event.tool);
+          onProgress?.(activityPhrase(event.tool, event.input, cardLocale), event.tool);
         }
         // The opening line, handed to the chat while the tools run (docs/31 layer 1a).
         if (event.type === "interim") onInterim?.(event.text);
@@ -3485,6 +3484,9 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
           const limitParam = url.searchParams.get("limit");
           const { events, total } = log.query({
             box: url.searchParams.get("box") ?? undefined,
+            agent: url.searchParams.get("agent") ?? undefined,
+            turn: url.searchParams.get("turn") ?? undefined,
+            toolUse: url.searchParams.get("toolUse") ?? undefined,
             from: url.searchParams.get("from") ?? undefined,
             to: url.searchParams.get("to") ?? undefined,
             refused: url.searchParams.get("refused") === "1",
@@ -4131,6 +4133,42 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
           }
           if (refused(agentId)) return;
           send(res, 200, { agent: agentId, ...memoryAdmin.detail(agentId) });
+          return;
+        }
+        // The standing files (INV-777): read and written on the host, the copy that counts; a
+        // write is pushed to the agent's box so the copy it may edit is current.
+        if (route === "GET /api/standing") {
+          const agentId = url.searchParams.get("agent") ?? "";
+          if (!registry.has(agentId)) {
+            send(res, 404, { error: `No agent ${agentId}` });
+            return;
+          }
+          if (refused(agentId)) return;
+          send(res, 200, { agent: agentId, cap: STANDING_BYTE_CAP, files: readStanding(registry.dirFor(agentId), registry.get(agentId).profile.name) });
+          return;
+        }
+        if (route === "POST /api/standing") {
+          const body = await readJson(req);
+          const agentId = String(body.agent ?? "");
+          if (!registry.has(agentId)) {
+            send(res, 404, { error: `No agent ${agentId}` });
+            return;
+          }
+          if (refused(agentId)) return;
+          const name = String(body.name ?? "");
+          if (!isStandingName(name) || typeof body.text !== "string") {
+            send(res, 400, { error: `name must be one of ${STANDING_FILES.join(", ")} and text a string` });
+            return;
+          }
+          const agent = registry.get(agentId);
+          const result = writeStanding(registry.dirFor(agentId), agent.profile.name, name, body.text, "person");
+          if (!result.ok) {
+            send(res, 413, { error: result.refusal });
+            return;
+          }
+          log(`standing: ${caller.userId ?? "operator"} edited ${name} of ${agent.profile.name}`);
+          void orchestrator.syncStanding(agentId).catch(() => undefined);
+          send(res, 200, { ok: true, files: readStanding(registry.dirFor(agentId), agent.profile.name) });
           return;
         }
         if (route === "POST /api/memory/change") {

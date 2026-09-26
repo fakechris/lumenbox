@@ -14,6 +14,7 @@
  */
 
 import { createServer, connect as netConnect, type Server } from "node:net";
+import { decodeCall } from "./call.ts";
 import {
   EgressProtocolError,
   decodeRequest,
@@ -63,6 +64,30 @@ export interface NetworkEvent {
   allowed: boolean;
   /** Why it was refused, when it was. */
   reason?: "unauthorized" | "not allowed";
+  /**
+   * Whether the stream named the call it belongs to (INV-784, call.ts). `call` means the
+   * four fields below say who; `unattributed` is a stream from a proxy that predates the
+   * token, a connection boxd did not vouch for, or two browser actions in flight at once.
+   * Never a reason to refuse: the record is what changes, not the decision.
+   */
+  attribution: "call" | "unattributed";
+  agentId?: string;
+  turnId?: string;
+  toolUseId?: string;
+  jobId?: string;
+}
+
+/** The attribution fields for a stream, from the token it carried, if any. */
+export function attributionOf(call: string | undefined): Pick<NetworkEvent, "attribution" | "agentId" | "turnId" | "toolUseId" | "jobId"> {
+  const identity = decodeCall(call);
+  if (identity === undefined) return { attribution: "unattributed" };
+  return {
+    attribution: "call",
+    agentId: identity.agentId,
+    turnId: identity.turnId,
+    ...(identity.toolUseId !== undefined ? { toolUseId: identity.toolUseId } : {}),
+    ...(identity.jobId !== undefined ? { jobId: identity.jobId } : {}),
+  };
 }
 
 /**
@@ -133,6 +158,7 @@ export function startEgressRelay(options: RelayOptions): Server {
             port: request.port,
             allowed,
             ...(reason !== undefined ? { reason } : {}),
+            ...attributionOf(request.call),
           });
         } catch {
           // The log must never decide a stream.

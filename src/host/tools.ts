@@ -42,6 +42,7 @@ import { MCP_FACE_DIR, MCP_FACE_TOKEN_VARIABLE, type McpFace } from "./mcp-face.
 import type { ModelRelay } from "./model-relay.ts";
 import type { DelegateSessions } from "./delegate-sessions.ts";
 import { randomBytes } from "node:crypto";
+import { encodeCall } from "../egress/call.ts";
 import { MAIN_CONVERSATION, normaliseTags } from "../agents/registry.ts";
 import { describeTask, isLive, isTaskStatus, TASK_STATUSES, type TaskStore, clampContract } from "./tasks.ts";
 import { ABSENT, versionOf, type FileVersions } from "./files.ts";
@@ -70,6 +71,7 @@ import {
 } from "../protocol/index.ts";
 import { afterTimeout, idempotencyOfHttp } from "../protocol/idempotency.ts";
 import { skillSlugOf } from "./skill-provenance.ts";
+import { capRefusal, standingFileOf, writeStandingFromAgent } from "./standing.ts";
 import { SKILL_FILENAME } from "./skills.ts";
 import {
   type BotTemplate,
@@ -228,6 +230,11 @@ export interface ToolContext {
    * transcript that is its evidence.
    */
   turnId?: string;
+  /**
+   * The tool_use id of this call (INV-784). With `turnId`, what the box is told the call
+   * is, so the relay's network events say which call opened each connection.
+   */
+  toolUseId?: string;
   /**
    * The tools this turn has called so far, this one included. A reviewer accepting a task
    * with nothing here but `Tasks` has read the assignee's summary and checked nothing.
@@ -2186,6 +2193,23 @@ function boxOfAgent(context: ToolContext): { id: string; name: string } | undefi
   }
 }
 
+/**
+ * The call token a box request carries (INV-784, egress/call.ts): who this is, for the
+ * relay's record. Nothing when the turn is not one — a CLI run, a test — and then the
+ * box attributes the connections to nobody rather than to a made-up id.
+ */
+function callFor(context: ToolContext, jobId?: string): { call?: string } {
+  if (context.turnId === undefined || context.toolUseId === undefined) return {};
+  return {
+    call: encodeCall({
+      agentId: context.agent.id,
+      turnId: context.turnId,
+      toolUseId: context.toolUseId,
+      ...(jobId !== undefined ? { jobId } : {}),
+    }),
+  };
+}
+
 function requireBox(context: ToolContext): BoxClient {
   if (!context.box) {
     throw new Error(
@@ -2507,10 +2531,14 @@ export async function dispatchTool(
       if (guarded.refusal !== undefined) return { text: guarded.refusal, isError: true };
       const box = requireBox(context);
       if (input.background === true) {
+        // Minted here so the call token can name the job before it exists (INV-784).
+        const jobId = `job-${randomBytes(8).toString("hex")}`;
         const started = await box.startJob(command, {
           ...(input.cwd ? { cwd: String(input.cwd) } : {}),
           ...(context.displayIndex !== undefined ? { display: context.displayIndex } : {}),
           ...(context.boxOwner !== undefined ? { owner: context.boxOwner } : {}),
+          jobId,
+          ...callFor(context, jobId),
         });
         return {
           text:
@@ -2532,6 +2560,7 @@ export async function dispatchTool(
         owner: context.boxOwner,
         // For the box's record: this one is the model's own shell, not housekeeping.
         actor: `agent:${context.agent.id}`,
+        ...callFor(context),
       });
       return {
         text: formatExec(result, input.timeout_ms ? Number(input.timeout_ms) : undefined),
@@ -2788,6 +2817,7 @@ export async function dispatchTool(
           const started = await box.startJob(installCommand(preset), {
             ...(context.boxOwner !== undefined ? { owner: context.boxOwner } : {}),
             jobId: installJobId,
+            ...callFor(context, installJobId),
           });
           return {
             text:
@@ -2962,6 +2992,7 @@ export async function dispatchTool(
           ...(Object.keys(jobEnv).length > 0 ? { env: jobEnv } : {}),
           ...(context.boxOwner !== undefined ? { owner: context.boxOwner } : {}),
           jobId,
+          ...callFor(context, jobId),
         });
       } catch (error) {
         if (routeKey !== undefined) context.mcpFace?.revoke(routeKey, "job failed to start");
@@ -3369,7 +3400,12 @@ export async function dispatchTool(
           isError: true,
         };
       }
+      // A standing file (INV-777) is capped, and its host copy is written in the same call.
+      const standingEdited = standingFileOf(path, context.agent.profile.name);
+      const editCap = standingEdited === undefined ? undefined : capRefusal(standingEdited, updated);
+      if (editCap !== undefined) return { text: editCap, isError: true };
       await box.writeFile(path, updated);
+      if (standingEdited !== undefined) writeStandingFromAgent(context.registry.dirFor(context.agent.id), context.agent.profile.name, standingEdited, updated);
       // Recorded like any other write, so the next writer still sees a conflict rather
       // than overwriting an edit nobody else knows happened.
       context.files?.observed(context.agent.id, path, versionOf(updated));
@@ -3449,7 +3485,13 @@ export async function dispatchTool(
         };
       }
       const written = templateStamp(context, path, content);
+      // A standing file (INV-777) is capped, and its host copy — the one that counts — is written
+      // in the same call, so the agent's edit is in its next prompt and never reported back to it.
+      const standingWritten = standingFileOf(path, context.agent.profile.name);
+      const writeCap = standingWritten === undefined ? undefined : capRefusal(standingWritten, written);
+      if (writeCap !== undefined) return { text: writeCap, isError: true };
       const result = await box.writeFile(path, written);
+      if (standingWritten !== undefined) writeStandingFromAgent(context.registry.dirFor(context.agent.id), context.agent.profile.name, standingWritten, written);
       // Its own write is the newest thing it has seen, so writing twice in a row is not a conflict
       // with itself.
       context.files?.observed(context.agent.id, result.path, versionOf(written));
@@ -3583,6 +3625,7 @@ export async function dispatchTool(
           op: "fill_secret",
           display: context.displayIndex,
           ...(context.boxOwner !== undefined ? { owner: context.boxOwner } : {}),
+          ...callFor(context),
           ref,
           secret_value: value,
           domains,
@@ -3653,6 +3696,7 @@ export async function dispatchTool(
               : name.slice("browser_".length),
         display: context.displayIndex,
         ...(context.boxOwner !== undefined ? { owner: context.boxOwner } : {}),
+        ...callFor(context),
       };
       if (name === "browser_open") {
         try {

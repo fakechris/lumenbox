@@ -184,7 +184,9 @@ export function exportAudit(options: ExportOptions): ExportManifest {
   write("auto-review.jsonl", select(readLines(join(options.home, "auto-review.jsonl")), record => byAgentId(record) || (typeof record.agent === "string" && (agentIds.has(record.agent) || agentNames.has(record.agent)))));
   write("answer-review.jsonl", select(readLines(join(options.home, "answer-review.jsonl")), record => typeof record.agent === "string" && (agentIds.has(record.agent) || agentNames.has(record.agent))));
   write("vault-audit.jsonl", select(readLines(join(options.home, "vault-audit.jsonl")), byAgentId));
-  write("network-events.jsonl", select(readLines(join(options.home, "network-events.jsonl")), record => record.box === box.id || record.box === box.name));
+  // By box, or by the agent the relay attributed the connection to (INV-784): the agent,
+  // turn and tool_use ids ride on the line as the relay wrote them.
+  write("network-events.jsonl", select(readLines(join(options.home, "network-events.jsonl")), record => record.box === box.id || record.box === box.name || byAgentId(record)));
   write("turns.jsonl", select(readRecord(join(options.home, "turns.jsonl")), byAgentId));
   // Every arrival at a door and what became of it (ingress.ts). Taken by time alone: an
   // arrival names no agent, because which agent it reaches is decided after it is written.
