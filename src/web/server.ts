@@ -3484,6 +3484,9 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
           const limitParam = url.searchParams.get("limit");
           const { events, total } = log.query({
             box: url.searchParams.get("box") ?? undefined,
+            agent: url.searchParams.get("agent") ?? undefined,
+            turn: url.searchParams.get("turn") ?? undefined,
+            toolUse: url.searchParams.get("toolUse") ?? undefined,
             from: url.searchParams.get("from") ?? undefined,
             to: url.searchParams.get("to") ?? undefined,
             refused: url.searchParams.get("refused") === "1",

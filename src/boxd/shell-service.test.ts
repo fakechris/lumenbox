@@ -269,3 +269,13 @@ test("yesterday's spool is reaped; today's is left alone", async () => {
     rmSync(dir, { recursive: true, force: true });
   }
 });
+
+test("a pinned per-call variable reaches the command and wins over the session, but is not remembered by it (INV-784)", async () => {
+  const session = `pinned-${Date.now()}`;
+  const first = await runShell({ command: "echo \"[$AGENTBOX_CALL]\"; export AGENTBOX_CALL=stale", session }, { AGENTBOX_CALL: "tok_1" });
+  assert.equal(first.stdout.trim(), "[tok_1]");
+  const second = await runShell({ command: "echo \"[$AGENTBOX_CALL]\"", session }, { AGENTBOX_CALL: "tok_2" });
+  assert.equal(second.stdout.trim(), "[tok_2]", "this call's token, not the one the session saved");
+  const third = await runShell({ command: "echo \"[$AGENTBOX_CALL]\"", session });
+  assert.equal(third.stdout.trim(), "[]", "a call token does not outlive its call");
+});

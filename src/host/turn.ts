@@ -43,6 +43,7 @@ import {
 } from "./transient.ts";
 import type { UsageKind, UsageLog } from "./usage.ts";
 import { chooseRelevant, memoryProjectionManifest, SHARED_CHAR_BUDGET, type MemoryRecall } from "./memory.ts";
+import { refusedLine, type NetworkEventLog } from "../egress/events.ts";
 import { needsReview, type ReviewInput, type ReviewMode, type Verdict } from "./auto-review.ts";
 import type { HookRunner } from "./hooks.ts";
 import { AGENT_WAKE_CUE, laneOf } from "../agents/bus.ts";
@@ -526,6 +527,12 @@ export interface TurnDeps {
    * that should not touch the state directory wants.
    */
   turns?: TurnLedger;
+  /**
+   * What the egress relay decided (INV-784): read after each tool call so the model is told,
+   * in one line on the result, which outbound connections its call had refused. Absent
+   * means the box's traffic is not going through a relay this host can see.
+   */
+  networkEvents?: Pick<NetworkEventLog, "query">;
   /** The fork ledger (docs/32): forks are recorded before they start and committed here. */
   pendingWork?: PendingWork;
   /** The MCP face (docs/33), for Delegate. */
@@ -2888,6 +2895,7 @@ async function runContextTurn(agent: AgentRecord, inbound: readonly InboundMessa
             ...(deps.templateSetup !== undefined ? { templateSetup: deps.templateSetup } : {}),
             ...(deps.templates !== undefined ? { templates: deps.templates } : {}),
             turnId,
+            toolUseId: toolUse.id,
             conversation,
             memorySources: inbound.map(message => `message:${message.id}`),
             toolsUsedThisTurn,
@@ -2909,6 +2917,19 @@ async function runContextTurn(agent: AgentRecord, inbound: readonly InboundMessa
         summary: outcome.text.split("\n")[0]?.slice(0, 200) ?? "",
         screenshot: outcome.images?.[0]?.data,
       });
+
+      // What the relay refused while this call ran, as one line on the result (INV-784): the
+      // model learns that `pip install` failed because vendor.test is not allowed, rather
+      // than reading a timeout. Read from the relay's own ledger, keyed by this call.
+      if (deps.networkEvents !== undefined) {
+        let refused: string | undefined;
+        try {
+          refused = refusedLine(deps.networkEvents.query({ toolUse: toolUse.id, refused: true, limit: 1000 }).events);
+        } catch {
+          // The ledger must never decide a tool result.
+        }
+        if (refused !== undefined) outcome = { ...outcome, text: `${outcome.text}\n${refused}` };
+      }
 
       // A model without vision must not be handed image blocks it cannot decode — the
       // request would be refused outright. The text keeps the fact that there was an

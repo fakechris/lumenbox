@@ -243,3 +243,24 @@ test("the export checks the evidence it is carrying, and says so when a file no 
     rmSync(root, { recursive: true, force: true });
   }
 });
+
+test("network events carry the agent, turn and tool call the relay attributed them to, and an agent's events travel with its box (INV-784)", () => {
+  const { root, registry, ada } = home();
+  try {
+    const line = (o: unknown) => `${JSON.stringify(o)}\n`;
+    writeFileSync(
+      join(root, "network-events.jsonl"),
+      line({ at: "2026-09-10T10:04:00Z", box: "somewhere-else", host: "vendor.test", port: 443, allowed: false, reason: "not allowed", attribution: "call", agentId: ada, turnId: "t-1", toolUseId: "toolu_7", jobId: "job-0123abcd" }),
+      { flag: "a" }
+    );
+    const out = join(root, "attributed-export");
+    exportAudit({ home: root, registry, box: registry.box.id, from: "2026-09-10T00:00:00Z", to: "2026-09-11T00:00:00Z", out });
+    const events = readAuditExport(out).records["network-events.jsonl"]!;
+    assert.equal(events.length, 2, "the box's own event and the one attributed to its agent");
+    const attributed = events.find(event => event.host === "vendor.test")!;
+    assert.deepEqual(
+      [attributed.attribution, attributed.agentId, attributed.turnId, attributed.toolUseId, attributed.jobId],
+      ["call", ada, "t-1", "toolu_7", "job-0123abcd"]
+    );
+  } finally { rmSync(root, { recursive: true, force: true }); }
+});

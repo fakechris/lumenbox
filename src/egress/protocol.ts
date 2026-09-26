@@ -20,6 +20,8 @@
  * failing loudly over rather than defaulting to.
  */
 
+import { isCallToken } from "./call.ts";
+
 export const PROTOCOL = "AGENTBOX-EGRESS";
 export const VERSION = 1;
 
@@ -30,6 +32,12 @@ export interface StreamRequest {
   token: string;
   host: string;
   port: number;
+  /**
+   * The call this stream belongs to (INV-784, call.ts): an opaque token boxd vouched for,
+   * decoded by the relay onto the network event. Absent from a proxy that predates it and
+   * from a connection nothing vouched for; the relay records either as unattributed.
+   */
+  call?: string;
 }
 
 export class EgressProtocolError extends Error {}
@@ -44,11 +52,15 @@ export function encodeRequest(request: StreamRequest): string {
   if (!Number.isInteger(request.port) || request.port < 1 || request.port > 65535) {
     throw new EgressProtocolError(`Not a port: ${request.port}`);
   }
+  if (request.call !== undefined && !isCallToken(request.call)) {
+    throw new EgressProtocolError("Not a call token");
+  }
   // The token goes on its own line and is never logged by either side.
   return (
     `${PROTOCOL} ${VERSION}\r\n` +
     `Authorization: ${request.token}\r\n` +
     `Host: ${request.host}:${request.port}\r\n` +
+    (request.call !== undefined ? `Call: ${request.call}\r\n` : "") +
     "\r\n"
   );
 }
@@ -80,6 +92,7 @@ export function decodeRequest(
 
   let token: string | undefined;
   let target: string | undefined;
+  let call: string | undefined;
   for (const line of headers) {
     const at = line.indexOf(":");
     if (at <= 0) continue;
@@ -87,6 +100,9 @@ export function decodeRequest(
     const value = line.slice(at + 1).trim();
     if (name === "authorization") token = value;
     if (name === "host") target = value;
+    // A malformed call line is not a reason to refuse the stream: attribution is a record,
+    // the token and host are the access control.
+    if (name === "call" && isCallToken(value)) call = value;
   }
 
   if (!token) throw new EgressProtocolError("No token");
@@ -104,7 +120,7 @@ export function decodeRequest(
     throw new EgressProtocolError(`Not a port: ${JSON.stringify(target.slice(split + 1))}`);
   }
 
-  return { request: { token, host, port }, rest: buffer.subarray(end + 4) };
+  return { request: { token, host, port, ...(call !== undefined ? { call } : {}) }, rest: buffer.subarray(end + 4) };
 }
 
 export function encodeResponse(ok: boolean, detail = ""): string {
