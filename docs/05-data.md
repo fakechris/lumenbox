@@ -725,6 +725,20 @@ and that ids, JSON and status words stay out of replies while text inside an ema
 information, not instructions. A skill grants nothing: what a tool may do is still the policy
 gate's and the bundle's to say.
 
+**Writing into Feishu and DingTalk (INV-754).** `FeishuWrite` (documents from markdown, Bitable rows,
+calendar events, tasks) and `DingTalkWrite` (an empty document with its link, calendar events) are
+offered when that service is connected, and go through the same host-side token as
+`connector_request` — DingTalk's in its own header. The connected app writes as itself, and three
+things follow that each break silently: a document it creates is invisible until someone is added, so
+the person who asked is added (by their door identity, which works only when the connected app is the
+one running the chat — said when it fails); an event is on the app's calendar, so they are invited;
+a task is seen only by its members, so they follow it. Each call is `self` until it names anyone
+else — `share_with`, `attendees`, `assignees` — and then `reach` (`side-effects.ts`). Creates are
+never retried after a lost answer: a second create is a second document. Set `AGENTBOX_FEISHU_DOMAIN`
+(the tenant's `*.feishu.cn`) for direct document links. The starter team's tool lists now name
+`connector_request` and these two: until now an allowlist withheld them from the default team even
+when connected, because the guard that checks the lists built its tools without a connection.
+
 **Writing a skill, and two hints (INV-755).** The `skill-authoring` starter is how a skill should
 be written here: a description that starts "Use when…" in the words people say and names the
 neighbour it is not; a short body in one of two shapes (tool: purpose, tools, authorisation,

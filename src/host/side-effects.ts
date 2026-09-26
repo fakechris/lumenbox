@@ -91,6 +91,10 @@ const DECLARED: Record<string, SideEffect> = {
 
   // Past the box.
   browser_upload: { tier: "reach", action: "upload a file from the box to a web page" },
+  // Office writes (INV-754): the person's own documents, tables, tasks and calendar are `self`;
+  // the call is raised to `reach` when it names anyone else — see `sideEffectOf`.
+  FeishuWrite: { tier: "self" },
+  DingTalkWrite: { tier: "self" },
 
   // Authority.
   RunOnHost: { tier: "credential", action: "run a command on the person's own machine" },
@@ -114,6 +118,14 @@ export function sideEffectOf(tool: string, input: Record<string, unknown> = {}):
     const connector = String(input.connector ?? "a connected service");
     if (method === "GET" || method === "HEAD") return { tier: "observe" };
     return { tier: "reach", action: `change something in ${connector} as the person who connected it` };
+  }
+  if (tool === "FeishuWrite" || tool === "DingTalkWrite") {
+    const others = (key: string) => Array.isArray(input[key]) && (input[key] as unknown[]).some(item => typeof item === "string" && item.trim() !== "");
+    const service = tool === "FeishuWrite" ? "Feishu" : "DingTalk";
+    if (others("share_with")) return { tier: "reach", action: `share a ${service} document with other people` };
+    if (others("attendees")) return { tier: "reach", action: `invite other people to a ${service} event` };
+    if (others("assignees")) return { tier: "reach", action: `assign a ${service} task to someone else` };
+    return { tier: "self" };
   }
   const declared = DECLARED[tool];
   if (declared !== undefined) return declared;

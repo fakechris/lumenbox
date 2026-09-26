@@ -14,7 +14,7 @@ function everyTool(): string[] {
   const before = process.env[key];
   process.env[key] = "offered-for-the-guard";
   try {
-    return buildTools(true, true, undefined, true, true, true, true, false, ["github"]).map(tool => tool.name);
+    return buildTools(true, true, undefined, true, true, true, true, false, ["github", "feishu", "dingtalk"]).map(tool => tool.name);
   } finally {
     if (before === undefined) delete process.env[key];
     else process.env[key] = before;
@@ -153,4 +153,16 @@ test("a delegated engine's own tools are tiered by what they are here, so readin
   const unknown = sideEffectOf("engine:Frobnicate");
   assert.equal(unknown.tier, "reach", "an engine tool we cannot see into leaves the box");
   assert.match(unknown.action!, /delegated engine run its Frobnicate tool/);
+});
+
+test("an office write is the person's own until it names someone else (INV-754)", () => {
+  assert.equal(sideEffectOf("FeishuWrite", { action: "doc_create", title: "Q3" }).tier, "self");
+  assert.equal(sideEffectOf("FeishuWrite", { action: "calendar_event", attendees: [] }).tier, "self", "an empty list names nobody");
+  const shared = sideEffectOf("FeishuWrite", { action: "doc_create", title: "Q3", share_with: ["ou_other"] });
+  assert.equal(shared.tier, "reach");
+  assert.match(shared.action!, /share a Feishu document/);
+  assert.equal(sideEffectOf("FeishuWrite", { action: "calendar_event", attendees: ["ou_a"] }).tier, "reach");
+  assert.equal(sideEffectOf("FeishuWrite", { action: "task_create", assignees: ["ou_a"] }).tier, "reach");
+  assert.match(sideEffectOf("DingTalkWrite", { action: "calendar_event", attendees: ["u1"] }).action!, /DingTalk event/);
+  assert.equal(sideEffectOf("DingTalkWrite", { action: "doc_create", name: "x" }).tier, "self");
 });

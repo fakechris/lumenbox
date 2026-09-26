@@ -7,6 +7,8 @@ import { isComputerWrite } from "../cua/execution.ts";
  * measurably under-triggers.
  */
 
+import { randomUUID } from "node:crypto";
+import { chunkBlocks, dingtalkEventBody, doorIdOf, feishuDocUrl, feishuEventBody, feishuTaskBody, instantOf, markdownToFeishuBlocks } from "./office-write.ts";
 import { agentboxHome } from "../config.ts";
 import { executeForget, forgetOutcomeReport, forgetPlanReport, forgettable, ForgetPlans, inventory } from "./forget.ts";
 import type Anthropic from "@anthropic-ai/sdk";
@@ -21,7 +23,7 @@ import type { Vault } from "./vault.ts";
 import { appendLearning, hostOf, learningsDir, readLearnings, renderLearnings } from "./learnings.ts";
 import type { ScopeStore } from "./scopes.ts";
 import type { BundleStore } from "./bundles.ts";
-import { oauthProvider, scrubToken, type OAuthGate } from "./oauth.ts";
+import { oauthProvider, scrubToken, tokenHeaders, type OAuthGate, type OAuthProvider } from "./oauth.ts";
 import type { McpManager } from "./mcp.ts";
 import { delegateEnv, delegateModel, PRESETS, presetNamed, quoteForShell, installCommand, withEnginesPath } from "./presets.ts";
 import { namesControlSurface } from "./control-surfaces.ts";
@@ -104,6 +106,8 @@ export interface ToolContext {
   caller?: { userId?: string };
   /** The person's name, for a rule written with a name rather than an id (INV-156). */
   callerName?: string;
+  /** Every door identity the person driving this turn speaks from, e.g. `feishu:ou_…` (INV-754). */
+  callerIdentities?: readonly string[];
   /**
    * Asked whether an action may happen, before it happens.
    *
@@ -648,6 +652,61 @@ export function buildTools(
           },
         },
         required: ["connector", "path"],
+      },
+    });
+  }
+
+  // The common office writes, as tools rather than raw API calls (INV-754): each action is tiered
+  // by who it reaches in side-effects.ts, and the vendor's quirks are handled once, here.
+  if (connectors.includes("feishu")) {
+    tools.push({
+      name: "FeishuWrite",
+      description:
+        "Put work into Feishu (飞书) through the connected app. Actions: doc_create (title, markdown — you are added " +
+        "so you can open it), doc_append (document_id, markdown), bitable_add / bitable_update / bitable_search " +
+        "(app_token and table_id from the base's URL; fields by their column names), calendar_event (summary, start, " +
+        "end, timezone; the event is on the app's calendar and you are invited so it shows on yours), task_create " +
+        "(summary, due; you follow it), task_complete (task_guid). Anything that reaches someone else — share_with, " +
+        "attendees, assignees — is shown to the person first and may need their approval. Times: \"2026-10-03 15:00\" " +
+        "with a timezone, or ISO with an offset.",
+      input_schema: {
+        type: "object",
+        properties: {
+          action: { type: "string", enum: ["doc_create", "doc_append", "bitable_add", "bitable_update", "bitable_search", "calendar_event", "task_create", "task_complete"] },
+          title: { type: "string" }, markdown: { type: "string" }, document_id: { type: "string" }, folder_token: { type: "string" },
+          share_with: { type: "array", items: { type: "string" }, description: "Other people's Feishu open_ids to give edit access. Reaches them." },
+          app_token: { type: "string" }, table_id: { type: "string" }, record_id: { type: "string" },
+          fields: { type: "object", description: "Column name → value. Dates as epoch milliseconds." },
+          contains: { type: "object", description: "bitable_search: column name → text the column should contain." },
+          summary: { type: "string" }, description: { type: "string" },
+          start: { type: "string" }, end: { type: "string" }, due: { type: "string" }, timezone: { type: "string", description: "IANA, e.g. Asia/Shanghai." },
+          attendees: { type: "array", items: { type: "string" }, description: "Other people's open_ids to invite. Reaches them." },
+          assignees: { type: "array", items: { type: "string" }, description: "Other people's open_ids to assign. Reaches them." },
+          task_guid: { type: "string" },
+        },
+        required: ["action"],
+      },
+    });
+  }
+  if (connectors.includes("dingtalk")) {
+    tools.push({
+      name: "DingTalkWrite",
+      description:
+        "Put work into DingTalk (钉钉) through the connected app. Actions: doc_create (name — creates an empty document " +
+        "in your My Documents space and returns its link; writing the body is not supported yet, so say so), " +
+        "calendar_event (summary, start, end, timezone; on your calendar). DingTalk acts for a person by their unionId: " +
+        "yours is used when known, otherwise pass operator_union_id. attendees invites other people — shown first, may need approval.",
+      input_schema: {
+        type: "object",
+        properties: {
+          action: { type: "string", enum: ["doc_create", "calendar_event"] },
+          name: { type: "string" }, workspace_id: { type: "string" },
+          operator_union_id: { type: "string" },
+          summary: { type: "string" }, description: { type: "string" },
+          start: { type: "string" }, end: { type: "string" }, timezone: { type: "string" },
+          attendees: { type: "array", items: { type: "string" }, description: "Other people's unionIds to invite. Reaches them." },
+        },
+        required: ["action"],
       },
     });
   }
@@ -2283,6 +2342,64 @@ function greetNewAgent(context: ToolContext, newId: string): void {
   });
 }
 
+/**
+ * A connection's provider and token, minted, refreshed and audited on the host — the one path every
+ * connector call takes, so the token never reaches the box and a missing grant is said one way.
+ */
+async function connectorAuth(context: ToolContext, connector: string): Promise<{ provider: OAuthProvider; token: string } | { refused: string }> {
+  const provider = oauthProvider(connector);
+  if (provider === undefined || context.oauth === undefined) return { refused: outcomeLine("refused", `${connector} is not a connected service here`) };
+  const token = await context.oauth.bearerFor(`oauth:${connector}`, {
+    agentId: context.agent.id,
+    agentName: context.agent.profile.name,
+    ...(context.caller?.userId !== undefined ? { principalId: context.caller.userId } : {}),
+    scopeGrants: context.bundles?.grantsSecret(boxOfAgent(context), `oauth:${connector}`) === true,
+  });
+  if (token === undefined) {
+    return { refused: outcomeLine("refused", `${provider.title} is not connected for you, or its token cannot be refreshed. Ask an admin in Settings → Connected services`) };
+  }
+  return { provider, token };
+}
+
+/**
+ * One JSON call through a connection, for the office tools (INV-754). No retry: every write here is
+ * a create, and a create repeated after a lost answer is a second document. A lost answer is said
+ * as unknown, with what to check, rather than tried again.
+ */
+async function connectorJson(
+  auth: { provider: OAuthProvider; token: string },
+  method: "GET" | "POST" | "PUT" | "PATCH",
+  path: string,
+  body?: unknown
+): Promise<{ ok: true; json: Record<string, unknown> } | { ok: false; text: string; unknown?: true }> {
+  let response: Response;
+  try {
+    response = await fetch(`${auth.provider.apiBase}${path}`, {
+      method,
+      headers: {
+        ...tokenHeaders(auth.provider, auth.token),
+        ...(auth.provider.apiHeaders ?? {}),
+        ...(body !== undefined ? { "content-type": "application/json; charset=utf-8" } : {}),
+      },
+      ...(body !== undefined ? { body: JSON.stringify(body) } : {}),
+      signal: AbortSignal.timeout(30_000),
+    });
+  } catch (error) {
+    return { ok: false, unknown: true, text: `${auth.provider.title} did not answer (${error instanceof Error ? error.message : String(error)}); it may or may not have happened — check before trying again.` };
+  }
+  const raw = scrubToken(await response.text(), auth.token);
+  let json: Record<string, unknown> = {};
+  try { json = JSON.parse(raw) as Record<string, unknown>; } catch { /* the status speaks */ }
+  // Feishu answers 200 with a non-zero `code` on refusal; DingTalk answers non-2xx with `code`/`message`.
+  const code = json.code;
+  const refused = response.status < 200 || response.status >= 300 || (typeof code === "number" && code !== 0);
+  if (refused) {
+    const why = typeof json.msg === "string" ? json.msg : typeof json.message === "string" ? json.message : raw.slice(0, 300);
+    return { ok: false, text: `${auth.provider.title} refused ${method} ${path.split("?")[0]} (HTTP ${response.status}${code !== undefined ? `, code ${String(code)}` : ""}): ${why}` };
+  }
+  return { ok: true, json };
+}
+
 export async function dispatchTool(
   name: string,
   input: Record<string, unknown>,
@@ -3436,6 +3553,175 @@ export async function dispatchTool(
       }
     }
 
+    case "FeishuWrite": {
+      const auth = await connectorAuth(context, "feishu");
+      if ("refused" in auth) return { text: auth.refused, isError: true };
+      const me = doorIdOf(context.callerIdentities, "feishu");
+      const strings = (value: unknown): string[] => (Array.isArray(value) ? value.filter((item): item is string => typeof item === "string" && item.trim() !== "").map(item => item.trim()) : []);
+      const text = (value: unknown): string => (typeof value === "string" ? value.trim() : "");
+      const zone = text(input.timezone) || Intl.DateTimeFormat().resolvedOptions().timeZone;
+      const fail = (message: string, unknown?: true) => ({ text: outcomeLine(unknown ? "unknown" : "failed", message), isError: true as const });
+      const data = (json: Record<string, unknown>) => (json.data ?? {}) as Record<string, any>;
+      // Appends in order, 50 blocks a call; stops at the first refusal and says how far it got.
+      const appendMarkdown = async (documentId: string, markdown: string): Promise<{ added: number; failed?: string }> => {
+        let added = 0;
+        for (const chunk of chunkBlocks(markdownToFeishuBlocks(markdown))) {
+          const reply = await connectorJson(auth, "POST", `/docx/v1/documents/${encodeURIComponent(documentId)}/blocks/${encodeURIComponent(documentId)}/children`, { children: chunk, index: -1 });
+          if (!reply.ok) return { added, failed: reply.text };
+          added += chunk.length;
+        }
+        return { added };
+      };
+      switch (String(input.action ?? "")) {
+        case "doc_create": {
+          const title = text(input.title);
+          if (title === "" || title.length > 800) return fail("doc_create needs a title of 1–800 characters");
+          const created = await connectorJson(auth, "POST", "/docx/v1/documents", { title, ...(text(input.folder_token) ? { folder_token: text(input.folder_token) } : {}) });
+          if (!created.ok) return fail(created.text, created.unknown);
+          const id = String(data(created.json).document?.document_id ?? "");
+          const lines = [`Created "${title}" (document ${id}).`];
+          // A document the app creates is invisible to everyone else until someone is added.
+          const grant = (openId: string, perm: "edit" | "full_access") =>
+            connectorJson(auth, "POST", `/drive/v1/permissions/${encodeURIComponent(id)}/members?type=docx`, { member_type: "openid", member_id: openId, perm, type: "user" });
+          if (me !== undefined) {
+            const added = await grant(me, "full_access");
+            lines.push(added.ok ? "The person who asked can open and edit it." : `Could not add the person who asked (${added.text}). If the connected Feishu app is not the one that runs this chat, their id differs between the two; the document exists but only the app can see it.`);
+          } else {
+            lines.push("Their Feishu id is not known here, so only the app can see it yet — ask whom to add, or share it with share_with.");
+          }
+          for (const other of strings(input.share_with)) {
+            const shared = await grant(other, "edit");
+            lines.push(shared.ok ? `Shared with ${other} (edit).` : `Could not share with ${other}: ${shared.text}`);
+          }
+          if (text(input.markdown) !== "") {
+            const appended = await appendMarkdown(id, String(input.markdown));
+            lines.push(appended.failed === undefined ? `Wrote ${appended.added} block(s).` : `Wrote ${appended.added} block(s), then stopped: ${appended.failed}`);
+          }
+          const url = feishuDocUrl(id, process.env.AGENTBOX_FEISHU_DOMAIN);
+          lines.push(url !== undefined ? `Link: ${url}` : "Link: open Feishu Docs and search the title (set AGENTBOX_FEISHU_DOMAIN to get direct links).");
+          return { text: `${outcomeLine("ok")} ${lines.join(" ")}` };
+        }
+        case "doc_append": {
+          const id = text(input.document_id);
+          if (id === "" || text(input.markdown) === "") return fail("doc_append needs document_id and markdown");
+          const appended = await appendMarkdown(id, String(input.markdown));
+          return appended.failed === undefined
+            ? { text: `${outcomeLine("ok")} Appended ${appended.added} block(s) to ${id}.` }
+            : fail(`Appended ${appended.added} block(s) to ${id}, then stopped: ${appended.failed}`);
+        }
+        case "bitable_add":
+        case "bitable_update":
+        case "bitable_search": {
+          const app = text(input.app_token);
+          const table = text(input.table_id);
+          if (app === "" || table === "") return fail("Bitable actions need app_token and table_id (both are in the base's URL)");
+          const base = `/bitable/v1/apps/${encodeURIComponent(app)}/tables/${encodeURIComponent(table)}/records`;
+          if (input.action === "bitable_search") {
+            const contains = (typeof input.contains === "object" && input.contains !== null ? input.contains : {}) as Record<string, unknown>;
+            const conditions = Object.entries(contains).map(([field_name, value]) => ({ field_name, operator: "contains", value: [String(value)] }));
+            const found = await connectorJson(auth, "POST", `${base}/search?page_size=50`, conditions.length > 0 ? { filter: { conjunction: "and", conditions } } : {});
+            if (!found.ok) return fail(found.text, found.unknown);
+            const items = (data(found.json).items ?? []) as { record_id: string; fields: Record<string, unknown> }[];
+            // Text cells come back as [{text, type}]; flattened so the model reads values, not structure.
+            const flat = items.map(item => ({ record_id: item.record_id, fields: Object.fromEntries(Object.entries(item.fields ?? {}).map(([key, value]) => [key, Array.isArray(value) ? value.map(part => (typeof part === "object" && part !== null && "text" in part ? (part as { text: string }).text : part)).join("") : value])) }));
+            return { text: `${outcomeLine("ok")} ${items.length} record(s)${data(found.json).has_more ? " (more exist; narrow the search)" : ""}.\n${JSON.stringify(flat).slice(0, 20_000)}` };
+          }
+          const fields = (typeof input.fields === "object" && input.fields !== null ? input.fields : undefined) as Record<string, unknown> | undefined;
+          if (fields === undefined || Object.keys(fields).length === 0) return fail(`${String(input.action)} needs fields`);
+          if (input.action === "bitable_add") {
+            const added = await connectorJson(auth, "POST", `${base}?client_token=${randomUUID()}`, { fields });
+            return added.ok ? { text: `${outcomeLine("ok")} Added record ${String(data(added.json).record?.record_id ?? "")}.` } : fail(added.text, added.unknown);
+          }
+          const record = text(input.record_id);
+          if (record === "") return fail("bitable_update needs record_id");
+          const updated = await connectorJson(auth, "PUT", `${base}/${encodeURIComponent(record)}`, { fields });
+          return updated.ok ? { text: `${outcomeLine("ok")} Updated record ${record}: ${Object.keys(fields).join(", ")}.` } : fail(updated.text, updated.unknown);
+        }
+        case "calendar_event": {
+          const summary = text(input.summary);
+          const startMs = instantOf(text(input.start), zone);
+          const endMs = instantOf(text(input.end), zone);
+          if (summary === "" || startMs === undefined || endMs === undefined || endMs <= startMs) return fail("calendar_event needs summary, and a start before its end (\"2026-10-03 15:00\" with timezone, or ISO with an offset)");
+          const primary = await connectorJson(auth, "POST", "/calendar/v4/calendars/primary");
+          if (!primary.ok) return fail(`${primary.text} (the app needs its bot capability turned on to have a calendar)`, primary.unknown);
+          const calendarId = String((data(primary.json).calendars ?? [])[0]?.calendar?.calendar_id ?? "");
+          const created = await connectorJson(auth, "POST", `/calendar/v4/calendars/${encodeURIComponent(calendarId)}/events?idempotency_key=${randomUUID()}${randomUUID().slice(0, 8)}`,
+            feishuEventBody({ summary, description: text(input.description), startMs, endMs, timezone: zone }));
+          if (!created.ok) return fail(created.text, created.unknown);
+          const event = data(created.json).event ?? {};
+          const invite = [...(me !== undefined ? [me] : []), ...strings(input.attendees).filter(id => id !== me)];
+          const lines = [`Created "${summary}" on the app's calendar.`];
+          if (invite.length > 0) {
+            const invited = await connectorJson(auth, "POST", `/calendar/v4/calendars/${encodeURIComponent(calendarId)}/events/${encodeURIComponent(String(event.event_id ?? ""))}/attendees?user_id_type=open_id`,
+              { attendees: invite.map(user_id => ({ type: "user", user_id })), need_notification: true });
+            lines.push(invited.ok ? `Invited ${invite.length} person(s)${me !== undefined ? ", including the person who asked, so it is on their calendar" : ""}.` : `The event exists but inviting failed: ${invited.text}`);
+          } else {
+            lines.push("Nobody is invited, so it is on the app's calendar only — say so, or add attendees.");
+          }
+          if (typeof event.app_link === "string") lines.push(`Link: ${event.app_link}`);
+          return { text: `${outcomeLine("ok")} ${lines.join(" ")}` };
+        }
+        case "task_create": {
+          const summary = text(input.summary);
+          if (summary === "") return fail("task_create needs a summary");
+          const dueText = text(input.due);
+          const dueMs = dueText === "" ? undefined : instantOf(dueText, zone);
+          if (dueText !== "" && dueMs === undefined) return fail("due is not a time I can read — use \"2026-10-03\", \"2026-10-03 18:00\" with timezone, or ISO");
+          const assignees = strings(input.assignees);
+          // A task the app creates is visible only to its members: the person who asked follows it.
+          const body = feishuTaskBody({ summary, description: text(input.description), ...(dueMs !== undefined ? { dueMs, allDay: /^\d{4}-\d{2}-\d{2}$/.test(dueText) } : {}), assignees, followers: me !== undefined ? [me] : [] });
+          const created = await connectorJson(auth, "POST", "/task/v2/tasks?user_id_type=open_id", body);
+          if (!created.ok) return fail(created.text, created.unknown);
+          const task = data(created.json).task ?? {};
+          return { text: `${outcomeLine("ok")} Created task "${summary}" (${String(task.guid ?? "")})${me === undefined && assignees.length === 0 ? " — nobody is a member, so only the app can see it; say so" : ""}.${typeof task.url === "string" ? ` Link: ${task.url}` : ""}` };
+        }
+        case "task_complete": {
+          const guid = text(input.task_guid);
+          if (guid === "") return fail("task_complete needs task_guid");
+          const done = await connectorJson(auth, "PATCH", `/task/v2/tasks/${encodeURIComponent(guid)}`, { task: { completed_at: String(Date.now()) }, update_fields: ["completed_at"] });
+          return done.ok ? { text: `${outcomeLine("ok")} Marked ${guid} complete.` } : fail(done.text, done.unknown);
+        }
+        default:
+          return fail("FeishuWrite needs an action: doc_create, doc_append, bitable_add, bitable_update, bitable_search, calendar_event, task_create or task_complete");
+      }
+    }
+
+    case "DingTalkWrite": {
+      const auth = await connectorAuth(context, "dingtalk");
+      if ("refused" in auth) return { text: auth.refused, isError: true };
+      const text = (value: unknown): string => (typeof value === "string" ? value.trim() : "");
+      const fail = (message: string, unknown?: true) => ({ text: outcomeLine(unknown ? "unknown" : "failed", message), isError: true as const });
+      const operator = text(input.operator_union_id) || doorIdOf(context.callerIdentities, "dingtalk");
+      if (operator === undefined || operator === "") return fail("DingTalk acts for a person by unionId, and whose is not known here — pass operator_union_id");
+      if (input.action === "doc_create") {
+        const name = text(input.name);
+        if (name === "") return fail("doc_create needs a name");
+        let workspace = text(input.workspace_id);
+        if (workspace === "") {
+          const mine = await connectorJson(auth, "GET", `/v2.0/wiki/mineWorkspaces?operatorId=${encodeURIComponent(operator)}`);
+          if (!mine.ok) return fail(mine.text, mine.unknown);
+          workspace = String((mine.json.workspace as { workspaceId?: string } | undefined)?.workspaceId ?? "");
+          if (workspace === "") return fail("DingTalk did not return a My Documents space for this person; pass workspace_id");
+        }
+        const created = await connectorJson(auth, "POST", `/v1.0/doc/workspaces/${encodeURIComponent(workspace)}/docs`, { name, docType: "DOC", operatorId: operator });
+        if (!created.ok) return fail(created.text, created.unknown);
+        return { text: `${outcomeLine("ok")} Created the DingTalk document "${name}", empty — writing its body is not supported yet, so tell the person to paste it or use a file.${typeof created.json.url === "string" ? ` Link: ${created.json.url}` : ""}` };
+      }
+      if (input.action === "calendar_event") {
+        const summary = text(input.summary);
+        const zone = text(input.timezone) || Intl.DateTimeFormat().resolvedOptions().timeZone;
+        const startMs = instantOf(text(input.start), zone);
+        const endMs = instantOf(text(input.end), zone);
+        if (summary === "" || startMs === undefined || endMs === undefined || endMs <= startMs) return fail("calendar_event needs summary, and a start before its end");
+        const attendees = Array.isArray(input.attendees) ? input.attendees.filter((id): id is string => typeof id === "string" && id.trim() !== "") : [];
+        const created = await connectorJson(auth, "POST", `/v1.0/calendar/users/${encodeURIComponent(operator)}/calendars/primary/events`,
+          dingtalkEventBody({ summary, description: text(input.description), startMs, endMs, timezone: zone, attendees }));
+        if (!created.ok) return fail(created.text, created.unknown);
+        return { text: `${outcomeLine("ok")} Created "${summary}" on the person's DingTalk calendar${attendees.length > 0 ? `, inviting ${attendees.length}` : ""} (event ${String(created.json.id ?? "")}).` };
+      }
+      return fail("DingTalkWrite needs an action: doc_create or calendar_event");
+    }
+
     case "connector_request": {
       const connector = String(input.connector ?? "").trim().toLowerCase();
       const method = String(input.method ?? "GET").trim().toUpperCase() || "GET";
@@ -3443,21 +3729,9 @@ export async function dispatchTool(
       if (connector === "" || path === "") return { text: outcomeLine("failed", "connector and path are both required"), isError: true };
       if (!path.startsWith("/") || path.startsWith("//")) return { text: outcomeLine("failed", "path must start with a single /"), isError: true };
       if (!["GET", "POST", "PUT", "PATCH", "DELETE"].includes(method)) return { text: outcomeLine("failed", `${method} is not a method this tool sends`), isError: true };
-      const provider = oauthProvider(connector);
-      if (provider === undefined || context.oauth === undefined) {
-        return { text: outcomeLine("refused", `${connector} is not a connected service here`), isError: true };
-      }
-      // The bearer is minted, refreshed and audited on the host; the model gets the
-      // reply with the token scrubbed even if the endpoint echoes its own headers.
-      const token = await context.oauth.bearerFor(`oauth:${connector}`, {
-        agentId: context.agent.id,
-        agentName: context.agent.profile.name,
-        ...(context.caller?.userId !== undefined ? { principalId: context.caller.userId } : {}),
-        scopeGrants: context.bundles?.grantsSecret(boxOfAgent(context), `oauth:${connector}`) === true,
-      });
-      if (token === undefined) {
-        return { text: outcomeLine("refused", `${provider.title} is not connected for you, or its token cannot be refreshed. Ask an admin in Settings → Connected services`), isError: true };
-      }
+      const auth = await connectorAuth(context, connector);
+      if ("refused" in auth) return { text: auth.refused, isError: true };
+      const { provider, token } = auth;
       const hasBody = input.body !== undefined && input.body !== null && method !== "GET";
       const extraHeaders = (typeof input.headers === "object" && input.headers !== null ? input.headers : {}) as Record<string, unknown>;
       // What the caller may do if the answer is lost, decided before the call and by the
@@ -3469,7 +3743,7 @@ export async function dispatchTool(
         fetch(`${provider.apiBase}${path}`, {
           method,
           headers: {
-            Authorization: `Bearer ${token}`,
+            ...tokenHeaders(provider, token),
             ...(provider.apiHeaders ?? {}),
             ...(hasBody ? { "content-type": "application/json; charset=utf-8" } : {}),
             ...Object.fromEntries(Object.entries(extraHeaders).filter(([, value]) => typeof value === "string")),
