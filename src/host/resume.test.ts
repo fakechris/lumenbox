@@ -13,6 +13,7 @@ import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
+  changedPromptSegments,
   giveUpNote,
   MAX_RESUMES,
   resumePrompt,
@@ -282,4 +283,35 @@ test("an open turn is matched by agent and conversation, and the main conversati
   assert.equal(openTurnFor(open, "a1", "feishu-oc_third"), undefined);
   assert.equal(openTurnFor(open, "a1")?.id, "t1", "no conversation: the coarse question");
   assert.equal(openTurnFor(open, "a3"), undefined);
+});
+
+test("the previous turn's prompt fingerprint is found per agent and conversation (INV-782)", () => {
+  const { path, cleanup } = ledgerPath();
+  try {
+    const ledger = new TurnLedger(path);
+    const a = { stable: "aaaaaaaaaaaaaaaa", volatile: "1111111111111111", tools: "tttttttttttttttt" };
+    const b = { ...a, volatile: "2222222222222222" };
+    const side = { ...a, tools: "ssssssssssssssss" };
+    assert.equal(ledger.lastPromptFingerprint("ada"), undefined, "nothing yet");
+    ledger.begin({ id: "t0", agentId: "ada", about: "before the field existed" });
+    assert.equal(ledger.lastPromptFingerprint("ada"), undefined, "an old record without one is skipped");
+    ledger.begin({ id: "t1", agentId: "ada", about: "one", promptFingerprint: a });
+    ledger.begin({ id: "t2", agentId: "ada", about: "side", conversation: "feishu-oc_room", promptFingerprint: side });
+    ledger.begin({ id: "t3", agentId: "ada", about: "two", promptFingerprint: b, promptChanged: ["volatile"] });
+    ledger.begin({ id: "t4", agentId: "bob", about: "bob", promptFingerprint: side });
+
+    const reread = new TurnLedger(path);
+    assert.deepEqual(reread.lastPromptFingerprint("ada"), b, "the latest in the main conversation");
+    assert.deepEqual(reread.lastPromptFingerprint("ada", "feishu-oc_room"), side);
+    assert.equal(reread.lastPromptFingerprint("ada", "feishu-oc_other"), undefined);
+    assert.deepEqual(changedPromptSegments(a, b), ["volatile"]);
+    assert.deepEqual(changedPromptSegments(a, side), ["tools"]);
+    assert.deepEqual(changedPromptSegments(a, a), []);
+    assert.deepEqual(changedPromptSegments(a, { ...side, stable: "bbbbbbbbbbbbbbbb" }), ["stable", "tools"], "fixed order");
+
+    const written = readFileSync(path, "utf8").split("\n").filter(Boolean).map(line => JSON.parse(line) as { id: string; promptChanged?: string[] });
+    assert.deepEqual(written.find(record => record.id === "t3")?.promptChanged, ["volatile"]);
+  } finally {
+    cleanup();
+  }
 });

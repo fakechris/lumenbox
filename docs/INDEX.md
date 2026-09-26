@@ -24,7 +24,7 @@ this file and the headers disagree. Edit the header, not this table.
 | [04-design](04-design.md) | Design | current | 2026-09-26 |
 | [05-data](05-data.md) | Data | current | 2026-09-26 |
 | [08-control-plane](08-control-plane.md) | Control plane | current | 2026-09-12 |
-| [11-roadmap](11-roadmap.md) | Roadmap and backlog | current | 2026-09-14 |
+| [11-roadmap](11-roadmap.md) | Roadmap and backlog | current | 2026-09-26 |
 | [21-dingtalk-wire](21-dingtalk-wire.md) | The DingTalk wire | current | 2026-08-28 |
 | [22-domain-model](22-domain-model.md) | The domain model: people, doors, workers, rooms | current | 2026-09-25 |
 | [27-testing-and-release](27-testing-and-release.md) | Testing and release stability: ours, against OpenClaw and Hermes | current | 2026-09-01 |

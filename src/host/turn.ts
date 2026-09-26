@@ -19,7 +19,7 @@ import type { DisplayLease } from "../box/display-lease.ts";
 import type { PolicyGate } from "./policy.ts";
 import type { Claims } from "./claims.ts";
 import type { FileVersions } from "./files.ts";
-import type { TurnLedger } from "./resume.ts";
+import { changedPromptSegments, type PromptFingerprint, type TurnLedger } from "./resume.ts";
 import type { PendingWork } from "./pending-work.ts";
 import type { McpFace } from "./mcp-face.ts";
 import type { ModelRelay } from "./model-relay.ts";
@@ -41,7 +41,7 @@ import {
   FirstTokenStallError,
   FIRST_TOKEN_DEADLINE_MS,
 } from "./transient.ts";
-import type { UsageKind, UsageLog } from "./usage.ts";
+import { cacheReadShare, type UsageKind, type UsageLog } from "./usage.ts";
 import { chooseRelevant, memoryProjectionManifest, SHARED_CHAR_BUDGET, type MemoryRecall } from "./memory.ts";
 import { needsReview, type ReviewInput, type ReviewMode, type Verdict } from "./auto-review.ts";
 import type { HookRunner } from "./hooks.ts";
@@ -1803,6 +1803,27 @@ async function runContextTurn(agent: AgentRecord, inbound: readonly InboundMessa
     .filter(tool => routineScope === undefined || routineScope.has(tool.name) ||
       (MCP_GATEWAY_TOOLS.has(tool.name) && [...routineScope].some(name => name.includes("__"))));
 
+  // The prompt in three digests (INV-782): the stable prefix, the volatile tail, and the tool
+  // definitions as sent. The tool set was never in `promptHash`, and it is the segment that moves
+  // with skills, MCP servers and the lane — the common cache killer nobody could see. Compared
+  // with the previous turn in this conversation, so the ledger and the span say *which* part
+  // moved, not only that something did. Record and compare only: nothing here changes the prompt.
+  const promptFingerprint: PromptFingerprint = {
+    stable: promptHashOf(promptParts.stable),
+    volatile: promptHashOf(promptParts.volatile),
+    tools: promptHashOf(toolsFingerprintOf(tools)),
+  };
+  const ledgerConversation = conversation !== MAIN_CONVERSATION ? conversation : undefined;
+  const previousFingerprint = deps.turns?.lastPromptFingerprint(agent.id, ledgerConversation);
+  const promptChanged =
+    previousFingerprint !== undefined ? changedPromptSegments(previousFingerprint, promptFingerprint) : undefined;
+  if (promptChanged !== undefined && promptChanged.length > 0) {
+    console.error(`[turn] ${agent.profile.name}: prompt changed since last turn: ${promptChanged.join(", ")}`);
+  }
+  // The opening call of the turn is the one whose cache share says whether the prefix survived
+  // from the previous turn; later rounds hit what this one just wrote. Noted once.
+  let cacheShareNoted = false;
+
   // One entry per completed round, for the loop and progress judgements. Held out here rather than
   // inside runRounds so a continuation can reset it: a fresh budget deserves a fresh judgement.
   const rounds: RoundRecord[] = [];
@@ -1873,6 +1894,8 @@ async function runContextTurn(agent: AgentRecord, inbound: readonly InboundMessa
     model: provider.model,
     build: buildInfo(),
     promptHash: promptHashOf(promptParts.stable, promptParts.volatile),
+    promptFingerprint,
+    ...(promptChanged !== undefined ? { promptChanged } : {}),
     contextEpoch: registry.contextVersion(agent.id, conversation),
     contextMode,
     memoryProjection: {
@@ -2127,6 +2150,12 @@ async function runContextTurn(agent: AgentRecord, inbound: readonly InboundMessa
         "agentbox.conversation": conversation,
         "agentbox.round": round,
         "agentbox.attempt": attempts + 1,
+        // Which prompt, in parts, and which parts differ from the previous turn (INV-782):
+        // `changed` is a comma list, empty when nothing moved, absent on a first turn.
+        "agentbox.prompt.stable_hash": promptFingerprint.stable,
+        "agentbox.prompt.volatile_hash": promptFingerprint.volatile,
+        "agentbox.prompt.tools_hash": promptFingerprint.tools,
+        ...(promptChanged !== undefined ? { "agentbox.prompt.changed": promptChanged.join(",") } : {}),
       },
       { traceId: turnId }
     );
@@ -2303,11 +2332,32 @@ async function runContextTurn(agent: AgentRecord, inbound: readonly InboundMessa
       cacheWriteTokens: response.usage.cache_creation_input_tokens ?? 0,
     };
     emit({ type: "usage", agentId: agent.id, round, ...usage });
+    // The turn's opening call, scored for the cache ledger (INV-782): what share came from
+    // cache, and — when enough turns in a row came in low with a segment moving — why.
+    let cacheShare: number | undefined;
+    if (!cacheShareNoted) {
+      cacheShareNoted = true;
+      const noted = deps.usage?.notePromptCache({
+        agentId: agent.id,
+        agentName: agent.profile.name,
+        provider: deps.provider?.label ?? "unknown",
+        model: deps.provider?.model ?? "unknown",
+        round,
+        usage,
+        changed: promptChanged,
+        workId,
+        turnId,
+        conversation,
+      });
+      cacheShare = noted?.share ?? cacheReadShare(usage);
+      if (noted?.reason !== undefined) console.error(`[usage] ${agent.profile.name}: ${noted.reason}`);
+    }
     span?.end({
       "gen_ai.usage.input_tokens": usage.inputTokens,
       "gen_ai.usage.output_tokens": usage.outputTokens,
       "agentbox.usage.cache_read_tokens": usage.cacheReadTokens,
       "agentbox.usage.cache_write_tokens": usage.cacheWriteTokens,
+      ...(cacheShare !== undefined ? { "agentbox.usage.cache_read_share": cacheShare } : {}),
     });
     // Learn the real context window while we are here. Providers report it under different names —
     // Anthropic does not report it at all today, several OpenAI-compatible endpoints do — so this
@@ -2366,6 +2416,7 @@ async function runContextTurn(agent: AgentRecord, inbound: readonly InboundMessa
       model: deps.provider?.model ?? "unknown",
       round,
       ...usage,
+      ...(cacheShare !== undefined ? { cacheShare } : {}),
     });
 
     // A response the context squeezed rather than finished. Discarded, never
@@ -3171,6 +3222,25 @@ export function reviewInputFor(options: {
     input: options.input,
     why: options.why,
   };
+}
+
+/**
+ * The tool definitions as one stable string, for the `tools` segment of the prompt fingerprint
+ * (INV-782). Sorted by name and with every object's keys sorted, so the digest answers "is this
+ * the same tool set" and not "were they assembled in the same order".
+ */
+export function toolsFingerprintOf<T extends { name: string }>(tools: readonly T[]): string {
+  const canonical = (value: unknown): unknown =>
+    Array.isArray(value)
+      ? value.map(canonical)
+      : value !== null && typeof value === "object"
+        ? Object.fromEntries(
+            Object.keys(value as Record<string, unknown>)
+              .sort()
+              .map(key => [key, canonical((value as Record<string, unknown>)[key])])
+          )
+        : value;
+  return JSON.stringify([...tools].sort((a, b) => a.name.localeCompare(b.name)).map(canonical));
 }
 
 /** A short, stable digest of an assembled prompt, for the turn ledger's `promptHash`. */
