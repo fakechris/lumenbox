@@ -2178,15 +2178,19 @@ export const ALL_TOOLS: readonly string[] = [
   "ReadKept",
   "ClaimWork",
   "RememberFact",
+  "Forget",
   "Recall",
   "OtherThreads",
   "Tasks",
   "RunOnHost",
 ];
 
-/** Everyone except the coordinator: building the team is the coordinator's job. */
+/**
+ * Everyone except the coordinator: building the team is the coordinator's job, and so is carrying
+ * out a person's request to forget (INV-757) — one agent, in the person's conversation.
+ */
 const NO_TEAM_BUILDING: readonly string[] = ALL_TOOLS.filter(
-  tool => tool !== "CreateAgent" && tool !== "UpdateAgent"
+  tool => tool !== "CreateAgent" && tool !== "UpdateAgent" && tool !== "Forget"
 );
 
 export const STARTER_TEAM: readonly {

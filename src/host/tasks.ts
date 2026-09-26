@@ -152,6 +152,12 @@ export interface Task {
    * moving is what waiting looks like.
    */
   waitingOn?: string;
+  /**
+   * Set when this task is a goal the person stated (INV-757): the area it belongs to and what
+   * they committed to. The board is the one home — `due` is the next follow-up, the aging sweep
+   * is the follow-up machinery, and one open goal per area is what stops a second intake.
+   */
+  goal?: { area: string; commitment?: string };
   /** Leave it alone until this instant: the answer to a nudge that is "not now" (INV-532). */
   snoozeUntil?: string;
   /** How often the requester has been nudged about an overdue or idle task, and when last. */
@@ -346,6 +352,7 @@ export class TaskStore {
     /** The agent proposing, when a person has yet to commit the work. */
     proposedBy?: string;
     due?: string;
+    goal?: { area: string; commitment?: string };
     now?: Date;
   }): Task | undefined {
     const title = input.title.replace(/\s+/g, " ").trim().slice(0, 200);
@@ -367,6 +374,9 @@ export class TaskStore {
       ...(input.contract !== undefined ? { contract: input.contract } : {}),
       ...(input.proposedBy !== undefined ? { proposedBy: input.proposedBy } : {}),
       ...(dueOf(input.due) !== undefined ? { due: dueOf(input.due)! } : {}),
+      ...(input.goal !== undefined && input.goal.area.trim() !== ""
+        ? { goal: { area: input.goal.area.trim().slice(0, 80), ...(input.goal.commitment?.trim() ? { commitment: input.goal.commitment.trim().slice(0, 500) } : {}) } }
+        : {}),
       createdAt: at,
       updatedAt: at,
       history: [{ at, by: input.requester, status: "open", note: input.proposedBy !== undefined ? "proposed, awaiting a person's commit" : "created" }],
@@ -858,6 +868,52 @@ export class TaskStore {
     }
   }
 
+  /** The live goal in an area, if there is one: what a second "I want to…" should follow up rather than restart. */
+  openGoalIn(area: string): Task | undefined {
+    const wanted = area.trim().toLowerCase();
+    return [...this.tasks.values()].find(task => task.goal !== undefined && isLive(task.status) && task.goal.area.toLowerCase() === wanted);
+  }
+
+  /**
+   * Every task that mentions a phrase, with the phrase replaced wherever it appears — title,
+   * description, contract, history (INV-757). Then the file is rewritten as one snapshot per task,
+   * so the earlier snapshots that held the wording go too. Returns how many tasks changed.
+   */
+  scrub(phrase: string, replacement = "[forgotten]", now = new Date()): number {
+    const pattern = new RegExp(phrase.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"), "gi");
+    const scrubValue = (value: unknown): unknown => {
+      if (typeof value === "string") return value.replace(pattern, replacement);
+      if (Array.isArray(value)) return value.map(scrubValue);
+      if (value !== null && typeof value === "object") {
+        return Object.fromEntries(Object.entries(value).map(([key, inner]) => [key, scrubValue(inner)]));
+      }
+      return value;
+    };
+    let changed = 0;
+    for (const [id, task] of this.tasks) {
+      const before = JSON.stringify(task);
+      if (!before.toLowerCase().includes(phrase.toLowerCase())) continue;
+      this.tasks.set(id, scrubValue(task) as Task);
+      changed += 1;
+    }
+    // Compacted whenever the file still holds the phrase, not only when a current task did: an
+    // earlier snapshot of a task since renamed is exactly where old wording survives.
+    const fileHolds = this.path !== null && existsSync(this.path) && readFileSync(this.path, "utf8").toLowerCase().includes(phrase.toLowerCase());
+    if (changed > 0 || fileHolds) this.compact(now);
+    return changed;
+  }
+
+  /** Whether the board's file still holds a phrase anywhere, snapshots included: the verification's check. */
+  fileMentions(phrase: string): boolean {
+    return this.path !== null && existsSync(this.path) && readFileSync(this.path, "utf8").toLowerCase().includes(phrase.toLowerCase());
+  }
+
+  /** How many tasks mention a phrase, current wording only: the plan's count. */
+  mentioning(phrase: string): number {
+    const needle = phrase.toLowerCase();
+    return [...this.tasks.values()].filter(task => JSON.stringify(task).toLowerCase().includes(needle)).length;
+  }
+
   /**
    * Rewrites the file as one snapshot per task, letting go of closed tasks past the
    * retention window. The counter marker goes first, so an id from a dropped task is
@@ -892,5 +948,6 @@ export function describeTask(task: Task, nameOf: (id: string) => string): string
   const assignee = task.assigneeId !== undefined ? ` @${nameOf(task.assigneeId)}` : " (unassigned)";
   const reviewer = task.reviewerId !== undefined ? ` · review by ${nameOf(task.reviewerId)}` : "";
   const proposed = task.proposedBy !== undefined ? " (proposed — a person commits it before anyone starts)" : "";
-  return `${task.id} [${task.status}]${assignee} ${task.title}${reviewer}${proposed}`;
+  const goal = task.goal !== undefined ? ` · goal (${task.goal.area}${task.goal.commitment !== undefined ? `: ${task.goal.commitment}` : ""})` : "";
+  return `${task.id} [${task.status}]${assignee} ${task.title}${goal}${reviewer}${proposed}`;
 }

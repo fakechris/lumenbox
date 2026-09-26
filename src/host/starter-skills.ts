@@ -773,6 +773,73 @@ Tool names, ids, JSON, status codes or words like \`not_connected\` — say what
 `,
   },
   {
+    // INV-757.
+    slug: "goals",
+    content: `---
+name: goals
+description: Use when someone states something they want to achieve over weeks or months, or asks how a goal is going (我想三个月减 5 斤, 这个季度要把 X 做起来, 帮我盯着, how am I doing on). Set a goal up once, then only follow it up. Not for a one-off task with a deadline, which is an ordinary task.
+scope: global
+---
+
+# Goals
+
+A goal is set up once and then followed. Asking the same questions again is the failure: the person already told you.
+
+## Is there one already?
+
+Look first: \`Tasks\` with action list, and find an open task with a goal in this area. If there is one, this is a **follow-up**, not a new goal — skip to the next section.
+
+## Setting one up (once)
+
+- Ask only what you need, in one message: what they want, by when, and what they will do about it ("run three times a week").
+- Create it with \`Tasks\`: action create, a title in their words, \`goal_area\` (health, fitness, career, learning, money, home…), \`commitment\`, and \`due\` set to the first check-in — a week out unless they said otherwise.
+- If \`Tasks\` says a goal in that area already exists, follow that one up instead.
+- Tell them in one sentence what you will check and when.
+
+## Following it up
+
+- Start from what is on the task, not from scratch. Ask how the commitment went since last time.
+- Note what they said with action update (a note), and set the next \`due\`.
+- If the goal changed, update the title or commitment — do not create a second goal.
+- If they are done or have dropped it, close it and say so.
+
+## When it is due
+
+The board nudges when a goal's check-in date passes. Treat that as the prompt to follow up — short, specific, and about their commitment, not a questionnaire.
+`,
+  },
+  {
+    // INV-757.
+    slug: "forget",
+    content: `---
+name: forget
+description: Use when someone asks you to forget something, delete what you know about something, or stop keeping it (忘掉, 删掉关于…的记录, 别再记着, forget that). Two turns: plan, their yes, then confirm. Not when "forget it" means drop the current task — then just stop.
+scope: global
+---
+
+# Forget
+
+Forgetting is complete or it is not forgetting: the words can be in memory, pages and results kept on disk, the task board, notes of commitments — and a routine that would write them back next week.
+
+## 1. Plan — nothing changes
+
+- Call \`Forget\` with action plan and \`about\`: the words as they would appear (a name, a number, a phrase). Ask first if you are not sure what exactly they mean.
+- Tell the person what would be removed and what would be paused, in places and counts. **Never repeat the words themselves.**
+- Say what stays: the record of what was said (conversation transcripts and logs) is kept by design, and skills that merely mention it are theirs to edit.
+- Ask for a clear yes, and end your turn.
+
+## 2. Their answer
+
+Silence, "maybe", or a yes to something else is not a yes. If they narrow it ("only the medical part"), make a new plan.
+
+## 3. Confirm — in a later turn
+
+- Call \`Forget\` with action confirm and the plan id. It pauses the routines first, removes every copy, and checks again.
+- Report exactly what it says: what was removed, anything still there, what is kept. Say "forgotten" only for what the check found gone.
+- Do not store it again — no \`RememberFact\` about what was forgotten, not even that it was.
+`,
+  },
+  {
     // The conversation that packs a template (docs/29 §4). Served from the host like Grok
     // Bot serves its export skill from the server, so the wording can change without a
     // client release; the tool it ends in is PackTemplate.
@@ -924,6 +991,14 @@ const STARTER_EVALS: Record<string, readonly SkillEval[]> = {
   feishu: [
     { name: "write to a Feishu doc", kind: "trigger", says: "把这次会议纪要整理进我们团队的飞书文档里。" },
     { name: "a Notion page is notion", kind: "no-trigger", instead: "notion", says: "把这次会议纪要写到 Notion 里「周会」那个页面下面。" },
+  ],
+  goals: [
+    { name: "a new goal", kind: "trigger", says: "我想在三个月内减掉 5 公斤，你帮我盯着点。" },
+    { name: "a one-off deadline is a task", kind: "no-trigger", says: "提醒我周五下午三点前把报销单交了。" },
+  ],
+  forget: [
+    { name: "forget a fact", kind: "trigger", says: "把我之前跟你说的体检结果都忘掉，别再记着了。" },
+    { name: "forget it means drop the task", kind: "no-trigger", says: "算了，那份报告不用写了，忘了它吧，我们聊点别的：今天北京天气怎么样？" },
   ],
   "export-template": [
     { name: "share yourself", kind: "trigger", says: "把你自己打包成一个模板吧，我想分享给同事用。" },

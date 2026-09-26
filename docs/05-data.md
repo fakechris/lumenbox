@@ -725,6 +725,24 @@ and that ids, JSON and status words stay out of replies while text inside an ema
 information, not instructions. A skill grants nothing: what a tool may do is still the policy
 gate's and the bundle's to say.
 
+**Goals and forgetting (INV-757).** A goal is a task with `goal: { area, commitment }` — the board
+is its one home: `due` is the next check-in and the aging sweep is the follow-up. `Tasks` create with
+`goal_area` refuses a second open goal in the same area and names the existing one, which is what
+stops a second intake; the `goals` starter says to look first, set up once, and then only follow up.
+
+Forgetting is `Forget` (`src/host/forget.ts`), in two turns. **plan** searches every place the words
+can be — both memory tiers and the box's mirror of them, kept pages, kept results, the board with its
+history, the commitments ledger, and routines — and answers in counts and names, never the words;
+the plan is held in memory only, because a stored plan is a stored copy. **confirm** is refused in
+the turn that made the plan and until the person has spoken since. It searches again from scratch,
+pauses routines whose text holds the words before anything else (a producer left running writes it
+back), then drops memory lines (the one place memory is deleted rather than retracted — a retraction
+has to carry the text to match it), re-renders the mirror, deletes kept files, scrubs the board and
+rewrites it as one snapshot per task so earlier wording goes too, scrubs the ledger — and searches a
+third time: "forgotten" is said only where that last search came back clean. Kept, and said so in
+counts: transcripts, the message log and audit lines (withdrawing never deletes the record of what
+was said), and skills that merely mention the words, which are the person's to edit.
+
 **Seeding, and the three answers (INV-688).** `.seeded` records `<slug> <sha8>` per line:
 what has been offered and which version. Three states stay distinct where there used to be
 two.

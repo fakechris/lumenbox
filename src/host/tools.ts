@@ -7,6 +7,8 @@ import { isComputerWrite } from "../cua/execution.ts";
  * measurably under-triggers.
  */
 
+import { agentboxHome } from "../config.ts";
+import { executeForget, forgetOutcomeReport, forgetPlanReport, forgettable, ForgetPlans, inventory } from "./forget.ts";
 import type Anthropic from "@anthropic-ai/sdk";
 import { optionLabel } from "./ask-options.ts";
 import { BoxError, type BoxClient } from "../box/client.ts";
@@ -354,7 +356,12 @@ export const PARALLEL_TOOL_LIMIT = 6;
  * Stated, not solved: `bash` and the browser reach the network. The fence is over *our*
  * channels; egress is a scope's policy (R4), not a tool list's.
  */
+/** Plans between the asking turn and the confirming one; in memory on purpose (see forget.ts). */
+const FORGET_PLANS = new ForgetPlans();
+
 export const FORK_WITHHELD_TOOLS: ReadonlySet<string> = new Set([
+  // Forgetting is the person's decision, confirmed in their conversation (INV-757).
+  "Forget",
   "RunOnHost",
   "computer",
   "SendToAgent",
@@ -664,6 +671,25 @@ export function buildTools(
   }
 
   if (hasBox && vision && canUseDesktop) {
+    tools.push({
+      name: "Forget",
+      description:
+        "Forget something the person asked you to forget — everywhere it was kept, not just in memory. Two steps, " +
+        "in two turns. action \"plan\" with about: the words to forget; nothing changes, you get what would be " +
+        "removed (counts and places, never the text). Tell the person that, without repeating the words, and ask " +
+        "once for a clear yes. Only in a later turn, after they answer, action \"confirm\" with the plan id: routines " +
+        "that would write it back are paused first, then every copy is removed and the places are checked again. " +
+        "Say it is forgotten only where that check came back clean, and say what is kept by design.",
+      input_schema: {
+        type: "object",
+        properties: {
+          action: { type: "string", enum: ["plan", "confirm"] },
+          about: { type: "string", description: "For plan: the words to forget, as they would appear (a name, a phrase, a number)." },
+          plan: { type: "string", description: "For confirm: the plan id the plan step returned." },
+        },
+        required: ["action"],
+      },
+    });
     tools.push({
       name: "computer",
         description:
@@ -1437,6 +1463,8 @@ export function buildTools(
           },
           id: { type: "string", description: "The task id, e.g. \"t12\". For read, take, update and propose_close." },
           due: { type: "string", description: "For create or update: when it is due, as YYYY-MM-DD or an ISO instant. A task past its due date nudges the requester; two nudges with no movement archive it." },
+          goal_area: { type: "string", description: "For create: this task is a goal the person stated, in this area (health, fitness, career, learning, money…). One open goal per area: if one exists you are told its id — follow it up instead of starting again. Set due to the next check-in." },
+          commitment: { type: "string", description: "For create with goal_area: what the person committed to, in their words (\"run 3 times a week\")." },
           waiting_on: { type: "string", description: "For update: who or what this is waiting for outside the box (a supplier, a deploy window, somebody on leave). It is still asked about, but never archived for not moving — waiting is not abandonment. Empty string clears it." },
           snooze_until: { type: "string", description: "For update: leave it alone until this date or instant (YYYY-MM-DD or ISO). The answer to a nudge that is \"not now\" — the board stays quiet about it until then. Empty string looks again now." },
           reason: { type: "string", description: "For propose_close: why this task should be closed, in one sentence the requester can read. They have two days to object; their silence closes it." },
@@ -4394,6 +4422,33 @@ export async function dispatchTool(
       };
     }
 
+    case "Forget": {
+      const action = String(input.action ?? "");
+      const conversation = context.conversation ?? MAIN_CONVERSATION;
+      const stores = { registry: context.registry, ...(context.tasks !== undefined ? { tasks: context.tasks } : {}), ...(context.box !== undefined ? { box: context.box } : {}), home: context.fetchedHome ?? agentboxHome() };
+      if (action === "plan") {
+        const about = String(input.about ?? "");
+        const refused = forgettable(about);
+        if (refused !== undefined) return { text: refused, isError: true };
+        const found = await inventory(about.trim(), stores);
+        const id = FORGET_PLANS.hold({ phrase: about.trim(), agentId: context.agent.id, conversation, turnId: context.turnId });
+        return { text: forgetPlanReport(found, id) };
+      }
+      if (action === "confirm") {
+        const taken = FORGET_PLANS.take(String(input.plan ?? ""), {
+          agentId: context.agent.id,
+          conversation,
+          turnId: context.turnId,
+          personSpokeSince: at =>
+            context.registry.readTranscript(context.agent.id, conversation).some(entry =>
+              (entry as { fromPerson?: boolean }).fromPerson === true && Date.parse((entry as { at: string }).at) > at),
+        });
+        if ("refused" in taken) return { text: taken.refused, isError: true };
+        return { text: forgetOutcomeReport(await executeForget(taken.phrase, stores)) };
+      }
+      return { text: 'Forget needs action "plan" (with about) or "confirm" (with plan).', isError: true };
+    }
+
     case "Tasks": {
       const board = context.tasks;
       if (board === undefined) {
@@ -4442,7 +4497,20 @@ export async function dispatchTool(
         if (reviewerRaw !== "" && reviewerId === undefined) {
           return { text: `No agent called "${reviewerRaw}" to review.`, isError: true };
         }
+        // A goal is set up once (INV-757). Asking the person the intake questions again for an area
+        // that already has a live goal is the failure this refuses; the existing one is followed up.
+        const goalArea = typeof input.goal_area === "string" ? input.goal_area.trim() : "";
+        if (goalArea !== "") {
+          const existing = board.openGoalIn(goalArea);
+          if (existing !== undefined) {
+            return {
+              text: `There is already an open ${existing.goal?.area ?? goalArea} goal: ${describeTask(existing, nameOf)}. Follow that one up — ask how it is going, note progress with update, set the next due — instead of setting it up again.`,
+              isError: true,
+            };
+          }
+        }
         const created = board.create({
+          ...(goalArea !== "" ? { goal: { area: goalArea, ...(typeof input.commitment === "string" ? { commitment: input.commitment } : {}) } } : {}),
           title: String(input.title ?? ""),
           ...(typeof input.description === "string" ? { description: input.description } : {}),
           requester: context.agent.id,

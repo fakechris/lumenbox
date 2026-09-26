@@ -1140,6 +1140,45 @@ export class AgentRegistry {
     }
   }
 
+  /**
+   * Drops every memory line that mentions a phrase, from every agent's own and shared file
+   * (INV-757). The one place memory is deleted rather than retracted: a retraction has to carry
+   * the text to match it, and "forget" means the text is gone. Atomic per file, the same
+   * temp-and-rename compaction uses. Returns how many lines went from each tier.
+   */
+  forgetMemoryMentioning(phrase: string): { personal: number; shared: number; agents: string[] } {
+    const needle = phrase.toLowerCase();
+    const mentions = (line: string): boolean => {
+      try {
+        const parsed = JSON.parse(line) as { text?: unknown };
+        return typeof parsed.text === "string" ? parsed.text.toLowerCase().includes(needle) : line.toLowerCase().includes(needle);
+      } catch {
+        return line.toLowerCase().includes(needle);
+      }
+    };
+    const drop = (path: string): number => {
+      if (!existsSync(path)) return 0;
+      const lines = readFileSync(path, "utf8").split("\n").filter(line => line.trim() !== "");
+      const kept = lines.filter(line => !mentions(line));
+      if (kept.length === lines.length) return 0;
+      const temp = `${path}.${process.pid}.forget.tmp`;
+      writeFileSync(temp, kept.length === 0 ? "" : `${kept.join("\n")}\n`, "utf8");
+      renameSync(temp, path);
+      return lines.length - kept.length;
+    };
+    let personal = 0;
+    let shared = 0;
+    const agents: string[] = [];
+    for (const agent of this.list()) {
+      const own = drop(this.memoryRecordsPathFor(agent.id));
+      const theirs = drop(this.sharedMemoryPathFor(agent.id));
+      if (own + theirs > 0) agents.push(agent.id);
+      personal += own;
+      shared += theirs;
+    }
+    return { personal, shared, agents };
+  }
+
   private sharedMemoryDir(): string {
     return join(this.root, SHARED_MEMORY_DIRNAME);
   }
