@@ -32,6 +32,7 @@
 import { envNumber } from "../config.ts";
 import { namesControlSurface } from "./control-surfaces.ts";
 import { describeSchedule, knownTimezone, parseSchedule, type Schedule } from "./schedule.ts";
+import { parseDeliverWhen } from "./routine-resolve.ts";
 import { declaredTools } from "./side-effects.ts";
 import { engineToolNames } from "./engine-tools.ts";
 
@@ -97,6 +98,12 @@ export interface Skill {
    * the turn ran in the main conversation, which no chat reads.
    */
   deliver?: string;
+  /**
+   * When a run's result reaches that chat (INV-776). `always`: every run is delivered.
+   * `changed` (the default when absent): a result identical to the previous run's, or a run
+   * that had nothing to say, stays on the results ledger and the chat is not interrupted.
+   */
+  deliverWhen?: "always" | "changed";
   /**
    * When it runs because someone said something, if it does.
    *
@@ -211,6 +218,7 @@ const KNOWN_KEYS = new Set([
   "agent",
   "timezone",
   "deliver",
+  "deliver_when",
   "authored_by",
   "because",
   "trigger",
@@ -409,6 +417,11 @@ export function skillFrom(
     return { problem: `${slug}: deliver is set but the skill has no schedule, so nothing fires.` };
   }
 
+  const deliverWhen = parseDeliverWhen(parsed.meta.deliver_when);
+  if (parsed.meta.deliver_when !== undefined && parsed.meta.deliver_when.trim() !== "" && deliverWhen === undefined) {
+    return { problem: `${slug}: deliver_when must be "always" or "changed", not "${parsed.meta.deliver_when.trim()}".` };
+  }
+
   return {
     skill: {
       slug,
@@ -424,6 +437,7 @@ export function skillFrom(
       ...(parsed.meta.agent ? { runAs: parsed.meta.agent.trim() } : {}),
       ...(timezone !== undefined && timezone !== "" ? { timezone } : {}),
       ...(deliver !== undefined && deliver !== "" ? { deliver } : {}),
+      ...(deliverWhen !== undefined ? { deliverWhen } : {}),
       ...(parsed.meta.authored_by ? { authoredBy: parsed.meta.authored_by.trim() } : {}),
       ...(parsed.meta.because ? { because: parsed.meta.because.trim() } : {}),
       ...(parsed.meta.paused?.trim() === "true" ? { paused: true } : {}),
@@ -524,6 +538,8 @@ export function renderSkills(skills: readonly Skill[]): string {
     "",
     "schedule is cron or @daily / @every 30m; timezone an IANA name (omit for this",
     "machine's clock); deliver the chat it reports to (omit and no chat hears it);",
+    "deliver_when: always to deliver every run — without it a run whose result is the same as",
+    "last time's, or that had nothing to say, is kept on the results ledger and not delivered;",
     "authored_by is you when it was your idea. No inline # comments in frontmatter.",
     "`paused: true` keeps a routine off until a person turns it on from the automations list;",
     "a routine you were handed by a template starts that way, and you do not remove the line",
