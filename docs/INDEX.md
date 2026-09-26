@@ -66,7 +66,7 @@ this file and the headers disagree. Edit the header, not this table.
 | [29-bot-templates](29-bot-templates.md) | Bot templates: the bot packs itself, the new bot installs itself | current | 2026-09-14 |
 | [30-multi-box](30-multi-box.md) | Many boxes, one host: the multi-box mode | current | 2026-09-14 |
 | [31-harness-review](31-harness-review.md) | The turn engine, reviewed against the incident and three references | current | 2026-09-02 |
-| [32-coordination-protocol](32-coordination-protocol.md) | Coordination as protocol, slice one: a fork ledger that survives restarts, and fenced children | current | 2026-09-03 |
+| [32-coordination-protocol](32-coordination-protocol.md) | Coordination as protocol, slice one: a fork ledger that survives restarts, and fenced children | current | 2026-09-26 |
 | [33-mcp-face](33-mcp-face.md) | The box gets an MCP face: a per-job route on the host, never a credential in the box | current | 2026-09-03 |
 | [34-extensions](34-extensions.md) | Extensions: the edges you can edit without restarting the core (R36) | current | 2026-09-03 |
 | [35-grok-onboarding](35-grok-onboarding.md) | Onboarding a Grok Bot box: the bot prepares its own box, the person connects from the laptop | current | 2026-09-03 |

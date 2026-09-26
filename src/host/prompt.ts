@@ -863,9 +863,11 @@ export const STABLE_SECTIONS: readonly PromptSection[] = [
  * 3. **skills** — what it can reuse. After memory because a skill is only worth reaching for once
  *    the situation is understood.
  * 4. **history** — that earlier turns are still readable, and only when something was summarised.
- * 5. **shared-memory** — what colleagues have kept. After its own, because "I learned this" and "a
+ * 5. **wrap-up** — what the closing message owes its reader, worded per lane. After the
+ *    background and before the roster: it is about how the turn ends, in every lane.
+ * 6. **shared-memory** — what colleagues have kept. After its own, because "I learned this" and "a
  *    colleague thought everyone needed this" are different claims and the weaker one goes second.
- * 6. **team** — who else exists. Last, because delegation is a decision made after the work is
+ * 7. **team** — who else exists. Last, because delegation is a decision made after the work is
  *    understood, not a lens for reading it.
  */
 /** The agent's plate, as board rows. Empty renders nothing — no section for no tasks. */
@@ -919,13 +921,50 @@ function renderChatFiles(context: PromptContext): string {
     "the person that number live. Write it from the script itself, not by hand between " +
     "steps, and delete it when the batch is done.\n\n" +
     "A deliverable belongs in outbox/ — a path pasted into your reply is not a deliverable, " +
-    "because the person is reading a phone, not the box.\n\n" +
-    "Your closing message is the only thing the person sees. It must stand alone: what was " +
-    "asked, what you did, what came of it, and where the deliverable is — in their language. " +
-    "\"已问。等回复。\" or \"done, see above\" reads as a glitch on a phone, because there is " +
-    "no above; the steps you took are folded away where they are not looking. If you asked " +
-    "someone something, your closing message says what you asked and why. If nothing worked, " +
-    "say what you tried and what you need. One complete paragraph beats a status line."
+    "because the person is reading a phone, not the box."
+  );
+}
+
+/**
+ * The closing message must stand alone, in every lane (INV-785).
+ *
+ * This rule used to live inside the file-exchange section, so it was only said to an outside
+ * chat with a box. A main session and a team room got nothing, and the wrap-up after a fork
+ * landed there read as a reaction to the last fork ("got the third one too") instead of the
+ * deliverable. One rule, one home, worded for the reader each lane actually has. Volatile
+ * because the lane is per turn; the stable prefix does not move.
+ *
+ * A fork has no closing message of its own — its findings go back as its final message
+ * (FORK_PROMPT_LINE) — so it gets nothing here.
+ */
+function renderWrapUp(context: PromptContext): string {
+  if (isForkConversation(context.conversation)) return "";
+  const conversation = context.conversation ?? "";
+  const main = conversation === "" || conversation === MAIN_CONVERSATION;
+  const room = !main && (context.heard?.length ?? 0) > 0;
+  const reader = main
+    ? "Your closing message is what the person reads when they come back to this session, " +
+      "often without scrolling up."
+    : room
+      ? "Your closing message is the only thing the room sees; nobody there watched you work, " +
+        "and the people who were not addressed still read it."
+      : "Your closing message is the only thing the person sees, on a phone, with your steps " +
+        "folded away where they are not looking.";
+  const deliverable = main
+    ? "where the result is"
+    : context.hasBox
+      ? "where the deliverable is (outbox/, not a path)"
+      : "where the deliverable is";
+  return (
+    "## Your closing message\n\n" +
+    `${reader} It must stand alone: what was asked, what you did, what came of it, and ` +
+    `${deliverable} — in their language. "已问。等回复。" or "done, see above" reads as a ` +
+    "glitch, because for the reader there is no above. If you asked someone something, say " +
+    "what you asked and why. If nothing worked, say what you tried and what you need. " +
+    "When results of work you started earlier arrive as messages, the wrap-up you write " +
+    "after the last one restates the whole deliverable — everything that was asked, all of " +
+    "what came back — not a reaction to the piece that landed last. One complete paragraph " +
+    "beats a status line."
   );
 }
 
@@ -998,6 +1037,9 @@ export const VOLATILE_SECTIONS: readonly PromptSection[] = [
           }
         : { kind: "ordinary" },
   },
+  // After the background, before the roster: the closing message is written last, and it
+  // is the same obligation in every lane (INV-785).
+  { name: "wrap-up", render: renderWrapUp },
   {
     name: "shared-memory",
     render: context =>

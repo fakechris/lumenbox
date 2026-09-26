@@ -2625,11 +2625,18 @@ export async function dispatchTool(
             }
           });
         }
+        // The receipt says what to do next and what not to do. It used to say only "end your
+        // turn"; a parent that was not told otherwise went on to check on the forks, guess at
+        // their findings and promise a time — none of which it can know (INV-785).
         return {
           text:
             `Started ${briefs.length} fork${briefs.length === 1 ? "" : "s"} in the background. ` +
             `Each reports here as a message when it lands. End your turn now with what the ` +
-            `person should hear — that you are on it, in your own words, not that you forked.`,
+            `person should hear — that you are on it, in your own words, not that you forked. ` +
+            `Until a fork's result arrives there is nothing more for you to do about it: do not ` +
+            `check on the forks' progress, do not predict or invent what they will find, do not ` +
+            `estimate how long they will take, and do not keep writing about the delegated work. ` +
+            `Each result reaches you as its own message, and that is when you fold it in.`,
         };
       }
 

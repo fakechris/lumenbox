@@ -153,6 +153,26 @@ test("an instruction arriving mid-join wakes the coordinator; late forks report 
   }
 });
 
+test("the background receipt forbids polling, predicting and narrating the delegated work (INV-785)", async () => {
+  const { context, seen, cleanup } = harness();
+  try {
+    const result = await dispatchTool("Fork", { briefs: ["quick one"], background: true }, context);
+    assert.match(result.text, /Started 1 fork in the background/);
+    assert.match(result.text, /End your turn now/);
+    // What the parent is told not to do while the fork runs: each was seen once.
+    assert.match(result.text, /do not check on the forks' progress/);
+    assert.match(result.text, /do not predict or invent what they will find/);
+    assert.match(result.text, /do not estimate how long they will take/);
+    assert.match(result.text, /do not keep writing about the delegated work/);
+    // And what will happen instead: the result arrives as its own message.
+    assert.match(result.text, /Each result reaches you as its own message/);
+    await new Promise(resolve => setTimeout(resolve, 200));
+    assert.ok(seen.some(entry => entry.conversation === "main" && /has finished/.test(entry.text)), "the fork landed as a message");
+  } finally {
+    cleanup();
+  }
+});
+
 // ── docs/32: the fork ledger ─────────────────────────────────────────────────────────────
 
 test("every fork is recorded before its message is queued, admitted with its inbox seq, and committed only by the engine", async () => {
