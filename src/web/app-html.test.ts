@@ -167,3 +167,40 @@ test("every CSS content escape is what a browser will accept", () => {
   const wrong = values.filter(value => !/^\\[0-9a-f]{4}$/.test(value));
   assert.deepEqual(wrong, [], "a CSS unicode escape is one backslash and four hex digits");
 });
+
+test("the feed renders the plain-language phrase and falls back to the tool name (INV-783)", () => {
+  // A browser cannot run here, so the page's activityLine is lifted out and run with the
+  // helpers it reaches for stubbed: the contract is "phrase in the reader's language when
+  // present, `→ tool` when not", and an event stored before phrases existed must still draw.
+  const source = /function activityLine\(e\) \{[\s\S]*?\n\}/.exec(APP_HTML)?.[0];
+  assert.ok(source, "activityLine is on the page");
+  const activityLine = new Function(
+    "who",
+    "esc",
+    "nameOf",
+    "MSG_LOCALE",
+    `${source}; return activityLine;`
+  )(
+    (name: string) => `<b>${name}</b>`,
+    (text: string) => String(text).replace(/</g, "&lt;"),
+    (id: string) => id,
+    "zh"
+  ) as (event: Record<string, unknown>) => { html: string; cls: string } | null;
+
+  const phrased = activityLine({
+    type: "tool_start",
+    agentName: "Ada",
+    tool: "bash",
+    input: { command: "python batch.py --token secret" },
+    phrase: { en: "running a command (python)", zh: "运行命令(python)" },
+  });
+  assert.equal(phrased?.html, "<b>Ada</b> 运行命令(python)");
+  assert.ok(!phrased?.html.includes("secret"));
+
+  const bare = activityLine({ type: "tool_start", agentName: "Ada", tool: "bash", input: { command: "ls" } });
+  assert.equal(bare?.html, "<b>Ada</b> &rarr; bash");
+
+  // A phrase without the page's language falls to English rather than to nothing.
+  const enOnly = activityLine({ type: "tool_start", agentName: "Ada", tool: "x", phrase: { en: "using x" } });
+  assert.equal(enOnly?.html, "<b>Ada</b> using x");
+});

@@ -20,8 +20,18 @@ import type { LedgerKind } from "../host/jsonl.ts";
 import { appendFileSync, existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import { dirname } from "node:path";
 
-/** An event with the time it happened, so a replayed line is not read as a live one. */
-export type StoredEvent = Record<string, unknown> & { type: string; at: string };
+/** The plain-language line for a tool call, both languages, from `host/activity-phrase.ts` (INV-783). */
+export interface ActivityPhrase {
+  en: string;
+  zh: string;
+}
+
+/**
+ * An event with the time it happened, so a replayed line is not read as a live one.
+ * A `tool_start` carries its `phrase` when the server attached one; older lines do not,
+ * and the page falls back to the tool name for them.
+ */
+export type StoredEvent = Record<string, unknown> & { type: string; at: string; phrase?: ActivityPhrase };
 
 export interface ActivityLogOptions {
   path: string;

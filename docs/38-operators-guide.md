@@ -2,7 +2,7 @@
      title: The operator's guide (what the README used to be)
      family: guide
      status: current
-     updated: 2026-09-07
+     updated: 2026-09-26
 -->
 # 38 — The operator's guide (what the README used to be)
 
@@ -809,6 +809,18 @@ changing under them.
 - **right** — the live box desktop over noVNC, plus an activity feed covering *all*
   agents. `✉ Ada → Bob` lines are how you see delegation happen. Click the desktop
   to give it keyboard focus, or use *open full size* for a whole-window screen.
+
+A tool call in that feed — and the action line on a Feishu or DingTalk task card — is
+written in a person's words, not the tool's: `Ada 运行命令(python)`, `Ada opening
+shop.example.com`, `派出 3 个子任务`, in the reader's language. The line comes from a
+fixed table in `src/host/activity-phrase.ts` (no model call), and what it shows of the
+arguments is deliberately the least a person needs to recognise the action: the program
+name of a command and never the command line, a file's basename and never its path, a
+URL's hostname and never its path or query. A tool the table does not know — an MCP
+server's or an extension's — gets "using create_issue on linear". On a task card the
+phrase stands in only until the script self-reports through `progress.json`; a number
+the work wrote outranks a sentence guessed from the tool it is using. An event stored
+before phrases existed still draws as `Ada → bash`.
 
 The desktop is proxied through this server at `/desktop/`, rather than linking to
 the container's own port. Docker assigns that port ephemerally, so it changes on
