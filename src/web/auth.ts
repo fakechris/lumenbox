@@ -220,3 +220,36 @@ export function authorize(
 
   return { allow: false, reason: cookie || bearer || query ? "wrong" : "missing" };
 }
+
+/**
+ * Where to send a person after they sign in: a path on this origin, or nothing (INV-724).
+ *
+ * A login `next` is attacker-chosen — it rides in a link — and the redirect it becomes carries the
+ * fresh session with it, so a `next` that leaves the origin is a phishing page with our login in
+ * front of it. The check has to be the browser's, not ours: a browser turns `\` into `/` and drops
+ * tab and newline before it resolves a Location, so `/\evil.example` and `/<TAB>/evil.example` are
+ * both `//evil.example` to it while `startsWith("//")` saw a path. Hence: resolve against a
+ * placeholder origin the way a browser would and require the origin to be unchanged, and refuse
+ * outright the characters that only ever appear in an attempt (backslash, control characters) and
+ * any embedded scheme.
+ *
+ * One definition, used by the box's own login and by the control-plane gateway; they had one each
+ * and both had a hole.
+ */
+export function safeNext(value: string | null | undefined): string | undefined {
+  if (value === null || value === undefined || value === "" || value.length > 512) return undefined;
+  if (!value.startsWith("/") || value.startsWith("//")) return undefined;
+  if (value.includes("\\") || value.includes("://")) return undefined;
+  for (let i = 0; i < value.length; i += 1) {
+    const code = value.charCodeAt(i);
+    if (code < 0x20 || code === 0x7f) return undefined;
+  }
+  const base = "http://next.invalid";
+  let resolved: URL;
+  try {
+    resolved = new URL(value, base);
+  } catch {
+    return undefined;
+  }
+  return resolved.origin === base ? value : undefined;
+}
