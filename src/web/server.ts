@@ -52,6 +52,7 @@ import {
   parseCookies,
   refusalToDrive,
   ROLE_HEADER,
+  safeNext,
   type Caller,
 } from "./auth.ts";
 import {
@@ -2978,9 +2979,8 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
       for (const [key, pending] of oauthStates) {
         if (Date.now() - pending.at > 10 * 60_000) oauthStates.delete(key);
       }
-      const rawNext = url.searchParams.get("next") ?? "/";
-      // Relative paths only: an absolute `next` would make this an open redirect.
-      const next = rawNext.startsWith("/") && !rawNext.startsWith("//") ? rawNext : "/";
+      // A path on this origin only: anything else would make this an open redirect (INV-724).
+      const next = safeNext(url.searchParams.get("next")) ?? "/";
       const state = randomBytes(16).toString("hex");
       oauthStates.set(state, { channelId, next, at: Date.now() });
       const target =
