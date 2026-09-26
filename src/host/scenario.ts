@@ -31,6 +31,7 @@ import { fakeModel } from "./testing/fake-model.ts";
 import type { BoxClient } from "../box/client.ts";
 import type { HistoryEntry } from "./compaction.ts";
 import { Rememberer, summariseExchange } from "./remember.ts";
+import { MemoryMirror } from "./memory-mirror.ts";
 import { memoryRef } from "./memory.ts";
 import type { ProviderProfile } from "./provider.ts";
 import type { PolicyGate } from "./policy.ts";
@@ -337,6 +338,9 @@ export async function runEpisode(options: EpisodeOptions): Promise<EpisodeResult
   const registry = new AgentRegistry(home);
   const files = new Map<string, string>(Object.entries(options.files ?? {}));
   const box = memoryBox(files, options.box ?? {});
+  // The real mirror over the memory box, so the standing files (INV-777) land where the tools
+  // and the prompt expect them, exactly as the orchestrator syncs them.
+  const mirror = new MemoryMirror({ registry, box: () => box });
   const observations: Observation[] = [];
   const rounds = new Map<string, number>();
   let clock = 0;
@@ -422,6 +426,7 @@ export async function runEpisode(options: EpisodeOptions): Promise<EpisodeResult
       ...(options.display !== undefined ? { displayIndex: options.display } : {}),
       ...(options.skills !== undefined ? { skills: options.skills } : {}),
       conversation,
+      syncStanding: (agentId: string) => mirror.sync(agentId),
       ...(rememberer !== undefined
         ? { onSummarised: (agentId: string, conversationId: string, entries: readonly HistoryEntry[]) => { void rememberer.flush(agentId, conversationId, entries).catch(() => {}); } }
         : {}),

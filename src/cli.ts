@@ -1256,14 +1256,18 @@ function relayBoxes(): { name: string; token: string; allow: string[] }[] {
 }
 
 async function cmdEgress(argv: string[]): Promise<number> {
-  // `agentbox egress events [--box X] [--from ISO] [--to ISO] [--refused] [--limit N]`:
-  // what the relay decided, from the log it writes (INV-432).
+  // `agentbox egress events [--box X] [--agent ID] [--turn ID] [--tool-use ID] [--from ISO]
+  // [--to ISO] [--refused] [--limit N]`: what the relay decided, from the log it writes
+  // (INV-432), by who made the call (INV-784).
   if (argv[0] === "events") {
     const { flags } = parseArgs(argv.slice(1));
     const str = (name: string) => (typeof flags.get(name) === "string" ? String(flags.get(name)) : undefined);
     const log = new NetworkEventLog(str("--file") ?? networkEventsPath());
     const { events, total } = log.query({
       box: str("--box"),
+      agent: str("--agent"),
+      turn: str("--turn"),
+      toolUse: str("--tool-use"),
       from: str("--from"),
       to: str("--to"),
       refused: flags.has("--refused"),
@@ -1273,7 +1277,8 @@ async function cmdEgress(argv: string[]): Promise<number> {
       out(`${bold(row.box)}  allowed ${row.allowed}  refused ${row.refused}${row.refusedHosts.length > 0 ? dim(`  (${row.refusedHosts.join(", ")})`) : ""}`);
     }
     for (const event of events) {
-      out(`${dim(event.at)}  ${event.box}  ${event.host}:${event.port}  ${event.allowed ? "allowed" : `refused (${event.reason ?? "?"})`}`);
+      const who = event.attribution === "call" ? `agent ${event.agentId} turn ${event.turnId}${event.toolUseId !== undefined ? ` call ${event.toolUseId}` : ""}${event.jobId !== undefined ? ` job ${event.jobId}` : ""}` : "unattributed";
+      out(`${dim(event.at)}  ${event.box}  ${event.host}:${event.port}  ${event.allowed ? "allowed" : `refused (${event.reason ?? "?"})`}  ${dim(who)}`);
     }
     out(dim(`${events.length} of ${total} shown`));
     return 0;
