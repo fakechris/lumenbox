@@ -27,6 +27,7 @@ import { join, posix } from "node:path";
 import { fileURLToPath } from "node:url";
 import { AgentRegistry, MAIN_CONVERSATION, conversationIdFor } from "../agents/registry.ts";
 import { isContextCommand, newContext } from "../host/context-recovery.ts";
+import { isStandingName, readStanding, STANDING_BYTE_CAP, STANDING_FILES, writeStanding } from "../host/standing.ts";
 import { isRecoveryCommand, recoverTask } from "../host/task-recovery.ts";
 import { isRetryCommand, retryLastAnswer } from "../host/retry-recovery.ts";
 import type { BusEvent } from "../agents/bus.ts";
@@ -4114,6 +4115,42 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
           }
           if (refused(agentId)) return;
           send(res, 200, { agent: agentId, ...memoryAdmin.detail(agentId) });
+          return;
+        }
+        // The standing files (INV-777): read and written on the host, the copy that counts; a
+        // write is pushed to the agent's box so the copy it may edit is current.
+        if (route === "GET /api/standing") {
+          const agentId = url.searchParams.get("agent") ?? "";
+          if (!registry.has(agentId)) {
+            send(res, 404, { error: `No agent ${agentId}` });
+            return;
+          }
+          if (refused(agentId)) return;
+          send(res, 200, { agent: agentId, cap: STANDING_BYTE_CAP, files: readStanding(registry.dirFor(agentId), registry.get(agentId).profile.name) });
+          return;
+        }
+        if (route === "POST /api/standing") {
+          const body = await readJson(req);
+          const agentId = String(body.agent ?? "");
+          if (!registry.has(agentId)) {
+            send(res, 404, { error: `No agent ${agentId}` });
+            return;
+          }
+          if (refused(agentId)) return;
+          const name = String(body.name ?? "");
+          if (!isStandingName(name) || typeof body.text !== "string") {
+            send(res, 400, { error: `name must be one of ${STANDING_FILES.join(", ")} and text a string` });
+            return;
+          }
+          const agent = registry.get(agentId);
+          const result = writeStanding(registry.dirFor(agentId), agent.profile.name, name, body.text, "person");
+          if (!result.ok) {
+            send(res, 413, { error: result.refusal });
+            return;
+          }
+          log(`standing: ${caller.userId ?? "operator"} edited ${name} of ${agent.profile.name}`);
+          void orchestrator.syncStanding(agentId).catch(() => undefined);
+          send(res, 200, { ok: true, files: readStanding(registry.dirFor(agentId), agent.profile.name) });
           return;
         }
         if (route === "POST /api/memory/change") {

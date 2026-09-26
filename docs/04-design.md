@@ -263,6 +263,34 @@ and ten long ones cost very different amounts of the thing actually being spent.
   move. Shared shards compact together: a retraction is only dropped once nothing it could kill
   remains on disk, so no crash between shard writes can resurrect a withdrawn fact.
 
+### 13.1 Standing files (INV-777)
+
+Memory is written by the agent and projected by us; `instructions.md` is written by the operator
+once. Neither is a place a person and the agent both edit that is in front of the model every turn.
+The **standing files** are: four per agent under the agent's host directory,
+`<agents>/<id>/standing/` — `AGENTS.md` (conventions and the agent's own lessons), `SOUL.md`
+(voice; a change to it is mentioned to the person), `USER.md` (the person, in their own words —
+distinct from memory facts) and `HEARTBEAT.md` (a `- [ ]` checklist). Seeded from short templates
+on first read, never re-seeded; capped at 8 KiB each, a longer write refused with a message.
+
+- **Canonical copy: the host.** The box carries a read-write mirror at
+  `/home/box/work/standing/<agent-slug>/`, pushed by the same sync as the memory mirror before each
+  turn. `write_file` and `edit_file` on a mirror path write the host copy in the same call; a
+  `bash` write reaches only the box and is overwritten by the next sync (stated in the prompt).
+- **Injected last.** One volatile section, `standing`, rendered from disk each turn after
+  `unattended` and before the recap, so an edit invalidates only the tail of the cached prefix.
+  An empty file renders as `(empty)`.
+- **Change notice, once.** `standing.json` beside the files holds the hash and text of each file
+  as last injected. At turn start, a file whose hash moved — and was not moved by this agent's own
+  tool write, which updates the table directly — is put on the user-message side as a unified diff
+  in a `diff source=file-diff` fence, labelled as data. The table is then advanced, so the notice
+  is never repeated; first sight of a file is not a change.
+- **Heartbeat.** A built-in `@every 30m` routine per agent (`heartbeat:<agent-id>`), through the
+  ordinary scheduler, running as the agent whose file it is. It is offered to the scheduler only
+  when `HEARTBEAT.md` has an unchecked item; an empty or fully checked list starts no turn.
+- **Web.** `GET /api/standing?agent=` and `POST /api/standing {agent,name,text}` (413 over the
+  cap), and a file picker + textarea in the agent modal.
+
 ## 14. Skills and schedules
 
 A skill is a markdown file with frontmatter under `/home/box/work/skills/<slug>/SKILL.md`, written
