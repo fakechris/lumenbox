@@ -19,7 +19,7 @@
 import { createHash } from "node:crypto";
 import { appendLine } from "./jsonl.ts";
 import type { AgentRecord, AgentRegistry } from "../agents/registry.ts";
-import { dedupeKey, recordHasRevokedSource, revokedMemorySources, type MemoryRecord } from "./memory.ts";
+import { dedupeKey, recordHasRevokedSource, revokedMemorySources, validateRecord, type MemoryRecord } from "./memory.ts";
 
 export interface MemoryView {
   /** The dedupe key: what a retraction or a re-record is matched on. */
@@ -240,6 +240,10 @@ export class MemoryAdmin {
     }
     if (current.version !== request.version) {
       return { ok: false, conflict: true, current, why: "that line changed since you saw it; here is what it says now" };
+    }
+    if (request.text !== undefined && request.text.trim() !== "") {
+      const refused = validateRecord(request.text);
+      if (refused !== undefined) return { ok: false, conflict: false, why: refused.reason };
     }
     const at = this.now().toISOString();
     const retraction: MemoryRecord = { at, kind: "retraction", text: current.text, source: `web:${request.by}` };

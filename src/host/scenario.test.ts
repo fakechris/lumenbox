@@ -688,6 +688,35 @@ test("a teammate woken by an agent is not offered a line to the person", async (
   }
 });
 
+// ── 2026-09-26, a key pasted in chat that would have been remembered (INV-740) ─────────────
+//
+// What could happen: a person pastes an API key, the agent calls RememberFact with it, and memory —
+// read into every later turn, mirrored into the box, shared with teammates — now carries the key.
+// Found reading egoist/lorca, which scrubs every memory write for the same reason.
+
+test("a key pasted in chat is not remembered, and the refusal does not repeat it", async () => {
+  const key = `sk-${"Zq9Xw8Vu7T".repeat(3)}`;
+  let laterSystem: string | undefined;
+  const script: Script = ({ round, system }) => {
+    if (round === 0) return { call: "RememberFact", input: { fact: `Chris's OpenAI key is ${key}` } };
+    laterSystem ??= system;
+    return { say: "I won't keep the key itself; tell me where it is stored instead." };
+  };
+  const episode = await runEpisode({ team: [{ name: "Ada" }], says: [`my key is ${key}, remember it`], script });
+  try {
+    const refusal = episode.score.refusals.find(line => line.startsWith("Ada") && /credential/.test(line));
+    assert.ok(episode.score.trail.includes("Ada:RememberFact"), "the agent did try to remember it");
+    assert.ok(refusal !== undefined, `RememberFact was refused: ${episode.score.refusals.join(" | ")}`);
+    assert.match(refusal, /credential \(openai-anthropic\)/);
+    assert.ok(!refusal.includes(key.slice(3, 15)), "the refusal quotes no part of the key");
+    const ada = episode.registry.list()[0]!.id;
+    assert.ok(!JSON.stringify(episode.registry.readMemoryRecords(ada)).includes(key), "memory has no key");
+    assert.ok(laterSystem !== undefined && !laterSystem.includes(key), "the next call's system prompt has no key");
+  } finally {
+    episode.cleanup();
+  }
+});
+
 // ── 2026-09-08, the front agent that disappeared into the work ────────────────────────────
 //
 // What happened: heavy work ran inline, so the person watched nothing happen for minutes with no

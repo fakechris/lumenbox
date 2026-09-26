@@ -596,3 +596,15 @@ test("what the budget dropped is listed by head, newest first, under its own sma
   const all = renderMemory(recallRecords(records.slice(0, 2), 10_000));
   assert.doesNotMatch(all, /Also kept/);
 });
+
+test("a memory that carries a credential is refused, by kind and without quoting it (INV-740)", () => {
+  const github = `ghp_${"Ab1".repeat(13)}`;
+  const refused = validateRecord(`deploy with ${github}`);
+  assert.match(refused?.reason ?? "", /looks like it holds a credential \(github-pat\)/);
+  assert.ok(!(refused?.reason ?? "").includes(github.slice(0, 12)), "the refusal quotes no part of the token");
+  assert.equal(validateRecord("Chris wants the digest on Mondays."), undefined);
+  // The extractor drops the line; the rest of the batch is kept.
+  const parsed = parseExtraction(["Chris wants the digest on Mondays.", `the token is ${github}`].join("\n"), []);
+  assert.deepEqual(parsed.map(record => record.text), ["Chris wants the digest on Mondays."]);
+  assert.deepEqual(importMarkdown(`- password: ${"p".repeat(16)}\n- the region is eu-west-1`).map(record => record.text), ["the region is eu-west-1"]);
+});

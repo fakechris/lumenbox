@@ -34,6 +34,7 @@
 
 import { createHash } from "node:crypto";
 import { envNumber } from "../config.ts";
+import { credentialIn, credentialRefusal } from "./secret-scan.ts";
 
 /** A single thing remembered. One JSON object per line, appended, never edited in place. */
 export interface MemoryRecord {
@@ -201,6 +202,11 @@ export function validateRecord(text: string): { reason: string } | undefined {
         `several facts, or it is a document — put that under /home/box/work and remember where it is.`,
     };
   }
+  // Memory is read into every future turn, mirrored into the box and shared with teammates, so a
+  // key kept here is a key handed to all of them, every turn (INV-740). Refused, not rewritten:
+  // the agent is told what to keep instead, and nothing is silently altered (docs/10 S-1).
+  const credential = credentialIn(trimmed);
+  if (credential !== undefined) return { reason: credentialRefusal("A memory", credential) };
   return undefined;
 }
 
