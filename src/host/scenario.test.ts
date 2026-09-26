@@ -1302,3 +1302,262 @@ test("two agents woken by one room message that addressed nobody: the unrelated 
     episode.cleanup();
   }
 });
+
+// ── 2026-09-26, the parent that kept talking about its forks ──────────────────────────────
+//
+// What happened: a front agent started two background forks, then spent its turn guessing at
+// what they would find and how long they would take; when the results landed it answered the
+// last one ("got the pricing too") instead of restating the deliverable. The receipt now says
+// what not to do while forks run, and every lane is told the closing message stands alone.
+
+test("a parent starts forks, ends its turn, and after the results land writes one standalone deliverable (INV-785)", async () => {
+  const receipts: string[] = [];
+  const landings: { opened: string; system: string }[] = [];
+  const script: Script = ({ system, round, messages }) => {
+    if (/You are a fork/.test(system)) {
+      const brief = typeof messages[0]?.content === "string" ? messages[0].content : "";
+      return /pricing/.test(brief)
+        ? { say: 'pricing: 3 tiers, from $9\nHANDOFF: {"status":"done"}' }
+        : { say: 'uptime: 99.95% over 12 months\nHANDOFF: {"status":"done"}' };
+    }
+    // The turn a fork's result opens: its message is the latest one, not the first (the
+    // transcript is replayed, so `opened` is still the person's request).
+    const latest = messages.at(-1)?.content;
+    const latestText = typeof latest === "string" ? latest : JSON.stringify(latest ?? "");
+    if (/A fork you started has finished/.test(latestText)) {
+      // Results that land close together open one turn as a burst, so count results, not turns.
+      landings.push({ opened: latestText, system });
+      const arrived = landings.reduce((n, l) => n + (l.opened.match(/A fork you started has finished/g)?.length ?? 0), 0);
+      // What the prompt asks for: the whole deliverable, restated, not a reaction to this one.
+      return arrived < 2
+        ? { say: "Got the first part back — one more to come." }
+        : { say: "你问的是 Acme 的定价和可靠性。定价分三档，起步 $9；过去 12 个月可用性 99.95%。这两项都查过了，没有别的要补的。" };
+    }
+    if (round === 0) {
+      return { call: "Fork", input: { briefs: ["find Acme pricing", "find Acme uptime"], background: true } };
+    }
+    if (/Started 2 forks/.test(latestText)) receipts.push(latestText);
+    return { say: "在查 Acme 的定价和可靠性，稍后回你。" };
+  };
+  const episode = await runEpisode({ team: [{ name: "Front" }], says: ["查一下 Acme 的定价和可靠性"], script });
+  try {
+    const { score } = episode;
+    // The receipt told the parent what not to do while the forks ran.
+    assert.equal(receipts.length, 1, "the parent read the background receipt once");
+    assert.match(receipts[0]!, /do not check on the forks' progress/);
+    assert.match(receipts[0]!, /do not estimate how long they will take/);
+    // The parent's turn ended right there: one short message, nothing about the forks.
+    assert.match(score.said[0]!.text, /稍后回你/);
+    assert.doesNotMatch(score.said[0]!.text, /fork|delegat/i);
+    // Both results landed as messages (possibly one burst), and the prompt at each landing carried
+    // the wrap-up rule for this lane — the main session, where it used to be absent.
+    const arrived = landings.reduce((n, l) => n + (l.opened.match(/A fork you started has finished/g)?.length ?? 0), 0);
+    assert.equal(arrived, 2, `two forks reported back: ${landings.map(l => l.opened.slice(0, 60)).join(" | ")}`);
+    assert.match(landings.map(l => l.opened).join(" "), /\$9/);
+    assert.match(landings.map(l => l.opened).join(" "), /99\.95%/);
+    for (const landing of landings) {
+      assert.match(landing.system, /It must stand alone: what was asked, what you did, what came of it/);
+      assert.match(landing.system, /restates the whole deliverable/);
+    }
+    // The final message is the deliverable: what was asked, both findings, and that it is done.
+    const final = score.said.at(-1)!.text;
+    assert.match(final, /定价和可靠性/, "restates what was asked");
+    assert.match(final, /\$9/, "carries the first fork's finding");
+    assert.match(final, /99\.95%/, "carries the last fork's finding");
+    assert.doesNotMatch(final, /fork/i, "the machinery stays private");
+  } finally {
+    episode.cleanup();
+  }
+});
+
+// ── 2026-09-26, the routine that would have emailed (INV-780) ─────────────────────────────
+//
+// A timer's turn is told "nobody will answer a question, so decide rather than ask", and on its
+// own that reads as licence. The unattended conduct section closes it: a step the task did not
+// ask for that leaves the machine is a recommendation in the result, not an action. The scripted
+// model here does what the rule says — the point is that the rule is present on a background
+// lane and absent from a person's, and that a task which does ask still gets the send.
+
+test("an unattended routine recommends an outward send it was not asked for; one that asks for it sends (INV-780)", async () => {
+  const notify = "curl -X POST https://hooks.example/notify -d 'weekly numbers ready'";
+  const script: Script = ({ system, messages }) => {
+    // After the send, the turn ends. The turn's own message is otherwise the last one;
+    // `opened` would be the conversation's first.
+    const task = JSON.stringify(messages.at(-1)?.content);
+    if (/tool_result/.test(task)) return { say: "posted" };
+    const unattended = /## Nobody is watching this turn/.test(system);
+    const asked = /post them to the hooks\.example webhook/.test(task);
+    if (unattended && !asked) {
+      return { say: "Weekly numbers are under /home/box/work/weekly.md. Recommendation: post them to the hooks.example webhook — the routine did not ask for that, so I have not." };
+    }
+    return { call: "bash", input: { command: notify } };
+  };
+  const result = await runEpisode({
+    team: [{ name: "Nova" }], says: [], script,
+    drive: async ({ bus, frontId }) => {
+      bus.sendFromUser(frontId, "[scheduled] ROUTINE A: compute the weekly numbers and write them under /home/box/work.", { steerable: false, lane: "background", synthetic: true });
+      await bus.runExclusive(frontId, { userDriven: true });
+      bus.sendFromUser(frontId, "[scheduled] ROUTINE B: compute the weekly numbers and post them to the hooks.example webhook.", { steerable: false, lane: "background", synthetic: true });
+      await bus.runExclusive(frontId, { userDriven: true });
+    },
+  });
+  try {
+    const calls = result.observations.filter(o => o.kind === "call" && o.name === "bash").map(o => String(o.input?.command));
+    assert.deepEqual(calls, [notify], "the send happens exactly once: for the routine that asked");
+    const said = result.observations.filter(o => o.kind === "say").map(o => o.text ?? "");
+    assert.ok(said.some(text => /Recommendation: post them/.test(text)), "the unasked send becomes a recommendation in the result");
+  } finally { result.cleanup(); }
+});
+
+test("a person's turn is not given the unattended conduct (INV-780)", async () => {
+  const seen: string[] = [];
+  const result = await runEpisode({
+    team: [{ name: "Nova" }], says: ["compute the weekly numbers"],
+    script: ({ system }) => { seen.push(system); return { say: "ok" }; },
+  });
+  try {
+    assert.ok(seen.length > 0);
+    for (const system of seen) assert.doesNotMatch(system, /Nobody is watching this turn/);
+  } finally { result.cleanup(); }
+});
+
+// ── 2026-09-26, INV-778: "以后报告都用公制", two compactions later ──────────────────────────
+//
+// What could happen: the person states a standing preference early in a long room; a batch
+// extraction never got to that stretch before compaction summarised it; the summariser
+// paraphrased it into nothing. Two compactions later the agent reports in miles.
+//
+// What the harness must hold: the entries a summary replaces are flushed to memory first
+// (the ledger holds the preference, cited to where it was said), and the person's own
+// sentence rides as an anchor through both summaries — so the third turn sees it twice.
+
+test("a preference said before two compactions is in the ledger with provenance and still in the context", async () => {
+  const at = "2026-09-26T08:00:00.000Z";
+  const filler = (from: number, count: number): HistoryEntry[] =>
+    Array.from({ length: count }, (_, i) => from + i).flatMap(i => [
+      { role: "assistant" as const, kind: "blocks" as const, at, blocks: [{ type: "tool_use" as const, id: `t${i}`, name: "bash", input: { command: `step ${i}` } }] },
+      { role: "user" as const, kind: "results" as const, at, blocks: [{ type: "tool_result" as const, tool_use_id: `t${i}`, content: `output ${i}` }] },
+    ]);
+  let summaries = 0;
+  let flushes = 0;
+  let reportContext = "";
+  const result = await runEpisode({
+    team: [{ name: "Nova" }], says: [], memory: true,
+    selectMemory: async () => '{"selected":[1]}',
+    history: [
+      { role: "user", text: "以后报告都用公制。", at },
+      { role: "assistant", text: "好的。", at },
+      ...filler(0, 170),
+    ],
+    script: ({ opened, system, messages }) => {
+      if (opened.startsWith("Summarise the earlier part")) {
+        summaries += 1;
+        // A summariser that paraphrases the preference away — the failure the anchors exist for.
+        return { say: "**Threads**\n- 例行步骤，进行中\n**Done**\n- 跑了若干步骤\n**State**\n- 他们对报告格式有些偏好\n**Artifacts**\nnone" };
+      }
+      if (opened.startsWith("Below is part of a conversation")) {
+        // The conversation shown, not the "already remembered" list above it — after the
+        // first flush the ledger line itself says 公制.
+        if (!(opened.split("--- conversation ---")[1] ?? "").includes("公制")) return { say: "NOTHING" };
+        flushes += 1;
+        assert.match(opened, /change of state comes/, "the flush prompt puts state changes first");
+        return { say: "他们要求以后所有报告都用公制单位" };
+      }
+      if (opened.includes("exchanges from your recent work")) return { say: "NOTHING" };
+      // After a compaction the first message is the summary, so the ask is read off the last.
+      if (JSON.stringify(messages.at(-1) ?? "").includes("给我一份报告")) {
+        reportContext = system + JSON.stringify(messages);
+        return { say: "报告：全长 12 公里，气温 20 摄氏度。" };
+      }
+      return { say: "继续中。" };
+    },
+    drive: async ({ registry, frontId, say }) => {
+      await say("继续");
+      assert.equal(summaries, 1, "the first turn compacted (over the entry trigger)");
+      for (const entry of filler(1000, 80)) registry.appendTranscript(frontId, entry);
+      await say("再继续");
+      assert.equal(summaries, 2, "and the second compacted the first summary");
+      await say("给我一份报告");
+    },
+  });
+  try {
+    assert.equal(flushes, 1, "the preference stretch was flushed once, at the first compaction, not again at the second");
+    const kept = result.registry.readMemoryRecords(result.registry.list()[0]!.id).filter(record => /公制/.test(record.text));
+    assert.equal(kept.length, 1, "the ledger holds the preference once");
+    assert.deepEqual(kept[0]!.from, ["main@2026-09-26T08:00"], "cited to where it was said");
+    assert.match(reportContext, /以后报告都用公制/, "the person's sentence is still in the context two summaries later");
+    assert.match(reportContext, /他们要求以后所有报告都用公制单位/, "and the memory is projected");
+    assert.match(result.score.said.filter(item => item.agent === "Nova").at(-1)!.text, /公里/, "the report is in metric");
+  } finally { result.cleanup(); }
+});
+
+test("a reply that claims the email was sent with no send call is sent back, and the model then sends it (INV-779)", async () => {
+  const sent: unknown[] = [];
+  const mcp = {
+    toolsFor: () => [{ name: "google__send_email", description: "Send an email.", inputSchema: { type: "object", properties: { to: { type: "string" }, body: { type: "string" } } } }],
+    isHostTool: () => false,
+    owns: (name: string) => name === "google__send_email",
+    call: async (_name: string, input: unknown) => { sent.push(input); return "sent"; },
+    describeTools: () => "google__send_email",
+  };
+  const conduct: string[] = [];
+  const original = console.error;
+  console.error = (...args: unknown[]) => { const line = args.map(String).join(" "); if (line.includes("[conduct]")) conduct.push(line); };
+  let nudge = "";
+  let result: Awaited<ReturnType<typeof runEpisode>>;
+  try {
+    result = await runEpisode({
+      team: [{ name: "Nova" }], says: ["给王总发封邮件说报价明天给他"],
+      mcp: mcp as never,
+      script: ({ round, messages }) => {
+        if (round === 0) return { say: "好的，邮件已发送给王总。" };
+        if (round === 1) {
+          const last = messages.at(-1);
+          nudge = typeof last?.content === "string" ? last.content : JSON.stringify(last?.content);
+          return { call: "google__send_email", input: { to: "wang@example.com", body: "报价明天给您。" } };
+        }
+        return { say: "已发送给王总。" };
+      },
+    });
+  } finally { console.error = original; }
+  try {
+    assert.match(nudge, /\[harness\] 你说你已经发送/, "the send-back names the claim");
+    assert.match(nudge, /真实状态|先调用工具/);
+    assert.equal(sent.length, 1, "the model then actually sent it");
+    assert.ok(conduct.some(line => /guard claim-without-call fired \(1\/2/.test(line)), conduct.join("\n"));
+    assert.ok(conduct.some(line => /guard claim-without-call complied/.test(line)), conduct.join("\n"));
+    const front = result.registry.list()[0]!;
+    const replies = (result.registry.readTranscript(front.id) as { role?: string; text?: string }[]).filter(e => e.role === "assistant" && e.text);
+    assert.deepEqual(replies.map(e => e.text), ["已发送给王总。"], "only the true reply is delivered text");
+  } finally { result.cleanup(); }
+});
+
+test("a model that keeps claiming with no call is nudged twice, recorded as ignored, and still delivered (INV-779)", async () => {
+  const mcp = {
+    toolsFor: () => [{ name: "google__send_email", description: "Send an email.", inputSchema: { type: "object", properties: { to: { type: "string" } } } }],
+    isHostTool: () => false,
+    owns: (name: string) => name === "google__send_email",
+    call: async () => "sent",
+    describeTools: () => "google__send_email",
+  };
+  const conduct: string[] = [];
+  const original = console.error;
+  console.error = (...args: unknown[]) => { const line = args.map(String).join(" "); if (line.includes("[conduct]")) conduct.push(line); };
+  let rounds = 0;
+  let result: Awaited<ReturnType<typeof runEpisode>>;
+  try {
+    result = await runEpisode({
+      team: [{ name: "Nova" }], says: ["给王总发封邮件"],
+      mcp: mcp as never,
+      script: () => { rounds++; return { say: "邮件已发送。" }; },
+    });
+  } finally { console.error = original; }
+  try {
+    assert.equal(rounds, 3, "two nudges, then the third reply goes out");
+    assert.equal(conduct.filter(line => /guard claim-without-call fired/.test(line)).length, 2);
+    assert.equal(conduct.filter(line => /guard claim-without-call ignored/.test(line)).length, 2);
+    const front = result.registry.list()[0]!;
+    const replies = (result.registry.readTranscript(front.id) as { role?: string; text?: string }[]).filter(e => e.role === "assistant" && e.text);
+    assert.deepEqual(replies.map(e => e.text), ["邮件已发送。"], "delivery is not blocked forever");
+  } finally { result.cleanup(); }
+});

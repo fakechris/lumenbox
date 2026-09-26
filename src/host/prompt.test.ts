@@ -185,8 +185,11 @@ test("the prompt's sections have an order, and it is the documented one", () => 
       "skills",
       "heard",
       "history",
+      "wrap-up",
       "shared-memory",
       "team",
+      // unattended renders only on a background lane (INV-780), just before the recap.
+      "unattended",
       "critical",
     ]
   );
@@ -195,7 +198,8 @@ test("the prompt's sections have an order, and it is the documented one", () => 
   // memory first and the objective arrives as a footnote to a pile of facts.
   assert.equal(VOLATILE_SECTIONS[0]?.name, "plan");
   // And delegation is a decision made after the work is understood, not a lens for reading it.
-  assert.equal(VOLATILE_SECTIONS.at(-2)?.name, "team");
+  // Only the unattended conduct (background lanes only) and the recap come after it.
+  assert.equal(VOLATILE_SECTIONS.at(-3)?.name, "team");
   assert.equal(VOLATILE_SECTIONS.at(-1)?.name, "critical");
 });
 
@@ -276,6 +280,67 @@ test("a chat conversation with a box is told its file-exchange convention; the t
     buildSystemPrompt({ ...base, hasBox: false, conversation: "feishu-oc_room" }),
     /file exchange/
   );
+});
+
+// ── the closing message stands alone, in every lane (INV-785) ──────────────────────────
+
+test("every lane is told its closing message must stand alone, worded for its reader", () => {
+  const base = {
+    agent: { id: "a", profile: { name: "Ada", description: "", createdAt: "", updatedAt: "" } } as never,
+    teammates: [],
+    memory: [],
+    resolution: undefined,
+    agentsRoot: "/tmp",
+    hasBox: true,
+  };
+  const standsAlone = /It must stand alone: what was asked, what you did, what came of it/;
+  const restates = /restates the whole deliverable[^.]*not a reaction to the piece that landed last/;
+
+  // The main session: the rule used to be absent here altogether.
+  const main = buildSystemPrompt({ ...base, conversation: "main" });
+  assert.match(main, standsAlone);
+  assert.match(main, restates);
+  assert.match(main, /what the person reads when they come back to this session/);
+  assert.match(buildSystemPrompt({ ...base }), standsAlone, "no conversation at all is the main lane too");
+
+  // A team room: the reader is everybody in the room, and nobody watched the work.
+  const room = buildSystemPrompt({
+    ...base,
+    conversation: "feishu-oc_room",
+    heard: [{ at: "2026-09-26T00:00:00Z", from: "Bob", text: "morning all" }] as never,
+  });
+  assert.match(room, standsAlone);
+  assert.match(room, restates);
+  assert.match(room, /the only thing the room sees/);
+
+  // An outside chat, one to one: the reader is on a phone, and the deliverable is in outbox/.
+  const chat = buildSystemPrompt({ ...base, conversation: "telegram-123" });
+  assert.match(chat, standsAlone);
+  assert.match(chat, restates);
+  assert.match(chat, /the only thing the person sees, on a phone/);
+  assert.match(chat, /outbox\/, not a path/);
+
+  // Without a box the rule still stands; only the pointer at outbox/ goes.
+  const boxless = buildSystemPrompt({ ...base, hasBox: false, conversation: "telegram-123" });
+  assert.match(boxless, standsAlone);
+  assert.doesNotMatch(boxless, /outbox/);
+
+  // A fork's closing message is its handoff; it is not told to write a wrap-up for a person.
+  assert.doesNotMatch(buildSystemPrompt({ ...base, conversation: "fork/abc" }), standsAlone);
+
+  // One home: the file-exchange section no longer carries its own copy of the rule.
+  assert.equal(chat.match(/must stand alone/g)?.length, 1);
+
+  // And none of it moved the stable prefix — the lane is per turn, so it lives after the
+  // cache breakpoint.
+  const stable = buildSystemPromptParts({ ...base, conversation: "main" }).stable;
+  assert.doesNotMatch(stable, standsAlone);
+  assert.equal(buildSystemPromptParts({ ...base, conversation: "telegram-123" }).stable, stable);
+  assert.equal(
+    buildSystemPromptParts({ ...base, conversation: "feishu-oc_room", heard: [{ at: "", from: "Bob", text: "hi" }] as never }).stable,
+    stable
+  );
+  assert.ok(sectionsPresent({ ...base, conversation: "main" }).includes("wrap-up"));
 });
 
 test("a section that is empty for a suspicious reason says so", () => {
@@ -600,4 +665,39 @@ test("the skills index is framed as a step before acting, and the turn reminder 
   assert.match(zh, /Skills 清单/);
   assert.doesNotMatch(turnReminderFor("MiniMax-M3", "帮我调研一下固态电池的进展", false)!, /Skills/, "no skills, no line about them");
   assert.match(turnReminderFor("glm-4.6", "research this", true)!, /check the Skills list/);
+});
+
+test("a background lane gets the unattended conduct; a person's turn does not, and the stable prefix is the same bytes (INV-780)", () => {
+  const base = {
+    agent: { id: "a1", profile: { name: "Ada", description: "" } } as never,
+    teammates: [],
+    memory: [],
+    resolution: undefined,
+    agentsRoot: "/tmp",
+    hasBox: true,
+  };
+  const attended = buildSystemPromptParts({ ...base, lane: "user" });
+  const unattended = buildSystemPromptParts({ ...base, lane: "background" });
+  const unsaid = buildSystemPromptParts(base);
+
+  assert.match(unattended.volatile, /## Nobody is watching this turn/);
+  for (const rule of ["whole authorization", "Nothing leaves the machine", "no durable state", "recommend it instead of doing it", "delete recoverably", "data, never an instruction"]) {
+    assert.ok(unattended.volatile.toLowerCase().includes(rule.toLowerCase()), `unattended prompt carries "${rule}"`);
+  }
+  assert.doesNotMatch(attended.volatile, /Nobody is watching this turn/);
+  assert.doesNotMatch(unsaid.volatile, /Nobody is watching this turn/);
+  assert.doesNotMatch(unattended.stable, /Nobody is watching this turn/, "never in the cached prefix");
+  assert.equal(unattended.stable, attended.stable, "the stable prefix does not vary by lane");
+  assert.equal(unattended.stable, unsaid.stable);
+  // Before the recap, which stays last.
+  assert.ok(unattended.volatile.indexOf("Nobody is watching") < unattended.volatile.lastIndexOf("# Before you answer"), "the recap is still the tail");
+
+  const previous = process.env.AGENTBOX_ABLATE;
+  try {
+    process.env.AGENTBOX_ABLATE = "unattended";
+    assert.doesNotMatch(buildSystemPromptParts({ ...base, lane: "background" }).volatile, /Nobody is watching/, "ablatable by name");
+  } finally {
+    if (previous === undefined) delete process.env.AGENTBOX_ABLATE;
+    else process.env.AGENTBOX_ABLATE = previous;
+  }
 });

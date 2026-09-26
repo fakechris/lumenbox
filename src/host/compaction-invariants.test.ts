@@ -181,3 +181,14 @@ test("clampSummaryToBudget leaves a fitting summary untouched and marks a clippe
   assert.ok(clipped.text.length < 3_000);
   assert.match(clipped.text, /\[summary clipped to fit the context window/);
 });
+
+test("INV-778: a user instruction survives two summaries that omitted it, as an anchor", async () => {
+  const h = harness("user-anchor");
+  const history: TranscriptEntry[] = [user("以后报告都用公制。"), ...Array.from({ length: 14 }, (_, i) => pair(i)).flat()];
+  const once = await h.run(history);
+  const first = text(activeWindow(once as never)[0]!);
+  assert.doesNotMatch(first.split("**Exact references")[0]!, /公制/, "the scripted summariser dropped it from the prose");
+  assert.match(first, /the person said: 以后报告都用公制。/, "the anchor carried it");
+  const twice = await h.run([...once, ...Array.from({ length: 12 }, (_, i) => pair(100 + i)).flat()]);
+  assert.match(text(activeWindow(twice as never)[0]!), /the person said: 以后报告都用公制。/, "and the second pass carried the first pass's anchor");
+});

@@ -153,6 +153,16 @@ logged and never repeated in the same turn.
 - *Trailing intent* (Hermes): reply ≤ 400 chars ending in a first-person future action
   (`我先|让我|我去|我这就|我马上|let me|I'll now|I will now`) with no tool call → one nudge
   "do it now, in this response". Max 2 per turn, shared counter with the guard above.
+- *Claim without a call* (INV-779, 2026-09-26): the reply asserts a completed action in the
+  completed tense — "已发送 / I've sent", "记住了 / saved", "已安排 / set a reminder", "查过了
+  / I checked" — and no tool of the matching category ran this turn. The verb→category table
+  is `src/host/action-claims.ts`, deterministic, each entry tested; the tool side reuses the
+  side-effect tiers (INV-691): a send is any `reach` call, a check any `observe` one, a save
+  the record-writing tools, and a UI action (`computer`, `browser_act`) covers every category
+  because the page decides what a click was. Future and conditional forms ("我会发", "I'll
+  send", "如果需要我可以发") never match — that is the trailing-intent guard's ground. One
+  nudge, no `tool_choice` (the honest answer may be "not yet"), the shared counter and the
+  same `fired / complied / ignored` ledger; after two nudges the reply goes out as is.
 
 Deliberately **not** built: a text classifier for "answered from priors" in general. The
 structural signal — zero tool calls on a turn that makes a factual claim about a named,

@@ -36,6 +36,8 @@ import {
 } from "./memory.ts";
 import { buildPitfallPrompt, parsePitfall, type PitfallSource } from "./pitfalls.ts";
 import { credentialIn } from "./secret-scan.ts";
+import type { HistoryEntry } from "./compaction.ts";
+import { memoryRef } from "./memory.ts";
 
 /**
  * How many exchanges accumulate before extraction runs.
@@ -57,6 +59,19 @@ export const EPISODE_EVERY = envNumber("AGENTBOX_EPISODE_EVERY", 4);
 /** How many existing memories the extractor is shown, so it can avoid repeating them. */
 const RELEVANT_LIMIT = 12;
 
+/**
+ * How long a pre-compaction flush may take before it is given up on (INV-778).
+ *
+ * The flush is insurance for the summary, not a gate on it: compaction never waits for
+ * it, but the agent's write chain does, and a hung extractor would hold every later
+ * memory write behind it. One line is logged and the chain moves on.
+ */
+export const FLUSH_TIMEOUT_MS = envNumber("AGENTBOX_FLUSH_TIMEOUT_MS", 30_000);
+
+/** Total prose a flush shows the extractor; and each exchange's share, so one long turn cannot take it all. */
+const FLUSH_CHAR_CAP = 12_000;
+const FLUSH_EXCHANGE_CHARS = 4_000;
+
 export interface Exchange {
   agentId: string;
   /** What arrived, and what the agent said back. Trimmed: the extractor needs the gist, not the log. */
@@ -65,6 +80,24 @@ export interface Exchange {
   principal?: string;
   /** Where in the transcript this was: `<conversation>@<time>`. What a kept note cites. */
   ref?: string;
+  /**
+   * The conversation and the time of the last transcript entry the exchange covers
+   * (INV-778). Together they are the watermark: a compaction flush extracts only the
+   * entries after it, and an exchange a flush already covered is not batched again.
+   * Absent on callers that do not know — then the exchange is batched as before.
+   */
+  conversation?: string;
+  at?: string;
+}
+
+/** One exchange waiting for its batch, with everything the batch will need. */
+interface PendingExchange {
+  text: string;
+  principal?: string;
+  ref?: string;
+  conversation?: string;
+  at?: string;
+  guard: () => boolean;
 }
 
 export interface RememberDeps {
@@ -80,6 +113,8 @@ export interface RememberDeps {
    */
   usage?: UsageLog;
   log?: (line: string) => void;
+  /** How long a pre-compaction flush may run; defaults to `FLUSH_TIMEOUT_MS`. A test sets it short. */
+  flushTimeoutMs?: number;
 }
 
 /**
@@ -104,7 +139,15 @@ export function payerOf(principals: readonly (string | undefined)[]): string | u
  * would cost a call to recover something nobody missed.
  */
 export class Rememberer {
-  private readonly pending = new Map<string, string[]>();
+  private readonly pending = new Map<string, PendingExchange[]>();
+  /**
+   * Per agent and conversation, the transcript time through which exchanges have been
+   * handed to the extractor (INV-778). The compaction flush reads it so it does not
+   * extract what a batch already has, and advances it so the next batch does not
+   * extract what the flush just did. In memory like the queue: after a restart the
+   * worst case is one re-extraction, which dedupe absorbs.
+   */
+  private readonly extractedThrough = new Map<string, string>();
   /**
    * One write chain per agent (docs/24 review, Codex finding 6 + Grok round 2).
    *
@@ -117,11 +160,6 @@ export class Rememberer {
    * batch N's append is on disk before batch N+1 reads what is known.
    */
   private readonly writeChains = new Map<string, Promise<void>>();
-  /** Who each pending exchange was with, positionally — see payerOf. */
-  private readonly pendingPayers = new Map<string, (string | undefined)[]>();
-  /** Where each pending exchange was, positionally; the numbers the extractor cites. */
-  private readonly pendingRefs = new Map<string, (string | undefined)[]>();
-  private readonly pendingGuards = new Map<string, (() => boolean)[]>();
   private readonly extractions = new Map<string, string[]>();
   /** Who each pending extraction batch belonged to, for the episode that condenses them. */
   private readonly extractionPayers = new Map<string, (string | undefined)[]>();
@@ -186,40 +224,108 @@ export class Rememberer {
    */
   async record(exchange: Exchange): Promise<void> {
     if (EXTRACT_EVERY <= 0) return;
+    // Already covered by a compaction flush: batching it again would extract it twice.
+    if (this.behindWatermark(exchange.agentId, exchange.conversation, exchange.at)) return;
     const batch = this.pending.get(exchange.agentId) ?? [];
-    batch.push(exchange.text);
+    batch.push({
+      text: exchange.text,
+      principal: exchange.principal,
+      ref: exchange.ref,
+      conversation: exchange.conversation,
+      at: exchange.at,
+      guard: this.deps.registry.contextWriteGuard(),
+    });
     this.pending.set(exchange.agentId, batch);
-    const payers = this.pendingPayers.get(exchange.agentId) ?? [];
-    payers.push(exchange.principal);
-    this.pendingPayers.set(exchange.agentId, payers);
-    const refs = this.pendingRefs.get(exchange.agentId) ?? [];
-    refs.push(exchange.ref);
-    this.pendingRefs.set(exchange.agentId, refs);
-    const guards = this.pendingGuards.get(exchange.agentId) ?? [];
-    guards.push(this.deps.registry.contextWriteGuard());
-    this.pendingGuards.set(exchange.agentId, guards);
     if (batch.length < EXTRACT_EVERY) return;
 
     this.pending.set(exchange.agentId, []);
-    this.pendingPayers.set(exchange.agentId, []);
-    this.pendingRefs.set(exchange.agentId, []);
-    this.pendingGuards.set(exchange.agentId, []);
+    this.advanceWatermark(exchange.agentId, batch);
     await this.enqueue(exchange.agentId, () =>
-      this.extract(exchange.agentId, batch, payerOf(payers), refs, () => guards.every(guard => guard()))
+      this.extract(
+        exchange.agentId,
+        batch.map(item => item.text),
+        payerOf(batch.map(item => item.principal)),
+        batch.map(item => item.ref),
+        () => batch.every(item => item.guard())
+      )
     );
   }
 
   /**
-   * Extracts from text that is about to be summarised away, now, ahead of the batch.
+   * Extracts from the entries a summary is about to replace, now, ahead of the batch
+   * (INV-778).
    *
-   * The batch waits for three exchanges; a compaction does not wait for anything. What the
-   * summary is replacing goes through the same extractor as one exchange, so a decision
-   * made in a long conversation is a record before the summary can lose it.
+   * The batch waits for three exchanges; a compaction does not wait for anything. Only
+   * the entries past the watermark go: what a batch already extracted is not extracted
+   * again, and what this flush covers is taken out of the pending queue so the next batch
+   * does not repeat it. Each exchange is cited by its own place in the transcript, the way
+   * a batch is. The extractor is told state changes come first, because a summary keeps
+   * a fact and loses that it stopped being true.
+   *
+   * Never throws and never blocks compaction: the caller does not await it, and a flush
+   * that fails or hangs past `FLUSH_TIMEOUT_MS` is one logged line.
    */
-  async flush(agentId: string, text: string, ref?: string): Promise<void> {
-    if (EXTRACT_EVERY <= 0 || text.trim() === "") return;
+  async flush(agentId: string, conversation: string, entries: readonly HistoryEntry[]): Promise<void> {
+    if (EXTRACT_EVERY <= 0) return;
+    const watermark = this.extractedThrough.get(watermarkKey(agentId, conversation));
+    const fresh = entries.filter(entry => {
+      const at = (entry as { at?: string }).at;
+      return at === undefined || watermark === undefined || at > watermark;
+    });
+    const exchanges = exchangesOf(fresh, conversation);
+    if (exchanges.length === 0) return;
+    const skipped = entries.length - fresh.length;
+    this.log(
+      `flushing ${exchanges.length} exchange${exchanges.length === 1 ? "" : "s"} to memory before they are summarised` +
+        (skipped > 0 ? ` (${skipped} entr${skipped === 1 ? "y" : "ies"} already extracted)` : "")
+    );
+    // Marked as extracted before the model answers, so a batch that fills meanwhile does
+    // not take the same exchanges; the pending queue is trimmed for the same reason.
+    const through = exchanges[exchanges.length - 1]!.at;
+    this.extractedThrough.set(watermarkKey(agentId, conversation), through);
+    this.pending.set(
+      agentId,
+      (this.pending.get(agentId) ?? []).filter(item => !this.behindWatermark(agentId, item.conversation, item.at))
+    );
     const guard = this.deps.registry.contextWriteGuard();
-    await this.enqueue(agentId, () => this.extract(agentId, [text], undefined, ref !== undefined ? [ref] : [], guard));
+    await this.enqueue(agentId, async () => {
+      let timer: NodeJS.Timeout | undefined;
+      const limit = this.deps.flushTimeoutMs ?? FLUSH_TIMEOUT_MS;
+      const timeout = new Promise<"timeout">(resolve => {
+        timer = setTimeout(() => resolve("timeout"), limit);
+      });
+      try {
+        const outcome = await Promise.race([
+          this.extract(agentId, exchanges.map(item => item.text), undefined, exchanges.map(item => item.ref), guard, { stateChangesFirst: true }),
+          timeout,
+        ]);
+        if (outcome === "timeout") this.log(`pre-compaction memory flush timed out after ${limit}ms; the summary stands`);
+      } catch (error) {
+        this.log(`pre-compaction memory flush failed (${error instanceof Error ? error.message : String(error)}); the summary stands`);
+      } finally {
+        if (timer !== undefined) clearTimeout(timer);
+      }
+    });
+  }
+
+  private behindWatermark(agentId: string, conversation: string | undefined, at: string | undefined): boolean {
+    if (conversation === undefined || at === undefined) return false;
+    const watermark = this.extractedThrough.get(watermarkKey(agentId, conversation));
+    return watermark !== undefined && at <= watermark;
+  }
+
+  private advanceWatermark(agentId: string, batch: readonly PendingExchange[]): void {
+    for (const item of batch) {
+      if (item.conversation === undefined || item.at === undefined) continue;
+      const key = watermarkKey(agentId, item.conversation);
+      const current = this.extractedThrough.get(key);
+      if (current === undefined || item.at > current) this.extractedThrough.set(key, item.at);
+    }
+  }
+
+  /** Resolves once every memory write queued so far for the agent has landed or failed. For tests and shutdown. */
+  settle(agentId: string): Promise<void> {
+    return this.writeChains.get(agentId) ?? Promise.resolve();
   }
 
   /** Appends work to the agent's write chain. A failed link never breaks the chain. */
@@ -237,7 +343,8 @@ export class Rememberer {
     exchanges: readonly string[],
     principal?: string,
     refs: readonly (string | undefined)[] = [],
-    guard: () => boolean = () => true
+    guard: () => boolean = () => true,
+    options: { stateChangesFirst?: boolean } = {}
   ): Promise<void> {
     if (!guard()) return;
     // Citable only when every exchange has a place: a numbering with holes would let the
@@ -258,7 +365,7 @@ export class Rememberer {
     try {
       const reply = await this.ask(
         agentId,
-        buildExtractionPrompt(combined, relevant, citable.length > 1 ? citable.length : 1),
+        buildExtractionPrompt(combined, relevant, citable.length > 1 ? citable.length : 1, options),
         principal
       );
       records = parseExtraction(reply, known, new Date(), citable);
@@ -364,4 +471,52 @@ export function summariseExchange(inbound: string, outbound: string, limit = 4_0
     return clean.length > limit ? `${clean.slice(0, limit)}…` : clean;
   };
   return [`They said: ${trim(inbound)}`, `You replied: ${trim(outbound)}`].join("\n\n");
+}
+
+function watermarkKey(agentId: string, conversation: string): string {
+  return `${agentId}\u0000${conversation}`;
+}
+
+/**
+ * The entries a summary will replace, regrouped as the exchanges the extractor reads
+ * (INV-778): a person's message and what the agent said back until the next message.
+ * Tool traffic is left out for the reason `summariseExchange` gives; text the agent
+ * wrote alongside a tool call is kept, because that is where it says what it decided.
+ * Each exchange cites its own place, so a record kept from it can be checked against
+ * what was said — the provenance a batch-extracted record carries.
+ */
+export function exchangesOf(
+  entries: readonly HistoryEntry[],
+  conversation: string
+): { text: string; ref: string; at: string }[] {
+  const groups: { lines: string[]; first: string; last: string }[] = [];
+  for (const entry of entries) {
+    const at = (entry as { at?: string }).at ?? "";
+    let line: string | undefined;
+    if (!("kind" in entry)) {
+      line = `${entry.role === "user" ? "They said" : "You replied"}: ${entry.text.trim()}`;
+    } else if (entry.kind === "blocks") {
+      const said = entry.blocks
+        .filter((block): block is { type: "text"; text: string } => (block as { type?: string }).type === "text")
+        .map(block => block.text.trim())
+        .filter(text => text !== "")
+        .join("\n");
+      if (said !== "") line = `You replied: ${said}`;
+    }
+    if (line === undefined || line.trim() === "") continue;
+    const opensExchange = !("kind" in entry) && entry.role === "user";
+    const current = groups[groups.length - 1];
+    if (opensExchange || current === undefined) groups.push({ lines: [line], first: at, last: at });
+    else {
+      current.lines.push(line);
+      if (at > current.last) current.last = at;
+    }
+  }
+  const share = Math.max(400, Math.min(FLUSH_EXCHANGE_CHARS, Math.floor(FLUSH_CHAR_CAP / Math.max(1, groups.length))));
+  return groups.map(group => {
+    const joined = group.lines.join("\n\n");
+    const text = joined.length > share ? `${joined.slice(0, share)}…` : joined;
+    const when = group.first === "" ? new Date() : new Date(group.first);
+    return { text, ref: memoryRef(conversation, Number.isNaN(when.getTime()) ? new Date() : when), at: group.last };
+  });
 }

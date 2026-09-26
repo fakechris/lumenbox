@@ -21,7 +21,7 @@ this file and the headers disagree. Edit the header, not this table.
 | [01-requirements](01-requirements.md) | Requirements | current | 2026-08-22 |
 | [02-product](02-product.md) | Product | current | 2026-08-19 |
 | [03-architecture](03-architecture.md) | Architecture | current | 2026-09-22 |
-| [04-design](04-design.md) | Design | current | 2026-09-24 |
+| [04-design](04-design.md) | Design | current | 2026-09-26 |
 | [05-data](05-data.md) | Data | current | 2026-09-26 |
 | [08-control-plane](08-control-plane.md) | Control plane | current | 2026-09-12 |
 | [11-roadmap](11-roadmap.md) | Roadmap and backlog | current | 2026-09-14 |
@@ -58,15 +58,15 @@ this file and the headers disagree. Edit the header, not this table.
 | [16-long-work](16-long-work.md) | Finishing long work: the protocol, the cost, and the stop | current | 2026-08-26 |
 | [18-identity-box](18-identity-box.md) | Boxes that say what they are (v4) | superseded by [22-domain-model](22-domain-model.md) — §4 replaces boxName/config.boxes[name] with ids and incarnations | 2026-08-29 |
 | [20-completion-standard](20-completion-standard.md) | The standard of completion, written before the work | current | 2026-09-14 |
-| [23-context-compaction](23-context-compaction.md) | Why the agent kept compacting, and what long-horizon systems do instead | current | 2026-09-14 |
-| [24-context-memory](24-context-memory.md) | Context, memory and compaction: ours, against Hermes and OpenClaw | current | 2026-09-14 |
+| [23-context-compaction](23-context-compaction.md) | Why the agent kept compacting, and what long-horizon systems do instead | current | 2026-09-26 |
+| [24-context-memory](24-context-memory.md) | Context, memory and compaction: ours, against Hermes and OpenClaw | current | 2026-09-26 |
 | [25-workbuddy](25-workbuddy.md) | Workbuddy: skills, presets, delegated engines — the hands-on program | current | 2026-09-03 |
 | [26-inbound-reliability](26-inbound-reliability.md) | Inbound reliability: what a message goes through, and what mature harnesses do | current | 2026-09-01 |
 | [28-grokbot-0.30-delta](28-grokbot-0.30-delta.md) | What Grok Bot 0.30.0 changed, and what it says we should change | current | 2026-09-01 |
 | [29-bot-templates](29-bot-templates.md) | Bot templates: the bot packs itself, the new bot installs itself | current | 2026-09-14 |
 | [30-multi-box](30-multi-box.md) | Many boxes, one host: the multi-box mode | current | 2026-09-14 |
 | [31-harness-review](31-harness-review.md) | The turn engine, reviewed against the incident and three references | current | 2026-09-26 |
-| [32-coordination-protocol](32-coordination-protocol.md) | Coordination as protocol, slice one: a fork ledger that survives restarts, and fenced children | current | 2026-09-03 |
+| [32-coordination-protocol](32-coordination-protocol.md) | Coordination as protocol, slice one: a fork ledger that survives restarts, and fenced children | current | 2026-09-26 |
 | [33-mcp-face](33-mcp-face.md) | The box gets an MCP face: a per-job route on the host, never a credential in the box | current | 2026-09-03 |
 | [34-extensions](34-extensions.md) | Extensions: the edges you can edit without restarting the core (R36) | current | 2026-09-03 |
 | [35-grok-onboarding](35-grok-onboarding.md) | Onboarding a Grok Bot box: the bot prepares its own box, the person connects from the laptop | current | 2026-09-03 |

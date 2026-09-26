@@ -114,7 +114,7 @@ test("an in-flight extraction cannot reintroduce the old context after new", asy
         return { content: [{ type: "text", text: "Always write seventeen blind spots" }], usage: {} };
       } } } as never,
     });
-    const learning = f.registry.withContext(f.agent.id, f.input.conversation, () => rememberer.flush(f.agent.id, "old conversation"));
+    const learning = f.registry.withContext(f.agent.id, f.input.conversation, () => rememberer.flush(f.agent.id, f.input.conversation, [{ role: "user", text: "old conversation", at: new Date().toISOString() }]));
     await started;
     f.registry.contextStore(f.agent.id, f.input.conversation).advance("new", 0);
     release();
